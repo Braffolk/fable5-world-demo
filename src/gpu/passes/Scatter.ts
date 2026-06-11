@@ -107,33 +107,35 @@ const TAU = 6.2831853;
 // ---------------------------------------------------------------------------
 
 function pcg2d(p: NV2, salt: number): NV2 {
-  // cells are non-negative grid coords; +1024 guards small negatives
-  const vx = p.x.add(1024 + (salt & 0xffff)).toUint().toVar();
-  const vy = p.y.add(1024 + ((salt >> 16) & 0xffff)).toUint().toVar();
+  // PURE expression chain — no toVar/assign, so it works in material node
+  // graphs too (assign needs a Fn() stack). +40000 keeps negative ring cell
+  // coords positive before the uint cast (world cells span ±~10k).
   const M = uint(1664525);
   const C = uint(1013904223);
-  vx.assign(vx.mul(M).add(C));
-  vy.assign(vy.mul(M).add(C));
-  vx.addAssign(vy.mul(M));
-  vy.addAssign(vx.mul(M));
-  vx.assign(vx.bitXor(vx.shiftRight(uint(16))));
-  vy.assign(vy.bitXor(vy.shiftRight(uint(16))));
-  vx.addAssign(vy.mul(M));
-  vy.addAssign(vx.mul(M));
-  vx.assign(vx.bitXor(vx.shiftRight(uint(16))));
-  vy.assign(vy.bitXor(vy.shiftRight(uint(16))));
+  const a0 = p.x.add(40000 + (salt & 0x3fff)).toUint();
+  const b0 = p.y.add(40000 + ((salt >> 14) & 0x3fff)).toUint();
+  const a1 = a0.mul(M).add(C);
+  const b1 = b0.mul(M).add(C);
+  const a2 = a1.add(b1.mul(M));
+  const b2 = b1.add(a2.mul(M));
+  const a3 = a2.bitXor(a2.shiftRight(uint(16)));
+  const b3 = b2.bitXor(b2.shiftRight(uint(16)));
+  const a4 = a3.add(b3.mul(M));
+  const b4 = b3.add(a4.mul(M));
+  const a5 = a4.bitXor(a4.shiftRight(uint(16)));
+  const b5 = b4.bitXor(b4.shiftRight(uint(16)));
   const inv = 1 / 16777216;
   return vec2(
-    float(vx.bitAnd(uint(0xffffff))).mul(inv),
-    float(vy.bitAnd(uint(0xffffff))).mul(inv),
+    float(a5.bitAnd(uint(0xffffff))).mul(inv),
+    float(b5.bitAnd(uint(0xffffff))).mul(inv),
   );
 }
 
-function cellHash2(cell: NV2, salt: number): NV2 {
+export function cellHash2(cell: NV2, salt: number): NV2 {
   return pcg2d(cell, salt);
 }
 
-function cellHash(cell: NV2, salt: number): NF {
+export function cellHash(cell: NV2, salt: number): NF {
   return pcg2d(cell, salt).x;
 }
 
@@ -377,7 +379,7 @@ export async function runScatter(
     If(s.h.lessThan(LAKE_LEVEL + 0.4), () => {
       Return();
     });
-    If(s.riverDepth.greaterThan(0.03).or(s.standing.greaterThan(0.12)), () => {
+    If(s.riverDepth.greaterThan(0.22).or(s.standing.greaterThan(0.3)), () => {
       Return();
     });
 
@@ -492,7 +494,7 @@ export async function runScatter(
     If(s.h.lessThan(LAKE_LEVEL + 0.35), () => {
       Return();
     });
-    If(s.riverDepth.greaterThan(0.02).or(s.standing.greaterThan(0.1)), () => {
+    If(s.riverDepth.greaterThan(0.2).or(s.standing.greaterThan(0.3)), () => {
       Return();
     });
 
@@ -594,7 +596,7 @@ export async function runScatter(
     If(s.h.lessThan(LAKE_LEVEL + 0.3), () => {
       Return();
     });
-    If(s.riverDepth.greaterThan(0.05).or(s.standing.greaterThan(0.15)), () => {
+    If(s.riverDepth.greaterThan(0.3).or(s.standing.greaterThan(0.35)), () => {
       Return();
     });
 

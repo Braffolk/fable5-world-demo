@@ -11,6 +11,7 @@ import { ProbeGI } from '../gpu/passes/ProbeGI';
 import { buildCanopyMap, runScatter } from '../gpu/passes/Scatter';
 import { addScatterDebug } from './ScatterDebug';
 import { Forests } from '../vegetation/Forests';
+import { GroundRing } from '../vegetation/GroundRing';
 import { buildVegLibrary } from '../vegetation/VegLibrary';
 import { updateSunUniforms } from '../render/VegMaterials';
 import { Heightfield } from '../world/Heightfield';
@@ -114,6 +115,17 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       forests.update(engine.renderer, engine.camera);
       Object.assign(engine.stats.counters, forests.counterSnapshot());
     });
+
+    // near-field carpets: 800k-blade grass ring + 80k debris ring
+    if (!ablate.has('grass')) {
+      const ring = new GroundRing(hf, canopyTex, seed);
+      ring.init(lib.atlases.get('beech') ?? null);
+      engine.scene.add(ring.group);
+      engine.onUpdate(() => {
+        ring.update(engine.renderer, engine.camera);
+        Object.assign(engine.stats.counters, ring.counterSnapshot());
+      });
+    }
   }
 
   // volumetric clouds (noise bake + sun-shadow map)

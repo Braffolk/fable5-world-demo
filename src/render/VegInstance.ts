@@ -22,6 +22,7 @@ import {
   instanceIndex,
   interleavedGradientNoise,
   mix,
+  normalLocal,
   positionLocal,
   screenCoordinate,
   smoothstep,
@@ -153,7 +154,19 @@ export function instanceVeg(
   const px = rx.add(B.y.mul(ls.y));
   const pz = rz.add(B.z.mul(ls.y));
   const wpos = vec3(px, ls.y, pz).add(A.xyz);
-  mat.positionNode = wpos;
+  // Normals MUST rotate with the instance (same mechanism as three's
+  // InstanceNode: assign normalLocal before returning the position). With
+  // unrotated normals a yawed trunk is lit from the wrong side — reads as
+  // inverted faces ("seeing the far side of the trunk").
+  mat.positionNode = Fn(() => {
+    const n = vec3(
+      normalLocal.x.mul(c).add(normalLocal.z.mul(s)),
+      normalLocal.y,
+      normalLocal.z.mul(c).sub(normalLocal.x.mul(s)),
+    ).toVar();
+    normalLocal.assign(n);
+    return wpos;
+  })();
   // shadow-map pass builds its own position pipeline — feed it the same
   // instance transform or casters render at the pool origin
   (mat as unknown as { castShadowPositionNode: unknown }).castShadowPositionNode = wpos;
