@@ -73,6 +73,9 @@ async function boot(): Promise<void> {
   hooks.setPose = (p) => fly.setPose(p);
   hooks.getPose = () => fly.getPose();
   hooks.settle = (frames?: number) => engine.settle(frames ?? 8);
+  hooks.flyCamEnabled = (on) => {
+    fly.enabled = on;
+  };
 
   engine.start();
   await engine.settle(6);

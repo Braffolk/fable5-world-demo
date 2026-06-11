@@ -7,6 +7,7 @@
  * ?alt=N puts the camera N meters above ground (ground-clamped spawn).
  */
 
+import { BOOKMARKS, installBookmarks } from './Bookmarks';
 import { Froxels } from '../gpu/passes/Froxels';
 import { PARTICLE_COUNT, Particles } from '../gpu/passes/Particles';
 import { ProbeGI } from '../gpu/passes/ProbeGI';
@@ -49,9 +50,12 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     engine.stats.counters['terrain.maxH'] = Math.round(maxH);
   }
 
-  // physical sky first: probe gathering needs the atmosphere LUTs
+  // physical sky first: probe gathering needs the atmosphere LUTs.
+  // ?shot=N boots straight into a composed bookmark — use ITS time of day
+  const bootBm = params.shot !== null ? BOOKMARKS[params.shot - 1] : undefined;
+  const bootTod = bootBm?.tod ?? params.timeOfDay;
   ctx.progress(0.93, 'sky: baking atmosphere LUTs');
-  const sunSky = new SunSky(engine, params.timeOfDay);
+  const sunSky = new SunSky(engine, bootTod);
   await sunSky.init(engine.renderer);
   (engine as unknown as { sunSky?: SunSky }).sunSky = sunSky;
   // tooling probe handle (tools/probe-state.ts) — light/scene state triage
@@ -232,7 +236,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
 
   // HDR post stack: aerial perspective, clouds, GTAO, TRAA, bloom, exposure, grade
   ctx.progress(0.98, 'post: building pipeline');
-  const post = new PostStack(engine, sunSky.atmosphere, params.timeOfDay, clouds, froxels);
+  const post = new PostStack(engine, sunSky.atmosphere, bootTod, clouds, froxels);
   engine.post = post;
 
   ctx.hooks.setTimeOfDay = (t: number) => {
@@ -278,6 +282,9 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     const wsurf = hf.waterYAtCpu(c.x, c.z) + 0.45;
     if (c.y < wsurf) c.y = wsurf;
   });
+
+  // composed bookmarks (keys 1-9, ?shot=N) + 92 s flythrough (?fly=1 / F)
+  installBookmarks(engine, hf, ctx.hooks, params);
 
   ctx.progress(1, 'terrain ready');
 }

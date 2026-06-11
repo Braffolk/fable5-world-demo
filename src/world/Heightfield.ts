@@ -309,6 +309,48 @@ export class Heightfield {
     for (let it = 0; it < 2; it++) {
       await renderer.computeAsync([mkSmooth(out, tmp), mkSmooth(tmp, out)]);
     }
+
+    // WET-TO-WET cliff cut: adjacent ponds can legitimately fill at levels
+    // a meter+ apart; across their (sub-texel) divide the bilinear+smoothed
+    // surface renders a steep dark water RAMP — a hovering slab from afar
+    // (user-class artifact found at the twin lake). Water never ramps:
+    // where the gradient BETWEEN WET CELLS exceeds ~0.35, sink the cell to
+    // dry. Shorelines are untouched (their neighbor is dry, not wet).
+    const texel = WORLD_SIZE / res;
+    const cliffK = Fn(() => {
+      const i = instanceIndex;
+      If(i.greaterThanEqual(res * res), () => {
+        Return();
+      });
+      const x = i.mod(res).toInt();
+      const y = i.div(res).toInt();
+      const xm = clamp(float(x).sub(1), 0, res - 1).toInt();
+      const xp = clamp(float(x).add(1), 0, res - 1).toInt();
+      const ym = clamp(float(y).sub(1), 0, res - 1).toInt();
+      const yp = clamp(float(y).add(1), 0, res - 1).toInt();
+      const c = out.element(i).toVar();
+      const dMax = float(0).toVar();
+      for (const [ox, oy] of [[xm, y], [xp, y], [x, ym], [x, yp]] as const) {
+        const ni = (oy as NI).mul(res).add(ox as NI);
+        const wn = wet.element(ni);
+        dMax.assign(dMax.max(c.sub(out.element(ni)).abs().mul(wn)));
+      }
+      const isWet = wet.element(i).greaterThan(0.5);
+      const cliff = dMax.div(texel).greaterThan(0.35);
+      tmp.element(i).assign(
+        isWet.and(cliff).select(bed.element(i).sub(2), c),
+      );
+    })().compute(res * res);
+    cliffK.setName('waterYCliffCut');
+    const copyK = Fn(() => {
+      const i = instanceIndex;
+      If(i.greaterThanEqual(res * res), () => {
+        Return();
+      });
+      out.element(i).assign(tmp.element(i));
+    })().compute(res * res);
+    copyK.setName('waterYCopy');
+    await renderer.computeAsync([cliffK, copyK]);
     return out;
   }
 
@@ -327,14 +369,24 @@ export class Heightfield {
       });
       const bx = i.mod(farRes).mul(factor).toInt();
       const by = i.div(farRes).mul(factor).toInt();
-      const m = float(1e9).toVar();
+      // Plain conservative MIN. Known limitation (diagnosed at the twin
+      // lake, 2026-06-12): shore-overlapping blocks dip toward the dry
+      // sentinel, so a low grazing view across a LARGE lake shows a thin
+      // dark band at its far rim. Alternatives tried and rejected:
+      // max-of-wet domes over river inlets; min-of-wet lenses where wide
+      // inlet rivers meet the lake (two legitimate wet levels bridge
+      // across 16 m far-texels). The real fix is a per-water-body far
+      // field or the planar-lake pass (logged in STATUS) — at ≥384 m the
+      // min's dip is the least-bad behavior and shore ramps fade out in
+      // the material on the NEAR levels where they would be obvious.
+      const mn = float(1e9).toVar();
       for (let oy = 0; oy < factor; oy++) {
         for (let ox = 0; ox < factor; ox++) {
-          const v = src.element(by.add(oy).mul(res).add(bx.add(ox)));
-          m.assign(m.min(v));
+          const idx = by.add(oy).mul(res).add(bx.add(ox));
+          mn.assign(mn.min(src.element(idx)));
         }
       }
-      out.element(i).assign(m);
+      out.element(i).assign(mn);
     })().compute(farRes * farRes);
     kernel.setName('waterYFar');
     await renderer.computeAsync(kernel);

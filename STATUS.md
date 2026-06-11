@@ -252,6 +252,24 @@ cov 0.62), contact shadows (?ablate=contact to A/B), black facets root-caused to
   (esp. river width/coverage now matching their "too much water" ask);
   wind feel (amplitude/speed live); fog density taste (?fog=N); particle
   visibility. Shadow-flicker live check still outstanding from Phase 5.
+- PHASE 7 PROGRESS (2026-06-12): perf pass 1 DONE — 48→32 ms GPU at the
+  forest-hero framing (half-res GTAO + joint-bilateral upsample −12 ms;
+  ring-1 casters to near cascades only −4 ms; ?ablate=casters knob).
+  Next perf whales: veg main raster ~15 ms (card overdraw/hero ring),
+  bloom ~5 ms, water SSR loop. BOOKMARKS + FLYTHROUGH DONE: keys 1–9 /
+  ?shot=N (pose + per-bookmark ToD), ?fly=1 or F = 92 s Catmull-Rom tour
+  (src/debug/Bookmarks.ts; poses verified by shots). Remaining Phase 7:
+  more perf toward 60fps@1440p, reduced preset wiring, HUD per-pass GPU
+  timings + timestamp overflow, full battery, final two-frame test +
+  self-score rubric, fold gate art-direction deltas into the bookmarks.
+- KNOWN LIMITATION (logged 2026-06-12, deep-dived): large-lake FAR RIM
+  shows a thin dark band at low grazing views (bookmark 2). Diagnosis
+  trail: NOT trees/fresnel/SSR-reach/canopy-attenuation/wet-fringe — it
+  is the min-reduced far water field dipping at shore-overlapping 8×8
+  blocks, exaggerated edge-on. min-of-wet/max-of-wet reductions tried and
+  REJECTED (inlet lens/dome — two legitimate wet levels bridge a 16 m far
+  texel). Proper fix = per-water-body far field or the planar-lake pass
+  (optional polish item); revisit only if the user flags it live.
 
 ## Key decisions log
 

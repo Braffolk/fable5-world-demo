@@ -56,6 +56,8 @@ export interface LaasHooks {
   setTimeOfDay: ((t: number) => void) | null;
   /** settle frames (TAA/temporal effects) then resolve — call before screenshots */
   settle: ((frames?: number) => Promise<void>) | null;
+  /** enable/disable fly-camera input (flythrough takes the wheel) */
+  flyCamEnabled: ((on: boolean) => void) | null;
 }
 
 declare global {
@@ -77,6 +79,7 @@ export function initHooks(): LaasHooks {
     initialPose: null,
     setTimeOfDay: null,
     settle: null,
+    flyCamEnabled: null,
   };
   window.__laas = hooks;
   return hooks;

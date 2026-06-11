@@ -199,7 +199,10 @@ export function waterMaterial(
   const rdir = reflect(viewDir.negate(), vec3(n.x.mul(0.55), n.y, n.z.mul(0.55)).normalize());
   const reflection = Fn((): NV3 => {
     const dirV = cameraViewMatrix.mul(vec4(rdir, 0)).xyz;
-    const stepLen = clamp(dist.mul(0.09), 0.25, 12);
+    // far cap 28 m: a grazing lake reflects its far tree line — with a
+    // 12 m cap the march died ~200 m short and the whole far band fell to
+    // the FLAT probe fallback (read as a dark slab hovering on the lake)
+    const stepLen = clamp(dist.mul(0.09), 0.25, 28);
     const jitter = interleavedGradientNoise(screenCoordinate.xy);
     const hit = float(0).toVar();
     const hitUv = vec2(0, 0).toVar();
@@ -228,32 +231,35 @@ export function waterMaterial(
         },
       );
     });
-    // sky fallback (horizon-clamped so the LUT never samples below ground);
-    // canopy-attenuated — a gorge stream under crowns must NOT reflect open
-    // sky (scene1/2 streams read dark because their sky is occluded)
+    // sky fallback (horizon-clamped so the LUT never samples below ground)
     const rdirUp = vec3(rdir.x, rdir.y.max(0.035), rdir.z).normalize();
-    let sky = atm.skyColor(rdirUp);
-    if (canopyTex) {
-      const cov = canopyAt(canopyTex, positionWorld.xz);
-      sky = sky.mul(cov.mul(0.7).oneMinus()) as unknown as ReturnType<typeof atm.skyColor>;
-    }
-    // TERRAIN-HORIZON occlusion: when the SSR march misses, "sky" is only
-    // correct if the reflected ray actually clears the terrain. A noon gorge
-    // stream otherwise mirrors bright open sky and reads as a white-blue
-    // sheet (the walls are what's really in the mirror). March the height
-    // field at log-spaced ranges (nearest fetches); occluded rays fall back
-    // to the probe field sampled toward the reflection — the probes already
-    // encode how bright the walls/canopy are in that direction.
+    const sky = atm.skyColor(rdirUp);
+    // CROWNED-HORIZON occlusion: when the SSR march misses, "sky" is only
+    // correct if the reflected ray clears terrain AND tree crowns. March
+    // the height field at log-spaced ranges with the canopy map raising
+    // the tested horizon by crown height — one test covers both regimes:
+    // steep gorge-stream rays get caught by overhead crowns (dark wall/
+    // canopy mirror, scene1), grazing lake rays clear the far tree line
+    // into open sky (a blanket canopy multiply here used to crush the
+    // far-lake band to black). Occluded rays fall back to the probe field
+    // toward the ray — it already encodes wall/canopy brightness.
     const horizonVis = float(1).toVar();
     for (const dRay of [9, 24, 65, 180]) {
       const q = positionWorld.xz.add(rdir.xz.mul(dRay));
       const rayY = positionWorld.y.add(rdir.y.mul(dRay));
-      horizonVis.mulAssign(smoothstep(-7, 1.5, rayY.sub(hf.sampleHeightNearest(q))));
+      let hQ = hf.sampleHeightNearest(q) as NF;
+      if (canopyTex) {
+        hQ = hQ.add(canopyAt(canopyTex, q).mul(16)) as NF;
+      }
+      // wide knee — a hard threshold printed razor-edged reflection bands
+      horizonVis.mulAssign(smoothstep(-16, 7, rayY.sub(hQ)));
     }
     const wallAmb = gi
-      ? (gi.irradiance(positionWorld, rdir).mul(0.5) as unknown as NV3)
+      ? (gi.irradiance(positionWorld, rdir).mul(0.65) as unknown as NV3)
       : (sky.mul(0.18) as unknown as NV3);
-    const fallback = mix(wallAmb, sky as unknown as NV3, horizonVis);
+    // ripple-jittered blend breaks the residual banding at the transition
+    const vJit = n.x.add(n.z).mul(0.18);
+    const fallback = mix(wallAmb, sky as unknown as NV3, horizonVis.add(vJit).clamp(0, 1));
     // fade SSR toward the screen border so hits don't pop at the edge
     const e = hitUv.sub(0.5).abs().mul(2);
     const edgeFade = smoothstep(1.0, 0.82, e.x.max(e.y));
@@ -305,8 +311,26 @@ export function waterMaterial(
   mat.colorNode = vec3(0.74, 0.76, 0.74).mul(foam);
   mat.emissiveNode = mix(refr, skyRefl, fres).mul(foam.oneMinus());
   mat.roughnessNode = mix(float(0.05), float(0.55), foam);
-  // shoreline feather: mm-deep water fades out over the bed
-  mat.opacityNode = smoothstep(0.004, 0.05, vDepth).mul(0.985);
+  // shoreline feather: mm-deep water fades out over the bed. ALSO fade
+  // steep surface RAMPS: the field dives ~2 m to the dry sentinel past
+  // every shoreline — across a FLAT far beach seen edge-on that dive
+  // renders as a thick dark band hugging the shore (twin-lake artifact).
+  // Hydrology gates real water to gentle slopes (rdGate), so any render
+  // slope ≥ ~30° is a dive, never water.
+  const eS = 2.0;
+  const gWx = sampleY(positionWorld.xz.add(vec2(eS, 0)))
+    .sub(sampleY(positionWorld.xz.sub(vec2(eS, 0))))
+    .div(2 * eS);
+  const gWz = sampleY(positionWorld.xz.add(vec2(0, eS)))
+    .sub(sampleY(positionWorld.xz.sub(vec2(0, eS))))
+    .div(2 * eS);
+  // near levels only: far levels carry the min-reduction's shore dip by
+  // design (see Heightfield.reduceWaterY) — fading it would expose the
+  // dark silt bed as a rim band instead
+  const rampK = lvl.far
+    ? float(1)
+    : smoothstep(0.55, 0.3, vec2(gWx, gWz).length());
+  mat.opacityNode = smoothstep(0.004, 0.05, vDepth).mul(rampK).mul(0.985);
 
   // ?waterdbg=N — component probe ladder (1 foam, 2 fresnel, 3 refraction,
   // 4 reflection, 5 column thickness, 6 SSR hit/horizon mix)
