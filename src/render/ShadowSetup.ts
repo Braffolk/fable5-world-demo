@@ -20,8 +20,8 @@ import {
 } from 'three/tsl';
 import type { NF, NV2, NV4 } from '../gpu/TSLTypes';
 
-const BLOCKER_TAPS = 8;
-const PCF_TAPS = 12;
+const BLOCKER_TAPS = 6;
+const PCF_TAPS = 9;
 /** light angular size factor: penumbra growth per unit blocker–receiver gap */
 const PENUMBRA_SCALE = 38;
 const MAX_PENUMBRA_TEXELS = 14;

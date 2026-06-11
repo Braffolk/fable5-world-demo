@@ -95,11 +95,11 @@ function grassThin(dist: NF): NF {
   return float(58).div(dist.max(1).add(42)).min(1).pow(1.15);
 }
 
-const DEB_GRID = 448;
-const DEB_CELL = 0.3; // ±67 m ring
-const DEB_R = 62;
+const DEB_GRID = 512;
+const DEB_CELL = 0.3; // ±77 m ring
+const DEB_R = 74;
 // cobble / pebble / twig / chip / litter
-const DEB_CAPS = [16384, 32768, 24576, 16384, 32768];
+const DEB_CAPS = [24576, 49152, 49152, 32768, 65536];
 
 interface RingBind {
   cells: StorageBufferNode<'uint'>;
@@ -439,17 +439,21 @@ export class GroundRing {
       });
       const canopy = canopyAt(canopyTex, wpos);
       const streamK = smoothstep(0.32, 0.7, fl.y).max(smoothstep(0.02, 0.2, fl.z));
-      const wCobble = streamK.mul(2.2).add(bio.w.mul(0.3)).mul(0.5);
-      const wPebble = bio.w.mul(0.9).add(streamK).add(0.15).mul(0.6);
-      const wTwig = canopy.mul(1.4).add(0.1).mul(float(1).sub(streamK));
+      // bank margin: too shallow for the bed override, too wet for grass —
+      // gravel it or it reads as a bare strip along every wash
+      const marginK = smoothstep(0.005, 0.06, fl.z).mul(float(1).sub(streamK));
+      const wCobble = streamK.mul(2.2).add(marginK.mul(0.8)).add(bio.w.mul(0.3)).mul(0.5);
+      const wPebble = bio.w.mul(0.9).add(streamK).add(marginK.mul(1.4)).add(0.15).mul(0.6);
+      const wTwig = canopy.mul(1.8).add(0.12).mul(float(1).sub(streamK));
       const wChip = canopy.mul(0.8).mul(float(1).sub(streamK));
-      const wLitter = canopy.mul(2.0).add(0.05).mul(float(1).sub(streamK.mul(0.8)));
+      const wLitter = canopy.mul(3.0).add(0.08).mul(float(1).sub(streamK.mul(0.8)));
       const wSum = wCobble.add(wPebble).add(wTwig).add(wChip).add(wLitter);
       // streambeds are FULLY cobbled geometry (spec §9) — override biome density
-      const dens = byBio(bioId, [0.25, 0.45, 0.8, 0.85, 0.5, 0.6])
+      const dens = byBio(bioId, [0.4, 0.6, 1.0, 1.0, 0.6, 0.75])
         .mul(float(1).sub(bio.y.mul(0.9)))
         .mul(wSum.mul(0.5).min(1))
         .max(streamK.mul(0.95))
+        .max(marginK.mul(0.7))
         .mul(float(1).sub(smoothstep(0.7, 1.05, ns.w)));
       const edge = float(1).sub(smoothstep(DEB_R * 0.72, DEB_R, dist));
       If(cellHash(wc, salt ^ 0x132f).greaterThanEqual(dens.mul(edge)), () => {

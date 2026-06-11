@@ -66,6 +66,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   engine.stats.counters['veg.trees'] = scatter.trees.count;
   engine.stats.counters['veg.under'] = scatter.understory.count;
   engine.stats.counters['veg.extras'] = scatter.extras.count;
+  engine.stats.counters['veg.stones'] = scatter.stones.count;
 
   ctx.progress(0.958, 'terrain: building tiles');
   const view = new URLSearchParams(window.location.search).get('view');

@@ -69,6 +69,13 @@ export const enum VegClass {
   Stump = 17,
   Boulder = 18,
   Slab = 19,
+  // size-stratified ground solids (the "no bare ground" layer): each class
+  // draws to the range where it still covers >~2 px — constant screen-space
+  // granularity, the aggregate equivalent of nanite cluster selection
+  StoneL = 20, // 0.6–2.2 m → 900 m
+  StoneM = 21, // 0.2–0.6 m → 280 m
+  StoneS = 22, // 6–20 cm → 90 m
+  Branch = 23, // fallen branches on forest floors → 230 m
 }
 
 /** structural variants baked per tree species (geometry reuse, D5) */
@@ -86,15 +93,19 @@ export interface ScatterResult {
   trees: ScatterLayer;
   understory: ScatterLayer;
   extras: ScatterLayer;
+  /** stones (3 size classes) + fallen branches — ground-solid coverage */
+  stones: ScatterLayer;
 }
 
 // child-grid cell sizes (m) — jitter spans the full cell, so no grid reads
 const TREE_CELL = 3.4;
 const UNDER_CELL = 2.4;
-const EXTRA_CELL = 7;
+const EXTRA_CELL = 5.5;
+const STONE_CELL = 2.1;
 const TREE_CAP = 600_000;
 const UNDER_CAP = 700_000;
-const EXTRA_CAP = 90_000;
+const EXTRA_CAP = 180_000;
+const STONE_CAP = 1_500_000;
 
 // parent clump field (shared by trees + understory — canopy correlation)
 const PARENT_CELL = 26;
@@ -610,7 +621,7 @@ export async function runScatter(
     const w2 = s.rockExp.mul(1.1).add(0.12).mul(0.42); // boulder
     const w3 = s.rockExp.mul(0.9).mul(0.2); // slab
 
-    const dens = byBiome(s.bioId, [0.04, 0.12, 0.3, 0.32, 0.1, 0.25]);
+    const dens = byBiome(s.bioId, [0.08, 0.25, 0.62, 0.65, 0.22, 0.5]);
     const slopeFade = float(1).sub(smoothstep(0.55, 1.1, s.slope));
     const wSum = w0.add(w1).add(w2).add(w3);
     const accept = dens.mul(slopeFade).mul(wSum.min(1));
@@ -667,16 +678,112 @@ export async function runScatter(
   extraK.setName('scatterExtras');
   await renderer.computeAsync(extraK);
 
+  // ------------------------------------------------- stones + branches --
+  // size-stratified ground solids: stones everywhere geology says so
+  // (scree slopes, rock exposure, streambeds, talus under cliffs) plus a
+  // light scatter on all soil; fallen branches on forest floors. This is
+  // the "no bare ground" layer — references show ground GEOMETRY at every
+  // distance, never naked splat.
+  const stoneG = Math.round(WORLD_SIZE / STONE_CELL);
+  const stoneA = instancedArray(STONE_CAP, 'vec4');
+  const stoneB = instancedArray(STONE_CAP, 'vec4');
+  const stoneCount = instancedArray(1, 'uint').toAtomic();
+  const sS = seed.sub('scatter/stones') & 0x7fffffff;
+
+  const stoneK = Fn(() => {
+    const i = instanceIndex;
+    If(i.greaterThanEqual(stoneG * stoneG), () => {
+      Return();
+    });
+    const cell = vec2(float(i.mod(stoneG)), float(i.div(stoneG)));
+    const jit = cellHash2(cell, sS);
+    const wpos = cell.add(jit).div(stoneG).sub(0.5).mul(WORLD_SIZE);
+    const s = sampleSite(hf, wpos);
+    If(s.h.lessThan(LAKE_LEVEL + 0.25), () => {
+      Return();
+    });
+    If(s.standing.greaterThan(0.5), () => {
+      Return();
+    });
+
+    const canopy = clumpField(wpos, sT ^ 0x51f3);
+    const streamK = smoothstep(0.05, 0.3, s.riverDepth);
+    // scree: moderate-steep slopes shed stones; talus accumulates below rock
+    const scree = smoothstep(0.42, 0.8, s.slope).mul(
+      float(1).sub(smoothstep(0.95, 1.25, s.slope)),
+    );
+    const stoneBase = byBiome(s.bioId, [0.55, 0.4, 0.26, 0.32, 0.14, 0.18])
+      .mul(
+        s.rockExp
+          .mul(0.85)
+          .add(scree.mul(0.7))
+          .add(streamK.mul(0.9))
+          .add(0.12),
+      )
+      .mul(float(1).sub(s.snow.mul(0.85)));
+    const branchW = canopy.mul(0.55).mul(
+      byBiome(s.bioId, [0, 0.2, 1, 1, 0.3, 0.7]),
+    );
+    const accept = stoneBase.add(branchW).min(1);
+    If(cellHash(cell, sS ^ 0x71f1).greaterThanEqual(accept), () => {
+      Return();
+    });
+
+    // class pick: branch vs stone, stones split L/M/S by size budget
+    const r = cellHash(cell, sS ^ 0x2e2e).mul(stoneBase.add(branchW));
+    const h2 = cellHash2(cell, sS ^ 0x6b6b);
+    const cls = int(VegClass.Branch).toVar();
+    const scale = float(1).toVar();
+    const sink = float(0.05).toVar();
+    If(r.lessThan(stoneBase), () => {
+      const sr = h2.x;
+      If(sr.lessThan(0.13), () => {
+        cls.assign(int(VegClass.StoneL));
+        scale.assign(h2.y.pow(1.7).mul(1.6).add(0.6)); // 0.6–2.2 m
+        sink.assign(scale.mul(0.3));
+      }).Else(() => {
+        If(sr.lessThan(0.45), () => {
+          cls.assign(int(VegClass.StoneM));
+          scale.assign(h2.y.mul(0.4).add(0.2)); // 0.2–0.6 m
+          sink.assign(scale.mul(0.26));
+        }).Else(() => {
+          cls.assign(int(VegClass.StoneS));
+          scale.assign(h2.y.mul(0.14).add(0.06)); // 6–20 cm
+          sink.assign(scale.mul(0.22));
+        });
+      });
+    }).Else(() => {
+      scale.assign(h2.y.mul(0.8).add(0.6));
+      sink.assign(0.04);
+    });
+
+    const yaw = cellHash(cell, sS ^ 0x3d3d).mul(TAU);
+    const variant = cellHash(cell, sS ^ 0x5c5c).mul(4).floor().min(3);
+    const idF = float(cls).mul(8).add(variant);
+    append(
+      stoneCount,
+      STONE_CAP,
+      stoneA,
+      stoneB,
+      vec4(wpos.x, s.h.sub(sink), wpos.y, scale) as unknown as NV4,
+      vec4(yaw, s.nrmXZ.x.mul(0.4), s.nrmXZ.y.mul(0.4), idF) as unknown as NV4,
+    );
+  })().compute(stoneG * stoneG);
+  stoneK.setName('scatterStones');
+  await renderer.computeAsync(stoneK);
+
   // ---- counts (single boot-time readback; instance data stays on GPU) ----
-  const [tc, uc, ec] = await Promise.all([
+  const [tc, uc, ec, sc] = await Promise.all([
     readCount(renderer, treeCount, TREE_CAP),
     readCount(renderer, underCount, UNDER_CAP),
     readCount(renderer, extraCount, EXTRA_CAP),
+    readCount(renderer, stoneCount, STONE_CAP),
   ]);
 
   return {
     trees: { bufA: treeA, bufB: treeB, cap: TREE_CAP, count: tc },
     understory: { bufA: underA, bufB: underB, cap: UNDER_CAP, count: uc },
     extras: { bufA: extraA, bufB: extraB, cap: EXTRA_CAP, count: ec },
+    stones: { bufA: stoneA, bufB: stoneB, cap: STONE_CAP, count: sc },
   };
 }

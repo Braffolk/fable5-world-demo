@@ -25,6 +25,7 @@ import {
 } from '../render/VegMaterials';
 import { buildLog, buildStump, type DecayState } from './Deadfall';
 import { captureFoliageAtlas } from './FoliageCards';
+import { twigGeometry } from './GroundCover';
 import { captureImpostor, type ImpostorAtlas, type ImpostorPart } from './Impostors';
 import { buildRock } from './RockBuilder';
 import { TREE_SPECIES } from './Species';
@@ -126,9 +127,9 @@ export async function buildVegLibrary(
   };
 
   const pools: VegPool[] = [];
-  const clsHeight = new Array<number>(20).fill(1);
-  const clsRadius = new Array<number>(20).fill(1);
-  const clsMaxDist = new Array<number>(20).fill(150);
+  const clsHeight = new Array<number>(24).fill(1);
+  const clsRadius = new Array<number>(24).fill(1);
+  const clsMaxDist = new Array<number>(24).fill(150);
   const trackCls = (cls: number, h: number, r: number): void => {
     clsHeight[cls] = Math.max(clsHeight[cls] ?? 1, h);
     clsRadius[cls] = Math.max(clsRadius[cls] ?? 1, r);
@@ -402,6 +403,94 @@ export async function buildVegLibrary(
     }
     clsMaxDist[cls] = 700;
   }
+
+  // ---- size-stratified stones + fallen branches (no-bare-ground layer) ------
+  progress(0.93, 'veg: stone/branch pools');
+  const stoneClasses: {
+    cls: number;
+    preset: 'boulder' | 'cobble';
+    d1: number;
+    d2: number | null;
+    moss: number;
+    maxDist: number;
+  }[] = [
+    { cls: VegClass.StoneL, preset: 'boulder', d1: 3, d2: 2, moss: 0.22, maxDist: 900 },
+    { cls: VegClass.StoneM, preset: 'cobble', d1: 2, d2: 1, moss: 0.12, maxDist: 280 },
+    { cls: VegClass.StoneS, preset: 'cobble', d1: 1, d2: null, moss: 0.06, maxDist: 90 },
+  ];
+  for (const sc of stoneClasses) {
+    for (let v = 0; v < 4; v++) {
+      const hi = buildRock(sc.preset, seed.rng(`veg/stone${sc.cls}/${v}`), sc.d1);
+      const lo =
+        sc.d2 !== null
+          ? buildRock(sc.preset, seed.rng(`veg/stone${sc.cls}/${v}`), sc.d2)
+          : null;
+      const b = bounds([hi.geometry]);
+      trackCls(sc.cls, b.height, b.radius);
+      pools.push({
+        cls: sc.cls,
+        variant: v,
+        r1: [
+          {
+            geo: hi.geometry,
+            tris: hi.stats.tris,
+            make: () => rockMaterial({ moss: sc.moss }),
+            castShadow: sc.cls !== VegClass.StoneS,
+          },
+        ],
+        r2: lo
+          ? [
+              {
+                geo: lo.geometry,
+                tris: lo.stats.tris,
+                make: () => rockMaterial({ moss: sc.moss }),
+                castShadow: sc.cls === VegClass.StoneL,
+              },
+            ]
+          : null,
+        trisR1: hi.stats.tris,
+        trisR2: lo ? lo.stats.tris : 0,
+        height: b.height,
+        radius: b.radius,
+      });
+    }
+    clsMaxDist[sc.cls] = sc.maxDist;
+  }
+  // fallen branches: scaled twig tubes, deadwood-shaded
+  for (let v = 0; v < 4; v++) {
+    const geo = twigGeometry(seed.rng(`veg/branch/${v}`));
+    geo.scale(6.5, 5, 6.5);
+    const tris = geo.index ? geo.index.count / 3 : 0;
+    const b = bounds([geo]);
+    trackCls(VegClass.Branch, b.height, b.radius);
+    pools.push({
+      cls: VegClass.Branch,
+      variant: v,
+      r1: [
+        {
+          geo,
+          tris,
+          make: () => deadwoodMaterial(deadTex),
+          castShadow: false,
+        },
+      ],
+      // clone: a geometry holds ONE indirect slot — sharing it across draws
+      // would overwrite the first draw's offset
+      r2: [
+        {
+          geo: geo.clone(),
+          tris,
+          make: () => deadwoodMaterial(deadTex),
+          castShadow: false,
+        },
+      ],
+      trisR1: tris,
+      trisR2: tris,
+      height: b.height,
+      radius: b.radius,
+    });
+  }
+  clsMaxDist[VegClass.Branch] = 230;
 
   progress(1, 'veg: pools ready');
   return { pools, impostors, clsHeight, clsRadius, clsMaxDist, atlases, barks };

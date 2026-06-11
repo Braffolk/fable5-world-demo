@@ -76,7 +76,7 @@ const CAP_UNDER = 4096;
 const CAP_EX_R1 = 1024;
 const CAP_EX_R2 = 2048;
 
-const GROUPS = 114;
+const GROUPS = 146;
 
 function groupOf(cls: number, variant: number, ring: 1 | 2 | 3): number {
   if (cls < 6) {
@@ -92,7 +92,14 @@ function capOf(g: number): number {
   if (g < 48) return g % 2 === 0 ? CAP_TREE_R1 : CAP_TREE_R2;
   if (g < 54) return CAP_IMPOSTOR;
   if (g < 82) return CAP_UNDER;
-  return (g - 82) % 2 === 0 ? CAP_EX_R1 : CAP_EX_R2;
+  if (g < 114) return (g - 82) % 2 === 0 ? CAP_EX_R1 : CAP_EX_R2;
+  // size-stratified stones/branches (cls 20–23)
+  const cls = 16 + ((g - 82) >> 3);
+  const isR1 = (g - 82) % 2 === 0;
+  if (cls === 20) return isR1 ? 4096 : 24576; // StoneL → 900 m
+  if (cls === 21) return isR1 ? 8192 : 16384; // StoneM → 280 m
+  if (cls === 22) return isR1 ? 24576 : 64; // StoneS — single ring
+  return 8192; // Branch
 }
 
 export class Forests {
@@ -162,14 +169,15 @@ export class Forests {
     );
 
     // per-class cull info: (height, radius, maxDist, hasR2)
-    const clsInfo = new Float32Array(20 * 4);
-    for (let c = 0; c < 20; c++) {
+    const clsInfo = new Float32Array(24 * 4);
+    for (let c = 0; c < 24; c++) {
       clsInfo[c * 4 + 0] = this.lib.clsHeight[c] ?? 1;
       clsInfo[c * 4 + 1] = this.lib.clsRadius[c] ?? 1;
       clsInfo[c * 4 + 2] = this.lib.clsMaxDist[c] ?? 150;
-      clsInfo[c * 4 + 3] = c >= 18 || c < 6 ? 1 : 0;
+      const hasR2 = c < 6 || c === 18 || c === 19 || c === 20 || c === 21 || c === 23;
+      clsInfo[c * 4 + 3] = hasR2 ? 1 : 0;
     }
-    const clsBuf = storage(new StorageBufferAttribute(clsInfo, 4), 'vec4', 20);
+    const clsBuf = storage(new StorageBufferAttribute(clsInfo, 4), 'vec4', 24);
 
     // ---- draws ---------------------------------------------------------------
     interface DrawSpec {
@@ -198,7 +206,13 @@ export class Forests {
     };
 
     const layerOf = (cls: number): ScatterLayer =>
-      cls < 6 ? this.scatter.trees : cls < 15 ? this.scatter.understory : this.scatter.extras;
+      cls < 6
+        ? this.scatter.trees
+        : cls < 15
+          ? this.scatter.understory
+          : cls < 20
+            ? this.scatter.extras
+            : this.scatter.stones;
 
     const fadeFor = (cls: number, ring: 1 | 2 | 3): RingFade => {
       if (cls < 6) {
@@ -209,7 +223,7 @@ export class Forests {
       }
       const maxD = this.lib.clsMaxDist[cls] ?? 150;
       if (cls < 15) return { fadeOutAt: maxD - 15, band: 15 };
-      const hasR2 = cls >= 18;
+      const hasR2 = cls === 18 || cls === 19 || cls === 20 || cls === 21 || cls === 23;
       if (ring === 1)
         return hasR2
           ? { fadeOutAt: EX_R1_FAR, band: EX_BAND }
@@ -412,6 +426,7 @@ export class Forests {
       makeCull(this.scatter.trees, 'trees'),
       makeCull(this.scatter.understory, 'under'),
       makeCull(this.scatter.extras, 'extras'),
+      makeCull(this.scatter.stones, 'extras'),
       indirectK,
     ];
   }
