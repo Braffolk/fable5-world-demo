@@ -202,10 +202,15 @@ cov 0.62), contact shadows (?ablate=contact to A/B), black facets root-caused to
   waterYRaw in carve kernel (ponds at FILL level W — flat; rivers at
   bed+gated depth; slope-gated: steep reaches dry), SPLIT thresholds
   (RIVER_T 14 carve/moisture unchanged; WATER_T +220 visible water only),
-  flowDir = dir × speed (0 in lakes). User-confirmed fixed: water spikes,
-  far half-flooded mountains, border sheets, foam stripes. REMAINING for
-  stream-water close: caustics on submerged beds, gate shots vs scene1/2,
-  underwater camera guard maybe, WATER_T fine-tune with user live.
+  flowDir = dir × speed (0 in lakes). User-confirmed fixed LIVE: water
+  spikes, far half-flooded mountains, border sheets, foam stripes, foam
+  loop seam (detail octave moved inside the two-phase blend + variance
+  renorm, commit "FIX: foam loop seam"), flow motion "looks good now".
+  REMAINING for stream-water close: caustics on submerged beds, gate
+  shots vs scene1/2 (streambed close-up), underwater camera guard maybe,
+  WATER_T fine-tune if user flags. Deadfall winding/caps fixed+confirmed
+  (1a80f86). THEN: lakes planar reflection → hierarchical wind (user is
+  waiting on animated trees) → froxels → particles.
   (2) LAKES: planar reflection at LAKE_LEVEL (one clip-plane pass) +
   shore blend.
   (3) HIERARCHICAL WIND: trunk sway (low-freq) + branch/card flutter
