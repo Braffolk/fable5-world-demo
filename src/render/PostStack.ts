@@ -45,6 +45,7 @@ import {
   velocity,
 } from 'three/tsl';
 import type { Engine } from '../core/Engine';
+import type { Froxels } from '../gpu/passes/Froxels';
 import { hash12 } from '../gpu/noise/NoiseTSL';
 import type { NF, NV3, NV4 } from '../gpu/TSLTypes';
 import type { Atmosphere } from '../sky/Atmosphere';
@@ -62,6 +63,7 @@ export class PostStack {
     atmosphere: Atmosphere,
     tod: number,
     clouds: Clouds | null = null,
+    froxels: Froxels | null = null,
   ) {
     const { renderer, scene, camera } = engine;
     const q = new URLSearchParams(window.location.search);
@@ -164,6 +166,12 @@ export class PostStack {
       const camAltKm = camPosW.y.div(1000).max(0.005);
       // sky = cleared depth; tolerate either depth convention (0 or 1 at far)
       const isSky = d.lessThanEqual(1e-7).or(d.greaterThanEqual(0.9999999));
+      // froxel volumetrics first (local shafts/valley fog ≤ ~480 m), the
+      // km-scale Hillaire haze integrates on top of the fogged radiance
+      if (froxels) {
+        const fogDist = isSky.select(float(1e5), dist);
+        col.assign(froxels.apply(col, fogDist, screenUV));
+      }
       const hazed = atmosphere.aerial(col, dirW, camAltKm, distKm);
       // reversed-z: far plane clears to 0 → sky already carries the atmosphere
       const scenePart = isSky.select(col, hazed).toVar();

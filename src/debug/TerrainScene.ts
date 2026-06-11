@@ -7,6 +7,7 @@
  * ?alt=N puts the camera N meters above ground (ground-clamped spawn).
  */
 
+import { Froxels } from '../gpu/passes/Froxels';
 import { ProbeGI } from '../gpu/passes/ProbeGI';
 import { buildCanopyMap, runScatter } from '../gpu/passes/Scatter';
 import { addScatterDebug } from './ScatterDebug';
@@ -203,9 +204,19 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     shadowRig,
   };
 
+  // froxel volumetrics: canopy shafts + valley fog (?ablate=froxels, ?fog=N)
+  let froxels: Froxels | null = null;
+  if (!ablate.has('froxels')) {
+    froxels = new Froxels(hf, sunSky.atmosphere, canopyTex, clouds);
+    const fq = Number(new URLSearchParams(window.location.search).get('fog') ?? NaN);
+    if (Number.isFinite(fq)) froxels.fogK.value = fq;
+    const fx = froxels;
+    engine.onUpdate(() => fx.update(engine.renderer, engine.camera));
+  }
+
   // HDR post stack: aerial perspective, clouds, GTAO, TRAA, bloom, exposure, grade
   ctx.progress(0.98, 'post: building pipeline');
-  const post = new PostStack(engine, sunSky.atmosphere, params.timeOfDay, clouds);
+  const post = new PostStack(engine, sunSky.atmosphere, params.timeOfDay, clouds, froxels);
   engine.post = post;
 
   ctx.hooks.setTimeOfDay = (t: number) => {
