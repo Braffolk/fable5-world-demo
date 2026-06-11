@@ -71,6 +71,30 @@ export interface TerrainShading {
 
 const uvFromWorld = (p: NV2): NV2 => p.div(WORLD_SIZE).add(0.5);
 
+/**
+ * Micro-displacement constants — SHARED by the TerrainTiles vertex stage
+ * (geometry) and the fragment normal counterpart below. fbm(2.6 m) rolls +
+ * val(0.9 m) breakup + ridged(1.15 m) creases (rock-weighted); amplitude
+ * fades out 45→85 m and is gated by slope/rockExposure so grass meadows
+ * stay smooth under their blade carpet (veg sits on the undisplaced field).
+ */
+export const DISP = {
+  base: 0.15,
+  rock: 0.55,
+  gravel: 0.3,
+  fade0: 45,
+  fade1: 85,
+  sF1: 2.6,
+  sF2: 0.9,
+  sRid: 1.15,
+  wF1: 0.55,
+  wF2: 0.33,
+  wRid: 0.62,
+  ridBase: 0.25,
+  slopeKnee0: 0.45,
+  slopeKnee1: 0.95,
+} as const;
+
 export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
   const wp = positionWorld;
   const wxz = wp.xz;
@@ -274,6 +298,31 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
         ).mul(bumpAmp),
       )
       .normalize();
+
+    // geometric micro-displacement counterpart (TerrainTiles vertex): the
+    // silhouette now has fbm/ridged relief — light it with the analytic
+    // height-gradient normal (−∂h/∂x, 0, −∂h/∂z), same amplitudes + fade,
+    // or the displaced surface shades as if it were still flat. Same gating
+    // curve as the vertex stage (NOT rockW — different knees).
+    const rockKd = smoothstep(DISP.slopeKnee0, DISP.slopeKnee1, slope).max(
+      rockExposure.mul(0.85),
+    );
+    // gravel banks/streambeds are lumpy even on gentle slopes
+    const gravelKd = smoothstep(0.32, 0.7, flowStrength)
+      .max(smoothstep(0.02, 0.2, riverDepth))
+      .mul(float(DISP.gravel));
+    const dispAmpF = mix(float(DISP.base), float(DISP.rock), rockKd)
+      .max(gravelKd)
+      .mul(snowW.mul(0.75).oneMinus())
+      .mul(
+        clamp(float(DISP.fade1).sub(camDist).div(DISP.fade1 - DISP.fade0), 0, 1),
+      );
+    const gF = fbmG(DISP.sF1).mul(2 * DISP.wF1);
+    const gR = ridG(DISP.sRid).mul(
+      rockKd.mul(1 - DISP.ridBase).add(DISP.ridBase).mul(DISP.wRid),
+    );
+    const gSum = gF.add(gR).mul(dispAmpF);
+    nrm = nrm.add(vec3(gSum.x.negate(), 0, gSum.y.negate())).normalize();
   }
 
   // ---------- roughness ---------------------------------------------------------------

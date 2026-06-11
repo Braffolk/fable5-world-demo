@@ -23,6 +23,7 @@ import {
   clamp,
   float,
   fract,
+  smoothstep,
   instanceIndex,
   instancedArray,
   mix,
@@ -37,7 +38,8 @@ import {
   vec4,
 } from 'three/tsl';
 import type { ProbeGI } from '../gpu/passes/ProbeGI';
-import { buildTerrainShading } from '../render/TerrainMaterial';
+import { DISP, buildTerrainShading } from '../render/TerrainMaterial';
+import { PERIOD_FBM, PERIOD_RID, PERIOD_VAL } from '../gpu/passes/NoiseBake';
 import type { Heightfield } from './Heightfield';
 import { macroTerrain } from './MacroMap';
 import { FAR_RADIUS, WORLD_HALF, WORLD_SIZE } from './WorldConst';
@@ -124,7 +126,48 @@ export class TerrainTiles {
     // instance + object matrices are identity → positionNode is world space
     const skirtDrop = isSkirt.mul(tileSize.mul(0.045).add(2.5));
     const hSample = hf.sampleHeightFrom(heightBuf, wpos).sub(skirtDrop);
-    mat.positionNode = vec3(wpos.x, hSample, wpos.y);
+
+    // --- micro-displacement (5×-detail / Pillar A): geometric relief ≤85 m.
+    // The splat's bump normals imply 10–35 cm of relief the silhouette never
+    // had — grazing close-ups read blob-smooth ("bare smooth ground" ban).
+    // Crack-free: skirt verts sample the same world-space field at their
+    // clamped edge position, and CDLOD morph makes shared-edge verts
+    // coincide across LODs. Veg sits on the UNDISPLACED field — amplitude
+    // stays ≤9 cm where grass grows (blade sink hides it), full on bare
+    // rock/scree; snow smooths it back out.
+    const uvV = wpos.div(WORLD_SIZE).add(0.5);
+    const nsV = texture(hf.normalTex, uvV, 0);
+    const bioV = hf.biomeTex ? texture(hf.biomeTex, uvV, 0) : vec4(0, 0, 0, 0);
+    const fldV = hf.fieldsTex ? texture(hf.fieldsTex, uvV, 0) : vec4(0, 0, 0, 0);
+    const rockK = smoothstep(DISP.slopeKnee0, DISP.slopeKnee1, nsV.w).max(
+      bioV.a.mul(0.85),
+    );
+    const gravelK = smoothstep(0.32, 0.7, fldV.y)
+      .max(smoothstep(0.02, 0.2, fldV.z))
+      .mul(float(DISP.gravel));
+    const dispAmp = mix(float(DISP.base), float(DISP.rock), rockK)
+      .max(gravelK)
+      .mul(bioV.g.mul(0.75).oneMinus())
+      .mul(clamp(float(DISP.fade1).sub(camD).div(DISP.fade1 - DISP.fade0), 0, 1));
+    const noiseA = hf.noiseA as NonNullable<typeof hf.noiseA>;
+    const noiseB = hf.noiseB as NonNullable<typeof hf.noiseB>;
+    const f1 = texture(noiseA, wpos.div(DISP.sF1 * PERIOD_FBM), 0)
+      .y.mul(2)
+      .sub(1);
+    const f2 = texture(noiseA, wpos.div(DISP.sF2 * PERIOD_VAL).add(vec2(0.31, 0.77)), 0)
+      .x.mul(2)
+      .sub(1);
+    // ridged creases (1−|n| sharp valleys) carry the "rock" read — weighted
+    // toward rock faces, soft elsewhere
+    const r1 = texture(noiseB, wpos.div(DISP.sRid * PERIOD_RID), 0)
+      .z.mul(2)
+      .sub(1);
+    const disp = f1
+      .mul(DISP.wF1)
+      .add(f2.mul(DISP.wF2))
+      .add(r1.mul(rockK.mul(1 - DISP.ridBase).add(DISP.ridBase)).mul(DISP.wRid))
+      .mul(dispAmp);
+    mat.positionNode = vec3(wpos.x, hSample.add(disp), wpos.y);
     // shadow casting: skip the morph + bilinear (4 reads → 1); cascade texels
     // are meters wide, normalBias absorbs the nearest-fetch steps
     mat.castShadowPositionNode = vec3(
@@ -146,6 +189,13 @@ export class TerrainTiles {
     mat.normalNode = shading.normalNode;
     mat.roughnessNode = shading.roughnessNode;
     mat.metalnessNode = float(0);
+    // ?dispdbg=1 — paint micro-displacement (green=+, red=−, dark=none);
+    // must land AFTER the shading assignment or it gets overwritten
+    if (new URLSearchParams(window.location.search).get('dispdbg') === '1') {
+      const dv = varying(disp);
+      mat.colorNode = vec3(0.02);
+      mat.emissiveNode = vec3(dv.negate().max(0).mul(2), dv.max(0).mul(2), 0.02);
+    }
     if (opts.gi && !ablate.has('gi')) {
       // probe-GI irradiance replaces the hemisphere ambient (Phase 3) —
       // injected through the lighting context like a light map. The probe
