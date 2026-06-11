@@ -38,14 +38,20 @@ export function buildTree(
   const skel = growSkeleton(sp, rng, opts?.inst);
 
   // ---- bark/tubes ------------------------------------------------------------
+  // Ring LODs stop the tube hierarchy BELOW the anchor level — the card
+  // sprays visually own that level, so its tubes are pure waste (a forest
+  // beech carried 98k card + 13k twig tris before this diet).
+  const anchorLevel = sp.foliage?.anchorLevel ?? 2;
   const barkG = new MeshGrower();
-  const lodK = lod === 0 ? 1 : lod === 1 ? 0.7 : 0.45;
-  const maxLevel = lod === 0 ? 99 : lod === 1 ? 2 : 1;
+  const lodK = lod === 0 ? 1 : lod === 1 ? 0.6 : 0.32;
+  const maxLevel =
+    lod === 0 ? 99 : lod === 1 ? Math.max(1, anchorLevel - 1) : Math.max(1, anchorLevel - 2);
   tubesForSkeleton(barkG, skel, rng.fork('tubes'), {
     lodK,
     uRepeats: sp.barkRepeats,
     flare: { ...sp.flare, phase: rng.float() * Math.PI * 2 },
     maxLevel,
+    branchStride: lod === 2 ? 2 : 1,
   });
   const barkTris = barkG.triCount;
   const bark = barkG.build();
@@ -54,20 +60,34 @@ export function buildTree(
   let foliage: BufferGeometry | null = null;
   let foliageMesh: BufferGeometry | null = null;
   let folTris = 0;
-  if (sp.foliage && skel.anchors.length > 0 && lod === 0) {
+  if (sp.foliage && skel.anchors.length > 0) {
     const fol = sp.foliage;
     const mode = opts?.foliageMode ?? 'cards';
     const crownC = new Vector3(0, skel.crownCenterY, 0);
     const crownR = Math.max(skel.crownRadius, (skel.height - skel.crownCenterY) * 0.9);
     if (mode === 'cards' || mode === 'hybrid') {
+      // ring LODs thin anchors to a card budget and enlarge the survivors
+      // (≈ sqrt(stride) keeps painted coverage), so high-anchor species
+      // (beech: 24k anchors) cost the same as low-anchor ones
+      const target = lod === 0 ? Infinity : lod === 1 ? 1100 : 300;
+      const stride = Math.max(1, Math.ceil(skel.anchors.length / target));
+      const anchors =
+        stride > 1 ? skel.anchors.filter((_, i) => i % stride === 0) : skel.anchors;
+      const card =
+        stride > 1
+          ? {
+              ...fol.card,
+              sizeK: fol.card.sizeK * Math.min(3.1, Math.sqrt(stride) * 0.9 + 0.12),
+            }
+          : fol.card;
       const folG = new MeshGrower();
-      buildFoliageCards(folG, skel.anchors, fol.card, rng.fork('foliage'));
+      buildFoliageCards(folG, anchors, card, rng.fork('foliage'));
       folG.bendNormals(crownC, crownR, fol.normalBend);
       folG.crownAO(crownC, crownR, 0.55);
       folTris += folG.triCount;
       foliage = folG.build();
     }
-    if (mode === 'mesh' || mode === 'hybrid') {
+    if ((mode === 'mesh' || mode === 'hybrid') && lod === 0) {
       const folG = new MeshGrower();
       const folRng = rng.fork('foliageMesh');
       // real needles need ~3x density to match the painted card sprays

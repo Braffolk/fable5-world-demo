@@ -51,7 +51,11 @@
       "Bash(git commit -q -m 'Phase 4 CLOSE: dressing, hero hybrids, translucency, SS bounce, impostor capture, gate sheet *)",
       "Bash(git -C /Users/sebastian/IdeaProjects/fable-demo2 log --oneline -8)",
       "Bash(git -C /Users/sebastian/IdeaProjects/fable-demo2 status --short)",
-      "Bash(git commit -q -m 'Phase 5: GPU clustered-Poisson scatter \\(trees/understory/extras, density fns, ecotone warp, pcg2d hash\\) + ?view=scatter markers *)"
+      "Bash(git commit -q -m 'Phase 5: GPU clustered-Poisson scatter \\(trees/understory/extras, density fns, ecotone warp, pcg2d hash\\) + ?view=scatter markers *)",
+      "Bash(sed -n '154,160p;243,247p' src/vegetation/Understory.ts)",
+      "Bash(sed -n '15,21p' src/vegetation/Deadfall.ts)",
+      "Bash(sed -n '141,158p' src/vegetation/RockBuilder.ts)",
+      "Bash(sed -n '55,75p;110,118p' src/vegetation/Impostors.ts)"
     ]
   }
 }

@@ -197,7 +197,9 @@ export class TerrainTiles {
     this.mesh = new InstancedMesh(patch, mat, MAX_TILES);
     this.mesh.frustumCulled = false;
     this.mesh.receiveShadow = true;
-    this.mesh.castShadow = true; // terrain self-shadowing (mountain shadows)
+    // mountain shadows come from the coarse ShadowProxy grid — casting the
+    // full CDLOD mesh re-rasterized ~11M tris across the four cascades
+    this.mesh.castShadow = false;
 
     // --- far shell -----------------------------------------------------------------
     const ring = new RingGeometry(WORLD_HALF * 0.952, FAR_RADIUS, 160, 42);

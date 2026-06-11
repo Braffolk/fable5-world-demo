@@ -10,7 +10,11 @@
 import { ProbeGI } from '../gpu/passes/ProbeGI';
 import { runScatter } from '../gpu/passes/Scatter';
 import { addScatterDebug } from './ScatterDebug';
+import { Forests } from '../vegetation/Forests';
+import { buildVegLibrary } from '../vegetation/VegLibrary';
+import { updateSunUniforms } from '../render/VegMaterials';
 import { Heightfield } from '../world/Heightfield';
+import { buildTerrainShadowProxy } from '../world/ShadowProxy';
 import { TerrainTiles } from '../world/TerrainTiles';
 import { PostStack } from '../render/PostStack';
 import { setupSunShadows } from '../render/ShadowSetup';
@@ -70,6 +74,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     const tiles = new TerrainTiles(hf, view, { gi });
     engine.scene.add(tiles.mesh);
     engine.scene.add(tiles.farShell);
+    engine.scene.add(buildTerrainShadowProxy(hf));
     engine.onUpdate(() => {
       tiles.update(engine.camera);
       engine.stats.counters['terrain.tiles'] = tiles.activeTiles;
@@ -83,6 +88,24 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   engine.stats.counters['veg.under'] = scatter.understory.count;
   engine.stats.counters['veg.extras'] = scatter.extras.count;
   if (view === 'scatter') addScatterDebug(engine.scene, scatter);
+
+  // Phase 5: variant pools + GPU cull → compacted indirect draws
+  const ablate = new Set(
+    (new URLSearchParams(window.location.search).get('ablate') ?? '').split(','),
+  );
+  if (view !== 'scatter' && !ablate.has('veg')) {
+    const lib = await buildVegLibrary(engine.renderer, seed, (p, m) =>
+      ctx.progress(0.963 + p * 0.006, m),
+    );
+    const forests = new Forests(hf, scatter, lib, ablate.has('gi') ? null : gi);
+    forests.init(engine.renderer);
+    engine.scene.add(forests.group);
+    updateSunUniforms(sunSky.sun);
+    engine.onUpdate(() => {
+      forests.update(engine.renderer, engine.camera);
+      Object.assign(engine.stats.counters, forests.counterSnapshot());
+    });
+  }
 
   // volumetric clouds (noise bake + sun-shadow map)
   ctx.progress(0.97, 'sky: baking cloud noise');
@@ -120,9 +143,12 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       const x = Number(q.get('x') ?? 600);
       const z = Number(q.get('z') ?? 900);
       const yaw = Number(q.get('yaw') ?? 2.4); // rad; 0 = looking −z (north)
+      const pitch = Number(q.get('pitch') ?? NaN); // rad; negative = down
       const y = hf.heightAtCpu(x, z) + alt;
       engine.camera.position.set(x, y, z);
-      engine.camera.lookAt(x - Math.sin(yaw) * 100, y - 4, z - Math.cos(yaw) * 100);
+      const dy = Number.isFinite(pitch) ? Math.sin(pitch) * 100 : -4;
+      const dh = Number.isFinite(pitch) ? Math.cos(pitch) * 100 : 100;
+      engine.camera.lookAt(x - Math.sin(yaw) * dh, y + dy, z - Math.cos(yaw) * dh);
     } else {
       engine.camera.position.set(1500, 1000, 1900);
       engine.camera.lookAt(0, 350, -300);

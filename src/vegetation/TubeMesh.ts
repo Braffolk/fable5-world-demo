@@ -277,11 +277,16 @@ export function tubesForSkeleton(
     flare?: { amp: number; height: number; lobes: number; phase: number };
     /** skip branches at or above this level (LOD cut) */
     maxLevel?: number;
+    /** keep only every Nth branch of level ≥ 1 (far-LOD bark diet) */
+    branchStride?: number;
   },
 ): void {
   const maxLevel = opts.maxLevel ?? 99;
+  const stride = opts.branchStride ?? 1;
+  let bi = 0;
   for (const br of skel.branches) {
     if (br.level > maxLevel) continue;
+    if (br.level >= 1 && stride > 1 && bi++ % stride !== 0) continue;
     // sway: trunk rigid, outer levels flexible
     const flexB = br.level === 0 ? 0 : br.level === 1 ? 0.12 : 0.3;
     const flexT = br.level === 0 ? 0.05 : br.level === 1 ? 0.35 : 0.7;
