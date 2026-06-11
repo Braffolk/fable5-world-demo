@@ -281,10 +281,62 @@ export class PostStack {
       ? aerialNode
       : aerialNode.mul(aoFaded).mul(ablate.has('contact') ? float(1) : contactNode);
 
+    // --- screen-space bounce / color bleed (DEVIATIONS D-2) --------------------
+    // Half-res gather of nearby on-screen radiance, depth-gated, added back
+    // modulated by the receiver's chroma. Subtle by design: probes carry the
+    // large-scale bounce; this adds the local green-on-trunk / warm-on-rock
+    // bleed that probes are too coarse for. ?ablate=bounce to A/B.
+    let withBounce = withAO;
+    if (!ablate.has('bounce')) {
+      const bounceLayer = Fn((): NV4 => {
+        const res = vec4(0).toVar();
+        const d = depthTex.x;
+        const isSky = d.lessThanEqual(1e-7).or(d.greaterThanEqual(0.9999999));
+        If(isSky.not(), () => {
+          const viewPos = getViewPosition(screenUV, d, uProjInv);
+          const dist = viewPos.length();
+          // ≈0.6 m world-space gather radius projected to screen
+          const rPx = clamp(float(0.55).div(dist), 0.004, 0.07);
+          const sum = vec3(0).toVar();
+          const wsum = float(0).toVar();
+          for (let i = 0; i < 8; i++) {
+            const ga = i * 2.399963 + 0.7;
+            const rr = Math.sqrt((i + 0.5) / 8);
+            const offX = Math.cos(ga) * rr;
+            const offY = Math.sin(ga) * rr;
+            const uvS = screenUV.add(vec2(offX, offY).mul(rPx));
+            const dS = texture(depthTex.value, uvS).x;
+            const pS = getViewPosition(uvS, dS, uProjInv);
+            const w = smoothstep(1.8, 0.25, pS.sub(viewPos).length());
+            sum.addAssign(texture(beauty.value, uvS).rgb.mul(w));
+            wsum.addAssign(w);
+          }
+          res.assign(vec4(sum.div(wsum.max(1e-3)), wsum.mul(0.125)));
+        });
+        return res;
+      })();
+      const bounceRtt = rtt(bounceLayer);
+      const sizeBounce = (): void => {
+        const dpr = renderer.getPixelRatio();
+        bounceRtt.setSize(
+          Math.max(2, Math.floor(window.innerWidth * dpr * 0.5)),
+          Math.max(2, Math.floor(window.innerHeight * dpr * 0.5)),
+        );
+      };
+      sizeBounce();
+      window.addEventListener('resize', sizeBounce);
+      // receiver albedo proxy: scene color normalized by its own luminance
+      const recLum = luminance(withAO.rgb).add(0.25);
+      const recTint = withAO.rgb.div(recLum);
+      withBounce = withAO.rgb.add(
+        bounceRtt.rgb.mul(recTint).mul(bounceRtt.a).mul(0.16),
+      ) as unknown as typeof withAO;
+    }
+
     // --- TRAA ----------------------------------------------------------------------
     const taaed = ablate.has('taa')
-      ? (withAO as unknown as ReturnType<typeof traa>)
-      : traa(withAO, depthTex, velocityTex, camera);
+      ? (withBounce as unknown as ReturnType<typeof traa>)
+      : traa(withBounce, depthTex, velocityTex, camera);
 
     // --- bloom -----------------------------------------------------------------------
     const taaedRgb = (taaed as unknown as NV4).rgb;

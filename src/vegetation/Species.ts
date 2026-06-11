@@ -55,7 +55,7 @@ export const SPRUCE: SpeciesParams = {
   flare: { amp: 0.5, height: 1.0, lobes: 5 },
   barkLayer: 0,
   barkRepeats: 5,
-  foliageColor: { r: 0.045, g: 0.10, b: 0.05, hueVar: 0.16 },
+  foliageColor: { r: 0.045, g: 0.10, b: 0.05, hueVar: 0.24 },
   brokenTop: 0,
   stubChance: 0.02,
 };
@@ -100,13 +100,13 @@ export const PINE: SpeciesParams = {
     tilt: 0.55,
     clusterSize: [1, 1],
     normalBend: 0.66,
-    card: { mode: 'cross', sizeK: 2.4 },
-    leaf: { len: 0.16, width: 0.026, shapePow: 1, fold: 0, curl: 0, needleCount: 60, brush: 1 },
+    card: { mode: 'cross', sizeK: 2.2 },
+    leaf: { len: 0.21, width: 0.018, shapePow: 1, fold: 0, curl: 0, needleCount: 88, brush: 1 },
   },
   flare: { amp: 0.42, height: 0.8, lobes: 4 },
   barkLayer: 1,
   barkRepeats: 4,
-  foliageColor: { r: 0.055, g: 0.105, b: 0.045, hueVar: 0.2 },
+  foliageColor: { r: 0.04, g: 0.092, b: 0.048, hueVar: 0.22 },
   brokenTop: 0,
   stubChance: 0.04,
 };
@@ -159,7 +159,7 @@ export const BEECH: SpeciesParams = {
   flare: { amp: 0.55, height: 1.2, lobes: 6 },
   barkLayer: 2,
   barkRepeats: 4,
-  foliageColor: { r: 0.06, g: 0.135, b: 0.035, hueVar: 0.22 },
+  foliageColor: { r: 0.06, g: 0.145, b: 0.035, hueVar: 0.3 },
   brokenTop: 0,
   stubChance: 0.02,
 };
@@ -212,7 +212,7 @@ export const BIRCH: SpeciesParams = {
   flare: { amp: 0.32, height: 0.7, lobes: 4 },
   barkLayer: 3,
   barkRepeats: 3,
-  foliageColor: { r: 0.075, g: 0.14, b: 0.03, hueVar: 0.3 },
+  foliageColor: { r: 0.075, g: 0.15, b: 0.03, hueVar: 0.34 },
   brokenTop: 0,
   stubChance: 0.03,
 };
@@ -252,9 +252,9 @@ export const KARST_GNARL: SpeciesParams = {
   foliage: {
     kind: 'leafCluster',
     anchorLevel: 3,
-    spacing: 0.1,
-    tStart: 0.15,
-    scale: [0.09, 0.13],
+    spacing: 0.055,
+    tStart: 0.12,
+    scale: [0.11, 0.16],
     tilt: 0.9,
     clusterSize: [2, 4],
     normalBend: 0.66,
@@ -285,8 +285,8 @@ export const SNAG: SpeciesParams = {
       segs: 13, wander: 0.06, gravitropism: 0.04, droop: 0, tipCurl: 0, taper: 0.9,
     },
     {
-      density: 1.4, whorl: 0, childStart: 0.25, childEnd: 0.95,
-      angleBase: 1.6, angleTip: 0.9, lenRatio: 0.22, lenJitter: 0.5, radRatio: 0.3,
+      density: 2.4, whorl: 0, childStart: 0.2, childEnd: 0.97,
+      angleBase: 1.6, angleTip: 0.85, lenRatio: 0.38, lenJitter: 0.45, radRatio: 0.32,
       segs: 6, wander: 0.14, gravitropism: -0.1, droop: 0.6, tipCurl: 0.05, taper: 0.75,
     },
     {
@@ -301,7 +301,7 @@ export const SNAG: SpeciesParams = {
   barkRepeats: 4,
   foliageColor: { r: 0.1, g: 0.09, b: 0.07, hueVar: 0.1 },
   brokenTop: 0.62,
-  stubChance: 0.45,
+  stubChance: 0.28,
 };
 
 export const TREE_SPECIES: readonly SpeciesParams[] = [

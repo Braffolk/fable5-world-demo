@@ -61,6 +61,11 @@ export const ROCK_PRESETS = {
     macro: 0.14, strata: 0, strataFreq: 1, strataTilt: 0,
     ridged: 0.02, cuts: 0, cutBite: 0, micro: 0.01,
   },
+  cliffFace: {
+    radius: 3.0, squash: [1, 1.7, 0.5] as [number, number, number],
+    macro: 0.22, strata: 0.13, strataFreq: 5.5, strataTilt: 0.1,
+    ridged: 0.12, cuts: 6, cutBite: 0.4, micro: 0.02,
+  },
 } as const;
 
 export type RockPreset = keyof typeof ROCK_PRESETS;

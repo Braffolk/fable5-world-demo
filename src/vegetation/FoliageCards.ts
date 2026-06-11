@@ -54,16 +54,17 @@ function buildTwigTile(
   const half = 0.46;
   if (fol.kind === 'needleSpray') {
     const brush = fol.leaf.brush > 0.5;
+    const frond = fol.captureStyle === 'frond';
     // main spray growing +y from tile bottom; needle scale in tile units
     const scaleToTile = (2 * half) / (fol.scale[1] * 1.15);
     const leaf = {
       ...fol.leaf,
-      len: fol.leaf.len * scaleToTile,
+      len: fol.leaf.len * scaleToTile * (frond ? 1.45 : 1),
       width: fol.leaf.width * scaleToTile * 1.15,
-      needleCount: Math.round(fol.leaf.needleCount * (brush ? 1.4 : 1.2)),
+      needleCount: Math.round(fol.leaf.needleCount * (frond ? 1.5 : brush ? 1.4 : 1.2)),
     };
-    const sprayLen = fol.scale[1] * scaleToTile;
-    const sub = brush ? 6 : 9;
+    const sprayLen = fol.scale[1] * scaleToTile * (frond ? 1.3 : 1);
+    const sub = frond ? 0 : brush ? 6 : 9;
     for (let i = -1; i < sub; i++) {
       const t = i < 0 ? 0 : (i + 0.6) / sub;
       const along = -half + t * sprayLen * 0.8;
@@ -147,6 +148,19 @@ function captureMaterial(sp: SpeciesParams): MeshStandardNodeMaterial {
   return mat;
 }
 
+/** WebGPU readbacks are top-left origin; UV space expects v=0 at bottom */
+export function flipRows(px: Uint8Array, w: number, h: number): void {
+  const row = w * 4;
+  const tmp = new Uint8Array(row);
+  for (let y = 0; y < h >> 1; y++) {
+    const a = y * row;
+    const b = (h - 1 - y) * row;
+    tmp.set(px.subarray(a, a + row));
+    px.copyWithin(a, b, b + row);
+    px.set(tmp, b);
+  }
+}
+
 /** alpha-aware dilation: bleed cluster color into transparent texels */
 function dilate(px: Uint8Array, res: number, passes: number): void {
   const idx = (x: number, y: number): number => (y * res + x) * 4;
@@ -222,6 +236,7 @@ export async function captureFoliageAtlas(
     0, 0, ATLAS_RES, ATLAS_RES,
   )) as Uint8Array;
   const px = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
+  flipRows(px, ATLAS_RES, ATLAS_RES);
   dilate(px, ATLAS_RES, 6);
   rt.dispose();
 
@@ -243,13 +258,18 @@ export async function captureFoliageAtlas(
 export function buildFoliageCards(
   g: MeshGrower,
   anchors: readonly LeafAnchor[],
-  opts: { mode: 'lying' | 'cross'; sizeK: number },
+  opts: { mode: 'lying' | 'cross'; sizeK: number; bend?: number },
   rng: Rng,
 ): void {
   const right = new Vector3();
   const upL = new Vector3();
   const out = new Vector3();
   const p = new Vector3();
+  const rowPos = new Vector3();
+  const dirRow = new Vector3();
+  const nrmRow = new Vector3();
+  const bend = opts.bend ?? 0;
+  const rows = bend !== 0 ? 3 : 1; // length segments
   for (const a of anchors) {
     const tile = rng.int(4);
     const u0 = (tile % 2) * 0.5;
@@ -265,25 +285,34 @@ export function buildFoliageCards(
     const flex = 0.45 + rng.float() * 0.35;
     const phase = rng.float() * Math.PI * 2;
     const planes = opts.mode === 'cross' ? 2 : 1;
+    const bendJ = bend * (0.75 + rng.float() * 0.5);
     for (let pl = 0; pl < planes; pl++) {
       // plane 0: width=right, normal=upL; plane 1: width=upL, normal=right
       const w = pl === 0 ? right : upL;
       const nrm = pl === 0 ? upL : right;
       const base = g.vertCount;
-      for (let iv = 0; iv <= 1; iv++) {
+      // march the card spine, bending away from the plane normal
+      rowPos.copy(a.pos).addScaledVector(out, -0.08 * s);
+      for (let iv = 0; iv <= rows; iv++) {
+        const t = iv / rows;
+        const ang = bendJ * t;
+        dirRow.copy(out).multiplyScalar(Math.cos(ang)).addScaledVector(nrm, -Math.sin(ang));
+        nrmRow.copy(nrm).multiplyScalar(Math.cos(ang)).addScaledVector(out, Math.sin(ang));
         for (let iu = 0; iu <= 1; iu++) {
-          p.copy(a.pos)
-            .addScaledVector(w, (iu - 0.5) * s)
-            .addScaledVector(out, (iv - 0.08) * s);
+          p.copy(rowPos).addScaledVector(w, (iu - 0.5) * s);
           g.vertex(
             p.x, p.y, p.z,
-            nrm.x, nrm.y, nrm.z,
-            u0 + iu * 0.5, v0 + iv * 0.5,
+            nrmRow.x, nrmRow.y, nrmRow.z,
+            u0 + iu * 0.5, v0 + t * 0.5,
             a.hue, flex, phase, 1 - a.age * 0.25,
           );
         }
+        if (iv < rows) rowPos.addScaledVector(dirRow, s / rows);
       }
-      g.quad(base, base + 1, base + 3, base + 2);
+      for (let iv = 0; iv < rows; iv++) {
+        const r0 = base + iv * 2;
+        g.quad(r0, r0 + 1, r0 + 3, r0 + 2);
+      }
     }
   }
 }

@@ -7,10 +7,11 @@
  * Hue/AO are consumed here; sway feeds the Phase-6 wind field.
  */
 
-import { DoubleSide, type Texture } from 'three';
+import { Color, DoubleSide, type DirectionalLight, type Texture, Vector3 } from 'three';
 import { MeshStandardNodeMaterial } from 'three/webgpu';
 import {
   attribute,
+  cameraPosition,
   clamp,
   float,
   mix,
@@ -19,11 +20,46 @@ import {
   positionWorld,
   smoothstep,
   texture,
+  uniform,
   uv,
   vec3,
 } from 'three/tsl';
 import { fbm3, valueNoise3 } from '../gpu/noise/NoiseTSL';
 import type { NF, NV3, NV4 } from '../gpu/TSLTypes';
+
+/**
+ * Shared sun uniforms for the foliage translucency term (D-2). Updated by
+ * the scene on init + time-of-day changes.
+ */
+export const sunU = {
+  dir: uniform(new Vector3(0, 1, 0)),
+  color: uniform(new Color(1, 1, 1)),
+  intensity: uniform(0),
+};
+
+export function updateSunUniforms(sun: DirectionalLight): void {
+  sunU.dir.value.copy(sun.position).normalize();
+  sunU.color.value.copy(sun.color);
+  sunU.intensity.value = sun.intensity;
+}
+
+/**
+ * Back-lit transmission glow: light through the blade toward a camera that
+ * faces the sun. Thin-surface approximation; modest k since it is not
+ * shadow-gated yet (full gating with Phase-5/6 light queries).
+ */
+function translucency(albedo: NV3, k: number): NV3 {
+  const viewDir = positionWorld.sub(cameraPosition).normalize();
+  const toward = clamp(viewDir.dot(vec3(sunU.dir).negate()), 0, 1);
+  const glow = toward.pow(5).mul(sunU.intensity).mul(k);
+  const sunCol = sunU.color as unknown as NV3;
+  return albedo.mul(sunCol).mul(glow).mul(vec3(0.9, 1.05, 0.55));
+}
+
+/** grass variant: transmission strengthens toward the blade tip */
+export function grassTranslucency(albedo: NV3, tipT: NF): NV3 {
+  return translucency(albedo, 0.09).mul(tipT);
+}
 
 function vdata(): NV4 {
   return attribute('vdata', 'vec4') as unknown as NV4;
@@ -103,6 +139,13 @@ export function rockMaterial(opts?: { moss?: number }): MeshStandardNodeMaterial
   albedo = mix(albedo, vec3(0.16, 0.175, 0.14), lich.mul(0.55)) as unknown as NV3;
   // dust settles on up-faces
   albedo = mix(albedo, vec3(0.17, 0.15, 0.12), upness.pow(2).mul(0.3)) as unknown as NV3;
+  // dirt streaks bleeding down steep faces (dressing rule)
+  const steep = float(1).sub(upness);
+  const streakN = valueNoise3(vec3(wp.x.mul(2.6), wp.y.mul(0.22), wp.z.mul(2.6)));
+  const streak = smoothstep(0.55, 0.82, streakN)
+    .mul(smoothstep(0.45, 0.8, steep))
+    .mul(0.55);
+  albedo = mix(albedo, albedo.mul(vec3(0.5, 0.46, 0.4)), streak) as unknown as NV3;
   const mossAmt = opts?.moss ?? 0.25;
   if (mossAmt > 0) {
     const mossN = smoothstep(0.45, 0.75, fbm3(wp.mul(1.7), 3).mul(0.5).add(0.5));
@@ -129,9 +172,9 @@ export function deadwoodMaterial(tex: {
   const a = texture(tex.texA, uv() as never) as unknown as NV4;
   const b = texture(tex.texB, uv() as never) as unknown as NV4;
   let albedo = a.rgb.mul(a.rgb) as unknown as NV3;
-  const mossN = smoothstep(0.35, 0.7, fbm3(positionWorld.mul(2.6), 3).mul(0.5).add(0.5));
-  const moss = smoothstep(0.15, 0.75, normalWorld.y).mul(d.z).mul(mossN).clamp(0, 1);
-  albedo = mix(albedo, vec3(0.04, 0.082, 0.026), moss) as unknown as NV3;
+  const mossN = smoothstep(0.24, 0.58, fbm3(positionWorld.mul(2.6), 3).mul(0.5).add(0.5));
+  const moss = smoothstep(0.05, 0.65, normalWorld.y).mul(d.z).mul(mossN).clamp(0, 1);
+  albedo = mix(albedo, vec3(0.05, 0.1, 0.032), moss) as unknown as NV3;
   // rot darkening for heavily decayed wood
   albedo = albedo.mul(float(1).sub(d.z.mul(0.25))) as unknown as NV3;
   mat.colorNode = hueShift(albedo, d.x, 0.1);
@@ -166,6 +209,23 @@ export function flowerMaterial(petal: {
   return mat;
 }
 
+/** mushroom shading by vdata.x part id: 0 stem, 0.5 gills, 1 cap */
+export function mushroomMaterial(): MeshStandardNodeMaterial {
+  const mat = new MeshStandardNodeMaterial();
+  const d = vdata();
+  const stem = vec3(0.32, 0.29, 0.24);
+  const gills = vec3(0.42, 0.37, 0.28);
+  const cap = vec3(0.23, 0.12, 0.05);
+  const gillK = smoothstep(0.12, 0.02, d.x.sub(0.5).abs());
+  const capK = smoothstep(0.85, 0.95, d.x);
+  let albedo = mix(stem, gills, gillK) as unknown as NV3;
+  albedo = mix(albedo, cap, capK) as unknown as NV3;
+  mat.colorNode = albedo.mul(d.w);
+  mat.roughness = 0.62;
+  mat.metalness = 0;
+  return mat;
+}
+
 export interface FoliageMatParams {
   color: { r: number; g: number; b: number; hueVar: number };
 }
@@ -174,7 +234,9 @@ export function foliageMaterial(p: FoliageMatParams): MeshStandardNodeMaterial {
   const mat = new MeshStandardNodeMaterial();
   const d = vdata();
   const base = vec3(p.color.r, p.color.g, p.color.b);
-  mat.colorNode = hueShift(base, d.x, p.color.hueVar).mul(d.w.mul(0.8).add(0.2));
+  const tinted = hueShift(base, d.x, p.color.hueVar).mul(d.w.mul(0.8).add(0.2));
+  mat.colorNode = tinted;
+  mat.emissiveNode = translucency(tinted as unknown as NV3, 0.032);
   mat.roughness = 0.62;
   mat.metalness = 0;
   mat.side = DoubleSide;
@@ -190,9 +252,11 @@ export function foliageCardMaterial(
   const d = vdata();
   const t = texture(atlas, uv() as never) as unknown as NV4;
   const albedo = t.rgb.mul(t.rgb); // sqrt-encoded at capture
-  mat.colorNode = hueShift(albedo, d.x, p.color.hueVar * 0.55).mul(
+  const tinted = hueShift(albedo, d.x, p.color.hueVar * 0.8).mul(
     d.w.mul(0.75).add(0.25),
   );
+  mat.colorNode = tinted;
+  mat.emissiveNode = translucency(tinted as unknown as NV3, 0.032);
   mat.opacityNode = t.w;
   mat.alphaTest = 0.32;
   mat.roughness = 0.62;

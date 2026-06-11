@@ -45,7 +45,10 @@
       "Bash(sed -n 30,60p node_modules/three/src/nodes/accessors/Tangent.js)",
       "Bash(sed -n 1,50p node_modules/three/src/nodes/accessors/TangentUtils.js)",
       "Bash(git commit -q -m 'Phase 4: bark texture synthesis \\(6 species recipes\\) + textured bark material w/ aoNode *)",
-      "Bash(sed -n 40,100p src/core/NoiseJS.ts)"
+      "Bash(sed -n 40,100p src/core/NoiseJS.ts)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" --max-time 3 http://localhost:5173/)",
+      "Bash(npx eslint *)",
+      "Bash(git commit -q -m 'Phase 4 CLOSE: dressing, hero hybrids, translucency, SS bounce, impostor capture, gate sheet *)"
     ]
   }
 }

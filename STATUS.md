@@ -82,10 +82,21 @@ feedback comes in chat; the two-frame test is the agent-side acceptance only.
       VERIFIED: no-black-shadows at golden hour (darkest-20 lum 61.8, chroma 20.1 — AgX-toe
       desat fixed); ?view=probes ambient-only debug view; +3 ms GPU. Forest-interior gate
       re-judged after Phase 4 (no forest exists). Artifacts: shots/phase-3/.
-- [ ] **Phase 4** — generators: 6+ tree species (per-instance growth), rocks/cliffs, grass, ferns,
-      shrubs×3, flowers×4 (incl. pink shrub), deadfall, debris classes, procedural texture arrays,
-      dressing systems (moss/vines/ledge ferns/root flare/fungi/staining), octahedral impostors,
-      `?scene=gallery`. Gate: gallery sheet + macro-meso-micro audit.
+- [x] **Phase 4** — DONE 2026-06-11. Growth grammar (tropisms, whorl/spiral/PLANAR phyllotaxis,
+      crown envelopes, light-competition asym, per-instance lean/age/bias = D5); 6 tree species
+      (spruce/pine/beech/birch/karst-gnarl/snag) + 3 shrubs (incl. PINK FLOWERING) + fern + 4
+      flowers; foliage CLUSTER-CARD pipeline (real leaf/needle meshes captured to per-species
+      2×2 atlases — the ez-tree look, zero assets) + hero HYBRID mode (cards + real-mesh
+      foliage; hero spruce 1.18M / beech 1.26M tris); bark synthesis 6 recipes (2048² compute,
+      albedo/cavity + normal/rough/height, aoNode wired = D-1); rocks (welded icosphere +
+      strata ledges + fracture cuts; hero 327k craggy, cliffFace preset, wall, cobbles); grass
+      (clumped instanced blades, 260k shown), debris kit (cobbles/pebbles/twigs/chips/litter
+      reusing leaf atlas), deadfall (logs ×3 decay + stumps + shelf/cap fungi), dressing
+      (moss/lichen/streaks by upness+cavity, hanging vines, ledge ferns, litter ring); foliage
+      translucency + SS bounce (D-2), octahedral impostor capture 8×8 albedo+normal+depth +
+      relit preview (runtime → D-4/Phase 5). Gate: gallery sheet shots/phase-4/ + macro-meso-
+      micro audit in DELTA.md (top-3 deltas fixed: foliage hue variance, log moss, blossoms).
+      Forest-interior gate re-judge happens after Phase-5 assembly (no forest yet).
 - [ ] **Phase 5** — GPU scatter (clustered Poisson, density fns), chunk streaming, meshlet/cluster
       culling + Hi-Z + indirect, LOD/impostor transitions (dithered), far forests as canopy
       shells. Gate: repetition flight; throughput floors (HUD-verified).
@@ -137,22 +148,27 @@ pass (contrast-stretched weather, isotropic phase floor, base-darkened ambient, 
 cov 0.62), contact shadows (?ablate=contact to A/B), black facets root-caused to GTAO
 (NOT PCSS — depth-derived normals fixed it), gate + shadow-color test PASSED.
 
-**Phase 4 — generators: 6+ tree species, rocks/cliffs, grass, shrubs, flowers,
-deadfall/debris, dressing, impostors, ?scene=gallery.** The single biggest visual gap
-(DELTA Phase-2 #1). Strategy D5: K structural variants per species per LOD ring +
-continuous per-instance GPU deformation + bespoke hero meshes near camera.
+**Phase 5 — scattering (clustered Poisson, GPU instance buffers), chunk
+streaming, culling (frustum + Hi-Z), LOD/impostor transitions, far forests.**
+Assets exist (Phase 4); now the world gets planted. Includes: per-species
+density functions (biome/slope/altitude/moisture), card-LOD rings + D-4
+impostor runtime material, shadow-pass tile culling (20M-tris debt), grass
+ring around camera (800k floor), forest-interior gate re-judge vs scene1.
 
 ## Next actions (always keep current)
 
-- Phase 4 design pass: procedural tree builder architecture (branching skeleton →
-  mesh ribs → leaf cards w/ procedural texture ARRAYS), species params (conifer ×2,
-  broadleaf ×2, karst-gnarled, snag), rock/boulder builder (cube-sphere + ridged
-  displacement + hardness strata), grass blade geometry, gallery scene for the
-  macro–meso–micro audit. Wire aoNode + translucency + SS-bounce during material
-  build (DEVIATIONS D-1/D-2 close-out).
-- KNOWN visual debts (carried): DELTA Ph-2 #4 (2nd cloud layer, Ph 6), #7 (gate
-  framing anchor), #10 (god rays, Ph 6); kettle-pond density (Ph 6 water); terrain
-  20 M tris at massif views (shadow culling, Ph 5).
+- Phase 5 design pass: GPU scatter (clustered Poisson per spec §3.5 — parent
+  clumps + child scatter, density fns from biome/slope/moisture/altitude fields,
+  instance buffers written on GPU), chunk residency/streaming, frustum + Hi-Z
+  cull compute → indirect draws, LOD rings (hero hybrid ≤40 m → cards ≤250 m →
+  branch cards ≤600 m → octahedral impostors beyond; dithered transitions),
+  far forests as canopy shells, 800k-blade grass ring, shadow-pass tile culling.
+- Phase-4 species variants: bake K=4–6 structural variants per species per ring
+  (geometry reuse via instancing; per-instance hue/age/lean in instance data).
+- KNOWN visual debts (carried): pine crown structure (DELTA Ph-4 #3); rock micro
+  normals (#8); grass color mixing (#7); DELTA Ph-2 #4 (2nd cloud layer, Ph 6),
+  #7 (gate framing anchor), #10 (god rays, Ph 6); kettle-pond density (Ph 6);
+  terrain 20 M tris at massif views (shadow culling, Ph 5).
 
 ## Key decisions log
 
@@ -260,3 +276,23 @@ split view, ground-clamped camera helper, silhouette/tiling gate + DELTA.md.
   print parallel straight lines. Stop particles below ~2× the ε slope (and in lakes).
 - device.onuncapturederror is wired in Engine — silent black frames usually mean a
   LOGIC bug (wrong uniforms), not a validation error.
+- WebGPU `readRenderTargetPixelsAsync` rows are TOP-left origin — flipRows()
+  before building DataTextures or every capture is v-flipped (was invisible on
+  near-symmetric sprays, obvious on trees).
+- Capture scenes MUST use DoubleSide materials — leaf blades facing away from
+  the ortho camera get backface-culled and the atlas comes out empty (bit the
+  broadleaf tiles; conifer needles survived by accident of normal tilt).
+- Real-geometry needles at true scale are sub-pixel at review distance — they
+  vanish under TRAA. The ez-tree lesson: lushness = BIG captured cluster cards
+  (one card = a whole painted spray); real needle geometry is for the hero ring
+  where pixels exist. Hybrid (cards + mesh) wins close-up.
+- Tree structure realism (user feedback): foliage must sit on a FINE twig level
+  (planar two-sided branchlet lattices for conifer boughs / distichous beech
+  twigs), never directly on primaries — `planar` LevelParams flag.
+- Auto-exposure note again for assets: albedo tweaks barely move the frame;
+  judge materials by RELATIVE contrast (bark vs foliage vs ground).
+- 8-bit capture of dark albedos bands — sqrt-encode at write, square at sample
+  (foliage atlases, bark, impostors all do this).
+- Broken-trunk taper: trunk points span only the kept length — taper must use
+  t×brokenTop or the break ends in a spike and the jagged cap never triggers
+  (also: don't double-cull children above a break that's already shortened).

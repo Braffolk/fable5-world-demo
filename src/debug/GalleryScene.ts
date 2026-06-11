@@ -30,10 +30,14 @@ import {
   deadwoodMaterial,
   flowerMaterial,
   foliageCardMaterial,
+  foliageMaterial,
+  mushroomMaterial,
   rockMaterial,
+  updateSunUniforms,
 } from '../render/VegMaterials';
 import { SunSky } from '../sky/SunSky';
 import { buildLog, buildStump, type DecayState } from '../vegetation/Deadfall';
+import { buildMushroom, buildVines } from '../vegetation/Dressing';
 import { captureFoliageAtlas } from '../vegetation/FoliageCards';
 import {
   barkChipGeometry,
@@ -47,6 +51,11 @@ import { buildRock, type RockPreset } from '../vegetation/RockBuilder';
 import { TREE_SPECIES } from '../vegetation/Species';
 import { buildTree } from '../vegetation/TreeBuilder';
 import {
+  captureImpostor,
+  impostorPreviewMaterial,
+  type ImpostorPart,
+} from '../vegetation/Impostors';
+import {
   buildFern,
   buildFlower,
   buildShrub,
@@ -56,7 +65,7 @@ import {
 } from '../vegetation/Understory';
 import type { WorldContext } from './Scenes';
 
-const ROW_Z = { trees: 0, rocks: 40, ground: 70, dead: 100 } as const;
+const ROW_Z = { hero: -26, trees: 0, rocks: 40, ground: 70, dead: 100 } as const;
 
 function labelSprite(text: string, sub: string): Mesh {
   const cv = document.createElement('canvas');
@@ -89,6 +98,7 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
   ctx.progress(0.05, 'gallery: sky');
   const sunSky = new SunSky(engine, params.timeOfDay);
   await sunSky.init(engine.renderer);
+  updateSunUniforms(sunSky.sun);
 
   setupSunShadows(sunSky.sun, engine.camera, undefined, {
     maxFar: 320,
@@ -128,16 +138,24 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
     z: number,
     title: string,
     sub: string,
+    opts?: { pedestal?: boolean },
   ): { x: number; z: number } => {
-    const ped = new Mesh(pedestalGeo, pedestalMat);
-    ped.position.set(x, 0.21, z);
-    ped.receiveShadow = true;
-    ped.castShadow = true;
-    engine.scene.add(ped);
-    const label = labelSprite(title, sub);
-    label.position.set(x, 0.62, z + 2.45);
-    label.rotation.x = -0.42;
-    engine.scene.add(label);
+    if (opts?.pedestal !== false) {
+      const ped = new Mesh(pedestalGeo, pedestalMat);
+      ped.position.set(x, 0.21, z);
+      ped.receiveShadow = true;
+      ped.castShadow = true;
+      engine.scene.add(ped);
+      const label = labelSprite(title, sub);
+      label.position.set(x, 0.62, z + 2.45);
+      label.rotation.x = -0.42;
+      engine.scene.add(label);
+    } else {
+      // floating label behind the exhibit (never occludes it)
+      const label = labelSprite(title, sub);
+      label.position.set(x, 2.3, z - 4.6);
+      engine.scene.add(label);
+    }
     return { x, z };
   };
 
@@ -281,6 +299,49 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
     }
   }
   exhibit(48, RZ, 'Rock wall', 'stacked slabs');
+
+  // dressed cliff: leaning slab + dirt streaks + hanging vines + ledge ferns
+  {
+    const cliffRock = buildRock('cliffFace', seed.rng('cliff/0'), 6);
+    rockTris += cliffRock.stats.tris;
+    const m = new Mesh(cliffRock.geometry, rockMaterial({ moss: 0.4 }));
+    m.scale.set(1.5, 1.7, 1.2);
+    m.position.set(72, 4.2, RZ);
+    m.rotation.set(0.05, 0.2, -0.02);
+    m.castShadow = true;
+    m.receiveShadow = true;
+    engine.scene.add(m);
+    const vineRng = seed.rng('cliff/vines');
+    const vines = buildVines(vineRng, 5.2, 4.2, 9);
+    const stemMat = barkTexturedMaterial(barks.get(4) as BarkTextures);
+    const vs = new Mesh(vines.stems, stemMat);
+    vs.position.set(71.8, 7.6, RZ + 1.7);
+    vs.castShadow = true;
+    engine.scene.add(vs);
+    const hazelAtlas = atlases.get('bushHazel');
+    if (hazelAtlas) {
+      const vl = new Mesh(
+        vines.leaves,
+        foliageCardMaterial(hazelAtlas, { color: { r: 0.05, g: 0.12, b: 0.035, hueVar: 0.25 } }),
+      );
+      vl.position.copy(vs.position);
+      vl.castShadow = true;
+      engine.scene.add(vl);
+    }
+    const fernAtlas2 = atlases.get('fern');
+    if (fernAtlas2) {
+      for (let i = 0; i < 2; i++) {
+        const lf = new Mesh(
+          buildFern(seed.rng(`cliff/fern${i}`)),
+          foliageCardMaterial(fernAtlas2, { color: FERN_CAPTURE.foliageColor }),
+        );
+        lf.position.set(70.4 + i * 2.2, 1.5 + i * 1.3, RZ + 1.75 - i * 0.35);
+        lf.castShadow = true;
+        engine.scene.add(lf);
+      }
+    }
+    exhibit(72, RZ + 5, 'Dressed cliff', 'streaks+vines+ledge ferns', { pedestal: false });
+  }
   engine.stats.counters['rock.tris'] = rockTris;
 
   // ---- ground row: grass, debris square, ferns, flowers, shrubs ---------------
@@ -292,17 +353,17 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
     const small = grassPatch(seed.rng('grass/small'), 60_000, 6);
     small.position.set(-62, 0, GZ);
     engine.scene.add(small);
-    exhibit(-62, GZ + 4, 'Grass 6×6 m', '60k blades');
+    exhibit(-62, GZ + 4, 'Grass 6×6 m', '60k blades', { pedestal: false });
     const meadow = grassPatch(seed.rng('grass/meadow'), 200_000, 13);
     meadow.position.set(-44, 0, GZ);
     engine.scene.add(meadow);
-    exhibit(-44, GZ + 7.5, 'Meadow 13×13 m', '200k blades');
+    exhibit(-44, GZ + 7.5, 'Meadow 13×13 m', '200k blades', { pedestal: false });
 
     // 2×2 m ground debris square
     const sq = 2.4;
     const cobbleGeo = buildRock('cobble', seed.rng('gc/cob'), 2).geometry;
-    const cobInst = new InstancedMesh(cobbleGeo, rockMaterial({ moss: 0.08 }), 70);
-    scatterInstances(cobInst, seed.rng('gc/cobs'), sq, 0.04, [0.5, 1.4], true);
+    const cobInst = new InstancedMesh(cobbleGeo, rockMaterial({ moss: 0.08 }), 42);
+    scatterInstances(cobInst, seed.rng('gc/cobs'), sq, 0.02, [0.35, 1.0], true);
     cobInst.position.set(-26, 0.05, GZ);
     engine.scene.add(cobInst);
     const pebInst = new InstancedMesh(
@@ -349,7 +410,7 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
         engine.scene.add(li);
       }
     }
-    exhibit(-26, GZ + 2, 'Ground square 2.4 m', 'cobbles+twigs+chips+litter');
+    exhibit(-26, GZ + 2, 'Ground square 2.4 m', 'cobbles+twigs+chips+litter', { pedestal: false });
 
     // ferns
     const fernAtlas = atlases.get('fern');
@@ -364,7 +425,7 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
         fern.receiveShadow = true;
         engine.scene.add(fern);
       }
-      exhibit(-9, GZ + 2.5, 'Ferns ×3', 'frond rosettes');
+      exhibit(-9, GZ + 2.5, 'Ferns ×3', 'frond rosettes', { pedestal: false });
     }
 
     // flower patches
@@ -383,7 +444,7 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
         fl.castShadow = true;
         engine.scene.add(fl);
       }
-      exhibit(fx, GZ + 2, fk.label, `×${fk.n}`);
+      exhibit(fx, GZ + 2, fk.label, `×${fk.n}`, { pedestal: false });
       fx += 7;
     }
 
@@ -404,7 +465,7 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
         fm.receiveShadow = true;
         engine.scene.add(fm);
       }
-      exhibit(sx, GZ + 2.5, sp.label, 'multi-stem');
+      exhibit(sx, GZ + 2.5, sp.label, 'multi-stem', { pedestal: false });
       sx += 9;
     }
   }
@@ -418,11 +479,23 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
     const log = buildLog(seed.rng(`log/${i}`), decays[i] as DecayState);
     const m = new Mesh(log.geometry, deadwoodMaterial(spruceBark));
     m.position.set(-22 + i * 9, 0, DZ);
-    m.rotation.y = seed.rng(`logr/${i}`).float() * 6.28;
+    // keep logs near-perpendicular to the row so they present their length
+    m.rotation.y = (seed.rng(`logr/${i}`).float() - 0.5) * 0.8;
     m.castShadow = true;
     m.receiveShadow = true;
     engine.scene.add(m);
-    exhibit(-22 + i * 9, DZ + 2.5, `Log (${decays[i]})`, `${log.length.toFixed(1)} m`);
+    exhibit(-22 + i * 9, DZ + 2.5, `Log (${decays[i]})`, `${log.length.toFixed(1)} m`, { pedestal: false });
+  }
+  {
+    const shelfRng = seed.rng('shelf');
+    for (let i = 0; i < 4; i++) {
+      const sh = new Mesh(buildMushroom(shelfRng.fork(String(i)), 'shelf'), mushroomMaterial());
+      sh.position.set(-13.6 + i * 0.5, 0.32 + (i % 2) * 0.12, DZ + 0.28);
+      sh.rotation.z = Math.PI / 2 - 0.3;
+      sh.rotation.y = -Math.PI / 2;
+      sh.castShadow = true;
+      engine.scene.add(sh);
+    }
   }
   for (let i = 0; i < 2; i++) {
     const st = buildStump(seed.rng(`stump/${i}`));
@@ -432,7 +505,97 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
     m.receiveShadow = true;
     engine.scene.add(m);
   }
-  exhibit(11, DZ + 2.5, 'Stumps ×2', 'root flare, jagged top');
+  exhibit(11, DZ + 2.5, 'Stumps ×2', 'root flare, jagged top', { pedestal: false });
+
+  // ---- hero row: mesh-foliage hero trees (>=100k tris floor) ------------------
+  ctx.progress(0.96, 'gallery: hero trees');
+  await new Promise((r) => setTimeout(r, 0));
+  {
+    const HZ = ROW_Z.hero;
+    const heroSpecs = [TREE_SPECIES[0], TREE_SPECIES[2]];
+    let hx = -14;
+    for (const sp of heroSpecs) {
+      if (!sp) continue;
+      const built = buildTree(sp, seed.rng(`hero/${sp.id}`), { foliageMode: 'hybrid' });
+      const at = exhibit(hx, HZ, `HERO ${sp.label}`, `${(built.stats.tris / 1000).toFixed(0)}k tris (mesh foliage)`);
+      const bm = new Mesh(built.bark, barkTexturedMaterial(barks.get(sp.barkLayer) as BarkTextures));
+      bm.position.set(at.x, 0.42, at.z);
+      bm.castShadow = true;
+      bm.receiveShadow = true;
+      engine.scene.add(bm);
+      const heroAtlas = atlases.get(sp.id);
+      if (built.foliage && heroAtlas) {
+        const fm = new Mesh(built.foliage, foliageCardMaterial(heroAtlas, { color: sp.foliageColor }));
+        fm.position.copy(bm.position);
+        fm.castShadow = true;
+        fm.receiveShadow = true;
+        engine.scene.add(fm);
+      }
+      if (built.foliageMesh) {
+        const fm2 = new Mesh(built.foliageMesh, foliageMaterial({ color: sp.foliageColor }));
+        fm2.position.copy(bm.position);
+        fm2.castShadow = true;
+        fm2.receiveShadow = true;
+        engine.scene.add(fm2);
+      }
+      engine.stats.counters[`hero.${sp.id}`] = built.stats.tris;
+      hx += 28;
+    }
+    // tree-base dressing: mushroom cluster + litter ring at the beech hero
+    const mrng = seed.rng('fungi');
+    for (let i = 0; i < 6; i++) {
+      const mush = new Mesh(buildMushroom(mrng.fork(String(i)), 'cap'), mushroomMaterial());
+      const a2 = mrng.float() * 6.28;
+      const rr = 0.5 + mrng.float() * 1.3;
+      mush.position.set(14 + Math.cos(a2) * rr, 0.42, HZ + Math.sin(a2) * rr);
+      mush.castShadow = true;
+      engine.scene.add(mush);
+    }
+    const beechAtlas2 = atlases.get('beech');
+    if (beechAtlas2) {
+      const lg = new PlaneGeometry(0.16, 0.16);
+      lg.rotateX(-Math.PI / 2);
+      const li = new InstancedMesh(lg, litterMaterial(beechAtlas2), 160);
+      scatterInstances(li, seed.rng('hero/litter'), 5, 0.04, [0.8, 2.0], true);
+      li.position.set(14, 0.44, HZ);
+      engine.scene.add(li);
+    }
+  }
+
+  // ---- impostor capture demo (8x8 octahedral, albedo+normal+depth) ------------
+  ctx.progress(0.97, 'gallery: capturing impostors');
+  await new Promise((r) => setTimeout(r, 0));
+  {
+    const sp = TREE_SPECIES[0];
+    const atlas0 = sp ? atlases.get(sp.id) : undefined;
+    if (sp && atlas0) {
+      const built = buildTree(sp, seed.rng(`tree/${sp.id}/0`));
+      const parts: ImpostorPart[] = [
+        { geometry: built.bark, kind: 'bark', barkTex: barks.get(sp.barkLayer) as BarkTextures },
+      ];
+      if (built.foliage) parts.push({ geometry: built.foliage, kind: 'cards', atlas: atlas0 });
+      const imp = await captureImpostor(engine.renderer, parts, {
+        centerY: built.stats.height * 0.5,
+        radius: built.stats.height * 0.62,
+      });
+      // preview cards: three captured views beside the real tree
+      // side-on tiles (grid center is the zenith view in hemi-oct mapping)
+      const views = [
+        { gx: 7, gy: 4 },
+        { gx: 4, gy: 7 },
+        { gx: 6, gy: 6 },
+      ];
+      for (let i = 0; i < views.length; i++) {
+        const card = new Mesh(
+          new PlaneGeometry(imp.radius * 2, imp.radius * 2),
+          impostorPreviewMaterial(imp, views[i] as { gx: number; gy: number }),
+        );
+        card.position.set(-150 - i * 0.01, imp.centerY + 0.42, ROW_Z.trees + i * 0.01);
+        engine.scene.add(card);
+      }
+      exhibit(-150, ROW_Z.trees, 'Impostor preview', '8×8 oct capture', { pedestal: false });
+    }
+  }
 
   // ---- post stack (no clouds in the gallery) ----------------------------------
   ctx.progress(0.95, 'gallery: post pipeline');
@@ -442,6 +605,7 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
   ctx.hooks.setTimeOfDay = (t: number) => {
     void (async () => {
       await sunSky.setTimeOfDay(t);
+      updateSunUniforms(sunSky.sun);
       post.setTimeOfDay(t);
     })();
   };

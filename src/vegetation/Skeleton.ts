@@ -98,7 +98,9 @@ function growBranch(ctx: GrowCtx, spec: BranchSpec): SkelBranch | null {
   const B = new Vector3();
   for (let i = 0; i <= segs; i++) {
     const t = i / segs;
-    let r = spec.baseR * Math.pow(Math.max(0, 1 - t), lp.taper);
+    // a broken trunk's points span only the kept length — taper accordingly
+    const tTaper = isTrunk && sp.brokenTop > 0 ? t * sp.brokenTop : t;
+    let r = spec.baseR * Math.pow(Math.max(0, 1 - tTaper), lp.taper);
     if (isTrunk) r = Math.max(r, spec.baseR * 0.012);
     else r = Math.max(r, 0.0035);
     pts.push(pos.clone());
@@ -142,8 +144,7 @@ function growBranch(ctx: GrowCtx, spec: BranchSpec): SkelBranch | null {
     const cp = sp.levels[childLevel] as LevelParams;
     const span = Math.max(0, cp.childEnd - cp.childStart);
     const densityScale = 0.75 + inst.age * 0.45;
-    let count = Math.round(effLen * span * cp.density * densityScale);
-    if (sp.brokenTop > 0) count = Math.round(count * 0.5);
+    const count = Math.round(effLen * span * cp.density * densityScale);
     if (count > 0) {
       const whorl = cp.whorl;
       const planar = cp.planar ?? 0;
@@ -155,7 +156,6 @@ function growBranch(ctx: GrowCtx, spec: BranchSpec): SkelBranch | null {
         azimuth += whorl >= 2 ? GOLDEN * 0.5 + rng.float() * 0.4 : 0;
         for (let wi = 0; wi < inWhorl; wi++) {
           const t = Math.min(0.985, tG + (rng.float() - 0.5) * (span / groups) * 0.6);
-          if (sp.brokenTop > 0 && t > sp.brokenTop * 0.96) continue;
           let az: number;
           if (rng.float() < planar) {
             // two-sided in the bough plane: ±N (horizontal perp), alternating

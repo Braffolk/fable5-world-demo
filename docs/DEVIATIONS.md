@@ -38,3 +38,34 @@ outgrow their visual payoff before vegetation exists. A camera-following
 high-density L0 clipmap (5 m) is planned for Phase 4/5 when canopy-scale
 occlusion makes it visible. The floor is interpreted as the final-state
 near-camera density.
+
+## D-1 UPDATE (Phase 4): aoNode landed on asset materials
+
+All Phase-4 asset materials (bark, rock, deadwood, grass) wire baked
+cavity/crevice AO through `material.aoNode` — true indirect-only occlusion
+inside the lighting loop. The screen-space GTAO keeps the Phase-3 luminance
+mask for terrain. Remaining gap: terrain splat material itself (no baked
+cavity texture) — revisit if terrain close-ups demand it.
+
+## D-2 UPDATE (Phase 4): screen-space bounce + translucency landed
+
+- Screen-space bounce: half-res depth-gated radiance gather added to the
+  post stack (`?ablate=bounce`), composited before TRAA, receiver-chroma
+  modulated. Subtle by design — probe GI carries large-scale bounce.
+- Foliage translucency: thin-surface back-transmission term on foliage
+  cards, hero leaf meshes, and grass tips (shared sun uniforms). NOT yet
+  shadow-gated (glows slightly in shaded foliage when looking sunward);
+  proper gating needs a light-space visibility query — queued for Phase 5/6
+  alongside the wind field. Coefficient kept low (0.032) until then.
+
+## D-4: Octahedral impostor runtime (Phase 4 → 5)
+
+**Spec:** LOD chain to octahedral impostors (≥ 8×8 views, albedo+normal+depth).
+**Implemented (Phase 4):** capture rig produces 8×8 hemi-octahedral atlases
+(albedo sqrt-encoded + world-normal + per-view linear depth in alpha), plus
+fixed-view relit preview cards verified against the source tree in the
+gallery.
+**Deferred:** the runtime impostor material (3-view blend by camera
+direction, depth-based parallax, dithered transitions) belongs to the
+Phase-5 LOD/scatter system where impostors actually draw. Capture data and
+encoding are final.

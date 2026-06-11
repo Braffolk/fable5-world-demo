@@ -24,6 +24,7 @@ import { MeshStandardNodeMaterial } from 'three/webgpu';
 import { attribute, float, mix, smoothstep, texture, uv, vec3 } from 'three/tsl';
 import type { Rng } from '../core/Seed';
 import type { NF, NV3, NV4 } from '../gpu/TSLTypes';
+import { grassTranslucency } from '../render/VegMaterials';
 import { MeshGrower } from './TubeMesh';
 
 /** single grass blade: tapered 4-segment strip with a built-in bend */
@@ -81,6 +82,7 @@ export function grassMaterial(): MeshStandardNodeMaterial {
   let albedo = mix(fresh, dry, id.y) as unknown as NV3;
   albedo = albedo.mul(id.x.mul(0.16).add(1)) as unknown as NV3;
   mat.colorNode = albedo;
+  mat.emissiveNode = grassTranslucency(albedo, t);
   // fake self-shadowing at the base
   mat.aoNode = smoothstep(0.0, 0.55, t).mul(0.55).add(0.45);
   mat.roughness = 0.88;
@@ -250,9 +252,9 @@ export function litterMaterial(atlas: Texture): MeshStandardNodeMaterial {
   const albedo = t.rgb.mul(t.rgb);
   // shift green leaf clusters toward dry browns
   const browned = mix(
-    albedo.mul(vec3(2.6, 1.35, 0.5)).add(vec3(0.02, 0.008, 0.002)),
-    vec3(0.16, 0.1, 0.045),
-    float(0.35),
+    albedo.mul(vec3(1.7, 1.0, 0.42)).add(vec3(0.012, 0.006, 0.002)),
+    vec3(0.11, 0.072, 0.034),
+    float(0.5),
   );
   mat.colorNode = browned;
   mat.opacityNode = t.w;

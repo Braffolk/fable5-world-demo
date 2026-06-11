@@ -16,7 +16,10 @@ import type { GrowthInstance, Skeleton, SpeciesParams } from './VegTypes';
 
 export interface BuiltTree {
   bark: BufferGeometry;
+  /** card foliage (atlas material) — null for snags or mesh-only mode */
   foliage: BufferGeometry | null;
+  /** real leaf/needle geometry (vertex-color material) — hero/hybrid mode */
+  foliageMesh: BufferGeometry | null;
   skeleton: Skeleton;
   stats: { tris: number; anchors: number; branches: number; height: number };
 }
@@ -27,8 +30,8 @@ export function buildTree(
   opts?: {
     lod?: 0 | 1 | 2;
     inst?: Partial<GrowthInstance>;
-    /** 'cards' (captured cluster atlas, default) | 'mesh' (real leaf geometry, hero) */
-    foliageMode?: 'cards' | 'mesh';
+    /** 'cards' (default) | 'mesh' (real leaves only) | 'hybrid' (hero: both) */
+    foliageMode?: 'cards' | 'mesh' | 'hybrid';
   },
 ): BuiltTree {
   const lod = opts?.lod ?? 0;
@@ -49,30 +52,44 @@ export function buildTree(
 
   // ---- foliage ---------------------------------------------------------------
   let foliage: BufferGeometry | null = null;
+  let foliageMesh: BufferGeometry | null = null;
   let folTris = 0;
   if (sp.foliage && skel.anchors.length > 0 && lod === 0) {
-    const folG = new MeshGrower();
-    const folRng = rng.fork('foliage');
     const fol = sp.foliage;
-    if ((opts?.foliageMode ?? 'cards') === 'cards') {
-      buildFoliageCards(folG, skel.anchors, fol.card, folRng);
-    } else {
-      for (const anchor of skel.anchors) {
-        if (fol.kind === 'needleSpray') buildSprayAt(folG, anchor, fol.leaf, folRng);
-        else buildLeafCluster(folG, anchor, fol.leaf, fol.clusterSize, folRng);
-      }
-    }
+    const mode = opts?.foliageMode ?? 'cards';
     const crownC = new Vector3(0, skel.crownCenterY, 0);
     const crownR = Math.max(skel.crownRadius, (skel.height - skel.crownCenterY) * 0.9);
-    folG.bendNormals(crownC, crownR, fol.normalBend);
-    folG.crownAO(crownC, crownR, 0.55);
-    folTris = folG.triCount;
-    foliage = folG.build();
+    if (mode === 'cards' || mode === 'hybrid') {
+      const folG = new MeshGrower();
+      buildFoliageCards(folG, skel.anchors, fol.card, rng.fork('foliage'));
+      folG.bendNormals(crownC, crownR, fol.normalBend);
+      folG.crownAO(crownC, crownR, 0.55);
+      folTris += folG.triCount;
+      foliage = folG.build();
+    }
+    if (mode === 'mesh' || mode === 'hybrid') {
+      const folG = new MeshGrower();
+      const folRng = rng.fork('foliageMesh');
+      // real needles need ~3x density to match the painted card sprays
+      const heroLeaf =
+        fol.kind === 'needleSpray'
+          ? { ...fol.leaf, needleCount: Math.round(fol.leaf.needleCount * 3), len: fol.leaf.len * 1.15 }
+          : fol.leaf;
+      for (const anchor of skel.anchors) {
+        if (fol.kind === 'needleSpray') buildSprayAt(folG, anchor, heroLeaf, folRng);
+        else buildLeafCluster(folG, anchor, fol.leaf, fol.clusterSize, folRng);
+      }
+      folG.bendNormals(crownC, crownR, fol.normalBend);
+      folG.crownAO(crownC, crownR, 0.55);
+      folTris += folG.triCount;
+      foliageMesh = folG.build();
+    }
   }
 
   return {
     bark,
     foliage,
+    foliageMesh,
     skeleton: skel,
     stats: {
       tris: barkTris + folTris,

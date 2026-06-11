@@ -85,3 +85,49 @@ low-poly outlines in hero shots). Tiling test PASS (multi-scale procedural
 breakup, no visible repetition at mid-range). Erosion split view PASS.
 Self-score (terrain geology row): 6/10 — same class as refs at vista range,
 betrayed up close (by design until Phases 4/5).
+
+## Phase 4 close (2026-06-11) — generators vs refs (asset quality scope)
+
+Shots: `shots/phase-4/` (12-shot gallery sheet). References: scene1 (mossy
+boulders, ferns, debris), scene2 (deadfall, moss), scene3 (karst vegetation),
+Witcher (conifer slopes, snags).
+
+Macro–meso–micro audit (spec §4):
+- Trees: macro PASS (6 distinct species silhouettes, per-seed structure);
+  meso PASS (synthesized bark relief + normal maps, bough card masses);
+  micro PASS-with-note (bark roughness/cavity variance; leaf vein detail is
+  painted at capture resolution — hero hybrid adds real leaf/needle geometry
+  near camera).
+- Rocks: macro PASS (fracture-cut craggy silhouettes); meso PASS (strata
+  ledges + ridged creases in geometry); micro NOTE (shader grain only —
+  detail normal layer queued for Phase 5 close-ups).
+- Ground cover: macro PASS (clumped placement); meso PASS (real cobble/twig/
+  chip geometry); micro PASS (litter alpha cards, blade tip ramps).
+
+Top-10 deltas (ranked):
+1. Assets reviewed in isolation — no FOREST assembly yet (scene1/scene3's
+   read is masses of vegetation in terrain context). **[Phase 5 structural]**
+2. ~~Foliage reads monochrome dark-green~~ → FIXED: per-card hue variance up
+   (0.8× hueVar), species hueVar raised, brighter broadleaf greens.
+3. Pine crown reads blobby-round at range; plate-gaps need structure work —
+   acceptable as a second conifer, refine with forest assembly. [Phase 5]
+4. ~~Moss on mossy/rotten logs too thin vs scene2~~ → FIXED: lower threshold,
+   brighter moss, side coverage.
+5. Card flatness visible at grazing angles up close — hero ring uses hybrid
+   (cards + real leaf meshes); world mid-range unaffected. [accepted]
+6. ~~Pink shrub blossoms too sparse~~ → FIXED: frac 0.56 + denser anchors.
+7. Grass blade color uniform within a patch; needs species mixing + terrain
+   moisture tint. [Phase 5 scatter inputs]
+8. Rock micro normal detail (2 cm scale) shader-only. [Phase 5]
+9. Impostor RUNTIME (view blending, parallax) pending — capture + preview
+   verified. [Phase 5 LOD rings]
+10. No wind motion on foliage (sway data baked in vdata). [Phase 6]
+
+Verdicts: silhouette test PASS (hero rock + trees craggy/organic at dawn);
+per-instance variation law PASS (3 seeds per species visibly distinct, hue/
+age jitter everywhere); bare-ground test N/A until world assembly (debris
+square proves the near-field kit); hero floors PASS (hero spruce 1.18M tris,
+hero beech 1.26M, hero rock 327k, grass 260k blades shown @ 60 fps-class).
+Self-score (vegetation row): 6.5/10 — species read as the right class at
+review distance; the gap to refs is assembly density (Phase 5) + motion
+(Phase 6), not asset quality.

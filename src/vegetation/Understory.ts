@@ -78,9 +78,9 @@ export const BUSH_PINKFLOWER: SpeciesParams = {
   foliage: {
     kind: 'leafCluster',
     anchorLevel: 2,
-    spacing: 0.08,
+    spacing: 0.055,
     tStart: 0.12,
-    scale: [0.075, 0.12],
+    scale: [0.09, 0.14],
     tilt: 0.95,
     clusterSize: [2, 3],
     normalBend: 0.62,
@@ -92,7 +92,7 @@ export const BUSH_PINKFLOWER: SpeciesParams = {
   barkLayer: 2,
   barkRepeats: 2,
   foliageColor: { r: 0.05, g: 0.115, b: 0.032, hueVar: 0.2 },
-  blossom: { r: 0.42, g: 0.12, b: 0.16, frac: 0.42 },
+  blossom: { r: 0.58, g: 0.16, b: 0.24, frac: 0.56 },
   brokenTop: 0,
   stubChance: 0.02,
 };
@@ -232,10 +232,11 @@ export const FERN_CAPTURE: SpeciesParams = {
     clusterSize: [1, 1],
     normalBend: 0.55,
     planarLeaves: true,
+    captureStyle: 'frond',
     card: { mode: 'cross', sizeK: 2.2 },
-    leaf: { len: 0.085, width: 0.02, shapePow: 1, fold: 0, curl: 0, needleCount: 42, brush: 0 },
+    leaf: { len: 0.1, width: 0.032, shapePow: 1, fold: 0, curl: 0, needleCount: 30, brush: 0 },
   },
-  foliageColor: { r: 0.04, g: 0.115, b: 0.025, hueVar: 0.2 },
+  foliageColor: { r: 0.045, g: 0.14, b: 0.028, hueVar: 0.22 },
 };
 
 /** fern plant: rosette of 6–10 frond cards rising from a center */
@@ -249,19 +250,19 @@ export function buildFern(rng: Rng): BufferGeometry {
   const X = new Vector3(1, 0, 0);
   for (let i = 0; i < fronds; i++) {
     const az = (i / fronds) * Math.PI * 2 + rng.float() * 0.6;
-    const pitch = 0.5 + rng.float() * 0.55; // rise angle from ground
+    const pitch = 0.75 + rng.float() * 0.4; // steep at the base, arches over
     q.setFromAxisAngle(Y, az);
     qt.setFromAxisAngle(X, -(Math.PI / 2 - pitch));
     q.multiply(qt);
     anchors.push({
       pos: new Vector3(Math.cos(az) * 0.03, 0.02, Math.sin(az) * 0.03),
       quat: q.clone(),
-      scale: 0.3 + rng.float() * 0.25,
+      scale: 0.2 + rng.float() * 0.14,
       hue: rng.float() * 2 - 1,
       age: rng.float() * 0.4,
     });
   }
-  buildFoliageCards(g, anchors, { mode: 'lying', sizeK: 2.1 }, rng);
+  buildFoliageCards(g, anchors, { mode: 'lying', sizeK: 2.4, bend: 1.0 }, rng);
   return g.build();
 }
 
