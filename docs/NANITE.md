@@ -676,6 +676,19 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-12 (f): N1 C1+C2 landed. C1 (46689b4): src/nanite/Tsl.ts typed
+  helper layer (one documented cast per @types gap: sUvec2/sUvec4RO/uv2/
+  minU/maxU/aLoadU/toF/loopU/loopI/returnIf/sU32Views); SpikeRaster
+  refactored onto it, casts 166→99 (bool-comparison and .select casts were
+  pure noise — gone; remainder is repo-standard TSLTypes narrowing).
+  C2 (64184ac): src/nanite/Clusterize.ts — greedy adjacency clusterizer
+  (typed-array hash adjacency, centroid-priority heap, SEED CONTINUITY from
+  the previous frontier + underfull refill = the fill-quality fix: avg
+  126.9/128, 100% full on hero rock, no fragments) + tools/probe-clusterize.ts
+  (node-only invariant checks: permutation/coverage/sphere/cone — all hold).
+  Throughput 4.1 Mtri/s; REAL all-pools source ≈ 3–4M tris (the 10–20M doc
+  figure counted instance multiplicity) → ~1 s boot, inside the <2 s gate.
+
 - 2026-06-12 (e): USER-REPORTED: ?packing=a failed BindGroupLayout creation —
   11 storage buffers in one compute stage (the F9 10/stage adapter limit,
   first real bite): the overflow fix's counters binding pushed Option A's
@@ -739,12 +752,21 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## NEXT ACTIONS
 
-1. N1: generic boot clusterizer (greedy shared-edge adjacency, ~96–128 tris,
-   bounds + normal cones + error placeholder) + registerMesh/bindInstances
-   skeleton + cluster tables for ALL opaque pools + PACKED mega-buffer layout
-   (≤10 storage bindings per stage) + typed TSL helper layer replacing the
-   spike's `as unknown` casts (user note) + visible-cluster HUD counter.
-   Gate: all opaque pools clusterized < +2 s gen; cluster stats printed.
-2. N2 per the table (two-phase occlusion; replaces the spike's WORK_CAP
-   single-dim dispatch + per-instance serial cluster loops with the real
-   two-level culling chain).
+1. N1-C3: src/nanite/GeometryRegistry.ts — registerMesh(ClusterSource,
+   materialClass, opts)/bindInstances per the content contract; PACKED
+   mega-buffers (vertex blob 24 B/vert: pos 3×f32 + oct-normal u32 + uv 2×f16
+   + vdata u32, ONE u32 blob buffer; index blob u32 for now; cluster records
+   8×u32: sphere 4×f32-bits, cone oct-axis u32 + cos f32-bits, triStart,
+   triCount u16|matClass u8|flags u8; mesh table with lodGroup linkage);
+   TSL decode helpers (readVertex/readCluster) in the registry module —
+   designed against the 10-binding ceiling; counters-in-queue rule applies.
+   Late registration supported (hero trees). HUD counters nanite.* + build().
+2. N1-C4: boot wiring behind ?nanite=1 (world scene builds the registry from
+   ALL opaque pools — rock/stone variants, deadfall, debris meshes, tree-ring
+   BARK/opaque sub-geometries where separable (mixed card geoms deferred to
+   N6 with a note), hero meshes late, terrain = implicit heightfield records
+   over the REAL 4096² field; ?nanite=0/absent boots untouched). Print + gate:
+   all pools clusterized, measured ms (<2 s), cluster stats table, registry
+   memory MB. Commit with numbers → then N2.
+3. N2 per the table (two-phase occlusion; replaces the spike's per-instance
+   serial cluster loops with the real two-level culling chain).
