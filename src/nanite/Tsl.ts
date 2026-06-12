@@ -121,9 +121,10 @@ export function sU32Views(
   attr: StorageBufferAttribute,
   count: number,
 ): { rw: StorageBufferNode<'uint'>; ro: StorageBufferNode<'uint'>; atomic: AtomicBuf } {
+  // (cast: some TS servers resolve the storage() overload to 'struct')
   return {
-    rw: storage(attr, 'uint', count),
-    ro: storage(attr, 'uint', count).toReadOnly(),
+    rw: storage(attr, 'uint', count) as unknown as StorageBufferNode<'uint'>,
+    ro: storage(attr, 'uint', count).toReadOnly() as unknown as StorageBufferNode<'uint'>,
     atomic: storage(attr, 'uint', count).toAtomic() as unknown as AtomicBuf,
   };
 }
