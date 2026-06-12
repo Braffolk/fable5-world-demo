@@ -389,13 +389,64 @@ cov 0.62), contact shadows (?ablate=contact to A/B), black facets root-caused to
 - PHASE 7 PROGRESS (2026-06-12): perf pass 1 DONE — 48→32 ms GPU at the
   forest-hero framing (half-res GTAO + joint-bilateral upsample −12 ms;
   ring-1 casters to near cascades only −4 ms; ?ablate=casters knob).
-  Next perf whales: veg main raster ~15 ms (card overdraw/hero ring),
-  bloom ~5 ms, water SSR loop. BOOKMARKS + FLYTHROUGH DONE: keys 1–9 /
-  ?shot=N (pose + per-bookmark ToD), ?fly=1 or F = 92 s Catmull-Rom tour
-  (src/debug/Bookmarks.ts; poses verified by shots). Remaining Phase 7:
-  more perf toward 60fps@1440p, reduced preset wiring, HUD per-pass GPU
-  timings + timestamp overflow, full battery, final two-frame test +
-  self-score rubric, fold gate art-direction deltas into the bookmarks.
+  BOOKMARKS + FLYTHROUGH DONE: keys 1–9 / ?shot=N (pose + per-bookmark
+  ToD), ?fly=1 or F = 92 s Catmull-Rom tour (src/debug/Bookmarks.ts).
+  Remaining Phase 7: more perf (below), reduced preset wiring, full
+  battery, final two-frame test + self-score rubric, fold gate
+  art-direction deltas into the bookmarks, re-pose bm7.
+- **PHASE 7 PERF PASS 2 (2026-06-13, commits 0a86032..bac5cff) — landed:**
+  1. PER-PASS GPU PROFILER (GpuProfiler.ts): labels every render/compute
+     timestamp uid (tagGpu / ComputeNode.name / RT texture names /
+     shadow.cN); Engine resolves timestamps EVERY frame (the 10-frame
+     cadence overflowed the 2048-query pool — that WAS the overflow
+     warning; boot world-gen still overflows once, harmless). HUD top-16
+     passes; shoot.ts --gpusample prints per-pass medians.
+  2. CASCADE SHADOW CACHING (CsmCached.ts): cascade i re-fits+re-renders
+     every [1,2,3,6] frames, staggered phases; light pose + map freeze
+     TOGETHER (a moved light over a cached map translates every shadow);
+     forced refresh on sun move / >4%-span fit drift / updateFrustums.
+     ?shadowcache=0. −3.9 ms avg, fps 20.1→22.2 at bm4 user-viewport.
+  3. VERTEX-STAGE SHADING HOISTS: grass (albedo/normal-blend/translucency/
+     AO + ring fetches), cards (hue×age factor — hueShift is LINEAR in
+     base; translucency; edge fade), hero leaves, probe-GI varying in both
+     patchGI's (probe grid 16 m, canopy residual 4 m ⇒ vertex eval is
+     sub-quantization on ≤2 m primitives). bm4 scene −1.4, bm7 −0.5.
+  4. DEPTH PREPASS (VegPrepass.ts): depth-only twins for GRASS layers +
+     CARD parts (alphaTest>0), sharing geometry/indirect slot + the live
+     position/mask/opacity nodes; color pass at depthFunc=EQUAL.
+     Requires WGSL @invariant on clip position (installPositionInvariance
+     patches the builder prototype) or Metal FMA-fuses depths apart.
+     bm4 GPU 49.6→39.4 ms (r.scene 16.4→6.4). bm7 neutral (hero-ring
+     vertex ×2 offsets it). Opaque bark/rock twins REMOVED — wall loss.
+  - CURRENT STATE at user viewport (2592×1676): bm4 wall ~45 ms (fps
+    ~24), gpu ~39, cpu.submit ~15.7 @ 595 draws; bm7 wall ~41/gpu 42.
+  - **NEXT WHALE: CPU SUBMIT — ~15 ms for ~600 draws (~26 µs/draw,
+    three.js WebGPU per-object node/bind overhead). Plan: CDP CPU profile
+    of the frame loop (Playwright Profiler.start/stop over ~60 frames),
+    find the hot three.js paths, then targeted fixes (uniform-group
+    update batching, needsRefresh short-circuits, matrixWorldAutoUpdate
+    off for static veg, possibly upstream-style RenderObject caching).
+    BundleGroup REVERTED — three 0.184 static bundles recorded before
+    async pipeline compiles (empty forests), ignore renderOrder inside,
+    and cascade-camera bundles bypassed per-cascade caster layers (GPU
+    2×). Re-try only with a fixed three or a hand-rolled bundle path.**
+  - Post-chain floor after scene fixes ≈ TRAA resolve 4.4 + megaquad
+    (aerial/AO-apply/contact/bounce) 3.9 + GTAO 2.4 + clouds.half 2.5 +
+    bloom-real ~1-2 + screen ~0.4 ≈ 15 ms at this viewport — the next
+    GPU tier once CPU is fixed: merge half-res passes (GTAO+bounce+
+    clouds one MRT pass), contact-march early-exit, leaner TRAA resolve.
+  - MEASUREMENT METHODOLOGY (BINDING for all Phase-7 numbers):
+    (a) M1 Max THERMAL DRIFT: cross-run medians drift +50% when hot —
+    only ABAB pairs / in-session 24-sample averages count; cool-downs
+    between batches; (b) per-pass GPU timestamps are ENCODER WALL SPANS
+    incl. dependency stalls (bloom 'cost' 9-13 ms ablated to ~1 ms wall:
+    fps flat) — rank with them, VERIFY with wall fps + ablation deltas;
+    (c) pixel-equivalence checks MUST use tools/shoot.ts --framealign N
+    (+ --wind 0): unaligned captures differ 20-27% from frame-indexed
+    jitter alone (deterministic floor when aligned: 0.2-0.5%; water/
+    particles still animate on wall-clock TSL time — exclude or accept);
+    (d) headless fps ≈ wall only when GPU-bound; with the prepass, bm4
+    became CPU-submit-bound and 10 ms GPU savings moved fps <1.
 - KNOWN LIMITATION (logged 2026-06-12, deep-dived): large-lake FAR RIM
   shows a thin dark band at low grazing views (bookmark 2). Diagnosis
   trail: NOT trees/fresnel/SSR-reach/canopy-attenuation/wet-fringe — it

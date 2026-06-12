@@ -53,3 +53,38 @@
 - @types/three Fn typing: `Fn(fn)` returns callable; calling with no args then `.compute()` —
   typed via `FnNode`/NodeElements; if tsc complains about `Fn(() => {...})()` use explicit
   zero-arg tuple generic or `Fn<[]>`.
+
+## Phase 7 (perf) findings — three 0.184 WebGPU internals
+
+- **Timestamp pools**: every render context / `renderer.compute()` CALL
+  allocates a query pair keyed `r:<frameCalls>:<ctxId>:f<frame>` /
+  `c:...`; `resolveTimestampsAsync` computes PER-UID durations into
+  `backend.timestampQueryPool[type].timestamps` (a Map that three never
+  clears — prune it or it grows forever) and only reports the sum. The
+  2048-query pool resets its write index ONLY on resolve — resolve every
+  frame or attribution dies after ~10 frames. Compute arrays get ONE uid
+  for the whole array (the DataMap keys on the array instance).
+- **Per-pass GPU timestamps on Apple are encoder wall spans** including
+  waits on prior passes. Sums match wall only when serialized; individual
+  values inflate for dependency-stalled passes (bloom bright/h0 showed
+  4-6.6 ms each; ablating the whole chain moved wall fps ~0). Rank with
+  them, verify with fps + ablation.
+- **`@builtin(position)` is NOT invariant by default**: a depth-prepass
+  (depthFunc EQUAL) needs `@invariant` or Metal fuses position math
+  differently across pipelines (last-ulp depth mismatch = shaded pass
+  drops out). three has no API; patch the WGSL builder prototype obtained
+  from `backend.createNodeBuilder(...)` (the class is not exported and
+  `three/src/...` imports load a SECOND module instance — patching that
+  does nothing).
+- **BundleGroup (static) is not production-ready here**: it records
+  whatever pipelines exist at first render (async shader compiles ⇒
+  objects silently missing forever), children encode in TRAVERSAL order
+  (renderOrder ignored inside), and per-cascade shadow cameras lost the
+  caster layer filtering (every cascade rendered the full veg = GPU 2×).
+- **CSMShadowNode cascade caching**: `lwLight.shadow.autoUpdate=false` +
+  scheduled `needsUpdate=true` works (ShadowNode.updateBefore contract),
+  but the light pose must freeze WITH the map — CSM updateBefore refits
+  texel-snapped centers per frame; override it (CsmCached.ts mirrors the
+  loop; extents are rotation-invariant, set in updateFrustums only).
+- **ShadowMap RTs all share texture.name 'ShadowMap'** and RenderTarget
+  has NO id field — distinguish cascades by RT object identity (WeakMap).
