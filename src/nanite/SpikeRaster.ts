@@ -37,6 +37,7 @@ import { markFragmentWritable } from '../render/ThreePatches';
 import {
   Discard,
   Fn,
+  Return,
   If,
   Loop,
   atomicAdd,
@@ -50,6 +51,7 @@ import {
   float,
   instanceIndex,
   int,
+  localId,
   max,
   min,
   normalize,
@@ -66,16 +68,19 @@ import {
   vec3,
   vec4,
   vertexIndex,
+  workgroupId,
 } from 'three/tsl';
 import type { NB, NF, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
 import type { SpikeContent } from './SpikeContent';
 import { TERRAIN_CELL, TERRAIN_QUADS, TERRAIN_WIN } from './SpikeContent';
 
-// single-dimension indirect dispatch ceiling; the spike content is sized to
-// stay under it with frustum margin (proper 2D-split / hierarchical queues
-// land at N2 — overflow here drops items SILENTLY, so the HUD shows
-// spike.work vs the cap and the readback flags it)
-const WORK_CAP = 65535;
+// work-queue capacity. The indirect dispatch 2D-splits at 65535 workgroups
+// per dimension and the kernels linearize via workgroupId, so the cap is
+// memory-bound, not dispatch-bound (262144 × 8 B = 2 MB; spike content maxes
+// at ~78k items with the whole field in frustum). Overflow still drops
+// silently past the cap — HUD spike.work + console warn flag it (F14).
+const WORK_CAP = 262144;
+const DISPATCH_ROW = 65535;
 const HW_CAP = 262144;
 const MAX_RASTER_SIZE = 16;
 const NEAR_EPS = 1e-4;
@@ -302,9 +307,20 @@ export function buildSpikeRaster(
 
   // ---- kArgs ---------------------------------------------------------------------
   const kArgs = Fn(() => {
-    const n = countersRO.element(0) as unknown as NU;
-    dispatchBuf.element(0).assign(min(n as unknown as NF, uint(WORK_CAP) as unknown as NF));
-    dispatchBuf.element(1).assign(uint(1));
+    // single (atomic) view of the counters buffer — mixing the read-only view
+    // into the same dispatch is a WebGPU same-scope usage violation
+    const n = min(
+      atomicLoad(counters.element(0)) as unknown as NF,
+      uint(WORK_CAP) as unknown as NF,
+    ) as unknown as NU;
+    atomicStore(counters.element(1), n);
+    const rows = n.add(uint(DISPATCH_ROW - 1)).div(uint(DISPATCH_ROW));
+    dispatchBuf.element(0).assign(
+      min(n as unknown as NF, uint(DISPATCH_ROW) as unknown as NF),
+    );
+    dispatchBuf.element(1).assign(
+      max(rows as unknown as NF, uint(1) as unknown as NF),
+    );
     dispatchBuf.element(2).assign(uint(1));
   })().compute(1, [1]);
   (kArgs as unknown as ComputeKernel).setName('spikeArgs');
@@ -315,8 +331,14 @@ export function buildSpikeRaster(
     mode: 'depth' | 'payload' | 'optionA',
   ): ReturnType<ReturnType<typeof Fn>> => {
     const kn = Fn(() => {
-      const itemIdx = instanceIndex.div(128) as unknown as NU;
-      const localTri = instanceIndex.mod(128) as unknown as NU;
+      // 2D-split indirect dispatch: linearize the workgroup id (one work item
+      // per 128-thread workgroup); guard against the partial last row
+      const wid = workgroupId as unknown as { x: NU; y: NU };
+      const itemIdx = wid.y.mul(uint(DISPATCH_ROW)).add(wid.x).toVar();
+      const localTri = ((localId as unknown as { x: NU }).x as NU).toVar();
+      If((itemIdx.greaterThanEqual(countersRO.element(1) as unknown as NU) as unknown as NB), () => {
+        Return();
+      });
       const item = workQueueRO.element(itemIdx) as unknown as { x: NU; y: NU };
       const instId = item.x;
       const clusterId = item.y;

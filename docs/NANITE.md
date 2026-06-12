@@ -652,7 +652,14 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   counter keeps climbing past the cap while writes are skipped — whichever
   instances cull LAST lose their clusters (the terrain instance vanished
   wholesale). ALWAYS surface queueCount vs cap in the HUD and warn on
-  overflow (F14 made law; it fired on day one).
+  overflow (F14 made law; it fired on day one — TWICE: sizing content to a
+  pose-dependent frustum fraction is never a fix; caps must be memory-bound
+  with dispatch 2D-splitting, never dispatch-bound).
+- (N0) One dispatch must bind ONE view of a buffer: atomic + read-only views
+  of the same attribute in a single kernel = WebGPU "writable usage and
+  another usage in the same synchronization scope" validation error.
+- (N0) A bare JS `return` inside If(() => {...}) silently builds NOTHING —
+  use TSL Return() for an early WGSL return.
 - (N0) Depth-equality across two RENDER pipelines misses by a few ulp (FMA
   fusion differs per pipeline — same mechanism as the VegPrepass @invariant
   trap). Compute-pass pairs compiled from identical TSL are exact in
@@ -669,6 +676,20 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-12 (d): USER-REPORTED (live fly-out): terrain vanished + rock holes
+  beyond the standing framing — the work queue overflowed AGAIN at full-field
+  visibility (78,464 items vs the 65,535 single-dim dispatch cap; content had
+  been sized to the standing pose's partial frustum, which was a dodge).
+  REAL FIX: indirect dispatch 2D-splits at 65535 workgroups/dim, kernels
+  linearize via workgroupId.y·65535+workgroupId.x + localId.x, partial-last-
+  row guard via TSL Return(); WORK_CAP now memory-bound (262144 ≈ 2 MB).
+  Two new gotchas hit en route: (1) binding the SAME buffer as atomic AND
+  read-only views in ONE dispatch is a WebGPU same-scope usage violation
+  (kArgs now uses the atomic view alone); (2) a bare JS `return` inside an
+  If() closure builds nothing — TSL Return() is required for a WGSL return.
+  Verified: far view complete at 78,464 items / ~105 fps; standing view
+  unchanged; gate-viewport medians 6.2 ms (was 6.0 — noise). sw=0 unaffected
+  throughout (no queue), which is what localized it.
 - 2026-06-12 (c): **N0 COMPLETE — GO.** Branch baselines captured (ledger; bm3
   outlier flagged). Spike shipped: `?scene=rasterspike` (`&sw=0/1`,
   `&packing=a|c`, `&clusterdbg=1`) — src/nanite/SpikeContent.ts (3 rock
