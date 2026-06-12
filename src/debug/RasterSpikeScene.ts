@@ -81,7 +81,7 @@ async function runRegistryGpuTest(renderer: Renderer, rng: Rng): Promise<void> {
     minMax[i * 2 + 1] = 1 + i * 0.5;
   }
   reg.registerMesh(
-    { kind: 'heightfield', gridW: 4, gridH: 4, winQuads: 8, cellSize: 1, originX: 0, originZ: 0, minMax },
+    { kind: 'heightfield', quadsX: 32, quadsZ: 32, winQuads: 8, cellSize: 1, originX: 0, originZ: 0, minMax },
     'terrain',
     { label: 'regtest-hf' },
   );

@@ -102,26 +102,29 @@ const srcB = rockSource('angular', 42, 5);
 const srcLod = rockSource('boulder', 41, 3);
 const srcLate = rockSource('angular', 77, 3);
 
-const GRID_W = 16;
-const GRID_H = 12;
-const WIN_QUADS = 8;
+// 131 quads × winQuads 7 → 19 windows per axis, last window partial (5 quads)
+const QUADS_X = 131;
+const QUADS_Z = 131;
+const WIN_QUADS = 7;
+const WINDOWS = Math.ceil(QUADS_X / WIN_QUADS);
 const CELL = 2;
 const ORIGIN_X = -64;
 const ORIGIN_Z = -48;
 const hAt = (x: number, z: number): number => Math.sin(x * 0.05) * 6 + Math.cos(z * 0.07) * 4;
-const minMax = new Float32Array(GRID_W * GRID_H * 2);
-for (let gz = 0; gz < GRID_H; gz++) {
-  for (let gx = 0; gx < GRID_W; gx++) {
+const winSpan = (g: number, total: number): number => Math.min(WIN_QUADS, total - g * WIN_QUADS);
+const minMax = new Float32Array(WINDOWS * WINDOWS * 2);
+for (let gz = 0; gz < WINDOWS; gz++) {
+  for (let gx = 0; gx < WINDOWS; gx++) {
     let mn = Infinity;
     let mx = -Infinity;
-    for (let qz = 0; qz <= WIN_QUADS; qz++) {
-      for (let qx = 0; qx <= WIN_QUADS; qx++) {
+    for (let qz = 0; qz <= winSpan(gz, QUADS_Z); qz++) {
+      for (let qx = 0; qx <= winSpan(gx, QUADS_X); qx++) {
         const h = hAt(ORIGIN_X + (gx * WIN_QUADS + qx) * CELL, ORIGIN_Z + (gz * WIN_QUADS + qz) * CELL);
         mn = Math.min(mn, h);
         mx = Math.max(mx, h);
       }
     }
-    const i = (gz * GRID_W + gx) * 2;
+    const i = (gz * WINDOWS + gx) * 2;
     minMax[i] = mn;
     minMax[i + 1] = mx;
   }
@@ -136,8 +139,8 @@ const hB = reg.registerMesh(srcB, 'rock', { label: 'rockB', castShadows: false }
 const hT = reg.registerMesh(
   {
     kind: 'heightfield',
-    gridW: GRID_W,
-    gridH: GRID_H,
+    quadsX: QUADS_X,
+    quadsZ: QUADS_Z,
     winQuads: WIN_QUADS,
     cellSize: CELL,
     originX: ORIGIN_X,
@@ -229,27 +232,32 @@ const { verts, clusters, meshes, instances, instanceMesh, indices } = dbg.arrays
   console.log(`  C clusters=${ref.clusterCount} axisErr=${axErr.toExponential(2)}`);
 }
 
-// --- H: heightfield records --------------------------------------------------
+// --- H: heightfield records (incl. partial edge windows) ---------------------
 {
   const entry = reg.meshEntry(hT);
-  expect(entry.clusterCount === GRID_W * GRID_H, 'H: window count');
+  expect(entry.clusterCount === WINDOWS * WINDOWS, 'H: window count');
   let ok = true;
   let worst = 0;
-  for (let gz = 0; gz < GRID_H; gz++) {
-    for (let gx = 0; gx < GRID_W; gx++) {
-      const dec = decodeClusterCPU(clusters, entry.clusterBase + gz * GRID_W + gx);
+  let partials = 0;
+  for (let gz = 0; gz < WINDOWS; gz++) {
+    for (let gx = 0; gx < WINDOWS; gx++) {
+      const dec = decodeClusterCPU(clusters, entry.clusterBase + gz * WINDOWS + gx);
+      const qx = winSpan(gx, QUADS_X);
+      const qz = winSpan(gz, QUADS_Z);
+      if (qx < WIN_QUADS || qz < WIN_QUADS) partials++;
       if ((dec.triStart & 0xffff) !== gx || dec.triStart >>> 16 !== gz) ok = false;
-      if (dec.triCount !== WIN_QUADS * WIN_QUADS * 2) ok = false;
+      if (dec.triCount !== qx * qz * 2) ok = false;
       if ((dec.flags & CLUSTER_FLAG_HEIGHTFIELD) === 0) ok = false;
       if (dec.meshId !== hT) ok = false;
-      const i = (gz * GRID_W + gx) * 2;
-      const win = WIN_QUADS * CELL;
+      const i = (gz * WINDOWS + gx) * 2;
+      const x0 = ORIGIN_X + gx * WIN_QUADS * CELL;
+      const z0 = ORIGIN_Z + gz * WIN_QUADS * CELL;
       for (const y of [minMax[i] as number, minMax[i + 1] as number]) {
         for (const [cx, cz] of [
-          [ORIGIN_X + gx * win, ORIGIN_Z + gz * win],
-          [ORIGIN_X + gx * win + win, ORIGIN_Z + gz * win],
-          [ORIGIN_X + gx * win, ORIGIN_Z + gz * win + win],
-          [ORIGIN_X + gx * win + win, ORIGIN_Z + gz * win + win],
+          [x0, z0],
+          [x0 + qx * CELL, z0],
+          [x0, z0 + qz * CELL],
+          [x0 + qx * CELL, z0 + qz * CELL],
         ] as const) {
           const d = Math.hypot(cx - dec.sphere[0], y - dec.sphere[1], cz - dec.sphere[2]);
           worst = Math.max(worst, d - dec.sphere[3]);
@@ -258,8 +266,9 @@ const { verts, clusters, meshes, instances, instanceMesh, indices } = dbg.arrays
     }
   }
   expect(ok, 'H: record fields mismatch');
+  expect(partials === WINDOWS * 2 - 1, `H: expected ${WINDOWS * 2 - 1} partial windows, saw ${partials}`);
   expect(worst < 1e-4, `H: corner outside sphere by ${worst.toExponential(2)}`);
-  console.log(`  H windows=${GRID_W * GRID_H} cornerSlack=${worst.toExponential(2)}`);
+  console.log(`  H windows=${WINDOWS * WINDOWS} partials=${partials} cornerSlack=${worst.toExponential(2)}`);
 }
 
 // --- M: mesh table -----------------------------------------------------------
@@ -278,7 +287,7 @@ const { verts, clusters, meshes, instances, instanceMesh, indices } = dbg.arrays
   expect((t.flags & MESH_FLAG_HEIGHTFIELD) !== 0 && t.winQuads === WIN_QUADS, 'M: hf flag/winQuads');
   expect(
     t.hfOriginX === ORIGIN_X && t.hfOriginZ === ORIGIN_Z && t.hfCellSize === CELL &&
-      t.gridW === GRID_W && t.gridH === GRID_H,
+      t.quadsX === QUADS_X && t.quadsZ === QUADS_Z,
     'M: hf params',
   );
   expect(a.lodNext === hLod && a.lodDist === 120, 'M: lod linkage');

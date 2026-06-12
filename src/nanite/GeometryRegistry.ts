@@ -13,8 +13,8 @@
  *                 flags u8 | meshId u16
  *   mesh table    12×u32: clusterStart/Count, instFirst/Count, lodNext,
  *                 lodDist f32-bits, channel|matClass|flags|winQuads bytes,
- *                 hf originX/originZ/cellSize f32-bits, gridW|gridH u16s,
- *                 swayPad f32-bits
+ *                 hf originX/originZ/cellSize f32-bits, quadsX|quadsZ u16s
+ *                 (total quads — edge windows clamp), swayPad f32-bits
  *   instances     2×vec4/instance — A=(x,y,z,scale), B=(yaw,leanX,leanZ,idF)
  *                 verbatim (slot-hash variation law reads B.w)
  *   instanceMesh  1×u32/instance — owning mesh id (cull-side lookup)
@@ -105,16 +105,17 @@ export interface ExplicitSource {
 
 export interface HeightfieldSource {
   kind: 'heightfield';
-  /** window counts along x / z */
-  gridW: number;
-  gridH: number;
-  /** quads per window side (8 → 128 tris/window); tris must fit MAX_CLUSTER_TRIS */
+  /** total quads along x / z (vertex grid is quads+1; res−1 for a height texture) */
+  quadsX: number;
+  quadsZ: number;
+  /** quads per window side; the LAST window per axis may be partial (edge clamp) */
   winQuads: number;
   /** world units per quad */
   cellSize: number;
+  /** world position of vertex (0,0) */
   originX: number;
   originZ: number;
-  /** per-window height (min,max) pairs, length 2·gridW·gridH — bounds spheres */
+  /** per-WINDOW height (min,max) pairs, ceil(quadsX/w)·ceil(quadsZ/w) windows */
   minMax: Float32Array;
 }
 
@@ -339,8 +340,8 @@ export interface MeshCPU {
   hfOriginX: number;
   hfOriginZ: number;
   hfCellSize: number;
-  gridW: number;
-  gridH: number;
+  quadsX: number;
+  quadsZ: number;
   swayPad: number;
 }
 
@@ -362,8 +363,8 @@ export function decodeMeshCPU(table: Uint32Array, mi: number): MeshCPU {
     hfOriginX: bitsF32(table[b + 7] as number),
     hfOriginZ: bitsF32(table[b + 8] as number),
     hfCellSize: bitsF32(table[b + 9] as number),
-    gridW: w10 & 0xffff,
-    gridH: w10 >>> 16,
+    quadsX: w10 & 0xffff,
+    quadsZ: w10 >>> 16,
     swayPad: bitsF32(table[b + 11] as number),
   };
 }
@@ -455,8 +456,9 @@ export interface MeshNodes {
   hfOriginX: NF;
   hfOriginZ: NF;
   hfCellSize: NF;
-  gridW: NU;
-  gridH: NU;
+  /** total heightfield quads per axis (edge windows clamp against these) */
+  quadsX: NU;
+  quadsZ: NU;
   swayPad: NF;
 }
 
@@ -478,8 +480,8 @@ export function readMesh(meshes: StorageBufferNode<'uint'>, mi: NU): MeshNodes {
     hfOriginX: bcU2F(elemU(meshes, base.add(uint(7)))),
     hfOriginZ: bcU2F(elemU(meshes, base.add(uint(8)))),
     hfCellSize: bcU2F(elemU(meshes, base.add(uint(9)))),
-    gridW: w10.bitAnd(uint(0xffff)),
-    gridH: w10.shiftRight(uint(16)),
+    quadsX: w10.bitAnd(uint(0xffff)),
+    quadsZ: w10.shiftRight(uint(16)),
     swayPad: bcU2F(elemU(meshes, base.add(uint(11)))),
   };
 }
@@ -506,7 +508,15 @@ interface MeshEntry {
   instCount: number;
   lodNext: number;
   lodDist: number;
-  hf?: { originX: number; originZ: number; cellSize: number; gridW: number; gridH: number };
+  hf?: {
+    originX: number;
+    originZ: number;
+    cellSize: number;
+    quadsX: number;
+    quadsZ: number;
+    windowsX: number;
+    windowsZ: number;
+  };
   /** staged until uploaded by build()/flush() */
   packedVerts?: Uint32Array;
   packedIdx?: Uint32Array;
@@ -867,44 +877,54 @@ export class GeometryRegistry {
     matClass: MaterialClassId,
     opts: RegisterOpts,
   ): MeshEntry {
-    const trisPerWin = src.winQuads * src.winQuads * 2;
-    if (trisPerWin > MAX_CLUSTER_TRIS) {
-      throw new Error(`GeometryRegistry: heightfield window ${src.winQuads}² → ${trisPerWin} tris > ${MAX_CLUSTER_TRIS}`);
+    const w = src.winQuads;
+    if (w * w * 2 > MAX_CLUSTER_TRIS) {
+      throw new Error(`GeometryRegistry: heightfield window ${w}² → ${w * w * 2} tris > ${MAX_CLUSTER_TRIS}`);
     }
-    if (src.gridW > 0xffff || src.gridH > 0xffff) throw new Error('GeometryRegistry: heightfield grid exceeds u16');
-    if (src.minMax.length !== src.gridW * src.gridH * 2) {
-      throw new Error('GeometryRegistry: heightfield minMax length mismatch');
+    if (src.quadsX > 0xffff || src.quadsZ > 0xffff) throw new Error('GeometryRegistry: heightfield quads exceed u16');
+    const windowsX = Math.ceil(src.quadsX / w);
+    const windowsZ = Math.ceil(src.quadsZ / w);
+    if (src.minMax.length !== windowsX * windowsZ * 2) {
+      throw new Error(
+        `GeometryRegistry: heightfield minMax length ${src.minMax.length} != ${windowsX * windowsZ * 2}`,
+      );
     }
-    this.checkRoom(0, 0, src.gridW * src.gridH, 0);
-    const entry = this.newEntry(handle, matClass, { ...opts, transformChannel: 'terrain' }, true, src.winQuads);
+    this.checkRoom(0, 0, windowsX * windowsZ, 0);
+    const entry = this.newEntry(handle, matClass, { ...opts, transformChannel: 'terrain' }, true, w);
     entry.hf = {
       originX: src.originX,
       originZ: src.originZ,
       cellSize: src.cellSize,
-      gridW: src.gridW,
-      gridH: src.gridH,
+      quadsX: src.quadsX,
+      quadsZ: src.quadsZ,
+      windowsX,
+      windowsZ,
     };
-    const n = src.gridW * src.gridH;
+    const n = windowsX * windowsZ;
     entry.clusterBase = this.clusterCursor;
     entry.clusterCount = n;
     this.clusterCursor += n;
 
-    const win = src.winQuads * src.cellSize;
     const recs = new Uint32Array(n * CLUSTER_WORDS);
-    for (let gz = 0; gz < src.gridH; gz++) {
-      for (let gx = 0; gx < src.gridW; gx++) {
-        const i = gz * src.gridW + gx;
+    for (let gz = 0; gz < windowsZ; gz++) {
+      for (let gx = 0; gx < windowsX; gx++) {
+        // edge windows clamp to the remaining quads (partial clusters)
+        const qx = Math.min(w, src.quadsX - gx * w);
+        const qz = Math.min(w, src.quadsZ - gz * w);
+        const i = gz * windowsX + gx;
         const mn = src.minMax[i * 2] as number;
         const mx = src.minMax[i * 2 + 1] as number;
+        const ex = qx * src.cellSize;
+        const ez = qz * src.cellSize;
         const b = i * CLUSTER_WORDS;
-        recs[b] = f32Bits(src.originX + (gx + 0.5) * win);
+        recs[b] = f32Bits(src.originX + gx * w * src.cellSize + ex / 2);
         recs[b + 1] = f32Bits((mn + mx) / 2);
-        recs[b + 2] = f32Bits(src.originZ + (gz + 0.5) * win);
-        recs[b + 3] = f32Bits(Math.hypot(win / 2, (mx - mn) / 2, win / 2));
+        recs[b + 2] = f32Bits(src.originZ + gz * w * src.cellSize + ez / 2);
+        recs[b + 3] = f32Bits(Math.hypot(ex / 2, (mx - mn) / 2, ez / 2));
         recs[b + 4] = octEncode(0, 1, 0);
         recs[b + 5] = f32Bits(-1); // cone disabled — windows face anywhere
         recs[b + 6] = (gx | (gz << 16)) >>> 0;
-        recs[b + 7] = (trisPerWin | (CLUSTER_FLAG_HEIGHTFIELD << 8) | (handle << 16)) >>> 0;
+        recs[b + 7] = ((qx * qz * 2) | (CLUSTER_FLAG_HEIGHTFIELD << 8) | (handle << 16)) >>> 0;
       }
     }
     entry.clusterRecs = recs;
@@ -991,7 +1011,7 @@ export class GeometryRegistry {
     m[b + 7] = f32Bits(e.hf?.originX ?? 0);
     m[b + 8] = f32Bits(e.hf?.originZ ?? 0);
     m[b + 9] = f32Bits(e.hf?.cellSize ?? 0);
-    m[b + 10] = ((e.hf?.gridW ?? 0) | ((e.hf?.gridH ?? 0) << 16)) >>> 0;
+    m[b + 10] = ((e.hf?.quadsX ?? 0) | ((e.hf?.quadsZ ?? 0) << 16)) >>> 0;
     m[b + 11] = f32Bits(e.swayPad);
   }
 

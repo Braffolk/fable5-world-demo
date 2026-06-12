@@ -175,6 +175,29 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       Object.assign(engine.stats.counters, forests.counterSnapshot());
     });
 
+    // ?nanite=1 — N1-C4: build the GeometryRegistry from all opaque pools
+    // (cluster tables + packed mega-buffers only; rendering unchanged until
+    // N2/N3). ?nanite=0/absent: this block never runs.
+    if (new URLSearchParams(window.location.search).get('nanite') === '1') {
+      ctx.progress(0.985, 'nanite: clusterizing opaque pools');
+      const { buildWorldRegistry } = await import('../nanite/WorldRegistry');
+      const wr = await buildWorldRegistry({
+        renderer: engine.renderer,
+        hf,
+        scatter,
+        lib,
+        counters: engine.stats.counters,
+      });
+      (engine as unknown as { naniteRegistry?: unknown }).naniteRegistry = wr.registry;
+      // eslint-disable-next-line no-console
+      console.log(
+        `[laas] nanite registry: total ${wr.totalMs.toFixed(0)} ms (readback ` +
+          `${wr.readbackMs.toFixed(0)} + partition ${wr.partitionMs.toFixed(0)} + terrain minMax ` +
+          `${wr.terrainMs.toFixed(0)} + build ${wr.buildMs.toFixed(0)}); deferred instances ` +
+          `${wr.deferredInstances}\n${wr.report.table}\ndeferred: ${wr.deferred.join('; ')}`,
+      );
+    }
+
     // near-field carpets: 800k-blade grass ring + 80k debris ring
     if (!ablate.has('grass')) {
       const ring = new GroundRing(hf, canopyTex, seed, ablate.has('gi') ? null : gi);
