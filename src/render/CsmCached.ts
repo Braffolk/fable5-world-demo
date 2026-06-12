@@ -51,6 +51,8 @@ export class CachedCsmShadowNode extends CSMShadowNode {
   private frameNo = 0;
   private frozenCenters: (Vector3 | undefined)[] = [];
   private lastSunDir = new Vector3();
+  private lastFov = 0;
+  private lastAspect = 0;
 
   constructor(light: Light, data?: ConstructorParameters<typeof CSMShadowNode>[1]) {
     super(light, data);
@@ -89,6 +91,17 @@ export class CachedCsmShadowNode extends CSMShadowNode {
     if (_lightDirection.distanceToSquared(this.lastSunDir) > 1e-10) {
       this.lastSunDir.copy(_lightDirection);
       this.invalidate();
+    }
+
+    // frustum-shape changes (sprint FOV kick, resize races) refit cascades —
+    // CSM extents derive from the camera frustum and would silently go stale
+    const pc = camera as unknown as { fov?: number; aspect?: number };
+    if (typeof pc.fov === 'number' && typeof pc.aspect === 'number') {
+      if (pc.fov !== this.lastFov || pc.aspect !== this.lastAspect) {
+        this.lastFov = pc.fov;
+        this.lastAspect = pc.aspect;
+        this.updateFrustums(); // calls invalidate() via our override
+      }
     }
 
     _lightOrientationMatrix.lookAt(light.position, light.target.position, _up);

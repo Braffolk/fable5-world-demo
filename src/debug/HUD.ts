@@ -1,6 +1,8 @@
 /**
- * F3 diagnostics HUD. Subsystems contribute line providers; the HUD re-renders
- * at 4 Hz from current EngineStats + providers. Floor checks (triangle counts
+ * Diagnostics HUD. DEFAULT: a minimal FPS chip only — the full debug panel
+ * (per-pass GPU timings, counters, providers) toggles with F3 (?hud=1 boots
+ * with it open for tooling shots). Subsystems contribute line providers;
+ * re-renders at 4 Hz from current EngineStats. Floor checks (triangle counts
  * etc.) read `window.__laas.stats` directly — the HUD is for humans.
  */
 
@@ -11,6 +13,7 @@ export type HudProvider = () => string[];
 
 export class Hud {
   private el: HTMLDivElement;
+  private fpsEl: HTMLDivElement;
   private providers: HudProvider[] = [];
   private visible: boolean;
   private engine: Engine;
@@ -30,23 +33,40 @@ export class Hud {
       'pointer-events:none', 'border-radius:4px', 'max-height:90vh', 'overflow:hidden',
     ].join(';');
     document.body.appendChild(this.el);
-    this.el.style.display = this.visible ? 'block' : 'none';
+
+    // always-on minimal readout — just fps (F3 swaps in the full panel)
+    this.fpsEl = document.createElement('div');
+    this.fpsEl.id = 'hud-fps';
+    this.fpsEl.style.cssText = [
+      'position:fixed', 'top:10px', 'left:10px', 'z-index:1000',
+      'color:#d9e8e0', 'background:rgba(8,12,10,0.5)', 'padding:3px 8px',
+      'font:12px/1.2 ui-monospace,Menlo,monospace', 'white-space:pre',
+      'pointer-events:none', 'border-radius:4px',
+    ].join(';');
+    document.body.appendChild(this.fpsEl);
+    this.applyVisibility();
 
     window.addEventListener('keydown', (e) => {
       if (e.code === 'F3') {
         e.preventDefault();
         this.visible = !this.visible;
-        this.el.style.display = this.visible ? 'block' : 'none';
+        this.applyVisibility();
       }
     });
 
     engine.onUpdate((dt) => {
       this.acc += dt;
-      if (this.acc >= 0.25 && this.visible) {
+      if (this.acc >= 0.25) {
         this.acc = 0;
-        this.render();
+        if (this.visible) this.render();
+        else this.fpsEl.textContent = `${this.engine.stats.fps.toFixed(0)} fps`;
       }
     });
+  }
+
+  private applyVisibility(): void {
+    this.el.style.display = this.visible ? 'block' : 'none';
+    this.fpsEl.style.display = this.visible ? 'none' : 'block';
   }
 
   addProvider(p: HudProvider): void {
@@ -79,6 +99,7 @@ export class Hud {
       for (const k of counterKeys.sort()) lines.push(`${k}: ${fmt(s.counters[k] ?? 0)}`);
     }
     for (const p of this.providers) lines.push('—', ...p());
+    lines.push('—', 'F3 hud · V walk/fly · 1-9 bookmarks · F flythrough · P pose');
     this.el.textContent = lines.join('\n');
   }
 }

@@ -66,11 +66,19 @@ async function boot(): Promise<void> {
   };
   await buildScene(params.scene, ctx);
 
+  // terrain probe first — walk mode + fly soft-collision depend on it
+  if (hooks.groundProbe) fly.groundProbe = hooks.groundProbe;
   if (params.cam !== null) {
     const pose = parseCamString(params.cam);
-    if (pose) fly.setPose(pose);
+    if (pose) fly.setPose(pose); // explicit pose ⇒ fly semantics
   } else if (hooks.initialPose) {
     fly.setPose(hooks.initialPose);
+    // grounded RPG exploration is the interactive default (V toggles fly);
+    // ?walk=0 keeps tooling/legacy behavior
+    const q = new URLSearchParams(window.location.search);
+    if (hooks.initialPoseMode === 'walk' && q.get('walk') !== '0') {
+      fly.setMode('walk');
+    }
   }
 
   new Hud(engine, params);

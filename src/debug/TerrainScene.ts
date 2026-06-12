@@ -254,7 +254,16 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     }
   });
 
-  // camera: ground-clamped spawn (?alt=) or a default SE vista
+  // terrain/water probe for the camera rig: walk-mode ground physics + the
+  // fly-mode soft collision / underwater guard both live in FlyCamera now
+  ctx.hooks.groundProbe = (x, z) => ({
+    ground: hf.heightAtCpu(x, z),
+    water: hf.waterYAtCpu(x, z),
+  });
+
+  // camera spawn: ground-clamped (?alt/x/z → fly) or the DEFAULT WALK SPAWN
+  // at the map center — first dry, reasonably flat spot on a spiral out
+  // from (0,0), eye at head height, facing the NE massif
   const q = new URLSearchParams(window.location.search);
   const alt = Number(q.get('alt') ?? NaN);
   if (params.cam === null) {
@@ -266,25 +275,45 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       const y = hf.heightAtCpu(x, z) + alt;
       // the fly camera doesn't exist yet — main applies this after rigging
       ctx.hooks.initialPose = { p: [x, y, z], yaw, pitch };
+      ctx.hooks.initialPoseMode = 'fly';
       engine.camera.position.set(x, y, z);
     } else {
-      engine.camera.position.set(1500, 1000, 1900);
-      engine.camera.lookAt(0, 350, -300);
+      const spawn = findWalkSpawn(hf);
+      ctx.hooks.initialPose = {
+        p: [spawn.x, hf.heightAtCpu(spawn.x, spawn.z) + 1.7, spawn.z],
+        yaw: -0.78, // face NE — the serrated massif anchors the first frame
+        pitch: -0.02,
+      };
+      ctx.hooks.initialPoseMode = 'walk';
+      engine.camera.position.set(spawn.x, ctx.hooks.initialPose.p[1], spawn.z);
     }
   }
-  // soft ground collision for fly camera + underwater guard (no underwater
-  // rendering exists: the refraction texture above the surface is garbage
-  // from below — hold the eye just above the water instead)
-  engine.onUpdate(() => {
-    const c = engine.camera.position;
-    const ground = hf.heightAtCpu(c.x, c.z) + 1.4;
-    if (c.y < ground) c.y = ground;
-    const wsurf = hf.waterYAtCpu(c.x, c.z) + 0.45;
-    if (c.y < wsurf) c.y = wsurf;
-  });
 
   // composed bookmarks (keys 1-9, ?shot=N) + 92 s flythrough (?fly=1 / F)
   installBookmarks(engine, hf, ctx.hooks, params);
 
   ctx.progress(1, 'terrain ready');
+}
+
+/**
+ * Default walk spawn: first dry, reasonably flat spot on a coarse spiral
+ * out from the map center (dry = waterY sits below the bed there; flat =
+ * central-difference slope under ~19°).
+ */
+function findWalkSpawn(hf: Heightfield): { x: number; z: number } {
+  for (let r = 0; r <= 240; r += 12) {
+    const steps = Math.max(1, Math.round((2 * Math.PI * r) / 18));
+    for (let k = 0; k < steps; k++) {
+      const a = (k / steps) * Math.PI * 2;
+      const x = Math.cos(a) * r;
+      const z = Math.sin(a) * r;
+      const h = hf.heightAtCpu(x, z);
+      if (hf.waterYAtCpu(x, z) > h - 0.05) continue; // wet or waterline
+      const sx = hf.heightAtCpu(x + 6, z) - hf.heightAtCpu(x - 6, z);
+      const sz = hf.heightAtCpu(x, z + 6) - hf.heightAtCpu(x, z - 6);
+      if (Math.hypot(sx, sz) / 12 > 0.35) continue; // too steep
+      return { x, z };
+    }
+  }
+  return { x: 0, z: 0 };
 }

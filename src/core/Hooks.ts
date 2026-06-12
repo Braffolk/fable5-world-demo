@@ -53,6 +53,11 @@ export interface LaasHooks {
   /** scene-requested spawn pose (?alt/x/z/yaw/pitch) — main applies it once
    *  the fly camera exists (scenes build BEFORE the camera rig) */
   initialPose: CamPose | null;
+  /** 'walk' only for the default interactive spawn (no explicit pose
+   *  params) — every explicit/programmatic pose keeps fly semantics */
+  initialPoseMode: 'walk' | 'fly' | null;
+  /** terrain/water heights at (x, z) — walk mode + fly soft collision */
+  groundProbe: ((x: number, z: number) => { ground: number; water: number }) | null;
   setTimeOfDay: ((t: number) => void) | null;
   /** settle frames (TAA/temporal effects) then resolve — call before screenshots */
   settle: ((frames?: number) => Promise<void>) | null;
@@ -77,6 +82,8 @@ export function initHooks(): LaasHooks {
     setPose: null,
     getPose: null,
     initialPose: null,
+    initialPoseMode: null,
+    groundProbe: null,
     setTimeOfDay: null,
     settle: null,
     flyCamEnabled: null,

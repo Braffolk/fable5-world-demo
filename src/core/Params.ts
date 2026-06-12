@@ -40,7 +40,8 @@ export function parseParams(search: string = window.location.search): LaasParams
     scene: q.get('scene') ?? 'world',
     timeOfDay: Math.min(24, Math.max(0, num(q.get('T'), 11))),
     preset,
-    hud: q.get('hud') !== '0',
+    // full debug panel hidden by default — F3 toggles it (fps chip always on)
+    hud: q.get('hud') === '1',
     cam: q.get('cam'),
     shot: shotN >= 1 && shotN <= 9 ? Math.floor(shotN) : null,
     freeze: q.get('freeze') === '1',
