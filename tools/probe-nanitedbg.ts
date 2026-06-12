@@ -14,6 +14,7 @@ async function main(): Promise<void> {
   const { browser } = await launchWebGPU();
   const errors: string[] = [];
   const logs: string[] = [];
+  let countersOut: Record<string, number> = {};
   try {
     const page = await browser.newPage();
     await page.setViewportSize({ width: 1280, height: 720 });
@@ -25,24 +26,33 @@ async function main(): Promise<void> {
     page.on('pageerror', (e) => errors.push(String(e)));
     const extra: Record<string, string> = { nanite: '1', nanitedbg: mode };
     if (shot) extra['shot'] = shot;
+    // DBG_EXTRA="audit=1&occl=0" forwards page params (probe-pan's pattern)
+    for (const kv of (process.env['DBG_EXTRA'] ?? '').split('&')) {
+      const [k, v] = kv.split('=');
+      if (k && v !== undefined) extra[k] = v;
+    }
     await page.goto(laasUrl({ scene: 'world', hud: false, extra }), { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => (window as unknown as { __laas?: { ready?: boolean } }).__laas?.ready === true, undefined, { timeout: 240_000 });
     await new Promise((r) => setTimeout(r, 4000)); // let meter() publish counters
-    const counters = await page.evaluate(() => {
+    countersOut = (await page.evaluate(() => {
       const dbg = (window as unknown as { __laasDbg?: { engine?: { stats?: { counters?: Record<string, number> } } } }).__laasDbg;
       const c = dbg?.engine?.stats?.counters ?? {};
       return Object.fromEntries(Object.entries(c).filter(([k]) => k.startsWith('nanite')));
-    });
+    })) as Record<string, number>;
     await page.screenshot({ path: `/tmp/nanitedbg-${mode}${shot ? `-bm${shot}` : ''}.png` });
-    console.log('counters:', JSON.stringify(counters));
+    console.log('counters:', JSON.stringify(countersOut));
   } finally {
     await browser.close();
   }
   for (const l of logs) console.log('log:', l.slice(0, 300));
   for (const e of errors.slice(0, 8)) console.log('ERR:', e.slice(0, 500));
   const overflow = logs.some((l) => l.includes('OVERFLOW'));
-  const pass = errors.length === 0 && !overflow;
-  console.log(`[probe-nanitedbg] ${pass ? 'PASS' : 'FAIL'} (${errors.length} errors${overflow ? ', queue overflow' : ''})`);
+  const orphans = countersOut['nanite.orphans'];
+  const orphanFail = orphans !== undefined && orphans > 0;
+  const pass = errors.length === 0 && !overflow && !orphanFail;
+  console.log(
+    `[probe-nanitedbg] ${pass ? 'PASS' : 'FAIL'} (${errors.length} errors${overflow ? ', queue overflow' : ''}${orphanFail ? `, ${orphans} orphan px` : ''})`,
+  );
   if (!pass) process.exit(1);
 }
 void main();

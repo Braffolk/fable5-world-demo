@@ -47,6 +47,8 @@ export function buildNaniteView(
   const phase2 = params.get('phase2') !== '0';
   const frozenParam = params.get('cullfreeze') === '1';
   const hzbLevel = Number(params.get('hzblevel') ?? '1');
+  /** ?audit=1 — per-frame raster consistency count (orphans must be 0) */
+  const auditOn = params.get('audit') === '1';
 
   const cam = makeNaniteCam(size.x, size.y);
   // vis buffers first: the HZB views the depth buffer, the cull consumes the
@@ -103,6 +105,7 @@ export function buildNaniteView(
     raster.depth2(renderer); // appended range (0 workgroups when none)
     raster.hwDepth(renderer, engine.camera); // late big/near tris
     raster.payload(renderer, engine.camera); // all items vs final depth
+    if (auditOn) raster.audit(renderer);
     if (!frozen) hzb.build(renderer); // final — next frame's occluder
     renderer.render(viewScene, engine.camera);
     frame++;
@@ -113,8 +116,16 @@ export function buildNaniteView(
     // created the GPU buffers yet, so a readback would throw
     if (frame === 0 || frame % 15 !== 0 || reading) return;
     reading = true;
-    void Promise.all([cull.readCounts(r), raster.readHwCount(r)])
-      .then(([c, hw]) => {
+    void Promise.all([
+      cull.readCounts(r),
+      raster.readHwCount(r),
+      auditOn ? raster.readAudit(r) : Promise.resolve(null),
+    ])
+      .then(([c, hw, aud]) => {
+        if (aud) {
+          engine.stats.counters['nanite.orphans'] = aud.orphans;
+          engine.stats.counters['nanite.covered'] = aud.covered;
+        }
         engine.stats.counters['nanite.visClusters'] = c.visClusters;
         engine.stats.counters['nanite.chunks'] = c.chunks;
         engine.stats.counters['nanite.rejInst'] = c.rejInst;

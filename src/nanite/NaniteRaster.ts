@@ -10,9 +10,11 @@
  * cluster list, so the resolve recovers (instance, cluster) in one
  * indirection (25-bit item headroom, F3).
  *
- * Float-edge scanline core stays example-verbatim (fixed-point integer edges
- * are N3); flat resolve = matClass palette or cluster-hash tint (the deferred
- * N1 checkpoint), face-normal lambert, real f32 depth out.
+ * Scanline core (N3a): FIXED-POINT integer edge functions — verts snapped to
+ * a 1/256-px grid (8 subpixel bits, HW convention), coverage + top-left rule
+ * in exact i32 math (watertight; replaces the example's float −1e-5 bias).
+ * Flat resolve = matClass palette or cluster-hash tint (the deferred N1
+ * checkpoint), face-normal lambert, real f32 depth out.
  */
 
 import { Mesh, Scene, Vector3 } from 'three';
@@ -35,9 +37,7 @@ import {
   dot,
   float,
   instanceIndex,
-  int,
   max,
-  min,
   normalize,
   positionGeometry,
   screenCoordinate,
@@ -62,13 +62,16 @@ import {
   elemU,
   localX,
   loopI,
+  maxI,
   maxU,
+  minI,
   minU,
   readBuffer,
   returnIf,
   sU32Views,
   texLoadR,
   toF,
+  toI,
   wgLinear,
 } from './Tsl';
 import type { BufOf, UV2 } from './Tsl';
@@ -96,6 +99,9 @@ export interface NaniteRasterHandles {
   /** SW payload over ALL items vs final depth + HW payload render */
   payload(renderer: Renderer, camera: PerspectiveCamera): void;
   readHwCount(renderer: Renderer): Promise<number>;
+  /** count covered/orphan pixels (dispatch after payload; ?audit=1) */
+  audit(renderer: Renderer): void;
+  readAudit(renderer: Renderer): Promise<{ orphans: number; covered: number }>;
 }
 
 /** Option C vis buffers — created OUTSIDE the raster so the HZB (which the
@@ -144,6 +150,12 @@ export function buildNaniteRaster(
   const hwQueueV = sU32Views(hwQueueAttr, 1 + HW_CAP * 2);
   const hwDrawAttr = new IndirectStorageBufferAttribute(new Uint32Array(4), 4);
   const hwDrawBuf = sU32Views(hwDrawAttr as unknown as StorageBufferAttribute, 4).rw;
+
+  // consistency audit (?audit=1): [0] = orphans (depth written but payload
+  // never matched it — ANY pass disagreement, SW or HW, shows up here),
+  // [1] = covered pixels
+  const auditAttr = new StorageBufferAttribute(new Uint32Array(4), 1);
+  const auditV = sU32Views(auditAttr, 4);
 
   // ---- shared fetch helpers ------------------------------------------------------
   /** per-(instance, cluster) decode shared by the 3 corner fetches */
@@ -248,11 +260,13 @@ export function buildNaniteRaster(
     });
     If(instanceIndex.equal(uint(0)), () => {
       atomicStore(hwQueueV.atomic.element(0), uint(0));
+      atomicStore(auditV.atomic.element(0), uint(0));
+      atomicStore(auditV.atomic.element(1), uint(0));
     });
   })().compute(pixelCount, [256]);
   (kVisClear as unknown as ComputeKernel).setName('nanVisClear');
 
-  // ---- SW raster kernels (Option C two-pass; spike-verbatim scanline core) ----------
+  // ---- SW raster kernels (Option C two-pass; fixed-point integer scanline) ----------
   // `phase2` offsets the work-item index by qRaster[0].y (the phase-2 base
   // written by kRasterArgs2) so the appended range rasters without touching
   // phase-1 items; depth1/payload start at 0.
@@ -313,107 +327,149 @@ export function buildNaniteRaster(
             const s1 = ndc1.xy.add(1).mul(0.5).mul(vec2(W, H)).toVar();
             const s2 = ndc2.xy.add(1).mul(0.5).mul(vec2(W, H)).toVar();
 
-            const minX = max(float(0), min(s0.x, min(s1.x, s2.x)));
-            const maxX = min(W.sub(1), max(s0.x, max(s1.x, s2.x)));
-            const minY = max(float(0), min(s0.y, min(s1.y, s2.y)));
-            const maxY = min(H.sub(1), max(s0.y, max(s1.y, s2.y)));
+            // FIXED-POINT snap (N3a): 1/256-px integer grid — 8 subpixel bits,
+            // the D3D HW convention. All coverage below is exact i32 math:
+            // watertight at shared edges and bit-identical between the depth
+            // and payload kernels by construction. WGSL f32→i32 SATURATES, so
+            // far off-screen verts read as a huge extent → HW route.
+            const xi0 = toI(s0.x.mul(256).round()).toVar();
+            const yi0 = toI(s0.y.mul(256).round()).toVar();
+            const xi1 = toI(s1.x.mul(256).round()).toVar();
+            const yi1 = toI(s1.y.mul(256).round()).toVar();
+            const xi2 = toI(s2.x.mul(256).round()).toVar();
+            const yi2 = toI(s2.y.mul(256).round()).toVar();
 
-            const startX = int(minX.floor()).toVar();
-            const endX = int(maxX.floor()).toVar();
-            const startY = int(minY.floor()).toVar();
-            const endY = int(maxY.floor()).toVar();
+            // whole-pixel bbox (trunc-div ≠ floor only below 0, where start
+            // clamps to 0 / validBB rejects — harmless)
+            const bbMinX = minI(xi0, minI(xi1, xi2)).div(toI(256)).toVar();
+            const bbMaxX = maxI(xi0, maxI(xi1, xi2)).div(toI(256)).toVar();
+            const bbMinY = minI(yi0, minI(yi1, yi2)).div(toI(256)).toVar();
+            const bbMaxY = maxI(yi0, maxI(yi1, yi2)).div(toI(256)).toVar();
 
-            const bbW = endX.sub(startX);
-            const bbH = endY.sub(startY);
+            // SW only when the UNCLAMPED extent is small (the float core sized
+            // the clamped box — a screen-spanning tri with a 16-px on-screen
+            // sliver ran SW with unbounded edge terms; now it routes HW).
+            // Bound: deltas ≤ ~17 px ⇒ every edge term < 2^26, i32-safe.
+            const smallEnough = bbMaxX
+              .sub(bbMinX)
+              .lessThanEqual(toI(MAX_RASTER_SIZE))
+              .and(bbMaxY.sub(bbMinY).lessThanEqual(toI(MAX_RASTER_SIZE)));
+
+            const startX = maxI(toI(0), bbMinX).toVar();
+            const endX = minI(toI(width - 1), bbMaxX).toVar();
+            const startY = maxI(toI(0), bbMinY).toVar();
+            const endY = minI(toI(height - 1), bbMaxY).toVar();
             const validBB = startX.lessThanEqual(endX).and(startY.lessThanEqual(endY));
-            const smallEnough = bbW
-              .lessThanEqual(int(MAX_RASTER_SIZE))
-              .and(bbH.lessThanEqual(int(MAX_RASTER_SIZE)));
 
-            If((validBB as unknown as { and: (o: unknown) => NB }).and(smallEnough), () => {
-              const area = edgeFn(s0 as unknown as NV2, s1 as unknown as NV2, s2 as unknown as NV2);
-
-              const stepXw0 = s1.y.sub(s2.y);
-              const stepYw0 = s2.x.sub(s1.x);
-              const stepXw1 = s2.y.sub(s0.y);
-              const stepYw1 = s0.x.sub(s2.x);
-              const stepXw2 = s0.y.sub(s1.y);
-              const stepYw2 = s1.x.sub(s0.x);
-
-              // top-left rule (float-edge bias, example-verbatim; fixed point = N3)
-              const tl0 = stepXw0.lessThan(0).or(stepXw0.equal(0).and(stepYw0.greaterThan(0)));
-              const tl1 = stepXw1.lessThan(0).or(stepXw1.equal(0).and(stepYw1.greaterThan(0)));
-              const tl2 = stepXw2.lessThan(0).or(stepXw2.equal(0).and(stepYw2.greaterThan(0)));
-              const bias0 = tl0.select(float(0), float(-1e-5));
-              const bias1 = tl1.select(float(0), float(-1e-5));
-              const bias2 = tl2.select(float(0), float(-1e-5));
-
-              const pStart = vec2(float(startX).add(0.5), float(startY).add(0.5));
-              const rw0 = edgeFn(s1 as unknown as NV2, s2 as unknown as NV2, pStart as unknown as NV2)
-                .add(bias0)
+            If((smallEnough as unknown as { and: (o: unknown) => NB }).and(validBB), () => {
+              // integer twice-area; snapping can collapse/flip a sub-1/256-px
+              // sliver → skip (also guards the reciprocal — the float core
+              // divided blindly)
+              const area2 = yi2
+                .sub(yi0)
+                .mul(xi1.sub(xi0))
+                .sub(xi2.sub(xi0).mul(yi1.sub(yi0)))
                 .toVar();
-              const rw1 = edgeFn(s2 as unknown as NV2, s0 as unknown as NV2, pStart as unknown as NV2)
-                .add(bias1)
-                .toVar();
-              const rw2 = edgeFn(s0 as unknown as NV2, s1 as unknown as NV2, pStart as unknown as NV2)
-                .add(bias2)
-                .toVar();
+              If(area2.greaterThan(toI(0)), () => {
+                // edge i is opposite vertex i; ex/ey = dE per +1 UNIT (1/256 px)
+                const ex0 = yi1.sub(yi2).toVar();
+                const ey0 = xi2.sub(xi1).toVar();
+                const ex1 = yi2.sub(yi0).toVar();
+                const ey1 = xi0.sub(xi2).toVar();
+                const ex2 = yi0.sub(yi1).toVar();
+                const ey2 = xi1.sub(xi0).toVar();
 
-              const b0s = rw0.div(area);
-              const b1s = rw1.div(area);
-              const b2s = rw2.div(area);
-              const rowZ = b0s.mul(ndc0.z).add(b1s.mul(ndc1.z)).add(b2s.mul(ndc2.z)).toVar();
-              const stepXz = stepXw0
-                .div(area)
-                .mul(ndc0.z)
-                .add(stepXw1.div(area).mul(ndc1.z))
-                .add(stepXw2.div(area).mul(ndc2.z));
-              const stepYz = stepYw0
-                .div(area)
-                .mul(ndc0.z)
-                .add(stepYw1.div(area).mul(ndc1.z))
-                .add(stepYw2.div(area).mul(ndc2.z));
+                // top-left rule, same orientation convention as the float core:
+                // the boundary E == 0 is owned iff dE/dx < 0, or dE/dx == 0 and
+                // dE/dy > 0; the -1 bias turns ≥0 into >0 on unowned edges —
+                // exact and scale-free (the -1e-5 float bias competed with ulp
+                // at edge-term scale ~1e6)
+                const tlBias = (ex: NI, ey: NI): NI =>
+                  ex
+                    .lessThan(toI(0))
+                    .or(ex.equal(toI(0)).and(ey.greaterThan(toI(0))))
+                    .select(toI(0), toI(-1)) as unknown as NI;
+                const bias0 = tlBias(ex0 as unknown as NI, ey0 as unknown as NI);
+                const bias1 = tlBias(ex1 as unknown as NI, ey1 as unknown as NI);
+                const bias2 = tlBias(ex2 as unknown as NI, ey2 as unknown as NI);
 
-              loopI('sy', startY as unknown as NI, endY as unknown as NI, (y) => {
-                const cw0 = rw0.toVar();
-                const cw1 = rw1.toVar();
-                const cw2 = rw2.toVar();
-                const cz = rowZ.toVar();
-                loopI('sx', startX as unknown as NI, endX as unknown as NI, (x) => {
-                  If(
-                    cw0
-                      .greaterThanEqual(0)
-                      .and(cw1.greaterThanEqual(0))
-                      .and(cw2.greaterThanEqual(0))
-                      .and(cz.greaterThanEqual(0))
-                      .and(cz.lessThanEqual(1)),
-                    () => {
-                      const px = uint(y).mul(uint(cam.uW)).add(uint(x));
-                      const bits = bcF2U(cz as unknown as NF);
-                      if (mode === 'depth') {
-                        const cur = aLoadU(visDepthV.atomic.element(px));
-                        If(bits.lessThan(cur), () => {
-                          atomicMin(visDepthV.atomic.element(px), bits);
+                // E at the center of (startX, startY), in units²
+                const pcx = startX.mul(toI(256)).add(toI(128)).toVar();
+                const pcy = startY.mul(toI(256)).add(toI(128)).toVar();
+                const rw0 = pcy
+                  .sub(yi1)
+                  .mul(xi2.sub(xi1))
+                  .sub(pcx.sub(xi1).mul(yi2.sub(yi1)))
+                  .add(bias0)
+                  .toVar();
+                const rw1 = pcy
+                  .sub(yi2)
+                  .mul(xi0.sub(xi2))
+                  .sub(pcx.sub(xi2).mul(yi0.sub(yi2)))
+                  .add(bias1)
+                  .toVar();
+                const rw2 = pcy
+                  .sub(yi0)
+                  .mul(xi1.sub(xi0))
+                  .sub(pcx.sub(xi0).mul(yi1.sub(yi0)))
+                  .add(bias2)
+                  .toVar();
+                // per-PIXEL steps = ex/ey × 256 units
+                const sx0 = ex0.mul(toI(256)).toVar();
+                const sx1 = ex1.mul(toI(256)).toVar();
+                const sx2 = ex2.mul(toI(256)).toVar();
+                const sy0 = ey0.mul(toI(256)).toVar();
+                const sy1 = ey1.mul(toI(256)).toVar();
+                const sy2 = ey2.mul(toI(256)).toVar();
+                const rcpArea = float(1).div(toF(area2 as unknown as NI)).toVar();
+
+                loopI('sy', startY as unknown as NI, endY as unknown as NI, (y) => {
+                  const cw0 = rw0.toVar();
+                  const cw1 = rw1.toVar();
+                  const cw2 = rw2.toVar();
+                  loopI('sx', startX as unknown as NI, endX as unknown as NI, (x) => {
+                    If(
+                      cw0
+                        .greaterThanEqual(toI(0))
+                        .and(cw1.greaterThanEqual(toI(0)))
+                        .and(cw2.greaterThanEqual(toI(0))),
+                      () => {
+                        // depth from the exact integer weights (the -1 biases
+                        // shift weights by ≤ 1/area2 ≈ 2^-25 — negligible);
+                        // identical expression+inputs in both passes → equal bits
+                        const cz = toF(cw0 as unknown as NI)
+                          .mul(ndc0.z)
+                          .add(toF(cw1 as unknown as NI).mul(ndc1.z))
+                          .add(toF(cw2 as unknown as NI).mul(ndc2.z))
+                          .mul(rcpArea)
+                          .toVar();
+                        If(cz.greaterThanEqual(0).and(cz.lessThanEqual(1)), () => {
+                          const px = uint(y).mul(uint(cam.uW)).add(uint(x));
+                          const bits = bcF2U(cz as unknown as NF);
+                          if (mode === 'depth') {
+                            const cur = aLoadU(visDepthV.atomic.element(px));
+                            If(bits.lessThan(cur), () => {
+                              atomicMin(visDepthV.atomic.element(px), bits);
+                            });
+                          } else {
+                            const cur = elemU(visDepthV.ro, px);
+                            If(bits.equal(cur), () => {
+                              (visPayloadV.rw as unknown as { element(i: NU): { assign(v: NU): void } })
+                                .element(px)
+                                .assign(payload);
+                            });
+                          }
                         });
-                      } else {
-                        const cur = elemU(visDepthV.ro, px);
-                        If(bits.equal(cur), () => {
-                          (visPayloadV.rw as unknown as { element(i: NU): { assign(v: NU): void } })
-                            .element(px)
-                            .assign(payload);
-                        });
-                      }
-                    },
-                  );
-                  cw0.addAssign(stepXw0);
-                  cw1.addAssign(stepXw1);
-                  cw2.addAssign(stepXw2);
-                  cz.addAssign(stepXz);
+                      },
+                    );
+                    cw0.addAssign(sx0);
+                    cw1.addAssign(sx1);
+                    cw2.addAssign(sx2);
+                  });
+                  rw0.addAssign(sy0);
+                  rw1.addAssign(sy1);
+                  rw2.addAssign(sy2);
                 });
-                rw0.addAssign(stepYw0);
-                rw1.addAssign(stepYw1);
-                rw2.addAssign(stepYw2);
-                rowZ.addAssign(stepYz);
               });
             }).Else(() => {
               if (mode === 'depth') {
@@ -451,6 +507,22 @@ export function buildNaniteRaster(
     hwDrawBuf.element(3).assign(uint(0));
   })().compute(1, [1]);
   (kHwArgs as unknown as ComputeKernel).setName('nanHwArgs');
+
+  // ---- kAudit (?audit=1) — run AFTER the payload passes: a covered pixel
+  // whose payload is still the clear sentinel means no pass-2 writer ever
+  // reproduced the stored depth (raster pass inconsistency). Gate: 0.
+  const kAudit = Fn(() => {
+    returnIf(instanceIndex.greaterThanEqual(uint(pixelCount)));
+    const d = elemU(visDepthV.ro, instanceIndex);
+    If(d.notEqual(uint(0xffffffff)), () => {
+      atomicAdd(auditV.atomic.element(1), uint(1));
+      const p = elemU(visPayloadV.ro, instanceIndex);
+      If(p.equal(uint(0xffffffff)), () => {
+        atomicAdd(auditV.atomic.element(0), uint(1));
+      });
+    });
+  })().compute(pixelCount, [256]);
+  (kAudit as unknown as ComputeKernel).setName('nanAudit');
 
   // ---- HW big/near-triangle passes (vertex pulling; fragment writes vis bufs) --------
   const hwGeometry = new BufferGeometry();
@@ -502,11 +574,12 @@ export function buildNaniteRaster(
         if (pass === 'depth') {
           atomicMin(visDepthV.atomic.element(px), bits);
         } else {
-          // cross-pipeline FMA divergence: ±64-ulp equality window (N0 gotcha;
-          // N3 fixed-point depth removes the class)
+          // EXACT equality (N3a) — the N0 ±64-ulp cross-pipeline window is
+          // retired: 0 orphans measured at exact equality on real HW load
+          // (25k tris underfoot); the ?audit=1 oracle re-catches any future
+          // driver/three divergence
           const cur = elemU(visDepthV.ro, px);
-          const du = maxU(bits, cur).sub(minU(bits, cur));
-          If(du.lessThanEqual(uint(64)), () => {
+          If(bits.equal(cur), () => {
             (visPayloadV.rw as unknown as { element(i: NU): { assign(v: NU): void } })
               .element(px)
               .assign(pay);
@@ -548,6 +621,11 @@ export function buildNaniteRaster(
     const dRaw = elemU(visDepthV.ro, pixelIndex);
     const pRaw = elemU(visPayloadV.ro, pixelIndex);
     If(dRaw.equal(uint(0xffffffff)), () => {
+      Discard();
+    });
+    // orphan (pass-2 never matched pass-1's depth): background, not a garbage
+    // payload decode — black-pixel probes then see it as a hole
+    If(pRaw.equal(uint(0xffffffff)), () => {
       Discard();
     });
     const itemIdx = pRaw.shiftRight(uint(7));
@@ -638,6 +716,14 @@ export function buildNaniteRaster(
     const buf = await readBuffer(renderer, hwQueueAttr, 0, 4);
     return new Uint32Array(buf)[0] ?? 0;
   };
+  const audit = (renderer: Renderer): void => {
+    dispatch(renderer, kAudit);
+  };
+  const readAudit = async (renderer: Renderer): Promise<{ orphans: number; covered: number }> => {
+    const buf = await readBuffer(renderer, auditAttr, 0, 8);
+    const u = new Uint32Array(buf);
+    return { orphans: u[0] ?? 0, covered: u[1] ?? 0 };
+  };
 
-  return { resolveScene, clearVis, depth1, depth2, hwDepth, payload, readHwCount };
+  return { resolveScene, clearVis, depth1, depth2, hwDepth, payload, readHwCount, audit, readAudit };
 }

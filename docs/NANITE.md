@@ -702,6 +702,31 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-13 (m): N3-C1 landed — FIXED-POINT integer edge functions (N3a).
+  SW scanline now snaps verts to a 1/256-px grid (8 subpixel bits, D3D HW
+  convention) and decides coverage in exact i32 math: integer edge terms +
+  integer top-left rule (bias −1 turns ≥0 into >0 on unowned edges — the
+  float −1e-5 bias is gone), depth from exact integer weights, per-pixel
+  (kills the float core's 16-step incremental z drift). SW/HW routing moved
+  to the UNCLAMPED bbox extent — bounds every edge term < 2^26 (i32-safe by
+  construction; before, a screen-spanning tri with a small on-screen sliver
+  ran SW with unbounded float terms) — border-clipped giants now route HW
+  (hwTris +~3–6%). Snapped-degenerate slivers (area2 ≤ 0) are skipped, which
+  also guards the reciprocal the float core divided by blindly. NEW ?audit=1
+  oracle (kAudit + nanite.orphans/covered HUD + probe gate + resolve
+  discards orphans to background so black-px probes see them): counts
+  covered pixels whose payload never matched pass-1 depth — THE consistency
+  symptom for any SW/HW pass disagreement. MEASURED (720p spawn/bm3/bm7):
+  orphans 0 / coverage within ±4 px of float core (909,027→909,023 etc. —
+  subpixel boundary ownership); probe-pan 0 holes; HW ±64-ulp equality
+  window RETIRED — 0 orphans at EXACT equality on real HW load (25k tris
+  underfoot at walk-mode spawn + 79k at bm3 2592); audit stays as the live
+  tripwire for future driver/three divergence. PERF (bm3 2592×1676):
+  nanRasterDepth 2.29 ms (float 2.5), nanRasterPayload 2.69 (3.1) — integer
+  inner loop ~0.6 ms FASTER. tsc clean; registry/clusterize/registry-gpu/
+  boot(293 ms)/nanitedbg×3/pan all green. Tsl grew minI/maxI/toI (toI
+  documents WGSL f32→i32 saturation — the off-screen-vert containment).
+
 - 2026-06-13 (l): **N2 COMPLETE** — C4 gate measured (ledger row "N2
   close"). Counts at 2592×1676 (two-phase, real boot): bm1 4,161 / bm3
   94,282 / bm4 89,620 / bm7 65,975 visClusters; steady-state p2 appends
@@ -913,25 +938,19 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## NEXT ACTIONS
 
-1. N3: vis-buffer raster hardening + parity (phase table row N3; design
-   notes "Vis-buffer + depth precision"). The raster EXISTS (N2's port);
-   N3 makes it correct enough to gate against hardware:
-   (a) FIXED-POINT integer edge functions (≥8 subpixel bits, top-left
-   rule) replacing the float −1e-5 bias — exact watertightness; verify
-   i32 edge-term ranges with bbox-guarded SW sizes (design note F12/§3).
-   This also kills the HW-payload ±64-ulp equality window (cross-pipeline
-   FMA) — re-verify exact equality after.
+1. N3 continue: (a) DONE 2026-06-13 (integer edges + exact HW equality +
+   ?audit oracle — log entry m). Remaining:
    (b) Silhouette parity gate: flat-lit nanite view vs an equivalent
    flat-lit HARDWARE render of the same migrated subset — diff ≤0.05%,
    no structural breaks (F12). Build the HW reference as a debug variant
    (same registry content drawn instanced via three) — bounded work, it
-   dies after the gate.
+   dies after the gate. Terrain reference geometry: build windows
+   CPU-side from the height texture data for the framing's frustum only
+   (full L0 is 33.5M tris — never build it whole).
    (c) Grazing-horizon depth probes at 4 km (re-use the horizon probe
    framing from STATUS); confirm no z-artifacts with full-f32 depth.
    (d) Walk-mode near-field: verify near-crossing→HW path underfoot
    (spike law F10c) in the world view.
-   NOTE: N2 left the example's float-edge scanline core in place — known
-   non-watertight at 2592-px coords (GOTCHAS); N3(a) is not optional.
 2. Then N4 (materials resolve übershader) per the table. The transform
    stage (wind channels) enters with N4's per-material ports — swayPad
    bounds already pad the cull side (F6 satisfied).

@@ -18,6 +18,7 @@ import {
   Return,
   atomicLoad,
   bitcast,
+  int,
   localId,
   max,
   min,
@@ -91,6 +92,20 @@ export function minU(a: NU, b: NU): NU {
 }
 export function maxU(a: NU, b: NU): NU {
   return max(a as unknown as NF, b as unknown as NF) as unknown as NU;
+}
+
+/** int min/max (same typings restriction as minU/maxU) */
+export function minI(a: NI, b: NI): NI {
+  return min(a as unknown as NF, b as unknown as NF) as unknown as NI;
+}
+export function maxI(a: NI, b: NI): NI {
+  return max(a as unknown as NF, b as unknown as NF) as unknown as NI;
+}
+
+/** int constructor/conversion typed as NI (@types int() returns a bare node;
+ *  WGSL i32(f32) SATURATES on overflow — callers may rely on that) */
+export function toI(v: number | NF): NI {
+  return int(v as unknown as number) as unknown as NI;
 }
 
 /** atomicLoad with a usable uint result (AtomicFunctionNode is method-less in @types) */
