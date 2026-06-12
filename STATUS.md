@@ -229,8 +229,9 @@ cov 0.62), contact shadows (?ablate=contact to A/B), black facets root-caused to
   (3) Chromium without navigator.gpu → actionable checklist (update /
   hardware acceleration / chrome://gpu / Linux Vulkan flag). Adapter-null
   keeps the richer probeWebGPU diagnostics overlay (Safari 26+ claims
-  dropped from its text). ?nogate=1 escape hatch. PENDING USER CONFIRM:
-  live Safari/Firefox/mobile messaging (user testing themselves).
+  dropped from its text). ?nogate=1 escape hatch. USER CONFIRMED LIVE (2026-06-12): browser
+  gate works; pointer-lock issues gone; walk feel decent; no cloud lag
+  noticed — all four pending live-confirms resolved positive.
 
 - **USER FEEDBACK BATCH 2 — COMPLETE (2026-06-12, commits f245787..ca941b9).**
   All 11 items + 3 live follow-ups landed, each verified by shots and
