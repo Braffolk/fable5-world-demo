@@ -477,6 +477,8 @@ measurement discipline; shot cycles ~2–3 min, cooled ABAB rounds 15–30 min e
 |---|---|---|---|---|---|---|---|
 | main baseline (cooled, 2026-06-13, STATUS pass-3) | 29.1 ms | 25.3 | 42.8 | 38.0 | 11.4–14.2 ms | ~548–905 | reference |
 | branch baseline (2026-06-12, this session, shots/nanite/base-bm*.json) | 33.6 | 58.3 ⚠ | 41.7 | 41.9 | 10.5–14.8 ms | 548–722 | bm3 = outlier (system-state spike, single run) — ABAB it before any bm3 conclusion; bm1/4/7 within thermal envelope of main |
+| old path re-ref (2026-06-13, uncooled singles, n2-old-bm*.json) | 32.9 | 66.8 ⚠ | 49.6 | 34.0 | 11–17.5 | 548–722 | bm3 slow AGAIN (58.3 then 66.8) — likely real on this content, not a spike; tris 12.6–16.5M |
+| **N2 close — flat dbg view** (2026-06-13, n2-nan-bm*.json) | 7.9 | 8.5 | 16.8* | 8.3 | **0.6–0.9** | ~4 | NOT beauty-comparable (no materials/post/cards/grass); the deliverable: cpu.submit COLLAPSED 11–15→<1 ms on real content; nanite GPU (2-phase cull + 2×SW raster + HW + resolve, 4.34 Mpx) ≈ 2.5 ms bm1 → 7.4 ms bm3 (depth 2.5 + payload 3.1 + instCull 0.7 + hw 1.1); old-path compute hooks still tick underneath (+1–2 ms pollution: grassRingCull, vegCull, probeGather); *bm4 frameMs P95-polluted, fps 103 |
 
 N0 SPIKE LEDGER (2592×1676, gpusample-24 medians, back-to-back in-session;
 content: 10.04M instanced tris, 1144 source clusters, 1937 instances,
@@ -700,6 +702,26 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-13 (l): **N2 COMPLETE** — C4 gate measured (ledger row "N2
+  close"). Counts at 2592×1676 (two-phase, real boot): bm1 4,161 / bm3
+  94,282 / bm4 89,620 / bm7 65,975 visClusters; steady-state p2 appends
+  0.2–21k (clusters occluded only by other phase-2 geometry oscillate
+  between phases — bounded, known two-phase property, costs a little
+  re-raster). GATE READING: cpu.submit 11–15 → 0.6–0.9 ms on the real
+  world (THE binding constraint, collapsed); nanite GPU 2.5–7.4 ms total
+  at 4.34 Mpx incl. both raster passes. "visible counts match old path
+  ±LOD policy" is met as: geometry SET identical within envelopes
+  (verified visually all framings), ring/envelope constants mirror the
+  old path by construction (D-N14), occlusion removes only hidden
+  geometry (image-identical occl on/off at 5 framings); a tris-vs-tris
+  number vs old stats is NOT comparable (old total is card/impostor/
+  grass-heavy: 12.6–16.5M). probe-pan zero holes (F13) ✓. 5× stress: caps
+  hold, F14 flags fire, self-heals ✓. bm3 old-path slow twice in a row
+  (58.3, 66.8) — treat as real bm3 content cost on this branch, not a
+  spike; investigate only if it blocks an N-gate. Old-path compute hooks
+  (grassRing/vegCull/probeGather) intentionally still tick under the
+  debug view (+1–2 ms) — they die at N6/N10, not before.
+
 - 2026-06-12 (k): N2-C3 landed — TWO-PHASE occlusion complete. Phase 1
   records occlusion-only rejects at both levels (rejInst/rejClust, counters
   2/3); phase 2 re-tests vs the fresh HZB with CURRENT matrices (instance
@@ -891,34 +913,25 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## NEXT ACTIONS
 
-1. N2-C2: HZB + phase-1 occlusion. Port the example pyramid onto the
-   Option C visDepth buffer (NaniteHzb.ts): level 0 = half canvas res from
-   visDepth (0xffffffff empty → 1.0 far), levels 2×2-max upward, ALL levels
-   packed in one f32 storage buffer + vec4 level table (offset,w,h,0), one
-   kernel per level [64]; init fill 1.0 = frame-0 pass-through for free.
-   sphereOccluded ported verbatim (prev-frame VP + prev camPos uniforms —
-   extend NaniteCam with prev snapshot + cotHalfFov; level pick
-   ceil(log2(2·radiusTexels)), 2×2 footprint max, dist>2r + w>0 guards).
-   Wire into kInstCull + kClusterCull at the marked C2 seams (occlusion-
-   only fail → record reject, C3). HZB builds AFTER the raster each frame
-   (this frame's depth = next frame's occluder). `?occl=0` escape hatch.
-   Re-measure the 5 framings (table in progress log i) — expect forest
-   interiors to drop hardest (bm7 216k is mostly occluded trunks).
-2. N2-C3: two-phase loop + freeze + pan probe. Record occlusion-only
-   rejects at BOTH levels in phase 1 (rejInst u32 list + rejClust uvec2
-   list, counters slots 2/3); after phase-1 raster + HZB: phase-2 kernels
-   re-test rejects vs the FRESH HZB with CURRENT matrices (instance rejects
-   re-expand through cluster cull incl. frustum+cone; cluster rejects re-
-   test occlusion only), APPEND survivors to qRaster (payload indices stay
-   stable), raster the appended range only (second indirect dispatch from a
-   phase-2 args kernel), rebuild HZB after. ?cullfreeze=1 (freeze cull-side
-   uniforms, fly free); ?nanitedbg=hzb (pyramid level visualizer);
-   tools/probe-pan.ts (scripted hard pan: capture frame-0-after-turn vs
-   settled frame diff = disocclusion holes; gate ZERO holes, F13).
-3. N2-C4 (gate): visible-counts at 4 bookmarks vs old path ±LOD policy
-   (use draws/tris from ?nanite=0 stats as the reference denominator) +
-   5× synthetic stress (?stress=5 instance duplication probe — F3/F16
-   payload-bit gate at scale) + perf ledger row (cull chain GPU ms at user
-   viewport via gpusample) + NANITE.md close.
-4. N3 per the table (fixed-point edges, full vis-buffer + flat resolve
-   parity gates, near-crossing→HW, grazing-horizon probes).
+1. N3: vis-buffer raster hardening + parity (phase table row N3; design
+   notes "Vis-buffer + depth precision"). The raster EXISTS (N2's port);
+   N3 makes it correct enough to gate against hardware:
+   (a) FIXED-POINT integer edge functions (≥8 subpixel bits, top-left
+   rule) replacing the float −1e-5 bias — exact watertightness; verify
+   i32 edge-term ranges with bbox-guarded SW sizes (design note F12/§3).
+   This also kills the HW-payload ±64-ulp equality window (cross-pipeline
+   FMA) — re-verify exact equality after.
+   (b) Silhouette parity gate: flat-lit nanite view vs an equivalent
+   flat-lit HARDWARE render of the same migrated subset — diff ≤0.05%,
+   no structural breaks (F12). Build the HW reference as a debug variant
+   (same registry content drawn instanced via three) — bounded work, it
+   dies after the gate.
+   (c) Grazing-horizon depth probes at 4 km (re-use the horizon probe
+   framing from STATUS); confirm no z-artifacts with full-f32 depth.
+   (d) Walk-mode near-field: verify near-crossing→HW path underfoot
+   (spike law F10c) in the world view.
+   NOTE: N2 left the example's float-edge scanline core in place — known
+   non-watertight at 2592-px coords (GOTCHAS); N3(a) is not optional.
+2. Then N4 (materials resolve übershader) per the table. The transform
+   stage (wind channels) enters with N4's per-material ports — swayPad
+   bounds already pad the cull side (F6 satisfied).
