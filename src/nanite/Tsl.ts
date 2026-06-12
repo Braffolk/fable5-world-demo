@@ -175,6 +175,25 @@ export interface V4W {
   assign(v: NV4 | unknown): void;
 }
 
+/** writable f32 element */
+export interface FW {
+  assign(v: NF | number): void;
+}
+/** readable + writable f32 element (kernels that reduce within ONE buffer
+ *  must read and write through the SAME view — N0 same-scope law) */
+export type FRW = NF & FW;
+
+/** read-write + read-only f32 storage views */
+export function sF32Views(
+  attr: StorageBufferAttribute,
+  count: number,
+): { rw: BufOf<FRW>; ro: BufOf<NF> } {
+  return {
+    rw: storage(attr, 'float', count) as unknown as BufOf<FRW>,
+    ro: storage(attr, 'float', count).toReadOnly() as unknown as BufOf<NF>,
+  };
+}
+
 /** read-write + read-only vec4 storage views */
 export function sVec4Views(
   attr: StorageBufferAttribute,

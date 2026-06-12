@@ -89,24 +89,41 @@ export interface NaniteRasterHandles {
   readHwCount(renderer: Renderer): Promise<number>;
 }
 
+/** Option C vis buffers — created OUTSIDE the raster so the HZB (which the
+ *  cull consumes) can view the depth buffer without a builder cycle */
+export interface NaniteVisBuffers {
+  depthAttr: StorageBufferAttribute;
+  depthV: ReturnType<typeof sU32Views>;
+  payloadAttr: StorageBufferAttribute;
+  payloadV: ReturnType<typeof sU32Views>;
+}
+
+export function makeVisBuffers(pixelCount: number): NaniteVisBuffers {
+  const depthAttr = new StorageBufferAttribute(new Uint32Array(pixelCount), 1);
+  markFragmentWritable(depthAttr);
+  const payloadAttr = new StorageBufferAttribute(new Uint32Array(pixelCount), 1);
+  markFragmentWritable(payloadAttr);
+  return {
+    depthAttr,
+    depthV: sU32Views(depthAttr, pixelCount),
+    payloadAttr,
+    payloadV: sU32Views(payloadAttr, pixelCount),
+  };
+}
+
 export function buildNaniteRaster(
   gpu: RegistryGpu,
   heightTex: Texture,
   cam: NaniteCam,
   cull: { qRasterRO: BufOf<UV2>; rasterDispatchAttr: IndirectStorageBufferAttribute },
+  vis: NaniteVisBuffers,
   tint: 'flat' | 'cluster',
 ): NaniteRasterHandles {
   const { width, height } = cam;
   const pixelCount = width * height;
   const qRasterRO = cull.qRasterRO;
-
-  // ---- vis buffers (Option C) -------------------------------------------------
-  const visDepthAttr = new StorageBufferAttribute(new Uint32Array(pixelCount), 1);
-  markFragmentWritable(visDepthAttr);
-  const visDepthV = sU32Views(visDepthAttr, pixelCount);
-  const visPayloadAttr = new StorageBufferAttribute(new Uint32Array(pixelCount), 1);
-  markFragmentWritable(visPayloadAttr);
-  const visPayloadV = sU32Views(visPayloadAttr, pixelCount);
+  const visDepthV = vis.depthV;
+  const visPayloadV = vis.payloadV;
 
   // hwQueue: [0] = atomic count, then (payload, instId) pairs
   const hwQueueAttr = new StorageBufferAttribute(new Uint32Array(1 + HW_CAP * 2), 1);

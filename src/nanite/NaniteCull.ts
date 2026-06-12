@@ -24,7 +24,7 @@
 import { IndirectStorageBufferAttribute, StorageBufferAttribute } from 'three/webgpu';
 import type { Renderer } from 'three/webgpu';
 import { Fn, If, Loop, atomicAdd, atomicStore, dot, float, instanceIndex, uint, vec3 } from 'three/tsl';
-import type { NF, NU, NV3, NV4 } from '../gpu/TSLTypes';
+import type { NB, NF, NU, NV3, NV4 } from '../gpu/TSLTypes';
 import { LOD_NONE, MESH_FLAG_HEIGHTFIELD, MESH_WORDS, readCluster, readMesh } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
 import {
@@ -86,6 +86,8 @@ export function buildNaniteCull(
   gpu: RegistryGpu,
   instanceCount: number,
   cam: NaniteCam,
+  /** prev-HZB occlusion test (NaniteHzb.sphereOccluded); null = ?occl=0 */
+  sphereOccluded: ((center: NV3, radius: NF) => NB) | null,
 ): NaniteCullChain {
   // ---- buffers ---------------------------------------------------------------
   // counters: [0] chunk pushes, [1] raster pushes, [2,3] reserved (C3 rejects)
@@ -148,7 +150,10 @@ export function buildNaniteCull(
       radiusW.assign(instSphereRadius(A, B, head.sphere.w, head.swayPad));
     });
     returnIf(frustumVisible(centerW as unknown as NV3, radiusW as unknown as NF).lessThan(0.5));
-    // C2 seam: prev-HZB occlusion test here; occlusion-only reject → record
+    if (sphereOccluded) {
+      // C3 seam: record occlusion-only instance rejects for phase 2
+      returnIf(sphereOccluded(centerW as unknown as NV3, radiusW as unknown as NF));
+    }
 
     // discrete LOD select: walk the chain while the camera is beyond lodDist
     // (chains are ≤ 3 hops today; 4 iterations = headroom)
@@ -250,7 +255,14 @@ export function buildNaniteCull(
           });
         });
       });
-      // C2 seam: prev-HZB cluster occlusion; occlusion-only reject → record
+      if (sphereOccluded) {
+        // C3 seam: record occlusion-only cluster rejects for phase 2
+        If(visible.greaterThan(0.5), () => {
+          If(sphereOccluded(centerW as unknown as NV3, radiusW as unknown as NF), () => {
+            visible.assign(0);
+          });
+        });
+      }
 
       If(visible.greaterThan(0.5), () => {
         const slot = atomicAdd(counters.element(1), uint(1)) as unknown as NU;

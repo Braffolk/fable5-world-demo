@@ -45,6 +45,13 @@ export interface NaniteCam {
   vp: UniformMat4;
   camPos: UniformV3;
   planes: UniformArrV4;
+  /** previous frame's VP + camera position — the occlusion-test pair
+   *  (static world: prev matrices, current bounds). Frame 0 holds identity;
+   *  the HZB's far-plane init makes the test pass-through regardless. */
+  prevVp: UniformMat4;
+  prevCamPos: UniformV3;
+  /** cot(fovY/2) — screen-space projection factor (HZB level pick) */
+  cotHalfFov: UniformF;
   uW: UniformF;
   uH: UniformF;
   width: number;
@@ -55,6 +62,9 @@ export interface NaniteCam {
 export function makeNaniteCam(width: number, height: number): NaniteCam {
   const vp = uniformMat4(new Matrix4());
   const camPos = uniformV3(new Vector3());
+  const prevVp = uniformMat4(new Matrix4());
+  const prevCamPos = uniformV3(new Vector3());
+  const cotHalfFov = uniformF(1);
   const planes = uniformArrV4([
     new Vector4(),
     new Vector4(),
@@ -70,16 +80,22 @@ export function makeNaniteCam(width: number, height: number): NaniteCam {
   return {
     vp,
     camPos,
+    prevVp,
+    prevCamPos,
+    cotHalfFov,
     planes,
     uW,
     uH,
     width,
     height,
     update(camera: PerspectiveCamera): void {
+      prevVp.value.copy(vp.value);
+      prevCamPos.value.copy(camPos.value);
       camera.updateMatrixWorld();
       projScreen.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
       vp.value.copy(projScreen);
       camPos.value.copy(camera.position);
+      cotHalfFov.value = 1 / Math.tan(((camera.fov * Math.PI) / 180) / 2);
       frustum.setFromProjectionMatrix(projScreen);
       for (let i = 0; i < 6; i++) {
         const p = frustum.planes[i];

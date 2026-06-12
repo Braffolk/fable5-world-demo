@@ -17,7 +17,8 @@ import type { Heightfield } from '../world/Heightfield';
 import type { GeometryRegistry } from './GeometryRegistry';
 import { makeNaniteCam } from './NaniteCommon';
 import { buildNaniteCull } from './NaniteCull';
-import { buildNaniteRaster } from './NaniteRaster';
+import { buildNaniteHzb } from './NaniteHzb';
+import { buildNaniteRaster, makeVisBuffers } from './NaniteRaster';
 
 export interface NaniteViewHandles {
   render(): void;
@@ -33,8 +34,18 @@ export function buildNaniteView(
   const renderer = engine.renderer;
   const size = renderer.getDrawingBufferSize(new Vector2());
   const cam = makeNaniteCam(size.x, size.y);
-  const cull = buildNaniteCull(registry.gpu, registry.instanceCount, cam);
-  const raster = buildNaniteRaster(registry.gpu, hf.heightTex, cam, cull, mode);
+  // vis buffers first: the HZB views the depth buffer, the cull consumes the
+  // HZB (prev frame's content), the raster fills it — no builder cycle
+  const vis = makeVisBuffers(size.x * size.y);
+  const occl = new URLSearchParams(window.location.search).get('occl') !== '0';
+  const hzb = buildNaniteHzb(vis.depthV.ro, cam);
+  const cull = buildNaniteCull(
+    registry.gpu,
+    registry.instanceCount,
+    cam,
+    occl ? hzb.sphereOccluded : null,
+  );
+  const raster = buildNaniteRaster(registry.gpu, hf.heightTex, cam, cull, vis, mode);
 
   let frame = 0;
   let reading = false;
@@ -52,8 +63,9 @@ export function buildNaniteView(
       }
     }
     cam.update(engine.camera);
-    cull.run(renderer);
+    cull.run(renderer); // occlusion tests read LAST frame's HZB content
     raster.update(renderer, engine.camera);
+    hzb.build(renderer); // this frame's depth = next frame's occluder
     renderer.render(raster.resolveScene, engine.camera);
   };
 
