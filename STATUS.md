@@ -196,6 +196,21 @@ cov 0.62), contact shadows (?ablate=contact to A/B), black facets root-caused to
 
 ## Next actions (always keep current)
 
+- **USER DETOUR COMPLETE (2026-06-14, commit e790e07): WALK MODE +
+  SPAWN + MINIMAL HUD.** FlyCamera is now a walk/fly rig — walk is the
+  interactive default (spawn = first dry low-slope spot from map center,
+  eye 1.7 m, facing NE massif), V toggles fly. Gravity/jump (input-
+  buffered)/sprint + industry camera effects (stride-phased bob, landing
+  dip spring, sprint FOV kick — CsmCached refits cascades on fov change).
+  CONTRACTS: every programmatic pose (setPose/?cam/?shot/bookmarks/
+  flythrough) auto-switches to FLY; getPose/P strip effect offsets; the
+  fly soft-collision + underwater guard moved from TerrainScene into the
+  rig. ?walk=0 escape hatch. HUD: debug panel now HIDDEN by default
+  (always-on fps chip instead; F3 toggles; ?hud=1 boots open — shoot.ts
+  passes hud explicitly so tooling is unaffected). PENDING USER CONFIRM:
+  walk feel (speeds/bob amplitude/jump height/FOV kick are constants at
+  the top of FlyCamera.ts).
+
 - **USER FEEDBACK BATCH 2 — COMPLETE (2026-06-12, commits f245787..ca941b9).**
   All 11 items + 3 live follow-ups landed, each verified by shots and
   committed separately:
