@@ -25,12 +25,111 @@ import {
   Vector3,
 } from 'three';
 import { BufferAttribute, BufferGeometry } from 'three';
-import { NodeMaterial } from 'three/webgpu';
-import { dot, max, normalize, normalWorld, vec3, vec4 } from 'three/tsl';
+import { NodeMaterial, StorageBufferAttribute, type Renderer } from 'three/webgpu';
+import { dot, max, normalize, normalWorld, storage, vec3, vec4 } from 'three/tsl';
+import type { Rng } from '../core/Seed';
 import type { NF, NV3 } from '../gpu/TSLTypes';
+import { GeometryRegistry } from '../nanite/GeometryRegistry';
 import { buildSpikeContent, TERRAIN_QUADS } from '../nanite/SpikeContent';
 import { buildSpikeRaster } from '../nanite/SpikeRaster';
+import { readBuffer } from '../nanite/Tsl';
+import { buildRock } from '../vegetation/RockBuilder';
 import type { WorldContext } from './Scenes';
+
+/**
+ * Registry GPU roundtrip: pack a real rock + heightfield records + CPU and
+ * GPU instance streams, build, then (a) validateOnGpu — readVertex/readCluster
+ * TSL decode vs the CPU mirrors, (b) read back the instance blob region the
+ * copy kernel wrote and compare against the source arrays. Logs [regtest]
+ * PASS/FAIL for the headless probe (tools/probe-registry-gpu.ts).
+ */
+async function runRegistryGpuTest(renderer: Renderer, rng: Rng): Promise<void> {
+  const reg = new GeometryRegistry();
+  const rock = buildRock('boulder', rng, 4);
+  const pos = rock.geometry.attributes.position;
+  const nrm = rock.geometry.attributes.normal;
+  const dat = rock.geometry.attributes.vdata;
+  const idx = rock.geometry.index;
+  if (!pos || !nrm || !dat || !idx) throw new Error('regtest: rock attrs missing');
+  const positions = pos.array as Float32Array;
+  const vCount = positions.length / 3;
+  const uvs = new Float32Array(vCount * 2);
+  const vdata = new Uint32Array(vCount);
+  const d = dat.array as Float32Array;
+  for (let v = 0; v < vCount; v++) {
+    uvs[v * 2] = (positions[v * 3] as number) * 0.13 + 0.5;
+    uvs[v * 2 + 1] = (positions[v * 3 + 2] as number) * 0.13 + 0.5;
+    const quant = (i: number): number =>
+      Math.round(Math.max(0, Math.min(1, d[v * 4 + i] as number)) * 255);
+    vdata[v] = (quant(0) | (quant(1) << 8) | (quant(2) << 16) | (quant(3) << 24)) >>> 0;
+  }
+  const h = reg.registerMesh(
+    {
+      kind: 'mesh',
+      positions,
+      normals: nrm.array as Float32Array,
+      uvs,
+      vdata,
+      indices: new Uint32Array(idx.array as ArrayLike<number>),
+    },
+    'rock',
+    { label: 'regtest-rock' },
+  );
+  const minMax = new Float32Array(32);
+  for (let i = 0; i < 16; i++) {
+    minMax[i * 2] = -1 - i * 0.25;
+    minMax[i * 2 + 1] = 1 + i * 0.5;
+  }
+  reg.registerMesh(
+    { kind: 'heightfield', gridW: 4, gridH: 4, winQuads: 8, cellSize: 1, originX: 0, originZ: 0, minMax },
+    'terrain',
+    { label: 'regtest-hf' },
+  );
+
+  // 2 CPU instances + 5 GPU-copied instances on the same mesh
+  const cpuA = new Float32Array([1, 2, 3, 1.5, 4, 5, 6, 0.8]);
+  const cpuB = new Float32Array([0.1, 0.2, 0.3, 17, 0.4, 0.5, 0.6, 18]);
+  reg.bindInstances(h, { a: cpuA, b: cpuB });
+  const N = 5;
+  const srcA = new Float32Array(N * 4);
+  const srcB = new Float32Array(N * 4);
+  for (let i = 0; i < N * 4; i++) {
+    srcA[i] = i + 0.25;
+    srcB[i] = 1000 - i * 0.5;
+  }
+  const attrA = new StorageBufferAttribute(srcA, 4);
+  const attrB = new StorageBufferAttribute(srcB, 4);
+  reg.bindInstances(h, {
+    bufA: storage(attrA, 'vec4', N),
+    bufB: storage(attrB, 'vec4', N),
+    count: N,
+  });
+
+  reg.build(renderer);
+  const v = await reg.validateOnGpu(renderer, 64);
+
+  const attrs = reg.debug().attrs;
+  const entry = reg.meshEntry(h);
+  const gpuFirst = entry.instFirst + 2;
+  const blob = new Float32Array(await readBuffer(renderer, attrs.instances, gpuFirst * 32, N * 32));
+  let copyOk = true;
+  for (let i = 0; i < N; i++) {
+    for (let k = 0; k < 4; k++) {
+      if (blob[i * 8 + k] !== (srcA[i * 4 + k] as number)) copyOk = false;
+      if (blob[i * 8 + 4 + k] !== (srcB[i * 4 + k] as number)) copyOk = false;
+    }
+  }
+  const ids = new Uint32Array(await readBuffer(renderer, attrs.instanceMesh, gpuFirst * 4, N * 4));
+  let idsOk = true;
+  for (let i = 0; i < N; i++) if (ids[i] !== h) idsOk = false;
+
+  const pass = v.pass && copyOk && idsOk;
+  // eslint-disable-next-line no-console
+  console.log(
+    `[regtest] ${pass ? 'PASS' : 'FAIL'} — decode: ${v.detail}; ` +
+      `gpuCopy ${copyOk ? 'ok' : 'MISMATCH'}; instMesh ${idsOk ? 'ok' : 'MISMATCH'}`,
+  );
+}
 
 function flatMaterial(albedo: [number, number, number]): NodeMaterial {
   const mat = new NodeMaterial();
@@ -64,6 +163,11 @@ export async function buildRasterSpikeScene(ctx: WorldContext): Promise<void> {
   );
   engine.stats.counters['spike.clusters'] = content.clusterCount;
   engine.stats.counters['spike.instTrisK'] = Math.round(content.stats.instancedTris / 1000);
+
+  // &regtest=1 — GeometryRegistry GPU decode/copy roundtrip (N1-C3 validation)
+  if (q.get('regtest') === '1') {
+    await runRegistryGpuTest(engine.renderer, seed.rng('regtest'));
+  }
 
   if (sw) {
     ctx.progress(0.5, 'spike: SW raster pipeline');

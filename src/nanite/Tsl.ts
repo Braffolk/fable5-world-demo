@@ -12,10 +12,22 @@
  *  - AtomicFunctionNode return lacks value-typed methods (THREE-NOTES)
  */
 
-import { If, Loop, Return, atomicLoad, max, min, storage, uvec2 } from 'three/tsl';
-import type { StorageBufferNode } from 'three/webgpu';
+import {
+  If,
+  Loop,
+  Return,
+  atomicLoad,
+  bitcast,
+  max,
+  min,
+  storage,
+  unpackHalf2x16,
+  unpackSnorm2x16,
+  uvec2,
+} from 'three/tsl';
+import type { Renderer, StorageBufferNode } from 'three/webgpu';
 import type { StorageBufferAttribute } from 'three/webgpu';
-import type { NB, NF, NI, NU } from '../gpu/TSLTypes';
+import type { NB, NF, NI, NU, NV2, NV4 } from '../gpu/TSLTypes';
 
 /** structural view of a uint vec2/vec4 storage element */
 export interface UV2 {
@@ -114,6 +126,73 @@ export function returnIf(cond: NB): void {
   If(cond, () => {
     Return();
   });
+}
+
+/** f32 bits → uint (bitcast return is untyped in @types) */
+export function bcF2U(f: NF): NU {
+  return bitcast(f, 'uint') as unknown as NU;
+}
+
+/** uint bits → f32 */
+export function bcU2F(u: NU): NF {
+  return bitcast(u, 'float') as unknown as NF;
+}
+
+/** WGSL unpack2x16float (typings return a bare PackFloatNode) */
+export function unpackHalfU(u: NU): NV2 {
+  return unpackHalf2x16(u) as unknown as NV2;
+}
+
+/** WGSL unpack2x16snorm */
+export function unpackSnormU(u: NU): NV2 {
+  return unpackSnorm2x16(u) as unknown as NV2;
+}
+
+/** read a u32 element from a (read-only) uint storage view */
+export function elemU(buf: StorageBufferNode<'uint'>, i: NU | number): NU {
+  return (buf as unknown as BufOf<NU>).element(i);
+}
+
+/** writable u32 element */
+export interface UW {
+  assign(v: NU | number | unknown): void;
+}
+
+/** writable u32 element of a read-write uint storage view */
+export function elemUW(buf: StorageBufferNode<'uint'>, i: NU | number): UW {
+  return (buf as unknown as BufOf<UW>).element(i);
+}
+
+/** writable vec4 element */
+export interface V4W {
+  assign(v: NV4 | unknown): void;
+}
+
+/** read-write + read-only vec4 storage views */
+export function sVec4Views(
+  attr: StorageBufferAttribute,
+  count: number,
+): { rw: BufOf<V4W>; ro: BufOf<NV4> } {
+  return {
+    rw: storage(attr, 'vec4', count) as unknown as BufOf<V4W>,
+    ro: storage(attr, 'vec4', count).toReadOnly() as unknown as BufOf<NV4>,
+  };
+}
+
+/** renderer.compute with the kernel-node cast (Fn().compute() returns an untyped node) */
+export function dispatch(renderer: Renderer, kernel: unknown): void {
+  renderer.compute(kernel as Parameters<Renderer['compute']>[0]);
+}
+
+/** async storage-attribute readback (attr param is over-narrowed in @types) */
+export function readBuffer(
+  renderer: Renderer,
+  attr: StorageBufferAttribute,
+  byteOffset: number,
+  byteLength: number,
+): Promise<ArrayBuffer> {
+  type Attr = Parameters<Renderer['getArrayBufferAsync']>[0];
+  return renderer.getArrayBufferAsync(attr as unknown as Attr, null, byteOffset, byteLength);
 }
 
 /** read-write + read-only + atomic u32 views over one attribute */
