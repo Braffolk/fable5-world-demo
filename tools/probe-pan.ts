@@ -49,7 +49,9 @@ async function blackPixels(path: string): Promise<number> {
   for (let y = SKY_GUARD_ROWS; y < img.info.height; y++) {
     for (let x = 0; x < img.info.width; x++) {
       const i = (y * img.info.width + x) * ch;
-      if ((img.data[i] ?? 0) + (img.data[i + 1] ?? 0) + (img.data[i + 2] ?? 0) < 24) black++;
+      // ≤ 24, NOT < 24: background = page bg #06080a which sums to EXACTLY
+      // 24 — the original < 24 made the hole gate vacuous (N3 discovery)
+      if ((img.data[i] ?? 0) + (img.data[i + 1] ?? 0) + (img.data[i + 2] ?? 0) <= 24) black++;
     }
   }
   return black;

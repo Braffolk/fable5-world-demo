@@ -52,9 +52,12 @@ async function shoot(mode: 'flat' | 'hwref', framing: string): Promise<string> {
     );
     await new Promise((r) => setTimeout(r, 2500)); // settle (two-phase + hwref pose freeze)
     await page.evaluate(() => {
-      // the always-on fps chip is DOM — its text varies between runs
-      const el = document.getElementById('hud-fps');
-      if (el) el.style.display = 'none';
+      // the always-on fps chip + boot overlay are DOM — chip text varies
+      // between runs; the overlay's fade can linger into early shots
+      for (const id of ['hud-fps', 'boot']) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+      }
     });
     await page.screenshot({ path });
     if (errors.length) throw new Error(`page errors in ${mode}/${framing}: ${errors[0]}`);
@@ -86,7 +89,7 @@ async function diff(framing: string, a: string, b: string): Promise<{ cover: num
     if (d > TOL) {
       const la = (ia.data[p * ca] ?? 0) + (ia.data[p * ca + 1] ?? 0) + (ia.data[p * ca + 2] ?? 0);
       const lb = (ib.data[p * cb] ?? 0) + (ib.data[p * cb + 1] ?? 0) + (ib.data[p * cb + 2] ?? 0);
-      const isCover = la < BG !== lb < BG;
+      const isCover = la <= BG !== lb <= BG;
       if (isCover) {
         cover++;
         overlay[p * 3] = 255; // red = silhouette/coverage disagreement

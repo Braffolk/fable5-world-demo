@@ -481,6 +481,7 @@ measurement discipline; shot cycles ~2–3 min, cooled ABAB rounds 15–30 min e
 | branch baseline (2026-06-12, this session, shots/nanite/base-bm*.json) | 33.6 | 58.3 ⚠ | 41.7 | 41.9 | 10.5–14.8 ms | 548–722 | bm3 = outlier (system-state spike, single run) — ABAB it before any bm3 conclusion; bm1/4/7 within thermal envelope of main |
 | old path re-ref (2026-06-13, uncooled singles, n2-old-bm*.json) | 32.9 | 66.8 ⚠ | 49.6 | 34.0 | 11–17.5 | 548–722 | bm3 slow AGAIN (58.3 then 66.8) — likely real on this content, not a spike; tris 12.6–16.5M |
 | **N2 close — flat dbg view** (2026-06-13, n2-nan-bm*.json) | 7.9 | 8.5 | 16.8* | 8.3 | **0.6–0.9** | ~4 | NOT beauty-comparable (no materials/post/cards/grass); the deliverable: cpu.submit COLLAPSED 11–15→<1 ms on real content; nanite GPU (2-phase cull + 2×SW raster + HW + resolve, 4.34 Mpx) ≈ 2.5 ms bm1 → 7.4 ms bm3 (depth 2.5 + payload 3.1 + instCull 0.7 + hw 1.1); old-path compute hooks still tick underneath (+1–2 ms pollution: grassRingCull, vegCull, probeGather); *bm4 frameMs P95-polluted, fps 103 |
+| **N3 close — fixed-point raster** (2026-06-13, bm3 2592×1676 single) | — | 8.1 | — | — | 0.6 | ~5 | integer scanline FASTER than the float core: nanRasterDepth 2.29 ms (was 2.5), nanRasterPayload 2.69 (was 3.1); hwTris 79k (unclamped-extent routing); gates: watertight ✓ silhouette parity 0–102 px = 0.000–0.011% vs HW at 5 framings ✓ 4-km grazing shimmer/holes/orphans 0 ✓ near-field F10c ✓ |
 
 N0 SPIKE LEDGER (2592×1676, gpusample-24 medians, back-to-back in-session;
 content: 10.04M instanced tris, 1144 source clusters, 1937 instances,
@@ -681,6 +682,20 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## GOTCHAS (append-only, nanite-specific)
 
+- (N3) The page background #06080a SUMS TO EXACTLY 24 — every probe
+  black/hole threshold written `r+g+b < 24` silently classified background
+  as geometry, making probe-pan's N2 hole gate VACUOUS (it measured
+  nothing; phase-2 evidence stood on p2-append counters, and a re-run with
+  `<= 24` re-verified 0 holes honestly). Lesson made law: NEGATIVE-CONTROL
+  every new pixel gate — force a known hole/diff and watch the gate fire —
+  before trusting its first PASS.
+- (N3) Debug views that freeze content on "camera stopped" must UNFREEZE
+  on motion: hwref's stable-latch survived a probe TELEPORT and rendered
+  spawn-frozen content from the horizon pose (wedge-of-nothing symptom).
+- (N3) The #boot overlay fade and the always-on #hud-fps DOM chip pollute
+  Playwright pixel gates (a low-alpha full-screen fade shifts EVERY pixel
+  past tolerance) — hide both elements before screenshotting.
+
 - (seed) The reference example's `.toVar()` placements around chunk bounds are
   load-bearing ("store as var to prevent inlining") — WGSL codegen inlines
   re-reads otherwise; keep the pattern in ported kernels.
@@ -719,6 +734,30 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   min/max on uint nodes, float(uintNode) → use .toFloat().
 
 ## PROGRESS LOG (append-only, newest first)
+
+- 2026-06-13 (o): **N3 COMPLETE** — C3 landed: grazing-horizon (c) +
+  walk-mode near-field (d) gates PASS via NEW tools/probe-horizon-nanite.ts
+  (uses main's __laas groundProbe/setPose/settle hooks). graze4km (corner
+  +40 m eye down the 5.4 km diagonal, ~0.5° grazing): frame shimmer 0 px
+  (bit-stable — NO z-race with full-f32 depth), holes 0, orphans 0,
+  silhouette parity vs HW 0 px; flips 4,866 (0.53% — tie-ownership blooms
+  at grazing where surfaces run near-coplanar for long stretches; same
+  class→invisible, cross-class→counted; silhouette exactness is the gate).
+  nearfield (eye ground+0.05 m, terrain through the near plane): shimmer 0,
+  holes 0, orphans 0, silhouette 0 px, flips 41, hwTris 12,473 — F10c
+  near-crossing→HW verified underfoot IN THE WORLD. Two probe-infra bugs
+  found by the gates failing (GOTCHAS): the `< 24` background-sum trap
+  (probe-pan's N2 hole gate was VACUOUS — fixed to ≤24 and RE-RUN: 0 holes
+  honest), and hwref's freeze latch surviving teleports. probe-parity
+  re-run with the honest classifier: silhouette 4/0/102/39/13 px
+  (0.0004–0.0111%, gate 0.05%) + flips 134–1,099 (≤0.12%) at
+  spawn/bm1/bm3/bm4/bm7 — real nonzero numbers proving the classifier
+  measures. Two-phase tie oscillation quantified: 1 px/frame at the
+  grazing pose (frame0==frame2 — alternation, not drift); stability gate
+  allows ≤8 px. N3 GATES ALL MET: watertight fixed-point raster (C1),
+  silhouette ≤0.05% with no structural breaks (C2: 0 px), no z-artifacts
+  at 4 km grazing (C3), near-crossing→HW underfoot (C3). Perf: bm3
+  2592×1676 depth 2.29 + payload 2.69 ms (ledger row).
 
 - 2026-06-13 (n): N3-C2 landed — SILHOUETTE PARITY GATE PASSED: **0 px
   silhouette diff at ALL 5 framings** (spawn/bm1/bm3/bm4/bm7, 1280×720,
@@ -979,14 +1018,17 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## NEXT ACTIONS
 
-1. N3 continue: (a) DONE (integer edges + exact HW equality + ?audit
-   oracle — log m). (b) DONE (parity gate PASSED 0 px silhouette diff at
-   5 framings — log n, D-N15). Remaining:
-   (c) Grazing-horizon depth probes at 4 km (re-use the horizon probe
-   framing from STATUS); confirm no z-artifacts with full-f32 depth.
-   (d) Walk-mode near-field: verify near-crossing→HW path underfoot
-   (spike law F10c) in the world view; then N3 close (ledger row +
-   checkpoint note).
-2. Then N4 (materials resolve übershader) per the table. The transform
-   stage (wind channels) enters with N4's per-material ports — swayPad
-   bounds already pad the cull side (F6 satisfied).
+1. N4: materials resolve übershader (phase table row N4; design notes
+   "Resolve / materials"). Port order TERRAIN → ROCK → BARK → DEADWOOD →
+   DEBRIS, each gated on frame-aligned equivalence vs `?nanite=0`
+   (`--framealign N --wind 0 --lockexp 1`, deterministic floor ≤0.2%
+   where geometry-identical). The transform stage (wind channels) enters
+   with the per-material ports — swayPad already pads the cull side (F6).
+   Unpack→barycentrics→attribute fetch: port the example's analytic
+   UV/normal derivative block verbatim (lines ~1216–1263); TextureNode
+   .grad() and TSL Switch verified in 0.184 (F17). Velocity (prev
+   transforms + prev wind phase) lands here too — NOT example-proven
+   (F10a), three's VelocityNode unusable (THREE-NOTES). Outputs: beauty
+   rgba16f + REAL f32 depth via depthNode + velocity rg16f. Shadows stay
+   on the old path until N5 (the resolve only RECEIVES CSM).
+2. Then N5 (per-cascade cluster shadow re-culls) per the table.

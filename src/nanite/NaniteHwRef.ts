@@ -366,13 +366,15 @@ export function buildNaniteHwRef(
   };
 
   const render = (): void => {
-    // the LOD partition must match the kernel's SETTLED pose (walk-mode
-    // spawn drops to the ground over the first frames): coarse rebuilds
-    // while moving, one EXACT rebuild when the camera stops, then freeze
+    // the LOD partition must match the kernel's pose at rest (walk-mode
+    // spawn settles over the first frames; probes TELEPORT mid-run):
+    // coarse rebuilds while moving, one EXACT rebuild when the camera
+    // stops; any later motion un-freezes — never latch permanently
+    engine.camera.getWorldPosition(camPos);
+    const stopped = camPos.distanceTo(lastFramePos) < 1e-4;
+    lastFramePos.copy(camPos);
+    if (!stopped) stable = false;
     if (!stable) {
-      engine.camera.getWorldPosition(camPos);
-      const stopped = camPos.distanceTo(lastFramePos) < 1e-4;
-      lastFramePos.copy(camPos);
       if (stopped && camPos.distanceTo(lastBuildPos) > 0) rebuild();
       if (stopped && camPos.distanceTo(lastBuildPos) === 0) {
         stable = true;
