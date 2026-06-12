@@ -35,9 +35,22 @@ import {
 } from 'three/webgpu';
 import { markFragmentWritable } from '../render/ThreePatches';
 import {
+  aLoadU,
+  loopI,
+  loopU,
+  maxU,
+  minU,
+  returnIf,
+  sU32Views,
+  sUvec2,
+  sUvec4RO,
+  toF,
+  uv2,
+  type UV4,
+} from './Tsl';
+import {
   Discard,
   Fn,
-  Return,
   If,
   Loop,
   atomicAdd,
@@ -62,7 +75,6 @@ import {
   uint,
   uniform,
   uniformArray,
-  uvec2,
   varyingProperty,
   vec2,
   vec3,
@@ -70,7 +82,7 @@ import {
   vertexIndex,
   workgroupId,
 } from 'three/tsl';
-import type { NB, NF, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
+import type { NB, NF, NI, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
 import type { SpikeContent } from './SpikeContent';
 import { TERRAIN_CELL, TERRAIN_QUADS, TERRAIN_WIN } from './SpikeContent';
 
@@ -129,8 +141,8 @@ export function buildSpikeRaster(
   const posBuf = storage(new StorageBufferAttribute(c.positions, 4), 'vec4', c.positions.length / 4).toReadOnly();
   const idxBuf = storage(new StorageBufferAttribute(c.indices, 1), 'uint', c.indices.length).toReadOnly();
   const sphereBuf = storage(new StorageBufferAttribute(c.clusterSphere, 4), 'vec4', c.clusterCount).toReadOnly();
-  const metaBuf = storage(new StorageBufferAttribute(c.clusterMeta, 4), 'uvec4' as unknown as 'vec4', c.clusterCount).toReadOnly();
-  const meshTableBuf = storage(new StorageBufferAttribute(c.meshTable, 2), 'uvec2' as unknown as 'vec4', c.meshTable.length / 2).toReadOnly();
+  const metaBuf = sUvec4RO(new StorageBufferAttribute(c.clusterMeta, 4), c.clusterCount);
+  const meshTableBuf = sUvec2(new StorageBufferAttribute(c.meshTable, 2), c.meshTable.length / 2).ro;
   const instABuf = storage(new StorageBufferAttribute(c.instA, 4), 'vec4', c.instanceCount).toReadOnly();
   const instBBuf = storage(new StorageBufferAttribute(c.instB, 4), 'vec4', c.instanceCount).toReadOnly();
   const heightsBuf = storage(new StorageBufferAttribute(c.heights, 1), 'float', c.heights.length).toReadOnly();
@@ -138,19 +150,21 @@ export function buildSpikeRaster(
   // entry 0 is reserved: x = clamped item count (written by kArgs); items
   // live at [1..count] — the guard costs no extra binding this way (F9)
   const workQueueAttr = new StorageBufferAttribute(new Uint32Array((WORK_CAP + 1) * 2), 2);
-  const workQueue = storage(workQueueAttr, 'uvec2' as unknown as 'vec4', WORK_CAP + 1);
-  const workQueueRO = storage(workQueueAttr, 'uvec2' as unknown as 'vec4', WORK_CAP + 1).toReadOnly();
+  const workQueueViews = sUvec2(workQueueAttr, WORK_CAP + 1);
+  const workQueue = workQueueViews.rw;
+  const workQueueRO = workQueueViews.ro;
 
   const countersAttr = new StorageBufferAttribute(new Uint32Array(4), 1);
-  const counters = storage(countersAttr, 'uint', 4).toAtomic();
+  const counters = sU32Views(countersAttr, 4).atomic;
 
   const dispatchAttr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
   const dispatchBuf = storage(dispatchAttr, 'uint', 3);
 
   // hwQueue: [0] = atomic count, then (payload, instId) pairs
   const hwQueueAttr = new StorageBufferAttribute(new Uint32Array(1 + HW_CAP * 2), 1);
-  const hwQueue = storage(hwQueueAttr, 'uint', 1 + HW_CAP * 2).toAtomic();
-  const hwQueueRO = storage(hwQueueAttr, 'uint', 1 + HW_CAP * 2).toReadOnly();
+  const hwQueueV = sU32Views(hwQueueAttr, 1 + HW_CAP * 2);
+  const hwQueue = hwQueueV.atomic;
+  const hwQueueRO = hwQueueV.ro;
 
   const hwDrawAttr = new IndirectStorageBufferAttribute(new Uint32Array(4), 4);
   const hwDrawBuf = storage(hwDrawAttr, 'uint', 4);
@@ -160,13 +174,15 @@ export function buildSpikeRaster(
   // three patch (ThreePatches.installFragmentStorageWrites)
   const visDepthAttr = new StorageBufferAttribute(new Uint32Array(pixelCount), 1);
   markFragmentWritable(visDepthAttr);
-  const visDepthAtomic = storage(visDepthAttr, 'uint', pixelCount).toAtomic();
-  const visDepthRO = storage(visDepthAttr, 'uint', pixelCount).toReadOnly();
+  const visDepthV = sU32Views(visDepthAttr, pixelCount);
+  const visDepthAtomic = visDepthV.atomic;
+  const visDepthRO = visDepthV.ro;
   const visPayloadAttr = new StorageBufferAttribute(new Uint32Array(pixelCount), 1);
   markFragmentWritable(visPayloadAttr);
-  const visPayload = storage(visPayloadAttr, 'uint', pixelCount);
-  const visPayloadAtomic = storage(visPayloadAttr, 'uint', pixelCount).toAtomic();
-  const visPayloadRO = storage(visPayloadAttr, 'uint', pixelCount).toReadOnly();
+  const visPayloadV = sU32Views(visPayloadAttr, pixelCount);
+  const visPayload = visPayloadV.rw;
+  const visPayloadAtomic = visPayloadV.atomic;
+  const visPayloadRO = visPayloadV.ro;
 
   // ---- shared TSL builders ------------------------------------------------------
   const HF_N = TERRAIN_QUADS + 1;
@@ -174,17 +190,17 @@ export function buildSpikeRaster(
   const tileOZ = c.tileOrigin.z;
 
   /** world-space vertex v of (instId, clusterId, localTri); pure expression per call site */
-  const fetchWorldVert = (instId: NU, meta: NV4, localTri: NU, v: 0 | 1 | 2): NV3 => {
-    const kind = (meta as unknown as { x: NU }).x;
+  const fetchWorldVert = (instId: NU, meta: UV4, localTri: NU, v: 0 | 1 | 2): NV3 => {
+    const kind = meta.x;
     const A = instABuf.element(instId) as unknown as NV4;
     const B = instBBuf.element(instId) as unknown as NV4;
     const out = vec3(0).toVar();
-    If((kind.equal(uint(1)) as unknown as NB), () => {
-      const win = (meta as unknown as { w: NU }).w;
+    If((kind.equal(uint(1))), () => {
+      const win = meta.w;
       const gx = win.bitAnd(uint(0xffff));
       const gz = win.shiftRight(uint(16));
       const quad = localTri.shiftRight(uint(1));
-      const odd = localTri.bitAnd(uint(1)).equal(uint(1)) as unknown as NB;
+      const odd = localTri.bitAnd(uint(1)).equal(uint(1));
       const qx = quad.mod(uint(TERRAIN_WIN));
       const qz = quad.div(uint(TERRAIN_WIN));
       // up-facing CCW — even tri (0,0)(0,1)(1,1), odd tri (0,0)(1,1)(1,0)
@@ -194,24 +210,24 @@ export function buildSpikeRaster(
         dx = uint(0) as unknown as NU;
         dz = uint(0) as unknown as NU;
       } else if (v === 1) {
-        dx = (odd as unknown as { select: (a: unknown, b: unknown) => NU }).select(uint(1), uint(0));
+        dx = odd.select(uint(1), uint(0));
         dz = uint(1) as unknown as NU;
       } else {
         dx = uint(1) as unknown as NU;
-        dz = (odd as unknown as { select: (a: unknown, b: unknown) => NU }).select(uint(0), uint(1));
+        dz = odd.select(uint(0), uint(1));
       }
       const sx = gx.add(qx).add(dx);
       const sz = gz.add(qz).add(dz);
       const h = heightsBuf.element(sz.mul(uint(HF_N)).add(sx)) as unknown as NF;
       out.assign(
         vec3(
-          (sx as unknown as NF).toFloat().mul(TERRAIN_CELL).add(tileOX),
+          toF(sx).mul(TERRAIN_CELL).add(tileOX),
           h,
-          (sz as unknown as NF).toFloat().mul(TERRAIN_CELL).add(tileOZ),
+          toF(sz).mul(TERRAIN_CELL).add(tileOZ),
         ),
       );
     }).Else(() => {
-      const triStart = (meta as unknown as { y: NU }).y;
+      const triStart = meta.y;
       const vi = idxBuf.element(triStart.add(localTri).mul(uint(3)).add(uint(v))) as unknown as NU;
       const p = (posBuf.element(vi) as unknown as NV4).xyz;
       const s = A.w;
@@ -236,19 +252,19 @@ export function buildSpikeRaster(
     const b = a.shiftRight(uint(16)).bitXor(a).mul(uint(277803737));
     const h = b.shiftRight(uint(16)).bitXor(b);
     return vec3(
-      (h.bitAnd(uint(255)) as unknown as NF).toFloat().div(255),
-      (h.shiftRight(uint(8)).bitAnd(uint(255)) as unknown as NF).toFloat().div(255),
-      (h.shiftRight(uint(16)).bitAnd(uint(255)) as unknown as NF).toFloat().div(255),
+      toF(h.bitAnd(uint(255))).div(255),
+      toF(h.shiftRight(uint(8)).bitAnd(uint(255))).div(255),
+      toF(h.shiftRight(uint(16)).bitAnd(uint(255))).div(255),
     ).mul(0.8).add(0.2) as unknown as NV3;
   };
 
   // ---- kClear -------------------------------------------------------------------
   const kClear = Fn(() => {
-    If((instanceIndex.lessThan(uint(pixelCount)) as unknown as NB), () => {
+    If((instanceIndex.lessThan(uint(pixelCount))), () => {
       atomicStore(visDepthAtomic.element(instanceIndex), isA ? uint(0) : uint(0xffffffff));
       atomicStore(visPayloadAtomic.element(instanceIndex), isA ? uint(0) : uint(0xffffffff));
     });
-    If((instanceIndex.equal(uint(0)) as unknown as NB), () => {
+    If((instanceIndex.equal(uint(0))), () => {
       atomicStore(counters.element(0), uint(0));
       atomicStore(hwQueue.element(0), uint(0));
     });
@@ -257,21 +273,21 @@ export function buildSpikeRaster(
 
   // ---- kCull: per instance, loop its clusters, frustum test, append ---------------
   const kCull = Fn(() => {
-    If((instanceIndex.lessThan(uint(c.instanceCount)) as unknown as NB), () => {
+    If((instanceIndex.lessThan(uint(c.instanceCount))), () => {
       const A = instABuf.element(instanceIndex) as unknown as NV4;
       const B = instBBuf.element(instanceIndex) as unknown as NV4;
       const meshId = uint(B.w) as unknown as NU;
-      const range = meshTableBuf.element(meshId) as unknown as { x: NU; y: NU };
+      const range = meshTableBuf.element(meshId);
       const start = range.x;
       const count = range.y;
-      Loop({ start: uint(0), end: count, type: 'uint', condition: '<' } as never, (lp: unknown) => {
-        const clusterId = start.add((lp as { i: NU }).i);
+      loopU(uint(0), count, (i) => {
+        const clusterId = start.add(i);
         const sph = sphereBuf.element(clusterId) as unknown as NV4;
         const meta = metaBuf.element(clusterId) as unknown as NV4;
         const kind = (meta as unknown as { x: NU }).x;
         const centerW = vec3(0).toVar();
         const radiusW = float(0).toVar();
-        If((kind.equal(uint(1)) as unknown as NB), () => {
+        If((kind.equal(uint(1))), () => {
           centerW.assign(sph.xyz);
           radiusW.assign(sph.w);
         }).Else(() => {
@@ -289,16 +305,14 @@ export function buildSpikeRaster(
         Loop(6, ({ i: pi }) => {
           const plane = frustumPlanes.element(pi) as unknown as NV4;
           const d = dot(plane.xyz, centerW as unknown as NV3).add(plane.w) as unknown as NF;
-          If((d.lessThan(radiusW.negate()) as unknown as NB), () => {
+          If((d.lessThan(radiusW.negate())), () => {
             visible.assign(0);
           });
         });
-        If((visible.greaterThan(0.5) as unknown as NB), () => {
+        If((visible.greaterThan(0.5)), () => {
           const slot = atomicAdd(counters.element(0), uint(1)) as unknown as NU;
-          If((slot.lessThan(uint(WORK_CAP)) as unknown as NB), () => {
-            workQueue
-              .element(slot.add(uint(1)))
-              .assign(uvec2(instanceIndex as unknown as number, clusterId as unknown as number));
+          If((slot.lessThan(uint(WORK_CAP))), () => {
+            workQueue.element(slot.add(uint(1))).assign(uv2(instanceIndex, clusterId));
           });
         });
       });
@@ -310,18 +324,11 @@ export function buildSpikeRaster(
   const kArgs = Fn(() => {
     // single (atomic) view of the counters buffer — mixing the read-only view
     // into the same dispatch is a WebGPU same-scope usage violation
-    const n = min(
-      atomicLoad(counters.element(0)) as unknown as NF,
-      uint(WORK_CAP) as unknown as NF,
-    ) as unknown as NU;
-    workQueue.element(0).assign(uvec2(n as unknown as number, 0));
+    const n = minU(aLoadU(counters.element(0)), uint(WORK_CAP));
+    workQueue.element(0).assign(uv2(n, 0));
     const rows = n.add(uint(DISPATCH_ROW - 1)).div(uint(DISPATCH_ROW));
-    dispatchBuf.element(0).assign(
-      min(n as unknown as NF, uint(DISPATCH_ROW) as unknown as NF),
-    );
-    dispatchBuf.element(1).assign(
-      max(rows as unknown as NF, uint(1) as unknown as NF),
-    );
+    dispatchBuf.element(0).assign(minU(n, uint(DISPATCH_ROW)));
+    dispatchBuf.element(1).assign(maxU(rows, uint(1)));
     dispatchBuf.element(2).assign(uint(1));
   })().compute(1, [1]);
   (kArgs as unknown as ComputeKernel).setName('spikeArgs');
@@ -337,17 +344,15 @@ export function buildSpikeRaster(
       const wid = workgroupId as unknown as { x: NU; y: NU };
       const itemIdx = wid.y.mul(uint(DISPATCH_ROW)).add(wid.x).toVar();
       const localTri = ((localId as unknown as { x: NU }).x as NU).toVar();
-      const itemCount = (workQueueRO.element(0) as unknown as { x: NU }).x;
-      If((itemIdx.greaterThanEqual(itemCount) as unknown as NB), () => {
-        Return();
-      });
-      const item = workQueueRO.element(itemIdx.add(uint(1))) as unknown as { x: NU; y: NU };
+      const itemCount = workQueueRO.element(0).x;
+      returnIf(itemIdx.greaterThanEqual(itemCount));
+      const item = workQueueRO.element(itemIdx.add(uint(1)));
       const instId = item.x;
       const clusterId = item.y;
-      const meta = metaBuf.element(clusterId) as unknown as NV4;
-      const triCount = (meta as unknown as { z: NU }).z;
+      const meta = metaBuf.element(clusterId);
+      const triCount = meta.z;
 
-      If((localTri.lessThan(triCount) as unknown as NB), () => {
+      If((localTri.lessThan(triCount)), () => {
         const w0 = fetchWorldVert(instId, meta, localTri, 0);
         const w1 = fetchWorldVert(instId, meta, localTri, 1);
         const w2 = fetchWorldVert(instId, meta, localTri, 2);
@@ -361,13 +366,13 @@ export function buildSpikeRaster(
         const nearOK = p0.w
           .greaterThan(NEAR_EPS)
           .and(p1.w.greaterThan(NEAR_EPS))
-          .and(p2.w.greaterThan(NEAR_EPS)) as unknown as NB;
+          .and(p2.w.greaterThan(NEAR_EPS));
 
-        If(nearOK.not() as unknown as NB, () => {
+        If(nearOK.not(), () => {
           // near-plane crossing → HW path clips it (never drop, F10c)
           if (mode !== 'payload') {
             const slot = atomicAdd(hwQueue.element(0), uint(1)) as unknown as NU;
-            If((slot.lessThan(uint(HW_CAP)) as unknown as NB), () => {
+            If((slot.lessThan(uint(HW_CAP))), () => {
               const base = slot.mul(uint(2)).add(uint(1));
               atomicStore(hwQueue.element(base), payload);
               atomicStore(hwQueue.element(base.add(uint(1))), instId);
@@ -379,7 +384,7 @@ export function buildSpikeRaster(
           const ndc2 = p2.xyz.div(p2.w).toVar();
 
           const areaNdc = edgeFn(ndc0.xy as unknown as NV2, ndc1.xy as unknown as NV2, ndc2.xy as unknown as NV2);
-          If((areaNdc.greaterThan(0) as unknown as NB), () => {
+          If((areaNdc.greaterThan(0)), () => {
             const W = float(uW as unknown as NF);
             const H = float(uH as unknown as NF);
             const s0 = ndc0.xy.add(1).mul(0.5).mul(vec2(W, H)).toVar();
@@ -398,10 +403,10 @@ export function buildSpikeRaster(
 
             const bbW = endX.sub(startX);
             const bbH = endY.sub(startY);
-            const validBB = startX.lessThanEqual(endX).and(startY.lessThanEqual(endY)) as unknown as NB;
+            const validBB = startX.lessThanEqual(endX).and(startY.lessThanEqual(endY));
             const smallEnough = bbW
               .lessThanEqual(int(MAX_RASTER_SIZE))
-              .and(bbH.lessThanEqual(int(MAX_RASTER_SIZE))) as unknown as NB;
+              .and(bbH.lessThanEqual(int(MAX_RASTER_SIZE)));
 
             If((validBB as unknown as { and: (o: unknown) => NB }).and(smallEnough), () => {
               const area = edgeFn(s0 as unknown as NV2, s1 as unknown as NV2, s2 as unknown as NV2);
@@ -417,9 +422,9 @@ export function buildSpikeRaster(
               const tl0 = stepXw0.lessThan(0).or(stepXw0.equal(0).and(stepYw0.greaterThan(0)));
               const tl1 = stepXw1.lessThan(0).or(stepXw1.equal(0).and(stepYw1.greaterThan(0)));
               const tl2 = stepXw2.lessThan(0).or(stepXw2.equal(0).and(stepYw2.greaterThan(0)));
-              const bias0 = (tl0 as unknown as { select: (a: unknown, b: unknown) => NF }).select(float(0), float(-1e-5));
-              const bias1 = (tl1 as unknown as { select: (a: unknown, b: unknown) => NF }).select(float(0), float(-1e-5));
-              const bias2 = (tl2 as unknown as { select: (a: unknown, b: unknown) => NF }).select(float(0), float(-1e-5));
+              const bias0 = tl0.select(float(0), float(-1e-5));
+              const bias1 = tl1.select(float(0), float(-1e-5));
+              const bias2 = tl2.select(float(0), float(-1e-5));
 
               const pStart = vec2(float(startX).add(0.5), float(startY).add(0.5));
               const rw0 = edgeFn(s1 as unknown as NV2, s2 as unknown as NV2, pStart as unknown as NV2).add(bias0).toVar();
@@ -433,37 +438,31 @@ export function buildSpikeRaster(
               const stepXz = stepXw0.div(area).mul(ndc0.z).add(stepXw1.div(area).mul(ndc1.z)).add(stepXw2.div(area).mul(ndc2.z));
               const stepYz = stepYw0.div(area).mul(ndc0.z).add(stepYw1.div(area).mul(ndc1.z)).add(stepYw2.div(area).mul(ndc2.z));
 
-              Loop(
-                { name: 'sy', type: 'int', start: startY, end: endY, condition: '<=' } as never,
-                (lpy: unknown) => {
-                const y = (lpy as { sy: NU }).sy;
+              loopI('sy', startY as unknown as NI, endY as unknown as NI, (y) => {
                 const cw0 = rw0.toVar();
                 const cw1 = rw1.toVar();
                 const cw2 = rw2.toVar();
                 const cz = rowZ.toVar();
-                Loop(
-                  { name: 'sx', type: 'int', start: startX, end: endX, condition: '<=' } as never,
-                  (lpx: unknown) => {
-                  const x = (lpx as { sx: NU }).sx;
+                loopI('sx', startX as unknown as NI, endX as unknown as NI, (x) => {
                   If(
                     cw0
                       .greaterThanEqual(0)
                       .and(cw1.greaterThanEqual(0))
                       .and(cw2.greaterThanEqual(0))
                       .and(cz.greaterThanEqual(0))
-                      .and(cz.lessThanEqual(1)) as unknown as NB,
+                      .and(cz.lessThanEqual(1)),
                     () => {
                       const px = uint(y).mul(uint(uW as unknown as NF)).add(uint(x));
                       if (mode === 'depth') {
                         const bits = bitcast(cz as unknown as NF, 'uint') as unknown as NU;
                         const cur = atomicLoad(visDepthAtomic.element(px)) as unknown as NU;
-                        If((bits.lessThan(cur) as unknown as NB), () => {
+                        If((bits.lessThan(cur)), () => {
                           atomicMin(visDepthAtomic.element(px), bits);
                         });
                       } else if (mode === 'payload') {
                         const bits = bitcast(cz as unknown as NF, 'uint') as unknown as NU;
                         const cur = visDepthRO.element(px) as unknown as NU;
-                        If((bits.equal(cur) as unknown as NB), () => {
+                        If((bits.equal(cur)), () => {
                           visPayload.element(px).assign(payload);
                         });
                       } else {
@@ -474,7 +473,7 @@ export function buildSpikeRaster(
                         const packedA = dLo.shiftLeft(uint(A_LO_BITS)).bitOr(payload.bitAnd(uint((1 << A_LO_BITS) - 1)));
                         const packedB = dHi.shiftLeft(uint(A_HI_BITS)).bitOr(payload.shiftRight(uint(A_LO_BITS)));
                         const cur = (atomicLoad(visDepthAtomic.element(px)) as unknown as NU).shiftRight(uint(A_LO_BITS));
-                        If((dLo.greaterThanEqual(cur) as unknown as NB), () => {
+                        If((dLo.greaterThanEqual(cur)), () => {
                           atomicMax(visDepthAtomic.element(px), packedA);
                           atomicMax(visPayloadAtomic.element(px), packedB);
                         });
@@ -496,7 +495,7 @@ export function buildSpikeRaster(
                 If(validBB, () => {
                   // big triangle → HW queue
                   const slot = atomicAdd(hwQueue.element(0), uint(1)) as unknown as NU;
-                  If((slot.lessThan(uint(HW_CAP)) as unknown as NB), () => {
+                  If((slot.lessThan(uint(HW_CAP))), () => {
                     const base = slot.mul(uint(2)).add(uint(1));
                     atomicStore(hwQueue.element(base), payload);
                     atomicStore(hwQueue.element(base.add(uint(1))), instId);
@@ -518,10 +517,7 @@ export function buildSpikeRaster(
 
   // ---- kHwArgs ----------------------------------------------------------------------
   const kHwArgs = Fn(() => {
-    const n = min(
-      atomicLoad(hwQueue.element(0)) as unknown as NF,
-      uint(HW_CAP) as unknown as NF,
-    ) as unknown as NU;
+    const n = minU(aLoadU(hwQueue.element(0)), uint(HW_CAP));
     hwDrawBuf.element(0).assign(n.mul(uint(3)));
     hwDrawBuf.element(1).assign(uint(1));
     hwDrawBuf.element(2).assign(uint(0));
@@ -553,24 +549,21 @@ export function buildSpikeRaster(
       const instId = (hwQueueRO.element(base.add(uint(1))) as unknown as NU).toVar();
       const itemIdx = payload.shiftRight(uint(7));
       const localTri = payload.bitAnd(uint(127));
-      const item = workQueueRO.element(itemIdx.add(uint(1))) as unknown as { x: NU; y: NU };
+      const item = workQueueRO.element(itemIdx.add(uint(1)));
       const clusterId = item.y;
-      const meta = metaBuf.element(clusterId) as unknown as NV4;
+      const meta = metaBuf.element(clusterId);
 
       const w0 = fetchWorldVert(instId, meta, localTri, 0);
       const w1 = fetchWorldVert(instId, meta, localTri, 1);
       const w2 = fetchWorldVert(instId, meta, localTri, 2);
-      const world = (corner.equal(uint(1)) as unknown as { select: (a: unknown, b: unknown) => NV3 }).select(
-        w1,
-        (corner.equal(uint(2)) as unknown as { select: (a: unknown, b: unknown) => NV3 }).select(w2, w0),
-      ) as unknown as NV3;
+      const world = corner.equal(uint(1)).select(w1, corner.equal(uint(2)).select(w2, w0)) as unknown as NV3;
       const clip = ((uProj as unknown as { mul: (v: unknown) => NV4 }).mul(vec4(world, 1)) as NV4).toVar();
 
       (vPayLo as unknown as { assign: (v: unknown) => void }).assign(
-        (payload.bitAnd(uint(0xffff)) as unknown as NF).toFloat(),
+        toF(payload.bitAnd(uint(0xffff))),
       );
       (vPayHi as unknown as { assign: (v: unknown) => void }).assign(
-        (payload.shiftRight(uint(16)) as unknown as NF).toFloat(),
+        toF(payload.shiftRight(uint(16))),
       );
       (vZ as unknown as { assign: (v: unknown) => void }).assign(clip.z);
       (vW as unknown as { assign: (v: unknown) => void }).assign(clip.w);
@@ -581,7 +574,7 @@ export function buildSpikeRaster(
       const pay = uint(vPayLo.round()).bitOr(uint(vPayHi.round()).shiftLeft(uint(16))).toVar();
       const fy = float(uH as unknown as NF).sub(screenCoordinate.y);
       const px = uint(fy).mul(uint(uW as unknown as NF)).add(uint(screenCoordinate.x));
-      If((z.greaterThanEqual(0).and(z.lessThanEqual(1)) as unknown as NB), () => {
+      If((z.greaterThanEqual(0).and(z.lessThanEqual(1))), () => {
         if (pass === 'depth') {
           const bits = bitcast(z as unknown as NF, 'uint') as unknown as NU;
           atomicMin(visDepthAtomic.element(px), bits);
@@ -596,7 +589,7 @@ export function buildSpikeRaster(
           const cur = visDepthRO.element(px) as unknown as NU;
           const du = max(bits as unknown as NF, cur as unknown as NF)
             .sub(min(bits as unknown as NF, cur as unknown as NF)) as unknown as NU;
-          If((du.lessThanEqual(uint(64)) as unknown as NB), () => {
+          If((du.lessThanEqual(uint(64))), () => {
             visPayload.element(px).assign(pay);
           });
         } else {
@@ -647,16 +640,16 @@ export function buildSpikeRaster(
   let emptyNode: NB;
   let depthOutNode: NF;
   if (isA) {
-    emptyNode = dRaw.shiftRight(uint(A_LO_BITS)).equal(uint(0)) as unknown as NB;
+    emptyNode = dRaw.shiftRight(uint(A_LO_BITS)).equal(uint(0));
     payloadNode = pRaw
       .bitAnd(uint((1 << A_HI_BITS) - 1))
       .shiftLeft(uint(A_LO_BITS))
       .bitOr(dRaw.bitAnd(uint((1 << A_LO_BITS) - 1))) as unknown as NU;
-    const yN = (dRaw.shiftRight(uint(A_LO_BITS)) as unknown as NF).toFloat().div(A_DEPTH_LO_MAX);
+    const yN = toF(dRaw.shiftRight(uint(A_LO_BITS))).div(A_DEPTH_LO_MAX);
     const y2 = yN.mul(yN);
     depthOutNode = float(1).sub(y2.mul(y2)) as unknown as NF;
   } else {
-    emptyNode = dRaw.equal(uint(0xffffffff)) as unknown as NB;
+    emptyNode = dRaw.equal(uint(0xffffffff));
     payloadNode = pRaw;
     depthOutNode = bitcast(dRaw, 'float') as unknown as NF;
   }
@@ -670,11 +663,11 @@ export function buildSpikeRaster(
     // as a wrong-color pixel, which is exactly what we want to SEE if it occurs
     const itemIdx = payloadNode.shiftRight(uint(7));
     const localTri = payloadNode.bitAnd(uint(127));
-    const item = workQueueRO.element(itemIdx.add(uint(1))) as unknown as { x: NU; y: NU };
+    const item = workQueueRO.element(itemIdx.add(uint(1)));
     const instId = item.x;
     const clusterId = item.y;
-    const meta = metaBuf.element(clusterId) as unknown as NV4;
-    const kind = (meta as unknown as { x: NU }).x;
+    const meta = metaBuf.element(clusterId);
+    const kind = meta.x;
 
     const w0 = fetchWorldVert(instId, meta, localTri, 0);
     const w1 = fetchWorldVert(instId, meta, localTri, 1);
@@ -683,10 +676,7 @@ export function buildSpikeRaster(
 
     const L = normalize(vec3(0.55, 0.8, 0.25)) as unknown as NV3;
     const lambert = max(dot(faceN, L), 0).mul(0.85).add(0.18) as unknown as NF;
-    const albedo = (kind.equal(uint(1)) as unknown as { select: (a: unknown, b: unknown) => NV3 }).select(
-      vec3(0.30, 0.36, 0.22),
-      vec3(0.42, 0.41, 0.40),
-    );
+    const albedo = kind.equal(uint(1)).select(vec3(0.3, 0.36, 0.22), vec3(0.42, 0.41, 0.4));
     let col = albedo.mul(lambert) as unknown as NV3;
     if (clusterTint) {
       col = col.mul(0.65).add(hashColor(clusterId).mul(lambert).mul(0.35)) as unknown as NV3;
