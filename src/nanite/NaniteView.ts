@@ -24,6 +24,7 @@ import type { Heightfield } from '../world/Heightfield';
 import type { GeometryRegistry } from './GeometryRegistry';
 import { makeNaniteCam } from './NaniteCommon';
 import { buildNaniteCull } from './NaniteCull';
+import { buildNaniteHwRef } from './NaniteHwRef';
 import { buildNaniteHzb } from './NaniteHzb';
 import { buildNaniteRaster, makeVisBuffers } from './NaniteRaster';
 
@@ -36,8 +37,9 @@ export function buildNaniteView(
   engine: Engine,
   registry: GeometryRegistry,
   hf: Heightfield,
-  mode: 'flat' | 'cluster' | 'hzb',
+  mode: 'flat' | 'cluster' | 'hzb' | 'hwref',
 ): NaniteViewHandles {
+  if (mode === 'hwref') return buildNaniteHwRef(engine, registry, hf);
   const renderer = engine.renderer;
   const size = renderer.getDrawingBufferSize(new Vector2());
   const params = new URLSearchParams(window.location.search);
@@ -49,6 +51,8 @@ export function buildNaniteView(
   const hzbLevel = Number(params.get('hzblevel') ?? '1');
   /** ?audit=1 — per-frame raster consistency count (orphans must be 0) */
   const auditOn = params.get('audit') === '1';
+  /** ?shade=0 — pure matClass color (probe-parity's shading-free compare) */
+  const shade = params.get('shade') !== '0';
 
   const cam = makeNaniteCam(size.x, size.y);
   // vis buffers first: the HZB views the depth buffer, the cull consumes the
@@ -68,6 +72,7 @@ export function buildNaniteView(
     cull,
     vis,
     mode === 'hzb' ? 'flat' : mode,
+    shade,
   );
   const viewScene = mode === 'hzb' ? hzb.makeViewer(hzbLevel) : raster.resolveScene;
 

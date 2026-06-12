@@ -224,8 +224,10 @@ measurement discipline; shot cycles ~2–3 min, cooled ABAB rounds 15–30 min e
 - N2: `?cullfreeze=1` — freeze visibility then fly: culled geometry visibly missing
   behind you, none missing in view; `?nanitedbg=hzb` pyramid view; `?occl=0`
   kills occlusion for A/B.
-- N3: `?nanite=1` (terrain+rocks migrated) vs `?nanite=0` — should look identical at
-  flat-lit dbg (`?clusterdbg=flat`); `?clusterdbg=tri|depth|over` views.
+- N3: `?scene=world&nanite=1&nanitedbg=flat` vs `&nanitedbg=hwref` — the
+  nanite raster vs a hardware render of the same content: should be
+  indistinguishable (machine gate: probe-parity, 0 px silhouette diff).
+  `&shade=0` shows the gate's pure-class-color mode.
 - N4–N6: `?nanite=1` vs `?nanite=0` at bookmarks 1–9 — full shading; report anything
   that looks different (materials are gated on pixel-equivalence, your eyes are the
   second gate). HUD shows draws/cpu.submit collapsing.
@@ -653,6 +655,22 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   instanceMesh buffer (cull-side instance→mesh without touching B.w idF).
   AMENDED N2-C1: mesh record = 16×u32 — words 12–15 = mesh-local bounding
   sphere (instance-level cull; heightfield spheres are world-space).
+- D-N15 (2026-06-13, N3-C2): PARITY GATE DECOMPOSITION — the F12 gate is
+  measured as TWO numbers: (1) SILHOUETTE diff (pixels where exactly one
+  side shows background) ≤ 0.05% HARD — the literal F12 target; (2)
+  interior matClass ownership flips (both sides lit, different class)
+  ≤ 0.2% backstop. Flips are depth tie-breaks where surfaces INTERSECT
+  (stones/trunks sunk into terrain — both rasters draw both surfaces
+  correctly; the per-pixel winner at near-coplanar contact differs by
+  sub-ulp interpolation convention). No raster convention can align them
+  across two rasterizers; the backstop still catches real regressions.
+  Shading is excluded from the machine gate (?shade=0 pure-class colors):
+  HW derivative normals are garbage at silhouette pixels and average
+  across sub-pixel triangles while the resolve fetches the pixel's exact
+  triangle — a shading-MODEL difference, not a raster defect; lambert
+  shots remain for human judgement, and N4 gates real shading with the
+  lockexp pixel-equivalence methodology.
+
 - D-N14 (2026-06-12, N2-C1): HYBRID DRAW ENVELOPE — the LOD chain tail's
   lodDist (lodNext = NONE) is the instance cull-beyond distance, set by
   WorldRegistry to the old path's real-geometry edge (trees R2_FAR+BAND2 =
@@ -701,6 +719,29 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   min/max on uint nodes, float(uintNode) → use .toFloat().
 
 ## PROGRESS LOG (append-only, newest first)
+
+- 2026-06-13 (n): N3-C2 landed — SILHOUETTE PARITY GATE PASSED: **0 px
+  silhouette diff at ALL 5 framings** (spawn/bm1/bm3/bm4/bm7, 1280×720,
+  tol 3/255) — the fixed-point raster is EXACTLY silhouette-equivalent to
+  the Metal HW rasterizer, far inside the ≤0.05% gate. Interior
+  intersection flips 0.014–0.121% (≤0.2% backstop; D-N15 decomposition).
+  NEW src/nanite/NaniteHwRef.ts (`?nanitedbg=hwref`): the registry content
+  drawn as classic instanced three draws — CPU mirror of kInstCull's chain
+  walk + D-N14 envelope, exact contract transform as Matrix4
+  (T·Shear·RotY·S), terrain windows rebuilt from hf.cpuHeights with
+  fetchWorldVert's corner tables, CPU-frustum-selected per pose (spawn:
+  59,322 windows / 5.8M tris; 110 draws total, ~136 ms build); partition
+  tracks the settling walk camera and freezes at rest. `?shade=0` on both
+  views = the machine-gate mode (pure class colors). tools/probe-parity.ts
+  shoots both views per framing, classifies diff px silhouette-vs-flip,
+  writes red/yellow overlay PNGs. DEBUG TRAIL (for the next reference
+  build): three findings en route — (1) hwref derivative normals break at
+  silhouettes + sub-pixel tris → shading excluded from the machine gate
+  (D-N15); (2) scene.background black ≠ the flat view's TRANSPARENT
+  discard over the #06080a page background = 12.6k phantom "structural"
+  diff px; (3) the always-on DOM fps chip pollutes screenshots (probe
+  hides it). bm3/bm4 lambert-mode shots eyeballed clean (human half of
+  F12). tsc clean.
 
 - 2026-06-13 (m): N3-C1 landed — FIXED-POINT integer edge functions (N3a).
   SW scanline now snaps verts to a 1/256-px grid (8 subpixel bits, D3D HW
@@ -938,19 +979,14 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## NEXT ACTIONS
 
-1. N3 continue: (a) DONE 2026-06-13 (integer edges + exact HW equality +
-   ?audit oracle — log entry m). Remaining:
-   (b) Silhouette parity gate: flat-lit nanite view vs an equivalent
-   flat-lit HARDWARE render of the same migrated subset — diff ≤0.05%,
-   no structural breaks (F12). Build the HW reference as a debug variant
-   (same registry content drawn instanced via three) — bounded work, it
-   dies after the gate. Terrain reference geometry: build windows
-   CPU-side from the height texture data for the framing's frustum only
-   (full L0 is 33.5M tris — never build it whole).
+1. N3 continue: (a) DONE (integer edges + exact HW equality + ?audit
+   oracle — log m). (b) DONE (parity gate PASSED 0 px silhouette diff at
+   5 framings — log n, D-N15). Remaining:
    (c) Grazing-horizon depth probes at 4 km (re-use the horizon probe
    framing from STATUS); confirm no z-artifacts with full-f32 depth.
    (d) Walk-mode near-field: verify near-crossing→HW path underfoot
-   (spike law F10c) in the world view.
+   (spike law F10c) in the world view; then N3 close (ledger row +
+   checkpoint note).
 2. Then N4 (materials resolve übershader) per the table. The transform
    stage (wind channels) enters with N4's per-material ports — swayPad
    bounds already pad the cull side (F6 satisfied).

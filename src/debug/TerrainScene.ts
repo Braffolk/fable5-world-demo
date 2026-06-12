@@ -268,9 +268,10 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // ?nanitedbg=flat|cluster (needs ?nanite=1) — N2 debug view: cull → raster
   // → flat resolve replaces the frame render via the post slot; the old
   // pipeline keeps booting/updating untouched. `cluster` = the deferred N1
-  // checkpoint (meshlet colors on the real world).
+  // checkpoint (meshlet colors on the real world); `hwref` = the N3 parity
+  // reference (same content, hardware instanced draws).
   const nanitedbg = new URLSearchParams(window.location.search).get('nanitedbg');
-  if (nanitedbg === 'flat' || nanitedbg === 'cluster' || nanitedbg === 'hzb') {
+  if (nanitedbg === 'flat' || nanitedbg === 'cluster' || nanitedbg === 'hzb' || nanitedbg === 'hwref') {
     if (naniteRegistry) {
       const { buildNaniteView } = await import('../nanite/NaniteView');
       engine.post = buildNaniteView(engine, naniteRegistry, hf, nanitedbg);

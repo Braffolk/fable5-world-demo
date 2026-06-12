@@ -138,6 +138,9 @@ export function buildNaniteRaster(
   },
   vis: NaniteVisBuffers,
   tint: 'flat' | 'cluster',
+  /** false (?shade=0): pure matClass color, no lambert — the parity gate's
+   *  shading-free mode (coverage/structure compare only) */
+  shade = true,
 ): NaniteRasterHandles {
   const { width, height } = cam;
   const pixelCount = width * height;
@@ -635,15 +638,19 @@ export function buildNaniteRaster(
     const ci = item.y.toVar();
     const ctx = makeCtx(instId, ci);
 
-    const w0 = fetchWorldVert(ctx, localTri, 0);
-    const w1 = fetchWorldVert(ctx, localTri, 1);
-    const w2 = fetchWorldVert(ctx, localTri, 2);
-    const faceN = normalize(
-      cross(w1.sub(w0) as unknown as NV3, w2.sub(w0) as unknown as NV3),
-    ) as unknown as NV3;
-
-    const L = normalize(vec3(0.55, 0.8, 0.25)) as unknown as NV3;
-    const lambert = max(dot(faceN, L), 0).mul(0.85).add(0.18) as unknown as NF;
+    let lambert: NF;
+    if (shade) {
+      const w0 = fetchWorldVert(ctx, localTri, 0);
+      const w1 = fetchWorldVert(ctx, localTri, 1);
+      const w2 = fetchWorldVert(ctx, localTri, 2);
+      const faceN = normalize(
+        cross(w1.sub(w0) as unknown as NV3, w2.sub(w0) as unknown as NV3),
+      ) as unknown as NV3;
+      const L = normalize(vec3(0.55, 0.8, 0.25)) as unknown as NV3;
+      lambert = max(dot(faceN, L), 0).mul(0.85).add(0.18) as unknown as NF;
+    } else {
+      lambert = float(1) as unknown as NF;
+    }
 
     // matClass palette (flat) — terrain/rock/bark/deadwood/leaf/grass/debris
     const matClass = elemU(gpu.meshes, ctx.meshId.mul(uint(MESH_WORDS)).add(uint(6)))
