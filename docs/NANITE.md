@@ -648,6 +648,15 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   lodNext/lodDist chain, channel|matClass|flags|winQuads, hf origin/cell/grid,
   swayPad). Instance blob = interleaved A/B vec4 pairs + a parallel u32
   instanceMesh buffer (cull-side instance→mesh without touching B.w idF).
+  AMENDED N2-C1: mesh record = 16×u32 — words 12–15 = mesh-local bounding
+  sphere (instance-level cull; heightfield spheres are world-space).
+- D-N14 (2026-06-12, N2-C1): HYBRID DRAW ENVELOPE — the LOD chain tail's
+  lodDist (lodNext = NONE) is the instance cull-beyond distance, set by
+  WorldRegistry to the old path's real-geometry edge (trees R2_FAR+BAND2 =
+  496 m; other pools lib.clsMaxDist; terrain 0 = unlimited). Beyond it the
+  old pipeline shows impostors — the sanctioned far field until the N8 DAG
+  bottoms out (impostor retirement is N9's judged call). Without it the
+  vista pushed 18.6M cluster items (every r2 ring to 4 km).
 
 ## GOTCHAS (append-only, nanite-specific)
 
@@ -689,6 +698,37 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   min/max on uint nodes, float(uintNode) → use .toFloat().
 
 ## PROGRESS LOG (append-only, newest first)
+
+- 2026-06-12 (i): N2-C1 landed (86a12a9): the registry-fed cull chain + the
+  spike raster ported onto registry buffers — `?nanite=1&nanitedbg=flat|
+  cluster` renders the whole migrated world through cull→Option-C raster→
+  flat resolve, replacing the frame render via the engine post slot (old
+  pipeline boots/updates untouched; `cluster` = the deferred N1 checkpoint,
+  meshlet colors on the real world — VERIFIED visually at spawn). NEW:
+  mesh record widened to 16 words (12–15 = mesh-local bounding sphere;
+  explicit = cluster-sphere union, heightfield = world grid box — probe
+  asserts geometry containment, not sphere-in-sphere: window spheres bulge
+  outside the global box by design). Cull = kInstCull (frustum on instance
+  world sphere incl. lean operator-norm + swayPad; LOD chain walk; HYBRID
+  DRAW ENVELOPE) → 64-cluster chunk expansion (bulk atomicAdd, packed
+  uvec2: base 26b | count−1 6b) → kClusterCull (frustum + cone backface,
+  yaw-rotated axis, sin-slack 0.25 rad for lean/wind) → qRaster. swayPad
+  sourced from Wind.ts term bounds (F6): trees 3.8 m / snags 1.7 / shrubs
+  2.4 at strength 1. Raster: makeCtx/fetchWorldVert decode registry blobs;
+  heightfield verts from hf.heightTex textureLoad (partial windows, window-
+  index×winQuads vertex base); HW big/near-tri passes + resolve ported
+  unchanged. COUNTS (1280×720, frustum+cone+envelope, NO occlusion yet):
+  spawn 153k / bm1 131k / bm3 396k / bm4 229k / bm7 216k visClusters;
+  chunks ≤ 13k; hwTris ≤ 25k. The envelope (chain-tail lodDist = old ring
+  edge: trees 496 m = R2_FAR+BAND2, pools clsMaxDist 90–700 m, terrain
+  unlimited; D-N14) cut bm3 from 18.6M — without it every r2 ring ran to
+  4 km. F16 answered: 25-bit payload itemIdx holds 80× the worst measured
+  count. qRaster cap 2M ×8 B = 16 MB (terrain binds LAST → its pushes died
+  past the old 524k cap — the N0 overflow lesson re-fired before the
+  envelope landed). Probes: registry/registry-gpu/nanite-boot PASS + NEW
+  tools/probe-nanitedbg.ts (boot+counters+screenshot+fail-on-overflow).
+  tsc clean. Tsl.ts grew localX/wgLinear/texLoadR/uniformMat4/uniformV3/
+  uniformF/uniformU/uniformArrV4/dispatchIndirect.
 
 - 2026-06-12 (h): **N1 COMPLETE** — C4 landed (a9cc381): ?nanite=1 builds the
   GeometryRegistry from ALL opaque world pools (src/nanite/WorldRegistry.ts;
@@ -808,25 +848,34 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## NEXT ACTIONS
 
-1. N2: the real culling chain (phase table row N2; design notes "Culling
-   (N2)"). Consumes registry.gpu.{meshes,clusters,instances,instanceMesh} +
-   readMesh/readCluster from GeometryRegistry.ts — instance→mesh via the
-   instanceMesh buffer, discrete LOD select via the lodNext/lodDist chain
-   walk (distance to instance origin), then per-cluster frustum/cone/
-   prev-HZB tests. TWO-PHASE occlusion from the start (record rejects at
-   BOTH levels, re-test vs fresh HZB; frame-0 pass-through). HZB port from
-   the example (half-res L0, max-far, storage mips; source = Option C depth
-   buffer). Work queues with explicit caps + counters-in-queue (slot 0) +
-   2D-split indirect dispatch (the N0 laws). Before occlusion tests: source
-   trunk sway amplitudes from Wind.ts into swayPad (F6) via a registry
-   setter or re-register. Deliverables: ?cullfreeze=1, tools/probe-pan.ts,
-   visible-cluster counts at 4 bookmarks + 5× synthetic stress (F3 payload
-   gate), HUD nanite.visClusters. Gate: visible counts match old path ±LOD
-   policy at 4 bookmarks; zero disocclusion holes on probe-pan.
-   NOTE: N2 needs a raster consumer to produce depth for the HZB — minimum
-   viable order inside N2: (a) port the spike raster onto registry buffers
-   in a world-scene debug view (?nanitedbg=flat: cull→raster→flat resolve,
-   no materials), (b) HZB from its depth, (c) two-phase loop. That debug
-   view is ALSO the deferred N1 checkpoint (?clusterdbg world colors).
-2. N3 per the table (fixed-point edges, full vis-buffer + flat resolve
+1. N2-C2: HZB + phase-1 occlusion. Port the example pyramid onto the
+   Option C visDepth buffer (NaniteHzb.ts): level 0 = half canvas res from
+   visDepth (0xffffffff empty → 1.0 far), levels 2×2-max upward, ALL levels
+   packed in one f32 storage buffer + vec4 level table (offset,w,h,0), one
+   kernel per level [64]; init fill 1.0 = frame-0 pass-through for free.
+   sphereOccluded ported verbatim (prev-frame VP + prev camPos uniforms —
+   extend NaniteCam with prev snapshot + cotHalfFov; level pick
+   ceil(log2(2·radiusTexels)), 2×2 footprint max, dist>2r + w>0 guards).
+   Wire into kInstCull + kClusterCull at the marked C2 seams (occlusion-
+   only fail → record reject, C3). HZB builds AFTER the raster each frame
+   (this frame's depth = next frame's occluder). `?occl=0` escape hatch.
+   Re-measure the 5 framings (table in progress log i) — expect forest
+   interiors to drop hardest (bm7 216k is mostly occluded trunks).
+2. N2-C3: two-phase loop + freeze + pan probe. Record occlusion-only
+   rejects at BOTH levels in phase 1 (rejInst u32 list + rejClust uvec2
+   list, counters slots 2/3); after phase-1 raster + HZB: phase-2 kernels
+   re-test rejects vs the FRESH HZB with CURRENT matrices (instance rejects
+   re-expand through cluster cull incl. frustum+cone; cluster rejects re-
+   test occlusion only), APPEND survivors to qRaster (payload indices stay
+   stable), raster the appended range only (second indirect dispatch from a
+   phase-2 args kernel), rebuild HZB after. ?cullfreeze=1 (freeze cull-side
+   uniforms, fly free); ?nanitedbg=hzb (pyramid level visualizer);
+   tools/probe-pan.ts (scripted hard pan: capture frame-0-after-turn vs
+   settled frame diff = disocclusion holes; gate ZERO holes, F13).
+3. N2-C4 (gate): visible-counts at 4 bookmarks vs old path ±LOD policy
+   (use draws/tris from ?nanite=0 stats as the reference denominator) +
+   5× synthetic stress (?stress=5 instance duplication probe — F3/F16
+   payload-bit gate at scale) + perf ledger row (cull chain GPU ms at user
+   viewport via gpusample) + NANITE.md close.
+4. N3 per the table (fixed-point edges, full vis-buffer + flat resolve
    parity gates, near-crossing→HW, grazing-horizon probes).
