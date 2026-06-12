@@ -46,6 +46,10 @@ import { readBuffer } from './Tsl';
 const R0_FAR = 26;
 const R1_FAR = 150;
 const EX_R1_FAR = 120;
+/** tree real-geometry envelope: R2_FAR 460 + BAND2 36 (Forests.ts) — beyond
+ *  it the old path shows impostors, the hybrid's sanctioned far field (the
+ *  N2 instance cull drops what impostors own; the N8 DAG retires this) */
+const TREE_GEO_FAR = 496;
 /** terrain window size: 7 quads → 98 tris, divides 4095 exactly (4096² field) */
 const TERRAIN_WIN_QUADS = 7;
 
@@ -120,11 +124,17 @@ export function geometryToSource(geo: BufferGeometry): ExplicitSource {
 
 function classPolicy(
   cls: number,
-): { matClass: MaterialClassId; channel: TransformChannel; lodDist: number } | null {
-  if (cls <= TREE_MAX_CLS) return { matClass: 'bark', channel: 'trunk', lodDist: R1_FAR };
-  if (SHRUB_CLASSES.has(cls)) return { matClass: 'bark', channel: 'trunk', lodDist: 0 };
-  if (DEADWOOD_CLASSES.has(cls)) return { matClass: 'deadwood', channel: 'rigid', lodDist: EX_R1_FAR };
-  if (ROCK_CLASSES.has(cls)) return { matClass: 'rock', channel: 'rigid', lodDist: EX_R1_FAR };
+): { matClass: MaterialClassId; channel: TransformChannel; lodDist: number; swayPad: number } | null {
+  // swayPad = conservative world-space max wind displacement at strength 1
+  // (F6; bounds derived from Wind.ts vegWindOffset term-by-term, e=g=1):
+  // lean ≤ 2.46k + sway 0.8k + swayX 0.45k + branch 0.30k + flutter 0.17k,
+  // prof capped 1.6 → trees (k=1) ≈ 3.8 m; snags k=0.45 → 1.7 m; understory
+  // prof ≤ ~1.0 at its low knee/height → 2.4 m. Deadwood/stones are rigid.
+  if (cls === 5) return { matClass: 'bark', channel: 'trunk', lodDist: R1_FAR, swayPad: 1.7 };
+  if (cls <= TREE_MAX_CLS) return { matClass: 'bark', channel: 'trunk', lodDist: R1_FAR, swayPad: 3.8 };
+  if (SHRUB_CLASSES.has(cls)) return { matClass: 'bark', channel: 'trunk', lodDist: 0, swayPad: 2.4 };
+  if (DEADWOOD_CLASSES.has(cls)) return { matClass: 'deadwood', channel: 'rigid', lodDist: EX_R1_FAR, swayPad: 0 };
+  if (ROCK_CLASSES.has(cls)) return { matClass: 'rock', channel: 'rigid', lodDist: EX_R1_FAR, swayPad: 0 };
   return null; // ferns/flowers — leafy, N9
 }
 
@@ -231,13 +241,18 @@ export async function buildWorldRegistry(input: {
       transformChannel: policy.channel,
       castShadows: first.part.castShadow,
       label,
-      // swayPad stays 0 until N2 sources real amplitudes from Wind.ts (F6)
+      swayPad: policy.swayPad,
     });
     for (let r = 1; r < rings.length; r++) {
       const prev = rings[r - 1] as { part: PoolPart; switchAt: number };
       const ring = rings[r] as { part: PoolPart; switchAt: number };
       reg.registerLod(head, geometryToSource(ring.part.geo), prev.switchAt);
     }
+    // hybrid draw envelope = the old path's: trees hand over to impostors at
+    // TREE_GEO_FAR; everything else uses its pool max distance (clsMaxDist;
+    // trees' own entry is 1e8 "impostors continue" — not a geometry bound)
+    const maxDist = isTree ? TREE_GEO_FAR : (lib.clsMaxDist[pool.cls] ?? 150);
+    reg.setMaxDistance(head, maxDist);
     heads.set(idF, head);
   }
 

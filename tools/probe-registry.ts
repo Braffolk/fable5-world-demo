@@ -295,7 +295,49 @@ const { verts, clusters, meshes, instances, instanceMesh, indices } = dbg.arrays
   expect(a.instFirst === 0 && a.instCount === 5, 'M: rockA instances');
   expect(b.instFirst === 5 && b.instCount === 3, 'M: rockB instances');
   expect(t.instFirst === 8 && t.instCount === 1, 'M: hf instances');
-  console.log('  M mesh table ok');
+
+  // mesh sphere (words 12–15): explicit meshes contain every cluster sphere;
+  // the heightfield contains its grid AABB corners (window spheres bulge
+  // outside the global box — geometry containment is the soundness property)
+  let worstM = Number.NEGATIVE_INFINITY;
+  for (const [h, dec] of [[hA, a], [hB, b]] as const) {
+    const e = reg.meshEntry(h);
+    for (let c = 0; c < e.clusterCount; c++) {
+      const cl = decodeClusterCPU(clusters, e.clusterBase + c);
+      const d =
+        Math.hypot(
+          cl.sphere[0] - dec.sphere[0],
+          cl.sphere[1] - dec.sphere[1],
+          cl.sphere[2] - dec.sphere[2],
+        ) +
+        cl.sphere[3] -
+        dec.sphere[3];
+      worstM = Math.max(worstM, d);
+    }
+  }
+  expect(worstM < 1e-4, `M: cluster sphere outside mesh sphere by ${worstM.toExponential(2)}`);
+  let gMin = Number.POSITIVE_INFINITY;
+  let gMax = Number.NEGATIVE_INFINITY;
+  for (let i = 0; i < minMax.length; i += 2) {
+    gMin = Math.min(gMin, minMax[i] as number);
+    gMax = Math.max(gMax, minMax[i + 1] as number);
+  }
+  let worstH = Number.NEGATIVE_INFINITY;
+  for (const y of [gMin, gMax]) {
+    for (const [cx, cz] of [
+      [ORIGIN_X, ORIGIN_Z],
+      [ORIGIN_X + QUADS_X * CELL, ORIGIN_Z],
+      [ORIGIN_X, ORIGIN_Z + QUADS_Z * CELL],
+      [ORIGIN_X + QUADS_X * CELL, ORIGIN_Z + QUADS_Z * CELL],
+    ] as const) {
+      const d = Math.hypot(cx - t.sphere[0], y - t.sphere[1], cz - t.sphere[2]);
+      worstH = Math.max(worstH, d - t.sphere[3]);
+    }
+  }
+  expect(worstH < 1e-4, `M: hf grid corner outside mesh sphere by ${worstH.toExponential(2)}`);
+  console.log(
+    `  M mesh table ok (sphere containment: clusters ${worstM.toExponential(2)}, hf corners ${worstH.toExponential(2)})`,
+  );
 }
 
 // --- I: instance blob ---------------------------------------------------------

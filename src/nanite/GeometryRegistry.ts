@@ -59,7 +59,7 @@ import {
 
 export const VERT_WORDS = 6;
 export const CLUSTER_WORDS = 8;
-export const MESH_WORDS = 12;
+export const MESH_WORDS = 16;
 export const MAX_CLUSTER_TRIS = 128;
 export const LOD_NONE = 0xffffffff;
 
@@ -343,6 +343,8 @@ export interface MeshCPU {
   quadsX: number;
   quadsZ: number;
   swayPad: number;
+  /** mesh-local bounding sphere (heightfield: world-space) — instance cull */
+  sphere: [number, number, number, number];
 }
 
 export function decodeMeshCPU(table: Uint32Array, mi: number): MeshCPU {
@@ -366,7 +368,58 @@ export function decodeMeshCPU(table: Uint32Array, mi: number): MeshCPU {
     quadsX: w10 & 0xffff,
     quadsZ: w10 >>> 16,
     swayPad: bitsF32(table[b + 11] as number),
+    sphere: [
+      bitsF32(table[b + 12] as number),
+      bitsF32(table[b + 13] as number),
+      bitsF32(table[b + 14] as number),
+      bitsF32(table[b + 15] as number),
+    ],
   };
+}
+
+/**
+ * Conservative bounding sphere of a cluster-sphere set: center = extent-box
+ * center, radius = max(dist(center, cᵢ) + rᵢ). Contains every cluster sphere
+ * by construction (instance-level cull soundness needs containment, not
+ * minimality).
+ */
+export function meshSphereFromClusters(
+  spheres: Float32Array,
+  count: number,
+): [number, number, number, number] {
+  if (count === 0) return [0, 0, 0, 0];
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let minZ = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  let maxZ = Number.NEGATIVE_INFINITY;
+  for (let i = 0; i < count; i++) {
+    const x = spheres[i * 4] as number;
+    const y = spheres[i * 4 + 1] as number;
+    const z = spheres[i * 4 + 2] as number;
+    const r = spheres[i * 4 + 3] as number;
+    minX = Math.min(minX, x - r);
+    minY = Math.min(minY, y - r);
+    minZ = Math.min(minZ, z - r);
+    maxX = Math.max(maxX, x + r);
+    maxY = Math.max(maxY, y + r);
+    maxZ = Math.max(maxZ, z + r);
+  }
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const cz = (minZ + maxZ) / 2;
+  let rad = 0;
+  for (let i = 0; i < count; i++) {
+    const d =
+      Math.hypot(
+        (spheres[i * 4] as number) - cx,
+        (spheres[i * 4 + 1] as number) - cy,
+        (spheres[i * 4 + 2] as number) - cz,
+      ) + (spheres[i * 4 + 3] as number);
+    if (d > rad) rad = d;
+  }
+  return [cx, cy, cz, rad];
 }
 
 // ---------------------------------------------------------------------------
@@ -460,6 +513,8 @@ export interface MeshNodes {
   quadsX: NU;
   quadsZ: NU;
   swayPad: NF;
+  /** mesh-local bounding sphere (heightfield: world-space) — instance cull */
+  sphere: NV4;
 }
 
 export function readMesh(meshes: StorageBufferNode<'uint'>, mi: NU): MeshNodes {
@@ -483,6 +538,12 @@ export function readMesh(meshes: StorageBufferNode<'uint'>, mi: NU): MeshNodes {
     quadsX: w10.bitAnd(uint(0xffff)),
     quadsZ: w10.shiftRight(uint(16)),
     swayPad: bcU2F(elemU(meshes, base.add(uint(11)))),
+    sphere: vec4(
+      bcU2F(elemU(meshes, base.add(uint(12)))),
+      bcU2F(elemU(meshes, base.add(uint(13)))),
+      bcU2F(elemU(meshes, base.add(uint(14)))),
+      bcU2F(elemU(meshes, base.add(uint(15)))),
+    ) as unknown as NV4,
   };
 }
 
@@ -508,6 +569,8 @@ interface MeshEntry {
   instCount: number;
   lodNext: number;
   lodDist: number;
+  /** mesh-local bounding sphere (heightfield: world-space) — instance cull */
+  sphere: [number, number, number, number];
   hf?: {
     originX: number;
     originZ: number;
@@ -658,6 +721,19 @@ export class GeometryRegistry {
     tail.lodDist = switchDist;
     if (this.built && tail.uploaded) this.rewriteMeshRecord(tail);
     return lod;
+  }
+
+  /**
+   * Set the chain's maximum draw distance: the TAIL keeps lodNext = NONE and
+   * its lodDist becomes the cull-beyond envelope (0 = unlimited). During the
+   * hybrid stage this mirrors the old path's ring/impostor envelope — the
+   * far field belongs to impostors until the N8 DAG bottoms out.
+   */
+  setMaxDistance(h: MeshHandle, d: number): void {
+    let tail = this.meshEntry(h) as MeshEntry;
+    while (tail.lodNext !== LOD_NONE) tail = this.entries[tail.lodNext] as MeshEntry;
+    tail.lodDist = d;
+    if (this.built && tail.uploaded) this.rewriteMeshRecord(tail);
   }
 
   bindInstances(h: MeshHandle, stream: InstanceStream): void {
@@ -868,6 +944,7 @@ export class GeometryRegistry {
     entry.packedVerts = packed;
     entry.packedIdx = idx;
     entry.clusterRecs = this.encodeClusterRecs(entry, built);
+    entry.sphere = meshSphereFromClusters(built.sphere, built.clusterCount);
     return entry;
   }
 
@@ -904,6 +981,23 @@ export class GeometryRegistry {
     entry.clusterBase = this.clusterCursor;
     entry.clusterCount = n;
     this.clusterCursor += n;
+
+    // mesh sphere (world-space — heightfield instances are identity): full
+    // grid extent horizontally, global height range vertically
+    let gMin = Number.POSITIVE_INFINITY;
+    let gMax = Number.NEGATIVE_INFINITY;
+    for (let i = 0; i < n; i++) {
+      gMin = Math.min(gMin, src.minMax[i * 2] as number);
+      gMax = Math.max(gMax, src.minMax[i * 2 + 1] as number);
+    }
+    const exAll = src.quadsX * src.cellSize;
+    const ezAll = src.quadsZ * src.cellSize;
+    entry.sphere = [
+      src.originX + exAll / 2,
+      (gMin + gMax) / 2,
+      src.originZ + ezAll / 2,
+      Math.hypot(exAll / 2, (gMax - gMin) / 2, ezAll / 2),
+    ];
 
     const recs = new Uint32Array(n * CLUSTER_WORDS);
     for (let gz = 0; gz < windowsZ; gz++) {
@@ -961,6 +1055,7 @@ export class GeometryRegistry {
       instCount: 0,
       lodNext: LOD_NONE,
       lodDist: 0,
+      sphere: [0, 0, 0, 0],
       uploaded: false,
     };
   }
@@ -1013,6 +1108,10 @@ export class GeometryRegistry {
     m[b + 9] = f32Bits(e.hf?.cellSize ?? 0);
     m[b + 10] = ((e.hf?.quadsX ?? 0) | ((e.hf?.quadsZ ?? 0) << 16)) >>> 0;
     m[b + 11] = f32Bits(e.swayPad);
+    m[b + 12] = f32Bits(e.sphere[0]);
+    m[b + 13] = f32Bits(e.sphere[1]);
+    m[b + 14] = f32Bits(e.sphere[2]);
+    m[b + 15] = f32Bits(e.sphere[3]);
   }
 
   private rewriteMeshRecord(e: MeshEntry): void {

@@ -29,9 +29,11 @@ import { setupSunShadows } from '../render/ShadowSetup';
 import { Clouds } from '../sky/Clouds';
 import { SunSky } from '../sky/SunSky';
 import type { WorldContext } from './Scenes';
+import type { GeometryRegistry } from '../nanite/GeometryRegistry';
 
 export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   const { engine, params, seed } = ctx;
+  let naniteRegistry: GeometryRegistry | null = null;
 
   const hf = await Heightfield.generate(
     engine.renderer,
@@ -189,6 +191,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
         counters: engine.stats.counters,
       });
       (engine as unknown as { naniteRegistry?: unknown }).naniteRegistry = wr.registry;
+      naniteRegistry = wr.registry;
       // eslint-disable-next-line no-console
       console.log(
         `[laas] nanite registry: total ${wr.totalMs.toFixed(0)} ms (readback ` +
@@ -261,6 +264,23 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   ctx.progress(0.98, 'post: building pipeline');
   const post = new PostStack(engine, sunSky.atmosphere, bootTod, clouds, froxels);
   engine.post = post;
+
+  // ?nanitedbg=flat|cluster (needs ?nanite=1) — N2 debug view: cull → raster
+  // → flat resolve replaces the frame render via the post slot; the old
+  // pipeline keeps booting/updating untouched. `cluster` = the deferred N1
+  // checkpoint (meshlet colors on the real world).
+  const nanitedbg = new URLSearchParams(window.location.search).get('nanitedbg');
+  if (nanitedbg === 'flat' || nanitedbg === 'cluster') {
+    if (naniteRegistry) {
+      const { buildNaniteView } = await import('../nanite/NaniteView');
+      engine.post = buildNaniteView(engine, naniteRegistry, hf, nanitedbg);
+      // eslint-disable-next-line no-console
+      console.log(`[laas] nanitedbg=${nanitedbg}: N2 debug view replacing the frame render`);
+    } else {
+      // eslint-disable-next-line no-console
+      console.warn('[laas] ?nanitedbg needs ?nanite=1 with vegetation enabled — ignored');
+    }
+  }
 
   ctx.hooks.setTimeOfDay = (t: number) => {
     void (async () => {

@@ -18,16 +18,23 @@ import {
   Return,
   atomicLoad,
   bitcast,
+  localId,
   max,
   min,
   storage,
+  texture,
+  uint,
+  uniform,
+  uniformArray,
   unpackHalf2x16,
   unpackSnorm2x16,
   uvec2,
+  workgroupId,
 } from 'three/tsl';
+import type { Matrix4, Texture, Vector3, Vector4 } from 'three';
 import type { Renderer, StorageBufferNode } from 'three/webgpu';
 import type { StorageBufferAttribute } from 'three/webgpu';
-import type { NB, NF, NI, NU, NV2, NV4 } from '../gpu/TSLTypes';
+import type { NB, NF, NI, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
 
 /** structural view of a uint vec2/vec4 storage element */
 export interface UV2 {
@@ -193,6 +200,65 @@ export function readBuffer(
 ): Promise<ArrayBuffer> {
   type Attr = Parameters<Renderer['getArrayBufferAsync']>[0];
   return renderer.getArrayBufferAsync(attr as unknown as Attr, null, byteOffset, byteLength);
+}
+
+/** local invocation index x (@types expose localId as a bare Node) */
+export function localX(): NU {
+  return (localId as unknown as { x: NU }).x;
+}
+
+/** linearized workgroup id for 2D-split indirect dispatches (row = 65535) */
+export function wgLinear(rowSize: number): NU {
+  const wid = workgroupId as unknown as { x: NU; y: NU };
+  return wid.y.mul(uint(rowSize)).add(wid.x);
+}
+
+/** textureLoad .r at an integer texel coord (TextureNode.load is untyped) */
+export function texLoadR(tex: Texture, x: NU, y: NU): NF {
+  const t = texture(tex) as unknown as { load(c: unknown): { r: NF } };
+  return t.load(uv2(x, y)).r;
+}
+
+/** mat4 uniform handle: TSL node with .mul(vec4) plus the CPU-side .value */
+export type UniformMat4 = { mul(v: unknown): NV4; value: Matrix4 };
+export function uniformMat4(m: Matrix4): UniformMat4 {
+  return uniform(m) as unknown as UniformMat4;
+}
+
+/** vec3 uniform usable as an NV3 with CPU-side .value */
+export type UniformV3 = NV3 & { value: Vector3 };
+export function uniformV3(v: Vector3): UniformV3 {
+  return uniform(v) as unknown as UniformV3;
+}
+
+/** float uniform usable as an NF with CPU-side .value */
+export type UniformF = NF & { value: number };
+export function uniformF(v: number): UniformF {
+  return uniform(v) as unknown as UniformF;
+}
+
+/** uint uniform usable as an NU with CPU-side .value ('uint' rejected by @types) */
+export type UniformU = NU & { value: number };
+export function uniformU(v: number): UniformU {
+  return uniform(v, 'uint' as unknown as 'float') as unknown as UniformU;
+}
+
+/** vec4 uniform array (frustum planes etc.) with CPU-side .array */
+export type UniformArrV4 = { element(i: NU | NI | number): NV4; array: Vector4[] };
+export function uniformArrV4(items: Vector4[]): UniformArrV4 {
+  return uniformArray(items, 'vec4') as unknown as UniformArrV4;
+}
+
+/** renderer.compute with indirect dispatch args (param is untyped in @types) */
+export function dispatchIndirect(
+  renderer: Renderer,
+  kernel: unknown,
+  args: unknown,
+): void {
+  renderer.compute(
+    kernel as Parameters<Renderer['compute']>[0],
+    args as Parameters<Renderer['compute']>[1],
+  );
 }
 
 /** read-write + read-only + atomic u32 views over one attribute */
