@@ -237,8 +237,11 @@ measurement discipline; shot cycles ~2–3 min, cooled ABAB rounds 15–30 min e
 ### Cluster build (N1)
 - Greedy spatial clustering over index buffer: seed tri → grow by shared-edge
   adjacency picking min bounding-sphere growth, cap 128 tris (pad to fixed-size
-  records). Per cluster: sphere (xyz,r), normal cone (axis, cosAngle, for backface
-  cull), triOffset/triCount, vertexOffset window, materialClass, flags.
+  records). Per cluster (AS BUILT, C3): sphere 4×f32-bits, cone oct-axis
+  snorm2x16 + cos f32-bits, triStart (heightfield: gx|gz<<16), triCount u8 |
+  flags u8 | **meshId u16** — matClass lives in the MESH record (D-N13): kernels
+  need cluster→mesh anyway (hf params/channel), and indices are GLOBAL vertex
+  ids so no vertexOffset is needed.
 - Data layout: PACKED mega-buffers (F9: ≤10 storage bindings per stage forces
   interleaving): one u32 blob per concern with manual decode — e.g. vertex blob
   (position 3×f32 + normal oct-u32 + uv 2×f16 + vdata u32 ≈ 24 B/vert), index blob
@@ -634,6 +637,14 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 - D-N12 (2026-06-12, N0): Option C confirmed primary with measured cost:
   +1.0 ms (+20%) over Option A at 2592×1676 on 10M tris — the price of full
   f32 depth + full 32-bit payload. Spike A/B stays available via ?packing.
+- D-N13 (2026-06-12, C3): Cluster record word 7 = triCount u8 | flags u8 |
+  meshId u16 (the NEXT-ACTIONS sketch's matClass byte moved to the mesh
+  record): raster/resolve need cluster→mesh for heightfield params + channel
+  + matClass anyway, triCount fits u8 at the 128 cap, and global vertex ids
+  kill the vertexOffset field. Mesh record = 12×u32 (cluster/instance ranges,
+  lodNext/lodDist chain, channel|matClass|flags|winQuads, hf origin/cell/grid,
+  swayPad). Instance blob = interleaved A/B vec4 pairs + a parallel u32
+  instanceMesh buffer (cull-side instance→mesh without touching B.w idF).
 
 ## GOTCHAS (append-only, nanite-specific)
 
@@ -675,6 +686,22 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   min/max on uint nodes, float(uintNode) → use .toFloat().
 
 ## PROGRESS LOG (append-only, newest first)
+
+- 2026-06-12 (g): N1 C3 landed (81dbae0): src/nanite/GeometryRegistry.ts —
+  the content-contract entry point (registerMesh explicit|heightfield,
+  registerLod chain, bindInstances CPU|GPU-scatter, build()/flush() with a
+  late-registration budget; capacity overflow THROWS pre-mutation, F14).
+  Packed per D-N13; GPU instance streams land via per-stream copy kernels;
+  late uploads via addUpdateRange (WebGPUAttributeUtils honors updateRanges —
+  verified in source). TSL readVertex/readCluster/readMesh + oct/f16 codecs
+  with exact CPU mirrors. VERIFIED: tools/probe-registry.ts (node — pos/
+  vdata/sphere/cos BITS exact, oct16 normal 5.4e-5, uv f16 2.4e-4, hf sphere
+  containment 4.9e-7, mesh table/LOD/instances exact, late flush + overflow
+  throw); tools/probe-registry-gpu.ts (headless, ?scene=rasterspike&regtest=1
+  — TSL decode vs CPU mirrors maxErr 2.6e-7, exactFails 0, copy kernel +
+  instanceMesh exact). Tsl.ts grew bcF2U/bcU2F/unpackHalfU/unpackSnormU/
+  elemU/elemUW/sVec4Views/dispatch/readBuffer. tsc clean; spike scene
+  untouched without &regtest.
 
 - 2026-06-12 (f): N1 C1+C2 landed. C1 (46689b4): src/nanite/Tsl.ts typed
   helper layer (one documented cast per @types gap: sUvec2/sUvec4RO/uv2/
@@ -752,21 +779,22 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## NEXT ACTIONS
 
-1. N1-C3: src/nanite/GeometryRegistry.ts — registerMesh(ClusterSource,
-   materialClass, opts)/bindInstances per the content contract; PACKED
-   mega-buffers (vertex blob 24 B/vert: pos 3×f32 + oct-normal u32 + uv 2×f16
-   + vdata u32, ONE u32 blob buffer; index blob u32 for now; cluster records
-   8×u32: sphere 4×f32-bits, cone oct-axis u32 + cos f32-bits, triStart,
-   triCount u16|matClass u8|flags u8; mesh table with lodGroup linkage);
-   TSL decode helpers (readVertex/readCluster) in the registry module —
-   designed against the 10-binding ceiling; counters-in-queue rule applies.
-   Late registration supported (hero trees). HUD counters nanite.* + build().
-2. N1-C4: boot wiring behind ?nanite=1 (world scene builds the registry from
-   ALL opaque pools — rock/stone variants, deadfall, debris meshes, tree-ring
-   BARK/opaque sub-geometries where separable (mixed card geoms deferred to
-   N6 with a note), hero meshes late, terrain = implicit heightfield records
-   over the REAL 4096² field; ?nanite=0/absent boots untouched). Print + gate:
-   all pools clusterized, measured ms (<2 s), cluster stats table, registry
-   memory MB. Commit with numbers → then N2.
-3. N2 per the table (two-phase occlusion; replaces the spike's per-instance
-   serial cluster loops with the real two-level culling chain).
+1. N1-C4: boot wiring behind ?nanite=1 — world scene builds a GeometryRegistry
+   from ALL opaque pools; ?nanite=0/absent boots untouched. Survey first
+   (write the pool→source map into the commit): rock/stone variants, deadfall
+   logs/stumps, debris meshes, tree-ring BARK/opaque trunk sub-geometries
+   where separable from card geometry (mixed card geoms deferred to N6 with a
+   note), hero meshes via the LATE path (constructor late budget + flush()),
+   terrain = ONE heightfield source over the REAL 4096² field (minMax from
+   the existing height-range data; window = 8×8 quads at L0 stride to start).
+   Instances: scatter layers are MIXED-class buffers — C4 needs per-mesh
+   contiguous ranges; boot-static partition (counts are read back at boot
+   already). vdata packing per pool (rock probe shows the 4×u8 pattern).
+   Gate + commit numbers: all pools clusterized measured ms (<2 s), cluster
+   stats table, registry MB, HUD nanite.* counters live (pass
+   engine.stats.counters into build()).
+2. N2 per the table (two-phase occlusion; replaces the spike's per-instance
+   serial cluster loops with the real two-level culling chain; consumes
+   registry.gpu.{meshes,clusters,instances,instanceMesh} + readMesh/
+   readCluster — instance→mesh via instanceMesh buffer, LOD chain walk via
+   lodNext/lodDist).
