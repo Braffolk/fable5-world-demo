@@ -7,7 +7,7 @@
 import { ACESFilmicToneMapping, PerspectiveCamera, Scene } from 'three';
 import { TimestampQuery, WebGPURenderer } from 'three/webgpu';
 import { buildRequiredLimits } from './Diagnostics';
-import { installMaterialKeyMemo } from '../render/ThreePatches';
+import { installFragmentStorageWrites, installMaterialKeyMemo } from '../render/ThreePatches';
 import { installPositionInvariance } from '../render/VegPrepass';
 import { GpuProfiler } from './GpuProfiler';
 import type { EngineStats, LaasHooks } from './Hooks';
@@ -107,6 +107,9 @@ export class Engine {
     // shadow-pass render objects re-hash their material node graph every
     // frame (see ThreePatches) — memoize per material
     installMaterialKeyMemo(renderer);
+    // opt-in fragment-stage storage writes (nanite vis-buffer HW path);
+    // inert unless a buffer is marked via markFragmentWritable
+    installFragmentStorageWrites(renderer);
 
     window.addEventListener('resize', () => {
       engine.camera.aspect = window.innerWidth / window.innerHeight;

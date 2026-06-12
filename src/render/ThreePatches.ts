@@ -27,6 +27,7 @@
  * bumping needsUpdate (three would miss the pipeline rebuild anyway).
  */
 
+import { Mesh } from 'three';
 import type { WebGPURenderer } from 'three/webgpu';
 
 interface RenderObjectShape {
@@ -48,6 +49,85 @@ function freezeShadowAlphaTest(mat: object): void {
     enumerable: false, // keep it out of the cache-key property loop, like the accessor
     configurable: true,
   });
+}
+
+/**
+ * FRAGMENT-STAGE STORAGE WRITES (nanite vis-buffer HW path). three 0.184
+ * structurally forbids writable storage buffers outside compute:
+ *  (a) WGSLNodeBuilder.getNodeAccess returns READ_ONLY for any non-compute
+ *      stage (atomics get READ_WRITE plus a console warning), so plain
+ *      stores emit `var<storage, read>` → WGSL parse error;
+ *  (b) WebGPUBindingUtils.createBindingsLayout hardcodes ReadOnlyStorage
+ *      for every binding without COMPUTE visibility → layout/shader mismatch
+ *      even when the WGSL side is read_write (the atomic case).
+ * WebGPU itself allows read_write storage in fragment shaders — only the
+ * library blocks it. This patch is strictly OPT-IN per buffer attribute:
+ * unmarked materials keep stock behavior.
+ *
+ * markFragmentWritable(attr) — call for each StorageBufferAttribute that
+ * fragment-stage node code writes (plain or atomic).
+ */
+const fragWritableAttrs = new WeakSet<object>();
+
+export function markFragmentWritable(attr: object): void {
+  fragWritableAttrs.add(attr);
+}
+
+export function installFragmentStorageWrites(renderer: WebGPURenderer): void {
+  // (a) WGSL access: honor node.access for marked attributes in any stage
+  const backend = renderer.backend as unknown as {
+    createNodeBuilder(o: object, r: unknown): object;
+    bindingUtils: object;
+  };
+  const builder = backend.createNodeBuilder(new Mesh(), renderer);
+  const bProto = Object.getPrototypeOf(builder) as {
+    getNodeAccess(node: { value?: object; access?: string }, stage: string): string;
+    __laasFragWrite?: boolean;
+  };
+  if (bProto.__laasFragWrite !== true) {
+    bProto.__laasFragWrite = true;
+    const origAccess = bProto.getNodeAccess;
+    bProto.getNodeAccess = function (
+      this: unknown,
+      node: { value?: object; access?: string },
+      stage: string,
+    ): string {
+      if (stage !== 'compute' && node.value && fragWritableAttrs.has(node.value)) {
+        return (node.access ?? 'readWrite') as string;
+      }
+      return origAccess.call(this, node, stage);
+    };
+  }
+
+  // (b) layout: marked bindings get COMPUTE visibility OR-ed in, routing them
+  // through the access-honoring branch (FRAGMENT|COMPUTE + Storage is valid;
+  // the buffers never appear in a vertex stage, which WOULD be invalid)
+  const utilsProto = Object.getPrototypeOf(backend.bindingUtils) as {
+    createBindingsLayout(bindGroup: { bindings: unknown[] }): unknown;
+    __laasFragWrite?: boolean;
+  };
+  if (utilsProto.__laasFragWrite !== true) {
+    utilsProto.__laasFragWrite = true;
+    const origLayout = utilsProto.createBindingsLayout;
+    utilsProto.createBindingsLayout = function (
+      this: unknown,
+      bindGroup: { bindings: unknown[] },
+    ): unknown {
+      for (const b of bindGroup.bindings) {
+        const sb = b as {
+          isStorageBuffer?: boolean;
+          visibility: number;
+          nodeUniform?: { value?: object; node?: { value?: object } };
+        };
+        if (sb.isStorageBuffer !== true) continue;
+        const attr = sb.nodeUniform?.node?.value ?? sb.nodeUniform?.value;
+        if (attr && fragWritableAttrs.has(attr)) {
+          sb.visibility |= 4; // GPUShaderStage.COMPUTE
+        }
+      }
+      return origLayout.call(this, bindGroup);
+    };
+  }
 }
 
 export function installMaterialKeyMemo(renderer: WebGPURenderer): void {

@@ -468,7 +468,18 @@ measurement discipline; shot cycles ~2–3 min, cooled ABAB rounds 15–30 min e
 
 | Point | bm1 | bm3 | bm4 | bm7 | cpu.submit | draws | notes |
 |---|---|---|---|---|---|---|---|
-| main baseline (cooled, 2026-06-13, STATUS pass-3) | 29.1 ms | 25.3 | 42.8 | 38.0 | 11.4–14.2 ms | ~548–905 | capture FRESH at N0 on this branch |
+| main baseline (cooled, 2026-06-13, STATUS pass-3) | 29.1 ms | 25.3 | 42.8 | 38.0 | 11.4–14.2 ms | ~548–905 | reference |
+| branch baseline (2026-06-12, this session, shots/nanite/base-bm*.json) | 33.6 | 58.3 ⚠ | 41.7 | 41.9 | 10.5–14.8 ms | 548–722 | bm3 = outlier (system-state spike, single run) — ABAB it before any bm3 conclusion; bm1/4/7 within thermal envelope of main |
+
+N0 SPIKE LEDGER (2592×1676, gpusample-24 medians, back-to-back in-session;
+content: 10.04M instanced tris, 1144 source clusters, 1937 instances,
+55,568 visible work items, 22,784 HW-queued tris):
+
+| Path | GPU total | breakdown |
+|---|---|---|
+| HW reference (5 instanced draws) | 2.8 ms | rt 2.16 + screen 0.52; cpu.submit 0.4 ms |
+| SW Option C (2-pass) | 6.0 ms | depth 2.03 + payload 1.18 + cull 0.59 + hwPass 0.52 + clear 0.33 + resolve 0.33; cpu.submit 0.2 ms |
+| SW Option A (single-pass dual-max) | 5.0 ms | rasterA 2.03 + cull 0.66 + hwPass 0.46 + clear 0.33 + resolve 0.66 |
 
 ## BASELINE CAPTURE (N0 first task — exact commands)
 
@@ -614,6 +625,16 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   binning serves 16k artist materials — elopezr; GDC 2024 Nanite GPU Driven
   Materials).
 
+- D-N11 (2026-06-12, N0): Fragment-stage vis-buffer writes ship via the
+  opt-in ThreePatches.installFragmentStorageWrites + markFragmentWritable —
+  three 0.184 hardcodes ReadOnlyStorage for non-compute storage bindings in
+  BOTH WGSLNodeBuilder.getNodeAccess and WebGPUBindingUtils.createBindingsLayout;
+  the patch honors node access for marked attributes only (re-verify on any
+  three upgrade). The primitive-index/MRT fallback was not needed.
+- D-N12 (2026-06-12, N0): Option C confirmed primary with measured cost:
+  +1.0 ms (+20%) over Option A at 2592×1676 on 10M tris — the price of full
+  f32 depth + full 32-bit payload. Spike A/B stays available via ?packing.
+
 ## GOTCHAS (append-only, nanite-specific)
 
 - (seed) The reference example's `.toVar()` placements around chunk bounds are
@@ -627,9 +648,54 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   scale ~10⁶) — use fixed-point integer edges from day one.
 - (review) atomicMax winners are deterministic per-buffer but NOT consistent
   ACROSS two buffers — never split one logical payload across two atomics.
+- (N0) Work-queue overflow is INVISIBLE except as missing geometry: the
+  counter keeps climbing past the cap while writes are skipped — whichever
+  instances cull LAST lose their clusters (the terrain instance vanished
+  wholesale). ALWAYS surface queueCount vs cap in the HUD and warn on
+  overflow (F14 made law; it fired on day one).
+- (N0) Depth-equality across two RENDER pipelines misses by a few ulp (FMA
+  fusion differs per pipeline — same mechanism as the VegPrepass @invariant
+  trap). Compute-pass pairs compiled from identical TSL are exact in
+  practice; the HW payload pass needs a small ulp tolerance until
+  fixed-point depth (N3).
+- (N0) TSL If/.toVar()/.assign() in MATERIAL node graphs need an Fn() stack
+  exactly like compute — build vertexNode/fragmentNode as Fn(() => ...)()
+  and pass varyings via varyingProperty assigned inside the vertex Fn (the
+  example's hwPosition pattern).
+- (N0) @types/three 0.184 TSL gaps needing casts (consolidate into typed
+  helpers at N1): scalar/uvec storage type strings ('uvec2'/'uvec4'),
+  ranged Loop objects with custom names, uvec2() ctor with uint nodes,
+  min/max on uint nodes, float(uintNode) → use .toFloat().
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-12 (c): **N0 COMPLETE — GO.** Branch baselines captured (ledger; bm3
+  outlier flagged). Spike shipped: `?scene=rasterspike` (`&sw=0/1`,
+  `&packing=a|c`, `&clusterdbg=1`) — src/nanite/SpikeContent.ts (3 rock
+  variants + 256² heightfield tile, 128-tri clusters, IMPLICIT terrain
+  clusters per F4), src/nanite/SpikeRaster.ts (clear → per-instance cluster
+  cull → indirect 1-dim dispatch → Option C two-pass SW raster → HW big/near-
+  tri queue rendered as TWO vis-buffer-writing fragment passes → fullscreen
+  resolve w/ face normals + cluster tint), ThreePatches.installFragmentStorageWrites
+  (opt-in defeat of three's read-only-storage-outside-compute, BOTH the WGSL
+  access and the bind-group-layout sides — markFragmentWritable(attr)).
+  GATE NUMBERS (table above): cpu.submit 0.2–0.4 ms ≈ dispatch overhead ✓
+  (vs 10.5–14.8 ms world pipeline — THE binding constraint, proven
+  addressable); Option C full-precision tax = ~1.0 ms over Option A (+20%)
+  at full viewport ✓ C stays primary (D-N5 confirmed with data); fragment
+  storage writes verified live ✓ (HW path writes the same vis buffer — one
+  resolve, one convention). vs the IDEAL 5-draw instanced HW reference the
+  SW path reads 6.0 vs 2.8 ms — expected: spike tris are 2–30 px (HW comfort
+  zone) with perfect vertex-cache reuse and zero overdraw; the real
+  replacement target (905 draws, alpha overdraw, 12 ms submit) is what
+  N3–N6 measure. Known spike debts → N1/N2: WORK_CAP 65535 single-dim
+  indirect dispatch (overflow DROPS silently — hit it: 65,678 items at the
+  first framing made terrain vanish; HUD spike.work + console warn added;
+  proper queue scaling is N2), terrain-instance serial cluster loop in cull
+  (~0.5 ms tail — two-level cull at N2), HW payload equality needs ±64-ulp
+  tolerance (cross-RENDER-pipeline FMA divergence; SW compute passes are
+  exact — N3 fixed-point kills the class), `as unknown` casts to be
+  consolidated into typed TSL helpers at N1 (user note 2026-06-12).
 - 2026-06-12 (b): ADVERSARIAL REVIEW PASS done (fresh context): example source
   re-read line-by-line (3 misreadings corrected), Karis/Epic/community literature
   verified (two-phase, DAG cut machinery, foliage, material binning), adapter
@@ -641,9 +707,12 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## NEXT ACTIONS
 
-1. N0: baseline capture (commands above) → spike scene: rock pool + ONE heightfield
-   terrain tile through cull→queue→Option C SW raster→flat resolve; A/B Option A
-   vs C raster cost in the spike; verify fragment-stage storage atomics for the
-   HW path (fallback: primitive-index + MRT merge) → GO/NO-GO numbers.
-2. N1 per the table (packed mega-buffer layout designed against the 10-binding
-   ceiling from day one).
+1. N1: generic boot clusterizer (greedy shared-edge adjacency, ~96–128 tris,
+   bounds + normal cones + error placeholder) + registerMesh/bindInstances
+   skeleton + cluster tables for ALL opaque pools + PACKED mega-buffer layout
+   (≤10 storage bindings per stage) + typed TSL helper layer replacing the
+   spike's `as unknown` casts (user note) + visible-cluster HUD counter.
+   Gate: all opaque pools clusterized < +2 s gen; cluster stats printed.
+2. N2 per the table (two-phase occlusion; replaces the spike's WORK_CAP
+   single-dim dispatch + per-instance serial cluster loops with the real
+   two-level culling chain).
