@@ -90,9 +90,11 @@ import {
 } from './Tsl';
 import type { BufOf, UV2 } from './Tsl';
 
-/** occlusion-reject list caps (F14) */
-const REJ_INST_CAP = 262_144;
-const REJ_CLUST_CAP = 524_288;
+/** occlusion-reject list caps (F14). Overflow is graceful: victims miss
+ *  phase 2 THIS frame only (next frame's phase 1 re-tests everything) —
+ *  measured at ?stress=5 bm3: 3.8M inst rejects, flag fired, image intact. */
+const REJ_INST_CAP = 1_048_576;
+const REJ_CLUST_CAP = 1_048_576;
 
 interface ComputeKernel {
   setName(name: string): unknown;

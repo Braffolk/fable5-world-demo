@@ -256,7 +256,13 @@ export async function buildWorldRegistry(input: {
     heads.set(idF, head);
   }
 
-  // bind partitioned instances to chain heads
+  // bind partitioned instances to chain heads. ?stress=N (synthetic, F3/F16
+  // gate): bind N deterministic jittered copies of every stream — queue caps,
+  // payload bits and overflow flags get exercised at ~N× instance counts.
+  // Copies reuse the original y (hover/sink on slopes is fine for a stress
+  // test — nothing reads it back).
+  const stressParam = Number(new URLSearchParams(window.location.search).get('stress') ?? '1');
+  const stress = Number.isFinite(stressParam) ? Math.max(1, Math.min(8, Math.floor(stressParam))) : 1;
   let deferredInstances = 0;
   for (const [id, s] of perId) {
     const head = heads.get(id);
@@ -265,6 +271,14 @@ export async function buildWorldRegistry(input: {
       continue;
     }
     reg.bindInstances(head, { a: s.a, b: s.b });
+    for (let k = 1; k < stress; k++) {
+      const a = new Float32Array(s.a);
+      for (let i = 0; i < s.fill; i++) {
+        a[i * 4] = (a[i * 4] as number) + (((k * 37 + i) % 13) - 6) * 0.61;
+        a[i * 4 + 2] = (a[i * 4 + 2] as number) + (((k * 53 + i) % 11) - 5) * 0.73;
+      }
+      reg.bindInstances(head, { a, b: s.b });
+    }
   }
 
   // ---- terrain: the REAL field as ONE heightfield source ---------------------

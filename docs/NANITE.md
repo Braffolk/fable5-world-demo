@@ -700,6 +700,31 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-12 (k): N2-C3 landed — TWO-PHASE occlusion complete. Phase 1
+  records occlusion-only rejects at both levels (rejInst/rejClust, counters
+  2/3); phase 2 re-tests vs the fresh HZB with CURRENT matrices (instance
+  rejects re-expand through full cluster cull; cluster rejects re-test
+  occlusion only) and APPENDS to qRaster — payload indices stable,
+  qRaster[0]=(total, phase2base); raster split into depth1/depth2(slot
+  base)/hwDepth/payload-full passes; final HZB rebuild closes the frame.
+  ?cullfreeze=1 (verified: 180° turn → black void), ?nanitedbg=hzb +
+  &hzblevel=N (verified clean mip), ?phase2=0 A/B. tools/probe-pan.ts
+  (F13): per-frame hard STRAFE (rotation has no parallax — disocclusion
+  needs translation), sky-guarded black-pixel gate. PASS 0 holes 8/8
+  frames at 1 m/frame; phase 2 recovered up to 24,815 clusters/frame
+  (74,893 sampled total) — the loop is LIVE. FINDING: the phase2=0
+  negative control ALSO shows 0 visible holes at this occluder scale —
+  HZB footprint max is conservative around narrow trunks and revealed
+  slivers stay covered by boundary clusters; two-phase is cheap insurance
+  that becomes load-bearing when occluders tighten (N9 foliage walls).
+  nanite.p2 HUD counter = appends. ?stress=5 (C4): 4.78M instances bound
+  (227 MB registry), pipeline intact at spawn+bm3, F14 verified live
+  (rejInst 3.8M > cap → flag fired, image intact, victims self-heal next
+  frame — phase 1 re-tests everything); reject caps raised to 1M.
+  Gotchas re-fired: same-scope ×2 (HZB reduction ro+rw; kRasterArgs2),
+  meter readback before first dispatch. main.ts exposes __laasFly (probe
+  camera control; rig overwrites camera.rotation — setPose is the API).
+
 - 2026-06-12 (j): N2-C2 landed (HZB + phase-1 occlusion). NaniteHzb.ts:
   example pyramid on the Option C depth buffer (F19) — half-res L0, packed
   f32 mip chain, per-level kernels; init far-fill = frame-0 pass-through;
