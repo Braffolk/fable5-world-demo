@@ -38,7 +38,7 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173` in Google Chrome 113 or newer on a desktop or laptop. Other Chromium-based browsers (Edge, Brave, Arc, Opera) work too. Safari and Firefox are not supported — the engine is built and tested against Chrome's WebGPU implementation, and the page detects this before loading and says so. Mobile and tablet browsers get a notice recommending a computer. There is no WebGL fallback by design: if Chrome is present but WebGPU is unavailable, the page fails loudly with diagnostics and the exact things to check (hardware acceleration, `chrome://gpu`, browser version).
+Open `http://localhost:5173` in Google Chrome 113 or newer on a desktop or laptop. Other Chromium-based browsers (Edge, Brave, Arc, Opera) should work too. Safari and Firefox are not supported — the engine is built and tested against Chrome's WebGPU implementation, and the page detects this before loading and says so. Mobile and tablet browsers get a notice recommending a computer. There is no WebGL fallback by design: if Chrome is present but WebGPU is unavailable, the page fails loudly with diagnostics and the exact things to check (hardware acceleration, `chrome://gpu`, browser version).
 
 Controls: click to capture the mouse. WASD to move, Shift to sprint, Space to jump, V toggles walk/fly, mouse wheel sets fly speed, E/Q move vertically in fly mode. Keys 1–9 jump to composed bookmarks, F starts the flythrough, F3 opens the debug HUD with per-pass GPU timings, P prints the current camera pose as a `?cam=` string.
 

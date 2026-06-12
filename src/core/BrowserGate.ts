@@ -78,7 +78,7 @@ export function browserGate(): boolean {
       'Safari and Firefox currently cannot run it.',
       '',
       'Please open this page in Google Chrome 113 or newer.',
-      'Chromium-based browsers (Edge, Brave, Arc, Opera) also work.',
+      'Chromium-based browsers (Edge, Brave, Arc, Opera) should also work.',
     ]);
     return false;
   }
