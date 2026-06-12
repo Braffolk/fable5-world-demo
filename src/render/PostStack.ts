@@ -343,23 +343,33 @@ export class PostStack {
           .mul(0.8)
           .add(0.4);
         const range = float(1.7);
-        const occl = float(0).toVar();
+        // first-hit-wins early exit: the contribution 1−f·0.5 strictly
+        // DECREASES with step index, so once any step hits, later steps can
+        // never raise the max — identical output, and whole wavefronts skip
+        // the remaining taps (contact hits are spatially coherent). hitF
+        // sentinel 2 = no hit yet.
+        const hitF = float(2).toVar();
         for (let s = 1; s <= SSCS_STEPS; s++) {
           // quadratic step distribution: dense near the surface
           const f = (s / SSCS_STEPS) ** 1.6;
-          const sampleV = viewPos.add(sunV.mul(range).mul(jit).mul(f));
-          const uvS = getScreenPosition(sampleV, uProj);
-          const inFrame = uvS.x
-            .greaterThan(0.001)
-            .and(uvS.x.lessThan(0.999))
-            .and(uvS.y.greaterThan(0.001))
-            .and(uvS.y.lessThan(0.999));
-          const dS = texture(depthTex.value, uvS).x;
-          const bufV = getViewPosition(uvS, dS, uProjInv);
-          const dz = bufV.z.sub(sampleV.z); // >0: buffer closer to camera
-          const hit = dz.greaterThan(0.05).and(dz.lessThan(1.4)).and(inFrame);
-          occl.assign(occl.max(hit.select(float(1).sub(float(f).mul(0.5)), float(0))));
+          If(hitF.greaterThan(1.5), () => {
+            const sampleV = viewPos.add(sunV.mul(range).mul(jit).mul(f));
+            const uvS = getScreenPosition(sampleV, uProj);
+            const inFrame = uvS.x
+              .greaterThan(0.001)
+              .and(uvS.x.lessThan(0.999))
+              .and(uvS.y.greaterThan(0.001))
+              .and(uvS.y.lessThan(0.999));
+            const dS = texture(depthTex.value, uvS).x;
+            const bufV = getViewPosition(uvS, dS, uProjInv);
+            const dz = bufV.z.sub(sampleV.z); // >0: buffer closer to camera
+            const hit = dz.greaterThan(0.05).and(dz.lessThan(1.4)).and(inFrame);
+            If(hit, () => {
+              hitF.assign(f);
+            });
+          });
         }
+        const occl = hitF.lessThan(1.5).select(float(1).sub(hitF.mul(0.5)), float(0));
         // distance fade + floor
         const fade = smoothstep(240, 140, dist);
         result.assign(float(1).sub(occl.mul(0.6).mul(fade)));
