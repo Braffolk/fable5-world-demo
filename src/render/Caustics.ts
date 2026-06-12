@@ -244,9 +244,14 @@ export function causticTint(wp: NV3, depthIn?: NF): NF {
   const pat = mix(tap(offA), tap(offB), w2);
 
   const submerged = smoothstep(0.025, 0.09, depth);
+  // FOCAL RAMP (user: "horribly strong in shallow water"): refraction
+  // needs travel distance to fold rays into filaments — a few cm of water
+  // can't focus our 0.3–1.1 m surface waves. Contrast develops toward a
+  // ~0.5 m focal band, then the existing deepFade defocuses it away.
+  const focal = smoothstep(0.04, 0.5, depth);
   const deepFade = exp(depth.max(0).mul(-0.32));
   const sunUp = smoothstep(0.03, 0.16, sunDir.y);
-  return pat.mul(submerged).mul(deepFade).mul(sunUp);
+  return pat.mul(submerged).mul(focal).mul(deepFade).mul(sunUp);
 }
 
 /** lit-graph triage variant: x = gated tint, y = gate product, z = raw pattern */
@@ -255,6 +260,7 @@ export function causticTintParts(wp: NV3, depthIn?: NF): NV3 {
   const depth = depthIn ?? causticDepth(wp);
   const sunDir = vec3(ctx.sunDir as unknown as NV3);
   const gates = smoothstep(0.025, 0.09, depth)
+    .mul(smoothstep(0.04, 0.5, depth))
     .mul(exp(depth.max(0).mul(-0.32)))
     .mul(smoothstep(0.03, 0.16, sunDir.y));
   const tint = causticTint(wp, depth);
@@ -267,7 +273,7 @@ export function causticTintParts(wp: NV3, depthIn?: NF): NV3 {
  * (before instancing pins the vec4 shadow contract and before GI patches
  * wrap the color chain). No-op when no context is active (gallery scene).
  */
-export function applyCaustics(mat: MeshStandardNodeMaterial, gain = 1.6): void {
+export function applyCaustics(mat: MeshStandardNodeMaterial, gain = 1.3): void {
   if (!ctx) return;
   const prev = mat.colorNode as unknown as NV3 | null;
   if (!prev) return;
