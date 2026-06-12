@@ -45,6 +45,14 @@ const DIP_C = 18; // landing-dip spring damping
 // fly-mode soft collision (legacy contract from TerrainScene)
 const FLY_GROUND_CLEAR = 1.4;
 const WADE_CLEAR = 0.45; // eye stays above water (no underwater rendering)
+// Browsers enforce a cooldown (~1.25 s in Chromium) after the user exits
+// pointer lock with ESC — a requestPointerLock() inside it is REJECTED
+// ("pointer lock cannot be acquired immediately after exiting"). Clicks in
+// that window must be deferred, not dropped.
+const LOCK_COOLDOWN_MS = 1300;
+// a deferred/retried request is only honored while the authorizing click is
+// recent (transient user activation lasts ~5 s — stay well inside it)
+const LOCK_INTENT_MS = 3500;
 
 export class FlyCamera {
   readonly camera: PerspectiveCamera;
@@ -79,11 +87,69 @@ export class FlyCamera {
     this.camera = camera;
     this.baseFov = camera.fov;
 
+    // ---- pointer lock, cooldown-aware ----------------------------------
+    // A click during the post-ESC cooldown used to fire requestPointerLock()
+    // unconditionally: the browser rejected it (console SecurityError — the
+    // `void` didn't swallow the promise rejection) and the click was lost;
+    // the user had to guess when to click again. Now: clicks inside the
+    // cooldown schedule the request for the cooldown's end, and a rejection/
+    // pointerlockerror retries while the click intent is fresh.
+    let unlockAt = -1e9; // performance.now() of the last lock exit
+    let lockIntentAt = -1e9; // last click asking for the lock
+    let relockTimer: number | undefined;
+    const clearRelock = (): void => {
+      if (relockTimer !== undefined) {
+        window.clearTimeout(relockTimer);
+        relockTimer = undefined;
+      }
+    };
+    const retryLock = (delayMs: number): void => {
+      // bounded: never re-lock without a recent user gesture
+      if (performance.now() - lockIntentAt > LOCK_INTENT_MS) return;
+      if (relockTimer !== undefined) return;
+      relockTimer = window.setTimeout(() => {
+        relockTimer = undefined;
+        acquireLock();
+      }, delayMs);
+    };
+    const acquireLock = (): void => {
+      if (!this.enabled || this.locked) return;
+      clearRelock();
+      const wait = unlockAt + LOCK_COOLDOWN_MS - performance.now();
+      if (wait > 0) {
+        // inside the browser cooldown — defer instead of burning the request
+        relockTimer = window.setTimeout(() => {
+          relockTimer = undefined;
+          acquireLock();
+        }, wait + 60);
+        return;
+      }
+      let p: Promise<void> | undefined;
+      try {
+        // Safari returns undefined (no promise) — guard before .catch
+        p = dom.requestPointerLock() as unknown as Promise<void> | undefined;
+      } catch {
+        retryLock(350);
+        return;
+      }
+      if (p !== undefined && typeof p.catch === 'function') {
+        p.catch(() => retryLock(350));
+      }
+    };
     dom.addEventListener('click', () => {
-      if (this.enabled && !this.locked) void dom.requestPointerLock();
+      if (!this.enabled || this.locked) return;
+      lockIntentAt = performance.now();
+      acquireLock();
     });
     document.addEventListener('pointerlockchange', () => {
+      const was = this.locked;
       this.locked = document.pointerLockElement === dom;
+      if (was && !this.locked) unlockAt = performance.now();
+      if (this.locked) clearRelock();
+    });
+    document.addEventListener('pointerlockerror', () => {
+      // cooldown miss or focus race — re-request once the window passes
+      retryLock(Math.max(unlockAt + LOCK_COOLDOWN_MS - performance.now() + 60, 300));
     });
     document.addEventListener('mousemove', (e) => {
       if (!this.locked) return;

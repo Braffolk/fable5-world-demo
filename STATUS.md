@@ -210,6 +210,15 @@ cov 0.62), contact shadows (?ablate=contact to A/B), black facets root-caused to
   passes hud explicitly so tooling is unaffected). PENDING USER CONFIRM:
   walk feel (speeds/bob amplitude/jump height/FOV kick are constants at
   the top of FlyCamera.ts).
+  FOLLOW-UP FIXED (2026-06-12): clicks during the browser's ~1.25 s
+  post-ESC pointer-lock cooldown were dropped with a console SecurityError
+  ("pointer lock cannot be acquired immediately after exiting") — the rig
+  now records unlockAt on pointerlockchange, DEFERS in-cooldown clicks to
+  the cooldown's end (the click's transient activation still authorizes
+  the deferred call), and retries bounded (3.5 s intent window) on
+  pointerlockerror/rejection. Verified HEADED via tools/probe-pointerlock.ts:
+  first-click lock 2 ms; click-right-after-exit re-locks unaided in
+  1270 ms; no unhandled rejections.
 
 - **USER FEEDBACK BATCH 2 — COMPLETE (2026-06-12, commits f245787..ca941b9).**
   All 11 items + 3 live follow-ups landed, each verified by shots and
@@ -890,3 +899,13 @@ split view, ground-clamped camera helper, silhouette/tiling gate + DELTA.md.
   in updateFn-order territory: setPose mutates between frames, so every
   updateFn sees the fresh pose. Mid-update mutation only happens via
   FlyCamera/flythrough — reason from code order, verify live.
+- Pointer-lock verification traps: headless Chromium rejects EVERY
+  requestPointerLock with WrongDocumentError ("root document not valid") —
+  pointer-lock UX is only probeable HEADED (chromium.launch headless:false),
+  and the window needs page.bringToFront() or macOS never grants focus and
+  the request silently never resolves. A Playwright-synthesized Escape does
+  NOT reach the browser's pointer-lock accelerator — exercise the cooldown
+  via document.exitPointerLock() instead. Also: tsx/esbuild injects a
+  `__name` helper around named function expressions inside page.evaluate
+  callbacks → ReferenceError in the page; pass big instrumented blocks as
+  STRING evaluates (tools/probe-pointerlock.ts documents the pattern).
