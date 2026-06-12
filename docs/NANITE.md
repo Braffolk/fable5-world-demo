@@ -217,12 +217,13 @@ measurement discipline; shot cycles ~2–3 min, cooled ABAB rounds 15–30 min e
 ## USER CHECKPOINTS (visual, per phase — open in Chrome on the branch)
 
 - N0: `?scene=rasterspike&sw=1` vs `&sw=0` — same content, spike vs hardware; HUD fps.
-- N1: `?clusterdbg=1` — meshlet-colored world. DEFERRED to N2/N3's world
-  debug view (progress log h): cluster colors on world geometry need the
-  nanite raster; painting them through the old pipeline would violate its
-  untouchability. Until then: spike clusterdbg + numeric invariants.
+- N1: meshlet-colored world — LIVE since N2-C1 as
+  `?scene=world&nanite=1&nanitedbg=cluster` (world-side param is nanitedbg;
+  `clusterdbg` is the SPIKE scene's param — user hit this trap 2026-06-12).
+  Black sky/far field expected: only migrated geometry exists in the view.
 - N2: `?cullfreeze=1` — freeze visibility then fly: culled geometry visibly missing
-  behind you, none missing in view; `?clusterdbg=hzb` pyramid view.
+  behind you, none missing in view; `?nanitedbg=hzb` pyramid view; `?occl=0`
+  kills occlusion for A/B.
 - N3: `?nanite=1` (terrain+rocks migrated) vs `?nanite=0` — should look identical at
   flat-lit dbg (`?clusterdbg=flat`); `?clusterdbg=tri|depth|over` views.
 - N4–N6: `?nanite=1` vs `?nanite=0` at bookmarks 1–9 — full shading; report anything
@@ -698,6 +699,23 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   min/max on uint nodes, float(uintNode) → use .toFloat().
 
 ## PROGRESS LOG (append-only, newest first)
+
+- 2026-06-12 (j): N2-C2 landed (HZB + phase-1 occlusion). NaniteHzb.ts:
+  example pyramid on the Option C depth buffer (F19) — half-res L0, packed
+  f32 mip chain, per-level kernels; init far-fill = frame-0 pass-through;
+  rebuilt after each raster. sphereOccluded prev-VP/prev-camPos (NaniteCam
+  prev snapshot + cotHalfFov) with TWO example departures: (1) reduction
+  reads the prev level through the SAME rw view (a second ro view of one
+  buffer = same-scope violation — N0 gotcha re-fired live); (2) NO Y flip
+  in the footprint lookup — the example sources a top-down TEXTURE, our
+  depth buffer rows are bottom-up; the mirrored lookup over-culled valley
+  framings against the near wall (bm1 131k→179 clusters, sawtooth holes;
+  bisected via ?occl=0). makeVisBuffers hoisted from the raster builder
+  (hzb→cull→raster cycle). MEASURED cuts (720p, image-identical at all 5
+  framings): spawn 153k→108k (1.4×), bm1 131k→3.8k (35×, canyon), bm3
+  396k→80k (4.9×), bm4 229k→99k (2.3×), bm7 216k→66k (3.3×); bm1 fps chip
+  70→121. Single-phase still (pan disocclusion = C3). USER Q&A: param is
+  ?nanitedbg=… on world (clusterdbg = spike) — checkpoint table fixed.
 
 - 2026-06-12 (i): N2-C1 landed (86a12a9): the registry-fed cull chain + the
   spike raster ported onto registry buffers — `?nanite=1&nanitedbg=flat|
