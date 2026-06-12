@@ -13,12 +13,24 @@
  * matrices, current bounds — NANITE.md "Culling (N2)").
  */
 
-import { StorageBufferAttribute } from 'three/webgpu';
+import { NodeMaterial, StorageBufferAttribute } from 'three/webgpu';
 import type { Renderer, StorageBufferNode } from 'three/webgpu';
-import { Fn, If, float, instanceIndex, uint, vec4 } from 'three/tsl';
+import { BufferGeometry, Float32BufferAttribute, Mesh, Scene, Sphere, Vector3 } from 'three';
+import { Fn, If, float, instanceIndex, positionGeometry, screenCoordinate, uint, vec4 } from 'three/tsl';
 import type { NB, NF, NV3 } from '../gpu/TSLTypes';
 import type { NaniteCam } from './NaniteCommon';
-import { bcU2F, dispatch, elemU, minU, sF32Views, toF, uniformArrV4, uniformF } from './Tsl';
+import {
+  bcU2F,
+  dispatch,
+  elemU,
+  minU,
+  sF32Views,
+  toF,
+  uniformArrV4,
+  uniformF,
+  type UniformMat4,
+  type UniformV3,
+} from './Tsl';
 import { Vector4 } from 'three';
 
 const MAX_LEVELS = 16;
@@ -30,8 +42,14 @@ interface ComputeKernel {
 export interface NaniteHzb {
   /** run the reduction chain (call AFTER the raster wrote visDepth) */
   build(renderer: Renderer): void;
-  /** conservative occlusion test vs the pyramid (prev-frame matrices) */
-  sphereOccluded(center: NV3, radius: NF): NB;
+  /**
+   * conservative occlusion test vs the pyramid contents at dispatch time.
+   * Phase 1 passes the PREV frame's (vp, camPos) — the pyramid then holds
+   * last frame's depth; phase 2 passes the CURRENT pair vs the fresh build.
+   */
+  sphereOccluded(center: NV3, radius: NF, vp: UniformMat4, camPos: UniformV3): NB;
+  /** fullscreen grayscale view of one pyramid level (?nanitedbg=hzb) */
+  makeViewer(level: number): Scene;
   levelCount: number;
 }
 
@@ -121,13 +139,18 @@ export function buildNaniteHzb(
     for (const k of kernels) dispatch(renderer, k);
   };
 
-  // ---- conservative sphere test (example-verbatim, prev-frame inputs) -------------
-  const sphereOccluded = (center: NV3, radius: NF): NB => {
-    const toCamera = cam.prevCamPos.sub(center).toVar();
+  // ---- conservative sphere test (example-verbatim, caller picks the VP pair) ------
+  const sphereOccluded = (
+    center: NV3,
+    radius: NF,
+    vp: UniformMat4,
+    camPos: UniformV3,
+  ): NB => {
+    const toCamera = camPos.sub(center).toVar();
     const dist = toCamera.length().toVar();
     const nearPoint = center.add(toCamera.div(dist).mul(radius));
-    const nearClip = cam.prevVp.mul(vec4(nearPoint, 1)).toVar();
-    const centerClip = cam.prevVp.mul(vec4(center, 1)).toVar();
+    const nearClip = vp.mul(vec4(nearPoint, 1)).toVar();
+    const centerClip = vp.mul(vec4(center, 1)).toVar();
     const nearestZ = nearClip.z.div(nearClip.w);
     const ndc = centerClip.xy.div(centerClip.w);
 
@@ -166,5 +189,42 @@ export function buildNaniteHzb(
       .and(nearestZ.greaterThan(maxZ)) as unknown as NB;
   };
 
-  return { build, sphereOccluded, levelCount };
+  // ---- ?nanitedbg=hzb — grayscale level inspector ----------------------------------
+  const makeViewer = (level: number): Scene => {
+    const L = levels[Math.max(0, Math.min(levelCount - 1, level))] as {
+      offset: number;
+      w: number;
+      h: number;
+    };
+    const geo = new BufferGeometry();
+    geo.setAttribute(
+      'position',
+      new Float32BufferAttribute(new Float32Array([-1, -1, 0, 3, -1, 0, -1, 3, 0]), 3),
+    );
+    geo.boundingSphere = new Sphere(new Vector3(), Number.POSITIVE_INFINITY);
+    const mat = new NodeMaterial();
+    mat.vertexNode = vec4(positionGeometry.xy, 0, 1) as unknown as typeof mat.vertexNode;
+    mat.fragmentNode = Fn(() => {
+      // screenCoordinate is top-down; pyramid rows are bottom-up (buffer law)
+      const u = screenCoordinate.x.div(cam.uW);
+      const v = float(1).sub(screenCoordinate.y.div(cam.uH));
+      const tx = minU(uint(u.mul(L.w)), uint(L.w - 1));
+      const ty = minU(uint(v.mul(L.h)), uint(L.h - 1));
+      const z = hzbF.ro.element(uint(L.offset).add(ty.mul(uint(L.w))).add(tx));
+      // contrast lift: classic depth crowds 1.0 — show 1−z on a 4th root
+      const g = float(1).sub(z).max(0).pow(0.25);
+      return vec4(g, g, z.equal(1).select(float(0.25), g), 1);
+    })() as unknown as typeof mat.fragmentNode;
+    mat.depthTest = false;
+    mat.depthWrite = false;
+    mat.fog = false;
+    mat.lights = false;
+    const mesh = new Mesh(geo, mat);
+    mesh.frustumCulled = false;
+    const scene = new Scene();
+    scene.add(mesh);
+    return scene;
+  };
+
+  return { build, sphereOccluded, makeViewer, levelCount };
 }

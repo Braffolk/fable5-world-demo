@@ -56,6 +56,8 @@ async function boot(): Promise<void> {
   // during interactive motion (clouds/aerial visibly lagged the camera).
   const fly = new FlyCamera(engine.camera, engine.renderer.domElement);
   engine.onUpdate((dt) => fly.update(dt));
+  // probe surface: scripted camera control (tools/probe-pan.ts drives yaw)
+  (window as unknown as { __laasFly?: FlyCamera }).__laasFly = fly;
 
   const seed = new WorldSeed(params.seed);
   registerScene('sanity', buildSanityScene);

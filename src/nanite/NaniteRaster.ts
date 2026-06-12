@@ -84,8 +84,17 @@ interface ComputeKernel {
 export interface NaniteRasterHandles {
   /** fullscreen resolve mesh in its own scene — render with the main camera */
   resolveScene: Scene;
-  /** per-frame: vis clear → SW pass 1 → HW pass 1 → SW pass 2 → HW pass 2 */
-  update(renderer: Renderer, camera: PerspectiveCamera): void;
+  /** clear vis buffers + hw queue (every frame, before any pass) */
+  clearVis(renderer: Renderer): void;
+  /** SW depth over phase-1 items */
+  depth1(renderer: Renderer): void;
+  /** SW depth over phase-2 appended items (slot base; 0 workgroups when none) */
+  depth2(renderer: Renderer): void;
+  /** HW big/near-tri depth render (re-runs hwArgs; full-queue redraw is
+   *  idempotent atomicMin) */
+  hwDepth(renderer: Renderer, camera: PerspectiveCamera): void;
+  /** SW payload over ALL items vs final depth + HW payload render */
+  payload(renderer: Renderer, camera: PerspectiveCamera): void;
   readHwCount(renderer: Renderer): Promise<number>;
 }
 
@@ -115,7 +124,12 @@ export function buildNaniteRaster(
   gpu: RegistryGpu,
   heightTex: Texture,
   cam: NaniteCam,
-  cull: { qRasterRO: BufOf<UV2>; rasterDispatchAttr: IndirectStorageBufferAttribute },
+  cull: {
+    qRasterRO: BufOf<UV2>;
+    rasterDispatchAttr: IndirectStorageBufferAttribute;
+    rasterDispatch2Attr: IndirectStorageBufferAttribute;
+    rasterDispatchFullAttr: IndirectStorageBufferAttribute;
+  },
   vis: NaniteVisBuffers,
   tint: 'flat' | 'cluster',
 ): NaniteRasterHandles {
@@ -239,11 +253,17 @@ export function buildNaniteRaster(
   (kVisClear as unknown as ComputeKernel).setName('nanVisClear');
 
   // ---- SW raster kernels (Option C two-pass; spike-verbatim scanline core) ----------
-  const rasterKernel = (mode: 'depth' | 'payload'): unknown => {
+  // `phase2` offsets the work-item index by qRaster[0].y (the phase-2 base
+  // written by kRasterArgs2) so the appended range rasters without touching
+  // phase-1 items; depth1/payload start at 0.
+  const rasterKernel = (mode: 'depth' | 'payload', phase2 = false): unknown => {
     const kn = Fn(() => {
-      const itemIdx = wgLinear(DISPATCH_ROW).toVar();
+      const head = qRasterRO.element(0);
+      const itemIdx = phase2
+        ? head.y.add(wgLinear(DISPATCH_ROW)).toVar()
+        : wgLinear(DISPATCH_ROW).toVar();
       const localTri = localX().toVar();
-      const itemCount = qRasterRO.element(0).x;
+      const itemCount = head.x;
       returnIf(itemIdx.greaterThanEqual(itemCount));
       const item = qRasterRO.element(itemIdx.add(uint(1)));
       const instId = item.x.toVar();
@@ -417,6 +437,8 @@ export function buildNaniteRaster(
 
   const kRasterDepth = rasterKernel('depth');
   (kRasterDepth as ComputeKernel).setName('nanRasterDepth');
+  const kRasterDepth2 = rasterKernel('depth', true);
+  (kRasterDepth2 as ComputeKernel).setName('nanRasterDepth2');
   const kRasterPayload = rasterKernel('payload');
   (kRasterPayload as ComputeKernel).setName('nanRasterPayload');
 
@@ -586,21 +608,30 @@ export function buildNaniteRaster(
   const resolveScene = new Scene();
   resolveScene.add(resolveMesh);
 
-  // ---- per-frame ------------------------------------------------------------------
-  const update = (renderer: Renderer, camera: PerspectiveCamera): void => {
+  // ---- per-frame passes --------------------------------------------------------------
+  const clearVis = (renderer: Renderer): void => {
     dispatch(renderer, kVisClear);
+  };
+  const depth1 = (renderer: Renderer): void => {
     dispatchIndirect(renderer, kRasterDepth, cull.rasterDispatchAttr);
-    dispatch(renderer, kHwArgs);
-
+  };
+  const depth2 = (renderer: Renderer): void => {
+    dispatchIndirect(renderer, kRasterDepth2, cull.rasterDispatch2Attr);
+  };
+  const hwRender = (renderer: Renderer, camera: PerspectiveCamera, mat: NodeMaterial): void => {
     const prevRT = renderer.getRenderTarget();
     renderer.setRenderTarget(hwRT);
-    hwMesh.material = hwDepthMat;
-    renderer.render(hwScene, camera);
-
-    dispatchIndirect(renderer, kRasterPayload, cull.rasterDispatchAttr);
-    hwMesh.material = hwPayloadMat;
+    hwMesh.material = mat;
     renderer.render(hwScene, camera);
     renderer.setRenderTarget(prevRT);
+  };
+  const hwDepth = (renderer: Renderer, camera: PerspectiveCamera): void => {
+    dispatch(renderer, kHwArgs);
+    hwRender(renderer, camera, hwDepthMat);
+  };
+  const payload = (renderer: Renderer, camera: PerspectiveCamera): void => {
+    dispatchIndirect(renderer, kRasterPayload, cull.rasterDispatchFullAttr);
+    hwRender(renderer, camera, hwPayloadMat);
   };
 
   const readHwCount = async (renderer: Renderer): Promise<number> => {
@@ -608,5 +639,5 @@ export function buildNaniteRaster(
     return new Uint32Array(buf)[0] ?? 0;
   };
 
-  return { resolveScene, update, readHwCount };
+  return { resolveScene, clearVis, depth1, depth2, hwDepth, payload, readHwCount };
 }

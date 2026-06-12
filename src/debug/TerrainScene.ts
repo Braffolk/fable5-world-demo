@@ -270,7 +270,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // pipeline keeps booting/updating untouched. `cluster` = the deferred N1
   // checkpoint (meshlet colors on the real world).
   const nanitedbg = new URLSearchParams(window.location.search).get('nanitedbg');
-  if (nanitedbg === 'flat' || nanitedbg === 'cluster') {
+  if (nanitedbg === 'flat' || nanitedbg === 'cluster' || nanitedbg === 'hzb') {
     if (naniteRegistry) {
       const { buildNaniteView } = await import('../nanite/NaniteView');
       engine.post = buildNaniteView(engine, naniteRegistry, hf, nanitedbg);
