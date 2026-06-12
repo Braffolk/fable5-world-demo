@@ -676,6 +676,17 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-12 (e): USER-REPORTED: ?packing=a failed BindGroupLayout creation —
+  11 storage buffers in one compute stage (the F9 10/stage adapter limit,
+  first real bite): the overflow fix's counters binding pushed Option A's
+  single kernel (both vis atomics + hwQueue) over. Fix: workQueue entry 0 is
+  now the RESERVED count slot (items at [1..n]) — the guard reads the queue
+  that every kernel already binds, zero extra bindings. Budgets now: A-raster
+  10/10, C-depth 9, C-payload 9. Lesson for N1's packed layout: counters that
+  gate a queue belong IN the queue buffer. Also user-confirmed expectation:
+  spike has NO LOD (full-detail clusters at any distance; stable hash colors
+  are the correctness signal) — discrete ring sets arrive with pool
+  migration (N1–N6), continuous DAG refinement + ?clusterdbg=lod at N8.
 - 2026-06-12 (d): USER-REPORTED (live fly-out): terrain vanished + rock holes
   beyond the standing framing — the work queue overflowed AGAIN at full-field
   visibility (78,464 items vs the 65,535 single-dim dispatch cap; content had

@@ -135,13 +135,14 @@ export function buildSpikeRaster(
   const instBBuf = storage(new StorageBufferAttribute(c.instB, 4), 'vec4', c.instanceCount).toReadOnly();
   const heightsBuf = storage(new StorageBufferAttribute(c.heights, 1), 'float', c.heights.length).toReadOnly();
 
-  const workQueueAttr = new StorageBufferAttribute(new Uint32Array(WORK_CAP * 2), 2);
-  const workQueue = storage(workQueueAttr, 'uvec2' as unknown as 'vec4', WORK_CAP);
-  const workQueueRO = storage(workQueueAttr, 'uvec2' as unknown as 'vec4', WORK_CAP).toReadOnly();
+  // entry 0 is reserved: x = clamped item count (written by kArgs); items
+  // live at [1..count] — the guard costs no extra binding this way (F9)
+  const workQueueAttr = new StorageBufferAttribute(new Uint32Array((WORK_CAP + 1) * 2), 2);
+  const workQueue = storage(workQueueAttr, 'uvec2' as unknown as 'vec4', WORK_CAP + 1);
+  const workQueueRO = storage(workQueueAttr, 'uvec2' as unknown as 'vec4', WORK_CAP + 1).toReadOnly();
 
   const countersAttr = new StorageBufferAttribute(new Uint32Array(4), 1);
   const counters = storage(countersAttr, 'uint', 4).toAtomic();
-  const countersRO = storage(countersAttr, 'uint', 4).toReadOnly();
 
   const dispatchAttr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
   const dispatchBuf = storage(dispatchAttr, 'uint', 3);
@@ -296,7 +297,7 @@ export function buildSpikeRaster(
           const slot = atomicAdd(counters.element(0), uint(1)) as unknown as NU;
           If((slot.lessThan(uint(WORK_CAP)) as unknown as NB), () => {
             workQueue
-              .element(slot)
+              .element(slot.add(uint(1)))
               .assign(uvec2(instanceIndex as unknown as number, clusterId as unknown as number));
           });
         });
@@ -313,7 +314,7 @@ export function buildSpikeRaster(
       atomicLoad(counters.element(0)) as unknown as NF,
       uint(WORK_CAP) as unknown as NF,
     ) as unknown as NU;
-    atomicStore(counters.element(1), n);
+    workQueue.element(0).assign(uvec2(n as unknown as number, 0));
     const rows = n.add(uint(DISPATCH_ROW - 1)).div(uint(DISPATCH_ROW));
     dispatchBuf.element(0).assign(
       min(n as unknown as NF, uint(DISPATCH_ROW) as unknown as NF),
@@ -336,10 +337,11 @@ export function buildSpikeRaster(
       const wid = workgroupId as unknown as { x: NU; y: NU };
       const itemIdx = wid.y.mul(uint(DISPATCH_ROW)).add(wid.x).toVar();
       const localTri = ((localId as unknown as { x: NU }).x as NU).toVar();
-      If((itemIdx.greaterThanEqual(countersRO.element(1) as unknown as NU) as unknown as NB), () => {
+      const itemCount = (workQueueRO.element(0) as unknown as { x: NU }).x;
+      If((itemIdx.greaterThanEqual(itemCount) as unknown as NB), () => {
         Return();
       });
-      const item = workQueueRO.element(itemIdx) as unknown as { x: NU; y: NU };
+      const item = workQueueRO.element(itemIdx.add(uint(1))) as unknown as { x: NU; y: NU };
       const instId = item.x;
       const clusterId = item.y;
       const meta = metaBuf.element(clusterId) as unknown as NV4;
@@ -551,7 +553,7 @@ export function buildSpikeRaster(
       const instId = (hwQueueRO.element(base.add(uint(1))) as unknown as NU).toVar();
       const itemIdx = payload.shiftRight(uint(7));
       const localTri = payload.bitAnd(uint(127));
-      const item = workQueueRO.element(itemIdx) as unknown as { x: NU; y: NU };
+      const item = workQueueRO.element(itemIdx.add(uint(1))) as unknown as { x: NU; y: NU };
       const clusterId = item.y;
       const meta = metaBuf.element(clusterId) as unknown as NV4;
 
@@ -668,7 +670,7 @@ export function buildSpikeRaster(
     // as a wrong-color pixel, which is exactly what we want to SEE if it occurs
     const itemIdx = payloadNode.shiftRight(uint(7));
     const localTri = payloadNode.bitAnd(uint(127));
-    const item = workQueueRO.element(itemIdx) as unknown as { x: NU; y: NU };
+    const item = workQueueRO.element(itemIdx.add(uint(1))) as unknown as { x: NU; y: NU };
     const instId = item.x;
     const clusterId = item.y;
     const meta = metaBuf.element(clusterId) as unknown as NV4;
