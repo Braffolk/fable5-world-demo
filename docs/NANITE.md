@@ -217,7 +217,10 @@ measurement discipline; shot cycles ~2–3 min, cooled ABAB rounds 15–30 min e
 ## USER CHECKPOINTS (visual, per phase — open in Chrome on the branch)
 
 - N0: `?scene=rasterspike&sw=1` vs `&sw=0` — same content, spike vs hardware; HUD fps.
-- N1: `?clusterdbg=1` — meshlet-colored world (hash colors per cluster, old pipeline).
+- N1: `?clusterdbg=1` — meshlet-colored world. DEFERRED to N2/N3's world
+  debug view (progress log h): cluster colors on world geometry need the
+  nanite raster; painting them through the old pipeline would violate its
+  untouchability. Until then: spike clusterdbg + numeric invariants.
 - N2: `?cullfreeze=1` — freeze visibility then fly: culled geometry visibly missing
   behind you, none missing in view; `?clusterdbg=hzb` pyramid view.
 - N3: `?nanite=1` (terrain+rocks migrated) vs `?nanite=0` — should look identical at
@@ -687,6 +690,32 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-12 (h): **N1 COMPLETE** — C4 landed (a9cc381): ?nanite=1 builds the
+  GeometryRegistry from ALL opaque world pools (src/nanite/WorldRegistry.ts;
+  TerrainScene hook inside the veg block — nanite=1 with ablate=veg is a
+  no-op by design). GATE PASS (tools/probe-nanite-boot.ts, real boot):
+  133 meshes, 355,795 clusters, 1.52M explicit + 33.5M implicit terrain
+  tris, 1.07M verts, 955,053 instances bound (207,274 leafy deferred);
+  89.9 MB (verts 25.8 + idx 18.3 + clusters 11.4 + inst 34.4); boot add-on
+  554–570 ms = readback 6–8 + idF partition 70 + terrain minMax 74 +
+  clusterize 308–336 (< 2000 gate) + build 16–18. Pool policy: tree barks
+  r0→r1→r2 chains (26/150 m), shrub barks, logs/stumps/branches, boulders/
+  slabs/stones r1→r2 (120 m); ferns/flowers + card/leaf parts = 3.10M tris
+  deferred to N9 (counted per part); GroundRing clipmap stays bespoke until
+  N6/N10 (audit unchanged). Terrain: HeightfieldSource generalized to
+  total-quad counts + PARTIAL edge windows (res−1 need not divide; mesh
+  record word 10 = quadsX|quadsZ now) — 585² windows at winQuads 7, 98 tris
+  avg, 100% full. Scatter readback once at boot (placements static),
+  CPU partition by idF preserves buffer order (variation law intact).
+  N1 USER CHECKPOINT (?clusterdbg=1 world) DEFERRED to N3: it needs cluster
+  colors on world geometry, which only the nanite raster can draw without
+  touching the old pipeline (untouchability law wins; cluster quality is
+  verified numerically + visually on the spike instead). Hero/R0 bark is
+  boot-built in VegLibrary (not background) — the LATE path stays exercised
+  by probes, real consumer arrives with background hero refinement at N6.
+  swayPad left 0 on trunk channels — N2 must source real amplitudes from
+  Wind.ts before occlusion tests (F6).
+
 - 2026-06-12 (g): N1 C3 landed (81dbae0): src/nanite/GeometryRegistry.ts —
   the content-contract entry point (registerMesh explicit|heightfield,
   registerLod chain, bindInstances CPU|GPU-scatter, build()/flush() with a
@@ -779,22 +808,25 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## NEXT ACTIONS
 
-1. N1-C4: boot wiring behind ?nanite=1 — world scene builds a GeometryRegistry
-   from ALL opaque pools; ?nanite=0/absent boots untouched. Survey first
-   (write the pool→source map into the commit): rock/stone variants, deadfall
-   logs/stumps, debris meshes, tree-ring BARK/opaque trunk sub-geometries
-   where separable from card geometry (mixed card geoms deferred to N6 with a
-   note), hero meshes via the LATE path (constructor late budget + flush()),
-   terrain = ONE heightfield source over the REAL 4096² field (minMax from
-   the existing height-range data; window = 8×8 quads at L0 stride to start).
-   Instances: scatter layers are MIXED-class buffers — C4 needs per-mesh
-   contiguous ranges; boot-static partition (counts are read back at boot
-   already). vdata packing per pool (rock probe shows the 4×u8 pattern).
-   Gate + commit numbers: all pools clusterized measured ms (<2 s), cluster
-   stats table, registry MB, HUD nanite.* counters live (pass
-   engine.stats.counters into build()).
-2. N2 per the table (two-phase occlusion; replaces the spike's per-instance
-   serial cluster loops with the real two-level culling chain; consumes
-   registry.gpu.{meshes,clusters,instances,instanceMesh} + readMesh/
-   readCluster — instance→mesh via instanceMesh buffer, LOD chain walk via
-   lodNext/lodDist).
+1. N2: the real culling chain (phase table row N2; design notes "Culling
+   (N2)"). Consumes registry.gpu.{meshes,clusters,instances,instanceMesh} +
+   readMesh/readCluster from GeometryRegistry.ts — instance→mesh via the
+   instanceMesh buffer, discrete LOD select via the lodNext/lodDist chain
+   walk (distance to instance origin), then per-cluster frustum/cone/
+   prev-HZB tests. TWO-PHASE occlusion from the start (record rejects at
+   BOTH levels, re-test vs fresh HZB; frame-0 pass-through). HZB port from
+   the example (half-res L0, max-far, storage mips; source = Option C depth
+   buffer). Work queues with explicit caps + counters-in-queue (slot 0) +
+   2D-split indirect dispatch (the N0 laws). Before occlusion tests: source
+   trunk sway amplitudes from Wind.ts into swayPad (F6) via a registry
+   setter or re-register. Deliverables: ?cullfreeze=1, tools/probe-pan.ts,
+   visible-cluster counts at 4 bookmarks + 5× synthetic stress (F3 payload
+   gate), HUD nanite.visClusters. Gate: visible counts match old path ±LOD
+   policy at 4 bookmarks; zero disocclusion holes on probe-pan.
+   NOTE: N2 needs a raster consumer to produce depth for the HZB — minimum
+   viable order inside N2: (a) port the spike raster onto registry buffers
+   in a world-scene debug view (?nanitedbg=flat: cull→raster→flat resolve,
+   no materials), (b) HZB from its depth, (c) two-phase loop. That debug
+   view is ALSO the deferred N1 checkpoint (?clusterdbg world colors).
+2. N3 per the table (fixed-point edges, full vis-buffer + flat resolve
+   parity gates, near-crossing→HW, grazing-horizon probes).
