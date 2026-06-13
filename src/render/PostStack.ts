@@ -57,6 +57,11 @@ import { HalfResMrtNode, type HalfResEntry } from './HalfResMrt';
 
 export class PostStack {
   readonly post: RenderPipeline;
+  /** the live TRAANode when TAA is on — the nanite frame reads its
+   *  _jitterIndex to mirror the per-frame camera jitter (D-N18) */
+  traaNode: object | null = null;
+  /** scene-pass depth texture node (nanite depth forensics probe) */
+  sceneDepthNode: object | null = null;
   private grade = new GradeUniforms();
   private exposureBuf: StorageBufferNode<'float'>;
   private exposureKernel: Parameters<Renderer['compute']>[0];
@@ -129,6 +134,7 @@ export class PostStack {
         this.post = new RenderPipeline(renderer);
         this.post.outputNode = scenePass;
       }
+      this.sceneDepthNode = scenePass.getTextureNode('depth');
       this.exposureBuf = instancedArray(2, 'float');
       this.exposureKernel = Fn(() => {})().compute(1);
       return;
@@ -140,6 +146,7 @@ export class PostStack {
     scenePass.setMRT(mrt(skyveldbg ? { output, velocity } : { output }));
     const beauty = scenePass.getTextureNode('output');
     const depthTex = scenePass.getTextureNode('depth');
+    this.sceneDepthNode = depthTex;
     const velocityTex = skyveldbg ? scenePass.getTextureNode('velocity') : null;
 
     // --- merged half-res MRT pass: clouds march + GTAO + SS bounce -------------
@@ -507,6 +514,10 @@ export class PostStack {
     const taaed = ablate.has('taa')
       ? (withBounce as unknown as ReturnType<typeof traa>)
       : traa(withBounce, depthTex, reprojectedVelocity, camera);
+    // nanite jitter mirror (D-N18): the compute raster must project with the
+    // SAME per-frame TRAA view offset the scene pass renders with; the node's
+    // _jitterIndex is read before the pipeline render (it increments after)
+    if (!ablate.has('taa')) this.traaNode = taaed as unknown as object;
 
     // --- bloom -----------------------------------------------------------------------
     const taaedRgb = (taaed as unknown as NV4).rgb;

@@ -260,6 +260,32 @@ export class Forests {
   /** depth twins render before color draws (renderOrder; kept in one child
    *  group so a future bundle path can rely on traversal order too) */
   private prepassGroup = new Group();
+  /** camera-pass meshes of pool OPAQUE parts (parts[0] — exactly what
+   *  WorldRegistry migrates) keyed by VegClass — hidden per migrated class in
+   *  the nanite full-frame mode (D-N19). Caster siblings are separate meshes
+   *  on cascade layers and NEVER appear here: suppression cannot touch
+   *  shadows. */
+  private migratable: { mesh: Mesh; cls: number }[] = [];
+
+  /**
+   * Hide the camera draws of pools whose material class is nanite-migrated.
+   * `matClassOf` = WorldRegistry.migratedMatClass (passed in by the caller —
+   * the registry module stays a dynamic import). Returns hidden-mesh count.
+   */
+  suppressMigrated(
+    matClassOf: (cls: number) => string | null,
+    classes: ReadonlySet<string>,
+  ): number {
+    let n = 0;
+    for (const m of this.migratable) {
+      const mc = matClassOf(m.cls);
+      if (mc !== null && classes.has(mc)) {
+        m.mesh.visible = false;
+        n++;
+      }
+    }
+    return n;
+  }
 
   private compact!: StorageBufferNode<'uint'>;
   private counters!: ReturnType<StorageBufferNode<'uint'>['toAtomic']>;
@@ -363,7 +389,7 @@ export class Forests {
       g: number,
       tris: number,
       shadowLayer: number | null = null,
-    ): void => {
+    ): Mesh => {
       const indexCount = geo.index ? geo.index.count : geo.attributes.position?.count ?? 0;
       draws.push({ group: g, indexCount });
       const mesh = new Mesh(geo, mat);
@@ -406,6 +432,7 @@ export class Forests {
       }
       meshes.push(mesh);
       this.group.add(mesh);
+      return mesh;
     };
 
     /** geometry view sharing attributes/index but with its own indirect slot */
@@ -565,7 +592,10 @@ export class Forests {
             mat.colorNode = vec4(vec3(cdbg.r, cdbg.g, cdbg.b), 1);
             if (op) mat.opacityNode = op;
           }
-          addDraw(part.geo, mat, g, part.tris);
+          const visMesh = addDraw(part.geo, mat, g, part.tris);
+          // opaque part = parts[0] (WorldRegistry's migration unit) — track
+          // it for D-N19 camera-draw suppression
+          if (part === parts[0]) this.migratable.push({ mesh: visMesh, cls: pool.cls });
           // per-cascade caster siblings. Tree R2 skips its card/bark parts —
           // the crown proxy below carries the whole far shadow (a cascade
           // texel ≥0.5 m out there; 1.8k-tri cards bought nothing but raster)

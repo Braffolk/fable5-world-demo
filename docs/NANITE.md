@@ -672,6 +672,50 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   shots remain for human judgement, and N4 gates real shading with the
   lockexp pixel-equivalence methodology.
 
+- D-N16 (2026-06-13, N4 recon): VELOCITY OUTPUT DEFERRED — the current
+  TRAA consumes ANALYTIC camera reprojection from depth for ALL geometry
+  (PostStack velReproject; the velocity MRT is skyveldbg-only). A
+  vis-buffer velocity output would have NO consumer, so it cannot be a
+  parity requirement; the resolve's real depth feeds the existing
+  reprojection exactly like old-path geometry. Re-opened only if TRAA
+  ever upgrades to true per-object velocity (then: prev transforms +
+  prev wind phase as the phase table sketched).
+- D-N17 (2026-06-13, N4 recon): RESOLVE LIGHTS MANUALLY — three's node
+  lighting cannot receive per-fragment reconstructed positions:
+  positionWorld is a vertex varying (Position.js:58), and the
+  vertexNode-branch positionView reconstruction
+  (cameraProjectionMatrixInverse × clipSpace varying, Position.js:84) is
+  a NEAR-PLANE point — right ray direction, wrong magnitude; the
+  reference example gets away with it because its scene is IBL-only (no
+  shadows/fog/position-dependent terms). Patching the accessor
+  singletons is brittle vs upgrades. So the übershader mirrors the
+  lighting term-by-term: sun BRDF per three's PhysicalLightingModel +
+  CSMShadowNode cascade select + OUR pcssFilter (ShadowSetup.ts — same
+  code, portable) × cloud gate, probe-GI via the lightmap-slot
+  convention (IrradianceNode contribution), aoNode = indirect-only.
+  Fog/aerial/GTAO/contact/clouds need NO port: they are post-space from
+  beauty+depth (PostStack).
+- D-N18 (2026-06-13, N4 recon): IN-SCENE RESOLVE + JITTER MIRROR — the
+  resolve is a fullscreen-triangle Mesh in engine.scene (renderOrder
+  −1000, depthNode = vis-buffer f32 verbatim: classic depth, three's
+  reversedDepthBuffer is opt-in and unset), so every later HW draw
+  (grass, cards, water, sky) depth-tests against nanite geometry inside
+  the ONE scene pass and the whole post chain applies unchanged. The
+  nanite compute runs in an engine.post wrapper BEFORE postStack.render;
+  NaniteCam mirrors TRAA's jitter (read _jitterIndex pre-render, halton
+  (i+1,2)/(i+1,3) − 0.5 via scratch-camera setViewOffset) so SW/HW/
+  resolve share the scene pass's jittered VP (else: sub-pixel offset +
+  crawl vs hardware content under TRAA).
+- D-N19 (2026-06-13, N4 recon): INCREMENTAL CLASS MIGRATION — registry
+  gets a material-class filter (?naniteclasses=, default = the ported
+  set so far; nanitedbg views default to ALL classes for pipeline
+  probes). Only filtered classes raster + suppress their old camera
+  draws (terrain tiles castShadow=false already — ShadowProxy is the
+  caster; Forests camera meshes are separate from its per-cascade caster
+  meshes, so hiding camera draws never touches shadows). Un-ported
+  classes keep the old path — no double draw, no z-fight, per-material
+  gates run on real frames.
+
 - D-N14 (2026-06-12, N2-C1): HYBRID DRAW ENVELOPE — the LOD chain tail's
   lodDist (lodNext = NONE) is the instance cull-beyond distance, set by
   WorldRegistry to the old path's real-geometry edge (trees R2_FAR+BAND2 =
@@ -681,6 +725,30 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   vista pushed 18.6M cluster items (every r2 ring to 4 km).
 
 ## GOTCHAS (append-only, nanite-specific)
+
+- (N4-C0) THE SCANLINE DEPTH WAS BIASED-NEAR ON SUB-PIXEL TRIANGLES from
+  N3a until N4-C0: the integer cz interpolated with the TOP-LEFT-BIASED
+  edge weights (the −1 fill-rule biases) but divided by the UNBIASED
+  area2 — a RELATIVE error of ~Σbias/area2, ulp-level on big triangles
+  (the N3 comment "≤1/area2 ≈ 2⁻²⁵" silently assumed area2~2²⁵) but
+  ~5e-4 of FULL DEPTH RANGE on far sub-pixel slivers (area2 ~10³
+  units²), always NEGATIVE ⇒ far terrain depth landed hundreds of
+  meters NEAR. Every internal gate was BLIND by construction: depth and
+  payload share the formula (audit exact-match ✓), the resolve never
+  compared depth to truth, hwref parity diffs silhouettes (coverage,
+  not z), and the HW path only overlaps SW where the error is sub-ulp.
+  The FIRST external depth consumer (water depth-testing the resolve's
+  frag_depth at N4-C0) made the lake vanish wholesale. Found by
+  exact-number GPU forensics (storage-buffer probe kernels — PNG-based
+  number probes are POISONED by tone-map/sRGB; never decode quantities
+  through the canvas). Lesson made law: a value is only verified when a
+  consumer DIFFERENT from its producer checks it against independent
+  truth — self-consistent pairs prove consistency, not correctness.
+- (N4-C0) Slot collisions between stacked one-off GPU diagnostics
+  (kSelfTest vs the in-kernel dump both writing audit[2..3]) produced
+  two phantom "findings" (z>1 corners, 1e-3 corner spread) that cost a
+  bisect cycle each — single-writer discipline for debug slots, or
+  partition the buffer per probe.
 
 - (N3) The page background #06080a SUMS TO EXACTLY 24 — every probe
   black/hole threshold written `r+g+b < 24` silently classified background
@@ -734,6 +802,40 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   min/max on uint nodes, float(uintNode) → use .toFloat().
 
 ## PROGRESS LOG (append-only, newest first)
+
+- 2026-06-13 (p): **N4-C0 landed — full-frame integration + an N3-era
+  depth-bias bug found and fixed.** `?nanite=1` (no nanitedbg) now renders
+  the migrated classes INTO the real frame: NaniteFrame.ts (compute
+  scheduling in an engine.post wrapper before postStack.render; TRAA
+  jitter MIRROR via TRAANode._jitterIndex + halton(i+1,2/3) on a scratch
+  camera), NaniteResolve.ts (fullscreen-tri mesh IN engine.scene,
+  renderOrder −1000, fragmentNode flat palette for C0, depthNode = vis
+  f32 verbatim, Discard keeps cleared depth), NaniteFetch.ts (makeCtx/
+  fetchWorldVert extracted verbatim from the raster — one decode for
+  raster+resolve), WorldRegistry class filter (D-N19, ?naniteclasses,
+  PORTED_CLASSES=[terrain], migratedMatClass exported), suppression:
+  terrain tiles+farShell hidden (+CDLOD update skipped), Forests
+  opaque parts[0] tagged at addDraw and hidden per class — casters are
+  separate cascade-layer meshes, shadows untouched. probe-nanite-boot
+  pins N1 semantics via ?naniteframe=0. THE BUG (gotcha above): water
+  z-failed against resolve-written depth everywhere; forensics chain
+  (postmin bisect → waterdbg 5/7/8 rungs → nandepth=half liveness →
+  storage-buffer probe kernels: scene-depth==vis bit-exact, payload
+  triangles healthy+covering, min-keyed writer identity → live weights
+  dump: cw=(1376,0,595) vs area2=1972) convicted the biased-weight
+  interpolation; fix = UNBIASED weights for cz (coverage keeps the
+  biases). Re-proven battery: nanitedbg ✓ pan 0 holes ✓ parity
+  silhouettes IDENTICAL (4/0/102/39/13 px) with intersection flips
+  ↓~10× (47/10/63/107/112 vs 134–1,099 — SW depth now lands on HW
+  depth at intersections) ✓ horizon-nanite: graze shimmer 3 px content
+  (15-px raw was ±1-LSB byte noise — probe metric now ignores ≤1 LSB),
+  holes/orphans/silhouette 0, graze flips 4,866→480 ✓ boot 289 ms ✓.
+  C0 gates: bm1/3/4/7+spawn+aerial boot ✓; water/lake/river/grass/
+  crowns depth-compose against nanite terrain ✓ (the lake was THE
+  canary); audit orphans 0 in frame mode (~900k covered px) ✓;
+  cross-boot framealign+lockexp+wind0 diff 0.06% (floor) ✓. Bisects
+  kept (URL-gated): ?nanhw=0, ?nandepth=0|half, ?nandbg=dist,
+  ?nanprobe=1 (exact-number kernel), waterdbg 7/8.
 
 - 2026-06-13 (o): **N3 COMPLETE** — C3 landed: grazing-horizon (c) +
   walk-mode near-field (d) gates PASS via NEW tools/probe-horizon-nanite.ts
@@ -1018,17 +1120,43 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## NEXT ACTIONS
 
-1. N4: materials resolve übershader (phase table row N4; design notes
-   "Resolve / materials"). Port order TERRAIN → ROCK → BARK → DEADWOOD →
-   DEBRIS, each gated on frame-aligned equivalence vs `?nanite=0`
-   (`--framealign N --wind 0 --lockexp 1`, deterministic floor ≤0.2%
-   where geometry-identical). The transform stage (wind channels) enters
-   with the per-material ports — swayPad already pads the cull side (F6).
-   Unpack→barycentrics→attribute fetch: port the example's analytic
-   UV/normal derivative block verbatim (lines ~1216–1263); TextureNode
-   .grad() and TSL Switch verified in 0.184 (F17). Velocity (prev
-   transforms + prev wind phase) lands here too — NOT example-proven
-   (F10a), three's VelocityNode unusable (THREE-NOTES). Outputs: beauty
-   rgba16f + REAL f32 depth via depthNode + velocity rg16f. Shadows stay
-   on the old path until N5 (the resolve only RECEIVES CSM).
-2. Then N5 (per-cascade cluster shadow re-culls) per the table.
+N4 in flight (recon done 2026-06-13; D-N16..D-N19 record the architecture).
+Chunks, each tsc-clean + committed:
+
+1. ~~N4-C0~~ DONE (log entry p) — full-frame integration + the N3 depth-bias
+   fix; all C0 gates measured, battery re-proven.
+2. **N4-C1 — TERRAIN port + gate**: parameterize buildTerrainShading's TSL
+   singletons (positionWorld/cameraPosition/normalWorld → explicit surface
+   ctx; old callers pass the singletons — bit-identical by construction,
+   verify with one framealigned nanite=0 pre/post diff). Resolve terrain
+   branch: perspective-correct barycentric wp (example block ~1173–1263) →
+   shared shading fn → MANUAL light mirror (D-N17): sun BRDF (three
+   PhysicalLightingModel formulas) × CSM cascade-select + OUR pcssFilter ×
+   cloud-shadow gate + probe-GI irradiance × canopy (lightmap-slot mirror)
+   × aoNode rules + caustics/wet block from TerrainTiles. 'terrain'
+   channel gets the MICRO-DISPLACEMENT port in fetchWorldVert (DISP
+   formula, noiseA/B + biome/normal texture gates; pad terrain cluster
+   spheres +0.6 m) — without it near terrain (<85 m) is not
+   geometry-identical vs old. KNOWN honest deltas to measure, not hide:
+   CDLOD distance morph vs full-res L0 windows at far ridges; skirts.
+   Gate: `--framealign N --wind 0 --lockexp 1` full-frame diff vs
+   ?nanite=0 ≤0.2% (thr 12/255, tools/diff.ts) at terrain-dominant
+   framings + structural eyeball of diff maps.
+3. **N4-C2 — ROCK port + gate**: vdata decode from vert blob (hue/strata/
+   lichen/AO channels drive rockMaterial); per-instance variation per
+   VegInstance slot-hash law; caustics. Same gate on rock framings.
+4. **N4-C3 — BARK + DEADWOOD + trunk wind channel**: barkTextured/deadwood
+   need texA/texB PER POOL → texture array or atlas decision (16 sampled
+   textures/stage budget); uv f16 + analytic grad derivatives (example
+   verbatim); hueShift×vdata; Wind.ts 'trunk' channel into fetchWorldVert
+   (cull already swayPad-padded, F6) — gate runs --wind 0; separate living-
+   wind eyeball + a wind=1 shimmer sanity probe. DEADWOOD shares the bark
+   texture path + moss/rot terms.
+5. **N4-C4 — close**: shadow-receive verification (shadow-color +
+   no-black-shadows pass), full battery (probe-nanitedbg/pan/parity/
+   horizon-nanite + registry probes), perf ledger row at 2592×1676,
+   USER CHECKPOINT note (?nanite=1 vs ?nanite=0 bookmarks), PROGRESS LOG.
+   DEBRIS class branch arrives with its pool migration at N6 (the debris
+   ring is not in the registry yet — N1 pool policy; phase-table wording
+   predates it). Velocity output: see D-N16 (deferred, no consumer).
+6. Then N5 (per-cascade cluster shadow re-culls) per the table.

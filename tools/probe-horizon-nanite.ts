@@ -136,14 +136,17 @@ async function silhouetteDiff(a: string, b: string): Promise<{ cover: number; fl
   return { cover, flips };
 }
 
-/** px differing at all between two raw buffers */
+/** px with a CONTENT difference between two raw buffers: >1 LSB in any
+ *  channel. ±1-LSB transients are byte-pipeline quantization noise (measured:
+ *  15 px of exactly-±1 deltas at the grazing pose, f0==f2==f1 at thr 1);
+ *  a real tie-flip swaps the full class color (≥10 LSB). */
 function frameDiff(a: { data: Buffer; ch: number }, b: { data: Buffer; ch: number }): number {
   let n = 0;
   for (let p = 0; p < W * H; p++) {
     if (
-      a.data[p * a.ch] !== b.data[p * b.ch] ||
-      a.data[p * a.ch + 1] !== b.data[p * b.ch + 1] ||
-      a.data[p * a.ch + 2] !== b.data[p * b.ch + 2]
+      Math.abs((a.data[p * a.ch] ?? 0) - (b.data[p * b.ch] ?? 0)) > 1 ||
+      Math.abs((a.data[p * a.ch + 1] ?? 0) - (b.data[p * b.ch + 1] ?? 0)) > 1 ||
+      Math.abs((a.data[p * a.ch + 2] ?? 0) - (b.data[p * b.ch + 2] ?? 0)) > 1
     )
       n++;
   }

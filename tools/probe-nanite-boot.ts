@@ -25,9 +25,12 @@ async function main(): Promise<void> {
       if (m.type() === 'error') errors.push(t);
     });
     page.on('pageerror', (e) => errors.push(String(e)));
-    await page.goto(laasUrl({ scene: 'world', hud: false, extra: { nanite: '1' } }), {
-      waitUntil: 'domcontentloaded',
-    });
+    // naniteframe=0 → N1 build-only semantics: this probe gates the FULL
+    // registry build (all classes), not the N4 full-frame migration set
+    await page.goto(
+      laasUrl({ scene: 'world', hud: false, extra: { nanite: '1', naniteframe: '0' } }),
+      { waitUntil: 'domcontentloaded' },
+    );
     await page.waitForFunction(() => (window as LaasWindow).__laas?.ready === true, undefined, {
       timeout: 180_000,
     });

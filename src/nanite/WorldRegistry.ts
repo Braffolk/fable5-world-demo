@@ -122,6 +122,25 @@ export function geometryToSource(geo: BufferGeometry): ExplicitSource {
   return { kind: 'mesh', positions, normals, uvs, vdata, indices };
 }
 
+/**
+ * Material classes whose resolve port has LANDED (N4 chunk state) — the
+ * default migration set for the full-frame mode (`?nanite=1`). Grows per
+ * N4 chunk: terrain (C1) → rock (C2) → bark+deadwood (C3). Override with
+ * `?naniteclasses=csv|all`; nanitedbg views default to all (pipeline
+ * probes want the whole registry).
+ */
+export const PORTED_CLASSES: readonly MaterialClassId[] = ['terrain'];
+
+/**
+ * Material class a pool's OPAQUE part (parts[0]) migrates as, or null while
+ * it stays old-path. The old pipeline's camera-draw suppression (N4-C0,
+ * D-N19) keys off the SAME predicate, so the migrated set and the
+ * suppressed set can never drift apart.
+ */
+export function migratedMatClass(cls: number): MaterialClassId | null {
+  return classPolicy(cls)?.matClass ?? null;
+}
+
 function classPolicy(
   cls: number,
 ): { matClass: MaterialClassId; channel: TransformChannel; lodDist: number; swayPad: number } | null {
@@ -157,8 +176,12 @@ export async function buildWorldRegistry(input: {
   scatter: ScatterResult;
   lib: VegLib;
   counters?: Record<string, number>;
+  /** D-N19 incremental migration: only these material classes register +
+   *  raster (their old camera draws get suppressed); omitted = all opaque */
+  classes?: ReadonlySet<MaterialClassId>;
 }): Promise<WorldRegistryResult> {
-  const { renderer, hf, scatter, lib, counters } = input;
+  const { renderer, hf, scatter, lib, counters, classes } = input;
+  const inSet = (c: MaterialClassId): boolean => !classes || classes.has(c);
   const t0 = performance.now();
   const deferred: string[] = [];
 
@@ -222,6 +245,10 @@ export async function buildWorldRegistry(input: {
       notePart(label, pool.r1, 0);
       continue;
     }
+    if (!inSet(policy.matClass)) {
+      deferred.push(`${label}: class '${policy.matClass}' not in migration set`);
+      continue;
+    }
     // opaque part = parts[0] by construction (bark/rock/deadwood); the rest
     // are foliage cards / mesh leaves (deferred N9)
     const isTree = pool.cls <= TREE_MAX_CLS;
@@ -283,54 +310,58 @@ export async function buildWorldRegistry(input: {
 
   // ---- terrain: the REAL field as ONE heightfield source ---------------------
   const tTerr0 = performance.now();
-  const heights = hf.cpuHeights;
-  if (!heights) throw new Error('WorldRegistry: hf.cpuHeights missing (boot order)');
-  const res = hf.res;
-  const quads = res - 1;
-  const cell = WORLD_SIZE / res;
-  const origin = cell / 2 - WORLD_SIZE / 2; // vertex (0,0) = texel-center 0
-  const w = TERRAIN_WIN_QUADS;
-  const windows = Math.ceil(quads / w);
-  const minMax = new Float32Array(windows * windows * 2);
-  for (let gz = 0; gz < windows; gz++) {
-    const z0 = gz * w;
-    const z1 = Math.min(z0 + w, quads);
-    for (let gx = 0; gx < windows; gx++) {
-      const x0 = gx * w;
-      const x1 = Math.min(x0 + w, quads);
-      let mn = Infinity;
-      let mx = -Infinity;
-      for (let z = z0; z <= z1; z++) {
-        const row = z * res;
-        for (let x = x0; x <= x1; x++) {
-          const h = heights[row + x] as number;
-          if (h < mn) mn = h;
-          if (h > mx) mx = h;
+  if (inSet('terrain')) {
+    const heights = hf.cpuHeights;
+    if (!heights) throw new Error('WorldRegistry: hf.cpuHeights missing (boot order)');
+    const res = hf.res;
+    const quads = res - 1;
+    const cell = WORLD_SIZE / res;
+    const origin = cell / 2 - WORLD_SIZE / 2; // vertex (0,0) = texel-center 0
+    const w = TERRAIN_WIN_QUADS;
+    const windows = Math.ceil(quads / w);
+    const minMax = new Float32Array(windows * windows * 2);
+    for (let gz = 0; gz < windows; gz++) {
+      const z0 = gz * w;
+      const z1 = Math.min(z0 + w, quads);
+      for (let gx = 0; gx < windows; gx++) {
+        const x0 = gx * w;
+        const x1 = Math.min(x0 + w, quads);
+        let mn = Infinity;
+        let mx = -Infinity;
+        for (let z = z0; z <= z1; z++) {
+          const row = z * res;
+          for (let x = x0; x <= x1; x++) {
+            const h = heights[row + x] as number;
+            if (h < mn) mn = h;
+            if (h > mx) mx = h;
+          }
         }
+        const i = (gz * windows + gx) * 2;
+        minMax[i] = mn;
+        minMax[i + 1] = mx;
       }
-      const i = (gz * windows + gx) * 2;
-      minMax[i] = mn;
-      minMax[i + 1] = mx;
     }
+    const hTerrain = reg.registerMesh(
+      {
+        kind: 'heightfield',
+        quadsX: quads,
+        quadsZ: quads,
+        winQuads: w,
+        cellSize: cell,
+        originX: origin,
+        originZ: origin,
+        minMax,
+      },
+      'terrain',
+      { label: 'terrain' },
+    );
+    reg.bindInstances(hTerrain, {
+      a: new Float32Array([0, 0, 0, 1]),
+      b: new Float32Array([0, 0, 0, 0]),
+    });
+  } else {
+    deferred.push("terrain: class 'terrain' not in migration set");
   }
-  const hTerrain = reg.registerMesh(
-    {
-      kind: 'heightfield',
-      quadsX: quads,
-      quadsZ: quads,
-      winQuads: w,
-      cellSize: cell,
-      originX: origin,
-      originZ: origin,
-      minMax,
-    },
-    'terrain',
-    { label: 'terrain' },
-  );
-  reg.bindInstances(hTerrain, {
-    a: new Float32Array([0, 0, 0, 1]),
-    b: new Float32Array([0, 0, 0, 0]),
-  });
   const tTerr1 = performance.now();
   deferred.push('GroundRing grass/debris: clipmap-instanced — N6/N10 per audit');
   deferred.push(`card/leaf tris deferred to N9: ${deferredTris}`);

@@ -44,6 +44,7 @@ import {
   interleavedGradientNoise,
   mix,
   perspectiveDepthToViewZ,
+  viewZToPerspectiveDepth,
   positionLocal,
   positionView,
   positionWorld,
@@ -333,9 +334,14 @@ export function waterMaterial(
   mat.opacityNode = smoothstep(0.004, 0.05, vDepth).mul(rampK).mul(0.985);
 
   // ?waterdbg=N — component probe ladder (1 foam, 2 fresnel, 3 refraction,
-  // 4 reflection, 5 column thickness, 6 SSR hit/horizon mix)
+  // 4 reflection, 5 column thickness, 6 SSR hit/horizon mix, 7 depth-test
+  // forensics: R = stored scene depth (far-stretched), G = own raster depth,
+  // B = 1 where water LOSES the depth test — depthTest disabled so the paint
+  // lands even where the surface is z-rejected)
   const dbg = Number(new URLSearchParams(window.location.search).get('waterdbg') ?? '0');
   if (dbg > 0) {
+    const storedD = (viewportDepthTexture(screenUV) as unknown as NV4).x;
+    const ownD = viewZToPerspectiveDepth(fragZ, cameraNear, cameraFar);
     const paint =
       dbg === 1
         ? vec3(foam)
@@ -347,10 +353,33 @@ export function waterMaterial(
               ? skyRefl
               : dbg === 5
                 ? vec3(thick.mul(0.25), vDepth.mul(0.25), 0)
-                : (skyRefl as NV3);
+                : dbg === 7
+                  ? vec3(
+                      ownD.sub(storedD).mul(5000).clamp(0, 1), // R: water LOSES by
+                      storedD.sub(ownD).mul(5000).clamp(0, 1), // G: water WINS by
+                      storedD.lessThan(1e-6).select(float(1), float(0)), // B: stored ≈ 0
+                    )
+                  : dbg === 8
+                    ? // numeric: own/stored as view DISTANCE / 2000 (decode from
+                      // a raw screenshot; needs skyveldbg=raw for NoToneMapping)
+                      vec3(
+                        fragZ.negate().div(2000).clamp(0, 1),
+                        float(0.3)
+                          .div(float(1).sub(storedD.mul(float(29999.7).div(30000))))
+                          .div(2000)
+                          .clamp(0, 1),
+                        0,
+                      )
+                    : (skyRefl as NV3);
     mat.colorNode = vec3(0);
     mat.emissiveNode = paint;
     mat.opacityNode = float(1);
+    if (dbg === 7 || dbg === 8) {
+      // pure scene-depth read: no z-reject AND no self-writes (six clipmap
+      // sheets otherwise occlude each other into the copy)
+      mat.depthTest = false;
+      mat.depthWrite = false;
+    }
   }
 
   return mat;

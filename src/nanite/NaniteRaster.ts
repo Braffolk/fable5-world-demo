@@ -48,11 +48,12 @@ import {
   vec4,
   vertexIndex,
 } from 'three/tsl';
-import type { NB, NF, NI, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
+import type { NB, NF, NI, NU, NV2, NV3 } from '../gpu/TSLTypes';
 import { markFragmentWritable } from '../render/ThreePatches';
-import { MESH_WORDS, VERT_WORDS } from './GeometryRegistry';
+import { MESH_WORDS } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
-import { DISPATCH_ROW, QRASTER_CAP, hashColor, instTransformPoint, instYaw, type NaniteCam } from './NaniteCommon';
+import { DISPATCH_ROW, QRASTER_CAP, hashColor, type NaniteCam } from './NaniteCommon';
+import { makeFetch } from './NaniteFetch';
 import {
   aLoadU,
   bcF2U,
@@ -63,13 +64,11 @@ import {
   localX,
   loopI,
   maxI,
-  maxU,
   minI,
   minU,
   readBuffer,
   returnIf,
   sU32Views,
-  texLoadR,
   toF,
   toI,
   wgLinear,
@@ -160,97 +159,8 @@ export function buildNaniteRaster(
   const auditAttr = new StorageBufferAttribute(new Uint32Array(4), 1);
   const auditV = sU32Views(auditAttr, 4);
 
-  // ---- shared fetch helpers ------------------------------------------------------
-  /** per-(instance, cluster) decode shared by the 3 corner fetches */
-  interface VertCtx {
-    isHF: NB;
-    A: NV4;
-    B: NV4;
-    yawSc: ReturnType<typeof instYaw>;
-    triStart: NU;
-    triCount: NU;
-    meshId: NU;
-    /** heightfield: vertex-grid window base + partial width (quads) */
-    gx: NU;
-    gz: NU;
-    qxw: NU;
-    oX: NF;
-    oZ: NF;
-    cell: NF;
-  }
-
-  const makeCtx = (instId: NU, ci: NU): VertCtx => {
-    const cBase = ci.mul(uint(8)).toVar();
-    const triStart = elemU(gpu.clusters, cBase.add(uint(6))).toVar();
-    const w7 = elemU(gpu.clusters, cBase.add(uint(7))).toVar();
-    const triCount = w7.bitAnd(uint(0xff)).toVar();
-    const isHF = w7.shiftRight(uint(8)).bitAnd(uint(0xff)).bitAnd(uint(1)).notEqual(uint(0)).toVar();
-    const meshId = w7.shiftRight(uint(16)).toVar();
-    const A = gpu.instances.element(instId.mul(uint(2))).toVar() as unknown as NV4;
-    const B = gpu.instances.element(instId.mul(uint(2)).add(uint(1))).toVar() as unknown as NV4;
-    const mBase = meshId.mul(uint(MESH_WORDS)).toVar();
-    const winW = elemU(gpu.meshes, mBase.add(uint(6))).shiftRight(uint(24)).toVar();
-    const quadsX = elemU(gpu.meshes, mBase.add(uint(10))).bitAnd(uint(0xffff)).toVar();
-    const gx = triStart.bitAnd(uint(0xffff)).mul(winW).toVar();
-    const gz = triStart.shiftRight(uint(16)).mul(winW).toVar();
-    const qxw = minU(winW, maxU(quadsX, gx).sub(gx)).toVar();
-    const oX = bcU2F(elemU(gpu.meshes, mBase.add(uint(7)))).toVar();
-    const oZ = bcU2F(elemU(gpu.meshes, mBase.add(uint(8)))).toVar();
-    const cell = bcU2F(elemU(gpu.meshes, mBase.add(uint(9)))).toVar();
-    return {
-      isHF: isHF as unknown as NB,
-      A,
-      B,
-      yawSc: instYaw(B),
-      triStart,
-      triCount,
-      meshId,
-      gx,
-      gz,
-      qxw,
-      oX: oX as unknown as NF,
-      oZ: oZ as unknown as NF,
-      cell: cell as unknown as NF,
-    };
-  };
-
-  /** world-space corner v of ctx's localTri (heightfield convention = spike:
-   *  up-facing CCW, even tri (0,0)(0,1)(1,1), odd tri (0,0)(1,1)(1,0)) */
-  const fetchWorldVert = (ctx: VertCtx, localTri: NU, v: 0 | 1 | 2): NV3 => {
-    const out = vec3(0).toVar();
-    If(ctx.isHF, () => {
-      const quad = localTri.shiftRight(uint(1));
-      const odd = localTri.bitAnd(uint(1)).equal(uint(1));
-      const col = quad.mod(ctx.qxw);
-      const row = quad.div(ctx.qxw);
-      let dx: NU;
-      let dz: NU;
-      if (v === 0) {
-        dx = uint(0) as unknown as NU;
-        dz = uint(0) as unknown as NU;
-      } else if (v === 1) {
-        dx = odd.select(uint(1), uint(0));
-        dz = uint(1) as unknown as NU;
-      } else {
-        dx = uint(1) as unknown as NU;
-        dz = odd.select(uint(0), uint(1));
-      }
-      const sx = ctx.gx.add(col).add(dx);
-      const sz = ctx.gz.add(row).add(dz);
-      const h = texLoadR(heightTex, sx, sz);
-      out.assign(vec3(toF(sx).mul(ctx.cell).add(ctx.oX), h, toF(sz).mul(ctx.cell).add(ctx.oZ)));
-    }).Else(() => {
-      const vi = elemU(gpu.indices, ctx.triStart.add(localTri).mul(uint(3)).add(uint(v)));
-      const vb = vi.mul(uint(VERT_WORDS));
-      const p = vec3(
-        bcU2F(elemU(gpu.verts, vb)),
-        bcU2F(elemU(gpu.verts, vb.add(uint(1)))),
-        bcU2F(elemU(gpu.verts, vb.add(uint(2)))),
-      );
-      out.assign(instTransformPoint(ctx.A, ctx.B, ctx.yawSc, p as unknown as NV3));
-    });
-    return out as unknown as NV3;
-  };
+  // ---- shared fetch helpers (NaniteFetch.ts — also the resolve's decode) ----------
+  const { makeCtx, fetchWorldVert } = makeFetch(gpu, heightTex);
 
   const edgeFn = (a: NV2, b: NV2, p: NV2): NF =>
     p.y.sub(a.y).mul(b.x.sub(a.x)).sub(p.x.sub(a.x).mul(b.y.sub(a.y))) as unknown as NF;
@@ -437,13 +347,24 @@ export function buildNaniteRaster(
                         .and(cw1.greaterThanEqual(toI(0)))
                         .and(cw2.greaterThanEqual(toI(0))),
                       () => {
-                        // depth from the exact integer weights (the -1 biases
-                        // shift weights by ≤ 1/area2 ≈ 2^-25 — negligible);
-                        // identical expression+inputs in both passes → equal bits
-                        const cz = toF(cw0 as unknown as NI)
+                        // depth from the UNBIASED integer weights: the top-left
+                        // −1 biases belong to COVERAGE only. Folding them into
+                        // the weights divides by area2 while the weights sum to
+                        // area2−(1..3) — a RELATIVE error of ~bias/area2 that is
+                        // ulp-level on big triangles but ~5e-4 on sub-pixel far
+                        // slivers (area2 ~10³ units²) ⇒ far depth biased NEARER
+                        // by hundreds of meters. Self-consistent across passes
+                        // (audit/parity blind) — found at N4-C0 when WATER
+                        // depth-tested against the buffer. Unbiased weights sum
+                        // to area2 exactly (integer identity): cz is exact, and
+                        // both passes still compute identical bits.
+                        const uw0 = cw0.sub(bias0).toVar();
+                        const uw1 = cw1.sub(bias1).toVar();
+                        const uw2 = cw2.sub(bias2).toVar();
+                        const cz = toF(uw0 as unknown as NI)
                           .mul(ndc0.z)
-                          .add(toF(cw1 as unknown as NI).mul(ndc1.z))
-                          .add(toF(cw2 as unknown as NI).mul(ndc2.z))
+                          .add(toF(uw1 as unknown as NI).mul(ndc1.z))
+                          .add(toF(uw2 as unknown as NI).mul(ndc2.z))
                           .mul(rcpArea)
                           .toVar();
                         If(cz.greaterThanEqual(0).and(cz.lessThanEqual(1)), () => {

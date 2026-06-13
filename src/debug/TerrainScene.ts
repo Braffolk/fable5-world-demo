@@ -34,6 +34,14 @@ import type { GeometryRegistry } from '../nanite/GeometryRegistry';
 export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   const { engine, params, seed } = ctx;
   let naniteRegistry: GeometryRegistry | null = null;
+  /** material classes the nanite full-frame mode owns (D-N19) — set when the
+   *  registry builds; drives old-path camera-draw suppression */
+  let naniteClasses: ReadonlySet<string> | null = null;
+  const qNan = new URLSearchParams(window.location.search);
+  /** `?nanite=1` without a debug view = full-frame mode (N4); `?naniteframe=0`
+   *  keeps N1 build-only semantics (boot probes) */
+  const naniteFrameMode =
+    qNan.get('nanite') === '1' && !qNan.get('nanitedbg') && qNan.get('naniteframe') !== '0';
 
   const hf = await Heightfield.generate(
     engine.renderer,
@@ -116,6 +124,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   }
 
   ctx.progress(0.958, 'terrain: building tiles');
+  let tilesRef: TerrainTiles | null = null;
   const view = new URLSearchParams(window.location.search).get('view');
   if (view === 'scatter') addScatterDebug(engine.scene, scatter);
   if (view === 'split' && hf.preErosion) {
@@ -133,11 +142,15 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     });
   } else {
     const tiles = new TerrainTiles(hf, view, { gi, canopyTex });
+    tilesRef = tiles;
     engine.scene.add(tiles.mesh);
     engine.scene.add(tiles.farShell);
     // ?ablate=proxy — drop the terrain shadow caster (shadow-debug bisect)
     if (!ablate.has('proxy')) engine.scene.add(buildTerrainShadowProxy(hf));
     engine.onUpdate(() => {
+      // suppressed by the nanite full-frame mode (D-N19): skip the CDLOD
+      // walk too — the registry heightfield owns the camera-pass terrain
+      if (!tiles.mesh.visible) return;
       tiles.update(engine.camera);
       engine.stats.counters['terrain.tiles'] = tiles.activeTiles;
     });
@@ -182,13 +195,28 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     // N2/N3). ?nanite=0/absent: this block never runs.
     if (new URLSearchParams(window.location.search).get('nanite') === '1') {
       ctx.progress(0.985, 'nanite: clusterizing opaque pools');
-      const { buildWorldRegistry } = await import('../nanite/WorldRegistry');
+      const { buildWorldRegistry, PORTED_CLASSES } = await import('../nanite/WorldRegistry');
+      // D-N19 migration set: explicit ?naniteclasses=csv|all wins; full-frame
+      // mode defaults to the ported set; dbg/build-only modes take everything
+      type MatCls = 'terrain' | 'rock' | 'bark' | 'deadwood';
+      const ALL: readonly MatCls[] = ['terrain', 'rock', 'bark', 'deadwood'];
+      const clsParam = qNan.get('naniteclasses');
+      let classes: Set<MatCls> | undefined;
+      if (clsParam && clsParam !== 'all') {
+        classes = new Set(
+          clsParam.split(',').filter((c): c is MatCls => (ALL as readonly string[]).includes(c)),
+        );
+      } else if (!clsParam && naniteFrameMode) {
+        classes = new Set(PORTED_CLASSES as readonly MatCls[]);
+      }
+      naniteClasses = classes ?? new Set(ALL);
       const wr = await buildWorldRegistry({
         renderer: engine.renderer,
         hf,
         scatter,
         lib,
         counters: engine.stats.counters,
+        ...(classes ? { classes } : {}),
       });
       (engine as unknown as { naniteRegistry?: unknown }).naniteRegistry = wr.registry;
       naniteRegistry = wr.registry;
@@ -281,6 +309,23 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       // eslint-disable-next-line no-console
       console.warn('[laas] ?nanitedbg needs ?nanite=1 with vegetation enabled — ignored');
     }
+  } else if (naniteRegistry && naniteClasses && naniteFrameMode) {
+    // N4 full-frame mode (D-N18/D-N19): nanite compute + in-scene resolve own
+    // the migrated classes; their old camera draws hide (shadow casting stays
+    // on the old path until N5 — ShadowProxy + per-cascade caster siblings)
+    const { buildNaniteFrame } = await import('../nanite/NaniteFrame');
+    const { migratedMatClass } = await import('../nanite/WorldRegistry');
+    engine.post = buildNaniteFrame(engine, naniteRegistry, hf, post);
+    if (naniteClasses.has('terrain') && tilesRef) {
+      tilesRef.mesh.visible = false;
+      tilesRef.farShell.visible = false;
+    }
+    const hidden = forestsRef?.suppressMigrated(migratedMatClass, naniteClasses) ?? 0;
+    // eslint-disable-next-line no-console
+    console.log(
+      `[laas] nanite full-frame: classes [${[...naniteClasses].join(',')}]; suppressed ` +
+        `${hidden} pool draws${naniteClasses.has('terrain') ? ' + terrain tiles/far shell' : ''}`,
+    );
   }
 
   ctx.hooks.setTimeOfDay = (t: number) => {
