@@ -36,6 +36,7 @@ import { buildNaniteHzb } from './NaniteHzb';
 import { makeFetch } from './NaniteFetch';
 import { buildNaniteRaster, makeVisBuffers } from './NaniteRaster';
 import { buildNaniteResolve } from './NaniteResolve';
+import { buildNaniteShadow, type NaniteShadow } from './NaniteShadow';
 import { bcU2F, dispatch, elemU, readBuffer, returnIf, texLoadR, toF, uniformArrV4 } from './Tsl';
 
 export interface NaniteFrameHandles {
@@ -119,6 +120,14 @@ export function buildNaniteFrame(
     barkTexB: world.barkTexB,
   });
   engine.scene.add(resolve.mesh);
+
+  // ?nanshadow2=1 — N5-C0: per-cascade nanite shadow cull (no raster yet).
+  // Needs the CSM (its cascade ortho cameras feed the cull frusta). Off by
+  // default until C2 retires the old casters.
+  const shadow2On = params.get('nanshadow2') === '1' && world.csm !== null;
+  const shadow: NaniteShadow | null = shadow2On
+    ? buildNaniteShadow(registry.gpu, registry.instanceCount)
+    : null;
 
   // ?nanprobe=1 — exact-number depth forensics: a compute kernel reads the
   // SCENE PASS depth texture and the vis buffer at up to 8 pixels into a
@@ -266,6 +275,10 @@ export function buildNaniteFrame(
     if (auditOn) raster.audit(renderer);
     if (!frozen) hzb.build(renderer); // final — next frame's occluder
     if (probeRun && params.get('nanprobeat') === 'hzb') probeRun(renderer);
+    // N5-C0: per-cascade shadow cull, reading last frame's cascade fit (one
+    // frame stale; the CsmCached lightMargin absorbs it). Before post.render so
+    // C1's caster draws (run inside the shadow pass) have fresh lists.
+    if (shadow && !frozen) shadow.update(renderer, world.csm, engine.camera);
     post.render(); // scene pass (resolve mesh + old-path remainder) + post chain
     if (probeRun && !params.get('nanprobeat')) probeRun(renderer); // default: after scene
     frame++;
@@ -284,11 +297,20 @@ export function buildNaniteFrame(
       cull.readCounts(r),
       raster.readHwCount(r),
       auditOn ? raster.readAudit(r) : Promise.resolve(null),
+      shadow ? shadow.readCounts(r) : Promise.resolve(null),
     ])
-      .then(([c, hw, aud]) => {
+      .then(([c, hw, aud, sh]) => {
         if (aud) {
           engine.stats.counters['nanite.orphans'] = aud.orphans;
           engine.stats.counters['nanite.covered'] = aud.covered;
+        }
+        if (sh) {
+          let shTotal = 0;
+          for (let i = 0; i < sh.length; i++) {
+            engine.stats.counters[`nanite.shC${i}`] = sh[i] ?? 0;
+            shTotal += sh[i] ?? 0;
+          }
+          engine.stats.counters['nanite.shTotal'] = shTotal;
         }
         engine.stats.counters['nanite.visClusters'] = c.visClusters;
         engine.stats.counters['nanite.chunks'] = c.chunks;

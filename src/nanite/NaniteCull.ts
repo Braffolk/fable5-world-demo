@@ -146,7 +146,13 @@ export function buildNaniteCull(
   cam: NaniteCam,
   /** prev/fresh-HZB occlusion test (NaniteHzb.sphereOccluded); null = ?occl=0 */
   sphereOccluded: SphereOccludedFn | null,
+  /** N5: shadow casters disable cone backface — the cone axis is camera-
+   *  relative (instRotateDir vs cam.camPos), but a cluster facing away from the
+   *  CAMERA still casts toward the LIGHT, so cone-culling it punches shadow
+   *  holes. Default true (camera path). */
+  opts?: { coneCull?: boolean },
 ): NaniteCullChain {
+  const coneCull = opts?.coneCull !== false;
   // ---- buffers ---------------------------------------------------------------
   // counters: [0] chunk pushes (phase 2 resets for re-expansion), [1] raster
   // pushes (appends across phases), [2] inst rejects, [3] cluster rejects,
@@ -339,23 +345,26 @@ export function buildNaniteCull(
 
         const visible = frustumVisible(s.center, s.radius).toVar();
 
-        // cone backface (explicit meshes only; conservative slack)
-        If(visible.greaterThan(0.5).and(c.coneCos.greaterThan(-0.99)).and(isHF.not()), () => {
-          const sinTest = float(1)
-            .sub(c.coneCos.mul(c.coneCos))
-            .max(0)
-            .sqrt()
-            .add(CONE_SLACK)
-            .toVar();
-          If(sinTest.lessThan(1), () => {
-            const axisW = instRotateDir(yawSc, c.coneAxis);
-            const toC = s.center.sub(cam.camPos).toVar();
-            const d = toC.length();
-            If(dot(toC as unknown as NV3, axisW).greaterThan(d.mul(sinTest).add(s.radius)), () => {
-              visible.assign(0);
+        // cone backface (explicit meshes only; conservative slack) — skipped
+        // for shadow casters (D-N26: camera-relative cone wrong for light views)
+        if (coneCull) {
+          If(visible.greaterThan(0.5).and(c.coneCos.greaterThan(-0.99)).and(isHF.not()), () => {
+            const sinTest = float(1)
+              .sub(c.coneCos.mul(c.coneCos))
+              .max(0)
+              .sqrt()
+              .add(CONE_SLACK)
+              .toVar();
+            If(sinTest.lessThan(1), () => {
+              const axisW = instRotateDir(yawSc, c.coneAxis);
+              const toC = s.center.sub(cam.camPos).toVar();
+              const d = toC.length();
+              If(dot(toC as unknown as NV3, axisW).greaterThan(d.mul(sinTest).add(s.radius)), () => {
+                visible.assign(0);
+              });
             });
           });
-        });
+        }
 
         if (sphereOccluded) {
           const vp = phase === 1 ? cam.prevVp : cam.vp;

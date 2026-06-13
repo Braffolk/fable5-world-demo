@@ -985,6 +985,27 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-13 (y): **N5-C0 — per-cascade nanite shadow CULL landed** (numeric
+  milestone, no raster yet). (Opus 4.8.) NEW src/nanite/NaniteShadow.ts:
+  SHADOW_CASCADES (4) cull chains, each = buildNaniteCull with the cascade's
+  ORTHO frustum planes (refreshed one frame stale from csm.lights[c].shadow.camera
+  — the Forests.planesCsmU hook), sphereOccluded=null (casters never HZB-occluded,
+  F5), coneCull=false (NEW buildNaniteCull opt — the camera-relative cone backface
+  is wrong for a light view), camPos = MAIN camera (LOD matches the lit geometry,
+  no peter-pan). Pins each cascade camera to layer 2+c (cam.layers.enable) for
+  C1's caster siblings. Wired into NaniteFrame behind ?nanshadow2=1 (default off):
+  shadow.update runs before post.render reading last-frame cascade fits; per-
+  cascade visClusters → HUD nanite.shC0..3 + shTotal. VALIDATED at 2 framings:
+  bm7 181k/269k/427k/565k (total 1.44M), bm3 vista 384k/496k/625k/756k (total
+  2.26M) — MONOTONIC by cascade index (each ortho box covers a geometrically
+  larger area), every cascade < the 2M QRASTER_CAP, no overflow, no errors; the
+  near cascade exceeds the camera's 53k visClusters (no occlusion + wider box, as
+  expected). Cost: +~2.5 ms (nanInstCull 0.7→3.2, aggregated across the now-5
+  instance culls) — C3 will gate re-cull on each cascade's CsmCached refresh tick
+  + drop the unused reject buffers (~144 MB across 4 cascades). tsc clean. NEXT:
+  N5-C1 — the HW vertex-pulling caster mesh per cascade (the risky integration
+  chunk): nanite self-shadows with ?nanshadow2=1 and NO ?oldgeo.
+
 - 2026-06-13 (x): **N4-C4 close — N4 COMPLETE. Full verification battery green +
   bark/deadwood shadow-receive gate + first full-beauty perf row.** (Opus 4.8.)
   The C3 material+wind+limit-raise+matParam changes are confirmed NON-regressive
