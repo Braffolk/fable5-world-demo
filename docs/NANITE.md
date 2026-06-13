@@ -1084,6 +1084,40 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-14 (ac): **N5-R1 — CADENCE: per-cascade shadow raster gated on VP change.
+  Static camera ⇒ ~0 shadow cost; moving ⇒ only changed cascades.** (Opus 4.8 1M.)
+  R0 rastered all 4 cascades EVERY frame (35 ms). R1 gates the per-cascade re-raster
+  (clearVis→cull→depth1→hwDepth→kCopy) on whether the cascade's light VP changed
+  since its last raster: `cascM = proj·viewInv`, exact `Matrix4.equals(lastVP)` →
+  skip. ROBUST with no epsilon because CsmCached FREEZES the light pose between
+  refreshes (CsmCached.ts:294 — a cached cascade `continue`s without moving lwLight),
+  so a frozen cascade's recomputed VP is BIT-IDENTICAL frame to frame. The depthTex
+  StorageTexture persists across frames, so a skip retains last refresh's depth;
+  cascVP[c]/cascParam[c] are left untouched in the SAME skip → raster/sample
+  LOCKSTEP holds automatically (D-N28's #1 correctness item). New `rasteredMask()`
+  (bit c = cascade c re-rastered this run) → stats `nanite.shRaster` for crisp
+  non-timing validation. GATES (both halves, bm7):
+  • STATIC (shoot, settle 40): nanite.shRaster=0 (all cached); c.nanRasterDepth
+    35→**1.77 ms** — and IDENTICAL to c.nanRasterPayload (which is camera-only:
+    shadows are depth-only / no payload by D-N28), so the cascades contributed
+    ZERO to the depth raster this frame = structural proof the ~33 ms shadow raster
+    is gone. fps 22→63. Shadows still present + ATTACHED (cached depth → PCSS):
+    trunk casts on grass, downed logs cast, bark self-shades — no peter-pan, no
+    visual regression vs R0.
+  • MOVING (NEW tools/probe-shadowcadence.ts — world frozen, step camera 1.5 m/fr,
+    read shRaster each frame): clean period-6 pattern `1111 0001 0011 0101 0011
+    0001`…; c0 90% (period 1, tracks camera), c1 47% (/2), c2 30% (/3), c3 17%
+    (/6) = exactly CsmCached PERIODS [1,2,3,6]. 1.83 cascade-rasters/frame vs R0's
+    4.00 always; cluster-weighted (shC0..3 = 170k/238k/358k/553k — the cascade that
+    rasters most is the CHEAPEST) ≈ 464k/frame = **35% of R0's 1.319M/frame** →
+    ~65% less moving-camera raster work, ~100% less static. Probe `--static`
+    control = 0.00/frame (validates the tool). tsc clean (incl. the new tool).
+  STILL ABOVE the 1–2 ms target while MOVING (the 35% residual ≈ 11 ms shadow
+  raster): R2 (coarse far-cascade LOD + a depthOnly buildNaniteRaster option that
+  drops the unused payload/HW-resolve build, ~64 MB/cascade) and R3 (static/dynamic
+  wind split — cache static depth, re-atomicMin only trunk-channel clusters) close
+  it. ?nanshadow2=1 still default-OFF (R4 flips). NEXT: R2.
+
 - 2026-06-14 (ab): **N5-R0 — depth-only SW shadow raster: ARCHITECTURE PROVEN,
   shadows CORRECT (perf is R1–R3).** (Opus 4.8 1M.) Pivoted off the HW caster
   (D-N28, research-grounded). Per cascade: reuse buildNaniteRaster DEPTH-ONLY
@@ -1831,11 +1865,18 @@ migration). Chunks, each tsc-clean + committed:
      frame (no cadence yet). GATE: shadows appear, ATTACHED (no crawl/peter-pan vs
      C1), correct under TRAA; measure cost. Keep C1 for A/B (?nanshadow3 vs
      ?nanshadow2). Validate cascade 0 FIRST (the one you can see), then 1–3.
-   - R1 — CADENCE: re-raster a cascade only when its VP changes (= CachedCsmShadow
-     freeze + sun/drift force-refresh, auto-detected). GATE: static camera ≈ 0
-     shadow cost; moving → only changed cascades.
+   - ~~R1 — CADENCE~~ DONE (log ac). Per-cascade re-raster gated on exact light-VP
+     change (`Matrix4.equals`; CsmCached freezes the pose → bit-identical VP when
+     cached → no epsilon). depthTex persists across the skip; cascVP/cascParam left
+     untouched in the same skip → lockstep automatic. New `rasteredMask()` →
+     `nanite.shRaster`. GATE GREEN both halves @bm7: STATIC shRaster=0, nanRasterDepth
+     35→1.77 ms (==payload ⇒ shadow raster zeroed), fps 22→63, shadows still
+     attached; MOVING (tools/probe-shadowcadence.ts) clean [1,2,3,6] cadence, 1.83
+     cascade-rasters/fr vs 4.00, cluster-weighted ~35% of R0. tsc clean.
    - R2 — COARSE LOD for far-cascade shadow casters (cascade 0 stays honest for
-     PCSS). GATE: cluster counts down, penumbra unaffected near.
+     PCSS) + a depthOnly buildNaniteRaster option (the per-cascade rasters build
+     unused payload/HW-resolve kernels today, ~64 MB/cascade ≈ 200 MB total). GATE:
+     cluster counts down, penumbra unaffected near; memory down.
    - R3 — STATIC/DYNAMIC SPLIT for wind: cache static cascade depth, every frame
      copy + atomicMin ONLY trunk-channel (wind, within 380–480 m fade) clusters on
      top. GATE: windy trunks cast MOVING shadows with a STILL camera; cost ~1–2 ms.

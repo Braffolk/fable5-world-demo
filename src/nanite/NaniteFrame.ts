@@ -298,6 +298,9 @@ export function buildNaniteFrame(
     if (traa && typeof traa._jitterIndex === 'number') {
       engine.stats.counters['nanite.jitterIdx'] = traa._jitterIndex;
     }
+    // R1: which cascades re-rastered this frame (bitmask). Static settled camera
+    // → 0 (all served from cache); moving → bit0 (c0) every frame + far on cadence.
+    if (shadow) engine.stats.counters['nanite.shRaster'] = shadow.rasteredMask();
     // frame 0: no dispatch has created the GPU buffers yet — readback throws
     if (frame === 0 || frame % 15 !== 0 || reading) return;
     reading = true;

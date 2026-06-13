@@ -107,6 +107,11 @@ interface Cascade {
   /** false until runPhase1 has dispatched at least once — its GPU buffers do not
    *  exist before then, so readCounts must skip it (CSM cascades init lazily). */
   ran: boolean;
+  /** R1 CADENCE: the light VP that rastered the depth currently in depthTex. We
+   *  re-raster a cascade only when its VP differs from this (CsmCached freezes the
+   *  light pose between refreshes → bit-identical VP → exact-equality skip). Init
+   *  identity; `ran` forces the first raster regardless. */
+  lastVP: Matrix4;
 }
 
 interface NamedKernel {
@@ -126,6 +131,9 @@ export interface NaniteShadow {
   debugDepth(worldPos: NV3): NF;
   /** per-cascade visible-cluster counts (HUD) */
   readCounts(renderer: Renderer): Promise<number[]>;
+  /** R1 validation: bitmask of cascades RE-RASTERED on the last run() (bit c = 1 ⇒
+   *  cascade c re-rastered; 0 ⇒ served from cache). Static camera → 0 after warmup. */
+  rasteredMask(): number;
   cascades: number;
 }
 
@@ -174,16 +182,28 @@ export function buildNaniteShadow(
     (kCopy as unknown as NamedKernel).setName(`nanShadowCopy${c}`);
 
     cascVP.push(uniformMat4(new Matrix4()));
-    cascades.push({ cam, cull, vis, raster, depthTex, kCopy, count: -1, ran: false });
+    cascades.push({
+      cam,
+      cull,
+      vis,
+      raster,
+      depthTex,
+      kCopy,
+      count: -1,
+      ran: false,
+      lastVP: new Matrix4(),
+    });
   }
 
   const cascM = new Matrix4();
   const cascFrustum = new Frustum();
+  let lastRasterMask = 0;
 
   const run = (renderer: Renderer, csm: object | null, mainCamera: PerspectiveCamera): void => {
     const lights = (csm as { lights?: { shadow?: { camera?: CascadeLightCam } }[] } | null)
       ?.lights;
     if (!lights) return;
+    let mask = 0;
     for (let c = 0; c < SHADOW_CASCADES; c++) {
       const lcam = lights[c]?.shadow?.camera;
       if (!lcam || !Number.isFinite(lcam.left ?? NaN)) continue;
@@ -191,6 +211,16 @@ export function buildNaniteShadow(
       // the cascade light VP (three is the matrix + texel-snap authority) — used
       // for BOTH the raster projection (cam.vp) and the resolve sample (cascVP).
       cascM.multiplyMatrices(lcam.projectionMatrix, lcam.matrixWorldInverse);
+      // R1 CADENCE: re-raster ONLY when this cascade's VP changed since its last
+      // raster. CsmCached freezes the light pose between refreshes (CsmCached.ts:294
+      // — a cached cascade `continue`s without moving lwLight), so the recomputed VP
+      // is BIT-IDENTICAL and exact equality is a robust gate (no epsilon). On skip,
+      // the depthTex StorageTexture retains last refresh's depth and cascVP[c]/
+      // cascParam[c] are left untouched → raster/sample lockstep holds (D-N28). A
+      // fully static camera caches all four cascades ⇒ ~0 shadow cost; a moving
+      // camera re-rasters c0 every frame and c1/2/3 on the [2,3,6] cadence + drift.
+      if (cc.ran && cascM.equals(cc.lastVP)) continue;
+      mask |= 1 << c;
       cascFrustum.setFromProjectionMatrix(cascM);
       cc.cam.vp.value.copy(cascM);
       cascVP[c]!.value.copy(cascM);
@@ -209,8 +239,10 @@ export function buildNaniteShadow(
       cc.raster.depth1(renderer);
       cc.raster.hwDepth(renderer, mainCamera); // camera arg unused (HW vertexNode uses cam.vp)
       dispatch(renderer, cc.kCopy);
+      cc.lastVP.copy(cascM);
       cc.ran = true;
     }
+    lastRasterMask = mask;
   };
 
   // ---- resolve-side PCSS over our own textures --------------------------------
@@ -357,5 +389,15 @@ export function buildNaniteShadow(
     return out;
   };
 
-  return { run, shadowFactor, cascadeTint, debugDepth, readCounts, cascades: SHADOW_CASCADES };
+  const rasteredMask = (): number => lastRasterMask;
+
+  return {
+    run,
+    shadowFactor,
+    cascadeTint,
+    debugDepth,
+    readCounts,
+    rasteredMask,
+    cascades: SHADOW_CASCADES,
+  };
 }
