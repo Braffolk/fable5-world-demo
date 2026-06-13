@@ -1065,6 +1065,36 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   LOD band. Regression locked: probe-dagpack 2-LOD-chain envelope assertion (red/green) +
   NEW tools/probe-envelope.ts (−300 m far-pose, no collapse) + probe-envperf.ts (perf).
 
+- D-N34 (2026-06-14, N8-D2a — terrain DAG construction + the D-N32 OPEN questions SETTLED):
+  the terrain builder is martini's O(n) vertical-error PYRAMID feeding BuildDag's locked-
+  boundary cluster-DAG scaffolding (NOT pure martini getMesh). REASON (decisive, supersedes
+  any "pure RTIN" reading of D-N32): pure RTIN/martini is crack-free ONLY under a per-FRAME
+  bintree traversal (ROAM-style); D-N31 fixed the runtime as a FLAT per-cluster cut (terrain
+  must use the same, no per-frame traversal), and a flat cut over independent per-error-band
+  martini meshes T-junctions at the frontier where adjacent regions at different distances
+  pick different bands. The ONLY construction that is both crack-free under the flat cut AND
+  adaptive is martini-error-metric × BuildDag-locked-cluster-DAG. Settled OPEN items:
+  • (error metric) MAX vertical deviation in METRES (martini), not RMS, not a flatness weight
+    — zero vertical error IS flatness; metres projects directly through the existing cut.
+  • (RTIN→cluster mapping) clusters are clusterize()'d spatial patches of each error band;
+    group = the BuildDag group, so own/parent (error,sphere) share bit-for-bit across siblings
+    exactly like rock → the flat cut is crack-free by the SAME proof.
+  • (decimation) on-grid half-edge collapse to the lower-martini-error ENDPOINT (F4: survivors
+    stay on the grid; store packed `gx|gz<<16`, GPU fetches height — no baked floats), ERROR-
+    BOUNDED by doubling bands e₀·2^ℓ (flat plains collapse at the lowest band, cliffs DEFER
+    upward → smooth ±1 cut). LOD0 = full grid (ownError 0 ⇒ no up-close holes).
+  • (crack-freeness) inherited from BuildDag PLUS three manifold guards that regular-grid
+    endpoint-collapse needs (QEM-optimal on irregular rock never trips them): link-condition,
+    near-collinear-degeneracy, all-3-verts-locked seam-triangle. Proven 0 cracks on an
+    adversarial flat|ramp|ridge field (probe-heightdag W check, canonical-grid-id keyed).
+  • (cross-tile 4 km) DEFERRED: the 2560 m field is ONE RTIN domain (no cross-tile cracks);
+    the far shell's multi-tile stitch is D3 (far field), not D2.
+  • (LOD0 leaf count) falls out of e₀ × terrain roughness, MEASURED in D2b on the real field.
+  All flag-guarded by `gridEndpoint` (default false) ⇒ rock/bark/deadwood path byte-identical
+  (probe-dag re-green). OPEN for D2b: build SPEED (0.01 Mtri/s — iterative QEM heap + guards;
+  needs a martini-DIRECT removal and/or the D-N30 Worker for 4096²); the GPU grid-coord-indexed
+  vertex-decode path (one isHF-indexed branch in NaniteFetch); the 2^k+1 grid reconciliation.
+
 ## GOTCHAS (append-only, nanite-specific)
 
 - (N5-C1) A SHADOW-CASTER NodeMaterial MUST SET `map = null`. three's shadow
@@ -1215,6 +1245,48 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   min/max on uint nodes, float(uintNode) → use .toFloat().
 
 ## PROGRESS LOG (append-only, newest first)
+
+- 2026-06-14 (ai): **N8-D2a — terrain heightfield-native adaptive DAG builder
+  (BuildHeightDag.ts) + node probe; CRACK-FREE, on-grid (F4), adaptive; D-N32 OPEN
+  questions settled; D-N34 recorded.** (Opus 4.8 1M.) The terrain DAG rides the SAME
+  flat kClusterCull cut as rock (D-N31) — unified runtime, specialised build — via a
+  synthesis I had to derive: pure martini/RTIN is crack-free only under per-FRAME
+  bintree traversal (ROAM); baked into the flat per-cluster cut, independent per-band
+  meshes T-junction at the frontier. So the build feeds the martini VERTICAL-error
+  pyramid into BuildDag's PROVEN locked-boundary scaffolding (siblings share the parent
+  pair exactly ⇒ cut falls between groups where verts were locked ⇒ crack-free), with
+  three flag-guarded BuildDag additions (all gated by `gridEndpoint`, default false ⇒
+  rock path BYTE-IDENTICAL, probe-dag re-green-confirmed):
+  • `gridEndpoint` — interior edge-collapse targets a grid ENDPOINT, never the off-grid
+    QEM-optimal point → every survivor stays on the heightfield grid (F4: store packed
+    grid coords `gx|gz<<16`, GPU fetches height; no baked floats).
+  • `gridErrAt(x,z)` (martini pyramid, O(n) bottom-up) — the collapse DROPS the lower-
+    error vertex and its cost IS that vertical error in metres (the cut's own unit), not
+    the area-weighted QEM scalar.
+  • `levelBudget(ℓ)=e₀·2^ℓ` — ERROR-BOUNDED, not ratio: a level runs only collapses ≤
+    the band; costlier ones DEFER to the next (higher-budget) level (stuck cliffs earn
+    intermediate LODs instead of freezing at LOD0 → smooth ±1 cut). LOD0 = full grid
+    (ownError 0 ⇒ no holes up close, even on cliffs).
+  • MANIFOLD-SAFETY (the crack hunt — adversarial flat|ramp|ridge field, probe W check
+    keyed by CANONICAL grid-id catches T-junctions AND overlaps): ratio→error-bound took
+    cracks 20→4; +link-condition (reject collapses where a,b share a non-apex neighbour
+    → 3-tris-on-edge) →2; +degeneracy (reject near-COLLINEAR result, sin²θ<1e-8 — a flat
+    boundary row was folding zero-area slivers that both groups re-made) →1; +shared-
+    boundary (reject a result triangle with all-3 verts LOCKED — a seam triangle the
+    neighbour group re-creates identically) →**0**. Endpoint-collapse on a REGULAR grid
+    trips manifold cases QEM-optimal on irregular rock never does; rock didn't need these.
+  • BuildHeightDag.ts wraps it: build LOD0 grid mesh (stride-3, winding matched to the
+    GPU heightfield path), martini errs, call buildDag, recover grid coords from the on-
+    grid survivor positions → pack `gridVerts`. Reuses clusterize() + ALL DAG metadata.
+  GATES (tools/probe-heightdag.ts, node, all green; tsc clean): M/C/E/O/A (shared cut
+  invariants) + **W watertight** (every interior edge of the selected cut used exactly 2×
+  at τ∈{0,.5,2,8,∞}) + **G on-grid/F4** (offGrid 0, residual 0 cells) + **D deterministic**
+  + **adaptivity** (τ=1 cut, cam 100 m up: flat/ramp 3.5k tris vs cliffs 12.8k = 3.6×
+  denser cliffs, 46% culled — the "plains SIGNIFICANTLY fewer tris" mandate, MEASURED).
+  CAVEAT for D2b: build throughput is 0.01 Mtri/s (32 768-tri probe in 2.4 s — the
+  iterative QEM heap + per-collapse manifold guards); the martini pyramid is O(n) but the
+  REMOVAL is heap-driven → for 4096² (~33M tris) this needs a martini-DIRECT removal
+  and/or the D-N30 Worker before it's viable. D2a proves CORRECTNESS; speed is D2b.
 
 - 2026-06-14 (ah): **N8-D1 user re-test → DAG'd trees VANISHED at ~26 m; root-caused
   to the attachDag draw-envelope + fixed (+ a cut error-scale bug found mid-trace).**
@@ -2123,10 +2195,24 @@ CHUNK PLAN (to the logical point):
   compact connectivity); emits the SAME cut metadata (own/parent error+sphere) → the parallel
   buffer → kClusterCull (unified runtime, specialized build). Crack-free via the restricted-
   quadtree forced-split rule (+ cross-tile for the 4 km field). Node-test the error pyramid +
-  cut like probe-dag/probe-dagpack BEFORE GPU. Steps: (D2a) BuildHeightDag builder + node
-  probe; (D2b) register terrain as DAG'd (replace the discrete window path) + GPU gate; (D2c)
-  perf ledger row vs pre-DAG. Plus the carried D1e items: perf ledger, ?clusterdbg=lod heatmap,
-  USER CHECKPOINT (continuous zoom on hero rock/tree + terrain). THEN shadows resume at S4.
+  cut like probe-dag/probe-dagpack BEFORE GPU. Steps:
+  - ~~(D2a) BuildHeightDag builder + node probe~~ **DONE** (log ai; D-N34; martini error
+    pyramid × BuildDag locked-cluster-DAG via gridEndpoint/gridErrAt/levelBudget + 3 manifold
+    guards). probe-heightdag green: crack-free cut (W), on-grid F4 (G), adaptive (3.6× cliffs),
+    deterministic; rock byte-identical (gridEndpoint default false). Construction approach NOTE
+    corrected vs the line above: it is martini-error-metric × BuildDag-scaffolding, NOT pure
+    martini getMesh — the flat per-cluster cut (D-N31) forces locked-cluster boundaries; see
+    D-N34 for why pure RTIN (ROAM per-frame traversal) can't ride the flat cut crack-free.
+  - (D2b) register terrain as DAG'd (replace the discrete uniform-window path) + GPU gate. NEW
+    GPU work: a grid-coord-INDEXED heightfield vertex decode (one isHF-indexed branch in
+    NaniteFetch — index → `gx|gz<<16` → textureLoad height → world XZ; normals stay from
+    normalTex). Reconcile the real field res to 2^k+1 (martini needs a power-of-two grid).
+    FIRST resolve the build SPEED (0.01 Mtri/s today — iterative QEM heap + per-collapse
+    guards): either a martini-DIRECT removal (precomputed errs ⇒ no heap reseed) or the D-N30
+    Worker, before 4096² is viable.
+  - (D2c) perf ledger row vs pre-DAG (pre-DAG terrain = 33M-tri uniform windows → measure the
+    adaptive draw-tri reduction). Plus the carried D1e items: perf ledger, ?clusterdbg=lod
+    heatmap, USER CHECKPOINT (continuous zoom on hero rock/tree + terrain). THEN shadows S4.
 
 CURRENT INFRA (read 2026-06-13): Clusterize.ts → BuiltClusters {indices (permuted, cluster
 tris contiguous), sphere 4f32/cluster, cone 4f32, triStart, triCount} — greedy ≤128-tri,

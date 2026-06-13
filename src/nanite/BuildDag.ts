@@ -51,7 +51,31 @@ export interface DagOpts {
   normalOffset?: number;
   /** position weld grid (world units), default 1e-5 */
   weldEps?: number;
+  /** GRID mode (terrain heightfield): restrict every interior edge-collapse to
+   *  the lower-cost ENDPOINT instead of the off-grid QEM-optimal point, so all
+   *  survivors stay on the heightfield grid (F4 — positions reconstruct from the
+   *  heights buffer, never baked off-grid). QEM cost on a heightfield IS the
+   *  vertical deviation, so flat regions (≈0 cost) collapse first and cliffs
+   *  (high cost) survive → the adaptive "plains cheap / cliffs dense" decimation.
+   *  Default false (explicit meshes use the free QEM-optimal target). */
+  gridEndpoint?: boolean;
+  /** terrain GRID mode: per grid-vertex VERTICAL error (the martini error
+   *  pyramid), sampled at a survivor's world (x,z). When set, an interior
+   *  collapse DROPS the lower-error vertex and its cost IS that vertical error
+   *  (metres) — so the decimation is ordered + bounded by true vertical
+   *  deviation, not the area-weighted QEM scalar. */
+  gridErrAt?: (x: number, z: number) => number;
+  /** terrain GRID mode: per-level vertical-error BUDGET (metres). A level only
+   *  runs collapses with error ≤ budget(level); costlier ones DEFER to the next
+   *  (higher-budget) level. Doubling per level ⇒ progressive LOD bands: flat
+   *  plains collapse at the lowest band, cliffs survive until the budget grows
+   *  to their detail → smooth ±1 cut, no big jumps (crack-free). */
+  levelBudget?: (level: number) => number;
 }
+
+/** resolved options: every scalar defaulted, the terrain callbacks stay optional */
+type FullDagOpts = Required<Omit<DagOpts, 'gridErrAt' | 'levelBudget'>> &
+  Pick<DagOpts, 'gridErrAt' | 'levelBudget'>;
 
 /** one cluster at one LOD level, across the whole DAG (LOD0 first) */
 export interface DagCluster {
@@ -357,7 +381,10 @@ function simplifyGroup(
   poolIdx: ArrayLike<number>,
   stride: number,
   groupClusters: DagCluster[],
-  opts: Required<DagOpts>,
+  opts: FullDagOpts,
+  /** terrain error-bounded mode: collapse only while the cheapest remaining
+   *  drop costs ≤ this vertical-error budget (Infinity ⇒ ratio mode). */
+  budget = Infinity,
 ): SimplifyResult {
   // ---- weld group triangles into a local soup (by quantised position) -------
   //  spatial-hash buckets (qx,qy,qz,localId quads) — no string keys. Locked
@@ -505,6 +532,24 @@ function simplifyGroup(
       tx = verts[b * stride] as number;
       ty = verts[b * stride + 1] as number;
       tz = verts[b * stride + 2] as number;
+    } else if (opts.gridEndpoint) {
+      // terrain GRID mode: KEEP one endpoint (stay on-grid, F4); DROP the lower-
+      // detail one. With the martini error field, "detail" = vertical error
+      // (keep the higher-error vertex); else fall back to the lower-QEM endpoint.
+      let keepA: boolean;
+      if (opts.gridErrAt) {
+        const errA = opts.gridErrAt(verts[a * stride] as number, verts[a * stride + 2] as number);
+        const errB = opts.gridErrAt(verts[b * stride] as number, verts[b * stride + 2] as number);
+        keepA = errA >= errB;
+      } else {
+        const ea = evalQuadric(tmp, 0, verts[a * stride] as number, verts[a * stride + 1] as number, verts[a * stride + 2] as number);
+        const eb = evalQuadric(tmp, 0, verts[b * stride] as number, verts[b * stride + 1] as number, verts[b * stride + 2] as number);
+        keepA = ea <= eb;
+      }
+      keep = keepA ? a : b;
+      tx = verts[keep * stride] as number;
+      ty = verts[keep * stride + 1] as number;
+      tz = verts[keep * stride + 2] as number;
     } else {
       const opt = solveQuadric(tmp, 0);
       if (opt) {
@@ -538,7 +583,16 @@ function simplifyGroup(
         tz = cc[2];
       }
     }
-    const cost = Math.max(0, evalQuadric(tmp, 0, tx, ty, tz));
+    // martini mode: cost = the DROPPED vertex's true vertical error (metres), so
+    // the heap orders + the budget bounds by real height deviation. Else: the
+    // area-weighted QEM scalar (explicit meshes, ratio-bounded).
+    let cost: number;
+    if (opts.gridErrAt) {
+      const drop = keep === a ? b : a;
+      cost = opts.gridErrAt(verts[drop * stride] as number, verts[drop * stride + 2] as number);
+    } else {
+      cost = Math.max(0, evalQuadric(tmp, 0, tx, ty, tz));
+    }
     return { cost, a, b, va: version[a] as number, vb: version[b] as number, keep, tx, ty, tz };
   };
 
@@ -615,15 +669,127 @@ function simplifyGroup(
     return false;
   };
 
+  // ---- link condition (manifold safety) -------------------------------------
+  //  A half-edge collapse a→b is manifold-safe iff a and b share NO common
+  //  neighbour other than the apex(es) of the triangle(s) on edge (a,b). A
+  //  third shared neighbour ⇒ the collapse folds 3+ triangles onto one edge
+  //  (non-manifold). QEM-optimal collapses on irregular meshes rarely trip this,
+  //  but REGULAR grid endpoint-collapses do — so terrain checks it explicitly.
+  const linkOk = (a: number, b: number): boolean => {
+    const apex = new Set<number>();
+    const nbrA = new Set<number>();
+    for (const t of vtri[a] as number[]) {
+      if (triAlive[t] !== 1) continue;
+      const i0 = triA[t] as number;
+      const i1 = triB[t] as number;
+      const i2 = triC[t] as number;
+      if (i0 !== a) nbrA.add(i0);
+      if (i1 !== a) nbrA.add(i1);
+      if (i2 !== a) nbrA.add(i2);
+      if (i0 === b || i1 === b || i2 === b) {
+        if (i0 !== a && i0 !== b) apex.add(i0);
+        if (i1 !== a && i1 !== b) apex.add(i1);
+        if (i2 !== a && i2 !== b) apex.add(i2);
+      }
+    }
+    for (const t of vtri[b] as number[]) {
+      if (triAlive[t] !== 1) continue;
+      const tri = [triA[t] as number, triB[t] as number, triC[t] as number];
+      for (const w of tri) {
+        if (w === b) continue;
+        if (nbrA.has(w) && !apex.has(w)) return false; // shared non-apex ⇒ non-manifold
+      }
+    }
+    return true;
+  };
+
+  // ---- degeneracy guard (terrain) -------------------------------------------
+  //  Reject a collapse that would leave any surviving incident triangle near-
+  //  COLLINEAR. On a flat boundary row, endpoint-collapsing the interior can
+  //  fold a triangle onto 3 collinear grid points (zero area). wouldFlip only
+  //  catches sign FLIPS, not degeneracies, so the zero-area sliver survives and —
+  //  produced identically by both groups sharing that boundary — reads as a
+  //  duplicated, non-manifold triangle. Scale-invariant test: sin²θ < 1e-8.
+  const triDegenerates = (a: number, b: number, tx: number, ty: number, tz: number): boolean => {
+    const pos = (id: number, c: number): number =>
+      id < 0 ? (c === 0 ? tx : c === 1 ? ty : tz) : (verts[id * stride + c] as number);
+    for (let vi = 0; vi < 2; vi++) {
+      const v = vi === 0 ? a : b;
+      for (const t of vtri[v] as number[]) {
+        if (triAlive[t] !== 1) continue;
+        const i0 = triA[t] as number;
+        const i1 = triB[t] as number;
+        const i2 = triC[t] as number;
+        if ((i0 === a || i1 === a || i2 === a) && (i0 === b || i1 === b || i2 === b)) continue; // degenerates away
+        const s0 = i0 === a || i0 === b ? -1 : i0;
+        const s1 = i1 === a || i1 === b ? -1 : i1;
+        const s2 = i2 === a || i2 === b ? -1 : i2;
+        const ax = pos(s0, 0);
+        const ay = pos(s0, 1);
+        const az = pos(s0, 2);
+        const e1x = pos(s1, 0) - ax;
+        const e1y = pos(s1, 1) - ay;
+        const e1z = pos(s1, 2) - az;
+        const e2x = pos(s2, 0) - ax;
+        const e2y = pos(s2, 1) - ay;
+        const e2z = pos(s2, 2) - az;
+        const cx = e1y * e2z - e1z * e2y;
+        const cy = e1z * e2x - e1x * e2z;
+        const cz = e1x * e2y - e1y * e2x;
+        const m2 = cx * cx + cy * cy + cz * cz;
+        const d = (e1x * e1x + e1y * e1y + e1z * e1z) * (e2x * e2x + e2y * e2y + e2z * e2z);
+        if (d > 0 && m2 < 1e-8 * d) return true; // sin²θ < 1e-8 ⇒ near-collinear
+      }
+    }
+    return false;
+  };
+
+  // ---- shared-boundary guard (terrain) --------------------------------------
+  //  Reject a collapse that would leave a surviving triangle whose THREE verts
+  //  are all LOCKED (all on the group boundary). Such a triangle lies entirely on
+  //  the seam shared with the neighbouring group, which — locking the identical
+  //  verts — re-creates the SAME triangle, so it appears in BOTH clusters (a
+  //  non-manifold duplicate). Keeping an interior vertex makes the triangle owned
+  //  by exactly one group. (Rejecting a collapse never opens a hole.)
+  const makesBoundaryTri = (a: number, b: number, keep: number): boolean => {
+    for (let vi = 0; vi < 2; vi++) {
+      const v = vi === 0 ? a : b;
+      for (const t of vtri[v] as number[]) {
+        if (triAlive[t] !== 1) continue;
+        const i0 = triA[t] as number;
+        const i1 = triB[t] as number;
+        const i2 = triC[t] as number;
+        if ((i0 === a || i1 === a || i2 === a) && (i0 === b || i1 === b || i2 === b)) continue; // degenerates away
+        const m0 = i0 === a || i0 === b ? keep : i0;
+        const m1 = i1 === a || i1 === b ? keep : i1;
+        const m2 = i2 === a || i2 === b ? keep : i2;
+        if (locked[m0] === 1 && locked[m1] === 1 && locked[m2] === 1) return true;
+      }
+    }
+    return false;
+  };
+
   // ---- collapse loop --------------------------------------------------------
+  //  ratio mode (explicit): collapse cheapest-first until ≤ targetRatio tris.
+  //  budget mode (terrain): collapse every drop whose vertical error ≤ budget;
+  //  stop once the cheapest remaining exceeds the band (the rest defer upward).
+  const useBudget = Number.isFinite(budget);
   const targetTris = Math.max(1, Math.floor(soupTris * opts.targetRatio));
   let aliveTris = soupTris;
   let maxCost = 0;
-  while (aliveTris > targetTris && heap.length > 0) {
+  while (heap.length > 0) {
+    if (useBudget) {
+      if ((heap[0] as Collapse).cost > budget) break; // min-heap: nothing else fits the band
+    } else if (aliveTris <= targetTris) {
+      break;
+    }
     const e = heapPop(heap);
     if (vAlive[e.a] !== 1 || vAlive[e.b] !== 1) continue;
     if ((version[e.a] as number) !== e.va || (version[e.b] as number) !== e.vb) continue; // stale
     if (wouldFlip(e.a, e.b, e.tx, e.ty, e.tz)) continue;
+    if (opts.gridEndpoint && !linkOk(e.a, e.b)) continue; // terrain: keep the soup manifold
+    if (opts.gridEndpoint && triDegenerates(e.a, e.b, e.tx, e.ty, e.tz)) continue; // no collinear slivers
+    if (opts.gridEndpoint && makesBoundaryTri(e.a, e.b, e.keep)) continue; // no seam-duplicate tris
     const keep = e.keep;
     const drop = keep === e.a ? e.b : e.a;
     // attribute update on the survivor (locked survivor keeps its record verbatim)
@@ -703,7 +869,9 @@ function simplifyGroup(
     simpTris++;
   }
   const meanArea = warea.length ? warea.reduce((s, a) => s + a, 0) / Math.max(1, nv) : 1;
-  const qemErr = Math.sqrt(maxCost / Math.max(meanArea, 1e-12));
+  // budget mode: maxCost IS the worst vertical error in metres (already the cut's
+  // unit). ratio mode: convert the area-weighted QEM scalar to an RMS metre.
+  const qemErr = useBudget ? maxCost : Math.sqrt(maxCost / Math.max(meanArea, 1e-12));
   return {
     verts: Float32Array.from(outPos),
     indices: Uint32Array.from(outIdx),
@@ -767,7 +935,7 @@ export function buildDag(
   lod0?: BuiltClusters,
 ): DagBuild {
   const t0 = now();
-  const o: Required<DagOpts> = {
+  const o: FullDagOpts = {
     maxTris: opts.maxTris ?? 128,
     targetRatio: opts.targetRatio ?? 0.5,
     groupMax: opts.groupMax ?? 24,
@@ -775,6 +943,9 @@ export function buildDag(
     maxLevels: opts.maxLevels ?? 24,
     normalOffset: opts.normalOffset ?? -1,
     weldEps: opts.weldEps ?? 1e-5,
+    gridEndpoint: opts.gridEndpoint ?? false,
+    gridErrAt: opts.gridErrAt,
+    levelBudget: opts.levelBudget,
   };
 
   const built = lod0 ?? clusterize(verts, vertStride, indices, o.maxTris);
@@ -823,8 +994,11 @@ export function buildDag(
   // -- build levels -----------------------------------------------------------
   let active: number[] = clusters.map((_, i) => i);
   let maxError = 0;
+  let noProgress = 0; // terrain: consecutive levels with zero reduction (budget too low / all-locked)
   for (let level = 0; level < o.maxLevels; level++) {
     if (active.length < 2) break; // nothing left to merge
+    // terrain: this level's vertical-error budget (Infinity ⇒ explicit ratio mode)
+    const budget = o.levelBudget ? o.levelBudget(level) : Infinity;
     const partition = partitionClusters(active, clusters, o.groupMax);
     let outClusters = 0;
     let outTris = 0;
@@ -838,7 +1012,7 @@ export function buildDag(
       const groupClusters = groupIds.map((id) => clusters[id] as DagCluster);
       // simplifyGroup only READS the pool; pass the growing arrays directly
       // (appending parents below never moves existing cluster tri ranges).
-      const res = simplifyGroup(poolVerts, poolIdx, vertStride, groupClusters, o);
+      const res = simplifyGroup(poolVerts, poolIdx, vertStride, groupClusters, o, budget);
 
       // child own-error max + own-sphere union (containment)
       let childErr = 0;
@@ -855,7 +1029,12 @@ export function buildDag(
       const stuck = reduction < o.stuckFrac || res.simpTris < 1;
 
       if (stuck) {
-        // group cannot reduce → its inputs become roots (parentError stays +∞)
+        // group cannot reduce at this budget. Explicit mesh: its inputs become
+        // roots (parentError stays +∞). Terrain (budget mode): DEFER the inputs
+        // to the next, higher-budget level instead — a cliff that can't simplify
+        // at e_ℓ may at 2·e_ℓ, so it earns intermediate LODs (smooth cut) rather
+        // than freezing at LOD0. If nothing anywhere reduces, the loop's
+        // no-progress guard ends it and the un-collapsed clusters stay roots.
         stuckGroups++;
         groups.push({
           id: gid,
@@ -869,6 +1048,7 @@ export function buildDag(
           parents: [],
           reduced: false,
         });
+        if (o.gridEndpoint) for (const id of groupIds) nextActive.push(id);
         continue;
       }
 
@@ -956,8 +1136,19 @@ export function buildDag(
       triReduction: inTris > 0 ? 1 - outTris / inTris : 0,
     });
 
-    if (nextActive.length === 0) break; // all groups stuck → done
-    if (nextActive.length >= active.length) break; // no progress → stop (roots stand)
+    if (nextActive.length === 0) break; // all groups stuck (non-deferring) → done
+    if (o.gridEndpoint) {
+      // terrain: a no-reduction level isn't terminal — the budget doubles next
+      // level and a cliff may then simplify. Only stop after 2 consecutive dead
+      // levels (4× budget, still nothing ⇒ the remainder is locked-boundary).
+      if (outClusters === 0) {
+        if (++noProgress >= 2) break;
+      } else {
+        noProgress = 0;
+      }
+    } else if (nextActive.length >= active.length) {
+      break; // explicit ratio mode: no progress → stop (roots stand)
+    }
     active = nextActive;
   }
 
