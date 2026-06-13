@@ -482,6 +482,7 @@ measurement discipline; shot cycles ~2–3 min, cooled ABAB rounds 15–30 min e
 | old path re-ref (2026-06-13, uncooled singles, n2-old-bm*.json) | 32.9 | 66.8 ⚠ | 49.6 | 34.0 | 11–17.5 | 548–722 | bm3 slow AGAIN (58.3 then 66.8) — likely real on this content, not a spike; tris 12.6–16.5M |
 | **N2 close — flat dbg view** (2026-06-13, n2-nan-bm*.json) | 7.9 | 8.5 | 16.8* | 8.3 | **0.6–0.9** | ~4 | NOT beauty-comparable (no materials/post/cards/grass); the deliverable: cpu.submit COLLAPSED 11–15→<1 ms on real content; nanite GPU (2-phase cull + 2×SW raster + HW + resolve, 4.34 Mpx) ≈ 2.5 ms bm1 → 7.4 ms bm3 (depth 2.5 + payload 3.1 + instCull 0.7 + hw 1.1); old-path compute hooks still tick underneath (+1–2 ms pollution: grassRingCull, vegCull, probeGather); *bm4 frameMs P95-polluted, fps 103 |
 | **N3 close — fixed-point raster** (2026-06-13, bm3 2592×1676 single) | — | 8.1 | — | — | 0.6 | ~5 | integer scanline FASTER than the float core: nanRasterDepth 2.29 ms (was 2.5), nanRasterPayload 2.69 (was 3.1); hwTris 79k (unclamped-extent routing); gates: watertight ✓ silhouette parity 0–102 px = 0.000–0.011% vs HW at 5 framings ✓ 4-km grazing shimmer/holes/orphans 0 ✓ near-field F10c ✓ |
+| **N4-C4 close — full beauty, 4 classes** (2026-06-13, c4-perf-bm*.json, gpusample-24 in-session, uncooled back-to-back) | 8.3 ms | 17.5 | 15.9 | 17.5 | **1.4–1.5 ms** | 21 | FIRST full-beauty nanite row (terrain+rock+bark+deadwood resolved + CSM-receive + post). NOT beauty-comparable to main (black slate per D-N21: no grass/cards/water/leaf/impostors — main draws all that). The deliverable signal: cpu.submit 11–15→**1.4 ms**, draws 548–905→**21**, on real content with shading. Nanite GPU: cull+SW-raster+HZB compute 2.95(bm1)/8.7(bm3)/8.6(bm4)/5.8(bm7) + HW pass 0.8–1.1; rasterDepth+payload 0.5(bm1)/5.9(bm3)/5.8(bm4)/3.5(bm7); visClusters 3.8k/81k/80k/53k, hwTris 18k/79k/55k/40k. Frame floor is the POST chain (bloom 6.5–7.5 + TRAA 6.5–7.4 + half.mrt 4.8–5.4 + scene 3.0–3.5) + the CSM cascade renders the resolve now solely drives (F11: post is a separate workstream). Thermal: in-session medians, bm7 ran warmest; not cooled ABAB. |
 
 N0 SPIKE LEDGER (2592×1676, gpusample-24 medians, back-to-back in-session;
 content: 10.04M instanced tris, 1144 source clusters, 1937 instances,
@@ -836,6 +837,32 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## GOTCHAS (append-only, nanite-specific)
 
+- (N4-C4) BLACK SLATE HAS NO SHADOWS — the CSM map is EMPTY in the default
+  black-slate build, so any shadow-RECEIVE check must run `?oldgeo=1`. Both
+  caster sources — the terrain ShadowProxy AND the Forests per-cascade caster
+  siblings — are gated behind `!DISABLE_OLD_GEOMETRY` (TerrainScene), and nanite
+  cluster shadow casting is N5 (not yet). So with the default slate the resolve
+  SAMPLES a cleared (all-far) shadow map ⇒ shadow factor = 1 everywhere ⇒
+  `?nanshadow=0` vs on is a visual NO-OP. A naive A/B there shows a large
+  "difference" that is PURELY cross-boot TRAA jitter on high-frequency bark
+  texture (10.9% of px at bm7, salt-and-pepper riding the fissures) — it looks
+  like shadows in the aggregate number but a red-overlay diff reveals it is NOT
+  coherent shadow shapes. LESSON (re-confirms the framealign law): to test
+  receive, run casters on (`?oldgeo=1`) AND frame-align (`--framealign N --wind 0
+  --lockexp 1`) so the beauty−noshadow diff is the pure shadow term; verify the
+  diff is COHERENT (a cast shadow with edges), not speckle, before trusting any
+  shadow %. The migrated tree camera draws stay hidden under oldgeo (suppress-
+  Migrated) so nanite bark still owns its pixels and receives the old casters.
+- (N4-C4) NO-BLACK-SHADOWS is not an absolute luma floor — it is ALBEDO
+  RETENTION. A fixed luma-floor gate on shadowed bark fights two NON-bugs: the
+  tonemap toe (deep forest shadow is correctly dark, D-N22 energy-correct) and
+  the bark's own cavity-AO fissure crevices (deep crevices in low light go
+  near-black BY DESIGN — a zoomed crop read 21% pure-black px but 57% brown =
+  correct detailed dark bark). The real failure mode (a zero-ambient code bug)
+  zeroes albedo → flat GREY-BLACK with no chroma. So gate the warm-albedo
+  fraction of the shadowed subset (chroma retained ⇒ albedo×ambient ≠ 0), not
+  its min/p1 luma. bm7 shadowed-sunlit bark = 100% warm-albedo, 0% void.
+
 - (N4-C3) STORAGE-TEXTURE MIPS DON'T REGENERATE AFTER A COMPUTE WRITE. three
   auto-generates a texture's mip chain ONCE (when first bound) — for a
   StorageTexture/StorageArrayTexture that's the COMPUTE storage bind, BEFORE the
@@ -926,6 +953,54 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   min/max on uint nodes, float(uintNode) → use .toFloat().
 
 ## PROGRESS LOG (append-only, newest first)
+
+- 2026-06-13 (x): **N4-C4 close — N4 COMPLETE. Full verification battery green +
+  bark/deadwood shadow-receive gate + first full-beauty perf row.** (Opus 4.8.)
+  The C3 material+wind+limit-raise+matParam changes are confirmed NON-regressive
+  to the cull/raster/registry pipeline: registry (matParam word-7 dual-use intact
+  — H/M checks pass), registry-gpu (decode exact), nanitedbg flat+cluster (0
+  errors, no overflow), pan (0 holes/10 frames, phase-2 live 42k appends). The N3
+  SILHOUETTE gates re-pass BIT-IDENTICAL to N3 once the wind confound is removed:
+  parity silhouette 4/0/102/39/13 px (≤0.0111%, gate 0.05%) + flips ≤0.0122%;
+  horizon graze + nearfield shimmer/holes/orphans 0, silhouette 0 px. KEY METHOD:
+  C3 put trunk wind in the SHARED fetchWorldVert (raster geometry), but NaniteHwRef
+  (the parity reference) is rigid — so the gates run `?nanwind=0` (rigid raster ≡
+  rigid hwref); the wind branch compiles OUT cleanly with wind off, proving zero
+  raster drift. Added an EXTRA env forward to probe-parity (PARITY_EXTRA) +
+  probe-horizon-nanite (HORIZON_EXTRA), mirroring pan's PAN_EXTRA.
+  SHADOW-RECEIVE — the hard-won part (NEW tools/probe-barkshadow.ts + GOTCHA):
+  the FIRST cut ran in black slate and "passed" — FALSELY. Black slate has an
+  EMPTY CSM (ShadowProxy + Forests per-cascade casters are BOTH gated behind
+  !DISABLE_OLD_GEOMETRY → nothing casts until N5), so ?nanshadow on/off there
+  differs ONLY by cross-boot TRAA jitter on busy bark texture (10.9% of px,
+  salt-and-pepper ON the fissures — diffed to a red overlay to SEE it, the
+  decisive check). The probe was measuring jitter, not shadows. FIX: run the gate
+  with `?oldgeo=1` (restores the casters; migrated tree CAMERA draws stay hidden
+  via suppressMigrated so nanite bark still owns its pixels and RECEIVES the old
+  casters' shadows — the N4 hybrid path, identical to how terrain's receive was
+  proven in (s)) + `wind=0 lockexp=1 framealign 0` (deterministic; beauty−noshadow
+  diff = the PURE shadow term). Result: coherent cast shadow falls across the
+  trunk (not speckle — verified by the framealigned diff image), bm7 50,050
+  shadowed-sunlit bark px. NO-BLACK metric redesigned twice: an absolute luma
+  floor is the WRONG instrument (fights both the tonemap toe AND the bark's own
+  cavity-AO fissure crevices — a zoomed crop showed 21% of DARK px pure-black but
+  57% brown = correct detailed dark bark, not a void). The honest signal is
+  WARM-ALBEDO RETENTION: a zero-ambient bug zeroes albedo→flat grey-black
+  (chroma→0); correct dim shadow keeps the warm tint. bm7 shadowed-sunlit bark =
+  100% warm-albedo, 0% void → no-black ✓. Deadwood shares bark's isBD branch
+  VERIFIED (one class-agnostic lighting block, NaniteResolve 488–527; only albedo
+  differs per isD.select, deadwood's is DIMMER = conservative) — bark's proof
+  covers it (its thin ground logs give 6–16k eroded px but 0 sunlit-then-shadowed,
+  so not gated on the subset directly). Wind shimmer glance: live (nofreeze)
+  ?wind=1 bm7 settled 40 frames renders bark CRISP — no crawl/shimmer (the
+  bit-identical raster/resolve windy-position reconstruction holds under TRAA).
+  PERF (ledger row, 2592×1676, gpusample-24): FIRST full-beauty nanite row —
+  cpu.submit 11–15→**1.4 ms**, draws 548–905→**21**, fps bm1/3/4/7 = 99/60/61/71
+  (frameMs 8.3/17.5/15.9/17.5); nanite GPU 3–10 ms, frame floor is post+CSM (F11).
+  NOT beauty-comparable to main (D-N21 black slate has no grass/cards/water/leaf).
+  tsc clean. NEXT: N5 — per-cascade cluster shadow re-culls (make the cluster
+  pipeline DRIVE the casters; until then the resolve correctly SAMPLES the CSM but
+  only the old ShadowProxy/Forests casters fill it, i.e. only under ?oldgeo=1).
 
 - 2026-06-13 (w): **N4-C3 trunk WIND channel landed — N4-C3 now COMPLETE.**
   (Opus 4.8.) The 'trunk' transform channel (Wind.vegWindOffset assembly, leaf
@@ -1420,8 +1495,9 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## NEXT ACTIONS
 
-N4 in flight (recon done 2026-06-13; D-N16..D-N19 record the architecture).
-Chunks, each tsc-clean + committed:
+N4 COMPLETE (2026-06-13; D-N16..D-N25 record the architecture). The material
+übershader ports TERRAIN/ROCK/BARK/DEADWOOD (DEBRIS deferred to its N6 pool
+migration). Chunks, each tsc-clean + committed:
 
 1. ~~N4-C0~~ DONE (log entry p) — full-frame integration + the N3 depth-bias
    fix; all C0 gates measured, battery re-proven.
@@ -1451,11 +1527,24 @@ Chunks, each tsc-clean + committed:
      precomputed per-instance in makeCtx; ?nanwind=0 A/B; ~2% perf. Deadwood
      rigid. A wind=1 shimmer/TRAA sanity probe over time is still worth a glance
      at N4-C4 (the static A/B is done).
-5. **N4-C4 — close**: shadow-receive verification (shadow-color +
-   no-black-shadows pass), full battery (probe-nanitedbg/pan/parity/
-   horizon-nanite + registry probes), perf ledger row at 2592×1676,
-   USER CHECKPOINT note (?nanite=1 vs ?nanite=0 bookmarks), PROGRESS LOG.
-   DEBRIS class branch arrives with its pool migration at N6 (the debris
-   ring is not in the registry yet — N1 pool policy; phase-table wording
-   predates it). Velocity output: see D-N16 (deferred, no consumer).
-6. Then N5 (per-cascade cluster shadow re-culls) per the table.
+5. ~~N4-C4 — close~~ DONE (log x). Battery green (registry/registry-gpu/
+   nanitedbg/pan/parity/horizon-nanite — parity+horizon run `?nanwind=0` to
+   match the rigid hwref; bit-identical to N3). Shadow-receive proven via NEW
+   tools/probe-barkshadow.ts under `?oldgeo=1` (black slate has no casters —
+   GOTCHA): coherent cast shadow on the trunk, bm7 50k shadowed-sunlit bark px,
+   100% warm-albedo / 0% void (no black crush; deadwood covered by the shared
+   isBD branch). Wind shimmer glance clean. Perf ledger row landed (cpu.submit
+   →1.4 ms, draws →21). DEBRIS class branch arrives with its pool migration at
+   N6 (the debris ring is not in the registry yet — N1 pool policy; phase-table
+   wording predates it). Velocity output: see D-N16 (deferred, no consumer).
+
+   **N4 COMPLETE.** USER CHECKPOINT (open in Chrome on the branch):
+   `?scene=world&nanite=1&shot=N` (N∈1..9) = the black-slate beauty — terrain +
+   rock + bark + deadwood all nanite-rendered, lit (sun×CSM-when-casters +
+   probe-GI), wind-swayed trunks; HUD draws 21, cpu.submit ~1.4 ms. To see the
+   nanite geometry receiving SHADOWS, add `&oldgeo=1` (restores casters until
+   N5; tree camera draws stay hidden). A/B against the old pipeline =
+   `?scene=world&nanite=0&oldgeo=1` (both flags — `?nanite=0` alone is an empty
+   slate by D-N21). Per D-N22 materials are judged on quality, not pixel-diffed.
+6. Then N5 (per-cascade cluster shadow re-culls) per the table — the nanite
+   clusters become the CSM casters, retiring the ?oldgeo dependency for shadows.

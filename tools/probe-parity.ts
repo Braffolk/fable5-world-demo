@@ -42,6 +42,13 @@ async function shoot(mode: 'flat' | 'hwref', framing: string): Promise<string> {
     // average across quads — not a raster defect; humans judge lambert shots)
     const extra: Record<string, string> = { nanite: '1', nanitedbg: mode, shade: '0' };
     if (framing !== 'spawn') extra['shot'] = framing;
+    // PARITY_EXTRA="nanwind=0" — the raster's trunk-wind branch (N4-C3) bends
+    // bark in the flat view while NaniteHwRef is rigid; run wind off so the
+    // silhouette gate measures RASTER correctness, not the wind confound.
+    for (const kv of (process.env['PARITY_EXTRA'] ?? '').split('&')) {
+      const [k, v] = kv.split('=');
+      if (k && v !== undefined) extra[k] = v;
+    }
     await page.goto(laasUrl({ scene: 'world', hud: false, extra }), {
       waitUntil: 'domcontentloaded',
     });

@@ -48,6 +48,13 @@ async function shoot(
     page.on('pageerror', (e) => errors.push(String(e)));
     const extra: Record<string, string> = { nanite: '1', nanitedbg: view, shade: '0' };
     if (view === 'flat') extra['audit'] = '1';
+    // HORIZON_EXTRA="nanwind=0" — match NaniteHwRef's rigid trunks (N4-C3 wind
+    // is in the shared raster fetch); these graze/near-field cases are terrain-
+    // dominant but trees can intrude, so disable the wind confound for the gate.
+    for (const kv of (process.env['HORIZON_EXTRA'] ?? '').split('&')) {
+      const [k, v] = kv.split('=');
+      if (k && v !== undefined) extra[k] = v;
+    }
     await page.goto(laasUrl({ scene: 'world', hud: false, extra }), {
       waitUntil: 'domcontentloaded',
     });
