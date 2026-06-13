@@ -43,6 +43,19 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   const naniteFrameMode =
     qNan.get('nanite') === '1' && !qNan.get('nanitedbg') && qNan.get('naniteframe') !== '0';
 
+  // ── USER DIRECTIVE (2026-06-13): OLD GEOMETRY HARD-DISABLED ──────────────
+  // Every default (non-nanite) SOLID-GEOMETRY render path is switched OFF so
+  // the ONLY thing that can appear in the world is the nanite-rendered output.
+  // No fallback: with this true, ?nanite=0 shows bare sky. The DATA those
+  // systems produce (heightfield, scatter, VegLibrary, GI, canopy map) still
+  // builds because the nanite registry is constructed from it — only the
+  // camera-pass meshes are withheld from engine.scene. Environment systems
+  // (sky/atmosphere/clouds/froxels/CSM/post) stay on so there is a frame to
+  // look at. Flip to false to restore the full old pipeline (the N7 A/B path).
+  // Overrides the NANITE.md "?nanite=0 boots the untouched old pipeline"
+  // constraint deliberately, for the duration of the nanite build.
+  const DISABLE_OLD_GEOMETRY = true;
+
   const hf = await Heightfield.generate(
     engine.renderer,
     params,
@@ -140,7 +153,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       pre.update(engine.camera);
       post.update(engine.camera);
     });
-  } else {
+  } else if (!DISABLE_OLD_GEOMETRY) {
     const tiles = new TerrainTiles(hf, view, { gi, canopyTex });
     tilesRef = tiles;
     engine.scene.add(tiles.mesh);
@@ -157,7 +170,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   }
 
   // Phase 6: stream/lake water clipmap (?ablate=water to A/B)
-  if (view !== 'split' && !ablate.has('water')) {
+  if (view !== 'split' && !ablate.has('water') && !DISABLE_OLD_GEOMETRY) {
     const water = new WaterSurface(
       hf,
       sunSky.atmosphere,
@@ -174,21 +187,25 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     const lib = await buildVegLibrary(engine.renderer, seed, (p, m) =>
       ctx.progress(0.963 + p * 0.006, m),
     );
-    const forests = new Forests(
-      hf,
-      scatter,
-      lib,
-      ablate.has('gi') ? null : gi,
-      canopyTex,
-    );
-    forests.init(engine.renderer);
-    forestsRef = forests;
-    engine.scene.add(forests.group);
+    // sun uniforms feed the nanite terrain shading too — keep them current
+    // even when the old veg render is disabled
     updateSunUniforms(sunSky.sun);
-    engine.onUpdate(() => {
-      forests.update(engine.renderer, engine.camera);
-      Object.assign(engine.stats.counters, forests.counterSnapshot());
-    });
+    if (!DISABLE_OLD_GEOMETRY) {
+      const forests = new Forests(
+        hf,
+        scatter,
+        lib,
+        ablate.has('gi') ? null : gi,
+        canopyTex,
+      );
+      forests.init(engine.renderer);
+      forestsRef = forests;
+      engine.scene.add(forests.group);
+      engine.onUpdate(() => {
+        forests.update(engine.renderer, engine.camera);
+        Object.assign(engine.stats.counters, forests.counterSnapshot());
+      });
+    }
 
     // ?nanite=1 — N1-C4: build the GeometryRegistry from all opaque pools
     // (cluster tables + packed mega-buffers only; rendering unchanged until
@@ -230,7 +247,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     }
 
     // near-field carpets: 800k-blade grass ring + 80k debris ring
-    if (!ablate.has('grass')) {
+    if (!ablate.has('grass') && !DISABLE_OLD_GEOMETRY) {
       const ring = new GroundRing(hf, canopyTex, seed, ablate.has('gi') ? null : gi);
       ring.init(lib.atlases.get('beech') ?? null);
       engine.scene.add(ring.group);
@@ -241,7 +258,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     }
 
     // far forests: aggregate canopy shell beyond the impostor mid-band
-    if (!ablate.has('shell')) {
+    if (!ablate.has('shell') && !DISABLE_OLD_GEOMETRY) {
       engine.scene.add(buildCanopyShell(hf, canopyTex));
     }
   }
@@ -271,7 +288,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   };
 
   // GPU particles: snow/pollen/leaves riding the wind (?ablate=particles)
-  if (view !== 'split' && !ablate.has('particles')) {
+  if (view !== 'split' && !ablate.has('particles') && !DISABLE_OLD_GEOMETRY) {
     const parts = new Particles(hf, canopyTex, ablate.has('gi') ? null : gi);
     engine.scene.add(parts.mesh);
     engine.onUpdate((dt) => parts.update(engine.renderer, engine.camera, dt));

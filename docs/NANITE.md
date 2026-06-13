@@ -746,6 +746,29 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   bottoms out (impostor retirement is N9's judged call). Without it the
   vista pushed 18.6M cluster items (every r2 ring to 4 km).
 
+- D-N21 (2026-06-13, USER DIRECTIVE — supersedes the "?nanite=0 boots the
+  untouched old pipeline" constraint for the build's duration): the OLD
+  (non-nanite) SOLID-GEOMETRY render paths are HARD-DISABLED so the only thing
+  that can appear in the world is the nanite output — no fallback, no
+  hybrid-render confusion. Implemented as one switch `DISABLE_OLD_GEOMETRY =
+  true` at the top of buildTerrainScene (TerrainScene.ts), gating every
+  camera-pass add: TerrainTiles mesh/farShell + terrain ShadowProxy, Forests
+  group, GroundRing grass+debris, CanopyShell, WaterSurface, Particles. What
+  STAYS: the producers the registry is built from (Heightfield, Scatter,
+  VegLibrary, ProbeGI, canopy map) and the screen-space environment
+  (SunSky/atmosphere, Clouds, Froxels, CSM rig, PostStack, sun uniforms) so
+  there is a lit frame to judge against. RATIONALE (user, verbatim intent):
+  the hybrid kept drawing old-path trees/grass/water + their wind+lighting,
+  which read as "nanite isn't active" every time — so until the nanite side is
+  feature-complete we build against a BLACK-SLATE world where every visible
+  surface is provably nanite. VERIFIED at the walk spawn 1280×720: draws
+  724→21, triangles 12,034,968→2,002 (the resolve fullscreen tri + env quads),
+  nanite.visClusters ~30.6k still rastering; the frame shows ONLY the nanite
+  terrain + sky. REVERSIBLE: flip the constant to false to restore the full
+  old pipeline (the N7 A/B path). The misleading "+ terrain tiles/far shell"
+  suppression log is now moot (tilesRef is never created) — left as-is; the
+  real witness is the draw/tri collapse, not the log.
+
 ## GOTCHAS (append-only, nanite-specific)
 
 - (N4-C0) THE SCANLINE DEPTH WAS BIASED-NEAR ON SUB-PIXEL TRIANGLES from
@@ -824,6 +847,31 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   min/max on uint nodes, float(uintNode) → use .toFloat().
 
 ## PROGRESS LOG (append-only, newest first)
+
+- 2026-06-13 (r): **Old geometry hard-disabled (D-N21) — black-slate nanite
+  build.** (Opus 4.8.) Context: across two sessions the user kept reading
+  `?nanite=1` as "nanite isn't active" because the hybrid was STILL drawing the
+  old-path trees/grass/water with full wind + lighting (correct by D-N19 — only
+  `terrain` is migrated — but indistinguishable to the eye from "old pipeline").
+  Two non-actions first, to stop the thrash: (1) REVERTED the uncommitted
+  `nanlit=three` resolve rewrite back to 001a5ed (the manual-lit resolve D-N20
+  mandates — the three-lighting MeshStandardNodeMaterial path is the exact
+  fallback-to-transparent trap D-N20 documents). (2) PROVED the terrain already
+  IS nanite, two ways before touching anything: console
+  `nanite full-frame: classes [terrain]; suppressed … + terrain tiles/far
+  shell` + `visClusters 30628`; and `?nanite=1&nandbg=cov&postmin=1` painting
+  every nanite-covered pixel red — the ground went red, the swaying trees did
+  NOT (old path, on top). Then per the user's directive: DISABLE_OLD_GEOMETRY
+  switch in TerrainScene.ts gates off every old solid-geometry add (tiles/
+  shadowproxy/forests/groundring/canopyshell/water/particles), keeping the
+  registry producers + environment. RESULT at walk spawn 1280×720: draws
+  724→21, tris 12.03M→2,002, fps 31→119; the frame is now ONLY the nanite
+  terrain + sky (verified visually — bare slopes, distant peaks, no veg). tsc
+  clean. NEXT: with the slate clean, resume N4-C1 proper — CSM shadow-receive
+  + ambient/IBL parity on the nanite terrain, then the framealign ≤0.2% gate
+  (the gate now compares nanite-only vs a temporarily-restored old frame, or
+  shifts to absolute-quality eyeballing since there is no live old path to
+  diff against frame-for-frame).
 
 - 2026-06-13 (q): **N4-C1 transparency bug fixed; shading parity still open.**
   (Opus 4.8 continuing Fable's work.) User reported near-camera terrain
