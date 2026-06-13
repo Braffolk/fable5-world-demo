@@ -225,14 +225,18 @@ export function buildNaniteResolve(
       const sf = (nodeObject(world.csm) as unknown as NV4).x.clamp(0, 1).toVar() as unknown as NF;
       direct = nDotL.mul(sf) as unknown as NF;
     }
-    // ENERGY PARITY with the old terrain (MeshPhysicalNodeMaterial): three's
-    // PhysicalLightingModel applies BRDF_Lambert = albedo/π to BOTH the direct
-    // sun term (irradiance = NdotL·sunColor, sunColor = color·intensity, no π —
-    // src line 303/600/624) AND the indirect probe irradiance (IrradianceNode →
-    // context.irradiance → ×albedo/π — line 713). There is NO separate
-    // hemisphere ambient: the probe field IS the ambient (it ray-marches the
-    // atmosphere; sunSky.dimAmbientForGI drops the env term). Mirror exactly —
-    // accumulate radiance, divide once by π.
+    // ENERGY-CORRECT lighting (D-N22, user choice — NOT pixel-parity with the
+    // old terrain). Uses three's BRDF energy exactly: BRDF_Lambert = albedo/π
+    // on BOTH the direct sun term (irradiance = NdotL·sunColor, sunColor =
+    // color·intensity, no π — three src 303/600/624) AND the indirect probe
+    // irradiance (the old path's IrradianceNode → context.irradiance → ×albedo/π
+    // — line 713). The probe field is the sole sky-diffuse ambient here
+    // (occlusion-aware, ray-marches the atmosphere). DELIBERATE DIVERGENCE from
+    // the old terrain, which ALSO adds a full env-IBL skylight term
+    // (scene.environment, intensity 1.0) on top of the probe — making it
+    // brighter; we do NOT replicate that (it double-counts the unoccluded sky).
+    // So nanite terrain is dimmer than old by design; parity was abandoned.
+    // Accumulate radiance, divide once by π.
     let radiance: NV3 = sunCol.mul(direct) as unknown as NV3;
     if (world.gi) {
       let irr = world.gi.irradiance(wp, shading.worldNormalNode) as unknown as NV3;

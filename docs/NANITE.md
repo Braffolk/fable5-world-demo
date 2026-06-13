@@ -769,6 +769,29 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   suppression log is now moot (tilesRef is never created) — left as-is; the
   real witness is the draw/tri collapse, not the log.
 
+- D-N22 (2026-06-13, USER DIRECTIVE — terrain lighting = ENERGY-CORRECT, NOT
+  pixel-parity): the nanite terrain lights with sun×CSM + probe-GI ambient +
+  caustics, all through three's exact BRDF (albedo/π on direct AND indirect —
+  see NaniteResolve energy block). It is DELIBERATELY dimmer than the old
+  terrain and we STOP chasing equivalence. Why the old is brighter (measured,
+  not guessed): the old MeshPhysicalNodeMaterial gets a FULL env-IBL skylight
+  term — scene.environment = sky PMREM at environmentIntensity 1.0
+  (SunSky.ts:128-129) — ON TOP of the probe field; dimAmbientForGI (117-120)
+  only dims the hemisphere, never the env. Whether that env term is a legit
+  unoccluded-skylight or a double-count of the probe is genuinely ambiguous
+  (disabling it globally drove golden hour near-black: old luma 28→11, so it is
+  load-bearing, NOT a pure redundancy — the earlier "double-count bug" call was
+  too strong). The user's ruling: the nanite uses the clean probe-only ambient
+  (energy-correct), we DO NOT replicate the env term in the resolve, and we DO
+  NOT disable it on the shared/old path (no reason to — we're not matching, and
+  it only darkens code the black slate never shows). CONSEQUENCE: the
+  `--framealign --lockexp` ≤0.2% terrain-lighting parity gate (N4-C1 NEXT
+  ACTIONS item 2) is RETIRED — terrain lighting is judged on absolute quality
+  (no-black-shadows floor, looks-right), not diffed against ?nanite=0. The
+  measurement scaffold stays usable (?oldgeo=1) but is no longer a gate.
+  Brightness, if wanted, is tuned via probe-GI strength / exposure / ToD as its
+  own task — never by re-introducing the env double-count.
+
 ## GOTCHAS (append-only, nanite-specific)
 
 - (N4-C0) THE SCANLINE DEPTH WAS BIASED-NEAR ON SUB-PIXEL TRIANGLES from
@@ -847,6 +870,30 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   min/max on uint nodes, float(uintNode) → use .toFloat().
 
 ## PROGRESS LOG (append-only, newest first)
+
+- 2026-06-13 (t): **N4-C1 lighting CLOSED on the energy-correct model;
+  pixel-parity with old terrain ABANDONED (user directive, D-N22).** (Opus
+  4.8.) After CSM-receive (s) the terrain was still ~broadly off vs ?nanite=0.
+  Investigated with a 4-probe workflow + GPU luma/diff: exposure ruled out
+  (lockexp pins both to 1.0), normals match, and the real gap is that the OLD
+  terrain adds a full env-IBL skylight (scene.environment intensity 1.0) the
+  nanite lacks. Tried the "energy-correct" global fix (env-IBL=0 in
+  dimAmbientForGI): it drove the old golden hour near-black (luma 28→11), proving
+  the env term is load-bearing skylight, not a clean double-count — so I reverted
+  that shared-path change. USER CALL: stop chasing equivalence; the nanite uses
+  the clean probe-only energy-correct model (sun×CSM + probe-GI + caustics, exact
+  three BRDF albedo/π on both terms), accepted as dimmer-than-old by design.
+  Net code state: the energy-correct resolve (committed bdb24c7: removed the
+  spurious hemisphere ambient, added the missing 1/π on sun+probe) STANDS; SunSky
+  is back to original (env-IBL untouched on the shared path); the resolve comment
+  now states the deliberate divergence. The ≤0.2% terrain-lighting gate is
+  retired (D-N22) — terrain lighting is judged on absolute quality, not diffed.
+  ?oldgeo=1 / ?nanshadow=0 remain as scaffolding. Measured signposts kept for the
+  record: golden-vista nanite-vs-old mean delta 36→18 (π fix) → diff 33% after
+  the env experiment; midday nanite 70 vs old 80 luma (nanite dimmer = missing
+  env skylight, by design). NEXT: per the user, move forward — N4-C2 (ROCK
+  material + register the rock class so the black slate gains real nanite
+  objects), not more lighting diffing.
 
 - 2026-06-13 (s): **N4-C1 CSM sun-shadow receive landed on the nanite
   terrain.** (Opus 4.8.) The dominant ~39% over-bright term (D-N20: "almost
