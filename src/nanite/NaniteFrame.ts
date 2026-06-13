@@ -65,6 +65,8 @@ export function buildNaniteFrame(
     gi: import('../gpu/passes/ProbeGI').ProbeGI | null;
     canopyTex: import('three/webgpu').StorageTexture | null;
     csm: import('three/addons/csm/CSMShadowNode.js').CSMShadowNode | null;
+    barkTexA: import('three').Texture | null;
+    barkTexB: import('three').Texture | null;
   },
 ): NaniteFrameHandles {
   const renderer = engine.renderer;
@@ -109,6 +111,8 @@ export function buildNaniteFrame(
     gi: world.gi,
     canopyTex: world.canopyTex,
     csm: world.csm,
+    barkTexA: world.barkTexA,
+    barkTexB: world.barkTexB,
   });
   engine.scene.add(resolve.mesh);
 

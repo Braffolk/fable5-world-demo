@@ -129,7 +129,7 @@ export function geometryToSource(geo: BufferGeometry): ExplicitSource {
  * `?naniteclasses=csv|all`; nanitedbg views default to all (pipeline
  * probes want the whole registry).
  */
-export const PORTED_CLASSES: readonly MaterialClassId[] = ['terrain', 'rock'];
+export const PORTED_CLASSES: readonly MaterialClassId[] = ['terrain', 'rock', 'bark', 'deadwood'];
 
 /**
  * Material class a pool's OPAQUE part (parts[0]) migrates as, or null while
@@ -269,6 +269,8 @@ export async function buildWorldRegistry(input: {
       castShadows: first.part.castShadow,
       label,
       swayPad: policy.swayPad,
+      // bark/deadwood: texture-array slice (rock ignores it). LODs inherit it.
+      matParam: pool.barkLayer ?? 0,
     });
     for (let r = 1; r < rings.length; r++) {
       const prev = rings[r - 1] as { part: PoolPart; switchAt: number };

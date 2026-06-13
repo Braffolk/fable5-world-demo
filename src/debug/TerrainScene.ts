@@ -37,6 +37,9 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   /** material classes the nanite full-frame mode owns (D-N19) — set when the
    *  registry builds; drives old-path camera-draw suppression */
   let naniteClasses: ReadonlySet<string> | null = null;
+  /** bark texture-array (from VegLib) for the nanite resolve — hoisted out of
+   *  the veg block so the full-frame build below can thread it */
+  let naniteBark: { texA: import('three').Texture; texB: import('three').Texture } | null = null;
   const qNan = new URLSearchParams(window.location.search);
   /** `?nanite=1` without a debug view = full-frame mode (N4); `?naniteframe=0`
    *  keeps N1 build-only semantics (boot probes) */
@@ -194,6 +197,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     // sun uniforms feed the nanite terrain shading too — keep them current
     // even when the old veg render is disabled
     updateSunUniforms(sunSky.sun);
+    naniteBark = lib.barkArray; // resolve bark/deadwood sampled-array (N4-C3)
     if (!DISABLE_OLD_GEOMETRY) {
       const forests = new Forests(
         hf,
@@ -340,6 +344,8 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       gi: ablate.has('gi') ? null : gi,
       canopyTex,
       csm: shadowRig.csm ?? null,
+      barkTexA: naniteBark?.texA ?? null,
+      barkTexB: naniteBark?.texB ?? null,
     });
     if (naniteClasses.has('terrain') && tilesRef) {
       tilesRef.mesh.visible = false;

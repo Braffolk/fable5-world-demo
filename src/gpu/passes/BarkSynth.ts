@@ -8,7 +8,7 @@
  */
 
 import { FloatType, LinearMipmapLinearFilter, RepeatWrapping, Vector2 } from 'three';
-import { StorageTexture, type Renderer } from 'three/webgpu';
+import { StorageArrayTexture, StorageTexture, type Renderer } from 'three/webgpu';
 import {
   Fn,
   float,
@@ -24,7 +24,7 @@ import {
 } from 'three/tsl';
 import { sqrt } from 'three/tsl';
 import { hash12 } from '../noise/NoiseTSL';
-import type { NF, NV2, NV3 } from '../TSLTypes';
+import type { NF, NV2, NV3, NV4 } from '../TSLTypes';
 
 export const BARK_RES = 2048;
 
@@ -159,6 +159,50 @@ export interface BarkTextures {
   texB: StorageTexture;
 }
 
+/** texA (albedo.rgb sqrt-enc + cavity.a) and texB (normal.xy + rough + height)
+ *  for one bark pixel — shared by the per-layer 2D bake and the array bake so
+ *  the nanite resolve's sampled array is bit-identical to the old material's
+ *  per-layer textures. Call inside an Fn() stack. */
+function barkPixelValues(
+  p: BarkParams,
+  uvN: NV2,
+  seedK: number,
+): { a: NV4; b: NV4 } {
+  const h = barkHeight(p, uvN, seedK).toVar();
+  const e = 1.6 / BARK_RES;
+  const hx0 = barkHeight(p, uvN.add(vec2(-e, 0)), seedK);
+  const hx1 = barkHeight(p, uvN.add(vec2(e, 0)), seedK);
+  const hy0 = barkHeight(p, uvN.add(vec2(0, -e)), seedK);
+  const hy1 = barkHeight(p, uvN.add(vec2(0, e)), seedK);
+  const n = vec3(
+    hx0.sub(hx1).mul(p.normalK * 0.5),
+    hy0.sub(hy1).mul(p.normalK * 0.5),
+    float(1),
+  ).normalize();
+
+  // cavity: darker in crevices + slight top lightening
+  const cavity = h.clamp(0, 1).mul(0.7).add(0.3);
+  const mott = pnoise(uvN.mul(2), 2, seedK + 201).sub(0.5).mul(p.mottle);
+  let albedo: NV3 = mix(
+    vec3(p.deep[0], p.deep[1], p.deep[2]),
+    vec3(p.high[0], p.high[1], p.high[2]),
+    h.clamp(0, 1),
+  ) as unknown as NV3;
+  albedo = albedo.mul(mott.add(1)) as unknown as NV3;
+  if (p.lenticels > 0) {
+    // horizontal dark dashes: stretched worley spots
+    const lw = pworley(uvN.mul(vec2(5, 24)), new Vector2(5, 24), seedK + 77);
+    const dash = float(1).sub(lw.f1.smoothstep(0.2, 0.42));
+    albedo = mix(albedo, vec3(0.045, 0.04, 0.038), dash.mul(0.85)) as unknown as NV3;
+  }
+  const rough = float(p.roughBase).add(h.sub(0.5).mul(p.roughVar * 2));
+  const albEnc = sqrtV3(albedo.clamp(0, 1) as unknown as NV3);
+  return {
+    a: vec4(albEnc, cavity) as unknown as NV4,
+    b: vec4(n.xy.mul(0.5).add(0.5), rough.clamp(0.3, 1), h.clamp(0, 1)) as unknown as NV4,
+  };
+}
+
 /** height field expression (re-evaluated at offsets for normals) */
 function barkHeight(p: BarkParams, uvN: NV2, seedK: number): NF {
   const P = 1; // uv tiles at 1
@@ -210,41 +254,75 @@ export async function bakeBarkTextures(
     const xi = id.mod(uint(BARK_RES));
     const yi = id.div(uint(BARK_RES));
     const uvN = vec2(float(xi).add(0.5), float(yi).add(0.5)).div(BARK_RES);
-
-    const h = barkHeight(p, uvN, seedK).toVar();
-    const e = 1.6 / BARK_RES;
-    const hx0 = barkHeight(p, uvN.add(vec2(-e, 0)), seedK);
-    const hx1 = barkHeight(p, uvN.add(vec2(e, 0)), seedK);
-    const hy0 = barkHeight(p, uvN.add(vec2(0, -e)), seedK);
-    const hy1 = barkHeight(p, uvN.add(vec2(0, e)), seedK);
-    const n = vec3(
-      hx0.sub(hx1).mul(p.normalK * 0.5),
-      hy0.sub(hy1).mul(p.normalK * 0.5),
-      float(1),
-    ).normalize();
-
-    // cavity: darker in crevices + slight top lightening
-    const cavity = h.clamp(0, 1).mul(0.7).add(0.3);
-    const mott = pnoise(uvN.mul(2), 2, seedK + 201).sub(0.5).mul(p.mottle);
-    let albedo: NV3 = mix(
-      vec3(p.deep[0], p.deep[1], p.deep[2]),
-      vec3(p.high[0], p.high[1], p.high[2]),
-      h.clamp(0, 1),
-    ) as unknown as NV3;
-    albedo = albedo.mul(mott.add(1)) as unknown as NV3;
-    if (p.lenticels > 0) {
-      // horizontal dark dashes: stretched worley spots
-      const lw = pworley(uvN.mul(vec2(5, 24)), new Vector2(5, 24), seedK + 77);
-      const dash = float(1).sub(lw.f1.smoothstep(0.2, 0.42));
-      albedo = mix(albedo, vec3(0.045, 0.04, 0.038), dash.mul(0.85)) as unknown as NV3;
-    }
-    const rough = float(p.roughBase).add(h.sub(0.5).mul(p.roughVar * 2));
-
-    const albEnc = sqrtV3(albedo.clamp(0, 1) as unknown as NV3);
-    textureStore(texA, ivec2(int(xi), int(yi)), vec4(albEnc, cavity));
-    textureStore(texB, ivec2(int(xi), int(yi)), vec4(n.xy.mul(0.5).add(0.5), rough.clamp(0.3, 1), h.clamp(0, 1)));
+    const px = barkPixelValues(p, uvN, seedK);
+    textureStore(texA, ivec2(int(xi), int(yi)), px.a);
+    textureStore(texB, ivec2(int(xi), int(yi)), px.b);
   })().compute(BARK_RES * BARK_RES);
 
   await renderer.computeAsync(kernel);
+  return { texA, texB };
+}
+
+export interface BarkArrayTextures {
+  /** 2D-array albedo (rgb sqrt-enc) + cavity (a); slice index == bark layer */
+  texA: StorageArrayTexture;
+  /** 2D-array normal.xy + roughness + height; slice index == bark layer */
+  texB: StorageArrayTexture;
+}
+
+/**
+ * Bark texture ARRAY for the nanite resolve übershader (N4-C3): one
+ * `texture_2d_array` per map, slice L == BARK_TABLE layer L, so a single
+ * sampled binding covers every species' bark (the 10-storage / 16-sampled
+ * budget forbids binding 12 separate 2D bark textures). Baked from the SAME
+ * `barkPixelValues` recipe as the per-layer 2D bake — pass the per-layer
+ * `seedK` used on the old path (`seed.sub('bark/L') % 977`) so the array is
+ * visually identical. Deadwood shares slice 5 (snag).
+ */
+export async function bakeBarkArray(
+  renderer: Renderer,
+  seedKByLayer: readonly number[],
+): Promise<BarkArrayTextures> {
+  const depth = BARK_TABLE.length;
+  const mk = (): StorageArrayTexture => {
+    const t = new StorageArrayTexture(BARK_RES, BARK_RES, depth);
+    t.wrapS = RepeatWrapping;
+    t.wrapT = RepeatWrapping;
+    t.generateMipmaps = true;
+    t.minFilter = LinearMipmapLinearFilter;
+    t.anisotropy = 4;
+    return t;
+  };
+  const texA = mk();
+  const texB = mk();
+  // one dispatch per layer (BarkParams are a compile-time table — cannot be
+  // indexed by a runtime node); each writes its array slice via .depthNode.
+  for (let layer = 0; layer < depth; layer++) {
+    const p = BARK_TABLE[layer] as BarkParams;
+    const seedK = seedKByLayer[layer] ?? 0;
+    const kernel = Fn(() => {
+      const id = instanceIndex;
+      const xi = id.mod(uint(BARK_RES));
+      const yi = id.div(uint(BARK_RES));
+      const uvN = vec2(float(xi).add(0.5), float(yi).add(0.5)).div(BARK_RES);
+      const px = barkPixelValues(p, uvN, seedK);
+      // array store: textureStore(arr, uvec2, value) + array index via depthNode
+      // (read at generate time, so set AFTER the helper toStacks the node).
+      const sA = textureStore(texA, ivec2(int(xi), int(yi)), px.a);
+      (sA as unknown as { depthNode: unknown }).depthNode = int(layer);
+      const sB = textureStore(texB, ivec2(int(xi), int(yi)), px.b);
+      (sB as unknown as { depthNode: unknown }).depthNode = int(layer);
+    })().compute(BARK_RES * BARK_RES);
+    await renderer.computeAsync(kernel);
+  }
+  // Regenerate the mip chain from the now-filled level 0. three's auto-mip ran
+  // (empty) when these storage textures were first bound for the compute write
+  // and never reran — without this, any sample at mip > 0 reads black (the
+  // nanite resolve's distant/grazing trunks). Self-submits its own encoder.
+  const backend = (renderer as unknown as {
+    backend: { generateMipmaps(t: StorageArrayTexture): void };
+  }).backend;
+  backend.generateMipmaps(texA);
+  backend.generateMipmaps(texB);
   return { texA, texB };
 }

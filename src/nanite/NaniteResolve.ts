@@ -31,9 +31,11 @@ import {
   If,
   cameraProjectionMatrixInverse,
   cameraWorldMatrix,
+  cross,
   dot,
   float,
   getViewPosition,
+  int,
   max,
   mix,
   nodeObject,
@@ -44,15 +46,17 @@ import {
   smoothstep,
   texture,
   uint,
+  vec2,
   vec3,
   vec4,
 } from 'three/tsl';
-import type { NF, NU, NV3, NV4 } from '../gpu/TSLTypes';
+import type { NF, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
 import type { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js';
 import { causticContext, causticDepth, causticTint } from '../render/Caustics';
 import { buildTerrainShading } from '../render/TerrainMaterial';
 import { sunU } from '../render/VegMaterials';
 import { canopyAt } from '../gpu/passes/Scatter';
+import { BARK_RES } from '../gpu/passes/BarkSynth';
 import { fbm3, valueNoise3 } from '../gpu/noise/NoiseTSL';
 import type { ProbeGI } from '../gpu/passes/ProbeGI';
 import type { Heightfield } from '../world/Heightfield';
@@ -80,6 +84,28 @@ export interface ResolveWorld {
    *  reconstructed positions select the right cascade (?shadowcache=0 falls
    *  back to the base positionView.z select — a debug-only A/B). */
   csm: CSMShadowNode | null;
+  /** bark/deadwood texture-array (texA albedo+cavity, texB normal+rough+height);
+   *  sampled at the per-mesh layer slice (mesh word 7). null = bark unported. */
+  barkTexA: Texture | null;
+  barkTexB: Texture | null;
+}
+
+/** TextureNode sample-config chain (depth = array slice, grad = explicit deriv) */
+interface TexSample {
+  depth(d: unknown): TexSample;
+  grad(a: unknown, b: unknown): TexSample;
+}
+
+/** hue jitter (port of VegMaterials.hueShift): warm/cool tint by vdata.x */
+function hueShift(base: NV3, hue: NF, amount: number): NV3 {
+  const k = hue.mul(amount);
+  const warm = vec3(1.18, 1.0, 0.55);
+  const cool = vec3(0.7, 0.95, 1.25);
+  return base
+    .mul(warm)
+    .mul(k.clamp(0, 1))
+    .add(base.mul(cool).mul(k.negate().clamp(0, 1)))
+    .add(base.mul(float(1).sub(k.abs()))) as unknown as NV3;
 }
 
 /** 3D barycentric of p inside triangle (a,b,c) — perspective-correct because
@@ -163,6 +189,9 @@ export function buildNaniteResolve(
   const q = new URLSearchParams(window.location.search);
   const nandepth = q.get('nandepth');
   const nandbg = q.get('nandbg');
+  // ?nanbark= bisect: const (flat brown) | lN (force mip N) | grad (anisotropic
+  // ray-plane derivatives — known NaN on near trunks, default is analytic LOD)
+  const nanbark = q.get('nanbark');
   // ?nanshadow=0 — bisect: drop the CSM sun-shadow receive (A/B the term)
   const shadowsOn = world.csm !== null && q.get('nanshadow') !== '0';
 
@@ -302,21 +331,156 @@ export function buildNaniteResolve(
       rockAo.assign(rk.ao);
     });
 
-    // bark/deadwood/other still flat palette (ported at C3)
-    const isB = matClass.equal(uint(2));
-    const isD = matClass.equal(uint(3));
-    const palette = isB.select(
-      vec3(0.36, 0.27, 0.19),
-      isD.select(vec3(0.33, 0.28, 0.22), vec3(0.35, 0.33, 0.3)),
-    ) as unknown as NV3;
+    // ---- BARK + DEADWOOD shading (N4-C3): textured trunks/snags. Same
+    // explicit-mesh fetch as rock, plus per-vertex UV interpolation, a tangent
+    // frame from the triangle edges for the normal map, analytic UV gradients
+    // (neighbour-pixel rays intersected with THIS triangle's plane → no
+    // silhouette mip spike), and the bark texture-ARRAY sampled at the per-mesh
+    // layer slice (mesh word 7). Diffuse-only (roughness unused, like terrain/
+    // rock). Trunk WIND rides in via fetchWorldVert at the C3 second commit.
+    const isB = matClass.equal(uint(2)).toVar();
+    const isD = matClass.equal(uint(3)).toVar();
+    const isBD = isB.or(isD).toVar();
+    const barkCol = vec3(0.3).toVar() as unknown as NV3;
+    const barkNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
+    const barkAo = float(1).toVar() as unknown as NF;
+    if (world.barkTexA && world.barkTexB) {
+      const barkTexA = world.barkTexA;
+      const barkTexB = world.barkTexB;
+      If(isBD, () => {
+        const instId = item.x;
+        const localTri = pRaw.bitAnd(uint(127));
+        const ctx = fetch.makeCtx(instId, ci);
+        const w0 = fetch.fetchWorldVert(ctx, localTri, 0);
+        const w1 = fetch.fetchWorldVert(ctx, localTri, 1);
+        const w2 = fetch.fetchWorldVert(ctx, localTri, 2);
+        const bw = baryWeights(wp, w0, w1, w2);
+        const tb = ctx.triStart.add(localTri).mul(uint(3));
+        const va = readVertex(gpu.verts, elemU(gpu.indices, tb));
+        const vb = readVertex(gpu.verts, elemU(gpu.indices, tb.add(uint(1))));
+        const vc = readVertex(gpu.verts, elemU(gpu.indices, tb.add(uint(2))));
+        const uvv = va.uv
+          .mul(bw.x)
+          .add(vb.uv.mul(bw.y))
+          .add(vc.uv.mul(bw.z)) as unknown as NV2;
+        const dv = unpackVdata(va.vdata)
+          .mul(bw.x)
+          .add(unpackVdata(vb.vdata).mul(bw.y))
+          .add(unpackVdata(vc.vdata).mul(bw.z)) as unknown as NV4;
+        const gnrm = normalize(
+          instRotateDir(ctx.yawSc, va.nrm)
+            .mul(bw.x)
+            .add(instRotateDir(ctx.yawSc, vb.nrm).mul(bw.y))
+            .add(instRotateDir(ctx.yawSc, vc.nrm).mul(bw.z)),
+        ) as unknown as NV3;
+
+        // tangent frame (world-space): T along +U, Gram-Schmidt vs the normal,
+        // Bi = N×T. Edge/uv-delta solve (Lengyel) — bark texB.xy perturbs it.
+        const e1 = w1.sub(w0);
+        const e2 = w2.sub(w0);
+        const du1 = vb.uv.x.sub(va.uv.x);
+        const dq1 = vb.uv.y.sub(va.uv.y);
+        const du2 = vc.uv.x.sub(va.uv.x);
+        const dq2 = vc.uv.y.sub(va.uv.y);
+        const r = float(1).div(du1.mul(dq2).sub(du2.mul(dq1)).add(1e-8));
+        const Traw = e1.mul(dq2).sub(e2.mul(dq1)).mul(r) as unknown as NV3;
+        const Braw = e2.mul(du1).sub(e1.mul(du2)).mul(r) as unknown as NV3;
+        const T = normalize(Traw.sub(gnrm.mul(dot(gnrm, Traw)))) as unknown as NV3;
+        const Bi = normalize(cross(gnrm, T)) as unknown as NV3;
+
+        // analytic mip LOD (NaN-proof, isotropic): world size of one screen
+        // pixel at the surface vs world size of one bark texel. |Traw|/|Braw| =
+        // world metres per uv unit; bark tiles once per uv unit (BARK_RES texels/
+        // unit). Conservative axis (min world-per-texel) to anti-alias. The
+        // hardware auto-mip is unusable here (uv is computed in non-uniform
+        // control flow → undefined derivatives); anisotropic .grad() is future
+        // work (?nanbark=grad — the ray-plane neighbour path NaNs on near trunks).
+        const C = vec3(cam.camPos) as unknown as NV3;
+        const dist = wp.sub(C).length();
+        const pixWorld = dist.mul(2).div(float(cam.cotHalfFov).mul(float(cam.uH)));
+        const wPerTexel = Traw.length().min(Braw.length()).div(BARK_RES).max(1e-6);
+        const lod = pixWorld.div(wPerTexel).max(1e-4).log2().max(0);
+        const planeN = normalize(cross(e1, e2)) as unknown as NV3;
+        const rayDir = (suv: NV2): NV3 => {
+          const vpN = getViewPosition(suv, zDev, cameraProjectionMatrixInverse) as unknown as NV3;
+          const wd = (
+            (cameraWorldMatrix as unknown as { mul(v: NV4): NV4 }).mul(
+              (vec4 as unknown as (a: NV3, b: number) => NV4)(vpN, 0),
+            ) as unknown as NV4
+          ).xyz as unknown as NV3;
+          return normalize(wd) as unknown as NV3;
+        };
+        const uvAt = (dir: NV3): NV2 => {
+          const tt = dot(planeN, w0.sub(C)).div(dot(planeN, dir).add(1e-8));
+          const bh = baryWeights(C.add(dir.mul(tt)) as unknown as NV3, w0, w1, w2);
+          return va.uv.mul(bh.x).add(vb.uv.mul(bh.y)).add(vc.uv.mul(bh.z)) as unknown as NV2;
+        };
+
+        const layer = int(fetch.meshWord(ctx.meshId, 7).bitAnd(uint(0xff)));
+        // ?nanbark=const — flat brown, no texture (fetch/branch sanity)
+        if (nanbark === 'const') {
+          barkCol.assign(vec3(0.4, 0.25, 0.13) as unknown as NV3);
+          barkNrm.assign(gnrm);
+          barkAo.assign(float(1) as unknown as NF);
+          return;
+        }
+        // ?nanbark=lN — force mip level N (inspect the generated chain)
+        const lvlMatch = nanbark ? /^l(\d+)$/.exec(nanbark) : null;
+        const sample = (t: Texture): NV4 => {
+          const base = texture(t, uvv as never) as unknown as TexSample;
+          if (lvlMatch)
+            return (base.depth(layer) as unknown as { level(n: number): NV4 }).level(
+              Number(lvlMatch[1]),
+            );
+          if (nanbark === 'grad') {
+            const dUVdx = uvAt(
+              rayDir(screenUV.add(vec2(float(1).div(cam.uW), 0)) as unknown as NV2),
+            ).sub(uvv) as unknown as NV2;
+            const dUVdy = uvAt(
+              rayDir(screenUV.add(vec2(0, float(1).div(cam.uH))) as unknown as NV2),
+            ).sub(uvv) as unknown as NV2;
+            return base.depth(layer).grad(dUVdx, dUVdy) as unknown as NV4;
+          }
+          // DEFAULT: analytic isotropic mip LOD (NaN-proof)
+          return (base.depth(layer) as unknown as { level(n: unknown): NV4 }).level(lod);
+        };
+        const tA = sample(barkTexA);
+        const tB = sample(barkTexB);
+
+        // albedo: sqrt-decoded texture, bark (hue+cavity) vs deadwood (dim+moss+rot)
+        const tex = tA.rgb.mul(tA.rgb) as unknown as NV3;
+        const barkAlb = hueShift(tex, dv.x, 0.14).mul(dv.w.mul(0.45).add(0.55)) as unknown as NV3;
+        // deadwood dim (logDim, representative — energy-correct, not per-pool)
+        let deadAlb = tex.mul(vec3(0.6, 0.52, 0.44)) as unknown as NV3;
+        const mossN = smoothstep(0.24, 0.58, fbm3(wp.mul(2.6), 3).mul(0.5).add(0.5));
+        const moss = smoothstep(0.05, 0.65, gnrm.y).mul(dv.z).mul(mossN).clamp(0, 1);
+        deadAlb = mix(deadAlb, vec3(0.05, 0.1, 0.032), moss) as unknown as NV3;
+        deadAlb = deadAlb.mul(float(1).sub(dv.z.mul(0.25))) as unknown as NV3; // rot
+        deadAlb = hueShift(deadAlb, dv.x, 0.1) as unknown as NV3;
+
+        // tangent-space normal map (three normalMap: n = tex·2−1, z kept = 1)
+        const pert = normalize(
+          T.mul(tB.x.mul(2).sub(1))
+            .add(Bi.mul(tB.y.mul(2).sub(1)))
+            .add(gnrm),
+        ) as unknown as NV3;
+
+        barkCol.assign(isD.select(deadAlb, barkAlb));
+        barkNrm.assign(pert);
+        barkAo.assign(tA.w as unknown as NF);
+      });
+    }
+
+    // unported explicit classes (leaf/grass/debris — N9/N10) keep a flat gray
+    const palette = vec3(0.35, 0.33, 0.3) as unknown as NV3;
     const albedo = isT
-      .select(terrainCol, isR.select(rockCol, palette))
+      .select(terrainCol, isR.select(rockCol, isBD.select(barkCol, palette)))
       .toVar() as unknown as NV3;
     const wNormal = isT
-      .select(shading.worldNormalNode, isR.select(rockNrm, vec3(0, 1, 0)))
+      .select(shading.worldNormalNode, isR.select(rockNrm, isBD.select(barkNrm, vec3(0, 1, 0))))
       .toVar() as unknown as NV3;
-    // aoNode (rock): applied to indirect only — 1 elsewhere
-    const ao = isR.select(rockAo, float(1)) as unknown as NF;
+    // aoNode (rock + bark cavity): applied to indirect only — 1 elsewhere
+    const ao = isR.select(rockAo, isBD.select(barkAo, float(1))) as unknown as NF;
 
     // ---- MANUAL lighting (D-N17): sun lambert × CSM shadow + sky ambient +
     // probe GI. The CSM node (proven on the old path) is referenced as a
@@ -365,9 +529,19 @@ export function buildNaniteResolve(
     if (nandbg === 'normal') return vec4(wNormal.mul(0.5).add(0.5), 1);
     if (nandbg === 'cov') return vec4(1, 0, 0, 1); // every covered pixel red
     if (nandbg === 'cls')
-      // matClass tint: terrain green, rock red, bark/deadwood/other blue
+      // matClass tint: terrain green / rock red / bark blue / deadwood cyan /
+      // other (leaf/grass/debris) magenta
       return vec4(
-        isT.select(vec3(0.1, 0.6, 0.1), isR.select(vec3(0.95, 0.1, 0.1), vec3(0.1, 0.1, 0.95))),
+        isT.select(
+          vec3(0.1, 0.6, 0.1),
+          isR.select(
+            vec3(0.95, 0.1, 0.1),
+            isB.select(
+              vec3(0.1, 0.1, 0.95),
+              isD.select(vec3(0.1, 0.7, 0.8), vec3(0.8, 0.1, 0.8)),
+            ),
+          ),
+        ),
         1,
       ) as unknown as NV4;
     return vec4(lit, 1);

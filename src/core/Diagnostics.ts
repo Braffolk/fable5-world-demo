@@ -25,11 +25,19 @@ const INTERESTING_LIMITS: readonly (keyof GPUSupportedLimits & string)[] = [
 /**
  * Limits we ask the device for (clamped to what the adapter reports).
  * Compute passes bind many storage buffers — the default 8 is not enough.
+ *
+ * maxSampledTexturesPerShaderStage: the nanite resolve übershader samples the
+ * terrain maps + probe GI + 4 CSM cascades + canopy + caustics + the bark
+ * texture-array — 17, over the spec-DEFAULT 16. This adapter reports 48, so we
+ * raise the request (D-N23/D-N25: storage buffers are the real cap at 10/F9,
+ * "sampled textures are separate and plentiful"). Clamped to adapterMax below,
+ * so lower hardware degrades to its own ceiling rather than failing the device.
  */
 export function buildRequiredLimits(d: GpuDiagnostics): Record<string, number> {
   const want: Record<string, number> = {
     maxStorageBuffersPerShaderStage: 16,
     maxStorageTexturesPerShaderStage: 8,
+    maxSampledTexturesPerShaderStage: 24,
     maxBufferSize: 1 << 30,
     maxStorageBufferBindingSize: 1 << 30,
   };

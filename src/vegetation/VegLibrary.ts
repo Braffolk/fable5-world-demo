@@ -14,7 +14,13 @@
 import type { BufferGeometry, DataTexture } from 'three';
 import type { MeshStandardNodeMaterial, Renderer } from 'three/webgpu';
 import type { WorldSeed } from '../core/Seed';
-import { bakeBarkTextures, type BarkTextures } from '../gpu/passes/BarkSynth';
+import {
+  bakeBarkArray,
+  bakeBarkTextures,
+  BARK_TABLE,
+  type BarkArrayTextures,
+  type BarkTextures,
+} from '../gpu/passes/BarkSynth';
 import { TREE_VARIANTS, VegClass } from '../gpu/passes/Scatter';
 import {
   barkTexturedMaterial,
@@ -51,6 +57,10 @@ export interface PoolPart {
 export interface VegPool {
   cls: number;
   variant: number;
+  /** BARK_TABLE layer the OPAQUE (parts[0]) bark/deadwood texture uses —
+   *  threaded to the nanite resolve as the texture-array slice (matParam).
+   *  Undefined for rock/leaf pools (no bark texture). */
+  barkLayer?: number;
   /** hero ring (trees only): full bark + cards + real mesh leaves, ≤26 m */
   r0?: PoolPart[] | null;
   r1: PoolPart[] | null;
@@ -90,6 +100,8 @@ export interface VegLib {
   clsMaxDist: number[];
   atlases: Map<string, DataTexture>;
   barks: Map<number, BarkTextures>;
+  /** bark texture-array (slice == BARK_TABLE layer) for the nanite resolve */
+  barkArray: BarkArrayTextures;
 }
 
 const FLOWER_COLOR: Record<FlowerKind, { r: number; g: number; b: number }> = {
@@ -146,6 +158,12 @@ export async function buildVegLibrary(
     if (!b) throw new Error(`bark layer ${layer} not baked`);
     return b;
   };
+  // nanite resolve sampled-array: every BARK_TABLE layer, same per-layer seedK
+  // as the 2D bake above (so the array is visually identical to the old path).
+  const barkArray = await bakeBarkArray(
+    renderer,
+    BARK_TABLE.map((_, layer) => seed.sub(`bark/${layer}`) % 977),
+  );
 
   const pools: VegPool[] = [];
   const clsHeight = new Array<number>(24).fill(1);
@@ -213,6 +231,7 @@ export async function buildVegLibrary(
       pools.push({
         cls: ci,
         variant: v,
+        barkLayer: sp.barkLayer,
         r0,
         r1,
         r2,
@@ -285,6 +304,7 @@ export async function buildVegLibrary(
       pools.push({
         cls,
         variant: v,
+        barkLayer: 2, // shrub opaque part uses barkOf(2) above
         r1: parts,
         r2: null,
         trisR1: shrub.tris,
@@ -371,6 +391,7 @@ export async function buildVegLibrary(
     pools.push({
       cls: VegClass.Log,
       variant: v,
+      barkLayer: 5, // deadwood: snag bark (barkOf(5))
       r1: [
         {
           geo: log.geometry,
@@ -394,6 +415,7 @@ export async function buildVegLibrary(
     pools.push({
       cls: VegClass.Stump,
       variant: v,
+      barkLayer: 5, // deadwood: snag bark (barkOf(5))
       r1: [
         {
           geo: stump.geometry,
@@ -526,6 +548,7 @@ export async function buildVegLibrary(
     pools.push({
       cls: VegClass.Branch,
       variant: v,
+      barkLayer: 5, // deadwood: snag bark (barkOf(5))
       r1: [
         {
           geo,
@@ -553,5 +576,5 @@ export async function buildVegLibrary(
   clsMaxDist[VegClass.Branch] = 230;
 
   progress(1, 'veg: pools ready');
-  return { pools, impostors, clsHeight, clsRadius, clsMaxDist, atlases, barks };
+  return { pools, impostors, clsHeight, clsRadius, clsMaxDist, atlases, barks, barkArray };
 }

@@ -807,7 +807,48 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   fine); if a future class needs another storage buffer, pack two mega-buffers
   (F9) rather than split the übershader (D-N10 stands).
 
+- D-N24 (2026-06-13, N4-C3): BARK/DEADWOOD texture-ARRAY + per-mesh matParam.
+  Per-species bark (6 BARK_TABLE layers) can't be 12 separate bound 2D textures
+  (the 16-sampled-texture budget), so the resolve samples ONE `texture_2d_array`
+  per map (texA albedo+cavity, texB normal+rough+height), slice == bark layer.
+  The per-mesh layer index rides in the registry mesh-record's word 7 — which
+  holds hfOriginX for HEIGHTFIELD meshes ONLY, so explicit (bark/deadwood/rock)
+  meshes reuse it free as a generic `matParam` (RegisterOpts.matParam; LODs
+  inherit the head's). Deadwood shares slice 5 (snag) + adds moss/rot/dim; its
+  per-pool dim is approximated by one logDim constant (energy-correct, not
+  per-pool — D-N22 latitude). The resolve interpolates uv/normal/vdata by the
+  same barycentric path as rock (D-N16) + a world-space TBN from triangle edges
+  for the tangent normal map. MIP SELECTION is an analytic isotropic LOD (world
+  texel footprint vs screen-pixel footprint) — NOT hardware auto-mip (uv is
+  computed in the non-uniform If(isBD) branch → undefined derivatives) and NOT
+  the anisotropic ray-plane .grad() (it NaNs on very near trunks → black; kept
+  behind ?nanbark=grad for a later aniso pass).
+
+- D-N25 (2026-06-13, N4-C3): maxSampledTexturesPerShaderStage RAISED 16→24
+  (Diagnostics.buildRequiredLimits, clamped to adapterMax). The resolve samples
+  17 (terrain maps + probe GI + 4 CSM cascades + canopy + caustics + bark texA/
+  texB), over the spec-DEFAULT 16. This adapter reports 48, so the raise is free
+  capacity, NOT a deviation: it makes D-N23's "sampled textures are separate and
+  plentiful" literally true and follows the existing storage-buffer clamp (8→16)
+  precedent. Storage buffers remain the real hard cap (adapter 10 = F9); sampled
+  textures are not. Lower hardware degrades to its own ceiling (clamp), where the
+  array would need merging to ≤16 — a future portability concern, not now.
+
 ## GOTCHAS (append-only, nanite-specific)
+
+- (N4-C3) STORAGE-TEXTURE MIPS DON'T REGENERATE AFTER A COMPUTE WRITE. three
+  auto-generates a texture's mip chain ONCE (when first bound) — for a
+  StorageTexture/StorageArrayTexture that's the COMPUTE storage bind, BEFORE the
+  kernel fills level 0, so every mip > 0 is EMPTY. Sampling lands on an empty
+  mip ⇒ pure black (the resolve's distant/grazing bark). The OLD 2D bark hid it
+  by only ever sampling near mip 0. FIX: call `renderer.backend.generateMipmaps(
+  tex)` AFTER the bake compute (BarkSynth.bakeBarkArray) — it downsamples the
+  now-filled level 0 and self-submits. Symptom signature: forced .level(0) is
+  correct, .level(2+) is black.
+- (N4-C3) Hardware auto-mip is UNUSABLE in the resolve übershader: the per-pixel
+  uv is computed inside `If(matClass==bark)` (non-uniform control flow), so
+  WGSL `textureSample`'s implicit ddx/ddy are UNDEFINED → garbage mip → black on
+  the whole class, not just silhouettes. Must pass an explicit level/grad.
 
 - (N4-C0) THE SCANLINE DEPTH WAS BIASED-NEAR ON SUB-PIXEL TRIANGLES from
   N3a until N4-C0: the integer cz interpolated with the TOP-LEFT-BIASED
@@ -885,6 +926,30 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   min/max on uint nodes, float(uintNode) → use .toFloat().
 
 ## PROGRESS LOG (append-only, newest first)
+
+- 2026-06-13 (v): **N4-C3 BARK + DEADWOOD material landed — the nanite world's
+  first TEXTURED, UV-mapped, normal-mapped class (trunks + snags).** (Opus 4.8.)
+  PORTED_CLASSES += bark + deadwood (~684k tree/shrub + 25k deadwood instances
+  move into the resolve). New capabilities over rock (C2): per-vertex UV
+  interpolation, a sampled bark texture-ARRAY (D-N24 — one texture_2d_array per
+  map, slice == species bark layer, threaded as the registry's per-mesh matParam
+  in mesh word 7), a world-space TBN from the triangle edges driving the tangent
+  normal map (three normalMap math: n=tex·2−1, z=1), and an analytic isotropic
+  mip LOD. THREE root-causes chained to get there: (1) 17 sampled textures > the
+  spec-default 16 → invalid pipeline → black frame; FIXED by raising the device
+  limit to 24 (adapter supports 48 — D-N25). (2) every mip>0 of the array was
+  BLACK — three never regenerates storage-texture mips after the compute write;
+  FIXED by an explicit backend.generateMipmaps after bake (GOTCHA). (3) the
+  anisotropic ray-plane .grad() NaNs on very near trunks (black); REPLACED as
+  the default by the NaN-proof analytic LOD (grad kept behind ?nanbark=grad).
+  Bisected the whole chain with ?nanbark=const|lN|uv|tex0 (flag scaffolding,
+  trimmed to const|lN|grad). VERIFIED: forest-interior + gorge shots render
+  detailed lit bark (fissures, species tint, cavity AO) with no black/errors/
+  overflow; 112–117 fps @ ~1MP, drawCalls 21, nanite.inst 955k. Deadwood shares
+  slice 5 + moss/rot. Diffuse-only (roughness unused, like terrain/rock — a
+  spec term is future work). NEXT: N4-C3 second commit — trunk WIND channel
+  (Wind.ts 'trunk' math into fetchWorldVert, shared by raster+resolve so they
+  stay bit-identical; gate runs --wind 0, then a living-wind eyeball).
 
 - 2026-06-13 (u): **N4-C2 ROCK material landed — first real OBJECTS in the
   nanite world + the resolve's first per-vertex attribute interpolation.** (Opus
@@ -1354,13 +1419,19 @@ Chunks, each tsc-clean + committed:
    ?nandbg=cls debug added. Gate is the energy-correct/quality bar per D-N22
    (not a pixel diff). Per-instance slot-hash tint NOT yet wired (rock material
    uses vdata, not the B.w idF hash — revisit if clones show).
-4. **N4-C3 — BARK + DEADWOOD + trunk wind channel**: barkTextured/deadwood
-   need texA/texB PER POOL → texture array or atlas decision (16 sampled
-   textures/stage budget); uv f16 + analytic grad derivatives (example
-   verbatim); hueShift×vdata; Wind.ts 'trunk' channel into fetchWorldVert
-   (cull already swayPad-padded, F6) — gate runs --wind 0; separate living-
-   wind eyeball + a wind=1 shimmer sanity probe. DEADWOOD shares the bark
-   texture path + moss/rot terms.
+4. ~~N4-C3 MATERIAL — BARK + DEADWOOD~~ DONE (log v). texture-array (D-N24) +
+   per-mesh matParam + UV/normal/vdata barycentric interp + TBN tangent normal
+   map + hueShift×vdata + deadwood moss/rot. Mip = analytic isotropic LOD
+   (D-N24: hardware auto-mip dead in non-uniform branch; .grad() NaNs near —
+   ?nanbark=grad for the aniso pass). Two infra fixes: sampled-texture limit
+   16→24 (D-N25), storage-texture mip regen after compute (GOTCHA).
+   REMAINING N4-C3 — **trunk WIND channel**: Wind.ts 'trunk' math into
+   fetchWorldVert's explicit branch when channel=='trunk' (read from mesh
+   word 6) — SHARED by raster + resolve so they reconstruct bit-identical
+   world positions (the barycentric needs the same w0..w2 the raster drew).
+   Needs time + wind uniforms threaded into makeFetch. Cull already
+   swayPad-padded (F6). Gate runs --wind 0 (material unchanged); then a
+   living-wind eyeball + a wind=1 shimmer sanity probe.
 5. **N4-C4 — close**: shadow-receive verification (shadow-color +
    no-black-shadows pass), full battery (probe-nanitedbg/pan/parity/
    horizon-nanite + registry probes), perf ledger row at 2592×1676,

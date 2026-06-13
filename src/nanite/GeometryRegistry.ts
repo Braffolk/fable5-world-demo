@@ -130,6 +130,10 @@ export interface RegisterOpts {
   castShadows?: boolean;
   /** max wind sway amplitude in meters — cluster-bound padding at cull (F6) */
   swayPad?: number;
+  /** explicit-mesh material parameter (e.g. bark texture-array slice). Stored
+   *  in mesh-record word 7 — which holds hfOriginX for HEIGHTFIELD meshes only,
+   *  so explicit meshes reuse it free (resolve reads it raw via meshWord(7)). */
+  matParam?: number;
   /** stats-table label */
   label?: string;
 }
@@ -559,6 +563,8 @@ interface MeshEntry {
   flags: number;
   winQuads: number;
   swayPad: number;
+  /** explicit-mesh material param packed into word 7 (hfOriginX slot) */
+  matParam: number;
   vertBase: number;
   vertCount: number;
   triBase: number;
@@ -715,6 +721,7 @@ export class GeometryRegistry {
       transformChannel: channelName ?? 'rigid',
       castShadows: (head.flags & MESH_FLAG_CAST_SHADOWS) !== 0,
       swayPad: head.swayPad,
+      matParam: head.matParam, // LOD bark shares the head's texture-array slice
       label: `${head.label}/lod`,
     });
     tail.lodNext = lod;
@@ -1045,6 +1052,7 @@ export class GeometryRegistry {
       flags,
       winQuads,
       swayPad: opts.swayPad ?? 0,
+      matParam: opts.matParam ?? 0,
       vertBase: 0,
       vertCount: 0,
       triBase: 0,
@@ -1103,7 +1111,9 @@ export class GeometryRegistry {
     m[b + 4] = e.lodNext;
     m[b + 5] = f32Bits(e.lodDist);
     m[b + 6] = (e.channel | (MATERIAL_CLASS[e.matClass] << 8) | (e.flags << 16) | (e.winQuads << 24)) >>> 0;
-    m[b + 7] = f32Bits(e.hf?.originX ?? 0);
+    // word 7: hfOriginX (heightfield) | matParam raw-u32 (explicit, e.g. bark
+    // texture-array slice — read raw by the resolve, never as a float)
+    m[b + 7] = e.hf ? f32Bits(e.hf.originX) : e.matParam >>> 0;
     m[b + 8] = f32Bits(e.hf?.originZ ?? 0);
     m[b + 9] = f32Bits(e.hf?.cellSize ?? 0);
     m[b + 10] = ((e.hf?.quadsX ?? 0) | ((e.hf?.quadsZ ?? 0) << 16)) >>> 0;
