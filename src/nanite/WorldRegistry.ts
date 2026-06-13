@@ -141,6 +141,16 @@ export function migratedMatClass(cls: number): MaterialClassId | null {
   return classPolicy(cls)?.matClass ?? null;
 }
 
+/** trunk-wind profile (Forests.ts windBind): 0 tree (k1,f1,h0=6), 1 snag
+ *  (k.45,f.8,h6), 2 shrub (k1,f1.8,h.9). Packed into matParam high byte; the
+ *  fetch reads it for the 'trunk' channel (rigid classes ignore it). */
+function windProfile(cls: number): number {
+  if (cls === 5) return 1; // snag species
+  if (cls <= TREE_MAX_CLS) return 0; // canopy trees 0–4
+  if (SHRUB_CLASSES.has(cls)) return 2; // understory shrubs
+  return 0; // rigid (deadwood/rock) — unused
+}
+
 function classPolicy(
   cls: number,
 ): { matClass: MaterialClassId; channel: TransformChannel; lodDist: number; swayPad: number } | null {
@@ -269,8 +279,9 @@ export async function buildWorldRegistry(input: {
       castShadows: first.part.castShadow,
       label,
       swayPad: policy.swayPad,
-      // bark/deadwood: texture-array slice (rock ignores it). LODs inherit it.
-      matParam: pool.barkLayer ?? 0,
+      // matParam low byte = bark texture-array slice (rock ignores it); high
+      // byte = trunk-wind profile (rigid channels ignore it). LODs inherit it.
+      matParam: (pool.barkLayer ?? 0) | (windProfile(pool.cls) << 8),
     });
     for (let r = 1; r < rings.length; r++) {
       const prev = rings[r - 1] as { part: PoolPart; switchAt: number };

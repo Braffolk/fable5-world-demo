@@ -53,7 +53,7 @@ import { markFragmentWritable } from '../render/ThreePatches';
 import { MESH_WORDS } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
 import { DISPATCH_ROW, QRASTER_CAP, hashColor, type NaniteCam } from './NaniteCommon';
-import { makeFetch, type TerrainDisp } from './NaniteFetch';
+import { makeFetch, type TerrainDisp, type TrunkWindOpt } from './NaniteFetch';
 import {
   aLoadU,
   bcF2U,
@@ -142,6 +142,9 @@ export function buildNaniteRaster(
   shade = true,
   /** terrain micro-displacement (frame mode; dbg views omit — NaniteFetch) */
   disp?: TerrainDisp,
+  /** trunk wind (frame mode) — MUST match the resolve's makeFetch so the
+   *  rastered geometry and the resolve's barycentric corners agree */
+  wind?: TrunkWindOpt,
 ): NaniteRasterHandles {
   const { width, height } = cam;
   const pixelCount = width * height;
@@ -162,7 +165,7 @@ export function buildNaniteRaster(
   const auditV = sU32Views(auditAttr, 4);
 
   // ---- shared fetch helpers (NaniteFetch.ts — also the resolve's decode) ----------
-  const { makeCtx, fetchWorldVert } = makeFetch(gpu, heightTex, disp);
+  const { makeCtx, fetchWorldVert } = makeFetch(gpu, heightTex, disp, wind);
 
   const edgeFn = (a: NV2, b: NV2, p: NV2): NF =>
     p.y.sub(a.y).mul(b.x.sub(a.x)).sub(p.x.sub(a.x).mul(b.y.sub(a.y))) as unknown as NF;

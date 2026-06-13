@@ -105,7 +105,11 @@ export function buildNaniteFrame(
         noiseB: hf.noiseB,
         camPos: cam.camPos,
       };
-  const raster = buildNaniteRaster(registry.gpu, hf.heightTex, cam, cull, vis, 'flat', true, disp);
+  // trunk wind (matches the resolve's makeFetch — both read ?nanwind so the
+  // rastered geometry and the resolve's barycentric corners stay bit-identical)
+  const windOn = params.get('nanwind') !== '0';
+  const windOpt = windOn ? { camPos: cam.camPos } : undefined;
+  const raster = buildNaniteRaster(registry.gpu, hf.heightTex, cam, cull, vis, 'flat', true, disp, windOpt);
   const resolve = buildNaniteResolve(registry.gpu, hf.heightTex, cam, cull, vis, {
     hf,
     gi: world.gi,

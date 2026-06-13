@@ -81,8 +81,12 @@ export function gustAt(xz: NV2): NF {
   return g1.mul(0.6).add(g2.mul(0.4));
 }
 
+/** branch response lag in metres (≈0.5 s downwind) — exported for the nanite
+ *  trunk channel, which ports this assembly into the shared vertex fetch */
+export const WIND_LAG_M = LAG_M;
+
 /** the 85 m front octave only, sampled `lagM` downwind = `lagM/speed` s ago */
-function gustLagAt(xz: NV2, lagM: number): NF {
+export function gustLagAt(xz: NV2, lagM: number): NF {
   if (!ctx) throw new Error('wind context not set');
   const d = vec2(windU.dir as unknown as NV2);
   const p = xz

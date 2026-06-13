@@ -177,16 +177,17 @@ export function buildNaniteResolve(
   vis: NaniteVisBuffers,
   world: ResolveWorld,
 ): NaniteResolveHandles {
-  // ROCK (and future explicit-mesh classes) need per-vertex attributes →
-  // re-fetch the cluster triangle. Terrain reconstructs wp from depth and
-  // never touches this. No disp: the rock branch only hits the explicit-mesh
-  // path of fetchWorldVert (heightfield disp is terrain-only).
-  const fetch = makeFetch(gpu, heightTex);
   const hf = world.hf;
   if (!hf.biomeTex || !hf.fieldsTex || !hf.noiseA || !hf.noiseB) {
     throw new Error('NaniteResolve: heightfield derived maps missing (boot order)');
   }
   const q = new URLSearchParams(window.location.search);
+  // ROCK (and future explicit-mesh classes) need per-vertex attributes →
+  // re-fetch the cluster triangle. Terrain reconstructs wp from depth and
+  // never touches this. ?nanwind=0 A/Bs the trunk wind — MUST match the raster's
+  // makeFetch (both read this flag) so their windy positions stay bit-identical.
+  const windOn = q.get('nanwind') !== '0';
+  const fetch = makeFetch(gpu, heightTex, undefined, windOn ? { camPos: cam.camPos } : undefined);
   const nandepth = q.get('nandepth');
   const nandbg = q.get('nandbg');
   // ?nanbark= bisect: const (flat brown) | lN (force mip N) | grad (anisotropic

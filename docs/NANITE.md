@@ -927,6 +927,26 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-13 (w): **N4-C3 trunk WIND channel landed — N4-C3 now COMPLETE.**
+  (Opus 4.8.) The 'trunk' transform channel (Wind.vegWindOffset assembly, leaf
+  flutter omitted — trunks have low flex) ported into the SHARED fetchWorldVert,
+  so the raster (geometry) and the resolve (barycentric corners) reconstruct
+  bit-identical windy positions by construction. Per-instance wind profile
+  (tree/snag/shrub → k/freq/h0) packed into matParam's HIGH byte (D-N24 low byte
+  = bark slice); the 4 gust FIELD texture samples (exposure/gust/lag) are
+  precomputed ONCE per instance in makeCtx (gated on the trunk channel so
+  terrain/rock pay nothing), leaving only the per-vertex prof/flex ALU in
+  fetchWorldVert. Reuses the Wind module's gustAt/gustLagAt/windExposure + windU
+  + TSL time (gustLagAt + WIND_LAG_M newly exported); slotHash re-derived so the
+  per-instance phase matches the old path's bake. VERIFIED: bark still renders
+  correct (no cracks/barycentric corruption ⇒ raster/resolve agree), ?wind=2.5
+  visibly bends background trunks downwind while ?nanwind=0 keeps them straight
+  (A/B), perf 116.5 vs 118.9 fps (~2%, the precompute pays off), tsc clean. The
+  --wind 0 / ?nanwind=0 no-op safety holds (strength 0 zeroes the offset).
+  Deadwood stays RIGID (channel 'rigid', as the old path). NEXT: N4-C4 close
+  (shadow-receive + no-black-shadows verification, full probe battery, perf
+  ledger row, USER CHECKPOINT), then N5.
+
 - 2026-06-13 (v): **N4-C3 BARK + DEADWOOD material landed — the nanite world's
   first TEXTURED, UV-mapped, normal-mapped class (trunks + snags).** (Opus 4.8.)
   PORTED_CLASSES += bark + deadwood (~684k tree/shrub + 25k deadwood instances
@@ -1419,19 +1439,18 @@ Chunks, each tsc-clean + committed:
    ?nandbg=cls debug added. Gate is the energy-correct/quality bar per D-N22
    (not a pixel diff). Per-instance slot-hash tint NOT yet wired (rock material
    uses vdata, not the B.w idF hash — revisit if clones show).
-4. ~~N4-C3 MATERIAL — BARK + DEADWOOD~~ DONE (log v). texture-array (D-N24) +
-   per-mesh matParam + UV/normal/vdata barycentric interp + TBN tangent normal
-   map + hueShift×vdata + deadwood moss/rot. Mip = analytic isotropic LOD
-   (D-N24: hardware auto-mip dead in non-uniform branch; .grad() NaNs near —
-   ?nanbark=grad for the aniso pass). Two infra fixes: sampled-texture limit
-   16→24 (D-N25), storage-texture mip regen after compute (GOTCHA).
-   REMAINING N4-C3 — **trunk WIND channel**: Wind.ts 'trunk' math into
-   fetchWorldVert's explicit branch when channel=='trunk' (read from mesh
-   word 6) — SHARED by raster + resolve so they reconstruct bit-identical
-   world positions (the barycentric needs the same w0..w2 the raster drew).
-   Needs time + wind uniforms threaded into makeFetch. Cull already
-   swayPad-padded (F6). Gate runs --wind 0 (material unchanged); then a
-   living-wind eyeball + a wind=1 shimmer sanity probe.
+4. ~~N4-C3 — BARK + DEADWOOD + trunk wind~~ DONE (log v + w).
+   - MATERIAL (v): texture-array (D-N24) + per-mesh matParam + UV/normal/vdata
+     barycentric interp + TBN tangent normal map + hueShift×vdata + deadwood
+     moss/rot. Mip = analytic isotropic LOD (hardware auto-mip dead in the
+     non-uniform branch; .grad() NaNs near — ?nanbark=grad for the aniso pass).
+     Infra: sampled-texture limit 16→24 (D-N25), storage-texture mip regen
+     after compute (GOTCHA).
+   - WIND (w): 'trunk' channel ported into the shared fetchWorldVert (raster +
+     resolve bit-identical); profile in matParam high byte; gust fields
+     precomputed per-instance in makeCtx; ?nanwind=0 A/B; ~2% perf. Deadwood
+     rigid. A wind=1 shimmer/TRAA sanity probe over time is still worth a glance
+     at N4-C4 (the static A/B is done).
 5. **N4-C4 — close**: shadow-receive verification (shadow-color +
    no-black-shadows pass), full battery (probe-nanitedbg/pan/parity/
    horizon-nanite + registry probes), perf ledger row at 2592×1676,
