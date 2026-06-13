@@ -1340,26 +1340,20 @@ Chunks, each tsc-clean + committed:
 
 1. ~~N4-C0~~ DONE (log entry p) — full-frame integration + the N3 depth-bias
    fix; all C0 gates measured, battery re-proven.
-2. **N4-C1 — TERRAIN port + gate**: parameterize buildTerrainShading's TSL
-   singletons (positionWorld/cameraPosition/normalWorld → explicit surface
-   ctx; old callers pass the singletons — bit-identical by construction,
-   verify with one framealigned nanite=0 pre/post diff). Resolve terrain
-   branch: perspective-correct barycentric wp (example block ~1173–1263) →
-   shared shading fn → MANUAL light mirror (D-N17): sun BRDF (three
-   PhysicalLightingModel formulas) × CSM cascade-select + OUR pcssFilter ×
-   cloud-shadow gate + probe-GI irradiance × canopy (lightmap-slot mirror)
-   × aoNode rules + caustics/wet block from TerrainTiles. 'terrain'
-   channel gets the MICRO-DISPLACEMENT port in fetchWorldVert (DISP
-   formula, noiseA/B + biome/normal texture gates; pad terrain cluster
-   spheres +0.6 m) — without it near terrain (<85 m) is not
-   geometry-identical vs old. KNOWN honest deltas to measure, not hide:
-   CDLOD distance morph vs full-res L0 windows at far ridges; skirts.
-   Gate: `--framealign N --wind 0 --lockexp 1` full-frame diff vs
-   ?nanite=0 ≤0.2% (thr 12/255, tools/diff.ts) at terrain-dominant
-   framings + structural eyeball of diff maps.
-3. **N4-C2 — ROCK port + gate**: vdata decode from vert blob (hue/strata/
-   lichen/AO channels drive rockMaterial); per-instance variation per
-   VegInstance slot-hash law; caustics. Same gate on rock framings.
+2. ~~N4-C1 — TERRAIN port~~ DONE (log p/q/s/t). CSM shadow-receive + manual
+   PhysicalLightingModel BRDF (albedo/π) + probe-GI + caustics landed; micro-
+   displacement already in fetchWorldVert. GATE RETIRED → ENERGY-CORRECT, not
+   pixel-parity (D-N22, user directive): the old terrain double-adds an env-IBL
+   skylight the nanite intentionally omits, so terrain lighting is judged on
+   absolute quality, NOT diffed vs ?nanite=0. Old/shared path left untouched.
+   Also: old geometry hard-disabled (D-N21, ?oldgeo=1 to restore for any A/B).
+3. ~~N4-C2 — ROCK port~~ DONE (log u, commit 5525464). PORTED_CLASSES += rock;
+   resolve gained per-vertex barycentric attribute interpolation (vdata 4×u8
+   unpack + instance-rotated normals) + ported rockMaterial. F9 wall fixed
+   (D-N23: heightfield read from heightTex texture, not the storage buffer).
+   ?nandbg=cls debug added. Gate is the energy-correct/quality bar per D-N22
+   (not a pixel diff). Per-instance slot-hash tint NOT yet wired (rock material
+   uses vdata, not the B.w idF hash — revisit if clones show).
 4. **N4-C3 — BARK + DEADWOOD + trunk wind channel**: barkTextured/deadwood
    need texA/texB PER POOL → texture array or atlas decision (16 sampled
    textures/stage budget); uv f16 + analytic grad derivatives (example
