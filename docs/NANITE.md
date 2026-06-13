@@ -848,6 +848,38 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-13 (s): **N4-C1 CSM sun-shadow receive landed on the nanite
+  terrain.** (Opus 4.8.) The dominant ~39% over-bright term (D-N20: "almost
+  all of it the missing canopy shadow") is now received. MECHANISM (D-N17 as
+  written, no deviation): the resolve references the SAME proven
+  CachedCsmShadowNode as a multiplicative factor — exactly how AnalyticLightNode
+  consumes it (`colorNode.mul(shadowNode)`, three src line 230) — so OUR
+  pcssFilter (blocker search → world-metric penumbra → Vogel PCF) and the
+  cloud-shadow gate ride along unchanged. The cascade-select reads
+  `shadowPositionWorld`, which ShadowBaseNode sources from
+  `material.receivedShadowPositionNode`; the resolve sets that to the per-pixel
+  RECONSTRUCTED world position (self-contained Fn mirroring depthNode — NOT a
+  fragment closure var, so it builds inside the shadow subgraph cleanly). This
+  is why the CsmCached.setup() override (shadowPositionWorld-based linearDepth,
+  already 0.02% A/B on the old path) was needed: the fullscreen triangle's
+  positionView is a near-plane point that would pin every pixel to cascade 0.
+  Threaded shadowRig.csm → buildNaniteFrame → buildNaniteResolve (ResolveWorld.csm,
+  base CSMShadowNode type; runtime is the Cached subtype). The resolve is now
+  the ONLY consumer keeping the CSM alive in black-slate mode (its updateBefore
+  refits cascades + the shadow pass renders — r.shadow.* reappears). FLAGS:
+  ?nanshadow=0 (A/B the term), and DISABLE_OLD_GEOMETRY is now ?oldgeo=1
+  -overridable (default still fully disabled — a gate harness, not a fallback:
+  restores casters + the nanite=0 reference for the lighting gate). VALIDATED:
+  black slate renders with no fallback (drawCalls 21, tris 2002, no compile
+  errors); with casters (oldgeo=1) the nanshadow ON/OFF diff is 29.65% of px,
+  spatially shadow-SHAPED not noise; grass-ablated A/B shows the bare nanite
+  terrain gaining clear tree + self shadows under the tod-19 low sun. tsc clean.
+  STILL OPEN (finishes N4-C1): ambient/IBL parity (the hand-rolled hemisphere
+  ambient vs three's environment IBL diffuse) — the smaller residual; then the
+  `--framealign N --wind 0 --lockexp 1` ≤0.2% gate vs ?nanite=0 (oldgeo=1) at
+  terrain-dominant framings, accounting for the known honest deltas (CDLOD
+  morph at far ridges, skirts).
+
 - 2026-06-13 (r): **Old geometry hard-disabled (D-N21) — black-slate nanite
   build.** (Opus 4.8.) Context: across two sessions the user kept reading
   `?nanite=1` as "nanite isn't active" because the hybrid was STILL drawing the

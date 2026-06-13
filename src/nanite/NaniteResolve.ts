@@ -37,6 +37,7 @@ import {
   getViewPosition,
   max,
   mix,
+  nodeObject,
   normalize,
   positionGeometry,
   screenCoordinate,
@@ -47,6 +48,7 @@ import {
   vec4,
 } from 'three/tsl';
 import type { NF, NV3, NV4 } from '../gpu/TSLTypes';
+import type { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js';
 import { causticContext, causticDepth, causticTint } from '../render/Caustics';
 import { buildTerrainShading } from '../render/TerrainMaterial';
 import { sunU } from '../render/VegMaterials';
@@ -69,6 +71,13 @@ export interface ResolveWorld {
   hf: Heightfield;
   gi: ProbeGI | null;
   canopyTex: StorageTexture | null;
+  /** sun CSM cascades (D-N17 shadow receive) — sampled at the reconstructed
+   *  world position via receivedShadowPositionNode; null = no sun shadows.
+   *  At runtime this is the CachedCsmShadowNode (default), whose
+   *  shadowPositionWorld-based cascade-select is what makes per-pixel
+   *  reconstructed positions select the right cascade (?shadowcache=0 falls
+   *  back to the base positionView.z select — a debug-only A/B). */
+  csm: CSMShadowNode | null;
 }
 
 export function buildNaniteResolve(
@@ -87,6 +96,8 @@ export function buildNaniteResolve(
   const q = new URLSearchParams(window.location.search);
   const nandepth = q.get('nandepth');
   const nandbg = q.get('nandbg');
+  // ?nanshadow=0 — bisect: drop the CSM sun-shadow receive (A/B the term)
+  const shadowsOn = world.csm !== null && q.get('nanshadow') !== '0';
 
   // CLIP-SPACE fullscreen triangle (covers ndc [-1,1]² via (-1,-1),(3,-1),(-1,3))
   const geometry = new BufferGeometry();
@@ -98,6 +109,32 @@ export function buildNaniteResolve(
 
   const mat = new NodeMaterial();
   mat.vertexNode = vec4(positionGeometry.xy, 0, 1) as unknown as typeof mat.vertexNode;
+
+  // D-N17 shadow receive: the CSM cascade-select + sampling read
+  // `shadowPositionWorld`, which ShadowBaseNode sources from
+  // material.receivedShadowPositionNode. The fullscreen triangle's
+  // positionWorld is the clip-space vertex (useless), so supply the
+  // per-pixel RECONSTRUCTED world position — self-contained like depthNode,
+  // not a closure var, so it builds inside the shadow subgraph cleanly.
+  if (shadowsOn) {
+    (mat as unknown as { receivedShadowPositionNode?: unknown }).receivedShadowPositionNode = Fn(
+      () => {
+        const fy = float(cam.uH).sub(screenCoordinate.y);
+        const pixelIndex = uint(fy).mul(uint(cam.uW)).add(uint(screenCoordinate.x));
+        const zDev = bcU2F(elemU(vis.depthV.ro, pixelIndex));
+        const wpv = getViewPosition(
+          screenUV,
+          zDev,
+          cameraProjectionMatrixInverse,
+        ) as unknown as NV3;
+        return (
+          (cameraWorldMatrix as unknown as { mul(v: NV4): NV4 }).mul(
+            (vec4 as unknown as (a: NV3, b: number) => NV4)(wpv, 1),
+          ) as unknown as NV4
+        ).xyz;
+      },
+    )();
+  }
 
   mat.fragmentNode = Fn(() => {
     // vis-buffer fetch (bottom-up rows: raster writes y·W+x with y bottom-up,
@@ -175,14 +212,21 @@ export function buildNaniteResolve(
       .select(shading.worldNormalNode, vec3(0, 1, 0))
       .toVar() as unknown as NV3;
 
-    // ---- MANUAL lighting (D-N17): sun lambert + sky ambient + probe GI.
-    // Matches the OLD terrain's terms qualitatively; CSM receive + exact IBL
-    // parity land in the next pass. (Better an opaque, correctly-coloured
-    // surface than a transparent one.)
+    // ---- MANUAL lighting (D-N17): sun lambert × CSM shadow + sky ambient +
+    // probe GI. The CSM node (proven on the old path) is referenced as a
+    // multiplicative factor exactly like AnalyticLightNode does
+    // (colorNode.mul(shadowNode)); it carries OUR pcssFilter + the cloud
+    // gate, sampling at receivedShadowPositionNode set above. Exact IBL
+    // parity for the ambient is the remaining N4-C1 term.
     const sunDir = normalize(vec3(sunU.dir)) as unknown as NV3;
     const nDotL = max(dot(wNormal, sunDir), 0) as unknown as NF;
     const sunCol = (sunU.color as unknown as NV3).mul(float(sunU.intensity)) as unknown as NV3;
-    let lit: NV3 = albedo.mul(sunCol).mul(nDotL) as unknown as NV3;
+    let direct: NF = nDotL;
+    if (shadowsOn && world.csm) {
+      const sf = (nodeObject(world.csm) as unknown as NV4).x.clamp(0, 1).toVar() as unknown as NF;
+      direct = nDotL.mul(sf) as unknown as NF;
+    }
+    let lit: NV3 = albedo.mul(sunCol).mul(direct) as unknown as NV3;
     // sky/hemisphere ambient (normal up → sky tint, down → ground tint)
     const up = clamp(wNormal.y.mul(0.5).add(0.5), 0, 1);
     const ambient = mix(vec3(0.18, 0.16, 0.12), vec3(0.4, 0.5, 0.62), up).mul(0.5) as unknown as NV3;

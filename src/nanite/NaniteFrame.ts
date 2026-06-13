@@ -61,7 +61,11 @@ export function buildNaniteFrame(
   registry: GeometryRegistry,
   hf: Heightfield,
   post: PostStack,
-  world: { gi: import('../gpu/passes/ProbeGI').ProbeGI | null; canopyTex: import('three/webgpu').StorageTexture | null },
+  world: {
+    gi: import('../gpu/passes/ProbeGI').ProbeGI | null;
+    canopyTex: import('three/webgpu').StorageTexture | null;
+    csm: import('three/addons/csm/CSMShadowNode.js').CSMShadowNode | null;
+  },
 ): NaniteFrameHandles {
   const renderer = engine.renderer;
   const size = renderer.getDrawingBufferSize(new Vector2());
@@ -104,6 +108,7 @@ export function buildNaniteFrame(
     hf,
     gi: world.gi,
     canopyTex: world.canopyTex,
+    csm: world.csm,
   });
   engine.scene.add(resolve.mesh);
 

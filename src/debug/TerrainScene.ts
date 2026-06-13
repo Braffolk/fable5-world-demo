@@ -54,7 +54,11 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // look at. Flip to false to restore the full old pipeline (the N7 A/B path).
   // Overrides the NANITE.md "?nanite=0 boots the untouched old pipeline"
   // constraint deliberately, for the duration of the nanite build.
-  const DISABLE_OLD_GEOMETRY = true;
+  // DEFAULT = disabled; `?oldgeo=1` restores the full old world — used ONLY to
+  // capture the parity reference for the N4 lighting gate (and to bring back
+  // the CSM shadow casters the nanite terrain receives from until N5). The
+  // default still shows bare nanite; this is a gate harness, not a fallback.
+  const DISABLE_OLD_GEOMETRY = qNan.get('oldgeo') !== '1';
 
   const hf = await Heightfield.generate(
     engine.renderer,
@@ -335,6 +339,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     engine.post = buildNaniteFrame(engine, naniteRegistry, hf, post, {
       gi: ablate.has('gi') ? null : gi,
       canopyTex,
+      csm: shadowRig.csm ?? null,
     });
     if (naniteClasses.has('terrain') && tilesRef) {
       tilesRef.mesh.visible = false;
