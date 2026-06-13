@@ -792,6 +792,21 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   Brightness, if wanted, is tuned via probe-GI strength / exposure / ToD as its
   own task — never by re-introducing the env double-count.
 
+- D-N23 (2026-06-13, N4-C2): F9 BINDING BUDGET — the resolve übershader is the
+  binding-heaviest stage (it does geometry fetch AND material shading in one
+  fragment). Adding ROCK pushed it to 11 storage buffers (cap 10). FIX, straight
+  from F9 ("sampled textures are separate and plentiful"): material-SAMPLING
+  data reads from its TEXTURE, not its storage buffer. Concretely the heightfield
+  height — used by the probe-GI ground-height lookup — is sampled from heightTex
+  (already bound) instead of the height storage buffer (GI.irradiance gained an
+  optional `groundY` the resolve supplies). This is NOT per-class buffers: ALL
+  geometry shares the one registry mega-buffer set (verts/indices/clusters/
+  meshes/instances) per D-N13 — the budget pressure is the COUNT of distinct
+  shared buffers in one stage, not duplication. Resolve now ≤10. Headroom rule
+  for the rest of N4: new material inputs must be TEXTURES (bark texA/texB are —
+  fine); if a future class needs another storage buffer, pack two mega-buffers
+  (F9) rather than split the übershader (D-N10 stands).
+
 ## GOTCHAS (append-only, nanite-specific)
 
 - (N4-C0) THE SCANLINE DEPTH WAS BIASED-NEAR ON SUB-PIXEL TRIANGLES from
@@ -870,6 +885,30 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   min/max on uint nodes, float(uintNode) → use .toFloat().
 
 ## PROGRESS LOG (append-only, newest first)
+
+- 2026-06-13 (u): **N4-C2 ROCK material landed — first real OBJECTS in the
+  nanite world + the resolve's first per-vertex attribute interpolation.** (Opus
+  4.8.) PORTED_CLASSES += 'rock', so the cull→raster pipeline processes a second
+  material class (~122k boulder/slab/stone instances move from deferred into the
+  registry). The big new capability: the resolve now RE-FETCHES the cluster
+  triangle and barycentric-interpolates per-vertex attributes (terrain shaded
+  from world position alone and never needed this). Path: payload→(instId via
+  item.x, ci, localTri = pRaw&127)→makeCtx→fetchWorldVert×3 for the world
+  corners→3D barycentric of the reconstructed wp (perspective-correct for free)
+  →readVertex×3 for vdata (4×u8 unorm unpack, WorldRegistry pack format) + oct
+  normals (instance-yaw'd via instRotateDir), interpolate→ported rockMaterial
+  (strata banding vdata.y, lichen vdata.z, dust/streak by upness, moss, AO
+  vdata.w→aoNode on the indirect term). Gated on isR so heightfield/terrain
+  clusters never enter the explicit-mesh fetch. F9 WALL HIT + FIXED (D-N23): the
+  added geometry mega-buffers pushed the fragment stage to 11 storage buffers
+  (cap 10); fixed by reading the GI ground height from heightTex (TEXTURE) not
+  the height storage buffer — NOT by per-class buffers (the mega-buffers stay
+  shared per D-N13). VERIFIED: ?nandbg=cls (NEW matClass tint — terrain green /
+  rock red / other blue) shows rocks rastering as coherent scattered red shapes,
+  correctly classified; rock pixels read pale grey-brown (145-169) vs terrain
+  (86,78,58) — sane rock material, no garbage; drawCalls 21, no WebGPU errors,
+  tsc clean. NEXT: N4-C3 (BARK + DEADWOOD — needs per-pool texA/texB textures +
+  uv/grad derivatives + the trunk wind channel).
 
 - 2026-06-13 (t): **N4-C1 lighting CLOSED on the energy-correct model;
   pixel-parity with old terrain ABANDONED (user directive, D-N22).** (Opus

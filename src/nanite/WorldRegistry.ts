@@ -129,7 +129,7 @@ export function geometryToSource(geo: BufferGeometry): ExplicitSource {
  * `?naniteclasses=csv|all`; nanitedbg views default to all (pipeline
  * probes want the whole registry).
  */
-export const PORTED_CLASSES: readonly MaterialClassId[] = ['terrain'];
+export const PORTED_CLASSES: readonly MaterialClassId[] = ['terrain', 'rock'];
 
 /**
  * Material class a pool's OPAQUE part (parts[0]) migrates as, or null while

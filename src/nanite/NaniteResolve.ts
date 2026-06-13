@@ -42,23 +42,26 @@ import {
   screenCoordinate,
   screenUV,
   smoothstep,
+  texture,
   uint,
   vec3,
   vec4,
 } from 'three/tsl';
-import type { NF, NV3, NV4 } from '../gpu/TSLTypes';
+import type { NF, NU, NV3, NV4 } from '../gpu/TSLTypes';
 import type { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js';
 import { causticContext, causticDepth, causticTint } from '../render/Caustics';
 import { buildTerrainShading } from '../render/TerrainMaterial';
 import { sunU } from '../render/VegMaterials';
 import { canopyAt } from '../gpu/passes/Scatter';
+import { fbm3, valueNoise3 } from '../gpu/noise/NoiseTSL';
 import type { ProbeGI } from '../gpu/passes/ProbeGI';
 import type { Heightfield } from '../world/Heightfield';
-import { MESH_WORDS } from './GeometryRegistry';
+import { MESH_WORDS, readVertex } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
-import type { NaniteCam } from './NaniteCommon';
+import { makeFetch } from './NaniteFetch';
+import { instRotateDir, type NaniteCam } from './NaniteCommon';
 import type { NaniteVisBuffers } from './NaniteRaster';
-import { bcU2F, elemU } from './Tsl';
+import { bcU2F, elemU, toF } from './Tsl';
 import type { BufOf, UV2 } from './Tsl';
 
 export interface NaniteResolveHandles {
@@ -79,6 +82,67 @@ export interface ResolveWorld {
   csm: CSMShadowNode | null;
 }
 
+/** 3D barycentric of p inside triangle (a,b,c) — perspective-correct because
+ *  p is the real reconstructed world point on the rasterized surface (not a
+ *  screen-interpolated value). Ericson's method. */
+function baryWeights(p: NV3, a: NV3, b: NV3, c: NV3): NV3 {
+  const v0 = b.sub(a);
+  const v1 = c.sub(a);
+  const v2 = p.sub(a);
+  const d00 = dot(v0, v0);
+  const d01 = dot(v0, v1);
+  const d11 = dot(v1, v1);
+  const d20 = dot(v2, v0);
+  const d21 = dot(v2, v1);
+  const denom = d00.mul(d11).sub(d01.mul(d01)).max(float(1e-12)) as unknown as NF;
+  const v = d11.mul(d20).sub(d01.mul(d21)).div(denom) as unknown as NF;
+  const w = d00.mul(d21).sub(d01.mul(d20)).div(denom) as unknown as NF;
+  const u = float(1).sub(v).sub(w);
+  return vec3(u, v, w) as unknown as NV3;
+}
+
+/** registry vdata word (4×u8 unorm, WorldRegistry.geometryToSource) → vec4 */
+function unpackVdata(packed: NU): NV4 {
+  return vec4(
+    toF(packed.bitAnd(uint(0xff))),
+    toF(packed.shiftRight(uint(8)).bitAnd(uint(0xff))),
+    toF(packed.shiftRight(uint(16)).bitAnd(uint(0xff))),
+    toF(packed.shiftRight(uint(24)).bitAnd(uint(0xff))),
+  ).div(255) as unknown as NV4;
+}
+
+/** ROCK material (port of VegMaterials.rockMaterial, defaults) — strata banding
+ *  from vdata.y, lichen via vdata.z, AO/moss via vdata.w, on world-space noise.
+ *  Returns albedo (incl. the colorNode AO darkening) + ao (the aoNode, applied
+ *  to indirect only by the caller). Roughness omitted — terrain is matte-lit. */
+function rockShade(d: NV4, wp: NV3, nrm: NV3): { albedo: NV3; ao: NF } {
+  const strataT = d.y;
+  const upness = nrm.y.max(0);
+  const bandTint = valueNoise3(vec3(float(0), strataT.mul(7.3), float(0)).add(wp.mul(0.02)));
+  const grain = fbm3(wp.mul(2.1), 3).mul(0.5).add(0.5);
+  const tr = 0.285;
+  const tg = 0.255;
+  const tb = 0.215;
+  let albedo = mix(
+    vec3(tr * 0.42, tg * 0.44, tb * 0.55),
+    vec3(tr, tg, tb),
+    bandTint.mul(0.55).add(grain.mul(0.45)).clamp(0, 1),
+  ) as unknown as NV3;
+  const lich = smoothstep(0.62, 0.78, valueNoise3(wp.mul(3.7))).mul(d.z.mul(0.7).add(0.3));
+  albedo = mix(albedo, vec3(0.16, 0.175, 0.14), lich.mul(0.55)) as unknown as NV3;
+  albedo = mix(albedo, vec3(0.17, 0.15, 0.12), upness.pow(2).mul(0.3)) as unknown as NV3;
+  const steep = float(1).sub(upness);
+  const streakN = valueNoise3(vec3(wp.x.mul(2.6), wp.y.mul(0.22), wp.z.mul(2.6)));
+  const streak = smoothstep(0.55, 0.82, streakN).mul(smoothstep(0.45, 0.8, steep)).mul(0.55);
+  albedo = mix(albedo, albedo.mul(vec3(0.5, 0.46, 0.4)), streak) as unknown as NV3;
+  // moss (default amount 0.25 → ×0.5 gate)
+  const mossN = smoothstep(0.45, 0.75, fbm3(wp.mul(1.7), 3).mul(0.5).add(0.5));
+  const moss = smoothstep(0.45, 0.85, upness).mul(mossN).mul(d.w).mul(0.5).clamp(0, 1);
+  albedo = mix(albedo, vec3(0.045, 0.085, 0.03), moss) as unknown as NV3;
+  albedo = albedo.mul(d.w.mul(0.35).add(0.65)) as unknown as NV3; // colorNode AO darkening
+  return { albedo, ao: d.w as unknown as NF };
+}
+
 export function buildNaniteResolve(
   gpu: RegistryGpu,
   heightTex: Texture,
@@ -87,7 +151,11 @@ export function buildNaniteResolve(
   vis: NaniteVisBuffers,
   world: ResolveWorld,
 ): NaniteResolveHandles {
-  void heightTex; // raster-side fetch uses it; the resolve reconstructs wp
+  // ROCK (and future explicit-mesh classes) need per-vertex attributes →
+  // re-fetch the cluster triangle. Terrain reconstructs wp from depth and
+  // never touches this. No disp: the rock branch only hits the explicit-mesh
+  // path of fetchWorldVert (heightfield disp is terrain-only).
+  const fetch = makeFetch(gpu, heightTex);
   const hf = world.hf;
   if (!hf.biomeTex || !hf.fieldsTex || !hf.noiseA || !hf.noiseB) {
     throw new Error('NaniteResolve: heightfield derived maps missing (boot order)');
@@ -198,18 +266,57 @@ export function buildNaniteResolve(
     }
     void terrainRough;
 
-    // un-ported classes (rock/bark/deadwood): flat palette
-    const isR = matClass.equal(uint(1));
+    // ---- ROCK shading (N4-C2): re-fetch the cluster triangle, barycentric-
+    // interpolate vdata + normal at the reconstructed surface point, run the
+    // ported rockMaterial. Gated on isR so terrain (heightfield clusters, no
+    // explicit verts) never enters the explicit-mesh fetch.
+    const isR = matClass.equal(uint(1)).toVar();
+    const rockCol = vec3(0.3).toVar() as unknown as NV3;
+    const rockNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
+    const rockAo = float(1).toVar() as unknown as NF;
+    If(isR, () => {
+      const instId = item.x;
+      const localTri = pRaw.bitAnd(uint(127));
+      const ctx = fetch.makeCtx(instId, ci);
+      const w0 = fetch.fetchWorldVert(ctx, localTri, 0);
+      const w1 = fetch.fetchWorldVert(ctx, localTri, 1);
+      const w2 = fetch.fetchWorldVert(ctx, localTri, 2);
+      const bw = baryWeights(wp, w0, w1, w2);
+      const tb = ctx.triStart.add(localTri).mul(uint(3));
+      const a = readVertex(gpu.verts, elemU(gpu.indices, tb));
+      const b = readVertex(gpu.verts, elemU(gpu.indices, tb.add(uint(1))));
+      const c = readVertex(gpu.verts, elemU(gpu.indices, tb.add(uint(2))));
+      const dv = unpackVdata(a.vdata)
+        .mul(bw.x)
+        .add(unpackVdata(b.vdata).mul(bw.y))
+        .add(unpackVdata(c.vdata).mul(bw.z)) as unknown as NV4;
+      const nrm = normalize(
+        instRotateDir(ctx.yawSc, a.nrm)
+          .mul(bw.x)
+          .add(instRotateDir(ctx.yawSc, b.nrm).mul(bw.y))
+          .add(instRotateDir(ctx.yawSc, c.nrm).mul(bw.z)),
+      ) as unknown as NV3;
+      const rk = rockShade(dv, wp, nrm);
+      rockCol.assign(rk.albedo);
+      rockNrm.assign(nrm);
+      rockAo.assign(rk.ao);
+    });
+
+    // bark/deadwood/other still flat palette (ported at C3)
     const isB = matClass.equal(uint(2));
     const isD = matClass.equal(uint(3));
-    const palette = isR.select(
-      vec3(0.42, 0.41, 0.4),
-      isB.select(vec3(0.36, 0.27, 0.19), isD.select(vec3(0.33, 0.28, 0.22), vec3(0.35, 0.33, 0.3))),
+    const palette = isB.select(
+      vec3(0.36, 0.27, 0.19),
+      isD.select(vec3(0.33, 0.28, 0.22), vec3(0.35, 0.33, 0.3)),
     ) as unknown as NV3;
-    const albedo = isT.select(terrainCol, palette).toVar() as unknown as NV3;
-    const wNormal = isT
-      .select(shading.worldNormalNode, vec3(0, 1, 0))
+    const albedo = isT
+      .select(terrainCol, isR.select(rockCol, palette))
       .toVar() as unknown as NV3;
+    const wNormal = isT
+      .select(shading.worldNormalNode, isR.select(rockNrm, vec3(0, 1, 0)))
+      .toVar() as unknown as NV3;
+    // aoNode (rock): applied to indirect only — 1 elsewhere
+    const ao = isR.select(rockAo, float(1)) as unknown as NF;
 
     // ---- MANUAL lighting (D-N17): sun lambert × CSM shadow + sky ambient +
     // probe GI. The CSM node (proven on the old path) is referenced as a
@@ -239,11 +346,16 @@ export function buildNaniteResolve(
     // Accumulate radiance, divide once by π.
     let radiance: NV3 = sunCol.mul(direct) as unknown as NV3;
     if (world.gi) {
-      let irr = world.gi.irradiance(wp, shading.worldNormalNode) as unknown as NV3;
+      // F9: read ground height from heightTex (TEXTURE — plentiful) so the
+      // resolve does not bind the height STORAGE buffer (10-buffer/stage cap)
+      const groundY = (
+        texture(hf.heightTex, hf.uvFromWorld(wp.xz)) as unknown as NV4
+      ).x as unknown as NF;
+      let irr = world.gi.irradiance(wp, wNormal, 2.0, groundY) as unknown as NV3;
       if (world.canopyTex) {
         irr = irr.mul(canopyAt(world.canopyTex, wp.xz).mul(0.18).oneMinus()) as unknown as NV3;
       }
-      radiance = radiance.add(irr) as unknown as NV3;
+      radiance = radiance.add(irr.mul(ao)) as unknown as NV3;
     }
     let lit: NV3 = albedo.mul(radiance).mul(float(1 / Math.PI)) as unknown as NV3;
 
@@ -252,6 +364,12 @@ export function buildNaniteResolve(
     if (nandbg === 'albedo') return vec4(albedo, 1);
     if (nandbg === 'normal') return vec4(wNormal.mul(0.5).add(0.5), 1);
     if (nandbg === 'cov') return vec4(1, 0, 0, 1); // every covered pixel red
+    if (nandbg === 'cls')
+      // matClass tint: terrain green, rock red, bark/deadwood/other blue
+      return vec4(
+        isT.select(vec3(0.1, 0.6, 0.1), isR.select(vec3(0.95, 0.1, 0.1), vec3(0.1, 0.1, 0.95))),
+        1,
+      ) as unknown as NV4;
     return vec4(lit, 1);
   })() as unknown as typeof mat.fragmentNode;
 

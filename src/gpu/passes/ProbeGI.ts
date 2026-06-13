@@ -348,8 +348,13 @@ export class ProbeGI {
    * Irradiance at a world position/normal (SH-L1 cosine-lobe evaluation).
    * Sample point is pushed up by `lift` meters (normal offset of the caller).
    */
-  irradiance(wp: NV3, n: NV3, lift = 2.0): NV3 {
-    const hAbove = max(wp.y.sub(this.hf.sampleHeight(wp.xz)).add(lift), 0.0);
+  /** `groundY`: optional pre-sampled ground height. The vis-buffer resolve
+   *  (F9, ≤10 storage buffers/stage) passes the height from heightTex (a
+   *  TEXTURE — "plentiful") so it need not bind the height storage buffer;
+   *  other callers omit it and use the buffer sampler. */
+  irradiance(wp: NV3, n: NV3, lift = 2.0, groundY?: NF): NV3 {
+    const gY = groundY ?? this.hf.sampleHeight(wp.xz);
+    const hAbove = max(wp.y.sub(gY).add(lift), 0.0);
     // invert layerH = BASE·RATIO^i  →  i = log2(h/BASE)/log2(RATIO)
     const li = clamp(
       log2(hAbove.div(LAYER_BASE).max(1)).div(Math.log2(LAYER_RATIO)),
