@@ -54,6 +54,7 @@ import {
 } from 'three/tsl';
 import type { NF, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
 import type { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js';
+import type { NaniteShadow } from './NaniteShadow';
 import { causticContext, causticDepth, causticTint } from '../render/Caustics';
 import { buildTerrainShading } from '../render/TerrainMaterial';
 import { sunU } from '../render/VegMaterials';
@@ -90,6 +91,11 @@ export interface ResolveWorld {
    *  sampled at the per-mesh layer slice (mesh word 7). null = bark unported. */
   barkTexA: Texture | null;
   barkTexB: Texture | null;
+  /** N5-R0 (D-N28): nanite's own depth-only shadow path. When present, the resolve
+   *  takes the sun-shadow factor from shadowFactor() (PCSS over our r32 cascade
+   *  textures) INSTEAD of three's CSM node — three's shadow map stays empty in the
+   *  black slate. null = fall back to the old csm receive (?oldgeo). */
+  naniteShadow: NaniteShadow | null;
 }
 
 /** TextureNode sample-config chain (depth = array slice, grad = explicit deriv) */
@@ -495,7 +501,23 @@ export function buildNaniteResolve(
     const nDotL = max(dot(wNormal, sunDir), 0) as unknown as NF;
     const sunCol = (sunU.color as unknown as NV3).mul(float(sunU.intensity)) as unknown as NV3;
     let direct: NF = nDotL;
-    if (shadowsOn && world.csm) {
+    if (shadowsOn && world.naniteShadow) {
+      // N5-R0 (D-N28): OUR depth-only shadow — PCSS over our r32 cascade textures,
+      // sampled at the reconstructed world pos. We still REFERENCE three's CSM node
+      // (keep) so three runs its per-frame cascade FIT (NaniteShadow.run reads the
+      // fitted cascade VPs); its own map is EMPTY in the black slate → keep == 1 →
+      // folds out (and a cheap blocker-search-only sample). ?oldgeo → csm path.
+      const keep = world.csm
+        ? ((nodeObject(world.csm) as unknown as NV4).x.clamp(0, 1) as unknown as NF)
+        : (float(1) as unknown as NF);
+      const my = (
+        world.naniteShadow.shadowFactor(wp as unknown as NV3, wNormal as unknown as NV3) as unknown as {
+          clamp(a: number, b: number): NF;
+        }
+      ).clamp(0, 1);
+      const sf = (my as unknown as { mul(o: NF): { toVar(): NF } }).mul(keep).toVar();
+      direct = nDotL.mul(sf) as unknown as NF;
+    } else if (shadowsOn && world.csm) {
       const sf = (nodeObject(world.csm) as unknown as NV4).x.clamp(0, 1).toVar() as unknown as NF;
       direct = nDotL.mul(sf) as unknown as NF;
     }
@@ -530,6 +552,25 @@ export function buildNaniteResolve(
     if (nandbg === 'flat') return vec4(albedo, 1);
     if (nandbg === 'albedo') return vec4(albedo, 1);
     if (nandbg === 'normal') return vec4(wNormal.mul(0.5).add(0.5), 1);
+    // ?nandbg=shadow — the raw nanite shadow factor (white=lit, black=shadow);
+    // ?nandbg=shadowc — which cascade covers each pixel (r/g/b/yellow = 0/1/2/3,
+    // black = none). N5-R0 debug.
+    if (
+      (nandbg === 'shadow' || nandbg === 'shadowc' || nandbg === 'shadowd') &&
+      world.naniteShadow
+    ) {
+      if (nandbg === 'shadowc')
+        return vec4(world.naniteShadow.cascadeTint(wp as unknown as NV3), 1) as unknown as NV4;
+      if (nandbg === 'shadowd') {
+        const dd = world.naniteShadow.debugDepth(wp as unknown as NV3) as unknown as NF;
+        return vec4(dd, dd, dd, 1) as unknown as NV4;
+      }
+      const s = world.naniteShadow.shadowFactor(
+        wp as unknown as NV3,
+        wNormal as unknown as NV3,
+      ) as unknown as NF;
+      return vec4(s, s, s, 1) as unknown as NV4;
+    }
     if (nandbg === 'cov') return vec4(1, 0, 0, 1); // every covered pixel red
     // per-cluster hash tint (matches the ?nanitedbg=cluster view, but for the
     // full-frame migrated set) — visualises meshlet boundaries on the resolve

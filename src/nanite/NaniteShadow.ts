@@ -1,128 +1,132 @@
 /**
- * N5 — cluster-driven CSM shadow casters (D-N26).
- *   C0: the per-cascade CULL.
- *   C1: the per-cascade HW vertex-pulling CASTER mesh (this file).
+ * N5 — cluster-driven CSM shadows (D-N28). R0: depth-only compute SW raster.
  *
- * One nanite cull chain per CSM cascade, fed the cascade's ORTHO frustum (not
- * the camera frustum): an off-screen / ridge-hidden caster still casts (F5), so
- * shadow casters are culled by the light view, never the camera view. Reuses
- * buildNaniteCull with:
- *   - the cascade ortho frustum planes (refreshed one frame stale from
- *     csm.lights[c].shadow.camera, exactly like Forests.planesCsmU — the
- *     CsmCached lightMargin slack swallows the lag),
- *   - sphereOccluded = null (casters are never HZB-occluded),
- *   - coneCull = false (camera-relative cone backface is wrong for a light view),
- *   - camPos = the MAIN camera position so LOD selection MATCHES the visible
- *     geometry's LOD (a caster at a coarser LOD than its lit surface peter-pans).
+ * The PROPER Nanite path (research-grounded — see D-N28): reuse the visibility
+ * rasterizer DEPTH-ONLY to render shadow depth, into OWN r32 buffers, sampled by
+ * the resolve's own PCSS. NOT three's CSM shadow map (a WebGPU compute shader
+ * cannot write a DepthTexture), NOT the HW vertex-pulling caster (D-N26/D-N27,
+ * measured 14–31 ms/cascade — deleted). 64-bit atomics are NOT needed: depth-only
+ * is a single u32 atomicMin, which the Option-C depth pass already does.
  *
- * C1 caster (D-N26): per cascade, a vertex-pulling NodeMaterial Mesh on layer
- * 2+c (castShadow=true, frustumCulled=false) added to engine.scene. three's CSM
- * renders ONLY layer 2+c into cascade c (csm.lights[c].shadow.camera.layers
- * .enable(2+c) below), so each caster fills exactly its own cascade depth map.
+ * Per cascade:
+ *   - a NaniteCull chain fed the cascade ORTHO frustum (off-screen casters still
+ *     cast → sphereOccluded=null, F5; coneCull=false; LOD by the MAIN camera so
+ *     casters match the lit surface's LOD, no peter-pan),
+ *   - a buildNaniteRaster instance REUSED depth-only: its SW depth scanline + HW
+ *     big-tri path, projecting through cam.vp = the cascade LIGHT VP, writing the
+ *     cascade's own vis-depth buffer (atomicMin). We run clearVis → cull →
+ *     depth1 → hwDepth (NO payload pass, NO material resolve — < half main-view),
+ *   - a copy kernel: vis-depth (u32 f32-bits; 0xffffffff = empty → far 1.0) → an
+ *     r32float StorageTexture the resolve SAMPLES (textures are outside the
+ *     10-storage-buffer/stage cap — F9/D-N23, so depth reaches the resolve as a
+ *     texture, not an 11th storage buffer).
  *
- * The integration wall (verified against three 0.184 source): the shadow pass
- * does NOT use a mesh's vertexNode — it swaps in a shared depth override
- * material and reads ONLY material.castShadowPositionNode (Renderer
- * ._getShadowNodes → positionLocal). That node returns LOCAL space, three then
- * applies modelViewProjection = cameraProjectionMatrix · cameraViewMatrix ·
- * modelWorldMatrix. During cascade c's shadow render the active camera IS the
- * cascade ortho light camera, so cameraView/Projection ARE the cascade light VP.
- * We force the caster mesh's matrixWorld to identity ⇒ modelWorldMatrix = I ⇒
- * the world position fetchWorldVert returns lands straight in light clip space —
- * no hand-rolled vp uniform. side = DoubleSide so terrain's single-sided up-faces
- * still cast (the default front→back shadow flip would cull them).
+ * The resolve's shadow factor = shadowFactor(worldPos, normal): cascade-select
+ * (nearest covering cascade) + PCSS (blocker search + world-metric penumbra +
+ * Vogel PCF), sampling our textures. LOCKSTEP is automatic: raster and sample use
+ * the SAME csm.lights[c].shadow.camera VP (cascVP) — three stays the matrix +
+ * texel-snap authority, we never recompute ortho frusta.
  *
- * The caster's makeFetch is built with the SAME (gpu, heightTex, disp, wind) the
- * CAMERA raster uses (NaniteFrame), so caster geometry is bit-identical to the
- * rendered geometry incl. trunk wind + terrain micro-displacement — shadows
- * attach to their surfaces with no peter-pan / detach.
- *
- * Draw: the cull produces a visible-cluster list (cull.qRasterRO; slot 0 =
- * (count, _), items at 1.. = (instId, ci)). A tiny per-cascade kCasterArgs
- * kernel converts that count into a non-indexed indirect DRAW (vertexCount =
- * count · MAX_CLUSTER_TRIS · 3, the same over-draw-then-degenerate stride the SW
- * raster dispatches). The caster's castShadowPositionNode decodes
- * vertexIndex → (cluster, localTri, corner) → fetchWorldVert; padding triangles
- * (localTri ≥ triCount) collapse all three corners to vec3(0) ⇒ zero-area.
- *
- * NOTE (C1 scope): the cull still runs every frame for all cascades (C0). three
- * only actually RENDERS a cascade — hence draws its caster — on that cascade's
- * CsmCached refresh tick (frozen cascades reuse the cached map), so the heavy
- * caster draw is already cadence-amortised; gating the CULL itself to the
- * refresh tick (and dropping the now-unused reject buffers) is C3.
+ * R0 rasters EVERY frame (wind correct, no caching). R1 gates on the CsmCached
+ * refresh tick; R3 adds the static/dynamic split so cached cascades still get
+ * moving wind shadows. ?nanshadow=1 (was nanshadow2; the HW caster is retired).
  */
 
-import {
-  BufferGeometry,
-  DoubleSide,
-  Float32BufferAttribute,
-  Frustum,
-  Matrix4,
-  Mesh,
-  Sphere,
-  Vector3,
-} from 'three';
+import { FloatType, Frustum, Matrix4, NearestFilter, RedFormat, Vector4 } from 'three';
 import type { PerspectiveCamera, Texture } from 'three';
-import {
-  IndirectStorageBufferAttribute,
-  NodeMaterial,
-  StorageBufferAttribute,
-  type Renderer,
-} from 'three/webgpu';
+import { StorageTexture, type Renderer } from 'three/webgpu';
 import {
   Fn,
   If,
-  cameraProjectionMatrix,
-  cameraViewMatrix,
+  float,
+  instanceIndex,
+  int,
+  interleavedGradientNoise,
+  screenCoordinate,
+  textureLoad,
+  textureStore,
   uint,
+  uvec2,
   vec3,
   vec4,
-  vertexIndex,
 } from 'three/tsl';
-import type { NU, NV3 } from '../gpu/TSLTypes';
-import { MAX_CLUSTER_TRIS, type RegistryGpu } from './GeometryRegistry';
+import { vogelDiskSample } from 'three/tsl';
+import type { NB, NF, NV2, NV3 } from '../gpu/TSLTypes';
+import type { RegistryGpu } from './GeometryRegistry';
 import { makeNaniteCam, type NaniteCam } from './NaniteCommon';
 import { buildNaniteCull, type NaniteCullChain } from './NaniteCull';
-import { makeFetch, type TerrainDisp, type TrunkWindOpt } from './NaniteFetch';
-import { dispatch, sU32Views } from './Tsl';
+import type { TerrainDisp, TrunkWindOpt } from './NaniteFetch';
+import {
+  buildNaniteRaster,
+  makeVisBuffers,
+  type NaniteRasterHandles,
+  type NaniteVisBuffers,
+} from './NaniteRaster';
+import { bcU2F, dispatch, elemU, minU, uniformArrV4, uniformMat4 } from './Tsl';
+import type { UniformArrV4, UniformMat4 } from './Tsl';
 
 /** CSM default cascade count (csmcasc can lower it — we guard per-cascade) */
 export const SHADOW_CASCADES = 4;
+const SHADOW_MAP = 2048;
+const SHADOW_PIX = SHADOW_MAP * SHADOW_MAP;
 
-/** verts emitted per visible cluster (over-draw; padding tris degenerate) */
-const CASTER_VERTS_PER_CLUSTER = MAX_CLUSTER_TRIS * 3;
+// PCSS (mirrors ShadowSetup.ts — world-metric penumbra)
+const BLOCKER_TAPS = 6;
+const PCF_TAPS = 9;
+const SUN_TAN = 0.011;
+const MIN_PENUMBRA_M = 0.05;
+const MAX_PENUMBRA_M = 3.0;
+/** world-space normal offset on the receiver (acne suppression) */
+const NORMAL_BIAS_M = 0.12;
+/** WORLD-SPACE depth bias (metres). Converted to [0,1] cascade depth per cascade
+ *  via depthRange (cascParam.y) — the cascade near/far span the full lightMargin+
+ *  maxFar range, so a constant [0,1] bias would be metres of slop; world-metric
+ *  keeps it a fixed ~0.3 m regardless of cascade depth range. */
+const DEPTH_BIAS_M = 0.35;
+const TAU = 6.28318530718;
 
-/** the per-cascade light camera fields we read (ortho cascade camera) */
 interface CascadeLightCam {
   projectionMatrix: Matrix4;
   matrixWorldInverse: Matrix4;
-  layers: { enable(ch: number): void };
   left?: number;
+  right?: number;
+  top?: number;
+  bottom?: number;
+  near?: number;
+  far?: number;
 }
 
-interface CascadeCull {
+interface Cascade {
   cam: NaniteCam;
   cull: NaniteCullChain;
-  /** indirect DRAW args (vertexCount, instanceCount, firstVertex, firstInstance) */
-  kCasterArgs: unknown;
-  /** the layer-2+c caster mesh (added to engine.scene by NaniteFrame) */
-  mesh: Mesh;
-  /** last-read visible-cluster count (HUD) */
+  vis: NaniteVisBuffers;
+  raster: NaniteRasterHandles;
+  depthTex: StorageTexture;
+  kCopy: unknown;
   count: number;
+  /** false until runPhase1 has dispatched at least once — its GPU buffers do not
+   *  exist before then, so readCounts must skip it (CSM cascades init lazily). */
+  ran: boolean;
+}
+
+interface NamedKernel {
+  setName(n: string): unknown;
 }
 
 export interface NaniteShadow {
-  /** refresh per-cascade planes from the CSM lights, run each cascade cull, and
-   *  write each caster's indirect draw args. Call BEFORE post.render() (the
-   *  cascade cameras hold last frame's fit — one frame stale, hidden in
-   *  lightMargin like Forests). No-op until CSM inits. */
-  update(renderer: Renderer, csm: object | null, mainCamera: PerspectiveCamera): void;
-  /** per-cascade visible-cluster counts (HUD; -1 if a cascade never ran) */
+  /** per-cascade: refresh cascade VP/planes, cull, depth-raster, copy → texture.
+   *  Call BEFORE post.render() (the resolve samples the textures that frame). */
+  run(renderer: Renderer, csm: object | null, mainCamera: PerspectiveCamera): void;
+  /** TSL shadow factor in [0,1] for the resolve: nearest-covering-cascade select
+   *  + PCSS over our own per-cascade depth textures. worldPos+normal world-space. */
+  shadowFactor(worldPos: NV3, normal: NV3): NF;
+  /** ?nandbg=shadowc debug: which cascade covers a world pos (color tint) */
+  cascadeTint(worldPos: NV3): NV3;
+  /** ?nandbg=shadowd debug: the stored cascade depth at a world pos (1=empty) */
+  debugDepth(worldPos: NV3): NF;
+  /** per-cascade visible-cluster counts (HUD) */
   readCounts(renderer: Renderer): Promise<number[]>;
   cascades: number;
-  /** the per-cascade caster meshes — add to engine.scene so three's CSM
-   *  shadow render includes them (one per cascade, layer 2+c). */
-  casterMeshes: Mesh[];
 }
 
 export function buildNaniteShadow(
@@ -134,147 +138,217 @@ export function buildNaniteShadow(
   /** trunk wind — MUST match the camera raster's makeFetch */
   wind?: TrunkWindOpt,
 ): NaniteShadow {
-  // ONE shared fetch (closes over gpu/heightTex/disp/wind, NOT the per-cascade
-  // qRaster) — identical inputs to the camera raster ⇒ bit-identical geometry.
-  const { makeCtx, fetchWorldVert } = makeFetch(gpu, heightTex, disp, wind);
+  const cascades: Cascade[] = [];
+  const cascVP: UniformMat4[] = [];
+  // per-cascade (span_m, depthRange_m, texel, radius) for the world-metric PCSS
+  const cascParam: UniformArrV4 = uniformArrV4(
+    Array.from({ length: SHADOW_CASCADES }, () => new Vector4(1, 1, 1 / SHADOW_MAP, 1.15)),
+  );
 
-  // ?nancasterdbg=1 — render cascade 0's caster in the MAIN camera pass (bright,
-  // depthTest off) so the vertex-pulled geometry is directly visible: isolates
-  // "is the world decode correct" from "is the shadow light VP correct".
-  const dbgCaster = new URLSearchParams(window.location.search).get('nancasterdbg') === '1';
-
-  // vertex-pulling world-position decode: vertexIndex → (cluster, localTri,
-  // corner) → world. Padding tris (localTri ≥ triCount) collapse all three
-  // corners to vec3(0) ⇒ zero-area. Returned as a fresh node per call so it can
-  // feed both castShadowPositionNode and (dbg) a main-pass vertexNode.
-  const worldPos = (cull: NaniteCullChain): NV3 =>
-    Fn(() => {
-      const triGlobal = vertexIndex.div(3) as unknown as NU;
-      const corner = vertexIndex.mod(3) as unknown as NU;
-      const itemIdx = triGlobal.shiftRight(uint(7)).toVar(); // / 128
-      const localTri = triGlobal.bitAnd(uint(127)).toVar(); // % 128
-      const item = cull.qRasterRO.element(itemIdx.add(uint(1)));
-      const instId = item.x.toVar();
-      const ci = item.y.toVar();
-      const ctx = makeCtx(instId, ci);
-      const out = vec3(0).toVar();
-      If(localTri.lessThan(ctx.triCount), () => {
-        const w0 = fetchWorldVert(ctx, localTri, 0);
-        const w1 = fetchWorldVert(ctx, localTri, 1);
-        const w2 = fetchWorldVert(ctx, localTri, 2);
-        const world = corner
-          .equal(uint(1))
-          .select(w1, corner.equal(uint(2)).select(w2, w0)) as unknown as NV3;
-        out.assign(world);
-      });
-      return out;
-    })() as unknown as NV3;
-
-  const cascades: CascadeCull[] = [];
   for (let c = 0; c < SHADOW_CASCADES; c++) {
-    // size is irrelevant to the cull (it reads only planes + camPos); the
-    // shadow map is 2048² but the cull never touches width/height.
-    const cam = makeNaniteCam(2048, 2048);
+    const cam = makeNaniteCam(SHADOW_MAP, SHADOW_MAP);
     const cull = buildNaniteCull(gpu, instanceCount, cam, null, { coneCull: false });
+    const vis = makeVisBuffers(SHADOW_PIX);
+    // REUSE the raster depth-only: we only ever call clearVis/depth1/hwDepth.
+    const raster = buildNaniteRaster(gpu, heightTex, cam, cull, vis, 'flat', false, disp, wind);
 
-    // indirect DRAW args, filled from the visible-cluster count by kCasterArgs
-    const drawAttr = new IndirectStorageBufferAttribute(new Uint32Array(4), 4);
-    const drawBuf = sU32Views(drawAttr as unknown as StorageBufferAttribute, 4).rw;
-    const kCasterArgs = Fn(() => {
-      const n = cull.qRasterRO.element(0).x.toVar();
-      drawBuf.element(0).assign(n.mul(uint(CASTER_VERTS_PER_CLUSTER)));
-      drawBuf.element(1).assign(uint(1));
-      drawBuf.element(2).assign(uint(0));
-      drawBuf.element(3).assign(uint(0));
-    })().compute(1, [1]);
-    (kCasterArgs as unknown as { setName(n: string): unknown }).setName(`nanCasterArgs${c}`);
+    const depthTex = new StorageTexture(SHADOW_MAP, SHADOW_MAP);
+    depthTex.type = FloatType;
+    depthTex.format = RedFormat;
+    depthTex.magFilter = NearestFilter;
+    depthTex.minFilter = NearestFilter;
+    depthTex.generateMipmaps = false;
+    depthTex.name = `nanShadowDepth${c}`;
 
-    // vertex-pulling caster: world position injected via castShadowPositionNode
-    // (LOCAL space; identity matrixWorld ⇒ LOCAL == WORLD), so three's
-    // light-camera MVP projects it during cascade c's shadow render.
-    const mat = new NodeMaterial();
-    mat.name = `nanCaster${c}`;
-    // DoubleSide so the override's shadow side is DoubleSide (front→back flip
-    // would cull terrain's single up-faces ⇒ no terrain shadow). Depth-only:
-    // the shared shadow override owns depth; colorWrite/lights are moot (the
-    // caster never renders in the main pass — layer-gated off camera layer 0).
-    mat.side = DoubleSide;
-    mat.colorWrite = false;
-    mat.fog = false;
-    mat.lights = false;
-    // CRITICAL: base NodeMaterial leaves `map` UNDEFINED, but three's shadow
-    // setup gates on `material.map !== null` (Renderer._getShadowNodes) — so
-    // undefined makes it try reference('map','texture',material) on a missing
-    // texture → "texture() expects a valid Texture" → the shadow override fails
-    // to build → no shadows. MeshStandardNodeMaterial sets map=null; we must too.
-    (mat as unknown as { map: unknown }).map = null;
-    (mat as unknown as { castShadowPositionNode: unknown }).castShadowPositionNode = worldPos(cull);
+    // copy vis-depth (u32 f32-bits) → r32f texture; clear sentinel → far (1.0)
+    const kCopy = Fn(() => {
+      const px = instanceIndex;
+      If(px.lessThan(uint(SHADOW_PIX)), () => {
+        const raw = elemU(vis.depthV.ro, px).toVar();
+        const d = raw.equal(uint(0xffffffff)).select(float(1), bcU2F(raw));
+        const x = px.mod(uint(SHADOW_MAP));
+        const y = px.div(uint(SHADOW_MAP));
+        textureStore(depthTex, uvec2(x, y), vec4(d, 0, 0, 1)).toWriteOnly();
+      });
+    })().compute(SHADOW_PIX, [256]);
+    (kCopy as unknown as NamedKernel).setName(`nanShadowCopy${c}`);
 
-    const geo = new BufferGeometry();
-    geo.setAttribute('position', new Float32BufferAttribute(new Float32Array(3), 3));
-    geo.setIndirect(drawAttr, 0);
-    geo.boundingSphere = new Sphere(new Vector3(), Number.POSITIVE_INFINITY);
-
-    const mesh = new Mesh(geo, mat);
-    mesh.castShadow = true;
-    mesh.receiveShadow = false;
-    mesh.frustumCulled = false;
-    // pin matrixWorld = identity: castShadowPositionNode is LOCAL space and three
-    // does modelViewMatrix · positionLocal — only correct when modelWorld = I.
-    mesh.matrixAutoUpdate = false;
-    mesh.matrixWorldAutoUpdate = false;
-    mesh.matrixWorld.identity();
-    mesh.layers.set(2 + c); // ONLY cascade c's shadow camera renders this caster
-
-    if (dbgCaster && c === 0) {
-      // visualize cascade 0's vertex-pulled geometry in the MAIN camera pass:
-      // emissive green, depthTest off (always on top). If this shows the near
-      // terrain/trunks correctly, the decode is good and the bug is shadow-side.
-      mat.colorWrite = true;
-      mat.depthTest = false;
-      mat.depthWrite = false;
-      mat.vertexNode = Fn(() =>
-        cameraProjectionMatrix.mul(cameraViewMatrix.mul(vec4(worldPos(cull), 1))),
-      )() as unknown as typeof mat.vertexNode;
-      mat.fragmentNode = Fn(() => vec4(0, 1, 0, 1))() as unknown as typeof mat.fragmentNode;
-      mesh.layers.enable(0); // also render in the main camera pass
-    }
-
-    cascades.push({ cam, cull, kCasterArgs, mesh, count: -1 });
+    cascVP.push(uniformMat4(new Matrix4()));
+    cascades.push({ cam, cull, vis, raster, depthTex, kCopy, count: -1, ran: false });
   }
 
   const cascM = new Matrix4();
   const cascFrustum = new Frustum();
 
-  const update = (
-    renderer: Renderer,
-    csm: object | null,
-    mainCamera: PerspectiveCamera,
-  ): void => {
+  const run = (renderer: Renderer, csm: object | null, mainCamera: PerspectiveCamera): void => {
     const lights = (csm as { lights?: { shadow?: { camera?: CascadeLightCam } }[] } | null)
       ?.lights;
     if (!lights) return;
     for (let c = 0; c < SHADOW_CASCADES; c++) {
       const lcam = lights[c]?.shadow?.camera;
-      // CSM inits its lwLights lazily; left is finite once the fit ran
       if (!lcam || !Number.isFinite(lcam.left ?? NaN)) continue;
-      lcam.layers.enable(2 + c); // caster siblings on this layer only
+      const cc = cascades[c]!;
+      // the cascade light VP (three is the matrix + texel-snap authority) — used
+      // for BOTH the raster projection (cam.vp) and the resolve sample (cascVP).
       cascM.multiplyMatrices(lcam.projectionMatrix, lcam.matrixWorldInverse);
       cascFrustum.setFromProjectionMatrix(cascM);
-      const cam = cascades[c]!.cam;
+      cc.cam.vp.value.copy(cascM);
+      cascVP[c]!.value.copy(cascM);
       for (let p = 0; p < 6; p++) {
         const pl = cascFrustum.planes[p];
-        if (pl) cam.planes.array[p]?.set(pl.normal.x, pl.normal.y, pl.normal.z, pl.constant);
+        if (pl) cc.cam.planes.array[p]?.set(pl.normal.x, pl.normal.y, pl.normal.z, pl.constant);
       }
-      cam.camPos.value.copy(mainCamera.position); // LOD by the camera, not the light
-      cascades[c]!.cull.runPhase1(renderer); // no occlusion → no phase 2
-      dispatch(renderer, cascades[c]!.kCasterArgs); // visible count → draw args
+      cc.cam.camPos.value.copy(mainCamera.position); // LOD by the camera, not the light
+      // world-metric PCSS params from the ortho extents
+      const span = Math.max((lcam.right ?? 1) - (lcam.left ?? 0), 1);
+      const depthRange = Math.max((lcam.far ?? 1) - (lcam.near ?? 0), 1);
+      (cascParam.array[c] as Vector4).set(span, depthRange, 1 / SHADOW_MAP, 1.15);
+      // depth-only raster of the cascade, then copy to the sampled texture
+      cc.raster.clearVis(renderer);
+      cc.cull.runPhase1(renderer);
+      cc.raster.depth1(renderer);
+      cc.raster.hwDepth(renderer, mainCamera); // camera arg unused (HW vertexNode uses cam.vp)
+      dispatch(renderer, cc.kCopy);
+      cc.ran = true;
     }
   };
+
+  // ---- resolve-side PCSS over our own textures --------------------------------
+  const depthAt = (c: number, uv: NV2): NF => {
+    const u = (uv as unknown as { clamp(a: number, b: number): NV2 }).clamp(0, 1);
+    const tx = minU(uint((u as unknown as { x: NF }).x.mul(SHADOW_MAP)), uint(SHADOW_MAP - 1));
+    const ty = minU(uint((u as unknown as { y: NF }).y.mul(SHADOW_MAP)), uint(SHADOW_MAP - 1));
+    return (textureLoad(cascades[c]!.depthTex, uvec2(tx, ty)) as unknown as { x: NF }).x;
+  };
+
+  /** PCSS over cascade c at uv with receiver depth (mirrors ShadowSetup.pcssFilter
+   *  but reads our r32 texture and does a manual depth compare). Returns lit∈[0,1]. */
+  const pcss = (c: number, uv: NV2, receiver: NF): NF =>
+    Fn(() => {
+      const param = cascParam.element(int(c));
+      const span = (param as unknown as { x: NF }).x.max(1);
+      const depthRange = (param as unknown as { y: NF }).y.max(1);
+      const texel = (param as unknown as { z: NF }).z;
+      const radius = (param as unknown as { w: NF }).w.max(1);
+      const phi = interleavedGradientNoise(screenCoordinate.xy).mul(TAU);
+      // world-metric depth bias → [0,1] depth via this cascade's depthRange
+      const dBias = float(DEPTH_BIAS_M).div(depthRange);
+
+      // blocker search (raw depth reads)
+      const searchR = texel.mul(6).mul(radius);
+      const blockerSum = float(0).toVar();
+      const blockerCount = float(0).toVar();
+      for (let i = 0; i < BLOCKER_TAPS; i++) {
+        const tap = vogelDiskSample(float(i), float(BLOCKER_TAPS), phi) as unknown as NV2;
+        const uvT = (uv as unknown as { add(o: unknown): NV2 }).add(
+          (tap as unknown as { mul(o: unknown): NV2 }).mul(searchR),
+        );
+        const d = depthAt(c, uvT);
+        const isBlk = d.lessThan(receiver.sub(dBias));
+        blockerSum.addAssign(isBlk.select(d, float(0)));
+        blockerCount.addAssign(isBlk.select(float(1), float(0)));
+      }
+
+      const result = float(1).toVar();
+      If(blockerCount.greaterThan(0.5), () => {
+        const avgBlocker = blockerSum.div(blockerCount);
+        const gapM = receiver.sub(avgBlocker).mul(depthRange);
+        const penumbraM = gapM.mul(SUN_TAN).clamp(MIN_PENUMBRA_M, MAX_PENUMBRA_M);
+        const penumbra = penumbraM.div(span).max(texel.mul(0.75)).mul(radius);
+        const sum = float(0).toVar();
+        for (let i = 0; i < PCF_TAPS; i++) {
+          const tap = vogelDiskSample(float(i), float(PCF_TAPS), phi) as unknown as NV2;
+          const uvT = (uv as unknown as { add(o: unknown): NV2 }).add(
+            (tap as unknown as { mul(o: unknown): NV2 }).mul(penumbra),
+          );
+          const lit = receiver.lessThanEqual(depthAt(c, uvT).add(dBias));
+          sum.addAssign(lit.select(float(1), float(0)));
+        }
+        result.assign(sum.div(PCF_TAPS));
+      });
+      return result;
+    })() as unknown as NF;
+
+  // shadowCoord (uv ∈ [0,1], z ∈ [0,1]) + coverage test for cascade c at wp.
+  const cascadeCoord = (
+    c: number,
+    wp: NV3,
+  ): { uv: NV2; z: NF; inside: NB } => {
+    const sc = cascVP[c]!.mul(vec4(wp, 1));
+    const ndc = (sc as unknown as { xyz: NV3 }).xyz; // ortho → w == 1
+    const uv = (ndc as unknown as { xy: NV2 }).xy.mul(0.5).add(0.5) as unknown as NV2;
+    const z = (ndc as unknown as { z: NF }).z;
+    const ux = (uv as unknown as { x: NF }).x;
+    const uy = (uv as unknown as { y: NF }).y;
+    const inside = ux
+      .greaterThanEqual(0)
+      .and(ux.lessThanEqual(1))
+      .and(uy.greaterThanEqual(0))
+      .and(uy.lessThanEqual(1))
+      .and(z.greaterThanEqual(0))
+      .and(z.lessThanEqual(1)) as unknown as NB;
+    return { uv, z, inside };
+  };
+
+  const shadowFactor = (worldPos: NV3, normal: NV3): NF =>
+    Fn(() => {
+      const wp = (worldPos as unknown as { add(o: unknown): NV3 }).add(
+        (normal as unknown as { mul(o: number): NV3 }).mul(NORMAL_BIAS_M),
+      ).toVar();
+      const sf = float(1).toVar();
+      const found = float(0).toVar();
+      for (let c = 0; c < SHADOW_CASCADES; c++) {
+        If(found.equal(0), () => {
+          const { uv, z, inside } = cascadeCoord(c, wp as unknown as NV3);
+          If(inside, () => {
+            found.assign(1);
+            sf.assign(pcss(c, uv, z));
+          });
+        });
+      }
+      return sf;
+    })() as unknown as NF;
+
+  // ?nandbg=shadowc — DIAG: cascade-0 raw uv (r=uv.x, g=uv.y) — gradient in
+  // [0,1] means coverage maths are right; saturated/uniform means cascVP×wp wrong.
+  const cascadeTint = (worldPos: NV3): NV3 =>
+    Fn(() => {
+      const tints = [vec3(1, 0, 0), vec3(0, 1, 0), vec3(0, 0, 1), vec3(1, 1, 0)];
+      const col = vec3(0).toVar();
+      const found = float(0).toVar();
+      for (let c = 0; c < SHADOW_CASCADES; c++) {
+        If(found.equal(0), () => {
+          const { inside } = cascadeCoord(c, worldPos);
+          If(inside, () => {
+            found.assign(1);
+            col.assign(tints[c]!);
+          });
+        });
+      }
+      return col;
+    })() as unknown as NV3;
+
+  // ?nandbg=shadowd — the stored cascade depth at the selected cascade (1=empty)
+  const debugDepth = (worldPos: NV3): NF =>
+    Fn(() => {
+      const d = float(1).toVar();
+      const found = float(0).toVar();
+      for (let c = 0; c < SHADOW_CASCADES; c++) {
+        If(found.equal(0), () => {
+          const { uv, inside } = cascadeCoord(c, worldPos);
+          If(inside, () => {
+            found.assign(1);
+            d.assign(depthAt(c, uv));
+          });
+        });
+      }
+      return d;
+    })() as unknown as NF;
 
   const readCounts = async (renderer: Renderer): Promise<number[]> => {
     const out = await Promise.all(
       cascades.map(async (cc) => {
+        if (!cc.ran) return -1; // GPU buffers not created yet
         const counts = await cc.cull.readCounts(renderer);
         cc.count = counts.visClusters;
         return counts.visClusters;
@@ -283,10 +357,5 @@ export function buildNaniteShadow(
     return out;
   };
 
-  return {
-    update,
-    readCounts,
-    cascades: SHADOW_CASCADES,
-    casterMeshes: cascades.map((cc) => cc.mesh),
-  };
+  return { run, shadowFactor, cascadeTint, debugDepth, readCounts, cascades: SHADOW_CASCADES };
 }

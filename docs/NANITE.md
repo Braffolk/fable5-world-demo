@@ -835,7 +835,61 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   textures are not. Lower hardware degrades to its own ceiling (clamp), where the
   array would need merging to ≤16 — a future portability concern, not now.
 
-- D-N26 (2026-06-13, N5 design): NANITE SHADOW CASTERS = HW INDIRECT DRAWS INTO
+- D-N28 (2026-06-14, N5 PIVOT — SUPERSEDES D-N26/D-N27's HW caster; research-
+  grounded, see PROGRESS LOG (aa) + RESEARCH below): NANITE SHADOWS = DEPTH-ONLY
+  COMPUTE SW RASTER into OWN r32 per-cascade depth buffers, sampled by the
+  resolve's OWN PCSS. NOT three's CSM shadow map, NOT HW vertex-pulling. The C1
+  HW caster (D-N26/D-N27) is a measured dead-end: 14–31 ms PER cascade, every
+  cascade every frame (90→15 fps). Four cross-verified sources + a code trace say
+  do what Nanite actually does:
+  • REUSE THE DEPTH PASS, DEPTH-ONLY. rasterKernel('depth') (NaniteRaster.ts
+    191–419) already projects tris through cam.vp and atomicMin(bcF2U(cz)) into a
+    u32/px buffer. For a cascade: point cam.vp at the LIGHT VP, write a per-cascade
+    r32 buffer, SKIP pass-2 (payload) + the material resolve. Shadows are < half
+    the main-view cost. (elopezr "same process… only depth output"; CS418 "shadow
+    views only end stage 1"; the SW/HW big-tri split is reused as-is.)
+  • 64-BIT ATOMICS NOT NEEDED for shadows — depth-only = one 32-bit atomicMin,
+    which we already do (bcF2U). (ktstephano Sparse VSM: 32-bit imageAtomicMin on
+    f32-bits; Tellusim/Scthe restrict SW raster to depth-only ON METAL for this.)
+  • OWN r32 BUFFERS, not three's shadow.map — a WebGPU compute shader CANNOT write
+    a DepthTexture (depth formats aren't storage; spec + gpuweb#1043). So "fill
+    three's depth texture" is impossible; that is WHY C1 had to vertex-pull into
+    the shadow override. Allocate r32uint storage (atomicMin target) per cascade,
+    like makeVisBuffers.
+  • RESOLVE SAMPLES OUR BUFFERS. The pcssFilter already does manual taps
+    (ShadowSetup.ts:71 raw .x read, :92 .compare()) and three 0.184 .compare()
+    SOFTWARE-FALLBACKS on a non-DepthTexture (TextureNode.js:408–416, gated
+    WGSLNodeBuilder:714) — so an r32 buffer/texture works with no sampler fork.
+    Replace the resolve's nodeObject(world.csm).x (NaniteResolve.ts:499) with our
+    own cascade-select + PCSS over the 4 buffers.
+  • LOCKSTEP (the #1 correctness item): the raster VP MUST equal the sample VP.
+    Use the SAME csm.lights[c].shadow.camera (projectionMatrix·matrixWorldInverse)
+    for both — NaniteShadow.update already reads exactly these. Do NOT recompute
+    ortho frusta (CSM texel-snap is non-obvious; mis-repro = crawling shadows).
+  • CACHING IS THE SPEED. Keep CachedCsmShadowNode purely as the cascade-fit +
+    [1,2,3,6] cadence bookkeeper; gate the SW raster on it — re-raster a cascade
+    ONLY when its VP changes (auto-captures freeze + sun/drift force-refresh).
+    Static camera ⇒ ~0 shadow cost. (All 4 reports: cadence = the poor-man's VSM
+    page cache; UE "pages cached between frames unless invalidated by moving
+    objects or light".)
+  • WIND (the user's catch): caching freezes wind shadows. PROPER fix = STATIC/
+    DYNAMIC dual-depth split (UE VSM "two copies of depth") — cache static
+    (terrain/rock/rigid trunks = the bulk), and every frame copy + atomicMin ONLY
+    the dynamic (trunk-channel, within the 380–480 m wind fade) clusters on top.
+    Far cascades are wind-rigid ⇒ fully cached. (UE: WPO/vertex-anim invalidates
+    its page every frame — grass-WPO shadow 8.2→3.1 ms when disabled; keep wind in
+    the dynamic set / cascade 0.) Deferred to R3; R0–R2 raster every frame so wind
+    is correct meanwhile.
+  • COARSE LOD for far-cascade shadow casters (penumbra hides silhouette error) —
+    keep cascade 0 honest (world-metric PCSS blocker search lives there).
+  • DO NOT BUILD: the 16K virtual page table/clipmap (overkill at 1 sun/4
+    cascades); light-space HZB caster occlusion (defer; sphereOccluded stays null —
+    off-screen casters must cast, F5). camera-HZB on casters is the classic bug.
+  R-CHUNK PLAN replaces N5-C2/C3 (NEXT ACTIONS). The C1 cull half (NaniteShadow C0)
+  is KEPT; the C1 caster-mesh half is deleted at R4.
+
+- D-N26 (2026-06-13, N5 design — SUPERSEDED by D-N28; HW caster measured too slow):
+  NANITE SHADOW CASTERS = HW INDIRECT DRAWS INTO
   THE CSM CASCADES VIA PER-CASCADE LAYERS — mirror the Forests caster mechanism
   (the very path N5 deletes), NOT a compute SW raster into an owned depth texture
   (deferred). RATIONALE: three's CSM samples a per-cascade DEPTH TEXTURE through
@@ -1029,6 +1083,48 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   min/max on uint nodes, float(uintNode) → use .toFloat().
 
 ## PROGRESS LOG (append-only, newest first)
+
+- 2026-06-14 (ab): **N5-R0 — depth-only SW shadow raster: ARCHITECTURE PROVEN,
+  shadows CORRECT (perf is R1–R3).** (Opus 4.8 1M.) Pivoted off the HW caster
+  (D-N28, research-grounded). Per cascade: reuse buildNaniteRaster DEPTH-ONLY
+  (clearVis→cull.runPhase1→depth1→hwDepth, cam.vp = the cascade LIGHT VP, NO
+  payload), copy vis-depth (u32 f32-bits; 0xffffffff→far 1.0) into an own r32f
+  StorageTexture; the resolve's shadow factor (NaniteResolve:499) is now OUR PCSS
+  over those textures (cascade-select by coverage + world-metric penumbra + Vogel
+  PCF), replacing nodeObject(world.csm).x. Shadows CORRECT at bm7: trunk + terrain
+  self-shadow, on/off mean|diff| 25.7, 46.9% px darker; cascade-coverage debug
+  shows proper near→far red/green/blue. THREE BUGS found+fixed (all non-obvious,
+  recorded as GOTCHAs/here): (1) readback of an un-run cascade's GPU buffer →
+  FATAL copyBufferToBuffer; fixed with a per-cascade `ran` guard in readCounts.
+  (2) THE CSM NEVER FIT ITS CASCADES — removing the HW casters meant three never
+  rendered the sun shadow, AND the resolve no longer referenced nodeObject(csm),
+  so CsmCached.updateBefore (the per-frame cascade FIT) ran in NO graph →
+  csm.lights empty → cull skipped → no shadows. Calling updateBefore() manually
+  CRASHED (node never setup() → null frustums). FIX: keep the resolve REFERENCING
+  nodeObject(world.csm) as a ×1 keep-alive (its map is EMPTY in the black slate →
+  factor 1 → folds out) so three runs its setup + per-frame fit; we read the
+  fitted csm.lights[c].shadow.camera VPs. (3) NO SHADOWS until the bias fix: the
+  cascade near/far span the full lightMargin+maxFar (~7740 m) so ALL geometry
+  compresses to z≈1.0; a constant [0,1] DEPTH_BIAS=4e-4 was ≈3 m of world slop and
+  ate every shadow. FIX: WORLD-METRIC bias = DEPTH_BIAS_M(0.35)/depthRange per
+  cascade. Diagnosed via ?nandbg=shadow/shadowc/shadowd (factor/cascade/depth
+  debug views — KEPT, gated). PERF (the whole point, NOT yet met): nanRasterDepth
+  = **35 ms** (all 1.44M cascade clusters rastered EVERY frame, no cache/LOD) →
+  22 fps. This is the uncached R0 baseline; the 1–2 ms target is R1+R2+R3:
+  • R1 CADENCE — re-raster a cascade only when its VP changes (cache the r32
+    texture between; CsmCached already freezes far cascades [1,2,3,6]). Cascade 0
+    (period 1) still every frame.
+  • R2 COARSE LOD for far-cascade casters (cut cluster counts) + a depthOnly
+    buildNaniteRaster option (the per-cascade rasters currently build unused
+    payload/resolve/audit — ~64 MB + build waste).
+  • R3 STATIC/DYNAMIC split — cache static cascade depth, atomicMin only the
+    trunk-channel (wind) clusters each frame on top. Brings cascade 0 to ~0.3 ms.
+  Estimated R1+R2+R3 ≈ 1–2 ms (cache the static bulk, re-raster only what moved).
+  ?nanshadow2=1 still default-OFF. tsc clean. Memory note: 4× full buildNaniteRaster
+  (vis depth+payload + hwRT + hwQueue per cascade) ≈ 200 MB — trim with depthOnly
+  in R2. NEXT: R1 (cadence) on a FRESH context (this one is diluted).
+
+
 
 - 2026-06-14 (z): **N5-C1 — HW vertex-pulling CASTER landed; black-slate nanite
   geometry now SELF-SHADOWS (the C1 gate is GREEN).** (Opus 4.8, 1M ctx.) Per
@@ -1720,11 +1816,29 @@ migration). Chunks, each tsc-clean + committed:
      on its CsmCached refresh tick so the gate is met, but gating the CULL to the
      tick + killing the 128-stride over-draw (shadow.c0 18–36 ms) is the C3 perf
      pass. ?nanshadow2 still default-OFF (C2 flips it after parity).
-   - N5-C2 — RETIRE OLD CASTERS + parity: gate ShadowProxy + Forests caster
-     siblings off when nanite shadows own the cascades; shadow parity at the
-     bookmarks (incl. off-screen casters via a pan probe); caster draw-count
-     ledger row. Flip ?nanshadow2 to default-on; black slate now self-shadows.
-   - N5-C3 — perf/close: cadence tuning (re-cull only on the cascade's CsmCached
-     refresh tick, not every frame), SW depth-only shadow raster IF the HW caster
-     raster measures too slow (D-N5/D-N26), perf ledger row, USER CHECKPOINT,
-     ⏸ shippable. Then N6 (migrate remaining opaque pools) per the table.
+   N5-C2/C3 (HW-caster retire + cadence) are SUPERSEDED by the R-CHUNK REWRITE
+   (D-N28): the HW caster measured 14–31 ms/cascade (90→15 fps) — replaced by a
+   depth-only compute SW raster into own r32 buffers, sampled by the resolve's own
+   PCSS. User directive: PROPER nanite, ~1–2 ms shadow budget, zero quick measures.
+   - R0 — DEPTH-ONLY SW SHADOW RASTER + OWN BUFFERS + RESOLVE SAMPLES THEM. Per
+     cascade: r32uint depth buffer (atomicMin target). A depth-only raster (reuse
+     rasterKernel('depth')'s scanline + SW/HW big-tri split; cam.vp = the cascade
+     LIGHT VP from csm.lights[c].shadow.camera; NO payload pass) over the existing
+     NaniteShadow C0 per-cascade qRaster, writing the cascade buffer. Resolve's
+     shadow factor (replace nodeObject(world.csm).x, NaniteResolve.ts:499) = OWN
+     PCSS over the 4 buffers: cascade-select by world pos, shadowCoord = the SAME
+     cascade VP (lockstep), manual taps reading the r32 buffer. Re-raster EVERY
+     frame (no cadence yet). GATE: shadows appear, ATTACHED (no crawl/peter-pan vs
+     C1), correct under TRAA; measure cost. Keep C1 for A/B (?nanshadow3 vs
+     ?nanshadow2). Validate cascade 0 FIRST (the one you can see), then 1–3.
+   - R1 — CADENCE: re-raster a cascade only when its VP changes (= CachedCsmShadow
+     freeze + sun/drift force-refresh, auto-detected). GATE: static camera ≈ 0
+     shadow cost; moving → only changed cascades.
+   - R2 — COARSE LOD for far-cascade shadow casters (cascade 0 stays honest for
+     PCSS). GATE: cluster counts down, penumbra unaffected near.
+   - R3 — STATIC/DYNAMIC SPLIT for wind: cache static cascade depth, every frame
+     copy + atomicMin ONLY trunk-channel (wind, within 380–480 m fade) clusters on
+     top. GATE: windy trunks cast MOVING shadows with a STILL camera; cost ~1–2 ms.
+   - R4 — close: delete the C1 HW caster mesh path + per-cascade HW raster; parity
+     at bookmarks (incl. off-screen casters via pan probe); perf ledger row; flip
+     ?nanshadow default-on. USER CHECKPOINT, ⏸. Then N6 (migrate opaque pools).

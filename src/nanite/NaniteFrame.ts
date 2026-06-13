@@ -111,6 +111,17 @@ export function buildNaniteFrame(
   const windOn = params.get('nanwind') !== '0';
   const windOpt = windOn ? { camPos: cam.camPos } : undefined;
   const raster = buildNaniteRaster(registry.gpu, hf.heightTex, cam, cull, vis, 'flat', true, disp, windOpt);
+
+  // ?nanshadow2=1 — N5-R0: nanite shadows via depth-only SW raster into own r32
+  // cascade textures, sampled by the resolve's own PCSS (D-N28; replaces the C1
+  // HW caster). Built BEFORE the resolve so the resolve binds shadowFactor. Needs
+  // the CSM (its cascade ortho cameras provide the per-cascade light VPs). Off by
+  // default until R4 retires the old casters + flips the default.
+  const shadow2On = params.get('nanshadow2') === '1' && world.csm !== null;
+  const shadow: NaniteShadow | null = shadow2On
+    ? buildNaniteShadow(registry.gpu, registry.instanceCount, hf.heightTex, disp, windOpt)
+    : null;
+
   const resolve = buildNaniteResolve(registry.gpu, hf.heightTex, cam, cull, vis, {
     hf,
     gi: world.gi,
@@ -118,20 +129,9 @@ export function buildNaniteFrame(
     csm: world.csm,
     barkTexA: world.barkTexA,
     barkTexB: world.barkTexB,
+    naniteShadow: shadow,
   });
   engine.scene.add(resolve.mesh);
-
-  // ?nanshadow2=1 — N5-C0: per-cascade nanite shadow cull (no raster yet).
-  // Needs the CSM (its cascade ortho cameras feed the cull frusta). Off by
-  // default until C2 retires the old casters.
-  const shadow2On = params.get('nanshadow2') === '1' && world.csm !== null;
-  const shadow: NaniteShadow | null = shadow2On
-    ? buildNaniteShadow(registry.gpu, registry.instanceCount, hf.heightTex, disp, windOpt)
-    : null;
-  // C1: the per-cascade caster meshes ride three's CSM shadow render (each on
-  // layer 2+c — only that cascade's shadow camera draws it). castShadow=true +
-  // frustumCulled=false + identity matrixWorld are set inside buildNaniteShadow.
-  if (shadow) for (const m of shadow.casterMeshes) engine.scene.add(m);
 
   // ?nanprobe=1 — exact-number depth forensics: a compute kernel reads the
   // SCENE PASS depth texture and the vis buffer at up to 8 pixels into a
@@ -282,7 +282,11 @@ export function buildNaniteFrame(
     // N5-C0: per-cascade shadow cull, reading last frame's cascade fit (one
     // frame stale; the CsmCached lightMargin absorbs it). Before post.render so
     // C1's caster draws (run inside the shadow pass) have fresh lists.
-    if (shadow && !frozen) shadow.update(renderer, world.csm, engine.camera);
+    // R0: the resolve KEEPS three's CSM node built (a ×1 keep-alive on the empty
+    // black-slate map — NaniteResolve), so three runs its setup + per-frame
+    // cascade FIT; shadow.run then reads the fitted csm.lights[c].shadow.camera
+    // VPs (one frame stale, absorbed by lightMargin) and rasters our own depth.
+    if (shadow && !frozen) shadow.run(renderer, world.csm, engine.camera);
     post.render(); // scene pass (resolve mesh + old-path remainder) + post chain
     if (probeRun && !params.get('nanprobeat')) probeRun(renderer); // default: after scene
     frame++;
