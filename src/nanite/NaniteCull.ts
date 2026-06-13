@@ -49,10 +49,12 @@ import {
 } from 'three/tsl';
 import type { NB, NF, NU, NV3, NV4 } from '../gpu/TSLTypes';
 import {
+  CLUSTER_FLAG_DAG,
   LOD_NONE,
   MESH_FLAG_HEIGHTFIELD,
   MESH_WORDS,
   readCluster,
+  readDag,
   readMesh,
 } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
@@ -83,8 +85,10 @@ import {
   returnIf,
   sU32Views,
   sUvec2,
+  uniformF,
   uv2,
   wgLinear,
+  type UniformF,
   type UniformMat4,
   type UniformV3,
 } from './Tsl';
@@ -117,6 +121,8 @@ export interface NaniteCullCounts {
   rejClust: number;
   /** clusters phase 2 brought back (appended past the phase-1 base) */
   p2Appends: number;
+  /** N8-D1: emitted clusters carrying a DAG record (the rock screen-error cut) */
+  dagClusters: number;
   /** non-null when a queue clamped this frame */
   overflow: string | null;
 }
@@ -150,9 +156,16 @@ export function buildNaniteCull(
    *  relative (instRotateDir vs cam.camPos), but a cluster facing away from the
    *  CAMERA still casts toward the LIGHT, so cone-culling it punches shadow
    *  holes. Default true (camera path). */
-  opts?: { coneCull?: boolean },
+  opts?: { coneCull?: boolean; tau?: UniformF },
 ): NaniteCullChain {
   const coneCull = opts?.coneCull !== false;
+  // N8-D1 continuous-LOD cut threshold (screen-error px). The camera path wires
+  // ?loderr into this uniform; shadow cascades take the default. projK =
+  // (screenH/2)·cot(fovY/2) — for the ortho shadow cams (cotHalfFov stays 1,
+  // uH = map size) it lands ~the camera's, so casters track the lit-surface LOD
+  // (proper DAG-decoupled caster LOD is S4). Mirrors probe-dag.project exactly.
+  const tau = opts?.tau ?? uniformF(1);
+  const projK = cam.cotHalfFov.mul(cam.uH).mul(0.5) as unknown as NF;
   // ---- buffers ---------------------------------------------------------------
   // counters: [0] chunk pushes (phase 2 resets for re-expansion), [1] raster
   // pushes (appends across phases), [2] inst rejects, [3] cluster rejects,
@@ -345,6 +358,29 @@ export function buildNaniteCull(
 
         const visible = frustumVisible(s.center, s.radius).toVar();
 
+        // N8-D1 continuous-LOD cut: a DAG cluster survives iff its OWN
+        // simplification error projects ≤ τ px AND its PARENT's projects > τ px
+        // (crack-free by the bit-exact sibling pairs). Gated on CLUSTER_FLAG_DAG
+        // so terrain / not-yet-DAG'd pools keep their discrete chain. own/parent
+        // spheres ride the instance transform like the geometric sphere (error
+        // metric → no swayPad); roots carry the +∞ sentinel so parent>τ always.
+        If(visible.greaterThan(0.5).and(c.flags.bitAnd(uint(CLUSTER_FLAG_DAG)).notEqual(uint(0))), () => {
+          const rec = readDag(gpu.dag, ci);
+          const ownC = instTransformPoint(A, B, yawSc, rec.ownSphere.xyz as unknown as NV3);
+          const ownR = instSphereRadius(A, B, rec.ownSphere.w as unknown as NF, float(0));
+          const parC = instTransformPoint(A, B, yawSc, rec.parentSphere.xyz as unknown as NV3);
+          const parR = instSphereRadius(A, B, rec.parentSphere.w as unknown as NF, float(0));
+          const dvo = cam.camPos.sub(ownC) as unknown as NV3;
+          const dvp = cam.camPos.sub(parC) as unknown as NV3;
+          const denO = dot(dvo, dvo).sub(ownR.mul(ownR)).max(float(1e-6)).sqrt() as unknown as NF;
+          const denP = dot(dvp, dvp).sub(parR.mul(parR)).max(float(1e-6)).sqrt() as unknown as NF;
+          const pOwn = projK.mul(rec.ownError).div(denO);
+          const pPar = projK.mul(rec.parentError).div(denP);
+          If(pOwn.greaterThan(tau).or(pPar.lessThanEqual(tau)), () => {
+            visible.assign(0);
+          });
+        });
+
         // cone backface (explicit meshes only; conservative slack) — skipped
         // for shadow casters (D-N26: camera-relative cone wrong for light views)
         if (coneCull) {
@@ -387,6 +423,12 @@ export function buildNaniteCull(
           const slot = atomicAdd(counters.element(1), uint(1)) as unknown as NU;
           If(slot.lessThan(uint(QRASTER_CAP)), () => {
             qRasterV.rw.element(slot.add(uint(1))).assign(uv2(instId, ci));
+          });
+          // N8-D1: count emitted DAG clusters separately (slot 5) — the rock-cut
+          // signal for the HUD + the continuous-zoom gate; terrain/bark are
+          // CLUSTER_FLAG_DAG=0 so they don't add, isolating the screen-error cut.
+          If(c.flags.bitAnd(uint(CLUSTER_FLAG_DAG)).notEqual(uint(0)), () => {
+            atomicAdd(counters.element(5), uint(1));
           });
         });
       });
@@ -521,6 +563,7 @@ export function buildNaniteCull(
     const visClusters = u[1] ?? 0;
     const rejInst = u[2] ?? 0;
     const rejClust = u[3] ?? 0;
+    const dagClusters = u[5] ?? 0;
     const p2Appends = Math.max(0, (q[0] ?? 0) - (q[1] ?? 0));
     let overflow: string | null = null;
     const over = (label: string, n: number, cap: number): void => {
@@ -530,7 +573,7 @@ export function buildNaniteCull(
     over('qRaster', visClusters, QRASTER_CAP);
     over('rejInst', rejInst, REJ_INST_CAP);
     over('rejClust', rejClust, REJ_CLUST_CAP);
-    return { chunks, visClusters, rejInst, rejClust, p2Appends, overflow };
+    return { chunks, visClusters, rejInst, rejClust, dagClusters, p2Appends, overflow };
   };
 
   return {

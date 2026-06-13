@@ -783,6 +783,21 @@ export class GeometryRegistry {
     return this.built;
   }
 
+  /**
+   * N8-D1: raise the late-registration budget before build(). attachDag() runs
+   * post-build (the DAG is built off the boot clusterize path) but caps freeze
+   * at build(), so the appended verts/tris/clusters must be reserved here first.
+   * Throws once built. Missing fields default 0.
+   */
+  addLate(b: Partial<LateBudget>): void {
+    if (this.built) throw new Error('GeometryRegistry: addLate after build()');
+    this.late.verts += b.verts ?? 0;
+    this.late.tris += b.tris ?? 0;
+    this.late.clusters += b.clusters ?? 0;
+    this.late.meshes += b.meshes ?? 0;
+    this.late.instances += b.instances ?? 0;
+  }
+
   meshEntry(h: MeshHandle): Readonly<MeshEntry> {
     const e = this.entries[h];
     if (!e) throw new Error(`GeometryRegistry: unknown mesh handle ${h}`);

@@ -235,6 +235,17 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
         classes = new Set(PORTED_CLASSES as readonly MatCls[]);
       }
       naniteClasses = classes ?? new Set(ALL);
+      // N8-D1: ?nanitedag=rock|bark|deadwood|all → continuous-LOD DAG for those
+      // explicit classes (built sync at boot for now; D1d moves it to a Worker).
+      const dagParam = qNan.get('nanitedag');
+      let dagClasses: Set<MatCls> | undefined;
+      if (dagParam) {
+        const want =
+          dagParam === 'all'
+            ? (['rock', 'bark', 'deadwood'] as MatCls[])
+            : dagParam.split(',').filter((c): c is MatCls => (ALL as readonly string[]).includes(c));
+        dagClasses = new Set(want.filter((c) => c !== 'terrain'));
+      }
       const wr = await buildWorldRegistry({
         renderer: engine.renderer,
         hf,
@@ -242,6 +253,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
         lib,
         counters: engine.stats.counters,
         ...(classes ? { classes } : {}),
+        ...(dagClasses && dagClasses.size > 0 ? { dag: dagClasses } : {}),
       });
       (engine as unknown as { naniteRegistry?: unknown }).naniteRegistry = wr.registry;
       naniteRegistry = wr.registry;
@@ -249,8 +261,11 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       console.log(
         `[laas] nanite registry: total ${wr.totalMs.toFixed(0)} ms (readback ` +
           `${wr.readbackMs.toFixed(0)} + partition ${wr.partitionMs.toFixed(0)} + terrain minMax ` +
-          `${wr.terrainMs.toFixed(0)} + build ${wr.buildMs.toFixed(0)}); deferred instances ` +
-          `${wr.deferredInstances}\n${wr.report.table}\ndeferred: ${wr.deferred.join('; ')}`,
+          `${wr.terrainMs.toFixed(0)} + build ${wr.buildMs.toFixed(0)}` +
+          (wr.dagMeshes > 0
+            ? ` + DAG ${wr.dagMeshes}m/${wr.dagBuildMs.toFixed(0)}ms/${(wr.dagTris / 1000).toFixed(0)}k tris`
+            : '') +
+          `); deferred instances ${wr.deferredInstances}\n${wr.report.table}\ndeferred: ${wr.deferred.join('; ')}`,
       );
     }
 

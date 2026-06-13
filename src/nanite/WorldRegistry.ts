@@ -32,13 +32,16 @@ import { VegClass } from '../gpu/passes/Scatter';
 import type { VegLib, PoolPart } from '../vegetation/VegLibrary';
 import type { Heightfield } from '../world/Heightfield';
 import { WORLD_SIZE } from '../world/WorldConst';
+import { type DagBuild, buildDag } from './BuildDag';
 import {
   type BuildReport,
+  DAG_VERT_STRIDE,
   type ExplicitSource,
   GeometryRegistry,
   type MaterialClassId,
   type MeshHandle,
   type TransformChannel,
+  explicitToDagVerts,
 } from './GeometryRegistry';
 import { readBuffer } from './Tsl';
 
@@ -85,6 +88,10 @@ export interface WorldRegistryResult {
   deferredInstances: number;
   /** per-part notes of geometry NOT migrated yet */
   deferred: string[];
+  /** N8-D1: meshes given a continuous-LOD DAG + total sync build ms (0 = none) */
+  dagMeshes: number;
+  dagBuildMs: number;
+  dagTris: number;
 }
 
 function attrOf(node: StorageBufferNode<'vec4'>): StorageBufferAttribute {
@@ -189,8 +196,11 @@ export async function buildWorldRegistry(input: {
   /** D-N19 incremental migration: only these material classes register +
    *  raster (their old camera draws get suppressed); omitted = all opaque */
   classes?: ReadonlySet<MaterialClassId>;
+  /** N8-D1: explicit classes to give a continuous-LOD DAG (rock/bark/deadwood).
+   *  Built SYNC here (D1d Workerizes per D-N30); terrain is never DAG'd in D1. */
+  dag?: ReadonlySet<MaterialClassId>;
 }): Promise<WorldRegistryResult> {
-  const { renderer, hf, scatter, lib, counters, classes } = input;
+  const { renderer, hf, scatter, lib, counters, classes, dag } = input;
   const inSet = (c: MaterialClassId): boolean => !classes || classes.has(c);
   const t0 = performance.now();
   const deferred: string[] = [];
@@ -238,6 +248,9 @@ export async function buildWorldRegistry(input: {
   // ---- register pools --------------------------------------------------------
   const reg = new GeometryRegistry();
   const heads = new Map<number, MeshHandle>(); // idF → chain head
+  // N8-D1: heads whose class wants a DAG — built after registration, attached
+  // after build(). The DAG comes off the head's FULL-detail source (rings[0]).
+  const toDag: { handle: MeshHandle; source: ExplicitSource; label: string }[] = [];
   let deferredTris = 0;
   const notePart = (label: string, parts: PoolPart[] | null | undefined, from: number): void => {
     if (!parts) return;
@@ -274,7 +287,8 @@ export async function buildWorldRegistry(input: {
     notePart(`${label}/r2`, pool.r2, 1);
     if (rings.length === 0) continue;
     const first = rings[0] as { part: PoolPart; switchAt: number };
-    const head = reg.registerMesh(geometryToSource(first.part.geo), policy.matClass, {
+    const headSource = geometryToSource(first.part.geo);
+    const head = reg.registerMesh(headSource, policy.matClass, {
       transformChannel: policy.channel,
       castShadows: first.part.castShadow,
       label,
@@ -294,6 +308,7 @@ export async function buildWorldRegistry(input: {
     const maxDist = isTree ? TREE_GEO_FAR : (lib.clsMaxDist[pool.cls] ?? 150);
     reg.setMaxDistance(head, maxDist);
     heads.set(idF, head);
+    if (dag?.has(policy.matClass)) toDag.push({ handle: head, source: headSource, label });
   }
 
   // bind partitioned instances to chain heads. ?stress=N (synthetic, F3/F16
@@ -379,8 +394,41 @@ export async function buildWorldRegistry(input: {
   deferred.push('GroundRing grass/debris: clipmap-instanced — N6/N10 per audit');
   deferred.push(`card/leaf tris deferred to N9: ${deferredTris}`);
 
+  // ---- N8-D1: LOD DAGs for the selected explicit classes (SYNC — D1d moves
+  // this to a background Worker per D-N30). Reserve the append budget before
+  // build() freezes caps; a per-mesh build failure is logged + skipped (the
+  // mesh keeps its discrete chain), never fatal.
+  const tDag0 = performance.now();
+  const dagBuilds: { handle: MeshHandle; dag: DagBuild }[] = [];
+  let dagTris = 0;
+  if (toDag.length > 0) {
+    let lateV = 0;
+    let lateT = 0;
+    let lateC = 0;
+    for (const item of toDag) {
+      let built: DagBuild;
+      try {
+        built = buildDag(explicitToDagVerts(item.source), DAG_VERT_STRIDE, item.source.indices, {
+          normalOffset: 3,
+        });
+      } catch (e) {
+        deferred.push(`DAG ${item.label}: build failed (${e instanceof Error ? e.message : String(e)})`);
+        continue;
+      }
+      lateV += built.verts.length / DAG_VERT_STRIDE;
+      lateT += built.indices.length / 3;
+      lateC += built.clusters.length;
+      dagTris += built.stats.totalTris;
+      dagBuilds.push({ handle: item.handle, dag: built });
+    }
+    reg.addLate({ verts: lateV, tris: lateT, clusters: lateC });
+  }
+  const tBuild0 = performance.now();
+  const dagBuildMs = tBuild0 - tDag0;
+
   // ---- build ------------------------------------------------------------------
   const report = reg.build(renderer, counters);
+  for (const b of dagBuilds) reg.attachDag(b.handle, b.dag);
   const t1 = performance.now();
   return {
     registry: reg,
@@ -388,9 +436,12 @@ export async function buildWorldRegistry(input: {
     readbackMs: tRead - t0,
     partitionMs: tPart - tRead,
     terrainMs: tTerr1 - tTerr0,
-    buildMs: t1 - tTerr1,
+    buildMs: t1 - tBuild0,
     totalMs: t1 - t0,
     deferredInstances,
     deferred,
+    dagMeshes: dagBuilds.length,
+    dagBuildMs,
+    dagTris,
   };
 }

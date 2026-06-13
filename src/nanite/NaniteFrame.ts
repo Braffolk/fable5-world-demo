@@ -38,7 +38,7 @@ import { makeFetch } from './NaniteFetch';
 import { buildNaniteRaster, makeVisBuffers } from './NaniteRaster';
 import { buildNaniteResolve } from './NaniteResolve';
 import { buildNaniteShadow, type NaniteShadow } from './NaniteShadow';
-import { bcU2F, dispatch, elemU, readBuffer, returnIf, texLoadR, toF, uniformArrV4 } from './Tsl';
+import { bcU2F, dispatch, elemU, readBuffer, returnIf, texLoadR, toF, uniformArrV4, uniformF } from './Tsl';
 
 export interface NaniteFrameHandles {
   render(): void;
@@ -81,6 +81,12 @@ export function buildNaniteFrame(
   const hwOn = params.get('nanhw') !== '0';
   const frozenParam = params.get('cullfreeze') === '1';
   const auditOn = params.get('audit') === '1';
+  // N8-D1 continuous-LOD cut threshold τ (screen-error px; 1 = sub-pixel error).
+  // The cull applies it per DAG cluster (project(own)≤τ AND project(parent)>τ);
+  // pre-DAG / terrain pools ignore it. ?loderr=N to coarsen/refine for A/B and
+  // the continuous-zoom gate; the setter below lets a probe sweep it live.
+  const loderrParam = Number(params.get('loderr') ?? '1');
+  const tau = uniformF(Number.isFinite(loderrParam) && loderrParam > 0 ? loderrParam : 1);
 
   const cam = makeNaniteCam(size.x, size.y);
   const vis = makeVisBuffers(size.x * size.y);
@@ -90,6 +96,7 @@ export function buildNaniteFrame(
     registry.instanceCount,
     cam,
     occl ? hzb.sphereOccluded : null,
+    { tau },
   );
   if (!hf.biomeTex || !hf.fieldsTex || !hf.noiseA || !hf.noiseB) {
     throw new Error('NaniteFrame: heightfield derived maps missing (boot order)');
@@ -201,6 +208,11 @@ export function buildNaniteFrame(
     setProbe: probeSet,
     readProbe: probeRead,
     vp: () => cam.vp.value.toArray(),
+    /** N8-D1: live τ (screen-error px) for the continuous-zoom gate / A-B */
+    setTau: (v: number) => {
+      tau.value = v;
+    },
+    tau: () => tau.value,
   };
 
   // jitter-mirrored projection: scratch camera = engine camera + TRAA's
@@ -325,6 +337,7 @@ export function buildNaniteFrame(
           engine.stats.counters['nanite.shTotal'] = shTotal;
         }
         engine.stats.counters['nanite.visClusters'] = c.visClusters;
+        engine.stats.counters['nanite.dagClusters'] = c.dagClusters;
         engine.stats.counters['nanite.chunks'] = c.chunks;
         engine.stats.counters['nanite.rejInst'] = c.rejInst;
         engine.stats.counters['nanite.rejClust'] = c.rejClust;
