@@ -933,6 +933,44 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   128-stride over-draw measured heavy: shadow.c0 18–36 ms; cascade 0 is PERIOD 1
   so it redraws every frame and cadence can't amortise it).
 
+- D-N29 (2026-06-13, N5 SHADOW RETHINK — user directive "which gives BOTH best perf
+  AND beauty? i dont care how long it takes"; research = 4 cited threads, PROGRESS LOG
+  ae): the sun shadow STAYS a SW-raster term. REJECTED: VSM (its page-cache — the whole
+  point — dies to wind; Epic docs verbatim "WPO/skeletal always invalidates cached pages
+  every frame"; + Metal auto-disables StaticSeparate); unified shadow+GI as the primary
+  sun shadow (UE Lumen deliberately keeps a SEPARATE VSM; CryEngine SVO sun shadows "too
+  soft … depends on voxel resolution"; 512³ voxels ≈ 2.5 GB > 1.5 GB); SW-RT of deformed
+  triangles (per-frame BVH rebuild over 162k swaying trees, M1 SW-RT ~10× off HW).
+  TARGET = a LAYERED stack, each frequency band by its cheapest-best tool:
+   (1) SHARP SUN TERM = SW-raster, but RESOLUTION REALLOCATED by screen-pixel density
+       (clipmap, not fixed 4-cascade splits) → ~1 shadow texel per screen pixel near =
+       crisp penumbra (BEAUTY) + texels only where pixels are (PERF). VSM's one genuinely
+       transferable win, taken WITHOUT its page-cache (dead to wind anyway). Feasible w/o
+       64-bit atomics — StratusGFX proves SVSM needs only 32-bit imageAtomicMin; our SW
+       raster already IS that "software path".
+   (2) PERF ENGINE = DAG-decoupled caster LOD + distance-regime split: NEAR real-geometry,
+       full sway, coarsen only ~2× (dapple survives, penumbra hides it) / MID coarsen
+       ~8–16× + shadow-pass WPO-FREEZE → rigid → cached / FAR rigid coarsest-or-impostor,
+       cached + temporally staggered (SpeedTree per-cascade scheme: cascade 0 every frame,
+       far cascades every 2nd/4th, drop geometry classes).
+   (3) SHADOW-VISIBLE-ONLY cluster cull (VSM's "needed-texel" mask — only raster clusters
+       that shadow visible pixels; tighter than per-cascade frustum). Pure perf.
+   (4) CONTACT-HARDENING soft penumbra (SMRT/PCSS: sharp at contact, soft away) — BEAUTY.
+   (5) ADDITIVE BEAUTY CEILING = capsule-SDF soft inter-tree occlusion (wind-FREE — a
+       capsule rotates by transform; blobs are CORRECT for the large-scale soft band) +
+       screen-space CONTACT shadows (fine sub-pixel band). The bands a sun map can't do
+       cheaply, each at its cheapest.
+  PLUS a RESOLVE-side fix for the fixed ~5 ms PCSS-SAMPLE cost (the static 115→70 gap,
+  NOT raster): half-res shadow eval + depth/normal-aware upsample (beauty-neutral on soft
+  penumbra; contact band kept sharp by the bilateral). Supersedes R2/R3/R4. Chunks S0–S5
+  in NEXT ACTIONS; the coarse-caster-LOD half of (2) is GATED ON the N8 DAG — interim uses
+  discrete-LOD bias + tighter cull. HONEST RISK (Thread A): the near real-geometry raster
+  is an irreducible per-frame floor (everyone re-rasters near swaying casters — SpeedTree,
+  Guerrilla, UE); we minimise the COUNT (tight cull + only-near + small foliage→contact
+  shadows) and coarsen modestly, but KEEP it real geometry because that is the near beauty.
+  Cites: PROGRESS LOG ae (4 thread docs); Epic VSM docs; SpeedTree GPU Gems 3 ch.4;
+  StratusGFX SVSM; UE Lumen/Capsule-Shadow docs; iq soft-shadow.
+
 ## GOTCHAS (append-only, nanite-specific)
 
 - (N5-C1) A SHADOW-CASTER NodeMaterial MUST SET `map = null`. three's shadow
@@ -1083,6 +1121,23 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   min/max on uint nodes, float(uintNode) → use .toFloat().
 
 ## PROGRESS LOG (append-only, newest first)
+
+- 2026-06-13 (ae): **SHADOW/LIGHTING PERF RETHINK — research complete, direction
+  chosen (pending sign-off).** (Opus 4.8 1M.) Ran 4 parallel cited research threads
+  (production foliage-shadow practice; VSM deep-dive; SDF/voxel/SW-RT; static/dynamic +
+  unified GI). All converged: wind casters can't be cached (Epic VSM docs: WPO "always
+  invalidates cached pages every frame"), so the production answer is a DISTANCE-REGIME
+  SPLIT of the caster representation (near full-sway+modest-coarsen / mid hard-coarsen+
+  WPO-freeze / far rigid-cached-impostor — SpeedTree's per-cascade scheme), NOT a
+  cleverer cache. VSM rejected (cache dies to wind, Metal disables StaticSeparate);
+  unified shadow+GI rejected as primary sun shadow (UE Lumen keeps a separate VSM; SVO
+  "too soft"); SW-RT of deformed tris rejected (per-frame BVH rebuild over 162k). Net:
+  KEEP SW-raster-into-CSM, replace R2/R3/R4 with R2′/R3′/R3″/R5/R6 (enhanced superset of
+  the already-planned coarse-far-LOD + static/dynamic split + two NEW levers: aggressive
+  shadow-pass WPO-freeze distance, contact-shadows for small foliage). Capsule-proxy SDF
+  staged as a mid/far escalation if the proven path's ceiling is hit. Full findings +
+  staged plan in NEXT ACTIONS; promotes to D-N29 on sign-off. No code changed this
+  session (research only); tsc not re-run (no edits).
 
 - 2026-06-14 (ad): **Nanite shadows DEFAULT-ON + C1 dead-end cleanup** (user
   directive: "shadows on by default, the new decently fast shadows; get rid of the
@@ -1834,51 +1889,101 @@ addresses the wrong (rigid) half. Wind fade still bounds the dynamic set to <~48
 so a static-far / dynamic-near SPLIT is valid — but the dynamic-near half is BIG and is
 the entire cost; do not design as if it were a small overlay.
 
-RESEARCH QUESTIONS (open — answer each with cited sources, no foregone conclusion;
-Q0 is THE question, the rest feed it):
- 0. **THE core problem — DYNAMIC FOLIAGE SHADOWS AT SCALE.** How do production
-    Nanite-style / vegetation-dense renderers (UE5 Nanite+VSM foliage, Fortnite Ch4,
-    Horizon, Ghost of Tsushima, Witcher3 GDC, etc.) shadow LARGE amounts of
-    WIND-ANIMATED foliage at high frame rate? What is the actual quality/perf tradeoff,
-    and what is the shadow-caster REPRESENTATION (full mesh re-raster? crude per-tree
-    proxy? lower shadow-LOD than camera? billboard/capsule? merged? none past N m)?
-    This is the cost; everything else is the rigid remainder.
- 1. Why does UE5 Nanite use VIRTUAL SHADOW MAPS, not CSM? VSM page caching: rigid
-    pages cached ~indefinitely, only invalidated pages re-render. BUT — UE's own docs
-    say WPO/vertex-animated (wind) geometry INVALIDATES its page every frame (grass-WPO
-    shadow cost is real). So VSM's cache helps our rigid half but NOT the swaying trees.
-    Does VSM still win for us via (a) resolution allocation — pages only where needed,
-    near=high/far=low — and (b) rendering only SHADOW-VISIBLE clusters, not whole
-    cascades? Quantify vs R1's per-cascade. Feasible in WebGPU WITHOUT 64-bit atomics
-    (what did Scthe/nanite-webgpu, ktstephano sparse-VSM, other WebGPU/Vulkan hobby
-    Nanites actually ship)?
- 2. SHADOW-LOD / PROXY DECOUPLING — cast the dynamic trees' shadows from geometry FAR
-    coarser than the camera view (penumbra hides silhouette error): per-tree
-    capsule/billboard/low-poly proxy that winds by a cheap transform, not per-vertex.
-    What do shipped games use for foliage shadow proxies? Quality floor vs "fantastic"?
- 3. SDF / VOXEL shadows for MOVING foliage — represent trees as coarse primitives
-    (capsules/ellipsoids) that update by TRANSFORM under wind (few ops), ray-march a
-    global field for soft shadows. The rigid terrain/rock SDF is baked once; the
-    dynamic foliage primitives are refreshed cheaply. ZERO per-vertex shadow raster.
-    Cost/quality/penumbra/WebGPU-compute feasibility? (UE DF shadows precedent.)
- 4. STATIC-FAR / DYNAMIC-NEAR SPLIT done right — cache the rigid set (terrain/rock +
-    trees beyond the wind fade), and spend the budget ONLY on the near dynamic foliage,
-    which is BIG (not a small overlay). Best technique for the dynamic half specifically.
- 5. Ray-traced shadows — no HW RT in WebGPU; SW ray-trace vs a cluster BVH/SDF —
-    viable at 100+ fps with animated foliage?
- 6. BROADER (user said "shadow/LIGHTING"): is there a unified soft-shadow+GI approach
-    (voxel/SDF cone tracing, surfel/probe) that gives soft shadows + bounce cheaply
-    and replaces the CSM term entirely?
+RESEARCH FINDINGS (2026-06-13 — 4 parallel cited research threads: A production
+foliage-shadow practice + caster representation/LOD, B Virtual Shadow Maps deep-dive,
+C SDF/voxel/SW-raytraced shadows, D static/dynamic split + unified shadow+GI. Full
+cited docs in session transcript; verdicts below. Recommendation PROVISIONAL pending
+user sign-off, then promote to D-N29 + implement.)
 
-CONSTRAINTS (binding): WebGPU — NO 64-bit atomics, NO HW ray tracing, ≤10 storage
-buffers/stage, ~1.5 GB UMA budget. Zero external assets (hand-rolled). Deterministic
-seed. WIND shadows must stay correct (the user's standing catch). Quality floor: no
-black shadows, soft penumbra, no pop within 300 m.
+CROSS-CUTTING CONCLUSIONS (all 4 threads independently converged):
+ 1. **Wind casters MUST re-raster every frame — NO cache/bake touches them.** Epic's
+    own VSM docs, verbatim: WPO/skeletal geometry "always invalidates cached pages
+    every frame." Confirmed by all threads. So VSM page-caching (its headline win) is
+    DEAD WEIGHT for our dominant cost; R1's per-cascade cache likewise only ever helped
+    the rigid half. This was the right read of SCENE REALITY.
+ 2. **The production answer is NOT a cleverer cache — it is a DISTANCE-REGIME SPLIT of
+    the caster representation.** Near (0–~150 m): full sway, coarsen geometry MODESTLY
+    (~2–4× via a coarser DAG cut; penumbra hides it). Mid (~150–480 m): coarsen HARD
+    (~8–16× — UE ships a 300k-tri tree casting from a ~30k proxy) AND push the shadow-
+    pass WPO-freeze distance MUCH closer than the view's wind fade → frozen = rigid =
+    cacheable. Far (>480 m, our wind already faded by design): fully rigid, cached,
+    coarsest DAG / impostor caster. (SpeedTree GPU Gems 3 ch.4 ships exactly this:
+    cascade 0 every frame full geo; cascade 2 every 2nd frame drops fronds; cascade 3
+    every 4th frame leaves-only — "shadows move realistically as the tree sways.")
+ 3. **Unified shadow+GI CANNOT be the primary sun shadow.** Decisive: UE5 Lumen (best-
+    funded unified GI) deliberately keeps a SEPARATE Virtual Shadow Map for the direct
+    sun. VXGI/SVOGI/SDFGI/DDGI all give SOFT low-frequency occlusion (CryEngine's own
+    docs call SVO sun shadows "too soft … softness depends on voxel resolution"), are
+    memory-hostile (512³ voxels ≈ 2.5 GB > our 1.5 GB), and need per-frame revoxelize
+    for wind. Keep shadows and GI SEPARATE. The "shadow/LIGHTING" question is answered:
+    don't merge. (Our existing probe-GI/contact already covers the no-black-shadows bar.)
+ 4. **The near-field wind cost is fundamentally "eat it, but eat less of it."** No
+    technique makes a NEAR, leaf-dappled, swaying shadow cheap while KEEPING the dapple
+    — everyone re-rasters real geometry there (SpeedTree full geo cascade 0; Guerrilla
+    eats it + overlaps on async compute we don't have; UE re-rasters WPO every frame).
+    Near levers are only: coarsen ~2–4×, CULL the count down (tighter shadow-relevant
+    cull), and drop small/distant foliage to CONTACT SHADOWS (Epic ships grass-as-
+    contact-shadows, NOT VSM). Capsule/SDF proxies make it cheap by THROWING AWAY the
+    dapple → their real role is MID/FAR, not the near rescue.
+ 5. **SW ray-tracing deformed triangle clusters = NO** (per-frame BVH rebuild/refit
+    over 162k swaying trees blows budget; M1 SW-RT ~10× off HW). Only viable against
+    RIGID proxies (folds into the capsule idea, cheapest dynamic case).
 
-DELIVERABLE: a written comparison (quality / perf / complexity / WebGPU-fit) of the
-viable approaches + a recommended direction as a new DECISION, THEN implement. The
-R2/R3/R4 CSM-raster chunks below are ON HOLD pending this rethink's verdict (they may
-be superseded if the verdict is VSM/SDF/baked rather than "keep CSM, optimize raster").
+PER-APPROACH VERDICT:
+ - **VSM**: NO as a system — cache (its point) dies to wind, `StaticSeparate` is auto-
+   disabled on Metal/M1, +256–512 MB pool + page-mgmt passes into a 1–2 ms budget.
+   STEAL two wind-independent ideas: (a) screen-density resolution allocation (clipmap,
+   ~1 texel/pixel) so near penumbra is crisp + far cheap; (b) shadow-visible-only
+   cluster cull (a "needed-texel" mask, tighter than per-cascade frustum). Feasible w/o
+   64-bit atomics — StratusGFX proves SVSM needs only 32-bit imageAtomicMin (our SW
+   raster already IS the "software path").
+ - **Capsule-proxy SDF soft shadows** (per-tree capsule trunk + ellipsoid crown,
+   winds by TRANSFORM, splat into a near ~128³ clipmap SDF, sphere-trace w/ iq's
+   min(res,k·h/t) 1-ray penumbra): the ONE representation where wind is ~free + a
+   SHIPPED precedent (UE Capsule Shadows, chosen precisely because meshes deform). BUT
+   blob/lollipop fidelity (no leaf dapple — worst exactly near-camera), UNPROVEN at
+   162k, needs map() acceleration, full per-frame field rebuild ~3–10 ms on a 2080 Ti
+   (~3× on M1) → 1–2 ms only via proxy-level splat + small clipmap + maybe 2–3-frame
+   amortize. ESCALATION option for MID/FAR, not the near primary.
+ - **Static/dynamic split**: DO IT, but it only caches the RIGID half (terrain/rock +
+   trees beyond wind fade) — does NOT touch the 30-fps-moving cost (near wind foliage).
+   Standard (DOOM Eternal, Decima, UE). Net win = static_cost − copy_cost; small when
+   the dynamic set is the majority, so pair it with regime-split, don't bank on it alone.
+
+DIRECTION — DECIDED (D-N29; user: "which gives BOTH best perf AND beauty? i dont care
+how long it takes"). Build the LAYERED stack (see D-N29) as chunks S0–S5, MEASURE between
+each (PERF LEDGER row + the static-sample-cost vs moving-raster-cost split). DAG-
+independent wins FIRST; the coarse-caster-LOD half of the perf engine (S4) lands with the
+N8 DAG. Order:
+  S0 — RESOLVE-side sample cost (the static 115→70 gap = ~5 ms FIXED PCSS sample, NOT
+       raster): eval shadowFactor at HALF-RES into a buffer + depth/normal-aware bilateral
+       upsample in the resolve. Beauty-neutral on soft penumbra (contact band stays sharp
+       via the bilateral). Helps static AND moving (sample is paid every frame). DAG-
+       independent, self-contained (resolve-side only). ← NOW.
+  S1 — Shadow-pass WPO-FREEZE + STATIC/DYNAMIC split: freeze trunk-wind in the shadow
+       raster beyond a near distance (~80–150 m) → rigid → the R1 cadence caches it; cache
+       rigid cascade depth, each frame atomicMin only the near-windy clusters on top
+       (fixes the stale-wind-on-static-cache gap the R0 header flagged). DAG-independent.
+  S2 — TIGHTER shadow cull (shadow-visible / needed-texel mask) + harder TEMPORAL STAGGER
+       of far cascades + cast far cascades from a coarser DISCRETE LOD (interim, pre-DAG).
+       Cuts the moving re-raster cluster count + frequency. DAG-independent.
+  S3 — SCREEN-DENSITY RESOLUTION ALLOCATION (clipmap, not fixed 4-cascade splits): ~1
+       shadow texel per screen pixel near = crisp penumbra + texel efficiency. The beauty
+       centrepiece. DAG-independent (big).
+  S4 — DAG-DECOUPLED caster LOD (GATED ON N8 DAG): cast each band from a progressively
+       coarser DAG cut (near ~2× / mid ~8–16× / far coarsest). The clean perf engine.
+  S5 — ADDITIVE BEAUTY CEILING: capsule-SDF soft inter-tree occlusion (wind-free blobs for
+       the large-scale soft band) + screen-space CONTACT shadows (fine sub-pixel band).
+       Optional, once the sun term is fast + crisp.
+REJECTED (killer citations in D-N29): full VSM (cache dies to wind; Metal disables
+StaticSeparate); unified shadow+GI as primary sun shadow (Lumen keeps a separate VSM;
+SVO "too soft"); SW-RT of deformed triangles (per-frame BVH rebuild over 162k blows it).
+CONSTRAINTS (binding): WebGPU — NO 64-bit atomics, NO HW RT, ≤10 storage buffers/stage,
+~1.5 GB UMA. Zero external assets. Deterministic seed. WIND shadows stay correct. Quality
+floor: no black shadows, soft penumbra, no pop within 300 m.
+
+The R2/R3/R4 chunks below are SUPERSEDED by S0–S5. NOW BUILDING: S0 (half-res shadow
+eval + bilateral upsample) — measure the bm7 static shadow-sample cost first, build, re-measure.
 
 ---
 
