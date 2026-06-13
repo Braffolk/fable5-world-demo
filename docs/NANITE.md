@@ -1095,6 +1095,24 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   needs a martini-DIRECT removal and/or the D-N30 Worker for 4096²); the GPU grid-coord-indexed
   vertex-decode path (one isHF-indexed branch in NaniteFetch); the 2^k+1 grid reconciliation.
 
+- D-N35 (2026-06-14, N8-D1e — the min-screen-size cull is NECESSARY-but-INSUFFICIENT for the
+  unbounded envelope; D-N33's "gated on min-screen cull" was optimistic). BUILT the primitive
+  (gated `?nanitemin=<px>`, default 0 = exact pre-D1e path): a per-CLUSTER cull dropping any
+  cluster whose projected sphere radius < minPx (crack-safe — the gap is sub-pixel), plus a
+  prototyped per-INSTANCE unbounded envelope (persist until the whole instance is sub-pixel).
+  MEASURED + REVERTED the envelope half: at minPx=1, removing the finite cutoff yields 3.75M
+  clusters / 100 ms WITH occlusion ON (reproduces D-N33's 3.70M) — because the count is
+  dominated by the sheer NUMBER of scattered instances inside a kilometre-scale envelope (a 1 m
+  rock survives to ~660 m, a 5 m tree to ~3.3 km at 1 px), and the pinned root means each costs
+  ≥1 cluster. A per-instance/cluster size test CANNOT fix an O(instances) blow-up. CONCLUSION:
+  the unbounded far-field ("retire impostors with real geometry", D-N33 end state) requires
+  HIERARCHICAL instance culling (cull spatial GROUPS of distant instances at once → O(regions)),
+  NOT a size flag — a real architecture task (own milestone), so the impostor far-field STAYS for
+  now. What ships: the per-cluster min-screen primitive (gated, default-off, inert within the
+  finite envelope — drops ~150 clusters — but the correct foundation). Validated: probe-minpx.ts
+  (A/Bs minPx 0 vs 1, occl ON, far-700 m); probe-envelope.ts default path byte-identical
+  (183679/175085). The finite-intended envelope (D-N33) remains the shipping default.
+
 ## GOTCHAS (append-only, nanite-specific)
 
 - (N5-C1) A SHADOW-CASTER NodeMaterial MUST SET `map = null`. three's shadow
@@ -1246,6 +1264,29 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-14 (ai): **N8-D1e min-screen-size cull primitive (gated) + the unbounded-envelope
+  RE-VALIDATION (D-N35); explicit-class DAG confirmed live; D2b GPU-wiring design mapped.**
+  (Opus 4.8 1M.) Pivoted from terrain-speed (banked) toward the D1e milestone per the user's
+  "reach d1e". (1) CONFIRMED the explicit-class rollout already works: `?nanitedag=all` DAGs
+  rock+bark+deadwood (TerrainScene → buildWorldRegistry, `dag` set excludes terrain), envelope
+  probe green (183679/175085 cl). The D1c "one hero mesh" is really a full flag-gated path. (2)
+  BUILT the min-screen-size cull (`?nanitemin=<px>`, default 0): per-cluster sub-pixel drop in
+  kClusterCull + `minPx` uniform in NaniteFrame. (3) PROTOTYPED + REVERTED the unbounded envelope
+  → D-N35: 3.75M cl / 100 ms even occl-ON; it needs HIERARCHICAL instance culling, not a size
+  flag. Default path byte-identical (gated). tsc clean; probe-minpx.ts added. (4) MAPPED the D2b
+  terrain GPU wiring for the next session (2 Explore passes): the heightfield decode ALREADY
+  exists (NaniteFetch `isHF` branch, CLUSTER_FLAG_HEIGHTFIELD, window-procedural — `texLoadR(
+  heightTex,sx,sz)` + world XZ + micro-disp); terrain is registered via WorldRegistry.ts:372
+  (`kind:'heightfield'`, uniform windows) — THE path D2b replaces. The DAG terrain needs a NEW
+  decode variant: grid-coord-INDEXED (store packed `gx|gz<<16` per vertex in the mega-buffer,
+  read it by vertex index, unpack→textureLoad→world XZ) distinguished by (isHF && isDAG); a
+  terrain attachDag that packs grid coords not float positions (waste words 1-5 or pack tighter)
+  + sets CLUSTER_FLAG_HEIGHTFIELD|CLUSTER_FLAG_DAG + the DAG cut records; and the 2^k+1
+  reconciliation (HEIGHT_RES 4096 texels = 4095 quads ≠ 2^k; use gridN=4096 sampling texel
+  clamp(gx,4095), cell=WORLD_SIZE/gridN, origin must match the window path's `cell/2-WORLD_HALF`
+  EXACTLY or terrain shifts off the placed objects). Plus: live 4096² build is ~5 min ⇒ needs the
+  Worker (D1d) before it can boot. Key files: NaniteFetch.ts (decode), GeometryRegistry.ts
+  (attachDag/packHeightfield/MESH+CLUSTER layouts), NaniteCull.ts (the cut), WorldRegistry.ts:372.
 - 2026-06-14 (ai): **N8-D2b (part 2) — terrain DAG build SPEED, single-thread pass
   (user picked "more single-thread opt, no Worker/tiling").** (Opus 4.8 1M.) Three
   more bit-identical structural wins on top of part 1, each profiled-then-fixed
@@ -2226,12 +2267,16 @@ CHUNK PLAN (to the logical point):
   swap; off the boot critical path per F15). (e) bark is the heavy class, 162k trees → WATCH
   the flat-cut cull-dispatch volume (?nanitedag=all near a forest = 0.14M cl / 16 ms occl-on
   measured; if cull dispatch is the bottleneck, D-N31's hierarchical-traversal pruning layer
-  is the lever). + UNBOUNDED draw envelope gated on a MIN-SCREEN-SIZE instance/cluster cull
-  (D-N33: drop an object whose whole projected extent < ~1 px) — the lever to extend the DAG
-  PAST each pool's finite envelope (trees vanish at 496 m today) and retire impostors for
-  real. + perf ledger row (cull dispatch, qRaster live, boot budget) vs pre-DAG; + ?clusterdbg
-  =lod heatmap (tint by ownErr coarseness — needs gpu.dag in the resolve OR a cull-side level
-  write; check resolve storage budget first); + USER CHECKPOINT (continuous zoom in Chrome).
+  is the lever). + MIN-SCREEN-SIZE cull primitive **BUILT** (gated `?nanitemin=<px>`, default
+  0; per-cluster sub-pixel drop in kClusterCull) — but the UNBOUNDED envelope it was meant to
+  unlock is **NOT a size flag** (D-N35, re-validated 3.75M cl / 100 ms occl-ON): retiring the
+  impostor far-field needs HIERARCHICAL instance culling (cull spatial GROUPS of distant
+  instances → O(regions) not O(instances)) — its own milestone; impostors STAY for now. STILL
+  TODO for D1e: + perf ledger row (cull dispatch, qRaster live, boot budget) vs pre-DAG; +
+  ?clusterdbg=lod heatmap (tint by ownErr coarseness — needs gpu.dag in the resolve OR a
+  cull-side level write; check resolve storage budget first); + USER CHECKPOINT (continuous
+  zoom in Chrome). (d) the Worker is NOT urgent for explicit classes (small meshes build sync
+  in <1 s) — it's really a TERRAIN prereq (4096² ≈ 5 min, log D2b); do it with D2b.
 - N8-D2 — TERRAIN DAG (COMMITTED, D-N32): a heightfield-NATIVE adaptive builder (RTIN /
   restricted right-triangle quadtree, Mapbox `martini`-class — NOT BuildDag's iterative QEM,
   wrong tool for a grid). O(n) bottom-up vertical-error pyramid; aggressive flat decimation

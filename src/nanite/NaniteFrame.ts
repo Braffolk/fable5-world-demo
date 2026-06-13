@@ -87,6 +87,13 @@ export function buildNaniteFrame(
   // the continuous-zoom gate; the setter below lets a probe sweep it live.
   const loderrParam = Number(params.get('loderr') ?? '1');
   const tau = uniformF(Number.isFinite(loderrParam) && loderrParam > 0 ? loderrParam : 1);
+  // N8-D1e min-screen-size cull (D-N33): drop any cluster whose projected sphere
+  // radius < minPx, and for DAG'd meshes REPLACE the finite hybrid draw envelope
+  // with this sub-pixel bound (Nanite-style "draw until it vanishes" — trees no
+  // longer wink out at 496 m). Crack-safe: any gap left is sub-pixel by definition.
+  // Default 0 = DISABLED ⇒ exact pre-D1e behaviour; ?nanitemin=N (px) to enable.
+  const minpxParam = Number(params.get('nanitemin') ?? '0');
+  const minPx = uniformF(Number.isFinite(minpxParam) && minpxParam > 0 ? minpxParam : 0);
 
   const cam = makeNaniteCam(size.x, size.y);
   const vis = makeVisBuffers(size.x * size.y);
@@ -96,7 +103,7 @@ export function buildNaniteFrame(
     registry.instanceCount,
     cam,
     occl ? hzb.sphereOccluded : null,
-    { tau },
+    { tau, minPx },
   );
   if (!hf.biomeTex || !hf.fieldsTex || !hf.noiseA || !hf.noiseB) {
     throw new Error('NaniteFrame: heightfield derived maps missing (boot order)');

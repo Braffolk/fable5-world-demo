@@ -156,9 +156,13 @@ export function buildNaniteCull(
    *  relative (instRotateDir vs cam.camPos), but a cluster facing away from the
    *  CAMERA still casts toward the LIGHT, so cone-culling it punches shadow
    *  holes. Default true (camera path). */
-  opts?: { coneCull?: boolean; tau?: UniformF },
+  opts?: { coneCull?: boolean; tau?: UniformF; minPx?: UniformF },
 ): NaniteCullChain {
   const coneCull = opts?.coneCull !== false;
+  // N8-D1e min-screen-size cull threshold (projected sphere RADIUS in px). 0 =
+  // disabled (exact pre-D1e behaviour). When > 0: any cluster projecting smaller
+  // is culled, and DAG'd meshes drop their finite hybrid envelope for this bound.
+  const minPx = opts?.minPx ?? uniformF(0);
   // N8-D1 continuous-LOD cut threshold (screen-error px). The camera path wires
   // ?loderr into this uniform; shadow cascades take the default. projK =
   // (screenH/2)·cot(fovY/2) — for the ortho shadow cams (cotHalfFov stays 1,
@@ -275,7 +279,11 @@ export function buildNaniteCull(
         nextDist.assign(bcU2F(elemU(gpu.meshes, m.add(uint(5)))));
       });
     });
-    // chain tail's lodDist = max draw envelope (0 = unlimited; D-N14)
+    // chain tail's lodDist = max draw envelope (0 = unlimited; D-N14). NOTE: the
+    // D-N33 "unbounded envelope" (persist until sub-pixel) was prototyped here and
+    // REVERTED — validated at 3.75M clusters / 100 ms (occl ON) because removing
+    // the cutoff submits the whole 4 km world's DAG instances to the cull. It needs
+    // HIERARCHICAL instance culling, not a per-instance size test. See NANITE.md.
     returnIf(
       nextId
         .equal(uint(LOD_NONE))
@@ -357,6 +365,17 @@ export function buildNaniteCull(
         const s = instWorldSphere(A, B, isHF as unknown as NB, c.sphere, swayPad);
 
         const visible = frustumVisible(s.center, s.radius).toVar();
+
+        // N8-D1e min-screen-size cull (D-N33): drop any cluster whose projected
+        // sphere radius is sub-pixel (< minPx). Crack-safe — the gap left is < 1px
+        // by construction. No-op when minPx==0 (default). Applies to all classes.
+        If(visible.greaterThan(0.5).and(minPx.greaterThan(0)), () => {
+          const toC = s.center.sub(cam.camPos) as unknown as NV3;
+          const distC = dot(toC, toC).max(float(1e-6)).sqrt();
+          If(projK.mul(s.radius).div(distC).lessThan(minPx), () => {
+            visible.assign(0);
+          });
+        });
 
         // N8-D1 continuous-LOD cut: a DAG cluster survives iff its OWN
         // simplification error projects ≤ τ px AND its PARENT's projects > τ px
