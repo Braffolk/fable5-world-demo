@@ -33,7 +33,6 @@ import type { GeometryRegistry } from './GeometryRegistry';
 import { makeNaniteCam } from './NaniteCommon';
 import { buildNaniteCull } from './NaniteCull';
 import { buildNaniteHzb } from './NaniteHzb';
-import { markFragmentWritable } from '../render/ThreePatches';
 import { makeFetch } from './NaniteFetch';
 import { buildNaniteRaster, makeVisBuffers } from './NaniteRaster';
 import { buildNaniteResolve } from './NaniteResolve';
@@ -75,10 +74,6 @@ export function buildNaniteFrame(
   const frozenParam = params.get('cullfreeze') === '1';
   const auditOn = params.get('audit') === '1';
 
-  const probeOnEarly = params.get('nanprobe') === '1';
-  const resolveDbgAttr = probeOnEarly ? new StorageBufferAttribute(new Float32Array(32), 1) : null;
-  if (resolveDbgAttr) markFragmentWritable(resolveDbgAttr);
-  const resolveDbgBuf = resolveDbgAttr ? storage(resolveDbgAttr, 'float', 32) : null;
   const cam = makeNaniteCam(size.x, size.y);
   const vis = makeVisBuffers(size.x * size.y);
   const hzb = buildNaniteHzb(vis.depthV.ro, cam);
@@ -105,15 +100,11 @@ export function buildNaniteFrame(
         camPos: cam.camPos,
       };
   const raster = buildNaniteRaster(registry.gpu, hf.heightTex, cam, cull, vis, 'flat', true, disp);
-  const resolve = buildNaniteResolve(
-    registry.gpu,
-    hf.heightTex,
-    cam,
-    cull,
-    vis,
-    { hf, gi: world.gi, canopyTex: world.canopyTex },
-    probeOnEarly ? { buf: resolveDbgBuf as never } : undefined,
-  );
+  const resolve = buildNaniteResolve(registry.gpu, hf.heightTex, cam, cull, vis, {
+    hf,
+    gi: world.gi,
+    canopyTex: world.canopyTex,
+  });
   engine.scene.add(resolve.mesh);
 
   // ?nanprobe=1 — exact-number depth forensics: a compute kernel reads the
@@ -176,17 +167,7 @@ export function buildNaniteFrame(
       }
     };
     probeRun = (r) => dispatch(r, kProbe);
-    probeRead = async () => {
-      const main = new Float32Array(await readBuffer(renderer, probeAttr, 0, 128));
-      if (resolveDbgAttr) {
-        const rd = new Float32Array(await readBuffer(renderer, resolveDbgAttr, 0, 128));
-        // splice the material-side wp into slots 28..30 of the result
-        main[28] = rd[28] ?? NaN;
-        main[29] = rd[29] ?? NaN;
-        main[30] = rd[30] ?? NaN;
-      }
-      return main;
-    };
+    probeRead = async () => new Float32Array(await readBuffer(renderer, probeAttr, 0, 128));
   }
   (window as unknown as { __laasNanite?: object }).__laasNanite = {
     setProbe: probeSet,
@@ -256,7 +237,6 @@ export function buildNaniteFrame(
       console.log('[nanite] cullfreeze: visibility frozen — fly to inspect');
     }
     cam.update(jitteredCamera());
-    resolve.syncCamera(engine.camera);
     if (!frozen) cull.runPhase1(renderer); // tests read LAST frame's HZB
     raster.clearVis(renderer);
     raster.depth1(renderer);
