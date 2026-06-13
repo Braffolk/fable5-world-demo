@@ -716,6 +716,28 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   classes keep the old path — no double draw, no z-fight, per-material
   gates run on real frames.
 
+- D-N20 (2026-06-13, N4-C1 reset): RESOLVE = CLIP-SPACE FULLSCREEN TRIANGLE +
+  PLAIN NodeMaterial + fragmentNode + MANUAL lighting — re-aligning to
+  D-N17/D-N18 after Fable's C1 deviation broke. Fable built the resolve as a
+  camera-glued NEAR-PLANE triangle + MeshPhysicalNodeMaterial (to ride three's
+  built-in sun/CSM/IBL lighting). That material FAILED to compile its lighting
+  (THREE.TSL "Vertex attribute normal not found") and three SILENTLY FELL BACK
+  to a material that ignored every node we set (colorNode/normalNode/
+  emissiveNode/maskNode/setupLightMap) — so the resolve rendered nothing
+  usable and near-camera terrain showed the sky behind it (user: "transparent,
+  dithered out"). The fallback also swallowed every debug paint, hiding the
+  failure through a long bisect. LESSON (GOTCHA): a NodeMaterial that emits a
+  "vertex attribute not found" warning is in a fallback/again-state — STOP and
+  fix the warning, do not trust any node you set on it. The C0 path (the
+  ?nanitedbg=flat resolve in NaniteRaster) always worked because it is exactly
+  this: clip-space fullscreen triangle + plain NodeMaterial + fragmentNode.
+  CONSEQUENCE: shading is computed manually in the fragment (D-N17 as written,
+  not three's pipeline). Specular view-dir is not needed (terrain is matte);
+  the open question D-N17 flagged (matching three's IBL/CSM exactly for the
+  ≤0.2% gate) is now the live N4-C1 work — CSM-receive + ambient/IBL parity
+  are NOT done yet (terrain renders correct-coloured but unshadowed, ~39% vs
+  ?nanite=0 at the walk spawn, almost all of it the missing canopy shadow).
+
 - D-N14 (2026-06-12, N2-C1): HYBRID DRAW ENVELOPE — the LOD chain tail's
   lodDist (lodNext = NONE) is the instance cull-beyond distance, set by
   WorldRegistry to the old path's real-geometry edge (trees R2_FAR+BAND2 =
@@ -802,6 +824,33 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   min/max on uint nodes, float(uintNode) → use .toFloat().
 
 ## PROGRESS LOG (append-only, newest first)
+
+- 2026-06-13 (q): **N4-C1 transparency bug fixed; shading parity still open.**
+  (Opus 4.8 continuing Fable's work.) User reported near-camera terrain
+  "transparent / dithered out" in the full-frame mode (?nanite=1). Root cause
+  (D-N20): Fable's C1 resolve (camera-glued near-plane triangle +
+  MeshPhysicalNodeMaterial) failed to compile its lighting and three fell back
+  to a node-ignoring material → resolve drew nothing → sky showed through. FIX:
+  rewrote NaniteResolve as the proven C0 architecture — clip-space fullscreen
+  triangle + plain NodeMaterial + fragmentNode; shading reconstructed in the
+  fragment (buildTerrainShading on the depth-reconstructed wp + manual sun
+  lambert + sky ambient + probe GI). Verified: coverage map fills the whole
+  ground near AND far (bm4 + walk spawn, ~97% covered, orphans 0); terrain
+  opaque + forest-coloured; full-frame still active (suppression confirmed:
+  39% diff vs ?nanite=0, not 0%). REMOVED Fable's camera-glued geometry +
+  syncCamera + the unused nanprobe-resolve-write plumbing + NaniteCommon.invVp
+  is now only used by the nanprobe kernel. STILL OPEN (next): CSM shadow
+  receive (the ~39% gap is the missing canopy shadow → nanite terrain too
+  bright), then ambient/IBL parity, then the framealign ≤0.2% gate; then the
+  THREE.TSL "normal not found" warning (cosmetic — buildTerrainShading's
+  unused normalNode path references a geometry normal; harmless on the plain
+  NodeMaterial). Commits: 6b83289 (Fable WIP checkpoint, preserved per user),
+  001a5ed (the fix). Two MISFRAMINGS cost time and are recorded so the next
+  context doesn't repeat them: (1) the resolve's debug-red looked "black" in
+  the FULL pipeline because post (exposure/aerial/tonemap) darkens it — always
+  use ?postmin=1 for coverage/paint probes; (2) the fallback material made
+  every paint mode show "lit terrain" (actually old-path trees + sky), which
+  read as a shading bug for far too long.
 
 - 2026-06-13 (p): **N4-C0 landed — full-frame integration + an N3-era
   depth-bias bug found and fixed.** `?nanite=1` (no nanitedbg) now renders
