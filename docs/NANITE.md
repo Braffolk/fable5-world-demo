@@ -1852,7 +1852,68 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## NEXT ACTIONS
 
-### ⏯ ACTIVE: SHADOW/LIGHTING PERF RETHINK (research mission, 2026-06-14)
+### ⏯ ACTIVE: N8 LOD DAG — PULLED FORWARD (user directive 2026-06-13: "pull N8 forward to a logical point")
+
+WHY: the D-N29 shadow perf-engine's biggest lever (S4 — cast shadows from a caster LOD
+COARSER than the camera view) NEEDS continuous cluster LOD = the N8 DAG. Rather than build
+shadow layers S0–S3 on today's discrete-LOD geometry and redo them for the DAG, build the
+DAG foundation FIRST, then drop the perf engine on top. The dominant nanite shadow caster
+TODAY is the TRUNK (bark, trunk-wind channel) + terrain/rock — trunks are EXPLICIT meshes,
+so an explicit-mesh DAG cheapens the CURRENT shadow cost directly AND sets up N9 foliage.
+
+LOGICAL POINT (the stopping milestone): continuous-LOD DAG WORKING on the currently-
+migrated EXPLICIT opaque meshes (rock, bark, deadwood) — boundary-locked QEM build +
+hierarchical runtime cut + crack-free + no-pop; continuous-zoom probe green; `?clusterdbg=
+lod` heatmap; boot-budget measured (the N8 gate per the spec). DEFERRED past this point:
+heightfield-TERRAIN DAG integration (its procedural height-mip already covers the far shell
+— fold in only if clean) and foliage AGGREGATES (N9 leaf-removal area-preservation).
+
+SEQUENCING: N6 (migrate remaining opaque pools) + N7 (hybrid close) STAY after this — the
+DAG applies to whatever is registered, so N6's later pools get DAG'd when registered. After
+the DAG logical point → resume the shadow stack: S4 (DAG-decoupled caster LOD) becomes
+buildable; S0 (half-res sample) / S1 (wind-freeze+split) / S2 (tighter cull+stagger) / S3
+(clipmap resolution) layer on; S5 (capsule-SDF+contact) is the beauty ceiling. The shadow
+research + D-N29 STAND; only the ORDER changed (S0–S5 follow the DAG, not precede it).
+
+IMPLEMENTATION: follow "### DAG (N8) — implementation-ready spec" (Technical design notes)
++ the phase-table N8 row. Build-cost budget is first-class (F15: time-slice if > ~2 s).
+Do NOT re-plan from scratch.
+
+CHUNK PLAN (to the logical point):
+- N8-D0 — DAG BUILD (CPU, new module e.g. BuildDag.ts): given LOD0 BuiltClusters
+  (Clusterize.ts), build levels k→k+1: cluster adjacency (shared-edge) → graph-partition
+  into groups of 8–32 (recursive boundary-min bisection — METIS substitute, zeux) → weld +
+  merge group tris → LOCK group-boundary verts → hand-rolled QEM edge-collapse simplify
+  interior to ~50% → re-clusterize the soup into 4–16 parents (reuse clusterize()) → own/
+  parent (error, sphere) pairs with containment + max-monotonicity + sibling-shared parent
+  pair (EXACT equality); stuck-fallback (<~15% reduction → stop that mesh; multiple roots
+  legal, parentError=∞). Output: extended per-cluster set across LOD levels + cut metadata.
+  GATE: builds on rock/bark/deadwood; per-level stats (tri reduction, stuck count); boot-
+  budget measured (F15); deterministic by seed. Validate via node probe tools/probe-dag.ts
+  (no GPU yet — verify monotonicity, containment, sibling-pair equality, no orphan errors).
+- N8-D1 — PACK + RUNTIME CUT (GPU): the current 8-word cluster record is FULL, so add a
+  PARALLEL per-cluster DAG buffer (ownErr f32 + ownSphere 4f32 + parentErr f32 + parentSphere
+  4f32 = 10 words; keep the cut kernel ≤10 storage buffers/stage — F9). Extend NaniteCull
+  with the hierarchical cut via the work queue: per instance push root group; pop →
+  project(own)≤τ AND project(parent)>τ → emit clusters, else push child groups. REPLACES the
+  mesh-level discrete lodNext/lodDist. GATE: tools/probe-zoom.ts continuous-zoom (no cracks,
+  no pop, stable tri counts); ?clusterdbg=lod heatmap; ?loderr=N slider (τ=1 px default).
+- N8-D2 — close: terrain heightfield DAG fold-in IF clean (else terrain stays on its height-
+  mip far shell — DEFER); perf ledger row vs pre-DAG; USER CHECKPOINT (continuous zoom on a
+  hero rock/tree). THEN shadows resume at S4 (DAG-decoupled caster LOD).
+
+CURRENT INFRA (read 2026-06-13): Clusterize.ts → BuiltClusters {indices (permuted, cluster
+tris contiguous), sphere 4f32/cluster, cone 4f32, triStart, triCount} — greedy ≤128-tri,
+shared-edge adjacency growth, pure CPU typed-array (node-runnable for probes). GeometryRegistry
+packs CLUSTER_WORDS=8 per cluster (sphere 4 + coneOct 1 + coneCos 1 + triStart 1 + (triCount
+u8 | flags u8 | meshId u16) 1) + a MESH table of 12 words incl. lodNext/lodDist = TODAY'S
+DISCRETE per-mesh LOD (rings as discrete cluster sets — the DAG's continuous per-cluster cut
+SUPERSEDES this). DAG metadata won't fit the full 8-word cluster rec → parallel buffer (D1).
+NOW BUILDING: N8-D0 (hand-rolled QEM DAG build + node validation probe).
+
+---
+
+### SHADOW/LIGHTING PERF RETHINK (research COMPLETE 2026-06-13 → D-N29; resumes after the DAG)
 
 > USER DIRECTIVE (verbatim intent): R1-cached nanite shadows are STILL
 > unacceptable — static ~70 fps, MOVING drops to **30 fps**. Baseline WITHOUT
