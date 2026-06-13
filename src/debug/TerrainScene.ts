@@ -315,7 +315,10 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     // on the old path until N5 — ShadowProxy + per-cascade caster siblings)
     const { buildNaniteFrame } = await import('../nanite/NaniteFrame');
     const { migratedMatClass } = await import('../nanite/WorldRegistry');
-    engine.post = buildNaniteFrame(engine, naniteRegistry, hf, post);
+    engine.post = buildNaniteFrame(engine, naniteRegistry, hf, post, {
+      gi: ablate.has('gi') ? null : gi,
+      canopyTex,
+    });
     if (naniteClasses.has('terrain') && tilesRef) {
       tilesRef.mesh.visible = false;
       tilesRef.farShell.visible = false;

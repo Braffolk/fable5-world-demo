@@ -60,6 +60,14 @@ export interface TerrainShadingInputs {
    * beyond the world edge.
    */
   baseNormalSlope?: NV4;
+  /**
+   * surface context override (N4 nanite resolve): explicit world position +
+   * camera position instead of the vertex-pipeline TSL singletons. The old
+   * forward materials omit this and get `positionWorld`/`cameraPosition` —
+   * bit-identical graphs by construction. Every other input above is already
+   * world-space-parametric (textures fetched by world uv derived from wp).
+   */
+  surf?: { wp: NV3; camPos: NV3 };
 }
 
 export interface TerrainShading {
@@ -97,7 +105,8 @@ export const DISP = {
 } as const;
 
 export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
-  const wp = positionWorld;
+  const wp = inp.surf?.wp ?? (positionWorld as unknown as NV3);
+  const camPos = inp.surf?.camPos ?? (cameraPosition as unknown as NV3);
   const wxz = wp.xz;
   const uv = uvFromWorld(wxz);
   const h = wp.y;
@@ -260,7 +269,7 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
   // (g0–g3); this gives the 200 m+ sward the same directional life so the
   // far layers dissolve into a live field, not flat paint.
   {
-    const vDir = positionWorld.sub(cameraPosition).normalize();
+    const vDir = wp.sub(camPos).normalize();
     const sunD = vec3(sunU.dir as unknown as NV3).normalize();
     const toSun = vDir.dot(sunD).max(0);
     const grazing = float(1).sub(baseNormal.dot(vDir.negate()).abs()).pow2();
@@ -269,7 +278,7 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
       .mul(toSun.pow(3))
       .mul(grazing)
       .mul(smoothstep(0.05, 0.22, sunD.y))
-      .mul(smoothstep(60, 220, positionWorld.sub(cameraPosition).length()))
+      .mul(smoothstep(60, 220, wp.sub(camPos).length()))
       .mul(0.55);
     col = col.add(vec3(0.085, 0.1, 0.032).mul(sheenK)) as NV3;
   }
@@ -304,7 +313,7 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
   // far-detail synthesis (Pillar D): serrated normal-domain detail keeps
   // mid/far ridges craggy where geometric density has LOD'd out. Applied by
   // DISTANCE on both near tiles and the far shell.
-  const camDist = wp.sub(cameraPosition).length();
+  const camDist = wp.sub(camPos).length();
   const farK = inp.far ? float(1) : smoothstep(900, 2600, camDist);
   // pre-baked ridged gradient at 310 m features; ×44 ≈ the old ±22 m
   // finite-difference amplitude (×2: baked noise is [0,1], mx was [-1,1])

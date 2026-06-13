@@ -33,6 +33,7 @@ import type { GeometryRegistry } from './GeometryRegistry';
 import { makeNaniteCam } from './NaniteCommon';
 import { buildNaniteCull } from './NaniteCull';
 import { buildNaniteHzb } from './NaniteHzb';
+import { markFragmentWritable } from '../render/ThreePatches';
 import { makeFetch } from './NaniteFetch';
 import { buildNaniteRaster, makeVisBuffers } from './NaniteRaster';
 import { buildNaniteResolve } from './NaniteResolve';
@@ -61,6 +62,7 @@ export function buildNaniteFrame(
   registry: GeometryRegistry,
   hf: Heightfield,
   post: PostStack,
+  world: { gi: import('../gpu/passes/ProbeGI').ProbeGI | null; canopyTex: import('three/webgpu').StorageTexture | null },
 ): NaniteFrameHandles {
   const renderer = engine.renderer;
   const size = renderer.getDrawingBufferSize(new Vector2());
@@ -73,6 +75,10 @@ export function buildNaniteFrame(
   const frozenParam = params.get('cullfreeze') === '1';
   const auditOn = params.get('audit') === '1';
 
+  const probeOnEarly = params.get('nanprobe') === '1';
+  const resolveDbgAttr = probeOnEarly ? new StorageBufferAttribute(new Float32Array(32), 1) : null;
+  if (resolveDbgAttr) markFragmentWritable(resolveDbgAttr);
+  const resolveDbgBuf = resolveDbgAttr ? storage(resolveDbgAttr, 'float', 32) : null;
   const cam = makeNaniteCam(size.x, size.y);
   const vis = makeVisBuffers(size.x * size.y);
   const hzb = buildNaniteHzb(vis.depthV.ro, cam);
@@ -82,8 +88,32 @@ export function buildNaniteFrame(
     cam,
     occl ? hzb.sphereOccluded : null,
   );
-  const raster = buildNaniteRaster(registry.gpu, hf.heightTex, cam, cull, vis, 'flat');
-  const resolve = buildNaniteResolve(registry.gpu, hf.heightTex, cam, cull, vis);
+  if (!hf.biomeTex || !hf.fieldsTex || !hf.noiseA || !hf.noiseB) {
+    throw new Error('NaniteFrame: heightfield derived maps missing (boot order)');
+  }
+  // ?nanodisp=1 — disable terrain micro-displacement (root-cause bisect for
+  // near-camera transparency: the disp branch only runs within 85 m)
+  const dispOff = params.get('nanodisp') === '1';
+  const disp = dispOff
+    ? undefined
+    : {
+        normalTex: hf.normalTex,
+        biomeTex: hf.biomeTex,
+        fieldsTex: hf.fieldsTex,
+        noiseA: hf.noiseA,
+        noiseB: hf.noiseB,
+        camPos: cam.camPos,
+      };
+  const raster = buildNaniteRaster(registry.gpu, hf.heightTex, cam, cull, vis, 'flat', true, disp);
+  const resolve = buildNaniteResolve(
+    registry.gpu,
+    hf.heightTex,
+    cam,
+    cull,
+    vis,
+    { hf, gi: world.gi, canopyTex: world.canopyTex },
+    probeOnEarly ? { buf: resolveDbgBuf as never } : undefined,
+  );
   engine.scene.add(resolve.mesh);
 
   // ?nanprobe=1 — exact-number depth forensics: a compute kernel reads the
@@ -125,41 +155,18 @@ export function buildNaniteFrame(
       const ci = item.y.toVar();
       const ctx = fetchDbg.makeCtx(instId, ci);
       const w0 = fetchDbg.fetchWorldVert(ctx, localTri, 0);
-      const w1 = fetchDbg.fetchWorldVert(ctx, localTri, 1);
-      const w2 = fetchDbg.fetchWorldVert(ctx, localTri, 2);
-      // ndc z range of the payload triangle: interpolated depth CANNOT leave
-      // [zmin,zmax] — stored outside ⇒ a foreign writer owns the depth
-      const q0 = cam.vp.mul(vec4(w0, 1));
-      const q1 = cam.vp.mul(vec4(w1, 1));
-      const q2 = cam.vp.mul(vec4(w2, 1));
-      const z0 = q0.z.div(q0.w);
-      const z1 = q1.z.div(q1.w);
-      const z2 = q2.z.div(q2.w);
-      const zmin = z0.min(z1).min(z2);
-      const zmax = z0.max(z1).max(z2);
-      void zmax;
-      // does the decoded triangle COVER the probe pixel on screen?
-      const W = float(size.x);
-      const H = float(size.y);
-      const s0 = q0.xy.div(q0.w).add(1).mul(0.5).mul(vec2(W, H));
-      const s1 = q1.xy.div(q1.w).add(1).mul(0.5).mul(vec2(W, H));
-      const s2 = q2.xy.div(q2.w).add(1).mul(0.5).mul(vec2(W, H));
-      const minX = s0.x.min(s1.x).min(s2.x);
-      const maxX = s0.x.max(s1.x).max(s2.x);
-      const minY = s0.y.min(s1.y).min(s2.y);
-      const maxY = s0.y.max(s1.y).max(s2.y);
-      // raster rows are bottom-up: pixel center (x+0.5, fy+0.5)
-      const pcx = toF(x).add(0.5);
-      const pcy = toF(fy).add(0.5);
-      const covers = pcx
-        .greaterThanEqual(minX.sub(1))
-        .and(pcx.lessThanEqual(maxX.add(1)))
-        .and(pcy.greaterThanEqual(minY.sub(1)))
-        .and(pcy.lessThanEqual(maxY.add(1)));
-      outBuf.element(instanceIndex.mul(uint(4))).assign(zmin);
-      outBuf.element(instanceIndex.mul(uint(4)).add(uint(1))).assign(visD);
-      outBuf.element(instanceIndex.mul(uint(4)).add(uint(2))).assign(covers.select(float(1), float(0)));
-      outBuf.element(instanceIndex.mul(uint(4)).add(uint(3))).assign(pcy.sub(s0.y));
+      void w0;
+      // THE RESOLVE'S wp EXPRESSIONS, verbatim (pixel-center ndc + invVp):
+      const ndcX = toF(x).add(0.5).div(float(size.x)).mul(2).sub(1);
+      const ndcY = toF(fy).add(0.5).div(float(size.y)).mul(2).sub(1);
+      const hpos = cam.invVp.mul(vec4(ndcX, ndcY, visD, 1));
+      const wpx = hpos.x.div(hpos.w);
+      const wpy = hpos.y.div(hpos.w);
+      const wpz = hpos.z.div(hpos.w);
+      outBuf.element(instanceIndex.mul(uint(4))).assign(wpx);
+      outBuf.element(instanceIndex.mul(uint(4)).add(uint(1))).assign(wpy);
+      outBuf.element(instanceIndex.mul(uint(4)).add(uint(2))).assign(wpz);
+      outBuf.element(instanceIndex.mul(uint(4)).add(uint(3))).assign(visD);
     })().compute(8, [8]);
     (kProbe as unknown as { setName(n: string): void }).setName('nanProbe');
     probeSet = (pix) => {
@@ -169,7 +176,17 @@ export function buildNaniteFrame(
       }
     };
     probeRun = (r) => dispatch(r, kProbe);
-    probeRead = async () => new Float32Array(await readBuffer(renderer, probeAttr, 0, 128));
+    probeRead = async () => {
+      const main = new Float32Array(await readBuffer(renderer, probeAttr, 0, 128));
+      if (resolveDbgAttr) {
+        const rd = new Float32Array(await readBuffer(renderer, resolveDbgAttr, 0, 128));
+        // splice the material-side wp into slots 28..30 of the result
+        main[28] = rd[28] ?? NaN;
+        main[29] = rd[29] ?? NaN;
+        main[30] = rd[30] ?? NaN;
+      }
+      return main;
+    };
   }
   (window as unknown as { __laasNanite?: object }).__laasNanite = {
     setProbe: probeSet,
@@ -194,9 +211,25 @@ export function buildNaniteFrame(
           console.warn('[nanite] TRAANode._jitterIndex missing — jitter mirror dead (three upgrade?)');
         }
       } else {
-        const jx = halton(idx + 1, 2);
-        const jy = halton(idx + 1, 3);
-        scratch.setViewOffset(size.x, size.y, jx - 0.5, jy - 0.5, size.x, size.y);
+        // ?nanjitter — mirror-phase bisects: 0 off | neg | swap | +1/-1 index
+        const jm = params.get('nanjitter');
+        if (jm !== '0') {
+          let i2 = idx;
+          if (jm === 'p1') i2 = (idx + 1) % 31;
+          if (jm === 'm1') i2 = (idx + 30) % 31;
+          let jx = halton(i2 + 1, 2) - 0.5;
+          let jy = halton(i2 + 1, 3) - 0.5;
+          if (jm === 'neg') {
+            jx = -jx;
+            jy = -jy;
+          }
+          if (jm === 'swap') {
+            const t = jx;
+            jx = jy;
+            jy = t;
+          }
+          scratch.setViewOffset(size.x, size.y, jx, jy, size.x, size.y);
+        }
       }
     }
     return scratch;
@@ -223,6 +256,7 @@ export function buildNaniteFrame(
       console.log('[nanite] cullfreeze: visibility frozen — fly to inspect');
     }
     cam.update(jitteredCamera());
+    resolve.syncCamera(engine.camera);
     if (!frozen) cull.runPhase1(renderer); // tests read LAST frame's HZB
     raster.clearVis(renderer);
     raster.depth1(renderer);
@@ -246,6 +280,10 @@ export function buildNaniteFrame(
 
   const meter = (r: WebGPURenderer): void => {
     post.meter(r);
+    const traa = post.traaNode as { _jitterIndex?: number } | null;
+    if (traa && typeof traa._jitterIndex === 'number') {
+      engine.stats.counters['nanite.jitterIdx'] = traa._jitterIndex;
+    }
     // frame 0: no dispatch has created the GPU buffers yet — readback throws
     if (frame === 0 || frame % 15 !== 0 || reading) return;
     reading = true;

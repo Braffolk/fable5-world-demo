@@ -43,6 +43,8 @@ export const CONE_SLACK = 0.25;
 export interface NaniteCam {
   /** projection · view (current frame) */
   vp: UniformMat4;
+  /** inverse of vp — the resolve unprojects (ndc, storedZ) back to world */
+  invVp: UniformMat4;
   camPos: UniformV3;
   planes: UniformArrV4;
   /** previous frame's VP + camera position — the occlusion-test pair
@@ -61,6 +63,7 @@ export interface NaniteCam {
 
 export function makeNaniteCam(width: number, height: number): NaniteCam {
   const vp = uniformMat4(new Matrix4());
+  const invVp = uniformMat4(new Matrix4());
   const camPos = uniformV3(new Vector3());
   const prevVp = uniformMat4(new Matrix4());
   const prevCamPos = uniformV3(new Vector3());
@@ -79,6 +82,7 @@ export function makeNaniteCam(width: number, height: number): NaniteCam {
   const frustum = new Frustum();
   return {
     vp,
+    invVp,
     camPos,
     prevVp,
     prevCamPos,
@@ -94,6 +98,7 @@ export function makeNaniteCam(width: number, height: number): NaniteCam {
       camera.updateMatrixWorld();
       projScreen.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
       vp.value.copy(projScreen);
+      invVp.value.copy(projScreen).invert();
       camPos.value.copy(camera.position);
       cotHalfFov.value = 1 / Math.tan(((camera.fov * Math.PI) / 180) / 2);
       frustum.setFromProjectionMatrix(projScreen);

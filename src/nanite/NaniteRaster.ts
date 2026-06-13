@@ -53,7 +53,7 @@ import { markFragmentWritable } from '../render/ThreePatches';
 import { MESH_WORDS } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
 import { DISPATCH_ROW, QRASTER_CAP, hashColor, type NaniteCam } from './NaniteCommon';
-import { makeFetch } from './NaniteFetch';
+import { makeFetch, type TerrainDisp } from './NaniteFetch';
 import {
   aLoadU,
   bcF2U,
@@ -140,6 +140,8 @@ export function buildNaniteRaster(
   /** false (?shade=0): pure matClass color, no lambert — the parity gate's
    *  shading-free mode (coverage/structure compare only) */
   shade = true,
+  /** terrain micro-displacement (frame mode; dbg views omit — NaniteFetch) */
+  disp?: TerrainDisp,
 ): NaniteRasterHandles {
   const { width, height } = cam;
   const pixelCount = width * height;
@@ -160,7 +162,7 @@ export function buildNaniteRaster(
   const auditV = sU32Views(auditAttr, 4);
 
   // ---- shared fetch helpers (NaniteFetch.ts — also the resolve's decode) ----------
-  const { makeCtx, fetchWorldVert } = makeFetch(gpu, heightTex);
+  const { makeCtx, fetchWorldVert } = makeFetch(gpu, heightTex, disp);
 
   const edgeFn = (a: NV2, b: NV2, p: NV2): NF =>
     p.y.sub(a.y).mul(b.x.sub(a.x)).sub(p.x.sub(a.x).mul(b.y.sub(a.y))) as unknown as NF;

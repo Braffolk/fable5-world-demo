@@ -11,12 +11,35 @@
  */
 
 import type { Texture } from 'three';
-import { If, uint, vec3 } from 'three/tsl';
-import type { NB, NF, NU, NV3, NV4 } from '../gpu/TSLTypes';
+import type { StorageTexture } from 'three/webgpu';
+import { If, clamp, float, mix, smoothstep, texture, uint, vec2, vec3 } from 'three/tsl';
+import type { NB, NF, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
+import { DISP } from '../render/TerrainMaterial';
+import { PERIOD_FBM, PERIOD_RID, PERIOD_VAL } from '../gpu/passes/NoiseBake';
+import { WORLD_SIZE } from '../world/WorldConst';
 import { MESH_WORDS, VERT_WORDS } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
 import { instTransformPoint, instYaw, type InstYaw } from './NaniteCommon';
+import type { UniformV3 } from './Tsl';
 import { bcU2F, elemU, maxU, minU, texLoadR, toF } from './Tsl';
+
+/**
+ * Terrain micro-displacement inputs ('terrain' transform channel, N4-C1):
+ * the EXACT TerrainTiles vertex formula (world-space fields, distance-faded
+ * 45→85 m) applied to heightfield vertices at fetch time, so the raster, the
+ * HW passes and the resolve all see the displaced surface. The nanitedbg
+ * views omit this (hwref's CPU build has no GPU noise textures — parity
+ * stays an undisplaced-vs-undisplaced compare; the full-frame C1 gate vs
+ * ?nanite=0 is what verifies displacement).
+ */
+export interface TerrainDisp {
+  normalTex: StorageTexture;
+  biomeTex: StorageTexture;
+  fieldsTex: StorageTexture;
+  noiseA: StorageTexture;
+  noiseB: StorageTexture;
+  camPos: UniformV3;
+}
 
 /** per-(instance, cluster) decode shared by the 3 corner fetches */
 export interface VertCtx {
@@ -45,7 +68,7 @@ export interface NaniteFetch {
   meshWord(meshId: NU, word: number): NU;
 }
 
-export function makeFetch(gpu: RegistryGpu, heightTex: Texture): NaniteFetch {
+export function makeFetch(gpu: RegistryGpu, heightTex: Texture, disp?: TerrainDisp): NaniteFetch {
   const makeCtx = (instId: NU, ci: NU): VertCtx => {
     const cBase = ci.mul(uint(8)).toVar();
     const triStart = elemU(gpu.clusters, cBase.add(uint(6))).toVar();
@@ -103,7 +126,56 @@ export function makeFetch(gpu: RegistryGpu, heightTex: Texture): NaniteFetch {
       const sx = ctx.gx.add(col).add(dx);
       const sz = ctx.gz.add(row).add(dz);
       const h = texLoadR(heightTex, sx, sz);
-      out.assign(vec3(toF(sx).mul(ctx.cell).add(ctx.oX), h, toF(sz).mul(ctx.cell).add(ctx.oZ)));
+      const wx = toF(sx).mul(ctx.cell).add(ctx.oX);
+      const wz = toF(sz).mul(ctx.cell).add(ctx.oZ);
+      if (disp) {
+        // TerrainTiles micro-displacement, verbatim (world-space fields;
+        // amplitude gated by slope/rockExposure/snow, faded 45→85 m)
+        const wpos = vec2(wx, wz);
+        const camD = wpos.sub(vec3(disp.camPos).xz).length();
+        const dOut = float(0).toVar();
+        If(camD.lessThan(float(DISP.fade1)), () => {
+          const uvV = wpos.div(WORLD_SIZE).add(0.5) as unknown as NV2;
+          const nsV = texture(disp.normalTex, uvV, 0) as unknown as NV4;
+          const bioV = texture(disp.biomeTex, uvV, 0) as unknown as NV4;
+          const fldV = texture(disp.fieldsTex, uvV, 0) as unknown as NV4;
+          const rockK = smoothstep(DISP.slopeKnee0, DISP.slopeKnee1, nsV.w).max(
+            bioV.a.mul(0.85),
+          );
+          const gravelK = smoothstep(0.32, 0.7, fldV.y)
+            .max(smoothstep(0.02, 0.2, fldV.z))
+            .mul(float(DISP.gravel));
+          const dispAmp = (mix(float(DISP.base), float(DISP.rock), rockK) as unknown as NF)
+            .max(gravelK)
+            .mul(bioV.g.mul(0.75).oneMinus())
+            .mul(clamp(float(DISP.fade1).sub(camD).div(DISP.fade1 - DISP.fade0), 0, 1));
+          const f1 = (texture(disp.noiseA, wpos.div(DISP.sF1 * PERIOD_FBM), 0) as unknown as NV4).y
+            .mul(2)
+            .sub(1);
+          const f2 = (
+            texture(
+              disp.noiseA,
+              wpos.div(DISP.sF2 * PERIOD_VAL).add(vec2(0.31, 0.77)),
+              0,
+            ) as unknown as NV4
+          ).x
+            .mul(2)
+            .sub(1);
+          const r1 = (texture(disp.noiseB, wpos.div(DISP.sRid * PERIOD_RID), 0) as unknown as NV4).z
+            .mul(2)
+            .sub(1);
+          dOut.assign(
+            f1
+              .mul(DISP.wF1)
+              .add(f2.mul(DISP.wF2))
+              .add(r1.mul(rockK.mul(1 - DISP.ridBase).add(DISP.ridBase)).mul(DISP.wRid))
+              .mul(dispAmp),
+          );
+        });
+        out.assign(vec3(wx, h.add(dOut), wz));
+      } else {
+        out.assign(vec3(wx, h, wz));
+      }
     }).Else(() => {
       const vi = elemU(gpu.indices, ctx.triStart.add(localTri).mul(uint(3)).add(uint(v)));
       const vb = vi.mul(uint(VERT_WORDS));

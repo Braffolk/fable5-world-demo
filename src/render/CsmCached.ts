@@ -25,6 +25,21 @@ import { Box3, Matrix4, Vector3 } from 'three';
 import { CSMFrustum } from 'three/addons/csm/CSMFrustum.js';
 import { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js';
 import type { Camera, Light, Object3D } from 'three/webgpu';
+import {
+  Fn,
+  If,
+  cameraViewMatrix,
+  float,
+  min,
+  reference,
+  renderGroup,
+  shadowPositionWorld,
+  uniform,
+  vec2,
+  vec4,
+  viewZToOrthographicDepth,
+} from 'three/tsl';
+import type { NF, NV4 } from '../gpu/TSLTypes';
 
 const PERIODS = [1, 2, 3, 6];
 const PHASES = [0, 1, 2, 5];
@@ -61,6 +76,148 @@ export class CachedCsmShadowNode extends CSMShadowNode {
   /** drop all cached fits — every cascade re-renders next frame */
   invalidate(): void {
     this.frozenCenters.length = 0;
+  }
+
+  /**
+   * Cascade-select view depth derived from shadowPositionWorld instead of
+   * three's `positionView.z`. For normal geometry the two are identical
+   * (shadowPositionWorld defaults to positionWorld). For the nanite resolve
+   * (a fullscreen triangle with `vertexNode`, N4/D-N18), `positionView`
+   * reconstructs a NEAR-PLANE point (right direction, wrong magnitude —
+   * Position.js fragment branch), which pinned every pixel to cascade 0;
+   * the material supplies the true per-pixel world position via
+   * `receivedShadowPositionNode`, which the shadow system assigns to
+   * `shadowPositionWorld` BEFORE these bodies run (ShadowBaseNode contract).
+   */
+  private cascadeLinearDepth(shadowFar: NF): NF {
+    type Grouped = { setGroup(g: unknown): unknown };
+    const cameraNear = (reference('camera.near', 'float', this) as unknown as Grouped).setGroup(
+      renderGroup,
+    ) as unknown as NF;
+    const spw4 = (vec4 as unknown as (a: unknown, b: number) => NV4)(shadowPositionWorld, 1);
+    const viewZ = (cameraViewMatrix as unknown as { mul(v: NV4): NV4 }).mul(spw4).z;
+    const ld = viewZToOrthographicDepth(viewZ, cameraNear, shadowFar) as unknown as {
+      toVar(): NF;
+    };
+    return ld.toVar();
+  }
+
+  // _setupFade/_setupStandard are vendored from three 0.184's CSMShadowNode
+  // with ONLY the linearDepth source swapped (cascadeLinearDepth above) —
+  // verify against the addon source on any three upgrade (same caveat as
+  // updateBefore below). The base methods read `positionView.z` directly.
+  private _setupFadeShadowPos(): unknown {
+    const self = this as unknown as {
+      cascades: number;
+      maxFar: number;
+      camera: { far: number } | null;
+      _shadowNodes: { oneMinus(): { mul(r: unknown): unknown } }[];
+      setupShadowPosition(builder: unknown): void;
+    };
+    const cascades = (
+      reference('_cascades', 'vec2', this) as unknown as {
+        setGroup(g: unknown): { setName(n: string): unknown };
+      }
+    )
+      .setGroup(renderGroup)
+      .setName('cascades') as unknown as { element(i: number): NV4 };
+    const shadowFar = (
+      ((uniform as unknown as (t: string) => { setGroup(g: unknown): { setName(n: string): unknown } })('float'))
+        .setGroup(renderGroup)
+        .setName('shadowFar') as unknown as { onRenderUpdate(fn: () => number): NF }
+    ).onRenderUpdate(() => Math.min(self.maxFar, self.camera?.far ?? self.maxFar));
+    const linearDepth = this.cascadeLinearDepth(shadowFar);
+    const lastCascade = self.cascades - 1;
+
+    return Fn((builder: unknown) => {
+      self.setupShadowPosition(builder);
+      const ret = vec4(1, 1, 1, 1).toVar();
+      const cascade = vec2().toVar();
+      const cascadeCenter = float(0).toVar();
+      const margin = float(0).toVar();
+      const csmX = float(0).toVar();
+      const csmY = float(0).toVar();
+      for (let i = 0; i < self.cascades; i++) {
+        const isLastCascade = i === lastCascade;
+        cascade.assign(cascades.element(i) as unknown as Parameters<typeof cascade.assign>[0]);
+        cascadeCenter.assign(cascade.x.add(cascade.y).div(2.0));
+        const closestEdge = linearDepth.lessThan(cascadeCenter).select(cascade.x, cascade.y);
+        margin.assign(float(0.25).mul(closestEdge.pow(2.0)));
+        csmX.assign(cascade.x.sub(margin.div(2.0)));
+        if (isLastCascade) {
+          csmY.assign(cascade.y);
+        } else {
+          csmY.assign(cascade.y.add(margin.div(2.0)));
+        }
+        const inRange = linearDepth.greaterThanEqual(csmX).and(linearDepth.lessThanEqual(csmY));
+        If(inRange, () => {
+          const dist = min(linearDepth.sub(csmX), csmY.sub(linearDepth)).toVar();
+          let ratio = dist.div(margin).clamp(0.0, 1.0);
+          if (i === 0) {
+            // don't fade at nearest edge
+            ratio = linearDepth.greaterThan(cascadeCenter).select(ratio, 1) as typeof ratio;
+          }
+          const shadowNode = self._shadowNodes[i];
+          if (shadowNode) {
+            ret.subAssign(
+              shadowNode.oneMinus().mul(ratio) as unknown as Parameters<typeof ret.subAssign>[0],
+            );
+          }
+        });
+      }
+      return ret;
+    })();
+  }
+
+  private _setupStandardShadowPos(): unknown {
+    const self = this as unknown as {
+      cascades: number;
+      maxFar: number;
+      camera: { far: number } | null;
+      _shadowNodes: unknown[];
+      setupShadowPosition(builder: unknown): void;
+    };
+    const cascades = (
+      reference('_cascades', 'vec2', this) as unknown as {
+        setGroup(g: unknown): { setName(n: string): unknown };
+      }
+    )
+      .setGroup(renderGroup)
+      .setName('cascades') as unknown as { element(i: number): NV4 };
+    const shadowFar = (
+      ((uniform as unknown as (t: string) => { setGroup(g: unknown): { setName(n: string): unknown } })('float'))
+        .setGroup(renderGroup)
+        .setName('shadowFar') as unknown as { onRenderUpdate(fn: () => number): NF }
+    ).onRenderUpdate(() => Math.min(self.maxFar, self.camera?.far ?? self.maxFar));
+    const linearDepth = this.cascadeLinearDepth(shadowFar);
+
+    return Fn((builder: unknown) => {
+      self.setupShadowPosition(builder);
+      const ret = vec4(1, 1, 1, 1).toVar();
+      const cascade = vec2().toVar();
+      for (let i = 0; i < self.cascades; i++) {
+        cascade.assign(cascades.element(i) as unknown as Parameters<typeof cascade.assign>[0]);
+        If(
+          linearDepth.greaterThanEqual(cascade.x).and(linearDepth.lessThanEqual(cascade.y)),
+          () => {
+            ret.assign(self._shadowNodes[i] as unknown as Parameters<typeof ret.assign>[0]);
+          },
+        );
+      }
+      return ret;
+    })();
+  }
+
+  override setup(builder: Parameters<CSMShadowNode['setup']>[0]): ReturnType<CSMShadowNode['setup']> {
+    const self = this as unknown as {
+      camera: unknown;
+      fade: boolean;
+      _init(builder: unknown): void;
+    };
+    if (self.camera === null) self._init(builder);
+    return (
+      self.fade === true ? this._setupFadeShadowPos() : this._setupStandardShadowPos()
+    ) as ReturnType<CSMShadowNode['setup']>;
   }
 
   override updateFrustums(): void {
