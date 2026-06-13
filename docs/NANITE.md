@@ -1797,6 +1797,62 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## NEXT ACTIONS
 
+### ⏯ ACTIVE: SHADOW/LIGHTING PERF RETHINK (research mission, 2026-06-14)
+
+> USER DIRECTIVE (verbatim intent): R1-cached nanite shadows are STILL
+> unacceptable — static ~70 fps, MOVING drops to **30 fps**. Baseline WITHOUT
+> shadows on this machine = **115–120 fps**. GOAL: **fantastic-looking shadows at
+> 100+ fps** (so a ≤~15–20 fps hit). "Complete rethink — explore all sorts of
+> nanite-style shadow/lighting solutions via internet search. Is CSM our best
+> option? Is it even the right option? What alternatives have a great balance of
+> quality and performance?" Research FIRST, then decide (new D-N entry), then build.
+
+MEASURED BOTTLENECK (established R0/R1 — do NOT re-measure): the moving cost is the
+per-frame SHADOW GEOMETRY RASTER. R1 caches per cascade so a STATIC camera re-rasters
+nothing (nanRasterDepth == nanRasterPayload, camera-only → ~0 shadow cost, 70 fps).
+A MOVING camera re-rasters cascade 0 every frame + far cascades on the [1,2,3,6]
+cadence ≈ 35% of R0's 1.44M clusters/frame ≈ ~10 ms+ of SW compute raster. The PCSS
+SAMPLE in the resolve is a FIXED per-pixel cost (same static or moving) — NOT the
+moving bottleneck. So the problem = re-rasterizing shadow geometry every frame as the
+camera moves. Caching at per-cascade granularity (R1) is too coarse to fix it.
+
+KEY LEVER (the world): LAAS is a MOSTLY-STATIC procedural world (deterministic seed)
+— terrain/rock/trunks are rigid; only WIND sway is dynamic (trunk/leaf channels,
+within the 380–480 m fade). Sun is static between ToD edits. So this is fundamentally
+a CACHING/PRECOMPUTE problem; CSM re-rasters because it is built for dynamic scenes.
+
+RESEARCH QUESTIONS (open — answer each with cited sources, no foregone conclusion):
+ 1. Why does UE5 Nanite use VIRTUAL SHADOW MAPS, not CSM? VSM page caching: static
+    pages cached ~indefinitely, only invalidated pages re-render → a moving camera
+    re-renders FEW pages, not whole cascades. Is per-page caching the real fix vs
+    R1's per-cascade? (D-N28 DEFERRED VSM / "don't build the 16K page table" — was
+    that deferral wrong now that per-cascade caching proved too coarse?)
+ 2. VSM in WebGPU — feasible WITHOUT 64-bit atomics? What did Scthe/nanite-webgpu,
+    ktstephano sparse-VSM, and other WebGPU/Vulkan hobby Nanites actually ship?
+ 3. SDF (distance-field) shadows — build a global SDF of the STATIC world ONCE,
+    ray-march for soft shadows in the resolve. ZERO per-frame geometry raster.
+    Cost/quality/penumbra/WebGPU-compute feasibility? (UE uses DF shadows for far
+    field.) Fit for a static world is the draw.
+ 4. BAKED + DYNAMIC hybrid — precompute static shadows (terrain/rock/trunk) once at
+    load (world is deterministic!), overlay only the small dynamic WIND set near field.
+ 5. Ray-traced shadows — no HW RT in WebGPU; SW ray-trace vs a cluster BVH/SDF —
+    viable at 100+ fps?
+ 6. BROADER (user said "shadow/LIGHTING"): is there a unified soft-shadow+GI approach
+    (voxel/SDF cone tracing, surfel/probe) that gives soft shadows + bounce cheaply
+    and replaces the CSM term entirely?
+
+CONSTRAINTS (binding): WebGPU — NO 64-bit atomics, NO HW ray tracing, ≤10 storage
+buffers/stage, ~1.5 GB UMA budget. Zero external assets (hand-rolled). Deterministic
+seed. WIND shadows must stay correct (the user's standing catch). Quality floor: no
+black shadows, soft penumbra, no pop within 300 m.
+
+DELIVERABLE: a written comparison (quality / perf / complexity / WebGPU-fit) of the
+viable approaches + a recommended direction as a new DECISION, THEN implement. The
+R2/R3/R4 CSM-raster chunks below are ON HOLD pending this rethink's verdict (they may
+be superseded if the verdict is VSM/SDF/baked rather than "keep CSM, optimize raster").
+
+---
+
 N4 COMPLETE (2026-06-13; D-N16..D-N25 record the architecture). The material
 übershader ports TERRAIN/ROCK/BARK/DEADWOOD (DEBRIS deferred to its N6 pool
 migration). Chunks, each tsc-clean + committed:
