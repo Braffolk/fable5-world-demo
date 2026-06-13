@@ -835,6 +835,37 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   textures are not. Lower hardware degrades to its own ceiling (clamp), where the
   array would need merging to ≤16 — a future portability concern, not now.
 
+- D-N26 (2026-06-13, N5 design): NANITE SHADOW CASTERS = HW INDIRECT DRAWS INTO
+  THE CSM CASCADES VIA PER-CASCADE LAYERS — mirror the Forests caster mechanism
+  (the very path N5 deletes), NOT a compute SW raster into an owned depth texture
+  (deferred). RATIONALE: three's CSM samples a per-cascade DEPTH TEXTURE through
+  a compare sampler (ShadowSetup.pcssFilter — blocker search + world-metric
+  penumbra + Vogel PCF). Forests already feeds those textures by (a) the cull
+  kernel testing instances against each cascade's ortho frustum (6 planes ×
+  CASCADES, refreshed one frame stale from `csm.lights[c].shadow.camera`, slack
+  hidden in lightMargin), and (b) per-cascade sibling caster meshes on layer
+  `2+c` with `castShadow=true`; `csm.lights[c].shadow.camera.layers.enable(2+c)`
+  makes ONLY cascade c render layer `2+c`, while visible meshes set
+  `castShadow=false` (Forests.ts:940-991, 391-431). Reusing this gets the proven
+  pcssFilter + cascade split (CsmCached) + cadence FOR FREE — a SW raster would
+  have to own the depth texture and reimplement the compare/penumbra, which is
+  the integration wall. The SW depth-only atomicMin path (D-N5) stays the
+  deferred perf option if HW caster raster measures too slow (it likely won't:
+  nanite clusters are far fewer tris than the alpha cards Forests rastered, and
+  shadow passes are depth-only). NANITE CASTER SPECIFICS vs the camera cull:
+  shadow cull = cascade ortho frustum + camera-distance LOD (shadow LOD must
+  match the visible geometry's LOD or peter-pan) + NO occlusion (an off-screen/
+  ridge-hidden caster still casts — F5) + NO cone backface (a cluster facing away
+  from the CAMERA still casts toward the light; cone uses the camera axis, wrong
+  for light views). So the shadow cull is buildNaniteCull with the cascade
+  NaniteCam, sphereOccluded=null, and cone disabled (new opt). The caster MESH
+  is a vertex-pulling NodeMaterial (indirect draw over the cascade's visible-
+  cluster list; vertexNode = fetchWorldVert by gl_VertexIndex→cluster/tri/corner,
+  transformed by cameraView/Projection which during cascade c's shadow render
+  ARE the cascade light VP — bit-identical positions incl. trunk wind to the
+  camera path); depth-only. Old casters (ShadowProxy + Forests siblings) retire
+  when nanite shadows own the cascades (gate like D-N21's DISABLE_OLD_GEOMETRY).
+
 ## GOTCHAS (append-only, nanite-specific)
 
 - (N4-C4) BLACK SLATE HAS NO SHADOWS — the CSM map is EMPTY in the default
@@ -1546,5 +1577,31 @@ migration). Chunks, each tsc-clean + committed:
    N5; tree camera draws stay hidden). A/B against the old pipeline =
    `?scene=world&nanite=0&oldgeo=1` (both flags — `?nanite=0` alone is an empty
    slate by D-N21). Per D-N22 materials are judged on quality, not pixel-diffed.
-6. Then N5 (per-cascade cluster shadow re-culls) per the table — the nanite
-   clusters become the CSM casters, retiring the ?oldgeo dependency for shadows.
+6. **N5 — cluster-driven CSM shadow casters** (design = D-N26; HW indirect
+   draws into the cascades via per-cascade layers, mirroring the Forests caster
+   path this phase deletes). Chunks, each tsc-clean + committed:
+   - N5-C0 — PER-CASCADE CULL: a shadow cull per cascade = buildNaniteCull with
+     the cascade NaniteCam (ortho frustum planes from csm.lights[c].shadow.camera,
+     refreshed one frame stale like Forests.planesCsmU), sphereOccluded=null,
+     cone disabled (new opt), camera-distance LOD. Produces a per-cascade
+     visible-cluster qRaster + indirect args. HUD per-cascade counts; validate
+     numerically (counts ≥ camera cull, grow with cascade index; off-screen
+     casters present). Gate ?nanshadow2=1 (off by default until C2). NO visual
+     change yet.
+   - N5-C1 — HW CASTER + INTEGRATION (the risky chunk): a vertex-pulling
+     NodeMaterial mesh per cascade on layer 2+c (castShadow=true,
+     frustumCulled=false), indirect-drawn over that cascade's cluster list;
+     vertexNode decodes gl_VertexIndex→(item,cluster,localTri,corner)→
+     fetchWorldVert, transformed by cameraView/Projection (= the cascade light
+     VP during its shadow render); depth-only. Wire the per-cascade re-cull onto
+     each cascade's CsmCached tick (re-cull when shadow.needsUpdate). GATE:
+     nanite self-shadows appear with ?nanshadow2=1 and ?oldgeo=0 (no old casters)
+     — the first frame where black-slate nanite geometry casts its own shadows.
+   - N5-C2 — RETIRE OLD CASTERS + parity: gate ShadowProxy + Forests caster
+     siblings off when nanite shadows own the cascades; shadow parity at the
+     bookmarks (incl. off-screen casters via a pan probe); caster draw-count
+     ledger row. Flip ?nanshadow2 to default-on; black slate now self-shadows.
+   - N5-C3 — perf/close: cadence tuning (re-cull only on the cascade's CsmCached
+     refresh tick, not every frame), SW depth-only shadow raster IF the HW caster
+     raster measures too slow (D-N5/D-N26), perf ledger row, USER CHECKPOINT,
+     ⏸ shippable. Then N6 (migrate remaining opaque pools) per the table.
