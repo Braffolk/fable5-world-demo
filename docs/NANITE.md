@@ -1007,6 +1007,23 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   Worker uses an IDLE CPU core. ESCALATION LADDER if a Worker ever starves a real
   interactive case (e.g. late hero-tree registration latency): Worker → ~2× TS opt (SoA
   heap, indexed decrease-key) → frame-slice the CPU build → compute kernel (last resort).
+- D-N31 (2026-06-13, N8-D1 — runtime cut shape): the spec sketched a HIERARCHICAL
+  work-queue traversal (push root group → pop → emit-or-refine-children). D1 ships the
+  semantically-equivalent **FLAT per-cluster cut** instead: every DAG cluster carries its
+  own (ownErr,ownSphere)+(parentErr,parentSphere) in a parallel buffer, and kClusterCull
+  tests `project(own)≤τ AND project(parent)>τ` independently per cluster. WHY: the
+  predicate is the SEMANTICS; the traversal is only a pruning OPTIMISATION. The flat form
+  is (a) provably crack-free with NO diamond/dedup problem (each cluster tested exactly
+  once → emitted 0/1×, no per-instance group "visited" state — which on a non-tree DAG is
+  the hard part the hierarchical form must solve), (b) a ~3-line addition to the EXISTING
+  instance→chunk→cluster cull (attachDag repoints word0/1 at the full DAG range so
+  kInstCull is untouched), (c) lets us VALIDATE the cut on real GPU projection before
+  investing in traversal machinery. COST: tests every DAG cluster of every visible
+  instance (≈2× LOD0 cluster count) vs the discrete chain's one ring — bounded to explicit
+  classes (terrain stays heightfield-mip). Measured FINE for rock (gate green, no overflow).
+  REVISIT (D1b-perf) only if a heavier class (bark = 162k trees) makes the cull-dispatch
+  volume the bottleneck — THEN add the hierarchical traversal as a pure pruning layer on
+  top (same predicate, fewer tests). The flat cut stays the correctness reference.
 
 ## GOTCHAS (append-only, nanite-specific)
 
@@ -1158,6 +1175,38 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   min/max on uint nodes, float(uintNode) → use .toFloat().
 
 ## PROGRESS LOG (append-only, newest first)
+
+- 2026-06-13 (ag): **N8-D1a/b/c — GPU continuous-LOD cut LIVE on rock; the N8
+  LOGICAL POINT is reached.** (Opus 4.8 1M.) Three commits:
+  • D1a (48a1ccd) — registry DAG sidecar: a parallel DAG_WORDS=10 f32 buffer
+    (ownErr+ownSphere4 + parentErr+parentSphere4) on RegistryGpu, indexed by the
+    same global clusterId (the 8-word cluster rec is full). `attachDag(handle,
+    DagBuild)` appends the DAG's full self-contained geometry (all levels incl a
+    LOD0 copy — D1 trades duplication for zero index-rebase), re-packs verts
+    (explicitToDagVerts stride-12 → VERT_WORDS), writes 8-word recs (CLUSTER_FLAG_DAG)
+    + the 10-float cut recs, REPOINTS the mesh at its DAG range + clears lodNext
+    (MESH_FLAG_HASDAG). Roots' +inf → DAG_ROOT_PARENT_ERR sentinel (1e30),
+    parentSphere←ownSphere. Validated node-only (tools/probe-dagpack.ts): pack
+    round-trips f32-faithful; hero rock-d7 τ=0→327680 tris (=LOD0), far→23 cl (=roots).
+  • D1b/c (b635b05) — the cut on GPU: kClusterCull tests
+    `project(own)≤τ AND project(parent)>τ` (projK=(screenH/2)·cot(fovY/2), mirrors
+    probe-dag.project; +1 storage = 8/10 F9 ok). kInstCull UNTOUCHED (repointed
+    range makes lodSelectAndPush push the whole DAG). τ uniform (?loderr, live
+    __laasNanite.setTau). NaniteShadow reuses buildNaniteCull → 4 cascades inherit
+    the cut free (casters track lit surface; decoupled caster-LOD = S4). slot-5
+    nanite.dagClusters isolates the rock cut. addLate() reserves the post-build
+    append budget; WorldRegistry DAGs ?nanitedag=rock|bark|deadwood|all SYNC at
+    boot (D1d Workerizes); TerrainScene threads it.
+  • GATE (tools/probe-zoom.ts, bm4 boulder, occl off): τ-sweep 32→0.25 →
+    dagClusters 63→63→64→70→74→77→86→124 (MONOTONIC refine, no collapse); zoom
+    dolly smooth (≤7% step, no pop); WATERTIGHT at both τ extremes (no cracks,
+    eyeballed); τ=1 PIXEL-MATCHES discrete LOD; shadows-ON correct. Rock DAG = 20
+    meshes / 192 ms / 94k tris; registry boot 766 ms (rock-only — F15 fine).
+    probe-dag + probe-dagpack + probe-registry green; tsc clean. See D-N31 (flat
+    per-cluster cut, NOT the hierarchical traversal — semantics vs optimisation).
+  REMAINING to fully close N8-D1: D1d (Worker build, D-N30) + D1e (bark/deadwood
+  DAG + perf ledger + ?clusterdbg=lod heatmap + USER CHECKPOINT). Then N8-D2 +
+  shadows resume at S4.
 
 - 2026-06-13 (af): **N8-D0 — hand-rolled QEM LOD DAG build LANDED + validated
   headless; F15 build-cost trigger FIRED (measured).** (Opus 4.8 1M.) NEW
@@ -1969,13 +2018,20 @@ CHUNK PLAN (to the logical point):
   GATE: builds on rock/bark/deadwood; per-level stats (tri reduction, stuck count); boot-
   budget measured (F15); deterministic by seed. Validate via node probe tools/probe-dag.ts
   (no GPU yet — verify monotonicity, containment, sibling-pair equality, no orphan errors).
-- N8-D1 — PACK + RUNTIME CUT (GPU): the current 8-word cluster record is FULL, so add a
-  PARALLEL per-cluster DAG buffer (ownErr f32 + ownSphere 4f32 + parentErr f32 + parentSphere
-  4f32 = 10 words; keep the cut kernel ≤10 storage buffers/stage — F9). Extend NaniteCull
-  with the hierarchical cut via the work queue: per instance push root group; pop →
-  project(own)≤τ AND project(parent)>τ → emit clusters, else push child groups. REPLACES the
-  mesh-level discrete lodNext/lodDist. GATE: tools/probe-zoom.ts continuous-zoom (no cracks,
-  no pop, stable tri counts); ?clusterdbg=lod heatmap; ?loderr=N slider (τ=1 px default).
+- ~~N8-D1a/b/c~~ **DONE** (log ag; 48a1ccd + b635b05; D-N31) — parallel 10-f32 DAG buffer
+  + attachDag (repoint mesh at DAG range, retire chain) + the per-cluster screen-error cut
+  in kClusterCull (FLAT, not the hierarchical traversal — D-N31: semantics vs pruning) +
+  ?loderr/setTau + ?nanitedag=rock|bark|deadwood|all SYNC boot wiring. GATE green on rock
+  (tools/probe-zoom.ts: τ-sweep monotonic 63→124, smooth zoom, watertight, τ=1 pixel-match,
+  shadows-ON correct). +1 storage = 8/10 (F9). nanite.dagClusters counter for HUD/gate.
+- N8-D1d/e — CLOSE N8-D1: (d) move buildDag to a background Worker (D-N30 — three-free,
+  typed arrays in/out; per-pool progressive: discrete LOD until each pool's DAG lands, then
+  swap; off the boot critical path per F15). (e) DAG bark + deadwood too (?nanitedag=all —
+  bark is the heavy class, 162k trees → WATCH the flat-cut cull-dispatch volume; if it's the
+  bottleneck, D-N31's hierarchical-traversal pruning layer is the lever). + perf ledger row
+  (cull dispatch, qRaster live, boot budget) vs pre-DAG; + ?clusterdbg=lod heatmap (tint by
+  ownErr coarseness — needs gpu.dag in the resolve OR a cull-side level write; check resolve
+  storage budget first); + USER CHECKPOINT (continuous zoom on hero rock/tree in Chrome).
 - N8-D2 — close: terrain heightfield DAG fold-in IF clean (else terrain stays on its height-
   mip far shell — DEFER); perf ledger row vs pre-DAG; USER CHECKPOINT (continuous zoom on a
   hero rock/tree). THEN shadows resume at S4 (DAG-decoupled caster LOD).
@@ -1996,7 +2052,10 @@ parentErr f32 + parentSphere 4f32 (=10 words) into the parallel per-cluster buff
 the DAG's higher-LOD verts/indices/cluster-recs to the registry mega-buffers, then drives the
 hierarchical cut in NaniteCull. NOTE the build cost (D-N30): D1 must invoke buildDag OFF the
 boot critical path (background Worker preferred — buildDag is three-free, typed-arrays in/out).
-NOW BUILDING: N8-D1 (GPU pack DAG metadata + hierarchical runtime cut).
+NOW BUILDING: N8-D1d/e (Worker DAG build per D-N30 + bark/deadwood DAG + perf ledger +
+?clusterdbg=lod + USER CHECKPOINT). D1a/b/c DONE (log ag): the GPU continuous-LOD cut is
+LIVE + gate-green on rock — the N8 logical point is reached for the rock class; D1d/e
+generalise it to all explicit classes off the boot critical path, then N8-D2 + shadows S4.
 
 ---
 
