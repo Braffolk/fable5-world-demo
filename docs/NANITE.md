@@ -1048,6 +1048,23 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   while building): RTIN-patch → ≤128-tri cluster mapping; error metric (vertical RMS vs max,
   flatness weight); cross-tile crack-freeness for the 4 km field; LOD0 leaf-cluster count.
 
+- D-N33 (2026-06-14, N8-D1 — DAG draw envelope + cut error scale, from the user re-test):
+  a DAG'd mesh inherits the chain's MAX draw distance (the setMaxDistance value on the tail:
+  trees TREE_GEO_FAR 496 m, rocks/deadwood clsMaxDist) — NOT the head's chain-SWITCH distance
+  (the bug: attachDag retired the chain but left the switch as the envelope, so the cull rule
+  `lodNext==NONE && lodDist>0 && dist>lodDist` dropped the WHOLE instance at 26 m / 120 m),
+  and NOT unbounded. WHY NOT unbounded (lodDist=0): tried + MEASURED — 3.70M clusters / 92 ms
+  (~11 fps) at an open vista even with occlusion ON, because the cut PINS the root
+  (parentErr=1e30, never cut) so every sub-pixel far object still draws ≥1 cluster; HZB can't
+  save an open plain. Unbounded IS the intended N8 end state (retire the impostor far-field
+  with real geometry) but is GATED on a MIN-SCREEN-SIZE cull (drop an instance/cluster whose
+  whole projected extent < ~1 px) — a D1e prerequisite, not a free lunch. Finite-intended-
+  envelope ships now: fixes the vanish, matches pre-DAG nanite tuning, 16 ms. SECOND fix
+  (same trace): the cut's screen error must scale the LOCAL-metre own/parentError by the
+  instance scale A.w (the spheres already do), else non-unit-scale instances pick the wrong
+  LOD band. Regression locked: probe-dagpack 2-LOD-chain envelope assertion (red/green) +
+  NEW tools/probe-envelope.ts (−300 m far-pose, no collapse) + probe-envperf.ts (perf).
+
 ## GOTCHAS (append-only, nanite-specific)
 
 - (N5-C1) A SHADOW-CASTER NodeMaterial MUST SET `map = null`. three's shadow
@@ -1198,6 +1215,39 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   min/max on uint nodes, float(uintNode) → use .toFloat().
 
 ## PROGRESS LOG (append-only, newest first)
+
+- 2026-06-14 (ah): **N8-D1 user re-test → DAG'd trees VANISHED at ~26 m; root-caused
+  to the attachDag draw-envelope + fixed (+ a cut error-scale bug found mid-trace).**
+  (Opus 4.8 1M.) USER (cluster-debug walk, ?nanitedag=all): "trees disappear after a
+  few tree-sizes; rocks coarsen correctly then also vanish, but LATER; bushes stick
+  around the LONGEST." Three behaviours = ONE cause: attachDag retired the LOD chain
+  (lodNext=NONE) but LEFT the head's chain-SWITCH distance as lodDist, so the instance
+  envelope rule `lodNext==NONE && lodDist>0 && dist>lodDist` dropped the WHOLE instance
+  past it — trees at R0_FAR=26 m, rocks/deadwood at EX_R1_FAR=120 m, shrubs at switch 0
+  = NEVER (the "stick around longest" tell). The cut was innocent: the root is pinned
+  (parentErr=1e30, can NEVER be cut) so a DAG cannot vanish via the cut → the drop is
+  provably instance-level. Nanite full-frame draws NO impostors (TerrainScene: old solid
+  paths OFF) so the drop reads as a clean vanish, not a billboard pop.
+  • FIX 1 (envelope, GeometryRegistry.attachDag): inherit the chain's MAX draw distance
+    (walk head→tail BEFORE collapsing — trees TREE_GEO_FAR 496 m, rocks clsMaxDist), NOT
+    the head switch and NOT unbounded. I TRIED unbounded (lodDist=0) first and MEASURED:
+    3.70M clusters / 92 ms (~11 fps) even with occlusion ON — open vista, little HZB
+    occlusion, and the pinned root means every sub-pixel far object still draws ≥1
+    cluster. Intended-envelope: 0.14M cl / 16.3 ms near / 8.4 ms far (~60 fps). Unbounded
+    is the N8 end state but needs a min-screen-size cull first → DEFERRED to D1e (D-N33).
+  • FIX 2 (cut error scale, NaniteCull): pOwn/pPar now multiply rec.ownError/parentError
+    by A.w (instance scale) — the own/parent spheres ride the instance transform (×A.w)
+    but the error was raw LOCAL metres, so non-unit-scale instances (big trees) picked the
+    wrong LOD band. Root sentinel 1e30·A.w still ≫ τ (roots stay pinned). No-op at A.w≈1.
+  • GATES (all green, tsc clean): NEW tools/probe-envelope.ts (end-to-end — pull camera
+    −300 m back so every object is past the old 26/120 m bug envelope; DAG still draws
+    183k cl, no collapse) + probe-envperf.ts (the 92→16 ms occl on/off measurement).
+    probe-dagpack.ts gained a 2-LOD-chain envelope assertion (lodDist == tail max 496, NOT
+    head switch 26), RED/GREEN proven by toggling the fix. probe-zoom.ts: median-of-9
+    reads (kill TAA frustum-edge jitter the now-smaller finite-envelope counts exposed) →
+    τ-sweep cleanly monotonic 1026→1104, smooth zoom. probe-dag still green.
+  STILL OPEN: trees vanish at 496 m (no impostor past it = pre-existing nanite behaviour);
+  truly-unbounded geometry + the min-screen cull = D1e (D-N33).
 
 - 2026-06-13 (ag): **N8-D1a/b/c — GPU continuous-LOD cut LIVE on rock; the N8
   LOGICAL POINT is reached.** (Opus 4.8 1M.) Three commits:
@@ -2052,14 +2102,19 @@ CHUNK PLAN (to the logical point):
   ?loderr/setTau + ?nanitedag=rock|bark|deadwood|all SYNC boot wiring. GATE green on rock
   (tools/probe-zoom.ts: τ-sweep monotonic 63→124, smooth zoom, watertight, τ=1 pixel-match,
   shadows-ON correct). +1 storage = 8/10 (F9). nanite.dagClusters counter for HUD/gate.
-- N8-D1d/e — CLOSE N8-D1: (d) move buildDag to a background Worker (D-N30 — three-free,
+- N8-D1d/e — CLOSE N8-D1: (PRE-REQ DONE — the envelope + cut error-scale bug from the user
+  re-test is FIXED, log ah / D-N33; bark + deadwood DAG confirmed working live under
+  ?nanitedag=all.) (d) move buildDag to a background Worker (D-N30 — three-free,
   typed arrays in/out; per-pool progressive: discrete LOD until each pool's DAG lands, then
-  swap; off the boot critical path per F15). (e) DAG bark + deadwood too (?nanitedag=all —
-  bark is the heavy class, 162k trees → WATCH the flat-cut cull-dispatch volume; if it's the
-  bottleneck, D-N31's hierarchical-traversal pruning layer is the lever). + perf ledger row
-  (cull dispatch, qRaster live, boot budget) vs pre-DAG; + ?clusterdbg=lod heatmap (tint by
-  ownErr coarseness — needs gpu.dag in the resolve OR a cull-side level write; check resolve
-  storage budget first); + USER CHECKPOINT (continuous zoom on hero rock/tree in Chrome).
+  swap; off the boot critical path per F15). (e) bark is the heavy class, 162k trees → WATCH
+  the flat-cut cull-dispatch volume (?nanitedag=all near a forest = 0.14M cl / 16 ms occl-on
+  measured; if cull dispatch is the bottleneck, D-N31's hierarchical-traversal pruning layer
+  is the lever). + UNBOUNDED draw envelope gated on a MIN-SCREEN-SIZE instance/cluster cull
+  (D-N33: drop an object whose whole projected extent < ~1 px) — the lever to extend the DAG
+  PAST each pool's finite envelope (trees vanish at 496 m today) and retire impostors for
+  real. + perf ledger row (cull dispatch, qRaster live, boot budget) vs pre-DAG; + ?clusterdbg
+  =lod heatmap (tint by ownErr coarseness — needs gpu.dag in the resolve OR a cull-side level
+  write; check resolve storage budget first); + USER CHECKPOINT (continuous zoom in Chrome).
 - N8-D2 — TERRAIN DAG (COMMITTED, D-N32): a heightfield-NATIVE adaptive builder (RTIN /
   restricted right-triangle quadtree, Mapbox `martini`-class — NOT BuildDag's iterative QEM,
   wrong tool for a grid). O(n) bottom-up vertical-error pyramid; aggressive flat decimation

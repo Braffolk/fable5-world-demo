@@ -374,8 +374,13 @@ export function buildNaniteCull(
           const dvp = cam.camPos.sub(parC) as unknown as NV3;
           const denO = dot(dvo, dvo).sub(ownR.mul(ownR)).max(float(1e-6)).sqrt() as unknown as NF;
           const denP = dot(dvp, dvp).sub(parR.mul(parR)).max(float(1e-6)).sqrt() as unknown as NF;
-          const pOwn = projK.mul(rec.ownError).div(denO);
-          const pPar = projK.mul(rec.parentError).div(denP);
+          // ownError/parentError are LOCAL-mesh metres, but ownC/ownR rode the
+          // instance transform (× A.w scale) into world space — so the error must
+          // too, else a non-unit-scale instance (big trees, shrunk debris) picks
+          // the wrong LOD band. (Root sentinel 1e30·A.w is still ≫ τ → roots stay
+          // pinned and can never be cut away.)
+          const pOwn = projK.mul(A.w).mul(rec.ownError).div(denO);
+          const pPar = projK.mul(A.w).mul(rec.parentError).div(denP);
           If(pOwn.greaterThan(tau).or(pPar.lessThanEqual(tau)), () => {
             visible.assign(0);
           });

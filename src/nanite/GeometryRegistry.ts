@@ -1072,6 +1072,25 @@ export class GeometryRegistry {
     // -- repoint the mesh at its DAG range; retire the discrete LOD chain ------
     entry.clusterBase = cBase;
     entry.clusterCount = cCount;
+    // The DAG is the COMPLETE continuous LOD, so it inherits the mesh's full
+    // intended DRAW envelope: the max distance setMaxDistance configured on the
+    // chain TAIL (trees TREE_GEO_FAR 496 m, rocks/deadwood clsMaxDist) — NOT the
+    // head's short chain-SWITCH distance. Walk the about-to-be-retired chain to
+    // recover it, THEN collapse to a single node. Leaving the head-switch distance
+    // is the bug that made the envelope rule `lodNext==NONE && lodDist>0 &&
+    // dist>lodDist` drop the WHOLE instance at ~26 m (trees) / ~120 m (rocks),
+    // while shrubs (switch 0) never dropped. A truly UNLIMITED (0) envelope is the
+    // N8 end state that retires the impostor far-field, but it needs the
+    // min-screen-size cull first — the cut pins the root (parent sentinel never
+    // cut), so without it an open vista floods (~3.7M clusters, ~90 ms even with
+    // occlusion). (N8-D1 envelope fix; unbounded deferred to N8-D1e + min-screen.)
+    let tail = entry;
+    for (let g = 0; g < 8 && tail.lodNext !== LOD_NONE; g++) {
+      const nxt = this.entries[tail.lodNext];
+      if (!nxt) break;
+      tail = nxt;
+    }
+    entry.lodDist = tail.lodDist;
     entry.lodNext = LOD_NONE;
     entry.flags |= MESH_FLAG_HASDAG;
     entry.sphere = meshSphereFromClusters(dagSpheres, cCount);

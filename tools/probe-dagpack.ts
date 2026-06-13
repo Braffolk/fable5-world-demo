@@ -99,6 +99,15 @@ function checkPack(label: string, src: ExplicitSource, dag: DagBuild): void {
     },
   });
   const h = reg.registerMesh(src, 'rock', { label, swayPad: 0.5, matParam: 3 });
+  // Build a real 2-LOD chain so the head's SWITCH distance (26 m) differs from the
+  // chain's MAX draw distance (496 m, on the tail). attachDag must inherit the MAX
+  // (the mesh's full intended envelope), NOT the head switch and NOT unbounded —
+  // else the head, now the chain tail (lodNext==NONE), is envelope-dropped just
+  // past the switch by the cull rule `lodNext==NONE && lodDist>0 && dist>lodDist`
+  // and the WHOLE instance vanishes (trees at ~26 m). A no-chain head can't tell
+  // switch from max — they'd be the same node — so the chain is load-bearing here.
+  reg.registerLod(h, src, 26);
+  reg.setMaxDistance(h, 496);
   reg.bindInstances(h, { a: new Float32Array([0, 0, 0, 1]), b: new Float32Array([0, 0, 0, 0]) });
   reg.build();
 
@@ -117,6 +126,7 @@ function checkPack(label: string, src: ExplicitSource, dag: DagBuild): void {
   expect(m.clusterStart === cBase, `${label} M: clusterStart ${m.clusterStart} != ${cBase}`);
   expect(m.clusterCount === cCount, `${label} M: clusterCount ${m.clusterCount} != ${cCount}`);
   expect(m.lodNext === LOD_NONE, `${label} M: lodNext not retired (${m.lodNext})`);
+  expect(m.lodDist === 496, `${label} M: DAG envelope ${m.lodDist} != chain max 496 — must inherit the tail's max draw distance, not the head switch (26, would envelope-drop the instance) or unbounded`);
   expect((m.flags & MESH_FLAG_HASDAG) !== 0, `${label} M: MESH_FLAG_HASDAG missing`);
 
   // --- C / D / V / I over every DAG cluster ---
