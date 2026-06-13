@@ -1246,6 +1246,31 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-14 (ai): **N8-D2b (part 1) — terrain DAG build SPEED: bit-identical
+  constant-factor pass + the `__name` measurement-artifact finding.** (Opus 4.8 1M.)
+  The D2a "0.015 Mtri/s / ~37 min for 4096²" alarm was profiled and largely DEBUNKED:
+  a CPU profile (esbuild bundle, V8 --cpu-prof) showed **~70% of the dev/tsx wall-time
+  was esbuild/tsx's `__name` keepNames wrapper** (every closure wrapped + a
+  `defineProperty` — surfaced as `set natives` 31% + `__name` 34%), an artifact ABSENT
+  from a production/minified bundle. Profiler-free clean (bundled, no keepNames) the
+  ORIGINAL was 2371 ms @256² = 0.055 Mtri/s (~10 min for 4096², not 37). The TRUE
+  algorithmic hot spot was `wouldFlip` (the orientation-flip guard) at ~50% — because
+  `rawCross` defined a nested `gx` CLOSURE re-allocated every call (16.6% self-time
+  alone), and `triDegenerates` did the same with `pos`. Four bit-identical fixes (the
+  terrain probe is unchanged — 612 cl / 5 roots / maxErr 11.2 m / 3.6× cliffs; rock
+  byte-identical, cut-sweeps exact): (1) terrainFast — skip the entire QEM quadric
+  machinery in `gridErrAt` mode (it computed Q but NEVER read it for cost/target);
+  (2) Set→version-stamp (`Int32Array`+gen counter) in `linkOk` + the reseed neighbour
+  dedup (kills per-call Set alloc); (3) INLINE `wouldFlip` — no `rawCross`/`gx` closure,
+  fully unrolled cross-products; (4) INLINE `triDegenerates` likewise. Result: clean
+  1316 ms @256² = 0.100 Mtri/s = **1.80×** (profiler-free, production-representative),
+  bit-identical. Clean scaling ~flat 0.08–0.10 Mtri/s to 2M tris, with MILD super-linear
+  creep at 1024² (the `poolVerts: number[]` growing-array + GC). probe-heightdag-scale.ts
+  added (clean scaling regression). REMAINING for 4096²-viable (the speed prereq is
+  reduced, not closed — ~5.6 min clean single-thread): a TYPED-ARRAY pool to replace
+  `poolVerts/poolIdx` Array.push (kills the creep + the ~400 MB JS-array memory blowup at
+  33.5M tris), then the D-N30 Worker (off boot path) + a deterministic-seed build CACHE;
+  Map elimination (weld-by-grid-id, edgeUse typed hash) is a further ~lever. tsc clean.
 - 2026-06-14 (ai): **N8-D2a — terrain heightfield-native adaptive DAG builder
   (BuildHeightDag.ts) + node probe; CRACK-FREE, on-grid (F4), adaptive; D-N32 OPEN
   questions settled; D-N34 recorded.** (Opus 4.8 1M.) The terrain DAG rides the SAME
@@ -2207,9 +2232,14 @@ CHUNK PLAN (to the logical point):
     GPU work: a grid-coord-INDEXED heightfield vertex decode (one isHF-indexed branch in
     NaniteFetch — index → `gx|gz<<16` → textureLoad height → world XZ; normals stay from
     normalTex). Reconcile the real field res to 2^k+1 (martini needs a power-of-two grid).
-    FIRST resolve the build SPEED (0.01 Mtri/s today — iterative QEM heap + per-collapse
-    guards): either a martini-DIRECT removal (precomputed errs ⇒ no heap reseed) or the D-N30
-    Worker, before 4096² is viable.
+    BUILD SPEED — part 1 DONE (log 2026-06-14 D2b part 1): bit-identical 1.80× (0.055→0.100
+    Mtri/s clean) by skipping the dead QEM quadrics in terrain mode + Set→stamp guards +
+    inlining the nested-closure flip/degeneracy checks; and the "37 min" figure was an
+    `__name` tsx artifact (real original ~10 min, now ~5.6 min clean single-thread for 4096²).
+    STILL OPEN before 4096² is viable: (i) TYPED-ARRAY pool for `poolVerts/poolIdx` (the
+    `number[]` Array.push is the super-linear creep + a ~400 MB memory blowup at 33.5M tris —
+    bit-identical, do FIRST); (ii) the D-N30 Worker (off boot path) + a deterministic-seed
+    build CACHE; (iii) optional further: Map elimination (weld-by-grid-id, edgeUse typed hash).
   - (D2c) perf ledger row vs pre-DAG (pre-DAG terrain = 33M-tri uniform windows → measure the
     adaptive draw-tri reduction). Plus the carried D1e items: perf ledger, ?clusterdbg=lod
     heatmap, USER CHECKPOINT (continuous zoom on hero rock/tree + terrain). THEN shadows S4.

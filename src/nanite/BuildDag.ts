@@ -477,39 +477,66 @@ function simplifyGroup(
     }
   }
 
-  // ---- per-vertex quadrics (area-weighted) + accumulated area ---------------
-  const Q = new Float64Array(nv * 10);
-  const warea = new Float64Array(nv);
-  for (let t = 0; t < soupTris; t++) {
-    const a = triA[t] as number;
-    const b = triB[t] as number;
-    const c = triC[t] as number;
-    const ax = verts[a * stride] as number;
-    const ay = verts[a * stride + 1] as number;
-    const az = verts[a * stride + 2] as number;
-    const e1x = (verts[b * stride] as number) - ax;
-    const e1y = (verts[b * stride + 1] as number) - ay;
-    const e1z = (verts[b * stride + 2] as number) - az;
-    const e2x = (verts[c * stride] as number) - ax;
-    const e2y = (verts[c * stride + 1] as number) - ay;
-    const e2z = (verts[c * stride + 2] as number) - az;
-    let nx = e1y * e2z - e1z * e2y;
-    let ny = e1z * e2x - e1x * e2z;
-    let nz = e1x * e2y - e1y * e2x;
-    const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
-    if (len < 1e-20) continue;
-    const area = 0.5 * len;
-    nx /= len;
-    ny /= len;
-    nz /= len;
-    const d = -(nx * ax + ny * ay + nz * az);
-    addPlane(Q, a * 10, nx, ny, nz, d, area);
-    addPlane(Q, b * 10, nx, ny, nz, d, area);
-    addPlane(Q, c * 10, nx, ny, nz, d, area);
-    warea[a] = (warea[a] as number) + area;
-    warea[b] = (warea[b] as number) + area;
-    warea[c] = (warea[c] as number) + area;
+  // ---- terrain FAST path: cost = precomputed martini vertical error ----------
+  //  In gridEndpoint+gridErrAt mode the collapse cost of edge (u,v) is a FIXED
+  //  function of the ORIGINAL heightfield — drop the lower-error endpoint, cost =
+  //  min(err[u],err[v]) — NOT a quadric that mutates as the mesh simplifies. So we
+  //  precompute per-vertex error ONCE and skip the entire QEM machinery (quadric
+  //  accumulation over every triangle, the tmp solve, the per-collapse reseed
+  //  cost). Output is BIT-IDENTICAL to the quadric path (which, in this mode,
+  //  computed Q but never read it for cost/target) — just far cheaper.
+  const terrainFast = opts.gridEndpoint && opts.gridErrAt != null;
+  const gErr = opts.gridErrAt;
+  const localErr = terrainFast ? new Float64Array(nv) : null;
+  if (terrainFast && localErr && gErr) {
+    for (let v = 0; v < nv; v++) {
+      localErr[v] = gErr(verts[v * stride] as number, verts[v * stride + 2] as number);
+    }
   }
+
+  // ---- version-stamp membership scratch -------------------------------------
+  //  Replaces the per-call Sets in linkOk + the reseed dedup (which dominated the
+  //  build — native Set alloc/add/has). mark[v]===markGen ⇔ v is "in the set";
+  //  bumping markGen clears the whole set in O(1) with no allocation. markGen is
+  //  local to this group and monotonic, so stamps never collide across collapses.
+  const mark = new Int32Array(nv);
+  let markGen = 0;
+
+  // ---- per-vertex quadrics (area-weighted) + accumulated area ---------------
+  //  (skipped in terrainFast — the precomputed martini error replaces the quadric)
+  const Q = new Float64Array(terrainFast ? 0 : nv * 10);
+  const warea = new Float64Array(terrainFast ? 0 : nv);
+  if (!terrainFast)
+    for (let t = 0; t < soupTris; t++) {
+      const a = triA[t] as number;
+      const b = triB[t] as number;
+      const c = triC[t] as number;
+      const ax = verts[a * stride] as number;
+      const ay = verts[a * stride + 1] as number;
+      const az = verts[a * stride + 2] as number;
+      const e1x = (verts[b * stride] as number) - ax;
+      const e1y = (verts[b * stride + 1] as number) - ay;
+      const e1z = (verts[b * stride + 2] as number) - az;
+      const e2x = (verts[c * stride] as number) - ax;
+      const e2y = (verts[c * stride + 1] as number) - ay;
+      const e2z = (verts[c * stride + 2] as number) - az;
+      let nx = e1y * e2z - e1z * e2y;
+      let ny = e1z * e2x - e1x * e2z;
+      let nz = e1x * e2y - e1y * e2x;
+      const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+      if (len < 1e-20) continue;
+      const area = 0.5 * len;
+      nx /= len;
+      ny /= len;
+      nz /= len;
+      const d = -(nx * ax + ny * ay + nz * az);
+      addPlane(Q, a * 10, nx, ny, nz, d, area);
+      addPlane(Q, b * 10, nx, ny, nz, d, area);
+      addPlane(Q, c * 10, nx, ny, nz, d, area);
+      warea[a] = (warea[a] as number) + area;
+      warea[b] = (warea[b] as number) + area;
+      warea[c] = (warea[c] as number) + area;
+    }
 
   // ---- candidate-collapse cost + optimal target -----------------------------
   const version = new Int32Array(nv);
@@ -517,6 +544,24 @@ function simplifyGroup(
   const tmp = new Float64Array(10);
   const evalCollapse = (a: number, b: number): Collapse | null => {
     if (locked[a] === 1 && locked[b] === 1) return null; // both fixed: cannot collapse
+    if (terrainFast && localErr) {
+      // keep the higher-error endpoint (stay where vertical detail is) and drop the
+      // lower; the cost IS the dropped vertex's martini error (metres), precomputed.
+      const keep =
+        locked[a] === 1 ? a : locked[b] === 1 ? b : (localErr[a] as number) >= (localErr[b] as number) ? a : b;
+      const drop = keep === a ? b : a;
+      return {
+        cost: localErr[drop] as number,
+        a,
+        b,
+        va: version[a] as number,
+        vb: version[b] as number,
+        keep,
+        tx: verts[keep * stride] as number,
+        ty: verts[keep * stride + 1] as number,
+        tz: verts[keep * stride + 2] as number,
+      };
+    }
     for (let k = 0; k < 10; k++) tmp[k] = (Q[a * 10 + k] as number) + (Q[b * 10 + k] as number);
     let keep = a;
     let tx: number;
@@ -617,53 +662,64 @@ function simplifyGroup(
   }
 
   // ---- would moving keep→(tx,ty,tz) flip any surviving incident triangle? ----
-  //  compares RAW cross products (sign of the dot ⇒ flip; no normalisation).
-  const cb = [0, 0, 0]; // scratch: cross before
-  const ca = [0, 0, 0]; // scratch: cross after
-  const rawCross = (
-    out: number[],
-    i0: number,
-    i1: number,
-    i2: number,
-    sx: number,
-    sy: number,
-    sz: number,
-  ): void => {
-    const gx = (id: number, c: number): number =>
-      id < 0 ? (c === 0 ? sx : c === 1 ? sy : sz) : (verts[id * stride + c] as number);
-    const ax = gx(i0, 0);
-    const ay = gx(i0, 1);
-    const az = gx(i0, 2);
-    const e1x = gx(i1, 0) - ax;
-    const e1y = gx(i1, 1) - ay;
-    const e1z = gx(i1, 2) - az;
-    const e2x = gx(i2, 0) - ax;
-    const e2y = gx(i2, 1) - ay;
-    const e2z = gx(i2, 2) - az;
-    out[0] = e1y * e2z - e1z * e2y;
-    out[1] = e1z * e2x - e1x * e2z;
-    out[2] = e1x * e2y - e1y * e2x;
-  };
+  //  Compares RAW cross products (sign of the dot ⇒ flip; no normalisation). Fully
+  //  INLINED — no rawCross / nested gx closure: this was the build's single hottest
+  //  spot (the per-call closure ALLOCATION + indirect component fetches, ~50% of
+  //  the build). Verts equal to a or b move to (tx,ty,tz); others keep position.
   const wouldFlip = (a: number, b: number, tx: number, ty: number, tz: number): boolean => {
     for (let vi = 0; vi < 2; vi++) {
       const v = vi === 0 ? a : b;
-      for (const t of vtri[v] as number[]) {
+      const tris = vtri[v] as number[];
+      for (let ti = 0; ti < tris.length; ti++) {
+        const t = tris[ti] as number;
         if (triAlive[t] !== 1) continue;
         const i0 = triA[t] as number;
         const i1 = triB[t] as number;
         const i2 = triC[t] as number;
         // tris containing the collapsed edge degenerate away — skip
-        const hasA = i0 === a || i1 === a || i2 === a;
-        const hasB = i0 === b || i1 === b || i2 === b;
-        if (hasA && hasB) continue;
-        rawCross(cb, i0, i1, i2, 0, 0, 0); // no -1 here
-        const s0 = i0 === a || i0 === b ? -1 : i0;
-        const s1 = i1 === a || i1 === b ? -1 : i1;
-        const s2 = i2 === a || i2 === b ? -1 : i2;
-        rawCross(ca, s0, s1, s2, tx, ty, tz);
-        if ((cb[0] as number) * (ca[0] as number) + (cb[1] as number) * (ca[1] as number) + (cb[2] as number) * (ca[2] as number) < 0) {
-          return true;
-        }
+        if ((i0 === a || i1 === a || i2 === a) && (i0 === b || i1 === b || i2 === b)) continue;
+        const o0 = i0 * stride;
+        const o1 = i1 * stride;
+        const o2 = i2 * stride;
+        const x0 = verts[o0] as number;
+        const y0 = verts[o0 + 1] as number;
+        const z0 = verts[o0 + 2] as number;
+        const x1 = verts[o1] as number;
+        const y1 = verts[o1 + 1] as number;
+        const z1 = verts[o1 + 2] as number;
+        const x2 = verts[o2] as number;
+        const y2 = verts[o2 + 1] as number;
+        const z2 = verts[o2 + 2] as number;
+        // BEFORE cross (original positions)
+        const be1x = x1 - x0;
+        const be1y = y1 - y0;
+        const be1z = z1 - z0;
+        const be2x = x2 - x0;
+        const be2y = y2 - y0;
+        const be2z = z2 - z0;
+        const cbx = be1y * be2z - be1z * be2y;
+        const cby = be1z * be2x - be1x * be2z;
+        const cbz = be1x * be2y - be1y * be2x;
+        // AFTER cross (verts == a or b snap to the target)
+        const X0 = i0 === a || i0 === b ? tx : x0;
+        const Y0 = i0 === a || i0 === b ? ty : y0;
+        const Z0 = i0 === a || i0 === b ? tz : z0;
+        const X1 = i1 === a || i1 === b ? tx : x1;
+        const Y1 = i1 === a || i1 === b ? ty : y1;
+        const Z1 = i1 === a || i1 === b ? tz : z1;
+        const X2 = i2 === a || i2 === b ? tx : x2;
+        const Y2 = i2 === a || i2 === b ? ty : y2;
+        const Z2 = i2 === a || i2 === b ? tz : z2;
+        const ae1x = X1 - X0;
+        const ae1y = Y1 - Y0;
+        const ae1z = Z1 - Z0;
+        const ae2x = X2 - X0;
+        const ae2y = Y2 - Y0;
+        const ae2z = Z2 - Z0;
+        const cax = ae1y * ae2z - ae1z * ae2y;
+        const cay = ae1z * ae2x - ae1x * ae2z;
+        const caz = ae1x * ae2y - ae1y * ae2x;
+        if (cbx * cax + cby * cay + cbz * caz < 0) return true;
       }
     }
     return false;
@@ -676,29 +732,37 @@ function simplifyGroup(
   //  (non-manifold). QEM-optimal collapses on irregular meshes rarely trip this,
   //  but REGULAR grid endpoint-collapses do — so terrain checks it explicitly.
   const linkOk = (a: number, b: number): boolean => {
-    const apex = new Set<number>();
-    const nbrA = new Set<number>();
+    // stamp a's neighbours (nbrA) with a fresh generation; track the apex(es) —
+    // the third verts of the triangle(s) on edge a-b — inline (a manifold edge has
+    // ≤2 incident tris, so ≤2 apexes; if the soup were already non-manifold here a
+    // 3rd apex only makes this stricter, which is crack-safe).
+    markGen++;
+    const gen = markGen;
+    let apex0 = -1;
+    let apex1 = -1;
     for (const t of vtri[a] as number[]) {
       if (triAlive[t] !== 1) continue;
       const i0 = triA[t] as number;
       const i1 = triB[t] as number;
       const i2 = triC[t] as number;
-      if (i0 !== a) nbrA.add(i0);
-      if (i1 !== a) nbrA.add(i1);
-      if (i2 !== a) nbrA.add(i2);
+      if (i0 !== a) mark[i0] = gen;
+      if (i1 !== a) mark[i1] = gen;
+      if (i2 !== a) mark[i2] = gen;
       if (i0 === b || i1 === b || i2 === b) {
-        if (i0 !== a && i0 !== b) apex.add(i0);
-        if (i1 !== a && i1 !== b) apex.add(i1);
-        if (i2 !== a && i2 !== b) apex.add(i2);
+        if (i0 !== a && i0 !== b) apex0 < 0 ? (apex0 = i0) : (apex1 = i0);
+        if (i1 !== a && i1 !== b) apex0 < 0 ? (apex0 = i1) : (apex1 = i1);
+        if (i2 !== a && i2 !== b) apex0 < 0 ? (apex0 = i2) : (apex1 = i2);
       }
     }
     for (const t of vtri[b] as number[]) {
       if (triAlive[t] !== 1) continue;
-      const tri = [triA[t] as number, triB[t] as number, triC[t] as number];
-      for (const w of tri) {
-        if (w === b) continue;
-        if (nbrA.has(w) && !apex.has(w)) return false; // shared non-apex ⇒ non-manifold
-      }
+      const i0 = triA[t] as number;
+      const i1 = triB[t] as number;
+      const i2 = triC[t] as number;
+      // shared non-apex neighbour ⇒ collapse folds 3+ tris on edge a-b (non-manifold)
+      if (i0 !== b && mark[i0] === gen && i0 !== apex0 && i0 !== apex1) return false;
+      if (i1 !== b && mark[i1] === gen && i1 !== apex0 && i1 !== apex1) return false;
+      if (i2 !== b && mark[i2] === gen && i2 !== apex0 && i2 !== apex1) return false;
     }
     return true;
   };
@@ -711,28 +775,29 @@ function simplifyGroup(
   //  produced identically by both groups sharing that boundary — reads as a
   //  duplicated, non-manifold triangle. Scale-invariant test: sin²θ < 1e-8.
   const triDegenerates = (a: number, b: number, tx: number, ty: number, tz: number): boolean => {
-    const pos = (id: number, c: number): number =>
-      id < 0 ? (c === 0 ? tx : c === 1 ? ty : tz) : (verts[id * stride + c] as number);
     for (let vi = 0; vi < 2; vi++) {
       const v = vi === 0 ? a : b;
-      for (const t of vtri[v] as number[]) {
+      const tris = vtri[v] as number[];
+      for (let ti = 0; ti < tris.length; ti++) {
+        const t = tris[ti] as number;
         if (triAlive[t] !== 1) continue;
         const i0 = triA[t] as number;
         const i1 = triB[t] as number;
         const i2 = triC[t] as number;
         if ((i0 === a || i1 === a || i2 === a) && (i0 === b || i1 === b || i2 === b)) continue; // degenerates away
-        const s0 = i0 === a || i0 === b ? -1 : i0;
-        const s1 = i1 === a || i1 === b ? -1 : i1;
-        const s2 = i2 === a || i2 === b ? -1 : i2;
-        const ax = pos(s0, 0);
-        const ay = pos(s0, 1);
-        const az = pos(s0, 2);
-        const e1x = pos(s1, 0) - ax;
-        const e1y = pos(s1, 1) - ay;
-        const e1z = pos(s1, 2) - az;
-        const e2x = pos(s2, 0) - ax;
-        const e2y = pos(s2, 1) - ay;
-        const e2z = pos(s2, 2) - az;
+        // inlined position fetch (verts == a or b snap to the target) — no closure
+        const o0 = i0 * stride;
+        const o1 = i1 * stride;
+        const o2 = i2 * stride;
+        const ax = i0 === a || i0 === b ? tx : (verts[o0] as number);
+        const ay = i0 === a || i0 === b ? ty : (verts[o0 + 1] as number);
+        const az = i0 === a || i0 === b ? tz : (verts[o0 + 2] as number);
+        const e1x = (i1 === a || i1 === b ? tx : (verts[o1] as number)) - ax;
+        const e1y = (i1 === a || i1 === b ? ty : (verts[o1 + 1] as number)) - ay;
+        const e1z = (i1 === a || i1 === b ? tz : (verts[o1 + 2] as number)) - az;
+        const e2x = (i2 === a || i2 === b ? tx : (verts[o2] as number)) - ax;
+        const e2y = (i2 === a || i2 === b ? ty : (verts[o2 + 1] as number)) - ay;
+        const e2z = (i2 === a || i2 === b ? tz : (verts[o2 + 2] as number)) - az;
         const cx = e1y * e2z - e1z * e2y;
         const cy = e1z * e2x - e1x * e2z;
         const cz = e1x * e2y - e1y * e2x;
@@ -805,9 +870,11 @@ function simplifyGroup(
       verts[kb + 2] = e.tz;
       if (opts.normalOffset >= 0) renormalize(verts, kb + opts.normalOffset);
     }
-    // accumulate quadric + area onto the survivor
-    addQuadric(Q, keep * 10, drop * 10);
-    warea[keep] = (warea[keep] as number) + (warea[drop] as number);
+    // accumulate quadric + area onto the survivor (skipped in terrainFast — no QEM)
+    if (!terrainFast) {
+      addQuadric(Q, keep * 10, drop * 10);
+      warea[keep] = (warea[keep] as number) + (warea[drop] as number);
+    }
     // re-point dropped vertex's triangles to the survivor; kill degenerates
     for (const t of vtri[drop] as number[]) {
       if (triAlive[t] !== 1) continue;
@@ -828,21 +895,25 @@ function simplifyGroup(
     version[keep] = (version[keep] as number) + 1;
     version[drop] = (version[drop] as number) + 1;
     if (e.cost > maxCost) maxCost = e.cost;
-    // compact survivor incidence + recompute edges to its neighbours
+    // compact survivor incidence + recompute edges to its neighbours. Stamp-dedup
+    // the neighbour list (was a per-collapse Set — the build's hottest allocation);
+    // push order is preserved, so the heap-seed order is bit-identical.
     const live: number[] = [];
-    const nbr = new Set<number>();
+    markGen++;
+    const gen = markGen;
+    const nbrList: number[] = [];
     for (const t of vtri[keep] as number[]) {
       if (triAlive[t] !== 1) continue;
       live.push(t);
       const a0 = triA[t] as number;
       const b0 = triB[t] as number;
       const c0 = triC[t] as number;
-      if (a0 !== keep) nbr.add(a0);
-      if (b0 !== keep) nbr.add(b0);
-      if (c0 !== keep) nbr.add(c0);
+      if (a0 !== keep && mark[a0] !== gen) (mark[a0] = gen), nbrList.push(a0);
+      if (b0 !== keep && mark[b0] !== gen) (mark[b0] = gen), nbrList.push(b0);
+      if (c0 !== keep && mark[c0] !== gen) (mark[c0] = gen), nbrList.push(c0);
     }
     vtri[keep] = live;
-    for (const w of nbr) {
+    for (const w of nbrList) {
       if (vAlive[w] !== 1) continue;
       const ne = evalCollapse(keep, w);
       if (ne) heapPush(heap, ne);
