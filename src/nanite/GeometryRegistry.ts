@@ -40,6 +40,7 @@ import { Fn, If, float, instanceIndex, normalize, storage, uint, vec3, vec4 } fr
 import type { Renderer, StorageBufferNode } from 'three/webgpu';
 import { StorageBufferAttribute } from 'three/webgpu';
 import type { NF, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
+import type { DagBuild, DagCluster } from './BuildDag';
 import { type BuiltClusters, type ClusterStats, clusterize } from './Clusterize';
 import {
   type BufOf,
@@ -50,6 +51,7 @@ import {
   elemUW,
   readBuffer,
   returnIf,
+  sF32Views,
   sU32Views,
   sVec4Views,
   toF,
@@ -60,6 +62,18 @@ import {
 export const VERT_WORDS = 6;
 export const CLUSTER_WORDS = 8;
 export const MESH_WORDS = 16;
+/** N8-D1: parallel per-cluster DAG record — f32 ownErr + ownSphere(4) +
+ *  parentErr + parentSphere(4); indexed by the SAME global clusterId as the
+ *  8-word cluster record (the 8-word rec is full, so the DAG cut metadata
+ *  lives in a sidecar buffer — F9: the cut kernel stays ≤10 storage bindings). */
+export const DAG_WORDS = 10;
+/** N8-D1: vertex layout fed to buildDag for a registry mesh — pos@0..2,
+ *  nrm@3..5, uv@6..7, vdata@8..11 (UNPACKED to 0..1 floats so QEM can
+ *  interpolate them). attachDag re-packs this back into VERT_WORDS. */
+export const DAG_VERT_STRIDE = 12;
+/** N8-D1: a root cluster's parentError is +∞ — stored as this finite sentinel
+ *  so the GPU projection (errToPx) yields a huge value (> any τ) without inf/NaN. */
+export const DAG_ROOT_PARENT_ERR = 1e30;
 export const MAX_CLUSTER_TRIS = 128;
 export const LOD_NONE = 0xffffffff;
 
@@ -87,8 +101,14 @@ export type TransformChannel = keyof typeof TRANSFORM_CHANNEL;
 export const MESH_FLAG_HEIGHTFIELD = 1;
 export const MESH_FLAG_AGGREGATE = 2;
 export const MESH_FLAG_CAST_SHADOWS = 4;
+/** N8-D1: mesh's clusterStart/Count point at its FULL DAG cluster range (all
+ *  levels) and lodNext = NONE — the cull applies the per-cluster screen-error
+ *  cut (project(own)≤τ AND project(parent)>τ) instead of the discrete LOD chain */
+export const MESH_FLAG_HASDAG = 8;
 /** cluster-record flag bits (byte 1 of word 7) */
 export const CLUSTER_FLAG_HEIGHTFIELD = 1;
+/** N8-D1: this cluster carries a DAG record at the same global index in gpu.dag */
+export const CLUSTER_FLAG_DAG = 2;
 
 export interface ExplicitSource {
   kind: 'mesh';
@@ -497,6 +517,80 @@ export function readCluster(recs: StorageBufferNode<'uint'>, ci: NU): ClusterNod
   };
 }
 
+export interface DagRecordCPU {
+  ownError: number;
+  /** xyz center, w radius — the sphere ownError is measured against */
+  ownSphere: [number, number, number, number];
+  /** +∞ stored as DAG_ROOT_PARENT_ERR for roots */
+  parentError: number;
+  parentSphere: [number, number, number, number];
+}
+
+export function decodeDagCPU(dag: Float32Array, ci: number): DagRecordCPU {
+  const b = ci * DAG_WORDS;
+  return {
+    ownError: dag[b] as number,
+    ownSphere: [dag[b + 1] as number, dag[b + 2] as number, dag[b + 3] as number, dag[b + 4] as number],
+    parentError: dag[b + 5] as number,
+    parentSphere: [dag[b + 6] as number, dag[b + 7] as number, dag[b + 8] as number, dag[b + 9] as number],
+  };
+}
+
+export interface DagNodes {
+  ownError: NF;
+  ownSphere: NV4;
+  parentError: NF;
+  parentSphere: NV4;
+}
+
+export function readDag(dag: BufOf<NF>, ci: NU): DagNodes {
+  const base = ci.mul(uint(DAG_WORDS)).toVar();
+  return {
+    ownError: dag.element(base),
+    ownSphere: vec4(
+      dag.element(base.add(uint(1))),
+      dag.element(base.add(uint(2))),
+      dag.element(base.add(uint(3))),
+      dag.element(base.add(uint(4))),
+    ) as unknown as NV4,
+    parentError: dag.element(base.add(uint(5))),
+    parentSphere: vec4(
+      dag.element(base.add(uint(6))),
+      dag.element(base.add(uint(7))),
+      dag.element(base.add(uint(8))),
+      dag.element(base.add(uint(9))),
+    ) as unknown as NV4,
+  };
+}
+
+/**
+ * Interleave an ExplicitSource into the DAG_VERT_STRIDE layout buildDag expects
+ * (pos@0, nrm@3, uv@6, vdata UNPACKED to 0..1 floats @8). The QEM build
+ * interpolates uv/vdata linearly and renormalises the normal (normalOffset 3);
+ * attachDag re-quantises the result back into the registry vertex format.
+ */
+export function explicitToDagVerts(src: ExplicitSource): Float32Array {
+  const vCount = src.positions.length / 3;
+  const out = new Float32Array(vCount * DAG_VERT_STRIDE);
+  for (let v = 0; v < vCount; v++) {
+    const o = v * DAG_VERT_STRIDE;
+    out[o] = src.positions[v * 3] as number;
+    out[o + 1] = src.positions[v * 3 + 1] as number;
+    out[o + 2] = src.positions[v * 3 + 2] as number;
+    out[o + 3] = src.normals[v * 3] as number;
+    out[o + 4] = src.normals[v * 3 + 1] as number;
+    out[o + 5] = src.normals[v * 3 + 2] as number;
+    out[o + 6] = src.uvs ? (src.uvs[v * 2] as number) : 0;
+    out[o + 7] = src.uvs ? (src.uvs[v * 2 + 1] as number) : 0;
+    const d = src.vdata ? (src.vdata[v] as number) : 0;
+    out[o + 8] = (d & 0xff) / 255;
+    out[o + 9] = ((d >>> 8) & 0xff) / 255;
+    out[o + 10] = ((d >>> 16) & 0xff) / 255;
+    out[o + 11] = ((d >>> 24) & 0xff) / 255;
+  }
+  return out;
+}
+
 export interface MeshNodes {
   clusterStart: NU;
   clusterCount: NU;
@@ -617,6 +711,9 @@ export interface RegistryGpu {
   /** vec4 records, 2 per instance: [i·2]=A (xyz,scale), [i·2+1]=B (yaw,leanX,leanZ,idF) */
   instances: BufOf<NV4>;
   instanceMesh: StorageBufferNode<'uint'>;
+  /** N8-D1: parallel per-cluster DAG record (DAG_WORDS f32). Valid only where
+   *  the cluster's CLUSTER_FLAG_DAG bit is set; zero elsewhere. */
+  dag: BufOf<NF>;
 }
 
 export class GeometryRegistry {
@@ -638,6 +735,8 @@ export class GeometryRegistry {
   private meshArr!: Uint32Array;
   private instArr!: Float32Array;
   private instMeshArr!: Uint32Array;
+  /** N8-D1: parallel per-cluster DAG records (DAG_WORDS f32 each) */
+  private dagArr!: Float32Array;
 
   private vertsAttr!: StorageBufferAttribute;
   private idxAttr!: StorageBufferAttribute;
@@ -645,6 +744,7 @@ export class GeometryRegistry {
   private meshAttr!: StorageBufferAttribute;
   private instAttr!: StorageBufferAttribute;
   private instMeshAttr!: StorageBufferAttribute;
+  private dagAttr!: StorageBufferAttribute;
 
   private caps!: { verts: number; tris: number; clusters: number; meshes: number; instances: number };
   private instRW!: BufOf<V4W>;
@@ -790,6 +890,8 @@ export class GeometryRegistry {
     this.meshArr = new Uint32Array(Math.max(1, this.caps.meshes * MESH_WORDS));
     this.instArr = new Float32Array(Math.max(8, this.caps.instances * 8));
     this.instMeshArr = new Uint32Array(Math.max(1, this.caps.instances));
+    const dagLen = Math.max(DAG_WORDS, this.caps.clusters * DAG_WORDS);
+    this.dagArr = new Float32Array(dagLen);
 
     this.vertsAttr = new StorageBufferAttribute(this.vertsArr, 1);
     this.idxAttr = new StorageBufferAttribute(this.idxArr, 1);
@@ -797,6 +899,7 @@ export class GeometryRegistry {
     this.meshAttr = new StorageBufferAttribute(this.meshArr, 1);
     this.instAttr = new StorageBufferAttribute(this.instArr, 4);
     this.instMeshAttr = new StorageBufferAttribute(this.instMeshArr, 1);
+    this.dagAttr = new StorageBufferAttribute(this.dagArr, 1);
 
     const verts = sU32Views(this.vertsAttr, Math.max(1, this.caps.verts * VERT_WORDS));
     const idx = sU32Views(this.idxAttr, Math.max(1, this.caps.tris * 3));
@@ -804,6 +907,7 @@ export class GeometryRegistry {
     const meshes = sU32Views(this.meshAttr, Math.max(1, this.caps.meshes * MESH_WORDS));
     const inst = sVec4Views(this.instAttr, Math.max(2, this.caps.instances * 2));
     const instMesh = sU32Views(this.instMeshAttr, Math.max(1, this.caps.instances));
+    const dag = sF32Views(this.dagAttr, dagLen);
     this.instRW = inst.rw;
     this.instMeshRW = instMesh.rw;
     this.gpu = {
@@ -813,6 +917,7 @@ export class GeometryRegistry {
       meshes: meshes.ro,
       instances: inst.ro,
       instanceMesh: instMesh.ro,
+      dag: dag.ro,
     };
 
     for (const e of this.entries) this.copyEntry(e);
@@ -849,6 +954,122 @@ export class GeometryRegistry {
     if (counters) this.updateCounters(counters);
   }
 
+  /**
+   * N8-D1 — attach a built LOD DAG (BuildDag.ts) to a registered mesh. Appends
+   * the DAG's full self-contained geometry (ALL levels, including a LOD0 copy —
+   * D1 trades that duplication for zero index-rebase complexity) as a fresh
+   * block in the mega-buffers, writes the parallel 10-float cut records, then
+   * REPOINTS the mesh at the DAG cluster range (clusterStart/Count) and clears
+   * its discrete LOD chain (lodNext = NONE, MESH_FLAG_HASDAG set). From here the
+   * cull runs the per-cluster screen-error cut instead of the ring chain; the
+   * original LOD0 clusters and any registerLod() entries go dead (unreferenced).
+   *
+   * Must run AFTER build() and within the `late` budget (the appended verts/
+   * tris/clusters are counted — raise late.* if it throws). Uploads via partial
+   * addUpdateRange like flush(); the next frame's kernels see the new data.
+   */
+  attachDag(handle: MeshHandle, dag: DagBuild): void {
+    if (!this.built) throw new Error('GeometryRegistry: attachDag before build()');
+    const entry = this.entries[handle];
+    if (!entry) throw new Error(`GeometryRegistry: attachDag unknown handle ${handle}`);
+    if ((entry.flags & MESH_FLAG_HASDAG) !== 0) {
+      throw new Error(`GeometryRegistry: mesh ${entry.label} already has a DAG`);
+    }
+    if (dag.vertStride !== DAG_VERT_STRIDE) {
+      throw new Error(`GeometryRegistry: DAG vertStride ${dag.vertStride} != ${DAG_VERT_STRIDE}`);
+    }
+    const vCount = dag.verts.length / DAG_VERT_STRIDE;
+    const tCount = dag.indices.length / 3;
+    const cCount = dag.clusters.length;
+    if (!Number.isInteger(vCount) || !Number.isInteger(tCount)) {
+      throw new Error('GeometryRegistry: DAG verts/indices not stride-aligned');
+    }
+    if (cCount === 0) throw new Error('GeometryRegistry: DAG has no clusters');
+    this.checkRoom(vCount, tCount, cCount, 0);
+
+    const vBase = this.vertCursor;
+    const tBase = this.triCursor;
+    const cBase = this.clusterCursor;
+
+    // -- re-pack verts (DAG float layout → registry VERT_WORDS) ----------------
+    const vArr = this.vertsArr;
+    const sv = dag.verts;
+    for (let v = 0; v < vCount; v++) {
+      const s = v * DAG_VERT_STRIDE;
+      const b = (vBase + v) * VERT_WORDS;
+      vArr[b] = f32Bits(sv[s] as number);
+      vArr[b + 1] = f32Bits(sv[s + 1] as number);
+      vArr[b + 2] = f32Bits(sv[s + 2] as number);
+      vArr[b + 3] = octEncode(sv[s + 3] as number, sv[s + 4] as number, sv[s + 5] as number);
+      vArr[b + 4] = (f32ToF16(sv[s + 6] as number) | (f32ToF16(sv[s + 7] as number) << 16)) >>> 0;
+      const q = (i: number): number => Math.round(Math.max(0, Math.min(1, sv[s + 8 + i] as number)) * 255);
+      vArr[b + 5] = (q(0) | (q(1) << 8) | (q(2) << 16) | (q(3) << 24)) >>> 0;
+    }
+
+    // -- append indices (rebased onto the appended vertex block) ---------------
+    const iArr = this.idxArr;
+    const si = dag.indices;
+    const ibase = tBase * 3;
+    for (let i = 0; i < si.length; i++) iArr[ibase + i] = (si[i] as number) + vBase;
+
+    // -- cluster records (8-word) + DAG cut records (10-float) -----------------
+    const cArr = this.clusterArr;
+    const dArr = this.dagArr;
+    const dagSpheres = new Float32Array(cCount * 4);
+    for (let c = 0; c < cCount; c++) {
+      const dc = dag.clusters[c] as DagCluster;
+      const cb = (cBase + c) * CLUSTER_WORDS;
+      cArr[cb] = f32Bits(dc.sx);
+      cArr[cb + 1] = f32Bits(dc.sy);
+      cArr[cb + 2] = f32Bits(dc.sz);
+      cArr[cb + 3] = f32Bits(dc.sr);
+      cArr[cb + 4] = octEncode(dc.cax, dc.cay, dc.caz);
+      cArr[cb + 5] = f32Bits(dc.ccos);
+      cArr[cb + 6] = tBase + dc.triStart;
+      if (dc.triCount > MAX_CLUSTER_TRIS) throw new Error('GeometryRegistry: DAG cluster exceeds tri cap');
+      cArr[cb + 7] = ((dc.triCount & 0xff) | (CLUSTER_FLAG_DAG << 8) | (entry.handle << 16)) >>> 0;
+
+      const db = (cBase + c) * DAG_WORDS;
+      const root = !Number.isFinite(dc.parentError);
+      dArr[db] = dc.ownError;
+      dArr[db + 1] = dc.oex;
+      dArr[db + 2] = dc.oey;
+      dArr[db + 3] = dc.oez;
+      dArr[db + 4] = dc.oer;
+      // root: parentError +∞ → finite sentinel; parentSphere ← ownSphere so the
+      // sqrt(d²−r²) denominator stays well-formed (the err alone forces project > τ)
+      dArr[db + 5] = root ? DAG_ROOT_PARENT_ERR : dc.parentError;
+      dArr[db + 6] = root ? dc.oex : dc.pex;
+      dArr[db + 7] = root ? dc.oey : dc.pey;
+      dArr[db + 8] = root ? dc.oez : dc.pez;
+      dArr[db + 9] = root ? dc.oer : dc.per;
+
+      dagSpheres[c * 4] = dc.sx;
+      dagSpheres[c * 4 + 1] = dc.sy;
+      dagSpheres[c * 4 + 2] = dc.sz;
+      dagSpheres[c * 4 + 3] = dc.sr;
+    }
+
+    this.vertCursor += vCount;
+    this.triCursor += tCount;
+    this.clusterCursor += cCount;
+
+    // -- repoint the mesh at its DAG range; retire the discrete LOD chain ------
+    entry.clusterBase = cBase;
+    entry.clusterCount = cCount;
+    entry.lodNext = LOD_NONE;
+    entry.flags |= MESH_FLAG_HASDAG;
+    entry.sphere = meshSphereFromClusters(dagSpheres, cCount);
+    this.writeMeshRecord(entry);
+
+    // -- upload appended ranges (partial writeBuffer; no-op marker in node) ----
+    this.pushRange(this.vertsAttr, vBase * VERT_WORDS, vCount * VERT_WORDS);
+    this.pushRange(this.idxAttr, tBase * 3, tCount * 3);
+    this.pushRange(this.clusterAttr, cBase * CLUSTER_WORDS, cCount * CLUSTER_WORDS);
+    this.pushRange(this.dagAttr, cBase * DAG_WORDS, cCount * DAG_WORDS);
+    this.pushRange(this.meshAttr, entry.handle * MESH_WORDS, MESH_WORDS);
+  }
+
   /** post-build backing arrays + attributes (probe/validation use only) */
   debug(): {
     arrays: {
@@ -858,6 +1079,7 @@ export class GeometryRegistry {
       meshes: Uint32Array;
       instances: Float32Array;
       instanceMesh: Uint32Array;
+      dag: Float32Array;
     };
     attrs: {
       verts: StorageBufferAttribute;
@@ -866,6 +1088,7 @@ export class GeometryRegistry {
       meshes: StorageBufferAttribute;
       instances: StorageBufferAttribute;
       instanceMesh: StorageBufferAttribute;
+      dag: StorageBufferAttribute;
     };
   } {
     if (!this.built) throw new Error('GeometryRegistry: debug() before build()');
@@ -877,6 +1100,7 @@ export class GeometryRegistry {
         meshes: this.meshArr,
         instances: this.instArr,
         instanceMesh: this.instMeshArr,
+        dag: this.dagArr,
       },
       attrs: {
         verts: this.vertsAttr,
@@ -885,6 +1109,7 @@ export class GeometryRegistry {
         meshes: this.meshAttr,
         instances: this.instAttr,
         instanceMesh: this.instMeshAttr,
+        dag: this.dagAttr,
       },
     };
   }
