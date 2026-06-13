@@ -1024,6 +1024,29 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   REVISIT (D1b-perf) only if a heavier class (bark = 162k trees) makes the cull-dispatch
   volume the bottleneck — THEN add the hierarchical traversal as a pure pruning layer on
   top (same predicate, fewer tests). The flat cut stays the correctness reference.
+- D-N32 (2026-06-13, TERRAIN-DAG approach — user directive + my correction of record):
+  terrain gets its OWN heightfield-native adaptive builder, SEPARATE from BuildDag, both
+  emitting the SAME cut metadata (own/parent error+sphere → the parallel buffer →
+  kClusterCull). CORRECTION OF RECORD: I first claimed terrain QEM would take "minutes" —
+  WRONG, that figure was BuildDag's ITERATIVE Garland-Heckbert edge-collapse (global heap,
+  recompute neighbour quadrics), the right tool for an IRREGULAR mesh but the wrong one for
+  a grid. A heightmap is regular: connectivity known, vertex error = pure VERTICAL deviation
+  → a **right-triangulated quadtree (RTIN, Mapbox `martini`-class)** builds a per-node error
+  pyramid BOTTOM-UP in O(n) (each coarse node err = max(children err, own interp err)),
+  sub-second for 4096², one-time + seed-deterministic + Worker-able. It is ADAPTIVE FOR
+  FREE — the per-node error gates refinement, so a flat plain collapses to a couple of big
+  right-triangles while a cliff/erosion-channel stays dense (user MANDATE 2026-06-13:
+  "non-naive optimizer … plains have SIGNIFICANTLY less tris"). RTIN selects a SUBSET of
+  grid vertices (never off-grid) → positions still reconstruct from the heights buffer (F4
+  procedural preserved; store compact connectivity per cluster, NOT baked floats — my
+  "+200 MB / loses F4" claim was also overstated; general off-grid QEM would lose it for a
+  marginal error-per-tri gain not worth it on a heightmap). Crack-free via the restricted-
+  quadtree balance rule (forced-split neighbours) — the analogue of BuildDag's locked
+  boundaries. So "QEM adaptive terrain" = the FAST path when done grid-native; the earlier
+  "cheap-uniform vs slow-adaptive" fork was a false dichotomy. SEQUENCING: explicit Worker
+  rollout (D1d) continues first (shared infra); terrain RTIN builder is N8-D2. OPEN (settle
+  while building): RTIN-patch → ≤128-tri cluster mapping; error metric (vertical RMS vs max,
+  flatness weight); cross-tile crack-freeness for the 4 km field; LOD0 leaf-cluster count.
 
 ## GOTCHAS (append-only, nanite-specific)
 
@@ -1988,8 +2011,13 @@ LOGICAL POINT (the stopping milestone): continuous-LOD DAG WORKING on the curren
 migrated EXPLICIT opaque meshes (rock, bark, deadwood) — boundary-locked QEM build +
 hierarchical runtime cut + crack-free + no-pop; continuous-zoom probe green; `?clusterdbg=
 lod` heatmap; boot-budget measured (the N8 gate per the spec). DEFERRED past this point:
-heightfield-TERRAIN DAG integration (its procedural height-mip already covers the far shell
-— fold in only if clean) and foliage AGGREGATES (N9 leaf-removal area-preservation).
+foliage AGGREGATES (N9 leaf-removal area-preservation).
+**TERRAIN-DAG IS COMMITTED, NOT OPTIONAL** (user directive 2026-06-13: "terrain will ALSO
+be going through the dags … the terrain itself … various repr" — and the PATH UNIFICATION
+audit always said so: "Terrain CDLOD … far shell folds into coarse DAG levels"). The old
+"fold in IF clean / DEFER" wording was a wrong hedge — terrain gets the SAME continuous cut
+as the explicit classes. Its construction is heightfield-NATIVE (F4: no baked verts), built
+in N8-D2/D3 — see the terrain-DAG note in NEXT ACTIONS for the approach fork.
 
 SEQUENCING: N6 (migrate remaining opaque pools) + N7 (hybrid close) STAY after this — the
 DAG applies to whatever is registered, so N6's later pools get DAG'd when registered. After
@@ -2032,9 +2060,18 @@ CHUNK PLAN (to the logical point):
   (cull dispatch, qRaster live, boot budget) vs pre-DAG; + ?clusterdbg=lod heatmap (tint by
   ownErr coarseness — needs gpu.dag in the resolve OR a cull-side level write; check resolve
   storage budget first); + USER CHECKPOINT (continuous zoom on hero rock/tree in Chrome).
-- N8-D2 — close: terrain heightfield DAG fold-in IF clean (else terrain stays on its height-
-  mip far shell — DEFER); perf ledger row vs pre-DAG; USER CHECKPOINT (continuous zoom on a
-  hero rock/tree). THEN shadows resume at S4 (DAG-decoupled caster LOD).
+- N8-D2 — TERRAIN DAG (COMMITTED, D-N32): a heightfield-NATIVE adaptive builder (RTIN /
+  restricted right-triangle quadtree, Mapbox `martini`-class — NOT BuildDag's iterative QEM,
+  wrong tool for a grid). O(n) bottom-up vertical-error pyramid; aggressive flat decimation
+  (user: plains SIGNIFICANTLY fewer tris — flat → a few big right-triangles, cliffs dense);
+  vertices stay on-grid → positions reconstruct from the heights buffer (F4 preserved, store
+  compact connectivity); emits the SAME cut metadata (own/parent error+sphere) → the parallel
+  buffer → kClusterCull (unified runtime, specialized build). Crack-free via the restricted-
+  quadtree forced-split rule (+ cross-tile for the 4 km field). Node-test the error pyramid +
+  cut like probe-dag/probe-dagpack BEFORE GPU. Steps: (D2a) BuildHeightDag builder + node
+  probe; (D2b) register terrain as DAG'd (replace the discrete window path) + GPU gate; (D2c)
+  perf ledger row vs pre-DAG. Plus the carried D1e items: perf ledger, ?clusterdbg=lod heatmap,
+  USER CHECKPOINT (continuous zoom on hero rock/tree + terrain). THEN shadows resume at S4.
 
 CURRENT INFRA (read 2026-06-13): Clusterize.ts → BuiltClusters {indices (permuted, cluster
 tris contiguous), sphere 4f32/cluster, cone 4f32, triStart, triCount} — greedy ≤128-tri,
