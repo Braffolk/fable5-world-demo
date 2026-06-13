@@ -126,8 +126,12 @@ export function buildNaniteFrame(
   // default until C2 retires the old casters.
   const shadow2On = params.get('nanshadow2') === '1' && world.csm !== null;
   const shadow: NaniteShadow | null = shadow2On
-    ? buildNaniteShadow(registry.gpu, registry.instanceCount)
+    ? buildNaniteShadow(registry.gpu, registry.instanceCount, hf.heightTex, disp, windOpt)
     : null;
+  // C1: the per-cascade caster meshes ride three's CSM shadow render (each on
+  // layer 2+c — only that cascade's shadow camera draws it). castShadow=true +
+  // frustumCulled=false + identity matrixWorld are set inside buildNaniteShadow.
+  if (shadow) for (const m of shadow.casterMeshes) engine.scene.add(m);
 
   // ?nanprobe=1 — exact-number depth forensics: a compute kernel reads the
   // SCENE PASS depth texture and the vis buffer at up to 8 pixels into a

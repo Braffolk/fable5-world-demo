@@ -15,5 +15,11 @@ export default defineConfig(({ command }) => ({
   esbuild: {
     target: "esnext",
   },
+  optimizeDeps: {
+    // three's capabilities/WebGPU.js uses top-level await; the dep optimizer's
+    // default esbuild target rejects it. Match the app target so cold-cache
+    // (re)optimization succeeds instead of relying on a warm .vite cache.
+    esbuildOptions: { target: "esnext" },
+  },
   base: command === "build" ? "/laas/" : "/",
 }));

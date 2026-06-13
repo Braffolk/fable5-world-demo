@@ -866,7 +866,52 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   camera path); depth-only. Old casters (ShadowProxy + Forests siblings) retire
   when nanite shadows own the cascades (gate like D-N21's DISABLE_OLD_GEOMETRY).
 
+- D-N27 (2026-06-14, N5-C1): NANITE SHADOW CASTER = vertex-pulling NodeMaterial
+  Mesh per cascade on layer 2+c, world position injected via
+  `castShadowPositionNode` (NOT vertexNode — the shadow pass ignores it),
+  identity matrixWorld, side=DoubleSide, **`map = null`** (the base-NodeMaterial
+  `!== null` trap — GOTCHA). Indirect non-indexed DRAW over the cascade cull's
+  qRasterRO, count = visClusters·128·3 via a per-cascade kCasterArgs kernel
+  (padding tris collapse to vec3(0)). makeFetch built with the SAME (heightTex,
+  disp, wind) as the camera raster ⇒ bit-identical geometry (no peter-pan). This
+  realises D-N26's "HW indirect draws into the cascades via layers" — the SW
+  depth-only atomicMin alternative stays the C3 perf fallback (the HW caster's
+  128-stride over-draw measured heavy: shadow.c0 18–36 ms; cascade 0 is PERIOD 1
+  so it redraws every frame and cadence can't amortise it).
+
 ## GOTCHAS (append-only, nanite-specific)
+
+- (N5-C1) A SHADOW-CASTER NodeMaterial MUST SET `map = null`. three's shadow
+  override builder (Renderer._getShadowNodes, three.webgpu.js:61050) gates the
+  cast-alpha texture path on `material.map !== null` — NOT truthiness. A plain
+  `new NodeMaterial()` leaves `map` UNDEFINED, and `undefined !== null` is TRUE, so
+  three runs `reference('map','texture',material)` on a MISSING texture →
+  "texture() expects a valid instance of THREE.Texture()" thrown at
+  TextureNode.setup → the override fails to build → that caster writes no depth →
+  no shadows. MeshStandardNodeMaterial sets `this.map = null` so the old Forests
+  caster never hit it; a hand-rolled base NodeMaterial caster must do the same.
+  (colorNode/castShadowNode/maskNode use truthy `&& .isNode` checks — only `map`
+  is the `!== null` trap.) Symptom that misleads: shadow.c0 burns 18+ ms (pure
+  vertex over-draw runs fine) so it LOOKS like the caster renders — but the depth
+  attachment stays empty.
+- (N5-C1) THE SHADOW PASS IGNORES A MESH's `vertexNode`. three swaps in a shared
+  depth OVERRIDE material per light and reads ONLY colorNode / depthNode /
+  castShadowPositionNode (or positionNode) off the source material
+  (_getShadowNodes). A vertex-pulled caster MUST inject world position via
+  `material.castShadowPositionNode` (LOCAL space → modelViewMatrix·it), and the
+  mesh MUST have identity matrixWorld (matrixAutoUpdate=false +
+  matrixWorldAutoUpdate=false + matrixWorld.identity()) so LOCAL==WORLD and the
+  cascade light VP (the active camera during the shadow render) projects it
+  correctly. Setting `vertexNode` instead silently renders the geometry's raw
+  position attribute. side=DoubleSide (NOT FrontSide) or the default front→back
+  shadow-side flip culls terrain's single up-faces ⇒ terrain casts no shadow.
+- (tooling) Vite SERVES three from `build/three.webgpu.js` and PRE-BUNDLES it into
+  `.vite/deps/chunk-*.js` — editing `node_modules/three/src/**` does NOTHING
+  (src is not the served path), and editing the deps chunk is overwritten on
+  re-optimize. To instrument three: patch `build/three.webgpu.js`, then
+  `npm run dev -- --force` (re-optimizes from the build file). The dep optimizer
+  needs `optimizeDeps.esbuildOptions.target='esnext'` in vite.config or it rejects
+  three's top-level-await capabilities file on a cold cache.
 
 - (N4-C4) BLACK SLATE HAS NO SHADOWS — the CSM map is EMPTY in the default
   black-slate build, so any shadow-RECEIVE check must run `?oldgeo=1`. Both
@@ -984,6 +1029,59 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   min/max on uint nodes, float(uintNode) → use .toFloat().
 
 ## PROGRESS LOG (append-only, newest first)
+
+- 2026-06-14 (z): **N5-C1 — HW vertex-pulling CASTER landed; black-slate nanite
+  geometry now SELF-SHADOWS (the C1 gate is GREEN).** (Opus 4.8, 1M ctx.) Per
+  cascade: a vertex-pulling NodeMaterial Mesh (layer 2+c, castShadow=true,
+  frustumCulled=false, identity matrixWorld) added to engine.scene; three's CSM
+  renders ONLY layer 2+c into cascade c. A per-cascade kCasterArgs kernel turns
+  cull.qRasterRO[0].x (visible count) into a non-indexed indirect DRAW
+  (vertexCount = count·128·3 over-draw; padding tris localTri≥triCount collapse to
+  vec3(0)). buildNaniteShadow now takes (heightTex, disp, wind) — built with the
+  SAME makeFetch args as the CAMERA raster so caster geometry is bit-identical
+  (no peter-pan). THE INTEGRATION MECHANISM (verified vs three 0.184 source, the
+  whole reason this chunk was "risky"): the shadow pass IGNORES a mesh's
+  vertexNode — it swaps in a shared depth OVERRIDE material and reads ONLY
+  material.castShadowPositionNode (Renderer._getShadowNodes → positionLocal,
+  three.webgpu.js:61042+). That node returns LOCAL space; three applies
+  modelViewProjection = cameraProj·cameraView·modelWorld, and during cascade c's
+  shadow render the active camera IS the cascade ortho light, so cameraView/Proj
+  ARE the cascade light VP. Forcing matrixWorld=identity ⇒ the world pos
+  fetchWorldVert returns lands straight in light clip space (no hand-rolled vp).
+  side=DoubleSide so the override's shadow side stays DoubleSide (the default
+  FrontSide→BackSide shadow flip would CULL terrain's single up-faces ⇒ no terrain
+  shadow). THE BUG THAT ATE THE SESSION (D-N27 + GOTCHA): a base NodeMaterial
+  leaves `map` UNDEFINED, but _getShadowNodes gates on `material.map !== null`
+  (NOT truthiness) → undefined passes → three does reference('map','texture',
+  material) on a missing texture → "texture() expects a valid Texture" ×4 (one per
+  cascade) → the shadow override fails to build → NO shadows, while the caster's
+  18 ms shadow.c0 (pure vertex over-draw) masqueraded as "it's rendering". Root-
+  caused by patching three.webgpu.js (the BUILT bundle — Vite serves
+  build/three.webgpu.js, NOT src/, and pre-bundles it; needed
+  optimizeDeps.esbuildOptions.target=esnext + --force to re-bundle the patch) to
+  dump the TextureNode.setup stack → ReferenceNode→TextureNode → the map line. FIX
+  = one line: `mat.map = null` (MeshStandardNodeMaterial sets it; base NodeMaterial
+  does not). DIAGNOSIS LADDER that proved the geometry was fine all along:
+  ?nancasterdbg=1 (KEPT — renders cascade 0's vertex-pulled caster in the MAIN
+  pass, emissive, depthTest off) showed correct green trunks+terrain ⇒ decode +
+  makeFetch + worldPos all correct; the failure was purely three's shadow-override
+  build. RESULT (1280×720, framealign-free settle-40, casters on vs off): bm7
+  mean|diff| 0.79→14.9, 41% darker; bm3 vista 25.9 mean, 71.8% darker — coherent
+  cast shadows (amplified diff = trunk + downslope ridge shadows, NOT speckle),
+  ridge trees shade the whole bm3 foreground slope. PERF (the C3 problem, logged
+  loud): the caster DRAW is heavy — shadow.c0 18 ms@bm7 / 36 ms@bm3 (720p), fps
+  121→42 / 109→29. cascade 0 (CsmCached PERIOD 1) redraws EVERY frame so cadence
+  won't save it; C3 = SW depth-only atomicMin raster (D-N5/D-N26) or exact-tri
+  compaction to kill the 128-stride over-draw. SCOPE NOTE: the cull still runs
+  every frame for all cascades (C0 unchanged); three only DRAWS a cascade on its
+  CsmCached refresh tick, so gating the CULL to the tick is folded into C3.
+  Robustness: no texture errors / overflow at bm1/3/4/7; default (no ?nanshadow2)
+  path untouched. ALSO landed (dev-env, unrelated): vite.config
+  optimizeDeps.esbuildOptions.target=esnext — three's capabilities/WebGPU.js has a
+  top-level await the dep optimizer's default target rejects; the old setup only
+  worked off a warm .vite cache (a cold clear broke `npm run dev`). tsc clean.
+  NEXT: N5-C2 (retire ShadowProxy + Forests caster siblings, shadow parity, flip
+  ?nanshadow2 default-on) then N5-C3 (the perf pass above).
 
 - 2026-06-13 (y): **N5-C0 — per-cascade nanite shadow CULL landed** (numeric
   milestone, no raster yet). (Opus 4.8.) NEW src/nanite/NaniteShadow.ts:
@@ -1609,15 +1707,19 @@ migration). Chunks, each tsc-clean + committed:
      numerically (counts ≥ camera cull, grow with cascade index; off-screen
      casters present). Gate ?nanshadow2=1 (off by default until C2). NO visual
      change yet.
-   - N5-C1 — HW CASTER + INTEGRATION (the risky chunk): a vertex-pulling
-     NodeMaterial mesh per cascade on layer 2+c (castShadow=true,
-     frustumCulled=false), indirect-drawn over that cascade's cluster list;
-     vertexNode decodes gl_VertexIndex→(item,cluster,localTri,corner)→
-     fetchWorldVert, transformed by cameraView/Projection (= the cascade light
-     VP during its shadow render); depth-only. Wire the per-cascade re-cull onto
-     each cascade's CsmCached tick (re-cull when shadow.needsUpdate). GATE:
-     nanite self-shadows appear with ?nanshadow2=1 and ?oldgeo=0 (no old casters)
-     — the first frame where black-slate nanite geometry casts its own shadows.
+   - ~~N5-C1 — HW CASTER + INTEGRATION (the risky chunk)~~ DONE (log z, D-N27).
+     Per-cascade vertex-pulling NodeMaterial Mesh (layer 2+c, castShadow,
+     frustumCulled=false, identity matrixWorld) injecting world pos via
+     `castShadowPositionNode` (the shadow pass IGNORES vertexNode — GOTCHA), depth
+     into the cascade via three's CSM; non-indexed indirect DRAW (kCasterArgs:
+     count·128·3) over cull.qRasterRO. GATE GREEN: black-slate nanite geometry
+     self-shadows at ?nanshadow2=1 / ?oldgeo=0 (bm7 41% / bm3 71.8% px darker vs
+     casters-off, coherent cast shadows). Root-cause eaten by the `map=null` trap
+     (GOTCHA). ?nancasterdbg=1 main-pass caster viz kept. DEFERRED to C3 (not C1):
+     the per-cascade re-cull is still every-frame (C0); three only DRAWS a cascade
+     on its CsmCached refresh tick so the gate is met, but gating the CULL to the
+     tick + killing the 128-stride over-draw (shadow.c0 18–36 ms) is the C3 perf
+     pass. ?nanshadow2 still default-OFF (C2 flips it after parity).
    - N5-C2 — RETIRE OLD CASTERS + parity: gate ShadowProxy + Forests caster
      siblings off when nanite shadows own the cascades; shadow parity at the
      bookmarks (incl. off-screen casters via a pan probe); caster draw-count
