@@ -1816,27 +1816,56 @@ SAMPLE in the resolve is a FIXED per-pixel cost (same static or moving) — NOT 
 moving bottleneck. So the problem = re-rasterizing shadow geometry every frame as the
 camera moves. Caching at per-cascade granularity (R1) is too coarse to fix it.
 
-KEY LEVER (the world): LAAS is a MOSTLY-STATIC procedural world (deterministic seed)
-— terrain/rock/trunks are rigid; only WIND sway is dynamic (trunk/leaf channels,
-within the 380–480 m fade). Sun is static between ToD edits. So this is fundamentally
-a CACHING/PRECOMPUTE problem; CSM re-rasters because it is built for dynamic scenes.
+SCENE REALITY (USER CORRECTION 2026-06-14 — do NOT call this world "static"; that
+framing is WRONG and was rejected): there are **162k trees**, and EVERY in-view
+(near-camera) tree SWAYS in wind → its shadow-caster geometry DEFORMS every frame, in
+the near field where shadow quality matters most. The wind-moved share is GROWING, not
+shrinking: once N8's DAG cuts terrain tri counts, vegetation becomes the DOMINANT share
+of shadow-casting geometry. So caching/baking helps ONLY the rigid remainder (terrain,
+rock, and the far field beyond the ~380–480 m wind fade); the wind-animated casters
+MUST re-rasterize every frame BY DEFINITION — no cache (R1 per-cascade, VSM per-page,
+or bake) touches them. THE REAL PROBLEM is therefore NOT "exploit staticness" — it is
+**cheaply shadowing a large, growing set of dynamically-deforming foliage at 100+ fps**.
+The lever is the shadow REPRESENTATION + LOD of the DYNAMIC casters (crude per-tree
+shadow proxies/capsules/billboards, shadow-LOD decoupled far below camera-LOD since
+penumbra hides silhouette error, coarse moving primitives in an SDF/voxel field that
+update by transform not per-vertex), NOT caching. R1's per-cascade cache was real but
+addresses the wrong (rigid) half. Wind fade still bounds the dynamic set to <~480 m,
+so a static-far / dynamic-near SPLIT is valid — but the dynamic-near half is BIG and is
+the entire cost; do not design as if it were a small overlay.
 
-RESEARCH QUESTIONS (open — answer each with cited sources, no foregone conclusion):
- 1. Why does UE5 Nanite use VIRTUAL SHADOW MAPS, not CSM? VSM page caching: static
-    pages cached ~indefinitely, only invalidated pages re-render → a moving camera
-    re-renders FEW pages, not whole cascades. Is per-page caching the real fix vs
-    R1's per-cascade? (D-N28 DEFERRED VSM / "don't build the 16K page table" — was
-    that deferral wrong now that per-cascade caching proved too coarse?)
- 2. VSM in WebGPU — feasible WITHOUT 64-bit atomics? What did Scthe/nanite-webgpu,
-    ktstephano sparse-VSM, and other WebGPU/Vulkan hobby Nanites actually ship?
- 3. SDF (distance-field) shadows — build a global SDF of the STATIC world ONCE,
-    ray-march for soft shadows in the resolve. ZERO per-frame geometry raster.
-    Cost/quality/penumbra/WebGPU-compute feasibility? (UE uses DF shadows for far
-    field.) Fit for a static world is the draw.
- 4. BAKED + DYNAMIC hybrid — precompute static shadows (terrain/rock/trunk) once at
-    load (world is deterministic!), overlay only the small dynamic WIND set near field.
+RESEARCH QUESTIONS (open — answer each with cited sources, no foregone conclusion;
+Q0 is THE question, the rest feed it):
+ 0. **THE core problem — DYNAMIC FOLIAGE SHADOWS AT SCALE.** How do production
+    Nanite-style / vegetation-dense renderers (UE5 Nanite+VSM foliage, Fortnite Ch4,
+    Horizon, Ghost of Tsushima, Witcher3 GDC, etc.) shadow LARGE amounts of
+    WIND-ANIMATED foliage at high frame rate? What is the actual quality/perf tradeoff,
+    and what is the shadow-caster REPRESENTATION (full mesh re-raster? crude per-tree
+    proxy? lower shadow-LOD than camera? billboard/capsule? merged? none past N m)?
+    This is the cost; everything else is the rigid remainder.
+ 1. Why does UE5 Nanite use VIRTUAL SHADOW MAPS, not CSM? VSM page caching: rigid
+    pages cached ~indefinitely, only invalidated pages re-render. BUT — UE's own docs
+    say WPO/vertex-animated (wind) geometry INVALIDATES its page every frame (grass-WPO
+    shadow cost is real). So VSM's cache helps our rigid half but NOT the swaying trees.
+    Does VSM still win for us via (a) resolution allocation — pages only where needed,
+    near=high/far=low — and (b) rendering only SHADOW-VISIBLE clusters, not whole
+    cascades? Quantify vs R1's per-cascade. Feasible in WebGPU WITHOUT 64-bit atomics
+    (what did Scthe/nanite-webgpu, ktstephano sparse-VSM, other WebGPU/Vulkan hobby
+    Nanites actually ship)?
+ 2. SHADOW-LOD / PROXY DECOUPLING — cast the dynamic trees' shadows from geometry FAR
+    coarser than the camera view (penumbra hides silhouette error): per-tree
+    capsule/billboard/low-poly proxy that winds by a cheap transform, not per-vertex.
+    What do shipped games use for foliage shadow proxies? Quality floor vs "fantastic"?
+ 3. SDF / VOXEL shadows for MOVING foliage — represent trees as coarse primitives
+    (capsules/ellipsoids) that update by TRANSFORM under wind (few ops), ray-march a
+    global field for soft shadows. The rigid terrain/rock SDF is baked once; the
+    dynamic foliage primitives are refreshed cheaply. ZERO per-vertex shadow raster.
+    Cost/quality/penumbra/WebGPU-compute feasibility? (UE DF shadows precedent.)
+ 4. STATIC-FAR / DYNAMIC-NEAR SPLIT done right — cache the rigid set (terrain/rock +
+    trees beyond the wind fade), and spend the budget ONLY on the near dynamic foliage,
+    which is BIG (not a small overlay). Best technique for the dynamic half specifically.
  5. Ray-traced shadows — no HW RT in WebGPU; SW ray-trace vs a cluster BVH/SDF —
-    viable at 100+ fps?
+    viable at 100+ fps with animated foliage?
  6. BROADER (user said "shadow/LIGHTING"): is there a unified soft-shadow+GI approach
     (voxel/SDF cone tracing, surfel/probe) that gives soft shadows + bounce cheaply
     and replaces the CSM term entirely?
