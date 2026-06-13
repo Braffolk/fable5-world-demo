@@ -991,6 +991,22 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   is paid only when the registry boot invokes the build); D0 delivers the
   validated builder + the measured budget. The pure-TS builder stays the
   reference/probe path regardless (node-runnable, deterministic).
+  RATIFIED 2026-06-13 (user "stick to worker" after weighing the fork). The compute-
+  kernel QEM is EXPLICITLY DEFERRED — the downsides (recorded so it is not re-
+  litigated): (1) edge-collapse QEM is serial-greedy (pop global-min cost → collapse →
+  recompute neighbours); the GPU-parallel variants (maximal-independent-set collapse,
+  grid-snap) are LOWER QUALITY on the exact thing that matters (LOD fidelity + crack-
+  freeness), and clusterize() is ALSO serial-greedy — the whole pipeline is; (2) WebGPU
+  has NO atomic float-add (quadric scatter-add → CAS spin-loops), no 64-bit atomics,
+  10 storage buffers/stage (F9), and the build is variable-size dynamic output across
+  levels → bump-allocators + the F14 silent-overflow class; (3) GPU atomic ordering +
+  FMA non-determinism breaks `?seed=N` AND threatens the bit-exact sibling-pair equality
+  (E) the crack-free cut depends on — the CPU build is deterministic for free; (4) debug
+  = storage-buffer readback forensics vs the node probe's exact-number headless check;
+  (5) it steals the SCARCE resource (GPU/UMA, the whole reason for this branch) while a
+  Worker uses an IDLE CPU core. ESCALATION LADDER if a Worker ever starves a real
+  interactive case (e.g. late hero-tree registration latency): Worker → ~2× TS opt (SoA
+  heap, indexed decrease-key) → frame-slice the CPU build → compute kernel (last resort).
 
 ## GOTCHAS (append-only, nanite-specific)
 
