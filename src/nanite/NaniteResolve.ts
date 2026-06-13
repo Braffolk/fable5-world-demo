@@ -17,8 +17,10 @@
  * receive + exact IBL parity are layered in next; the immediate contract is
  * that the terrain is THERE (opaque, correct albedo), not transparent.
  *
- * Bisects (URL-gated): ?nandbg=flat (matClass palette, no shading),
- * ?nandbg=albedo|normal|cov, ?nandepth=0 (depth write off).
+ * Bisects (URL-gated): ?nandbg=flat (albedo, no shading) | albedo | normal |
+ * cov (covered px red) | cls (matClass tint) | cluster (meshlet hash tint, like
+ * the ?nanitedbg=cluster view but for the full-frame migrated set); ?nandepth=0
+ * (depth write off); ?nanshadow=0; ?nanwind=0; ?nanbark=const|lN|grad.
  */
 
 import { Mesh, Sphere, Vector3 } from 'three';
@@ -63,7 +65,7 @@ import type { Heightfield } from '../world/Heightfield';
 import { MESH_WORDS, readVertex } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
 import { makeFetch } from './NaniteFetch';
-import { instRotateDir, type NaniteCam } from './NaniteCommon';
+import { hashColor, instRotateDir, type NaniteCam } from './NaniteCommon';
 import type { NaniteVisBuffers } from './NaniteRaster';
 import { bcU2F, elemU, toF } from './Tsl';
 import type { BufOf, UV2 } from './Tsl';
@@ -529,6 +531,9 @@ export function buildNaniteResolve(
     if (nandbg === 'albedo') return vec4(albedo, 1);
     if (nandbg === 'normal') return vec4(wNormal.mul(0.5).add(0.5), 1);
     if (nandbg === 'cov') return vec4(1, 0, 0, 1); // every covered pixel red
+    // per-cluster hash tint (matches the ?nanitedbg=cluster view, but for the
+    // full-frame migrated set) — visualises meshlet boundaries on the resolve
+    if (nandbg === 'cluster') return vec4(hashColor(ci), 1) as unknown as NV4;
     if (nandbg === 'cls')
       // matClass tint: terrain green / rock red / bark blue / deadwood cyan /
       // other (leaf/grass/debris) magenta
