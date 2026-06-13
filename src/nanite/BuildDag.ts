@@ -387,32 +387,51 @@ function simplifyGroup(
   budget = Infinity,
 ): SimplifyResult {
   // ---- weld group triangles into a local soup (by quantised position) -------
-  //  spatial-hash buckets (qx,qy,qz,localId quads) — no string keys. Locked
-  //  boundary verts are copied bit-identical across groups ⇒ identical quants ⇒
-  //  they re-weld at the next level (the mechanism that re-simplifies boundaries).
+  //  Open-addressing typed hash (was a Map<hash, number[]> + per-vertex number[]
+  //  push — the group's heaviest GC source). Local ids are still assigned in first-
+  //  ENCOUNTER order, so the welded soup is BIT-IDENTICAL; the hash only changes the
+  //  internal probe order. Locked boundary verts quantise identically across groups
+  //  ⇒ they re-weld next level (the boundary re-simplification mechanism). The soup
+  //  is bounded (≤ 3·inputTris verts), so everything is sized once, no growth.
   const inv = 1 / opts.weldEps;
-  const buckets = new Map<number, number[]>();
-  const localPos: number[] = []; // interleaved, stride floats
-  const triLocal: number[] = []; // local id triples
+  let totalInputTris = 0;
+  for (const c of groupClusters) totalInputTris += c.triCount;
+  const maxVerts = Math.max(totalInputTris * 3, 1);
+  let hcap = 16;
+  while (hcap < maxVerts * 2) hcap *= 2;
+  const hmask = hcap - 1;
+  const hslot = new Int32Array(hcap).fill(-1); // slot → localId (-1 empty)
+  const localQX = new Int32Array(maxVerts);
+  const localQY = new Int32Array(maxVerts);
+  const localQZ = new Int32Array(maxVerts);
+  const verts = new Float64Array(maxVerts * stride);
+  const triA = new Int32Array(totalInputTris);
+  const triB = new Int32Array(totalInputTris);
+  const triC = new Int32Array(totalInputTris);
+  let nLocal = 0;
   const localOf = (vid: number): number => {
     const p = vid * stride;
     const qx = Math.round((pool[p] as number) * inv);
     const qy = Math.round((pool[p + 1] as number) * inv);
     const qz = Math.round((pool[p + 2] as number) * inv);
-    const h = (Math.imul(qx, 73856093) ^ Math.imul(qy, 19349663) ^ Math.imul(qz, 83492791)) | 0;
-    let bucket = buckets.get(h);
-    if (bucket) {
-      for (let i = 0; i < bucket.length; i += 4) {
-        if (bucket[i] === qx && bucket[i + 1] === qy && bucket[i + 2] === qz) return bucket[i + 3] as number;
+    let h = (Math.imul(qx, 73856093) ^ Math.imul(qy, 19349663) ^ Math.imul(qz, 83492791)) & hmask;
+    for (;;) {
+      const lid = hslot[h] as number;
+      if (lid === -1) {
+        const id = nLocal++;
+        const b = id * stride;
+        for (let s = 0; s < stride; s++) verts[b + s] = pool[p + s] as number;
+        localQX[id] = qx;
+        localQY[id] = qy;
+        localQZ[id] = qz;
+        hslot[h] = id;
+        return id;
       }
-    } else {
-      bucket = [];
-      buckets.set(h, bucket);
+      if ((localQX[lid] as number) === qx && (localQY[lid] as number) === qy && (localQZ[lid] as number) === qz) {
+        return lid;
+      }
+      h = (h + 1) & hmask;
     }
-    const id = localPos.length / stride;
-    for (let s = 0; s < stride; s++) localPos.push(pool[p + s] as number);
-    bucket.push(qx, qy, qz, id);
-    return id;
   };
   let soupTris = 0;
   for (const c of groupClusters) {
@@ -421,24 +440,16 @@ function simplifyGroup(
       const b = localOf(poolIdx[t * 3 + 1] as number);
       const cc = localOf(poolIdx[t * 3 + 2] as number);
       if (a === b || b === cc || a === cc) continue; // welded-degenerate
-      triLocal.push(a, b, cc);
+      triA[soupTris] = a;
+      triB[soupTris] = b;
+      triC[soupTris] = cc;
       soupTris++;
     }
   }
-  const nv = localPos.length / stride;
-  const verts = new Float64Array(localPos.length);
-  for (let i = 0; i < localPos.length; i++) verts[i] = localPos[i] as number;
+  const nv = nLocal;
 
-  // ---- triangle + incidence structures --------------------------------------
-  const triA = new Int32Array(soupTris);
-  const triB = new Int32Array(soupTris);
-  const triC = new Int32Array(soupTris);
+  // ---- triangle incidence ---------------------------------------------------
   const triAlive = new Uint8Array(soupTris).fill(1);
-  for (let t = 0; t < soupTris; t++) {
-    triA[t] = triLocal[t * 3] as number;
-    triB[t] = triLocal[t * 3 + 1] as number;
-    triC[t] = triLocal[t * 3 + 2] as number;
-  }
   const vtri: number[][] = Array.from({ length: nv }, () => []);
   for (let t = 0; t < soupTris; t++) {
     (vtri[triA[t] as number] as number[]).push(t);
@@ -666,9 +677,10 @@ function simplifyGroup(
   //  INLINED — no rawCross / nested gx closure: this was the build's single hottest
   //  spot (the per-call closure ALLOCATION + indirect component fetches, ~50% of
   //  the build). Verts equal to a or b move to (tx,ty,tz); others keep position.
-  const wouldFlip = (a: number, b: number, tx: number, ty: number, tz: number): boolean => {
+  const wouldFlip = (a: number, b: number, tx: number, ty: number, tz: number, skip: number): boolean => {
     for (let vi = 0; vi < 2; vi++) {
       const v = vi === 0 ? a : b;
+      if (v === skip) continue; // this vertex doesn't move ⇒ its star can't flip
       const tris = vtri[v] as number[];
       for (let ti = 0; ti < tris.length; ti++) {
         const t = tris[ti] as number;
@@ -774,9 +786,10 @@ function simplifyGroup(
   //  catches sign FLIPS, not degeneracies, so the zero-area sliver survives and —
   //  produced identically by both groups sharing that boundary — reads as a
   //  duplicated, non-manifold triangle. Scale-invariant test: sin²θ < 1e-8.
-  const triDegenerates = (a: number, b: number, tx: number, ty: number, tz: number): boolean => {
+  const triDegenerates = (a: number, b: number, tx: number, ty: number, tz: number, skip: number): boolean => {
     for (let vi = 0; vi < 2; vi++) {
       const v = vi === 0 ? a : b;
+      if (v === skip) continue; // this vertex doesn't move ⇒ its star can't degenerate
       const tris = vtri[v] as number[];
       for (let ti = 0; ti < tris.length; ti++) {
         const t = tris[ti] as number;
@@ -851,9 +864,12 @@ function simplifyGroup(
     const e = heapPop(heap);
     if (vAlive[e.a] !== 1 || vAlive[e.b] !== 1) continue;
     if ((version[e.a] as number) !== e.va || (version[e.b] as number) !== e.vb) continue; // stale
-    if (wouldFlip(e.a, e.b, e.tx, e.ty, e.tz)) continue;
+    // gridEndpoint: target == keep's own position ⇒ KEEP doesn't move, so only the
+    // DROP star can flip/degenerate — skip keep's star (bit-identical: keep's tris
+    // are unchanged and the live mesh has no pre-existing flipped/degenerate tri).
+    if (wouldFlip(e.a, e.b, e.tx, e.ty, e.tz, opts.gridEndpoint ? e.keep : -1)) continue;
     if (opts.gridEndpoint && !linkOk(e.a, e.b)) continue; // terrain: keep the soup manifold
-    if (opts.gridEndpoint && triDegenerates(e.a, e.b, e.tx, e.ty, e.tz)) continue; // no collinear slivers
+    if (opts.gridEndpoint && triDegenerates(e.a, e.b, e.tx, e.ty, e.tz, e.keep)) continue; // no collinear slivers
     if (opts.gridEndpoint && makesBoundaryTri(e.a, e.b, e.keep)) continue; // no seam-duplicate tris
     const keep = e.keep;
     const drop = keep === e.a ? e.b : e.a;
@@ -920,22 +936,31 @@ function simplifyGroup(
     }
   }
 
-  // ---- compact survivors → fresh local mesh ---------------------------------
+  // ---- compact survivors → fresh local mesh (typed scratch, no number[].push) -
+  //  remap assigns new ids in first-encounter order (bit-identical to the old
+  //  outPos.length/stride); the result is returned as exact-length subarray views.
   const remap = new Int32Array(nv).fill(-1);
-  const outPos: number[] = [];
-  const outIdx: number[] = [];
+  const outPos = new Float32Array(nv * stride); // ≤ nv survivor verts
+  const outIdx = new Uint32Array(soupTris * 3); // ≤ soupTris survivor tris
+  let outV = 0;
+  let outI = 0;
   let simpTris = 0;
   for (let t = 0; t < soupTris; t++) {
     if (triAlive[t] !== 1) continue;
-    const ids = [triA[t] as number, triB[t] as number, triC[t] as number];
+    const ta = triA[t] as number;
+    const tb = triB[t] as number;
+    const tc = triC[t] as number;
     for (let v = 0; v < 3; v++) {
-      const id = ids[v] as number;
-      if ((remap[id] as number) < 0) {
-        remap[id] = outPos.length / stride;
+      const id = v === 0 ? ta : v === 1 ? tb : tc;
+      let r = remap[id] as number;
+      if (r < 0) {
+        r = outV++;
+        remap[id] = r;
         const p = id * stride;
-        for (let s = 0; s < stride; s++) outPos.push(verts[p + s] as number);
+        const o = r * stride;
+        for (let s = 0; s < stride; s++) outPos[o + s] = verts[p + s] as number;
       }
-      outIdx.push(remap[id] as number);
+      outIdx[outI++] = r;
     }
     simpTris++;
   }
@@ -944,8 +969,8 @@ function simplifyGroup(
   // unit). ratio mode: convert the area-weighted QEM scalar to an RMS metre.
   const qemErr = useBudget ? maxCost : Math.sqrt(maxCost / Math.max(meanArea, 1e-12));
   return {
-    verts: Float32Array.from(outPos),
-    indices: Uint32Array.from(outIdx),
+    verts: outPos.subarray(0, outV * stride),
+    indices: outIdx.subarray(0, outI),
     soupTris,
     simpTris,
     qemErr,
@@ -1021,9 +1046,32 @@ export function buildDag(
 
   const built = lod0 ?? clusterize(verts, vertStride, indices, o.maxTris);
 
-  // growing geometry pool (LOD0 verts as-is; LOD0 indices = the permuted set)
-  const poolVerts: number[] = Array.from(verts);
-  const poolIdx: number[] = Array.from(built.indices);
+  // growing geometry pools (LOD0 verts as-is; LOD0 indices = the permuted set),
+  // TYPED-ARRAY backed: number[].push over millions of floats was O(n) realloc +
+  // boxing + a final Float32Array.from over a ~400 MB JS array at 33.5M tris. This
+  // is amortised-O(1) append (capacity-doubling) + an exact slice to finalise.
+  let pv = new Float32Array(Math.max(verts.length * 2, 1024));
+  pv.set(verts);
+  let pvLen = verts.length;
+  let pi = new Uint32Array(Math.max(built.indices.length * 2, 1024));
+  pi.set(built.indices);
+  let piLen = built.indices.length;
+  const growV = (extra: number): void => {
+    if (pvLen + extra <= pv.length) return;
+    let cap = pv.length;
+    while (cap < pvLen + extra) cap *= 2;
+    const next = new Float32Array(cap);
+    next.set(pv.subarray(0, pvLen));
+    pv = next;
+  };
+  const growI = (extra: number): void => {
+    if (piLen + extra <= pi.length) return;
+    let cap = pi.length;
+    while (cap < piLen + extra) cap *= 2;
+    const next = new Uint32Array(cap);
+    next.set(pi.subarray(0, piLen));
+    pi = next;
+  };
   const clusters: DagCluster[] = [];
   const groups: DagGroup[] = [];
   const levelStats: DagLevelStats[] = [];
@@ -1081,9 +1129,9 @@ export function buildDag(
     for (const groupIds of partition) {
       const gid = groups.length;
       const groupClusters = groupIds.map((id) => clusters[id] as DagCluster);
-      // simplifyGroup only READS the pool; pass the growing arrays directly
-      // (appending parents below never moves existing cluster tri ranges).
-      const res = simplifyGroup(poolVerts, poolIdx, vertStride, groupClusters, o, budget);
+      // simplifyGroup only READS the pool; pass the current backing arrays
+      // (appending parents below grows them, but only AFTER this returns).
+      const res = simplifyGroup(pv, pi, vertStride, groupClusters, o, budget);
 
       // child own-error max + own-sphere union (containment)
       let childErr = 0;
@@ -1128,13 +1176,17 @@ export function buildDag(
       if (groupErr > maxError) maxError = groupErr;
 
       // append the simplified soup to the pool, re-clusterize into parents
-      const vertBase = poolVerts.length / vertStride;
-      for (let i = 0; i < res.verts.length; i++) poolVerts.push(res.verts[i] as number);
+      const vertBase = pvLen / vertStride;
+      growV(res.verts.length);
+      pv.set(res.verts, pvLen);
+      pvLen += res.verts.length;
       const parentBuilt = clusterize(res.verts, vertStride, res.indices, o.maxTris);
-      const triBase = poolIdx.length / 3;
+      const triBase = piLen / 3;
+      growI(parentBuilt.indices.length);
       for (let i = 0; i < parentBuilt.indices.length; i++) {
-        poolIdx.push((parentBuilt.indices[i] as number) + vertBase);
+        pi[piLen + i] = (parentBuilt.indices[i] as number) + vertBase;
       }
+      piLen += parentBuilt.indices.length;
 
       const parentIds: number[] = [];
       for (let c = 0; c < parentBuilt.clusterCount; c++) {
@@ -1224,8 +1276,8 @@ export function buildDag(
   }
 
   // -- pack -------------------------------------------------------------------
-  const outVerts = Float32Array.from(poolVerts);
-  const outIdx = Uint32Array.from(poolIdx);
+  const outVerts = pv.slice(0, pvLen);
+  const outIdx = pi.slice(0, piLen);
   let roots = 0;
   let totalTris = 0;
   for (const c of clusters) {

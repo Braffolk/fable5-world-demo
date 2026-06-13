@@ -1246,6 +1246,26 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-14 (ai): **N8-D2b (part 2) — terrain DAG build SPEED, single-thread pass
+  (user picked "more single-thread opt, no Worker/tiling").** (Opus 4.8 1M.) Three
+  more bit-identical structural wins on top of part 1, each profiled-then-fixed
+  (terrain probe still 612 cl / 5 roots / 11.2 m; rock byte-identical): (1) TYPED-
+  ARRAY pool for `poolVerts/poolIdx` — was `number[].push` over millions of floats +
+  a final `Float32Array.from` over a ~400 MB JS array at 33.5M tris (capacity-doubling
+  append + exact slice; this is the MEMORY fix that lets 4096² run at all, plus it
+  trims the >1M-tri super-linear creep); (2) gridEndpoint keep-star SKIP — the collapse
+  target IS the keep vertex's own position, so keep doesn't move and only the DROP star
+  can flip/degenerate ⇒ `wouldFlip`/`triDegenerates` check one star not two (halves the
+  #2 cost; bit-identical by the no-degenerate-tri invariant); (3) welding Map → open-
+  addressing TYPED hash + typed soup scratch (ids stay first-encounter order ⇒ identical;
+  kills the group's heaviest GC source) + the final compaction to typed scratch/subarray
+  views (no `number[].push`). Clean profiler-free throughput 0.055 → 0.143 Mtri/s @256²
+  (cumulative ~2.6×); 4096² ≈ 4.7 min clean single-thread (from ~10 min). Remaining minor
+  levers (NOT done — diminishing, <8%): `edgeUse`/`seen` → typed hashes, `buildDag`
+  per-cluster object churn. NOTE for wiring: the real 4096² build is still minutes, so it
+  must run OFF the main thread (a single background Worker or frame-time-slicing — NOT
+  multi-worker tiling) + a deterministic-seed cache; wiring itself is developed on small
+  fields (256² ≈ 1 s) so this doesn't block it. tsc clean.
 - 2026-06-14 (ai): **N8-D2b (part 1) — terrain DAG build SPEED: bit-identical
   constant-factor pass + the `__name` measurement-artifact finding.** (Opus 4.8 1M.)
   The D2a "0.015 Mtri/s / ~37 min for 4096²" alarm was profiled and largely DEBUNKED:
