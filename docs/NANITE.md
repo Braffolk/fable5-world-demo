@@ -971,6 +971,27 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   Cites: PROGRESS LOG ae (4 thread docs); Epic VSM docs; SpeedTree GPU Gems 3 ch.4;
   StratusGFX SVSM; UE Lumen/Capsule-Shadow docs; iq soft-shadow.
 
+- D-N30 (2026-06-13, N8-D0 — F15 build-cost MITIGATION): the hand-rolled QEM DAG
+  build (BuildDag.ts) runs at **0.16 Mtri/s in pure TS** (measured, probe-dag) →
+  the registry's 1.52M explicit tris ≈ **9.3 s**, OVER the ~2 s F15 soft target.
+  RULING: the DAG build runs **off the boot critical path — background / time-
+  sliced per pool** (reuse the late-registration infra the content contract
+  already mandates for hero trees). Boot stays at the current ~0.5 s clusterize
+  budget; each pool keeps its DISCRETE LOD chain (D-N14 envelope) until its DAG
+  is ready, then swaps to the continuous cut. This is the spec's pre-planned F15
+  mitigation ("time-slice the build … progressive DAG enablement per pool") and
+  is directly endorsed by the user directive that set up N8 ("i dont care how
+  long it takes or how long it wont be visible before finished"). PREFERENCE: a
+  Web Worker (buildDag takes plain typed arrays — no three — so geometry transfers
+  in, cluster data transfers back; zero main-thread hitch) over main-thread time-
+  slicing. FALLBACK FLOOR (documented, only if a background Worker still starves):
+  move the QEM inner loop to a compute kernel (F15) — NOT attempted yet; the
+  builder also has ~2× of un-exploited TS headroom (typed-array SoA heap, indexed
+  decrease-key) if a cheaper win suffices. This is a D1 WIRING decision (the cost
+  is paid only when the registry boot invokes the build); D0 delivers the
+  validated builder + the measured budget. The pure-TS builder stays the
+  reference/probe path regardless (node-runnable, deterministic).
+
 ## GOTCHAS (append-only, nanite-specific)
 
 - (N5-C1) A SHADOW-CASTER NodeMaterial MUST SET `map = null`. three's shadow
@@ -1121,6 +1142,43 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   min/max on uint nodes, float(uintNode) → use .toFloat().
 
 ## PROGRESS LOG (append-only, newest first)
+
+- 2026-06-13 (af): **N8-D0 — hand-rolled QEM LOD DAG build LANDED + validated
+  headless; F15 build-cost trigger FIRED (measured).** (Opus 4.8 1M.) NEW
+  src/nanite/BuildDag.ts (`buildDag(verts, vertStride, indices, opts, lod0?)`):
+  per level k→k+1 — spatial-median group partition (≤24 clusters; a deterministic
+  METIS substitute — crack-freeness is partitioner-INDEPENDENT, only reduction
+  efficiency isn't) → position-WELD the group soup (spatial-hash buckets, no
+  string keys) → LOCK the group boundary (soup edges used by ≠2 tris = shared-
+  with-another-group ∪ open-mesh-boundary) → area-weighted Garland-Heckbert QEM
+  edge-collapse to ~50% (binary-heap of collapses, lazy-versioned stale skip,
+  3×3 Cramer optimal placement w/ endpoint/midpoint fallback, raw-cross normal-
+  FLIP guard) → re-clusterize survivors via clusterize() into 4–16 parents →
+  (ownError,ownSphere)/(parentError,parentSphere) pairs with containment (sphere-
+  fold), max-monotonicity (+ strict ε bump), and EXACT sibling-pair equality
+  (child.parent pair === group pair === parent.own pair, bit-for-bit, so the cut
+  boundary always falls between groups). Stuck-fallback: a group reducing <15% →
+  its inputs become ROOTS (parentError=∞); multiple roots legal. Attributes ride
+  along by linear interp on collapse (normal renormalised via opts.normalOffset);
+  RNG-FREE → deterministic by construction. NEW tools/probe-dag.ts (node, no GPU):
+  builds on rock (closed, 3 detail levels) + bark-beech (open tube) + deadwood-
+  snag, asserts M (parentErr≥ownErr) / C (parentSphere⊇ownSphere) / E (bit-exact
+  sibling pairs) / O (no orphans, LOD0 ownErr=0, roots vs grouped) / A (τ-sweep
+  cut antichain: no group ever has input+parent both selected; τ=0 cut == LOD0
+  tris, τ=∞ == root tris, tris monotone-decreasing in τ) + a 2× determinism check.
+  ALL GREEN. Clean ~50% per-level reduction; rock-hero 327,680 tris → 10 levels,
+  5,407 clusters, 23 roots; bark 6 roots / snag 4 roots (open/branchy topology
+  refuses to over-simplify — the predicted multiple-roots behaviour). **F15
+  MEASURED (the boot-budget trigger): pure-TS build = 0.16 Mtri/s (hero 2.0 s /
+  327k tris) → the registry's 1.52M explicit tris ≈ 9.3 s, 4M ≈ 24.5 s — OVER the
+  ~2 s soft target.** Decision = D-N30 (background/progressive per-pool build, off
+  the boot critical path — the spec's pre-planned mitigation, endorsed by the
+  user's "i dont care how long it … wont be visible before finished" directive;
+  compute-kernel QEM is the documented floor if a background Worker still starves).
+  Easy TS opts already applied (weld-hash, sqrt-free flip): 2540→2004 ms hero. The
+  builder is correct + the cost is a wiring concern for D1, not a builder defect.
+  tsc clean; probe-clusterize still green (unchanged). NEXT: N8-D1 (GPU pack +
+  hierarchical runtime cut) — see NEXT ACTIONS.
 
 - 2026-06-13 (ae): **SHADOW/LIGHTING PERF RETHINK — research complete, direction
   chosen (pending sign-off).** (Opus 4.8 1M.) Ran 4 parallel cited research threads
@@ -1880,7 +1938,11 @@ IMPLEMENTATION: follow "### DAG (N8) — implementation-ready spec" (Technical d
 Do NOT re-plan from scratch.
 
 CHUNK PLAN (to the logical point):
-- N8-D0 — DAG BUILD (CPU, new module e.g. BuildDag.ts): given LOD0 BuiltClusters
+- ~~N8-D0~~ **DONE** (log af; D-N30) — BuildDag.ts + tools/probe-dag.ts; all invariants
+  green on rock (closed) / bark-beech (open tube) / deadwood-snag; deterministic; F15
+  FIRED (0.16 Mtri/s → 1.52M ≈ 9.3 s, over the ~2 s target) → D-N30 background build.
+  Original spec for the record:
+  DAG BUILD (CPU, new module e.g. BuildDag.ts): given LOD0 BuiltClusters
   (Clusterize.ts), build levels k→k+1: cluster adjacency (shared-edge) → graph-partition
   into groups of 8–32 (recursive boundary-min bisection — METIS substitute, zeux) → weld +
   merge group tris → LOCK group-boundary verts → hand-rolled QEM edge-collapse simplify
@@ -1909,7 +1971,16 @@ packs CLUSTER_WORDS=8 per cluster (sphere 4 + coneOct 1 + coneCos 1 + triStart 1
 u8 | flags u8 | meshId u16) 1) + a MESH table of 12 words incl. lodNext/lodDist = TODAY'S
 DISCRETE per-mesh LOD (rings as discrete cluster sets — the DAG's continuous per-cluster cut
 SUPERSEDES this). DAG metadata won't fit the full 8-word cluster rec → parallel buffer (D1).
-NOW BUILDING: N8-D0 (hand-rolled QEM DAG build + node validation probe).
+
+DONE: N8-D0 (log af). DagBuild output per cluster = geometric sphere/cone (cull, from
+clusterize) + (ownError, ownSphere) + (parentError, parentSphere) + level + groupAsInput/
+groupAsParent linkage; DagBuild also carries the grown vertex pool (verts/vertStride/indices)
+and groups[] (inputs/parents/error/sphere per group). D1 packs ownErr f32 + ownSphere 4f32 +
+parentErr f32 + parentSphere 4f32 (=10 words) into the parallel per-cluster buffer + appends
+the DAG's higher-LOD verts/indices/cluster-recs to the registry mega-buffers, then drives the
+hierarchical cut in NaniteCull. NOTE the build cost (D-N30): D1 must invoke buildDag OFF the
+boot critical path (background Worker preferred — buildDag is three-free, typed-arrays in/out).
+NOW BUILDING: N8-D1 (GPU pack DAG metadata + hierarchical runtime cut).
 
 ---
 
