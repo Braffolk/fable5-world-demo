@@ -1,7 +1,7 @@
 /**
  * R1 validation: nanite shadow-raster CADENCE under a MOVING camera.
  *
- * Boots bm7 with the nanite depth-only shadows (?nanshadow2=1), warms the cache,
+ * Boots bm7 with the nanite depth-only shadows (default-on), warms the cache,
  * then steps the camera forward one frame at a time (world FROZEN so wind/time do
  * not confound — pure camera motion) and reads `nanite.shRaster` each frame: the
  * bitmask of cascades RE-RASTERED that frame (bit c set ⇒ cascade c re-rastered;
@@ -62,7 +62,7 @@ async function main(): Promise<void> {
     width,
     height,
     freeze: true, // world frozen — isolate camera motion from wind/time
-    extra: { nanite: '1', nanshadow2: '1', shot },
+    extra: { nanite: '1', shot }, // nanite shadows are default-on
   });
   console.log(`[cadence] ${url} (${isStatic ? 'STATIC control' : 'MOVING'}, ${steps} steps)`);
   await page.goto(url, { waitUntil: 'domcontentloaded' });

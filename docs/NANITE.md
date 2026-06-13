@@ -1084,6 +1084,28 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-14 (ad): **Nanite shadows DEFAULT-ON + C1 dead-end cleanup** (user
+  directive: "shadows on by default, the new decently fast shadows; get rid of the
+  previous super slow shadow stuff"). (Opus 4.8 1M.) Flipped the producer from
+  opt-in `?nanshadow2=1` to DEFAULT-ON and UNIFIED it with the resolve's receive
+  flag → ONE `?nanshadow` (default on; `?nanshadow=0` disables producer + receive
+  together). The C1 HW vertex-pulling caster was already deleted in the R0 rewrite;
+  this removes its remnant comments/flags (NaniteFrame header + run-site, NaniteShadow
+  header, the nanshadow2 name) and renames shadow2On→shadowOn. The old Forests
+  per-pool caster siblings + ShadowProxy are RETAINED (gated behind
+  !DISABLE_OLD_GEOMETRY = ?oldgeo only — the A/B reference path; their wholesale
+  deletion is N6/N9 pool-migration scope, not this cleanup — flagged for the user).
+  VERIFIED: default `?nanite=1` (no shadow flag) @bm7 → shadows present + attached
+  (trunk-on-grass, bark self-shade), shRaster=0 (R1 cache), nanRasterDepth 1.38 ms
+  == nanRasterPayload (shadow raster zeroed static), fps 117@720p; `?nanshadow=0` →
+  producer absent, clean no-shadow A/B, fps 119; bm3 vista (heaviest, shTotal 2.26M)
+  → no queue overflow, cached, fps 103. tsc clean. HONEST NOTES: default-on always
+  allocates the 4× buildNaniteRaster (~200 MB — R2's depthOnly option trims it), and
+  three still renders 4 EMPTY CSM cascade maps per refresh (the keep-alive fit
+  side-effect — cheap, empty draws). MOVING cost is still the R1 residual (~35% of
+  R0 raster, ~11 ms); R2 (coarse far LOD + depthOnly) + R3 (static/dynamic wind)
+  bring it to the 1–2 ms target. NEXT: R2.
+
 - 2026-06-14 (ac): **N5-R1 — CADENCE: per-cascade shadow raster gated on VP change.
   Static camera ⇒ ~0 shadow cost; moving ⇒ only changed cascades.** (Opus 4.8 1M.)
   R0 rastered all 4 cascades EVERY frame (35 ms). R1 gates the per-cascade re-raster
@@ -1880,6 +1902,9 @@ migration). Chunks, each tsc-clean + committed:
    - R3 — STATIC/DYNAMIC SPLIT for wind: cache static cascade depth, every frame
      copy + atomicMin ONLY trunk-channel (wind, within 380–480 m fade) clusters on
      top. GATE: windy trunks cast MOVING shadows with a STILL camera; cost ~1–2 ms.
-   - R4 — close: delete the C1 HW caster mesh path + per-cascade HW raster; parity
-     at bookmarks (incl. off-screen casters via pan probe); perf ledger row; flip
-     ?nanshadow default-on. USER CHECKPOINT, ⏸. Then N6 (migrate opaque pools).
+   - R4 — close. C1 HW caster mesh path = already deleted in R0; flag UNIFIED to one
+     `?nanshadow` and FLIPPED DEFAULT-ON early per user directive (log ad); remnant
+     comments cleaned. REMAINING: parity at bookmarks (incl. off-screen casters via
+     pan probe), perf ledger row, USER CHECKPOINT, ⏸. (Old Forests/ShadowProxy
+     casters retained as the ?oldgeo A/B ref — deleting them is N6/N9 scope.) Then
+     N6 (migrate opaque pools). NOTE: R2/R3 (perf to 1–2 ms) now precede R4-close.

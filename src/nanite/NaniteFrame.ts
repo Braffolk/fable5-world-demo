@@ -5,8 +5,9 @@
  * inside the main scene pass, depth-composing with everything the old
  * pipeline still draws (grass, cards, water, sky). The migrated classes' old
  * CAMERA draws are suppressed by the scene (same predicate as the registry
- * filter); their shadow casting is untouched until N5 — terrain casts via
- * ShadowProxy and the pools via their separate per-cascade caster meshes.
+ * filter); their SHADOW casting is now the nanite shadow system (N5/D-N28:
+ * depth-only SW raster into our own r32 cascades, default-on). The old
+ * ShadowProxy / per-pool caster meshes only run under ?oldgeo (the A/B ref).
  *
  * JITTER MIRROR (D-N18): TRAA applies a per-frame Halton view offset to the
  * scene camera inside the pipeline render (onBeforeRenderPipeline), AFTER our
@@ -112,13 +113,14 @@ export function buildNaniteFrame(
   const windOpt = windOn ? { camPos: cam.camPos } : undefined;
   const raster = buildNaniteRaster(registry.gpu, hf.heightTex, cam, cull, vis, 'flat', true, disp, windOpt);
 
-  // ?nanshadow2=1 — N5-R0: nanite shadows via depth-only SW raster into own r32
-  // cascade textures, sampled by the resolve's own PCSS (D-N28; replaces the C1
-  // HW caster). Built BEFORE the resolve so the resolve binds shadowFactor. Needs
-  // the CSM (its cascade ortho cameras provide the per-cascade light VPs). Off by
-  // default until R4 retires the old casters + flips the default.
-  const shadow2On = params.get('nanshadow2') === '1' && world.csm !== null;
-  const shadow: NaniteShadow | null = shadow2On
+  // Nanite shadows (N5, D-N28): depth-only SW raster into own r32 cascade textures,
+  // sampled by the resolve's own PCSS. R1 caches per cascade (re-raster only on a
+  // VP change) → ~0 cost static, the [1,2,3,6] cadence moving. ON BY DEFAULT;
+  // ?nanshadow=0 disables the whole system (producer here + receive in the resolve,
+  // same flag). Built BEFORE the resolve so the resolve binds shadowFactor; needs
+  // the CSM (its cascade ortho cameras provide the per-cascade light VPs).
+  const shadowOn = params.get('nanshadow') !== '0' && world.csm !== null;
+  const shadow: NaniteShadow | null = shadowOn
     ? buildNaniteShadow(registry.gpu, registry.instanceCount, hf.heightTex, disp, windOpt)
     : null;
 
@@ -279,13 +281,12 @@ export function buildNaniteFrame(
     if (auditOn) raster.audit(renderer);
     if (!frozen) hzb.build(renderer); // final — next frame's occluder
     if (probeRun && params.get('nanprobeat') === 'hzb') probeRun(renderer);
-    // N5-C0: per-cascade shadow cull, reading last frame's cascade fit (one
-    // frame stale; the CsmCached lightMargin absorbs it). Before post.render so
-    // C1's caster draws (run inside the shadow pass) have fresh lists.
-    // R0: the resolve KEEPS three's CSM node built (a ×1 keep-alive on the empty
-    // black-slate map — NaniteResolve), so three runs its setup + per-frame
-    // cascade FIT; shadow.run then reads the fitted csm.lights[c].shadow.camera
-    // VPs (one frame stale, absorbed by lightMargin) and rasters our own depth.
+    // Nanite shadows (R0+R1): per-cascade light-frustum cull → depth-only SW
+    // raster into our own r32 cascade textures (R1 skips a cascade when its VP is
+    // unchanged → cached). The resolve KEEPS three's CSM node built (a ×1
+    // keep-alive on the empty black-slate map — NaniteResolve), so three runs its
+    // setup + per-frame cascade FIT; shadow.run then reads the fitted
+    // csm.lights[c].shadow.camera VPs (one frame stale, absorbed by lightMargin).
     if (shadow && !frozen) shadow.run(renderer, world.csm, engine.camera);
     post.render(); // scene pass (resolve mesh + old-path remainder) + post chain
     if (probeRun && !params.get('nanprobeat')) probeRun(renderer); // default: after scene

@@ -201,7 +201,10 @@ export function buildNaniteResolve(
   // ?nanbark= bisect: const (flat brown) | lN (force mip N) | grad (anisotropic
   // ray-plane derivatives — known NaN on near trunks, default is analytic LOD)
   const nanbark = q.get('nanbark');
-  // ?nanshadow=0 — bisect: drop the CSM sun-shadow receive (A/B the term)
+  // ?nanshadow=0 — master off for the whole nanite shadow system (this receive
+  // term AND the per-cascade producer in NaniteFrame read the same flag). Default
+  // ON. With the producer on, world.naniteShadow drives the PCSS branch below; the
+  // csm-only branch is the ?oldgeo fallback (receives the old caster maps).
   const shadowsOn = world.csm !== null && q.get('nanshadow') !== '0';
 
   // CLIP-SPACE fullscreen triangle (covers ndc [-1,1]² via (-1,-1),(3,-1),(-1,3))

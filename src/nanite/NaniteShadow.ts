@@ -27,9 +27,12 @@
  * the SAME csm.lights[c].shadow.camera VP (cascVP) — three stays the matrix +
  * texel-snap authority, we never recompute ortho frusta.
  *
- * R0 rasters EVERY frame (wind correct, no caching). R1 gates on the CsmCached
- * refresh tick; R3 adds the static/dynamic split so cached cascades still get
- * moving wind shadows. ?nanshadow=1 (was nanshadow2; the HW caster is retired).
+ * R1 (landed) gates the per-cascade raster on a light-VP change (CsmCached freezes
+ * the pose between refreshes → bit-identical VP → skip + keep the cached texture):
+ * ~0 cost on a static camera, the [1,2,3,6] cadence moving. R3 will add the
+ * static/dynamic split so cached cascades still get moving wind shadows. Nanite
+ * shadows are DEFAULT-ON; ?nanshadow=0 disables the whole system (the C1 HW caster
+ * is retired — D-N28).
  */
 
 import { FloatType, Frustum, Matrix4, NearestFilter, RedFormat, Vector4 } from 'three';
