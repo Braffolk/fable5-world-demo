@@ -31,7 +31,6 @@ import {
   If,
   cameraProjectionMatrixInverse,
   cameraWorldMatrix,
-  clamp,
   dot,
   float,
   getViewPosition,
@@ -226,19 +225,23 @@ export function buildNaniteResolve(
       const sf = (nodeObject(world.csm) as unknown as NV4).x.clamp(0, 1).toVar() as unknown as NF;
       direct = nDotL.mul(sf) as unknown as NF;
     }
-    let lit: NV3 = albedo.mul(sunCol).mul(direct) as unknown as NV3;
-    // sky/hemisphere ambient (normal up → sky tint, down → ground tint)
-    const up = clamp(wNormal.y.mul(0.5).add(0.5), 0, 1);
-    const ambient = mix(vec3(0.18, 0.16, 0.12), vec3(0.4, 0.5, 0.62), up).mul(0.5) as unknown as NV3;
-    lit = lit.add(albedo.mul(ambient)) as unknown as NV3;
-    // probe GI (the tiles' lightmap injection, canopy residual)
+    // ENERGY PARITY with the old terrain (MeshPhysicalNodeMaterial): three's
+    // PhysicalLightingModel applies BRDF_Lambert = albedo/π to BOTH the direct
+    // sun term (irradiance = NdotL·sunColor, sunColor = color·intensity, no π —
+    // src line 303/600/624) AND the indirect probe irradiance (IrradianceNode →
+    // context.irradiance → ×albedo/π — line 713). There is NO separate
+    // hemisphere ambient: the probe field IS the ambient (it ray-marches the
+    // atmosphere; sunSky.dimAmbientForGI drops the env term). Mirror exactly —
+    // accumulate radiance, divide once by π.
+    let radiance: NV3 = sunCol.mul(direct) as unknown as NV3;
     if (world.gi) {
       let irr = world.gi.irradiance(wp, shading.worldNormalNode) as unknown as NV3;
       if (world.canopyTex) {
         irr = irr.mul(canopyAt(world.canopyTex, wp.xz).mul(0.18).oneMinus()) as unknown as NV3;
       }
-      lit = lit.add(albedo.mul(irr)) as unknown as NV3;
+      radiance = radiance.add(irr) as unknown as NV3;
     }
+    let lit: NV3 = albedo.mul(radiance).mul(float(1 / Math.PI)) as unknown as NV3;
 
     // ---- debug overrides ------------------------------------------------------
     if (nandbg === 'flat') return vec4(albedo, 1);
