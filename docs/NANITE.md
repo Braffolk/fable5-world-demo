@@ -1438,6 +1438,36 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-14 (aq): **N8-D2 Stage 2d — crack-free inter-level SKIRTS (the last visible-correctness
+  blocker before default-on).** (Opus 4.8 1M.) Clipmap levels ABUT at 2× stride (the hollow drops a
+  coarse tile only when FULLY inside the finer extent), so a fine edge has 2× the coarse edge's verts
+  on the same line ⇒ T-junction cracks that show SKY. Sealed with a SELF-CONTAINED always-on perimeter
+  skirt per tile — no buildDag change (it already pins tile borders at base stride at every LOD, so the
+  surface edge passes through every perimeter vert at every cut; the residual crack is purely the
+  inter-level mismatch). Skirt = own TOP verts on the perimeter (render on the surface edge) + own
+  BOTTOM verts dropped below it; emitted as ALWAYS-ON clusters (level 0, ownError 0, parentError +∞ ⇒
+  drawn at every cut, frustum/occlusion-culled normally; cone-cull is off for heightfields anyway —
+  NaniteCull:411 `isHF.not()`). The drop is encoded as a 3-bit depth-level CODE in bits 13-15 of word0
+  (free: a tile texel coord ≤4095 uses bits 0-11), decoded at the ONE GPU fetch site (NaniteFetch
+  `fetchWorldVert`, shared by raster+shadow+hzb+resolve) → `h.sub(skirtDrop)`. DOUBLE-SIDED (4 tris/
+  segment): the SW raster backface-culls by signed area (NaniteRaster:241) and the camera grazes a
+  boundary from either side, so the area test renders whichever face points at the camera (≈0 raster
+  cost — the back pair always culls). **DEPTH CALIBRATION (the real work):** a geometric proof
+  (tools/probe-skirtgap.ts — samples the REAL field via __laas.groundProbe, 256 scanlines/axis, GPU/
+  tree/jitter-free) measured the actual cracks at 18→22→25→48 m (1500 m-relief cliffs, NOT the few-m I
+  first assumed) and that they SATURATE with stride — so depth ∝ 2^k is the wrong model (starves the
+  fine transitions, wildly over-covers the coarse → skirt walls). Switched to LINEAR
+  `depth = 24 + 12·level` m → the proof PASSES every transition with worst margin +6.1 m. MEASURED
+  (probe-seams, gridN 128, ablate=grass/water/shell/particles/caustics — NOT veg, which gates the
+  whole nanite path): boot +832 cl / +106 k tris (= 52 tiles × 16 skirt cl / 2048 tris, exact), pool
+  cap AUTO-GREW c1180→1204 (the boot measure absorbs the skirt add — no manual bump), +7 MB verts, boot
+  2203→2219 ms (negligible). Skirt-OFF vs ON A/B (`?nanitedskirt=0/1`, default ON): the off↔on diff is
+  pure tree-jitter noise (two boots, different jitter phase) — NO concentrated gridded walls ⇒ the
+  deeper fine skirts hang hidden, no wall artifact. Headless build check: skirt verts/tris/clusters
+  exact (8·gridN/16·gridN/⌈16·gridN/128⌉), all cluster invariants clean, indices in range, OFF path
+  BYTE-IDENTICAL (zero code bits). tsc clean; probe-stream + probe-streammove (217 loaded / 0 skipped,
+  no transient hole) + probe-seams + probe-skirtgap all green. NEXT → 2e: flip full-res DAG terrain
+  default ON + stride-1 vertex buffer (the "boot only to dag" mandate).
 - 2026-06-14 (ap): **N8-D2 #32 — DagWorker POOL: concurrent tile bakes (the "baking is slow" the
   user named).** (Opus 4.8 1M.) Builds were serialized on ONE persistent DagWorker (~170 ms/tile
   cache-miss) → a camera move needing K fresh tiles stalled ~K×170 ms of coarse→fine pop (no hole —
@@ -2663,7 +2693,22 @@ CHUNK PLAN (to the logical point):
     the 1 m detail with the live camera; resident≡desired, bounded, no-leak, re-centers exactly;
     bakes 4-wide so cold boot 7717→2211 ms (3.49×) + detail climbs ~pool× faster (probe-stream +
     probe-streammove green).
-  - **NEXT → 2d skirts (crack-free inter-level seams).** Required BEFORE flipping default ON.
+  - ~~#29 2d SKIRTS (crack-free inter-level seams)~~ **DONE (aq)** — self-contained always-on
+    perimeter skirt per tile (TOP verts on the surface edge + BOTTOM verts dropped, 3-bit depth-level
+    code in word0 bits 13-15, decoded at the one NaniteFetch fetch site, DOUBLE-SIDED for the
+    winding-based SW-raster cull). Depth model is LINEAR `24 + 12·level` m (NOT ∝2^k — the cracks
+    SATURATE at 18→48 m on these 1500 m cliffs; a geometric proof tools/probe-skirtgap.ts samples the
+    real field via groundProbe and confirms every transition seals, worst margin +6.1 m). `?nanitedskirt`
+    default ON; boot +832 cl/+106 k tris (cap auto-grows), no wall artifacts, all probes green.
+  - **NEXT → 2e: flip full-res DAG terrain default ON + stride-1 vertex buffer** (the "boot only to
+    dag" mandate). Holes (ao), slow-pop (ap), AND seams (aq) are now all solved ⇒ nothing visible-
+    correctness blocks the flip. OLD locked 2d spec (kept for the record, now executed).
+    **AS-BUILT DELTAS from the locked spec (refined during execution — see aq):** (1) encoding uses a
+    3-BIT depth-level CODE in bits 13-15 (not the single bit-15 flag) so the depth can vary per level;
+    (2) depth is LINEAR `24 + 12·level` m, NOT `SKIRT_DEPTH·2^level` — the geometric proof showed the
+    cracks SATURATE (18→48 m over levels), so ∝2^k starves the fine transitions and over-covers the
+    coarse (walls); (3) skirts are DOUBLE-SIDED (the SW raster culls by winding); (4) NO manual cap
+    bump was needed — the boot pool-cap measure already absorbs the skirt add. Original text follows:
     Adjacent clipmap levels ABUT at 2× stride (the hollow drops a coarse tile only when FULLY
     inside the finer extent) ⇒ the fine edge has 2× the coarse edge's verts on the SAME line ⇒
     T-junction cracks that show SKY (coarse terrain there was hollowed). Holes + slow-pop are

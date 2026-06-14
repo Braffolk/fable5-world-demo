@@ -15,6 +15,8 @@ import { laasUrl, launchWebGPU } from './launch';
 const W = 1280;
 const H = 720;
 const GRID_N = Math.max(2, Math.floor(Number(process.argv[2] ?? '128')));
+// screenshot tag so a skirt-OFF vs skirt-ON A/B doesn't overwrite (SKIRT=0/1; unset=def).
+const TAG = process.env.SKIRT === '0' ? 'off' : process.env.SKIRT === '1' ? 'on' : 'def';
 
 async function main(): Promise<void> {
   const { browser } = await launchWebGPU();
@@ -34,6 +36,8 @@ async function main(): Promise<void> {
       occl: '1',
       nanitedterrain: String(GRID_N),
       nanitedclip: '1',
+      // 2d A/B: SKIRT=0 → inter-level seams open (sky cracks); SKIRT=1 / unset → sealed.
+      ...(process.env.SKIRT != null ? { nanitedskirt: process.env.SKIRT } : {}),
       // NOTE: do NOT ablate 'veg' — the nanite engine (incl. the DAG terrain) is built
       // INSIDE the !ablate.has('veg') block in TerrainScene, so ablating veg disables the
       // whole nanite path. Ablate the rest (grass is the separable GroundRing).
@@ -91,9 +95,9 @@ async function main(): Promise<void> {
       { yaw: base.yaw, pitch, x: base.p[0], y: base.p[1] + dy, z: base.p[2] },
     );
     await settle();
-    await page.screenshot({ path: `shots/wip/seams-${label}.png` });
+    await page.screenshot({ path: `shots/wip/seams-${TAG}-${label}.png` });
     const dag = await page.evaluate(() => window.__laas.stats?.counters?.['nanite.dagClusters'] ?? -1);
-    console.log(`  ${label.padEnd(13)} dag ${String(dag).padStart(6)} cl  → shots/wip/seams-${label}.png`);
+    console.log(`  ${label.padEnd(13)} dag ${String(dag).padStart(6)} cl  → shots/wip/seams-${TAG}-${label}.png`);
   }
   await browser.close();
   console.log('[seams] inspect shots/wip/seams-*.png — sky slivers along concentric ring boundaries = T-junction cracks');

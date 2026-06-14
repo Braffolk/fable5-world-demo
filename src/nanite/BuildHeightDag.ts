@@ -38,6 +38,24 @@
 
 import { type DagCluster, type DagGroup, type DagLevelStats, buildDag } from './BuildDag';
 
+/**
+ * N8-D2 Stage 2d — skirt depth in WORLD metres for a clipmap level-k tile:
+ *     depth(k) = SKIRT_DEPTH_A + SKIRT_DEPTH_B · k.
+ * The inter-level T-junction crack is the coarse-neighbour's vertical deviation at
+ * stride 2^k; on real eroded terrain (cliffs) that grows with k but SATURATES
+ * (measured ~16→26→30→44 m for k=0..3, tools/probe-skirtgap.ts), so a LINEAR depth
+ * hugs it far better than ∝2^k would (which starves the fine transitions and wildly
+ * over-covers the coarse ones → skirt walls). These coefficients seal every measured
+ * transition with a 7-18 m margin; bump them if probe-skirtgap reports a CRACK (a
+ * steeper seed). Both the BUILD (skirt bounding sphere) and the GPU (NaniteFetch
+ * drops a flagged skirt vert) read them, so they agree. The depth-LEVEL is encoded
+ * as a 3-bit code (level+1) in bits 13-15 of a skirt vert's word0 — free because a
+ * tile texel coord ≤4095 uses only bits 0-11. */
+export const SKIRT_DEPTH_A = 24;
+export const SKIRT_DEPTH_B = 12;
+/** the 3-bit skirt code (level+1) caps the encodable clipmap level at 6 (code ≤7). */
+const SKIRT_MAX_LEVEL = 6;
+
 /** the heightfield to DAG: row-major (gridN+1)² heights over a regular grid. */
 export interface HeightField {
   /** (gridN+1)*(gridN+1) row-major heights (metres); vertex (gx,gz) at gz*(gridN+1)+gx */
@@ -67,6 +85,11 @@ export interface HeightDagOpts {
    *  omitting it first fits. Smaller ⇒ LOD0 stays finer near the camera. Default
    *  0.05 m. */
   baseError?: number;
+  /** N8-D2 Stage 2d: when ≥0, append a DOUBLE-SIDED perimeter SKIRT at this clipmap
+   *  level (0 = finest) to seal inter-level T-junction cracks. The curtain drops by
+   *  SKIRT_BASE_WORLD·2^level (∝ the ring's crack size). Undefined/<0 = no skirt
+   *  (default) ⇒ the headless probe + uniform-tile path stay byte-for-byte unchanged. */
+  skirtLevel?: number;
 }
 
 /**
@@ -212,6 +235,151 @@ function lod0Grid(hf: HeightField): { verts: Float32Array; indices: Uint32Array 
   return { verts, indices };
 }
 
+/** one always-on skirt cluster: level-0, ownError 0, parentError +∞ (→ drawn at
+ *  EVERY runtime cut), cone disabled (ccos −1 — heightfields skip cone cull anyway,
+ *  NaniteCull). Sphere == own/parent sphere (the root branch in attachHeightDagTile
+ *  copies own→parent). */
+function skirtCluster(
+  cx: number,
+  cy: number,
+  cz: number,
+  sr: number,
+  triStart: number,
+  triCount: number,
+): DagCluster {
+  return {
+    level: 0,
+    triStart,
+    triCount,
+    sx: cx,
+    sy: cy,
+    sz: cz,
+    sr,
+    cax: 0,
+    cay: 1,
+    caz: 0,
+    ccos: -1,
+    ownError: 0,
+    oex: cx,
+    oey: cy,
+    oez: cz,
+    oer: sr,
+    parentError: Infinity,
+    pex: cx,
+    pey: cy,
+    pez: cz,
+    per: sr,
+    groupAsInput: -1,
+    groupAsParent: -1,
+  };
+}
+
+/**
+ * N8-D2 Stage 2d — build a self-contained, ALWAYS-ON perimeter SKIRT for one tile.
+ * Clipmap levels ABUT at 2× stride, so a fine tile's edge has 2× the verts of the
+ * coarse tile it meets ⇒ T-junction cracks that show SKY. We hang a vertical curtain
+ * from every BASE-STRIDE perimeter vertex (buildDag locks tile borders at all LODs,
+ * so the surface edge passes through them at every cut): the TOP verts (code 0) sit
+ * exactly on the surface edge; the BOTTOM verts carry a 3-bit depth code in bits
+ * 13-15 of word0 so the GPU (NaniteFetch) drops them by SKIRT_BASE_WORLD·2^level.
+ * DOUBLE-SIDED — the SW raster backface-culls by winding (NaniteRaster) and the
+ * camera can graze a boundary from either side, so each segment emits 4 tris and the
+ * area test renders whichever pair faces the camera (≈0 raster cost; the back pair is
+ * always culled). Verts/tris index into the COMBINED tile arrays: `vertBase` =
+ * surface vert count, `triBase` = surface tri count. Spheres are WORLD-space (match
+ * buildDag's). */
+function buildPerimeterSkirt(
+  hf: HeightField,
+  level: number,
+  maxTris: number,
+  vertBase: number,
+  triBase: number,
+): { packed: number[]; tris: number[]; clusters: DagCluster[] } {
+  const { gridN, cellSize, originX, originZ, heights } = hf;
+  const lv = level < 0 ? 0 : level > SKIRT_MAX_LEVEL ? SKIRT_MAX_LEVEL : level;
+  const depth = SKIRT_DEPTH_A + SKIRT_DEPTH_B * lv;
+  const code = (lv + 1) & 0x7; // bits 13-15; 0 means "surface vert" (no drop)
+  const size = gridN + 1;
+  const packed: number[] = [];
+  const tris: number[] = [];
+  const clusters: DagCluster[] = [];
+  const maxSeg = Math.max(1, maxTris >> 2); // 4 tris per double-sided segment
+
+  // the in-progress cluster's WORLD AABB (top at h, bottom at h−depth) → sphere
+  let cStart = triBase;
+  let cSeg = 0;
+  let nx = Infinity;
+  let ny = Infinity;
+  let nz = Infinity;
+  let xx = -Infinity;
+  let xy = -Infinity;
+  let xz = -Infinity;
+  const grow = (x: number, h: number, z: number): void => {
+    if (x < nx) nx = x;
+    if (x > xx) xx = x;
+    if (z < nz) nz = z;
+    if (z > xz) xz = z;
+    if (h > xy) xy = h;
+    if (h - depth < ny) ny = h - depth;
+  };
+  const flush = (): void => {
+    if (cSeg === 0) return;
+    const cx = (nx + xx) / 2;
+    const cy = (ny + xy) / 2;
+    const cz = (nz + xz) / 2;
+    const sr = Math.hypot(xx - cx, xy - cy, xz - cz);
+    const end = triBase + tris.length / 3;
+    clusters.push(skirtCluster(cx, cy, cz, sr, cStart, end - cStart));
+    cStart = end;
+    cSeg = 0;
+    nx = ny = nz = Infinity;
+    xx = xy = xz = -Infinity;
+  };
+
+  // walk the 4 edges; corner verts are duplicated across adjacent edges (a coincident
+  // overlap, never a gap). Winding is irrelevant (double-sided), so all step the same.
+  const edges: ReadonlyArray<readonly [number, number, number, number]> = [
+    [0, 0, 1, 0], // south:  (0,0)→(gridN,0)
+    [gridN, 0, 0, 1], // east:   (gridN,0)→(gridN,gridN)
+    [gridN, gridN, -1, 0], // north:  (gridN,gridN)→(0,gridN)
+    [0, gridN, 0, -1], // west:   (0,gridN)→(0,0)
+  ];
+  for (const [ex, ez, dx, dz] of edges) {
+    let pTop = -1;
+    let pBot = -1;
+    let pwx = 0;
+    let pwz = 0;
+    let ph = 0;
+    for (let i = 0; i <= gridN; i++) {
+      const gx = ex + dx * i;
+      const gz = ez + dz * i;
+      const h = heights[gz * size + gx] as number;
+      const wx = gx * cellSize + originX;
+      const wz = gz * cellSize + originZ;
+      const top = vertBase + packed.length;
+      packed.push(((gx & 0x1fff) | ((gz & 0xffff) << 16)) >>> 0);
+      const bot = vertBase + packed.length;
+      packed.push(((gx & 0x1fff) | (code << 13) | ((gz & 0xffff) << 16)) >>> 0);
+      if (i > 0) {
+        grow(pwx, ph, pwz);
+        grow(wx, h, wz);
+        // quad (pTop,pBot,bot,top): 2 front tris + 2 reversed back tris
+        tris.push(pTop, pBot, bot, pTop, bot, top);
+        tris.push(pTop, bot, pBot, pTop, top, bot);
+        cSeg++;
+        if (cSeg >= maxSeg) flush();
+      }
+      pTop = top;
+      pBot = bot;
+      pwx = wx;
+      pwz = wz;
+      ph = h;
+    }
+    flush(); // close at the edge end so clusters stay edge-local
+  }
+  return { packed, tris, clusters };
+}
+
 export function buildHeightDag(hf: HeightField, opts: HeightDagOpts = {}): HeightDagBuild {
   const t0 = now();
   const { gridN, cellSize, originX, originZ } = hf;
@@ -271,10 +439,31 @@ export function buildHeightDag(hf: HeightField, opts: HeightDagOpts = {}): Heigh
     gridVerts[i] = (cgx & 0xffff) | ((cgz & 0xffff) << 16);
   }
 
+  // N8-D2 Stage 2d: append a self-contained perimeter skirt (seals inter-level
+  // clipmap T-junctions). Off (skirtLevel undef/<0) ⇒ the arrays are unchanged, so
+  // the headless probe + uniform path are byte-identical to before.
+  let outVerts = gridVerts;
+  let outIndices = dag.indices;
+  let outClusters = dag.clusters;
+  let skirtClusters = 0;
+  let skirtTris = 0;
+  if (opts.skirtLevel != null && opts.skirtLevel >= 0) {
+    const sk = buildPerimeterSkirt(hf, opts.skirtLevel, opts.maxTris ?? 128, nv, dag.indices.length / 3);
+    outVerts = new Uint32Array(nv + sk.packed.length);
+    outVerts.set(gridVerts, 0);
+    outVerts.set(sk.packed, nv);
+    outIndices = new Uint32Array(dag.indices.length + sk.tris.length);
+    outIndices.set(dag.indices, 0);
+    outIndices.set(sk.tris, dag.indices.length);
+    outClusters = dag.clusters.concat(sk.clusters);
+    skirtClusters = sk.clusters.length;
+    skirtTris = sk.tris.length / 3;
+  }
+
   return {
-    gridVerts,
-    indices: dag.indices,
-    clusters: dag.clusters,
+    gridVerts: outVerts,
+    indices: outIndices,
+    clusters: outClusters,
     groups: dag.groups,
     levelStats: dag.levelStats,
     lod0Count: dag.lod0Count,
@@ -283,8 +472,8 @@ export function buildHeightDag(hf: HeightField, opts: HeightDagOpts = {}): Heigh
       levels: dag.stats.levels,
       lod0Clusters: dag.stats.lod0Clusters,
       lod0Tris: dag.stats.lod0Tris,
-      totalClusters: dag.stats.totalClusters,
-      totalTris: dag.stats.totalTris,
+      totalClusters: dag.stats.totalClusters + skirtClusters,
+      totalTris: dag.stats.totalTris + skirtTris,
       roots: dag.stats.roots,
       maxError: dag.stats.maxError,
       offGridVerts,

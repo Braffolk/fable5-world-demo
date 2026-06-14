@@ -18,6 +18,7 @@ import { DISP } from '../render/TerrainMaterial';
 import { PERIOD_FBM, PERIOD_RID, PERIOD_VAL } from '../gpu/passes/NoiseBake';
 import { WORLD_SIZE } from '../world/WorldConst';
 import { gustAt, gustLagAt, windExposure, windU, WIND_LAG_M } from '../render/Wind';
+import { SKIRT_DEPTH_A, SKIRT_DEPTH_B } from './BuildHeightDag';
 import { CLUSTER_FLAG_DAG, MESH_WORDS, TRANSFORM_CHANNEL, VERT_WORDS } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
 import { instTransformPoint, instYaw, type InstYaw } from './NaniteCommon';
@@ -211,13 +212,23 @@ export function makeFetch(
       // (sx,sz) are obtained differs (adaptive indexed vs implicit window grid).
       const sx = uint(0).toVar();
       const sz = uint(0).toVar();
+      // N8-D2 Stage 2d: a perimeter SKIRT vert carries a 3-bit depth-level code in
+      // bits 13-15 of word0 (0 = surface vert); its world Y drops below the surface
+      // to seal inter-level T-junction cracks. Stays 0 on the window grid path below.
+      const skirtDrop = float(0).toVar();
       If(ctx.isDAG, () => {
-        // adaptive terrain DAG (D2b): explicit topology; each vertex's word0
-        // holds the packed texel coord (gx | gz<<16, clamped at pack time).
+        // adaptive terrain DAG (D2b): explicit topology; each vertex's word0 packs
+        // the texel coord — gx in bits 0-12, skirt code in 13-15, gz in 16-31.
         const vi = elemU(gpu.indices, ctx.triStart.add(localTri).mul(uint(3)).add(uint(v)));
         const packed = elemU(gpu.verts, vi.mul(uint(VERT_WORDS)));
-        sx.assign(packed.bitAnd(uint(0xffff)));
+        sx.assign(packed.bitAnd(uint(0x1fff)));
         sz.assign(packed.shiftRight(uint(16)));
+        const code = packed.shiftRight(uint(13)).bitAnd(uint(0x7)).toVar();
+        If(code.greaterThan(uint(0)), () => {
+          // depth = SKIRT_DEPTH_A + SKIRT_DEPTH_B·level, level = code−1 (linear ⇒ hugs
+          // the saturating inter-level crack; see BuildHeightDag for the calibration)
+          skirtDrop.assign(float(SKIRT_DEPTH_A).add(float(SKIRT_DEPTH_B).mul(toF(code.sub(uint(1))))));
+        });
       }).Else(() => {
         // window-procedural: implicit regular grid within the cluster's window
         const quad = localTri.shiftRight(uint(1));
@@ -286,9 +297,9 @@ export function makeFetch(
               .mul(dispAmp),
           );
         });
-        out.assign(vec3(wx, h.add(dOut), wz));
+        out.assign(vec3(wx, h.add(dOut).sub(skirtDrop), wz));
       } else {
-        out.assign(vec3(wx, h, wz));
+        out.assign(vec3(wx, h.sub(skirtDrop), wz));
       }
     }).Else(() => {
       const vi = elemU(gpu.indices, ctx.triStart.add(localTri).mul(uint(3)).add(uint(v)));

@@ -224,6 +224,10 @@ export async function buildWorldRegistry(input: {
    *  re-centers on the live camera). True full-res at the center, coarse to the
    *  field edge, bounded resident set. Implies the pool. Default false. */
   dagTerrainClip?: boolean;
+  /** N8-D2 Stage 2d: emit per-tile perimeter SKIRTS in clip mode (depth ∝ 2^level)
+   *  to seal inter-level T-junction cracks that would otherwise show sky. Default
+   *  true; `?nanitedskirt=0` turns them off for a same-pose A/B. */
+  dagTerrainSkirt?: boolean;
   /** N8-D1d: numeric world seed (WorldSeed.seed) → the terrain-DAG cache key.
    *  The heights are deterministic in the seed, so a cached DAG loads instantly
    *  (boot renders the DAG, no fallback). Omit to disable caching (always build). */
@@ -241,6 +245,7 @@ export async function buildWorldRegistry(input: {
     dagTerrainTiles,
     dagTerrainPool,
     dagTerrainClip,
+    dagTerrainSkirt,
     seed,
   } = input;
   const inSet = (c: MaterialClassId): boolean => !classes || classes.has(c);
@@ -447,7 +452,7 @@ export async function buildWorldRegistry(input: {
         // the live camera each frame (TerrainScene drives streamer.update). The
         // worker is PERSISTENT — handed to the streamer, NOT disposed at boot.
         const streamer = new TerrainStreamer(
-          { reg, heights, res, cell, origin, gridN, seed: seed ?? null, worker: dagWorker },
+          { reg, heights, res, cell, origin, gridN, seed: seed ?? null, worker: dagWorker, skirt: dagTerrainSkirt ?? true },
           (m) => deferred.push(m),
         );
         const nBoot = await streamer.buildBootSet(res / 2, res / 2);
@@ -473,7 +478,7 @@ export async function buildWorldRegistry(input: {
           `terrain DAG ${streamer.clipDesc}: ${nBoot} boot / ${streamer.maxTiles} max tiles, ` +
             `${s.tCl} cl, ${s.tTris | 0} tris, maxErr ${s.maxErr.toFixed(2)} m, offGrid ${s.offGrid}, ` +
             `${s.nCache} cached/${s.nBuilt} built, POOL ${slots}×(v${vCap}/t${tCap}/c${cCap}), bake×${bakeThreads}, ` +
-            `${(performance.now() - tHd0).toFixed(0)} ms`,
+            `skirt ${dagTerrainSkirt ?? true ? 'on' : 'off'}, ${(performance.now() - tHd0).toFixed(0)} ms`,
         );
       } else {
         // ---- uniform T×T tiles: per-tile mesh, or the 2b-1 all-resident pool ----
@@ -513,6 +518,7 @@ export async function buildWorldRegistry(input: {
               `-T${T}-${ti}x${tj}`,
               tileStats,
               (m) => deferred.push(m),
+              -1, // uniform tiles are all one stride ⇒ crack-free perimeters, no skirt
             );
             collectTile(gridVerts, built, T > 1 ? `terrain/t${ti}x${tj}` : 'terrain');
           }

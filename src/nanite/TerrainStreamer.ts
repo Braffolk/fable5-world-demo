@@ -29,7 +29,7 @@
  * outlives boot so update() can build new tiles as the camera roams.
  */
 import { type DagCluster } from './BuildDag';
-import { buildHeightDag } from './BuildHeightDag';
+import { buildHeightDag, type HeightDagOpts } from './BuildHeightDag';
 import { getCachedHeightDag, heightDagCacheKey, putCachedHeightDag } from './DagCache';
 import { type DagBuilder, type HeightDagResult } from './DagWorkerClient';
 import { clipmapTiles, clipmapMaxTiles, type ClipmapConfig, type ClipmapTile } from './TerrainClipmap';
@@ -86,10 +86,15 @@ export async function buildTerrainTile(
   suffix: string,
   stats: TileBuildStats,
   onDeferred: (msg: string) => void,
+  skirtLevel: number,
 ): Promise<{ gridVerts: Uint32Array; built: HeightDagResult }> {
   const { heights, res, cell, origin, gridN, seed, worker } = deps;
   const vpa = gridN + 1;
-  const cacheKey = seed != null ? heightDagCacheKey(seed, gridN, suffix) : null;
+  // N8-D2 Stage 2d: ≥0 appends a perimeter skirt at that clipmap level. Skirts change
+  // the geometry ⇒ a distinct cache key (else a no-skirt build aliases a skirt one).
+  const opts: HeightDagOpts = skirtLevel >= 0 ? { skirtLevel } : {};
+  const cacheSuffix = skirtLevel >= 0 ? `${suffix}-sk${skirtLevel}` : suffix;
+  const cacheKey = seed != null ? heightDagCacheKey(seed, gridN, cacheSuffix) : null;
   let built: HeightDagResult | null = cacheKey ? await getCachedHeightDag(cacheKey) : null;
   if (built) {
     stats.nCache++;
@@ -113,30 +118,36 @@ export async function buildTerrainTile(
     };
     if (worker) {
       try {
-        built = await worker.buildHeight(hfArgs);
+        built = await worker.buildHeight({ ...hfArgs, opts });
       } catch (e) {
         onDeferred(`terrain DAG tile ${suffix}: worker failed (${e instanceof Error ? e.message : String(e)}) → sync`);
-        built = buildHeightDag(hfArgs, {});
+        built = buildHeightDag(hfArgs, opts);
       }
     } else {
-      built = buildHeightDag(hfArgs, {});
+      built = buildHeightDag(hfArgs, opts);
     }
     if (cacheKey) void putCachedHeightDag(cacheKey, built); // fire-and-forget
     stats.nBuilt++;
   }
-  // remap tile-local grid coords (packed u16 gx|gz<<16) to GLOBAL texel coords
+  // remap tile-local grid coords to GLOBAL texel coords. word0 = gx(0-12) | skirt
+  // code(13-15) | gz(16-31); the 3-bit code is PRESERVED (a surface vert's code is 0,
+  // so this is identical to the old gx&0xffff for non-skirt verts).
   const gridVerts = new Uint32Array(built.gridVerts.length);
   for (let i = 0; i < built.gridVerts.length; i++) {
     const p = built.gridVerts[i] as number;
-    const texX = clampTexel(tx0 + (p & 0xffff) * tileStride, res);
+    const code = (p >>> 13) & 0x7;
+    const texX = clampTexel(tx0 + (p & 0x1fff) * tileStride, res);
     const texZ = clampTexel(tz0 + ((p >>> 16) & 0xffff) * tileStride, res);
-    gridVerts[i] = ((texX & 0xffff) | ((texZ & 0xffff) << 16)) >>> 0;
+    gridVerts[i] = ((texX & 0x1fff) | (code << 13) | ((texZ & 0xffff) << 16)) >>> 0;
   }
   return { gridVerts, built };
 }
 
 export interface StreamerDeps extends TileBuildDeps {
   reg: GeometryRegistry;
+  /** N8-D2 Stage 2d: emit per-tile perimeter skirts (depth ∝ 2^level) to seal the
+   *  inter-level T-junction cracks. False = no skirts (`?nanitedskirt=0` A/B). */
+  skirt: boolean;
 }
 
 interface BootTile {
@@ -269,6 +280,7 @@ export class TerrainStreamer {
           tileSuffix(this.cfg.gridN, t.strideTexels, t.tx0, t.tz0),
           this.bstats,
           this.onDeferred,
+          this.deps.skirt ? t.level : -1,
         ),
       ),
     );
@@ -384,6 +396,7 @@ export class TerrainStreamer {
             tileSuffix(this.cfg.gridN, t.strideTexels, t.tx0, t.tz0),
             this.bstats,
             this.onDeferred,
+            this.deps.skirt ? t.level : -1,
           ).then(
             (r) => ({ t, r, err: null as unknown }),
             (err: unknown) => ({ t, r: null as { gridVerts: Uint32Array; built: HeightDagResult } | null, err }),

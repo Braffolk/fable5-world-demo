@@ -261,6 +261,8 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       // CLIPMAP (concentric same-gridN rings, true full-res at the center, coarse to
       // the field edge, bounded). Boot-static center for now; implies the pool.
       const dagTerrainClip = qNan.get('nanitedclip') === '1';
+      // N8-D2 Stage 2d: ?nanitedskirt=0 disables the inter-level seam skirts (A/B). Default ON.
+      const dagTerrainSkirt = qNan.get('nanitedskirt') !== '0';
       const wr = await buildWorldRegistry({
         renderer: engine.renderer,
         hf,
@@ -274,6 +276,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
         ...(dagTerrainTiles > 1 ? { dagTerrainTiles } : {}),
         ...(dagTerrainPool ? { dagTerrainPool: true } : {}),
         ...(dagTerrainClip ? { dagTerrainClip: true } : {}),
+        ...(dagTerrainSkirt ? {} : { dagTerrainSkirt: false }),
       });
       (engine as unknown as { naniteRegistry?: unknown }).naniteRegistry = wr.registry;
       naniteRegistry = wr.registry;

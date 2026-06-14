@@ -63,8 +63,8 @@ function makeField(res: number): Float32Array {
 
 function newStreamer(reg: GeometryRegistry, heights: Float32Array): TerrainStreamer {
   return new TerrainStreamer(
-    { reg, heights, res: RES, cell: CELL, origin: ORIGIN, gridN: GRID_N, seed: null, worker: null },
-    () => {}, // swallow deferred notes
+    { reg, heights, res: RES, cell: CELL, origin: ORIGIN, gridN: GRID_N, seed: null, worker: null, skirt: false },
+    () => {}, // swallow deferred notes (skirt off — this probe checks residency, not seams)
   );
 }
 
