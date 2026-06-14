@@ -246,10 +246,15 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
             : dagParam.split(',').filter((c): c is MatCls => (ALL as readonly string[]).includes(c));
         dagClasses = new Set(want.filter((c) => c !== 'terrain'));
       }
-      // N8-D2b: ?nanitedterrain=<gridN> → adaptive terrain LOD DAG on a gridN²
-      // power-of-two subsample (256/512/…), replacing the discrete window grid.
+      // N8-D2 Stage 2e (D-N39) — the "boot only to dag" FLIP: terrain is the full-res
+      // clip-STREAMED DAG by default, no window-grid fallback. `?nanitedterrain` absent ⇒
+      // production default (gridN 128, clip on). `?nanitedterrain=0` is the explicit opt-out
+      // to the legacy implicit window grid (tooling / A-B). An explicit `?nanitedterrain=<gridN>`
+      // (>0) selects that grid and stays one-shot uniform unless `?nanitedclip=1` (preserves
+      // the per-flag tool semantics — probe-dterrain etc.).
       const dterrainParam = qNan.get('nanitedterrain');
-      const dagTerrainGridN = dterrainParam ? Math.max(0, Math.floor(Number(dterrainParam))) : 0;
+      const terrainDefault = dterrainParam == null;
+      const dagTerrainGridN = terrainDefault ? 128 : Math.max(0, Math.floor(Number(dterrainParam)));
       // N8-D2 (D-N38): ?nanitedtiles=T → split the terrain DAG into T×T tiles.
       const dtilesParam = qNan.get('nanitedtiles');
       const dagTerrainTiles = dtilesParam ? Math.max(1, Math.floor(Number(dtilesParam))) : 1;
@@ -257,10 +262,10 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       // streaming tile POOL (reserveTilePool/attachHeightDagTile) rather than the
       // per-tile registerHeightDag+attachHeightDag path. GPU-render parity proof.
       const dagTerrainPool = qNan.get('nanitedpool') === '1';
-      // N8-D2 Stage 2b-2 (D-N39): ?nanitedclip=1 → render terrain as a geometry
-      // CLIPMAP (concentric same-gridN rings, true full-res at the center, coarse to
-      // the field edge, bounded). Boot-static center for now; implies the pool.
-      const dagTerrainClip = qNan.get('nanitedclip') === '1';
+      // N8-D2 Stage 2b-2/2e (D-N39): the geometry CLIPMAP (concentric same-gridN rings,
+      // true full-res at the center, coarse to the field edge, bounded). DEFAULT ON (the
+      // 2e flip); `?nanitedclip=1` also forces it for an explicit gridN. Implies the pool.
+      const dagTerrainClip = terrainDefault || qNan.get('nanitedclip') === '1';
       // N8-D2 Stage 2d: ?nanitedskirt=0 disables the inter-level seam skirts (A/B). Default ON.
       const dagTerrainSkirt = qNan.get('nanitedskirt') !== '0';
       const wr = await buildWorldRegistry({

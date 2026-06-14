@@ -1438,6 +1438,21 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-14 (ar): **N8-D2 Stage 2e (part 1/2) — THE FLIP: full-res clip-streamed DAG terrain is the
+  DEFAULT, no window fallback (the "boot only to dag, no fucking fallback EVER" mandate).** (Opus 4.8 1M.)
+  Holes (ao) + slow-pop (ap) + seams (aq) were the three visible-correctness blockers; all sealed ⇒ the
+  flip is now pure plumbing. Bare `?nanite=1` (no terrain flags) now defaults to `dagTerrainGridN=128 +
+  dagTerrainClip=true` ⇒ the camera-following 1 m clipmap streamer renders the terrain from frame 1. The
+  legacy implicit window grid is retired to the explicit opt-out `?nanitedterrain=0` (tooling / A-B only);
+  an explicit `?nanitedterrain=<gridN>` still selects that grid and stays one-shot uniform unless
+  `?nanitedclip=1` (per-flag tool semantics preserved — probe-dterrain/probe-dagcache unaffected). ONE
+  edit (TerrainScene param defaulting); WorldRegistry already routes `gridN>0 && clip` → streamer, so no
+  engine change. MEASURED (new gate tools/probe-flip.ts, walk spawn): default boots 52 resident tiles /
+  34230 cl / 4.14 M tris (CLIPMAP 5L M4, gridN 128, skirts on, 2.24 s build, 0 cached cold), renders
+  terrain at the walk spawn (not bare sky); `?nanitedterrain=0` → window grid, no streamer. POOL
+  96 slots × (v95016 / t140364 / c1204) ⇒ **terrain verts 208.8 MB** (each vert wastes 5/6 words — only
+  word0 used) + indices 154.2 MB. That 208.8 MB is exactly what part 2/2 (stride-1 vertex buffer) cuts to
+  ~34.8 MB (−174 MB). tsc clean; probe-flip PASS. NEXT → 2e part 2: stride-1 terrain vertex buffer.
 - 2026-06-14 (aq): **N8-D2 Stage 2d — crack-free inter-level SKIRTS (the last visible-correctness
   blocker before default-on).** (Opus 4.8 1M.) Clipmap levels ABUT at 2× stride (the hollow drops a
   coarse tile only when FULLY inside the finer extent), so a fine edge has 2× the coarse edge's verts
@@ -2700,9 +2715,16 @@ CHUNK PLAN (to the logical point):
     SATURATE at 18→48 m on these 1500 m cliffs; a geometric proof tools/probe-skirtgap.ts samples the
     real field via groundProbe and confirms every transition seals, worst margin +6.1 m). `?nanitedskirt`
     default ON; boot +832 cl/+106 k tris (cap auto-grows), no wall artifacts, all probes green.
-  - **NEXT → 2e: flip full-res DAG terrain default ON + stride-1 vertex buffer** (the "boot only to
-    dag" mandate). Holes (ao), slow-pop (ap), AND seams (aq) are now all solved ⇒ nothing visible-
-    correctness blocks the flip. OLD locked 2d spec (kept for the record, now executed).
+  - ~~2e part 1 — THE FLIP (full-res clip-DAG terrain DEFAULT ON, window → `?nanitedterrain=0`)~~
+    **DONE (ar)** — bare `?nanite=1` boots the camera-following 1 m clipmap (52 tiles / 34230 cl / 4.14 M
+    tris); window grid retired to the opt-out; probe-flip PASS. Exposed the real cost the stride-1 buffer
+    targets: **terrain verts 208.8 MB** (96 pool slots × v95016 × 6 words, only word0 used).
+  - **NEXT → 2e part 2: stride-1 terrain vertex buffer** — terrain DAG verts use only word0 (packed
+    texel coord) of the shared VERT_WORDS=6 mega-buffer/pool slot ⇒ 5/6 wasted. Move terrain DAG verts to
+    a DEDICATED stride-1 (1 u32/vert) buffer read in the `isHF && isDAG` NaniteFetch branch; explicit
+    meshes keep the 6-word buffer, the window grid uses neither. Expected 208.8 → 34.8 MB (−174 MB). The
+    pool-slot vertCap is then in 1-word units; reserveTilePool's `slots*vertCap` reservation shrinks 6×.
+    OLD locked 2d spec (kept for the record, now executed).
     **AS-BUILT DELTAS from the locked spec (refined during execution — see aq):** (1) encoding uses a
     3-BIT depth-level CODE in bits 13-15 (not the single bit-15 flag) so the depth can vary per level;
     (2) depth is LINEAR `24 + 12·level` m, NOT `SKIRT_DEPTH·2^level` — the geometric proof showed the
