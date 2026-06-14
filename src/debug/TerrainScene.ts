@@ -246,6 +246,10 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
             : dagParam.split(',').filter((c): c is MatCls => (ALL as readonly string[]).includes(c));
         dagClasses = new Set(want.filter((c) => c !== 'terrain'));
       }
+      // N8-D2b: ?nanitedterrain=<gridN> → adaptive terrain LOD DAG on a gridN²
+      // power-of-two subsample (256/512/…), replacing the discrete window grid.
+      const dterrainParam = qNan.get('nanitedterrain');
+      const dagTerrainGridN = dterrainParam ? Math.max(0, Math.floor(Number(dterrainParam))) : 0;
       const wr = await buildWorldRegistry({
         renderer: engine.renderer,
         hf,
@@ -254,6 +258,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
         counters: engine.stats.counters,
         ...(classes ? { classes } : {}),
         ...(dagClasses && dagClasses.size > 0 ? { dag: dagClasses } : {}),
+        ...(dagTerrainGridN > 0 ? { dagTerrainGridN } : {}),
       });
       (engine as unknown as { naniteRegistry?: unknown }).naniteRegistry = wr.registry;
       naniteRegistry = wr.registry;

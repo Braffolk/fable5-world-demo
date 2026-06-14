@@ -1113,6 +1113,39 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   (A/Bs minPx 0 vs 1, occl ON, far-700 m); probe-envelope.ts default path byte-identical
   (183679/175085). The finite-intended envelope (D-N33) remains the shipping default.
 
+- D-N36 (2026-06-14, N8-D2b — terrain DAG GPU WIRING landed + headlessly validated). The
+  D2a builder (BuildHeightDag) is now wired to the GPU so terrain renders through the SAME
+  flat kClusterCull cut as rock/bark. Three pieces, all gated behind `?nanitedterrain=<gridN>`
+  (default 0 = the discrete window path, byte-identical):
+  • DECODE (NaniteFetch): a THIRD heightfield branch keyed on `isDAG` (CLUSTER_FLAG_DAG, read
+    from the cluster flags byte alongside isHF). Adaptive terrain has EXPLICIT topology (an
+    index buffer like rock) but each vertex's word0 holds a packed TEXEL coord (gx|gz<<16); the
+    branch reads it by vertex index → `texLoadR(heightTex,gx,gz)` for height + `gx*cell+oX` for
+    world XZ, then shares the EXACT window-path micro-disp. (isHF && !isDAG stays the implicit
+    window grid; identity terrain instance makes the DAG cut's instTransformPoint a no-op, so
+    HF+DAG rides the cut unchanged.)
+  • PACK (GeometryRegistry): a lean `registerHeightDag` (entry with hf origin/cell + the
+    HEIGHTFIELD flag but ZERO clusters — avoids the ~342k orphaned window clusters a
+    register-then-repoint would waste) + `attachHeightDag` (mirrors attachDag's cluster +
+    10-float DAG records, but packs grid coords into vertex word0 and sets
+    CLUSTER_FLAG_HEIGHTFIELD|CLUSTER_FLAG_DAG). Words 1-5 of each vertex are UNUSED (height
+    from heightTex, normal from normalTex) — a known 5/6 memory waste; a stride-1 terrain
+    vertex buffer is a later opt (matters only at full res).
+  • RECONCILE (WorldRegistry glue): build on a gridN² power-of-two SUBSAMPLE of the field
+    (stride = res/gridN), then REMAP the build's grid coords ×stride → texel coords CLAMPED to
+    res-1 (texLoadR does NOT clamp — out-of-range would read garbage). cell/origin passed to
+    the mesh = the TEXEL cell/origin (= the window path's exactly), so the decode lands on the
+    same world points as the placed objects. Far+ edge gets a 1-texel degenerate skirt from the
+    clamp (zero-area, collapses — harmless 2 km out).
+  VALIDATED headlessly (probe-dterrain.ts, gridN 256 & 512): (1) DECODE — DAG near ≈ window
+  near, terrain seated correctly under the scattered trees; (2) CRACK-FREE — elevated vista has
+  no sky holes / T-junction gaps; (3) ADAPTIVE — `?nandbg=cluster` tint shows cluster sizes
+  VARYING with detail+distance (coarse on plains/far, fine on cliffs) vs the window path's
+  uniform fine grid everywhere; (4) CUT live — dagClusters 320→245 @256² / 1058→857 @512²
+  near→vista; ~8 ms, no boot error. STILL gridN-subsampled (validation res): full-res 4096²
+  (1 m cells, near-camera parity with the window grid) is ~5 min sync ⇒ blocked on the D1d
+  Worker — the remaining gate before this can be the DEFAULT terrain path.
+
 ## GOTCHAS (append-only, nanite-specific)
 
 - (N5-C1) A SHADOW-CASTER NodeMaterial MUST SET `map = null`. three's shadow
@@ -1264,6 +1297,20 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-14 (ai): **N8-D2b — terrain DAG GPU WIRING: terrain now renders through the adaptive
+  LOD DAG + the shared flat cut, headlessly validated. (D-N36.)** (Opus 4.8 1M.) Wired the D2a
+  builder to the GPU behind `?nanitedterrain=<gridN>` (default 0 = window path, byte-identical).
+  (1) DECODE: third heightfield branch in NaniteFetch keyed on `isDAG` — explicit indexed
+  topology, vertex word0 = packed TEXEL coord → texLoadR height + world XZ, shares the window
+  micro-disp. (2) PACK: lean `registerHeightDag` (hf entry, zero clusters — no orphaned-window
+  waste) + `attachHeightDag` (attachDag's cluster+DAG records, grid coords in word0,
+  HEIGHTFIELD|DAG flags). (3) RECONCILE: gridN² power-of-two subsample build → remap ×stride to
+  texel coords clamped to res-1 (texLoadR doesn't clamp); texel cell/origin so it lands on the
+  placed objects. VALIDATED (probe-dterrain.ts @256 & 512): decode A/B near-identical to the
+  window path, crack-free vista, `?nandbg=cluster` shows ADAPTIVE cluster sizes (coarse far/flat,
+  fine on cliffs) vs the window's uniform grid, cut live (dagClusters 320→245 @256 / 1058→857
+  @512 near→vista), ~8 ms, no boot error. tsc clean. Still gridN-subsampled — full-res 4096²
+  (near-camera parity, ~5 min sync) is blocked on the D1d Worker before it can be the default.
 - 2026-06-14 (ai): **N8-D1e min-screen-size cull primitive (gated) + the unbounded-envelope
   RE-VALIDATION (D-N35); explicit-class DAG confirmed live; D2b GPU-wiring design mapped.**
   (Opus 4.8 1M.) Pivoted from terrain-speed (banked) toward the D1e milestone per the user's
@@ -2293,21 +2340,23 @@ CHUNK PLAN (to the logical point):
     corrected vs the line above: it is martini-error-metric × BuildDag-scaffolding, NOT pure
     martini getMesh — the flat per-cluster cut (D-N31) forces locked-cluster boundaries; see
     D-N34 for why pure RTIN (ROAM per-frame traversal) can't ride the flat cut crack-free.
-  - (D2b) register terrain as DAG'd (replace the discrete uniform-window path) + GPU gate. NEW
-    GPU work: a grid-coord-INDEXED heightfield vertex decode (one isHF-indexed branch in
-    NaniteFetch — index → `gx|gz<<16` → textureLoad height → world XZ; normals stay from
-    normalTex). Reconcile the real field res to 2^k+1 (martini needs a power-of-two grid).
-    BUILD SPEED — part 1 DONE (log 2026-06-14 D2b part 1): bit-identical 1.80× (0.055→0.100
-    Mtri/s clean) by skipping the dead QEM quadrics in terrain mode + Set→stamp guards +
-    inlining the nested-closure flip/degeneracy checks; and the "37 min" figure was an
-    `__name` tsx artifact (real original ~10 min, now ~5.6 min clean single-thread for 4096²).
-    STILL OPEN before 4096² is viable: (i) TYPED-ARRAY pool for `poolVerts/poolIdx` (the
-    `number[]` Array.push is the super-linear creep + a ~400 MB memory blowup at 33.5M tris —
-    bit-identical, do FIRST); (ii) the D-N30 Worker (off boot path) + a deterministic-seed
-    build CACHE; (iii) optional further: Map elimination (weld-by-grid-id, edgeUse typed hash).
+  - ~~(D2b) GPU WIRING — register terrain as DAG'd + the indexed decode~~ **DONE** (log/D-N36;
+    `?nanitedterrain=<gridN>`). The grid-coord-INDEXED decode (NaniteFetch isDAG branch: word0 =
+    packed texel coord → texLoadR + world XZ), lean registerHeightDag + attachHeightDag, and the
+    2^k subsample→texel-coord remap (clamp res-1; texel cell/origin) all landed + validated
+    headlessly (probe-dterrain @256/512: decode A/B, crack-free, adaptive tint vs uniform window,
+    cut live). BUILD SPEED — parts 1+2 DONE (bit-identical 2.6×, 0.055→0.143 Mtri/s; the typed-
+    array `poolVerts/poolIdx` pool + the "37 min = __name artifact" debunk are in those logs).
+    REMAINING before DAG terrain is the DEFAULT (not just a flag): (i) the D-N30 **Worker** — the
+    full-res 4096² build (1 m cells = near-camera parity with the window grid) is ~5 min sync, so
+    it MUST run off the boot path (single background Worker + a deterministic-seed cache); gridN-
+    subsample is validation-only / a fallback. (ii) optional memory: a stride-1 terrain vertex
+    buffer (the DAG verts waste 5/6 words today). This is now THE same blocker as D1d.
   - (D2c) perf ledger row vs pre-DAG (pre-DAG terrain = 33M-tri uniform windows → measure the
-    adaptive draw-tri reduction). Plus the carried D1e items: perf ledger, ?clusterdbg=lod
-    heatmap, USER CHECKPOINT (continuous zoom on hero rock/tree + terrain). THEN shadows S4.
+    adaptive draw-tri reduction; the `?nandbg=cluster` A/B already shows the qualitative win —
+    DAG sheds clusters near→far while the window grid is uniform-dense everywhere). Plus the
+    carried D1e items: perf ledger, ?clusterdbg=lod heatmap, USER CHECKPOINT (continuous zoom on
+    hero rock/tree + terrain). THEN shadows S4.
 
 CURRENT INFRA (read 2026-06-13): Clusterize.ts → BuiltClusters {indices (permuted, cluster
 tris contiguous), sphere 4f32/cluster, cone 4f32, triStart, triCount} — greedy ≤128-tri,

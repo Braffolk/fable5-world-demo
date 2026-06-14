@@ -1104,6 +1104,147 @@ export class GeometryRegistry {
     this.pushRange(this.meshAttr, entry.handle * MESH_WORDS, MESH_WORDS);
   }
 
+  /**
+   * N8-D2b: reserve a heightfield mesh whose geometry is an adaptive terrain
+   * LOD DAG (filled by attachHeightDag post-build) rather than the discrete
+   * window grid. Allocates NO clusters up front — the DAG range is appended
+   * late (reserve it with addLate) — but carries the hf origin/cell the GPU
+   * decode needs (mesh-record words 7/8/9) and the HEIGHTFIELD flag.
+   */
+  registerHeightDag(
+    matClass: MaterialClassId,
+    hf: { originX: number; originZ: number; cellSize: number },
+    opts: RegisterOpts = {},
+  ): MeshHandle {
+    const handle = this.entries.length;
+    if (handle >= 0xffff) throw new Error('GeometryRegistry: mesh id exceeds u16');
+    if (this.built && handle >= this.caps.meshes) {
+      throw new Error('GeometryRegistry: mesh capacity exceeded post-build — raise late.meshes');
+    }
+    const entry = this.newEntry(handle, matClass, { ...opts, transformChannel: 'terrain' }, true, 0);
+    entry.hf = {
+      originX: hf.originX,
+      originZ: hf.originZ,
+      cellSize: hf.cellSize,
+      quadsX: 0,
+      quadsZ: 0,
+      windowsX: 0,
+      windowsZ: 0,
+    };
+    this.entries.push(entry);
+    return handle;
+  }
+
+  /**
+   * N8-D2b: attach a terrain LOD DAG (buildHeightDag output) to a
+   * registerHeightDag mesh. Mirrors attachDag — same cluster records + 10-float
+   * DAG cut records + the SAME flat kClusterCull cut — but the vertex pool packs
+   * TEXEL grid coords (word0 = gx | gz<<16, already clamped to [0,res-1]; words
+   * 1-5 unused — height comes from heightTex, normal from normalTex on the GPU)
+   * and the cluster carries CLUSTER_FLAG_HEIGHTFIELD|CLUSTER_FLAG_DAG so the
+   * decode takes the indexed-heightfield path. (Wasting 5/6 vertex words is a
+   * known memory cost; a stride-1 terrain vertex buffer is a later optimisation.)
+   */
+  attachHeightDag(
+    handle: MeshHandle,
+    build: { gridVerts: Uint32Array; indices: Uint32Array; clusters: DagCluster[] },
+  ): void {
+    if (!this.built) throw new Error('GeometryRegistry: attachHeightDag before build()');
+    const entry = this.entries[handle];
+    if (!entry) throw new Error(`GeometryRegistry: attachHeightDag unknown handle ${handle}`);
+    if (!entry.hf) throw new Error(`GeometryRegistry: attachHeightDag mesh ${entry.label} is not a heightfield`);
+    if ((entry.flags & MESH_FLAG_HASDAG) !== 0) {
+      throw new Error(`GeometryRegistry: mesh ${entry.label} already has a DAG`);
+    }
+    const { gridVerts, indices, clusters } = build;
+    const vCount = gridVerts.length;
+    const tCount = indices.length / 3;
+    const cCount = clusters.length;
+    if (!Number.isInteger(tCount)) throw new Error('GeometryRegistry: height-DAG indices not tri-aligned');
+    if (cCount === 0) throw new Error('GeometryRegistry: height-DAG has no clusters');
+    this.checkRoom(vCount, tCount, cCount, 0);
+
+    const vBase = this.vertCursor;
+    const tBase = this.triCursor;
+    const cBase = this.clusterCursor;
+
+    // -- verts: word0 = packed texel coord; words 1-5 unused -------------------
+    const vArr = this.vertsArr;
+    for (let v = 0; v < vCount; v++) {
+      const b = (vBase + v) * VERT_WORDS;
+      vArr[b] = (gridVerts[v] as number) >>> 0;
+      vArr[b + 1] = 0;
+      vArr[b + 2] = 0;
+      vArr[b + 3] = 0;
+      vArr[b + 4] = 0;
+      vArr[b + 5] = 0;
+    }
+
+    // -- indices (rebased onto the appended vertex block) ----------------------
+    const iArr = this.idxArr;
+    const ibase = tBase * 3;
+    for (let i = 0; i < indices.length; i++) iArr[ibase + i] = (indices[i] as number) + vBase;
+
+    // -- cluster records (8-word) + DAG cut records (10-float) -----------------
+    const cArr = this.clusterArr;
+    const dArr = this.dagArr;
+    const hfFlags = (CLUSTER_FLAG_HEIGHTFIELD | CLUSTER_FLAG_DAG) & 0xff;
+    const dagSpheres = new Float32Array(cCount * 4);
+    for (let c = 0; c < cCount; c++) {
+      const dc = clusters[c] as DagCluster;
+      const cb = (cBase + c) * CLUSTER_WORDS;
+      cArr[cb] = f32Bits(dc.sx);
+      cArr[cb + 1] = f32Bits(dc.sy);
+      cArr[cb + 2] = f32Bits(dc.sz);
+      cArr[cb + 3] = f32Bits(dc.sr);
+      cArr[cb + 4] = octEncode(dc.cax, dc.cay, dc.caz);
+      cArr[cb + 5] = f32Bits(dc.ccos);
+      cArr[cb + 6] = tBase + dc.triStart;
+      if (dc.triCount > MAX_CLUSTER_TRIS) throw new Error('GeometryRegistry: height-DAG cluster exceeds tri cap');
+      cArr[cb + 7] = ((dc.triCount & 0xff) | (hfFlags << 8) | (entry.handle << 16)) >>> 0;
+
+      const db = (cBase + c) * DAG_WORDS;
+      const root = !Number.isFinite(dc.parentError);
+      dArr[db] = dc.ownError;
+      dArr[db + 1] = dc.oex;
+      dArr[db + 2] = dc.oey;
+      dArr[db + 3] = dc.oez;
+      dArr[db + 4] = dc.oer;
+      dArr[db + 5] = root ? DAG_ROOT_PARENT_ERR : dc.parentError;
+      dArr[db + 6] = root ? dc.oex : dc.pex;
+      dArr[db + 7] = root ? dc.oey : dc.pey;
+      dArr[db + 8] = root ? dc.oez : dc.pez;
+      dArr[db + 9] = root ? dc.oer : dc.per;
+
+      dagSpheres[c * 4] = dc.sx;
+      dagSpheres[c * 4 + 1] = dc.sy;
+      dagSpheres[c * 4 + 2] = dc.sz;
+      dagSpheres[c * 4 + 3] = dc.sr;
+    }
+
+    this.vertCursor += vCount;
+    this.triCursor += tCount;
+    this.clusterCursor += cCount;
+
+    // terrain DAG = the COMPLETE continuous LOD over one identity instance, so
+    // it inherits an UNLIMITED draw envelope (the whole field is eligible; the
+    // cut + frustum bound it). Unlike scattered DAG instances (D-N35) there is
+    // no multiplicity to flood — a single pinned root costs one cluster.
+    entry.clusterBase = cBase;
+    entry.clusterCount = cCount;
+    entry.lodNext = LOD_NONE;
+    entry.lodDist = 0;
+    entry.flags |= MESH_FLAG_HASDAG;
+    entry.sphere = meshSphereFromClusters(dagSpheres, cCount);
+    this.writeMeshRecord(entry);
+
+    this.pushRange(this.vertsAttr, vBase * VERT_WORDS, vCount * VERT_WORDS);
+    this.pushRange(this.idxAttr, tBase * 3, tCount * 3);
+    this.pushRange(this.clusterAttr, cBase * CLUSTER_WORDS, cCount * CLUSTER_WORDS);
+    this.pushRange(this.dagAttr, cBase * DAG_WORDS, cCount * DAG_WORDS);
+    this.pushRange(this.meshAttr, entry.handle * MESH_WORDS, MESH_WORDS);
+  }
+
   /** post-build backing arrays + attributes (probe/validation use only) */
   debug(): {
     arrays: {

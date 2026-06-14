@@ -32,7 +32,8 @@ import { VegClass } from '../gpu/passes/Scatter';
 import type { VegLib, PoolPart } from '../vegetation/VegLibrary';
 import type { Heightfield } from '../world/Heightfield';
 import { WORLD_SIZE } from '../world/WorldConst';
-import { type DagBuild, buildDag } from './BuildDag';
+import { type DagBuild, type DagCluster, buildDag } from './BuildDag';
+import { buildHeightDag } from './BuildHeightDag';
 import {
   type BuildReport,
   DAG_VERT_STRIDE,
@@ -199,8 +200,14 @@ export async function buildWorldRegistry(input: {
   /** N8-D1: explicit classes to give a continuous-LOD DAG (rock/bark/deadwood).
    *  Built SYNC here (D1d Workerizes per D-N30); terrain is never DAG'd in D1. */
   dag?: ReadonlySet<MaterialClassId>;
+  /** N8-D2b: when > 0, register terrain as an adaptive LOD DAG built on a
+   *  gridN² (power-of-two) SUBSAMPLE of the field instead of the discrete
+   *  window grid. SYNC at boot (≈1 s @256², ≈5 s @512²) — full-res needs the
+   *  D1d Worker. Texel coords are packed so the GPU still reads the full-res
+   *  heightTex. 0 = the discrete window path (default). */
+  dagTerrainGridN?: number;
 }): Promise<WorldRegistryResult> {
-  const { renderer, hf, scatter, lib, counters, classes, dag } = input;
+  const { renderer, hf, scatter, lib, counters, classes, dag, dagTerrainGridN } = input;
   const inSet = (c: MaterialClassId): boolean => !classes || classes.has(c);
   const t0 = performance.now();
   const deferred: string[] = [];
@@ -338,6 +345,9 @@ export async function buildWorldRegistry(input: {
 
   // ---- terrain: the REAL field as ONE heightfield source ---------------------
   const tTerr0 = performance.now();
+  let dagTerrainAttach:
+    | { handle: MeshHandle; gridVerts: Uint32Array; indices: Uint32Array; clusters: DagCluster[] }
+    | null = null;
   if (inSet('terrain')) {
     const heights = hf.cpuHeights;
     if (!heights) throw new Error('WorldRegistry: hf.cpuHeights missing (boot order)');
@@ -345,48 +355,105 @@ export async function buildWorldRegistry(input: {
     const quads = res - 1;
     const cell = WORLD_SIZE / res;
     const origin = cell / 2 - WORLD_SIZE / 2; // vertex (0,0) = texel-center 0
-    const w = TERRAIN_WIN_QUADS;
-    const windows = Math.ceil(quads / w);
-    const minMax = new Float32Array(windows * windows * 2);
-    for (let gz = 0; gz < windows; gz++) {
-      const z0 = gz * w;
-      const z1 = Math.min(z0 + w, quads);
-      for (let gx = 0; gx < windows; gx++) {
-        const x0 = gx * w;
-        const x1 = Math.min(x0 + w, quads);
-        let mn = Infinity;
-        let mx = -Infinity;
-        for (let z = z0; z <= z1; z++) {
-          const row = z * res;
-          for (let x = x0; x <= x1; x++) {
-            const h = heights[row + x] as number;
-            if (h < mn) mn = h;
-            if (h > mx) mx = h;
-          }
-        }
-        const i = (gz * windows + gx) * 2;
-        minMax[i] = mn;
-        minMax[i + 1] = mx;
+    if (dagTerrainGridN && dagTerrainGridN > 0) {
+      // ---- terrain LOD DAG (D2b, D-N32/34): adaptive heightfield DAG on a
+      // gridN² power-of-two SUBSAMPLE; pack TEXEL coords so the GPU decode reads
+      // the full-res heightTex. Replaces the discrete window path for terrain.
+      const gridN = dagTerrainGridN;
+      if ((gridN & (gridN - 1)) !== 0 || gridN > res) {
+        throw new Error(`WorldRegistry: dagTerrainGridN must be a power of two ≤ ${res}, got ${gridN}`);
       }
+      const stride = res / gridN; // texels per DAG cell
+      const vpa = gridN + 1;
+      const sub = new Float32Array(vpa * vpa);
+      for (let gz = 0; gz <= gridN; gz++) {
+        const tz = Math.min(gz * stride, res - 1);
+        const trow = tz * res;
+        const srow = gz * vpa;
+        for (let gx = 0; gx <= gridN; gx++) {
+          const tx = Math.min(gx * stride, res - 1);
+          sub[srow + gx] = heights[trow + tx] as number;
+        }
+      }
+      const tHd0 = performance.now();
+      const built = buildHeightDag(
+        { heights: sub, gridN, cellSize: cell * stride, originX: origin, originZ: origin },
+        {},
+      );
+      // remap build grid coords (0..gridN) → texel coords (clamped to res-1, so
+      // texLoadR — which does NOT clamp — never reads out of bounds)
+      const gridVerts = new Uint32Array(built.gridVerts.length);
+      for (let i = 0; i < built.gridVerts.length; i++) {
+        const p = built.gridVerts[i] as number;
+        const tx = Math.min((p & 0xffff) * stride, res - 1);
+        const tz = Math.min(((p >>> 16) & 0xffff) * stride, res - 1);
+        gridVerts[i] = ((tx & 0xffff) | ((tz & 0xffff) << 16)) >>> 0;
+      }
+      const hTerrain = reg.registerHeightDag(
+        'terrain',
+        { originX: origin, originZ: origin, cellSize: cell },
+        { label: 'terrain' },
+      );
+      reg.bindInstances(hTerrain, {
+        a: new Float32Array([0, 0, 0, 1]),
+        b: new Float32Array([0, 0, 0, 0]),
+      });
+      reg.addLate({
+        verts: gridVerts.length,
+        tris: built.indices.length / 3,
+        clusters: built.clusters.length,
+      });
+      dagTerrainAttach = { handle: hTerrain, gridVerts, indices: built.indices, clusters: built.clusters };
+      deferred.push(
+        `terrain DAG: gridN ${gridN} (stride ${stride}) → ${built.clusters.length} cl, ` +
+          `${(built.indices.length / 3) | 0} tris, ${built.stats.levels} lv, ` +
+          `maxErr ${built.stats.maxError.toFixed(2)} m, offGrid ${built.stats.offGridVerts}, ` +
+          `${(performance.now() - tHd0).toFixed(0)} ms`,
+      );
+    } else {
+      const w = TERRAIN_WIN_QUADS;
+      const windows = Math.ceil(quads / w);
+      const minMax = new Float32Array(windows * windows * 2);
+      for (let gz = 0; gz < windows; gz++) {
+        const z0 = gz * w;
+        const z1 = Math.min(z0 + w, quads);
+        for (let gx = 0; gx < windows; gx++) {
+          const x0 = gx * w;
+          const x1 = Math.min(x0 + w, quads);
+          let mn = Infinity;
+          let mx = -Infinity;
+          for (let z = z0; z <= z1; z++) {
+            const row = z * res;
+            for (let x = x0; x <= x1; x++) {
+              const h = heights[row + x] as number;
+              if (h < mn) mn = h;
+              if (h > mx) mx = h;
+            }
+          }
+          const i = (gz * windows + gx) * 2;
+          minMax[i] = mn;
+          minMax[i + 1] = mx;
+        }
+      }
+      const hTerrain = reg.registerMesh(
+        {
+          kind: 'heightfield',
+          quadsX: quads,
+          quadsZ: quads,
+          winQuads: w,
+          cellSize: cell,
+          originX: origin,
+          originZ: origin,
+          minMax,
+        },
+        'terrain',
+        { label: 'terrain' },
+      );
+      reg.bindInstances(hTerrain, {
+        a: new Float32Array([0, 0, 0, 1]),
+        b: new Float32Array([0, 0, 0, 0]),
+      });
     }
-    const hTerrain = reg.registerMesh(
-      {
-        kind: 'heightfield',
-        quadsX: quads,
-        quadsZ: quads,
-        winQuads: w,
-        cellSize: cell,
-        originX: origin,
-        originZ: origin,
-        minMax,
-      },
-      'terrain',
-      { label: 'terrain' },
-    );
-    reg.bindInstances(hTerrain, {
-      a: new Float32Array([0, 0, 0, 1]),
-      b: new Float32Array([0, 0, 0, 0]),
-    });
   } else {
     deferred.push("terrain: class 'terrain' not in migration set");
   }
@@ -429,6 +496,7 @@ export async function buildWorldRegistry(input: {
   // ---- build ------------------------------------------------------------------
   const report = reg.build(renderer, counters);
   for (const b of dagBuilds) reg.attachDag(b.handle, b.dag);
+  if (dagTerrainAttach) reg.attachHeightDag(dagTerrainAttach.handle, dagTerrainAttach);
   const t1 = performance.now();
   return {
     registry: reg,

@@ -18,7 +18,7 @@ import { DISP } from '../render/TerrainMaterial';
 import { PERIOD_FBM, PERIOD_RID, PERIOD_VAL } from '../gpu/passes/NoiseBake';
 import { WORLD_SIZE } from '../world/WorldConst';
 import { gustAt, gustLagAt, windExposure, windU, WIND_LAG_M } from '../render/Wind';
-import { MESH_WORDS, TRANSFORM_CHANNEL, VERT_WORDS } from './GeometryRegistry';
+import { CLUSTER_FLAG_DAG, MESH_WORDS, TRANSFORM_CHANNEL, VERT_WORDS } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
 import { instTransformPoint, instYaw, type InstYaw } from './NaniteCommon';
 import type { UniformV3 } from './Tsl';
@@ -74,6 +74,9 @@ export interface TerrainDisp {
 /** per-(instance, cluster) decode shared by the 3 corner fetches */
 export interface VertCtx {
   isHF: NB;
+  /** heightfield ADAPTIVE-DAG variant (CLUSTER_FLAG_DAG): explicit indexed
+   *  topology, each vertex word0 = packed grid coord — vs the implicit window grid */
+  isDAG: NB;
   A: NV4;
   B: NV4;
   yawSc: InstYaw;
@@ -113,7 +116,9 @@ export function makeFetch(
     const triStart = elemU(gpu.clusters, cBase.add(uint(6))).toVar();
     const w7 = elemU(gpu.clusters, cBase.add(uint(7))).toVar();
     const triCount = w7.bitAnd(uint(0xff)).toVar();
-    const isHF = w7.shiftRight(uint(8)).bitAnd(uint(0xff)).bitAnd(uint(1)).notEqual(uint(0)).toVar();
+    const flags = w7.shiftRight(uint(8)).bitAnd(uint(0xff)).toVar();
+    const isHF = flags.bitAnd(uint(1)).notEqual(uint(0)).toVar();
+    const isDAG = flags.bitAnd(uint(CLUSTER_FLAG_DAG)).notEqual(uint(0)).toVar();
     const meshId = w7.shiftRight(uint(16)).toVar();
     const A = gpu.instances.element(instId.mul(uint(2))).toVar() as unknown as NV4;
     const B = gpu.instances.element(instId.mul(uint(2)).add(uint(1))).toVar() as unknown as NV4;
@@ -180,6 +185,7 @@ export function makeFetch(
     }
     return {
       isHF: isHF as unknown as NB,
+      isDAG: isDAG as unknown as NB,
       A,
       B,
       yawSc: instYaw(B),
@@ -200,24 +206,39 @@ export function makeFetch(
   const fetchWorldVert = (ctx: VertCtx, localTri: NU, v: 0 | 1 | 2): NV3 => {
     const out = vec3(0).toVar();
     If(ctx.isHF, () => {
-      const quad = localTri.shiftRight(uint(1));
-      const odd = localTri.bitAnd(uint(1)).equal(uint(1));
-      const col = quad.mod(ctx.qxw);
-      const row = quad.div(ctx.qxw);
-      let dx: NU;
-      let dz: NU;
-      if (v === 0) {
-        dx = uint(0) as unknown as NU;
-        dz = uint(0) as unknown as NU;
-      } else if (v === 1) {
-        dx = odd.select(uint(1), uint(0));
-        dz = uint(1) as unknown as NU;
-      } else {
-        dx = uint(1) as unknown as NU;
-        dz = odd.select(uint(0), uint(1));
-      }
-      const sx = ctx.gx.add(col).add(dx);
-      const sz = ctx.gz.add(row).add(dz);
+      // grid texel coords of corner v — two heightfield conventions share the
+      // SAME height fetch + world reconstruction + micro-disp below; only how
+      // (sx,sz) are obtained differs (adaptive indexed vs implicit window grid).
+      const sx = uint(0).toVar();
+      const sz = uint(0).toVar();
+      If(ctx.isDAG, () => {
+        // adaptive terrain DAG (D2b): explicit topology; each vertex's word0
+        // holds the packed texel coord (gx | gz<<16, clamped at pack time).
+        const vi = elemU(gpu.indices, ctx.triStart.add(localTri).mul(uint(3)).add(uint(v)));
+        const packed = elemU(gpu.verts, vi.mul(uint(VERT_WORDS)));
+        sx.assign(packed.bitAnd(uint(0xffff)));
+        sz.assign(packed.shiftRight(uint(16)));
+      }).Else(() => {
+        // window-procedural: implicit regular grid within the cluster's window
+        const quad = localTri.shiftRight(uint(1));
+        const odd = localTri.bitAnd(uint(1)).equal(uint(1));
+        const col = quad.mod(ctx.qxw);
+        const row = quad.div(ctx.qxw);
+        let dx: NU;
+        let dz: NU;
+        if (v === 0) {
+          dx = uint(0) as unknown as NU;
+          dz = uint(0) as unknown as NU;
+        } else if (v === 1) {
+          dx = odd.select(uint(1), uint(0));
+          dz = uint(1) as unknown as NU;
+        } else {
+          dx = uint(1) as unknown as NU;
+          dz = odd.select(uint(0), uint(1));
+        }
+        sx.assign(ctx.gx.add(col).add(dx));
+        sz.assign(ctx.gz.add(row).add(dz));
+      });
       const h = texLoadR(heightTex, sx, sz);
       const wx = toF(sx).mul(ctx.cell).add(ctx.oX);
       const wz = toF(sz).mul(ctx.cell).add(ctx.oZ);
