@@ -1438,6 +1438,26 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-14 (ap): **N8-D2 #32 — DagWorker POOL: concurrent tile bakes (the "baking is slow" the
+  user named).** (Opus 4.8 1M.) Builds were serialized on ONE persistent DagWorker (~170 ms/tile
+  cache-miss) → a camera move needing K fresh tiles stalled ~K×170 ms of coarse→fine pop (no hole —
+  lazy-evict (ao) keeps the old LOD up — just a slow climb to detail). Fix is two-part, both needed:
+  (1) NEW `DagWorkerPool` (DagWorkerClient.ts) — N persistent DagBuildWorkers behind the same
+  `DagBuilder` interface (buildHeight/dispose), LEAST-LOADED dispatch (a fresh bake goes to the
+  most-idle thread, not a round-robin victim stuck on a slow tile); size = clamp(cores−2, 2..4);
+  throws if no Worker (headless node) → caller falls back to sync. (2) runDiff now BATCHES arrivals
+  (≤ MAX_LOADS_PER_DIFF=4, matched to pool size) and bakes them CONCURRENTLY (Promise.all) — the
+  batch costs ~one bake, not N — then ATTACHES synchronously (NO await between allocTileSlot and
+  attach/resident.set ⇒ the slot pool can't be raced; single-flight still bars re-entry).
+  buildBootSet likewise bakes the whole boot ring at once (deterministic: collect in set order, not
+  completion order). Build-before-alloc + cap-pre-check + lazy-evict invariants all preserved.
+  MEASURED (probe-streammove, cold = 0 cached/52 built, gridN 128): cold BOOT 7717 ms serial
+  (bake×1) → 2211 ms pool (bake×4) = **3.49×**; and in the SAME probe wall-time the pool streamed
+  219 tiles loaded vs 80 serial, lifting the worst MID-BAKE floor 482 → 729 cl (more detail bakes
+  within the settle(8) window, still hole-free). probe-stream (headless sync path, worker=null)
+  still green — the parallelization is transparent to it. tsc clean. NEXT (toward full-res default
+  ON): 2d skirts (crack-free inter-level seams) — required before flipping default — then 2e
+  stride-1 verts + flip.
 - 2026-06-14 (ao): **N8-D2 Stage 2b-3 fix — LAZY eviction kills the "LOD vanishes before the new
   one bakes in" hole (user report).** (Opus 4.8 1M.) Root cause: runDiff EVICTED departed tiles
   eagerly (synchronously, first) then started the SLOW async loads — so through the bake window the
@@ -2637,19 +2657,24 @@ CHUNK PLAN (to the logical point):
 
   STAGE-2 STREAMING STATUS (D-N39, the path to full-res-default — supersedes the D2b "(i) Worker
   / (ii) stride-1" remaining-list above with a concrete increment chain):
-  - ~~2a pool+evict~~ DONE (log aj) · ~~2b-1 pool→GPU~~ DONE (ak) · ~~2b-2 static clipmap~~ DONE
-    (al math / am GPU) · ~~2b-3 camera-following streamer~~ **DONE (log an)** — `?nanitedclip=1`
-    streams the 1 m detail with the live camera; resident≡desired, bounded, no-leak, re-centers
-    exactly (probe-stream + probe-streammove green).
-  - **NEXT → 2b-4 always-resident coarse BASE (teleport no-hole).** The clipmap is hole-free at
-    steady state + continuous motion but a fast TELEPORT into uncached terrain transiently voids
-    (the coarse backstop churns + its cache-miss rebuilds lag). Fix: pin a non-churning field-
-    spanning coarse base + REVIVE a minimal suppression (kClusterCull skips base clusters where a
-    finer resident ring covers them — the deleted 2c, now justified because a FIXED base overlaps
-    the camera-centered finer levels). See D-N39 tail (a).
-  - THEN 2d skirts (inter-level seams) · 2e stride-1 terrain vertex buffer (6×→1× vert mem,
-    ~100 MB→~17 MB) + flip the full-res DAG terrain default ON (retire `?nanitedterrain=0` window
-    to the explicit opt-out).
+  - ~~2a pool+evict~~ DONE (aj) · ~~2b-1 pool→GPU~~ DONE (ak) · ~~2b-2 static clipmap~~ DONE
+    (al math / am GPU) · ~~2b-3 camera-following streamer~~ DONE (an) · ~~2b-3 fix lazy-evict~~
+    DONE (ao) · ~~#32 DagWorker POOL (concurrent bakes)~~ **DONE (ap)** — `?nanitedclip=1` streams
+    the 1 m detail with the live camera; resident≡desired, bounded, no-leak, re-centers exactly;
+    bakes 4-wide so cold boot 7717→2211 ms (3.49×) + detail climbs ~pool× faster (probe-stream +
+    probe-streammove green).
+  - **NEXT → 2d skirts (crack-free inter-level seams).** Required BEFORE flipping default ON — a
+    stride mismatch at adjacent clipmap-level boundaries leaves T-junction cracks (sky slivers);
+    skirts (a vertical apron dropped at tile edges) or edge-stitching hide them. Holes + slow-pop
+    are now solved (lazy-evict ao + pool ap), so seams are the last visible-correctness blocker.
+  - THEN 2e stride-1 terrain vertex buffer (6×→1× vert mem, ~100 MB→~17 MB) + FLIP the full-res DAG
+    terrain default ON (retire `?nanitedterrain=0` window to the explicit opt-out) = the "boot only
+    to dag" mandate.
+  - POLISH (after default-on): 2b-4 always-resident coarse BASE — lazy+footprint-evict (ao) already
+    keeps the old coarse covering through the common teleport; only the EXTREME corner→corner jump
+    (beyond the lingering ring's reach) still needs a pinned non-churning base + a revived minimal
+    suppression (kClusterCull skips base clusters a finer resident ring covers — the deleted 2c,
+    now justified by a FIXED base under the camera-centered finer levels). See D-N39 tail (a).
 
 CURRENT INFRA (read 2026-06-13): Clusterize.ts → BuiltClusters {indices (permuted, cluster
 tris contiguous), sphere 4f32/cluster, cone 4f32, triStart, triCount} — greedy ≤128-tri,

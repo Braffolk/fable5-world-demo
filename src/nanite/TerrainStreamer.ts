@@ -31,12 +31,15 @@
 import { type DagCluster } from './BuildDag';
 import { buildHeightDag } from './BuildHeightDag';
 import { getCachedHeightDag, heightDagCacheKey, putCachedHeightDag } from './DagCache';
-import { type DagBuildWorker, type HeightDagResult } from './DagWorkerClient';
-import { clipmapTiles, clipmapMaxTiles, type ClipmapConfig } from './TerrainClipmap';
+import { type DagBuilder, type HeightDagResult } from './DagWorkerClient';
+import { clipmapTiles, clipmapMaxTiles, type ClipmapConfig, type ClipmapTile } from './TerrainClipmap';
 import type { GeometryRegistry } from './GeometryRegistry';
 
-/** at most this many tile LOADS per frame batch — bounds the main-thread attach
- *  cost; the remainder streams over subsequent frames (update() re-drives). */
+/** at most this many tile arrivals per diff batch. They BAKE CONCURRENTLY (#32 —
+ *  one per DagWorkerPool thread), so this bounds BOTH the parallel-build width and
+ *  the main-thread attach cost; the remainder streams over subsequent frames
+ *  (update() re-drives). Match it to the pool size so a full batch maps 1:1 to
+ *  threads — a batch then costs ~one bake, not N serial bakes. */
 const MAX_LOADS_PER_DIFF = 4;
 
 /** everything buildTerrainTile needs that is constant for the field's lifetime. */
@@ -48,8 +51,9 @@ export interface TileBuildDeps {
   gridN: number;
   /** numeric seed for the per-tile DAG cache, or null to always build (no cache). */
   seed: number | null;
-  /** persistent off-thread builder, or null to build synchronously on this thread. */
-  worker: DagBuildWorker | null;
+  /** persistent off-thread builder — a single Worker or a DagWorkerPool (concurrent
+   *  bakes) — or null to build synchronously on this thread. */
+  worker: DagBuilder | null;
 }
 
 /** mutable cache-hit / fresh-build tally threaded through a build pass. */
@@ -251,27 +255,36 @@ export class TerrainStreamer {
    */
   async buildBootSet(camTexelX: number, camTexelZ: number): Promise<number> {
     const set = clipmapTiles(camTexelX, camTexelZ, this.cfg);
-    for (const t of set) {
-      const { gridVerts, built } = await buildTerrainTile(
-        this.deps,
-        t.tx0,
-        t.tz0,
-        t.strideTexels,
-        tileSuffix(this.cfg.gridN, t.strideTexels, t.tx0, t.tz0),
-        this.bstats,
-        this.onDeferred,
-      );
+    // bake the WHOLE boot ring CONCURRENTLY across the pool (#32) — cold boot drops
+    // from ~set×170 ms serial to ~ceil(set/threads)×170 ms. Collect in `set` order
+    // (not completion order) so bootBuilt + the pool-cap measurement are deterministic
+    // regardless of which bake lands first.
+    const baked = await Promise.all(
+      set.map((t) =>
+        buildTerrainTile(
+          this.deps,
+          t.tx0,
+          t.tz0,
+          t.strideTexels,
+          tileSuffix(this.cfg.gridN, t.strideTexels, t.tx0, t.tz0),
+          this.bstats,
+          this.onDeferred,
+        ),
+      ),
+    );
+    set.forEach((t, i) => {
+      const r = baked[i] as { gridVerts: Uint32Array; built: HeightDagResult };
       this.bootBuilt.push({
         key: t.key,
         x0: t.tx0,
         z0: t.tz0,
         size: t.tileTexels,
-        gridVerts,
-        indices: built.indices,
-        clusters: built.clusters,
+        gridVerts: r.gridVerts,
+        indices: r.built.indices,
+        clusters: r.built.clusters,
       });
-      this.measure(built, gridVerts.length);
-    }
+      this.measure(r.built, r.gridVerts.length);
+    });
     return set.length;
   }
 
@@ -328,14 +341,20 @@ export class TerrainStreamer {
   }
 
   /**
-   * LAZY-evict + capped load. Departed tiles are NOT dropped up front — they keep
-   * RENDERING (their footprint stays covered) through the bake window until either
-   * (a) the whole desired set is resident again ⇒ the new coverage is complete, so
-   * cleanup drops the now-redundant stragglers, or (b) the pool runs dry and a slot
+   * LAZY-evict + capped CONCURRENT load. Departed tiles are NOT dropped up front —
+   * they keep RENDERING (their footprint stays covered) through the bake window until
+   * either (a) the whole desired set is resident again ⇒ the new coverage is complete,
+   * so cleanup drops the now-redundant stragglers, or (b) the pool runs dry and a slot
    * must be reclaimed ⇒ we evict the FARTHEST departed tile (the one least likely to
-   * leave a visible hole: far away + most likely already covered by a coarser
-   * resident ring + smallest on screen). This is the fix for "the detailed LOD
-   * vanishes before the new one bakes in" — the old LOD survives until replaced.
+   * leave a visible hole: far away + most likely already covered by a coarser resident
+   * ring + smallest on screen). This is the fix for "the detailed LOD vanishes before
+   * the new one bakes in" — the old LOD survives until replaced.
+   *
+   * #32: the batch's tiles BAKE CONCURRENTLY (one per DagWorkerPool thread) — the
+   * whole batch costs ~one bake instead of N serial bakes, shrinking the coarse→fine
+   * pop window ~pool-size×. The attach (alloc slot → write → resident.set) then runs
+   * synchronously over the baked results with NO await between alloc and attach, so
+   * the slot pool stays consistent (single-flight already bars re-entry).
    */
   private async runDiff(tx: number, tz: number): Promise<void> {
     const desired = clipmapTiles(tx, tz, this.cfg);
@@ -343,62 +362,75 @@ export class TerrainStreamer {
     for (const t of desired) want.add(t.key);
     // forget skip marks for tiles that left desired (a revisit re-attempts them)
     for (const key of this.skipped) if (!want.has(key)) this.skipped.delete(key);
-    // LOAD arrived — capped per batch; reclaim a slot from the farthest DEPARTED
-    // tile only on pool pressure (NOT an eager up-front evict that would hole).
-    const cap = this.deps.reg.tilePoolCap;
-    let loaded = 0;
+    // pick this batch's ARRIVALS (capped) — tiles desired but neither resident nor
+    // skipped — then bake them ALL AT ONCE across the pool.
+    const batch: ClipmapTile[] = [];
     for (const t of desired) {
       if (this.resident.has(t.key) || this.skipped.has(t.key)) continue;
-      if (loaded >= MAX_LOADS_PER_DIFF) break;
-      let gridVerts: Uint32Array;
-      let built: HeightDagResult;
-      try {
-        const r = await buildTerrainTile(
-          this.deps,
-          t.tx0,
-          t.tz0,
-          t.strideTexels,
-          tileSuffix(this.cfg.gridN, t.strideTexels, t.tx0, t.tz0),
-          this.bstats,
-          this.onDeferred,
-        );
-        gridVerts = r.gridVerts;
-        built = r.built;
-      } catch (e) {
-        this.onDeferred(`terrain stream tile ${t.key}: build failed (${e instanceof Error ? e.message : String(e)})`);
-        continue;
-      }
-      // cap pre-check BEFORE alloc — an oversized region is skipped (the coarser
-      // ring backstops it), never thrown inside attach + leaking the slot.
-      const tCount = built.indices.length / 3;
-      if (gridVerts.length > cap.vertCap || tCount > cap.triCap || built.clusters.length > cap.clusterCap) {
-        if (!this.capWarned) {
-          this.capWarned = true;
-          this.onDeferred(
-            `terrain stream: tile ${t.key} over slot cap (v${gridVerts.length}/${cap.vertCap} ` +
-              `t${tCount}/${cap.triCap} c${built.clusters.length}/${cap.clusterCap}) — SKIPPED, coarser ring backstops`,
-          );
+      batch.push(t);
+      if (batch.length >= MAX_LOADS_PER_DIFF) break;
+    }
+    if (batch.length > 0) {
+      // BAKE concurrently — each buildTerrainTile lands on its own pool thread (cache
+      // hits resolve instantly without touching a worker). Capture per-tile so one
+      // failed bake doesn't reject the whole batch.
+      const baked = await Promise.all(
+        batch.map((t) =>
+          buildTerrainTile(
+            this.deps,
+            t.tx0,
+            t.tz0,
+            t.strideTexels,
+            tileSuffix(this.cfg.gridN, t.strideTexels, t.tx0, t.tz0),
+            this.bstats,
+            this.onDeferred,
+          ).then(
+            (r) => ({ t, r, err: null as unknown }),
+            (err: unknown) => ({ t, r: null as { gridVerts: Uint32Array; built: HeightDagResult } | null, err }),
+          ),
+        ),
+      );
+      // ATTACH synchronously — reclaim a slot from the farthest DEPARTED tile only on
+      // pool pressure (NOT an eager up-front evict that would hole). NO await between
+      // allocTileSlot() and attach/resident.set ⇒ the slot pool can't be raced.
+      const cap = this.deps.reg.tilePoolCap;
+      for (const { t, r, err } of baked) {
+        if (r === null) {
+          this.onDeferred(`terrain stream tile ${t.key}: build failed (${err instanceof Error ? err.message : String(err)})`);
+          continue;
         }
-        this.skipped.add(t.key); // don't rebuild it every frame
-        this.nSkipped++;
-        continue;
-      }
-      // build-then-alloc: take a slot only now that the geometry is in hand. On
-      // pool pressure, reclaim one from the farthest departed tile (then re-alloc
-      // it properly via the free stack — never reuse a just-evicted slot directly).
-      let slot = this.deps.reg.allocTileSlot();
-      if (slot < 0 && this.evictFarthestDeparted(tx, tz, want)) slot = this.deps.reg.allocTileSlot();
-      if (slot < 0) {
-        if (!this.fullWarned) {
-          this.fullWarned = true;
-          this.onDeferred('terrain stream: pool full of DESIRED tiles — raise reserveTilePool slots');
+        const { gridVerts, built } = r;
+        // cap pre-check BEFORE alloc — an oversized region is skipped (the coarser
+        // ring backstops it), never thrown inside attach + leaking the slot.
+        const tCount = built.indices.length / 3;
+        if (gridVerts.length > cap.vertCap || tCount > cap.triCap || built.clusters.length > cap.clusterCap) {
+          if (!this.capWarned) {
+            this.capWarned = true;
+            this.onDeferred(
+              `terrain stream: tile ${t.key} over slot cap (v${gridVerts.length}/${cap.vertCap} ` +
+                `t${tCount}/${cap.triCap} c${built.clusters.length}/${cap.clusterCap}) — SKIPPED, coarser ring backstops`,
+            );
+          }
+          this.skipped.add(t.key); // don't rebuild it every frame
+          this.nSkipped++;
+          continue;
         }
-        break;
+        // build-then-alloc: take a slot only now that the geometry is in hand. On
+        // pool pressure, reclaim one from the farthest departed tile (then re-alloc
+        // it properly via the free stack — never reuse a just-evicted slot directly).
+        let slot = this.deps.reg.allocTileSlot();
+        if (slot < 0 && this.evictFarthestDeparted(tx, tz, want)) slot = this.deps.reg.allocTileSlot();
+        if (slot < 0) {
+          if (!this.fullWarned) {
+            this.fullWarned = true;
+            this.onDeferred('terrain stream: pool full of DESIRED tiles — raise reserveTilePool slots');
+          }
+          break;
+        }
+        this.deps.reg.attachHeightDagTile(slot, { gridVerts, indices: built.indices, clusters: built.clusters });
+        this.resident.set(t.key, { slot, x0: t.tx0, z0: t.tz0, size: t.tileTexels });
+        this.nLoaded++;
       }
-      this.deps.reg.attachHeightDagTile(slot, { gridVerts, indices: built.indices, clusters: built.clusters });
-      this.resident.set(t.key, { slot, x0: t.tx0, z0: t.tz0, size: t.tileTexels });
-      this.nLoaded++;
-      loaded++;
     }
     // CLEANUP — once the whole desired set is resident the new coverage is complete,
     // so any lingering departed tile is now redundant ⇒ drop it (keeps memory lean

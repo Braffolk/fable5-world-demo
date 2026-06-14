@@ -33,7 +33,7 @@ import type { VegLib, PoolPart } from '../vegetation/VegLibrary';
 import type { Heightfield } from '../world/Heightfield';
 import { WORLD_SIZE } from '../world/WorldConst';
 import { type DagBuild, type DagCluster, buildDag } from './BuildDag';
-import { DagBuildWorker, type HeightDagResult } from './DagWorkerClient';
+import { DagBuildWorker, DagWorkerPool, type DagBuilder, type HeightDagResult } from './DagWorkerClient';
 import { TerrainStreamer, buildTerrainTile, type TileBuildDeps, type TileBuildStats } from './TerrainStreamer';
 import {
   type BuildReport,
@@ -420,12 +420,19 @@ export async function buildWorldRegistry(input: {
       }
       const stride = tileTexels / gridN; // texels per tile-DAG cell
       const tHd0 = performance.now();
-      let dagWorker: DagBuildWorker | null = null;
+      // clip mode bakes tiles CONTINUOUSLY as the camera roams → a POOL of workers so
+      // a batch of arrivals bakes in parallel (#32, ~pool-size× shorter pop window);
+      // the one-shot uniform path only needs a single worker. Headless node has no
+      // Worker → construction throws → null → synchronous builds.
+      const cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
+      const poolSize = Math.max(2, Math.min(4, cores - 2));
+      let dagWorker: DagBuilder | null = null;
       try {
-        dagWorker = new DagBuildWorker();
+        dagWorker = dagTerrainClip ? new DagWorkerPool(poolSize) : new DagBuildWorker();
       } catch {
         dagWorker = null;
       }
+      const bakeThreads = dagWorker instanceof DagWorkerPool ? dagWorker.size : dagWorker ? 1 : 0;
       let poolMaxV = 0;
       let poolMaxT = 0;
       let poolMaxC = 0;
@@ -465,7 +472,7 @@ export async function buildWorldRegistry(input: {
         deferred.push(
           `terrain DAG ${streamer.clipDesc}: ${nBoot} boot / ${streamer.maxTiles} max tiles, ` +
             `${s.tCl} cl, ${s.tTris | 0} tris, maxErr ${s.maxErr.toFixed(2)} m, offGrid ${s.offGrid}, ` +
-            `${s.nCache} cached/${s.nBuilt} built, POOL ${slots}×(v${vCap}/t${tCap}/c${cCap}), ` +
+            `${s.nCache} cached/${s.nBuilt} built, POOL ${slots}×(v${vCap}/t${tCap}/c${cCap}), bake×${bakeThreads}, ` +
             `${(performance.now() - tHd0).toFixed(0)} ms`,
         );
       } else {
