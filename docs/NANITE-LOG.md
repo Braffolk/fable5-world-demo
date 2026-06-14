@@ -9,6 +9,32 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-15 (bb): **PERF-3 win #2 — the VERTEX-TRANSFORM CACHE: DECIDED (build-time COMPACTION — the only
+  general + WebGPU-safe keying; see D-N40) + stage 1 BUILT (vcompact buffer + range population, render
+  bit-identical, committed); stage 2 (the kernel cooperative transform = the win) is the delicate
+  shared-`fetchWorldVert` refactor, deferred to a fresh-context build.** (Opus 4.8 1M.) The remaining big lever
+  from `az` = the 3× fetchWorldVert (1.11 ms / 39%, redundant). NEW `?vrange` diagnostic (NaniteFrame, gated;
+  per-cluster vertex-INDEX range + redundancy): explicit 13.6k cl redund **4.13×** (95% range ≤128, avg unique
+  82); HF-DAG terrain 34.2k cl redund **3.76×** (40% range **>1024**, avg 931, max 16619). ⇒ a runtime
+  [vMin,vMax] range-cache HITS trees but FAILS terrain (range unbounded → can't fit shared mem); workgroup
+  atomics appear UNSUPPORTED in three's TSL (rules out a hash-dedup). Only BUILD-TIME per-cluster COMPACTION
+  generalizes (cache sized by vertCount ≤~190 fits the 16 KB workgroup limit for ALL geo; race-free strided
+  transform; bonus local-index memory win ⇒ likely NET −~100 MB). User confirmed "full compaction straight
+  away" + the criterion "which GENERALISES better to all geometry + webgpu limitations."
+  DESIGN (minimal blast radius): a PARALLEL per-cluster `gpu.vcompact` buffer (2 u32: vMin, count; 0 ⇒
+  per-thread fallback) — NOT a CLUSTER_WORDS change (would shift every ci·8 offset). **STAGE 1 (committed
+  1a8b062):** the buffer + `populateVCompact()` = [vMin,count] over each boot cluster's indices (≤
+  VCACHE_VERTS=192 → store, else 0; window-grid + streamed terrain stay 0). Explicit uses the EXISTING tight
+  ranges ⇒ NO duplication yet (terrain true-compaction = stage 3). Nothing reads vcompact ⇒ render
+  BIT-IDENTICAL, boots clean (87.9k visCl). **STAGE 2 (NEXT, the win):** (2a) refactor NaniteFetch — extract
+  `fetchWorldVertByIndex(ctx, vi)` + shared `hfWorld(ctx,sx,sz,skirtDrop)` from fetchWorldVert (window-grid
+  stays inline), BEHAVIOR-PRESERVING (fetchWorldVert is shared by resolve/shadow/hzb/raster — A/B the DEFAULT
+  path bit-identical before/after); (2b) NaniteRaster cooperative transform gated `?vcompact` (read vcompact →
+  fill `workgroupArray('vec3', VCACHE_VERTS)`, barrier, tris read shVerts[vi−vMin]; else fallback), vcompact
+  bound in the RASTER ONLY (resolve sits at the 10-buffer ceiling). VALIDATE the NET (the ctx-cache net −0.59
+  was BELOW its 0.46 gross — the cooperative transform has the SAME barrier+shared-read overhead). Then stage 3
+  (terrain compaction + pool-cap growth) + stage 4 (narrow local indices). tsc clean.
+
 - 2026-06-15 (ba): **PERF-3 win #1 — per-cluster makeCtx CACHE in workgroup shared memory (the first real
   rasterizer optimization): −0.59 ms (−11%) on the camera SW raster, validated bit-identical + alternated.**
   (Opus 4.8 1M.) From the LOG `az` decomposition: makeCtx ran PER THREAD (128×/cluster, incl. the trunk gust

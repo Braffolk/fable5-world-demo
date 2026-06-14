@@ -10,8 +10,13 @@
 > Status key: ✅ done · 🔵 active · ⬜ pending · 🚫 blocked. `blockedBy` = task ids that
 > must finish first. `spec` = the `## header` in NANITE-SPEC.md (+ D-N* / file refs).
 
-## YOU ARE HERE — 2026-06-14
-**PERF-1 LANDED (LOG `ay`): per-pass measurement is now TRUSTWORTHY, the PURE nanite
+## YOU ARE HERE — 2026-06-15
+**FRONTIER: PERF-3 win #2 (the VERTEX CACHE) — stage 1 committed; STAGE 2 (the kernel cooperative
+transform = the win) is the NEXT build (see the `PERF-3` row in §A, LOG `bb`, D-N40). Win #1 (makeCtx
+shared-mem cache) is LIVE (default ON, −0.59 ms). The rest of this block is the chronological arc that got
+here — read it for orientation.**
+
+**PERF-1 (LOG `ay`): per-pass measurement is now TRUSTWORTHY, the PURE nanite
 renderer is ISOLATED (`?pure`), and the user's WORST view is decomposed with cool numbers.**
 The first real dump exposed two integrity defects + one methodology error, all fixed:
 - the harness was LYING — dead-CSM garbage NEGATIVE timestamps poisoned the `render` total

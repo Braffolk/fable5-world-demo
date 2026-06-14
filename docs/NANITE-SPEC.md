@@ -1313,6 +1313,34 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   unviable). (a) is the path. Until then: realistic motion is hole-free; teleports/bookmarks show a
   brief void on first visit (instant on cached revisit).
 
+- D-N40 (2026-06-15, PERF-3 — the VERTEX-TRANSFORM CACHE generalizes ONLY via build-time COMPACTION;
+  LOG az/ba/bb). The depth rasterizer is per-TRIANGLE bound (resolution scaling: 16× fewer px → 1.43×
+  less nanRasterDepth) and its #1 sub-cost is the 3× fetchWorldVert (in-kernel `?rdbg` ablation: 1.11 ms
+  / 39%; atomicMin is NOT it — depth ≈ payload). Win #1 already cached makeCtx (0.46 ms / 16%) in workgroup
+  shared memory (`?wgcache`, default ON, −0.59 ms / −11%). The vertex cache is the next lever: ONE WORKGROUP
+  == ONE cluster (128 threads = 128 tris), but a 128-tri cluster fetches+transforms 3×128=384 corners for
+  ~82–96 UNIQUE verts (~4× redundant) ⇒ transform each unique vert ONCE into shared memory. The cache must
+  be keyed so triangles find their corners; three keyings, decided by GENERALIZATION + WebGPU limits (the
+  user's binding criterion), NOT just this scene's hit-rate:
+  - (a) runtime [vMin,vMax] RANGE-cache — REJECTED: the cache holds the index RANGE, UNBOUNDED for scattered
+    geometry. `?vrange` measured explicit 95% range ≤128 (hits) but HF-DAG TERRAIN 40% range >1024 / max
+    16619 (won't fit shared mem → falls back); terrain is the LARGER share ⇒ does not generalize.
+  - (b) runtime shared-mem HASH-dedup (range-independent) — REJECTED: needs workgroup-scoped ATOMICS for a
+    race-free slot claim; three's TSL exposes no atomic `workgroupArray` (WorkgroupInfoNode takes a plain
+    bufferType; zero usage in three) ⇒ not WebGPU-expressible here.
+  - (c) build-time per-cluster vertex COMPACTION — CHOSEN: make each cluster's unique verts contiguous so the
+    shared cache is sized by vertCount (≤~190, HARD-capped by MAX_CLUSTER_TRIS) ⇒ a fixed ~2.3 KB vec3 array
+    fits the 16 KB workgroup limit for ALL geometry incl. terrain; the strided cooperative transform writes
+    DISTINCT slots (race-free, NO atomics). Bonus: cluster-local indices become u8/u16, shrinking the 180 MB
+    index buffer ⇒ likely NET memory SAVINGS. Implemented incrementally via a PARALLEL `gpu.vcompact` buffer
+    (vMin/count per cluster; count=0 ⇒ per-thread fallback) so each pack path converts independently and the
+    kernel handles compacted-or-not per cluster (NOT a CLUSTER_WORDS change — that would shift every ci·8
+    offset across cull/makeCtx/encode). EXPLICIT meshes already have tight ranges (95% ≤128) ⇒ stage 1 caches
+    them with NO duplication (existing layout); TERRAIN (wide ranges) needs true compaction + pool-cap growth
+    (later stage). The cooperative transform reuses the same `workgroupArray`/`workgroupBarrier` mechanism as
+    win #1's makeCtx cache. The shared `fetchWorldVert` is split (behavior-preserving) into
+    `fetchWorldVertByIndex(ctx, vi)` so the cooperative phase can transform a vert by index.
+
 ## GOTCHAS (append-only, nanite-specific)
 
 - (N5-C1) A SHADOW-CASTER NodeMaterial MUST SET `map = null`. three's shadow
