@@ -1173,6 +1173,29 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   res; (ii) flip the default on once (i) lands and the one-time ~5 min first-build UX (a loading
   state — NOT window terrain) is acceptable.
 
+- D-N38 (2026-06-14, N8-D2 — TILED terrain DAG for full-res scale; the seam problem is solved
+  FOR FREE. USER DIRECTIVE: tiled streaming DAG → true 1 m, "maximum quality+perf endpoint").
+  MEASURED the single-DAG wall (probe-heightdag-scale, synthetic but the LOD0 floor is exact):
+  a single 4096² DAG = ~76 M tris / ~640 k clusters → ~1.1 GB stored (stride-1) AND ~640 k
+  per-frame cull invocations — over WebGPU buffer limits AND a cull-dispatch wall (gridN=1024 =
+  46 k cl renders at 8.3 ms; 14× that does not). So full-res is NOT one DAG; it must TILE +
+  STREAM (also the right shape for a 4 km world — cull/stream distant terrain). gridN=1024 (4 m)
+  validated viable as a single DAG NOW (8.3 ms). THE KEY FINDING that de-risks tiling: crack-free
+  seams need NO new builder code. buildDag already LOCKS any vertex on a mesh-boundary edge (used
+  by ≠2 soup triangles, BuildDag.ts:460-486; locked verts never collapse, :557). A tile's outer
+  PERIMETER is a mesh boundary ⇒ its edge verts auto-lock at full res ⇒ two adjacent tiles, both
+  sampling the SAME shared texel column at the SAME stride, get bit-identical locked edges ⇒
+  crack-free. STAGE 1 DONE + validated (probe-dterrain 256 ×4): T×T independent tile DAGs
+  (?nanitedterrain=<gridN>&nanitedtiles=T), each gridN² over its texel sub-region (tileTexels =
+  res/T; per-tile build positions in the tile's world origin, then gridVerts remap to GLOBAL
+  texel coords; one registerHeightDag+attachHeightDag per tile; per-tile cache key suffix). 4×4
+  @256 = 16 tiles, 48 840 cl, 5.85 M tris, offGrid 0, lit vista CRACK-FREE (no sky gaps), tint
+  shows the 16 tile regions yet a seamless surface, 6.6–9.8 ms. REMAINING for the endgame:
+  STAGE 2 = distance STREAMING (load near tiles / evict far → bounded memory + cull; needs
+  registry eviction + per-frame tile selection) + STAGE 3 = stride-1 terrain vertex buffer +
+  flip the full-res default. Tiles build SEQUENTIALLY now (16×~700 ms) — parallelise (N workers)
+  or rely on the cache for full-res.
+
 ## GOTCHAS (append-only, nanite-specific)
 
 - (N5-C1) A SHADOW-CASTER NodeMaterial MUST SET `map = null`. three's shadow
@@ -1324,6 +1347,17 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-14 (ai): **N8-D2 — TILED terrain DAG (Stage 1): crack-free seams for free; full-res
+  path unblocked (D-N38).** (Opus 4.8 1M.) Measured the single-DAG wall (4096² ≈ 1.1 GB + 640k
+  cull clusters → needs tile+stream, not one DAG; gridN=1024/4 m viable now at 8.3 ms). KEY
+  FINDING: buildDag already locks mesh-boundary verts, so a tile's perimeter auto-locks at full
+  res ⇒ adjacent tiles share identical edges ⇒ crack-free seams with ZERO builder changes. Built
+  Stage 1: `?nanitedterrain=<gridN>&nanitedtiles=T` → T×T independent tile DAGs (per-tile texel
+  subregion, build at the tile's world origin, remap to global texel coords, one
+  registerHeightDag+attachHeightDag + cache key per tile). Validated (probe-dterrain 256 ×4): 16
+  tiles, 48 840 cl, 5.85 M tris, offGrid 0, lit vista CRACK-FREE, tint shows 16 tile regions yet
+  seamless, 6.6–9.8 ms. tsc clean. Next: Stage 2 distance streaming (load near / evict far →
+  bounded memory+cull) + stride-1 vertex buffer + flip the full-res default.
 - 2026-06-14 (ai): **N8-D1d — terrain DAG built off-thread + CACHED; DAG-only, no window
   fallback (USER DIRECTIVE; D-N37).** (Opus 4.8 1M.) Built a Vite module Worker
   (DagWorker.worker.ts + DagWorkerClient.ts + DagWorkerTypes.ts — three-free chain, prod bundles

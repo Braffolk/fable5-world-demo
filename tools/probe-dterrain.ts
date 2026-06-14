@@ -16,6 +16,7 @@ import { laasUrl, launchWebGPU } from './launch';
 const W = 1280;
 const H = 720;
 const DAG_N = Math.max(2, Math.floor(Number(process.argv[2] ?? '512')));
+const TILES = Math.max(1, Math.floor(Number(process.argv[3] ?? '1')));
 
 interface Sample {
   dag: number;
@@ -23,7 +24,7 @@ interface Sample {
 }
 
 async function capture(gridN: number, nandbg: string): Promise<{ near: Sample; vista: Sample }> {
-  const tag = `g${gridN}-${nandbg || 'lit'}`;
+  const tag = `g${gridN}-t${TILES}-${nandbg || 'lit'}`;
   const { browser } = await launchWebGPU();
   const page = await browser.newPage({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
   page.on('console', (m) => {
@@ -36,6 +37,7 @@ async function capture(gridN: number, nandbg: string): Promise<{ near: Sample; v
     occl: '1',
     nanitedterrain: String(gridN),
   };
+  if (TILES > 1) extra.nanitedtiles = String(TILES);
   if (nandbg) extra.nandbg = nandbg;
   const url = laasUrl({ scene: 'world', width: W, height: H, freeze: true, extra });
   await page.goto(url, { waitUntil: 'domcontentloaded' });

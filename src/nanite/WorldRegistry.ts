@@ -208,12 +208,17 @@ export async function buildWorldRegistry(input: {
    *  D1d Worker. Texel coords are packed so the GPU still reads the full-res
    *  heightTex. 0 = the discrete window path (default). */
   dagTerrainGridN?: number;
+  /** N8-D2 (D-N38): split the terrain DAG into T×T independent tiles, each gridN²
+   *  over its texel sub-region. Tile perimeters auto-lock (mesh boundary) ⇒ seams
+   *  are crack-free. 1 (default) = a single DAG. >1 is the path to streamed full-res. */
+  dagTerrainTiles?: number;
   /** N8-D1d: numeric world seed (WorldSeed.seed) → the terrain-DAG cache key.
    *  The heights are deterministic in the seed, so a cached DAG loads instantly
    *  (boot renders the DAG, no fallback). Omit to disable caching (always build). */
   seed?: number;
 }): Promise<WorldRegistryResult> {
-  const { renderer, hf, scatter, lib, counters, classes, dag, dagTerrainGridN, seed } = input;
+  const { renderer, hf, scatter, lib, counters, classes, dag, dagTerrainGridN, dagTerrainTiles, seed } =
+    input;
   const inSet = (c: MaterialClassId): boolean => !classes || classes.has(c);
   const t0 = performance.now();
   const deferred: string[] = [];
@@ -351,9 +356,12 @@ export async function buildWorldRegistry(input: {
 
   // ---- terrain: the REAL field as ONE heightfield source ---------------------
   const tTerr0 = performance.now();
-  let dagTerrainAttach:
-    | { handle: MeshHandle; gridVerts: Uint32Array; indices: Uint32Array; clusters: DagCluster[] }
-    | null = null;
+  const dagTerrainTileAttaches: {
+    handle: MeshHandle;
+    gridVerts: Uint32Array;
+    indices: Uint32Array;
+    clusters: DagCluster[];
+  }[] = [];
   if (inSet('terrain')) {
     const heights = hf.cpuHeights;
     if (!heights) throw new Error('WorldRegistry: hf.cpuHeights missing (boot order)');
@@ -362,89 +370,111 @@ export async function buildWorldRegistry(input: {
     const cell = WORLD_SIZE / res;
     const origin = cell / 2 - WORLD_SIZE / 2; // vertex (0,0) = texel-center 0
     if (dagTerrainGridN && dagTerrainGridN > 0) {
-      // ---- terrain LOD DAG (D2b, D-N32/34): adaptive heightfield DAG on a
-      // gridN² power-of-two SUBSAMPLE; pack TEXEL coords so the GPU decode reads
-      // the full-res heightTex. Replaces the discrete window path for terrain.
+      // ---- terrain LOD DAG (D2b/D-N36), off-thread + cached (D1d/D-N37), TILED
+      // for full-res scale (D-N38). The field splits into T×T independent tile
+      // DAGs, each gridN² over its texel sub-region. A tile's outer perimeter is a
+      // mesh boundary ⇒ buildDag auto-LOCKS those verts at full res ⇒ adjacent
+      // tiles share identical edges ⇒ crack-free seams for free. T=1 = one DAG.
       const gridN = dagTerrainGridN;
       if ((gridN & (gridN - 1)) !== 0 || gridN > res) {
         throw new Error(`WorldRegistry: dagTerrainGridN must be a power of two ≤ ${res}, got ${gridN}`);
       }
-      const stride = res / gridN; // texels per DAG cell
+      const T = dagTerrainTiles && dagTerrainTiles > 0 ? Math.floor(dagTerrainTiles) : 1;
+      if (res % T !== 0) throw new Error(`WorldRegistry: dagTerrainTiles ${T} must divide res ${res}`);
+      const tileTexels = res / T; // texels per tile side (far edge shared with neighbour)
+      if (tileTexels % gridN !== 0 || tileTexels < gridN) {
+        throw new Error(`WorldRegistry: tileTexels ${tileTexels} must be a positive multiple of gridN ${gridN}`);
+      }
+      const stride = tileTexels / gridN; // texels per tile-DAG cell
       const vpa = gridN + 1;
       const tHd0 = performance.now();
-      // Persistent build CACHE (D1d/D-N30): the build is deterministic, so a DAG
-      // previously built for this (seed, gridN) loads instantly — boot renders the
-      // DAG from frame 1 with NO window fallback. On a MISS, subsample the field +
-      // build OFF the main thread (three-free worker) + persist for next boot. A
-      // worker failure still produces a DAG synchronously (never window terrain).
-      const cacheKey = seed != null ? heightDagCacheKey(seed, gridN) : null;
-      let built: HeightDagResult | null = cacheKey ? await getCachedHeightDag(cacheKey) : null;
-      let buildVia: string;
-      if (built) {
-        buildVia = 'cache';
-      } else {
-        const sub = new Float32Array(vpa * vpa);
-        for (let gz = 0; gz <= gridN; gz++) {
-          const tz = Math.min(gz * stride, res - 1);
-          const trow = tz * res;
-          const srow = gz * vpa;
-          for (let gx = 0; gx <= gridN; gx++) {
-            const tx = Math.min(gx * stride, res - 1);
-            sub[srow + gx] = heights[trow + tx] as number;
-          }
-        }
-        const hfArgs = { heights: sub, gridN, cellSize: cell * stride, originX: origin, originZ: origin };
-        let dagWorker: DagBuildWorker | null = null;
-        try {
-          dagWorker = new DagBuildWorker();
-        } catch {
-          dagWorker = null;
-        }
-        if (dagWorker) {
-          try {
-            built = await dagWorker.buildHeight(hfArgs);
-            buildVia = 'worker';
-          } catch (e) {
-            deferred.push(`terrain DAG: worker build failed (${e instanceof Error ? e.message : String(e)}) → sync`);
-            built = buildHeightDag(hfArgs, {});
-            buildVia = 'sync-fallback';
-          } finally {
-            dagWorker.dispose();
-          }
-        } else {
-          built = buildHeightDag(hfArgs, {});
-          buildVia = 'sync-noworker';
-        }
-        if (cacheKey) void putCachedHeightDag(cacheKey, built); // fire-and-forget persist
+      let dagWorker: DagBuildWorker | null = null;
+      try {
+        dagWorker = new DagBuildWorker();
+      } catch {
+        dagWorker = null;
       }
-      // remap build grid coords (0..gridN) → texel coords (clamped to res-1, so
-      // texLoadR — which does NOT clamp — never reads out of bounds)
-      const gridVerts = new Uint32Array(built.gridVerts.length);
-      for (let i = 0; i < built.gridVerts.length; i++) {
-        const p = built.gridVerts[i] as number;
-        const tx = Math.min((p & 0xffff) * stride, res - 1);
-        const tz = Math.min(((p >>> 16) & 0xffff) * stride, res - 1);
-        gridVerts[i] = ((tx & 0xffff) | ((tz & 0xffff) << 16)) >>> 0;
+      let tCl = 0;
+      let tTris = 0;
+      let nCache = 0;
+      let nBuilt = 0;
+      let maxErr = 0;
+      let offGrid = 0;
+      for (let tj = 0; tj < T; tj++) {
+        for (let ti = 0; ti < T; ti++) {
+          const tx0 = ti * tileTexels;
+          const tz0 = tj * tileTexels;
+          // build is deterministic → a cached tile loads instantly (boot renders
+          // the DAG, no window fallback). MISS → subsample this tile's texels +
+          // build off-thread (sync fallback on worker failure — still a DAG).
+          const cacheKey = seed != null ? heightDagCacheKey(seed, gridN, `-T${T}-${ti}x${tj}`) : null;
+          let built: HeightDagResult | null = cacheKey ? await getCachedHeightDag(cacheKey) : null;
+          if (built) {
+            nCache++;
+          } else {
+            const sub = new Float32Array(vpa * vpa);
+            for (let gz = 0; gz <= gridN; gz++) {
+              const texZ = Math.min(tz0 + gz * stride, res - 1);
+              const trow = texZ * res;
+              const srow = gz * vpa;
+              for (let gx = 0; gx <= gridN; gx++) {
+                const texX = Math.min(tx0 + gx * stride, res - 1);
+                sub[srow + gx] = heights[trow + texX] as number;
+              }
+            }
+            // build positions in WORLD space at this tile's origin (on-grid
+            // recovery is exact); the GPU decode uses GLOBAL texel coords below.
+            const hfArgs = {
+              heights: sub,
+              gridN,
+              cellSize: cell * stride,
+              originX: origin + tx0 * cell,
+              originZ: origin + tz0 * cell,
+            };
+            if (dagWorker) {
+              try {
+                built = await dagWorker.buildHeight(hfArgs);
+              } catch (e) {
+                deferred.push(`terrain DAG tile ${ti}x${tj}: worker failed (${e instanceof Error ? e.message : String(e)}) → sync`);
+                built = buildHeightDag(hfArgs, {});
+              }
+            } else {
+              built = buildHeightDag(hfArgs, {});
+            }
+            if (cacheKey) void putCachedHeightDag(cacheKey, built); // fire-and-forget
+            nBuilt++;
+          }
+          // remap tile-local grid coords (0..gridN) → GLOBAL texel coords (offset
+          // by the tile's texel origin; clamped to res-1 — texLoadR does NOT clamp)
+          const gridVerts = new Uint32Array(built.gridVerts.length);
+          for (let i = 0; i < built.gridVerts.length; i++) {
+            const p = built.gridVerts[i] as number;
+            const texX = Math.min(tx0 + (p & 0xffff) * stride, res - 1);
+            const texZ = Math.min(tz0 + ((p >>> 16) & 0xffff) * stride, res - 1);
+            gridVerts[i] = ((texX & 0xffff) | ((texZ & 0xffff) << 16)) >>> 0;
+          }
+          const h = reg.registerHeightDag(
+            'terrain',
+            { originX: origin, originZ: origin, cellSize: cell },
+            { label: T > 1 ? `terrain/t${ti}x${tj}` : 'terrain' },
+          );
+          reg.bindInstances(h, { a: new Float32Array([0, 0, 0, 1]), b: new Float32Array([0, 0, 0, 0]) });
+          reg.addLate({
+            verts: gridVerts.length,
+            tris: built.indices.length / 3,
+            clusters: built.clusters.length,
+          });
+          dagTerrainTileAttaches.push({ handle: h, gridVerts, indices: built.indices, clusters: built.clusters });
+          tCl += built.clusters.length;
+          tTris += built.indices.length / 3;
+          if (built.stats.maxError > maxErr) maxErr = built.stats.maxError;
+          offGrid += built.stats.offGridVerts;
+        }
       }
-      const hTerrain = reg.registerHeightDag(
-        'terrain',
-        { originX: origin, originZ: origin, cellSize: cell },
-        { label: 'terrain' },
-      );
-      reg.bindInstances(hTerrain, {
-        a: new Float32Array([0, 0, 0, 1]),
-        b: new Float32Array([0, 0, 0, 0]),
-      });
-      reg.addLate({
-        verts: gridVerts.length,
-        tris: built.indices.length / 3,
-        clusters: built.clusters.length,
-      });
-      dagTerrainAttach = { handle: hTerrain, gridVerts, indices: built.indices, clusters: built.clusters };
+      if (dagWorker) dagWorker.dispose();
       deferred.push(
-        `terrain DAG [${buildVia}]: gridN ${gridN} (stride ${stride}) → ${built.clusters.length} cl, ` +
-          `${(built.indices.length / 3) | 0} tris, ${built.stats.levels} lv, ` +
-          `maxErr ${built.stats.maxError.toFixed(2)} m, offGrid ${built.stats.offGridVerts}, ` +
+        `terrain DAG: ${T}×${T} tiles gridN ${gridN} (stride ${stride}) → ${tCl} cl, ${tTris | 0} tris, ` +
+          `maxErr ${maxErr.toFixed(2)} m, offGrid ${offGrid}, ${nCache} cached/${nBuilt} built, ` +
           `${(performance.now() - tHd0).toFixed(0)} ms`,
       );
     } else {
@@ -533,7 +563,7 @@ export async function buildWorldRegistry(input: {
   // ---- build ------------------------------------------------------------------
   const report = reg.build(renderer, counters);
   for (const b of dagBuilds) reg.attachDag(b.handle, b.dag);
-  if (dagTerrainAttach) reg.attachHeightDag(dagTerrainAttach.handle, dagTerrainAttach);
+  for (const t of dagTerrainTileAttaches) reg.attachHeightDag(t.handle, t);
   const t1 = performance.now();
   return {
     registry: reg,

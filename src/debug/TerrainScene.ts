@@ -250,6 +250,9 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       // power-of-two subsample (256/512/…), replacing the discrete window grid.
       const dterrainParam = qNan.get('nanitedterrain');
       const dagTerrainGridN = dterrainParam ? Math.max(0, Math.floor(Number(dterrainParam))) : 0;
+      // N8-D2 (D-N38): ?nanitedtiles=T → split the terrain DAG into T×T tiles.
+      const dtilesParam = qNan.get('nanitedtiles');
+      const dagTerrainTiles = dtilesParam ? Math.max(1, Math.floor(Number(dtilesParam))) : 1;
       const wr = await buildWorldRegistry({
         renderer: engine.renderer,
         hf,
@@ -260,6 +263,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
         ...(classes ? { classes } : {}),
         ...(dagClasses && dagClasses.size > 0 ? { dag: dagClasses } : {}),
         ...(dagTerrainGridN > 0 ? { dagTerrainGridN } : {}),
+        ...(dagTerrainTiles > 1 ? { dagTerrainTiles } : {}),
       });
       (engine as unknown as { naniteRegistry?: unknown }).naniteRegistry = wr.registry;
       naniteRegistry = wr.registry;

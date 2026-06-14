@@ -34,8 +34,8 @@ interface CachedBlob {
   stats: HeightDagStats;
 }
 
-export function heightDagCacheKey(seed: number, gridN: number): string {
-  return `dag-terrain-v${DAG_CACHE_VERSION}-s${seed >>> 0}-g${gridN}`;
+export function heightDagCacheKey(seed: number, gridN: number, suffix = ''): string {
+  return `dag-terrain-v${DAG_CACHE_VERSION}-s${seed >>> 0}-g${gridN}${suffix}`;
 }
 
 function openDb(): Promise<IDBDatabase> {
