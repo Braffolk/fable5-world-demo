@@ -1105,40 +1105,11 @@ export class GeometryRegistry {
   }
 
   /**
-   * N8-D2b: reserve a heightfield mesh whose geometry is an adaptive terrain
-   * LOD DAG (filled by attachHeightDag post-build) rather than the discrete
-   * window grid. Allocates NO clusters up front — the DAG range is appended
-   * late (reserve it with addLate) — but carries the hf origin/cell the GPU
-   * decode needs (mesh-record words 7/8/9) and the HEIGHTFIELD flag.
-   */
-  registerHeightDag(
-    matClass: MaterialClassId,
-    hf: { originX: number; originZ: number; cellSize: number },
-    opts: RegisterOpts = {},
-  ): MeshHandle {
-    const handle = this.entries.length;
-    if (handle >= 0xffff) throw new Error('GeometryRegistry: mesh id exceeds u16');
-    if (this.built && handle >= this.caps.meshes) {
-      throw new Error('GeometryRegistry: mesh capacity exceeded post-build — raise late.meshes');
-    }
-    const entry = this.newEntry(handle, matClass, { ...opts, transformChannel: 'terrain' }, true, 0);
-    entry.hf = {
-      originX: hf.originX,
-      originZ: hf.originZ,
-      cellSize: hf.cellSize,
-      quadsX: 0,
-      quadsZ: 0,
-      windowsX: 0,
-      windowsZ: 0,
-    };
-    this.entries.push(entry);
-    return handle;
-  }
-
-  /**
-   * N8-D2b: attach a terrain LOD DAG (buildHeightDag output) to a
-   * registerHeightDag mesh. Mirrors attachDag — same cluster records + 10-float
-   * DAG cut records + the SAME flat kClusterCull cut — but the vertex pool packs
+   * N8-D2b: attach a terrain LOD DAG (buildHeightDag output) to a heightfield
+   * mesh, repointing it from the discrete window grid to the adaptive DAG (D1d
+   * runs this in the BACKGROUND after the window placeholder boots). Mirrors
+   * attachDag — same cluster records + 10-float DAG cut records + the SAME flat
+   * kClusterCull cut — but the vertex pool packs
    * TEXEL grid coords (word0 = gx | gz<<16, already clamped to [0,res-1]; words
    * 1-5 unused — height comes from heightTex, normal from normalTex on the GPU)
    * and the cluster carries CLUSTER_FLAG_HEIGHTFIELD|CLUSTER_FLAG_DAG so the
