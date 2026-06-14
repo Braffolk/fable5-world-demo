@@ -1438,6 +1438,29 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-14 (ao): **N8-D2 Stage 2b-3 fix — LAZY eviction kills the "LOD vanishes before the new
+  one bakes in" hole (user report).** (Opus 4.8 1M.) Root cause: runDiff EVICTED departed tiles
+  eagerly (synchronously, first) then started the SLOW async loads — so through the bake window the
+  old detailed tile was already gone but its replacement wasn't in ⇒ a transient void (worse when
+  the coarse backstop churned too). Fix: the old LOD now SURVIVES until replaced. runDiff no longer
+  evicts up front; a departed tile keeps rendering until either (a) the whole desired set is resident
+  again (cleanup drops the now-redundant stragglers — lean memory when the camera settles), or (b)
+  the pool runs dry and a slot must be reclaimed → evict the departed tile FARTHEST from the camera
+  by FOOTPRINT distance (footprintDist2 = 0 if the camera is inside it ⇒ a coarse tile still covering
+  the camera is reclaimed LAST — it is the backstop; far small fine tiles go first). Pool headroom
+  raised to 1.5×clipmapMaxTiles so stragglers can linger through the bake. probe-stream still green
+  (resident≡desired after settle via cleanup, bounded, no-leak). probe-streammove upgraded to read
+  dag MID-BAKE (one settle right after each hop, before convergence): worst mid-bake over moderate
+  hops 654–768 cl (>0 = NO transient hole; was 0 with eager evict), and even a hard TELEPORT to the
+  rim holds 281 cl mid-bake (the field-spanning coarse ring lingers + covers the destination). The
+  mid-bake pattern is `654 → 1384` settled = coarse-shows-then-fine-pops-in (graceful LOD, never a
+  void) — confirmed by a mid-bake SCREENSHOT (full relief fills the frame during the bake). This
+  also largely SUBSUMES the 2b-4 teleport-hole concern from log (an): lazy+footprint-evict keeps the
+  old coarse covering through most teleports; an always-resident base is now polish for the extreme
+  corner→corner jump (beyond the old coarse ring's reach) + the eventual suppression-free endgame.
+  KNOWN/next perf: builds are still SERIALIZED on one DagWorker (~170 ms/tile cache-miss) → detail
+  pops in slowly on a big jump (coarse lingers meanwhile, no hole) — a DagWorker POOL (concurrent
+  bakes) shortens the coarse→fine window. tsc clean; probe-tilepool + probe-clipmap green.
 - 2026-06-14 (an): **N8-D2 Stage 2b-3 — the terrain clipmap FOLLOWS the camera (per-frame async
   streamer); detail re-centers on the live camera, hole-free at steady state (D-N39).** (Opus 4.8
   1M.) New TerrainStreamer.ts owns the residency loop: the field's buildTileGlobal moved into a

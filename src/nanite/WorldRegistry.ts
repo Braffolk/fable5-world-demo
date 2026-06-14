@@ -450,7 +450,10 @@ export async function buildWorldRegistry(input: {
         const vCap = Math.ceil(pm.v * 1.5) + 256;
         const tCap = Math.ceil(pm.t * 1.5) + 256;
         const cCap = Math.ceil(pm.c * 1.5) + 32;
-        const slots = streamer.maxTiles + 8;
+        // headroom ABOVE clipmapMaxTiles so departed tiles can LINGER through the
+        // async bake window (lazy eviction — the old LOD stays until its replacement
+        // is resident; far stragglers are reclaimed first under pressure). ~1.5×.
+        const slots = streamer.maxTiles + Math.ceil(streamer.maxTiles / 2);
         reg.reserveTilePool(
           'terrain',
           { originX: origin, originZ: origin, cellSize: cell },

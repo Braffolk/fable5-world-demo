@@ -137,15 +137,38 @@ export interface StreamerDeps extends TileBuildDeps {
 
 interface BootTile {
   key: string;
+  x0: number;
+  z0: number;
+  size: number;
   gridVerts: Uint32Array;
   indices: Uint32Array;
   clusters: DagCluster[];
 }
 
+/** a resident tile: its pool slot + texel footprint [x0,x0+size]×[z0,z0+size], used
+ *  for footprint-distance-ordered eviction under pool pressure (a coarse tile whose
+ *  footprint still covers the camera has distance 0 ⇒ is reclaimed LAST — it is the
+ *  backstop). */
+interface ResidentTile {
+  slot: number;
+  x0: number;
+  z0: number;
+  size: number;
+}
+
+/** distance² from point (px,pz) to the axis-aligned tile footprint (0 if inside). */
+function footprintDist2(t: ResidentTile, px: number, pz: number): number {
+  const dx = px < t.x0 ? t.x0 - px : px > t.x0 + t.size ? px - (t.x0 + t.size) : 0;
+  const dz = pz < t.z0 ? t.z0 - pz : pz > t.z0 + t.size ? pz - (t.z0 + t.size) : 0;
+  return dx * dx + dz * dz;
+}
+
 export class TerrainStreamer {
   private readonly cfg: ClipmapConfig;
-  /** tileKey → occupied pool slot. The live resident set; size ≤ maxTiles. */
-  private readonly resident = new Map<string, number>();
+  /** tileKey → resident tile (slot + center). Departed tiles linger here until a
+   *  replacement covers them (lazy eviction) ⇒ size can transiently exceed maxTiles
+   *  during a transition, bounded by the pool's slot count. */
+  private readonly resident = new Map<string, ResidentTile>();
   /** tiles that overflowed their slot cap — held so runDiff does NOT rebuild them
    *  every frame (the coarser ring backstops them). Pruned when they leave desired
    *  so a later revisit re-attempts (e.g. after a config change). */
@@ -238,7 +261,15 @@ export class TerrainStreamer {
         this.bstats,
         this.onDeferred,
       );
-      this.bootBuilt.push({ key: t.key, gridVerts, indices: built.indices, clusters: built.clusters });
+      this.bootBuilt.push({
+        key: t.key,
+        x0: t.tx0,
+        z0: t.tz0,
+        size: t.tileTexels,
+        gridVerts,
+        indices: built.indices,
+        clusters: built.clusters,
+      });
       this.measure(built, gridVerts.length);
     }
     return set.length;
@@ -253,7 +284,7 @@ export class TerrainStreamer {
         break;
       }
       this.deps.reg.attachHeightDagTile(slot, { gridVerts: b.gridVerts, indices: b.indices, clusters: b.clusters });
-      this.resident.set(b.key, slot);
+      this.resident.set(b.key, { slot, x0: b.x0, z0: b.z0, size: b.size });
       this.nLoaded++;
     }
     this.bootBuilt = [];
@@ -296,22 +327,24 @@ export class TerrainStreamer {
     }
   }
 
-  /** evict everything departed (sync) + load a capped batch of everything arrived. */
+  /**
+   * LAZY-evict + capped load. Departed tiles are NOT dropped up front — they keep
+   * RENDERING (their footprint stays covered) through the bake window until either
+   * (a) the whole desired set is resident again ⇒ the new coverage is complete, so
+   * cleanup drops the now-redundant stragglers, or (b) the pool runs dry and a slot
+   * must be reclaimed ⇒ we evict the FARTHEST departed tile (the one least likely to
+   * leave a visible hole: far away + most likely already covered by a coarser
+   * resident ring + smallest on screen). This is the fix for "the detailed LOD
+   * vanishes before the new one bakes in" — the old LOD survives until replaced.
+   */
   private async runDiff(tx: number, tz: number): Promise<void> {
     const desired = clipmapTiles(tx, tz, this.cfg);
     const want = new Set<string>();
     for (const t of desired) want.add(t.key);
-    // EVICT departed — synchronous, cheap, runs EVERY batch (bounds memory + vista)
-    for (const [key, slot] of [...this.resident]) {
-      if (!want.has(key)) {
-        this.deps.reg.evictHeightDagTile(slot);
-        this.resident.delete(key);
-        this.nEvicted++;
-      }
-    }
     // forget skip marks for tiles that left desired (a revisit re-attempts them)
     for (const key of this.skipped) if (!want.has(key)) this.skipped.delete(key);
-    // LOAD arrived — capped per batch; coarser resident ring backstops the rest
+    // LOAD arrived — capped per batch; reclaim a slot from the farthest DEPARTED
+    // tile only on pool pressure (NOT an eager up-front evict that would hole).
     const cap = this.deps.reg.tilePoolCap;
     let loaded = 0;
     for (const t of desired) {
@@ -350,20 +383,71 @@ export class TerrainStreamer {
         this.nSkipped++;
         continue;
       }
-      // build-then-alloc: take a slot only now that the geometry is in hand
-      const slot = this.deps.reg.allocTileSlot();
+      // build-then-alloc: take a slot only now that the geometry is in hand. On
+      // pool pressure, reclaim one from the farthest departed tile (then re-alloc
+      // it properly via the free stack — never reuse a just-evicted slot directly).
+      let slot = this.deps.reg.allocTileSlot();
+      if (slot < 0 && this.evictFarthestDeparted(tx, tz, want)) slot = this.deps.reg.allocTileSlot();
       if (slot < 0) {
         if (!this.fullWarned) {
           this.fullWarned = true;
-          this.onDeferred('terrain stream: pool full — deferring loads (raise reserveTilePool slots)');
+          this.onDeferred('terrain stream: pool full of DESIRED tiles — raise reserveTilePool slots');
         }
         break;
       }
       this.deps.reg.attachHeightDagTile(slot, { gridVerts, indices: built.indices, clusters: built.clusters });
-      this.resident.set(t.key, slot);
+      this.resident.set(t.key, { slot, x0: t.tx0, z0: t.tz0, size: t.tileTexels });
       this.nLoaded++;
       loaded++;
     }
+    // CLEANUP — once the whole desired set is resident the new coverage is complete,
+    // so any lingering departed tile is now redundant ⇒ drop it (keeps memory lean
+    // when the camera settles; during motion the stragglers stay as backstop).
+    let allResident = true;
+    for (const t of desired) {
+      if (!this.resident.has(t.key)) {
+        allResident = false;
+        break;
+      }
+    }
+    if (allResident) {
+      for (const [key, rt] of [...this.resident]) {
+        if (!want.has(key)) {
+          this.deps.reg.evictHeightDagTile(rt.slot);
+          this.resident.delete(key);
+          this.nEvicted++;
+        }
+      }
+    }
+  }
+
+  /**
+   * Reclaim ONE slot by evicting the DEPARTED (not-currently-desired) resident tile
+   * FARTHEST from the camera — least likely to leave a visible hole. Frees the slot
+   * to the registry free-stack (the caller re-allocs it). Returns false (evicts
+   * nothing) if every resident tile is currently desired — the pool is genuinely
+   * too small, so the caller stops loading rather than drop a needed tile.
+   */
+  private evictFarthestDeparted(tx: number, tz: number, want: Set<string>): boolean {
+    let worstKey: string | null = null;
+    let worstSlot = -1;
+    let worstD = -1;
+    for (const [key, rt] of this.resident) {
+      if (want.has(key)) continue; // never evict a tile we still want
+      // FOOTPRINT distance — a coarse tile still covering the camera scores 0 and is
+      // reclaimed last (it's the backstop); far small fine tiles go first.
+      const d = footprintDist2(rt, tx, tz);
+      if (d > worstD) {
+        worstD = d;
+        worstKey = key;
+        worstSlot = rt.slot;
+      }
+    }
+    if (worstKey == null) return false;
+    this.deps.reg.evictHeightDagTile(worstSlot);
+    this.resident.delete(worstKey);
+    this.nEvicted++;
+    return true;
   }
 
   /** HUD/probe snapshot. */

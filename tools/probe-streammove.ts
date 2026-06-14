@@ -101,57 +101,68 @@ async function main(): Promise<void> {
   };
 
   const vistaY = base.p[1] + 240;
-  // spawn is field-center (~world 0,0). hop across most of the 4096-wide field.
-  const poses: Array<[string, number, number]> = [
-    ['spawn', base.p[0], base.p[2]],
-    ['east-400', base.p[0] + 400, base.p[2]],
-    ['ne-900', base.p[0] + 900, base.p[2] + 700],
-    ['far-corner', 1500, 1500],
-    ['far-opposite', -1500, -1400],
-    ['back-spawn', base.p[0], base.p[2]],
+  // a CONTINUOUS-ish traverse in moderate hops (each well within the coarse ring's
+  // field-spanning reach) so lazy eviction keeps the old LOD covering through the
+  // bake window — mid-bake must stay hole-free. Plus a final hard TELEPORT to the
+  // far rim (the 2b-4 stress) which need only CONVERGE hole-free.
+  const X0 = base.p[0];
+  const Z0 = base.p[2];
+  const path: Array<[string, number, number, boolean]> = [
+    ['spawn', X0, Z0, false],
+    ['e-350', X0 + 350, Z0, true],
+    ['e-700', X0 + 700, Z0, true],
+    ['ne-1050', X0 + 700, Z0 + 350, true],
+    ['ne-1400', X0 + 1050, Z0 + 700, true],
+    ['back-spawn', X0, Z0, true],
+    ['teleport-rim', -1700, -1600, false], // hard jump — convergence-only
   ];
 
-  const snaps: Array<{ label: string; s: Snap }> = [];
-  for (const [label, x, z] of poses) {
+  const snaps: Array<{ label: string; mid: Snap; s: Snap }> = [];
+  for (const [label, x, z, midMatters] of path) {
     await setXZ(x, z, vistaY);
-    const s = await snap();
-    snaps.push({ label, s });
+    const mid = await readCounters(); // ONE settle(8) — mid-bake (before convergence)
+    await page.screenshot({ path: `shots/wip/streammove-${label}-mid.png` }); // mid-bake frame
+    const s = await snap(); // settle to steady state
+    snaps.push({ label, mid, s });
     await page.screenshot({ path: `shots/wip/streammove-${label}.png` });
     console.log(
-      `  ${label.padEnd(13)} dag ${String(s.dag).padStart(6)} cl | resident ${String(s.resident).padStart(3)} ` +
-        `loaded ${String(s.loaded).padStart(4)} evicted ${String(s.evicted).padStart(4)} ` +
-        `skip ${s.skipped} built ${s.built} | ${s.ms.toFixed(1)}ms`,
+      `  ${label.padEnd(13)} mid dag ${String(mid.dag).padStart(6)} (res ${String(mid.resident).padStart(3)}) → ` +
+        `settled dag ${String(s.dag).padStart(6)} (res ${String(s.resident).padStart(3)}) | ` +
+        `loaded ${s.loaded} evicted ${s.evicted} skip ${s.skipped}${midMatters ? '' : '  [convergence-only]'}`,
     );
   }
   await browser.close();
 
   // ---- assertions ----
   const spawn = snaps[0]!.s;
-  // boot rendered terrain (no fallback, no hole at frame 1)
   expect(spawn.resident > 0, `boot resident ${spawn.resident} — streamer not live`);
-  // every pose keeps terrain on screen (no hole) + bounded resident set
-  for (const { label, s } of snaps) {
-    expect(s.dag > 0, `${label}: dagClusters ${s.dag} — terrain HOLE (no-fallback violated)`);
+  for (const { label, mid, s } of snaps) {
+    // steady state: terrain renders everywhere (the no-fallback floor)
+    expect(s.dag > 0, `${label}: settled dagClusters ${s.dag} — terrain HOLE`);
     expect(s.resident > 0, `${label}: resident ${s.resident} — terrain went empty`);
+    // THE FIX: a moderate hop must stay hole-free DURING the bake (old LOD lingers)
+    const midMatters = path.find((p) => p[0] === label)![3];
+    if (midMatters) {
+      expect(mid.dag > 0, `${label}: MID-BAKE dagClusters ${mid.dag} — old LOD evicted before replacement baked (the bug)`);
+    }
   }
   const last = snaps[snaps.length - 1]!.s;
-  // the camera roamed ⇒ detail streamed in AND far detail dropped out
   expect(last.loaded > spawn.loaded, `streamer did not LOAD new tiles as the camera moved (${spawn.loaded}→${last.loaded})`);
   expect(last.evicted > 0, `streamer did not EVICT far tiles (${last.evicted})`);
-  // returning to spawn re-centers to a comparable resident count
   const back = snaps.find((x) => x.label === 'back-spawn')!.s;
   expect(Math.abs(back.resident - spawn.resident) <= 4, `back-spawn resident ${back.resident} far from boot ${spawn.resident} (re-center failed)`);
 
+  const midMin = Math.min(...snaps.filter((x) => path.find((p) => p[0] === x.label)![3]).map((x) => x.mid.dag));
   console.log(
-    `[streammove] gridN ${GRID_N}: ${poses.length} poses, resident ${Math.min(...snaps.map((x) => x.s.resident))}–` +
-      `${Math.max(...snaps.map((x) => x.s.resident))}, total loaded ${last.loaded} / evicted ${last.evicted} / skipped ${last.skipped}`,
+    `[streammove] gridN ${GRID_N}: ${path.length} poses; worst MID-BAKE dag over moderate hops = ${midMin} cl (must be >0 = no transient hole); ` +
+      `total loaded ${last.loaded} / evicted ${last.evicted} / skipped ${last.skipped}`,
   );
-  console.log('[streammove] inspect shots/wip/streammove-*.png — terrain must fill the frame at every pose (no sky holes)');
+  console.log('[streammove] inspect shots/wip/streammove-*.png — terrain fills the frame at every pose');
   if (failures > 0) {
     console.error(`[streammove] ${failures} FAILURES`);
     process.exit(1);
   }
-  console.log('[streammove] PASS — clipmap detail follows the camera, crack-free, no holes');
+  console.log('[streammove] PASS — detail follows the camera; old LOD survives the bake window (no transient hole on moderate motion)');
 }
 main().catch((e) => {
   console.error('[streammove] FAILED:', e instanceof Error ? e.message : e);
