@@ -1774,6 +1774,10 @@ export class GeometryRegistry {
   private populateVCompact(): void {
     const idx = this.idxArr;
     const cl = this.clusterArr;
+    let cached = 0;
+    let eligible = 0;
+    let tooWide = 0;
+    let sumCount = 0;
     for (let c = 0; c < this.clusterCursor; c++) {
       const triStart = cl[c * CLUSTER_WORDS + 6] ?? 0;
       const w7 = cl[c * CLUSTER_WORDS + 7] ?? 0;
@@ -1782,6 +1786,7 @@ export class GeometryRegistry {
       const isHF = (flags & CLUSTER_FLAG_HEIGHTFIELD) !== 0;
       const isDAG = (flags & CLUSTER_FLAG_DAG) !== 0;
       if (triCount === 0 || (isHF && !isDAG)) continue;
+      eligible++;
       let mn = 0xffffffff;
       let mx = 0;
       for (let t = 0; t < triCount; t++) {
@@ -1795,8 +1800,18 @@ export class GeometryRegistry {
       if (count > 0 && count <= VCACHE_VERTS) {
         this.vcompactArr[c * 2] = mn;
         this.vcompactArr[c * 2 + 1] = count;
+        cached++;
+        sumCount += count;
+      } else if (count > VCACHE_VERTS) {
+        tooWide++;
       }
     }
+    const tot = this.clusterCursor;
+    console.log(
+      `[laas][vcompact] cached ${cached}/${tot} boot clusters (${((100 * cached) / Math.max(1, tot)).toFixed(1)}%) — ` +
+        `eligible(non-window) ${eligible}, tooWide>${VCACHE_VERTS} ${tooWide}, avg count ${(sumCount / Math.max(1, cached)).toFixed(0)}. ` +
+        `Window-grid + streamed-terrain stay 0=fallback (stage 1 = explicit only).`,
+    );
   }
 
   private encodeClusterRecs(entry: MeshEntry, built: BuiltClusters): Uint32Array {

@@ -52,7 +52,7 @@ import {
 } from 'three/tsl';
 import type { NB, NF, NI, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
 import { markFragmentWritable } from '../render/ThreePatches';
-import { MESH_WORDS } from './GeometryRegistry';
+import { MESH_WORDS, VCACHE_VERTS } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
 import { DISPATCH_ROW, QRASTER_CAP, hashColor, instYaw, type NaniteCam } from './NaniteCommon';
 import { makeFetch, type TerrainDisp, type TrunkWindOpt, type VertCtx } from './NaniteFetch';
@@ -163,6 +163,18 @@ export function buildNaniteRaster(
   // makeCtx); `?wgcache=0` opts out. Applies to the camera raster AND every shadow-
   // clipmap level + the HW vertex stage (all share buildNaniteRaster).
   const wgcache = new URLSearchParams(window.location.search).get('wgcache') !== '0';
+  // PERF-3 win #2 (LOG bb / D-N40): per-cluster cooperative VERTEX-TRANSFORM cache.
+  // One workgroup == one cluster, but fetchWorldVert runs per CORNER = 3×triCount ≈
+  // 384× for a 128-tri cluster that references only ~82-96 UNIQUE verts (~4× redundant).
+  // Where the cluster's vertex indices occupy a tight contiguous range (set at build
+  // time in gpu.vcompact[ci] = (vMin, count), count>0 ≤ VCACHE_VERTS — explicit meshes +
+  // small DAG clusters; terrain/window-grid/streamed stay 0=fallback), transform each
+  // UNIQUE vert ONCE into workgroup shared memory and let the triangles read their
+  // corners from it. Race-free (strided write to DISTINCT slots, no atomics). Default
+  // OFF (?vcompact=1 opts in) until the net win is measured. gpu.vcompact is referenced
+  // HERE ONLY ⇒ bound to the RASTER compute kernel alone — the resolve fragment stage
+  // (at the 10-storage-buffer Metal ceiling) never sees it.
+  const vcompact = new URLSearchParams(window.location.search).get('vcompact') === '1';
   const qRasterRO = cull.qRasterRO;
   const visDepthV = vis.depthV;
   const visPayloadV = vis.payloadV;
@@ -180,7 +192,7 @@ export function buildNaniteRaster(
   const auditV = sU32Views(auditAttr, 4);
 
   // ---- shared fetch helpers (NaniteFetch.ts — also the resolve's decode) ----------
-  const { makeCtx, fetchWorldVert } = makeFetch(gpu, heightTex, disp, wind);
+  const { makeCtx, fetchWorldVert, fetchWorldVertByIndex } = makeFetch(gpu, heightTex, disp, wind);
 
   const edgeFn = (a: NV2, b: NV2, p: NV2): NF =>
     p.y.sub(a.y).mul(b.x.sub(a.x)).sub(p.x.sub(a.x).mul(b.y.sub(a.y))) as unknown as NF;
@@ -319,10 +331,53 @@ export function buildNaniteRaster(
         returnIf(itemCount.greaterThanEqual(uint(0)));
       }
 
+      // ---- cooperative vertex-transform cache (?vcompact) ----------------------------
+      // Transform each UNIQUE vert of a compacted cluster ONCE into shared memory. Every
+      // LIVE thread reaches the barrier (the only prior early-out — itemIdx ≥ itemCount —
+      // is per-WORKGROUP ⇒ uniform). Thread t writes slots t, t+128, … to DISTINCT cells
+      // (no atomics). The barrier is UNCONDITIONAL: vcCount is a storage value, so a
+      // vcCount-gated barrier would fail naga's uniformity analysis — count=0 clusters
+      // just pay an empty barrier and fall back per-corner below.
+      let shVerts: { element(i: NU): unknown } | null = null;
+      let vcMin: NU = uint(0) as unknown as NU;
+      let vcCount: NU = uint(0) as unknown as NU;
+      if (vcompact) {
+        shVerts = workgroupArray('vec3', VCACHE_VERTS) as unknown as { element(i: NU): unknown };
+        vcMin = elemU(gpu.vcompact, ci.mul(uint(2))).toVar();
+        vcCount = elemU(gpu.vcompact, ci.mul(uint(2)).add(uint(1))).toVar();
+        // VCACHE_VERTS ≤ 2·128 ⇒ at most 2 strides per thread; unrolled at build time.
+        for (let s = 0; s < Math.ceil(VCACHE_VERTS / 128); s++) {
+          const slot = (s === 0 ? localTri : localTri.add(uint(s * 128))).toVar();
+          If(slot.lessThan(vcCount), () => {
+            (shVerts!.element(slot) as { assign(x: NV3): void }).assign(
+              fetchWorldVertByIndex(ctx, vcMin.add(slot)),
+            );
+          });
+        }
+        workgroupBarrier();
+      }
+
+      // Corner fetch: read the cached vert (shVerts[vi−vMin]) when the cluster is
+      // compacted, else the per-thread fetchWorldVert. The vcCount>0 test is UNIFORM
+      // (shared ci) — a cheap predicted branch, no barrier. vi is derived from gpu.indices
+      // exactly as fetchWorldVert does, so the cached vert is bit-identical to the inline
+      // transform (NaniteFetch stage 2a split is behavior-preserving).
+      const fetchCorner = (v: 0 | 1 | 2): NV3 => {
+        if (!vcompact) return fetchWorldVert(ctx, localTri, v);
+        const wv = vec3(0).toVar();
+        If(vcCount.greaterThan(uint(0)), () => {
+          const vi = elemU(gpu.indices, ctx.triStart.add(localTri).mul(uint(3)).add(uint(v)));
+          wv.assign((shVerts!.element(vi.sub(vcMin)) as { toVar(): NV3 }).toVar());
+        }).Else(() => {
+          wv.assign(fetchWorldVert(ctx, localTri, v));
+        });
+        return wv as unknown as NV3;
+      };
+
       If(localTri.lessThan(ctx.triCount), () => {
-        const w0 = fetchWorldVert(ctx, localTri, 0);
-        const w1 = fetchWorldVert(ctx, localTri, 1);
-        const w2 = fetchWorldVert(ctx, localTri, 2);
+        const w0 = fetchCorner(0);
+        const w1 = fetchCorner(1);
+        const w2 = fetchCorner(2);
 
         const p0 = cam.vp.mul(vec4(w0, 1)).toVar();
         const p1 = cam.vp.mul(vec4(w1, 1)).toVar();
