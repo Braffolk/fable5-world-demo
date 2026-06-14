@@ -253,6 +253,10 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       // N8-D2 (D-N38): ?nanitedtiles=T → split the terrain DAG into T×T tiles.
       const dtilesParam = qNan.get('nanitedtiles');
       const dagTerrainTiles = dtilesParam ? Math.max(1, Math.floor(Number(dtilesParam))) : 1;
+      // N8-D2 Stage 2b-1 (D-N39): ?nanitedpool=1 → route terrain tiles through the
+      // streaming tile POOL (reserveTilePool/attachHeightDagTile) rather than the
+      // per-tile registerHeightDag+attachHeightDag path. GPU-render parity proof.
+      const dagTerrainPool = qNan.get('nanitedpool') === '1';
       const wr = await buildWorldRegistry({
         renderer: engine.renderer,
         hf,
@@ -264,6 +268,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
         ...(dagClasses && dagClasses.size > 0 ? { dag: dagClasses } : {}),
         ...(dagTerrainGridN > 0 ? { dagTerrainGridN } : {}),
         ...(dagTerrainTiles > 1 ? { dagTerrainTiles } : {}),
+        ...(dagTerrainPool ? { dagTerrainPool: true } : {}),
       });
       (engine as unknown as { naniteRegistry?: unknown }).naniteRegistry = wr.registry;
       naniteRegistry = wr.registry;

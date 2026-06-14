@@ -212,12 +212,17 @@ export async function buildWorldRegistry(input: {
    *  over its texel sub-region. Tile perimeters auto-lock (mesh boundary) ⇒ seams
    *  are crack-free. 1 (default) = a single DAG. >1 is the path to streamed full-res. */
   dagTerrainTiles?: number;
+  /** N8-D2 Stage 2b-1 (D-N39): route the terrain tiles through the streaming tile
+   *  POOL (reserveTilePool/attachHeightDagTile) instead of per-tile registerHeightDag
+   *  +attachHeightDag. GPU-render parity with the per-tile path; the foundation the
+   *  per-frame clipmap streamer (2b-2/2b-3) builds on. Default false (per-tile path). */
+  dagTerrainPool?: boolean;
   /** N8-D1d: numeric world seed (WorldSeed.seed) → the terrain-DAG cache key.
    *  The heights are deterministic in the seed, so a cached DAG loads instantly
    *  (boot renders the DAG, no fallback). Omit to disable caching (always build). */
   seed?: number;
 }): Promise<WorldRegistryResult> {
-  const { renderer, hf, scatter, lib, counters, classes, dag, dagTerrainGridN, dagTerrainTiles, seed } =
+  const { renderer, hf, scatter, lib, counters, classes, dag, dagTerrainGridN, dagTerrainTiles, dagTerrainPool, seed } =
     input;
   const inSet = (c: MaterialClassId): boolean => !classes || classes.has(c);
   const t0 = performance.now();
@@ -362,6 +367,9 @@ export async function buildWorldRegistry(input: {
     indices: Uint32Array;
     clusters: DagCluster[];
   }[] = [];
+  // N8-D2 Stage 2b-1 (D-N39): when dagTerrainPool, tiles are collected here and
+  // loaded into the streaming tile POOL post-build (instead of a per-tile mesh).
+  const terrainPoolTiles: { gridVerts: Uint32Array; indices: Uint32Array; clusters: DagCluster[] }[] = [];
   if (inSet('terrain')) {
     const heights = hf.cpuHeights;
     if (!heights) throw new Error('WorldRegistry: hf.cpuHeights missing (boot order)');
@@ -400,6 +408,9 @@ export async function buildWorldRegistry(input: {
       let nBuilt = 0;
       let maxErr = 0;
       let offGrid = 0;
+      let poolMaxV = 0;
+      let poolMaxT = 0;
+      let poolMaxC = 0;
       for (let tj = 0; tj < T; tj++) {
         for (let ti = 0; ti < T; ti++) {
           const tx0 = ti * tileTexels;
@@ -453,18 +464,26 @@ export async function buildWorldRegistry(input: {
             const texZ = Math.min(tz0 + ((p >>> 16) & 0xffff) * stride, res - 1);
             gridVerts[i] = ((texX & 0xffff) | ((texZ & 0xffff) << 16)) >>> 0;
           }
-          const h = reg.registerHeightDag(
-            'terrain',
-            { originX: origin, originZ: origin, cellSize: cell },
-            { label: T > 1 ? `terrain/t${ti}x${tj}` : 'terrain' },
-          );
-          reg.bindInstances(h, { a: new Float32Array([0, 0, 0, 1]), b: new Float32Array([0, 0, 0, 0]) });
-          reg.addLate({
-            verts: gridVerts.length,
-            tris: built.indices.length / 3,
-            clusters: built.clusters.length,
-          });
-          dagTerrainTileAttaches.push({ handle: h, gridVerts, indices: built.indices, clusters: built.clusters });
+          if (dagTerrainPool) {
+            // collect for the streaming POOL (one shared reservation post-loop)
+            terrainPoolTiles.push({ gridVerts, indices: built.indices, clusters: built.clusters });
+          } else {
+            const h = reg.registerHeightDag(
+              'terrain',
+              { originX: origin, originZ: origin, cellSize: cell },
+              { label: T > 1 ? `terrain/t${ti}x${tj}` : 'terrain' },
+            );
+            reg.bindInstances(h, { a: new Float32Array([0, 0, 0, 1]), b: new Float32Array([0, 0, 0, 0]) });
+            reg.addLate({
+              verts: gridVerts.length,
+              tris: built.indices.length / 3,
+              clusters: built.clusters.length,
+            });
+            dagTerrainTileAttaches.push({ handle: h, gridVerts, indices: built.indices, clusters: built.clusters });
+          }
+          if (gridVerts.length > poolMaxV) poolMaxV = gridVerts.length;
+          if (built.indices.length / 3 > poolMaxT) poolMaxT = built.indices.length / 3;
+          if (built.clusters.length > poolMaxC) poolMaxC = built.clusters.length;
           tCl += built.clusters.length;
           tTris += built.indices.length / 3;
           if (built.stats.maxError > maxErr) maxErr = built.stats.maxError;
@@ -472,9 +491,24 @@ export async function buildWorldRegistry(input: {
         }
       }
       if (dagWorker) dagWorker.dispose();
+      if (dagTerrainPool && terrainPoolTiles.length > 0) {
+        // one shared reservation: S = tile count, each slot sized to the worst
+        // tile this boot + margin (2b-3 streaming reloads arbitrary regions into a
+        // slot, so the cap must hold the global worst — margin covers it for now).
+        const vCap = Math.ceil(poolMaxV * 1.3) + 64;
+        const tCap = Math.ceil(poolMaxT * 1.3) + 128;
+        const cCap = Math.ceil(poolMaxC * 1.3) + 16;
+        reg.reserveTilePool(
+          'terrain',
+          { originX: origin, originZ: origin, cellSize: cell },
+          { slots: terrainPoolTiles.length, vertCap: vCap, triCap: tCap, clusterCap: cCap },
+          { label: 'terrain' },
+        );
+      }
       deferred.push(
         `terrain DAG: ${T}×${T} tiles gridN ${gridN} (stride ${stride}) → ${tCl} cl, ${tTris | 0} tris, ` +
           `maxErr ${maxErr.toFixed(2)} m, offGrid ${offGrid}, ${nCache} cached/${nBuilt} built, ` +
+          `${dagTerrainPool ? `POOL ${terrainPoolTiles.length}×(v${Math.ceil(poolMaxV * 1.3) + 64}/c${Math.ceil(poolMaxC * 1.3) + 16}) ` : ''}` +
           `${(performance.now() - tHd0).toFixed(0)} ms`,
       );
     } else {
@@ -564,6 +598,17 @@ export async function buildWorldRegistry(input: {
   const report = reg.build(renderer, counters);
   for (const b of dagBuilds) reg.attachDag(b.handle, b.dag);
   for (const t of dagTerrainTileAttaches) reg.attachHeightDag(t.handle, t);
+  // N8-D2 Stage 2b-1: load the collected terrain tiles into pool slots (one per
+  // tile here — all resident, render-parity with the per-tile path; the per-frame
+  // clipmap streamer (2b-3) makes residency a camera-centered subset).
+  for (const t of terrainPoolTiles) {
+    const slot = reg.allocTileSlot();
+    if (slot < 0) {
+      deferred.push('terrain pool: out of slots (raise pool size)');
+      break;
+    }
+    reg.attachHeightDagTile(slot, t);
+  }
   const t1 = performance.now();
   return {
     registry: reg,

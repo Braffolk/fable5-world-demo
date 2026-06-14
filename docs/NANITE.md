@@ -1234,11 +1234,25 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   (else z-fight): per-cluster region test in kClusterCull vs a T×T resident-bitmask uniform → skip
   base clusters in detail-covered regions. **2d** crack-free base↔detail seam: SKIRTS on the
   detail-window perimeter (base backstops the T-junction; standard clipmap). **2e** (was Stage 3)
-  stride-1 terrain vertex buffer (6×→1× vert mem) + flip the full-res default on. OPEN FORK at 2b
-  (decide then, NOT now — 2a is identical either way): two-layer-with-suppression (above) VS
-  per-tile-LOD-PYRAMID (every region resident at resolution = f(distance); coarsest levels ARE the
-  base, no separate layer, no suppression; cost = per-region resolution swap + neighbor-LOD-clamped
-  edge stitching). Both need 2a's slot pool + skirts; they differ only in the streamer policy.
+  stride-1 terrain vertex buffer (6×→1× vert mem) + flip the full-res default on.
+  FORK RESOLVED → **GEOMETRY CLIPMAP** (subsumes both candidates; cleaner than either): L levels,
+  each a fixed M×M grid of SAME-gridN tiles at DOUBLING stride (level k cell = baseCell·2^k, tile =
+  gridN·2^k m), each level a HOLLOW ring centered on the camera (its inner block is covered by the
+  finer level k−1; the coarsest FULL level is the always-resident backstop spanning the field). WHY
+  it beats the two candidates: (1) same gridN every level ⇒ UNIFORM slot cap ⇒ 2a's pool holds all
+  resident tiles directly (no per-tier pools); (2) hollow rings ⇒ levels DON'T overlap ⇒ NO z-fight
+  ⇒ **2c suppression is NOT NEEDED** (deleted from the plan — no hot-kernel edit, no region
+  bitmask); (3) the coarsest ring = the "base" (no separate layer); (4) clipmap = correct quality to
+  the horizon (concentric resolution rings), not a single 1 m→8 m jump. Inter-LEVEL seams (finer
+  ring's outer edge meets coarser ring's inner edge, different stride) are hidden by SKIRTS (2d) —
+  no neighbour-aware build, tiles stay independent (cache + perimeter-lock intact). Memory/cull
+  bounded by Σ(per-level ring tile counts), independent of field size. REVISED 2b/2c/2d: **2b-1**
+  route the existing Stage-1 tiles through the 2a pool (GPU-render parity with Stage 1 — proves
+  pool→GPU in isolation); **2b-2** static clipmap at boot (build/load the spawn-centered ring set
+  via the pool — proves the clipmap geometry + bounded + no-holes, sync/cache-backed, fixed camera);
+  **2b-3** per-frame STREAMING (camera moves → re-center rings → async DagWorker loads / evict at
+  ring edges; the already-resident coarser ring covers a fine tile WHILE it loads ⇒ graceful, never
+  a hole); **2c REMOVED** (clipmap needs no suppression); **2d** skirts for the inter-level seams.
 
 ## GOTCHAS (append-only, nanite-specific)
 
@@ -1391,6 +1405,20 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-14 (ak): **N8-D2 Stage 2b-1 — terrain tiles routed through the streaming POOL; GPU
+  render parity (D-N39).** (Opus 4.8 1M.) Resolved the D-N39 2b fork → GEOMETRY CLIPMAP (same-gridN
+  tiles at doubling stride, hollow rings, uniform 2a pool, NO suppression — levels don't overlap,
+  2c deleted; skirts for inter-level seams). First sub-step lands the pool→GPU path: `?nanitedpool=1`
+  makes WorldRegistry collect the terrain tiles and load them into the 2a pool (reserveTilePool +
+  allocTileSlot + attachHeightDagTile) instead of per-tile registerHeightDag+attachHeightDag. probe-
+  dterrain POOL=1 256 ×4: build BIT-IDENTICAL to the per-tile path (48 840 cl, 5 846 152 tris,
+  offGrid 0), cut sheds 1729 cl near → 1375 vista (8.7/7.4 ms), lit vista CRACK-FREE (no sky holes),
+  cluster-tint shows the adaptive structure + tile regions, near decode correct (planted trees/rock/
+  grass). The instance-driven cull picks up pool tiles with zero cull changes (per D-N39). KNOWN: the
+  pool sizes every slot to the WORST tile (DAG soup ~319 k verts/tile → v415195/c4665 ×16 = generous
+  reservation, ~50 % over the per-tile sum) — expected + temporary: 2b-2/2b-3 hold FAR fewer slots
+  (clipmap rings, not all 256 full-res tiles), so absolute memory drops well below all-resident.
+  Default off (opt-in flag). tsc clean. Next: 2b-2 static clipmap at boot.
 - 2026-06-14 (aj): **N8-D2 Stage 2a — registry streaming tile POOL + eviction (D-N39).** (Opus
   4.8 1M.) Re-read the cull pipeline first and found the design-reshaping fact: the cull is
   INSTANCE-DRIVEN (kInstCull frustum-culls per instance → only visible instances enqueue their
