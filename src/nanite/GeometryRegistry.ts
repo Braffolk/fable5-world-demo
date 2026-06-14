@@ -1,5 +1,5 @@
 /**
- * GeometryRegistry (N1-C3, docs/NANITE.md) — the single entry point for solid
+ * GeometryRegistry (N1-C3, docs/NANITE-SPEC.md) — the single entry point for solid
  * geometry per the content contract: registerMesh(ClusterSource, materialClass,
  * opts) + bindInstances(handle, stream), then build() packs everything into
  * PACKED mega-buffers sized against the 10-storage-bindings-per-stage ceiling:

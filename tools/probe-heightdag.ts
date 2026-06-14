@@ -1,5 +1,5 @@
 /**
- * Terrain heightfield DAG validation probe (node-only, no browser; NANITE.md
+ * Terrain heightfield DAG validation probe (node-only, no browser; NANITE-SPEC.md
  * N8-D2, D-N32). Builds buildHeightDag on a deterministic BIMODAL field (flat
  * plain + tilted ramp + ridged cliffs) and asserts the crack-free cut invariants
  * PLUS the terrain-specific ones, then prints adaptivity + build throughput.

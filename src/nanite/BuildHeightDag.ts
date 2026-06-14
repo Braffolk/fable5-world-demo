@@ -1,5 +1,5 @@
 /**
- * Terrain heightfield LOD DAG (NANITE.md N8-D2, D-N32) — heightfield-NATIVE
+ * Terrain heightfield LOD DAG (NANITE-SPEC.md N8-D2, D-N32) — heightfield-NATIVE
  * adaptive builder. Hand-rolled, CPU/typed-array, node-runnable (no three.js,
  * no GPU) for the validation probe (tools/probe-heightdag.ts).
  *

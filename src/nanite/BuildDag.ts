@@ -1,5 +1,5 @@
 /**
- * Nanite LOD DAG build (NANITE.md N8-D0) — hand-rolled, CPU/typed-array,
+ * Nanite LOD DAG build (NANITE-SPEC.md N8-D0) — hand-rolled, CPU/typed-array,
  * node-runnable (no three.js, no GPU) for the validation probe (tools/probe-dag.ts).
  *
  * Given LOD0 clusters (Clusterize.ts), build a continuous-LOD cluster DAG:

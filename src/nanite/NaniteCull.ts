@@ -1,5 +1,5 @@
 /**
- * N2 culling chain (NANITE.md "Culling (N2)") — registry-fed two-level cull
+ * N2 culling chain (NANITE-SPEC.md "Culling (N2)") — registry-fed two-level cull
  * with TWO-PHASE occlusion:
  *
  * PHASE 1 (prev-frame HZB, prev VP/camPos — static world: prev matrices,
@@ -297,7 +297,7 @@ export function buildNaniteCull(
     // D-N33 "unbounded envelope" (persist until sub-pixel) was prototyped here and
     // REVERTED — validated at 3.75M clusters / 100 ms (occl ON) because removing
     // the cutoff submits the whole 4 km world's DAG instances to the cull. It needs
-    // HIERARCHICAL instance culling, not a per-instance size test. See NANITE.md.
+    // HIERARCHICAL instance culling, not a per-instance size test. See NANITE-SPEC.md.
     returnIf(
       nextId
         .equal(uint(LOD_NONE))

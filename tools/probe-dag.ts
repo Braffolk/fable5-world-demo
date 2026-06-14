@@ -1,5 +1,5 @@
 /**
- * LOD DAG validation probe (node-only, no browser; NANITE.md N8-D0).
+ * LOD DAG validation probe (node-only, no browser; NANITE-SPEC.md N8-D0).
  * Builds the cluster DAG on real generated rocks at several detail levels and
  * asserts the crack-free runtime-cut invariants, then prints per-level stats +
  * an extrapolated all-pools build time (F15 boot budget).

@@ -5,7 +5,7 @@
  * keeps booting and updating untouched; only its render call is bypassed —
  * zero code paths shared, zero cost when the param is absent).
  *
- * Frame sequence (NANITE.md "Culling (N2)"):
+ * Frame sequence (NANITE-SPEC.md "Culling (N2)"):
  *   cull phase 1 (prev HZB, prev VP) → SW+HW depth → fresh HZB →
  *   cull phase 2 (re-test rejects, current VP) → late SW+HW depth →
  *   payload vs final depth → final HZB (next frame's occluder) → resolve

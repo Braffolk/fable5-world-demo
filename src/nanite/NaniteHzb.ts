@@ -10,7 +10,7 @@
  * sphereOccluded is the example's conservative test verbatim: nearest sphere
  * point vs the 2×2 footprint max at the level where the sphere's diameter
  * fits one texel; PREV-frame VP + camera position (static world: prev
- * matrices, current bounds — NANITE.md "Culling (N2)").
+ * matrices, current bounds — NANITE-SPEC.md "Culling (N2)").
  */
 
 import { NodeMaterial, StorageBufferAttribute } from 'three/webgpu';

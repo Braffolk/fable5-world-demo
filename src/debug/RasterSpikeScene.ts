@@ -1,5 +1,5 @@
 /**
- * ?scene=rasterspike — N0 feasibility spike (docs/NANITE.md).
+ * ?scene=rasterspike — N0 feasibility spike (docs/NANITE-SPEC.md).
  *
  * Same content two ways:
  *   &sw=1 (default) — compute cull → work queue → SW raster (Option C two-pass

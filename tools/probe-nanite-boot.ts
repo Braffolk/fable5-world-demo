@@ -1,7 +1,7 @@
 /**
  * N1-C4 boot gate probe — boots the REAL world scene with ?nanite=1 headless,
  * captures the registry build log, and asserts the phase gate: all opaque
- * pools clusterized with clusterize time < 2 s (NANITE.md N1 gate).
+ * pools clusterized with clusterize time < 2 s (NANITE-SPEC.md N1 gate).
  *
  *   npx tsx tools/probe-nanite-boot.ts     (needs the dev server on :5173)
  */

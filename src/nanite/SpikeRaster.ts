@@ -4,7 +4,7 @@
  * stage (the unified-convention departure from the reference example, F10b —
  * this is also the fragment-storage-atomics verification the N0 gate asks for).
  *
- * Depth packing per docs/NANITE.md D-N5:
+ * Depth packing per docs/NANITE-SPEC.md D-N5:
  *  - Option C (DEFAULT, ?packing=c): pass 1 atomicMin(f32-depth-bits) into
  *    visDepth; pass 2 re-walks the same work items and plain-stores the full
  *    32-bit payload where its depth bits equal the stored minimum.

@@ -1,5 +1,5 @@
 /**
- * Greedy mesh clusterizer (NANITE.md N1) — splits an indexed triangle mesh
+ * Greedy mesh clusterizer (NANITE-SPEC.md N1) — splits an indexed triangle mesh
  * into clusters of ≤ maxTris triangles, grown over shared-edge adjacency
  * with centroid-proximity priority (tight bounding spheres, good locality).
  *

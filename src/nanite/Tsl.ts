@@ -4,7 +4,7 @@
  * cast HERE, call sites stay clean). Runtime behavior is identical to the
  * raw TSL calls; every workaround is documented against the typings gap.
  *
- * Gaps covered (NANITE.md gotchas, N0):
+ * Gaps covered (NANITE-SPEC.md gotchas, N0):
  *  - storage() rejects 'uvec2'/'uvec4' type strings (runtime supports them)
  *  - uvec2() constructor rejects uint nodes
  *  - ranged Loop objects with custom names are untyped (runtime: LoopNode)

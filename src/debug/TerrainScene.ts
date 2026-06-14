@@ -55,7 +55,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // camera-pass meshes are withheld from engine.scene. Environment systems
   // (sky/atmosphere/clouds/froxels/CSM/post) stay on so there is a frame to
   // look at. Flip to false to restore the full old pipeline (the N7 A/B path).
-  // Overrides the NANITE.md "?nanite=0 boots the untouched old pipeline"
+  // Overrides the NANITE-SPEC.md "?nanite=0 boots the untouched old pipeline"
   // constraint deliberately, for the duration of the nanite build.
   // DEFAULT = disabled; `?oldgeo=1` restores the full old world — used ONLY to
   // capture the parity reference for the N4 lighting gate (and to bring back

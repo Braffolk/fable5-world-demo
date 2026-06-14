@@ -1,5 +1,5 @@
 /**
- * WorldRegistry (N1-C4, docs/NANITE.md) — builds THE GeometryRegistry from the
+ * WorldRegistry (N1-C4, docs/NANITE-SPEC.md) — builds THE GeometryRegistry from the
  * real world's opaque pools behind ?nanite=1. No rendering changes yet (that
  * is N2/N3); this wires the content contract end to end and measures it.
  *
