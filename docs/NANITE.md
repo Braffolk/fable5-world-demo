@@ -1405,6 +1405,19 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-14 (am): **N8-D2 Stage 2b-2 (GPU) — terrain CLIPMAP RENDERS through the pool; bounded
+  full-field at true 1 m (D-N39).** (Opus 4.8 1M.) Wired clipmapTiles into WorldRegistry behind
+  `?nanitedclip=1` (implies the pool): a shared buildTileGlobal(tx0,tz0,stride,suffix) helper
+  (extracted from the uniform loop, now clamps off-field samples both ends) builds each clipmap tile
+  into a pool slot; levels auto-sized so the coarsest ring spans the field (no holes). Validated
+  (probe-dterrain CLIP=1 128): CLIPMAP 5L M4 → 52 tiles, 33 398 cl, 4.0 M tris, offGrid 0, POOL
+  52×(v80848/c1011) ≈ 100 MB terrain verts (vs the ~1.96 GB all-resident full-res wall) — bounded +
+  ⊥ world size; cut sheds 1332 cl near → 986 vista (8.9/8.2 ms). Screenshots: lit vista CRACK-FREE
+  continuous to the horizon (no sky holes), lit near = TRUE 1 m at the field center (finest level,
+  stride 1 = 1 m cells; finer than Stage-1's 4 m subsample) with correct decode (planted trees/rock/
+  grass), cluster-tint full coverage. Field-centered (static) for now; the inter-level seams are
+  backstopped by the hollow-skip overlap (no cracks visible) — proper snapping + skirts is 2d. NEXT:
+  2b-3 per-frame streaming (re-center rings on the live camera via DagWorker async load/evict).
 - 2026-06-14 (al): **N8-D2 Stage 2b-2 (math) — terrain CLIPMAP residency, hole-free + bounded +
   world-size-⊥ (D-N39).** (Opus 4.8 1M.) TerrainClipmap.ts: clipmapTiles(camX,camZ,cfg) = L
   concentric levels of same-gridN tiles at DOUBLING stride (level k cell = baseStride·2^k texels),

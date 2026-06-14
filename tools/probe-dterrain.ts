@@ -24,9 +24,10 @@ interface Sample {
 }
 
 const POOL = process.env.POOL === '1'; // route terrain tiles through the streaming pool (2b-1)
+const CLIP = process.env.CLIP === '1'; // render terrain as a geometry clipmap (2b-2)
 
 async function capture(gridN: number, nandbg: string): Promise<{ near: Sample; vista: Sample }> {
-  const tag = `g${gridN}-t${TILES}-${POOL ? 'pool-' : ''}${nandbg || 'lit'}`;
+  const tag = `g${gridN}-t${TILES}-${CLIP ? 'clip-' : POOL ? 'pool-' : ''}${nandbg || 'lit'}`;
   const { browser } = await launchWebGPU();
   const page = await browser.newPage({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
   page.on('console', (m) => {
@@ -41,6 +42,7 @@ async function capture(gridN: number, nandbg: string): Promise<{ near: Sample; v
   };
   if (TILES > 1) extra.nanitedtiles = String(TILES);
   if (POOL) extra.nanitedpool = '1';
+  if (CLIP) extra.nanitedclip = '1';
   if (nandbg) extra.nandbg = nandbg;
   const url = laasUrl({ scene: 'world', width: W, height: H, freeze: true, extra });
   await page.goto(url, { waitUntil: 'domcontentloaded' });

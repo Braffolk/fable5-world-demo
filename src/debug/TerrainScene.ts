@@ -257,6 +257,10 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       // streaming tile POOL (reserveTilePool/attachHeightDagTile) rather than the
       // per-tile registerHeightDag+attachHeightDag path. GPU-render parity proof.
       const dagTerrainPool = qNan.get('nanitedpool') === '1';
+      // N8-D2 Stage 2b-2 (D-N39): ?nanitedclip=1 → render terrain as a geometry
+      // CLIPMAP (concentric same-gridN rings, true full-res at the center, coarse to
+      // the field edge, bounded). Boot-static center for now; implies the pool.
+      const dagTerrainClip = qNan.get('nanitedclip') === '1';
       const wr = await buildWorldRegistry({
         renderer: engine.renderer,
         hf,
@@ -269,6 +273,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
         ...(dagTerrainGridN > 0 ? { dagTerrainGridN } : {}),
         ...(dagTerrainTiles > 1 ? { dagTerrainTiles } : {}),
         ...(dagTerrainPool ? { dagTerrainPool: true } : {}),
+        ...(dagTerrainClip ? { dagTerrainClip: true } : {}),
       });
       (engine as unknown as { naniteRegistry?: unknown }).naniteRegistry = wr.registry;
       naniteRegistry = wr.registry;
