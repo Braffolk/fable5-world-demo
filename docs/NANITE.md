@@ -2751,12 +2751,25 @@ CHUNK PLAN (to the logical point):
     in the resolve, which never needs the terrain buffer). All probes green. **STAGE 2e COMPLETE — the
     "boot only to dag" mandate is met: bare `?nanite=1` boots the full-res clip-streamed DAG terrain by
     default, lean stride-1 verts, no window fallback (window survives only as `?nanitedterrain=0`).**
-  - **NEXT after 2e**: (D2c) perf-ledger row vs pre-DAG + `?clusterdbg=lod` heatmap + the carried D1e
-    USER CHECKPOINT (continuous zoom in Chrome on hero rock/tree + terrain) → then shadows S4. Optional
-    polish: 2b-4 always-resident coarse base (teleport no-hole; DOWNGRADED). The paramless-`?nanite=1`
-    default-on (retire the whole `?nanite=0` opt-out) is a SEPARATE later endgame flip — leave for a
-    user-present session (it changes the bare-URL boot for every debug scene).
-    OLD locked 2d spec (kept for the record, now executed).
+  - **D2c perf-ledger — DONE (probe-perfledger.ts), with an HONEST correction.** Default clip-DAG vs
+    `?nanitedterrain=0` window grid at the spawn (veg+rock identical ⇒ counter delta = terrain): DAG
+    visClusters ×0.83 (fewer — better cluster culling), hwTris ×1.77 (MORE near big-tris), regTrisK ×9.84
+    (DAG stores adaptive geo; window is implicit). **The naive "DAG = fewer terrain tris" was WRONG:** both
+    paths are ~1 m full-res, so the DAG is NOT a same-fidelity draw-cost reduction — it trades a bit more
+    near big-tri raster for continuous NO-POP LOD + adaptive flat-decimation + BOUNDED streaming memory
+    (34.8 MB fixed vs the window grid's implicit-but-unbounded) + the shadow caster-LOD foundation (S4).
+    The real fps win is S4, not terrain draw count. (probe-perfledger's vista row is stale under `?freeze`
+    — the per-frame cull doesn't re-run; the qualitative far-shed is the `?nandbg=cluster` A/B.)
+    BLOCKED: `?clusterdbg=lod` heatmap via the resolve is OFF THE TABLE — it needs gpu.dag (or a level
+    write) in the resolve, but the resolve already sits at the 10-buffer Metal storage ceiling (see log as;
+    that ceiling is exactly what the stride-1 hfVerts add breached). A lod heatmap must ride a cull-side
+    write or a separate debug pass, not the resolve.
+  - **NEXT**: the carried D1e USER CHECKPOINT (continuous zoom in Chrome on hero rock/tree + terrain —
+    USER-PRESENT, deferred while away) → then **shadows S4** (the D-N29 caster-LOD-decoupled shadow perf
+    engine — the actual moving-fps win; the DAG foundation it needed is now the default). Optional polish:
+    2b-4 always-resident coarse base (teleport no-hole; DOWNGRADED). The paramless-`?nanite=1` default-on
+    (retire the `?nanite=0` opt-out) is a SEPARATE later endgame flip — leave for a user-present session
+    (it changes the bare-URL boot for every debug scene). OLD locked 2d spec (kept for the record).
     **AS-BUILT DELTAS from the locked spec (refined during execution — see aq):** (1) encoding uses a
     3-BIT depth-level CODE in bits 13-15 (not the single bit-15 flag) so the depth can vary per level;
     (2) depth is LINEAR `24 + 12·level` m, NOT `SKIRT_DEPTH·2^level` — the geometric proof showed the
