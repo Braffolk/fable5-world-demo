@@ -9,6 +9,30 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-14 (az): **PERF-3 ANALYSIS — the depth rasterizer DECOMPOSED to its sub-stages (no guessing): it is
+  per-TRIANGLE bound, and the #1 cost is the 3× `fetchWorldVert` vertex fetch+transform (54%).** (Opus 4.8
+  1M.) Three converging measurements at the worst "long alley" view (cam −4.2,303.1,−1.4 yaw 67.5° T11,
+  `?pure`, 2592×1676, 82k visClusters):
+  (A) **RESOLUTION SCALING** (non-invasive): 16× fewer pixels (4.34M→0.27M) cut `nanRasterDepth` only **1.43×**
+  (2.82→1.97 ms) ⇒ ~70% per-triangle (pixel-INDEPENDENT), ~30% per-pixel fill (~0.85 ms @4K).
+  (B) **IN-KERNEL ABLATION** (`?rdbg`, BUILD-TIME gate in NaniteRaster — a `returnIf`-true early-out after a
+  sink `atomicMin` that consumes the stage's live vars so the compiler can't sink the work past the branch;
+  `rdbg=0` emits the kernel byte-UNCHANGED): rdbg=1 (stop after the 3 vertex fetch+transforms) = **1.51 ms**;
+  rdbg=2 (stop after edge setup) = **1.64 ms**; rdbg=0 (full) = **2.82 ms** ⇒ **vertex fetch+transform 1.51 ms
+  (54%)**, edge/near/backface/snap/bbox **0.13 ms (5%)**, per-pixel loop (coverage+depth interp+atomicMin)
+  **1.18 ms (42%)**. Reconciles with (A): pixel-independent total = 1.51 + 0.13 + ~0.33 (tiny-tri loop entry)
+  ≈ 1.97 ms = the res floor.
+  (C) **atomicMin is NOT a dominator:** depth (atomicMin) 2.82 ≈ payload (plain equality-store, no atomic)
+  2.95 — if contention ruled, depth would dwarf payload.
+  CONCLUSION (the lever, proven not guessed): the per-triangle **VERTEX fetch+transform**, not the fill or the
+  atomic. A 128-tri cluster has ~70 unique verts but the kernel calls `fetchWorldVert` 3×128 = 384 (~5.5×
+  redundant), and ONE WORKGROUP already == ONE cluster (128 threads = 128 tris) ⇒ PERF-3 fix = per-cluster
+  **VERTEX TRANSFORM CACHING in workgroup shared memory** (cooperatively transform the cluster's unique verts
+  ONCE → `workgroupBarrier` → each tri reads 3 from shared mem). Canonical Nanite; also pays back the payload
+  pass + the HW vertex stage + every shadow raster (all call `fetchWorldVert`). Est. ~1.0–1.2 ms off the SW
+  depth pass (and proportional on payload/HW/shadow). `?rdbg` is build-time gated so production is pristine;
+  tsc clean. NEXT: implement the cache.
+
 - 2026-06-14 (ay): **PERF-1 — per-pass measurement made TRUSTWORTHY + the PURE nanite renderer ISOLATED
   (?pure) + the user's WORST view decomposed with COOL numbers. Two integrity defects and one methodology
   error found and fixed; the SW depth+payload raster confirmed the #1 pure-nanite cost.** (Opus 4.8 1M.)

@@ -27,9 +27,12 @@ SW raster = depth **2.82** + payload **2.95** = **5.77 ms** (+ HW 2.62 + flat re
 (the SAME raster reads 5.96 ms hot). ⇒ (a) the SW depth+payload raster is the #1 nanite lever;
 (b) post throttles nanite on top of its own cost.
 
-**→ NEXT: `PERF-3` — decompose `nanRasterDepth` IN-KERNEL (toggle transform / edge-setup /
-scanline-fill / atomicMin blocks, difference timed runs = the truest per-line a GPU allows),
-then cut the dominant block.** Also owed: a COOLED (idle-between) batch to lock absolute ms.
+**PERF-3 ANALYSIS DONE (LOG `az`):** `nanRasterDepth` is per-TRIANGLE bound — vertex fetch+transform
+**1.51 ms (54%)**, edge setup 0.13, per-pixel loop 1.18; atomic is NOT it (depth≈payload). ONE
+workgroup == ONE cluster (128 threads) yet calls `fetchWorldVert` 3×128 = ~5.5× redundant.
+**→ NEXT (active): per-cluster VERTEX TRANSFORM CACHING in workgroup shared memory** — transform the
+cluster's unique verts ONCE → barrier → tris read 3 from shared mem. Est. −1.0–1.2 ms on the SW depth
+pass (also pays back payload + HW + shadow rasters). Owed: a COOLED (idle-between) batch for absolute ms.
 
 ## Phases (coarse status — see SPEC `## Phase plan`)
 N0 scaffold ✅ · N1 clusterize ✅ · N2 cull ✅ · N3 vis-buffer ✅ · N4 materials ✅ ·
@@ -39,9 +42,9 @@ N0 scaffold ✅ · N1 clusterize ✅ · N2 cull ✅ · N3 vis-buffer ✅ · N4 m
 ## A. MEASUREMENT + CORE RASTER — immediate priority (user 2026-06-14)
 | id | task | status | blockedBy | spec | scope (one line) |
 |----|------|--------|-----------|------|------|
-| `PERF-1` | Ablation flags / pure-nanite isolation | 🔵 | — | Tracking protocol; Resolve (N4) | SURVEY DONE: `?ablate=` ALREADY covers shadows,pcss,cloudshadow,clouds,ao,bounce,contact,taa,bloom (+`?postmin=1`); `?nandbg=flat` = flat-albedo resolve. TODO: a `?pure=1` MASTER composing them all via a shared `ablations()` helper across the 4 sites (PostStack:80, ShadowSetup:114, TerrainTiles:90, TerrainScene:107) + force flat resolve + gap-fill (fog/water/tonemap/aerial), then probe each layer's delta (→PERF-2). |
-| `PERF-2` | Profile pure-nanite floor + per-effect deltas | ⬜ | `PERF-1` | PERF LEDGER | decompose the frame at 2592×1676; suspect `nanRasterDepth` (~10ms) + post are the real costs; re-ranks the board |
-| `PERF-3` | SIGNIFICANT depth-rasterizer optimization | ⬜ | `PERF-2` | Vis-buffer + depth precision (N3); Culling (N2) | the core SW raster has never been isolated/optimized — likely the biggest single lever |
+| `PERF-1` | Trustworthy per-pass measurement + `?pure` | ✅ | — | LOG `ay`; GpuProfiler/main.ts | DONE 1f2fdbc — hardened GpuProfiler vs garbage −timestamps (harness was lying: render=−97ms→0 samples); `?pure` master (postmin+nanshadow=0+nandbg=flat, keeps geometry, fixes "?pure=zero terrain"); probe-worstpos.ts. KEY: post chain THERMALLY THROTTLES nanite ~2.1×. |
+| `PERF-2` | Profile pure-nanite floor + worst-view decomp | ✅ | `PERF-1` | LOG `ay`,`az`; PERF LEDGER | DONE (folded) — worst view 82k visCl: SW raster depth 2.82 + payload 2.95 = 5.77ms, HW 2.62, flat resolve 2.10 (cool). SW depth+payload = the #1 nanite cost. |
+| `PERF-3` | Depth-rasterizer optimization (vertex-transform cache) | 🔵 | `PERF-2` | LOG `az`; NaniteRaster/NaniteFetch | ANALYSIS DONE (`?rdbg` ablation, build-time gated): per-triangle bound, **3× fetchWorldVert = 54%**, atomic NOT it. ACTIVE: per-cluster vertex-transform CACHE in workgroup shared mem (1 wg = 1 cluster, 128 threads); est. −1.0–1.2ms. |
 | `AUDIT-1` | Deviation audit vs original Fable 5 spec | ⬜ | — | PROVENANCE; `reference/fable5-original-NANITE.md` | diff current state/impl vs the 937-line original; flag unjustified drops from my D-N* edits (shadows = D-N29, justified) |
 
 ## B. DAG (N8) — active workstream (SPEC `### DAG (N8)`)

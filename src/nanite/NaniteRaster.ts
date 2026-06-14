@@ -148,6 +148,11 @@ export function buildNaniteRaster(
 ): NaniteRasterHandles {
   const { width, height } = cam;
   const pixelCount = width * height;
+  // PERF-3 raster ablation (?rdbg=1|2): BUILD-TIME gate — 0 / absent emits the
+  // depth kernel UNCHANGED (production pristine, zero instrumentation). Used to
+  // attribute nanRasterDepth's per-triangle setup (resolution scaling proved it
+  // ~70% setup-bound) to its sub-stages — see the two sinks in the depth kernel.
+  const rdbg = Number(new URLSearchParams(window.location.search).get('rdbg') ?? '0');
   const qRasterRO = cull.qRasterRO;
   const visDepthV = vis.depthV;
   const visPayloadV = vis.payloadV;
@@ -210,6 +215,25 @@ export function buildNaniteRaster(
         const p0 = cam.vp.mul(vec4(w0, 1)).toVar();
         const p1 = cam.vp.mul(vec4(w1, 1)).toVar();
         const p2 = cam.vp.mul(vec4(w2, 1)).toVar();
+
+        if (mode === 'depth' && rdbg === 1) {
+          // ?rdbg=1 — stop right after the 3 vertex fetch+transforms. The sink
+          // atomicMin consumes ALL THREE clip positions BEFORE the early-out, so
+          // the compiler cannot sink the fetchWorldVert/transform work past the
+          // return (it would be a side-effecting use). returnIf's guard is a
+          // runtime-true compare (uint ≥ 0) ⇒ always returns here, yet the
+          // downstream stays REACHABLE (no unreachable-code error). Isolates:
+          // work-item fetch + ctx + 3× fetchWorldVert + 3× vp transform.
+          const sinkV = p0.z
+            .div(p0.w.max(NEAR_EPS))
+            .add(p1.z.div(p1.w.max(NEAR_EPS)))
+            .add(p2.z.div(p2.w.max(NEAR_EPS)))
+            .mul(1 / 3)
+            .clamp(0, 1);
+          const sinkPx = itemIdx.mul(uint(2654435761)).add(localTri).mod(uint(pixelCount));
+          atomicMin(visDepthV.atomic.element(sinkPx), bcF2U(sinkV as unknown as NF));
+          returnIf(itemCount.greaterThanEqual(uint(0)));
+        }
 
         const payload = itemIdx.shiftLeft(uint(7)).bitOr(localTri).toVar();
 
@@ -340,6 +364,25 @@ export function buildNaniteRaster(
                 const sy1 = ey1.mul(toI(256)).toVar();
                 const sy2 = ey2.mul(toI(256)).toVar();
                 const rcpArea = float(1).div(toF(area2 as unknown as NI)).toVar();
+
+                if (mode === 'depth' && rdbg === 2) {
+                  // ?rdbg=2 — stop right before the scanline loop. The sink folds
+                  // the edge-setup vars (rcpArea, rw0..2, the per-pixel steps) so
+                  // none are sunk past / DCE'd, forcing the full per-triangle
+                  // setup to be timed. (rdbg2 − rdbg1) = near/backface + ndc +
+                  // fixed-point snap + bbox + edge setup; (full − rdbg2) = the
+                  // per-pixel loop (coverage + depth interp + atomicMin).
+                  const sinkV = rcpArea
+                    .add(toF(rw0 as unknown as NI))
+                    .add(toF(rw1 as unknown as NI))
+                    .add(toF(rw2 as unknown as NI))
+                    .add(toF(sx0 as unknown as NI))
+                    .add(toF(sy0 as unknown as NI))
+                    .clamp(0, 1);
+                  const sinkPx = uint(startY).mul(uint(cam.uW)).add(uint(startX));
+                  atomicMin(visDepthV.atomic.element(sinkPx), bcF2U(sinkV as unknown as NF));
+                  returnIf(itemCount.greaterThanEqual(uint(0)));
+                }
 
                 loopI('sy', startY as unknown as NI, endY as unknown as NI, (y) => {
                   const cw0 = rw0.toVar();
