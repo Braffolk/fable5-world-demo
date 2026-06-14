@@ -102,6 +102,12 @@ export interface NaniteFetch {
   /** world-space corner v of ctx's localTri (heightfield convention = spike:
    *  up-facing CCW, even tri (0,0)(0,1)(1,1), odd tri (0,0)(1,1)(1,0)) */
   fetchWorldVert(ctx: VertCtx, localTri: NU, v: 0 | 1 | 2): NV3;
+  /** world-space position of a vertex BY its global index `vi` (the value
+   *  `fetchWorldVert` reads from `gpu.indices`). Same math as `fetchWorldVert`,
+   *  keyed by vi — the PERF-3 cooperative vertex cache transforms each unique vi
+   *  ONCE through this. Defined for the explicit and adaptive-DAG conventions;
+   *  the window-grid heightfield has no index buffer (count=0 ⇒ never called). */
+  fetchWorldVertByIndex(ctx: VertCtx, vi: NU): NV3;
   /** mesh-record word 6: matClass u8 (bits 8–15) etc. */
   meshWord(meshId: NU, word: number): NU;
 }
@@ -210,38 +216,148 @@ export function makeFetch(
     };
   };
 
+  // ---- world-reconstruction helpers (split out of fetchWorldVert at PERF-3 stage
+  //      2a — behavior-preserving: fetchWorldVert recomposes the SAME math. The
+  //      by-INDEX forms exist so the cooperative vertex cache (NaniteRaster) can
+  //      transform each UNIQUE vert ONCE, keyed by its global index vi). ----------
+
+  /** heightfield TAIL shared by both HF conventions: grid texel (sx,sz) + skirtDrop
+   *  → world pos (height fetch + reconstruction + the verbatim micro-displacement).
+   *  Only how (sx,sz) are obtained differs (adaptive-indexed vs implicit window grid). */
+  const hfWorld = (ctx: VertCtx, sx: NU, sz: NU, skirtDrop: NF): NV3 => {
+    const out = vec3(0).toVar();
+    const h = texLoadR(heightTex, sx, sz);
+    const wx = toF(sx).mul(ctx.cell).add(ctx.oX);
+    const wz = toF(sz).mul(ctx.cell).add(ctx.oZ);
+    if (disp) {
+      // TerrainTiles micro-displacement, verbatim (world-space fields;
+      // amplitude gated by slope/rockExposure/snow, faded 45→85 m)
+      const wpos = vec2(wx, wz);
+      const camD = wpos.sub(vec3(disp.camPos).xz).length();
+      const dOut = float(0).toVar();
+      If(camD.lessThan(float(DISP.fade1)), () => {
+        const uvV = wpos.div(WORLD_SIZE).add(0.5) as unknown as NV2;
+        const nsV = texture(disp.normalTex, uvV, 0) as unknown as NV4;
+        const bioV = texture(disp.biomeTex, uvV, 0) as unknown as NV4;
+        const fldV = texture(disp.fieldsTex, uvV, 0) as unknown as NV4;
+        const rockK = smoothstep(DISP.slopeKnee0, DISP.slopeKnee1, nsV.w).max(
+          bioV.a.mul(0.85),
+        );
+        const gravelK = smoothstep(0.32, 0.7, fldV.y)
+          .max(smoothstep(0.02, 0.2, fldV.z))
+          .mul(float(DISP.gravel));
+        const dispAmp = (mix(float(DISP.base), float(DISP.rock), rockK) as unknown as NF)
+          .max(gravelK)
+          .mul(bioV.g.mul(0.75).oneMinus())
+          .mul(clamp(float(DISP.fade1).sub(camD).div(DISP.fade1 - DISP.fade0), 0, 1));
+        const f1 = (texture(disp.noiseA, wpos.div(DISP.sF1 * PERIOD_FBM), 0) as unknown as NV4).y
+          .mul(2)
+          .sub(1);
+        const f2 = (
+          texture(
+            disp.noiseA,
+            wpos.div(DISP.sF2 * PERIOD_VAL).add(vec2(0.31, 0.77)),
+            0,
+          ) as unknown as NV4
+        ).x
+          .mul(2)
+          .sub(1);
+        const r1 = (texture(disp.noiseB, wpos.div(DISP.sRid * PERIOD_RID), 0) as unknown as NV4).z
+          .mul(2)
+          .sub(1);
+        dOut.assign(
+          f1
+            .mul(DISP.wF1)
+            .add(f2.mul(DISP.wF2))
+            .add(r1.mul(rockK.mul(1 - DISP.ridBase).add(DISP.ridBase)).mul(DISP.wRid))
+            .mul(dispAmp),
+        );
+      });
+      out.assign(vec3(wx, h.add(dOut).sub(skirtDrop), wz));
+    } else {
+      out.assign(vec3(wx, h.sub(skirtDrop), wz));
+    }
+    return out as unknown as NV3;
+  };
+
+  /** adaptive terrain-DAG vertex BY INDEX (D2b): each vertex packs the texel coord —
+   *  gx in bits 0-12, skirt code in 13-15, gz in 16-31. N8-D2 Stage 2e: terrain verts
+   *  live in their OWN stride-1 buffer (gpu.hfVerts, one word/vert), so index it by vi
+   *  directly. RASTER reads the stride-1 hf buffer; RESOLVE (bindHfVerts=false) never
+   *  reaches this (terrain uses depth there) so it reads gpu.verts as harmless dead
+   *  code, dropping the hfVerts binding from the resolve's fragment stage. */
+  const dagWorldByIndex = (ctx: VertCtx, vi: NU): NV3 => {
+    const packed = bindHfVerts ? elemU(gpu.hfVerts, vi) : elemU(gpu.verts, vi);
+    const sx = packed.bitAnd(uint(0x1fff)).toVar();
+    const sz = packed.shiftRight(uint(16)).toVar();
+    // N8-D2 Stage 2d: a perimeter SKIRT vert carries a 3-bit depth-level code in
+    // bits 13-15 of word0 (0 = surface vert); its world Y drops below the surface
+    // to seal inter-level T-junction cracks.
+    const skirtDrop = float(0).toVar();
+    const code = packed.shiftRight(uint(13)).bitAnd(uint(0x7)).toVar();
+    If(code.greaterThan(uint(0)), () => {
+      // depth = SKIRT_DEPTH_A + SKIRT_DEPTH_B·level, level = code−1 (linear ⇒ hugs
+      // the saturating inter-level crack; see BuildHeightDag for the calibration)
+      skirtDrop.assign(float(SKIRT_DEPTH_A).add(float(SKIRT_DEPTH_B).mul(toF(code.sub(uint(1))))));
+    });
+    return hfWorld(ctx, sx as unknown as NU, sz as unknown as NU, skirtDrop as unknown as NF);
+  };
+
+  /** explicit-mesh vertex BY INDEX: gpu.verts[vi·VERT_WORDS] → instance-transformed
+   *  world pos (+ trunk wind). The SAME fetch runs in the raster (geometry) and the
+   *  resolve (barycentric corners), so both reconstruct bit-identical windy positions. */
+  const explicitWorldByIndex = (ctx: VertCtx, vi: NU): NV3 => {
+    const out = vec3(0).toVar();
+    const vb = vi.mul(uint(VERT_WORDS));
+    const p = vec3(
+      bcU2F(elemU(gpu.verts, vb)),
+      bcU2F(elemU(gpu.verts, vb.add(uint(1)))),
+      bcU2F(elemU(gpu.verts, vb.add(uint(2)))),
+    );
+    out.assign(instTransformPoint(ctx.A, ctx.B, ctx.yawSc, p as unknown as NV3));
+    // trunk WIND (Wind.vegWindOffset assembly, flutter omitted): per-vertex
+    // prof/flex scaling of the makeCtx-precomputed per-instance scalars.
+    if (wind) {
+      If(ctx.channel.equal(uint(TRANSFORM_CHANNEL.trunk)), () => {
+        const w = ctx.wind as TrunkWindFields;
+        const localY = (p as unknown as NV3).y.mul(ctx.A.w as unknown as NF);
+        const vd = elemU(gpu.verts, vb.add(uint(5)));
+        const flex = toF(vd.shiftRight(uint(8)).bitAnd(uint(0xff))).div(255);
+        const yn = localY.div(localY.add(w.h0));
+        const prof = yn.mul(yn).mul(1.7).add(flex.mul(0.3)).min(1.6);
+        const swayA = w.swayABase.mul(prof);
+        const sway = time.mul(w.natW).add(w.ph).sin().mul(swayA);
+        const swayX = time
+          .mul(w.natW.mul(1.31))
+          .add(w.ph.mul(1.7))
+          .sin()
+          .mul(swayA)
+          .mul(0.45);
+        const along = w.leanBase.mul(prof).add(sway).add(w.branchBase.mul(flex));
+        const dy = along.abs().add(swayX.abs()).mul(flex).mul(-0.2);
+        out.assign(
+          out.add(
+            vec3(
+              w.dirX.mul(along).sub(w.dirY.mul(swayX)),
+              dy,
+              w.dirY.mul(along).add(w.dirX.mul(swayX)),
+            ),
+          ),
+        );
+      });
+    }
+    return out as unknown as NV3;
+  };
+
   const fetchWorldVert = (ctx: VertCtx, localTri: NU, v: 0 | 1 | 2): NV3 => {
     const out = vec3(0).toVar();
     If(ctx.isHF, () => {
-      // grid texel coords of corner v — two heightfield conventions share the
-      // SAME height fetch + world reconstruction + micro-disp below; only how
-      // (sx,sz) are obtained differs (adaptive indexed vs implicit window grid).
-      const sx = uint(0).toVar();
-      const sz = uint(0).toVar();
-      // N8-D2 Stage 2d: a perimeter SKIRT vert carries a 3-bit depth-level code in
-      // bits 13-15 of word0 (0 = surface vert); its world Y drops below the surface
-      // to seal inter-level T-junction cracks. Stays 0 on the window grid path below.
-      const skirtDrop = float(0).toVar();
       If(ctx.isDAG, () => {
-        // adaptive terrain DAG (D2b): explicit topology; each vertex packs the texel
-        // coord — gx in bits 0-12, skirt code in 13-15, gz in 16-31. N8-D2 Stage 2e:
-        // terrain verts live in their OWN stride-1 buffer (gpu.hfVerts, one word/vert),
-        // so index it by vi directly — not vi·VERT_WORDS into the 6-word explicit buffer.
         const vi = elemU(gpu.indices, ctx.triStart.add(localTri).mul(uint(3)).add(uint(v)));
-        // RASTER reads the stride-1 hf buffer; RESOLVE (bindHfVerts=false) never runs
-        // this branch (terrain uses depth there) so it reads gpu.verts as harmless dead
-        // code, dropping the hfVerts binding from the resolve's fragment stage.
-        const packed = bindHfVerts ? elemU(gpu.hfVerts, vi) : elemU(gpu.verts, vi);
-        sx.assign(packed.bitAnd(uint(0x1fff)));
-        sz.assign(packed.shiftRight(uint(16)));
-        const code = packed.shiftRight(uint(13)).bitAnd(uint(0x7)).toVar();
-        If(code.greaterThan(uint(0)), () => {
-          // depth = SKIRT_DEPTH_A + SKIRT_DEPTH_B·level, level = code−1 (linear ⇒ hugs
-          // the saturating inter-level crack; see BuildHeightDag for the calibration)
-          skirtDrop.assign(float(SKIRT_DEPTH_A).add(float(SKIRT_DEPTH_B).mul(toF(code.sub(uint(1))))));
-        });
+        out.assign(dagWorldByIndex(ctx, vi));
       }).Else(() => {
-        // window-procedural: implicit regular grid within the cluster's window
+        // window-procedural: implicit regular grid within the cluster's window —
+        // no index buffer (sx,sz derived from localTri), so it stays inline here.
         const quad = localTri.shiftRight(uint(1));
         const odd = localTri.bitAnd(uint(1)).equal(uint(1));
         const col = quad.mod(ctx.qxw);
@@ -258,102 +374,25 @@ export function makeFetch(
           dx = uint(1) as unknown as NU;
           dz = odd.select(uint(0), uint(1));
         }
-        sx.assign(ctx.gx.add(col).add(dx));
-        sz.assign(ctx.gz.add(row).add(dz));
+        const sx = ctx.gx.add(col).add(dx);
+        const sz = ctx.gz.add(row).add(dz);
+        out.assign(hfWorld(ctx, sx as unknown as NU, sz as unknown as NU, float(0) as unknown as NF));
       });
-      const h = texLoadR(heightTex, sx, sz);
-      const wx = toF(sx).mul(ctx.cell).add(ctx.oX);
-      const wz = toF(sz).mul(ctx.cell).add(ctx.oZ);
-      if (disp) {
-        // TerrainTiles micro-displacement, verbatim (world-space fields;
-        // amplitude gated by slope/rockExposure/snow, faded 45→85 m)
-        const wpos = vec2(wx, wz);
-        const camD = wpos.sub(vec3(disp.camPos).xz).length();
-        const dOut = float(0).toVar();
-        If(camD.lessThan(float(DISP.fade1)), () => {
-          const uvV = wpos.div(WORLD_SIZE).add(0.5) as unknown as NV2;
-          const nsV = texture(disp.normalTex, uvV, 0) as unknown as NV4;
-          const bioV = texture(disp.biomeTex, uvV, 0) as unknown as NV4;
-          const fldV = texture(disp.fieldsTex, uvV, 0) as unknown as NV4;
-          const rockK = smoothstep(DISP.slopeKnee0, DISP.slopeKnee1, nsV.w).max(
-            bioV.a.mul(0.85),
-          );
-          const gravelK = smoothstep(0.32, 0.7, fldV.y)
-            .max(smoothstep(0.02, 0.2, fldV.z))
-            .mul(float(DISP.gravel));
-          const dispAmp = (mix(float(DISP.base), float(DISP.rock), rockK) as unknown as NF)
-            .max(gravelK)
-            .mul(bioV.g.mul(0.75).oneMinus())
-            .mul(clamp(float(DISP.fade1).sub(camD).div(DISP.fade1 - DISP.fade0), 0, 1));
-          const f1 = (texture(disp.noiseA, wpos.div(DISP.sF1 * PERIOD_FBM), 0) as unknown as NV4).y
-            .mul(2)
-            .sub(1);
-          const f2 = (
-            texture(
-              disp.noiseA,
-              wpos.div(DISP.sF2 * PERIOD_VAL).add(vec2(0.31, 0.77)),
-              0,
-            ) as unknown as NV4
-          ).x
-            .mul(2)
-            .sub(1);
-          const r1 = (texture(disp.noiseB, wpos.div(DISP.sRid * PERIOD_RID), 0) as unknown as NV4).z
-            .mul(2)
-            .sub(1);
-          dOut.assign(
-            f1
-              .mul(DISP.wF1)
-              .add(f2.mul(DISP.wF2))
-              .add(r1.mul(rockK.mul(1 - DISP.ridBase).add(DISP.ridBase)).mul(DISP.wRid))
-              .mul(dispAmp),
-          );
-        });
-        out.assign(vec3(wx, h.add(dOut).sub(skirtDrop), wz));
-      } else {
-        out.assign(vec3(wx, h.sub(skirtDrop), wz));
-      }
     }).Else(() => {
       const vi = elemU(gpu.indices, ctx.triStart.add(localTri).mul(uint(3)).add(uint(v)));
-      const vb = vi.mul(uint(VERT_WORDS));
-      const p = vec3(
-        bcU2F(elemU(gpu.verts, vb)),
-        bcU2F(elemU(gpu.verts, vb.add(uint(1)))),
-        bcU2F(elemU(gpu.verts, vb.add(uint(2)))),
-      );
-      out.assign(instTransformPoint(ctx.A, ctx.B, ctx.yawSc, p as unknown as NV3));
-      // trunk WIND (Wind.vegWindOffset assembly, flutter omitted): per-vertex
-      // prof/flex scaling of the makeCtx-precomputed per-instance scalars. The
-      // SAME shared fetch runs in the raster (geometry) and the resolve (the
-      // barycentric corners), so both reconstruct bit-identical windy positions.
-      if (wind) {
-        If(ctx.channel.equal(uint(TRANSFORM_CHANNEL.trunk)), () => {
-          const w = ctx.wind as TrunkWindFields;
-          const localY = (p as unknown as NV3).y.mul(ctx.A.w as unknown as NF);
-          const vd = elemU(gpu.verts, vb.add(uint(5)));
-          const flex = toF(vd.shiftRight(uint(8)).bitAnd(uint(0xff))).div(255);
-          const yn = localY.div(localY.add(w.h0));
-          const prof = yn.mul(yn).mul(1.7).add(flex.mul(0.3)).min(1.6);
-          const swayA = w.swayABase.mul(prof);
-          const sway = time.mul(w.natW).add(w.ph).sin().mul(swayA);
-          const swayX = time
-            .mul(w.natW.mul(1.31))
-            .add(w.ph.mul(1.7))
-            .sin()
-            .mul(swayA)
-            .mul(0.45);
-          const along = w.leanBase.mul(prof).add(sway).add(w.branchBase.mul(flex));
-          const dy = along.abs().add(swayX.abs()).mul(flex).mul(-0.2);
-          out.assign(
-            out.add(
-              vec3(
-                w.dirX.mul(along).sub(w.dirY.mul(swayX)),
-                dy,
-                w.dirY.mul(along).add(w.dirX.mul(swayX)),
-              ),
-            ),
-          );
-        });
-      }
+      out.assign(explicitWorldByIndex(ctx, vi));
+    });
+    return out as unknown as NV3;
+  };
+
+  const fetchWorldVertByIndex = (ctx: VertCtx, vi: NU): NV3 => {
+    const out = vec3(0).toVar();
+    If(ctx.isHF, () => {
+      // only the adaptive-DAG convention has explicit vertex indices; window-grid
+      // clusters have vcompact count=0, so the cooperative cache never calls this.
+      out.assign(dagWorldByIndex(ctx, vi));
+    }).Else(() => {
+      out.assign(explicitWorldByIndex(ctx, vi));
     });
     return out as unknown as NV3;
   };
@@ -361,5 +400,5 @@ export function makeFetch(
   const meshWord = (meshId: NU, word: number): NU =>
     elemU(gpu.meshes, meshId.mul(uint(MESH_WORDS)).add(uint(word)));
 
-  return { makeCtx, fetchWorldVert, meshWord };
+  return { makeCtx, fetchWorldVert, fetchWorldVertByIndex, meshWord };
 }
