@@ -26,6 +26,10 @@ async function capture(gridN: number, nandbg: string): Promise<{ near: Sample; v
   const tag = `g${gridN}-${nandbg || 'lit'}`;
   const { browser } = await launchWebGPU();
   const page = await browser.newPage({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
+  page.on('console', (m) => {
+    const t = m.text();
+    if (t.includes('terrain DAG')) console.log(`  [${tag}] ${t.replace(/^\[laas]\s*/, '')}`);
+  });
   const extra: Record<string, string> = {
     nanite: '1',
     nanshadow: '0',

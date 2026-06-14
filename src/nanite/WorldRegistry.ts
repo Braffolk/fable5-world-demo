@@ -34,6 +34,7 @@ import type { Heightfield } from '../world/Heightfield';
 import { WORLD_SIZE } from '../world/WorldConst';
 import { type DagBuild, type DagCluster, buildDag } from './BuildDag';
 import { buildHeightDag } from './BuildHeightDag';
+import { DagBuildWorker, type HeightDagResult } from './DagWorkerClient';
 import {
   type BuildReport,
   DAG_VERT_STRIDE,
@@ -376,10 +377,34 @@ export async function buildWorldRegistry(input: {
         }
       }
       const tHd0 = performance.now();
-      const built = buildHeightDag(
-        { heights: sub, gridN, cellSize: cell * stride, originX: origin, originZ: origin },
-        {},
-      );
+      const hfArgs = { heights: sub, gridN, cellSize: cell * stride, originX: origin, originZ: origin };
+      // N8-D1d (D-N30): build OFF the main thread — the chain is three-free.
+      // Increment 1 awaits it (still pre-build()); a Worker failure / absence
+      // falls back to a synchronous build (the input `sub` is copied, not
+      // transferred, so it survives the fallback).
+      let dagWorker: DagBuildWorker | null = null;
+      try {
+        dagWorker = new DagBuildWorker();
+      } catch {
+        dagWorker = null;
+      }
+      let built: HeightDagResult;
+      let buildVia: string;
+      if (dagWorker) {
+        try {
+          built = await dagWorker.buildHeight(hfArgs);
+          buildVia = 'worker';
+        } catch (e) {
+          deferred.push(`terrain DAG: worker build failed (${e instanceof Error ? e.message : String(e)}) → sync`);
+          built = buildHeightDag(hfArgs, {});
+          buildVia = 'sync-fallback';
+        } finally {
+          dagWorker.dispose();
+        }
+      } else {
+        built = buildHeightDag(hfArgs, {});
+        buildVia = 'sync-noworker';
+      }
       // remap build grid coords (0..gridN) → texel coords (clamped to res-1, so
       // texLoadR — which does NOT clamp — never reads out of bounds)
       const gridVerts = new Uint32Array(built.gridVerts.length);
@@ -405,7 +430,7 @@ export async function buildWorldRegistry(input: {
       });
       dagTerrainAttach = { handle: hTerrain, gridVerts, indices: built.indices, clusters: built.clusters };
       deferred.push(
-        `terrain DAG: gridN ${gridN} (stride ${stride}) → ${built.clusters.length} cl, ` +
+        `terrain DAG [${buildVia}]: gridN ${gridN} (stride ${stride}) → ${built.clusters.length} cl, ` +
           `${(built.indices.length / 3) | 0} tris, ${built.stats.levels} lv, ` +
           `maxErr ${built.stats.maxError.toFixed(2)} m, offGrid ${built.stats.offGridVerts}, ` +
           `${(performance.now() - tHd0).toFixed(0)} ms`,
