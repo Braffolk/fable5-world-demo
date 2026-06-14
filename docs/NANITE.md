@@ -1438,6 +1438,27 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-14 (av): **N5 shadow S4 (DAG-decoupled caster LOD) — implemented + MEASURED MINOR for this world;
+  the real lever is OCCLUSION (redirect).** (Opus 4.8 1M.) The DAG cut predicate in kClusterCull is
+  τ-driven (NaniteCull:403), and the shadow culls passed NO τ (default 1 px) — NaniteCull's own comment said
+  "proper DAG-decoupled caster LOD is S4." Worse, projK_shadow = uH·½ = 1024 (cotHalfFov 1, 2048 map) vs the
+  perspective cam ~468, so shadows rendered ~2× FINER than the camera — pure waste. Wired a coarser
+  per-cascade τ (`?shadowtau`, default 4, ×CASCADE_MUL [1,1.7,2.7,4]) into each cascade cull. RESULT: shTotal
+  (shadow visible-cluster count, the moving-raster proxy) moved only **807,644 → 805,995 (0.3%)** across
+  τ=1→8. ROOT CAUSE (the valuable finding): the dominant shadow casters here are NOT DAG — terrain is a
+  discrete CLIPMAP and vegetation is explicit discrete-LOD; only rock/bark are true DAG (**dagClusters ≈ 6%**
+  of the view). So the DAG τ cut only trims that minority. Added the cross-class min-screen-size cull as a
+  complement (`?shadowminpx`, NaniteCull minPx "applies to all classes", ×CASCADE_MUL): minPx=4 → shTotal
+  **806k → 711k (−12%, far cascade c3 −26%)**, beauty-safe at bm7 but it TRADES a little shadow completeness
+  (drops small casters — Epic ships this for foliage). **THE BIG FINDING:** the shadow cascades carry **805k
+  clusters vs the camera's 21k (38×)** — because they have **NO occlusion culling** (sphereOccluded=null) +
+  wide ortho coverage + 4 cascades, where the camera's HZB occlusion cut its clusters ~65× (1.36M→21k). So
+  the headline shadow-raster lever is OCCLUSION-CULLING the casters (ZERO quality loss — only drops casters
+  hidden from the light), NOT LOD coarsening. That needs a per-cascade light HZB (buildNaniteHzb works on any
+  cam's vis buffer) + an ORTHO sphereOccluded variant (the existing one is perspective-only: finite camPos,
+  cotHalfFov level-pick, w-divide) + per-cascade two-phase cull. Defaults kept conservative (τ=4 removes the
+  over-detail ~free; minPx=0 = no quality loss; both tuning flags). tsc clean; bm7 A/B beauty-neutral. NEXT:
+  the shadow OCCLUSION cull (per-cascade ortho HZB) — the actual 2–4× moving win.
 - 2026-06-14 (au): **N5 shadow S0 (D-N29) — HALF-RES PCSS eval + depth-aware BILATERAL upsample.** (Opus 4.8
   1M.) First chunk of the shadow perf engine, now that the N8 DAG default unblocks the stack. The fixed
   per-pixel PCSS sample in shadowFactor (6-tap blocker search + 9-tap penumbra PCF ≈ 15 cascade-texture taps)
@@ -2811,12 +2832,14 @@ CHUNK PLAN (to the logical point):
     write) in the resolve, but the resolve already sits at the 10-buffer Metal storage ceiling (see log as;
     that ceiling is exactly what the stride-1 hfVerts add breached). A lod heatmap must ride a cull-side
     write or a separate debug pass, not the resolve.
-  - **NEXT**: **shadows** — the D-N29 perf engine, built S0→S5 in order (see the plan block below).
-    S0 DONE (log au — half-res PCSS + bilateral upsample, sample ~halved, beauty-neutral). NOW: **S1**
-    (shadow-pass WPO-freeze + static/dynamic split) → S2 (tighter cull + stagger) → S3 (screen-density
-    clipmap res) → **S4** (DAG-decoupled caster LOD — the headline moving-fps win, now DAG-unblocked) → S5
-    (capsule-SDF + contact, beauty ceiling). Also pending: the carried D1e USER CHECKPOINT (continuous zoom
-    in Chrome on hero rock/tree + terrain — USER-PRESENT). Optional polish:
+  - **NEXT**: **shadows** — the D-N29 perf engine. Measurement reordered it (see the plan block below).
+    S0 DONE (log au — half-res PCSS + bilateral, sample ~halved). S4 DONE but MINOR (log av — casters
+    mostly non-DAG; LOD coarsening 0.3–12%). The finding: shadow cascades carry 38× the camera's clusters
+    for lack of OCCLUSION culling → NOW: **S2-OCCL** (per-cascade light HZB + ortho sphereOccluded +
+    two-phase cull — skip casters hidden from the sun; expected 2–4×, zero quality loss; the user's 30-fps
+    pain). Then S1 (WPO-freeze / static-dynamic) → S3 (screen-density clipmap res) → S5 (capsule-SDF +
+    contact). Also pending: the carried D1e USER CHECKPOINT (continuous zoom in Chrome on hero rock/tree +
+    terrain — USER-PRESENT). Optional polish:
     2b-4 always-resident coarse base (teleport no-hole; DOWNGRADED). The paramless-`?nanite=1` default-on
     (retire the `?nanite=0` opt-out) is a SEPARATE later endgame flip — leave for a user-present session
     (it changes the bare-URL boot for every debug scene). OLD locked 2d spec (kept for the record).
@@ -3018,7 +3041,15 @@ N8 DAG. Order:
        shadow texel per screen pixel near = crisp penumbra + texel efficiency. The beauty
        centrepiece. DAG-independent (big).
   S4 — DAG-DECOUPLED caster LOD (GATED ON N8 DAG): cast each band from a progressively
-       coarser DAG cut (near ~2× / mid ~8–16× / far coarsest). The clean perf engine.
+       coarser DAG cut (near ~2× / mid ~8–16× / far coarsest). ~DONE/MINOR (log av): wired
+       per-cascade shadow τ + minPx knobs, but shTotal moved only 0.3% (τ) / 12% (minPx=4) —
+       the casters here are mostly NON-DAG (terrain clipmap + explicit veg; dagClusters ~6%),
+       so LOD coarsening is second-order. The REAL lever surfaced: the shadow cascades carry
+       38× the camera's clusters because they have NO OCCLUSION cull → S2-OCCL below.
+  S2-OCCL (PROMOTED — the actual moving-raster lever, log av): per-cascade LIGHT HZB +
+       two-phase cull so shadow casters HIDDEN FROM THE SUN are skipped (zero quality loss,
+       unlike minPx). Needs an ORTHO sphereOccluded (the existing NaniteHzb test is
+       perspective-only: finite camPos, cotHalfFov level-pick, w-divide). Expected 2–4×. ← NOW.
   S5 — ADDITIVE BEAUTY CEILING: capsule-SDF soft inter-tree occlusion (wind-free blobs for
        the large-scale soft band) + screen-space CONTACT shadows (fine sub-pixel band).
        Optional, once the sun term is fast + crisp.
@@ -3029,11 +3060,12 @@ CONSTRAINTS (binding): WebGPU — NO 64-bit atomics, NO HW RT, ≤10 storage buf
 ~1.5 GB UMA. Zero external assets. Deterministic seed. WIND shadows stay correct. Quality
 floor: no black shadows, soft penumbra, no pop within 300 m.
 
-The R2/R3/R4 chunks below are SUPERSEDED by S0–S5. S0 DONE (log au — sample ~halved,
-beauty-neutral). NOW BUILDING: S1 (shadow-pass WPO-freeze + static/dynamic split) — the first
-chunk that attacks the MOVING shadow-raster cost (the user's 30-fps pain): freeze trunk-wind in
-the shadow raster past ~80–150 m so those clusters go rigid → the R1 per-cascade cadence caches
-them, and each frame atomicMin only the near-windy clusters on top of the cached rigid depth.
+The R2/R3/R4 chunks below are SUPERSEDED by S0–S5. S0 DONE (log au — sample ~halved). S4 done but
+MINOR (log av — casters mostly non-DAG). NOW BUILDING: S2-OCCL — per-cascade LIGHT HZB + ortho
+sphereOccluded + two-phase cull to skip shadow casters hidden from the sun (the 38×-disparity
+finding; zero quality loss; expected 2–4× off the moving shadow raster — the user's 30-fps pain).
+Then S1 (WPO-freeze / static-dynamic split — also fixes stale static-camera wind shadows), S3
+(screen-density clipmap res), S5 (capsule-SDF + contact, beauty ceiling).
 
 ---
 

@@ -65,7 +65,7 @@ import {
   type NaniteRasterHandles,
   type NaniteVisBuffers,
 } from './NaniteRaster';
-import { bcU2F, dispatch, elemU, minU, uniformArrV4, uniformMat4 } from './Tsl';
+import { bcU2F, dispatch, elemU, minU, uniformArrV4, uniformF, uniformMat4 } from './Tsl';
 import type { UniformArrV4, UniformMat4 } from './Tsl';
 
 /** CSM default cascade count (csmcasc can lower it — we guard per-cascade) */
@@ -159,9 +159,36 @@ export function buildNaniteShadow(
     Array.from({ length: SHADOW_CASCADES }, () => new Vector4(1, 1, 1 / SHADOW_MAP, 1.15)),
   );
 
+  // S4 (D-N29): DAG-DECOUPLED caster LOD — cast shadows from a COARSER DAG cut than
+  // the camera view. The lit surface is at camera LOD; penumbra hides caster
+  // silhouette error (more so the farther + softer the cascade). The shadow cull's
+  // projK already runs ~2× FINER than the perspective camera (projK = uH·½ = 1024 at
+  // cotHalfFov 1 vs ~468), so shadows were OVER-detailed — a coarser per-cascade τ
+  // removes that waste AND sheds the moving raster's dominant cost. τ grows with the
+  // cascade's distance band (c0 near = sharpest contact, c3 far = coarsest). The LOD
+  // distance is camera-relative (cam.camPos = main camera), so the bands line up.
+  // ?shadowtau=N scales the base px (default 4); =1 ≈ near the old camera-LOD detail.
+  const shParams = new URLSearchParams(window.location.search);
+  const shTauBase = Math.max(0.25, Number(shParams.get('shadowtau') ?? 4));
+  const CASCADE_TAU_MUL = [1, 1.7, 2.7, 4];
+  // S4 (cont): the DOMINANT shadow casters here are NOT DAG (terrain clipmap +
+  // explicit vegetation — dagClusters is ~6% of the view), so the τ cut above only
+  // trims the rock/bark minority. The cross-class lever is the min-screen-size cull
+  // (NaniteCull "applies to all classes"): drop any shadow caster whose sphere
+  // projects sub-shadowmap-pixel. Epic ships exactly this (small foliage dropped
+  // from shadow maps → contact shadows). Grows per cascade (coarser far). projK is
+  // ~1024 for the 2048 map, so minPx px ≈ that many shadow texels. ?shadowminpx=N.
+  const shMinPxBase = Math.max(0, Number(shParams.get('shadowminpx') ?? 0));
+
   for (let c = 0; c < SHADOW_CASCADES; c++) {
     const cam = makeNaniteCam(SHADOW_MAP, SHADOW_MAP);
-    const cull = buildNaniteCull(gpu, instanceCount, cam, null, { coneCull: false });
+    const cullTau = uniformF(shTauBase * (CASCADE_TAU_MUL[c] ?? 4));
+    const cullMinPx = uniformF(shMinPxBase * (CASCADE_TAU_MUL[c] ?? 4));
+    const cull = buildNaniteCull(gpu, instanceCount, cam, null, {
+      coneCull: false,
+      tau: cullTau,
+      minPx: cullMinPx,
+    });
     const vis = makeVisBuffers(SHADOW_PIX);
     // REUSE the raster depth-only: we only ever call clearVis/depth1/hwDepth.
     const raster = buildNaniteRaster(gpu, heightTex, cam, cull, vis, 'flat', false, disp, wind);
