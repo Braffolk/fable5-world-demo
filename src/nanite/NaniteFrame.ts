@@ -76,6 +76,70 @@ export function buildNaniteFrame(
   const renderer = engine.renderer;
   const size = renderer.getDrawingBufferSize(new Vector2());
   const params = new URLSearchParams(window.location.search);
+  // ?vrange=1 — PERF-3 diagnostic: per-cluster vertex-INDEX range distribution +
+  // redundancy, to size/justify a vertex-transform cache. range = max−min global
+  // index over a cluster's tri corners; a runtime [vMin,vMax] shared-mem cache of
+  // size S hits when range ≤ S. redund = 3·tris / unique-verts (the fetchWorldVert
+  // over-fetch the cache eliminates). Split explicit (gpu.verts) vs HF-DAG
+  // (gpu.hfVerts); window-grid HF is skipped (no index buffer).
+  if (params.get('vrange') === '1') {
+    const dbg = registry.debug().arrays;
+    const idx = dbg.indices;
+    const cl = dbg.clusters;
+    const N = registry.clusterCount;
+    const CW = 8; // CLUSTER_WORDS
+    const buckets = [64, 128, 256, 512, 1024, Number.POSITIVE_INFINITY];
+    const tally = (label: string, pred: (flags: number) => boolean): void => {
+      const hist = new Array<number>(buckets.length).fill(0);
+      let nCl = 0;
+      let sumRange = 0;
+      let sumUnique = 0;
+      let sumTris = 0;
+      let maxRange = 0;
+      const seen = new Set<number>();
+      for (let c = 0; c < N; c++) {
+        const triStart = cl[c * CW + 6] ?? 0;
+        const w7 = cl[c * CW + 7] ?? 0;
+        const triCount = w7 & 0xff;
+        const flags = (w7 >>> 8) & 0xff;
+        if (triCount === 0 || !pred(flags)) continue;
+        let mn = 0xffffffff;
+        let mx = 0;
+        seen.clear();
+        for (let t = 0; t < triCount; t++) {
+          for (let v = 0; v < 3; v++) {
+            const vi = idx[(triStart + t) * 3 + v] ?? 0;
+            if (vi < mn) mn = vi;
+            if (vi > mx) mx = vi;
+            seen.add(vi);
+          }
+        }
+        const range = mx - mn + 1;
+        nCl++;
+        sumRange += range;
+        sumUnique += seen.size;
+        sumTris += triCount;
+        if (range > maxRange) maxRange = range;
+        for (let b = 0; b < buckets.length; b++) {
+          if (range <= (buckets[b] ?? 0)) {
+            hist[b] = (hist[b] ?? 0) + 1;
+            break;
+          }
+        }
+      }
+      if (nCl === 0) {
+        console.log(`[laas][vrange] ${label}: (none)`);
+        return;
+      }
+      const pct = (x: number): string => `${((x / nCl) * 100).toFixed(0)}%`;
+      console.log(
+        `[laas][vrange] ${label}: ${nCl} cl · avg range ${(sumRange / nCl).toFixed(0)} · avg unique ${(sumUnique / nCl).toFixed(0)} · avg tris ${(sumTris / nCl).toFixed(0)} · redund ${((3 * sumTris) / sumUnique).toFixed(2)}× · maxRange ${maxRange}`,
+      );
+      console.log(`[laas][vrange] ${label} range≤[64,128,256,512,1024,∞]: ${hist.map(pct).join(' ')}`);
+    };
+    tally('explicit', (f) => (f & 1) === 0);
+    tally('HF-DAG', (f) => (f & 1) !== 0 && (f & 2) !== 0);
+  }
   const occl = params.get('occl') !== '0';
   const phase2 = params.get('phase2') !== '0';
   /** ?nanhw=0 — bisect: skip the HW big/near-tri passes (expect bbox-routed
