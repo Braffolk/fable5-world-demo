@@ -1146,34 +1146,6 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   (1 m cells, near-camera parity with the window grid) is ~5 min sync ⇒ blocked on the D1d
   Worker — the remaining gate before this can be the DEFAULT terrain path.
 
-- D-N37 (2026-06-14, N8-D1d — the terrain DAG build runs OFF-THREAD and attaches in the
-  BACKGROUND, realizing D-N30). The build chain (buildHeightDag → buildDag → clusterize) is
-  three-free / typed-arrays in-out (verified: Clusterize.ts has ZERO imports), so it runs in a
-  plain Vite module Worker — no GPU/DOM in the bundle. THE BOOT-UNBLOCK PATTERN (the key
-  decision): terrain registers the discrete WINDOW path as a boot PLACEHOLDER (instant, full
-  near detail — it is the shipping default anyway) and reserves a conservative DAG append
-  budget; build() goes live on the window terrain; the Worker builds the DAG off the critical
-  path; when it finishes, attachHeightDag runs in the BACKGROUND (a .then on the build promise)
-  and REPOINTS the window mesh to the DAG (the window entry's hf is already the texel origin/
-  cell the decode needs, and attachDag/attachHeightDag were always post-build late-attach
-  capable — they append new ranges then flip ONE mesh record, so the live render loop sees the
-  window terrain until the atomic flip; no torn state). So a minutes-long full-res build never
-  blocks boot — the scene is interactive on the window terrain and the adaptive DAG pops in when
-  ready. Sub-decisions: (a) inputs are COPIED to the worker (not transferred) so a worker
-  failure falls back to a SYNC build with the input intact; outputs (gridVerts+indices) are
-  transferred zero-copy. (b) The append budget is reserved at boot (caps freeze at build())
-  BEFORE the size is known → reserve ~4× LOD0 (observed DAG total ≈2.9× LOD0); an OVERSHOOT is
-  non-fatal — attachHeightDag's checkRoom throws, the catch logs it, and the window terrain is
-  KEPT (graceful degradation). This is why the placeholder matters: a failed/oversized DAG just
-  leaves working terrain. VALIDATED (probe-dterrain @256, the swap observed live): "building
-  off-thread — window placeholder live" → "terrain DAG attached (bg): 2958 cl, offGrid 0, +943
-  ms AFTER boot"; post-swap dagClusters 320→245 byte-identical to the sync path, render
-  crack-free (the live background mutation is correct). REMAINING for full-res default (NOT
-  blocking — subsample works today): a deterministic-seed build CACHE (skip the ~5 min rebuild
-  every boot — the build is RNG-free so the DAG bytes are content-addressable by the heights
-  hash) + the tighter stride-1 terrain vertex buffer (the conservative 4× budget × 6-word verts
-  is GBs at 4096²). Explicit-pool builds stay sync for now (<1 s — the Worker is a terrain need).
-
 ## GOTCHAS (append-only, nanite-specific)
 
 - (N5-C1) A SHADOW-CASTER NodeMaterial MUST SET `map = null`. three's shadow
@@ -1325,22 +1297,6 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
-- 2026-06-14 (ai): **N8-D1d — terrain DAG build runs OFF-THREAD + attaches in the BACKGROUND;
-  boot no longer blocks on it (D-N30 realized; D-N37).** (Opus 4.8 1M.) The three-free build
-  chain runs in a Vite module Worker (DagWorker.worker.ts + DagWorkerClient.ts +
-  DagWorkerTypes.ts). Increment 1: terrain build moved to the worker, AWAITED pre-build()
-  (proved the transport — "[worker] gridN 256 → 2958 cl, offGrid 0, 948 ms", byte-identical to
-  sync). Increment 2 (the boot-unblock): terrain registers the WINDOW path as a boot PLACEHOLDER
-  + reserves a conservative ~4× LOD0 budget; build() goes live on the window; the worker builds
-  the DAG off the critical path; attachHeightDag runs in the BACKGROUND (.then) and repoints the
-  window mesh → DAG. Validated (probe-dterrain @256, swap watched live): "building off-thread —
-  window placeholder live" → "attached (bg): 2958 cl, offGrid 0, +943 ms after boot"; post-swap
-  320→245 cl byte-identical, crack-free, the live registry mutation correct (one atomic mesh-
-  record flip, no torn state). Inputs COPIED (sync fallback intact on worker failure); a budget
-  OVERSHOOT is caught → window terrain kept (graceful). Removed the now-superseded lean
-  registerHeightDag (the window entry's hf already carries the texel origin/cell). tsc clean.
-  Remaining for full-res DEFAULT: a deterministic-seed build CACHE + a stride-1 terrain vertex
-  buffer; explicit pools stay sync (<1 s).
 - 2026-06-14 (ai): **N8-D2b — terrain DAG GPU WIRING: terrain now renders through the adaptive
   LOD DAG + the shared flat cut, headlessly validated. (D-N36.)** (Opus 4.8 1M.) Wired the D2a
   builder to the GPU behind `?nanitedterrain=<gridN>` (default 0 = window path, byte-identical).
@@ -2353,11 +2309,9 @@ CHUNK PLAN (to the logical point):
   shadows-ON correct). +1 storage = 8/10 (F9). nanite.dagClusters counter for HUD/gate.
 - N8-D1d/e — CLOSE N8-D1: (PRE-REQ DONE — the envelope + cut error-scale bug from the user
   re-test is FIXED, log ah / D-N33; bark + deadwood DAG confirmed working live under
-  ?nanitedag=all.) ~~(d) move the DAG build to a background Worker (D-N30)~~ **DONE for terrain**
-  (log/D-N37): DagWorker.worker.ts; terrain registers a WINDOW placeholder + reserves budget,
-  the worker builds off-thread, attachHeightDag swaps window→DAG in the BACKGROUND (+943 ms
-  after boot @256, boot never blocks). Explicit pools still build sync (<1 s; wire them through
-  the same worker only if a heavy ?nanitedag=all boot demands it). (e) bark is the heavy class, 162k trees → WATCH
+  ?nanitedag=all.) (d) move buildDag to a background Worker (D-N30 — three-free,
+  typed arrays in/out; per-pool progressive: discrete LOD until each pool's DAG lands, then
+  swap; off the boot critical path per F15). (e) bark is the heavy class, 162k trees → WATCH
   the flat-cut cull-dispatch volume (?nanitedag=all near a forest = 0.14M cl / 16 ms occl-on
   measured; if cull dispatch is the bottleneck, D-N31's hierarchical-traversal pruning layer
   is the lever). + MIN-SCREEN-SIZE cull primitive **BUILT** (gated `?nanitemin=<px>`, default

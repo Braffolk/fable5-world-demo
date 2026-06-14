@@ -59,25 +59,6 @@ async function capture(gridN: number, nandbg: string): Promise<{ near: Sample; v
     }
     return { dag: -1, ms: -1 };
   };
-  // Increment 2: terrain boots on the WINDOW placeholder (dagClusters 0); the
-  // adaptive DAG attaches in the BACKGROUND. Settle frames until the swap lands
-  // (dagClusters > 0) so the shots show the DAG, not the placeholder. The wall
-  // time to swap proves the build ran off the boot path (window rendered first).
-  let swapMs = -1;
-  if (gridN > 0) {
-    const t0 = Date.now();
-    for (let i = 0; i < 240; i++) {
-      const dag = await page.evaluate(async () => {
-        if (window.__laas.settle) await window.__laas.settle(16);
-        return window.__laas.stats?.counters['nanite.dagClusters'] ?? 0;
-      });
-      if (dag > 0) {
-        swapMs = Date.now() - t0;
-        break;
-      }
-    }
-    console.log(`  [${tag}] background swap ${swapMs >= 0 ? `landed +${swapMs} ms` : 'NEVER (placeholder kept)'}`);
-  }
   const near = await sample();
   await page.screenshot({ path: `shots/wip/dterrain-${tag}-near.png` });
   // elevated vista — lift + pitch down to expose the near→far cluster gradient
