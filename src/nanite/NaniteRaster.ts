@@ -207,6 +207,20 @@ export function buildNaniteRaster(
       const ci = item.y.toVar();
       const ctx = makeCtx(instId, ci);
 
+      if (mode === 'depth' && rdbg === 3) {
+        // ?rdbg=3 — stop right after makeCtx (the per-(instance,cluster) decode:
+        // cluster/mesh/instance reads + the trunk-wind gust TEXTURE samples that
+        // run once per THREAD = 128×/cluster). The sink folds the wind scalars so
+        // those gust samples can't be DCE'd. (rdbg1 − rdbg3) = the 3 fetchWorldVert.
+        const wSink = ctx.wind
+          ? ctx.wind.leanBase.add(ctx.wind.natW).add(ctx.wind.branchBase)
+          : float(0);
+        const sinkV = ctx.A.x.add(toF(ctx.triCount)).add(wSink).clamp(0, 1);
+        const sinkPx = itemIdx.mul(uint(2654435761)).add(localTri).mod(uint(pixelCount));
+        atomicMin(visDepthV.atomic.element(sinkPx), bcF2U(sinkV as unknown as NF));
+        returnIf(itemCount.greaterThanEqual(uint(0)));
+      }
+
       If(localTri.lessThan(ctx.triCount), () => {
         const w0 = fetchWorldVert(ctx, localTri, 0);
         const w1 = fetchWorldVert(ctx, localTri, 1);
