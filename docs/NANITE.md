@@ -1438,6 +1438,44 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-14 (ax): **N5 shadow S3 — the SCREEN-DENSITY SHADOW CLIPMAP (D-N29 point 1) is BUILT,
+  correct + beautiful + drops CSM; MEASURED at perf PARITY with the 4 cascades (the cluster win is
+  offset by per-level fixed overhead) — the honest moving-fps WIN needs S4-on-the-headroom next.**
+  (Opus 4.8 1M.) NaniteShadowClip.ts: replaces the 4 fixed CSM cascades with ONE camera-centred
+  clipmap — L concentric ORTHO levels along the sun, doubling half-extent (E_k=E_0·2^k), each
+  texel-SNAPPED to its own grid (anti-crawl + free cadence: a coarse level's huge texel rarely moves
+  ⇒ the R1 exact-VP gate caches it). Own ortho VPs from sunU.dir.value + the camera (three's CSM
+  DROPPED for shadow geometry; world.csm survives only as the resolve's cloud-gate carrier).
+  `OrthographicCamera.coordinateSystem = WebGPUCoordinateSystem` (a standalone three cam defaults to
+  WebGL z∈[-1,1] — the raster/sample want z∈[0,1]; the #1 correctness trap). HOLLOW (NaniteCull new
+  opt `innerReject`=1/E): a level rasters only its RING — clusters whose light-clip bbox lies entirely
+  in [±0.5] (the finer box, extents double) are dropped → each caster rasters into EXACTLY ONE level.
+  Gap-free because shadows project along the sun ⇒ caster + its shadow share light-XY (the finer level
+  covering the caster covers everything it shadows); the radius margin keeps straddlers in both. ONE
+  shared vis (raster→copy→reuse) ⇒ less memory than 4 cascades. Same NaniteShadow interface ⇒ resolve
+  unchanged; ?shadowclip=0 A/Bs back to the cascades. Knobs: ?shadowcliplevels (6) / shadowclipbase
+  (12 m ⇒ 384 m coverage, > the 300 m floor) / shadowclipres (1024) / shadowclipminpx (0). MEASURED
+  (probe-shadowclip.ts, NEW; bm7, 2592×1676, moving @0.12/frame): clipmap rasters **×0.32 the clusters**
+  (250k vs 786k — the hollow + screen-density + minPx) and is **VISUALLY ≥ the cascades** (smoother
+  vista, less foreground banding, soft attached near contact; T1024 ≈ T2048 at distance, clean near).
+  BUT fps is PARITY: clipmap 49.2 moving vs cascades 49.9 (static 72 vs 73). WHY (the key finding): the
+  cluster win does NOT convert to fps because the cost is per-level FIXED overhead (clear+copy+162k
+  instance-cull × MORE maps) + fill, not the cluster raster — the cascades' [1,2,3,6] cadence re-rasters
+  only ~1.8 maps/frame, while the clipmap's fine levels (small texels) re-raster ~5/frame. Uniform
+  screen-density inherently uses more maps than the cascades' coarse-far. Sweeps: fewer levels (7→5:
+  45→48 fps) + lower T (2048→768: 49→53, fill scales T²) each help ~marginally; the floor is the
+  T-independent per-level cull/clear/copy. GROUNDING: the NO-shadow ceiling here is **83.5 fps** (not
+  100+ — the user's 115-120 was a lighter scene), so the realistic target is "approach 83.5", i.e. make
+  shadows ~free. NEXT (the real perf win, recorded not yet built): (1) SHARE the instance cull — the
+  levels are concentric + all LOD off the SAME camera, so ONE inst-cull vs the coarsest box feeds all
+  levels' cluster culls (kills the ×N 162k-cull + LOD-walk); (2) S4 DAG caster-coarsening on the ×0.32
+  cluster HEADROOM (the clipmap's far levels are coarse ⇒ minPx + DAG bite hard where the fine cascades
+  made them useless — the lever S4/S2-OCCL lacked on the cascade base); (3) variable-T (sharp near /
+  cheap far). Default ON (honours "drop CSM", beauty ≥, perf parity = no regression); coverage drops
+  from the cascades' 3200 m to 384 m (a recorded tradeoff, > the 300 m floor; a cheap cached far-backstop
+  level closes it). tsc clean. Tested bm3 + bm7 static/moving; broader bookmark + walk-mode + low-sun
+  sweep still pending.
+
 - 2026-06-14 (aw): **N5 shadow S2-OCCL — per-cascade light-HZB occlusion cull WIRED but MEASURED WEAK
   (default off); the moving-shadow lever is NOT occlusion either.** (Opus 4.8 1M.) Built the headline
   candidate from log av: a per-cascade light HZB (buildNaniteHzb on each cascade's vis depth) + a NEW ORTHO
@@ -3090,12 +3128,21 @@ floor: no black shadows, soft penumbra, no pop within 300 m.
 
 The R2/R3/R4 chunks below are SUPERSEDED by S0–S5. STATUS: S0 DONE (log au — sample ~halved, real
 win). S4 done but MINOR (log av — casters mostly non-DAG, ≤12%). S2-OCCL TRIED but WEAK (log aw —
-occlusion ~0: phase2 self-occludes + CsmCached prev-HZB staleness + high-sun weak inter-occlusion;
-default off). KEY: two measured findings prove the 38× shadow/camera cluster disparity is WIDE
-COVERAGE × 4 CASCADES × fine geometry, NOT LOD-coarsenable or occludable geometry. NOW (NEEDS
-USER DIRECTION): S3 — collapse the 4 cascades into ONE screen-density shadow CLIPMAP + far-caster
-PROXIES/impostors (the remaining big moving-raster lever; a real far-shadow quality/perf tradeoff).
-Also still open: S1 (WPO-freeze / static-dynamic split — fixes stale static-camera wind shadows).
+occlusion ~0). **S3 BUILT (log ax) — the screen-density shadow CLIPMAP (NaniteShadowClip.ts) replaces
+the 4 CSM cascades: own ortho VPs from sun+camera (CSM dropped for geometry), doubling texel-snapped
+levels, gap-free HOLLOW ring cull (NaniteCull innerReject), shared vis. CORRECT + beauty ≥ cascades +
+×0.32 the clusters + drops CSM. Default ON (?shadowclip=0 A/Bs to cascades).** BUT the honest finding:
+fps is PARITY with the cascades (49.2 vs 49.9 moving @bm7/2592²) — the ×0.32 cluster win is offset by
+per-level FIXED overhead (clear+copy+162k inst-cull × more maps; the cascade [1,2,3,6] cadence re-rasters
+~1.8 maps/frame vs the clipmap's ~5). Uniform screen-density costs more maps than the cascades' coarse-far.
+The NO-shadow ceiling here is 83.5 fps (100+ unreachable at this bookmark — the user's 115-120 was lighter),
+so the target is "approach 83.5 / make shadows ~free". The clipmap is the BEAUTY win + the ×0.32 cluster
+HEADROOM; the moving-fps WIN is the NEXT chunk on top of it: **S3-perf = (1) SHARE the instance cull across
+levels (concentric + same-camera LOD ⇒ one inst-cull feeds all cluster culls, kills the ×N fixed cost);
+(2) S4 DAG caster-coarsening on the clipmap's coarse far levels (minPx + DAG bite where the fine cascades
+made them useless); (3) variable-T (sharp near / cheap far).** Coverage drops 3200 m→384 m (recorded
+tradeoff, > the 300 m floor; a cached far-backstop level closes it). Also still open: S1 (WPO-freeze /
+static-dynamic split — stale static-camera wind shadows).
 
 ---
 

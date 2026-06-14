@@ -39,6 +39,7 @@ import {
   Fn,
   If,
   Loop,
+  abs,
   atomicAdd,
   atomicStore,
   dot,
@@ -46,6 +47,7 @@ import {
   instanceIndex,
   uint,
   vec3,
+  vec4,
 } from 'three/tsl';
 import type { NB, NF, NU, NV3, NV4 } from '../gpu/TSLTypes';
 import {
@@ -156,9 +158,21 @@ export function buildNaniteCull(
    *  relative (instRotateDir vs cam.camPos), but a cluster facing away from the
    *  CAMERA still casts toward the LIGHT, so cone-culling it punches shadow
    *  holes. Default true (camera path). */
-  opts?: { coneCull?: boolean; tau?: UniformF; minPx?: UniformF },
+  opts?: { coneCull?: boolean; tau?: UniformF; minPx?: UniformF; innerReject?: UniformF },
 ): NaniteCullChain {
   const coneCull = opts?.coneCull !== false;
+  // S3 SHADOW CLIPMAP hollow (D-N29): a clipmap level rasters only the RING
+  // outside the next-finer level — a cluster whose light-space clip bbox lies
+  // ENTIRELY within [±0.5] (the finer level's box, since extents double) is
+  // covered by that finer level and is dropped here. The uniform carries 1/E
+  // (the inverse light-XY half-extent of THIS level) so radius→clip is r·(1/E);
+  // 0 = disabled (the camera path + the finest level, which has no finer level).
+  // Shadows project along the sun ⇒ caster and its shadow share light-XY, so the
+  // finer level that covers the caster also covers everything it shadows — the
+  // hollow is gap-free. The radius margin keeps boundary-straddling clusters in
+  // BOTH levels (no seam). Cheaper than per-cascade redundancy: each caster
+  // rasters into exactly one level.
+  const innerInvHalf = opts?.innerReject ?? uniformF(0);
   // N8-D1e min-screen-size cull threshold (projected sphere RADIUS in px). 0 =
   // disabled (exact pre-D1e behaviour). When > 0: any cluster projecting smaller
   // is culled, and DAG'd meshes drop their finite hybrid envelope for this bound.
@@ -375,6 +389,21 @@ export function buildNaniteCull(
           If(projK.mul(s.radius).div(distC).lessThan(minPx), () => {
             visible.assign(0);
           });
+        });
+
+        // S3 SHADOW CLIPMAP hollow: drop clusters lying ENTIRELY inside the
+        // next-finer level's box (clip [±0.5]; extents double). cam.vp here is
+        // the level's ORTHO VP (w==1 → clip.xy ∈ [-1,1] over [±E]); rClip =
+        // radius·(1/E). Keeps boundary-straddlers (margin) so no seam gap.
+        If(visible.greaterThan(0.5).and(innerInvHalf.greaterThan(0)), () => {
+          const clip = cam.vp.mul(vec4(s.center, 1)) as unknown as NV4;
+          const rClip = s.radius.mul(innerInvHalf);
+          If(
+            abs(clip.x).add(rClip).lessThan(0.5).and(abs(clip.y).add(rClip).lessThan(0.5)),
+            () => {
+              visible.assign(0);
+            },
+          );
         });
 
         // N8-D1 continuous-LOD cut: a DAG cluster survives iff its OWN

@@ -38,6 +38,7 @@ import { makeFetch } from './NaniteFetch';
 import { buildNaniteRaster, makeVisBuffers } from './NaniteRaster';
 import { buildNaniteResolve } from './NaniteResolve';
 import { buildNaniteShadow, type NaniteShadow } from './NaniteShadow';
+import { buildNaniteShadowClip } from './NaniteShadowClip';
 import { buildShadowHalf, type ShadowHalf } from './NaniteShadowHalf';
 import { bcU2F, dispatch, elemU, readBuffer, returnIf, texLoadR, toF, uniformArrV4, uniformF } from './Tsl';
 
@@ -135,8 +136,15 @@ export function buildNaniteFrame(
   // same flag). Built BEFORE the resolve so the resolve binds shadowFactor; needs
   // the CSM (its cascade ortho cameras provide the per-cascade light VPs).
   const shadowOn = params.get('nanshadow') !== '0' && world.csm !== null;
+  // S3 (D-N29): the SCREEN-DENSITY SHADOW CLIPMAP replaces the 4 fixed CSM
+  // cascades (the resolved sun-shadow rethink — CSM dropped for shadow geometry).
+  // ?shadowclip=0 A/Bs back to the cascade path (NaniteShadow.ts). world.csm stays
+  // alive only as the resolve's cloud-gate carrier until that gate is re-sourced.
+  const useClip = params.get('shadowclip') !== '0';
   const shadow: NaniteShadow | null = shadowOn
-    ? buildNaniteShadow(registry.gpu, registry.instanceCount, hf.heightTex, disp, windOpt)
+    ? useClip
+      ? buildNaniteShadowClip(registry.gpu, registry.instanceCount, hf.heightTex, disp, windOpt)
+      : buildNaniteShadow(registry.gpu, registry.instanceCount, hf.heightTex, disp, windOpt)
     : null;
 
   // S0 (D-N29): half-res PCSS eval + depth-aware bilateral upsample — quarters the
