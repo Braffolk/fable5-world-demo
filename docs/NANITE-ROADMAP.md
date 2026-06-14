@@ -40,12 +40,20 @@ range >1024) ⇒ runtime range-cache FAILS terrain; workgroup atomics unsupporte
 bonus local-index memory win ~−100 MB). DESIGN: PARALLEL `gpu.vcompact` buffer (2 u32/cluster: vertBase,
 vertCount; 0 ⇒ per-thread fallback) — NOT a CLUSTER_WORDS change (would shift every ci·8 offset). Gated
 `?vcompact`, compacted PER PACK PATH so the kernel handles compacted-or-not per cluster (incremental, always
-self-consistent). STAGES: **(1) explicit-path compaction** (contiguous dup verts + indices + vcompact;
-fetchWorldVert UNCHANGED ⇒ render BIT-IDENTICAL, no perf yet) → **(2) kernel cooperative transform** (read
-vcompact, transform [vertBase,+vertCount) into shared vec3, barrier, tris read shVerts[vi−vertBase]) = the win
-→ **(3) extend to attachDag + attachHeightDagTile** (pool caps grow for dup) → **(4) narrow local indices**
-(memory). NOTE: the ctx-cache net (−0.59) was below gross — the cooperative transform has the same barrier+
-shared-read overhead, so VALIDATE the net win at stage 2 before stages 3–4. Owed: COOLED absolute-ms batch.
+self-consistent). STAGES: **(1) ✅ DONE (committed):** explicit-path `[vMin,count]` cache — `gpu.vcompact`
+buffer + `populateVCompact()` (range over each boot cluster's indices, ≤VCACHE_VERTS=192 → store, else
+0=fallback; window-grid + streamed terrain stay 0). Explicit uses the EXISTING tight ranges ⇒ NO duplication
+(terrain = the later true-compaction stage). Nothing reads it yet ⇒ render bit-identical, boots clean (87.9k
+visCl). **(2) ⬜ NEXT = THE WIN — kernel cooperative transform, gated `?vcompact`. (2a)** refactor NaniteFetch:
+extract `fetchWorldVertByIndex(ctx, vi)` + a shared `hfWorld(ctx,sx,sz,skirtDrop)` from `fetchWorldVert`
+(window-grid stays inline). BEHAVIOR-PRESERVING — `fetchWorldVert` is shared by resolve/shadow/hzb/raster, so
+A/B the DEFAULT path bit-identical (screenshot) before/after the refactor. **(2b)** in NaniteRaster, read
+`gpu.vcompact[ci]`→(vMin,count); count>0 ⇒ cooperatively transform [vMin,vMin+count) via
+`fetchWorldVertByIndex` into `workgroupArray('vec3', VCACHE_VERTS)` (thread t: vMin+t,+128,…), barrier, tris
+read `shVerts[vi−vMin]`; else fall back. Bind `gpu.vcompact` in the RASTER ONLY (conditional — avoids the
+resolve 10-buffer ceiling). Validate bit-identical + measure the NET (ctx-cache net was BELOW gross — same
+barrier+shared-read overhead, so confirm the win is real). → **(3)** terrain true compaction (duplication +
+pool-cap growth) → **(4)** narrow local indices (memory). Owed: COOLED absolute-ms batch.
 
 ## Phases (coarse status — see SPEC `## Phase plan`)
 N0 scaffold ✅ · N1 clusterize ✅ · N2 cull ✅ · N3 vis-buffer ✅ · N4 materials ✅ ·
