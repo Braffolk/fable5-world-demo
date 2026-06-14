@@ -1322,6 +1322,14 @@ export class GeometryRegistry {
   get tileFreeSlotCount(): number {
     return this.tileFreeSlots.length;
   }
+  /** the pool's per-slot capacity — the streamer pre-checks a built tile against
+   *  this to SKIP an oversized region (coarser ring backstops) rather than have
+   *  attachHeightDagTile throw + leak the alloc'd slot. */
+  get tilePoolCap(): { vertCap: number; triCap: number; clusterCap: number } {
+    const pool = this.tilePool;
+    if (!pool) throw new Error('GeometryRegistry: no tile pool reserved');
+    return { vertCap: pool.vertCap, triCap: pool.triCap, clusterCap: pool.clusterCap };
+  }
   tileSlotHandle(slot: number): MeshHandle {
     const h = this.tilePoolHandles[slot];
     if (h == null) throw new Error(`GeometryRegistry: tile slot ${slot} has no handle`);

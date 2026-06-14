@@ -287,6 +287,16 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
             : '') +
           `); deferred instances ${wr.deferredInstances}\n${wr.report.table}\ndeferred: ${wr.deferred.join('; ')}`,
       );
+      // N8-D2 Stage 2b-3 (D-N39): drive the clipmap streamer from the live camera
+      // — re-center the 1 m detail rings each frame (evict departed / stream in
+      // arrived). The coarser resident ring backstops in-flight loads ⇒ no holes.
+      if (wr.terrainStreamer) {
+        const streamer = wr.terrainStreamer;
+        engine.onUpdate(() => {
+          streamer.update(engine.camera.position.x, engine.camera.position.z);
+          Object.assign(engine.stats.counters, streamer.counters());
+        });
+      }
     }
 
     // near-field carpets: 800k-blade grass ring + 80k debris ring

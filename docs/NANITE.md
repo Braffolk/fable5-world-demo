@@ -1267,6 +1267,25 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   few attaches/frame to avoid hitches; if the tile left `desired` before the build returns, free the
   slot + discard). Cache key is per (gridN, stride, tx0, tz0) ⇒ revisits are instant. No per-frame
   reg.flush needed (attachHeightDagTile's pushRange marks needsUpdate → three auto-uploads).
+  **2b-3 DONE + committed** (log an) — built ≈ the factoring, with two refinements found in build:
+  (i) build-BEFORE-alloc + a cap-PRE-check (read reg.tilePoolCap) so a slot is never held across an
+  await nor leaked when attach would overflow — over-cap tiles are SKIPPED (coarser ring backstops),
+  not thrown; (ii) a `skipped` Set so a permanently-over-cap tile is built ONCE per residency, not
+  rebuilt every frame (pruned when it leaves `desired`). update() is single-flight (busy-guard +
+  pendingCam coalesce to the latest camera; one batch/frame, the next frame re-drives the drain).
+  Headless probe-stream + GPU probe-streammove green: resident≡desired + bounded + no-leak at every
+  pose, re-centers EXACTLY on return. **FINDING that reshapes the no-hole story:** the clipmap is
+  hole-free at STEADY STATE and under CONTINUOUS motion (the just-departed backstop ring stays
+  resident), but a FAST TELEPORT into never-cached terrain has a TRANSIENT void — because EVERY
+  level re-centers, the coarse backstop ALSO churns, and its cache-miss rebuilds (~170 ms/tile,
+  serialized) lag the jump. So the "coarsest ring = always-resident backstop" claim only holds while
+  the camera stays put / moves slowly. THE FIX (new increment, before 2d): a genuinely
+  always-resident, NON-churning coarse base spanning the field — either (a) pin level L-1 to a FIXED
+  field grid (camera-independent) and REVIVE a minimal suppression so the camera-centered finer
+  levels hide it where they cover (the deleted 2c, now justified — overlap is back once the base is
+  fixed), or (b) a depth-underlay base (but the coarsest maxErr ≈ 194 m makes a flat Y-bias
+  unviable). (a) is the path. Until then: realistic motion is hole-free; teleports/bookmarks show a
+  brief void on first visit (instant on cached revisit).
 
 ## GOTCHAS (append-only, nanite-specific)
 
@@ -1419,6 +1438,34 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-14 (an): **N8-D2 Stage 2b-3 — the terrain clipmap FOLLOWS the camera (per-frame async
+  streamer); detail re-centers on the live camera, hole-free at steady state (D-N39).** (Opus 4.8
+  1M.) New TerrainStreamer.ts owns the residency loop: the field's buildTileGlobal moved into a
+  shared `buildTerrainTile(deps,…)` helper (WorldRegistry's uniform path + the streamer both call
+  it), plus a PERSISTENT DagWorker (clip mode no longer disposes it at boot). WorldRegistry clip
+  path now: construct the streamer, `await buildBootSet(res/2,res/2)` PRE-build (spawn-centered ring
+  set + measures caps), reserveTilePool sized for `clipmapMaxTiles+8` slots × boot-worst×1.5 caps,
+  `attachBootSet()` POST-build (frame-1 terrain, no fallback), return it. TerrainScene drives
+  `engine.onUpdate(()=>streamer.update(camX,camZ))`. update() → camTexel → clipmapTiles → diff vs
+  resident Map(tileKey→slot): EVICT departed immediately (sync, cheap — bounds memory+vista every
+  frame), LOAD arrived asynchronously (build→cap-check→alloc→attach, ≤4/frame; single-flight via a
+  busy-guard + pendingCam coalescing). KEY SAFETY: build-BEFORE-alloc (an in-flight build never
+  holds/leaks a slot), cap-pre-check BEFORE alloc (oversized region SKIPPED, coarser ring backstops,
+  never throws inside attach), and a `skipped` set so an over-cap tile is built ONCE not every frame.
+  Headless probe-stream.ts (res512/gridN64, 6-pose motion path + a skip-storm): resident≡desired at
+  every pose, 76 evictions, finest-L0-at-camera resident, cursors BOUNDED (v921312/t1464000/c15168
+  identical across the whole churn — the pool reuses slots in place, the memory bound), NO leak
+  (free+resident==slots always), deterministic re-settle, and 29 over-cap tiles skipped once with no
+  throw/leak/rebuild. GPU probe-streammove.ts (?nanitedclip=1 128, 6 vista poses incl. ±1500 hops):
+  with convergence settling every pose reaches dag>0 (no permanent hole), back-spawn re-centers to
+  EXACTLY the 52-tile boot set, loaded 184 / evicted 132 / skipped 0; screenshots show full relief
+  filling the frame at every pose. KNOWN LIMITATION (documented, next increment): a FAST TELEPORT
+  into never-cached terrain shows a TRANSIENT void while ~125 serialized cache-miss builds complete
+  (~170 ms/tile first-visit; instant on cached revisit) — because ALL clipmap levels re-center, the
+  coarse backstop churns too. Steady-state + continuous motion are hole-free; an always-resident
+  non-churning coarse base (revived minimal suppression or a depth-underlay) eliminates even the
+  teleport transient. tsc clean; probe-tilepool + probe-clipmap still green. NEXT: the always-
+  resident base backstop (teleport no-hole), then 2d skirts, then 2e stride-1 verts + default-on.
 - 2026-06-14 (am): **N8-D2 Stage 2b-2 (GPU) — terrain CLIPMAP RENDERS through the pool; bounded
   full-field at true 1 m (D-N39).** (Opus 4.8 1M.) Wired clipmapTiles into WorldRegistry behind
   `?nanitedclip=1` (implies the pool): a shared buildTileGlobal(tx0,tz0,stride,suffix) helper
@@ -2564,6 +2611,22 @@ CHUNK PLAN (to the logical point):
     DAG sheds clusters near→far while the window grid is uniform-dense everywhere). Plus the
     carried D1e items: perf ledger, ?clusterdbg=lod heatmap, USER CHECKPOINT (continuous zoom on
     hero rock/tree + terrain). THEN shadows S4.
+
+  STAGE-2 STREAMING STATUS (D-N39, the path to full-res-default — supersedes the D2b "(i) Worker
+  / (ii) stride-1" remaining-list above with a concrete increment chain):
+  - ~~2a pool+evict~~ DONE (log aj) · ~~2b-1 pool→GPU~~ DONE (ak) · ~~2b-2 static clipmap~~ DONE
+    (al math / am GPU) · ~~2b-3 camera-following streamer~~ **DONE (log an)** — `?nanitedclip=1`
+    streams the 1 m detail with the live camera; resident≡desired, bounded, no-leak, re-centers
+    exactly (probe-stream + probe-streammove green).
+  - **NEXT → 2b-4 always-resident coarse BASE (teleport no-hole).** The clipmap is hole-free at
+    steady state + continuous motion but a fast TELEPORT into uncached terrain transiently voids
+    (the coarse backstop churns + its cache-miss rebuilds lag). Fix: pin a non-churning field-
+    spanning coarse base + REVIVE a minimal suppression (kClusterCull skips base clusters where a
+    finer resident ring covers them — the deleted 2c, now justified because a FIXED base overlaps
+    the camera-centered finer levels). See D-N39 tail (a).
+  - THEN 2d skirts (inter-level seams) · 2e stride-1 terrain vertex buffer (6×→1× vert mem,
+    ~100 MB→~17 MB) + flip the full-res DAG terrain default ON (retire `?nanitedterrain=0` window
+    to the explicit opt-out).
 
 CURRENT INFRA (read 2026-06-13): Clusterize.ts → BuiltClusters {indices (permuted, cluster
 tris contiguous), sphere 4f32/cluster, cone 4f32, triStart, triCount} — greedy ≤128-tri,

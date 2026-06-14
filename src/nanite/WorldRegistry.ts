@@ -33,10 +33,8 @@ import type { VegLib, PoolPart } from '../vegetation/VegLibrary';
 import type { Heightfield } from '../world/Heightfield';
 import { WORLD_SIZE } from '../world/WorldConst';
 import { type DagBuild, type DagCluster, buildDag } from './BuildDag';
-import { buildHeightDag } from './BuildHeightDag';
-import { clipmapTiles } from './TerrainClipmap';
-import { getCachedHeightDag, heightDagCacheKey, putCachedHeightDag } from './DagCache';
 import { DagBuildWorker, type HeightDagResult } from './DagWorkerClient';
+import { TerrainStreamer, buildTerrainTile, type TileBuildDeps, type TileBuildStats } from './TerrainStreamer';
 import {
   type BuildReport,
   DAG_VERT_STRIDE,
@@ -96,6 +94,9 @@ export interface WorldRegistryResult {
   dagMeshes: number;
   dagBuildMs: number;
   dagTris: number;
+  /** N8-D2 Stage 2b-3 (D-N39): the live clipmap streamer in ?nanitedclip mode —
+   *  TerrainScene drives streamer.update(camXZ) per frame. Absent otherwise. */
+  terrainStreamer?: TerrainStreamer;
 }
 
 function attrOf(node: StorageBufferNode<'vec4'>): StorageBufferAttribute {
@@ -388,6 +389,10 @@ export async function buildWorldRegistry(input: {
   // N8-D2 Stage 2b-1 (D-N39): when dagTerrainPool, tiles are collected here and
   // loaded into the streaming tile POOL post-build (instead of a per-tile mesh).
   const terrainPoolTiles: { gridVerts: Uint32Array; indices: Uint32Array; clusters: DagCluster[] }[] = [];
+  // N8-D2 Stage 2b-3 (D-N39): the live clipmap streamer (?nanitedclip). Built +
+  // pool-reserved here (pre-build), boot tiles attached post-build, returned for
+  // TerrainScene to drive per frame. Owns the persistent DagWorker.
+  let terrainStreamer: TerrainStreamer | null = null;
   if (inSet('terrain')) {
     const heights = hf.cpuHeights;
     if (!heights) throw new Error('WorldRegistry: hf.cpuHeights missing (boot order)');
@@ -414,7 +419,6 @@ export async function buildWorldRegistry(input: {
         throw new Error(`WorldRegistry: tileTexels ${tileTexels} must be a positive multiple of gridN ${gridN}`);
       }
       const stride = tileTexels / gridN; // texels per tile-DAG cell
-      const vpa = gridN + 1;
       const tHd0 = performance.now();
       let dagWorker: DagBuildWorker | null = null;
       try {
@@ -422,143 +426,109 @@ export async function buildWorldRegistry(input: {
       } catch {
         dagWorker = null;
       }
-      let tCl = 0;
-      let tTris = 0;
-      let nCache = 0;
-      let nBuilt = 0;
-      let maxErr = 0;
-      let offGrid = 0;
       let poolMaxV = 0;
       let poolMaxT = 0;
       let poolMaxC = 0;
-      // build ONE tile DAG at texel origin (tx0,tz0), `stride` texels/cell, gridN
-      // cells → subsample (cache-aware) + remap grid coords to GLOBAL texel coords.
-      // Off-field samples clamp to the field edge (texLoadR does NOT clamp). Shared
-      // by the uniform T×T path and the clipmap path.
-      const buildTileGlobal = async (
-        tx0: number,
-        tz0: number,
-        tileStride: number,
-        suffix: string,
-      ): Promise<{ gridVerts: Uint32Array; built: HeightDagResult }> => {
-        const cacheKey = seed != null ? heightDagCacheKey(seed, gridN, suffix) : null;
-        let built: HeightDagResult | null = cacheKey ? await getCachedHeightDag(cacheKey) : null;
-        if (built) {
-          nCache++;
-        } else {
-          const sub = new Float32Array(vpa * vpa);
-          for (let gz = 0; gz <= gridN; gz++) {
-            const texZ = Math.max(0, Math.min(tz0 + gz * tileStride, res - 1));
-            const trow = texZ * res;
-            const srow = gz * vpa;
-            for (let gx = 0; gx <= gridN; gx++) {
-              const texX = Math.max(0, Math.min(tx0 + gx * tileStride, res - 1));
-              sub[srow + gx] = heights[trow + texX] as number;
-            }
-          }
-          const hfArgs = {
-            heights: sub,
-            gridN,
-            cellSize: cell * tileStride,
-            originX: origin + tx0 * cell,
-            originZ: origin + tz0 * cell,
-          };
-          if (dagWorker) {
-            try {
-              built = await dagWorker.buildHeight(hfArgs);
-            } catch (e) {
-              deferred.push(`terrain DAG tile ${suffix}: worker failed (${e instanceof Error ? e.message : String(e)}) → sync`);
-              built = buildHeightDag(hfArgs, {});
-            }
-          } else {
-            built = buildHeightDag(hfArgs, {});
-          }
-          if (cacheKey) void putCachedHeightDag(cacheKey, built); // fire-and-forget
-          nBuilt++;
-        }
-        const gridVerts = new Uint32Array(built.gridVerts.length);
-        for (let i = 0; i < built.gridVerts.length; i++) {
-          const p = built.gridVerts[i] as number;
-          const texX = Math.max(0, Math.min(tx0 + (p & 0xffff) * tileStride, res - 1));
-          const texZ = Math.max(0, Math.min(tz0 + ((p >>> 16) & 0xffff) * tileStride, res - 1));
-          gridVerts[i] = ((texX & 0xffff) | ((texZ & 0xffff) << 16)) >>> 0;
-        }
-        return { gridVerts, built };
-      };
-      // collect a built tile (pool slot or per-tile mesh) + roll up stats
-      const collectTile = (gridVerts: Uint32Array, built: HeightDagResult, label: string): void => {
-        if (usePool) {
-          terrainPoolTiles.push({ gridVerts, indices: built.indices, clusters: built.clusters });
-        } else {
-          const h = reg.registerHeightDag(
-            'terrain',
-            { originX: origin, originZ: origin, cellSize: cell },
-            { label },
-          );
-          reg.bindInstances(h, { a: new Float32Array([0, 0, 0, 1]), b: new Float32Array([0, 0, 0, 0]) });
-          reg.addLate({ verts: gridVerts.length, tris: built.indices.length / 3, clusters: built.clusters.length });
-          dagTerrainTileAttaches.push({ handle: h, gridVerts, indices: built.indices, clusters: built.clusters });
-        }
-        if (gridVerts.length > poolMaxV) poolMaxV = gridVerts.length;
-        if (built.indices.length / 3 > poolMaxT) poolMaxT = built.indices.length / 3;
-        if (built.clusters.length > poolMaxC) poolMaxC = built.clusters.length;
-        tCl += built.clusters.length;
-        tTris += built.indices.length / 3;
-        if (built.stats.maxError > maxErr) maxErr = built.stats.maxError;
-        offGrid += built.stats.offGridVerts;
-      };
-      let clipInfo = '';
+      const tileStats: TileBuildStats = { nCache: 0, nBuilt: 0 };
+      const tileDeps: TileBuildDeps = { heights, res, cell, origin, gridN, seed: seed ?? null, worker: dagWorker };
+
       if (dagTerrainClip) {
-        // geometry CLIPMAP (D-N39): concentric same-gridN rings centered on the
-        // FIELD for boot-static (2b-3 re-centers on the live camera). Levels sized
-        // so the coarsest ring spans the field (backstop ⇒ no holes from any view).
-        const M = 4;
-        const levels = Math.max(1, Math.ceil(Math.log2((2 * res) / (M * gridN))) + 1);
-        const set = clipmapTiles(res / 2, res / 2, { res, gridN, baseStride: 1, levels, tilesPerSide: M });
-        for (const t of set) {
-          const { gridVerts, built } = await buildTileGlobal(
-            t.tx0,
-            t.tz0,
-            t.strideTexels,
-            `-clip-g${gridN}-s${t.strideTexels}-${t.tx0}x${t.tz0}`,
-          );
-          collectTile(gridVerts, built, `terrain/${t.key}`);
-        }
-        clipInfo = `CLIPMAP ${levels}L M${M} → ${set.length} tiles; `;
+        // ---- CLIPMAP STREAMER (D-N39 2b-2 boot + 2b-3 follow) ------------------
+        // Build the spawn-centered ring set NOW (frame-1 terrain, no fallback),
+        // size the pool for the WHOLE clipmap (any camera pose ⇒ ≤ maxTiles
+        // resident) + headroom, attach post-build; the streamer then re-centers on
+        // the live camera each frame (TerrainScene drives streamer.update). The
+        // worker is PERSISTENT — handed to the streamer, NOT disposed at boot.
+        const streamer = new TerrainStreamer(
+          { reg, heights, res, cell, origin, gridN, seed: seed ?? null, worker: dagWorker },
+          (m) => deferred.push(m),
+        );
+        const nBoot = await streamer.buildBootSet(res / 2, res / 2);
+        const pm = streamer.poolMax;
+        // caps = boot-worst × generous margin; a reload hits arbitrary regions and
+        // an over-cap tile is SKIPPED (coarser ring backstops), never fatal.
+        const vCap = Math.ceil(pm.v * 1.5) + 256;
+        const tCap = Math.ceil(pm.t * 1.5) + 256;
+        const cCap = Math.ceil(pm.c * 1.5) + 32;
+        const slots = streamer.maxTiles + 8;
+        reg.reserveTilePool(
+          'terrain',
+          { originX: origin, originZ: origin, cellSize: cell },
+          { slots, vertCap: vCap, triCap: tCap, clusterCap: cCap },
+          { label: 'terrain' },
+        );
+        terrainStreamer = streamer;
+        const s = streamer.bootSummary();
+        deferred.push(
+          `terrain DAG ${streamer.clipDesc}: ${nBoot} boot / ${streamer.maxTiles} max tiles, ` +
+            `${s.tCl} cl, ${s.tTris | 0} tris, maxErr ${s.maxErr.toFixed(2)} m, offGrid ${s.offGrid}, ` +
+            `${s.nCache} cached/${s.nBuilt} built, POOL ${slots}×(v${vCap}/t${tCap}/c${cCap}), ` +
+            `${(performance.now() - tHd0).toFixed(0)} ms`,
+        );
       } else {
+        // ---- uniform T×T tiles: per-tile mesh, or the 2b-1 all-resident pool ----
+        let tCl = 0;
+        let tTris = 0;
+        let maxErr = 0;
+        let offGrid = 0;
+        // collect a built tile (pool slot or per-tile mesh) + roll up stats
+        const collectTile = (gridVerts: Uint32Array, built: HeightDagResult, label: string): void => {
+          if (usePool) {
+            terrainPoolTiles.push({ gridVerts, indices: built.indices, clusters: built.clusters });
+          } else {
+            const h = reg.registerHeightDag(
+              'terrain',
+              { originX: origin, originZ: origin, cellSize: cell },
+              { label },
+            );
+            reg.bindInstances(h, { a: new Float32Array([0, 0, 0, 1]), b: new Float32Array([0, 0, 0, 0]) });
+            reg.addLate({ verts: gridVerts.length, tris: built.indices.length / 3, clusters: built.clusters.length });
+            dagTerrainTileAttaches.push({ handle: h, gridVerts, indices: built.indices, clusters: built.clusters });
+          }
+          if (gridVerts.length > poolMaxV) poolMaxV = gridVerts.length;
+          if (built.indices.length / 3 > poolMaxT) poolMaxT = built.indices.length / 3;
+          if (built.clusters.length > poolMaxC) poolMaxC = built.clusters.length;
+          tCl += built.clusters.length;
+          tTris += built.indices.length / 3;
+          if (built.stats.maxError > maxErr) maxErr = built.stats.maxError;
+          offGrid += built.stats.offGridVerts;
+        };
         for (let tj = 0; tj < T; tj++) {
           for (let ti = 0; ti < T; ti++) {
-            const { gridVerts, built } = await buildTileGlobal(
+            const { gridVerts, built } = await buildTerrainTile(
+              tileDeps,
               ti * tileTexels,
               tj * tileTexels,
               stride,
               `-T${T}-${ti}x${tj}`,
+              tileStats,
+              (m) => deferred.push(m),
             );
             collectTile(gridVerts, built, T > 1 ? `terrain/t${ti}x${tj}` : 'terrain');
           }
         }
-      }
-      if (dagWorker) dagWorker.dispose();
-      if (usePool && terrainPoolTiles.length > 0) {
-        // one shared reservation: S = tile count, each slot sized to the worst
-        // tile this boot + margin (2b-3 streaming reloads arbitrary regions into a
-        // slot, so the cap must hold the global worst — margin covers it for now).
-        const vCap = Math.ceil(poolMaxV * 1.3) + 64;
-        const tCap = Math.ceil(poolMaxT * 1.3) + 128;
-        const cCap = Math.ceil(poolMaxC * 1.3) + 16;
-        reg.reserveTilePool(
-          'terrain',
-          { originX: origin, originZ: origin, cellSize: cell },
-          { slots: terrainPoolTiles.length, vertCap: vCap, triCap: tCap, clusterCap: cCap },
-          { label: 'terrain' },
+        if (usePool && terrainPoolTiles.length > 0) {
+          // one shared reservation: S = tile count, each slot sized to the worst
+          // tile this boot + margin.
+          const vCap = Math.ceil(poolMaxV * 1.3) + 64;
+          const tCap = Math.ceil(poolMaxT * 1.3) + 128;
+          const cCap = Math.ceil(poolMaxC * 1.3) + 16;
+          reg.reserveTilePool(
+            'terrain',
+            { originX: origin, originZ: origin, cellSize: cell },
+            { slots: terrainPoolTiles.length, vertCap: vCap, triCap: tCap, clusterCap: cCap },
+            { label: 'terrain' },
+          );
+        }
+        deferred.push(
+          `terrain DAG: ${T}×${T} tiles gridN ${gridN} → ${tCl} cl, ${tTris | 0} tris, ` +
+            `maxErr ${maxErr.toFixed(2)} m, offGrid ${offGrid}, ${tileStats.nCache} cached/${tileStats.nBuilt} built, ` +
+            `${usePool ? `POOL ${terrainPoolTiles.length}×(v${Math.ceil(poolMaxV * 1.3) + 64}/c${Math.ceil(poolMaxC * 1.3) + 16}) ` : ''}` +
+            `${(performance.now() - tHd0).toFixed(0)} ms`,
         );
       }
-      deferred.push(
-        `terrain DAG: ${clipInfo}${dagTerrainClip ? '' : `${T}×${T} tiles `}gridN ${gridN} → ${tCl} cl, ${tTris | 0} tris, ` +
-          `maxErr ${maxErr.toFixed(2)} m, offGrid ${offGrid}, ${nCache} cached/${nBuilt} built, ` +
-          `${usePool ? `POOL ${terrainPoolTiles.length}×(v${Math.ceil(poolMaxV * 1.3) + 64}/c${Math.ceil(poolMaxC * 1.3) + 16}) ` : ''}` +
-          `${(performance.now() - tHd0).toFixed(0)} ms`,
-      );
+      // clip mode hands the worker to the streamer (persistent); others dispose now.
+      if (dagWorker && !dagTerrainClip) dagWorker.dispose();
     } else {
       const w = TERRAIN_WIN_QUADS;
       const windows = Math.ceil(quads / w);
@@ -657,6 +627,9 @@ export async function buildWorldRegistry(input: {
     }
     reg.attachHeightDagTile(slot, t);
   }
+  // N8-D2 Stage 2b-3: attach the clipmap streamer's boot ring set into pool slots
+  // (frame-1 terrain). The streamer then re-centers on the live camera per frame.
+  if (terrainStreamer) terrainStreamer.attachBootSet();
   const t1 = performance.now();
   return {
     registry: reg,
@@ -671,5 +644,6 @@ export async function buildWorldRegistry(input: {
     dagMeshes: dagBuilds.length,
     dagBuildMs,
     dagTris,
+    ...(terrainStreamer ? { terrainStreamer } : {}),
   };
 }
