@@ -34,6 +34,7 @@ import type { Heightfield } from '../world/Heightfield';
 import { WORLD_SIZE } from '../world/WorldConst';
 import { type DagBuild, type DagCluster, buildDag } from './BuildDag';
 import { buildHeightDag } from './BuildHeightDag';
+import { getCachedHeightDag, heightDagCacheKey, putCachedHeightDag } from './DagCache';
 import { DagBuildWorker, type HeightDagResult } from './DagWorkerClient';
 import {
   type BuildReport,
@@ -207,8 +208,12 @@ export async function buildWorldRegistry(input: {
    *  D1d Worker. Texel coords are packed so the GPU still reads the full-res
    *  heightTex. 0 = the discrete window path (default). */
   dagTerrainGridN?: number;
+  /** N8-D1d: numeric world seed (WorldSeed.seed) → the terrain-DAG cache key.
+   *  The heights are deterministic in the seed, so a cached DAG loads instantly
+   *  (boot renders the DAG, no fallback). Omit to disable caching (always build). */
+  seed?: number;
 }): Promise<WorldRegistryResult> {
-  const { renderer, hf, scatter, lib, counters, classes, dag, dagTerrainGridN } = input;
+  const { renderer, hf, scatter, lib, counters, classes, dag, dagTerrainGridN, seed } = input;
   const inSet = (c: MaterialClassId): boolean => !classes || classes.has(c);
   const t0 = performance.now();
   const deferred: string[] = [];
@@ -366,44 +371,51 @@ export async function buildWorldRegistry(input: {
       }
       const stride = res / gridN; // texels per DAG cell
       const vpa = gridN + 1;
-      const sub = new Float32Array(vpa * vpa);
-      for (let gz = 0; gz <= gridN; gz++) {
-        const tz = Math.min(gz * stride, res - 1);
-        const trow = tz * res;
-        const srow = gz * vpa;
-        for (let gx = 0; gx <= gridN; gx++) {
-          const tx = Math.min(gx * stride, res - 1);
-          sub[srow + gx] = heights[trow + tx] as number;
-        }
-      }
       const tHd0 = performance.now();
-      const hfArgs = { heights: sub, gridN, cellSize: cell * stride, originX: origin, originZ: origin };
-      // N8-D1d (D-N30): build OFF the main thread — the chain is three-free.
-      // Increment 1 awaits it (still pre-build()); a Worker failure / absence
-      // falls back to a synchronous build (the input `sub` is copied, not
-      // transferred, so it survives the fallback).
-      let dagWorker: DagBuildWorker | null = null;
-      try {
-        dagWorker = new DagBuildWorker();
-      } catch {
-        dagWorker = null;
-      }
-      let built: HeightDagResult;
+      // Persistent build CACHE (D1d/D-N30): the build is deterministic, so a DAG
+      // previously built for this (seed, gridN) loads instantly — boot renders the
+      // DAG from frame 1 with NO window fallback. On a MISS, subsample the field +
+      // build OFF the main thread (three-free worker) + persist for next boot. A
+      // worker failure still produces a DAG synchronously (never window terrain).
+      const cacheKey = seed != null ? heightDagCacheKey(seed, gridN) : null;
+      let built: HeightDagResult | null = cacheKey ? await getCachedHeightDag(cacheKey) : null;
       let buildVia: string;
-      if (dagWorker) {
-        try {
-          built = await dagWorker.buildHeight(hfArgs);
-          buildVia = 'worker';
-        } catch (e) {
-          deferred.push(`terrain DAG: worker build failed (${e instanceof Error ? e.message : String(e)}) → sync`);
-          built = buildHeightDag(hfArgs, {});
-          buildVia = 'sync-fallback';
-        } finally {
-          dagWorker.dispose();
-        }
+      if (built) {
+        buildVia = 'cache';
       } else {
-        built = buildHeightDag(hfArgs, {});
-        buildVia = 'sync-noworker';
+        const sub = new Float32Array(vpa * vpa);
+        for (let gz = 0; gz <= gridN; gz++) {
+          const tz = Math.min(gz * stride, res - 1);
+          const trow = tz * res;
+          const srow = gz * vpa;
+          for (let gx = 0; gx <= gridN; gx++) {
+            const tx = Math.min(gx * stride, res - 1);
+            sub[srow + gx] = heights[trow + tx] as number;
+          }
+        }
+        const hfArgs = { heights: sub, gridN, cellSize: cell * stride, originX: origin, originZ: origin };
+        let dagWorker: DagBuildWorker | null = null;
+        try {
+          dagWorker = new DagBuildWorker();
+        } catch {
+          dagWorker = null;
+        }
+        if (dagWorker) {
+          try {
+            built = await dagWorker.buildHeight(hfArgs);
+            buildVia = 'worker';
+          } catch (e) {
+            deferred.push(`terrain DAG: worker build failed (${e instanceof Error ? e.message : String(e)}) → sync`);
+            built = buildHeightDag(hfArgs, {});
+            buildVia = 'sync-fallback';
+          } finally {
+            dagWorker.dispose();
+          }
+        } else {
+          built = buildHeightDag(hfArgs, {});
+          buildVia = 'sync-noworker';
+        }
+        if (cacheKey) void putCachedHeightDag(cacheKey, built); // fire-and-forget persist
       }
       // remap build grid coords (0..gridN) → texel coords (clamped to res-1, so
       // texLoadR — which does NOT clamp — never reads out of bounds)

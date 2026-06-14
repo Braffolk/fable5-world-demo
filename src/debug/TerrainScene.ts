@@ -256,6 +256,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
         scatter,
         lib,
         counters: engine.stats.counters,
+        seed: seed.seed,
         ...(classes ? { classes } : {}),
         ...(dagClasses && dagClasses.size > 0 ? { dag: dagClasses } : {}),
         ...(dagTerrainGridN > 0 ? { dagTerrainGridN } : {}),

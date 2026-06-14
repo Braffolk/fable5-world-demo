@@ -1146,6 +1146,33 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   (1 m cells, near-camera parity with the window grid) is ~5 min sync ⇒ blocked on the D1d
   Worker — the remaining gate before this can be the DEFAULT terrain path.
 
+- D-N37 (2026-06-14, N8-D1d — terrain DAG is the ONLY terrain in DAG mode; build is AWAITED +
+  CACHED; NO window/default fallback EVER. USER DIRECTIVE, verbatim intent: "it must immediately
+  boot only to dag. there will be no fucking fallback to default rendering behavior"). A first
+  attempt at off-boot building used a WINDOW PLACEHOLDER that rendered while the DAG built
+  off-thread, then swapped in after boot — REJECTED outright + reverted (the user will not accept
+  the window terrain shown even transiently). The correct shape:
+  • DAG mode (?nanitedterrain>0) registers ONLY the lean DAG (registerHeightDag — no window
+    clusters); the build is AWAITED before build(), so the FIRST terrain frame IS the DAG. The
+    window path (registerMesh heightfield) survives solely as the SEPARATE DAG-OFF mode
+    (?nanitedterrain=0), never a fallback within DAG mode. A worker failure falls back to a SYNC
+    build (still a DAG, briefly blocks the main thread) — NEVER to window rendering.
+  • The boot-cost problem (a ~5 min full-res build can't block every boot) is solved by a
+    PERSISTENT CACHE, not a placeholder. DagCache.ts (IndexedDB), key = seed + gridN +
+    DAG_CACHE_VERSION (the heights are deterministic in ?seed=N; bump the version on any worldgen/
+    build change). MISS → subsample + build off-thread (three-free worker) + persist; HIT → load
+    instantly, skipping the subsample AND the build. So the FIRST ever boot for a (seed,gridN)
+    builds once; every boot after renders the DAG in ~tens of ms. Cluster records pack into one
+    Float64Array (20 fields — the subset attachHeightDag reads; parentError ±Inf survives the
+    round-trip); gridVerts/indices ride as their own typed arrays; all best-effort (any IndexedDB
+    error → rebuild, never a crash). VALIDATED (probe-dagcache, two boots in one context): boot1
+    [worker] 911 ms → boot2 [cache] 21 ms, byte-identical cut (320 cl). The window-swap path is
+    gone; cache miss = build-and-wait, cache hit = instant, both DAG-only.
+  REMAINING for full-res DEFAULT: (i) gridN=4096 needs a STRIDE-1 terrain vertex buffer (the
+  6-word vert × millions of verts = GBs) + confirming the 2^k+1 clamp skirt at the true field
+  res; (ii) flip the default on once (i) lands and the one-time ~5 min first-build UX (a loading
+  state — NOT window terrain) is acceptable.
+
 ## GOTCHAS (append-only, nanite-specific)
 
 - (N5-C1) A SHADOW-CASTER NodeMaterial MUST SET `map = null`. three's shadow
@@ -1297,6 +1324,18 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-14 (ai): **N8-D1d — terrain DAG built off-thread + CACHED; DAG-only, no window
+  fallback (USER DIRECTIVE; D-N37).** (Opus 4.8 1M.) Built a Vite module Worker
+  (DagWorker.worker.ts + DagWorkerClient.ts + DagWorkerTypes.ts — three-free chain, prod bundles
+  it as a standalone 19.6 kB chunk) and a persistent IndexedDB cache (DagCache.ts, key
+  seed+gridN+version). FIRST landed a window-placeholder + background-swap (off boot path) but the
+  user REJECTED it outright — terrain must boot DIRECTLY to the DAG, zero window/default fallback
+  ever — so REVERTED it. Correct shape: DAG mode registers ONLY the lean DAG, the build is AWAITED
+  (boot's first terrain frame IS the DAG), and the cache makes that fast: MISS builds off-thread +
+  persists, HIT loads instantly. Validated (probe-dagcache, two boots one context): boot1 [worker]
+  911 ms → boot2 [cache] 21 ms, byte-identical 320-cl cut. Window path survives only as the
+  separate DAG-OFF mode (?nanitedterrain=0). tsc clean; prod build clean. Remaining for full-res
+  default: stride-1 terrain vertex buffer + gridN=4096 + flip the default.
 - 2026-06-14 (ai): **N8-D2b — terrain DAG GPU WIRING: terrain now renders through the adaptive
   LOD DAG + the shared flat cut, headlessly validated. (D-N36.)** (Opus 4.8 1M.) Wired the D2a
   builder to the GPU behind `?nanitedterrain=<gridN>` (default 0 = window path, byte-identical).
@@ -2309,9 +2348,13 @@ CHUNK PLAN (to the logical point):
   shadows-ON correct). +1 storage = 8/10 (F9). nanite.dagClusters counter for HUD/gate.
 - N8-D1d/e — CLOSE N8-D1: (PRE-REQ DONE — the envelope + cut error-scale bug from the user
   re-test is FIXED, log ah / D-N33; bark + deadwood DAG confirmed working live under
-  ?nanitedag=all.) (d) move buildDag to a background Worker (D-N30 — three-free,
-  typed arrays in/out; per-pool progressive: discrete LOD until each pool's DAG lands, then
-  swap; off the boot critical path per F15). (e) bark is the heavy class, 162k trees → WATCH
+  ?nanitedag=all.) ~~(d) move the DAG build to a Worker (D-N30)~~ **DONE for terrain** (D-N37):
+  DagWorker.worker.ts (three-free, prod bundles a standalone 19.6 kB chunk) + DagCache.ts
+  (IndexedDB, seed+gridN key). Terrain is DAG-ONLY — boot renders the DAG from frame 1, the build
+  AWAITED (no window fallback per the user directive), and a persistent cache makes that instant
+  after the first build ([worker] 911 ms → [cache] 21 ms @256). Explicit pools still build sync
+  (<1 s). NOTE: the "progressive / swap after boot" idea was tried + REJECTED — see D-N37.
+  (e) bark is the heavy class, 162k trees → WATCH
   the flat-cut cull-dispatch volume (?nanitedag=all near a forest = 0.14M cl / 16 ms occl-on
   measured; if cull dispatch is the bottleneck, D-N31's hierarchical-traversal pruning layer
   is the lever). + MIN-SCREEN-SIZE cull primitive **BUILT** (gated `?nanitemin=<px>`, default
