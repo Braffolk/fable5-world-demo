@@ -75,6 +75,12 @@ export const DAG_VERT_STRIDE = 12;
  *  so the GPU projection (errToPx) yields a huge value (> any τ) without inf/NaN. */
 export const DAG_ROOT_PARENT_ERR = 1e30;
 export const MAX_CLUSTER_TRIS = 128;
+/** PERF-3 vertex-cache: a cluster whose vertex indices span ≤ this many entries is
+ *  cooperatively transformed ONCE into a workgroup-shared vec3 array (3 f32 each →
+ *  VCACHE_VERTS·12 B; 192 → 2.3 KB, well under the 16 KB workgroup limit). Bounds the
+ *  shared array AND the per-cluster cache width. ≥ MAX_CLUSTER_TRIS so a 128-tri cluster
+ *  with ~tight indexing always fits (avg unique 82, explicit 95% range ≤128). */
+export const VCACHE_VERTS = 192;
 export const LOD_NONE = 0xffffffff;
 /** N8-D2 Stage 2a: an evicted streaming-tile slot parks its mesh sphere here so
  *  kInstCull's frustum test always rejects it (belt + suspenders alongside the
@@ -728,6 +734,11 @@ export interface RegistryGpu {
   /** N8-D1: parallel per-cluster DAG record (DAG_WORDS f32). Valid only where
    *  the cluster's CLUSTER_FLAG_DAG bit is set; zero elsewhere. */
   dag: BufOf<NF>;
+  /** PERF-3: parallel per-cluster vertex-cache record (2 u32: vMin, count). count>0 ⇒
+   *  the cluster's vertex indices occupy the tight range [vMin, vMin+count) (count ≤
+   *  VCACHE_VERTS) so the SW raster cooperatively transforms them ONCE into workgroup
+   *  shared memory; count=0 ⇒ per-thread fallback (terrain / window-grid / wide ranges). */
+  vcompact: StorageBufferNode<'uint'>;
 }
 
 export class GeometryRegistry {
@@ -771,6 +782,8 @@ export class GeometryRegistry {
   private instMeshArr!: Uint32Array;
   /** N8-D1: parallel per-cluster DAG records (DAG_WORDS f32 each) */
   private dagArr!: Float32Array;
+  /** PERF-3: parallel per-cluster vertex-cache record (vMin, count) — see RegistryGpu.vcompact */
+  private vcompactArr!: Uint32Array;
 
   private vertsAttr!: StorageBufferAttribute;
   private hfVertsAttr!: StorageBufferAttribute;
@@ -780,6 +793,7 @@ export class GeometryRegistry {
   private instAttr!: StorageBufferAttribute;
   private instMeshAttr!: StorageBufferAttribute;
   private dagAttr!: StorageBufferAttribute;
+  private vcompactAttr!: StorageBufferAttribute;
 
   private caps!: { verts: number; tris: number; clusters: number; meshes: number; instances: number };
   /** N8-D2 Stage 2e: capacity (in verts = words) of the stride-1 terrain-DAG buffer. */
@@ -950,6 +964,8 @@ export class GeometryRegistry {
     this.instMeshArr = new Uint32Array(Math.max(1, this.caps.instances));
     const dagLen = Math.max(DAG_WORDS, this.caps.clusters * DAG_WORDS);
     this.dagArr = new Float32Array(dagLen);
+    const vcompactLen = Math.max(2, this.caps.clusters * 2);
+    this.vcompactArr = new Uint32Array(vcompactLen);
 
     this.vertsAttr = new StorageBufferAttribute(this.vertsArr, 1);
     this.hfVertsAttr = new StorageBufferAttribute(this.hfVertsArr, 1);
@@ -959,6 +975,7 @@ export class GeometryRegistry {
     this.instAttr = new StorageBufferAttribute(this.instArr, 4);
     this.instMeshAttr = new StorageBufferAttribute(this.instMeshArr, 1);
     this.dagAttr = new StorageBufferAttribute(this.dagArr, 1);
+    this.vcompactAttr = new StorageBufferAttribute(this.vcompactArr, 1);
 
     const verts = sU32Views(this.vertsAttr, Math.max(1, this.caps.verts * VERT_WORDS));
     const hfVerts = sU32Views(this.hfVertsAttr, Math.max(1, this.hfCap));
@@ -968,6 +985,7 @@ export class GeometryRegistry {
     const inst = sVec4Views(this.instAttr, Math.max(2, this.caps.instances * 2));
     const instMesh = sU32Views(this.instMeshAttr, Math.max(1, this.caps.instances));
     const dag = sF32Views(this.dagAttr, dagLen);
+    const vcompact = sU32Views(this.vcompactAttr, vcompactLen);
     this.instRW = inst.rw;
     this.instMeshRW = instMesh.rw;
     this.gpu = {
@@ -979,6 +997,7 @@ export class GeometryRegistry {
       instances: inst.ro,
       instanceMesh: instMesh.ro,
       dag: dag.ro,
+      vcompact: vcompact.ro,
     };
 
     // N8-D2 Stage 2a: claim the tile pool as ONE fixed region just past the
@@ -999,6 +1018,7 @@ export class GeometryRegistry {
     }
 
     for (const e of this.entries) this.copyEntry(e);
+    this.populateVCompact();
     for (const s of this.cpuStreams) this.copyCpuStream(s);
     this.built = true;
     this.runGpuCopies(renderer);
@@ -1742,6 +1762,41 @@ export class GeometryRegistry {
       sphere: [0, 0, 0, 0],
       uploaded: false,
     };
+  }
+
+  /** PERF-3 (stage 1): per-cluster vertex-cache records for every BOOT cluster. A cluster
+   *  whose global vertex indices span a tight range (≤ VCACHE_VERTS) gets [vMin, count]
+   *  so the SW raster cooperatively transforms that range ONCE into workgroup shared
+   *  memory (explicit meshes: avg unique 82, 95% range ≤128). Others stay 0 ⇒ per-thread
+   *  fallback. Window-grid heightfield clusters (isHF && !isDAG) have NO index buffer
+   *  (triStart packs gx|gz) ⇒ skipped. Streamed terrain tiles attach POST-build ⇒ stay 0
+   *  (their DAG index ranges are wide anyway — 40% > 1024). */
+  private populateVCompact(): void {
+    const idx = this.idxArr;
+    const cl = this.clusterArr;
+    for (let c = 0; c < this.clusterCursor; c++) {
+      const triStart = cl[c * CLUSTER_WORDS + 6] ?? 0;
+      const w7 = cl[c * CLUSTER_WORDS + 7] ?? 0;
+      const triCount = w7 & 0xff;
+      const flags = (w7 >>> 8) & 0xff;
+      const isHF = (flags & CLUSTER_FLAG_HEIGHTFIELD) !== 0;
+      const isDAG = (flags & CLUSTER_FLAG_DAG) !== 0;
+      if (triCount === 0 || (isHF && !isDAG)) continue;
+      let mn = 0xffffffff;
+      let mx = 0;
+      for (let t = 0; t < triCount; t++) {
+        for (let v = 0; v < 3; v++) {
+          const vi = idx[(triStart + t) * 3 + v] ?? 0;
+          if (vi < mn) mn = vi;
+          if (vi > mx) mx = vi;
+        }
+      }
+      const count = mx - mn + 1;
+      if (count > 0 && count <= VCACHE_VERTS) {
+        this.vcompactArr[c * 2] = mn;
+        this.vcompactArr[c * 2 + 1] = count;
+      }
+    }
   }
 
   private encodeClusterRecs(entry: MeshEntry, built: BuiltClusters): Uint32Array {
