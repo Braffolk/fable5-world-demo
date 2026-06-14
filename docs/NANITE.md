@@ -1438,6 +1438,32 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-14 (as): **N8-D2 Stage 2e (part 2/2) — STRIDE-1 terrain vertex buffer (−174 MB) + the
+  caustic-wash root-cause it exposed.** (Opus 4.8 1M.) Terrain-DAG verts used only word0 (a packed texel
+  coord) of the shared 6-word `verts` record — 5/6 wasted. Moved them to a DEDICATED stride-1 buffer
+  (`gpu.hfVerts`, 1 u32/vert): new LateBudget.hfVerts + hfVertsArr/hfVertsAttr/hfVertCursor/hfCap, the
+  pool region claimed in hf-space (tilePoolBase.vert), both attach paths (registerHeightDag +
+  attachHeightDagTile) write stride-1 + rebase indices into hf-space, NaniteFetch's isHF&&isDAG branch
+  reads `hfVerts[vi]` (was `verts[vi·6]`), reserveTilePool/WorldRegistry reserve hfVerts. Explicit meshes
+  keep the 6-word `verts`; the window grid uses neither. **MEASURED: terrain verts 208.8 MB → 34.8 MB
+  (−174 MB, exactly the 5/6).** probe-tilepool/stream/streammove green (cursors show the shared vertCursor
+  bottoms out at ~0 — terrain left it); a GPU READBACK (probe-hfdiag, getArrayBufferAsync) confirms the
+  pool's hf bytes are byte-identical CPU↔GPU.
+  **THE BUG (cost the session): the clip DEFAULT boot washed flat gray — terrain+trees gone.** Bisected
+  it: geometry is CORRECT (probe-seams renders the detailed valley; readback byte-exact; probe-dterrain
+  non-pool clean) ⇒ NOT the verts. View-independent gray, present only with caustics ON (ablate=caustics
+  → perfect) ⇒ the caustic term in NaniteResolve. ROOT CAUSE: the shared `makeFetch` references
+  `gpu.hfVerts`, so wiring it into the RESOLVE fragment stage pushed its storage-buffer count past the
+  device ceiling (`maxStorageBuffersPerShaderStage = 10` on this Metal adapter) → the caustic `waterY`
+  storage-buffer read (Heightfield.sampleWaterY) silently mis-bound → `causticDepth = waterY − wp.y` blew
+  up → `terrainCol ·= (caust·1.7+1)` washed the whole frame. FIX: `makeFetch(gpu,…,bindHfVerts=true)`;
+  the RESOLVE passes `false` — it reconstructs terrain world-pos from the DEPTH buffer and only fetches
+  rock/bark (the explicit-mesh else branch), so it never needs the terrain buffer ⇒ one fewer storage
+  buffer ⇒ caustics correct. The raster keeps `bindHfVerts=true`. LESSON: a new registry storage buffer
+  is +1 binding in EVERY pass that calls makeFetch (raster+shadow+hzb+resolve); the resolve sits at the
+  10-buffer Metal ceiling, so only bind what a pass actually reads. Validated: tsc clean; probe-flip +
+  probe-groundview (default boot renders, caustics ON); probe-dterrain (rock/bark/terrain resolve intact);
+  probe-seams (clip vista); probe-tilepool/stream/streammove (pool + residency, no hole/leak). 2e COMPLETE.
 - 2026-06-14 (ar): **N8-D2 Stage 2e (part 1/2) — THE FLIP: full-res clip-streamed DAG terrain is the
   DEFAULT, no window fallback (the "boot only to dag, no fucking fallback EVER" mandate).** (Opus 4.8 1M.)
   Holes (ao) + slow-pop (ap) + seams (aq) were the three visible-correctness blockers; all sealed ⇒ the
@@ -2719,11 +2745,17 @@ CHUNK PLAN (to the logical point):
     **DONE (ar)** — bare `?nanite=1` boots the camera-following 1 m clipmap (52 tiles / 34230 cl / 4.14 M
     tris); window grid retired to the opt-out; probe-flip PASS. Exposed the real cost the stride-1 buffer
     targets: **terrain verts 208.8 MB** (96 pool slots × v95016 × 6 words, only word0 used).
-  - **NEXT → 2e part 2: stride-1 terrain vertex buffer** — terrain DAG verts use only word0 (packed
-    texel coord) of the shared VERT_WORDS=6 mega-buffer/pool slot ⇒ 5/6 wasted. Move terrain DAG verts to
-    a DEDICATED stride-1 (1 u32/vert) buffer read in the `isHF && isDAG` NaniteFetch branch; explicit
-    meshes keep the 6-word buffer, the window grid uses neither. Expected 208.8 → 34.8 MB (−174 MB). The
-    pool-slot vertCap is then in 1-word units; reserveTilePool's `slots*vertCap` reservation shrinks 6×.
+  - ~~2e part 2: stride-1 terrain vertex buffer~~ **DONE (as)** — dedicated `gpu.hfVerts` (1 u32/vert);
+    terrain verts 208.8 → 34.8 MB (−174 MB). Exposed + fixed a caustic-wash regression (adding hfVerts to
+    the resolve breached the 10-buffer Metal ceiling → mis-bound caustic waterY; fix = `bindHfVerts=false`
+    in the resolve, which never needs the terrain buffer). All probes green. **STAGE 2e COMPLETE — the
+    "boot only to dag" mandate is met: bare `?nanite=1` boots the full-res clip-streamed DAG terrain by
+    default, lean stride-1 verts, no window fallback (window survives only as `?nanitedterrain=0`).**
+  - **NEXT after 2e**: (D2c) perf-ledger row vs pre-DAG + `?clusterdbg=lod` heatmap + the carried D1e
+    USER CHECKPOINT (continuous zoom in Chrome on hero rock/tree + terrain) → then shadows S4. Optional
+    polish: 2b-4 always-resident coarse base (teleport no-hole; DOWNGRADED). The paramless-`?nanite=1`
+    default-on (retire the whole `?nanite=0` opt-out) is a SEPARATE later endgame flip — leave for a
+    user-present session (it changes the bare-URL boot for every debug scene).
     OLD locked 2d spec (kept for the record, now executed).
     **AS-BUILT DELTAS from the locked spec (refined during execution — see aq):** (1) encoding uses a
     3-BIT depth-level CODE in bits 13-15 (not the single bit-15 flag) so the depth can vary per level;

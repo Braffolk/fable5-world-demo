@@ -86,11 +86,11 @@ async function main(): Promise<void> {
     const m = def.poolLine.match(/POOL (\d+)×\(v(\d+)\/t(\d+)\/c(\d+)\)/);
     if (m) {
       const [, slots, v, t, c] = m.map(Number) as [number, number, number, number, number];
-      const vertMB = (slots * v * VERT_WORDS * 4) / (1024 * 1024);
+      const vertMB = (slots * v * 4) / (1024 * 1024); // 2e: stride-1, one word/vert
       const idxMB = (slots * t * 3 * 4) / (1024 * 1024);
       console.log(
-        `  pool memory       ${slots} slots × v${v}(×${VERT_WORDS}w)/t${t}/c${c} ⇒ verts ${vertMB.toFixed(1)} MB` +
-          ` (stride-1 → ${(vertMB / VERT_WORDS).toFixed(1)} MB), indices ${idxMB.toFixed(1)} MB`,
+        `  pool memory       ${slots} slots × v${v}(×1w, 2e)/t${t}/c${c} ⇒ verts ${vertMB.toFixed(1)} MB` +
+          ` (was ${(vertMB * VERT_WORDS).toFixed(1)} MB pre-2e at ×${VERT_WORDS}w), indices ${idxMB.toFixed(1)} MB`,
       );
     }
   }

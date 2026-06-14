@@ -181,6 +181,10 @@ export type InstanceStream = InstanceStreamCPU | InstanceStreamGPU;
 
 export interface LateBudget {
   verts: number;
+  /** N8-D2 Stage 2e: terrain-DAG verts live in a SEPARATE stride-1 buffer (each
+   *  vert is one packed texel coord — word0 only) so they don't waste 5/6 of a
+   *  6-word `verts` record. Reserve them here (registerHeightDag/pool late attach). */
+  hfVerts: number;
   tris: number;
   clusters: number;
   meshes: number;
@@ -206,6 +210,8 @@ export interface BuildReport {
   instances: number;
   bytes: {
     verts: number;
+    /** N8-D2 Stage 2e: terrain-DAG stride-1 vertex buffer (separate from `verts`). */
+    hfVerts: number;
     indices: number;
     clusters: number;
     meshTable: number;
@@ -709,6 +715,10 @@ interface GpuInstances {
 
 export interface RegistryGpu {
   verts: StorageBufferNode<'uint'>;
+  /** N8-D2 Stage 2e: terrain-DAG verts, stride-1 (one packed texel coord per vert).
+   *  Read in NaniteFetch's isHF&&isDAG branch as `hfVerts[vi]`; explicit meshes use
+   *  the 6-word `verts`, the implicit window grid uses neither. */
+  hfVerts: StorageBufferNode<'uint'>;
   indices: StorageBufferNode<'uint'>;
   clusters: StorageBufferNode<'uint'>;
   meshes: StorageBufferNode<'uint'>;
@@ -726,6 +736,9 @@ export class GeometryRegistry {
   private readonly cpuStreams: CpuInstances[] = [];
   private readonly gpuStreams: GpuInstances[] = [];
   private vertCursor = 0;
+  /** N8-D2 Stage 2e: monotonic cursor into the SEPARATE stride-1 terrain-DAG vertex
+   *  buffer (hfVertsArr). Independent of vertCursor (the 6-word explicit buffer). */
+  private hfVertCursor = 0;
   private triCursor = 0;
   private clusterCursor = 0;
   private instCursor = 0;
@@ -740,6 +753,7 @@ export class GeometryRegistry {
   // cull is instance-driven). Bounded memory + cull regardless of field size;
   // O(1) alloc/free, no fragmentation (the Nanite "page" model).
   private tilePool: { slots: number; vertCap: number; triCap: number; clusterCap: number } | null = null;
+  /** `vert` indexes the stride-1 hf vertex buffer (2e); tri/cluster index the shared buffers. */
   private tilePoolBase = { vert: 0, tri: 0, cluster: 0 };
   private tilePoolHandles: number[] = [];
   private tileFreeSlots: number[] = [];
@@ -748,6 +762,8 @@ export class GeometryRegistry {
 
   // backing arrays === attribute arrays (created at build; capacity-sized)
   private vertsArr!: Uint32Array;
+  /** N8-D2 Stage 2e: stride-1 terrain-DAG vertex buffer (one packed texel coord/vert). */
+  private hfVertsArr!: Uint32Array;
   private idxArr!: Uint32Array;
   private clusterArr!: Uint32Array;
   private meshArr!: Uint32Array;
@@ -757,6 +773,7 @@ export class GeometryRegistry {
   private dagArr!: Float32Array;
 
   private vertsAttr!: StorageBufferAttribute;
+  private hfVertsAttr!: StorageBufferAttribute;
   private idxAttr!: StorageBufferAttribute;
   private clusterAttr!: StorageBufferAttribute;
   private meshAttr!: StorageBufferAttribute;
@@ -765,6 +782,8 @@ export class GeometryRegistry {
   private dagAttr!: StorageBufferAttribute;
 
   private caps!: { verts: number; tris: number; clusters: number; meshes: number; instances: number };
+  /** N8-D2 Stage 2e: capacity (in verts = words) of the stride-1 terrain-DAG buffer. */
+  private hfCap = 0;
   private instRW!: BufOf<V4W>;
   private instMeshRW!: StorageBufferNode<'uint'>;
 
@@ -774,6 +793,7 @@ export class GeometryRegistry {
   constructor(opts?: { late?: Partial<LateBudget> }) {
     this.late = {
       verts: 0,
+      hfVerts: 0,
       tris: 0,
       clusters: 0,
       meshes: 0,
@@ -810,6 +830,7 @@ export class GeometryRegistry {
   addLate(b: Partial<LateBudget>): void {
     if (this.built) throw new Error('GeometryRegistry: addLate after build()');
     this.late.verts += b.verts ?? 0;
+    this.late.hfVerts += b.hfVerts ?? 0;
     this.late.tris += b.tris ?? 0;
     this.late.clusters += b.clusters ?? 0;
     this.late.meshes += b.meshes ?? 0;
@@ -917,7 +938,11 @@ export class GeometryRegistry {
       meshes: this.entries.length + this.late.meshes,
       instances: this.instCursor + this.late.instances,
     };
+    // N8-D2 Stage 2e: the stride-1 terrain-DAG buffer is sized independently — every
+    // hf vert is 1 word (a packed texel coord), vs VERT_WORDS=6 for explicit verts.
+    this.hfCap = this.hfVertCursor + this.late.hfVerts;
     this.vertsArr = new Uint32Array(Math.max(1, this.caps.verts * VERT_WORDS));
+    this.hfVertsArr = new Uint32Array(Math.max(1, this.hfCap));
     this.idxArr = new Uint32Array(Math.max(1, this.caps.tris * 3));
     this.clusterArr = new Uint32Array(Math.max(1, this.caps.clusters * CLUSTER_WORDS));
     this.meshArr = new Uint32Array(Math.max(1, this.caps.meshes * MESH_WORDS));
@@ -927,6 +952,7 @@ export class GeometryRegistry {
     this.dagArr = new Float32Array(dagLen);
 
     this.vertsAttr = new StorageBufferAttribute(this.vertsArr, 1);
+    this.hfVertsAttr = new StorageBufferAttribute(this.hfVertsArr, 1);
     this.idxAttr = new StorageBufferAttribute(this.idxArr, 1);
     this.clusterAttr = new StorageBufferAttribute(this.clusterArr, 1);
     this.meshAttr = new StorageBufferAttribute(this.meshArr, 1);
@@ -935,6 +961,7 @@ export class GeometryRegistry {
     this.dagAttr = new StorageBufferAttribute(this.dagArr, 1);
 
     const verts = sU32Views(this.vertsAttr, Math.max(1, this.caps.verts * VERT_WORDS));
+    const hfVerts = sU32Views(this.hfVertsAttr, Math.max(1, this.hfCap));
     const idx = sU32Views(this.idxAttr, Math.max(1, this.caps.tris * 3));
     const clusters = sU32Views(this.clusterAttr, Math.max(1, this.caps.clusters * CLUSTER_WORDS));
     const meshes = sU32Views(this.meshAttr, Math.max(1, this.caps.meshes * MESH_WORDS));
@@ -945,6 +972,7 @@ export class GeometryRegistry {
     this.instMeshRW = instMesh.rw;
     this.gpu = {
       verts: verts.ro,
+      hfVerts: hfVerts.ro,
       indices: idx.ro,
       clusters: clusters.ro,
       meshes: meshes.ro,
@@ -959,8 +987,10 @@ export class GeometryRegistry {
     // never bump — so later post-build attaches (explicit DAGs) land after the
     // pool, and slots are reused in place across the session.
     if (this.tilePool) {
-      this.tilePoolBase = { vert: this.vertCursor, tri: this.triCursor, cluster: this.clusterCursor };
-      this.vertCursor += this.tilePool.slots * this.tilePool.vertCap;
+      // 2e: the pool's verts live in the stride-1 hf buffer (tilePoolBase.vert indexes
+      // hfVertsArr); tris/clusters stay in the shared buffers.
+      this.tilePoolBase = { vert: this.hfVertCursor, tri: this.triCursor, cluster: this.clusterCursor };
+      this.hfVertCursor += this.tilePool.slots * this.tilePool.vertCap;
       this.triCursor += this.tilePool.slots * this.tilePool.triCap;
       this.clusterCursor += this.tilePool.slots * this.tilePool.clusterCap;
       this.tileFreeSlots = [];
@@ -1195,23 +1225,20 @@ export class GeometryRegistry {
     const cCount = clusters.length;
     if (!Number.isInteger(tCount)) throw new Error('GeometryRegistry: height-DAG indices not tri-aligned');
     if (cCount === 0) throw new Error('GeometryRegistry: height-DAG has no clusters');
-    this.checkRoom(vCount, tCount, cCount, 0);
+    this.checkRoom(0, tCount, cCount, 0);
+    if (this.hfVertCursor + vCount > this.hfCap) {
+      throw new Error(
+        `GeometryRegistry: hf-vert capacity exceeded (${this.hfVertCursor}+${vCount}/${this.hfCap}) — raise late.hfVerts`,
+      );
+    }
 
-    const vBase = this.vertCursor;
+    const vBase = this.hfVertCursor;
     const tBase = this.triCursor;
     const cBase = this.clusterCursor;
 
-    // -- verts: word0 = packed texel coord; words 1-5 unused -------------------
-    const vArr = this.vertsArr;
-    for (let v = 0; v < vCount; v++) {
-      const b = (vBase + v) * VERT_WORDS;
-      vArr[b] = (gridVerts[v] as number) >>> 0;
-      vArr[b + 1] = 0;
-      vArr[b + 2] = 0;
-      vArr[b + 3] = 0;
-      vArr[b + 4] = 0;
-      vArr[b + 5] = 0;
-    }
+    // -- verts: stride-1 (2e) — one packed texel coord per vert, dedicated hf buffer
+    const vArr = this.hfVertsArr;
+    for (let v = 0; v < vCount; v++) vArr[vBase + v] = (gridVerts[v] as number) >>> 0;
 
     // -- indices (rebased onto the appended vertex block) ----------------------
     const iArr = this.idxArr;
@@ -1255,7 +1282,7 @@ export class GeometryRegistry {
       dagSpheres[c * 4 + 3] = dc.sr;
     }
 
-    this.vertCursor += vCount;
+    this.hfVertCursor += vCount;
     this.triCursor += tCount;
     this.clusterCursor += cCount;
 
@@ -1271,7 +1298,7 @@ export class GeometryRegistry {
     entry.sphere = meshSphereFromClusters(dagSpheres, cCount);
     this.writeMeshRecord(entry);
 
-    this.pushRange(this.vertsAttr, vBase * VERT_WORDS, vCount * VERT_WORDS);
+    this.pushRange(this.hfVertsAttr, vBase, vCount);
     this.pushRange(this.idxAttr, tBase * 3, tCount * 3);
     this.pushRange(this.clusterAttr, cBase * CLUSTER_WORDS, cCount * CLUSTER_WORDS);
     this.pushRange(this.dagAttr, cBase * DAG_WORDS, cCount * DAG_WORDS);
@@ -1302,7 +1329,8 @@ export class GeometryRegistry {
       throw new Error('GeometryRegistry: reserveTilePool caps must be positive');
     }
     this.tilePool = { slots, vertCap, triCap, clusterCap };
-    this.addLate({ verts: slots * vertCap, tris: slots * triCap, clusters: slots * clusterCap });
+    // 2e: pool verts are reserved in the stride-1 hf buffer (hfVerts), not the 6-word `verts`.
+    this.addLate({ hfVerts: slots * vertCap, tris: slots * triCap, clusters: slots * clusterCap });
     const handles: MeshHandle[] = [];
     for (let s = 0; s < slots; s++) {
       const h = this.registerHeightDag(matClass, hf, {
@@ -1389,17 +1417,9 @@ export class GeometryRegistry {
     const tBase = this.tilePoolBase.tri + slot * pool.triCap;
     const cBase = this.tilePoolBase.cluster + slot * pool.clusterCap;
 
-    // verts: word0 = packed GLOBAL texel coord; words 1-5 unused (height from tex)
-    const vArr = this.vertsArr;
-    for (let v = 0; v < vCount; v++) {
-      const b = (vBase + v) * VERT_WORDS;
-      vArr[b] = (gridVerts[v] as number) >>> 0;
-      vArr[b + 1] = 0;
-      vArr[b + 2] = 0;
-      vArr[b + 3] = 0;
-      vArr[b + 4] = 0;
-      vArr[b + 5] = 0;
-    }
+    // verts: stride-1 (2e) — one packed GLOBAL texel coord per vert (height from tex)
+    const vArr = this.hfVertsArr;
+    for (let v = 0; v < vCount; v++) vArr[vBase + v] = (gridVerts[v] as number) >>> 0;
     // indices rebased onto the slot's vertex block
     const iArr = this.idxArr;
     const ibase = tBase * 3;
@@ -1454,7 +1474,7 @@ export class GeometryRegistry {
     entry.sphere = meshSphereFromClusters(dagSpheres, cCount);
     this.writeMeshRecord(entry);
 
-    this.pushRange(this.vertsAttr, vBase * VERT_WORDS, vCount * VERT_WORDS);
+    this.pushRange(this.hfVertsAttr, vBase, vCount);
     this.pushRange(this.idxAttr, tBase * 3, tCount * 3);
     this.pushRange(this.clusterAttr, cBase * CLUSTER_WORDS, cCount * CLUSTER_WORDS);
     this.pushRange(this.dagAttr, cBase * DAG_WORDS, cCount * DAG_WORDS);
@@ -1492,6 +1512,7 @@ export class GeometryRegistry {
   debug(): {
     arrays: {
       verts: Uint32Array;
+      hfVerts: Uint32Array;
       indices: Uint32Array;
       clusters: Uint32Array;
       meshes: Uint32Array;
@@ -1501,6 +1522,7 @@ export class GeometryRegistry {
     };
     attrs: {
       verts: StorageBufferAttribute;
+      hfVerts: StorageBufferAttribute;
       indices: StorageBufferAttribute;
       clusters: StorageBufferAttribute;
       meshes: StorageBufferAttribute;
@@ -1513,6 +1535,7 @@ export class GeometryRegistry {
     return {
       arrays: {
         verts: this.vertsArr,
+        hfVerts: this.hfVertsArr,
         indices: this.idxArr,
         clusters: this.clusterArr,
         meshes: this.meshArr,
@@ -1522,6 +1545,7 @@ export class GeometryRegistry {
       },
       attrs: {
         verts: this.vertsAttr,
+        hfVerts: this.hfVertsAttr,
         indices: this.idxAttr,
         clusters: this.clusterAttr,
         meshes: this.meshAttr,
@@ -1535,11 +1559,20 @@ export class GeometryRegistry {
   /** memory actually used (not capacity), bytes per blob */
   bytes(): BuildReport['bytes'] {
     const verts = this.vertCursor * VERT_WORDS * 4;
+    const hfVerts = this.hfVertCursor * 4; // stride-1 terrain-DAG buffer (2e)
     const indices = this.triCursor * 3 * 4;
     const clusters = this.clusterCursor * CLUSTER_WORDS * 4;
     const meshTable = this.entries.length * MESH_WORDS * 4;
     const instances = this.instCursor * (32 + 4);
-    return { verts, indices, clusters, meshTable, instances, total: verts + indices + clusters + meshTable + instances };
+    return {
+      verts,
+      hfVerts,
+      indices,
+      clusters,
+      meshTable,
+      instances,
+      total: verts + hfVerts + indices + clusters + meshTable + instances,
+    };
   }
 
   // -- internals ------------------------------------------------------------

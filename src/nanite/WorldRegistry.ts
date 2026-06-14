@@ -497,7 +497,8 @@ export async function buildWorldRegistry(input: {
               { label },
             );
             reg.bindInstances(h, { a: new Float32Array([0, 0, 0, 1]), b: new Float32Array([0, 0, 0, 0]) });
-            reg.addLate({ verts: gridVerts.length, tris: built.indices.length / 3, clusters: built.clusters.length });
+            // 2e: terrain-DAG verts go in the stride-1 hf buffer (hfVerts), not `verts`.
+            reg.addLate({ hfVerts: gridVerts.length, tris: built.indices.length / 3, clusters: built.clusters.length });
             dagTerrainTileAttaches.push({ handle: h, gridVerts, indices: built.indices, clusters: built.clusters });
           }
           if (gridVerts.length > poolMaxV) poolMaxV = gridVerts.length;

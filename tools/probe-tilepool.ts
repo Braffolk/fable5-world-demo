@@ -30,7 +30,6 @@ import {
   GeometryRegistry,
   MESH_FLAG_HASDAG,
   TILE_EVICTED_FAR,
-  VERT_WORDS,
   decodeClusterCPU,
   decodeDagCPU,
   decodeMeshCPU,
@@ -210,9 +209,10 @@ function loadAndVerify(name: string, slot: number): void {
   const vBase = reg.tileSlotBase(slot).vert;
   expect(minIdx >= vBase, `L ${name}@${slot}: index ${minIdx} below slot vertBase ${vBase}`);
   expect(maxIdx < vBase + gridVerts.length, `L ${name}@${slot}: index ${maxIdx} past slot vert block`);
-  // V: vertex word0 (raw) == the global texel coord we packed (read straight from
-  // the array — decodeVertexCPU reinterprets word0 as f32, wrong for texel coords)
-  expect(a.verts[vBase * VERT_WORDS] === (gridVerts[0] as number), `L ${name}@${slot}: vert0 word0 mismatch`);
+  // V: vertex word0 (raw) == the global texel coord we packed. N8-D2 Stage 2e: terrain
+  // verts live in the dedicated stride-1 hf buffer, so it's hfVerts[vBase] (one word/vert),
+  // not verts[vBase·VERT_WORDS] (decodeVertexCPU would reinterpret it as f32 anyway).
+  expect(a.hfVerts[vBase] === (gridVerts[0] as number), `L ${name}@${slot}: vert0 word0 mismatch`);
 }
 
 // --- L: load three regions into slots 0,1,2 -------------------------------------

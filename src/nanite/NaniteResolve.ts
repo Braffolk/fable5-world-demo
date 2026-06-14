@@ -195,7 +195,10 @@ export function buildNaniteResolve(
   // never touches this. ?nanwind=0 A/Bs the trunk wind — MUST match the raster's
   // makeFetch (both read this flag) so their windy positions stay bit-identical.
   const windOn = q.get('nanwind') !== '0';
-  const fetch = makeFetch(gpu, heightTex, undefined, windOn ? { camPos: cam.camPos } : undefined);
+  // bindHfVerts=false: the resolve reconstructs terrain world pos from DEPTH and only
+  // calls fetchWorldVert for rock/bark (the explicit-mesh else branch), so it must NOT
+  // bind the stride-1 terrain buffer — one fewer storage buffer in the fragment stage (2e).
+  const fetch = makeFetch(gpu, heightTex, undefined, windOn ? { camPos: cam.camPos } : undefined, false);
   const nandepth = q.get('nandepth');
   const nandbg = q.get('nandbg');
   // ?nanbark= bisect: const (flat brown) | lN (force mip N) | grad (anisotropic

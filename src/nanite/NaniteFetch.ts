@@ -111,6 +111,12 @@ export function makeFetch(
   heightTex: Texture,
   disp?: TerrainDisp,
   wind?: TrunkWindOpt,
+  /** N8-D2 Stage 2e: bind the stride-1 terrain-DAG vertex buffer (gpu.hfVerts) in
+   *  the isHF&&isDAG branch. The RASTER needs it (terrain positions); the RESOLVE
+   *  does NOT (terrain reconstructs its world pos from the depth buffer, rock/bark
+   *  take the explicit-mesh else branch) — so the resolve passes false to keep one
+   *  fewer storage buffer in its already buffer-heavy fragment stage. */
+  bindHfVerts = true,
 ): NaniteFetch {
   const makeCtx = (instId: NU, ci: NU): VertCtx => {
     const cBase = ci.mul(uint(8)).toVar();
@@ -217,10 +223,15 @@ export function makeFetch(
       // to seal inter-level T-junction cracks. Stays 0 on the window grid path below.
       const skirtDrop = float(0).toVar();
       If(ctx.isDAG, () => {
-        // adaptive terrain DAG (D2b): explicit topology; each vertex's word0 packs
-        // the texel coord — gx in bits 0-12, skirt code in 13-15, gz in 16-31.
+        // adaptive terrain DAG (D2b): explicit topology; each vertex packs the texel
+        // coord — gx in bits 0-12, skirt code in 13-15, gz in 16-31. N8-D2 Stage 2e:
+        // terrain verts live in their OWN stride-1 buffer (gpu.hfVerts, one word/vert),
+        // so index it by vi directly — not vi·VERT_WORDS into the 6-word explicit buffer.
         const vi = elemU(gpu.indices, ctx.triStart.add(localTri).mul(uint(3)).add(uint(v)));
-        const packed = elemU(gpu.verts, vi.mul(uint(VERT_WORDS)));
+        // RASTER reads the stride-1 hf buffer; RESOLVE (bindHfVerts=false) never runs
+        // this branch (terrain uses depth there) so it reads gpu.verts as harmless dead
+        // code, dropping the hfVerts binding from the resolve's fragment stage.
+        const packed = bindHfVerts ? elemU(gpu.hfVerts, vi) : elemU(gpu.verts, vi);
         sx.assign(packed.bitAnd(uint(0x1fff)));
         sz.assign(packed.shiftRight(uint(16)));
         const code = packed.shiftRight(uint(13)).bitAnd(uint(0x7)).toVar();
