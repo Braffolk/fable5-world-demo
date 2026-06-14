@@ -137,18 +137,34 @@ export class GpuProfiler {
         if (f > newest) newest = f;
       }
       let total = 0;
+      let garbage = 0;
       for (const [uid, ms] of ts) {
         const f = frameOf(uid);
-        if (f === newest) {
-          const key = `${prefix}.${this.uidLabels.get(uid) ?? uid.replace(FRAME_RE, '')}`;
-          fresh[key] = (fresh[key] ?? 0) + ms;
-          total += ms;
-        } else {
+        if (f !== newest) {
           ts.delete(uid);
           this.uidLabels.delete(uid);
+          continue;
         }
+        const key = `${prefix}.${this.uidLabels.get(uid) ?? uid.replace(FRAME_RE, '')}`;
+        // INTEGRITY GUARD (perf directive: "no guessing"): three occasionally
+        // resolves a GARBAGE (negative / non-finite) duration for some keep-alive
+        // passes — notably the dead CSM cascade maps (r.shadow.c*), which were
+        // reporting ≈ −69 ms and dragging the whole `render` total to −97 ms.
+        // A poisoned total silently invalidates EVERY downstream measurement
+        // (and zeroes shoot.ts --gpusample, whose gate is render+compute>0), so
+        // never let a single misbehaving pass corrupt the aggregate: keep the
+        // key VISIBLE (as 0, so the pass is not hidden) and tally a diagnostic
+        // count instead of summing the garbage.
+        if (!Number.isFinite(ms) || ms < 0) {
+          fresh[key] = fresh[key] ?? 0;
+          garbage++;
+          continue;
+        }
+        fresh[key] = (fresh[key] ?? 0) + ms;
+        total += ms;
       }
       fresh[type] = total;
+      if (garbage > 0) fresh[`${prefix}.__garbage`] = garbage;
     }
     if (Object.keys(fresh).length === 0) return; // no resolve landed yet — keep last
     for (const k of Object.keys(out)) {

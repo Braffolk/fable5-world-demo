@@ -136,7 +136,10 @@ export class PostStack {
       }
       this.sceneDepthNode = scenePass.getTextureNode('depth');
       this.exposureBuf = instancedArray(2, 'float');
+      // named so the profiler has NO anonymous passes even on the ?postmin/?pure
+      // path (the real metering kernel is 'autoExposure' below)
       this.exposureKernel = Fn(() => {})().compute(1);
+      this.exposureKernel.setName('autoExposureNoop');
       return;
     }
     // velocity MRT only for the ?skyveldbg diagnostic: TRAA consumes analytic

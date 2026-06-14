@@ -9,6 +9,46 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-14 (ay): **PERF-1 — per-pass measurement made TRUSTWORTHY + the PURE nanite renderer ISOLATED
+  (?pure) + the user's WORST view decomposed with COOL numbers. Two integrity defects and one methodology
+  error found and fixed; the SW depth+payload raster confirmed the #1 pure-nanite cost.** (Opus 4.8 1M.)
+  User directive: "track perf per line, or as close as possible — no guessing which subsystem is slow." The
+  infra ALREADY had per-PASS GPU timing (GpuProfiler taps three's per-compute/per-render timestamp pairs →
+  `stats.gpuPasses` as r.<label>/c.<label>, every frame; every nanite kernel `setName`'d) — but the first
+  real full-res dump exposed:
+  (1) **THE HARNESS WAS LYING.** The dead three-CSM keep-alive maps (`r.shadow.c*`, still rendered though the
+  D-N29 clipmap owns shadows now) resolve GARBAGE NEGATIVE timestamps (≈ −69 ms) → `render` total = −97 ms →
+  `shoot.ts --gpusample` (gate render+compute>0) dropped EVERY sample ("median 0.0 ms over 0 samples"). FIX:
+  `GpuProfiler.collect` rejects non-finite/negative durations from the total (key stays visible at 0 + a
+  `__garbage` count, never hidden) → median works (45.9 ms / 24 samples). A poisoned aggregate silently
+  invalidates everything downstream — integrity must not depend on no pass ever misbehaving.
+  (2) **ANONYMOUS COST.** A 6 ms full-res pass `r.rt#16` (= the post aerial/atmosphere composite) and a 0 ms
+  `c.compute?` (the postmin exposure noop). Named the noop (`autoExposureNoop`); rt#16 is post — stripped by
+  ?pure, attributable by ablation, so deferred.
+  (3) **METHODOLOGY (user caught it).** I'd measured bm7 = FOREST INTERIOR (alt 4 m, max occlusion) = the
+  CHEAPEST view in the set (`nanRasterDepth` 1.25 ms). Raster cost lives on WIDE deep sightlines. Built
+  `probe-worstpos.ts`: boots the user's reported worst pos (cam −4.2, 303.1, −1.4 @ T=11; their in-browser
+  43 fps / GPU compute 17.17 ms), SWEEPS yaw to find the heaviest orientation ("looking down the long
+  alley"), dumps the full sorted ledger + a screenshot. Worst = yaw 67.5° — a bare-winter-tree hillside vista
+  (thin branches = many tiny tris + heavy depth overdraw + foreground trunks = big-tri HW), **82k visClusters
+  / 130k hwTris, reproducing the user's ~17 ms compute.**
+  Built **?pure** (`main.ts expandPureAblation`): a MASTER that composes `nanite=1 + postmin=1 + nanshadow=0 +
+  nandbg=flat` via ONE `history.replaceState` (every existing read-site just works; explicit flags override,
+  e.g. `?pure=1&nandbg=albedo`). Strips ALL beauty, KEEPS geometry (`veg` deliberately NOT ablated — it gates
+  nanite registration). Fixes the user's "?pure = zero terrain" — it was simply never wired. Renders
+  flat-albedo terrain/rock/bark on clear sky.
+  **FINDINGS (cool, trustworthy):** at the worst view PURE nanite = SW raster depth **2.82** + payload
+  **2.95** = **5.77 ms** + HW pass **2.62** + flat resolve **2.10 ms**; **fps 35→95 just by stripping post.**
+  The post chain doesn't only cost itself — it THERMALLY THROTTLES the GPU: the SAME 82k-cluster raster is
+  `nanRasterDepth` **2.82 ms COOL (pure) vs 5.96 ms HOT (full beauty) ≈ 2.1×** inflation (post passes bloom/
+  TRAA/rt#16/half.mrt also read ~2.4× their bm3 values purely from heat). So the SW depth+payload raster
+  (5.77 ms cool) is the #1 pure-nanite cost = the PERF-3 lever, and un-throttling/cutting post pays the nanite
+  side back too. tsc clean. Files: GpuProfiler.ts (integrity guard), main.ts (?pure), PostStack.ts (noop
+  name), probe-worstpos.ts (NEW). **NEXT (PERF-3 precursor): IN-KERNEL decomposition of `nanRasterDepth`** —
+  the truest "per-line" a GPU allows (toggle transform / edge-setup / scanline-fill / atomicMin blocks,
+  difference timed runs) to find WHICH part of the 5.77 ms to cut, plus a COOLED (idle-between) batch to lock
+  absolute numbers vs the thermal envelope.
+
 - 2026-06-14 (ax): **N5 shadow S3 — the SCREEN-DENSITY SHADOW CLIPMAP (D-N29 point 1) is BUILT,
   correct + beautiful + drops CSM; MEASURED at perf PARITY with the 4 cascades (the cluster win is
   offset by per-level fixed overhead) — the honest moving-fps WIN needs S4-on-the-headroom next.**

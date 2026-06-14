@@ -21,7 +21,49 @@ import { buildShadowTestScene } from './debug/ShadowTestScene';
 import { buildTerrainScene } from './debug/TerrainScene';
 import { buildScene, registerScene, type WorldContext } from './debug/Scenes';
 
+/**
+ * ?pure=1 — MASTER ablation (PERF directive: isolate the PURE nanite renderer
+ * from every beauty/effect so its true GPU floor is measurable, not guessed).
+ * Composes the already-wired flags so each existing read-site just works with
+ * ZERO per-site plumbing — rewrite the URL ONCE, before any subsystem reads it:
+ *   nanite=1   → the pure nanite path is what we're isolating
+ *   postmin=1  → strip the ENTIRE post chain (half.mrt / aerial+atmosphere /
+ *                AO / bounce / clouds / froxels / contact / TRAA / bloom) and
+ *                output the raw scene pass — the ~60 ms of post that buried the
+ *                nanite cost (and the anonymous r.rt#16) and overheated the GPU
+ *   nanshadow=0→ no shadow-clipmap raster, no shadow sample in the resolve
+ *   nandbg=flat→ flat-albedo resolve (no lighting / IBL / GI) — r.scene becomes
+ *                the pure materialize cost (unpack → fetch 3 verts → barycentric)
+ * SURVIVORS = exactly the pure geometry pipeline: instance/cluster cull → SW
+ * depth+payload raster → HW big-tri pass → flat resolve. Geometry (terrain /
+ * rock / bark / deadwood) is KEPT — `veg` is deliberately NOT ablated because it
+ * gates the whole nanite registration. Each implied flag is only set when ABSENT,
+ * so explicit overrides survive (e.g. ?pure=1&nandbg=albedo to time a textured-
+ * but-unlit resolve, or ?pure=1&nanshadow=1 to add just shadows back).
+ */
+function expandPureAblation(): void {
+  const q = new URLSearchParams(window.location.search);
+  if (q.get('pure') !== '1') return;
+  const implied: Record<string, string> = {
+    nanite: '1',
+    postmin: '1',
+    nanshadow: '0',
+    nandbg: 'flat',
+  };
+  let changed = false;
+  for (const [k, v] of Object.entries(implied)) {
+    if (!q.has(k)) {
+      q.set(k, v);
+      changed = true;
+    }
+  }
+  if (changed) {
+    history.replaceState(null, '', `${window.location.pathname}?${q.toString()}`);
+  }
+}
+
 async function boot(): Promise<void> {
+  expandPureAblation();
   const hooks = initHooks();
   installGlobalErrorHooks();
   // environment gate BEFORE any loading: mobile / non-Chromium / missing

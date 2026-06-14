@@ -11,17 +11,25 @@
 > must finish first. `spec` = the `## header` in NANITE-SPEC.md (+ D-N* / file refs).
 
 ## YOU ARE HERE — 2026-06-14
-Just landed **S3** — the screen-density shadow CLIPMAP (commit 6154604): beauty win +
-drops CSM, but MEASURED at perf **parity** with the old cascades (LOG entry `ax`). The
-×0.32 cluster win didn't convert to fps — per-level fixed overhead ate it.
+**PERF-1 LANDED (LOG `ay`): per-pass measurement is now TRUSTWORTHY, the PURE nanite
+renderer is ISOLATED (`?pure`), and the user's WORST view is decomposed with cool numbers.**
+The first real dump exposed two integrity defects + one methodology error, all fixed:
+- the harness was LYING — dead-CSM garbage NEGATIVE timestamps poisoned the `render` total
+  (−97 ms) so `--gpusample` returned 0 samples; `GpuProfiler` now rejects non-finite/negative.
+- `?pure` (master ablation = postmin + nanshadow=0 + nandbg=flat; strips beauty, KEEPS
+  geometry) fixes the user's "?pure = zero terrain" (it was never wired) and isolates the floor.
+- I'd been measuring bm7 = forest INTERIOR (cheapest view). `probe-worstpos.ts` boots the
+  user's worst pos (cam −4.2,303.1,−1.4 @T11) and yaw-sweeps to the "long alley".
 
-**USER REDIRECT (2026-06-14, binding):** stop optimizing the shadow slice. We never
-isolated PURE nanite — the "83.5 fps ceiling" I quoted still includes bloom/TRAA/AO/GI.
-ISOLATE pure nanite + do SIGNIFICANT optimization on the core depth rasterizer; that's
-where the fps is. Doc restructure (this 3-file split) done first, per the user's sequence.
+**THE FINDING (cool, trustworthy):** worst view = 82k visClusters / 130k hwTris. PURE nanite
+SW raster = depth **2.82** + payload **2.95** = **5.77 ms** (+ HW 2.62 + flat resolve 2.10);
+**fps 35→95 just by stripping post.** AND the post chain THERMALLY THROTTLES the GPU **~2.1×**
+(the SAME raster reads 5.96 ms hot). ⇒ (a) the SW depth+payload raster is the #1 nanite lever;
+(b) post throttles nanite on top of its own cost.
 
-**→ NEXT: `PERF-1` (ablation) → `PERF-2` (profile pure nanite) → `PERF-3` (raster opt).**
-`PERF-2`'s decomposition re-ranks everything below (N8-completion vs raster-opt vs S3-perf).
+**→ NEXT: `PERF-3` — decompose `nanRasterDepth` IN-KERNEL (toggle transform / edge-setup /
+scanline-fill / atomicMin blocks, difference timed runs = the truest per-line a GPU allows),
+then cut the dominant block.** Also owed: a COOLED (idle-between) batch to lock absolute ms.
 
 ## Phases (coarse status — see SPEC `## Phase plan`)
 N0 scaffold ✅ · N1 clusterize ✅ · N2 cull ✅ · N3 vis-buffer ✅ · N4 materials ✅ ·
