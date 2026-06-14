@@ -31,7 +31,7 @@ N0 scaffold ✅ · N1 clusterize ✅ · N2 cull ✅ · N3 vis-buffer ✅ · N4 m
 ## A. MEASUREMENT + CORE RASTER — immediate priority (user 2026-06-14)
 | id | task | status | blockedBy | spec | scope (one line) |
 |----|------|--------|-----------|------|------|
-| `PERF-1` | Ablation flags / pure-nanite isolation | ⬜ | — | Tracking protocol; Resolve (N4) | granular `?ablate=shadows,ao,gi,post,bloom,traa,clouds,water,lighting` + `?pure=1` master → nanite raster + flat-albedo resolve only |
+| `PERF-1` | Ablation flags / pure-nanite isolation | 🔵 | — | Tracking protocol; Resolve (N4) | SURVEY DONE: `?ablate=` ALREADY covers shadows,pcss,cloudshadow,clouds,ao,bounce,contact,taa,bloom (+`?postmin=1`); `?nandbg=flat` = flat-albedo resolve. TODO: a `?pure=1` MASTER composing them all via a shared `ablations()` helper across the 4 sites (PostStack:80, ShadowSetup:114, TerrainTiles:90, TerrainScene:107) + force flat resolve + gap-fill (fog/water/tonemap/aerial), then probe each layer's delta (→PERF-2). |
 | `PERF-2` | Profile pure-nanite floor + per-effect deltas | ⬜ | `PERF-1` | PERF LEDGER | decompose the frame at 2592×1676; suspect `nanRasterDepth` (~10ms) + post are the real costs; re-ranks the board |
 | `PERF-3` | SIGNIFICANT depth-rasterizer optimization | ⬜ | `PERF-2` | Vis-buffer + depth precision (N3); Culling (N2) | the core SW raster has never been isolated/optimized — likely the biggest single lever |
 | `AUDIT-1` | Deviation audit vs original Fable 5 spec | ⬜ | — | PROVENANCE; `reference/fable5-original-NANITE.md` | diff current state/impl vs the 937-line original; flag unjustified drops from my D-N* edits (shadows = D-N29, justified) |
