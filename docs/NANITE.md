@@ -1253,6 +1253,20 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   **2b-3** per-frame STREAMING (camera moves → re-center rings → async DagWorker loads / evict at
   ring edges; the already-resident coarser ring covers a fine tile WHILE it loads ⇒ graceful, never
   a hole); **2c REMOVED** (clipmap needs no suppression); **2d** skirts for the inter-level seams.
+  2b-1 + 2b-2 (math + GPU) DONE + committed (the clipmap RENDERS, bounded, true 1 m at the field
+  center, ?nanitedclip=1). 2b-3 FACTORING (worked out during 2b-2, build it this way): move
+  buildTileGlobal INTO a new TerrainStreamer (ctor takes reg + heights + res/cell/origin/gridN +
+  seed + a PERSISTENT DagWorker — clip mode must NOT dispose the worker after boot). WorldRegistry
+  in clip mode: reserveTilePool sized for clipmapMaxTiles + in-flight headroom and the GLOBAL-worst
+  tile cap (not just the boot set — a slot reloads arbitrary tiles; size generously + catch-skip on
+  attachHeightDagTile overflow, the coarser ring backstops), construct the streamer, AWAIT
+  streamer.loadInitial(centerTexel) (frame-1 terrain, no fallback), return it in the result.
+  TerrainScene hooks engine.onUpdate(() => streamer.update(camWorldX,camWorldZ)). update(): camTexel
+  → clipmapTiles → diff vs resident Map(tileKey→slot): EVICT departed immediately (cheap), LOAD
+  arrived async (cache hit → attach next frame; miss → DagWorker.buildHeight, attach on resolve, a
+  few attaches/frame to avoid hitches; if the tile left `desired` before the build returns, free the
+  slot + discard). Cache key is per (gridN, stride, tx0, tz0) ⇒ revisits are instant. No per-frame
+  reg.flush needed (attachHeightDagTile's pushRange marks needsUpdate → three auto-uploads).
 
 ## GOTCHAS (append-only, nanite-specific)
 
