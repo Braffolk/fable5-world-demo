@@ -45,6 +45,7 @@ import {
   instanceIndex,
   int,
   interleavedGradientNoise,
+  normalize,
   screenCoordinate,
   textureLoad,
   textureStore,
@@ -58,6 +59,7 @@ import type { NB, NF, NV2, NV3 } from '../gpu/TSLTypes';
 import type { RegistryGpu } from './GeometryRegistry';
 import { makeNaniteCam, type NaniteCam } from './NaniteCommon';
 import { buildNaniteCull, type NaniteCullChain } from './NaniteCull';
+import { buildNaniteHzb, type NaniteHzb } from './NaniteHzb';
 import type { TerrainDisp, TrunkWindOpt } from './NaniteFetch';
 import {
   buildNaniteRaster,
@@ -67,6 +69,7 @@ import {
 } from './NaniteRaster';
 import { bcU2F, dispatch, elemU, minU, uniformArrV4, uniformF, uniformMat4 } from './Tsl';
 import type { UniformArrV4, UniformMat4 } from './Tsl';
+import { sunU } from '../render/VegMaterials';
 
 /** CSM default cascade count (csmcasc can lower it — we guard per-cascade) */
 export const SHADOW_CASCADES = 4;
@@ -106,6 +109,9 @@ interface Cascade {
   raster: NaniteRasterHandles;
   depthTex: StorageTexture;
   kCopy: unknown;
+  /** S2-OCCL: per-cascade light HZB for the two-phase occlusion cull. null when
+   *  ?shadowoccl is off (single-phase, no occlusion — the pre-S2-OCCL behaviour). */
+  hzb: NaniteHzb | null;
   count: number;
   /** false until runPhase1 has dispatched at least once — its GPU buffers do not
    *  exist before then, so readCounts must skip it (CSM cascades init lazily). */
@@ -179,18 +185,31 @@ export function buildNaniteShadow(
   // from shadow maps → contact shadows). Grows per cascade (coarser far). projK is
   // ~1024 for the 2048 map, so minPx px ≈ that many shadow texels. ?shadowminpx=N.
   const shMinPxBase = Math.max(0, Number(shParams.get('shadowminpx') ?? 0));
+  // S2-OCCL (D-N29, the log-av redirect): the headline moving-raster lever. The
+  // shadow cascades carry ~38× the camera's clusters because they had NO occlusion
+  // cull (sphereOccluded=null) — a per-cascade LIGHT HZB + two-phase cull skips
+  // casters HIDDEN FROM THE SUN (zero shadow-quality loss). ORTHO occlusion (the
+  // perspective test assumes a finite eye). Behind ?shadowoccl=1 until validated.
+  const occlOn = shParams.get('shadowoccl') === '1';
+  const sunDirNode = normalize(vec3(sunU.dir)) as unknown as NV3;
 
   for (let c = 0; c < SHADOW_CASCADES; c++) {
     const cam = makeNaniteCam(SHADOW_MAP, SHADOW_MAP);
+    const vis = makeVisBuffers(SHADOW_PIX);
+    // light HZB over THIS cascade's vis depth + the ORTHO occlusion test (span =
+    // cascParam[c].x, the ortho width in m, live each frame). Built only when on.
+    const hzb = occlOn ? buildNaniteHzb(vis.depthV.ro, cam) : null;
+    const occl = hzb
+      ? hzb.makeOrthoOccluded(sunDirNode, cascParam.element(int(c)).x as unknown as NF)
+      : null;
     const cullTau = uniformF(shTauBase * (CASCADE_TAU_MUL[c] ?? 4));
     const cullMinPx = uniformF(shMinPxBase * (CASCADE_TAU_MUL[c] ?? 4));
-    const cull = buildNaniteCull(gpu, instanceCount, cam, null, {
+    const cull = buildNaniteCull(gpu, instanceCount, cam, occl, {
       coneCull: false,
       tau: cullTau,
       minPx: cullMinPx,
     });
-    const vis = makeVisBuffers(SHADOW_PIX);
-    // REUSE the raster depth-only: we only ever call clearVis/depth1/hwDepth.
+    // REUSE the raster depth-only: clearVis/depth1/hwDepth (+ depth2 when occl on).
     const raster = buildNaniteRaster(gpu, heightTex, cam, cull, vis, 'flat', false, disp, wind);
 
     const depthTex = new StorageTexture(SHADOW_MAP, SHADOW_MAP);
@@ -222,6 +241,7 @@ export function buildNaniteShadow(
       raster,
       depthTex,
       kCopy,
+      hzb,
       count: -1,
       ran: false,
       lastVP: new Matrix4(),
@@ -255,6 +275,9 @@ export function buildNaniteShadow(
       if (cc.ran && cascM.equals(cc.lastVP)) continue;
       mask |= 1 << c;
       cascFrustum.setFromProjectionMatrix(cascM);
+      // S2-OCCL: prevVp = this cascade's LAST raster VP — the light HZB still holds
+      // depth from that raster, so phase-1 occlusion tests new clusters against it.
+      cc.cam.prevVp.value.copy(cc.cam.vp.value);
       cc.cam.vp.value.copy(cascM);
       cascVP[c]!.value.copy(cascM);
       for (let p = 0; p < 6; p++) {
@@ -271,6 +294,15 @@ export function buildNaniteShadow(
       cc.cull.runPhase1(renderer);
       cc.raster.depth1(renderer);
       cc.raster.hwDepth(renderer, mainCamera); // camera arg unused (HW vertexNode uses cam.vp)
+      if (cc.hzb) {
+        // two-phase: build a fresh light HZB from phase-1 depth, then re-cull —
+        // casters whose nearest-to-sun point is behind the recorded depth are hidden
+        // from the sun and skipped (depth2 rasters only the survivors).
+        cc.hzb.build(renderer);
+        cc.cull.runPhase2(renderer);
+        cc.raster.depth2(renderer);
+        cc.raster.hwDepth(renderer, mainCamera);
+      }
       dispatch(renderer, cc.kCopy);
       cc.lastVP.copy(cascM);
       cc.ran = true;

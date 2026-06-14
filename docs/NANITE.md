@@ -1438,6 +1438,28 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-14 (aw): **N5 shadow S2-OCCL — per-cascade light-HZB occlusion cull WIRED but MEASURED WEAK
+  (default off); the moving-shadow lever is NOT occlusion either.** (Opus 4.8 1M.) Built the headline
+  candidate from log av: a per-cascade light HZB (buildNaniteHzb on each cascade's vis depth) + a NEW ORTHO
+  sphereOccluded (NaniteHzb.makeOrthoOccluded — nearest-to-sun point vs the footprint max; no perspective
+  foreshortening; span/mapRes level-pick; w==1) + a two-phase cull per cascade (clearVis→phase1→depth1→
+  hzb.build→phase2→depth2→copy; prevVp = the cascade's last-raster VP). Behind ?shadowoccl=1. WIRING PROVEN
+  — a temp always-true test culled 99% (869k→6k). But the real nearestZ>maxZ math culls ~0 under the moving
+  probe (probe-shadowoccl.ts, new). THREE root causes, measured/reasoned: (1) phase2 tests vs the FRESH HZB
+  that ALREADY holds the cluster's own phase-1 depth → self-occlusion → never culls; the cull must come from
+  phase1 vs the PREV-frame HZB. (2) but CsmCached/R1 freezes cascades on the [1,2,3,6] cadence → on cached
+  frames the prev HZB is STALE → phase1 occlusion is weak (only c0, cadence 1, has a 1-frame-fresh prev HZB).
+  (3) a high/medium SUN has inherently weak inter-caster occlusion — it sees the canopy TOPS, so few casters
+  sit fully behind a closer one (a diagnostic "HZB has ANY near surface" test culled only 15%; the proper
+  conservative subset ~0). The camera's 65× comes from looking INTO the forest (trunks behind trunks), which
+  the sun does not. CONCLUSION: the 38× shadow/camera cluster disparity (log av) is dominated by WIDE ORTHO
+  COVERAGE × 4 CASCADES × fine geometry, NOT by occludable geometry — so neither caster-LOD (S4) NOR occlusion
+  (this) is the big moving-raster lever. Kept ?shadowoccl OFF (the two-phase overhead isn't worth ~0 cull) as
+  documented WIP — the ortho HZB test is correct, reusable infra once the prev-HZB-staleness is solved
+  (decouple the HZB refresh from the CsmCached raster cache). tsc clean; default behaviour unchanged.
+  STRATEGIC FORK (flagged for user direction): the moving-fps win needs a more radical lever — collapse the 4
+  cascades into ONE screen-density shadow CLIPMAP (S3) and/or far-caster PROXIES/impostors — a bigger change
+  with a real quality/perf tradeoff (far-shadow fidelity), so worth a check-in before building.
 - 2026-06-14 (av): **N5 shadow S4 (DAG-decoupled caster LOD) — implemented + MEASURED MINOR for this world;
   the real lever is OCCLUSION (redirect).** (Opus 4.8 1M.) The DAG cut predicate in kClusterCull is
   τ-driven (NaniteCull:403), and the shadow culls passed NO τ (default 1 px) — NaniteCull's own comment said
@@ -2832,14 +2854,15 @@ CHUNK PLAN (to the logical point):
     write) in the resolve, but the resolve already sits at the 10-buffer Metal storage ceiling (see log as;
     that ceiling is exactly what the stride-1 hfVerts add breached). A lod heatmap must ride a cull-side
     write or a separate debug pass, not the resolve.
-  - **NEXT**: **shadows** — the D-N29 perf engine. Measurement reordered it (see the plan block below).
-    S0 DONE (log au — half-res PCSS + bilateral, sample ~halved). S4 DONE but MINOR (log av — casters
-    mostly non-DAG; LOD coarsening 0.3–12%). The finding: shadow cascades carry 38× the camera's clusters
-    for lack of OCCLUSION culling → NOW: **S2-OCCL** (per-cascade light HZB + ortho sphereOccluded +
-    two-phase cull — skip casters hidden from the sun; expected 2–4×, zero quality loss; the user's 30-fps
-    pain). Then S1 (WPO-freeze / static-dynamic) → S3 (screen-density clipmap res) → S5 (capsule-SDF +
-    contact). Also pending: the carried D1e USER CHECKPOINT (continuous zoom in Chrome on hero rock/tree +
-    terrain — USER-PRESENT). Optional polish:
+  - **NEXT**: **shadows** — the D-N29 perf engine. Measurement reshaped it (see the plan block below).
+    S0 DONE (log au — half-res PCSS + bilateral, sample ~halved, real win). S4 + S2-OCCL TRIED but BOTH
+    MEASURED WEAK (logs av/aw — LOD coarsening ≤12% since casters are mostly non-DAG; occlusion ~0 since a
+    high sun barely self-occludes + CsmCached starves the prev-HZB; ?shadowoccl default off). Two findings
+    prove the 38× shadow/camera disparity is WIDE COVERAGE × 4 CASCADES × fine geo, not LOD/occlusion. NOW
+    (NEEDS USER DIRECTION before building — a real far-shadow quality/perf tradeoff): **S3** — collapse the
+    4 cascades into ONE screen-density shadow CLIPMAP + far-caster PROXIES/impostors. Also open: S1 (WPO-
+    freeze / static-dynamic — fixes stale static wind shadows). Also pending: the carried D1e USER CHECKPOINT
+    (continuous zoom in Chrome on hero rock/tree + terrain — USER-PRESENT). Optional polish:
     2b-4 always-resident coarse base (teleport no-hole; DOWNGRADED). The paramless-`?nanite=1` default-on
     (retire the `?nanite=0` opt-out) is a SEPARATE later endgame flip — leave for a user-present session
     (it changes the bare-URL boot for every debug scene). OLD locked 2d spec (kept for the record).
@@ -3046,10 +3069,15 @@ N8 DAG. Order:
        the casters here are mostly NON-DAG (terrain clipmap + explicit veg; dagClusters ~6%),
        so LOD coarsening is second-order. The REAL lever surfaced: the shadow cascades carry
        38× the camera's clusters because they have NO OCCLUSION cull → S2-OCCL below.
-  S2-OCCL (PROMOTED — the actual moving-raster lever, log av): per-cascade LIGHT HZB +
-       two-phase cull so shadow casters HIDDEN FROM THE SUN are skipped (zero quality loss,
-       unlike minPx). Needs an ORTHO sphereOccluded (the existing NaniteHzb test is
-       perspective-only: finite camPos, cotHalfFov level-pick, w-divide). Expected 2–4×. ← NOW.
+  S2-OCCL (TRIED — WEAK, log aw): per-cascade light HZB + ortho sphereOccluded + two-phase
+       cull, behind ?shadowoccl (OFF). Wiring proven (always-true → 99% cull) but the real test
+       culls ~0: phase2 self-occludes (own phase-1 depth), CsmCached staleness starves phase1's
+       prev-HZB, and a high sun has weak inter-caster occlusion (sees canopy tops). Kept as
+       default-off WIP. The 38× disparity is COVERAGE×CASCADES×fine-geo, not occludable geo.
+  S3 — SCREEN-DENSITY SHADOW CLIPMAP (PROMOTED to the real moving lever, log aw): collapse the 4
+       overlapping cascades into ONE clipmap (~1 shadow texel/screen pixel) — cuts the wide-ortho
+       × 4-cascade redundancy that dominates shTotal. Pair with far-caster PROXIES/impostors.
+       Bigger architectural change + a far-shadow quality/perf tradeoff → USER-DIRECTION check-in. ← NEXT.
   S5 — ADDITIVE BEAUTY CEILING: capsule-SDF soft inter-tree occlusion (wind-free blobs for
        the large-scale soft band) + screen-space CONTACT shadows (fine sub-pixel band).
        Optional, once the sun term is fast + crisp.
@@ -3060,12 +3088,14 @@ CONSTRAINTS (binding): WebGPU — NO 64-bit atomics, NO HW RT, ≤10 storage buf
 ~1.5 GB UMA. Zero external assets. Deterministic seed. WIND shadows stay correct. Quality
 floor: no black shadows, soft penumbra, no pop within 300 m.
 
-The R2/R3/R4 chunks below are SUPERSEDED by S0–S5. S0 DONE (log au — sample ~halved). S4 done but
-MINOR (log av — casters mostly non-DAG). NOW BUILDING: S2-OCCL — per-cascade LIGHT HZB + ortho
-sphereOccluded + two-phase cull to skip shadow casters hidden from the sun (the 38×-disparity
-finding; zero quality loss; expected 2–4× off the moving shadow raster — the user's 30-fps pain).
-Then S1 (WPO-freeze / static-dynamic split — also fixes stale static-camera wind shadows), S3
-(screen-density clipmap res), S5 (capsule-SDF + contact, beauty ceiling).
+The R2/R3/R4 chunks below are SUPERSEDED by S0–S5. STATUS: S0 DONE (log au — sample ~halved, real
+win). S4 done but MINOR (log av — casters mostly non-DAG, ≤12%). S2-OCCL TRIED but WEAK (log aw —
+occlusion ~0: phase2 self-occludes + CsmCached prev-HZB staleness + high-sun weak inter-occlusion;
+default off). KEY: two measured findings prove the 38× shadow/camera cluster disparity is WIDE
+COVERAGE × 4 CASCADES × fine geometry, NOT LOD-coarsenable or occludable geometry. NOW (NEEDS
+USER DIRECTION): S3 — collapse the 4 cascades into ONE screen-density shadow CLIPMAP + far-caster
+PROXIES/impostors (the remaining big moving-raster lever; a real far-shadow quality/perf tradeoff).
+Also still open: S1 (WPO-freeze / static-dynamic split — fixes stale static-camera wind shadows).
 
 ---
 

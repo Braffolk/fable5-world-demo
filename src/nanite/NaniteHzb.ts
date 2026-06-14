@@ -19,6 +19,7 @@ import { BufferGeometry, Float32BufferAttribute, Mesh, Scene, Sphere, Vector3 } 
 import { Fn, If, float, instanceIndex, positionGeometry, screenCoordinate, uint, vec4 } from 'three/tsl';
 import type { NB, NF, NV3 } from '../gpu/TSLTypes';
 import type { NaniteCam } from './NaniteCommon';
+import type { SphereOccludedFn } from './NaniteCull';
 import {
   bcU2F,
   dispatch,
@@ -48,6 +49,10 @@ export interface NaniteHzb {
    * last frame's depth; phase 2 passes the CURRENT pair vs the fresh build.
    */
   sphereOccluded(center: NV3, radius: NF, vp: UniformMat4, camPos: UniformV3): NB;
+  /** S2-OCCL: ORTHO occlusion test for directional-light shadow cascades (sunDir
+   *  toward the sun, span = cascade ortho width in m). Returns a SphereOccludedFn
+   *  for buildNaniteCull (camPos arg ignored — ortho has no finite eye). */
+  makeOrthoOccluded(sunDir: NV3, span: NF): SphereOccludedFn;
   /** fullscreen grayscale view of one pyramid level (?nanitedbg=hzb) */
   makeViewer(level: number): Scene;
   levelCount: number;
@@ -189,6 +194,49 @@ export function buildNaniteHzb(
       .and(nearestZ.greaterThan(maxZ)) as unknown as NB;
   };
 
+  // ---- ORTHO variant (S2-OCCL): directional-light shadow cascades --------------
+  // The perspective sphereOccluded above assumes a finite eye (toCamera/dist,
+  // cotHalfFov foreshortening). A sun cascade is ORTHOGRAPHIC: the "viewer" is at
+  // infinity along the sun direction, there is no foreshortening (world→texel is a
+  // constant span/mapRes), and clip w == 1. makeOrthoOccluded closes over THIS
+  // pyramid + the caller's sunDir (toward the sun) and ortho span (metres across the
+  // cascade), returning a SphereOccludedFn the shadow cull can use verbatim (camPos
+  // arg ignored). A caster is occluded ⇔ its nearest-to-light point sits BEHIND the
+  // farthest recorded near-surface in its footprint — zero shadow-quality loss (the
+  // caster contributes no new shadow), unlike dropping it by min-screen-size.
+  const makeOrthoOccluded =
+    (sunDir: NV3, span: NF): SphereOccludedFn =>
+    (center: NV3, radius: NF, vp: UniformMat4, _camPos: UniformV3): NB => {
+      const nearPoint = center.add((sunDir as unknown as { mul(o: NF): NV3 }).mul(radius));
+      const nearClip = vp.mul(vec4(nearPoint, 1)).toVar();
+      const centerClip = vp.mul(vec4(center, 1)).toVar();
+      const nearestZ = nearClip.z.div(nearClip.w); // ortho w==1 → identity divide
+      const ndc = centerClip.xy.div(centerClip.w);
+      // ortho footprint: world→half-res-pyramid texels = mapRes/span/2 (no /dist)
+      const radiusTexels = radius.mul(float(cam.width)).div((span as unknown as { max(o: number): NF }).max(1)).div(2);
+      const levelF = radiusTexels.mul(2).max(1).log2().ceil().clamp(0, levelCountU.sub(1));
+      const info = table.element(uint(levelF));
+      const lw = uint(info.y).toVar();
+      const lh = uint(info.z).toVar();
+      const lo = uint(info.x).toVar();
+      // NO Y flip — same bottom-up visDepth buffer law as the perspective path
+      const px = ndc.x.mul(0.5).add(0.5).mul(toF(lw));
+      const py = ndc.y.mul(0.5).add(0.5).mul(toF(lh));
+      const x0 = uint(px.sub(0.5).clamp(0, toF(lw.sub(uint(1))))).toVar();
+      const y0 = uint(py.sub(0.5).clamp(0, toF(lh.sub(uint(1))))).toVar();
+      const x1 = minU(x0.add(uint(1)), lw.sub(uint(1)));
+      const y1 = minU(y0.add(uint(1)), lh.sub(uint(1)));
+      const z00 = hzbF.ro.element(lo.add(y0.mul(lw)).add(x0));
+      const z01 = hzbF.ro.element(lo.add(y0.mul(lw)).add(x1));
+      const z10 = hzbF.ro.element(lo.add(y1.mul(lw)).add(x0));
+      const z11 = hzbF.ro.element(lo.add(y1.mul(lw)).add(x1));
+      const maxZ = z00.max(z01).max(z10.max(z11));
+      // only occlude on-screen casters (off-cascade ndc clamps to an edge texel →
+      // unreliable; the frustum cull already handles those)
+      const onScreen = ndc.x.abs().lessThan(1).and(ndc.y.abs().lessThan(1));
+      return onScreen.and(nearestZ.greaterThan(maxZ)) as unknown as NB;
+    };
+
   // ---- ?nanitedbg=hzb — grayscale level inspector ----------------------------------
   const makeViewer = (level: number): Scene => {
     const L = levels[Math.max(0, Math.min(levelCount - 1, level))] as {
@@ -226,5 +274,5 @@ export function buildNaniteHzb(
     return scene;
   };
 
-  return { build, sphereOccluded, makeViewer, levelCount };
+  return { build, sphereOccluded, makeOrthoOccluded, makeViewer, levelCount };
 }
