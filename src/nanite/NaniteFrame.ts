@@ -38,6 +38,7 @@ import { makeFetch } from './NaniteFetch';
 import { buildNaniteRaster, makeVisBuffers } from './NaniteRaster';
 import { buildNaniteResolve } from './NaniteResolve';
 import { buildNaniteShadow, type NaniteShadow } from './NaniteShadow';
+import { buildShadowHalf, type ShadowHalf } from './NaniteShadowHalf';
 import { bcU2F, dispatch, elemU, readBuffer, returnIf, texLoadR, toF, uniformArrV4, uniformF } from './Tsl';
 
 export interface NaniteFrameHandles {
@@ -138,6 +139,14 @@ export function buildNaniteFrame(
     ? buildNaniteShadow(registry.gpu, registry.instanceCount, hf.heightTex, disp, windOpt)
     : null;
 
+  // S0 (D-N29): half-res PCSS eval + depth-aware bilateral upsample — quarters the
+  // per-pixel shadow SAMPLE cost (paid every frame, static or moving). Built from
+  // the MAIN vis + cam (it reconstructs wp exactly like the resolve) and shadow's
+  // PCSS sampler. ?shalfres=0 falls back to the full-res per-pixel path for A/B.
+  const halfResShadow = params.get('shalfres') !== '0';
+  const shadowHalf: ShadowHalf | null =
+    shadow && halfResShadow ? buildShadowHalf(vis, cam, shadow) : null;
+
   const resolve = buildNaniteResolve(registry.gpu, hf.heightTex, cam, cull, vis, {
     hf,
     gi: world.gi,
@@ -146,6 +155,7 @@ export function buildNaniteFrame(
     barkTexA: world.barkTexA,
     barkTexB: world.barkTexB,
     naniteShadow: shadow,
+    shadowHalf,
   });
   engine.scene.add(resolve.mesh);
 
@@ -307,6 +317,10 @@ export function buildNaniteFrame(
     // setup + per-frame cascade FIT; shadow.run then reads the fitted
     // csm.lights[c].shadow.camera VPs (one frame stale, absorbed by lightMargin).
     if (shadow && !frozen) shadow.run(renderer, world.csm, engine.camera);
+    // S0: half-res shadow eval over the FINAL vis depth (after payload), before the
+    // resolve samples it. Runs every frame the resolve does (incl. frozen — the vis
+    // reprojects), reading cam.invVp set by cam.update above.
+    if (shadowHalf) shadowHalf.run(renderer);
     post.render(); // scene pass (resolve mesh + old-path remainder) + post chain
     if (probeRun && !params.get('nanprobeat')) probeRun(renderer); // default: after scene
     frame++;

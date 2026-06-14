@@ -1438,6 +1438,33 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-14 (au): **N5 shadow S0 (D-N29) — HALF-RES PCSS eval + depth-aware BILATERAL upsample.** (Opus 4.8
+  1M.) First chunk of the shadow perf engine, now that the N8 DAG default unblocks the stack. The fixed
+  per-pixel PCSS sample in shadowFactor (6-tap blocker search + 9-tap penumbra PCF ≈ 15 cascade-texture taps)
+  is the STATIC shadow cost — paid every frame whether moving or not (R1 caches the per-cascade RASTER, not
+  the sample). NEW NaniteShadowHalf.ts: a compute pass evaluates shadowFactor at HALF res into an rg32f
+  StorageTexture (R = factor, G = camDist), reconstructing wp EXACTLY like the resolve (cam.invVp · ndc,
+  bottom-up fy — the verbatim nanProbe expression; NO new uniform) and using a cheap depth-derivative
+  geometric normal oriented toward the camera (shadowFactor uses the normal ONLY for the receiver bias
+  offset). The resolve replaces the per-pixel shadowFactor with a depth-aware BILATERAL upsample (bilinear
+  footprint over the 4 nearest half-texels, each spatial weight × a camera-distance gaussian) — keeps the
+  contact band sharp at depth discontinuities where a naive bilinear would bleed shadow across silhouettes
+  (trunk vs background terrain). shadowFactor/pcss gained an optional `pix` param (the IGN sample-rotation
+  coord): screenCoordinate/fragCoord is UNDEFINED in a compute stage, so the half pass passes its own pixel
+  coord (the fragCoord-in-compute bug — caught at first boot, fixed). Binding-friendly: the resolve no longer
+  calls shadowFactor → drops 4 cascade textures, gains 1 half tex (net −3 sampled textures); storage-BUFFER
+  count unchanged (still under the Metal 10/stage cap). ?shalfres=0 restores the full-res per-pixel path for
+  A/B. MEASURED (probe-shadowcost.ts, bm7 static, median, bypasses shoot.ts's render+compute>0 gate which
+  the CSM keep-alive's garbage NEGATIVE r.shadow.c0 timestamp poisons): the resolve-side SAMPLE roughly
+  HALVES — full-res r.scene 1.18 ms → half-res r.scene+halfpass 0.98 ms (Δ 0.197 = 17% of resolve) @720p;
+  2.36 → 1.90 ms (Δ 0.459 = 19%) @1080p. ~Linear in pixel count (bilateral + 3×-reconstruct half-pass
+  overhead eats the theoretical 4× to ~2×), so the win GROWS at the user's higher res (~1.8 ms @4K-retina)
+  and helps MOVING too (the sample is every-frame). BEAUTY-NEUTRAL: shalfres on/off A/B at bm7
+  indistinguishable (same shadow placement, penumbra softness, contact band). Validated: tsc clean; boots
+  clean (no shader error post-fix); ?nandbg=shadow full-res ground-truth unchanged. Files: NaniteShadowHalf.ts
+  (new), NaniteShadow.ts (pix param), NaniteResolve.ts (upsample wire), NaniteFrame.ts (build + dispatch
+  before post.render), probe-shadowcost.ts (new). NEXT: S1 (shadow-pass WPO-freeze + static/dynamic split) —
+  begins on the MOVING raster cost (the user's 30-fps pain).
 - 2026-06-14 (at): **Clipmap cross-level OVERLAP fix — root-cause of the user's heavy z-fighting + sharp
   ground shelves (USER CHECKPOINT feedback on the 2e default DAG terrain).** (Opus 4.8 1M.) User returned,
   verified 2e (no gray wash, robust), and flagged 3 issues: (3) shadows popping in/out on cluster change —
@@ -2784,9 +2811,12 @@ CHUNK PLAN (to the logical point):
     write) in the resolve, but the resolve already sits at the 10-buffer Metal storage ceiling (see log as;
     that ceiling is exactly what the stride-1 hfVerts add breached). A lod heatmap must ride a cull-side
     write or a separate debug pass, not the resolve.
-  - **NEXT**: the carried D1e USER CHECKPOINT (continuous zoom in Chrome on hero rock/tree + terrain —
-    USER-PRESENT, deferred while away) → then **shadows S4** (the D-N29 caster-LOD-decoupled shadow perf
-    engine — the actual moving-fps win; the DAG foundation it needed is now the default). Optional polish:
+  - **NEXT**: **shadows** — the D-N29 perf engine, built S0→S5 in order (see the plan block below).
+    S0 DONE (log au — half-res PCSS + bilateral upsample, sample ~halved, beauty-neutral). NOW: **S1**
+    (shadow-pass WPO-freeze + static/dynamic split) → S2 (tighter cull + stagger) → S3 (screen-density
+    clipmap res) → **S4** (DAG-decoupled caster LOD — the headline moving-fps win, now DAG-unblocked) → S5
+    (capsule-SDF + contact, beauty ceiling). Also pending: the carried D1e USER CHECKPOINT (continuous zoom
+    in Chrome on hero rock/tree + terrain — USER-PRESENT). Optional polish:
     2b-4 always-resident coarse base (teleport no-hole; DOWNGRADED). The paramless-`?nanite=1` default-on
     (retire the `?nanite=0` opt-out) is a SEPARATE later endgame flip — leave for a user-present session
     (it changes the bare-URL boot for every debug scene). OLD locked 2d spec (kept for the record).
@@ -2972,11 +3002,15 @@ N8 DAG. Order:
        raster): eval shadowFactor at HALF-RES into a buffer + depth/normal-aware bilateral
        upsample in the resolve. Beauty-neutral on soft penumbra (contact band stays sharp
        via the bilateral). Helps static AND moving (sample is paid every frame). DAG-
-       independent, self-contained (resolve-side only). ← NOW.
+       independent, self-contained (resolve-side only). ✅ DONE (log au): NaniteShadowHalf.ts
+       — rg32f half-res (factor,camDist) + 4-tap camera-distance bilateral; SAMPLE roughly
+       HALVED (Δ0.197 ms/17% @720p, Δ0.459/19% @1080p — ~linear in px, ~1.8 ms @4K), BEAUTY-
+       NEUTRAL (shalfres on/off A/B identical), ?shalfres=0 restores full-res. (Overhead — the
+       bilateral + 3×-reconstruct half-pass — caps it at ~2×, not the theoretical 4×.)
   S1 — Shadow-pass WPO-FREEZE + STATIC/DYNAMIC split: freeze trunk-wind in the shadow
        raster beyond a near distance (~80–150 m) → rigid → the R1 cadence caches it; cache
        rigid cascade depth, each frame atomicMin only the near-windy clusters on top
-       (fixes the stale-wind-on-static-cache gap the R0 header flagged). DAG-independent.
+       (fixes the stale-wind-on-static-cache gap the R0 header flagged). DAG-independent. ← NOW.
   S2 — TIGHTER shadow cull (shadow-visible / needed-texel mask) + harder TEMPORAL STAGGER
        of far cascades + cast far cascades from a coarser DISCRETE LOD (interim, pre-DAG).
        Cuts the moving re-raster cluster count + frequency. DAG-independent.
@@ -2995,8 +3029,11 @@ CONSTRAINTS (binding): WebGPU — NO 64-bit atomics, NO HW RT, ≤10 storage buf
 ~1.5 GB UMA. Zero external assets. Deterministic seed. WIND shadows stay correct. Quality
 floor: no black shadows, soft penumbra, no pop within 300 m.
 
-The R2/R3/R4 chunks below are SUPERSEDED by S0–S5. NOW BUILDING: S0 (half-res shadow
-eval + bilateral upsample) — measure the bm7 static shadow-sample cost first, build, re-measure.
+The R2/R3/R4 chunks below are SUPERSEDED by S0–S5. S0 DONE (log au — sample ~halved,
+beauty-neutral). NOW BUILDING: S1 (shadow-pass WPO-freeze + static/dynamic split) — the first
+chunk that attacks the MOVING shadow-raster cost (the user's 30-fps pain): freeze trunk-wind in
+the shadow raster past ~80–150 m so those clusters go rigid → the R1 per-cascade cadence caches
+them, and each frame atomicMin only the near-windy clusters on top of the cached rigid depth.
 
 ---
 

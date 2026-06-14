@@ -55,6 +55,7 @@ import {
 import type { NF, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
 import type { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js';
 import type { NaniteShadow } from './NaniteShadow';
+import type { ShadowHalf } from './NaniteShadowHalf';
 import { causticContext, causticDepth, causticTint } from '../render/Caustics';
 import { buildTerrainShading } from '../render/TerrainMaterial';
 import { sunU } from '../render/VegMaterials';
@@ -96,6 +97,10 @@ export interface ResolveWorld {
    *  textures) INSTEAD of three's CSM node — three's shadow map stays empty in the
    *  black slate. null = fall back to the old csm receive (?oldgeo). */
   naniteShadow: NaniteShadow | null;
+  /** S0 (D-N29): when present, the sun-shadow factor is taken from a HALF-RES PCSS
+   *  eval + depth-aware bilateral upsample (NaniteShadowHalf) instead of the per-
+   *  pixel shadowFactor — ~4× fewer PCSS taps. null = full-res (?shalfres=0). */
+  shadowHalf: ShadowHalf | null;
 }
 
 /** TextureNode sample-config chain (depth = array slice, grad = explicit deriv) */
@@ -516,11 +521,15 @@ export function buildNaniteResolve(
       const keep = world.csm
         ? ((nodeObject(world.csm) as unknown as NV4).x.clamp(0, 1) as unknown as NF)
         : (float(1) as unknown as NF);
-      const my = (
-        world.naniteShadow.shadowFactor(wp as unknown as NV3, wNormal as unknown as NV3) as unknown as {
-          clamp(a: number, b: number): NF;
-        }
-      ).clamp(0, 1);
+      // S0: half-res PCSS + bilateral upsample when wired (default), else the
+      // full-res per-pixel sample (?shalfres=0). camDist drives the bilateral.
+      const camDist = (wp as unknown as { sub(o: NV3): { length(): NF } })
+        .sub(camPos)
+        .length();
+      const myRaw = world.shadowHalf
+        ? world.shadowHalf.upsample(wp as unknown as NV3, camDist)
+        : world.naniteShadow.shadowFactor(wp as unknown as NV3, wNormal as unknown as NV3);
+      const my = (myRaw as unknown as { clamp(a: number, b: number): NF }).clamp(0, 1);
       const sf = (my as unknown as { mul(o: NF): { toVar(): NF } }).mul(keep).toVar();
       direct = nDotL.mul(sf) as unknown as NF;
     } else if (shadowsOn && world.csm) {

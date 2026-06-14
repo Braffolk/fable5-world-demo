@@ -127,7 +127,10 @@ export interface NaniteShadow {
   run(renderer: Renderer, csm: object | null, mainCamera: PerspectiveCamera): void;
   /** TSL shadow factor in [0,1] for the resolve: nearest-covering-cascade select
    *  + PCSS over our own per-cascade depth textures. worldPos+normal world-space. */
-  shadowFactor(worldPos: NV3, normal: NV3): NF;
+  /** pix: the pixel coord for the IGN sample-rotation noise. Defaults to
+   *  screenCoordinate (fragment use); a COMPUTE caller (S0 half-res) MUST pass its
+   *  own coord — screenCoordinate/fragCoord is undefined in a compute stage. */
+  shadowFactor(worldPos: NV3, normal: NV3, pix?: NV2): NF;
   /** ?nandbg=shadowc debug: which cascade covers a world pos (color tint) */
   cascadeTint(worldPos: NV3): NV3;
   /** ?nandbg=shadowd debug: the stored cascade depth at a world pos (1=empty) */
@@ -258,14 +261,14 @@ export function buildNaniteShadow(
 
   /** PCSS over cascade c at uv with receiver depth (mirrors ShadowSetup.pcssFilter
    *  but reads our r32 texture and does a manual depth compare). Returns lit∈[0,1]. */
-  const pcss = (c: number, uv: NV2, receiver: NF): NF =>
+  const pcss = (c: number, uv: NV2, receiver: NF, pix: NV2): NF =>
     Fn(() => {
       const param = cascParam.element(int(c));
       const span = (param as unknown as { x: NF }).x.max(1);
       const depthRange = (param as unknown as { y: NF }).y.max(1);
       const texel = (param as unknown as { z: NF }).z;
       const radius = (param as unknown as { w: NF }).w.max(1);
-      const phi = interleavedGradientNoise(screenCoordinate.xy).mul(TAU);
+      const phi = interleavedGradientNoise(pix).mul(TAU);
       // world-metric depth bias → [0,1] depth via this cascade's depthRange
       const dBias = float(DEPTH_BIAS_M).div(depthRange);
 
@@ -325,8 +328,10 @@ export function buildNaniteShadow(
     return { uv, z, inside };
   };
 
-  const shadowFactor = (worldPos: NV3, normal: NV3): NF =>
+  const shadowFactor = (worldPos: NV3, normal: NV3, pix?: NV2): NF =>
     Fn(() => {
+      // IGN rotation source: caller-supplied pixel coord (compute) or fragCoord.
+      const pc = (pix ?? (screenCoordinate.xy as unknown as NV2)) as NV2;
       const wp = (worldPos as unknown as { add(o: unknown): NV3 }).add(
         (normal as unknown as { mul(o: number): NV3 }).mul(NORMAL_BIAS_M),
       ).toVar();
@@ -337,7 +342,7 @@ export function buildNaniteShadow(
           const { uv, z, inside } = cascadeCoord(c, wp as unknown as NV3);
           If(inside, () => {
             found.assign(1);
-            sf.assign(pcss(c, uv, z));
+            sf.assign(pcss(c, uv, z, pc));
           });
         });
       }
