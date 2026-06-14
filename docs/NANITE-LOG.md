@@ -9,6 +9,32 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-15 (bc): **PERF-3 win #2 — the VERTEX-TRANSFORM CACHE: BUILT, MEASURED, found a MARGINAL /
+  CONDITIONAL non-win — kept off-by-default, isolated to its own module; PERF-3 CLOSES (win #1 was the
+  raster win). User then steered PERF to the POST CHAIN.** (Opus 4.8 1M.) Built the full cache: stage 2a
+  (`fetchWorldVert` → `fetchWorldVertByIndex` split, behavior-preserving, A/B bit-identical), stage 2b (the
+  kernel cooperative transform, gated `?vcompact`), stage 2c (a GRID-keyed extension for window-grid terrain).
+  All bit-identical (vista off-vs-on 0.11% / Δ0.00 at the atomicMin payload-tie control floor; visClusters +
+  hwTris identical). **THE MEASUREMENT (4 cool alternated trials each):** by-index cache NEUTRAL on the wide
+  vista (depth 2.88 = 2.88 — explicit is only 10.1% of clusters and the dominant ≥83% is window-grid terrain
+  with NO index buffer), window-grid extension −1 quantum WORSE (2.88 → 2.95), and only a MARGINAL payload −1
+  quantum on the wind-trunk forest (its best case). **ROOT CAUSE (durable lesson — D-N40 addendum):** cache
+  win = R×C − (barrier + shared-mem overhead). R (corners/unique) is structurally ~4.7, vs makeCtx's R=128
+  (win #1) — 27× less. So it needs a HIGH per-vertex cost C to clear the fixed barrier; far terrain's C is the
+  cheapest in the engine (one `texLoadR`, absorbed by the GPU texture cache) ⇒ loses. The redundancy is
+  INTRA-cluster (~82 verts ≈ 2 KB fit L1 regardless of scene size) ⇒ **SCALE-INVARIANT in object count** — the
+  planned 5× more instances of SHARED meshes (228 meshes / 955k instances) does NOT change the per-cluster
+  verdict. It would pay only for HIGH-C geometry (skeletal / heavy WPO / near displaced terrain = 6 tex samples)
+  AND only with **COST-AWARE GATING** (cull bins clusters by per-vert cost; barrier only the expensive ones —
+  else the barrier taxes the cheap-terrain majority and nets negative). Reverted 2c (strictly negative); kept
+  1/2a/2b off-by-default but **extracted to `NaniteVertexCache.ts`** (`makeVertexCache(gpu, fetch).prime(...)`)
+  so the core raster kernel reads clean — the foundation for the gated version + a richer 5× world. Infra added
+  this arc: `?vrange` redundancy diag, the `[vcompact]` build-coverage log (10.1% cached), and the deterministic
+  A/B harness (`?occl=0 ?nanwind=0` to kill the atomic-tie + wind nondeterminism — the only way to a bit-exact
+  screenshot diff). Commits f24286e / 4700510 / 6a1c493. **→ PERF-4: the POST CHAIN (user pick) — bloom/TRAA/
+  aerial ~60 ms heats the GPU ~2.1×, inflating nanite raster itself (2.82 ms cool → 5.96 ms hot); cutting post
+  speeds EVERYTHING via reduced throttling.**
+
 - 2026-06-15 (bb): **PERF-3 win #2 — the VERTEX-TRANSFORM CACHE: DECIDED (build-time COMPACTION — the only
   general + WebGPU-safe keying; see D-N40) + stage 1 BUILT (vcompact buffer + range population, render
   bit-identical, committed); stage 2 (the kernel cooperative transform = the win) is the delicate

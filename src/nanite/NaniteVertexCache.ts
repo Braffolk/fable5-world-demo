@@ -1,5 +1,5 @@
 /**
- * PERF-3 win #2 (D-N40 / LOG bb–bd) — the per-cluster cooperative VERTEX-TRANSFORM
+ * PERF-3 win #2 (D-N40 / LOG bb–bc) — the per-cluster cooperative VERTEX-TRANSFORM
  * cache, ISOLATED here so the core SW raster kernel (NaniteRaster) stays clean. One
  * workgroup == one cluster (128 threads); a 128-tri cluster references only ~82 UNIQUE
  * verts but fetchWorldVert runs per CORNER = 3×triCount ≈ 384× (~4.7× redundant). When
@@ -9,7 +9,7 @@
  * ONCE into workgroup shared memory via fetchWorldVertByIndex, then each triangle reads
  * its corners from there.
  *
- * MEASURED (LOG bd) — a MARGINAL / CONDITIONAL optimization, DEFAULT OFF (?vcompact=1).
+ * MEASURED (LOG bc) — a MARGINAL / CONDITIONAL optimization, DEFAULT OFF (?vcompact=1).
  * The win = R×C − (barrier + shared-mem overhead), and R is structurally only ~4.7
  * (vs makeCtx's 128 — win #1), so it needs a HIGH per-vertex cost C to clear the fixed
  * barrier: NEUTRAL on the terrain-heavy vista (far-terrain transform is a single

@@ -1340,6 +1340,53 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
     (later stage). The cooperative transform reuses the same `workgroupArray`/`workgroupBarrier` mechanism as
     win #1's makeCtx cache. The shared `fetchWorldVert` is split (behavior-preserving) into
     `fetchWorldVertByIndex(ctx, vi)` so the cooperative phase can transform a vert by index.
+  - **MEASURED OUTCOME (2026-06-15, LOG bc) — the cache is a MARGINAL / CONDITIONAL non-win; default OFF,
+    isolated to `NaniteVertexCache.ts`.** Built fully (stages 2a/2b + a 2c grid-keyed window-grid extension), all
+    bit-identical, then measured (4 cool alternated trials each): NEUTRAL on the wide vista (depth 2.88=2.88 —
+    explicit is only 10.1% of clusters; the dominant ≥83% is window-grid terrain, no index buffer), −1 quantum
+    WORSE with the window-grid extension, MARGINAL payload −1 quantum on the wind-trunk forest (best case). **The
+    durable lesson:** a cooperative shared-memory cache wins iff `R×C > barrier+shared-mem overhead`, where R =
+    redundancy and C = per-item cost. makeCtx (win #1) won because R=128 (every thread recomputes the same ctx)
+    AND C was high (4 gust *texture* samples). The vertex cache has R≈4.7 (corners/unique) — structurally 27×
+    less — so it needs HIGH C, but far-terrain transform is the cheapest in the engine (one `texLoadR`, absorbed
+    by the GPU texture cache). The redundancy is INTRA-cluster (~82 verts ≈ 2 KB fit L1) ⇒ **scale-invariant in
+    object count**: 5× more instances of SHARED meshes (228 meshes / 955k instances) does NOT change the
+    per-cluster verdict. It would pay only for HIGH-C geometry (skeletal / heavy WPO / near displaced terrain =
+    6 tex samples) AND with **cost-aware gating** (cull bins clusters by per-vert cost; barrier only the
+    expensive ones — else the unconditional barrier taxes the cheap-terrain majority and nets negative). Kept
+    off-by-default as the foundation for that future.
+
+## PERF METHODOLOGY — the bar for a real win (2026-06-15, user directive)
+
+> Significant perf gains require this rigor; anything less is guessing and ships fake wins. This is the standard
+> PERF-3 mostly met (win #1 real, the vertex cache correctly *rejected* on measurement). **Read before any PERF work.**
+
+- **Measure per-pass, COOL, never full-frame fps.** Use the `GpuProfiler` per-pass timestamps (`?pure` to strip
+  beauty + isolate). The post chain THERMALLY THROTTLES the GPU ~2.1× (nanite raster reads 2.82 ms cool vs 5.96 ms
+  hot) and full-frame fps is too noisy headless — only cool per-pass numbers are trustworthy.
+- **Know the quantum.** GPU timestamps quantize to **0.0655 ms** (65536 ns). A "win" must clear it CONSISTENTLY
+  across **alternated** cool trials (off/on/off/on — never all-off-then-all-on, which the thermal ramp biases).
+  Sub-quantum or single-trial deltas are noise, not wins.
+- **Kill nondeterminism before any A/B diff.** The renderer's own atomicMin payload-tie race (~0.1% of pixels) and
+  the time-driven wind make naive screenshot diffs read ~55% changed from noise alone. The deterministic harness is
+  `?occl=0 ?nanwind=0` (kills the occlusion-cull two-phase warmup + the wind clock) — only then is a bit-exact diff
+  meaningful (control floor ~0.1% / mean Δ0.0).
+- **Validate bit-identical for any "behavior-preserving" change.** A refactor or cache must reproduce the same
+  pixels (within the control floor) AND the same `visClusters` / `hwTris` (no silent SW↔HW reroute).
+- **Root-cause the win, don't pattern-match.** Decompose WHY a lever should pay (e.g. the `R×C` model above) and
+  predict the magnitude before building. A technique that worked elsewhere (makeCtx caching) can be a *net loss*
+  in a regime with different R/C — measure the regime, not the technique.
+- **Measure NET, not gross, and on the TARGET view.** The win must hold on the user's representative WIDE shots
+  (deep+near geometry), not a fast close-up or a best-case. Net = after all overhead (barriers, extra bindings).
+- **Don't ship marginal/guessed wins.** If it doesn't clear the bar, reject it (and document WHY, so it isn't
+  re-attempted) — or keep it off-by-default + isolated, as the vertex cache was.
+
+**PERF-4 (the POST CHAIN) raises this bar.** Post (bloom/TRAA/aerial/half.mrt ~60 ms) is ~10× the nanite raster
+budget, so there is far MORE headroom and absolute gains should be LARGER — which means the bar for "a good
+optimization" is correspondingly HIGHER: target multi-ms wins, not the sub-quantum margins fought over in the
+raster kernel. Bonus coupling: cutting post cost also lifts the 2.1× thermal throttle, so post wins COMPOUND into
+nanite and everything else. Post also has visual headroom (effects can be reworked, not just sped up) — but every
+change must hold the beauty bar (A/B the look, not just the clock).
 
 ## GOTCHAS (append-only, nanite-specific)
 

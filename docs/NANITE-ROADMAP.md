@@ -11,10 +11,16 @@
 > must finish first. `spec` = the `## header` in NANITE-SPEC.md (+ D-N* / file refs).
 
 ## YOU ARE HERE — 2026-06-15
-**FRONTIER: PERF-3 win #2 (the VERTEX CACHE) — stage 1 committed; STAGE 2 (the kernel cooperative
-transform = the win) is the NEXT build (see the `PERF-3` row in §A, LOG `bb`, D-N40). Win #1 (makeCtx
-shared-mem cache) is LIVE (default ON, −0.59 ms). The rest of this block is the chronological arc that got
-here — read it for orientation.**
+**FRONTIER: PERF-4 = the POST CHAIN (user pick, after compaction). PERF-3 (depth rasterizer) is CLOSED:
+win #1 (makeCtx shared-mem cache) is LIVE (default ON, −0.59 ms / −11%); win #2 (the vertex cache) was BUILT,
+MEASURED, and found a MARGINAL / CONDITIONAL non-win (R≈4.7 vs makeCtx's R=128; far-terrain transform too cheap
+— texture-cache-absorbed), so it's kept OFF-by-default, isolated to `NaniteVertexCache.ts` (see LOG `bc`, D-N40
+MEASURED OUTCOME). The in-kernel raster wins are exhausted (fetchWorldVert irreducible by caching; 2-pass forced
+by no 64-bit atomics).**
+**→ BEFORE PERF-4: read the new `## PERF METHODOLOGY — the bar for a real win` in SPEC. Post (~60 ms, ~10× the
+raster budget) has MORE headroom and the gains should be LARGER, so the bar is HIGHER — target multi-ms wins, not
+the sub-quantum margins of the raster kernel; and post cuts COMPOUND via the 2.1× thermal throttle. Profile the
+post chain first (`r.UnrealBloomPass.*`, `r.TRAANode.resolve`, `r.half.mrt`, `r.rt#16` aerial) before touching it.**
 
 **PERF-1 (LOG `ay`): per-pass measurement is now TRUSTWORTHY, the PURE nanite
 renderer is ISOLATED (`?pure`), and the user's WORST view is decomposed with cool numbers.**
@@ -70,7 +76,8 @@ N0 scaffold ✅ · N1 clusterize ✅ · N2 cull ✅ · N3 vis-buffer ✅ · N4 m
 |----|------|--------|-----------|------|------|
 | `PERF-1` | Trustworthy per-pass measurement + `?pure` | ✅ | — | LOG `ay`; GpuProfiler/main.ts | DONE 1f2fdbc — hardened GpuProfiler vs garbage −timestamps (harness was lying: render=−97ms→0 samples); `?pure` master (postmin+nanshadow=0+nandbg=flat, keeps geometry, fixes "?pure=zero terrain"); probe-worstpos.ts. KEY: post chain THERMALLY THROTTLES nanite ~2.1×. |
 | `PERF-2` | Profile pure-nanite floor + worst-view decomp | ✅ | `PERF-1` | LOG `ay`,`az`; PERF LEDGER | DONE (folded) — worst view 82k visCl: SW raster depth 2.82 + payload 2.95 = 5.77ms, HW 2.62, flat resolve 2.10 (cool). SW depth+payload = the #1 nanite cost. |
-| `PERF-3` | Depth-rasterizer optimization (shared-mem caches) | 🔵 | `PERF-2` | LOG `az`,`ba`; NaniteRaster | WIN #1 LANDED (`?wgcache` default ON): per-cluster makeCtx cache in workgroup shared mem → **−0.59 ms (−11%)** camera SW raster, bit-identical + alternated, + the 6 shadow rasters. NEXT: the 3× fetchWorldVert (39%) vertex cache — FORK: build-time vert compaction (~1.5–2.5× mem) vs runtime [vMin,vMax] range-cache. |
+| `PERF-3` | Depth-rasterizer optimization (shared-mem caches) | ✅ | `PERF-2` | LOG `az`,`ba`,`bc`; D-N40; NaniteRaster/VertexCache | CLOSED. WIN #1 LANDED (`?wgcache` default ON): per-cluster makeCtx cache → **−0.59 ms (−11%)** camera SW raster (bit-identical, alternated) + the 6 shadow rasters. WIN #2 (vertex cache) BUILT + MEASURED = marginal/conditional non-win (R≈4.7 vs makeCtx R=128; far-terrain transform texture-cache-absorbed) → kept OFF-by-default, isolated to `NaniteVertexCache.ts`. In-kernel raster wins exhausted. |
+| `PERF-4` | Post-chain optimization (the 2.1× thermal throttle) | 🔵 | `PERF-3` | SPEC `## PERF METHODOLOGY`; PostStack | **FRONTIER (user pick).** Post (bloom/TRAA/aerial/half.mrt ~60 ms) heats the GPU ~2.1×, inflating nanite raster itself (2.82→5.96 ms). ~10× the raster budget ⇒ more headroom, LARGER expected gains, HIGHER bar (multi-ms, not sub-quantum); cuts COMPOUND via the throttle. STEP 1 = profile `r.UnrealBloomPass.*` / `r.TRAANode.resolve` / `r.half.mrt` / `r.rt#16` cool. Hold the beauty bar (A/B the look). |
 | `AUDIT-1` | Deviation audit vs original Fable 5 spec | ⬜ | — | PROVENANCE; `reference/fable5-original-NANITE.md` | diff current state/impl vs the 937-line original; flag unjustified drops from my D-N* edits (shadows = D-N29, justified) |
 
 ## B. DAG (N8) — active workstream (SPEC `### DAG (N8)`)
