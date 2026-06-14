@@ -17,7 +17,8 @@ async function main(): Promise<void> {
   if (process.env.OCCL) extra.occl = process.env.OCCL;
   if (process.env.ABLATE) extra.ablate = process.env.ABLATE;
   if (process.env.NANSKIRT) extra.nanitedskirt = process.env.NANSKIRT;
-  const url = laasUrl({ scene: 'world', width: 640, height: 400, freeze: true, extra });
+  const seed = process.env.SEED ? Number(process.env.SEED) : undefined;
+  const url = laasUrl({ scene: 'world', width: 640, height: 400, freeze: true, ...(seed !== undefined ? { seed } : {}), extra });
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__laas && (window.__laas.ready || window.__laas.error != null), undefined, {
     timeout: 180000,
