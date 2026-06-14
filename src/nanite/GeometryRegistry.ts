@@ -76,6 +76,10 @@ export const DAG_VERT_STRIDE = 12;
 export const DAG_ROOT_PARENT_ERR = 1e30;
 export const MAX_CLUSTER_TRIS = 128;
 export const LOD_NONE = 0xffffffff;
+/** N8-D2 Stage 2a: an evicted streaming-tile slot parks its mesh sphere here so
+ *  kInstCull's frustum test always rejects it (belt + suspenders alongside the
+ *  authoritative clusterCount=0, which makes lodSelectAndPush enqueue 0 chunks). */
+export const TILE_EVICTED_FAR = 1e9;
 
 export const MATERIAL_CLASS = {
   terrain: 0,
@@ -728,6 +732,20 @@ export class GeometryRegistry {
   private clusterizeMs = 0;
   private built = false;
 
+  // N8-D2 Stage 2a: streaming terrain tile POOL (D-N39). A fixed set of S slots,
+  // each a constant-capacity byte block at poolBase+slot*cap, with a stable
+  // heightfield mesh handle + identity instance. Streaming (re)loads a region
+  // into a free slot (attachHeightDagTile — overwrites in place) and releases it
+  // (evictHeightDagTile — zeroes the mesh draw, no tombstoning needed since the
+  // cull is instance-driven). Bounded memory + cull regardless of field size;
+  // O(1) alloc/free, no fragmentation (the Nanite "page" model).
+  private tilePool: { slots: number; vertCap: number; triCap: number; clusterCap: number } | null = null;
+  private tilePoolBase = { vert: 0, tri: 0, cluster: 0 };
+  private tilePoolHandles: number[] = [];
+  private tileFreeSlots: number[] = [];
+  /** handle resident in each slot, or -1 if free (parallel to the free-stack) */
+  private tileSlotOccupant: Int32Array | null = null;
+
   // backing arrays === attribute arrays (created at build; capacity-sized)
   private vertsArr!: Uint32Array;
   private idxArr!: Uint32Array;
@@ -934,6 +952,21 @@ export class GeometryRegistry {
       instanceMesh: instMesh.ro,
       dag: dag.ro,
     };
+
+    // N8-D2 Stage 2a: claim the tile pool as ONE fixed region just past the
+    // pre-build entries (its bytes were reserved via addLate in reserveTilePool).
+    // Cursors advance past it ONCE; per-slot writes address poolBase+slot*cap and
+    // never bump — so later post-build attaches (explicit DAGs) land after the
+    // pool, and slots are reused in place across the session.
+    if (this.tilePool) {
+      this.tilePoolBase = { vert: this.vertCursor, tri: this.triCursor, cluster: this.clusterCursor };
+      this.vertCursor += this.tilePool.slots * this.tilePool.vertCap;
+      this.triCursor += this.tilePool.slots * this.tilePool.triCap;
+      this.clusterCursor += this.tilePool.slots * this.tilePool.clusterCap;
+      this.tileFreeSlots = [];
+      for (let s = this.tilePool.slots - 1; s >= 0; s--) this.tileFreeSlots.push(s);
+      this.tileSlotOccupant = new Int32Array(this.tilePool.slots).fill(-1);
+    }
 
     for (const e of this.entries) this.copyEntry(e);
     for (const s of this.cpuStreams) this.copyCpuStream(s);
@@ -1243,6 +1276,208 @@ export class GeometryRegistry {
     this.pushRange(this.clusterAttr, cBase * CLUSTER_WORDS, cCount * CLUSTER_WORDS);
     this.pushRange(this.dagAttr, cBase * DAG_WORDS, cCount * DAG_WORDS);
     this.pushRange(this.meshAttr, entry.handle * MESH_WORDS, MESH_WORDS);
+  }
+
+  // -- N8-D2 Stage 2a: streaming terrain tile pool (D-N39) ------------------------
+
+  /**
+   * Reserve a fixed pool of `slots` streaming terrain-tile slots — the memory
+   * bound for full-res terrain. PRE-BUILD only. Creates one heightfield mesh
+   * handle per slot (sharing the GLOBAL hf origin/cell — tiles store global texel
+   * coords) + binds an identity instance to each, and reserves slots×cap of
+   * vert/tri/cluster space (claimed as one fixed region at build()). A slot is
+   * (re)loaded with attachHeightDagTile and released with evictHeightDagTile —
+   * O(1), no fragmentation. Returns the slot→handle table (index i = slot i).
+   */
+  reserveTilePool(
+    matClass: MaterialClassId,
+    hf: { originX: number; originZ: number; cellSize: number },
+    cap: { slots: number; vertCap: number; triCap: number; clusterCap: number },
+    opts: RegisterOpts = {},
+  ): MeshHandle[] {
+    if (this.built) throw new Error('GeometryRegistry: reserveTilePool after build()');
+    if (this.tilePool) throw new Error('GeometryRegistry: tile pool already reserved');
+    const { slots, vertCap, triCap, clusterCap } = cap;
+    if (slots <= 0 || vertCap <= 0 || triCap <= 0 || clusterCap <= 0) {
+      throw new Error('GeometryRegistry: reserveTilePool caps must be positive');
+    }
+    this.tilePool = { slots, vertCap, triCap, clusterCap };
+    this.addLate({ verts: slots * vertCap, tris: slots * triCap, clusters: slots * clusterCap });
+    const handles: MeshHandle[] = [];
+    for (let s = 0; s < slots; s++) {
+      const h = this.registerHeightDag(matClass, hf, {
+        ...opts,
+        label: opts.label ? `${opts.label}/slot${s}` : `tilepool/slot${s}`,
+      });
+      this.bindInstances(h, { a: new Float32Array([0, 0, 0, 1]), b: new Float32Array([0, 0, 0, 0]) });
+      handles.push(h);
+    }
+    this.tilePoolHandles = handles;
+    return handles;
+  }
+
+  get tilePoolSlotCount(): number {
+    return this.tilePool?.slots ?? 0;
+  }
+  get tileFreeSlotCount(): number {
+    return this.tileFreeSlots.length;
+  }
+  tileSlotHandle(slot: number): MeshHandle {
+    const h = this.tilePoolHandles[slot];
+    if (h == null) throw new Error(`GeometryRegistry: tile slot ${slot} has no handle`);
+    return h;
+  }
+  /** slot's fixed geometry base offsets (constant for the pool's lifetime;
+   *  cluster base also = the mesh record's clusterStart after a load). Probe/debug. */
+  tileSlotBase(slot: number): { vert: number; tri: number; cluster: number } {
+    const pool = this.tilePool;
+    if (!pool) throw new Error('GeometryRegistry: no tile pool reserved');
+    if (slot < 0 || slot >= pool.slots) throw new Error(`GeometryRegistry: tile slot ${slot} out of range`);
+    return {
+      vert: this.tilePoolBase.vert + slot * pool.vertCap,
+      tri: this.tilePoolBase.tri + slot * pool.triCap,
+      cluster: this.tilePoolBase.cluster + slot * pool.clusterCap,
+    };
+  }
+
+  /** pop a free tile slot, or -1 if the pool is full (caller evicts first). */
+  allocTileSlot(): number {
+    if (!this.tilePool) throw new Error('GeometryRegistry: no tile pool reserved');
+    const slot = this.tileFreeSlots.pop();
+    return slot ?? -1;
+  }
+
+  /**
+   * (Re)load a terrain tile (buildHeightDag output, global-texel gridVerts) into
+   * a slot's FIXED byte range — overwrites the previous occupant in place; no
+   * cursor growth. Mirrors attachHeightDag's pack but addresses poolBase+slot*cap
+   * and is REUSABLE (no already-has-DAG guard). The slot's mesh record is
+   * repointed at the new cluster range + sphere; partial uploads make the next
+   * frame's kernels see it.
+   */
+  attachHeightDagTile(
+    slot: number,
+    build: { gridVerts: Uint32Array; indices: Uint32Array; clusters: DagCluster[] },
+  ): void {
+    if (!this.built) throw new Error('GeometryRegistry: attachHeightDagTile before build()');
+    const pool = this.tilePool;
+    if (!pool) throw new Error('GeometryRegistry: no tile pool reserved');
+    if (slot < 0 || slot >= pool.slots) throw new Error(`GeometryRegistry: tile slot ${slot} out of range`);
+    const handle = this.tilePoolHandles[slot] as number;
+    const entry = this.entries[handle] as MeshEntry;
+    const { gridVerts, indices, clusters } = build;
+    const vCount = gridVerts.length;
+    const tCount = indices.length / 3;
+    const cCount = clusters.length;
+    if (!Number.isInteger(tCount)) throw new Error('GeometryRegistry: tile indices not tri-aligned');
+    if (cCount === 0) throw new Error('GeometryRegistry: tile has no clusters');
+    if (vCount > pool.vertCap || tCount > pool.triCap || cCount > pool.clusterCap) {
+      throw new Error(
+        `GeometryRegistry: tile exceeds slot cap (verts ${vCount}/${pool.vertCap}, tris ${tCount}/` +
+          `${pool.triCap}, clusters ${cCount}/${pool.clusterCap}) — raise reserveTilePool caps`,
+      );
+    }
+    const vBase = this.tilePoolBase.vert + slot * pool.vertCap;
+    const tBase = this.tilePoolBase.tri + slot * pool.triCap;
+    const cBase = this.tilePoolBase.cluster + slot * pool.clusterCap;
+
+    // verts: word0 = packed GLOBAL texel coord; words 1-5 unused (height from tex)
+    const vArr = this.vertsArr;
+    for (let v = 0; v < vCount; v++) {
+      const b = (vBase + v) * VERT_WORDS;
+      vArr[b] = (gridVerts[v] as number) >>> 0;
+      vArr[b + 1] = 0;
+      vArr[b + 2] = 0;
+      vArr[b + 3] = 0;
+      vArr[b + 4] = 0;
+      vArr[b + 5] = 0;
+    }
+    // indices rebased onto the slot's vertex block
+    const iArr = this.idxArr;
+    const ibase = tBase * 3;
+    for (let i = 0; i < indices.length; i++) iArr[ibase + i] = (indices[i] as number) + vBase;
+
+    // cluster records (8-word) + DAG cut records (10-float)
+    const cArr = this.clusterArr;
+    const dArr = this.dagArr;
+    const hfFlags = (CLUSTER_FLAG_HEIGHTFIELD | CLUSTER_FLAG_DAG) & 0xff;
+    const dagSpheres = new Float32Array(cCount * 4);
+    for (let c = 0; c < cCount; c++) {
+      const dc = clusters[c] as DagCluster;
+      const cb = (cBase + c) * CLUSTER_WORDS;
+      cArr[cb] = f32Bits(dc.sx);
+      cArr[cb + 1] = f32Bits(dc.sy);
+      cArr[cb + 2] = f32Bits(dc.sz);
+      cArr[cb + 3] = f32Bits(dc.sr);
+      cArr[cb + 4] = octEncode(dc.cax, dc.cay, dc.caz);
+      cArr[cb + 5] = f32Bits(dc.ccos);
+      cArr[cb + 6] = tBase + dc.triStart;
+      if (dc.triCount > MAX_CLUSTER_TRIS) throw new Error('GeometryRegistry: tile cluster exceeds tri cap');
+      cArr[cb + 7] = ((dc.triCount & 0xff) | (hfFlags << 8) | (handle << 16)) >>> 0;
+
+      const db = (cBase + c) * DAG_WORDS;
+      const root = !Number.isFinite(dc.parentError);
+      dArr[db] = dc.ownError;
+      dArr[db + 1] = dc.oex;
+      dArr[db + 2] = dc.oey;
+      dArr[db + 3] = dc.oez;
+      dArr[db + 4] = dc.oer;
+      dArr[db + 5] = root ? DAG_ROOT_PARENT_ERR : dc.parentError;
+      dArr[db + 6] = root ? dc.oex : dc.pex;
+      dArr[db + 7] = root ? dc.oey : dc.pey;
+      dArr[db + 8] = root ? dc.oez : dc.pez;
+      dArr[db + 9] = root ? dc.oer : dc.per;
+
+      dagSpheres[c * 4] = dc.sx;
+      dagSpheres[c * 4 + 1] = dc.sy;
+      dagSpheres[c * 4 + 2] = dc.sz;
+      dagSpheres[c * 4 + 3] = dc.sr;
+    }
+
+    entry.vertBase = vBase;
+    entry.vertCount = vCount;
+    entry.triBase = tBase;
+    entry.triCount = tCount;
+    entry.clusterBase = cBase;
+    entry.clusterCount = cCount;
+    entry.lodNext = LOD_NONE;
+    entry.lodDist = 0;
+    entry.flags |= MESH_FLAG_HASDAG;
+    entry.sphere = meshSphereFromClusters(dagSpheres, cCount);
+    this.writeMeshRecord(entry);
+
+    this.pushRange(this.vertsAttr, vBase * VERT_WORDS, vCount * VERT_WORDS);
+    this.pushRange(this.idxAttr, tBase * 3, tCount * 3);
+    this.pushRange(this.clusterAttr, cBase * CLUSTER_WORDS, cCount * CLUSTER_WORDS);
+    this.pushRange(this.dagAttr, cBase * DAG_WORDS, cCount * DAG_WORDS);
+    this.pushRange(this.meshAttr, handle * MESH_WORDS, MESH_WORDS);
+
+    if (this.tileSlotOccupant) this.tileSlotOccupant[slot] = handle;
+  }
+
+  /**
+   * Release a tile slot: zero its mesh draw (clusterCount=0 → lodSelectAndPush
+   * enqueues ceil(0/64)=0 chunks → it vanishes from the cull, NO tombstoning) +
+   * park its sphere off-world (frustum-reject in kInstCull) + return the slot to
+   * the free-stack for reuse. Idempotent on an already-free slot. The slot's
+   * stale buffer bytes stay until the next attachHeightDagTile overwrites them.
+   */
+  evictHeightDagTile(slot: number): void {
+    if (!this.built) throw new Error('GeometryRegistry: evictHeightDagTile before build()');
+    const pool = this.tilePool;
+    if (!pool) throw new Error('GeometryRegistry: no tile pool reserved');
+    if (slot < 0 || slot >= pool.slots) throw new Error(`GeometryRegistry: tile slot ${slot} out of range`);
+    const occ = this.tileSlotOccupant;
+    if (occ && occ[slot] === -1) return; // already free
+    const handle = this.tilePoolHandles[slot] as number;
+    const entry = this.entries[handle] as MeshEntry;
+    entry.clusterCount = 0;
+    entry.flags &= ~MESH_FLAG_HASDAG;
+    entry.sphere = [TILE_EVICTED_FAR, TILE_EVICTED_FAR, TILE_EVICTED_FAR, 0];
+    this.writeMeshRecord(entry);
+    this.pushRange(this.meshAttr, handle * MESH_WORDS, MESH_WORDS);
+    if (occ) occ[slot] = -1;
+    this.tileFreeSlots.push(slot);
   }
 
   /** post-build backing arrays + attributes (probe/validation use only) */

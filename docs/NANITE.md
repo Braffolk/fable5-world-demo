@@ -1196,6 +1196,50 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   flip the full-res default. Tiles build SEQUENTIALLY now (16×~700 ms) — parallelise (N workers)
   or rely on the cache for full-res.
 
+- D-N39 (2026-06-14, N8-D2 STAGE 2 architecture — the streaming design, grounded in a re-read of
+  the cull pipeline. SUPERSEDES the D-N38 Stage-2 sketch's framing.) THE KEY FINDING that reshapes
+  it: **the cull is INSTANCE-DRIVEN, not a flat global dispatch.** NaniteCull pipeline = kInstCull
+  (one thread per INSTANCE, instanceCount threads) → frustum+occlusion cull the instance's world
+  sphere → only VISIBLE instances call lodSelectAndPush → enqueue that mesh's [clusterBase,count)
+  range into the chunk queue → kClusterCull (one 64-wide workgroup per queued chunk) runs the flat
+  per-cluster cut. CONSEQUENCES: (1) an off-frustum / occluded tile enqueues ZERO clusters — it
+  costs one inst-cull thread, nothing more. So STAGE-1 TILING ALREADY SOLVED THE CULL WALL FOR A
+  GROUND CAMERA (frustum culls most tiles); the D-N38 "640 k cull invocations" wall was the SINGLE
+  4096² DAG = ONE instance whose whole range enqueues whenever on-screen. (2) What streaming
+  ACTUALLY buys is **(a) MEMORY** — every attached tile's verts/idx/clusters/dag stay resident in
+  the mega-buffers regardless of visibility (~1.1 GB for all of 4096² stride-1) — **and (b) the
+  VISTA cull** — when many fine tiles are simultaneously visible (camera lifted), they collectively
+  re-enqueue the whole 640 k; evicting far detail → a coarse base bounds it. So streaming bounds
+  MEMORY + the vista; it is NOT needed for the ground-camera cull (tiling already did that).
+  EVICTION is therefore SIMPLE: a tile = (mesh entry + identity instance + contiguous slot). To
+  evict, set the tile mesh's bounding sphere OFF-WORLD → kInstCull frustum-culls it → it enqueues
+  nothing; AND free its slot for reuse. NO cluster tombstoning is needed for cull-correctness (no
+  instance ⇒ no enqueue; mesh records + clusterBase/Count are mutable post-build + re-uploadable,
+  exactly as attachDag already repoints them). To avoid unbounded mesh-handle growth over a session
+  of loads/evicts, use a FIXED POOL of S (slot, meshHandle, instance) triples allocated once; each
+  slot is a fixed-capacity byte block (clusterBase constant per slot; only clusterCount+sphere+the
+  slot's buffer CONTENTS change per load) — the Nanite "page" model, O(1), no fragmentation.
+  ARCHITECTURE = two-layer "coarse base + streamed detail" (clipmap-with-backstop): a single
+  always-resident COARSE global terrain DAG (T=1, gridN≈512 = 8 m) covers the whole field → NO
+  HOLES ever incl. vista, small mem, cheap (its own cut sheds it by distance); + the field split
+  T×T into regions (T=16 → 256 m regions, 256² stride-1 = TRUE 1 m), only regions within radius R
+  of the camera RESIDENT (the S-slot pool), a per-frame streamer diffing desired-vs-resident →
+  load near (cache→attachTile / worker build) / evict far. The base is a DAG, not the window
+  fallback — no-fallback rule (D-N37) HOLDS (both layers are DAGs; window only ever under
+  ?nanitedterrain=0). INCREMENTS (each tsc-clean + committed + probe-validated): **2a** registry
+  tile-slot POOL + evict (reserveTilePool / allocTileSlot / attachHeightDagTile reusable write into
+  a fixed slot / evictTileSlot off-world+free) — foundation, NEEDED BY EITHER 2b policy, headless
+  probe (load/evict/reload, no corruption, bounded). **2b** base DAG + TerrainStreamer (per-frame
+  residency from camera XZ; engine.onUpdate hook). **2c** base SUPPRESSION where detail covers it
+  (else z-fight): per-cluster region test in kClusterCull vs a T×T resident-bitmask uniform → skip
+  base clusters in detail-covered regions. **2d** crack-free base↔detail seam: SKIRTS on the
+  detail-window perimeter (base backstops the T-junction; standard clipmap). **2e** (was Stage 3)
+  stride-1 terrain vertex buffer (6×→1× vert mem) + flip the full-res default on. OPEN FORK at 2b
+  (decide then, NOT now — 2a is identical either way): two-layer-with-suppression (above) VS
+  per-tile-LOD-PYRAMID (every region resident at resolution = f(distance); coarsest levels ARE the
+  base, no separate layer, no suppression; cost = per-region resolution swap + neighbor-LOD-clamped
+  edge stitching). Both need 2a's slot pool + skirts; they differ only in the streamer policy.
+
 ## GOTCHAS (append-only, nanite-specific)
 
 - (N5-C1) A SHADOW-CASTER NodeMaterial MUST SET `map = null`. three's shadow
@@ -1347,6 +1391,24 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-14 (aj): **N8-D2 Stage 2a — registry streaming tile POOL + eviction (D-N39).** (Opus
+  4.8 1M.) Re-read the cull pipeline first and found the design-reshaping fact: the cull is
+  INSTANCE-DRIVEN (kInstCull frustum-culls per instance → only visible instances enqueue their
+  cluster range), so off-frustum tiles already cost ~nothing and Stage-1 tiling ALREADY fixed the
+  ground-camera cull wall; streaming's real job is MEMORY + the vista (recorded as D-N39, which
+  supersedes the D-N38 Stage-2 framing). EVICTION is therefore trivial: clusterCount=0 ⇒
+  lodSelectAndPush enqueues ceil(0/64)=0 chunks ⇒ the tile vanishes with NO tombstoning. Built a
+  fixed-capacity tile-slot pool in GeometryRegistry (the Nanite "page" model): reserveTilePool
+  (pre-build — S slots × cap, one heightfield handle + identity instance each, region claimed once
+  at build()), allocTileSlot/tileFreeSlotCount (O(1) free-stack), attachHeightDagTile (reusable
+  in-place write into poolBase+slot*cap — mirrors attachHeightDag's pack, rebases indices, repoints
+  the mesh record), evictHeightDagTile (clusterCount→0 + sphere parked off-world TILE_EVICTED_FAR +
+  free slot; idempotent). Headless probe (probe-tilepool.ts): load/evict/reload across 4 slots —
+  mesh repoint + cluster/DAG/vert/index pack correct, evicted draw zeroed, a freed slot reloads a
+  DIFFERENT region in place, neighbour slots + a pre-build sentinel UNCORRUPTED, over-cap throws,
+  and THE invariant — **cursors stay IDENTICAL (v6924/t12802/c141) across the whole churn**
+  (streaming never grows the buffers). tsc clean; probe-dagpack/registry/heightdag still green.
+  Next: 2b base DAG + TerrainStreamer (per-frame residency); decide the 2b policy fork (D-N39).
 - 2026-06-14 (ai): **N8-D2 — TILED terrain DAG (Stage 1): crack-free seams for free; full-res
   path unblocked (D-N38).** (Opus 4.8 1M.) Measured the single-DAG wall (4096² ≈ 1.1 GB + 640k
   cull clusters → needs tile+stream, not one DAG; gridN=1024/4 m viable now at 8.3 ms). KEY
