@@ -1405,6 +1405,19 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-14 (al): **N8-D2 Stage 2b-2 (math) — terrain CLIPMAP residency, hole-free + bounded +
+  world-size-⊥ (D-N39).** (Opus 4.8 1M.) TerrainClipmap.ts: clipmapTiles(camX,camZ,cfg) = L
+  concentric levels of same-gridN tiles at DOUBLING stride (level k cell = baseStride·2^k texels),
+  each an M×M block centered on the camera, the inner block HOLLOW (covered by the finer level) ⇒
+  resident tiles form rings (finest full block at the center, coarser rings out; coarsest spans the
+  field = backstop). Same gridN every level ⇒ ONE uniform 2a-pool slot cap. Hollow skip is
+  fully-inside-only ⇒ never gaps (skipped area always backed by a finer resident level). Headless
+  probe-clipmap.ts over 7 in-field poses (center, corners, sub-tile snap offsets): COVERAGE
+  hole-free (every field point under ≥1 tile), FINEST-at-camera (level-0 tile over the cam),
+  BOUNDED ≤ clipmapMaxTiles (cfg res4096/gridN128/L5/M4 → ≤64; live 16–52 as the small field clips
+  outer rings), WORLD-SIZE ⊥ (16k≡32k = 64 tiles — the resident set does NOT grow with world size),
+  deterministic, no intra-level dup. tsc clean. NEXT: 2b-2 GPU wiring (build/load the clipmap set
+  into the pool at boot, ?nanitedclip=1) then 2b-3 per-frame streaming.
 - 2026-06-14 (ak): **N8-D2 Stage 2b-1 — terrain tiles routed through the streaming POOL; GPU
   render parity (D-N39).** (Opus 4.8 1M.) Resolved the D-N39 2b fork → GEOMETRY CLIPMAP (same-gridN
   tiles at doubling stride, hollow rings, uniform 2a pool, NO suppression — levels don't overlap,
