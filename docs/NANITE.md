@@ -2663,10 +2663,44 @@ CHUNK PLAN (to the logical point):
     the 1 m detail with the live camera; resident≡desired, bounded, no-leak, re-centers exactly;
     bakes 4-wide so cold boot 7717→2211 ms (3.49×) + detail climbs ~pool× faster (probe-stream +
     probe-streammove green).
-  - **NEXT → 2d skirts (crack-free inter-level seams).** Required BEFORE flipping default ON — a
-    stride mismatch at adjacent clipmap-level boundaries leaves T-junction cracks (sky slivers);
-    skirts (a vertical apron dropped at tile edges) or edge-stitching hide them. Holes + slow-pop
-    are now solved (lazy-evict ao + pool ap), so seams are the last visible-correctness blocker.
+  - **NEXT → 2d skirts (crack-free inter-level seams).** Required BEFORE flipping default ON.
+    Adjacent clipmap levels ABUT at 2× stride (the hollow drops a coarse tile only when FULLY
+    inside the finer extent) ⇒ the fine edge has 2× the coarse edge's verts on the SAME line ⇒
+    T-junction cracks that show SKY (coarse terrain there was hollowed). Holes + slow-pop are
+    solved (ao + ap), so seams are the last visible-correctness blocker. **LOCKED, DE-RISKED design
+    (investigated 06-14, ready to execute):**
+      · buildDag ALREADY pins every tile perimeter at base stride at ALL LODs (border edges are used
+        by 1 tri ⇒ "boundary" ⇒ locked; a border vert is always the collapse TARGET, never removed —
+        BuildDag.ts:557). So the surface edge passes through every base-stride perimeter vert at every
+        cut → no buildDag change needed; the residual crack is purely the inter-level 2× mismatch.
+      · GPU position is derived PURELY from word0's packed (gx,gz) → height fetch (NaniteFetch.ts
+        `fetchWorldVert`, the isHF&&isDAG branch, ~L214-244, the ONE decode site for raster+shadow+hzb).
+        ⇒ a skirt cluster can be FULLY SELF-CONTAINED: its own TOP verts at the perimeter (gx,gz)
+        render exactly on the surface edge; its own BOTTOM verts (same gx,gz, flagged) drop by
+        skirtDepth. No threading a flag through buildDag's QEM.
+      · ENCODING: word0 = (gx&0xffff)|(gz<<16); gx,gz ≤4096 use 13 bits ⇒ bit 15 FREE = SKIRT flag.
+        Decode: `isSkirt=(w>>15)&1; sx=w&0x7fff; sz=(w>>16)&0xffff; h -= f32(isSkirt)*SKIRT_DEPTH`
+        (subtract AFTER micro-disp so the curtain sits below the final surface). buildTerrainTile's
+        global remap must EXTRACT bit15, mask it off before `localGx=p&0x7fff`, then re-OR it onto the
+        global packed coord (texX&0x7fff | flag | texZ<<16).
+      · BUILD (buildHeightDag, opt-in `skirtDepth?:number` in HeightDagOpts; 0/undef = OFF so the
+        headless probe + uniform T×T path stay unchanged): enumerate the base-stride perimeter loop
+        (4·gridN local coords 0..gridN around the ring), emit n TOP + n BOTTOM verts + n curtain quads
+        (2 tris each, OUTWARD winding), split into ceil(2n_tris/128) ALWAYS-ON clusters: level 0,
+        ownError 0, parentError +∞ (→ DAG_ROOT_PARENT_ERR), groupAsInput/Parent −1, sphere = the
+        perimeter-arc+drop bound, cone set to NEVER backface-cull (verify the ccos convention in
+        NaniteCull first — a vertical curtain must not be cone-culled). ownError0+parent∞ ⇒ drawn at
+        every cut, frustum/occlusion-culled normally.
+      · CAPS: bump the streamer pool vert/tri/cluster cap basis by the skirt's add (~4·gridN verts,
+        ~8·gridN tris, ~⌈8·gridN/128⌉ clusters per tile) so attach never overflows.
+      · TOGGLE `?nanitedskirt=0/1` (default ON) for a same-pose A/B; validate with tools/probe-seams.ts
+        (already written — boots ablated* clip mode, grazing vistas, screenshots; *NOTE the nanite
+        engine is built INSIDE `!ablate.has('veg')` so do NOT ablate veg — ablate grass/water/shell/
+        particles/caustics only). Skirt OFF = sky cracks along ring boundaries; ON = sealed.
+      · COHERENT change-set (cannot split — the flag bit corrupts the old decode until NaniteFetch
+        masks it): buildHeightDag (gen) + TerrainStreamer.buildTerrainTile (remap preserves flag) +
+        NaniteFetch (decode mask + drop) + WorldRegistry (cap bump + toggle plumb) + probe. tsc +
+        probe-stream + probe-streammove + probe-seams green, then commit with before/after shots.
   - THEN 2e stride-1 terrain vertex buffer (6×→1× vert mem, ~100 MB→~17 MB) + FLIP the full-res DAG
     terrain default ON (retire `?nanitedterrain=0` window to the explicit opt-out) = the "boot only
     to dag" mandate.
