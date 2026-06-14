@@ -44,18 +44,13 @@ export interface ClipmapTile {
   key: string;
 }
 
-/** snap `v` DOWN to a multiple of `unit` (works for negative v) */
-function snapDown(v: number, unit: number): number {
-  return Math.floor(v / unit) * unit;
-}
-
 /**
  * The resident clipmap tile set for a camera at texel (camX, camZ). Hollow rings:
  * a level-k tile is omitted when it lies FULLY inside the finer level (k−1)'s
- * extent (so levels never gap; at worst a thin partial-overlap ring remains at a
- * boundary when the snapped extents misalign — hidden by skirts in 2d, never a
- * hole). Tiles fully outside the field are dropped. Each level is centered on the
- * camera, snapped to its own tile grid.
+ * extent. Each level snaps to 2× its tile grid, so consecutive levels NEST EXACTLY
+ * (the finer extent lands on coarse tile boundaries) ⇒ every coarse tile is fully
+ * inside the finer extent (dropped) or fully outside (kept), never a partial straddle
+ * — no cross-level overlap, no gap. Tiles fully outside the field are dropped.
  */
 export function clipmapTiles(camX: number, camZ: number, cfg: ClipmapConfig): ClipmapTile[] {
   const { res, gridN, baseStride, levels, tilesPerSide: M } = cfg;
@@ -67,8 +62,18 @@ export function clipmapTiles(camX: number, camZ: number, cfg: ClipmapConfig): Cl
     const stride = baseStride * (1 << k);
     const Tk = gridN * stride; // tile side in texels
     const half = (M / 2) * Tk;
-    const ox = snapDown(camX - half, Tk); // level origin (texels), tile-grid-aligned
-    const oz = snapDown(camZ - half, Tk);
+    // Snap each level's origin to 2× its tile grid (ROUNDED). This makes the next
+    // coarser level's tiles fall EXACTLY on this level's extent boundary, so every
+    // coarse tile is either fully inside the finer extent (dropped by the hollow) or
+    // fully outside (kept) — NEVER a partial straddle. The old per-level snapDown(…,Tk)
+    // misaligned consecutive levels (the finer extent is only M/2 coarse-tiles wide, so
+    // when misaligned it fully contained NO coarse tile ⇒ the finer level OVERLAID 2-3
+    // whole coarse tiles): both LODs rasterized the same ground at different heights ⇒
+    // heavy z-fighting + ~2× wasted terrain draw. (Skirts seal cracks, not overlap.)
+    // Rounding (not floor) keeps the camera within ±Tk of the level centre.
+    const snap = 2 * Tk;
+    const ox = Math.round((camX - half) / snap) * snap;
+    const oz = Math.round((camZ - half) / snap) * snap;
     const ext = { x0: ox, z0: oz, x1: ox + M * Tk, z1: oz + M * Tk };
     for (let tj = 0; tj < M; tj++) {
       for (let ti = 0; ti < M; ti++) {

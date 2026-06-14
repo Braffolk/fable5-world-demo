@@ -58,9 +58,13 @@ async function main(): Promise<void> {
   // same XZ, +150 m, pitch down — the probe-seams-equivalent view
   const base = (await page.evaluate(() => window.__laas.getPose?.() ?? null)) as CamPose | null;
   if (base) {
+    const elev = process.env.ELEV ? Number(process.env.ELEV) : 150;
+    const pitch = process.env.PITCH ? Number(process.env.PITCH) : -0.5;
+    const offx = process.env.OFFX ? Number(process.env.OFFX) : 0;
+    const offz = process.env.OFFZ ? Number(process.env.OFFZ) : 0;
     await page.evaluate(
-      (p) => window.__laas.setPose?.({ yaw: p.yaw, pitch: -0.5, p: [p.x, p.y + 150, p.z] as [number, number, number] }),
-      { yaw: base.yaw, x: base.p[0], y: base.p[1], z: base.p[2] },
+      (p) => window.__laas.setPose?.({ yaw: p.yaw, pitch: p.pitch, p: [p.x + p.offx, p.y + p.elev, p.z + p.offz] as [number, number, number] }),
+      { yaw: base.yaw, pitch, elev, offx, offz, x: base.p[0], y: base.p[1], z: base.p[2] },
     );
     await snap('elevated');
   }

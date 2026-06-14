@@ -1438,6 +1438,26 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-14 (at): **Clipmap cross-level OVERLAP fix — root-cause of the user's heavy z-fighting + sharp
+  ground shelves (USER CHECKPOINT feedback on the 2e default DAG terrain).** (Opus 4.8 1M.) User returned,
+  verified 2e (no gray wash, robust), and flagged 3 issues: (3) shadows popping in/out on cluster change —
+  confirmed CSM via `?nanshadow=0` (gone), DEFERRED to S4. (1) heavy z-fighting "in fan patterns," worst
+  from altitude; (2) sharp flat shelves/cuts in the ground. BOTH = one root cause: the clipmap had
+  near-TOTAL cross-level overlap. `clipmapTiles` snapped each level to ITS OWN tile grid (`snapDown(·,Tk)`),
+  so consecutive levels misaligned; the finer extent is only M/2 = 2 coarse-tiles wide (M=4), so when
+  misaligned it fully contained NO coarse tile ⇒ the hollow dropped nothing ⇒ the finer level OVERLAID 2–3
+  whole coarse tiles. Both LODs rasterized the same ground at different heights ⇒ z-fighting (1) + a coarse
+  flat tile poking up among the fine detail (2's shelves). New gate probe-clipoverlap.ts swept 12321 camera
+  positions: **12272 (99.6%) had cross-level overlap, worst a full 1024² tile.** (The 2d "thin ring hidden
+  by skirts" note was wrong — skirts seal cracks, not overlap, and it was whole tiles not a thin ring.)
+  FIX: snap each level to 2×Tk ROUNDED ⇒ the finer extent lands on coarse tile boundaries ⇒ every coarse
+  tile is fully-inside (dropped) or fully-outside (kept), never a straddle ⇒ **0/12321 overlap.** Bonus:
+  removes the ~2× terrain double-draw at the (vast majority) misaligned positions — the 2e perf-ledger's
+  hwTris ×1.77 was overlap-inflated. TRADEOFF: the finest level now re-centers every 2×Tk (256 m, was
+  128 m) — coarser snap, masked by the continuous LOD; watch for finest-detail re-center jumps when walking
+  (mitigation if needed: larger M or smaller gridN). Validated: tsc; probe-clipoverlap PASS (0 overlap);
+  probe-stream + probe-streammove (coverage/residency unaffected — no holes, no leak, bounded). User to
+  re-verify (1)+(2) live (static probes can't show the z-fight flicker; the node gate is the proof).
 - 2026-06-14 (as): **N8-D2 Stage 2e (part 2/2) — STRIDE-1 terrain vertex buffer (−174 MB) + the
   caustic-wash root-cause it exposed.** (Opus 4.8 1M.) Terrain-DAG verts used only word0 (a packed texel
   coord) of the shared 6-word `verts` record — 5/6 wasted. Moved them to a DEDICATED stride-1 buffer
