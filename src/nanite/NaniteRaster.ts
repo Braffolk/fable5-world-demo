@@ -47,13 +47,15 @@ import {
   vec3,
   vec4,
   vertexIndex,
+  workgroupArray,
+  workgroupBarrier,
 } from 'three/tsl';
-import type { NB, NF, NI, NU, NV2, NV3 } from '../gpu/TSLTypes';
+import type { NB, NF, NI, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
 import { markFragmentWritable } from '../render/ThreePatches';
 import { MESH_WORDS } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
-import { DISPATCH_ROW, QRASTER_CAP, hashColor, type NaniteCam } from './NaniteCommon';
-import { makeFetch, type TerrainDisp, type TrunkWindOpt } from './NaniteFetch';
+import { DISPATCH_ROW, QRASTER_CAP, hashColor, instYaw, type NaniteCam } from './NaniteCommon';
+import { makeFetch, type TerrainDisp, type TrunkWindOpt, type VertCtx } from './NaniteFetch';
 import {
   aLoadU,
   bcF2U,
@@ -153,6 +155,14 @@ export function buildNaniteRaster(
   // attribute nanRasterDepth's per-triangle setup (resolution scaling proved it
   // ~70% setup-bound) to its sub-stages — see the two sinks in the depth kernel.
   const rdbg = Number(new URLSearchParams(window.location.search).get('rdbg') ?? '0');
+  // PERF-3 (LOG az/ba): one workgroup == one cluster (128 threads share instId/ci),
+  // but makeCtx ran PER THREAD (128×/cluster, incl. the trunk gust texture samples) =
+  // 0.46 ms / 16% of nanRasterDepth, 100% redundant. Compute it ONCE (thread 0) and
+  // broadcast via workgroup shared memory. DEFAULT ON (A/B-validated bit-identical —
+  // f32 round-trip is exact, so the raster still agrees with the resolve's own
+  // makeCtx); `?wgcache=0` opts out. Applies to the camera raster AND every shadow-
+  // clipmap level + the HW vertex stage (all share buildNaniteRaster).
+  const wgcache = new URLSearchParams(window.location.search).get('wgcache') !== '0';
   const qRasterRO = cull.qRasterRO;
   const visDepthV = vis.depthV;
   const visPayloadV = vis.payloadV;
@@ -174,6 +184,10 @@ export function buildNaniteRaster(
 
   const edgeFn = (a: NV2, b: NV2, p: NV2): NF =>
     p.y.sub(a.y).mul(b.x.sub(a.x)).sub(p.x.sub(a.x).mul(b.y.sub(a.y))) as unknown as NF;
+
+  // ?wgcache bool→uint for packing isHF/isDAG into the shared-memory uint array
+  const b2u = (b: NB): NU =>
+    (b as unknown as { select(a: NU, c: NU): NU }).select(uint(1), uint(0));
 
   // ---- kVisClear ------------------------------------------------------------------
   const kVisClear = Fn(() => {
@@ -205,7 +219,91 @@ export function buildNaniteRaster(
       const item = qRasterRO.element(itemIdx.add(uint(1)));
       const instId = item.x.toVar();
       const ci = item.y.toVar();
-      const ctx = makeCtx(instId, ci);
+      let ctx: VertCtx;
+      if (wgcache) {
+        // Compute makeCtx ONCE (thread 0), broadcast through workgroup shared
+        // memory: 9 uint + ≤19 float fields. yawSc is recomputed from the cached B
+        // (cheap, deterministic). The f32 round-trip is exact, so the cached ctx is
+        // bit-identical to a per-thread makeCtx ⇒ the raster still agrees with the
+        // resolve. The only prior early-out (itemIdx ≥ itemCount) is UNIFORM across
+        // the workgroup, so every live thread reaches the barrier (no deadlock).
+        const shU = workgroupArray('uint', 9);
+        const shF = workgroupArray('float', 19);
+        // .element() is typed as a bare Node here — cast to the fluent TSL types
+        const setU = (i: number, v: NU): void =>
+          void (shU.element(uint(i)) as unknown as { assign(x: NU): unknown }).assign(v);
+        const setF = (i: number, v: NF): void =>
+          void (shF.element(uint(i)) as unknown as { assign(x: NF): unknown }).assign(v);
+        const getU = (i: number): NU => shU.element(uint(i)) as unknown as NU;
+        const getF = (i: number): NF => shF.element(uint(i)) as unknown as NF;
+        If(localTri.equal(uint(0)), () => {
+          const c = makeCtx(instId, ci);
+          setU(0, b2u(c.isHF));
+          setU(1, b2u(c.isDAG));
+          setU(2, c.triStart);
+          setU(3, c.triCount);
+          setU(4, c.meshId);
+          setU(5, c.channel);
+          setU(6, c.gx);
+          setU(7, c.gz);
+          setU(8, c.qxw);
+          setF(0, c.A.x as unknown as NF);
+          setF(1, c.A.y as unknown as NF);
+          setF(2, c.A.z as unknown as NF);
+          setF(3, c.A.w as unknown as NF);
+          setF(4, c.B.x as unknown as NF);
+          setF(5, c.B.y as unknown as NF);
+          setF(6, c.B.z as unknown as NF);
+          setF(7, c.B.w as unknown as NF);
+          setF(8, c.oX);
+          setF(9, c.oZ);
+          setF(10, c.cell);
+          if (wind) {
+            const w = c.wind as NonNullable<VertCtx['wind']>;
+            setF(11, w.h0);
+            setF(12, w.dirX);
+            setF(13, w.dirY);
+            setF(14, w.leanBase);
+            setF(15, w.swayABase);
+            setF(16, w.natW);
+            setF(17, w.ph);
+            setF(18, w.branchBase);
+          }
+        });
+        workgroupBarrier();
+        const cB = vec4(getF(4).toVar(), getF(5).toVar(), getF(6).toVar(), getF(7).toVar()) as unknown as NV4;
+        ctx = {
+          isHF: getU(0).toVar().equal(uint(1)),
+          isDAG: getU(1).toVar().equal(uint(1)),
+          A: vec4(getF(0).toVar(), getF(1).toVar(), getF(2).toVar(), getF(3).toVar()) as unknown as NV4,
+          B: cB,
+          yawSc: instYaw(cB),
+          triStart: getU(2).toVar(),
+          triCount: getU(3).toVar(),
+          meshId: getU(4).toVar(),
+          channel: getU(5).toVar(),
+          wind: wind
+            ? {
+                h0: getF(11).toVar(),
+                dirX: getF(12).toVar(),
+                dirY: getF(13).toVar(),
+                leanBase: getF(14).toVar(),
+                swayABase: getF(15).toVar(),
+                natW: getF(16).toVar(),
+                ph: getF(17).toVar(),
+                branchBase: getF(18).toVar(),
+              }
+            : null,
+          gx: getU(6).toVar(),
+          gz: getU(7).toVar(),
+          qxw: getU(8).toVar(),
+          oX: getF(8).toVar(),
+          oZ: getF(9).toVar(),
+          cell: getF(10).toVar(),
+        } as unknown as VertCtx;
+      } else {
+        ctx = makeCtx(instId, ci);
+      }
 
       if (mode === 'depth' && rdbg === 3) {
         // ?rdbg=3 — stop right after makeCtx (the per-(instance,cluster) decode:

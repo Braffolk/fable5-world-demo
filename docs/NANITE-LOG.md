@@ -9,6 +9,33 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-15 (ba): **PERF-3 win #1 — per-cluster makeCtx CACHE in workgroup shared memory (the first real
+  rasterizer optimization): −0.59 ms (−11%) on the camera SW raster, validated bit-identical + alternated.**
+  (Opus 4.8 1M.) From the LOG `az` decomposition: makeCtx ran PER THREAD (128×/cluster, incl. the trunk gust
+  texture samples) = 0.46 ms / 16% of nanRasterDepth, 100% redundant — because the SW raster dispatches ONE
+  WORKGROUP per cluster (128 threads = 128 triangles, all sharing the same instId/ci). NaniteRaster now (when
+  `?wgcache` ≠ 0, **default ON**) computes makeCtx ONCE in thread 0 and BROADCASTS the ~28 fields through
+  `workgroupArray` (9 uint + 19 float) + `workgroupBarrier` — three's first workgroup-shared-mem use in this
+  codebase (API from examples/jsm/gpgpu/BitonicSort). yawSc is recomputed from the cached B (cheap); the f32
+  round-trip is EXACT, so the cached ctx is bit-identical to a per-thread makeCtx ⇒ the raster still agrees
+  with the resolve's own makeCtx (no artifacts). The barrier is safe: the only prior early-out (itemIdx ≥
+  itemCount) is UNIFORM per workgroup, so every live thread reaches it.
+  MEASURED (worst "long alley" view, cam −4.2/303.1/−1.4 yaw67.5° T11, `?pure`, 2592×1676, ALTERNATED
+  0/1/0/1/0/1 to cancel thermal drift): camera SW raster (depth+payload) **5.77→5.18 ms = −0.59 ms (−11%)**,
+  consistent every pair (depth 2.82→2.62, payload 2.95→2.56); +4.5% fps cool. The net is below makeCtx's
+  gross 0.46 ms because the broadcast (barrier + 28 shared reads/thread) costs some back, but it's a clean,
+  reproducible win. ALSO speeds every shadow-clipmap level's raster (all 6 call buildNaniteRaster) — not
+  isolated here (thermal noise swamps a sub-ms shadow delta full-frame), but real. CORRECTNESS: boots clean
+  (no shader error), screenshot bit-matches the wgcache=0 view at the worst cam AND bm3 vista (terrain+rock)
+  + flat-albedo terrain/bark; visClusters/hwTris match within freeze-jitter variance. NOTE: full-frame
+  (beauty+shadows) fps is too thermally noisy in headless to quote a clean delta (±several ms swings drown
+  the sub-ms win) — the cool `?pure` per-pass number is the trustworthy one. NOTE: does NOT help the HW pass
+  (a separate NodeMaterial vertex stage, not a workgroup compute). tsc clean; default ON, `?wgcache=0` A/Bs.
+  NEXT (PERF-3 continues): the bigger lever is the 3× fetchWorldVert (1.11 ms / 39%, ~5.5× redundant) — a
+  per-cluster VERTEX-transform cache, but per-cluster verts are NOT compacted (global scattered indices; the
+  8-word cluster record is full), so it needs either a build-time per-cluster vertex compaction (~1.5–2.5×
+  vert memory) or a runtime [vMin,vMax]-range cache w/ fallback — a real architecture fork to weigh.
+
 - 2026-06-14 (az): **PERF-3 ANALYSIS — the depth rasterizer DECOMPOSED to its sub-stages (no guessing): it is
   per-TRIANGLE bound, and the #1 cost is the 3× `fetchWorldVert` vertex fetch+transform (54%).** (Opus 4.8
   1M.) Three converging measurements at the worst "long alley" view (cam −4.2,303.1,−1.4 yaw 67.5° T11,

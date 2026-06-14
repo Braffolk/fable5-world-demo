@@ -27,12 +27,16 @@ SW raster = depth **2.82** + payload **2.95** = **5.77 ms** (+ HW 2.62 + flat re
 (the SAME raster reads 5.96 ms hot). ⇒ (a) the SW depth+payload raster is the #1 nanite lever;
 (b) post throttles nanite on top of its own cost.
 
-**PERF-3 ANALYSIS DONE (LOG `az`):** `nanRasterDepth` is per-TRIANGLE bound — vertex fetch+transform
-**1.51 ms (54%)**, edge setup 0.13, per-pixel loop 1.18; atomic is NOT it (depth≈payload). ONE
-workgroup == ONE cluster (128 threads) yet calls `fetchWorldVert` 3×128 = ~5.5× redundant.
-**→ NEXT (active): per-cluster VERTEX TRANSFORM CACHING in workgroup shared memory** — transform the
-cluster's unique verts ONCE → barrier → tris read 3 from shared mem. Est. −1.0–1.2 ms on the SW depth
-pass (also pays back payload + HW + shadow rasters). Owed: a COOLED (idle-between) batch for absolute ms.
+**PERF-3 ANALYSIS DONE (LOG `az`):** `nanRasterDepth` per-TRIANGLE bound — makeCtx 0.46 (16%), 3×
+fetchWorldVert 1.11 (39%), edge 0.13 (5%), per-pixel loop 1.12 (40%); atomic NOT it (depth≈payload).
+**WIN #1 LANDED (LOG `ba`): per-cluster makeCtx CACHE in workgroup shared memory** — 1 workgroup == 1
+cluster, so compute makeCtx once (thread 0) + broadcast via `workgroupArray`/`workgroupBarrier`. **−0.59 ms
+(−11%)** on the camera SW raster (alternated, bit-identical), default ON (`?wgcache=0` A/Bs); also speeds the
+6 shadow rasters. First workgroup-shared-mem use in the codebase.
+**→ NEXT: the bigger lever — the 3× fetchWorldVert (39%, ~5.5× redundant) per-cluster VERTEX cache.** REAL
+FORK: per-cluster verts are NOT compacted (global scattered indices, record full) ⇒ needs a build-time
+vertex compaction (~1.5–2.5× vert memory) OR a runtime [vMin,vMax]-range cache w/ fallback. Owed: COOLED
+absolute-ms batch.
 
 ## Phases (coarse status — see SPEC `## Phase plan`)
 N0 scaffold ✅ · N1 clusterize ✅ · N2 cull ✅ · N3 vis-buffer ✅ · N4 materials ✅ ·
@@ -44,7 +48,7 @@ N0 scaffold ✅ · N1 clusterize ✅ · N2 cull ✅ · N3 vis-buffer ✅ · N4 m
 |----|------|--------|-----------|------|------|
 | `PERF-1` | Trustworthy per-pass measurement + `?pure` | ✅ | — | LOG `ay`; GpuProfiler/main.ts | DONE 1f2fdbc — hardened GpuProfiler vs garbage −timestamps (harness was lying: render=−97ms→0 samples); `?pure` master (postmin+nanshadow=0+nandbg=flat, keeps geometry, fixes "?pure=zero terrain"); probe-worstpos.ts. KEY: post chain THERMALLY THROTTLES nanite ~2.1×. |
 | `PERF-2` | Profile pure-nanite floor + worst-view decomp | ✅ | `PERF-1` | LOG `ay`,`az`; PERF LEDGER | DONE (folded) — worst view 82k visCl: SW raster depth 2.82 + payload 2.95 = 5.77ms, HW 2.62, flat resolve 2.10 (cool). SW depth+payload = the #1 nanite cost. |
-| `PERF-3` | Depth-rasterizer optimization (vertex-transform cache) | 🔵 | `PERF-2` | LOG `az`; NaniteRaster/NaniteFetch | ANALYSIS DONE (`?rdbg` ablation, build-time gated): per-triangle bound, **3× fetchWorldVert = 54%**, atomic NOT it. ACTIVE: per-cluster vertex-transform CACHE in workgroup shared mem (1 wg = 1 cluster, 128 threads); est. −1.0–1.2ms. |
+| `PERF-3` | Depth-rasterizer optimization (shared-mem caches) | 🔵 | `PERF-2` | LOG `az`,`ba`; NaniteRaster | WIN #1 LANDED (`?wgcache` default ON): per-cluster makeCtx cache in workgroup shared mem → **−0.59 ms (−11%)** camera SW raster, bit-identical + alternated, + the 6 shadow rasters. NEXT: the 3× fetchWorldVert (39%) vertex cache — FORK: build-time vert compaction (~1.5–2.5× mem) vs runtime [vMin,vMax] range-cache. |
 | `AUDIT-1` | Deviation audit vs original Fable 5 spec | ⬜ | — | PROVENANCE; `reference/fable5-original-NANITE.md` | diff current state/impl vs the 937-line original; flag unjustified drops from my D-N* edits (shadows = D-N29, justified) |
 
 ## B. DAG (N8) — active workstream (SPEC `### DAG (N8)`)
