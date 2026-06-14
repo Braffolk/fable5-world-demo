@@ -33,10 +33,19 @@ fetchWorldVert 1.11 (39%), edge 0.13 (5%), per-pixel loop 1.12 (40%); atomic NOT
 cluster, so compute makeCtx once (thread 0) + broadcast via `workgroupArray`/`workgroupBarrier`. **−0.59 ms
 (−11%)** on the camera SW raster (alternated, bit-identical), default ON (`?wgcache=0` A/Bs); also speeds the
 6 shadow rasters. First workgroup-shared-mem use in the codebase.
-**→ NEXT: the bigger lever — the 3× fetchWorldVert (39%, ~5.5× redundant) per-cluster VERTEX cache.** REAL
-FORK: per-cluster verts are NOT compacted (global scattered indices, record full) ⇒ needs a build-time
-vertex compaction (~1.5–2.5× vert memory) OR a runtime [vMin,vMax]-range cache w/ fallback. Owed: COOLED
-absolute-ms batch.
+**→ ACTIVE: PERF-3 win #2 — per-cluster VERTEX-TRANSFORM CACHE via build-time COMPACTION** (user-confirmed
+"full compaction straight away"). `?vrange` data: explicit redund 4.13× (95% range ≤128), HF-DAG 3.76× (40%
+range >1024) ⇒ runtime range-cache FAILS terrain; workgroup atomics unsupported ⇒ only compaction generalizes
+(cache sized by vertCount ≤~190 fits 16 KB shared mem for ALL geo; race-free strided transform, no atomics;
+bonus local-index memory win ~−100 MB). DESIGN: PARALLEL `gpu.vcompact` buffer (2 u32/cluster: vertBase,
+vertCount; 0 ⇒ per-thread fallback) — NOT a CLUSTER_WORDS change (would shift every ci·8 offset). Gated
+`?vcompact`, compacted PER PACK PATH so the kernel handles compacted-or-not per cluster (incremental, always
+self-consistent). STAGES: **(1) explicit-path compaction** (contiguous dup verts + indices + vcompact;
+fetchWorldVert UNCHANGED ⇒ render BIT-IDENTICAL, no perf yet) → **(2) kernel cooperative transform** (read
+vcompact, transform [vertBase,+vertCount) into shared vec3, barrier, tris read shVerts[vi−vertBase]) = the win
+→ **(3) extend to attachDag + attachHeightDagTile** (pool caps grow for dup) → **(4) narrow local indices**
+(memory). NOTE: the ctx-cache net (−0.59) was below gross — the cooperative transform has the same barrier+
+shared-read overhead, so VALIDATE the net win at stage 2 before stages 3–4. Owed: COOLED absolute-ms batch.
 
 ## Phases (coarse status — see SPEC `## Phase plan`)
 N0 scaffold ✅ · N1 clusterize ✅ · N2 cull ✅ · N3 vis-buffer ✅ · N4 materials ✅ ·
