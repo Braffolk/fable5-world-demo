@@ -9,6 +9,28 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-15 (bg): **PERF-4 CLOSED. The DEFINITIVE per-effect measurement: AO is ~100% of the real post cost;
+  bloom/TAA/clouds/etc. are ~0. Cleaned up — AO opts made permanent (A/B scaffolding deleted), the TAA fork
+  removed, quarter-res AO declined by the user ("call it done").** (Opus 4.8 1M.) The user asked for the ACTUAL
+  per-effect timings since the per-pass numbers lied. High-res GPU-bound (3888×2520, real frameMs) ablation,
+  reproduced twice: **removing AO alone → frameMs 33.4→25.0; removing ALL post → 33.4→24.9.** So **AO (GTAO march
+  + bilateral upsample + contact) ≈ the ENTIRE post cost (~8.4 ms high-res ≈ ~3–4 ms native-equiv); bloom + TAA +
+  aerial + clouds + bounce + exposure + grade ≈ 0.1 ms COMBINED.** The post passes pipeline/overlap on the GPU so
+  their encoder wall-spans (bloom 14.8, TAA 14.8, half.mrt 10.5 …) OVERCOUNT ~7× — removing bloom or TAA changes the
+  real frame by ~0 ms. This VINDICATES the whole arc: AO was always the only real post cost (user flagged it first,
+  budget 2 ms), bloom was a mirage, the TAA fork was correctly a non-win (~0.45 ms — can't save what costs nothing).
+  **CLEANUP (this entry):** (1) **AO optimizations made PERMANENT** — the `?aocheap=0` original path (full-res depth
+  re-sample upsample + no early-out) DELETED; the far-fade early-out, packed-view-z bilateral, and samples=6 are now
+  the only path (consts, no flags). (2) Removed the A/B + measurement scaffolding `?aocheap` / `?aofar` / `?aodbg`
+  (the AO-term debug view) / `?aosamples` (hardcoded 6). (3) **`LeanTraa.ts` + `?taacheap` DELETED** — the measured
+  non-win TAA fork (a vendored ~240-line library fork not worth the maintenance for ~0.45 ms). (4) bloom revert
+  already done (be). Kept: the AO wins (Gtao.ts maxDist gate + packed view-z out; PostStack early-out + packed
+  bilateral + samples 6), the `probe-postablate.ts` ablation harness + `probe-worstpos.ts` (reusable tooling). Render
+  bit-identical to the pre-cleanup default (the default was already the optimized path). tsc clean. **PERF-4 net:
+  AO shipped (~1.5 ms direct cut on the one effect that matters); bloom + TAA proven non-wins + reverted/removed;
+  further post perf is a beauty-TRADING exercise (the user declined quarter-res AO).** → PERF-4 closed; next frontier
+  is the user's call (back to N8/shadows, or the deferred AUDIT-1).
+
 - 2026-06-15 (bf): **PERF-4 effect #3 TAA — built the user-sanctioned `TRAANode` resolve fork; MEASURED it
   rigorously (high-res GPU-bound) = a MARGINAL ~0.5–1 ms win, NOT the projected ~3 ms, because TAA is ALU+drain-
   bound not fetch-bound. Default OFF, isolated, not shipped. This RE-FRAMES PERF-4: the post chain's "headroom" was

@@ -15,7 +15,6 @@ import type { Renderer, StorageBufferNode } from 'three/webgpu';
 import { RenderPipeline } from 'three/webgpu';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { traa } from 'three/addons/tsl/display/TRAANode.js';
-import { leanTraa } from './LeanTraa';
 import {
   Fn,
   If,
@@ -79,19 +78,16 @@ export class PostStack {
     const cloudview = q.get('cloudview');
     // perf attribution: ?ablate=clouds,ao,taa,bloom disables stages
     const ablate = new Set((q.get('ablate') ?? '').split(','));
-    // PERF-4 AO knob (budget 2 ms): GTAO sample count. 8 was mesh-viewer-ish;
-    // 6 (= 3 dir × 2 steps × 2 sides = 12 march samples) holds the look here —
-    // AO is a near-flat ~0.8 cue in this world (validated ?aodbg), so the march
-    // is over-sampled. Bump back toward 8 if denser future geometry needs it.
-    const aoSamples = Number(q.get('aosamples') ?? 6);
+    // PERF-4 AO (the one post effect that costs real frame time — bloom/TAA are
+    // ~0; LOG bf). GTAO sample count: 6 (= 3 dir × 2 steps × 2 sides = 12 march
+    // samples) holds the look — AO is a near-flat ~0.8 cue here, over-sampled at 8.
+    // Bump toward 8 if denser future geometry makes AO carry more contact.
+    const aoSamples = 6;
     // AO distance fade (m): beyond aoFadeFar the 1.6 m-radius AO is subpixel and
-    // forced to 1 — the march (Gtao maxDist) and the upsample early-out both
-    // skip the far field at this bound, the bulk of an elevated vista.
+    // forced to 1, so both the march (Gtao maxDist) and the bilateral upsample
+    // skip the far field there (the bulk of an elevated vista).
     const aoFadeNear = 700;
-    const aoFadeFar = Number(q.get('aofar') ?? 1800); // ?aofar=99999 disables both early-outs (A/B)
-    // PERF-4 master AO toggle (default on; ?aocheap=0 = original path for A/B):
-    // the far-fade early-outs (march + upsample) AND the packed-view-z bilateral.
-    const aoCheap = q.get('aocheap') !== '0';
+    const aoFadeFar = 1800;
     // debug probes need raw values — tone mapping would garble them
     const skyveldbg = q.get('skyveldbg') !== null && q.get('skyveldbg') !== '';
     renderer.toneMapping = cloudview || skyveldbg ? NoToneMapping : AgXToneMapping;
@@ -202,9 +198,9 @@ export class PostStack {
           halfAo,
           // GTAO defaults are mesh-viewer scale: 16 samples cost ~50 ms on
           // terrain vistas (Phase-2 finding) — 8 samples, 1.6 m radius.
-          // ?aosamples sweeps this for the PERF-4 budget hunt; maxDist skips the
-          // far-vista march (output-equivalent, faded to 1 in aoFaded below).
-          { samples: aoSamples, radius: 1.6, distanceFallOff: 0.6, maxDist: aoCheap ? aoFadeFar : 1e9 },
+          // maxDist skips the far-vista march (output-equivalent — faded to 1 in
+          // aoFaded below).
+          { samples: aoSamples, radius: 1.6, distanceFallOff: 0.6, maxDist: aoFadeFar },
         ),
       });
     }
@@ -396,11 +392,9 @@ export class PostStack {
               const uvi = screenUV.add(halfTexel.mul(vec2(ox, oy)));
               const s = (aoSrc as unknown as { sample(uv: unknown): unknown }).sample(uvi) as NV4;
               const ai = s.x;
-              // PERF-4: view-z packed in .y (Gtao) ⇒ 1 fetch/tap; aocheap=0
-              // restores the original full-res depth re-sample + unproject.
-              const zi = aoCheap
-                ? s.y
-                : getViewPosition(uvi, (depthTex.sample(uvi) as unknown as NV4).x, uProjInv).z;
+              // PERF-4: GTAO packs this tap's half-res view-z in .y ⇒ one fetch/tap
+              // for the bilateral guide (no full-res depth re-sample + unproject).
+              const zi = s.y;
               const w = exp2(zi.sub(zC).abs().mul(-3.5));
               acc.addAssign(ai.mul(w));
               avg.addAssign(ai);
@@ -417,8 +411,7 @@ export class PostStack {
           // PERF-4 early-out: past the fade end (k≈1) AO is forced to 1, so the
           // 4-tap bilateral is wasted (the far half of an elevated vista). Skip
           // it — output-equivalent (those pixels returned mix(...,1,k≈1)≈1).
-          if (aoCheap) If(k.lessThan(0.995), bilateral);
-          else bilateral();
+          If(k.lessThan(0.995), bilateral);
           return result;
         })()
       : null;
@@ -539,15 +532,9 @@ export class PostStack {
     const velLoad = (texel: NV2): NV4 =>
       vec4(velReproject(texel), 0, 1) as unknown as NV4;
     const reprojectedVelocity = { load: velLoad } as unknown as typeof depthTex;
-    // ?taacheap (PERF-4, default 0 = stock three TAA): 1 = depth-only lean
-    // resolve (low motion risk), 2 = full (depth + variance cut, ~3 ms, needs
-    // an in-motion quality review). LeanTraa subclasses TRAANode (same infra).
-    const taaCheap = Number(q.get('taacheap') ?? 0);
     const taaed = ablate.has('taa')
       ? (withBounce as unknown as ReturnType<typeof traa>)
-      : taaCheap > 0
-        ? leanTraa(withBounce, depthTex, reprojectedVelocity, camera, taaCheap)
-        : traa(withBounce, depthTex, reprojectedVelocity, camera);
+      : traa(withBounce, depthTex, reprojectedVelocity, camera);
     // nanite jitter mirror (D-N18): the compute raster must project with the
     // SAME per-frame TRAA view offset the scene pass renders with; the node's
     // _jitterIndex is read before the pipeline render (it increments after)
@@ -662,14 +649,10 @@ export class PostStack {
         : null;
 
     this.post = new RenderPipeline(renderer);
-    // ?aodbg=1 — the AO term as grayscale, BYPASSING TRAA/bloom/grade so an
-    // AO-quality A/B is deterministic (no temporal-jitter or lighting confound).
-    const aoDbg = q.get('aodbg') === '1' && aoFaded !== null;
     // chain bisect: 9 = constant at pipeline output, 8 = aerial only (no
     // AO/TRAA/bloom/exposure/grade), default = full chain
-    this.post.outputNode = aoDbg
-      ? (vec3(aoFaded as unknown as NF) as unknown as typeof graded)
-      : skyVelDbgView !== null ? skyVelDbgView
+    this.post.outputNode =
+      skyVelDbgView !== null ? skyVelDbgView
       : cloudview === '9' ? vec3(1, 0, 0)
       : cloudview !== null && cloudview !== '' ? aerialNode
       : graded;
