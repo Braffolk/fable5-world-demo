@@ -505,13 +505,69 @@ export function buildNaniteResolve(
       });
     }
 
-    // unported explicit classes (leaf/grass/debris — N9/N10) keep a flat gray
+    // ---- LEAF shading (N9-C0): the real mesh-leaf crown, OPAQUE + DOUBLE-SIDED.
+    // Port of VegMaterials.foliageMaterial: per-species tint (matParam, packed
+    // linear RGB + hueVar) × per-leaf hue jitter (vdata.x) × crown-depth AO
+    // (vdata.w); a warm translucent BACKLIGHT is added to `lit` below; NO specular.
+    // Same explicit-mesh fetch as bark, minus UV/TBN/texture (leaves have no detail
+    // map). The geometric normal is FLIPPED to face the camera (two-sided lighting).
+    const isL = matClass.equal(uint(4)).toVar();
+    const leafCol = vec3(0.1, 0.2, 0.08).toVar() as unknown as NV3;
+    const leafNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
+    If(isL, () => {
+      const instId = item.x;
+      const localTri = pRaw.bitAnd(uint(127));
+      const ctx = fetch.makeCtx(instId, ci);
+      const w0 = fetch.fetchWorldVert(ctx, localTri, 0);
+      const w1 = fetch.fetchWorldVert(ctx, localTri, 1);
+      const w2 = fetch.fetchWorldVert(ctx, localTri, 2);
+      const bw = baryWeights(wp, w0, w1, w2);
+      const tb = ctx.triStart.add(localTri).mul(uint(3));
+      const va = readVertex(gpu.verts, elemU(gpu.indices, tb));
+      const vb = readVertex(gpu.verts, elemU(gpu.indices, tb.add(uint(1))));
+      const vc = readVertex(gpu.verts, elemU(gpu.indices, tb.add(uint(2))));
+      const dv = unpackVdata(va.vdata)
+        .mul(bw.x)
+        .add(unpackVdata(vb.vdata).mul(bw.y))
+        .add(unpackVdata(vc.vdata).mul(bw.z)) as unknown as NV4;
+      // per-species tint from matParam (mesh word 7): linear RGB + hueVar (4×u8)
+      const mp = fetch.meshWord(ctx.meshId, 7);
+      const base = vec3(
+        toF(mp.bitAnd(uint(0xff))),
+        toF(mp.shiftRight(uint(8)).bitAnd(uint(0xff))),
+        toF(mp.shiftRight(uint(16)).bitAnd(uint(0xff))),
+      ).div(255) as unknown as NV3;
+      const hueVar = toF(mp.shiftRight(uint(24)).bitAnd(uint(0xff))).div(255);
+      // hueShift with a NODE amount (per-species hueVar) — inline of the resolve
+      // hueShift helper, whose `amount` is a compile-time constant for bark.
+      const k = (dv.x as unknown as NF).mul(hueVar);
+      const tintedHue = base
+        .mul(vec3(1.18, 1.0, 0.55))
+        .mul(k.clamp(0, 1))
+        .add(base.mul(vec3(0.7, 0.95, 1.25)).mul(k.negate().clamp(0, 1)))
+        .add(base.mul(float(1).sub(k.abs()))) as unknown as NV3;
+      leafCol.assign(tintedHue.mul(dv.w.mul(0.8).add(0.2)) as unknown as NV3);
+      // instance-rotated geometric normal, flipped to face the camera (two-sided)
+      const gnrm = normalize(
+        instRotateDir(ctx.yawSc, va.nrm)
+          .mul(bw.x)
+          .add(instRotateDir(ctx.yawSc, vb.nrm).mul(bw.y))
+          .add(instRotateDir(ctx.yawSc, vc.nrm).mul(bw.z)),
+      ) as unknown as NV3;
+      const toCam = normalize(camPos.sub(wp)) as unknown as NV3;
+      leafNrm.assign(dot(gnrm, toCam).lessThan(0).select(gnrm.negate(), gnrm) as unknown as NV3);
+    });
+
+    // unported explicit classes (grass/debris — N10) keep a flat gray
     const palette = vec3(0.35, 0.33, 0.3) as unknown as NV3;
     const albedo = isT
-      .select(terrainCol, isR.select(rockCol, isBD.select(barkCol, palette)))
+      .select(terrainCol, isR.select(rockCol, isBD.select(barkCol, isL.select(leafCol, palette))))
       .toVar() as unknown as NV3;
     const wNormal = isT
-      .select(shading.worldNormalNode, isR.select(rockNrm, isBD.select(barkNrm, vec3(0, 1, 0))))
+      .select(
+        shading.worldNormalNode,
+        isR.select(rockNrm, isBD.select(barkNrm, isL.select(leafNrm, vec3(0, 1, 0)))),
+      )
       .toVar() as unknown as NV3;
     // aoNode (rock + bark cavity): applied to indirect only — 1 elsewhere
     const ao = isR.select(rockAo, isBD.select(barkAo, float(1))) as unknown as NF;
@@ -576,6 +632,19 @@ export function buildNaniteResolve(
       radiance = radiance.add(irr.mul(ao)) as unknown as NV3;
     }
     let lit: NV3 = albedo.mul(radiance).mul(float(1 / Math.PI)) as unknown as NV3;
+    // N9-C0: leaf BACKLIGHT — warm translucent forward-scatter toward the sun
+    // (port of VegMaterials.translucency, k=0.032), added on top of the diffuse
+    // (the old path's emissiveNode). Leaves only; 0 elsewhere.
+    {
+      const viewDir = normalize(wp.sub(camPos)) as unknown as NV3;
+      const toward = dot(viewDir, sunDir.negate()).clamp(0, 1);
+      const glow = toward.pow(5).mul(float(sunU.intensity)).mul(0.032);
+      const backlight = leafCol
+        .mul(sunU.color as unknown as NV3)
+        .mul(glow)
+        .mul(vec3(0.9, 1.05, 0.55)) as unknown as NV3;
+      lit = lit.add(isL.select(backlight, vec3(0))) as unknown as NV3;
+    }
 
     // ---- debug overrides ------------------------------------------------------
     if (nandbg === 'flat') return vec4(albedo, 1);
@@ -606,7 +675,7 @@ export function buildNaniteResolve(
     if (nandbg === 'cluster') return vec4(hashColor(ci), 1) as unknown as NV4;
     if (nandbg === 'cls')
       // matClass tint: terrain green / rock red / bark blue / deadwood cyan /
-      // other (leaf/grass/debris) magenta
+      // leaf bright-green / other (grass/debris) magenta
       return vec4(
         isT.select(
           vec3(0.1, 0.6, 0.1),
@@ -614,7 +683,10 @@ export function buildNaniteResolve(
             vec3(0.95, 0.1, 0.1),
             isB.select(
               vec3(0.1, 0.1, 0.95),
-              isD.select(vec3(0.1, 0.7, 0.8), vec3(0.8, 0.1, 0.8)),
+              isD.select(
+                vec3(0.1, 0.7, 0.8),
+                isL.select(vec3(0.2, 0.85, 0.2), vec3(0.8, 0.1, 0.8)),
+              ),
             ),
           ),
         ),

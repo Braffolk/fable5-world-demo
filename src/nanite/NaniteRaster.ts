@@ -78,7 +78,14 @@ import {
 } from './Tsl';
 import type { BufOf, UV2 } from './Tsl';
 
-const HW_CAP = 262_144;
+// N9-C0: leaf needles are long, thin, near-camera tris — their bbox exceeds the
+// SW raster's 16 px i32-safe limit, so a dense crown routes hundreds of thousands
+// of them to the HW vertex-pulling path. The old 262k cap overflowed (clamp →
+// dropped tris → black holes in foliage; measured 876k hwTris in a dense stand).
+// Sized for that load; the queue only costs memory + the HW pass only pays for the
+// tris actually present. The real reduction (halving the dup, shedding far crowns)
+// is the two-sided raster + the aggregate DAG (N9-C2).
+const HW_CAP = 2_097_152;
 const MAX_RASTER_SIZE = 16;
 const NEAR_EPS = 1e-4;
 
@@ -227,13 +234,15 @@ export function buildNaniteRaster(
       let ctx: VertCtx;
       if (wgcache) {
         // Compute makeCtx ONCE (thread 0), broadcast through workgroup shared
-        // memory: 9 uint + ≤19 float fields. yawSc is recomputed from the cached B
+        // memory: 9 uint + ≤20 float fields. yawSc is recomputed from the cached B
         // (cheap, deterministic). The f32 round-trip is exact, so the cached ctx is
         // bit-identical to a per-thread makeCtx ⇒ the raster still agrees with the
         // resolve. The only prior early-out (itemIdx ≥ itemCount) is UNIFORM across
         // the workgroup, so every live thread reaches the barrier (no deadlock).
+        // NOTE: TrunkWindFields is serialized field-by-field here — adding a wind
+        // field (e.g. N9-C0 flutBase, slot 19) MUST extend shF + both halves below.
         const shU = workgroupArray('uint', 9);
-        const shF = workgroupArray('float', 19);
+        const shF = workgroupArray('float', 20);
         // .element() is typed as a bare Node here — cast to the fluent TSL types
         const setU = (i: number, v: NU): void =>
           void (shU.element(uint(i)) as unknown as { assign(x: NU): unknown }).assign(v);
@@ -273,6 +282,7 @@ export function buildNaniteRaster(
             setF(16, w.natW);
             setF(17, w.ph);
             setF(18, w.branchBase);
+            setF(19, w.flutBase); // N9-C0 leaf flutter
           }
         });
         workgroupBarrier();
@@ -297,6 +307,7 @@ export function buildNaniteRaster(
                 natW: getF(16).toVar(),
                 ph: getF(17).toVar(),
                 branchBase: getF(18).toVar(),
+                flutBase: getF(19).toVar(), // N9-C0 leaf flutter
               }
             : null,
           gx: getU(6).toVar(),

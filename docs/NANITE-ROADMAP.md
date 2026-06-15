@@ -11,17 +11,18 @@
 > must finish first. `spec` = the `## header` in NANITE-SPEC.md (+ D-N* / file refs).
 
 ## YOU ARE HERE — 2026-06-15
-**FRONTIER: N9 — foliage as REAL geometry (user-chosen + SCOPED 2026-06-15; we compacted, then start). Read SPEC
-`### Foliage (N9)` + D-N42 + the DAG-section "Aggregates" FIRST — the full chunk plan + verified recon live there.**
-- **THE PIVOT (verified):** real leaf/needle geometry ALREADY EXISTS (`LeafMesh.ts` → `foliageMesh`; impostor cards are
-  baked FROM it) — but ONLY at the hero ring (r0 ≤26 m); r1/r2 are cards. So N9 SURFACES it, doesn't generate it. The
-  net-new SPINE is the AGGREGATE DAG (area-preserving leaf removal: drop leaves + GROW survivors so far crowns stay full
-  leafy silhouettes, never balding — "still looks like leaves"; QEM can't, it degenerates on disconnected quads).
-  `MATERIAL_CLASS.leaf=4` / `TRANSFORM_CHANNEL.leaf=2` / the `WorldRegistry` deferral hook are all pre-wired (bark pattern).
-- **→ START AT N9-C0** (leaf plumbing, mechanical, hero-ring visible win) → C1 aggregate builder (standalone, node-tested,
-  the hard part) → C2 wire+continuous LOD (**re-measures the bark per-instance floor at leaf density — reveals if N8-HIC
-  is now needed**) → C3 impostor retirement (**USER JUDGE SHOTS — not autonomous**) → C4 close. Leaves are OPAQUE real
-  geometry, DOUBLE-SIDED (D-N3 alpha ban). NOTE: this re-opens un-black-slating → the two-frame-vs-main gate (AUDIT-1 META).
+**FRONTIER: N9 — foliage as REAL geometry. N9-C0 (leaf plumbing) LANDED at an OKAY state (user-accepted). Read SPEC
+`### Foliage (N9)` (esp. the "N9-C0 LANDED" note) + LOG bl before continuing.**
+- **N9-C0 DONE (LOG bl):** the hero `foliageMesh` renders through the nanite path as MATERIAL_CLASS.leaf — lit (isL
+  resolve: tint+hue+AO+warm backlight, OPAQUE, double-sided via geometry-dup), per-leaf flutter on the FULL
+  vegWindOffset synced to the trunk (shared world-pos wind key), `?naniteleaf=1` / `?naniteleafdensity=N` (default 4000),
+  same look with/without `?nanitedag`. 3 bugs fixed (wgcache `flutBase` slot = boot crash; HW_CAP 262k→2.1M = the needle
+  HW-queue overflow behind "dag/terrain vanish"; wind instId→world-pos sync). The crown is LESS FLUFFY than non-nanite
+  (DEFERRED → `N9-C0b`, a GENERATION rethink, AFTER core nanite — old hero leaned on D-N3-banned alpha CARDS).
+- **NEXT = USER'S CALL:** continue N9 → **C1 aggregate builder** (the net-new spine: area-preserving leaf removal,
+  standalone node-tested, the hard part) → C2 wire+continuous LOD (+ the **two-sided raster** `N9-C2-2s` to drop the
+  dup) → C3 impostor retirement (**USER JUDGE SHOTS**) → C4 close; OR pivot to other core nanite (N6/N7, shadow S4 — now
+  unblocked since leaves are the dominant casters). The un-black-slating / two-frame-vs-main gate re-applies at C4.
 - **N8-D1e LEFT AT ITS CHECKPOINT (validated + measured, LOG bj / D-N41) — 3 pending USER decisions, NOT blocking N9:**
   (1) default-on **rock+deadwood DAG** (free no-pop — recommended); (2) **bark DAG** stays opt-in until **N8-HIC** (the
   hierarchical instance cull — N9-C2 will tell us if it's needed); (3) explicit-DAG **Worker build** only when a class
@@ -115,7 +116,9 @@ N0 scaffold ✅ · N1 clusterize ✅ · N2 cull ✅ · N3 vis-buffer ✅ · N4 m
 | `N6` | Migrate remaining opaque pools (debris) | ⬜ | — | Phase plan N6 | register debris pool → DAG applies on registration |
 | `N7` | Hybrid close | ⬜ | `N6` | Phase plan N7 | finish the HW/SW hybrid envelope |
 | `N9` | **Foliage as REAL geometry** (SCOPED — D-N42, SPEC `### Foliage (N9)`) | 🔵 | — | D-N42; `### Foliage (N9)` | surface the existing `foliageMesh` + the aggregate DAG; the DOMINANT shadow casters; unlocks `S4`. Chunks ↓ |
-| `N9-C0` | Leaf PLUMBING (material class + 'leaf' channel + hero-ring reg) | ⬜ | — | `### Foliage (N9)` | mechanical, bark-pattern; real crowns ≤26 m (visible win); OPAQUE+double-sided; A/B vs old `foliageMode='mesh'` |
+| `N9-C0` | Leaf PLUMBING (material class + 'leaf' channel + hero-ring reg) | ✅ | — | `### Foliage (N9)`; LOG bl | LANDED, OKAY state (user-accepted). Real crowns ≤26 m: isL resolve (tint+hue+AO+backlight, OPAQUE, double-sided), full-vegWindOffset 'leaf' channel synced to trunk via shared world-pos key, `?naniteleaf=1`/`?naniteleafdensity=N`. Bugs fixed: wgcache `flutBase` slot (boot crash), HW_CAP 262k→2.1M (needle HW-queue overflow = the "dag/terrain vanish"). Same w/wo dag. |
+| `N9-C0b` | Leaf GENERATION rethink — fluffiness (DEFERRED, user, post-core) | ⬜ | — | `### Foliage (N9)` N9-C0 LANDED note | nanite crown LESS FLUFFY than non-nanite (old hero leaned on D-N3-banned alpha CARDS; conifer spray distribution spruce≠pine). GENERATION question (denser/bushier sprays) OR the aggregate fills it. NOT plumbing. Do AFTER core nanite. |
+| `N9-C2-2s` | Two-sided raster (per-mesh flag + back-face vert-swap) | ⬜ | `N9-C0` | `### Foliage (N9)` | drop the leaf geometry-dup → halve HW load + registry memory (the user's "selective culling"); non-leaf bit-identical. Do at C2 when leaves scale. |
 | `N9-C1` | AGGREGATE DAG builder (area-preserving leaf removal) | ⬜ | `N9-C0` | D-N3; `### Foliage (N9)` | THE hard part, net-new; node-tested standalone (probe-aggregate); drop leaves + grow survivors; bit-exact sibling pairs |
 | `N9-C2` | Wire aggregate → GPU (continuous leaf LOD, full distance) | ⬜ | `N9-C1` | `### Foliage (N9)` | attachDag leaf aggregate; probe-zoom no-pop; **re-measures the per-instance floor at leaf density → reveals if N8-HIC needed** |
 | `N9-C3` | Impostor retirement (ring-by-ring, **USER JUDGE SHOTS**) | ⬜ | `N9-C2` | `### Foliage (N9)` | A/B real crowns vs cards+CanopyShell at vistas; retire where user signs off; CanopyShell dies after vista shots |

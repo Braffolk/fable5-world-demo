@@ -191,8 +191,14 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // Phase 5: variant pools + GPU cull → compacted indirect draws
   let forestsRef: Forests | null = null;
   if (view !== 'scatter' && !ablate.has('veg')) {
-    const lib = await buildVegLibrary(engine.renderer, seed, (p, m) =>
-      ctx.progress(0.963 + p * 0.006, m),
+    // N9-C0: ?naniteleafdensity=N caps the nanite leaf head's per-crown anchor budget
+    // (real-leaf fullness vs memory/cluster cost). Default 2500; higher = fuller + heavier.
+    const leafDensity = Number(qNan.get('naniteleafdensity'));
+    const lib = await buildVegLibrary(
+      engine.renderer,
+      seed,
+      (p, m) => ctx.progress(0.963 + p * 0.006, m),
+      Number.isFinite(leafDensity) && leafDensity > 0 ? { leafAnchorTarget: leafDensity } : undefined,
     );
     // sun uniforms feed the nanite terrain shading too — keep them current
     // even when the old veg render is disabled
@@ -268,6 +274,10 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       const dagTerrainClip = terrainDefault || qNan.get('nanitedclip') === '1';
       // N8-D2 Stage 2d: ?nanitedskirt=0 disables the inter-level seam skirts (A/B). Default ON.
       const dagTerrainSkirt = qNan.get('nanitedskirt') !== '0';
+      // N9-C0: ?naniteleaf=1 also registers each tree pool's REAL mesh-leaf crown as
+      // a MATERIAL_CLASS.leaf head (hero ring ≤26 m) with the 'leaf' flutter channel.
+      // Opt-in until N9-C2's aggregate DAG extends leaves past 26 m; default OFF.
+      const naniteLeaf = qNan.get('naniteleaf') === '1';
       const wr = await buildWorldRegistry({
         renderer: engine.renderer,
         hf,
@@ -282,6 +292,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
         ...(dagTerrainPool ? { dagTerrainPool: true } : {}),
         ...(dagTerrainClip ? { dagTerrainClip: true } : {}),
         ...(dagTerrainSkirt ? {} : { dagTerrainSkirt: false }),
+        ...(naniteLeaf ? { leaf: true } : {}),
       });
       (engine as unknown as { naniteRegistry?: unknown }).naniteRegistry = wr.registry;
       naniteRegistry = wr.registry;

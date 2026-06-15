@@ -55,8 +55,21 @@ const EX_R1_FAR = 120;
  *  it the old path shows impostors, the hybrid's sanctioned far field (the
  *  N2 instance cull drops what impostors own; the N8 DAG retires this) */
 const TREE_GEO_FAR = 496;
+/** N9-C0: leaf-head cull-sphere wind padding (m). The crown does the FULL
+ *  vegWindOffset (lean+sway+branch+flutter) and sits at the tree top where sway
+ *  is maximal, so it rides the trunk's envelope — match the tree swayPad (3.8). */
+const LEAF_SWAY_PAD = 3.8;
 /** terrain window size: 7 quads → 98 tris, divides 4095 exactly (4096² field) */
 const TERRAIN_WIN_QUADS = 7;
+
+/** N9-C0: pack a per-species foliage tint into the leaf head's matParam (mesh
+ *  word 7) — linear RGB in the low 3 bytes + hueVar in the high byte (each 8-bit
+ *  unorm; the resolve isL branch unpacks it). The leaf channel carries no bark
+ *  layer / wind-profile byte, so all 32 bits are the tint. */
+function packLeafTint(c: { r: number; g: number; b: number; hueVar: number }): number {
+  const u8 = (x: number): number => Math.max(0, Math.min(255, Math.round(x * 255)));
+  return (u8(c.r) | (u8(c.g) << 8) | (u8(c.b) << 16) | (u8(c.hueVar) << 24)) >>> 0;
+}
 
 const TREE_MAX_CLS = 5;
 const SHRUB_CLASSES: ReadonlySet<number> = new Set([
@@ -104,7 +117,10 @@ function attrOf(node: StorageBufferNode<'vec4'>): StorageBufferAttribute {
 }
 
 /** BufferGeometry → packed ExplicitSource (vdata vec4 → 4×u8 word) */
-export function geometryToSource(geo: BufferGeometry): ExplicitSource {
+export function geometryToSource(
+  geo: BufferGeometry,
+  opts?: { doubleSided?: boolean },
+): ExplicitSource {
   const pos = geo.attributes.position;
   if (!pos || pos.itemSize !== 3) throw new Error('WorldRegistry: geometry lacks stride-3 positions');
   if (!geo.attributes.normal) geo.computeVertexNormals();
@@ -129,8 +145,26 @@ export function geometryToSource(geo: BufferGeometry): ExplicitSource {
   }
   const idx = geo.index;
   if (!idx) throw new Error('WorldRegistry: geometry not indexed');
-  const indices =
+  let indices =
     idx.array instanceof Uint32Array ? idx.array : new Uint32Array(idx.array as ArrayLike<number>);
+  // N9-C0: leaves are DOUBLE-SIDED, but the SW raster backface-culls by winding
+  // (CCW only) so a single-winding leaf strip only rasters from its front face
+  // (visible looking UP the tree, culled looking down). Emit each triangle in
+  // BOTH windings (the terrain-skirt trick): whichever faces the camera passes
+  // the cull, the other is culled (no z-fight, ≈0 extra raster cost). Same verts;
+  // the resolve already flips the leaf normal toward the camera for lighting.
+  if (opts?.doubleSided) {
+    const triCount = indices.length / 3;
+    const doubled = new Uint32Array(indices.length * 2);
+    doubled.set(indices, 0);
+    for (let t = 0; t < triCount; t++) {
+      const b = t * 3;
+      doubled[indices.length + b] = indices[b] as number;
+      doubled[indices.length + b + 1] = indices[b + 2] as number; // swap 1↔2 → reversed winding
+      doubled[indices.length + b + 2] = indices[b + 1] as number;
+    }
+    indices = doubled;
+  }
   return { kind: 'mesh', positions, normals, uvs, vdata, indices };
 }
 
@@ -228,6 +262,12 @@ export async function buildWorldRegistry(input: {
    *  to seal inter-level T-junction cracks that would otherwise show sky. Default
    *  true; `?nanitedskirt=0` turns them off for a same-pose A/B. */
   dagTerrainSkirt?: boolean;
+  /** N9-C0 (`?naniteleaf=1`): also register each tree pool's REAL mesh-leaf crown
+   *  as a MATERIAL_CLASS.leaf head, bound to the SAME instances as the bark trunk
+   *  (a co-located mesh, not a LOD), with the 'leaf' flutter channel. Hero-ring
+   *  only (≤R0_FAR=26 m) until N9-C2 extends it via the aggregate DAG. Opt-in;
+   *  default off (bit-identical boot). Tree pools only. */
+  leaf?: boolean;
   /** N8-D1d: numeric world seed (WorldSeed.seed) → the terrain-DAG cache key.
    *  The heights are deterministic in the seed, so a cached DAG loads instantly
    *  (boot renders the DAG, no fallback). Omit to disable caching (always build). */
@@ -246,6 +286,7 @@ export async function buildWorldRegistry(input: {
     dagTerrainPool,
     dagTerrainClip,
     dagTerrainSkirt,
+    leaf: leafOn,
     seed,
   } = input;
   const inSet = (c: MaterialClassId): boolean => !classes || classes.has(c);
@@ -295,6 +336,10 @@ export async function buildWorldRegistry(input: {
   // ---- register pools --------------------------------------------------------
   const reg = new GeometryRegistry();
   const heads = new Map<number, MeshHandle>(); // idF → chain head
+  // N9-C0: idF → leaf-class head (the co-located crown on the same instances as
+  // the bark trunk). Populated only when leafOn; bound in a separate pass below
+  // (a mesh's instance streams must be consecutive in the cursor).
+  const leafHeads = new Map<number, MeshHandle>();
   // N8-D1: heads whose class wants a DAG — built after registration, attached
   // after build(). The DAG comes off the head's FULL-detail source (rings[0]).
   const toDag: { handle: MeshHandle; source: ExplicitSource; label: string }[] = [];
@@ -356,6 +401,23 @@ export async function buildWorldRegistry(input: {
     reg.setMaxDistance(head, maxDist);
     heads.set(idF, head);
     if (dag?.has(policy.matClass)) toDag.push({ handle: head, source: headSource, label });
+
+    // N9-C0: the hero-ring REAL leaf crown as a SEPARATE MATERIAL_CLASS.leaf mesh
+    // bound to the SAME instances (trunk + crown render together — not LODs). The
+    // 'leaf' channel carries the full vegWindOffset wind; the per-species tint packs
+    // into matParam (this channel has no bark layer / wind profile). Hero envelope
+    // only (≤R0_FAR) until N9-C2's aggregate DAG extends it past 26 m. Opt-in.
+    if (leafOn && pool.leaf) {
+      const leafHead = reg.registerMesh(geometryToSource(pool.leaf.geo, { doubleSided: true }), 'leaf', {
+        transformChannel: 'leaf',
+        castShadows: false,
+        label: `${label}/leaf`,
+        swayPad: LEAF_SWAY_PAD,
+        matParam: packLeafTint(pool.leaf.color),
+      });
+      reg.setMaxDistance(leafHead, R0_FAR);
+      leafHeads.set(idF, leafHead);
+    }
   }
 
   // bind partitioned instances to chain heads. ?stress=N (synthetic, F3/F16
@@ -366,12 +428,15 @@ export async function buildWorldRegistry(input: {
   const stressParam = Number(new URLSearchParams(window.location.search).get('stress') ?? '1');
   const stress = Number.isFinite(stressParam) ? Math.max(1, Math.min(8, Math.floor(stressParam))) : 1;
   let deferredInstances = 0;
-  for (const [id, s] of perId) {
-    const head = heads.get(id);
-    if (head === undefined) {
-      deferredInstances += s.fill;
-      continue;
-    }
+  // bind a stream + its ?stress fan-out to one mesh head. A mesh's instance
+  // streams must be CONSECUTIVE in the global cursor (GeometryRegistry.bindInstances
+  // enforces it), so the leaf heads bind in their OWN pass below — never interleaved
+  // with bark. The jitter is deterministic, so re-running it keeps each crown on its
+  // trunk for both meshes.
+  const bindStream = (
+    head: MeshHandle,
+    s: { a: Float32Array; b: Float32Array; fill: number },
+  ): void => {
     reg.bindInstances(head, { a: s.a, b: s.b });
     for (let k = 1; k < stress; k++) {
       const a = new Float32Array(s.a);
@@ -380,6 +445,22 @@ export async function buildWorldRegistry(input: {
         a[i * 4 + 2] = (a[i * 4 + 2] as number) + (((k * 53 + i) % 11) - 5) * 0.73;
       }
       reg.bindInstances(head, { a, b: s.b });
+    }
+  };
+  for (const [id, s] of perId) {
+    const head = heads.get(id);
+    if (head === undefined) {
+      deferredInstances += s.fill;
+      continue;
+    }
+    bindStream(head, s);
+  }
+  // N9-C0: the SAME instances → each tree pool's leaf head (separate pass per the
+  // consecutive-streams rule; identical stress jitter keeps each crown on its trunk).
+  if (leafOn) {
+    for (const [id, s] of perId) {
+      const leafHead = leafHeads.get(id);
+      if (leafHead !== undefined) bindStream(leafHead, s);
     }
   }
 

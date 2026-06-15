@@ -17,7 +17,7 @@ import type { NB, NF, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
 import { DISP } from '../render/TerrainMaterial';
 import { PERIOD_FBM, PERIOD_RID, PERIOD_VAL } from '../gpu/passes/NoiseBake';
 import { WORLD_SIZE } from '../world/WorldConst';
-import { gustAt, gustLagAt, windExposure, windU, WIND_LAG_M } from '../render/Wind';
+import { gustAt, gustLagAt, leafFlutterAxes, windExposure, windU, WIND_LAG_M } from '../render/Wind';
 import { SKIRT_DEPTH_A, SKIRT_DEPTH_B } from './BuildHeightDag';
 import { CLUSTER_FLAG_DAG, MESH_WORDS, TRANSFORM_CHANNEL, VERT_WORDS } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
@@ -41,9 +41,11 @@ export interface TrunkWindOpt {
   camPos: UniformV3;
 }
 
-/** per-instance trunk-wind scalars precomputed in makeCtx (the 4 gust texture
- *  samples happen ONCE per instance here, not per rasterised corner). The
- *  per-vertex prof/flex scaling is applied in fetchWorldVert. */
+/** per-instance wind scalars precomputed in makeCtx (the gust texture samples
+ *  happen ONCE per instance here, not per rasterised corner). The per-vertex
+ *  prof/flex scaling is applied in fetchWorldVert. Carries BOTH channels: the
+ *  trunk fields stay 0 on the 'leaf' channel and `flutBase` (N9-C0 leaf flutter)
+ *  stays 0 on the 'trunk' channel — a mesh is exactly one channel. */
 interface TrunkWindFields {
   h0: NF;
   dirX: NF;
@@ -53,6 +55,8 @@ interface TrunkWindFields {
   natW: NF;
   ph: NF;
   branchBase: NF;
+  /** N9-C0: leaf-flutter amplitude base (s·gust·exposure, ≤120 m faded); 0 on trunk */
+  flutBase: NF;
 }
 
 /**
@@ -163,6 +167,20 @@ export function makeFetch(
       const natW = float(0).toVar();
       const ph = float(0).toVar();
       const branchBase = float(0).toVar();
+      const flutBase = float(0).toVar();
+      // N9-C0: SHARED per-tree wind key. The bark trunk and the leaf crown of ONE
+      // tree are now SEPARATE meshes with DIFFERENT global instIds, so keying the
+      // sway phase on instId desyncs them (crown swings out of phase with its
+      // branches). Hash the world POSITION instead — identical for both, since the
+      // leaf head binds the SAME instance A as the bark — so they sway in phase.
+      // (Quantized ~0.125 m; +half keeps the f32→u32 cast positive. This also
+      // restores the original's shared-slot behaviour: bark+foliage were one
+      // instance there. The per-instance TINT still keys on instId, unchanged.)
+      const half = WORLD_SIZE * 0.5;
+      const posKey = uint(A.x.add(half).mul(8))
+        .mul(uint(73856093))
+        .bitXor(uint(A.z.add(half).mul(8)).mul(uint(19349663)))
+        .toVar();
       If(channel.equal(uint(TRANSFORM_CHANNEL.trunk)), () => {
         const origin = A.xyz as unknown as NV3;
         const s = windU.strength as unknown as NF;
@@ -179,12 +197,40 @@ export function makeFetch(
         const eks = e.mul(k).mul(farAtten).toVar();
         leanBase.assign(s.mul(s).mul(g.mul(0.9).add(0.5)).mul(eks).mul(1.1));
         swayABase.assign(s.mul(g.mul(0.75).add(0.25)).mul(eks).mul(0.5));
-        const instPhase = slotHash(instId, 211).toVar();
+        const instPhase = slotHash(posKey, 211).toVar();
         const fJit = instPhase.mul(7.31).fract();
         natW.assign(fJit.mul(0.3).add(0.15).mul(6.2832 * 1).mul(freq).div(A.w.max(0.25).sqrt()));
         ph.assign(instPhase.mul(6.2832));
         const brAtten = float(1).sub(dist.sub(160).div(140).clamp(0, 1));
         branchBase.assign(gL.sub(0.45).mul(s).mul(eks).mul(0.55).mul(brAtten));
+      });
+      // N9-C0: leaf channel = the FULL Wind.vegWindOffset (terms 1–4), so the
+      // crown SWAYS WITH the trunk (lean+sway+branch) AND flutters — NOT a
+      // reinvented motion. Mirrors the trunk block with TREE-fixed params (k=1,
+      // freq=1, h0=6: matParam carries the leaf TINT on this channel, not a wind
+      // profile) and adds the flutter base (term 4). The gust/exposure FIELD reads
+      // happen ONCE per instance here; explicitWorldByIndex does the per-vertex
+      // prof/flex scaling + the shared leafFlutterAxes() noise tap.
+      If(channel.equal(uint(TRANSFORM_CHANNEL.leaf)), () => {
+        const origin = A.xyz as unknown as NV3;
+        const s = windU.strength as unknown as NF;
+        const dist = origin.sub(vec3(wind.camPos)).length();
+        const e = windExposure(origin.xz as unknown as NV2);
+        const g = gustAt(origin.xz as unknown as NV2);
+        const gL = gustLagAt(origin.xz as unknown as NV2, WIND_LAG_M);
+        h0.assign(float(6));
+        const farAtten = float(1).sub(dist.sub(380).div(100).clamp(0, 1));
+        const eks = e.mul(farAtten).toVar();
+        leanBase.assign(s.mul(s).mul(g.mul(0.9).add(0.5)).mul(eks).mul(1.1));
+        swayABase.assign(s.mul(g.mul(0.75).add(0.25)).mul(eks).mul(0.5));
+        const instPhase = slotHash(posKey, 211).toVar();
+        const fJit = instPhase.mul(7.31).fract();
+        natW.assign(fJit.mul(0.3).add(0.15).mul(6.2832).div(A.w.max(0.25).sqrt()));
+        ph.assign(instPhase.mul(6.2832));
+        const brAtten = float(1).sub(dist.sub(160).div(140).clamp(0, 1));
+        branchBase.assign(gL.sub(0.45).mul(s).mul(eks).mul(0.55).mul(brAtten));
+        const flutAtten = float(1).sub(dist.sub(40).div(80).clamp(0, 1));
+        flutBase.assign(s.mul(g.mul(0.7).add(0.3)).mul(eks).mul(0.07).mul(flutAtten));
       });
       windFields = {
         h0: h0 as unknown as NF,
@@ -195,6 +241,7 @@ export function makeFetch(
         natW: natW as unknown as NF,
         ph: ph as unknown as NF,
         branchBase: branchBase as unknown as NF,
+        flutBase: flutBase as unknown as NF,
       };
     }
     return {
@@ -342,6 +389,48 @@ export function makeFetch(
               w.dirX.mul(along).sub(w.dirY.mul(swayX)),
               dy,
               w.dirY.mul(along).add(w.dirX.mul(swayX)),
+            ),
+          ),
+        );
+      });
+      // N9-C0: leaf channel — the FULL Wind.vegWindOffset (terms 1–4) so the crown
+      // SWAYS WITH the trunk (lean+sway+branch, mirroring the trunk block above)
+      // PLUS the shared leaf flutter (term 4 via leafFlutterAxes — the SAME advected-
+      // fbm shimmer the old foliage material uses, not a reinvention). vdata.y=flex,
+      // vdata.z=phase: the same baked attributes the old path reads.
+      If(ctx.channel.equal(uint(TRANSFORM_CHANNEL.leaf)), () => {
+        const w = ctx.wind as TrunkWindFields;
+        const localY = (p as unknown as NV3).y.mul(ctx.A.w as unknown as NF);
+        const vd = elemU(gpu.verts, vb.add(uint(5)));
+        const flex = toF(vd.shiftRight(uint(8)).bitAnd(uint(0xff))).div(255);
+        const vphase = toF(vd.shiftRight(uint(16)).bitAnd(uint(0xff))).div(255);
+        const yn = localY.div(localY.add(w.h0));
+        const prof = yn.mul(yn).mul(1.7).add(flex.mul(0.3)).min(1.6);
+        const swayA = w.swayABase.mul(prof);
+        const sway = time.mul(w.natW).add(w.ph).sin().mul(swayA);
+        const swayX = time
+          .mul(w.natW.mul(1.31))
+          .add(w.ph.mul(1.7))
+          .sin()
+          .mul(swayA)
+          .mul(0.45);
+        // term 4 flutter: the shared advected-fbm axes × per-instance flutBase × flex
+        const flutA = w.flutBase.mul(flex);
+        const instPhase = w.ph.div(6.2832);
+        const flutAx = leafFlutterAxes(ctx.A.xz as unknown as NV2, vphase as unknown as NF, instPhase as unknown as NF);
+        const along = w.leanBase
+          .mul(prof)
+          .add(sway)
+          .add(w.branchBase.mul(flex))
+          .add(flutAx.x.mul(flutA));
+        const across = swayX.add(flutAx.y.mul(flutA));
+        const dy = along.abs().add(across.abs()).mul(flex).mul(-0.2);
+        out.assign(
+          out.add(
+            vec3(
+              w.dirX.mul(along).sub(w.dirY.mul(across)),
+              dy,
+              w.dirY.mul(along).add(w.dirX.mul(across)),
             ),
           ),
         );

@@ -103,6 +103,26 @@ export function windExposure(xz: NV2): NF {
   return float(1).sub(canopyAt(ctx.canopyTex, xz).mul(0.6));
 }
 
+/**
+ * Leaf micro-flutter axes (vegWindOffset term 4): two zero-mean advected-fbm
+ * gradient channels (along- + across-wind), decorrelated per vertex by the baked
+ * vdata.z phase and per instance by `instPhase`. A SHIMMER, not a shake (features
+ * ~6 m advected ~0.75 Hz, clamped). The caller scales by its own amplitude `flutA`.
+ * Shared so the old foliage material AND the nanite 'leaf' transform channel read
+ * the SAME tuned motion — never reinvented, never drifting. (Exported for nanite.)
+ */
+export function leafFlutterAxes(xz: NV2, vdataZ: NF, instPhase: NF): NV2 {
+  if (!ctx) throw new Error('wind context not set');
+  const d = vec2(windU.dir as unknown as NV2);
+  const pF = xz
+    .add(vdataZ.mul(vec2(37.1, 17.7)))
+    .add(vec2(instPhase.mul(91), 0))
+    .sub(d.mul(time.mul(4.5)))
+    .div(6 * PERIOD_FBM);
+  const fl = texture(ctx.noiseA, pF, 0) as unknown as NV4;
+  return vec2(fl.z.clamp(-1.2, 1.2), fl.w.clamp(-1.2, 1.2)) as unknown as NV2;
+}
+
 export interface WindBind {
   /** overall response scale (1 = trees) */
   k: number;
@@ -180,15 +200,10 @@ export function vegWindOffset(a: WindVertexArgs): NV3 {
   // ~6 m advected slowly (~0.75 Hz) — the first cut (±12 cm, 3–4 Hz
   // decorrelation) read as "leaves shaking wildly" (user)
   const flutAtten = float(1).sub(a.dist.sub(40).div(80).clamp(0, 1));
-  const pF = a.origin.xz
-    .add(vd.z.mul(vec2(37.1, 17.7)))
-    .add(vec2(a.instPhase.mul(91), 0))
-    .sub(d.mul(time.mul(4.5)))
-    .div(6 * PERIOD_FBM);
-  const fl = texture(ctx.noiseA, pF, 0) as unknown as NV4;
+  const flutAx = leafFlutterAxes(a.origin.xz, vd.z, a.instPhase);
   const flutA = s.mul(g.mul(0.7).add(0.3)).mul(eks).mul(flex).mul(0.07).mul(flutAtten);
-  const flutD = fl.z.clamp(-1.2, 1.2).mul(flutA);
-  const flutP = fl.w.clamp(-1.2, 1.2).mul(flutA);
+  const flutD = flutAx.x.mul(flutA);
+  const flutP = flutAx.y.mul(flutA);
 
   const along = lean.add(sway).add(branch).add(flutD);
   const across = swayX.add(flutP);

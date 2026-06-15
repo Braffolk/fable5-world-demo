@@ -534,6 +534,32 @@ OPEN QUESTIONS / RISKS (settle in-chunk):
 - velocity for wind-displaced leaves: D-N16 (deferred; TRAA camera-reproject; flutter falls back to variance
   clipping — accept).
 
+N9-C0 LANDED — OKAY STATE (2026-06-15; user accepted "okay" + deferred the fluffiness to a future task):
+- WORKS: r0 `foliageMesh` registers as MATERIAL_CLASS.leaf (≤R0_FAR=26 m), bound to the SAME tree instances as the
+  bark trunk (co-located mesh, NOT a LOD — trunk + crown render together). Resolve `isL` branch: per-species tint via
+  matParam (RGB + hueVar packed), per-leaf hue/AO from vdata, warm translucent backlight (port of foliageMaterial),
+  OPAQUE, DOUBLE-SIDED (geometry-dup — both windings). 'leaf' wind channel = the FULL Wind.vegWindOffset (terms 1–4,
+  via the shared `leafFlutterAxes`) so the crown sways WITH the trunk, keyed on a SHARED WORLD-POSITION hash (bark and
+  leaf are SEPARATE instances → different instId → keying wind on instId DESYNCS them). `?naniteleaf=1` opt-in;
+  `?naniteleafdensity=N` (default 4000) dials the per-crown anchor budget. Looks the SAME with/without `?nanitedag`.
+- BUGS FOUND + FIXED (durable — do NOT re-derive): (1) the workgroup makeCtx CACHE (`NaniteRaster` wgcache, default
+  ON) hand-serializes TrunkWindFields field-by-field into workgroup shared memory; adding the `flutBase` leaf-flutter
+  field required extending `shF` size + the write + the read (slot 19) — else the raster builds an 8-field wind object
+  → `w.flutBase` undefined → BOOT CRASH. LESSON: a field added to any MANUALLY-serialized struct must extend EVERY
+  pack/unpack site — grep a MEMBER name, not the constructor ([[debug-by-data-not-constructor]]). (2) leaf NEEDLES are
+  long/thin/near-camera tris → their bbox exceeds the SW raster's 16 px i32 limit → they route to the HW vertex-pull
+  path; a dense crown reached 876k hwTris vs the old `HW_CAP` 262k → clamp → DROPPED tris (black holes in foliage AND
+  near terrain — this was behind the "dag kills leaves" + "terrain vanishes" reports). Raised `HW_CAP` → 2_097_152.
+- DEFERRED to a FUTURE TASK (user directive, AFTER the core nanite work — "we might wanna rethink how we create this
+  geometry"): the nanite crown reads LESS FLUFFY than the non-nanite version. The old hero combined the mesh sprays
+  with DENSE alpha CARDS (the "transparentish combination") — cards are D-N3-banned from the SW raster, and
+  mesh-sprays-alone cover less. Conifer needle DISTRIBUTION matters: spruce (anchorLevel 2 × needleCount 30 = many
+  thin sprays) reads sparser than pine (anchorLevel 3 × 88 = bushy) at the same budget. This is a GENERATION question
+  (denser/bushier sprays, or let the aggregate's area-preservation fill it), NOT a plumbing bug. Accept "okay" for now.
+- THE TWO-SIDED RASTER (per-mesh double-sided flag + back-face vertex-swap in the raster; non-leaf clusters stay
+  bit-identical) is the agreed C2-time fix for the geometry-dup — halves the HW load + the registry memory (the
+  "selective culling" the user flagged). Do it when leaves scale to all distances (C2), alongside the aggregate.
+
 ### Memory budget (track in ledger from N1; probed limits above)
 - Per-stage binding ceiling: ≤10 storage buffers (F9) — the PACKED layout in
   "Cluster build" exists to satisfy this; count bindings per kernel in code review.

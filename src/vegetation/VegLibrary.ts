@@ -70,6 +70,15 @@ export interface VegPool {
   /** cull-sphere data (from geometry bounds, conservative over parts) */
   height: number;
   radius: number;
+  /** N9-C0: hero-ring REAL leaf crown (≤26 m) + its per-species tint, for the
+   *  MATERIAL_CLASS.leaf registration — a co-located mesh bound to the SAME
+   *  instances as the bark trunk (trunk + crown render together, not LODs). The
+   *  tint packs into the leaf head's matParam. Tree pools only (undefined else). */
+  leaf?: {
+    geo: BufferGeometry;
+    tris: number;
+    color: { r: number; g: number; b: number; hueVar: number };
+  };
 }
 
 /**
@@ -139,7 +148,16 @@ export async function buildVegLibrary(
   renderer: Renderer,
   seed: WorldSeed,
   progress: (p: number, msg: string) => void = () => {},
+  /** N9-C0: per-crown real-leaf anchor budget for the nanite leaf head (`?naniteleafdensity=N`).
+   *  The card-era hero leaned on all-anchor cards for fill, so the mesh crown was a sparse
+   *  detail layer (~850); the nanite path has NO cards (D-N3), so it must carry the crown.
+   *  Full density (all anchors) is ~827 MB / the D-N41 cluster wall — the aggregate (C2) is the
+   *  real fix; this caps it to a stable hero density. Default 2500; higher = fuller + heavier. */
+  opts?: { leafAnchorTarget?: number },
 ): Promise<VegLib> {
+  // N9-C0: per-crown real-leaf anchor budget for the nanite leaf head. Default 4000
+  // — the density the user signed off on for spruce + pine; ?naniteleafdensity=N dials it.
+  const leafAnchorTarget = opts?.leafAnchorTarget ?? 4000;
   // ---- shared captures -------------------------------------------------------
   progress(0, 'veg: capturing foliage atlases');
   const atlases = new Map<string, DataTexture>();
@@ -209,7 +227,13 @@ export async function buildVegLibrary(
         lod: 0,
         inst,
         foliageMode: 'hybrid',
-        hero: HERO_DIETS[sp.id] ?? { cardTarget: 1500, meshAnchorTarget: 1200 },
+        // N9-C0: the nanite leaf head renders foliageMesh as the WHOLE crown — there
+        // are NO cards in the SW raster (alpha-test, D-N3). The card-era
+        // meshAnchorTarget (a sparse detail layer ON TOP of all-anchor cards) read as
+        // a near-bare tree through nanite, so build the real needle/leaf crown at
+        // FULL anchor density to match the old card coverage. (cardTarget kept for the
+        // impostor bake + the ?oldgeo ref; only the mesh anchors densify.)
+        hero: { ...(HERO_DIETS[sp.id] ?? { cardTarget: 1500 }), meshAnchorTarget: leafAnchorTarget },
       });
       const t1 = buildTree(sp, seed.rng(label), { lod: 1, inst });
       const t2 = buildTree(sp, seed.rng(label), { lod: 2, inst });
@@ -239,6 +263,16 @@ export async function buildVegLibrary(
         trisR2: t2.stats.tris,
         height: b.height,
         radius: b.radius,
+        // N9-C0: the same real mesh-leaf crown pushed into r0 above, exposed for
+        // the leaf MATERIAL_CLASS registration (the old-path r0 part stays for the
+        // ?oldgeo A/B; the nanite leaf head repacks this geometry separately).
+        leaf: t0.foliageMesh
+          ? {
+              geo: t0.foliageMesh,
+              tris: t0.foliageMesh.index ? t0.foliageMesh.index.count / 3 : 0,
+              color: sp.foliageColor,
+            }
+          : undefined,
       });
     }
     clsMaxDist[ci] = 1e8; // trees continue as impostors

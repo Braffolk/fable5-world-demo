@@ -9,6 +9,27 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-15 (bl): **N9-C0 — REAL leaf geometry renders through the nanite path (OKAY state, user-accepted; the
+  remaining fluffiness gap DEFERRED to a future generation-rethink task). The hero `foliageMesh` is surfaced as
+  MATERIAL_CLASS.leaf on the tree instances — lit (isL resolve branch: per-species tint + per-leaf hue/AO + warm
+  backlight, OPAQUE, double-sided), per-leaf flutter on the FULL vegWindOffset synced to the trunk via a shared
+  world-position wind key; `?naniteleaf=1` / `?naniteleafdensity=N` (default 4000).** (Opus 4.8 1M.) A messy,
+  measurement-driven debugging session — three real bugs, none found by guessing: (1) BOOT CRASH — the `NaniteRaster`
+  workgroup makeCtx cache (wgcache, default on) hand-serializes the wind struct field-by-field into shared memory;
+  the new `flutBase` field needed its own slot (size+write+read), else `w.flutBase` was undefined at shader-build →
+  crash. (2) "nanitedag kills leaves" + "terrain vanishes when looking at trees" = the HW raster JOB QUEUE
+  OVERFLOWING — leaf needles (long/thin near-camera tris) flood the HW vertex-pull path; the user's dense view hit
+  **876k hwTris vs HW_CAP 262k** → clamp dropped triangles (black holes in foliage AND near terrain). Raised
+  HW_CAP→2,097,152. (3) leaf wind desynced from the branches (bark + leaf are SEPARATE instances → different instId)
+  → re-keyed the wind phase on a shared WORLD-POSITION hash. **PROCESS LESSON (user, repeatedly + sharply): when a
+  runtime object is missing a struct field, grep a MEMBER NAME to find the second (hand-rolled) serialization site —
+  do NOT search the constructor or invent browser-cache theories.** I burned a lot of the user's time guessing
+  mechanisms that all measured false ([[debug-by-data-not-constructor]] saved). DEFERRED (user, after the core nanite
+  work — "rethink how we create this geometry"): the crown reads LESS FLUFFY than the non-nanite version (old hero =
+  mesh sprays + DENSE alpha CARDS which are D-N3-banned from SW raster; conifer spray distribution differs — spruce
+  anchorLevel 2 ×30 needles vs pine anchorLevel 3 ×88). Noted in SPEC `### Foliage (N9)` as a GENERATION task; the
+  TWO-SIDED RASTER (drop the geometry-dup, halve HW+memory) is the agreed C2 fix. tsc clean throughout.
+
 - 2026-06-15 (bk): **N9 SCOPED (user-chosen frontier after D1e) — foliage as REAL geometry. Recon settled the pivot:
   real leaf meshes ALREADY EXIST (only at the hero ring); the AGGREGATE DAG is the net-new spine. Full plan written to
   SPEC `### Foliage (N9)` + D-N42 + ROADMAP C0–C4. Compact pending, then build.** (Opus 4.8 1M, docs only — no code.)
