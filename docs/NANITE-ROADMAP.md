@@ -11,23 +11,22 @@
 > must finish first. `spec` = the `## header` in NANITE-SPEC.md (+ D-N* / file refs).
 
 ## YOU ARE HERE — 2026-06-15
-**N8-D1e is at its USER CHECKPOINT — explicit-mesh DAG VALIDATED world-wide + MEASURED (LOG bj / D-N41). Engineering
-done; two visible-everywhere DEFAULT decisions wait for the user's in-motion review.**
-- **VALIDATED ✅:** bark/deadwood/rock all pass the no-pop continuous-LOD gate (probe-zoom CLASS-parameterised);
-  **bark holds under the 'trunk' wind channel** (the key new proof past the D1c rock hero). Crack-free is build-time-proven.
-  RIDER resolved — bm7/bm4/worstpos all render trunks+rock+deadwood; NO migration/cull gap (the old "bare terrain" read
-  was a transient framing).
-- **MEASURED ✅ (bm4 forest = DAG worst case):** **rock+deadwood DAG = FREE** (rDepth 1.44 == discrete, +164 ms boot);
-  **bark DAG = ~1.7× raster** (1.44→~2.5 ms) + **+3 s sync boot** — the 188k-tree per-instance floor, NOT fixable by τ
-  (saturates) or minPx (inert). DAG-all is pixel-identical to discrete STATICALLY (the 2× buys only no-pop-under-motion).
-- **THE CHECKPOINT DECISIONS (user's call — I did NOT flip defaults; one-line each):** (1) default-on **rock+deadwood DAG**?
-  (free no-pop — RECOMMENDED). (2) **bark DAG** stays opt-in (`?nanitedag=bark`) until its real fix lands? The fix =
-  **N8-HIC hierarchical instance culling** (cull distant instance GROUPS → O(regions); also the unbounded-far-field unblock,
-  D-N35), OR wait for N9 foliage aggregates to change the density math. (3) the D-N30 explicit-DAG **Worker build** (kills the
-  sync-boot hitch) is only needed once a class goes default — build it with whichever flip the user picks.
-- **NEXT FRONTIER after the checkpoint (user's pick):** **N8-HIC** (the bark unblock + real-geometry far-field) or **N9**
-  (foliage aggregate DAG — the dominant shadow casters; itself was blockedBy D1e, now validated). Read SPEC D-N41 + D-N35
-  + `### DAG (N8)` first.
+**FRONTIER: N9 — foliage as REAL geometry (user-chosen + SCOPED 2026-06-15; we compacted, then start). Read SPEC
+`### Foliage (N9)` + D-N42 + the DAG-section "Aggregates" FIRST — the full chunk plan + verified recon live there.**
+- **THE PIVOT (verified):** real leaf/needle geometry ALREADY EXISTS (`LeafMesh.ts` → `foliageMesh`; impostor cards are
+  baked FROM it) — but ONLY at the hero ring (r0 ≤26 m); r1/r2 are cards. So N9 SURFACES it, doesn't generate it. The
+  net-new SPINE is the AGGREGATE DAG (area-preserving leaf removal: drop leaves + GROW survivors so far crowns stay full
+  leafy silhouettes, never balding — "still looks like leaves"; QEM can't, it degenerates on disconnected quads).
+  `MATERIAL_CLASS.leaf=4` / `TRANSFORM_CHANNEL.leaf=2` / the `WorldRegistry` deferral hook are all pre-wired (bark pattern).
+- **→ START AT N9-C0** (leaf plumbing, mechanical, hero-ring visible win) → C1 aggregate builder (standalone, node-tested,
+  the hard part) → C2 wire+continuous LOD (**re-measures the bark per-instance floor at leaf density — reveals if N8-HIC
+  is now needed**) → C3 impostor retirement (**USER JUDGE SHOTS — not autonomous**) → C4 close. Leaves are OPAQUE real
+  geometry, DOUBLE-SIDED (D-N3 alpha ban). NOTE: this re-opens un-black-slating → the two-frame-vs-main gate (AUDIT-1 META).
+- **N8-D1e LEFT AT ITS CHECKPOINT (validated + measured, LOG bj / D-N41) — 3 pending USER decisions, NOT blocking N9:**
+  (1) default-on **rock+deadwood DAG** (free no-pop — recommended); (2) **bark DAG** stays opt-in until **N8-HIC** (the
+  hierarchical instance cull — N9-C2 will tell us if it's needed); (3) explicit-DAG **Worker build** only when a class
+  goes default. I did NOT flip defaults (visible-everywhere = user-present rule). bark DAG = ~1.7× raster in dense forest
+  (the per-instance floor, τ/minPx can't fix); rock+deadwood DAG = free.
 
 **JUST CLOSED earlier this session (LOG bd–bi) — durable, don't re-derive:**
 - **PERF-4 (post chain) ✅** — THE finding (LOG bg, high-res GPU-bound ablation ×2): **AO ≈ 100% of the real post
@@ -115,7 +114,12 @@ N0 scaffold ✅ · N1 clusterize ✅ · N2 cull ✅ · N3 vis-buffer ✅ · N4 m
 |----|------|--------|-----------|------|------|
 | `N6` | Migrate remaining opaque pools (debris) | ⬜ | — | Phase plan N6 | register debris pool → DAG applies on registration |
 | `N7` | Hybrid close | ⬜ | `N6` | Phase plan N7 | finish the HW/SW hybrid envelope |
-| `N9` | Foliage aggregate DAG (leaf-removal, area-preserving) | ⬜ | `N8-D1e` | DAG (N8) / Phase N9 | the DOMINANT shadow casters; unlocks `S4`'s full value |
+| `N9` | **Foliage as REAL geometry** (SCOPED — D-N42, SPEC `### Foliage (N9)`) | 🔵 | — | D-N42; `### Foliage (N9)` | surface the existing `foliageMesh` + the aggregate DAG; the DOMINANT shadow casters; unlocks `S4`. Chunks ↓ |
+| `N9-C0` | Leaf PLUMBING (material class + 'leaf' channel + hero-ring reg) | ⬜ | — | `### Foliage (N9)` | mechanical, bark-pattern; real crowns ≤26 m (visible win); OPAQUE+double-sided; A/B vs old `foliageMode='mesh'` |
+| `N9-C1` | AGGREGATE DAG builder (area-preserving leaf removal) | ⬜ | `N9-C0` | D-N3; `### Foliage (N9)` | THE hard part, net-new; node-tested standalone (probe-aggregate); drop leaves + grow survivors; bit-exact sibling pairs |
+| `N9-C2` | Wire aggregate → GPU (continuous leaf LOD, full distance) | ⬜ | `N9-C1` | `### Foliage (N9)` | attachDag leaf aggregate; probe-zoom no-pop; **re-measures the per-instance floor at leaf density → reveals if N8-HIC needed** |
+| `N9-C3` | Impostor retirement (ring-by-ring, **USER JUDGE SHOTS**) | ⬜ | `N9-C2` | `### Foliage (N9)` | A/B real crowns vs cards+CanopyShell at vistas; retire where user signs off; CanopyShell dies after vista shots |
+| `N9-C4` | Close — perf ledger + battery + two-frame-vs-main + CHECKPOINT | ⬜ | `N9-C3` | `### Foliage (N9)` | un-black-slating starts; two-frame gate re-applies (AUDIT-1 META); gallery A/B per species |
 
 ## D. SHADOWS (S-stack) — clipmap banked, perf deferred below core raster (SPEC D-N29)
 | id | task | status | blockedBy | spec | scope |

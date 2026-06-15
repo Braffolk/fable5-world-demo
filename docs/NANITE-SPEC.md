@@ -466,6 +466,74 @@ measurement discipline; shot cycles ~2–3 min, cooled ABAB rounds 15–30 min e
 - 4-km far field: DAG bottoms out at coarse blobs; impostors stay until N9 judges
   each ring. CanopyShell deletion only after vista shots pass.
 
+### Foliage (N9) — implementation-ready scope (2026-06-15, recon-grounded; the AGGREGATE is the spine)
+
+THE KEY RECON FINDING (verified file:line): **real leaf/needle geometry ALREADY EXISTS.** `LeafMesh.ts`
+`buildLeaf` (folded 4-row strips, ~18 tris/leaf) + `buildNeedleSpray` (drooping stem + per-needle quads) →
+`TreeBuilder` `foliageMesh` (a BufferGeometry: pos/normal/uv + vdata u32 = hue|flex|phase|ao). The octahedral
+impostor cards (`FoliageCards.ts`) are BAKED FROM this same geometry. ⇒ **N9 SURFACES existing geometry through
+the path; it does NOT generate leaves.** BUT `foliageMesh` is built ONLY at the HERO ring (r0, ≤26 m;
+`VegLibrary.ts:216-220` pushes it; r1/r2 are cards) — so real leaves span ≤26 m today. Extending them to ALL
+distances is the AGGREGATE DAG's job, which is **NET-NEW** (no aggregate mode in `BuildDag` — verified).
+
+PRE-WIRED (cheap to slot in): `MATERIAL_CLASS.leaf = 4` + `TRANSFORM_CHANNEL.leaf = 2` already reserved
+(`GeometryRegistry.ts:95/104`). The registration DEFERRAL HOOK is `WorldRegistry.ts:302-334` (`notePart` keeps
+parts[0]=bark, DEFERS parts[1+]=cards+foliageMesh; no-policy pools — ferns/flowers cls 11-14 — defer ALL); boot
+logs `card/leaf tris deferred to N9: ~3.10M` = the N9 payload. The resolve material switch (`NaniteResolve.ts`
+isT/isR/isB/isD) + the transform channel (`NaniteFetch.ts`, trunk-only today) are the slot-in points — the bark
+pattern, mechanically.
+
+THE SPINE = the AGGREGATE DAG (D-N3 + the DAG-section "Aggregates"): QEM DEGENERATES on disconnected leaf quads,
+so the build is stochastic leaf REMOVAL + area redistribution onto survivors (Epic "Preserve Area" — dilate the
+open boundary edges of remaining geometry to hold silhouette mass), NOT edge-collapse. **PLAIN TERMS (the GOAL,
+not jargon):** far crowns must still LOOK LIKE A FULL LEAFY CROWN with cheaper geometry — so as leaves are dropped
+to cut tris, the SURVIVORS GROW to keep the crown's silhouette + density (fewer, bigger leaf shapes), never a
+thinning/balding crown (the naive-drop failure Epic fixed). Individual leaves aren't resolvable at range anyway;
+what must survive is the leafy MASS/colour/silhouette — and the user is the final judge of that (C3 judge shots).
+Emits the SAME cut metadata (own/parent error+sphere, bit-exact sibling pairs) → rides the EXISTING flat
+kClusterCull cut (D-N31) unchanged.
+
+CHUNK PLAN (each tsc-clean + committed + probe; mirrors N8-D0→D1 + N4's one-class-at-a-time):
+- **N9-C0 — leaf PLUMBING (mechanical, hero-ring only, the early visible win):** register r0 `foliageMesh` as
+  MATERIAL_CLASS.leaf (redirect the foliageMesh part out of the deferral); port `foliageMaterial` into a resolve
+  isL branch (albedo×hue/age tint, translucency/backlight, NO specular, energy-correct; **OPAQUE** — D-N3 bans
+  alpha-test in SW raster, the leaf SHAPE *is* the strip geometry not an alpha mask; **DOUBLE-SIDED** — both faces);
+  add the 'leaf' wind channel to NaniteFetch (vdata flutter, NO trunk lean; far-fade ~120 m per Wind.ts). Gate
+  `?naniteclasses=…,leaf` / a `?naniteleaf` flag. GATE: hero trees (≤26 m, bm7) gain real crowns ≥ the old hero
+  mesh-leaves (A/B vs old-path `foliageMode='mesh'`); per-leaf flutter; no black. Bounded ≤26 m envelope ⇒ no flood;
+  no aggregate yet ⇒ beyond 26 m no foliage (C2 extends it).
+- **N9-C1 — the AGGREGATE DAG BUILDER (the hard part; node-tested STANDALONE like N8-D0):** new `BuildAggregateDag`
+  (or an `aggregate` mode in BuildDag): connected-component leaf "islands" → stochastic removal per level
+  (seed-deterministic) + survivor area redistribution (scale / boundary-dilate to preserve PROJECTED silhouette
+  mass) → clusters + own/parent (error,sphere) bit-exact sibling pairs (crack-free by the same proof). Node probe
+  (probe-aggregate.ts): area preserved per level within tolerance, silhouette mass monotone, deterministic,
+  stuck-fallback (multiple roots legal). GATE: a hero crown aggregates dense→coarse, headless-validated.
+- **N9-C2 — wire the aggregate to GPU (continuous leaf LOD, full distance):** attachDag the leaf aggregate
+  (LEAF-class attach), inheriting the leaf draw envelope; continuous crown LOD hero-detail → few-tri coarse crown
+  at range (the "Nanite far field"). GATE: probe-zoom on leaves (monotonic τ, smooth zoom, no pop); crowns thin
+  gracefully; perf measured — **THIS is where the N8-HIC instance-floor question gets RE-MEASURED at leaf density**
+  (N9 reveals whether the hierarchical instance cull is now required, per D-N41).
+- **N9-C3 — IMPOSTOR RETIREMENT (ring-by-ring, USER JUDGE SHOTS — the spec mandate, NOT autonomous):** A/B real
+  crowns vs impostor cards + CanopyShell at vista framings; retire impostor rings where the user signs off
+  (`?nanite=0` ref); keep where crowns don't yet hold. CanopyShell (`world/CanopyShell.ts`, the 600–900 m aggregate
+  surface) dies only after vista shots pass. GATE: gallery A/B per species + forest-interior + vista ≥ current
+  quality, USER judges.
+- **N9-C4 — close:** perf ledger row, full battery, the two-frame-vs-main check re-applies (un-black-slating starts
+  here — AUDIT-1 META), USER CHECKPOINT, ⏸.
+
+OPEN QUESTIONS / RISKS (settle in-chunk):
+- (the research risk) the Preserve-Area algorithm — area-redistribution mechanism (scale survivors vs dilate
+  boundary edges); does it hold crown silhouette + density at vista WITHOUT the alpha-card's fine leaf-edge detail?
+  Opaque strips are blockier per-leaf than alpha cutouts → the JUDGE-SHOT question (C3).
+- leaf PERF at forest scale: 3.1M deferred tris + the aggregate must shed HARD or a forest floods (188k trees ×
+  crown clusters). C2 measures it; likely the trigger for **N8-HIC** — N9 reveals the requirement, not speculation.
+- DOUBLE-SIDED leaves in the SW raster (winding cull — confirm the terrain-skirt double-sided path covers it) +
+  TRANSLUCENCY in the resolve (port foliageMaterial's backlight term).
+- which classes are N9: trees cls 0-5 are the C0-C3 target; shrub foliage (cls 8-10, bark-policy bushes) +
+  ferns/flowers (cls 11-14, no-policy) — sort N9-leaf vs N10-grass at C3.
+- velocity for wind-displaced leaves: D-N16 (deferred; TRAA camera-reproject; flutter falls back to variance
+  clipping — accept).
+
 ### Memory budget (track in ledger from N1; probed limits above)
 - Per-stage binding ceiling: ≤10 storage buffers (F9) — the PACKED layout in
   "Cluster build" exists to satisfy this; count bindings per kernel in code review.
@@ -1382,6 +1450,24 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   measurement; the default-on flip (rock+deadwood free now; bark gated) and the D-N30 explicit-DAG Worker build (only
   needed once a class goes default — explicit build is sync today: 3.2 s all / 0.16 s rock+deadwood) are deferred to the
   USER CHECKPOINT, per the standing "visible-everywhere default flips wait for a user-present session" rule.
+
+- D-N42 (2026-06-15, N9 SCOPED — user-chosen frontier after D1e; recon-grounded. Full plan in `### Foliage (N9)`).
+  Scoping CALLS, so they aren't re-litigated:
+  • **N9 SURFACES existing geometry, does not generate it** — real leaf/needle meshes exist (`LeafMesh.ts` →
+    `foliageMesh`); impostor cards are BAKED FROM them. But only at the hero ring (r0 ≤26 m); r1/r2 are cards.
+  • **The AGGREGATE DAG is the net-new spine** (no aggregate mode in BuildDag): area-preserving leaf removal (drop
+    leaves + GROW survivors so the far crown stays a full leafy silhouette, never balding — the "still looks like
+    leaves" requirement, in the user's words). QEM can't do it (degenerates on disconnected quads). User is the
+    final judge of far-crown look (C3 judge shots — the spec mandate, NOT autonomous).
+  • **PLUMBING-FIRST sequencing** (C0 hero leaves mechanical → C1 aggregate builder standalone → C2 wire → C3
+    impostor retirement → C4 close): early visible win (bare trunks gain crowns at ≤26 m) + isolates the hard
+    algorithm, mirroring N8-D0→D1 + N4's one-class-at-a-time.
+  • **Leaves are OPAQUE real geometry, DOUBLE-SIDED** — D-N3's permanent SW-raster alpha-test ban holds; the leaf
+    SHAPE is the strip geometry, not an alpha mask (per-leaf blockier than alpha cards → the C3 judge question).
+  • **N9 REVEALS whether N8-HIC is needed** (don't pre-build it): C2 re-measures the per-instance cull floor (D-N41)
+    at leaf density; the hierarchical instance cull lands then if the forest floods, built to a MEASURED requirement.
+  • Pre-wired + cheap: `MATERIAL_CLASS.leaf=4`, `TRANSFORM_CHANNEL.leaf=2`, the `WorldRegistry` deferral hook, the
+    `NaniteResolve` material switch + `NaniteFetch` channel — all bark-pattern slot-ins.
 
 ## PERF METHODOLOGY — the bar for a real win (2026-06-15, user directive)
 

@@ -9,6 +9,26 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-15 (bk): **N9 SCOPED (user-chosen frontier after D1e) — foliage as REAL geometry. Recon settled the pivot:
+  real leaf meshes ALREADY EXIST (only at the hero ring); the AGGREGATE DAG is the net-new spine. Full plan written to
+  SPEC `### Foliage (N9)` + D-N42 + ROADMAP C0–C4. Compact pending, then build.** (Opus 4.8 1M, docs only — no code.)
+  User picked N9 over N8-HIC (reasoning: N9 is the actual product — bare trunks gain crowns — it does NOT depend on
+  N8-HIC since crowns attach to the same tree instances, it's the dominant shadow casters (unblocks S4), and it REVEALS
+  the real instance-floor demand rather than pre-building the cull). **PIVOTAL RECON (Explore + verified file:line):**
+  real leaf/needle triangle geometry exists — `LeafMesh.ts` `buildLeaf`/`buildNeedleSpray` → `TreeBuilder` `foliageMesh`
+  (pos/normal/uv + vdata u32 = hue|flex|phase|ao); the octahedral impostor CARDS are BAKED FROM it (`FoliageCards.ts`).
+  So N9 SURFACES geometry, doesn't generate it — BUT `foliageMesh` is built ONLY at r0 (≤26 m; `VegLibrary.ts:216`),
+  r1/r2 are cards, so real leaves span ≤26 m today. **The AGGREGATE DAG is NET-NEW** (no aggregate mode in BuildDag,
+  verified): area-preserving leaf removal (drop leaves + GROW survivors so far crowns stay full leafy silhouettes — the
+  "still looks like leaves" requirement, user's framing; QEM degenerates on disconnected quads). Pre-wired + cheap:
+  `MATERIAL_CLASS.leaf=4` / `TRANSFORM_CHANNEL.leaf=2` reserved; deferral hook `WorldRegistry.ts:302-334` (boot logs
+  `card/leaf tris deferred to N9: ~3.10M` = the payload); resolve switch + NaniteFetch channel = bark-pattern slot-ins.
+  **CHUNK PLAN:** C0 leaf plumbing (mechanical, hero crowns ≤26 m, visible win) → C1 aggregate builder (standalone,
+  node-tested, the hard algorithm) → C2 wire+continuous LOD (**re-measures the D-N41 per-instance floor at leaf density
+  → reveals if N8-HIC is needed**) → C3 impostor retirement (**USER JUDGE SHOTS**) → C4 close (un-black-slating begins;
+  two-frame-vs-main gate re-applies). Leaves OPAQUE + DOUBLE-SIDED (D-N3 alpha ban). Open risks: the Preserve-Area
+  algorithm (the research bit), leaf perf at forest scale, double-sided/translucency. No code; tsc unaffected.
+
 - 2026-06-15 (bj): **N8-D1e — the explicit-mesh DAG cut VALIDATED WORLD-WIDE (bark/deadwood/rock all pass the no-pop
   continuous-LOD gate, bark under wind) + PERF CHARACTERIZED: rock+deadwood DAG is FREE, BARK is a ~1.7× raster
   regression in dense forest (the 188k-tree per-instance floor — NOT fixable by τ or minPx). The world-wide WIRING +
