@@ -9,6 +9,26 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-15 (bn): **N9-C2 — the leaf AGGREGATE wired to the GPU: continuous crown LOD to the full trunk envelope,
+  the cut VALIDATED on-device. AND C2 did its other job — it RE-MEASURED the floor at leaf density and the flood is
+  REAL, so N8-HIC is now DEFINITIVELY FORCED (pulled forward into C2, exactly as the directive pre-authorised).**
+  (Opus 4.8 1M.) WIRING (`WorldRegistry.ts`): each tree pool's leaf crown gets a `buildAggregateDag` DAG (a new
+  `toAggregate` list mirroring the bark `toDag` flow), `attachDag`'d identically, registered with `aggregate:true`,
+  and the envelope extended R0_FAR 26 m → **TREE_GEO_FAR 496 m** (crown matches the trunk). The aggregate emits the
+  SAME cut metadata as the QEM DAG, so it rides the existing flat kClusterCull (D-N31) unchanged — no GPU cut changes.
+  VALIDATED (`tools/probe-leafzoom.ts`, isolates the leaf cut: `?naniteleaf=1` with no `?nanitedag` + terrain DAG off
+  ⇒ `nanite.dagClusters` = leaf-only): **τ-sweep MONOTONIC across 3 orders of magnitude (2.8k → 3.76M leaf clusters
+  as τ 32→0.25), zoom-sweep SMOOTH (no pop > 60%), zero errors.** The aggregate's own/parent error bands drive a real
+  continuous GPU cut. Opt-in; default (leaf-OFF) bit-identical. **TWO FINDINGS, both as the SPEC anticipated:**
+  (1) BUILD COST — 20 crowns build SYNC in **15.5 s @ the default 4000 density** (5.4 s @ 800) → over the D6 ~15 s
+  world-gen budget ALONE ⇒ the build MUST move to the Worker/time-slice path (D-N30). Pending (C2-b2). (2) **THE FLOOD
+  (the headline)** — forest-interior @ τ=1: **133 ms/frame, 1.89M visible clusters (1.68M leaf), 1.13M crown
+  instances.** This is the per-instance-floor explosion D-N41 named: the flat per-cluster cull traverses every one of
+  1.13M visible crowns' DAGs. 1.68M/1.13M ≈ 1.5 clusters/instance ⇒ the cost is the INSTANCE COUNT, not depth — the
+  precise signature **N8-HIC** (hierarchical instance culling: cull spatial GROUPS → O(regions)) fixes. Per the
+  directive ("C2 will likely FORCE it — pull it forward"), **N8-HIC is now the active frontier inside C2.** Remaining
+  C2 after N8-HIC: the Worker build, the two-sided raster (drop the geometry-dup), perf ledger + close. tsc clean.
+
 - 2026-06-15 (bm): **N9-C1 — the AGGREGATE foliage DAG builder: area-preserving leaf removal, node-validated
   STANDALONE. Net-new `src/nanite/BuildAggregateDag.ts` (NOT an `aggregate` branch bolted into BuildDag — the user:
   "extending it should never just mean dropping extra branches in one function"). Emits the SAME DagBuild contract +

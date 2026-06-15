@@ -97,16 +97,20 @@ async function main(): Promise<void> {
   dump('leaf ON', on.counters);
 
   // REGISTRATION proof: leaf heads (+24) + their instances must appear, and they
-  // must actually rasterise (visClusters up). Otherwise the head never bound.
+  // must actually rasterise. NOTE: since N9-C2 the aggregate extends crowns to the
+  // full TREE_GEO_FAR envelope, so a forest-interior frame floods (1.6M+ leaf
+  // clusters — the per-instance-floor flood N8-HIC addresses) and the async
+  // visClusters readback is unreliable in this probe's settle window. So gate on
+  // trisK (rastered geometry), robust at any scale; probe-leafzoom is the cut gate.
   const dMesh = (on.counters['nanite.meshes'] ?? 0) - (off.counters['nanite.meshes'] ?? 0);
   const dInst = (on.counters['nanite.inst'] ?? 0) - (off.counters['nanite.inst'] ?? 0);
-  const dVis = (on.counters['nanite.visClusters'] ?? 0) - (off.counters['nanite.visClusters'] ?? 0);
-  console.log(`  Δmeshes=${dMesh}  Δinst=${dInst}  ΔvisClusters=${dVis}`);
+  const dTris = (on.counters['nanite.trisK'] ?? 0) - (off.counters['nanite.trisK'] ?? 0);
+  console.log(`  Δmeshes=${dMesh}  Δinst=${dInst}  ΔtrisK=${dTris}`);
   // tree species × 4 variants (5 species today = 20; the 6th foliageColor is understory)
   if (dMesh <= 0 || dMesh % 4 !== 0)
     fail(`leaf heads missing/odd: Δmeshes ${dMesh} (expect a positive multiple of 4 variants)`);
   if (dInst <= 0) fail(`leaf instances missing: Δinst ${dInst} ≤ 0 (crown not bound to trees)`);
-  if (dVis <= 0) fail(`leaf clusters not rastered: ΔvisClusters ${dVis} ≤ 0 (crown invisible)`);
+  if (dTris <= 0) fail(`leaf geometry not rastered: ΔtrisK ${dTris} ≤ 0 (crown invisible)`);
 
   // cls-debug coverage shot (leaf = bright green) + a forest framing (bm4)
   console.log('[leaf] cls-debug + forest framing');

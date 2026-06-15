@@ -33,6 +33,7 @@ import type { VegLib, PoolPart } from '../vegetation/VegLibrary';
 import type { Heightfield } from '../world/Heightfield';
 import { WORLD_SIZE } from '../world/WorldConst';
 import { type DagBuild, type DagCluster, buildDag } from './BuildDag';
+import { buildAggregateDag } from './BuildAggregateDag';
 import { DagBuildWorker, DagWorkerPool, type DagBuilder, type HeightDagResult } from './DagWorkerClient';
 import { TerrainStreamer, buildTerrainTile, type TileBuildDeps, type TileBuildStats } from './TerrainStreamer';
 import {
@@ -343,6 +344,10 @@ export async function buildWorldRegistry(input: {
   // N8-D1: heads whose class wants a DAG — built after registration, attached
   // after build(). The DAG comes off the head's FULL-detail source (rings[0]).
   const toDag: { handle: MeshHandle; source: ExplicitSource; label: string }[] = [];
+  // N9-C2: leaf crowns get the AREA-PRESERVING aggregate DAG (BuildAggregateDag —
+  // QEM degenerates on disconnected leaves) instead of QEM. Same DagBuild contract,
+  // so it rides the identical attachDag + cut; extends the crown to TREE_GEO_FAR.
+  const toAggregate: { handle: MeshHandle; source: ExplicitSource; label: string }[] = [];
   let deferredTris = 0;
   const notePart = (label: string, parts: PoolPart[] | null | undefined, from: number): void => {
     if (!parts) return;
@@ -402,20 +407,24 @@ export async function buildWorldRegistry(input: {
     heads.set(idF, head);
     if (dag?.has(policy.matClass)) toDag.push({ handle: head, source: headSource, label });
 
-    // N9-C0: the hero-ring REAL leaf crown as a SEPARATE MATERIAL_CLASS.leaf mesh
-    // bound to the SAME instances (trunk + crown render together — not LODs). The
-    // 'leaf' channel carries the full vegWindOffset wind; the per-species tint packs
-    // into matParam (this channel has no bark layer / wind profile). Hero envelope
-    // only (≤R0_FAR) until N9-C2's aggregate DAG extends it past 26 m. Opt-in.
+    // N9-C0/C2: the REAL leaf crown as a SEPARATE MATERIAL_CLASS.leaf mesh bound to
+    // the SAME instances (trunk + crown render together — not LODs). The 'leaf'
+    // channel carries the full vegWindOffset wind; the per-species tint packs into
+    // matParam (this channel has no bark layer / wind profile). N9-C2: the
+    // area-preserving aggregate DAG (built below) extends the crown across the FULL
+    // trunk envelope (TREE_GEO_FAR), tapering hero-detail → coarse with distance.
     if (leafOn && pool.leaf) {
-      const leafHead = reg.registerMesh(geometryToSource(pool.leaf.geo, { doubleSided: true }), 'leaf', {
+      const leafSource = geometryToSource(pool.leaf.geo, { doubleSided: true });
+      const leafHead = reg.registerMesh(leafSource, 'leaf', {
         transformChannel: 'leaf',
         castShadows: false,
         label: `${label}/leaf`,
         swayPad: LEAF_SWAY_PAD,
         matParam: packLeafTint(pool.leaf.color),
+        aggregate: true,
       });
-      reg.setMaxDistance(leafHead, R0_FAR);
+      reg.setMaxDistance(leafHead, TREE_GEO_FAR);
+      toAggregate.push({ handle: leafHead, source: leafSource, label: `${label}/leaf` });
       leafHeads.set(idF, leafHead);
     }
   }
@@ -706,6 +715,37 @@ export async function buildWorldRegistry(input: {
       dagBuilds.push({ handle: item.handle, dag: built });
     }
     reg.addLate({ verts: lateV, tris: lateT, clusters: lateC });
+  }
+  // N9-C2: leaf-crown aggregate DAGs (area-preserving). Same DagBuild contract +
+  // attach queue as the QEM meshes above, so they ride the identical cut. Built
+  // synchronously here today; the boot cost is measured (the DAG-section flag) and
+  // moves to the Worker/time-slice path if it threatens the D6 world-gen budget.
+  const tAgg0 = performance.now();
+  if (toAggregate.length > 0) {
+    let aggV = 0;
+    let aggT = 0;
+    let aggC = 0;
+    for (const item of toAggregate) {
+      let built: DagBuild;
+      try {
+        built = buildAggregateDag(explicitToDagVerts(item.source), DAG_VERT_STRIDE, item.source.indices, {
+          seed: seed ?? 0,
+        });
+      } catch (e) {
+        deferred.push(`AGG ${item.label}: build failed (${e instanceof Error ? e.message : String(e)})`);
+        continue;
+      }
+      aggV += built.verts.length / DAG_VERT_STRIDE;
+      aggT += built.indices.length / 3;
+      aggC += built.clusters.length;
+      dagTris += built.stats.totalTris;
+      dagBuilds.push({ handle: item.handle, dag: built });
+    }
+    reg.addLate({ verts: aggV, tris: aggT, clusters: aggC });
+  }
+  const aggBuildMs = performance.now() - tAgg0;
+  if (toAggregate.length > 0) {
+    console.log(`[worldreg] leaf aggregate DAG: ${toAggregate.length} crowns in ${aggBuildMs.toFixed(0)} ms`);
   }
   const tBuild0 = performance.now();
   const dagBuildMs = tBuild0 - tDag0;
