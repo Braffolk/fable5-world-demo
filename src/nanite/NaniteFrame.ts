@@ -160,6 +160,14 @@ export function buildNaniteFrame(
   // Default 0 = DISABLED ⇒ exact pre-D1e behaviour; ?nanitemin=N (px) to enable.
   const minpxParam = Number(params.get('nanitemin') ?? '0');
   const minPx = uniformF(Number.isFinite(minpxParam) && minpxParam > 0 ? minpxParam : 0);
+  // D-N43 Stage 0.5 SIM: distance-band scale (m) for the region-collapse sim that
+  // BOUNDS the Stage-1 cross-instance-aggregation win before its builder exists.
+  // τ_eff = τ·(1 + d/simBandD) ⇒ far clusters collapse to their per-mesh root (the
+  // ≥1-cluster/instance floor). 0 = OFF (default ⇒ shipped path bit-identical);
+  // ?simband=N or the live setter below sweeps it. Camera path only — shadows leave
+  // it 0 (separation). NOT a feature: a measurement scaffold (probe-simband).
+  const simbandParam = Number(params.get('simband') ?? '0');
+  const simBandD = uniformF(Number.isFinite(simbandParam) && simbandParam > 0 ? simbandParam : 0);
 
   const cam = makeNaniteCam(size.x, size.y);
   const vis = makeVisBuffers(size.x * size.y);
@@ -169,7 +177,7 @@ export function buildNaniteFrame(
     registry.instanceCount,
     cam,
     occl ? hzb.sphereOccluded : null,
-    { tau, minPx },
+    { tau, minPx, simBandD },
   );
   if (!hf.biomeTex || !hf.fieldsTex || !hf.noiseA || !hf.noiseB) {
     throw new Error('NaniteFrame: heightfield derived maps missing (boot order)');
@@ -302,6 +310,11 @@ export function buildNaniteFrame(
       tau.value = v;
     },
     tau: () => tau.value,
+    /** D-N43 Stage 0.5 SIM: live distance-band scale (m) for the region-collapse sim */
+    setSimBand: (v: number) => {
+      simBandD.value = v;
+    },
+    simBand: () => simBandD.value,
   };
 
   // jitter-mirrored projection: scratch camera = engine camera + TRAA's
@@ -431,6 +444,8 @@ export function buildNaniteFrame(
         }
         engine.stats.counters['nanite.visClusters'] = c.visClusters;
         engine.stats.counters['nanite.dagClusters'] = c.dagClusters;
+        engine.stats.counters['nanite.visTris'] = c.visTris;
+        engine.stats.counters['nanite.dagTris'] = c.dagTris;
         engine.stats.counters['nanite.chunks'] = c.chunks;
         engine.stats.counters['nanite.rejInst'] = c.rejInst;
         engine.stats.counters['nanite.rejClust'] = c.rejClust;

@@ -1588,6 +1588,28 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
     capture. PLUS a codebase study of how to integrate the cross-instance layer with attention to PERF + MEMORY (region
     record layout, the Worker build budget D-N30/D6, the 10-storage-buffer ceiling F9, the cull/cut wiring). De-risks the
     novel builder and tells us whether aggregation ALONE approaches ~1 tri/px or whether the voxel far-field is mandatory.
+    ✓ LANDED (2026-06-15, Opus 4.8 1M; LOG bq). SIM = distance-banded τ (`simBandD` uniform in NaniteCull + the
+    `bandedTau` module helper, τ_eff = τ·(1 + d/bandD); default 0 ⇒ bit-identical) + exact per-frame `visTris` (Σ
+    cluster.triCount) and `dagTris` (DAG-only ⇒ leaf isolated from the terrain base) counters; `?simband` + the
+    `setSimBand` hook; `tools/probe-simband.ts`. This is the user's reframe ("aggregates = the least-detailed DAG
+    levels") measured — banded τ forces the coarsest EXISTING per-mesh levels far away, the residual = the floor.
+    MEASURED (density 4000, shot 7, occl ON, post-Stage-0): baseline flood 627k visClusters / 569k LEAF clusters / 57
+    LEAF tris/px / 41.7 ms; SW raster ∝ visClusters (≈50-62 ns/cluster, 3rd confirmation of the per-cluster-overhead
+    bound). THE FLOOR (every DAG cluster → root) = LEAF **1,667 clusters / 0.147 tris/px (SUB-PIXEL)** / 8.3 ms. DECISIVE:
+    the aggregate already thins leaves BELOW screen density at its coarse end (57 → 0.15 tris/px over a 341× cluster
+    range) ⇒ the flood is per-CLUSTER OVERHEAD (569k→1.7k count), NOT triangle density. CONSEQUENCE (updates this
+    decision): cross-instance MERGE alone likely SUFFICES for foliage — merged super-clusters built to a screen-error
+    target on sub-pixel-dense leaves land at ~1 tri/px by construction — so the VOXEL far-field is DOWNGRADED from
+    "mandatory, coupled" to a DEFERRED far-tail/extreme-distance optimization; Stage 1 is MERGE-FIRST, voxels added only
+    if the merge's measured far tail demands. Win bounded ~4-5× (41.7 → ~8-10 ms non-leaf-raster floor). Caveat: the
+    floor tris/px(all)=3.47 is terrain-base-dominated (terrain DAG off to isolate leaves), not a foliage signal; the
+    merge's own per-region tri-floor is the one unmeasured unknown the builder settles. INTEGRATION (3-agent study):
+    super-clusters = SYNTHETIC identity-instance meshes + `attachDag` riding the EXISTING clusters/dag/instances buffers
+    (MESH_FLAG_AGGREGATE exists) ⇒ ZERO new buffers/bindings, no new cull path; build reuses DagWorkerPool (+ an
+    explicit/aggregate `DagReq` kind; today height-only + the explicit/aggregate builds run SYNC = the D6 violation) +
+    TerrainStreamer frame-pacing + DagCommon partition/mergeSpheres, triggered in WorldRegistry; F9 a non-issue (resolve
+    maxed but needs no region data; super-clusters add no bindings). The novel runtime de-risked = "more meshes + more
+    DAG parent links." visTris/dagTris + simBandD kept (HUD metric + the A/B bound for validating the real merge).
   • STAGE 1 — CROSS-INSTANCE AGGREGATION + OPAQUE VOXEL FAR-FIELD (the real fix; COUPLED, per Epic's production model).
     (1) CROSS-INSTANCE AGGREGATION = continue the cluster DAG ABOVE the per-mesh root: spatially group neighbouring crown
     instances (a forest cell), merge their geometry at world transforms + simplify into shared coarse "super-clusters"
@@ -1611,8 +1633,12 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
     mitigation): it hard-caps the far-field at pixel density, sidesteps the QEM-degenerates-on-disconnected-leaves wall
     that pure cross-instance merge HITS (Aokana, primary), and FIXES leaf double-siding for free (stored normal
     distribution sampled stochastically per pixel + the existing TRAA). Measured production wins: 62→119 fps @ 77k trees.
-    Couple them because neither alone reaches ~1 tri/px (cross-instance merge has its own per-region tri-floor; voxels are
-    the far tail).
+    COUPLING — REVISED by Stage 0.5's measurement (LOG bq, 2026-06-15): the bo prior was "couple them, neither alone
+    reaches ~1 tri/px." The sim MEASURED the leaf aggregate floor at **0.147 tris/px (sub-pixel)** ⇒ merge alone reaches
+    screen density for the density-4000 hero, so voxels are NO LONGER coupled/mandatory — they are DEFERRED to the far
+    tail (extreme distance where even a forest-cell super-cluster is sub-pixel) and kept for their free double-siding
+    fix. Stage 1 is therefore MERGE-FIRST; revisit voxels only if the merge's own per-region tri-floor (the one
+    unmeasured unknown) leaves a tail above screen density.
 
   HONESTY (adversarial verification, do NOT re-inflate): the cross-instance RUNTIME shape is a NOVEL design — NO engine
   has published ms for it. UE's scattered-instance aggregation is World Partition HLOD, an OFFLINE proxy bake; "Nanite
@@ -1632,8 +1658,9 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   (the D-N2 single-path mandate). Honour the clean-code rule: new modules/extracted helpers, not bolted branches.
 
   SEQUENCING (compact between EACH stage — durable state lives in these docs): Stage 0 two-sided fix ✓ LANDED
-  (2026-06-15) → compact → **Stage 0.5 sim + integration explore (NEXT)** → compact → Stage 1 implement (multi-level
-  aggregation + voxel) → compact. Evidence anchors: UE
+  (2026-06-15) → compact → Stage 0.5 sim + integration ✓ LANDED (2026-06-15; LOG bq — flood is cluster-overhead, merge
+  alone suffices, voxels deferred) → compact → **Stage 1 implement: multi-level cross-instance MERGE first (voxels
+  deferred per Stage 0.5) (NEXT)** → compact. Evidence anchors: UE
   Nanite Voxels/Foliage docs; elopezr "A Macro View of Nanite"; jms55 "Virtual Geometry in Bevy"; Scthe/nanite-webgpu;
   thecandidstartup Nanite pipeline; Aokana (arXiv 2505.02017); reference HTML lines 180-182/235-298/627-707/904-920.
 

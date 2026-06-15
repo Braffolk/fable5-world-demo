@@ -37,13 +37,17 @@
      "billions" = a marketing denominator; structurally-easy scene). The fix = cross-instance AGGREGATION (not culling),
      STAGED with a compact between each: **(0) two-sided raster fix ✅ LANDED (LOG bp)** = free lossless 2× (`N9-C2-2s`):
      leaf registry tris 13.171M→6.585M (2×), leaf clusters 131.8k→66.3k, forest vis-cluster overflow→1.499M, no holes,
-     tsc clean → **(0.5) perf SIM (NEXT)** (simulate region-collapse to BOUND the win) + **integration/perf/mem codebase
-     exploration** → **(1) MULTI-LEVEL cross-instance super-cluster DAG + opaque ≤1px VOXEL far-field** (Epic Nanite-Voxels
-     model; 1 u32 atomic, fixes leaf double-siding free). **MULTI-LEVEL** (user, 2026-06-15): for very long distances the
-     aggregation is RECURSIVE — merge bands (cell→region→…→voxel apex), which the existing arbitrary-depth DAG cut already
-     supports for free; design the region records for N levels from the outset. BINDING: the SEPARATION PRINCIPLE (nanite
-     stays self-contained in `src/nanite/`, CALLED BY world/scene code, no creep out). Stage-1 runtime shape is NOVEL (no
-     published ms) → Stage 0.5 de-risks before the build.
+     tsc clean → **(0.5) ✓ DONE (LOG bq)** — perf SIM (banded-τ `simBandD` + `visTris`/`dagTris` counters + probe-simband)
+     + 3-agent integration study. THE FINDING: the flood is per-CLUSTER OVERHEAD, not triangle density — LEAF floor =
+     **0.147 tris/px (sub-pixel)** at 1,667 clusters (569k→1.7k, 341× LOD range); SW raster ∝ visClusters (≈55 ns/cl). ⇒
+     cross-instance MERGE alone likely SUFFICES; **VOXELS DEFERRED** to the far tail (updates the bo "couple them"). Win
+     bounded ~4-5× (42→~8-10 ms). Integration: super-clusters = synthetic identity-instance meshes + attachDag on the
+     EXISTING buffers ⇒ ZERO new buffers/bindings/cull-path; build reuses DagWorkerPool + TerrainStreamer pacing →
+     **(1) Stage 1 = MULTI-LEVEL cross-instance MERGE builder, MERGE-FIRST (voxels deferred) (NEXT)** — recursive merge
+     bands (cell→region→…), which the existing arbitrary-depth DAG cut already selects for free; design the region records
+     for N levels from the outset (user 2026-06-15). BINDING: the SEPARATION PRINCIPLE (nanite self-contained in
+     `src/nanite/`, CALLED BY world/scene code, no creep out). Stage-1 runtime de-risked by Stage 0.5 = "more meshes +
+     more DAG parent links."
   6. **N8-2B4** — always-resident coarse terrain base (teleport no-hole backstop).
   **The user explicitly DEPRIORITISED polish (shadow S4, N6/N7, C0b fluffiness) BELOW the core DAG-culling pieces —
   do NOT pivot to polish until N8-HIC + N8-2B4 are done.** un-black-slating / two-frame-vs-main gate re-applies at C4.
@@ -131,7 +135,7 @@ N0 scaffold ✅ · N1 clusterize ✅ · N2 cull ✅ · N3 vis-buffer ✅ · N4 m
 | id | task | status | blockedBy | spec | scope |
 |----|------|--------|-----------|------|------|
 | `N8-D1e` | Full-world DAG wiring + ledger + CHECKPOINT | 🔵 | — | D-N41; LOG bj | VALIDATED (bark/deadwood/rock no-pop gate green, bark under wind) + MEASURED (rock+deadwood DAG free; bark ~1.7× raster + 3 s boot = the per-instance forest floor, τ/minPx don't help) + ledger row. AT the USER CHECKPOINT: (1) default-on rock+deadwood DAG? (free, rec) (2) bark stays opt-in until N8-HIC? Defaults NOT flipped (user-present rule). |
-| `N8-HIC` | Cross-instance AGGREGATION + opaque voxel far-field (THE flood fix) | 🔵 | — | **D-N43**; LOG bo, bn | **REDEFINED by D-N43 (research + measurement): "culling" was the wrong word — the fix is cross-instance AGGREGATION, not culling.** Root cause = primitive OVER-EMISSION (~16 tris/px vs ~1; per-mesh DAG floors at ≥1 cluster per visible instance; τ-sweep proves frame ∝ visible-CLUSTER count, per-cluster raster overhead). Reference-is-fast puzzle SOLVED (its "billions" = marketing denominator; easy scene). STAGED: **(0)** two-sided raster fix = free 2× (`N9-C2-2s`) **✅ LANDED LOG bp** (leaf tris/clusters halved, no holes) → compact → **(0.5) NEXT** perf SIM (region-collapse, bound the win) + integration/perf/mem codebase explore → compact → **(1)** MULTI-LEVEL cross-instance super-cluster DAG (break the ≥1-cl/inst floor; recursive merge bands per user 2026-06-15) + opaque ≤1px VOXEL far-field (Epic Nanite-Voxels model; 1 u32 atomic, fixes double-siding free). SEPARATION PRINCIPLE binding (nanite stays self-contained, called by others). Effort = hours of LLM grind/stage, not weeks. Stage-1 runtime shape is NOVEL (no published ms) ⇒ Stage 0.5 de-risks it. |
+| `N8-HIC` | Cross-instance AGGREGATION + opaque voxel far-field (THE flood fix) | 🔵 | — | **D-N43**; LOG bo, bn | **REDEFINED by D-N43 (research + measurement): "culling" was the wrong word — the fix is cross-instance AGGREGATION, not culling.** Root cause = primitive OVER-EMISSION (~16 tris/px vs ~1; per-mesh DAG floors at ≥1 cluster per visible instance; τ-sweep proves frame ∝ visible-CLUSTER count, per-cluster raster overhead). Reference-is-fast puzzle SOLVED (its "billions" = marketing denominator; easy scene). STAGED: **(0)** two-sided raster fix = free 2× (`N9-C2-2s`) **✅ LANDED LOG bp** (leaf tris/clusters halved, no holes) → compact → **(0.5) ✅ DONE LOG bq** perf SIM (banded-τ) + 3-agent integration study: flood = per-CLUSTER overhead NOT tri-density (LEAF floor **0.147 tris/px sub-pixel @ 1,667 cl**, 569k→1.7k = 341× range; SW raster ∝ visClusters), ⇒ merge alone suffices, **VOXELS DEFERRED** (updates bo "couple them"); super-clusters = synthetic identity meshes + attachDag on EXISTING buffers = ZERO new GPU plumbing; build reuses DagWorkerPool + TerrainStreamer pacing → compact → **(1) NEXT** MULTI-LEVEL cross-instance MERGE builder, **MERGE-FIRST** (voxels deferred to the far tail; recursive merge bands cell→region→… per user 2026-06-15; the arbitrary-depth cut selects them free). SEPARATION PRINCIPLE binding (nanite stays self-contained, called by others). Effort = hours of LLM grind/stage, not weeks. Stage-1 runtime de-risked by Stage 0.5 = "more meshes + more DAG parent links". |
 | `N8-2b4` | Always-resident coarse terrain base | ⬜ | — | DAG (N8) | teleport no-hole backstop ring |
 
 ## C. POOLS / HYBRID / FOLIAGE (SPEC `## Phase plan`)

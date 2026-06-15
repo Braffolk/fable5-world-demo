@@ -9,6 +9,48 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-15 (bq): **D-N43 STAGE 0.5 — the perf SIM + integration study. THE DECISIVE FINDING: the foliage flood is
+  per-CLUSTER OVERHEAD, not triangle density, so cross-instance MERGE is the lever and LIKELY SUFFICES ALONE — VOXELS
+  DOWNGRADED from "mandatory/coupled" (bo) to a DEFERRED far-tail nicety. Stage 1 becomes MERGE-FIRST.** (Opus 4.8 1M,
+  effort max.) THE SIM (net-new, all gated + default-off, separation-clean — lives in NaniteCull, set by NaniteFrame):
+  a distance-banded τ knob (`simBandD` uniform + the `bandedTau` module helper, τ_eff = τ·(1 + d/bandD) ⇒ near stays
+  sharp, far collapses to per-mesh ROOT; bandD=0 ⇒ τ_eff=τ, bit-identical) + two exact per-frame counters (`visTris`
+  slot 6 = Σ cluster.triCount; `dagTris` slot 7 = DAG-only ⇒ LEAF isolated from the terrain base) through readCounts →
+  stats; `?simband=N` + the `setSimBand` __laasNanite hook; `tools/probe-simband.ts` sweeps it on the density-4000
+  shot-7 flood. This is the user's own reframe ("aggregates = the least-detailed DAG levels") MEASURED — banded τ forces
+  the coarsest EXISTING per-mesh levels far away, and the residual IS the ≥1-cluster/instance floor the cross-instance
+  merge must break. MEASURED (density 4000, occl ON, post-Stage-0): baseline flood **627k visClusters / 569k LEAF
+  clusters / 64 tris/px (all) / 57 LEAF tris/px / 41.7 ms** (consistent with bo's 1.17M halved by the Stage-0 two-sided
+  fix — leaves are ~90% of visible clusters). Sweep monotonic; SW raster tracks visClusters near-LINEARLY (31.6 ms@627k
+  → 1.77 ms@28.7k ≈ 50-62 ns/cluster) = the per-cluster raster-workgroup-overhead bound, 3rd independent confirmation.
+  THE FLOOR (uniform τ=1e4, every DAG cluster → its root): **LEAF = 1,667 clusters / 0.147 tris/px (SUB-PIXEL!) / 8.3
+  ms.** ⇒ THE LEAF AGGREGATE ALREADY THINS TRIANGLES BELOW SCREEN DENSITY at its coarse end (57 → 0.15 tris/px across a
+  341× cluster-LOD range); the flood is the 569k→1.7k per-CLUSTER count, NOT triangle density. CONSEQUENCE (updates the
+  bo prior): cross-instance MERGE — collapse many per-crown clusters into few SHARED super-clusters at mid/far, below the
+  per-instance floor, WITHOUT nuking near detail — is exactly the right lever, and because the merged super-clusters are
+  built to a screen-error target on already-sub-pixel-dense leaves they reach ~1 tri/px BY CONSTRUCTION ⇒ MERGE ALONE
+  likely suffices for the hero; the opaque VOXEL far-field drops to a DEFERRED far-tail / extreme-distance optimization
+  (added only if the merge's measured far tail demands it — it still earns its keep for the free double-siding fix +
+  >4 km vistas). Frame win bounded: 41.7 → ~8-10 ms (the non-leaf-raster floor) ≈ **4-5×.** HONEST CAVEATS: (a) the
+  floor tris/px(all)=3.47 is TERRAIN-base-dominated (terrain DAG off here to isolate leaves — hence the separate dagTris
+  counter), NOT a foliage signal; (b) the merged super-cluster's OWN per-region tri-floor is the one unmeasured unknown
+  the builder will settle; (c) RND-2 (shadows-ON flood, HZB foliage-hole check) still owed. THE INTEGRATION STUDY (3
+  parallel Explore agents, converging): (1) RECORDS — cross-instance super-clusters register as SYNTHETIC identity-
+  instance "meshes" + `attachDag`, riding the EXISTING clusters/dag/instances mega-buffers (MESH_FLAG_AGGREGATE=2 already
+  exists; 64 B mesh + 36 B instance + 32 B/cluster + 40 B/DAG-cluster, geometry-dominated) ⇒ ZERO new GPU buffers, ZERO
+  new bindings, NO new cull/cut path (the arbitrary-depth cut already selects them). (2) BUILD — reuse `DagWorkerPool`
+  (extend `DagReq` with an explicit/aggregate kind — today it's HEIGHT-only and the explicit+aggregate builds run SYNC =
+  the D6 ~15 s violation) + TerrainStreamer's frame-paced busy/pendingCam coalesce + `DagCommon.partitionClusters`/
+  `mergeSpheres`; trigger in WorldRegistry after the per-crown DAG builds. (3) BUFFERS — F9 = 10 storage/stage; RESOLVE
+  is maxed 10/10 but never needs region data (cull-time logic), CULL has 2 slots headroom — and since super-clusters add
+  no bindings, the ceiling is a NON-ISSUE. NET: the NOVEL cross-instance runtime is FULLY de-risked — structurally it is
+  "more registered meshes + more DAG parent links," no new GPU plumbing, separation principle trivially honoured. KEPT
+  (not reverted): visTris/dagTris (a legit over-emission HUD metric, missing till now) + the simBandD knob (an A/B knob
+  like ?loderr/?nanitemin, default-off bit-identical — and the BOUND to validate the real Stage-1 merge against). tsc
+  clean. Files: NaniteCull (simBandD + bandedTau + visTris/dagTris counters + readCounts), NaniteFrame (uniform + hook +
+  stats), tools/probe-simband.ts. NEXT (after a compact): Stage 1 = cross-instance MERGE builder, MERGE-FIRST (voxels
+  deferred), MULTI-LEVEL from the outset (user 2026-06-15).
+
 - 2026-06-15 (bp): **D-N43 STAGE 0 — TWO-SIDED LEAF RASTER LANDED (free, lossless 2× on the geometry that dominates the
   forest).** (Opus 4.8 1M, effort max.) The reversed-winding leaf geometry DUPLICATE is gone; the SW raster now re-winds
   a two-sided back-face to CCW in place instead of culling it, so each leaf triangle is carried + rastered ONCE from

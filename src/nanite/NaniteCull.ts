@@ -102,6 +102,22 @@ import type { BufOf, UV2 } from './Tsl';
 const REJ_INST_CAP = 1_048_576;
 const REJ_CLUST_CAP = 1_048_576;
 
+/** D-N43 Stage 0.5 SIM — distance-banded τ. The cross-instance-AGGREGATION win is
+ *  *simulated* (before its builder exists) by coarsening the LOD cut with camera
+ *  distance: τ_eff = τ·(1 + d/bandD), so the near field stays at full detail while
+ *  far clusters collapse toward their per-mesh ROOT — the ≥1-cluster/instance floor
+ *  the real Stage-1 merge must break. bandD ≤ 0 ⇒ DISABLED (τ_eff = τ, the shipped
+ *  path is bit-identical). HOLE-FREE: the DAG cut stays watertight at any single
+ *  distance; only the LOD-transition distance shifts outward, so the rastered
+ *  geometry + tris/px stay REAL (unlike a drop-based region budget, which would
+ *  under-count). Minor LOD-transition cracks from the spatial τ gradient are
+ *  sub-pixel and acceptable for a perf BOUND — this knob never ships. */
+function bandedTau(tau: NF, bandD: NF, dist: NF): NF {
+  return bandD
+    .greaterThan(0)
+    .select(tau.mul(float(1).add(dist.div(bandD.max(float(1e-3))))), tau) as unknown as NF;
+}
+
 interface ComputeKernel {
   setName(name: string): unknown;
 }
@@ -125,6 +141,10 @@ export interface NaniteCullCounts {
   p2Appends: number;
   /** N8-D1: emitted clusters carrying a DAG record (the rock screen-error cut) */
   dagClusters: number;
+  /** D-N43 Stage 0.5: exact per-frame SW rastered triangles (Σ cluster triCount) */
+  visTris: number;
+  /** D-N43 Stage 0.5: DAG-only rastered triangles (isolates leaf/aggregate tris) */
+  dagTris: number;
   /** non-null when a queue clamped this frame */
   overflow: string | null;
 }
@@ -158,7 +178,14 @@ export function buildNaniteCull(
    *  relative (instRotateDir vs cam.camPos), but a cluster facing away from the
    *  CAMERA still casts toward the LIGHT, so cone-culling it punches shadow
    *  holes. Default true (camera path). */
-  opts?: { coneCull?: boolean; tau?: UniformF; minPx?: UniformF; innerReject?: UniformF },
+  opts?: {
+    coneCull?: boolean;
+    tau?: UniformF;
+    minPx?: UniformF;
+    innerReject?: UniformF;
+    /** D-N43 Stage 0.5 SIM: distance-band scale (m) for τ region-collapse; 0 = off */
+    simBandD?: UniformF;
+  },
 ): NaniteCullChain {
   const coneCull = opts?.coneCull !== false;
   // S3 SHADOW CLIPMAP hollow (D-N29): a clipmap level rasters only the RING
@@ -183,6 +210,10 @@ export function buildNaniteCull(
   // uH = map size) it lands ~the camera's, so casters track the lit-surface LOD
   // (proper DAG-decoupled caster LOD is S4). Mirrors probe-dag.project exactly.
   const tau = opts?.tau ?? uniformF(1);
+  // D-N43 Stage 0.5 SIM: distance-band scale for the region-collapse sim (0 = off,
+  // the default ⇒ τ_eff = τ). Only the camera path wires it (NaniteFrame); the
+  // shadow culls leave it 0, so casters are untouched (separation honoured).
+  const simBandD = opts?.simBandD ?? uniformF(0);
   const projK = cam.cotHalfFov.mul(cam.uH).mul(0.5) as unknown as NF;
   // ---- buffers ---------------------------------------------------------------
   // counters: [0] chunk pushes (phase 2 resets for re-expansion), [1] raster
@@ -429,7 +460,14 @@ export function buildNaniteCull(
           // pinned and can never be cut away.)
           const pOwn = projK.mul(A.w).mul(rec.ownError).div(denO);
           const pPar = projK.mul(A.w).mul(rec.parentError).div(denP);
-          If(pOwn.greaterThan(tau).or(pPar.lessThanEqual(tau)), () => {
+          // D-N43 Stage 0.5 SIM: distance-banded τ (region-collapse). bandedTau is a
+          // no-op when simBandD==0 (the default), so the shipped cut is unchanged.
+          const tauEff = bandedTau(
+            tau,
+            simBandD,
+            s.center.sub(cam.camPos).length() as unknown as NF,
+          );
+          If(pOwn.greaterThan(tauEff).or(pPar.lessThanEqual(tauEff)), () => {
             visible.assign(0);
           });
         });
@@ -477,11 +515,18 @@ export function buildNaniteCull(
           If(slot.lessThan(uint(QRASTER_CAP)), () => {
             qRasterV.rw.element(slot.add(uint(1))).assign(uv2(instId, ci));
           });
+          // D-N43 Stage 0.5 SIM: exact per-frame SW rastered-triangle count (slot 6).
+          // tris/px = visTris / screenPx — the over-emission metric the sim bounds.
+          // Pre-clamp (matches visClusters/dagClusters), cheap (cull is ~1.6 ms flat).
+          atomicAdd(counters.element(6), c.triCount);
           // N8-D1: count emitted DAG clusters separately (slot 5) — the rock-cut
           // signal for the HUD + the continuous-zoom gate; terrain/bark are
           // CLUSTER_FLAG_DAG=0 so they don't add, isolating the screen-error cut.
+          // D-N43 Stage 0.5 SIM: slot 7 = DAG-only tris ⇒ leaf tris/px isolated from
+          // the terrain base (which inflates visTris when terrain DAG is off).
           If(c.flags.bitAnd(uint(CLUSTER_FLAG_DAG)).notEqual(uint(0)), () => {
             atomicAdd(counters.element(5), uint(1));
+            atomicAdd(counters.element(7), c.triCount);
           });
         });
       });
@@ -561,6 +606,8 @@ export function buildNaniteCull(
         If(slot.lessThan(uint(QRASTER_CAP)), () => {
           qRasterV.rw.element(slot.add(uint(1))).assign(uv2(instId, ci));
         });
+        // D-N43 Stage 0.5 SIM: include phase-2 occlusion-revived tris in visTris
+        atomicAdd(counters.element(6), c.triCount);
       })().compute(REJ_CLUST_CAP, [64])
     : null;
   if (kClusterCull2b) (kClusterCull2b as unknown as ComputeKernel).setName('nanClusterCull2b');
@@ -617,6 +664,8 @@ export function buildNaniteCull(
     const rejInst = u[2] ?? 0;
     const rejClust = u[3] ?? 0;
     const dagClusters = u[5] ?? 0;
+    const visTris = u[6] ?? 0;
+    const dagTris = u[7] ?? 0;
     const p2Appends = Math.max(0, (q[0] ?? 0) - (q[1] ?? 0));
     let overflow: string | null = null;
     const over = (label: string, n: number, cap: number): void => {
@@ -626,7 +675,17 @@ export function buildNaniteCull(
     over('qRaster', visClusters, QRASTER_CAP);
     over('rejInst', rejInst, REJ_INST_CAP);
     over('rejClust', rejClust, REJ_CLUST_CAP);
-    return { chunks, visClusters, rejInst, rejClust, dagClusters, p2Appends, overflow };
+    return {
+      chunks,
+      visClusters,
+      rejInst,
+      rejClust,
+      dagClusters,
+      visTris,
+      dagTris,
+      p2Appends,
+      overflow,
+    };
   };
 
   return {
