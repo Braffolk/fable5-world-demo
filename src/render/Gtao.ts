@@ -63,6 +63,11 @@ export interface GtaoOptions {
   thickness?: number;
   distanceExponent?: number;
   scale?: number;
+  /** PERF-4: skip the whole march for pixels past this view distance (m). The
+   *  consumer fades AO to 1 with distance anyway (PostStack aoFaded), so beyond
+   *  the fade end the marched result is discarded — gating here is output-
+   *  equivalent and skips the 12–18 sample march on the far half of a vista. */
+  maxDist?: number;
 }
 
 interface DepthTexLike {
@@ -80,34 +85,37 @@ export function gtaoLayer(
   camera: PerspectiveCamera,
   resolution: ReturnType<typeof uniform>,
   opts: GtaoOptions,
-): NF {
+): NV4 {
   const uRadius = runiform(opts.radius);
   const uThickness = runiform(opts.thickness ?? 1);
   const uDistanceExponent = runiform(opts.distanceExponent ?? 1);
   const uDistanceFallOff = runiform(opts.distanceFallOff);
   const uScale = runiform(opts.scale ?? 1);
   const uSamples = runiform(opts.samples);
+  const uMaxDist = runiform(opts.maxDist ?? 1e9);
   // live object references — read current (jittered) values at upload time,
   // matching stock GTAONode's uniform(camera.projectionMatrix)
   const uProj = runiform(camera.projectionMatrix);
   const uProjInv = runiform(camera.projectionMatrixInverse);
   const noiseNode = texture(generateMagicSquareNoise());
 
-  return Fn((): NF => {
+  return Fn((): NV4 => {
     const uvNode = uv();
     const sampleDepth = (uvS: unknown): NF =>
       (depthTex.sample(uvS) as NV4).r as unknown as NF;
 
     const result = float(1).toVar();
     const depth = sampleDepth(uvNode).toVar();
+    const viewPosition = getViewPosition(
+      uvNode,
+      depth,
+      uProjInv as unknown as Parameters<typeof getViewPosition>[2],
+    ).toVar();
 
-    // stock: depth.greaterThanEqual(1.0).discard() onto a white-cleared RT
-    If(depth.lessThan(1.0), () => {
-      const viewPosition = getViewPosition(
-        uvNode,
-        depth,
-        uProjInv as unknown as Parameters<typeof getViewPosition>[2],
-      ).toVar();
+    // stock: depth.greaterThanEqual(1.0).discard() onto a white-cleared RT.
+    // PERF-4: also skip past uMaxDist (the consumer fades AO→1 there, so the
+    // marched value is discarded) — kills the far-vista march for free.
+    If(depth.lessThan(1.0).and(viewPosition.length().lessThan(uMaxDist as unknown as NF)), () => {
       const viewNormal = (
         getNormalFromDepth(
           uvNode,
@@ -288,7 +296,12 @@ export function gtaoLayer(
       result.assign(ao);
     });
 
-    return result;
+    // PERF-4: pack this half-res pixel's view-space z into .y so the full-res
+    // bilateral upsample (PostStack aoFaded) reads the depth guide straight from
+    // the AO texture — no per-tap full-res depth re-fetch + unproject. viewZ is
+    // valid even on the maxDist/sky skip branches (result stays 1 there; a huge
+    // |z| just makes those taps reject in the bilateral, which is correct).
+    return vec4(result, viewPosition.z, 0, 1);
   })();
 }
 

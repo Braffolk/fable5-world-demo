@@ -78,6 +78,19 @@ export class PostStack {
     const cloudview = q.get('cloudview');
     // perf attribution: ?ablate=clouds,ao,taa,bloom disables stages
     const ablate = new Set((q.get('ablate') ?? '').split(','));
+    // PERF-4 AO knob (budget 2 ms): GTAO sample count. 8 was mesh-viewer-ish;
+    // 6 (= 3 dir × 2 steps × 2 sides = 12 march samples) holds the look here —
+    // AO is a near-flat ~0.8 cue in this world (validated ?aodbg), so the march
+    // is over-sampled. Bump back toward 8 if denser future geometry needs it.
+    const aoSamples = Number(q.get('aosamples') ?? 6);
+    // AO distance fade (m): beyond aoFadeFar the 1.6 m-radius AO is subpixel and
+    // forced to 1 — the march (Gtao maxDist) and the upsample early-out both
+    // skip the far field at this bound, the bulk of an elevated vista.
+    const aoFadeNear = 700;
+    const aoFadeFar = Number(q.get('aofar') ?? 1800); // ?aofar=99999 disables both early-outs (A/B)
+    // PERF-4 master AO toggle (default on; ?aocheap=0 = original path for A/B):
+    // the far-fade early-outs (march + upsample) AND the packed-view-z bilateral.
+    const aoCheap = q.get('aocheap') !== '0';
     // debug probes need raw values — tone mapping would garble them
     const skyveldbg = q.get('skyveldbg') !== null && q.get('skyveldbg') !== '';
     renderer.toneMapping = cloudview || skyveldbg ? NoToneMapping : AgXToneMapping;
@@ -187,8 +200,10 @@ export class PostStack {
           camera,
           halfAo,
           // GTAO defaults are mesh-viewer scale: 16 samples cost ~50 ms on
-          // terrain vistas (Phase-2 finding) — 8 samples, 1.6 m radius
-          { samples: 8, radius: 1.6, distanceFallOff: 0.6 },
+          // terrain vistas (Phase-2 finding) — 8 samples, 1.6 m radius.
+          // ?aosamples sweeps this for the PERF-4 budget hunt; maxDist skips the
+          // far-vista march (output-equivalent, faded to 1 in aoFaded below).
+          { samples: aoSamples, radius: 1.6, distanceFallOff: 0.6, maxDist: aoCheap ? aoFadeFar : 1e9 },
         ),
       });
     }
@@ -359,42 +374,51 @@ export class PostStack {
       ? Fn((): NF => {
           const viewC = getViewPosition(screenUV, depthTex.x, uProjInv);
           const dist = viewC.length();
-          const k = smoothstep(700, 1800, dist);
-          // indirect-only approximation: sun-lit pixels (high HDR luminance)
-          // shed most of the post-AO — occlusion belongs to ambient light.
-          // (True aoNode-into-lighting wiring lands with the Phase-4 material
-          // restructure; see DEVIATIONS.md.)
-          const directK = smoothstep(1.2, 4.0, luminance(beauty.rgb)).mul(0.75);
-          const halfTexel = vec2(1).div(screenSize.mul(0.5));
-          const zC = viewC.z;
-          const acc = float(0).toVar();
-          const avg = float(0).toVar();
-          const wsum = float(1e-4).toVar();
-          for (const [ox, oy] of [
-            [-0.5, -0.5],
-            [0.5, -0.5],
-            [-0.5, 0.5],
-            [0.5, 0.5],
-          ] as const) {
-            const uvi = screenUV.add(halfTexel.mul(vec2(ox, oy)));
-            const ai = ((aoSrc as unknown as { sample(uv: unknown): unknown }).sample(uvi) as NV4).x;
-            const zi = getViewPosition(uvi, (depthTex.sample(uvi) as unknown as NV4).x, uProjInv).z;
-            const w = exp2(zi.sub(zC).abs().mul(-3.5));
-            acc.addAssign(ai.mul(w));
-            avg.addAssign(ai);
-            wsum.addAssign(w);
-          }
-          // GATED fallback for bilateral collapse: on grazing slopes near the
-          // horizon a half-res texel spans tens of meters of view depth, every
-          // tap rejects, and acc/1e-4 → 0 — the upsampler FABRICATED ao=0 and
-          // painted the far field black (horizon-black band; same collapse on
-          // grazing water = bm2 far-rim stripe). Support-free pixels fall back
-          // to the plain 4-tap average; wsum > 0.02 (any tap within ~2 m)
-          // keeps the bilateral result EXACT — zero deviation on healthy
-          // pixels (a global +0.01 weight floor printed a ~1% AO wash on the
-          // bm7 hero trunk and was rejected).
-          const aoRaw = mix(avg.mul(0.25), acc.div(wsum), smoothstep(0.002, 0.02, wsum));
-          return mix(mix(aoRaw, float(1), directK), float(1), k);
+          const k = smoothstep(aoFadeNear, aoFadeFar, dist);
+          const result = float(1).toVar();
+          // the full-res joint-bilateral upsample of the half-res AO.
+          const bilateral = (): void => {
+            // indirect-only approximation: sun-lit pixels (high HDR luminance)
+            // shed most of the post-AO — occlusion belongs to ambient light.
+            const directK = smoothstep(1.2, 4.0, luminance(beauty.rgb)).mul(0.75);
+            const halfTexel = vec2(1).div(screenSize.mul(0.5));
+            const zC = viewC.z;
+            const acc = float(0).toVar();
+            const avg = float(0).toVar();
+            const wsum = float(1e-4).toVar();
+            for (const [ox, oy] of [
+              [-0.5, -0.5],
+              [0.5, -0.5],
+              [-0.5, 0.5],
+              [0.5, 0.5],
+            ] as const) {
+              const uvi = screenUV.add(halfTexel.mul(vec2(ox, oy)));
+              const s = (aoSrc as unknown as { sample(uv: unknown): unknown }).sample(uvi) as NV4;
+              const ai = s.x;
+              // PERF-4: view-z packed in .y (Gtao) ⇒ 1 fetch/tap; aocheap=0
+              // restores the original full-res depth re-sample + unproject.
+              const zi = aoCheap
+                ? s.y
+                : getViewPosition(uvi, (depthTex.sample(uvi) as unknown as NV4).x, uProjInv).z;
+              const w = exp2(zi.sub(zC).abs().mul(-3.5));
+              acc.addAssign(ai.mul(w));
+              avg.addAssign(ai);
+              wsum.addAssign(w);
+            }
+            // GATED fallback for bilateral collapse: on grazing slopes a half-res
+            // texel spans tens of meters of view depth, every tap rejects, and
+            // acc/1e-4 → 0 (fabricated ao=0, horizon-black band). Support-free
+            // pixels fall back to the plain 4-tap average; wsum > 0.02 keeps the
+            // bilateral result EXACT on healthy pixels.
+            const aoRaw = mix(avg.mul(0.25), acc.div(wsum), smoothstep(0.002, 0.02, wsum));
+            result.assign(mix(mix(aoRaw, float(1), directK), float(1), k));
+          };
+          // PERF-4 early-out: past the fade end (k≈1) AO is forced to 1, so the
+          // 4-tap bilateral is wasted (the far half of an elevated vista). Skip
+          // it — output-equivalent (those pixels returned mix(...,1,k≈1)≈1).
+          if (aoCheap) If(k.lessThan(0.995), bilateral);
+          else bilateral();
+          return result;
         })()
       : null;
     // --- screen-space contact shadows (spec §2 floor) ---------------------------
@@ -631,10 +655,14 @@ export class PostStack {
         : null;
 
     this.post = new RenderPipeline(renderer);
+    // ?aodbg=1 — the AO term as grayscale, BYPASSING TRAA/bloom/grade so an
+    // AO-quality A/B is deterministic (no temporal-jitter or lighting confound).
+    const aoDbg = q.get('aodbg') === '1' && aoFaded !== null;
     // chain bisect: 9 = constant at pipeline output, 8 = aerial only (no
     // AO/TRAA/bloom/exposure/grade), default = full chain
-    this.post.outputNode =
-      skyVelDbgView !== null ? skyVelDbgView
+    this.post.outputNode = aoDbg
+      ? (vec3(aoFaded as unknown as NF) as unknown as typeof graded)
+      : skyVelDbgView !== null ? skyVelDbgView
       : cloudview === '9' ? vec3(1, 0, 0)
       : cloudview !== null && cloudview !== '' ? aerialNode
       : graded;

@@ -9,6 +9,37 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-15 (bd): **PERF-4 effect #1 — AO (GTAO + bilateral upsample): optimized to the user's 2 ms budget,
+  ~1.5 ms direct saved (verified within-run) + ~4 ms render via thermal un-throttle; ALL changes beauty-validated
+  (AO-term diff 0.00%). User drove PERF-4 effect-by-effect, AO first, budget 2 ms.** (Opus 4.8 1M.) **METHODOLOGY
+  (the honest post-measurement story — durable):** (1) per-pass GPU timestamps LIE for post — bloom's `bright`+`h0`
+  *read* 14 ms but `ablate=bloom` proves bloom is only ~6.5 ms; the first passes after a heavy one (TRAA/scene)
+  ABSORB drain latency at the encoder-wall-span boundary (two same-half-res passes can't really differ 100×, yet
+  `h0`=6.9 vs `v0`=0.07). So ABLATION is the only trustworthy "what does X cost" (SPEC: "verify with ablation").
+  (2) Headless `frameMs` is rAF/vsync-capped at 16.7 ms regardless of GPU load ⇒ `Δframe` is BLIND; `Δrender`
+  (per-pass timestamps, bracketed A/B) is the signal, and it maps to the user's GPU-bound 43 fps/23 ms real machine.
+  (3) Big-effect marginals are THERMALLY INFLATED (removing AO cooled the GPU, fps 56→68, every pass shrank) — so
+  measure the OPTIMIZATION as cheap-vs-original (both effect-on, matched thermal), not vs-off. New tool
+  `probe-postablate.ts` (boots per config, bracketed by baselines for drift). **AO DECOMP:** march ~1.8 ms (half-res
+  in `half.mrt`, POOR sample-ROI — 8→2 samples only −1.18 ms) + 4-tap joint-bilateral upsample ~2.5 ms (full-res in
+  `rt#16`) = the bigger half. **THE 3 OPTS (all gated `?aocheap`, default on, `=0` reverts):** (a) **far-fade
+  early-out** — AO is forced to 1 beyond 1800 m (the existing distance fade), yet the march AND the 4-tap upsample
+  computed the full result there and threw it away; gate both at the fade end (Gtao `maxDist`, upsample `If(k<.995)`)
+  → output-equivalent, skips the far half of a vista. (b) **packed view-z bilateral** — the upsample re-sampled
+  full-res depth + did a `getViewPosition` matrix unproject PER TAP (4×) just for the bilateral depth guide; GTAO
+  already computes each half-res pixel's view-z, so pack it into the AO texture `.y` (Gtao now returns vec4) and read
+  it straight (1 fetch/tap). The guide becomes half-res depth, which MATCHES the half-res AO → beauty-neutral. (c)
+  **samples 8→6** (12 march samples) — AO is a near-flat ~0.8 cue in this black-slate world (added `?aodbg` = the AO
+  term as grayscale, bypassing TRAA/bloom/grade for a deterministic A/B; samples 3/6/8 all diff 0.00% → AO is
+  over-sampled here). **MEASURED (bracketed, worstpos vista, 2592×1676):** full opt vs full original → march
+  `half.mrt` −0.66, upsample `rt#16` −0.85 = **~1.5 ms direct**, render total **−4.13 ms** (thermal-amplified, the
+  PERF-4 compounding thesis in action). **BEAUTY:** AO-term diff (`?aodbg`) 0.00% for both `aocheap` and samples
+  8→6; full-beauty bm7 0.00%. **AO is subtle here** (sparse black-slate geometry) — flagged: bump samples back toward
+  8 + revisit quarter-res march when the 5× / real-foliage world makes AO carry more contact. Files: Gtao.ts (maxDist
+  gate + packed view-z out), PostStack.ts (early-out + packed bilateral + `?aocheap`/`?aosamples`/`?aofar`/`?aodbg`),
+  probe-postablate.ts (NEW). tsc clean. **→ PERF-4 effect #2 (next, autonomous per user): BLOOM** — ablation-confirmed
+  ~6.5 ms clean; the two hot passes are half-res `bright`+`h0`; a low-frequency blur ⇒ resolution is nearly free.
+
 - 2026-06-15 (bc): **PERF-3 win #2 — the VERTEX-TRANSFORM CACHE: BUILT, MEASURED, found a MARGINAL /
   CONDITIONAL non-win — kept off-by-default, isolated to its own module; PERF-3 CLOSES (win #1 was the
   raster win). User then steered PERF to the POST CHAIN.** (Opus 4.8 1M.) Built the full cache: stage 2a
