@@ -13,25 +13,32 @@
 ## YOU ARE HERE — 2026-06-15
 **FRONTIER: PERF-4 = the POST CHAIN, running effect-by-effect (user directive: one effect at a time, they review
 when back). PERF-3 CLOSED (win #1 makeCtx cache LIVE −0.59 ms; win #2 vertex cache off-by-default, LOG bc/D-N40).**
-**PERF-4 progress (LOG bd, be):**
+**PERF-4 progress (LOG bd, be, bf):**
 - **AO ✅ SHIPPED** (`1db0bfd`): far-fade early-out (march+upsample) + packed-view-z bilateral + samples 8→6 =
   **~1.5 ms direct / ~4 ms render** (thermal un-throttle compounding); ALL beauty-validated 0.00% (`?aocheap`
   master toggle, `?aodbg` AO-term view, `?aosamples`/`?aofar`). AO is a near-flat ~0.8 cue here (sparse black-slate).
 - **BLOOM ✅ INVESTIGATED — NOT optimizable.** Its ~6.5 ms is DRAIN-ABSORPTION, not pixel work: resolution-scaling
   is FLAT at native AND GPU-bound high-res (the `bright` pass absorbs upstream TRAA/scene drain into its
   wall-span). Reverted — scaling only changes the glow for zero perf. Bloom's cost falls when TAA is cut.
-- **TAA 🔵 = the real remaining prize** (`TRAANode.resolve` fetch-bound ~6.8 ms, ~18 fetches/px: 9 depth + 8
-  variance + history). Hitting 2–3 ms means cutting the variance ghosting-guard and/or the parallax-edge depth
-  neighborhood — **MOTION-quality properties unvalidatable by static screenshots**, needing a ~300-line TRAANode
-  resolve fork. **FLAGGED for the user: needs a sanctioned fork + their in-motion review; NOT forked solo** (the
-  methodology forbids shipping unvalidated beauty changes).
+- **TAA ✅ BUILT + MEASURED = marginal non-win** (`LeanTraa.ts`, `?taacheap`, default OFF). User sanctioned "fork
+  three's resolve"; built it faithful (subclass TRAANode + `super.setup` + swap resolve, neighborhoods shrunk).
+  High-res GPU-bound A/B = **~0.45 ms native** (full cut ~2×), NOT the projected ~3 ms — `TRAANode.resolve` is
+  ALU+drain-bound, not fetch-bound (cutting 4 of ~18 fetches saves ~0.45 ms; the variance/clip/flicker MATH
+  dominates). Trades the ghosting guard for sub-ms ⇒ default OFF (vertex-cache precedent), kept for the user's
+  in-motion A/B.
 - **AERIAL (`rt#16`) / CLOUDS (`half.mrt`):** thin safe headroom (clouds 1.4 ms half-res; rest is beauty-critical
   froxel fog + Hillaire haze). AO's share already cut.
-**KEY MEASUREMENT REALITY (durable):** per-pass post timestamps LIE (drain-absorption — bloom reads 14 ms but is
-6.5 ms); headless `frameMs` is rAF-capped at 16.7 ms (use high-res 3888×2520 to go GPU-bound for real `Δframe`, or
-bracketed `Δrender`); big-effect marginals are thermally inflated. ABLATION is the truth. Tool: `probe-postablate.ts`.
-**→ NEXT: the actionable post win is the TAA fork — the user's call. Otherwise PERF-4's safe shippable wins (AO)
-are banked; bloom is a mirage; aerial/clouds are thin.**
+**KEY MEASUREMENT REALITY (durable, SPEC `## PERF METHODOLOGY`):** per-pass post timestamps LIE — they're encoder
+WALL-SPANS that OVERCOUNT ~2.4× (sum ~80 ms vs ~33 ms real frame at high res) and the first pass after a heavy one
+absorbs its drain. Cutting work in a post pass yields FAR LESS than its timestamp suggests because the passes are
+ALU/drain-bound (bloom = pure drain; TAA = ALU). Headless `frameMs` is rAF-capped at 16.7 ms (go GPU-bound at
+3888×2520 for real `Δframe`); ablation + high-res are the only truths. Tool: `probe-postablate.ts`.
+**→ PERF-4 RE-FRAME (honest conclusion): the post chain's apparent "~60 ms / 10× headroom" was the overcounted
+timestamps. The only genuinely-reducible BEAUTY-SAFE work was AO's wasted far-field compute (~1.5 ms, SHIPPED).
+Bloom + TAA are MEASURED non-wins (drain/ALU). The rest (TAA math, aerial haze, cloud march) is beauty-load-bearing
+real work. Further post perf = a beauty-TRADING exercise (lower-res atmospherics / fewer cloud steps / accept TAA
+ghosting) — the user's call. The 2.1× throttle compounding stays the lever, but it needs cutting REAL work the
+passes don't have without a quality hit.**
 
 **PERF-1 (LOG `ay`): per-pass measurement is now TRUSTWORTHY, the PURE nanite
 renderer is ISOLATED (`?pure`), and the user's WORST view is decomposed with cool numbers.**
@@ -89,7 +96,7 @@ N0 scaffold ✅ · N1 clusterize ✅ · N2 cull ✅ · N3 vis-buffer ✅ · N4 m
 | `PERF-2` | Profile pure-nanite floor + worst-view decomp | ✅ | `PERF-1` | LOG `ay`,`az`; PERF LEDGER | DONE (folded) — worst view 82k visCl: SW raster depth 2.82 + payload 2.95 = 5.77ms, HW 2.62, flat resolve 2.10 (cool). SW depth+payload = the #1 nanite cost. |
 | `PERF-3` | Depth-rasterizer optimization (shared-mem caches) | ✅ | `PERF-2` | LOG `az`,`ba`,`bc`; D-N40; NaniteRaster/VertexCache | CLOSED. WIN #1 LANDED (`?wgcache` default ON): per-cluster makeCtx cache → **−0.59 ms (−11%)** camera SW raster (bit-identical, alternated) + the 6 shadow rasters. WIN #2 (vertex cache) BUILT + MEASURED = marginal/conditional non-win (R≈4.7 vs makeCtx R=128; far-terrain transform texture-cache-absorbed) → kept OFF-by-default, isolated to `NaniteVertexCache.ts`. In-kernel raster wins exhausted. |
 | `PERF-4` | Post-chain optimization (the 2.1× thermal throttle) | 🔵 | `PERF-3` | SPEC `## PERF METHODOLOGY`; LOG bd/be; PostStack/Gtao | **IN PROGRESS, effect-by-effect (user).** AO ✅ `1db0bfd`: early-out + packed-view-z bilateral + samples 8→6 = ~1.5 ms direct / ~4 ms render, beauty 0.00% (`?aocheap`/`?aodbg`). BLOOM ✅ = NOT optimizable (drain-absorption, resolution-FLAT at native + GPU-bound high-res; reverted). TAA 🔵 = the real prize (fetch-bound ~6.8 ms, ~18 fetches/px); 2–3 ms cut needs a TRAANode resolve fork + USER in-motion review (ghosting unvalidatable headless) — FLAGGED, not forked solo. Aerial/clouds = thin (clouds 1.4 ms; rest beauty-critical haze). |
-| `PERF-4-TAA` | TAA resolve fork: reduce neighborhood fetches 9-depth/8-variance → ~half | ⬜ | `PERF-4` | LOG be; TRAANode.js | **USER CALL** — projected ~3–3.5 ms (`TRAANode.resolve` 6.8→~3.5). Needs: (1) a sanctioned ~300-line resolve fork (or custom lean resolve), (2) in-MOTION quality review (variance taps = ghosting guard; depth neighborhood = parallax-edge velocity dilation; both motion-only, unvalidatable by static shots). Decide approach (fork three vs custom vs accept cost) before building. |
+| `PERF-4-TAA` | TAA resolve fork (`LeanTraa.ts`) — BUILT + MEASURED = marginal | ✅→OFF | `PERF-4` | LOG bf; LeanTraa.ts | **MEASURED NON-WIN.** User sanctioned the fork; built `LeanTraa.ts` (subclass + faithful resolve copy, neighborhoods shrunk, `?taacheap`). High-res GPU-bound A/B = ~0.45 ms native (full cut ~2×), NOT the projected ~3 ms — `TRAANode.resolve` is ALU+drain-bound, not fetch-bound. Trades the ghosting guard for sub-ms ⇒ default OFF, kept gated for the user's in-motion A/B + future TAA rework. Vertex-cache precedent. |
 | `AUDIT-1` | Deviation audit vs original Fable 5 spec | ⬜ | — | PROVENANCE; `reference/fable5-original-NANITE.md` | diff current state/impl vs the 937-line original; flag unjustified drops from my D-N* edits (shadows = D-N29, justified) |
 
 ## B. DAG (N8) — active workstream (SPEC `### DAG (N8)`)

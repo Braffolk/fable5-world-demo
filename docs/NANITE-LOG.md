@@ -9,6 +9,34 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-15 (bf): **PERF-4 effect #3 TAA — built the user-sanctioned `TRAANode` resolve fork; MEASURED it
+  rigorously (high-res GPU-bound) = a MARGINAL ~0.5–1 ms win, NOT the projected ~3 ms, because TAA is ALU+drain-
+  bound not fetch-bound. Default OFF, isolated, not shipped. This RE-FRAMES PERF-4: the post chain's "headroom" was
+  an artifact of overcounted encoder-span timestamps — the only real beauty-safe win was AO.** (Opus 4.8 1M.) User
+  chose "fork three's resolve" (AskUserQuestion). Built **`LeanTraa.ts`** — subclasses TRAANode, reuses ALL its
+  infra (history/resolve RTs, jitter, velocity, camera uniforms) via `super.setup()`, then overwrites only
+  `_resolveMaterial.colorNode` with a FAITHFUL copy of three 0.184's resolve (clipAABB / variance / disocclusion /
+  flicker byte-for-byte) with the two neighborhoods shrunk: depth 3×3→5-tap cross, variance 8→4-tap cross. Gated
+  `?taacheap` (1 = variance-only, 2 = +depth), default 0 = stock. Boots + renders correctly (static bm7 diff 1.8%);
+  one bug en route — the stock `traa()` factory wraps beauty in `convertToTexture` (for the `passNode`/renderTarget
+  `updateBefore` reads), which the fork must replicate. **MEASURED (the native thermal noise swamps it — two native
+  runs disagreed on the SIGN; only high-res 3888×2520 GPU-bound, where frameMs is uncapped, is clean):** variance
+  8→4 = **frameMs 32.3 vs 33.3 ≈ ~1 ms at high res ⇒ ~0.45 ms native**; the full cut ~2×. The direct `traa` drop is
+  ~0.45 ms. **ROOT CAUSE:** cutting 4 of ~18 fetches saves ~0.45 ms because `TRAANode.resolve` is ALU+drain-bound —
+  the variance/clip/flicker MATH dominates, the texture loads don't. My "halve the 18 fetches → halve the 6.8 ms"
+  projection was WRONG (same trap as bloom: the per-pass timestamp is NOT the reducible cost). **VERDICT:** a sub-ms
+  native gain that trades the ghosting guard (variance) + parallax-edge velocity dilation (depth) — fails the
+  multi-ms / hold-the-beauty-bar bar. DEFAULT OFF + isolated (vertex-cache precedent, D-N40); kept for the user's
+  in-motion A/B (`?taacheap=1`) + as the foundation if TAA is ever reworked. **PERF-4 RE-FRAME (the big finding):**
+  the post chain's apparent ~60 ms is OVERCOUNTED encoder wall-spans (sum ~80 ms at high res while real frame is
+  ~33 ms ⇒ ~2.4× overcount); cutting work in a post pass yields far LESS than its timestamp suggests because the
+  passes are ALU/drain-bound (bloom = pure drain; TAA = ALU). The genuinely-reducible, beauty-safe work was AO's
+  wasted far-field computation (~1.5 ms, shipped bd). The rest (TAA math, bloom passes, aerial haze, cloud march)
+  is beauty-load-bearing real work. So PERF-4's safe headroom is ~AO; the thermal-throttle compounding is the lever
+  but it needs cutting REAL work, which the post passes don't have much of without a quality hit. tsc clean,
+  LeanTraa default-off committed. **→ recommend: ship AO (done), treat bloom+TAA as measured non-wins, and if more
+  post perf is wanted it's a beauty-trading exercise (lower-res atmospherics / fewer cloud steps) — the user's call.**
+
 - 2026-06-15 (be): **PERF-4 effects #2 BLOOM + #3 TAA — the surprising truth: BLOOM IS NOT INDEPENDENTLY
   OPTIMIZABLE (its cost is drain-absorption, not pixel work — proven flat across resolution at native AND
   GPU-bound high-res), and TAA is the REAL post bottleneck (fetch-bound ~6.8 ms) but reaching its 2–3 ms budget

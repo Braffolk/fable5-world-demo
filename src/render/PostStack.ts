@@ -15,6 +15,7 @@ import type { Renderer, StorageBufferNode } from 'three/webgpu';
 import { RenderPipeline } from 'three/webgpu';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { traa } from 'three/addons/tsl/display/TRAANode.js';
+import { leanTraa } from './LeanTraa';
 import {
   Fn,
   If,
@@ -538,9 +539,15 @@ export class PostStack {
     const velLoad = (texel: NV2): NV4 =>
       vec4(velReproject(texel), 0, 1) as unknown as NV4;
     const reprojectedVelocity = { load: velLoad } as unknown as typeof depthTex;
+    // ?taacheap (PERF-4, default 0 = stock three TAA): 1 = depth-only lean
+    // resolve (low motion risk), 2 = full (depth + variance cut, ~3 ms, needs
+    // an in-motion quality review). LeanTraa subclasses TRAANode (same infra).
+    const taaCheap = Number(q.get('taacheap') ?? 0);
     const taaed = ablate.has('taa')
       ? (withBounce as unknown as ReturnType<typeof traa>)
-      : traa(withBounce, depthTex, reprojectedVelocity, camera);
+      : taaCheap > 0
+        ? leanTraa(withBounce, depthTex, reprojectedVelocity, camera, taaCheap)
+        : traa(withBounce, depthTex, reprojectedVelocity, camera);
     // nanite jitter mirror (D-N18): the compute raster must project with the
     // SAME per-frame TRAA view offset the scene pass renders with; the node's
     // _jitterIndex is read before the pipeline render (it increments after)
