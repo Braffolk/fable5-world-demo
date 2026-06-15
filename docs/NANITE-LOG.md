@@ -9,6 +9,40 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-15 (bj): **N8-D1e — the explicit-mesh DAG cut VALIDATED WORLD-WIDE (bark/deadwood/rock all pass the no-pop
+  continuous-LOD gate, bark under wind) + PERF CHARACTERIZED: rock+deadwood DAG is FREE, BARK is a ~1.7× raster
+  regression in dense forest (the 188k-tree per-instance floor — NOT fixable by τ or minPx). The world-wide WIRING +
+  measurement close; the DEFAULT-FLIP + Worker build are gated on the USER CHECKPOINT (in-motion review) + the bark
+  floor's real fix (hierarchical instance cull).** (Opus 4.8 1M.) **RIDER (do-first) RESOLVED — no migration/cull
+  gap:** bm7 renders a full bark trunk + background trunks on green terrain; bm4 a whole forest of trunks with god-rays
+  + a foreground boulder (rock) + a log (deadwood); the worstpos vista is a hillside forest (bare-branch trees framing
+  a valley). The earlier "bm7 = bare terrain + sky" was a transient/framing read — all 3 explicit classes render at all
+  distances. **VALIDATION (the D1e deliverable — generalises the cut past the D1c rock hero):** generalised
+  `tools/probe-zoom.ts` (CLASS/SHOT env + `nanitedterrain=0` to ISOLATE the per-class dagCluster signal from the
+  now-default terrain DAG), ran all 3 explicit classes at bm4 (boulder+log+forest in one frame). GREEN: **bark** (the
+  load-bearing case — the 'trunk' WIND channel) τ-sweep 121k→230k monotonic + zoom 181.6k→179.4k SMOOTH (the cut holds
+  while trunks sway — the wind-padded cull sphere keeps the projection sound); **deadwood** 1012→1016 mono / smooth;
+  **rock** re-confirmed with the clean isolated signal (1026→1104). Crack-freeness stays build-time-proven (probe-dag
+  locked boundaries + bit-exact sibling pairs, class-agnostic). **PERF (bm4 = the DAG's WORST case, densest trees;
+  1280×832 per-pass rDepth, occl ON):** discrete-default visCl 51.8k / rDepth **1.44 ms**; **rock+deadwood DAG** (bark
+  discrete) visCl 51.4k / rDepth **1.44 ms** (+164 ms boot for 32 meshes/97k tris) = **FREE**; **+bark (=`?nanitedag=all`)**
+  visCl ~106k / rDepth **~2.5 ms** (+3161 ms sync boot, 68 meshes/2.6M tris) = the whole cost is BARK. Per-class
+  decomp (occl-off probe): rock-DAG ≈ 1k cl, deadwood-DAG ≈ 1k, **bark-DAG ≈ 181k** = 99% of the cost. **WHY bark is a
+  wall (locks D-N31's "revisit if bark makes cull volume the bottleneck" + D-N35):** the flat per-cluster cut floors at
+  ≥1 cluster per visible instance, and a dense forest has hundreds of k of in-envelope trees → the discrete chain's
+  aggressive far-ring collapse (1 coarse cluster, then impostor far-field) undercuts it ~2×. **τ saturates** (loderr
+  1→4 only sheds 106k→85k — chunks pinned at ~34k = the INSTANCE dispatch floor) and **minPx is INERT** (visCl ~106k
+  across minPx 0/1/2/4 — forest trees are a few px each, not sub-pixel; D-N35 re-confirmed). DAG-all is **visually
+  identical** to discrete at a STATIC frame (the 2× buys ONLY no-pop-under-motion — a motion property, same caveat as
+  the PERF-4 TAA fork: not screenshot-validatable, needs the user's in-motion eyeball). **THE FIX for bark = HIERARCHICAL
+  INSTANCE CULLING** (cull spatial GROUPS of distant instances → O(regions), the way impostors collapse the far forest) —
+  D-N35's deferred milestone, now a tracked ROADMAP task; OR N9 foliage aggregates change the density math. **NOT DONE
+  (gated on the checkpoint — visible-everywhere default changes the user reserves):** flip rock+deadwood DAG default-on
+  (free, recommended), flip/keep bark opt-in, the explicit-DAG Worker build (D-N30 — only needed once a class goes
+  default; explicit build is sync today, 3.2s for all / 0.16s for rock+deadwood). See D-N41. tsc clean; only
+  probe-zoom.ts changed (tooling). **→ N8-D1e drives to its USER CHECKPOINT:** in-motion no-pop review + the
+  rock+deadwood-default / bark-gating decision.
+
 - 2026-06-15 (bi): **AUDIT-1a RESOLVED (user: "bring hueshift back") — restored the per-instance TINT to the nanite
   bark/deadwood resolve.** (Opus 4.8 1M.) Faithful port of the old path's `applyInstanceTint` (VegInstance.ts:154,
   live via `instanceVeg`): on TOP of the existing per-vertex `hueShift(dv.x)`, multiply the albedo by a per-instance

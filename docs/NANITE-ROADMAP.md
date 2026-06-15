@@ -11,18 +11,25 @@
 > must finish first. `spec` = the `## header` in NANITE-SPEC.md (+ D-N* / file refs).
 
 ## YOU ARE HERE — 2026-06-15
-**FRONTIER: N8-D1e — close the explicit-mesh DAG WORLD-WIDE (user-chosen 2026-06-15, after PERF-4 + AUDIT-1 closed).**
-**→ N8-D1e:** extend the continuous DAG cut across ALL migrated explicit meshes (bark/rock/deadwood), not just the
-hero/test set; add the perf-ledger row; USER CHECKPOINT (continuous-zoom: no pop, no cracks, stable tri counts). The
-DAG machinery is already built — terrain DAG (D-N36–39), hero-mesh wire + draw-envelope (D-N33), flat per-cluster cut
-(D-N31), Worker build + cache (D-N30); this is the world-wiring close-out of N8-D1. Read SPEC `### DAG (N8)` + those
-D-N* first. **RIDER (do FIRST, ~15 min): sanity-check the world actually renders the migrated trunks.** During the
-tint work, bm7 ("forest interior dapple", x−850 z850 alt4) rendered as BARE terrain + sky (no trunks) and the
-worstpos vista's trees were only a thin horizon band — LIKELY just sparse trunk placement in this seed + the
-black-slate hiding all the un-migrated foliage (grass/understory/leaves = N9/N10), but CONFIRM it's not a
-migration/cull gap before extending the DAG over geometry that isn't showing up.
+**N8-D1e is at its USER CHECKPOINT — explicit-mesh DAG VALIDATED world-wide + MEASURED (LOG bj / D-N41). Engineering
+done; two visible-everywhere DEFAULT decisions wait for the user's in-motion review.**
+- **VALIDATED ✅:** bark/deadwood/rock all pass the no-pop continuous-LOD gate (probe-zoom CLASS-parameterised);
+  **bark holds under the 'trunk' wind channel** (the key new proof past the D1c rock hero). Crack-free is build-time-proven.
+  RIDER resolved — bm7/bm4/worstpos all render trunks+rock+deadwood; NO migration/cull gap (the old "bare terrain" read
+  was a transient framing).
+- **MEASURED ✅ (bm4 forest = DAG worst case):** **rock+deadwood DAG = FREE** (rDepth 1.44 == discrete, +164 ms boot);
+  **bark DAG = ~1.7× raster** (1.44→~2.5 ms) + **+3 s sync boot** — the 188k-tree per-instance floor, NOT fixable by τ
+  (saturates) or minPx (inert). DAG-all is pixel-identical to discrete STATICALLY (the 2× buys only no-pop-under-motion).
+- **THE CHECKPOINT DECISIONS (user's call — I did NOT flip defaults; one-line each):** (1) default-on **rock+deadwood DAG**?
+  (free no-pop — RECOMMENDED). (2) **bark DAG** stays opt-in (`?nanitedag=bark`) until its real fix lands? The fix =
+  **N8-HIC hierarchical instance culling** (cull distant instance GROUPS → O(regions); also the unbounded-far-field unblock,
+  D-N35), OR wait for N9 foliage aggregates to change the density math. (3) the D-N30 explicit-DAG **Worker build** (kills the
+  sync-boot hitch) is only needed once a class goes default — build it with whichever flip the user picks.
+- **NEXT FRONTIER after the checkpoint (user's pick):** **N8-HIC** (the bark unblock + real-geometry far-field) or **N9**
+  (foliage aggregate DAG — the dominant shadow casters; itself was blockedBy D1e, now validated). Read SPEC D-N41 + D-N35
+  + `### DAG (N8)` first.
 
-**JUST CLOSED this session (LOG bd–bi) — durable, don't re-derive:**
+**JUST CLOSED earlier this session (LOG bd–bi) — durable, don't re-derive:**
 - **PERF-4 (post chain) ✅** — THE finding (LOG bg, high-res GPU-bound ablation ×2): **AO ≈ 100% of the real post
   cost** (removing AO ≈ removing all post: frameMs 33.4→25.0 vs →24.9, 3888×2520); **bloom + TAA + aerial + clouds
   ≈ 0.1 ms combined** — their per-pass timestamps OVERCOUNT ~7× (the passes overlap on the GPU). AO optimized +
@@ -99,7 +106,8 @@ N0 scaffold ✅ · N1 clusterize ✅ · N2 cull ✅ · N3 vis-buffer ✅ · N4 m
 ## B. DAG (N8) — active workstream (SPEC `### DAG (N8)`)
 | id | task | status | blockedBy | spec | scope |
 |----|------|--------|-----------|------|------|
-| `N8-D1e` | Full-world DAG wiring + ledger + CHECKPOINT | ⬜ | — | DAG (N8) | close N8-D1: DAG across all migrated explicit meshes world-wide; perf ledger row; USER CHECKPOINT |
+| `N8-D1e` | Full-world DAG wiring + ledger + CHECKPOINT | 🔵 | — | D-N41; LOG bj | VALIDATED (bark/deadwood/rock no-pop gate green, bark under wind) + MEASURED (rock+deadwood DAG free; bark ~1.7× raster + 3 s boot = the per-instance forest floor, τ/minPx don't help) + ledger row. AT the USER CHECKPOINT: (1) default-on rock+deadwood DAG? (free, rec) (2) bark stays opt-in until N8-HIC? Defaults NOT flipped (user-present rule). |
+| `N8-HIC` | Hierarchical instance culling (bark DAG unblock) | ⬜ | — | D-N41; D-N35 | cull distant instance GROUPS at once → O(regions) not O(instances); breaks the dense-forest per-instance floor so bark DAG (+ the unbounded real-geometry far-field) becomes affordable. The real fix flagged by D-N31/D-N35/D-N41. Big — own milestone; weigh vs letting N9 aggregates subsume it. |
 | `N8-2b4` | Always-resident coarse terrain base | ⬜ | — | DAG (N8) | teleport no-hole backstop ring |
 
 ## C. POOLS / HYBRID / FOLIAGE (SPEC `## Phase plan`)

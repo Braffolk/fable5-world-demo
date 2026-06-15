@@ -510,6 +510,8 @@ measurement discipline; shot cycles ~2–3 min, cooled ABAB rounds 15–30 min e
 
 | **PERF-3 win #1 — makeCtx workgroup-shared-mem cache** (2026-06-15, `?wgcache` default ON, worst cam −4.2/303.1/−1.4 yaw 67.5° T11, `?pure`, 2592×1676, ALTERNATED 0/1) | — | — | — | — | — | 6 (pure) | The first rasterizer optimization. 1 workgroup == 1 cluster ⇒ compute makeCtx ONCE (thread 0) + broadcast via `workgroupArray`/`workgroupBarrier` (first shared-mem use in the codebase); kills the 128×/cluster redundant decode + trunk gust samples. **Camera SW raster (depth+payload) 5.77 → 5.18 ms = −0.59 ms (−11%)** — consistent across 3 alternated pairs (depth 2.82→2.62, payload 2.95→2.56). Bit-identical geometry (f32 round-trip exact; screenshot matches at worst cam + bm3). Also speeds the 6 shadow-clipmap rasters (shared buildNaniteRaster). Full-frame fps too thermally noisy headless to quote. NEXT: the 3× fetchWorldVert (1.11 ms / 39%) vertex cache. |
 
+| **N8-D1e — explicit-mesh DAG cost split** (2026-06-15, bm4 forest = DAG worst case, 1280×832 per-pass `c.nanRasterDepth`, occl ON, uncooled single — directional ratio, not a sub-quantum claim) | — | — | — | — | — | 21 | The DAG-vs-discrete cost characterisation (LOG bj / D-N41). **discrete default:** visCl 51.8k / rDepth **1.44 ms**. **rock+deadwood DAG** (bark discrete): visCl 51.4k / rDepth **1.44 ms** (+164 ms boot, 32 meshes/97k tris) = **FREE**. **`?nanitedag=all`** (+bark): visCl ~106k / rDepth **~2.5 ms** (~1.7×; +3161 ms sync boot, 68 meshes/2.6M tris) — the whole delta is BARK (per-class occl-off: rock ~1k, deadwood ~1k, **bark ~181k**). τ-saturated (loderr 1→4: 106k→85k) + minPx-inert (visCl ~106k @ minPx 0/1/2/4): the per-instance forest floor, not a cut-tuning miss. No-pop gate green all 3 classes (probe-zoom). |
+
 N0 SPIKE LEDGER (2592×1676, gpusample-24 medians, back-to-back in-session;
 content: 10.04M instanced tris, 1144 source clusters, 1937 instances,
 55,568 visible work items, 22,784 HW-queued tris):
@@ -1355,6 +1357,31 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
     6 tex samples) AND with **cost-aware gating** (cull bins clusters by per-vert cost; barrier only the
     expensive ones — else the unconditional barrier taxes the cheap-terrain majority and nets negative). Kept
     off-by-default as the foundation for that future.
+
+- D-N41 (2026-06-15, N8-D1e — the explicit-mesh DAG generalises CORRECTLY but the heavy BARK class is a perf wall the
+  flat cut cannot prune; rock+deadwood DAG is free. LOG bj). The continuous-LOD cut (D-N31) is now VALIDATED across all
+  three explicit classes (bark/deadwood/rock — probe-zoom CLASS-parameterised, terrain-isolated): monotonic τ-refine +
+  smooth-under-motion (no pop), and **bark holds while the 'trunk' wind channel sways** (the wind-padded cull sphere
+  keeps the screen-error projection sound). Crack-freeness stays build-time-proven (probe-dag locked boundaries +
+  bit-exact sibling pairs, class-agnostic). **PERF SPLIT (bm4 forest = the DAG's worst case, per-pass rDepth, occl ON):**
+  • rock+deadwood DAG = **FREE** (rDepth 1.44 == discrete 1.44; ~1k cl each in view; +164 ms boot) — no-pop stones/logs
+    at zero runtime cost; the obvious default-on candidate.
+  • bark DAG = **the whole cost** (rDepth 1.44→~2.5 ≈ 1.7×; ~181k cl occl-off = 99% of `?nanitedag=all`; +3.0 s of the
+    +3.2 s sync boot). **NOT a τ or minPx problem** — the flat per-cluster cut FLOORS at ≥1 cluster per visible
+    instance, and a dense forest has hundreds of k of in-envelope trees, so the discrete chain's aggressive far-ring
+    collapse (1 coarse ring cluster → impostor far-field beyond 496 m, D-N14) undercuts it ~2×. τ saturates (loderr
+    1→4 sheds only 106k→85k; chunks pinned at ~34k = the INSTANCE dispatch floor), and minPx is inert in a forest
+    (visCl ~106k across minPx 0/1/2/4 — trees are a few px each, not sub-pixel; re-confirms D-N35). The 2× buys ONLY
+    no-pop-under-motion (DAG-all is pixel-identical to discrete at a static frame — a MOTION property, needs the user's
+    in-motion review, not a screenshot).
+  **THE REAL FIX for bark (the unblock) = HIERARCHICAL INSTANCE CULLING** — cull spatial GROUPS of distant instances at
+  once (O(regions), not O(instances)), the architecture that lets real geometry retire the impostor far-field (D-N35
+  end-state; the same lever the "unbounded envelope" needs). Its own milestone (ROADMAP `N8-HIC`), gated on the user
+  caring about bark-DAG vs waiting for N9 foliage aggregates (which independently change the foliage density math). Until
+  then **bark DAG stays OPT-IN** (`?nanitedag=bark`/`all`). RULING: D1e ships the world-wide VALIDATION + the honest
+  measurement; the default-on flip (rock+deadwood free now; bark gated) and the D-N30 explicit-DAG Worker build (only
+  needed once a class goes default — explicit build is sync today: 3.2 s all / 0.16 s rock+deadwood) are deferred to the
+  USER CHECKPOINT, per the standing "visible-everywhere default flips wait for a user-present session" rule.
 
 ## PERF METHODOLOGY — the bar for a real win (2026-06-15, user directive)
 

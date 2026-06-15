@@ -1,28 +1,43 @@
 /**
- * N8-D1c GATE — continuous-LOD DAG cut under MOTION (no pop, no cracks, stable
- * counts). Boots the world with the rock pools DAG'd (?nanitedag=rock) at the
- * bm4 boulder framing (a big foreground rock = the DAG'd hero), occlusion off
- * for a deterministic count, then exercises the screen-error cut two ways:
+ * N8-D1c/D1e GATE — continuous-LOD DAG cut under MOTION (no pop, no cracks,
+ * stable counts). Boots the world with ONE explicit class DAG'd at the bm4
+ * framing (boulder + log + forest all in frame), occlusion off for a
+ * deterministic count, then exercises the screen-error cut two ways:
  *
  *   τ-SWEEP (fixed pose): tighten τ from coarse→fine via the live setTau hook.
- *   nanite.dagClusters (emitted rock-DAG clusters ONLY — terrain/bark are
- *   flag-0) must rise MONOTONICALLY as τ tightens (the cut frontier walks toward
- *   LOD0) and actually span a range (the cut is doing something).
+ *   nanite.dagClusters (emitted DAG clusters of the chosen class ONLY — terrain
+ *   is forced to the window grid via nanitedterrain=0 so it contributes 0 DAG
+ *   clusters; the other explicit classes are flag-0) must rise MONOTONICALLY as
+ *   τ tightens (the cut frontier walks toward LOD0) and span a range.
  *
  *   ZOOM-SWEEP (τ=1): dolly the camera along its view ray; dagClusters must
  *   move SMOOTHLY frame to frame — a big jump = a LOD pop, the thing the
  *   continuous cut exists to avoid.
  *
- * Frames → shots/wip/zoom-* for an eyeball pass (cracks = holes in the rock
+ * Frames → shots/wip/zoom-* for an eyeball pass (cracks = holes in the
  * silhouette between LOD bands). Crack-FREENESS is proven in probe-dag (locked
  * boundaries + bit-exact sibling pairs); this gate confirms the GPU cut realises
  * it without pops/holes/errors.
  *
- *   npx tsx tools/probe-zoom.ts            # needs the dev server on :5173
+ * D1e: run for EACH explicit class to prove the cut generalises past the D1c
+ * rock hero — bark is the load-bearing one (the 'trunk' wind channel: the cut
+ * must hold while vertices sway, since the cull sphere is wind-padded):
+ *   npx tsx tools/probe-zoom.ts                      # CLASS=rock  (D1c default)
+ *   CLASS=bark     npx tsx tools/probe-zoom.ts       # wind-channel class
+ *   CLASS=deadwood npx tsx tools/probe-zoom.ts       # rigid, shares rock path
+ *   CLASS=bark SHOT=7 npx tsx tools/probe-zoom.ts    # forest-interior framing
+ *                                            # needs the dev server on :5173
  */
 
 import type { CamPose } from '../src/core/Hooks';
 import { launchWebGPU, laasUrl } from './launch';
+
+// D1e: which explicit class to DAG + which bookmark to frame it at. bm4 (shot 4)
+// frames a boulder + a log + the forest at once, so toggling CLASS isolates each
+// class's DAG cluster signal at the SAME pose. nanitedterrain=0 forces the window
+// grid (terrain contributes 0 DAG clusters) so dagClusters is the class only.
+const CLASS = process.env.CLASS ?? 'rock';
+const SHOT = process.env.SHOT ?? '4';
 
 declare global {
   interface Window {
@@ -52,8 +67,17 @@ async function main(): Promise<void> {
     width,
     height,
     freeze: true,
-    extra: { nanite: '1', nanitedag: 'rock', nanshadow: '0', occl: '0', shot: '4', loderr: '1' },
+    extra: {
+      nanite: '1',
+      nanitedag: CLASS,
+      nanitedterrain: '0',
+      nanshadow: '0',
+      occl: '0',
+      shot: SHOT,
+      loderr: '1',
+    },
   });
+  console.log(`[zoom] CLASS=${CLASS} SHOT=${SHOT}`);
   console.log(`[zoom] ${url}`);
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__laas && (window.__laas.ready || window.__laas.error != null), undefined, {
