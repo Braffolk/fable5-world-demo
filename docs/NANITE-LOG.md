@@ -9,6 +9,21 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-15 (bi): **AUDIT-1a RESOLVED (user: "bring hueshift back") — restored the per-instance TINT to the nanite
+  bark/deadwood resolve.** (Opus 4.8 1M.) Faithful port of the old path's `applyInstanceTint` (VegInstance.ts:154,
+  live via `instanceVeg`): on TOP of the existing per-vertex `hueShift(dv.x)`, multiply the albedo by a per-instance
+  warm/cool RGB mix `mix(warm, cool, slotHash(instId,17))` and a value jitter `slotHash(instId,91)·tK·1.6 + (1−tK·0.8)`,
+  tK=0.12 (the veg default), keyed on the persistent scatter slot (instId). `slotHash` exported from NaniteFetch so
+  the nanite path has ONE hash shared by the wind phase (211) + the tint (17/91) — bit-identical to the old path's
+  variation law. **PERF: negligible** — ~6 ALU ops (2 hashes + a mix + 2 muls) on bark/deadwood pixels only, and the
+  resolve isn't ALU-bound (it's the geometry-fetch + lighting that costs). **VALIDATED:** tint-on vs tint-off A/B
+  (git-stash) on the tree vista changed 0.67% of pixels (above the ~0.1% control floor), confined to the tree band —
+  sky/terrain bit-identical; tsc clean. CAVEAT: bm7 (forest-interior bookmark) AND the worstpos vista both render
+  terrain-dominated in the current black-slate world (trees are a distant horizon band; "82k visClusters" is mostly
+  terrain DAG clusters), so I couldn't capture a NEAR-trunk showcase headless — the per-tree colour spread is best
+  eyeballed in-browser at a close forest pose (tK=0.12 is tunable up if it reads too subtle). Files: NaniteFetch.ts
+  (export slotHash), NaniteResolve.ts (tint on the bark/deadwood albedo).
+
 - 2026-06-15 (bh): **AUDIT-1 — deviation audit vs the original Fable 5 spec (`reference/fable5-original-NANITE.md`,
   937 lines, commit 8ac94518). VERDICT: the implementation is FAITHFUL — the core technical contract is fully
   honored, every architectural deviation is D-N*-documented + justified, the gaps are unreached phases (not drift).

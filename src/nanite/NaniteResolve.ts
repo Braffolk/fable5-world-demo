@@ -66,7 +66,7 @@ import type { ProbeGI } from '../gpu/passes/ProbeGI';
 import type { Heightfield } from '../world/Heightfield';
 import { MESH_WORDS, readVertex } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
-import { makeFetch } from './NaniteFetch';
+import { makeFetch, slotHash } from './NaniteFetch';
 import { hashColor, instRotateDir, type NaniteCam } from './NaniteCommon';
 import type { NaniteVisBuffers } from './NaniteRaster';
 import { bcU2F, elemU, toF } from './Tsl';
@@ -485,7 +485,21 @@ export function buildNaniteResolve(
             .add(gnrm),
         ) as unknown as NV3;
 
-        barkCol.assign(isD.select(deadAlb, barkAlb));
+        // AUDIT-1a: per-instance warm/cool + value jitter (slotHash 17/91) — the
+        // variation law the old path applied via applyInstanceTint (tintK 0.12).
+        // Without it a mesh's ~4k instances share one colour (the original's
+        // "migration clones trees" — banned). Same math, keyed on the persistent
+        // scatter slot (instId), on TOP of the per-vertex hueShift above.
+        const tK = 0.12;
+        const h1 = slotHash(instId, 17);
+        const h2 = slotHash(instId, 91);
+        const warmCool = mix(
+          vec3(1 + tK, 1, 1 - tK * 0.8),
+          vec3(1 - tK * 0.8, 1, 1 + tK),
+          h1,
+        ) as unknown as NV3;
+        const tintVal = h2.mul(tK * 1.6).add(1 - tK * 0.8);
+        barkCol.assign((isD.select(deadAlb, barkAlb) as unknown as NV3).mul(warmCool).mul(tintVal));
         barkNrm.assign(pert);
         barkAo.assign(tA.w as unknown as NF);
       });

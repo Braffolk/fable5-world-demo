@@ -26,8 +26,9 @@ import type { UniformV3 } from './Tsl';
 import { bcU2F, elemU, maxU, minU, texLoadR, toF } from './Tsl';
 
 /** cheap pcg-ish hash of an instance slot → 0..1 (mirror of VegInstance.slotHash
- *  — the trunk wind needs the SAME per-instance phase the old path baked) */
-function slotHash(slot: NU, salt: number): NF {
+ *  — the trunk wind needs the SAME per-instance phase the old path baked; the
+ *  resolve reuses it for the per-instance tint, AUDIT-1a). */
+export function slotHash(slot: NU, salt: number): NF {
   const a = slot.add(uint(salt)).mul(uint(747796405)).add(uint(2891336453));
   const b = a.shiftRight(a.shiftRight(uint(28)).add(uint(4))).bitXor(a).mul(uint(277803737));
   const c = b.shiftRight(uint(22)).bitXor(b);
