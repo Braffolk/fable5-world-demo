@@ -9,6 +9,31 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-15 (bm): **N9-C1 — the AGGREGATE foliage DAG builder: area-preserving leaf removal, node-validated
+  STANDALONE. Net-new `src/nanite/BuildAggregateDag.ts` (NOT an `aggregate` branch bolted into BuildDag — the user:
+  "extending it should never just mean dropping extra branches in one function"). Emits the SAME DagBuild contract +
+  crack-free cut metadata as the QEM DAG, so C2 attaches it identically.** (Opus 4.8 1M.) THE ALGORITHM (Epic
+  "Preserve Area", per SPEC DAG-§Aggregates): QEM degenerates on disconnected leaf quads, so per LOD level — (1)
+  weld ALL active clusters into one global soup, (2) GLOBAL connected-component islands (union-find) so a leaf split
+  across clusters is reunited + decided atomically (no half-leaves; the crack-free guarantee here is *stronger* than
+  QEM's boundary-lock), (3) seed-deterministic removal: order islands by a hash of their (seeded) centroid, KEEP the
+  low-hash prefix until kept AREA reaches `targetRatio` (0.5) of total → uniform spatial thin, drop the tail, (4)
+  GROW every survivor about its own centroid by `g=sqrt(total/kept)` so `g²·keptArea==total` → total area restored
+  EXACTLY (un-clamped), (5) per-group (spatial bisection) re-clusterize the grown survivors into parents, assigning
+  the bit-exact `(error,sphere)` sibling pairs. Error proxy = mean grown-leaf radius (monotone — leaves only grow).
+  CLEAN-CODE: the genuinely-shared primitives (`mergeSpheres`, `partitionClusters`, `now`) extracted to a new
+  `src/nanite/DagCommon.ts` (generic over `{sx,sy,sz}` to dodge a circular type dep) + imported by BOTH builders, not
+  copy-pasted; `probe-dag` stays GREEN → the extraction was behaviour-preserving. CONTAINMENT FIX (the one real
+  subtlety): grow can push a survivor OUTSIDE the input union sphere, so the group sphere is EXPANDED to also contain
+  the grown parent geometry (else projection-monotone containment `parentSphere ⊇ ownSphere` breaks). GATE
+  (`tools/probe-aggregate.ts`, synthetic crowns of 400–2600 folded disconnected leaf strips): M/C/E/O/A crack-free
+  invariants PASS + **AREA = 1.000× LOD0 at EVERY distance d6→d400** (crown-hero thins 4800→304 tris over 6 levels
+  while holding silhouette mass — never balds, the naive-drop failure Epic fixed) + THIN 50%/level + DET (bit-identical
+  rebuild; `?seed` thins a different subset, still area-preserving). BOOT-BUDGET FLAG for C2: ~0.34 Mtri/s on the tsx
+  path → the 3.1M leaf payload ≈ 9 s → C2 must use the Worker/time-slice build path (D-N30), as the SPEC already
+  anticipated. tsc clean. NEXT = N9-C2 (wire the aggregate to the GPU: LEAF-class attachDag → continuous crown LOD to
+  full distance; re-measures the per-instance floor at leaf density → reveals if N8-HIC is forced).
+
 - 2026-06-15 (bl): **N9-C0 — REAL leaf geometry renders through the nanite path (OKAY state, user-accepted; the
   remaining fluffiness gap DEFERRED to a future generation-rethink task). The hero `foliageMesh` is surfaced as
   MATERIAL_CLASS.leaf on the tree instances — lit (isL resolve branch: per-species tint + per-leaf hue/AO + warm

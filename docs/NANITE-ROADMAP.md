@@ -22,9 +22,10 @@
 - **NEXT — USER-DIRECTED (2026-06-15): DRIVE AUTONOMOUSLY + FAST. Do NOT ask for already-decided things; do NOT
   over-investigate/guess; make the call and proceed. The user flagged the pace as "shockingly slow."** Run this DAG
   in order without checkpoint-pausing:
-  1. **N9-C1** — aggregate DAG builder (the net-new spine: area-preserving leaf removal, standalone node-tested via
-     probe-aggregate, bit-exact sibling pairs). The hard part.
-  2. **N9-C2** — wire aggregate → GPU (continuous leaf LOD, full distance) + FOLD IN **N9-C2-2s** (two-sided raster:
+  1. **N9-C1 ✅ DONE (LOG bm)** — the aggregate DAG builder: net-new `BuildAggregateDag.ts` + shared `DagCommon.ts`,
+     node-validated (`probe-aggregate`: crack-free M/C/E/O/A + AREA 1.000× LOD0 at all distances = no balding,
+     deterministic). The hard part is behind us. → **C2 IS NOW THE FRONTIER.**
+  2. **N9-C2 ⬅ FRONTIER** — wire aggregate → GPU (continuous leaf LOD, full distance) + FOLD IN **N9-C2-2s** (two-sided raster:
      per-mesh double-sided flag + back-face vert-swap → drop the geometry-dup, halve HW+mem; non-leaf bit-identical).
   3. **N9-C3** — impostor retirement: DO the judge shots + present them at the close, don't block per-ring on approval.
   4. **N9-C4** — close (perf ledger, battery, two-frame-vs-main gate).
@@ -129,7 +130,7 @@ N0 scaffold ✅ · N1 clusterize ✅ · N2 cull ✅ · N3 vis-buffer ✅ · N4 m
 | `N9-C0` | Leaf PLUMBING (material class + 'leaf' channel + hero-ring reg) | ✅ | — | `### Foliage (N9)`; LOG bl | LANDED, OKAY state (user-accepted). Real crowns ≤26 m: isL resolve (tint+hue+AO+backlight, OPAQUE, double-sided), full-vegWindOffset 'leaf' channel synced to trunk via shared world-pos key, `?naniteleaf=1`/`?naniteleafdensity=N`. Bugs fixed: wgcache `flutBase` slot (boot crash), HW_CAP 262k→2.1M (needle HW-queue overflow = the "dag/terrain vanish"). Same w/wo dag. |
 | `N9-C0b` | Leaf GENERATION rethink — fluffiness (DEFERRED, user, post-core) | ⬜ | — | `### Foliage (N9)` N9-C0 LANDED note | nanite crown LESS FLUFFY than non-nanite (old hero leaned on D-N3-banned alpha CARDS; conifer spray distribution spruce≠pine). GENERATION question (denser/bushier sprays) OR the aggregate fills it. NOT plumbing. Do AFTER core nanite. |
 | `N9-C2-2s` | Two-sided raster (per-mesh flag + back-face vert-swap) | ⬜ | `N9-C0` | `### Foliage (N9)` | drop the leaf geometry-dup → halve HW load + registry memory (the user's "selective culling"); non-leaf bit-identical. Do at C2 when leaves scale. |
-| `N9-C1` | AGGREGATE DAG builder (area-preserving leaf removal) | ⬜ | `N9-C0` | D-N3; `### Foliage (N9)` | THE hard part, net-new; node-tested standalone (probe-aggregate); drop leaves + grow survivors; bit-exact sibling pairs |
+| `N9-C1` | AGGREGATE DAG builder (area-preserving leaf removal) | ✅ | `N9-C0` | D-N3; LOG bm; `BuildAggregateDag.ts` | DONE — net-new `BuildAggregateDag.ts` (+ shared `DagCommon.ts`; `probe-dag` still green). Per level: global connected-component islands → seed-det area-removal → grow survivors `g=√(total/kept)` (area EXACT) → per-group reclusterize w/ bit-exact sibling pairs. `probe-aggregate`: M/C/E/O/A crack-free + AREA 1.000× LOD0 at ALL distances (no balding) + 50%/level + deterministic + `?seed`-varied. Boot ~0.34 Mtri/s → C2 needs the Worker/time-slice path. |
 | `N9-C2` | Wire aggregate → GPU (continuous leaf LOD, full distance) | ⬜ | `N9-C1` | `### Foliage (N9)` | attachDag leaf aggregate; probe-zoom no-pop; **re-measures the per-instance floor at leaf density → reveals if N8-HIC needed** |
 | `N9-C3` | Impostor retirement (ring-by-ring, **USER JUDGE SHOTS**) | ⬜ | `N9-C2` | `### Foliage (N9)` | A/B real crowns vs cards+CanopyShell at vistas; retire where user signs off; CanopyShell dies after vista shots |
 | `N9-C4` | Close — perf ledger + battery + two-frame-vs-main + CHECKPOINT | ⬜ | `N9-C3` | `### Foliage (N9)` | un-black-slating starts; two-frame gate re-applies (AUDIT-1 META); gallery A/B per species |

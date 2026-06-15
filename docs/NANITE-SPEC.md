@@ -560,6 +560,33 @@ N9-C0 LANDED — OKAY STATE (2026-06-15; user accepted "okay" + deferred the flu
   bit-identical) is the agreed C2-time fix for the geometry-dup — halves the HW load + the registry memory (the
   "selective culling" the user flagged). Do it when leaves scale to all distances (C2), alongside the aggregate.
 
+N9-C1 LANDED — the AGGREGATE DAG BUILDER, node-validated standalone (2026-06-15, LOG bm):
+- `src/nanite/BuildAggregateDag.ts` (`buildAggregateDag(verts, stride, indices, opts)` → the SAME `DagBuild` the QEM
+  `buildDag` returns, so C2 calls `attachDag` identically). It is a SEPARATE module, NOT an `aggregate` branch inside
+  `buildDag.simplifyGroup` (user clean-code directive). Shared primitives (`mergeSpheres`, `partitionClusters`, `now`)
+  were extracted to `src/nanite/DagCommon.ts` and imported by both builders — `probe-dag` stayed green (extraction
+  behaviour-preserving). Opts: `targetRatio` 0.5 (kept-area fraction/level), `groupMax` 24, `stuckFrac` 0.15, `seed`,
+  `growMax` 2.5 (per-level linear grow clamp), `maxTris` 128, `weldEps` 1e-5.
+- ALGORITHM per LOD level (Epic "Preserve Area"): weld all active clusters into one global soup → GLOBAL
+  connected-component leaf "islands" (union-find) so a leaf split across clusters is reunited + decided as ONE atomic
+  unit (no half-leaves — a stronger crack-free guarantee than QEM boundary-locking) → seed-deterministic removal (order
+  islands by a hash of their seeded centroid, KEEP the low-hash prefix until kept area ≥ `targetRatio`·total, drop the
+  tail = uniform spatial thin) → GROW each survivor about its own centroid by `g = sqrt(total/kept)` so `g²·keptArea ==
+  total` ⇒ total area restored EXACTLY when un-clamped → per spatial group, re-clusterize the grown survivors into
+  parents, assigning the bit-exact `(error, sphere)` sibling pairs. The level error proxy = mean grown-leaf radius
+  (monotone; leaves only grow). Determinism: no RNG, all decisions are hashes (`?seed` thins a different subset).
+- THE ONE REAL SUBTLETY (don't re-derive): growing a survivor can push it OUTSIDE the input clusters' union sphere, so
+  the group sphere is EXPANDED to also contain the grown PARENT geometry — else projection-monotone containment
+  (`parentSphere ⊇ ownSphere`) breaks and the cut is no longer crack-free. (QEM never needed this — collapses stay
+  inside the input bounds.)
+- VALIDATED (`tools/probe-aggregate.ts`, synthetic crowns of 400–2600 folded disconnected leaf strips): the SAME
+  M/C/E/O/A crack-free invariants as `probe-dag` PASS, plus the aggregate gates — **AREA = 1.000× the LOD0 silhouette
+  mass at EVERY runtime cut distance (d6→d400)**, i.e. a crown thins 4800→304 tris over 6 levels WITHOUT balding (the
+  naive-drop failure Epic fixed); THIN 50%/level; DET bit-identical rebuild + seed-varied thinning.
+- BOOT-BUDGET FLAG for C2: the build is ~0.34 Mtri/s on the slow tsx path → the ~3.1M-tri leaf payload ≈ 9 s, OVER the
+  D6 ~15 s world-gen cap once stacked on the explicit+terrain DAGs ⇒ C2 must run the aggregate build through the
+  EXISTING Worker/time-slice path (D-N30), exactly as this section already anticipated ("C2 measures it").
+
 ### Memory budget (track in ledger from N1; probed limits above)
 - Per-stage binding ceiling: ≤10 storage buffers (F9) — the PACKED layout in
   "Cluster build" exists to satisfy this; count bindings per kernel in code review.
