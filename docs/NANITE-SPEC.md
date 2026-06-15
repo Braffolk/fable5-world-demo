@@ -1388,6 +1388,29 @@ raster kernel. Bonus coupling: cutting post cost also lifts the 2.1× thermal th
 nanite and everything else. Post also has visual headroom (effects can be reworked, not just sped up) — but every
 change must hold the beauty bar (A/B the look, not just the clock).
 
+**POST-MEASUREMENT REALITY (learned the hard way in PERF-4, LOG bd/be — read before trusting any post number):**
+- **Per-pass post timestamps MISATTRIBUTE upstream drain.** GPU timestamps are encoder WALL SPANS; the first pass
+  after a heavy one absorbs its drain/serialization into its own span. Bloom is the textbook trap: `bright`+`h0`
+  *read* ~14 ms but `ablate=bloom` proves bloom is ~6.5 ms, and its cost is FLAT across working resolution at
+  native AND GPU-bound high res — because the time is TRAA's drain, not bloom's pixels (two same-resolution passes
+  reading 6.9 vs 0.07 ms is the tell). **ABLATION (effect on vs off) is the only trustworthy per-effect cost.**
+  Corollary: optimize the SOURCE of the work (TAA), not the pass the drain is ATTRIBUTED to (bloom).
+- **Headless `frameMs` is rAF/vsync-capped at 16.7 ms** regardless of GPU load, so `Δframe` is BLIND at the user's
+  2592×1676. Two ways out: (a) render at HIGH res (≈3888×2520) to push the GPU past 16.7 ms ⇒ `frameMs` tracks real
+  GPU time and `Δframe` is honest (post is screen-space so high res is a VALID, even better, regime); (b) use
+  bracketed `Δrender` (per-pass spans, baseline-before-AND-after to cancel drift). The user's real machine is
+  GPU-bound (43 fps/23 ms) so any real GPU-work cut shows there — and COMPOUNDS via the throttle (AO's ~1.5 ms
+  direct read as ~4 ms render).
+- **Big-effect marginals are THERMALLY INFLATED.** Removing a big effect cools the GPU (fps 56→68, every pass
+  shrinks), so `effect-on vs effect-off` over-states. Measure an OPTIMIZATION as `cheap-version vs original-version`
+  (both effect-on ⇒ matched thermal) — the within-run delta is the real saving. Tool: `probe-postablate.ts`.
+- **An effect can be a measurement MIRAGE.** Bloom looked like the #1 post cost and is essentially un-optimizable;
+  AO looked modest and had a clean ~1.5 ms beauty-free win (skip far-faded work + pack the bilateral depth guide).
+  Decompose to REAL work before picking a target.
+- **TAA quality is a MOTION property** (ghosting/flicker) that static screenshots cannot validate — so a TAA
+  optimization (cutting its 9-tap depth / 8-tap variance neighborhoods) cannot be shipped without the user's
+  in-motion review. Per "hold the beauty bar", flag it; don't ship blind.
+
 ## GOTCHAS (append-only, nanite-specific)
 
 - (N5-C1) A SHADOW-CASTER NodeMaterial MUST SET `map = null`. three's shadow
