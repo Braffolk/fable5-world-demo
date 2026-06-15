@@ -19,10 +19,20 @@
   same look with/without `?nanitedag`. 3 bugs fixed (wgcache `flutBase` slot = boot crash; HW_CAP 262k→2.1M = the needle
   HW-queue overflow behind "dag/terrain vanish"; wind instId→world-pos sync). The crown is LESS FLUFFY than non-nanite
   (DEFERRED → `N9-C0b`, a GENERATION rethink, AFTER core nanite — old hero leaned on D-N3-banned alpha CARDS).
-- **NEXT = USER'S CALL:** continue N9 → **C1 aggregate builder** (the net-new spine: area-preserving leaf removal,
-  standalone node-tested, the hard part) → C2 wire+continuous LOD (+ the **two-sided raster** `N9-C2-2s` to drop the
-  dup) → C3 impostor retirement (**USER JUDGE SHOTS**) → C4 close; OR pivot to other core nanite (N6/N7, shadow S4 — now
-  unblocked since leaves are the dominant casters). The un-black-slating / two-frame-vs-main gate re-applies at C4.
+- **NEXT — USER-DIRECTED (2026-06-15): DRIVE AUTONOMOUSLY + FAST. Do NOT ask for already-decided things; do NOT
+  over-investigate/guess; make the call and proceed. The user flagged the pace as "shockingly slow."** Run this DAG
+  in order without checkpoint-pausing:
+  1. **N9-C1** — aggregate DAG builder (the net-new spine: area-preserving leaf removal, standalone node-tested via
+     probe-aggregate, bit-exact sibling pairs). The hard part.
+  2. **N9-C2** — wire aggregate → GPU (continuous leaf LOD, full distance) + FOLD IN **N9-C2-2s** (two-sided raster:
+     per-mesh double-sided flag + back-face vert-swap → drop the geometry-dup, halve HW+mem; non-leaf bit-identical).
+  3. **N9-C3** — impostor retirement: DO the judge shots + present them at the close, don't block per-ring on approval.
+  4. **N9-C4** — close (perf ledger, battery, two-frame-vs-main gate).
+  5. **N8-HIC** — hierarchical instance culling. THE unfinished CORE. C2 will likely FORCE it (leaves flood the
+     per-instance floor, D-N41) — pull it forward to C2 if so. Cull spatial GROUPS → O(regions).
+  6. **N8-2B4** — always-resident coarse terrain base (teleport no-hole backstop).
+  **The user explicitly DEPRIORITISED polish (shadow S4, N6/N7, C0b fluffiness) BELOW the core DAG-culling pieces —
+  do NOT pivot to polish until N8-HIC + N8-2B4 are done.** un-black-slating / two-frame-vs-main gate re-applies at C4.
 - **N8-D1e LEFT AT ITS CHECKPOINT (validated + measured, LOG bj / D-N41) — 3 pending USER decisions, NOT blocking N9:**
   (1) default-on **rock+deadwood DAG** (free no-pop — recommended); (2) **bark DAG** stays opt-in until **N8-HIC** (the
   hierarchical instance cull — N9-C2 will tell us if it's needed); (3) explicit-DAG **Worker build** only when a class
