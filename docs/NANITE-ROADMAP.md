@@ -11,26 +11,30 @@
 > must finish first. `spec` = the `## header` in NANITE-SPEC.md (+ D-N* / file refs).
 
 ## YOU ARE HERE — 2026-06-15
-**PERF-4 CLOSED (post chain). PERF-3 CLOSED (win #1 makeCtx cache LIVE −0.59 ms; win #2 vertex cache off, D-N40).**
-**THE DEFINITIVE FINDING (LOG bg — high-res GPU-bound ablation, reproduced 2×): AO is ~100% of the real post cost.**
-Removing AO alone → frameMs 33.4→25.0; removing ALL post → 33.4→24.9 (3888×2520). So **AO (GTAO march + bilateral
-upsample + contact) ≈ the ENTIRE post cost** (~8.4 ms high-res ≈ ~3–4 ms native-equiv); **bloom + TAA + aerial +
-clouds + bounce + grade ≈ 0.1 ms COMBINED.** The post passes overlap on the GPU so their encoder wall-spans (bloom
-14.8, TAA 14.8, half.mrt 10.5 …) OVERCOUNT ~7× — removing bloom or TAA changes the real frame by ~0 ms.
-**PERF-4 outcome:**
-- **AO ✅ SHIPPED + PERMANENT** (`1db0bfd`): far-fade early-out (march+upsample) + packed-view-z bilateral +
-  samples 6 = the one real post win (~1.5 ms direct), beauty-validated 0.00%. Cleanup (bg): the slower original
-  path + ALL A/B flags (`?aocheap`/`?aofar`/`?aodbg`/`?aosamples`) DELETED — the optimized path is now the only path.
-- **BLOOM ✅ = NOT optimizable** (drain-bound, resolution-flat at native + GPU-bound; reverted). ~0 ms real.
-- **TAA ✅ = measured non-win, REMOVED.** Built the user-sanctioned fork (`LeanTraa.ts`), measured ~0.45 ms native
-  (ALU/drain-bound, not fetch-bound), then DELETED in cleanup (bg) — not worth a vendored ~240-line library fork.
-- **QUARTER-RES AO: declined by the user** ("call it done" at the current AO).
-**KEY MEASUREMENT REALITY (durable, SPEC `## PERF METHODOLOGY`):** per-pass post timestamps are encoder WALL-SPANS
-that OVERCOUNT ~7× (the passes overlap on the GPU); headless `frameMs` is rAF-capped at 16.7 ms (go GPU-bound at
-3888×2520 for real `Δframe`). ABLATION at high res is the only truth. Tool: `probe-postablate.ts`.
-**→ PERF-4 CLOSED. AO was the only real post cost, optimized + shipped; bloom + TAA were measurement mirages
-(non-wins, reverted/removed); further post perf would be a beauty-TRADING exercise (declined). NEXT FRONTIER is the
-user's call: back to N8 (DAG close — N8-D1e), the shadow S-stack, or the deferred AUDIT-1.**
+**FRONTIER: N8-D1e — close the explicit-mesh DAG WORLD-WIDE (user-chosen 2026-06-15, after PERF-4 + AUDIT-1 closed).**
+**→ N8-D1e:** extend the continuous DAG cut across ALL migrated explicit meshes (bark/rock/deadwood), not just the
+hero/test set; add the perf-ledger row; USER CHECKPOINT (continuous-zoom: no pop, no cracks, stable tri counts). The
+DAG machinery is already built — terrain DAG (D-N36–39), hero-mesh wire + draw-envelope (D-N33), flat per-cluster cut
+(D-N31), Worker build + cache (D-N30); this is the world-wiring close-out of N8-D1. Read SPEC `### DAG (N8)` + those
+D-N* first. **RIDER (do FIRST, ~15 min): sanity-check the world actually renders the migrated trunks.** During the
+tint work, bm7 ("forest interior dapple", x−850 z850 alt4) rendered as BARE terrain + sky (no trunks) and the
+worstpos vista's trees were only a thin horizon band — LIKELY just sparse trunk placement in this seed + the
+black-slate hiding all the un-migrated foliage (grass/understory/leaves = N9/N10), but CONFIRM it's not a
+migration/cull gap before extending the DAG over geometry that isn't showing up.
+
+**JUST CLOSED this session (LOG bd–bi) — durable, don't re-derive:**
+- **PERF-4 (post chain) ✅** — THE finding (LOG bg, high-res GPU-bound ablation ×2): **AO ≈ 100% of the real post
+  cost** (removing AO ≈ removing all post: frameMs 33.4→25.0 vs →24.9, 3888×2520); **bloom + TAA + aerial + clouds
+  ≈ 0.1 ms combined** — their per-pass timestamps OVERCOUNT ~7× (the passes overlap on the GPU). AO optimized +
+  SHIPPED (early-out + packed-view-z bilateral + samples 6, ~1.5 ms direct, UNCONDITIONAL — A/B flags + slow path
+  deleted); bloom = mirage (reverted), TAA fork = non-win (removed). Methodology in SPEC `## PERF METHODOLOGY`.
+- **AUDIT-1 ✅ (LOG bh)** — impl FAITHFUL to the original Fable 5 spec (two-phase occlusion, Option C full-f32
+  vis-buffer, fixed-point edges, near→HW, registerMesh/bindInstances all verified); every deviation D-N*-justified;
+  one drift (per-instance TINT) found + FIXED (AUDIT-1a, LOG bi — `slotHash(instId,17/91)` restored on bark/deadwood).
+- **PERF-3 CLOSED** — win #1 makeCtx cache LIVE (default on); win #2 vertex cache off-by-default (non-win, D-N40).
+- The default `?scene=world&nanite=1` carries ALL shipped wins (no flags needed).
+**OTHER FRONTIERS (deferred):** shadow S-stack (mostly polish; S4 the real perf is gated on N9), N6 (opaque migration
+— but the missing density is foliage/grass = N9/N10), N8-D2 Stage 2b-4 (teleport no-hole coarse base).
 
 **PERF-1 (LOG `ay`): per-pass measurement is now TRUSTWORTHY, the PURE nanite
 renderer is ISOLATED (`?pure`), and the user's WORST view is decomposed with cool numbers.**
