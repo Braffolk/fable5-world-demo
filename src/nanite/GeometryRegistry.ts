@@ -41,10 +41,12 @@ import type { Renderer, StorageBufferNode } from 'three/webgpu';
 import { StorageBufferAttribute } from 'three/webgpu';
 import type { NF, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
 import type { DagBuild, DagCluster } from './BuildDag';
+import { buildDagHierarchy } from './DagHierarchy';
 import { type BuiltClusters, type ClusterStats, clusterize } from './Clusterize';
 import {
   type BufOf,
   type V4W,
+  bcF2U,
   bcU2F,
   dispatch,
   elemU,
@@ -61,12 +63,18 @@ import {
 
 export const VERT_WORDS = 6;
 export const CLUSTER_WORDS = 8;
-export const MESH_WORDS = 16;
-/** N8-D1: parallel per-cluster DAG record — f32 ownErr + ownSphere(4) +
- *  parentErr + parentSphere(4); indexed by the SAME global clusterId as the
- *  8-word cluster record (the 8-word rec is full, so the DAG cut metadata
- *  lives in a sidecar buffer — F9: the cut kernel stays ≤10 storage bindings). */
-export const DAG_WORDS = 10;
+/** N8-HIC: words 0–15 as before (cluster range, LOD chain, sphere, …); words
+ *  16–17 = the HIERARCHICAL-cull root seed range (rootBase, rootCount) into
+ *  gpu.dagLinks — the coarsest clusters the BFS traversal starts from. */
+export const MESH_WORDS = 18;
+/** N8-D1/HIC: parallel per-cluster DAG record (f32, indexed by the SAME global
+ *  clusterId as the 8-word cluster record). 0 ownErr + 1..4 ownSphere + 5
+ *  parentErr + 6..9 parentSphere (the screen-error cut), then N8-HIC:
+ *  10 childBase + 11 childCount (bitcast u32) — the cluster's children in
+ *  gpu.dagLinks, for the top-down hierarchical traversal (only a group's owner
+ *  parent carries them; 0 = leaf/non-owner). Sidecar keeps the cut kernel ≤10
+ *  storage bindings (F9). */
+export const DAG_WORDS = 12;
 /** N8-D1: vertex layout fed to buildDag for a registry mesh — pos@0..2,
  *  nrm@3..5, uv@6..7, vdata@8..11 (UNPACKED to 0..1 floats so QEM can
  *  interpolate them). attachDag re-packs this back into VERT_WORDS. */
@@ -564,6 +572,10 @@ export interface DagNodes {
   ownSphere: NV4;
   parentError: NF;
   parentSphere: NV4;
+  /** N8-HIC: this cluster's children in gpu.dagLinks (global cluster ids) — the
+   *  hierarchical-traversal descent. childCount > 0 only on a group's OWNER. */
+  childBase: NU;
+  childCount: NU;
 }
 
 export function readDag(dag: BufOf<NF>, ci: NU): DagNodes {
@@ -583,6 +595,8 @@ export function readDag(dag: BufOf<NF>, ci: NU): DagNodes {
       dag.element(base.add(uint(8))),
       dag.element(base.add(uint(9))),
     ) as unknown as NV4,
+    childBase: bcF2U(dag.element(base.add(uint(10)))),
+    childCount: bcF2U(dag.element(base.add(uint(11)))),
   };
 }
 
@@ -636,6 +650,9 @@ export interface MeshNodes {
   swayPad: NF;
   /** mesh-local bounding sphere (heightfield: world-space) — instance cull */
   sphere: NV4;
+  /** N8-HIC: hierarchical-cull root seed range into gpu.dagLinks (0/0 = brute-force) */
+  rootBase: NU;
+  rootCount: NU;
 }
 
 export function readMesh(meshes: StorageBufferNode<'uint'>, mi: NU): MeshNodes {
@@ -665,6 +682,8 @@ export function readMesh(meshes: StorageBufferNode<'uint'>, mi: NU): MeshNodes {
       bcU2F(elemU(meshes, base.add(uint(14)))),
       bcU2F(elemU(meshes, base.add(uint(15)))),
     ) as unknown as NV4,
+    rootBase: elemU(meshes, base.add(uint(16))),
+    rootCount: elemU(meshes, base.add(uint(17))),
   };
 }
 
@@ -692,6 +711,10 @@ interface MeshEntry {
   instCount: number;
   lodNext: number;
   lodDist: number;
+  /** N8-HIC: root seed range into gpu.dagLinks (the hierarchical-cull seeds);
+   *  0/0 until attachDag wires the DAG. */
+  rootBase: number;
+  rootCount: number;
   /** mesh-local bounding sphere (heightfield: world-space) — instance cull */
   sphere: [number, number, number, number];
   hf?: {
@@ -746,6 +769,11 @@ export interface RegistryGpu {
    *  VCACHE_VERTS) so the SW raster cooperatively transforms them ONCE into workgroup
    *  shared memory; count=0 ⇒ per-thread fallback (terrain / window-grid / wide ranges). */
   vcompact: StorageBufferNode<'uint'>;
+  /** N8-HIC: hierarchical-cull links — flat u32 of GLOBAL cluster ids. Per mesh:
+   *  [roots…] (mesh.rootBase/rootCount) then owner clusters' [children…]
+   *  (dag.childBase/childCount). The BFS traversal seeds from the roots and descends
+   *  via the children, replacing the brute-force all-clusters dispatch. */
+  dagLinks: StorageBufferNode<'uint'>;
 }
 
 export class GeometryRegistry {
@@ -791,6 +819,10 @@ export class GeometryRegistry {
   private dagArr!: Float32Array;
   /** PERF-3: parallel per-cluster vertex-cache record (vMin, count) — see RegistryGpu.vcompact */
   private vcompactArr!: Uint32Array;
+  /** N8-HIC: hierarchical-cull links (global cluster ids) — see RegistryGpu.dagLinks */
+  private dagLinksArr!: Uint32Array;
+  /** monotonic cursor into dagLinksArr; attachDag appends [roots, children] per DAG */
+  private dagLinksCursor = 0;
 
   private vertsAttr!: StorageBufferAttribute;
   private hfVertsAttr!: StorageBufferAttribute;
@@ -801,6 +833,7 @@ export class GeometryRegistry {
   private instMeshAttr!: StorageBufferAttribute;
   private dagAttr!: StorageBufferAttribute;
   private vcompactAttr!: StorageBufferAttribute;
+  private dagLinksAttr!: StorageBufferAttribute;
 
   private caps!: { verts: number; tris: number; clusters: number; meshes: number; instances: number };
   /** N8-D2 Stage 2e: capacity (in verts = words) of the stride-1 terrain-DAG buffer. */
@@ -973,6 +1006,12 @@ export class GeometryRegistry {
     this.dagArr = new Float32Array(dagLen);
     const vcompactLen = Math.max(2, this.caps.clusters * 2);
     this.vcompactArr = new Uint32Array(vcompactLen);
+    // N8-HIC: hierarchical-cull links (global cluster ids) — per mesh: its roots,
+    // then the owner clusters' children. Upper bound = 2× clusters (each cluster is
+    // an input to ≤1 group ⇒ children ≤ clusters; roots ≤ clusters). Auto-sized, so
+    // no caller reservation. Cursor appended alongside the DAG in attachDag.
+    const dagLinksLen = Math.max(1, this.caps.clusters * 2);
+    this.dagLinksArr = new Uint32Array(dagLinksLen);
 
     this.vertsAttr = new StorageBufferAttribute(this.vertsArr, 1);
     this.hfVertsAttr = new StorageBufferAttribute(this.hfVertsArr, 1);
@@ -983,6 +1022,7 @@ export class GeometryRegistry {
     this.instMeshAttr = new StorageBufferAttribute(this.instMeshArr, 1);
     this.dagAttr = new StorageBufferAttribute(this.dagArr, 1);
     this.vcompactAttr = new StorageBufferAttribute(this.vcompactArr, 1);
+    this.dagLinksAttr = new StorageBufferAttribute(this.dagLinksArr, 1);
 
     const verts = sU32Views(this.vertsAttr, Math.max(1, this.caps.verts * VERT_WORDS));
     const hfVerts = sU32Views(this.hfVertsAttr, Math.max(1, this.hfCap));
@@ -993,6 +1033,7 @@ export class GeometryRegistry {
     const instMesh = sU32Views(this.instMeshAttr, Math.max(1, this.caps.instances));
     const dag = sF32Views(this.dagAttr, dagLen);
     const vcompact = sU32Views(this.vcompactAttr, vcompactLen);
+    const dagLinks = sU32Views(this.dagLinksAttr, dagLinksLen);
     this.instRW = inst.rw;
     this.instMeshRW = instMesh.rw;
     this.gpu = {
@@ -1005,6 +1046,7 @@ export class GeometryRegistry {
       instanceMesh: instMesh.ro,
       dag: dag.ro,
       vcompact: vcompact.ro,
+      dagLinks: dagLinks.ro,
     };
 
     // N8-D2 Stage 2a: claim the tile pool as ONE fixed region just past the
@@ -1121,6 +1163,23 @@ export class GeometryRegistry {
     const cArr = this.clusterArr;
     const dArr = this.dagArr;
     const dagSpheres = new Float32Array(cCount * 4);
+    // N8-HIC: derive the hierarchical-cull links + append GLOBAL cluster ids to
+    // dagLinks as [roots…][children…]. childBase per cluster (DAG words 10/11) +
+    // rootBase/Count on the mesh seed the BFS traversal that replaces brute-force.
+    const hier = buildDagHierarchy(dag);
+    const linkBase = this.dagLinksCursor;
+    const rootCount = hier.rootIndices.length;
+    const childTotal = hier.childIndices.length;
+    if (linkBase + rootCount + childTotal > this.dagLinksArr.length) {
+      throw new Error(
+        `GeometryRegistry: dagLinks overflow (${linkBase + rootCount + childTotal} > ${this.dagLinksArr.length})`,
+      );
+    }
+    const dl = this.dagLinksArr;
+    for (let i = 0; i < rootCount; i++) dl[linkBase + i] = cBase + (hier.rootIndices[i] as number);
+    const childBlockBase = linkBase + rootCount;
+    for (let j = 0; j < childTotal; j++) dl[childBlockBase + j] = cBase + (hier.childIndices[j] as number);
+    this.dagLinksCursor = childBlockBase + childTotal;
     for (let c = 0; c < cCount; c++) {
       const dc = dag.clusters[c] as DagCluster;
       const cb = (cBase + c) * CLUSTER_WORDS;
@@ -1132,7 +1191,9 @@ export class GeometryRegistry {
       cArr[cb + 5] = f32Bits(dc.ccos);
       cArr[cb + 6] = tBase + dc.triStart;
       if (dc.triCount > MAX_CLUSTER_TRIS) throw new Error('GeometryRegistry: DAG cluster exceeds tri cap');
-      cArr[cb + 7] = ((dc.triCount & 0xff) | (CLUSTER_FLAG_DAG << 8) | (entry.handle << 16)) >>> 0;
+      // word7: triCount(0-7) | flags(8-9) | LOD level(10-15, for ?nanitedbg=lod) | handle(16-31)
+      cArr[cb + 7] =
+        ((dc.triCount & 0xff) | (CLUSTER_FLAG_DAG << 8) | ((dc.level & 0x3f) << 10) | (entry.handle << 16)) >>> 0;
 
       const db = (cBase + c) * DAG_WORDS;
       const root = !Number.isFinite(dc.parentError);
@@ -1155,12 +1216,24 @@ export class GeometryRegistry {
       dagSpheres[c * 4 + 3] = dc.sr;
     }
 
+    // N8-HIC: child links into the DAG record (words 10/11, bitcast u32) — global
+    // dagLinks offset of each cluster's children + count (non-zero only on a group
+    // OWNER; 0 on non-owners + LOD0). Terrain/non-DAG meshes leave these 0 and use
+    // the brute-force path (rootCount = 0 ⇒ not hierarchical).
+    for (let c = 0; c < cCount; c++) {
+      const db = (cBase + c) * DAG_WORDS;
+      dArr[db + 10] = bitsF32(childBlockBase + (hier.childStart[c] as number));
+      dArr[db + 11] = bitsF32(hier.childCount[c] as number);
+    }
+
     this.vertCursor += vCount;
     this.triCursor += tCount;
     this.clusterCursor += cCount;
 
     // -- repoint the mesh at its DAG range; retire the discrete LOD chain ------
     entry.clusterBase = cBase;
+    entry.rootBase = linkBase;
+    entry.rootCount = rootCount;
     entry.clusterCount = cCount;
     // The DAG is the COMPLETE continuous LOD, so it inherits the mesh's full
     // intended DRAW envelope: the max distance setMaxDistance configured on the
@@ -1191,6 +1264,7 @@ export class GeometryRegistry {
     this.pushRange(this.idxAttr, tBase * 3, tCount * 3);
     this.pushRange(this.clusterAttr, cBase * CLUSTER_WORDS, cCount * CLUSTER_WORDS);
     this.pushRange(this.dagAttr, cBase * DAG_WORDS, cCount * DAG_WORDS);
+    this.pushRange(this.dagLinksAttr, linkBase, rootCount + childTotal);
     this.pushRange(this.meshAttr, entry.handle * MESH_WORDS, MESH_WORDS);
   }
 
@@ -1546,6 +1620,7 @@ export class GeometryRegistry {
       instances: Float32Array;
       instanceMesh: Uint32Array;
       dag: Float32Array;
+      dagLinks: Uint32Array;
     };
     attrs: {
       verts: StorageBufferAttribute;
@@ -1569,6 +1644,7 @@ export class GeometryRegistry {
         instances: this.instArr,
         instanceMesh: this.instMeshArr,
         dag: this.dagArr,
+        dagLinks: this.dagLinksArr,
       },
       attrs: {
         verts: this.vertsAttr,
@@ -1763,6 +1839,8 @@ export class GeometryRegistry {
       triCount: 0,
       clusterBase: 0,
       clusterCount: 0,
+      rootBase: 0,
+      rootCount: 0,
       instFirst: 0,
       instCount: 0,
       lodNext: LOD_NONE,
@@ -1876,6 +1954,10 @@ export class GeometryRegistry {
     m[b + 13] = f32Bits(e.sphere[1]);
     m[b + 14] = f32Bits(e.sphere[2]);
     m[b + 15] = f32Bits(e.sphere[3]);
+    // N8-HIC: hierarchical-cull root seed range into gpu.dagLinks (0/0 ⇒ the mesh
+    // is non-hierarchical: terrain DAG / discrete-LOD / window grid → brute-force path)
+    m[b + 16] = e.rootBase >>> 0;
+    m[b + 17] = e.rootCount >>> 0;
   }
 
   private rewriteMeshRecord(e: MeshEntry): void {

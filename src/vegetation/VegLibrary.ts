@@ -11,17 +11,17 @@
  * GI, and dither fades on top.
  */
 
-import type { BufferGeometry, DataTexture } from 'three';
-import type { MeshStandardNodeMaterial, Renderer } from 'three/webgpu';
-import type { WorldSeed } from '../core/Seed';
+import type { BufferGeometry, DataTexture } from "three";
+import type { MeshStandardNodeMaterial, Renderer } from "three/webgpu";
+import type { WorldSeed } from "../core/Seed";
 import {
   bakeBarkArray,
   bakeBarkTextures,
   BARK_TABLE,
   type BarkArrayTextures,
   type BarkTextures,
-} from '../gpu/passes/BarkSynth';
-import { TREE_VARIANTS, VegClass } from '../gpu/passes/Scatter';
+} from "../gpu/passes/BarkSynth";
+import { TREE_VARIANTS, VegClass } from "../gpu/passes/Scatter";
 import {
   barkTexturedMaterial,
   deadwoodMaterial,
@@ -29,14 +29,18 @@ import {
   foliageCardMaterial,
   foliageMaterial,
   rockMaterial,
-} from '../render/VegMaterials';
-import { buildLog, buildStump, type DecayState } from './Deadfall';
-import { captureFoliageAtlas } from './FoliageCards';
-import { twigGeometry } from './GroundCover';
-import { captureImpostor, type ImpostorAtlas, type ImpostorPart } from './Impostors';
-import { buildRock } from './RockBuilder';
-import { TREE_SPECIES } from './Species';
-import { buildTree, type HeroDiet } from './TreeBuilder';
+} from "../render/VegMaterials";
+import { buildLog, buildStump, type DecayState } from "./Deadfall";
+import { captureFoliageAtlas } from "./FoliageCards";
+import { twigGeometry } from "./GroundCover";
+import {
+  captureImpostor,
+  type ImpostorAtlas,
+  type ImpostorPart,
+} from "./Impostors";
+import { buildRock } from "./RockBuilder";
+import { TREE_SPECIES } from "./Species";
+import { buildTree, type HeroDiet } from "./TreeBuilder";
 import {
   buildFern,
   buildFlower,
@@ -44,8 +48,8 @@ import {
   FERN_CAPTURE,
   UNDERSTORY_SPECIES,
   type FlowerKind,
-} from './Understory';
-import type { GrowthInstance, SpeciesParams } from './VegTypes';
+} from "./Understory";
+import type { GrowthInstance, SpeciesParams } from "./VegTypes";
 
 export interface PoolPart {
   geo: BufferGeometry;
@@ -133,7 +137,11 @@ function bounds(geos: BufferGeometry[]): { height: number; radius: number } {
   return { height, radius };
 }
 
-function variantInstance(seed: WorldSeed, id: string, v: number): Partial<GrowthInstance> {
+function variantInstance(
+  seed: WorldSeed,
+  id: string,
+  v: number,
+): Partial<GrowthInstance> {
   const vr = seed.rng(`veginst/${id}/${v}`);
   return {
     leanX: (vr.float() - 0.5) * 0.14,
@@ -159,17 +167,27 @@ export async function buildVegLibrary(
   // — the density the user signed off on for spruce + pine; ?naniteleafdensity=N dials it.
   const leafAnchorTarget = opts?.leafAnchorTarget ?? 4000;
   // ---- shared captures -------------------------------------------------------
-  progress(0, 'veg: capturing foliage atlases');
+  progress(0, "veg: capturing foliage atlases");
   const atlases = new Map<string, DataTexture>();
   for (const sp of [...TREE_SPECIES, ...UNDERSTORY_SPECIES, FERN_CAPTURE]) {
     if (!sp.foliage || atlases.has(sp.id)) continue;
-    atlases.set(sp.id, await captureFoliageAtlas(renderer, sp, seed.rng(`cards/${sp.id}`)));
+    atlases.set(
+      sp.id,
+      await captureFoliageAtlas(renderer, sp, seed.rng(`cards/${sp.id}`)),
+    );
   }
-  progress(0.2, 'veg: baking bark textures');
+  progress(0.2, "veg: baking bark textures");
   const barks = new Map<number, BarkTextures>();
-  const layers = new Set<number>([...TREE_SPECIES.map((s) => s.barkLayer), 2, 5]);
+  const layers = new Set<number>([
+    ...TREE_SPECIES.map((s) => s.barkLayer),
+    2,
+    5,
+  ]);
   for (const layer of layers) {
-    barks.set(layer, await bakeBarkTextures(renderer, layer, seed.sub(`bark/${layer}`) % 977));
+    barks.set(
+      layer,
+      await bakeBarkTextures(renderer, layer, seed.sub(`bark/${layer}`) % 977),
+    );
   }
   const barkOf = (layer: number): BarkTextures => {
     const b = barks.get(layer);
@@ -193,8 +211,11 @@ export async function buildVegLibrary(
   };
 
   // ---- trees: 6 species × 4 variants × (R1 cards, R2 branch-cards) ----------
-  progress(0.3, 'veg: growing tree variant pools');
-  const treeParts = (sp: SpeciesParams, t: ReturnType<typeof buildTree>): PoolPart[] => {
+  progress(0.3, "veg: growing tree variant pools");
+  const treeParts = (
+    sp: SpeciesParams,
+    t: ReturnType<typeof buildTree>,
+  ): PoolPart[] => {
     const parts: PoolPart[] = [
       {
         geo: t.bark,
@@ -226,14 +247,17 @@ export async function buildVegLibrary(
       const t0 = buildTree(sp, seed.rng(label), {
         lod: 0,
         inst,
-        foliageMode: 'hybrid',
+        foliageMode: "hybrid",
         // N9-C0: the nanite leaf head renders foliageMesh as the WHOLE crown — there
         // are NO cards in the SW raster (alpha-test, D-N3). The card-era
         // meshAnchorTarget (a sparse detail layer ON TOP of all-anchor cards) read as
         // a near-bare tree through nanite, so build the real needle/leaf crown at
         // FULL anchor density to match the old card coverage. (cardTarget kept for the
         // impostor bake + the ?oldgeo ref; only the mesh anchors densify.)
-        hero: { ...(HERO_DIETS[sp.id] ?? { cardTarget: 1500 }), meshAnchorTarget: leafAnchorTarget },
+        hero: {
+          ...(HERO_DIETS[sp.id] ?? { cardTarget: 1500 }),
+          meshAnchorTarget: leafAnchorTarget,
+        },
       });
       const t1 = buildTree(sp, seed.rng(label), { lod: 1, inst });
       const t2 = buildTree(sp, seed.rng(label), { lod: 2, inst });
@@ -276,11 +300,14 @@ export async function buildVegLibrary(
       });
     }
     clsMaxDist[ci] = 1e8; // trees continue as impostors
-    progress(0.3 + 0.25 * ((ci + 1) / TREE_SPECIES.length), `veg: ${sp.id} pool`);
+    progress(
+      0.3 + 0.25 * ((ci + 1) / TREE_SPECIES.length),
+      `veg: ${sp.id} pool`,
+    );
   }
 
   // ---- tree impostors (variant 0 R1 geometry, relightable octahedral) -------
-  progress(0.56, 'veg: capturing octahedral impostors');
+  progress(0.56, "veg: capturing octahedral impostors");
   const impostors = new Map<number, ImpostorAtlas>();
   for (let ci = 0; ci < TREE_SPECIES.length; ci++) {
     const sp = TREE_SPECIES[ci] as SpeciesParams;
@@ -289,10 +316,11 @@ export async function buildVegLibrary(
       inst: variantInstance(seed, sp.id, 0),
     });
     const parts: ImpostorPart[] = [
-      { geometry: t.bark, kind: 'bark', barkTex: barkOf(sp.barkLayer) },
+      { geometry: t.bark, kind: "bark", barkTex: barkOf(sp.barkLayer) },
     ];
     const atlas = atlases.get(sp.id);
-    if (t.foliage && atlas) parts.push({ geometry: t.foliage, kind: 'cards', atlas });
+    if (t.foliage && atlas)
+      parts.push({ geometry: t.foliage, kind: "cards", atlas });
     const radius = Math.max(
       t.stats.height * 0.55,
       t.skeleton.crownRadius * 1.4,
@@ -300,13 +328,19 @@ export async function buildVegLibrary(
     );
     impostors.set(
       ci,
-      await captureImpostor(renderer, parts, { centerY: t.stats.height * 0.5, radius }),
+      await captureImpostor(renderer, parts, {
+        centerY: t.stats.height * 0.5,
+        radius,
+      }),
     );
-    progress(0.56 + 0.18 * ((ci + 1) / TREE_SPECIES.length), `veg: impostor ${sp.id}`);
+    progress(
+      0.56 + 0.18 * ((ci + 1) / TREE_SPECIES.length),
+      `veg: impostor ${sp.id}`,
+    );
   }
 
   // ---- understory: shrubs / fern / flowers (R1 only) -------------------------
-  progress(0.76, 'veg: understory pools');
+  progress(0.76, "veg: understory pools");
   const underSpecies = [
     { cls: VegClass.BushHazel, sp: UNDERSTORY_SPECIES[0] as SpeciesParams },
     { cls: VegClass.BushPink, sp: UNDERSTORY_SPECIES[1] as SpeciesParams },
@@ -350,7 +384,7 @@ export async function buildVegLibrary(
     clsMaxDist[cls] = 170;
   }
   // ferns
-  const fernAtlas = atlases.get('fern');
+  const fernAtlas = atlases.get("fern");
   for (let v = 0; v < 4; v++) {
     const geo = buildFern(seed.rng(`veg/fern/${v}`));
     const tris = geo.index ? geo.index.count / 3 : 0;
@@ -365,7 +399,9 @@ export async function buildVegLibrary(
               geo,
               tris,
               make: () =>
-                foliageCardMaterial(fernAtlas, { color: FERN_CAPTURE.foliageColor }),
+                foliageCardMaterial(fernAtlas, {
+                  color: FERN_CAPTURE.foliageColor,
+                }),
               castShadow: false,
             },
           ]
@@ -380,9 +416,9 @@ export async function buildVegLibrary(
   clsMaxDist[VegClass.Fern] = 140;
   // flowers
   const flowerKinds: { cls: number; kind: FlowerKind }[] = [
-    { cls: VegClass.FlowerUmbel, kind: 'umbel' },
-    { cls: VegClass.FlowerBell, kind: 'bell' },
-    { cls: VegClass.FlowerDaisy, kind: 'daisy' },
+    { cls: VegClass.FlowerUmbel, kind: "umbel" },
+    { cls: VegClass.FlowerBell, kind: "bell" },
+    { cls: VegClass.FlowerDaisy, kind: "daisy" },
   ];
   for (const { cls, kind } of flowerKinds) {
     for (let v = 0; v < 4; v++) {
@@ -412,12 +448,12 @@ export async function buildVegLibrary(
   }
 
   // ---- extras: deadfall + boulders/slabs -------------------------------------
-  progress(0.86, 'veg: deadfall + boulder pools');
+  progress(0.86, "veg: deadfall + boulder pools");
   const deadTex = barkOf(5);
   // weathered-wood darkening: the snag bark bake is pale gray and logs read
   // as glowing white slivers in noon sun without it
   const logDim = { r: 0.6, g: 0.52, b: 0.44 };
-  const decayOf: DecayState[] = ['fresh', 'mossy', 'rotten', 'mossy'];
+  const decayOf: DecayState[] = ["fresh", "mossy", "rotten", "mossy"];
   for (let v = 0; v < 4; v++) {
     const log = buildLog(seed.rng(`veg/log/${v}`), decayOf[v] as DecayState);
     const b = bounds([log.geometry]);
@@ -467,10 +503,11 @@ export async function buildVegLibrary(
   }
   clsMaxDist[VegClass.Stump] = 170;
 
-  const rockPools: { cls: number; preset: 'boulder' | 'slab'; moss: number }[] = [
-    { cls: VegClass.Boulder, preset: 'boulder', moss: 0.3 },
-    { cls: VegClass.Slab, preset: 'slab', moss: 0.12 },
-  ];
+  const rockPools: { cls: number; preset: "boulder" | "slab"; moss: number }[] =
+    [
+      { cls: VegClass.Boulder, preset: "boulder", moss: 0.3 },
+      { cls: VegClass.Slab, preset: "slab", moss: 0.12 },
+    ];
   // scatter keys boulder/slab variants by rock exposure: 0/1 = pale bedrock
   // blocks beside cliffs (matching them), 2/3 = dark mossy forest rocks
   const paleRock = { r: 0.34, g: 0.33, b: 0.3 };
@@ -511,18 +548,39 @@ export async function buildVegLibrary(
   }
 
   // ---- size-stratified stones + fallen branches (no-bare-ground layer) ------
-  progress(0.93, 'veg: stone/branch pools');
+  progress(0.93, "veg: stone/branch pools");
   const stoneClasses: {
     cls: number;
-    preset: 'boulder' | 'cobble';
+    preset: "boulder" | "cobble";
     d1: number;
     d2: number | null;
     moss: number;
     maxDist: number;
   }[] = [
-    { cls: VegClass.StoneL, preset: 'boulder', d1: 3, d2: 2, moss: 0.22, maxDist: 900 },
-    { cls: VegClass.StoneM, preset: 'cobble', d1: 2, d2: 1, moss: 0.12, maxDist: 280 },
-    { cls: VegClass.StoneS, preset: 'cobble', d1: 1, d2: null, moss: 0.06, maxDist: 90 },
+    {
+      cls: VegClass.StoneL,
+      preset: "boulder",
+      d1: 3,
+      d2: 2,
+      moss: 0.22,
+      maxDist: 900,
+    },
+    {
+      cls: VegClass.StoneM,
+      preset: "cobble",
+      d1: 2,
+      d2: 1,
+      moss: 0.12,
+      maxDist: 280,
+    },
+    {
+      cls: VegClass.StoneS,
+      preset: "cobble",
+      d1: 1,
+      d2: null,
+      moss: 0.06,
+      maxDist: 90,
+    },
   ];
   for (const sc of stoneClasses) {
     for (let v = 0; v < 4; v++) {
@@ -531,8 +589,14 @@ export async function buildVegLibrary(
       // 2/3 in streambeds (dark water-rounded, mossy) — scree stops reading
       // as smooth dark blobs
       const isTalus = sc.cls === VegClass.StoneL && v < 2;
-      const preset = sc.cls === VegClass.StoneL ? (isTalus ? 'talus' : 'boulder') : sc.preset;
-      const moss = sc.cls === VegClass.StoneL ? (isTalus ? 0.06 : 0.3) : sc.moss;
+      const preset =
+        sc.cls === VegClass.StoneL
+          ? isTalus
+            ? "talus"
+            : "boulder"
+          : sc.preset;
+      const moss =
+        sc.cls === VegClass.StoneL ? (isTalus ? 0.06 : 0.3) : sc.moss;
       const tone = isTalus ? { r: 0.35, g: 0.34, b: 0.31 } : undefined;
       const hi = buildRock(preset, seed.rng(`veg/stone${sc.cls}/${v}`), sc.d1);
       const lo =
@@ -609,6 +673,15 @@ export async function buildVegLibrary(
   }
   clsMaxDist[VegClass.Branch] = 230;
 
-  progress(1, 'veg: pools ready');
-  return { pools, impostors, clsHeight, clsRadius, clsMaxDist, atlases, barks, barkArray };
+  progress(1, "veg: pools ready");
+  return {
+    pools,
+    impostors,
+    clsHeight,
+    clsRadius,
+    clsMaxDist,
+    atlases,
+    barks,
+    barkArray,
+  };
 }

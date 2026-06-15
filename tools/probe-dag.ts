@@ -21,6 +21,7 @@
  */
 
 import { buildDag, type DagBuild } from '../src/nanite/BuildDag';
+import { buildDagHierarchy, validateDagHierarchy } from '../src/nanite/DagHierarchy';
 import { Rng } from '../src/core/Seed';
 import { buildRock } from '../src/vegetation/RockBuilder';
 import { buildTree } from '../src/vegetation/TreeBuilder';
@@ -56,6 +57,13 @@ function dist(ax: number, ay: number, az: number, bx: number, by: number, bz: nu
 function checkMesh(name: string, dag: DagBuild): void {
   const cl = dag.clusters;
   const tol = 1e-4;
+
+  // H: hierarchical-traversal data reproduces the EXACT per-cluster cut (the cull
+  // rewrite depends on this — a wrong child/root link = holes or duplicate render).
+  const hier = buildDagHierarchy(dag);
+  const hv = validateDagHierarchy(dag, hier);
+  if (!hv.ok) fail(`${name} H: hierarchy ${hv.msg}`);
+  else console.log(`  ${name} H: ${hv.msg}`);
 
   // M + C: per non-root cluster
   let worstMono = 0;

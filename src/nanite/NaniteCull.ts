@@ -112,10 +112,21 @@ const REJ_CLUST_CAP = 1_048_576;
  *  geometry + tris/px stay REAL (unlike a drop-based region budget, which would
  *  under-count). Minor LOD-transition cracks from the spatial τ gradient are
  *  sub-pixel and acceptable for a perf BOUND — this knob never ships. */
-function bandedTau(tau: NF, bandD: NF, dist: NF): NF {
-  return bandD
-    .greaterThan(0)
-    .select(tau.mul(float(1).add(dist.div(bandD.max(float(1e-3))))), tau) as unknown as NF;
+function lodWarp(tau: NF, dist: NF, scale: NF, near: NF, pow: NF): NF {
+  // τ_eff = τ · (1 + (max(0, dist − near) / scale)^pow).
+  //   near  = full-detail plateau radius (≤ near m ⇒ τ_eff = τ, level 0)
+  //   scale = distance PAST `near` at which τ doubles (smaller ⇒ coarsens sooner)
+  //   pow   < 1 ⇒ detail drops FAST just past `near`, SLOW far (the "concentrate
+  //             detail near the player" curve); = 1 ⇒ linear; > 1 ⇒ slow-near-fast-far
+  // scale ≤ 0 ⇒ disabled (τ_eff = τ). CAVEAT: τ_eff varies with each cluster's own
+  // distance, so neighbouring DAG levels can use slightly different τ — the cut is
+  // watertight at a single point but the transition SHELL wiggles, which can open
+  // sub-cluster LOD-seam cracks. Worst right at the plateau edge with pow<1 (the
+  // gradient is vertical there). Inside the plateau (dist ≤ near) τ_eff = τ for all
+  // clusters ⇒ exact. Foliage hides this well; soften with larger near/scale.
+  const d = dist.sub(near).max(float(0)) as unknown as NF;
+  const grow = float(1).add(d.div(scale.max(float(1e-3))).pow(pow)) as unknown as NF;
+  return scale.greaterThan(0).select(tau.mul(grow), tau) as unknown as NF;
 }
 
 interface ComputeKernel {
@@ -183,10 +194,22 @@ export function buildNaniteCull(
     tau?: UniformF;
     minPx?: UniformF;
     innerReject?: UniformF;
-    /** D-N43 Stage 0.5 SIM: distance-band scale (m) for τ region-collapse; 0 = off */
+    /** lodWarp: distance-band scale (m) — τ doubles `scale` m past lodNear; 0 = off */
     simBandD?: UniformF;
+    /** lodWarp: full-detail plateau radius (m) — ≤ this, level 0 */
+    lodNear?: UniformF;
+    /** lodWarp: falloff exponent — <1 fast-near/slow-far, 1 linear, >1 slow-near */
+    lodPow?: UniformF;
+    /** N9-IMP: per-INSTANCE min screen SIZE (px, diameter). Below it the whole
+     *  instance is too small for geometry — dropped at kInstCull so the imposter
+     *  far-field owns it (UE5 model). 0 = off. */
+    instMinPx?: UniformF;
+    /** N8-HIC: HIERARCHICAL cull — seed roots + BFS-descend the DAG instead of
+     *  brute-forcing every cluster. v1 single-phase (validate at ?occl=0). */
+    hier?: boolean;
   },
 ): NaniteCullChain {
+  const hier = opts?.hier === true;
   const coneCull = opts?.coneCull !== false;
   // S3 SHADOW CLIPMAP hollow (D-N29): a clipmap level rasters only the RING
   // outside the next-finer level — a cluster whose light-space clip bbox lies
@@ -214,6 +237,12 @@ export function buildNaniteCull(
   // the default ⇒ τ_eff = τ). Only the camera path wires it (NaniteFrame); the
   // shadow culls leave it 0, so casters are untouched (separation honoured).
   const simBandD = opts?.simBandD ?? uniformF(0);
+  // lodWarp shape: full-detail plateau radius + falloff exponent (1 = linear)
+  const lodNear = opts?.lodNear ?? uniformF(0);
+  const lodPow = opts?.lodPow ?? uniformF(1);
+  // N9-IMP per-instance min screen-SIZE (px diameter); below it the instance is
+  // dropped whole (imposter far-field territory). 0 = off (the camera default).
+  const instMinPx = opts?.instMinPx ?? uniformF(0);
   const projK = cam.cotHalfFov.mul(cam.uH).mul(0.5) as unknown as NF;
   // ---- buffers ---------------------------------------------------------------
   // counters: [0] chunk pushes (phase 2 resets for re-expansion), [1] raster
@@ -361,6 +390,14 @@ export function buildNaniteCull(
     const isHF = head.flags.bitAnd(uint(MESH_FLAG_HEIGHTFIELD)).notEqual(uint(0)).toVar();
     const s = instWorldSphere(A, B, isHF as unknown as NB, head.sphere, head.swayPad);
     returnIf(frustumVisible(s.center, s.radius).lessThan(0.5));
+    // N9-IMP: per-instance min screen-SIZE cull — below instMinPx px (diameter) the
+    // whole tree is imposter territory, so emit NO geometry. Exempt heightfield
+    // (terrain has no imposter). Runs BEFORE occlusion ⇒ never enters phase 2.
+    const sizePx = projK
+      .mul(s.radius)
+      .mul(2)
+      .div(cam.camPos.sub(s.center).length().max(float(1e-3))) as unknown as NF;
+    returnIf(instMinPx.greaterThan(0).and(isHF.not()).and(sizePx.lessThan(instMinPx)));
     if (sphereOccluded) {
       // occlusion-ONLY reject → record for phase 2, skip this phase
       If(sphereOccluded(s.center, s.radius, cam.prevVp, cam.prevCamPos), () => {
@@ -460,12 +497,14 @@ export function buildNaniteCull(
           // pinned and can never be cut away.)
           const pOwn = projK.mul(A.w).mul(rec.ownError).div(denO);
           const pPar = projK.mul(A.w).mul(rec.parentError).div(denP);
-          // D-N43 Stage 0.5 SIM: distance-banded τ (region-collapse). bandedTau is a
-          // no-op when simBandD==0 (the default), so the shipped cut is unchanged.
-          const tauEff = bandedTau(
+          // lodWarp: near-plateau + power τ falloff (region-collapse). No-op when
+          // simBandD==0 (the default), so the shipped cut is unchanged.
+          const tauEff = lodWarp(
             tau,
-            simBandD,
             s.center.sub(cam.camPos).length() as unknown as NF,
+            simBandD,
+            lodNear,
+            lodPow,
           );
           If(pOwn.greaterThan(tauEff).or(pPar.lessThanEqual(tauEff)), () => {
             visible.assign(0);
@@ -624,7 +663,224 @@ export function buildNaniteCull(
   })().compute(1, [1]);
   (kRasterArgs2 as unknown as ComputeKernel).setName('nanRasterArgs2');
 
+  // ──────────────────────────────────────────────────────────────────────────
+  // N8-HIC: HIERARCHICAL traversal (opts.hier). Instead of dispatching every
+  // cluster of every visible instance, seed each hierarchical mesh's ROOTS into a
+  // frontier and BFS-descend: project(ownError) ≤ τ ⇒ emit (frustum + cone + size
+  // culls), else ⇒ enqueue children (gpu.dagLinks). Ping-pong frontiers (read A /
+  // write B, then swap) so no buffer is read+written in one pass (N0 law). Counts
+  // in frontierCount[0]=A,[1]=B. v1 single-phase, no occlusion (validate at occl=0
+  // vs the brute-force; the cut it produces is the SAME, just reached top-down).
+  // ──────────────────────────────────────────────────────────────────────────
+  let runPhase1Hier: ((renderer: Renderer) => void) | null = null;
+  if (hier) {
+    const HIER_MAX_DEPTH = 18; // ≥ the deepest DAG (measured ~13) + margin
+    const qFrontierAAttr = new StorageBufferAttribute(new Uint32Array(QRASTER_CAP * 2), 2);
+    const qFrontierA = sUvec2(qFrontierAAttr, QRASTER_CAP);
+    const qFrontierBAttr = new StorageBufferAttribute(new Uint32Array(QRASTER_CAP * 2), 2);
+    const qFrontierB = sUvec2(qFrontierBAttr, QRASTER_CAP);
+    // frontier counts A/B reuse counters slots 2/3 (rejInst/rejClust — unused in
+    // hier mode) so kTraverse stays ≤10 storage buffers WITH the HZB occlusion read
+    // (the HZB pyramid is itself a storage buffer, NaniteHzb).
+    const frontierCount = counters;
+    // frontier counts use counters slots 0/4 (chunk-push / chunk-snapshot — unused
+    // in hier mode), leaving slot 3 (rejClust count) + the rejClustV buffer free for
+    // the TWO-PHASE occlusion re-test (record-not-drop, then kClusterCull2b vs fresh HZB).
+    const FA = 0;
+    const FB = 4;
+    const traverseDispatchAttr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
+    const traverseDispatch = sU32Views(traverseDispatchAttr as unknown as StorageBufferAttribute, 3).rw;
+
+    // kClearHier: counters + both frontier counts → 0
+    const kClearHier = Fn(() => {
+      If(instanceIndex.lessThan(uint(8)), () => {
+        atomicStore(counters.element(instanceIndex), uint(0)); // includes the FA/FB slots
+      });
+    })().compute(8, [8]);
+    (kClearHier as unknown as ComputeKernel).setName('nanClearHier');
+
+    // kSeedRoots: per instance → frustum + size cull → append the mesh's ROOTS to
+    // frontier A (skips non-hierarchical meshes: rootCount 0 = terrain/discrete).
+    const kSeedRoots = Fn(() => {
+      returnIf(instanceIndex.greaterThanEqual(uint(instanceCount)));
+      const A = gpu.instances.element(instanceIndex.mul(uint(2))).toVar() as unknown as NV4;
+      const B = gpu.instances
+        .element(instanceIndex.mul(uint(2)).add(uint(1)))
+        .toVar() as unknown as NV4;
+      const headId = elemU(gpu.instanceMesh, instanceIndex).toVar();
+      const head = readMesh(gpu.meshes, headId);
+      const rootCount = head.rootCount.toVar();
+      returnIf(rootCount.equal(uint(0)));
+      const isHF = head.flags.bitAnd(uint(MESH_FLAG_HEIGHTFIELD)).notEqual(uint(0));
+      const s = instWorldSphere(A, B, isHF as unknown as NB, head.sphere, head.swayPad);
+      returnIf(frustumVisible(s.center, s.radius).lessThan(0.5));
+      const sizePx = projK
+        .mul(s.radius)
+        .mul(2)
+        .div(cam.camPos.sub(s.center).length().max(float(1e-3))) as unknown as NF;
+      returnIf(instMinPx.greaterThan(0).and(sizePx.lessThan(instMinPx)));
+      const rootBase = head.rootBase.toVar();
+      const slotBase = (atomicAdd(frontierCount.element(FA), rootCount) as unknown as NU).toVar();
+      loopU(uint(0), rootCount, (k) => {
+        const slot = slotBase.add(k);
+        If(slot.lessThan(uint(QRASTER_CAP)), () => {
+          const ci = elemU(gpu.dagLinks, rootBase.add(k));
+          qFrontierA.rw.element(slot).assign(uv2(instanceIndex, ci));
+        });
+      });
+    })().compute(instanceCount, [64]);
+    (kSeedRoots as unknown as ComputeKernel).setName('nanSeedRoots');
+
+    // one BFS pass: read inV[0..inCount), for each (instId, cluster) EMIT if the
+    // cut resolves, else enqueue its children to outV. Shared by the A→B / B→A
+    // ping-pong (read + write are different buffers).
+    const makeTraverse = (
+      inV: ReturnType<typeof sUvec2>,
+      outV: ReturnType<typeof sUvec2>,
+      inIdx: number,
+      outIdx: number,
+    ): unknown => {
+      const kn = Fn(() => {
+        // ONE thread per frontier item: global id = wg·64 + localX (kInstCull2 form)
+        const tid = wgLinear(DISPATCH_ROW).mul(uint(64)).add(localX()).toVar();
+        returnIf(tid.greaterThanEqual(aLoadU(frontierCount.element(inIdx))));
+        const item = inV.ro.element(tid);
+        const instId = item.x.toVar();
+        const ci = item.y.toVar();
+        const A = gpu.instances.element(instId.mul(uint(2))).toVar() as unknown as NV4;
+        const B = gpu.instances
+          .element(instId.mul(uint(2)).add(uint(1)))
+          .toVar() as unknown as NV4;
+        const yawSc = instYaw(B);
+        const rec = readDag(gpu.dag, ci);
+        // project(ownError) — the cut's pOwn (perspective, instance-scaled)
+        const ownC = instTransformPoint(A, B, yawSc, rec.ownSphere.xyz as unknown as NV3);
+        const ownR = instSphereRadius(A, B, rec.ownSphere.w as unknown as NF, float(0));
+        const dvo = cam.camPos.sub(ownC) as unknown as NV3;
+        const denO = dot(dvo, dvo).sub(ownR.mul(ownR)).max(float(1e-6)).sqrt() as unknown as NF;
+        const pOwn = projK.mul(A.w).mul(rec.ownError).div(denO);
+        const tauEff = lodWarp(
+          tau,
+          cam.camPos.sub(ownC).length() as unknown as NF,
+          simBandD,
+          lodNear,
+          lodPow,
+        );
+        If(pOwn.lessThanEqual(tauEff), () => {
+          // ── CUT: this cluster is the right LOD here → emit (with culls) ──────
+          const c = readCluster(gpu.clusters, ci);
+          const isHF = c.flags.bitAnd(uint(1)).notEqual(uint(0)).toVar();
+          const swayPad = bcU2F(
+            elemU(gpu.meshes, c.meshId.mul(uint(MESH_WORDS)).add(uint(11))),
+          );
+          const s = instWorldSphere(A, B, isHF as unknown as NB, c.sphere, swayPad);
+          const visible = frustumVisible(s.center, s.radius).toVar();
+          If(visible.greaterThan(0.5).and(minPx.greaterThan(0)), () => {
+            const toC = s.center.sub(cam.camPos) as unknown as NV3;
+            const distC = dot(toC, toC).max(float(1e-6)).sqrt();
+            If(projK.mul(s.radius).div(distC).lessThan(minPx), () => {
+              visible.assign(0);
+            });
+          });
+          if (coneCull) {
+            If(
+              visible.greaterThan(0.5).and(c.coneCos.greaterThan(-0.99)).and(isHF.not()),
+              () => {
+                const sinTest = float(1)
+                  .sub(c.coneCos.mul(c.coneCos))
+                  .max(0)
+                  .sqrt()
+                  .add(CONE_SLACK)
+                  .toVar();
+                If(sinTest.lessThan(1), () => {
+                  const axisW = instRotateDir(yawSc, c.coneAxis);
+                  const toC = s.center.sub(cam.camPos).toVar();
+                  const d = toC.length();
+                  If(
+                    dot(toC as unknown as NV3, axisW).greaterThan(d.mul(sinTest).add(s.radius)),
+                    () => {
+                      visible.assign(0);
+                    },
+                  );
+                });
+              },
+            );
+          }
+          // N8-HIC occlusion: single-phase, prev-frame HZB at emit (the two-phase
+          // record/re-test is a follow-up — it needs a buffer-budget rework). null at occl=0.
+          if (sphereOccluded) {
+            If(visible.greaterThan(0.5), () => {
+              If(sphereOccluded(s.center, s.radius, cam.prevVp, cam.prevCamPos), () => {
+                visible.assign(0);
+              });
+            });
+          }
+          If(visible.greaterThan(0.5), () => {
+            const slot = atomicAdd(counters.element(1), uint(1)) as unknown as NU;
+            If(slot.lessThan(uint(QRASTER_CAP)), () => {
+              qRasterV.rw.element(slot.add(uint(1))).assign(uv2(instId, ci));
+            });
+            atomicAdd(counters.element(6), c.triCount);
+            atomicAdd(counters.element(5), uint(1));
+            atomicAdd(counters.element(7), c.triCount);
+          });
+        }).Else(() => {
+          // ── too coarse → enqueue children (only an OWNER carries them) ───────
+          const childBase = rec.childBase.toVar();
+          const childCount = rec.childCount.toVar();
+          const base = (atomicAdd(frontierCount.element(outIdx), childCount) as unknown as NU).toVar();
+          loopU(uint(0), childCount, (k) => {
+            const slot = base.add(k);
+            If(slot.lessThan(uint(QRASTER_CAP)), () => {
+              const child = elemU(gpu.dagLinks, childBase.add(k));
+              outV.rw.element(slot).assign(uv2(instId, child));
+            });
+          });
+        });
+      })().compute(QRASTER_CAP, [64]);
+      return kn;
+    };
+    const kTraverseAB = makeTraverse(qFrontierA, qFrontierB, FA, FB);
+    (kTraverseAB as ComputeKernel).setName('nanTraverseAB');
+    const kTraverseBA = makeTraverse(qFrontierB, qFrontierA, FB, FA);
+    (kTraverseBA as ComputeKernel).setName('nanTraverseBA');
+
+    // args before each pass: reset the OUTPUT count, dispatch over the INPUT count
+    const makeArgs = (inIdx: number, outIdx: number): unknown => {
+      const kn = Fn(() => {
+        atomicStore(frontierCount.element(outIdx), uint(0));
+        // one workgroup (64 threads) per 64 frontier items
+        const n = minU(aLoadU(frontierCount.element(inIdx)), uint(QRASTER_CAP));
+        split2D(traverseDispatch, n.add(uint(63)).div(uint(64)));
+      })().compute(1, [1]);
+      return kn;
+    };
+    const kArgsAB = makeArgs(FA, FB);
+    (kArgsAB as ComputeKernel).setName('nanArgsAB');
+    const kArgsBA = makeArgs(FB, FA);
+    (kArgsBA as ComputeKernel).setName('nanArgsBA');
+
+    runPhase1Hier = (renderer: Renderer): void => {
+      dispatch(renderer, kClearHier as never);
+      dispatch(renderer, kSeedRoots as never);
+      for (let p = 0; p < HIER_MAX_DEPTH; p++) {
+        if (p % 2 === 0) {
+          dispatch(renderer, kArgsAB as never);
+          dispatchIndirect(renderer, kTraverseAB as never, traverseDispatchAttr);
+        } else {
+          dispatch(renderer, kArgsBA as never);
+          dispatchIndirect(renderer, kTraverseBA as never, traverseDispatchAttr);
+        }
+      }
+      dispatch(renderer, kRasterArgs);
+    };
+  }
+
   const runPhase1 = (renderer: Renderer): void => {
+    if (runPhase1Hier) {
+      runPhase1Hier(renderer);
+      return;
+    }
     dispatch(renderer, kClear);
     dispatch(renderer, kInstCull);
     dispatch(renderer, kChunkArgs);
@@ -637,6 +893,12 @@ export function buildNaniteCull(
   };
 
   const runPhase2 = (renderer: Renderer): void => {
+    if (hier) {
+      // N8-HIC v1 single-phase: the BFS produced the full qRaster; just sync the
+      // full-range payload args (two-phase occlusion re-test is a follow-up).
+      syncFullArgs(renderer);
+      return;
+    }
     if (!sphereOccluded || !kInstCull2 || !kClusterCull2 || !kClusterCull2b) {
       // no occlusion → nothing was rejected; keep full args in sync for the
       // payload pass (same contents as phase-1 args)

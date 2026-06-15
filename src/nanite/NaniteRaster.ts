@@ -52,7 +52,7 @@ import {
 } from 'three/tsl';
 import type { NB, NF, NI, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
 import { markFragmentWritable } from '../render/ThreePatches';
-import { MESH_WORDS } from './GeometryRegistry';
+import { CLUSTER_WORDS, MESH_WORDS } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
 import { DISPATCH_ROW, QRASTER_CAP, hashColor, instYaw, type NaniteCam } from './NaniteCommon';
 import { makeFetch, type TerrainDisp, type TrunkWindOpt, type VertCtx } from './NaniteFetch';
@@ -130,6 +130,8 @@ export interface NaniteRasterHandles {
   hwDepth(renderer: Renderer, camera: PerspectiveCamera): void;
   /** SW payload over ALL items vs final depth + HW payload render */
   payload(renderer: Renderer, camera: PerspectiveCamera): void;
+  /** single-pass Z+payload over ALL items (hier path) — SW + HW in one go */
+  combined(renderer: Renderer, camera: PerspectiveCamera): void;
   readHwCount(renderer: Renderer): Promise<number>;
   /** count covered/orphan pixels (dispatch after payload; ?audit=1) */
   audit(renderer: Renderer): void;
@@ -169,7 +171,7 @@ export function buildNaniteRaster(
     rasterDispatchFullAttr: IndirectStorageBufferAttribute;
   },
   vis: NaniteVisBuffers,
-  tint: 'flat' | 'cluster',
+  tint: 'flat' | 'cluster' | 'lod',
   /** false (?shade=0): pure matClass color, no lambert — the parity gate's
    *  shading-free mode (coverage/structure compare only) */
   shade = true,
@@ -242,7 +244,13 @@ export function buildNaniteRaster(
   // `phase2` offsets the work-item index by qRaster[0].y (the phase-2 base
   // written by kRasterArgs2) so the appended range rasters without touching
   // phase-1 items; depth1/payload start at 0.
-  const rasterKernel = (mode: 'depth' | 'payload', phase2 = false): unknown => {
+  // mode 'depth' = atomicMin Z only (two-pass occlusion path); 'payload' = equality
+  // store vs settled Z (pass 2 of that path); 'combined' = ONE pass that does both —
+  // atomicMin Z then speculatively claim the pixel's payload when we become the new
+  // nearest (same pattern the HW path uses). The single-pass payload write can lose a
+  // race to a stale farther writer (right Z, briefly the wrong tri's attrs — soft and
+  // self-healing, not sparkle), the price for collapsing the 3× raster into 1×.
+  const rasterKernel = (mode: 'depth' | 'payload' | 'combined', phase2 = false): unknown => {
     const kn = Fn(() => {
       const head = qRasterRO.element(0);
       const itemIdx = phase2
@@ -402,7 +410,7 @@ export function buildNaniteRaster(
 
         If(nearOK.not(), () => {
           // near-plane crossing → HW path clips it (never drop, F10c)
-          if (mode === 'depth') {
+          if (mode !== 'payload') {
             const slot = atomicAdd(hwQueueV.atomic.element(0), uint(1)) as unknown as NU;
             If(slot.lessThan(uint(HW_CAP)), () => {
               const base = slot.mul(uint(2)).add(uint(1));
@@ -584,6 +592,16 @@ export function buildNaniteRaster(
                             If(bits.lessThan(cur), () => {
                               atomicMin(visDepthV.atomic.element(px), bits);
                             });
+                          } else if (mode === 'combined') {
+                            // single pass: become the nearest ⇒ claim Z and payload
+                            // together (speculative; a later nearer frag re-claims both)
+                            const cur = aLoadU(visDepthV.atomic.element(px));
+                            If(bits.lessThan(cur), () => {
+                              atomicMin(visDepthV.atomic.element(px), bits);
+                              (visPayloadV.rw as unknown as { element(i: NU): { assign(v: NU): void } })
+                                .element(px)
+                                .assign(payload);
+                            });
                           } else {
                             const cur = elemU(visDepthV.ro, px);
                             If(bits.equal(cur), () => {
@@ -605,7 +623,7 @@ export function buildNaniteRaster(
                 });
               });
             }).Else(() => {
-              if (mode === 'depth') {
+              if (mode !== 'payload') {
                 If(validBB, () => {
                   // big triangle → HW queue
                   const slot = atomicAdd(hwQueueV.atomic.element(0), uint(1)) as unknown as NU;
@@ -630,6 +648,9 @@ export function buildNaniteRaster(
   (kRasterDepth2 as ComputeKernel).setName('nanRasterDepth2');
   const kRasterPayload = rasterKernel('payload');
   (kRasterPayload as ComputeKernel).setName('nanRasterPayload');
+  // single-pass Z+payload (hier path) — replaces depth1+payload re-raster
+  const kRasterCombined = rasterKernel('combined');
+  (kRasterCombined as ComputeKernel).setName('nanRasterCombined');
 
   // ---- kHwArgs ----------------------------------------------------------------------
   const kHwArgs = Fn(() => {
@@ -663,7 +684,7 @@ export function buildNaniteRaster(
   hwGeometry.setIndirect(hwDrawAttr, 0);
   hwGeometry.boundingSphere = new Sphere(new Vector3(), Number.POSITIVE_INFINITY);
 
-  const buildHwMaterial = (pass: 'depth' | 'payload'): NodeMaterial => {
+  const buildHwMaterial = (pass: 'depth' | 'payload' | 'combined'): NodeMaterial => {
     const mat = new NodeMaterial();
     const vPayLo = varyingProperty('float', `nanPayLo_${pass}`) as unknown as NF;
     const vPayHi = varyingProperty('float', `nanPayHi_${pass}`) as unknown as NF;
@@ -706,6 +727,15 @@ export function buildNaniteRaster(
         const bits = bcF2U(z as unknown as NF);
         if (pass === 'depth') {
           atomicMin(visDepthV.atomic.element(px), bits);
+        } else if (pass === 'combined') {
+          // single-pass Z+payload for big/near HW tris (mirrors the SW combined path)
+          const cur = aLoadU(visDepthV.atomic.element(px));
+          If(bits.lessThan(cur), () => {
+            atomicMin(visDepthV.atomic.element(px), bits);
+            (visPayloadV.rw as unknown as { element(i: NU): { assign(v: NU): void } })
+              .element(px)
+              .assign(pay);
+          });
         } else {
           // EXACT equality (N3a) — the N0 ±64-ulp cross-pipeline window is
           // retired: 0 orphans measured at exact equality on real HW load
@@ -736,6 +766,7 @@ export function buildNaniteRaster(
 
   const hwDepthMat = buildHwMaterial('depth');
   const hwPayloadMat = buildHwMaterial('payload');
+  const hwCombinedMat = buildHwMaterial('combined');
   const hwScene = new Scene();
   const hwMesh = new Mesh(hwGeometry, hwDepthMat);
   hwMesh.frustumCulled = false;
@@ -808,6 +839,22 @@ export function buildNaniteRaster(
     let col: NV3;
     if (tint === 'cluster') {
       col = hashColor(ci).mul(lambert) as unknown as NV3;
+    } else if (tint === 'lod') {
+      // color by the cluster's LOD LEVEL (packed in cluster word7 bits 10-15) — a
+      // per-level hue so the cut's distance falloff reads as colour bands (fine→coarse).
+      // The hue is a NON-wrapping red→violet sweep: level/MAXLVL maps to t∈[0,4.8] rad
+      // (< 2π), so the rainbow never completes a cycle and high levels can't loop back
+      // to salmon (level 0). Leaf DAGs reach ~14 levels; MAXLVL=16 keeps them in range.
+      const lvl = elemU(gpu.clusters, ci.mul(uint(CLUSTER_WORDS)).add(uint(7)))
+        .shiftRight(uint(10))
+        .bitAnd(uint(0x3f));
+      const t = toF(lvl).div(16).min(1).mul(4.8);
+      const c3 = vec3(
+        t.cos().mul(0.5).add(0.5),
+        t.add(2.094).cos().mul(0.5).add(0.5),
+        t.add(4.188).cos().mul(0.5).add(0.5),
+      ) as unknown as NV3;
+      col = c3.mul(lambert) as unknown as NV3;
     } else {
       col = (albedo as unknown as NV3).mul(lambert) as unknown as NV3;
     }
@@ -853,6 +900,13 @@ export function buildNaniteRaster(
     dispatchIndirect(renderer, kRasterPayload, cull.rasterDispatchFullAttr);
     hwRender(renderer, camera, hwPayloadMat);
   };
+  // single-pass Z+payload over the full set (hier path): replaces depth1 + the late
+  // hwDepth + payload re-raster with ONE SW pass + ONE HW pass.
+  const combined = (renderer: Renderer, camera: PerspectiveCamera): void => {
+    dispatchIndirect(renderer, kRasterCombined, cull.rasterDispatchFullAttr);
+    dispatch(renderer, kHwArgs); // SW pass filled hwQueue → build the indirect draw args
+    hwRender(renderer, camera, hwCombinedMat);
+  };
 
   const readHwCount = async (renderer: Renderer): Promise<number> => {
     const buf = await readBuffer(renderer, hwQueueAttr, 0, 4);
@@ -867,5 +921,5 @@ export function buildNaniteRaster(
     return { orphans: u[0] ?? 0, covered: u[1] ?? 0 };
   };
 
-  return { resolveScene, clearVis, depth1, depth2, hwDepth, payload, readHwCount, audit, readAudit };
+  return { resolveScene, clearVis, depth1, depth2, hwDepth, payload, combined, readHwCount, audit, readAudit };
 }

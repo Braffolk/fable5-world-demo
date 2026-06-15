@@ -8,3 +8,4 @@ shots/*
 !shots/phase-*/**
 *.log
 .claude/
+tools/geo/

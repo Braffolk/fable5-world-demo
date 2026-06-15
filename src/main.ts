@@ -14,6 +14,7 @@ import { initHooks } from './core/Hooks';
 import { parseCamString, parseParams } from './core/Params';
 import { WorldSeed } from './core/Seed';
 import { Hud } from './debug/HUD';
+import { buildForestScene } from './debug/ForestScene';
 import { buildGalleryScene } from './debug/GalleryScene';
 import { buildRasterSpikeScene } from './debug/RasterSpikeScene';
 import { buildSanityScene } from './debug/SanityScene';
@@ -107,6 +108,7 @@ async function boot(): Promise<void> {
   registerScene('gallery', buildGalleryScene);
   registerScene('shadowtest', buildShadowTestScene);
   registerScene('rasterspike', buildRasterSpikeScene);
+  registerScene('forest', buildForestScene);
   // 'world' becomes the streamed open world once terrain tiles land.
   registerScene('world', buildTerrainScene);
 

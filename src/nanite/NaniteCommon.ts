@@ -29,10 +29,15 @@ export const CHUNK_CLUSTERS = 64;
 export const QCHUNK_CAP = 1_048_576;
 /** raster work queue capacity (one item per visible cluster; doubles as the
  *  visible-cluster list the resolve payload indexes — F3/F16: payload itemIdx
- *  has 25 bits of headroom). Pre-occlusion C1 measured 1.36M at the walk
- *  spawn (no impostor band: r2 runs to 4 km until N8) — 2M × 8 B = 16 MB,
- *  memory-bound per F14; C2 occlusion is expected to slash the live count. */
-export const QRASTER_CAP = 2_097_152;
+ *  has 25 bits of headroom). Raised 2M→8M (2^23) for dense far-field views that
+ *  flooded the old 2M cap (trees flickering as clusters were dropped). Bit budget:
+ *  itemIdx<<7|localTri ⇒ 23+7 = 30 of 32 bits, still 2 spare. Memory ceiling: the
+ *  buffers it sizes (qRaster (CAP+1)×2×u32 = 64 MB; two BFS frontiers ×2×u32 = 64
+ *  MB each = 192 MB total) must each stay under WebGPU's default 128 MB
+ *  per-storage-buffer binding limit — 8M is the largest clean power of 2 that does.
+ *  Raising further needs a smaller stride or split buffers. The real fix for the
+ *  flood is the cluster floor (impostor/merge far-field), not a bigger queue. */
+export const QRASTER_CAP = 8_388_608;
 /** indirect-dispatch row size (maxComputeWorkgroupsPerDimension) */
 export const DISPATCH_ROW = 65_535;
 /** cone-test slack (radians, conservative on cos: sin(θ+Δ) ≤ sinθ + Δ) —

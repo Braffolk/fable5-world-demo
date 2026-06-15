@@ -9,6 +9,43 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-16 (br): **HIERARCHICAL DAG CULL + SINGLE-PASS VIS-BUFFER RASTER — the forest testbed proved the renderer
+  (not the geometry) was the bottleneck, and BOTH root causes are now fixed: brute-force cluster dispatch → top-down
+  BFS, and 3× software raster → 1×. Net measured on `?scene=forest` (200k instanced trees, all-DAG, eye-level,
+  instminpx=64): 50.0 ms → 16.7 ms, 20 → 57 fps (3.0×).** (Opus 4.8 1M.)
+  - **TESTBED** `?scene=forest` (`src/debug/ForestScene.ts`, `tools/probe-forest.ts`) — 200k real veg crowns INSTANCED
+    on a jittered grid, our cull→raster→resolve and NOTHING else. Isolates OUR pipeline cost vs `reference/ref-tree.html`
+    (the compute-rasterizer doing the same workload at 60 fps). Knobs: trees/spacing/leafdensity/dag/nanitedbg(+`lod`).
+  - **HIER CULL** (`src/nanite/DagHierarchy.ts` + NaniteCull `hier` opt, `?hier=1`) — the DAG is now used AS a hierarchy:
+    seed each mesh's ROOTS into a frontier, BFS-descend (project(ownError) ≤ τ ⇒ emit, else enqueue children) instead of
+    dispatching every cluster of every instance. `buildDagHierarchy` (owner-gated children = group.inputs for parents[0];
+    roots = parentError=∞) + `validateDagHierarchy` (CPU, proves the traversal reproduces the exact cut). Registry packs
+    a `dagLinks` buffer (roots then owner children, global ids) + mesh rootBase/rootCount (MESH_WORDS 16→18, DAG_WORDS
+    10→12). Traverse ≤10 storage buffers (F9), one thread/item, single-phase prev-HZB occlusion. Cull cost: 0.85 ms.
+  - **DIAGNOSIS** (enriched probe-forest: frameMs vs `cpu.submitMs100/100` vs `gpuPasses.compute+render`) — SOLIDLY
+    GPU-bound (CPU submit 0.7 ms; the "too many three.js dispatches" theory is DEAD). 78% of the frame was three SW
+    rasters: depth + depth2 + payload (13.8/13.7/13.9 ms). Reference does ONE (packed-atomic vis buffer, ref-tree.html:421).
+  - **PERF-VB1** — skip the redundant depth2 + 2nd hwDepth in hier mode (depth1 already covers the full set single-phase).
+    50.0 → 33.3 ms (20 → 31 fps), shot bit-identical.
+  - **PERF-VB2** — single-pass `'combined'` raster mode (NaniteRaster): `atomicMin(depth)` + speculatively claim the
+    winning triangle id (`payloadV = itemIdx<<7|localTri`) in ONE pass, SW + HW (mirrors the HW path's existing pattern).
+    Replaces depth1+payload re-raster. 33.3 → 16.7 ms (31 → 57 fps). Gotcha that cost a cycle: `combined()` MUST run
+    `kHwArgs` before `hwRender` or trunks (big near-tris) don't draw → next-frame HZB under-culls (the 472k-vs-367k
+    cluster anomaly). CAVEAT: the speculative payload write can race (right Z, briefly the wrong tri's attrs under heavy
+    overlap) — soft/self-healing, static parity confirmed, OWED: in-motion shimmer check. Race-free fallback = ref's two
+    32-bit packed-atomic buffers.
+  - **QRASTER_CAP 2M → 8M** (2^23) — the visible-cluster queue that flooded in dense/far views (trees flickering as
+    clusters dropped). Bit budget itemIdx<<7|localTri = 30/32 bits; 8M is the largest clean pow2 that keeps each queue
+    buffer (qRaster + 2 BFS frontiers, 64 MB each = 192 MB) under WebGPU's 128 MB per-buffer limit. Headroom, not a cure
+    — the real fix for the flood is the cluster floor (impostor/merge far-field; testable now via `?instminpx`: 0→256
+    drops vis 543k→294k / GPU 24→14 ms).
+  - **DEBUG** — `?nanitedbg=lod` colours clusters by LOD LEVEL (cluster word7 bits 10-15), non-wrapping red→violet sweep
+    (the old cos hue cycled every ~10 levels; leaf DAGs reach 14 → false "detailed" band fixed). `lodWarp` τ falloff:
+    `?lodnear` plateau + `?simband` scale + `?lodpow` exponent (<1 = detail drops fast near / slow far). Per-cluster
+    distance uses each cluster's own-sphere centre (leaves key off the crown — correct).
+  - PENDING: PERF-VB3 (make hier the DEFAULT + delete brute-force — needs non-DAG/terrain fork + two-phase occlusion
+    port; brute-force is wired into NaniteFrame + 2 shadow paths); the cluster-floor far-field; in-motion shimmer verify.
+
 - 2026-06-15 (bq): **D-N43 STAGE 0.5 — the perf SIM + integration study. THE DECISIVE FINDING: the foliage flood is
   per-CLUSTER OVERHEAD, not triangle density, so cross-instance MERGE is the lever and LIKELY SUFFICES ALONE — VOXELS
   DOWNGRADED from "mandatory/coupled" (bo) to a DEFERRED far-tail nicety. Stage 1 becomes MERGE-FIRST.** (Opus 4.8 1M,
