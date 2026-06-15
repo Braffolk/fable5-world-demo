@@ -9,6 +9,38 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-15 (bh): **AUDIT-1 — deviation audit vs the original Fable 5 spec (`reference/fable5-original-NANITE.md`,
+  937 lines, commit 8ac94518). VERDICT: the implementation is FAITHFUL — the core technical contract is fully
+  honored, every architectural deviation is D-N*-documented + justified, the gaps are unreached phases (not drift).
+  ONE genuine undocumented drift found: per-instance TINT.** (Opus 4.8 1M.) Verified the original's hard technical
+  commitments against the code (Explore sweep): **FAITHFUL ✓** — two-phase occlusion cull (phase-1 record-rejects +
+  phase-2 re-test vs fresh HZB, NaniteCull); Option C vis-buffer (atomicMin f32-bits depth + equality payload, FULL
+  f32 not 17-bit, NaniteRaster); fixed-point integer edges (8 subpixel bits ×256 + top-left −1 bias, not the float
+  −1e-5); near-plane→HW (never dropped); HW path writes the SAME vis-buffer (fragment storage atomics via
+  ThreePatches.markFragmentWritable, D-N11); registerMesh/bindInstances contract API; per-instance WIND PHASE
+  (slotHash(instId,211)); trunk wind channel; all original D-N1–D-N14 preserved. **JUSTIFIED DEVIATIONS (D-N*):**
+  (1) SHADOWS — orig D-N4/D-N8 (CSM-retained cluster casters into CSM cascades) → D-N28/D-N29 (depth-only SW-raster
+  CLIPMAP, CSM dropped); user-ratified, the HW caster was a measured 14–31 ms/cascade dead-end. (2) BLACK-SLATE —
+  orig "?nanite=0 boots the untouched old pipeline until N7" → D-N21 (old solid geometry hard-disabled, reversible).
+  (3) TERRAIN LIGHTING — orig N4 pixel-parity gate ≤0.2% → D-N22 (energy-correct, parity gate retired). (4) VELOCITY
+  — orig "resolve writes velocity; TRAA reads it from the vis-buffer" → D-N16 (deferred, no consumer; TRAA uses
+  analytic camera reprojection — caveat: wind/water object-motion falls back to variance clipping). (5) manual
+  lighting D-N17/20; (6) flat per-cluster DAG cut D-N31 (vs hierarchical traversal); (7) Worker DAG build D-N30;
+  (8) terrain RTIN + clipmap streaming D-N32/34/36–39. **UNREACHED PHASES (gaps, not drift):** LEAF/GRASS/DEBRIS
+  material classes + leaf/grass channels stub to gray (N9/N10) — minor scope-slip: orig put DEBRIS in N4, deferred
+  to N9/N10 (no debris geometry migrated yet anyway); N6 partial (rock+deadwood done, debris/grass/leaf pending);
+  N7 hybrid-close + two-frame-vs-main battery DEFERRED (made N/A by the black-slate; re-applies when un-black-slated).
+  **THE ONE DRIFT (undocumented) → FLAGGED for the user:** PER-INSTANCE TINT. The orig variation law required BOTH
+  `tint = slotHash(slot, 17/91)` AND `windPhase = slotHash(slot, 211)` "or migration CLONES TREES (banned)." The
+  impl reproduces the wind phase but NOT the tint — bark/deadwood hue is `hueShift(tex, dv.x)` keyed on per-VERTEX
+  `vdata.x` (shared across all instances of a mesh), so ~955k instances from 228 meshes share their mesh's colour
+  (trees vary by pose+wind, not tint). No D-N* ratifies dropping it. USER CALL: ratify (pose+wind+per-vertex hue is
+  enough) or restore (add `slotHash(instId,17/91)` to the bark albedo, ~few lines). **META:** the orig's "shippable
+  at every phase boundary + two-frame test MUST NOT regress vs main" discipline is currently SUSPENDED by the
+  black-slate + the parallel N5/N8 pursuit (N6/N7 not closed before N8) — intentional (user-driven), but the
+  two-frame-vs-main gate should be re-applied at N7/N10 when the world is re-migrated. AUDIT-1 done; one actionable
+  flag (tint) for the user. Docs only, no code change.
+
 - 2026-06-15 (bg): **PERF-4 CLOSED. The DEFINITIVE per-effect measurement: AO is ~100% of the real post cost;
   bloom/TAA/clouds/etc. are ~0. Cleaned up — AO opts made permanent (A/B scaffolding deleted), the TAA fork
   removed, quarter-res AO declined by the user ("call it done").** (Opus 4.8 1M.) The user asked for the ACTUAL
