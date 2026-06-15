@@ -1569,6 +1569,19 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
     NaniteRaster.ts:398) and shade with the camera-facing normal the resolve ALREADY flips (NaniteResolve.ts). A literal
     2× on the geometry that dominates the forest + ~½ HW needle queue + ½ leaf vert memory, zero visual change. This is
     the standing `N9-C2-2s` task.
+    ✓ LANDED (2026-06-15, Opus 4.8 1M). NOT a leaf special-case: a GENERAL per-mesh `MESH_FLAG_TWO_SIDED` bit (word-6
+    flags byte, free to read — `makeCtx` already loads w6) drives `orientForRaster` (NaniteRaster module helper), which
+    RE-WINDS a back-face to CCW IN PLACE (swap v1↔v2 → `edgeFn = cross(v1−v0,v2−v0)` negates → the positive-area integer
+    core rasters it once), else keeps the classic front-face cull. `ctx.twoSided` plumbed through `makeCtx` AND the
+    `?wgcache` cooperative broadcast (slot 9); HW near/big-tri queue → `DoubleSide` (nearer face wins atomicMin, payload
+    only on depth-match ⇒ safe for opaque too). The shadow rasterizer REUSES `buildNaniteRaster` ⇒ leaf shadows go
+    two-sided for free (separation principle paying off). MEASURED (probe-leaf A/B, hero bm7, leaf ON): leaf REGISTRY
+    triangles **13.171M → 6.585M (exactly 2×)**; leaf CLUSTERS **131,769 → 66,294 (1.99×)**; forest visible-cluster
+    queue **overflow (−1, >2.097M cap) → 1.499M (fits)** — the dup had been dropping clusters (latent holes). Visual
+    A/B at identical framing: byte-indistinguishable, no holes, clean boot, no errors; `leaf OFF` unchanged (leaf-only
+    change). tsc clean. All edits confined to `src/nanite/` (+ WorldRegistry caller). Files: GeometryRegistry (flag +
+    opt + newEntry), WorldRegistry (drop dup, `twoSided:true`), NaniteFetch (`ctx.twoSided`), NaniteRaster (helper +
+    accept gate + HW DoubleSide). The flood itself (per-instance floor) is UNTOUCHED — that is Stage 1.
   • STAGE 0.5 — PERF SIMULATION + INTEGRATION EXPLORATION (before any builder). A "simple sim" that EMPIRICALLY bounds the
     Stage-1 win BEFORE paying its build cost: simulate region-collapse (coarsen τ by distance band, or clamp per-instance
     emission to a region budget) and measure the resulting visible-cluster count + tris/px on the same density-4000
@@ -1579,7 +1592,19 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
     (1) CROSS-INSTANCE AGGREGATION = continue the cluster DAG ABOVE the per-mesh root: spatially group neighbouring crown
     instances (a forest cell), merge their geometry at world transforms + simplify into shared coarse "super-clusters"
     that lose instance identity, emitting the SAME own/parent error+sphere cut metadata so a far region emits a HANDFUL of
-    clusters, then ONE, instead of N roots. The ONLY mechanism that breaks the ≥1-cluster/instance floor. (2) OPAQUE VOXEL
+    clusters, then ONE, instead of N roots. The ONLY mechanism that breaks the ≥1-cluster/instance floor.
+    MULTI-LEVEL (user, 2026-06-15 — "for very long render distances we might also want multiple levels of such
+    aggregation"): make this RECURSIVE, not a single merge step. One level (cell → super-cluster) still over-emits across
+    a 4 km view — thousands of super-clusters. So build a HIERARCHY of merge levels, each a distance band: leaf clusters
+    (near) → cell super-clusters (mid) → region super-super-clusters (far) → … → the opaque voxel far-field as the
+    COARSEST level (the apex of the same tree). This is exactly the HLOD/forest-DAG shape (UE World-Partition HLOD is
+    multi-level for the same reason), and it falls out of the EXISTING machinery for free: the per-cluster cut
+    (`project(own) ≤ τ AND project(parent) > τ`, NaniteCull kClusterCull) already selects across ARBITRARY DAG depth — a
+    multi-level aggregate is just more parent links crossing instance boundaries at coarser scales, no new cull path. The
+    cost is build-time + memory (records per level, ~geometric so bounded); branch factor per level is a Stage-0.5 sim
+    knob (how many children collapse into one parent before the next band). Start Stage 1 with ONE aggregate level to
+    validate the mechanism, then stack bands until the far-field meets the voxel apex — design the region-record layout
+    and the builder for N levels from the outset so the second band is data, not a rewrite. (2) OPAQUE VOXEL
     FAR-FIELD = below an error/screen-size threshold, switch a merged far crown from triangles to ≤1px OPAQUE voxels/
     splats binned front-to-back into the SAME vis buffer with ONE u32 atomic each (NO u64). This is Epic's CURRENT
     production answer (UE5.7 Nanite Voxels EXPLICITLY supersede the area-preserving aggregate-DAG as the foliage
@@ -1606,8 +1631,9 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   feeding instance streams and knows NOTHING new. No nanite concepts leak outward — the engine stays "under the hood"
   (the D-N2 single-path mandate). Honour the clean-code rule: new modules/extracted helpers, not bolted branches.
 
-  SEQUENCING (compact between EACH stage — durable state lives in these docs): Stage 0 two-sided fix → compact → Stage
-  0.5 sim + integration explore → compact → Stage 1 implement (aggregation + voxel) → compact. Evidence anchors: UE
+  SEQUENCING (compact between EACH stage — durable state lives in these docs): Stage 0 two-sided fix ✓ LANDED
+  (2026-06-15) → compact → **Stage 0.5 sim + integration explore (NEXT)** → compact → Stage 1 implement (multi-level
+  aggregation + voxel) → compact. Evidence anchors: UE
   Nanite Voxels/Foliage docs; elopezr "A Macro View of Nanite"; jms55 "Virtual Geometry in Bevy"; Scthe/nanite-webgpu;
   thecandidstartup Nanite pipeline; Aokana (arXiv 2505.02017); reference HTML lines 180-182/235-298/627-707/904-920.
 

@@ -19,7 +19,13 @@ import { PERIOD_FBM, PERIOD_RID, PERIOD_VAL } from '../gpu/passes/NoiseBake';
 import { WORLD_SIZE } from '../world/WorldConst';
 import { gustAt, gustLagAt, leafFlutterAxes, windExposure, windU, WIND_LAG_M } from '../render/Wind';
 import { SKIRT_DEPTH_A, SKIRT_DEPTH_B } from './BuildHeightDag';
-import { CLUSTER_FLAG_DAG, MESH_WORDS, TRANSFORM_CHANNEL, VERT_WORDS } from './GeometryRegistry';
+import {
+  CLUSTER_FLAG_DAG,
+  MESH_FLAG_TWO_SIDED,
+  MESH_WORDS,
+  TRANSFORM_CHANNEL,
+  VERT_WORDS,
+} from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
 import { instTransformPoint, instYaw, type InstYaw } from './NaniteCommon';
 import type { UniformV3 } from './Tsl';
@@ -91,6 +97,8 @@ export interface VertCtx {
   meshId: NU;
   /** transform channel (TRANSFORM_CHANNEL) — 'trunk' (1) gets wind */
   channel: NU;
+  /** N9-C2: MESH_FLAG_TWO_SIDED — the raster re-winds back-faces instead of culling */
+  twoSided: NB;
   /** precomputed per-instance trunk-wind scalars, or null (wind off / non-trunk) */
   wind: TrunkWindFields | null;
   /** heightfield: vertex-grid window base + partial width (quads) */
@@ -144,6 +152,9 @@ export function makeFetch(
     const w6 = elemU(gpu.meshes, mBase.add(uint(6))).toVar();
     const winW = w6.shiftRight(uint(24)).toVar();
     const channel = w6.bitAnd(uint(0xff)).toVar();
+    // N9-C2: two-sided bit (flags byte 2 of w6) — the raster re-winds back-faces
+    // instead of culling for these meshes (leaf crowns). Free: w6 already loaded.
+    const twoSided = w6.shiftRight(uint(16)).bitAnd(uint(MESH_FLAG_TWO_SIDED)).notEqual(uint(0)).toVar();
     const quadsX = elemU(gpu.meshes, mBase.add(uint(10))).bitAnd(uint(0xffff)).toVar();
     const gx = triStart.bitAnd(uint(0xffff)).mul(winW).toVar();
     const gz = triStart.shiftRight(uint(16)).mul(winW).toVar();
@@ -254,6 +265,7 @@ export function makeFetch(
       triCount,
       meshId,
       channel,
+      twoSided: twoSided as unknown as NB,
       wind: windFields,
       gx,
       gz,

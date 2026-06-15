@@ -9,6 +9,25 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-15 (bp): **D-N43 STAGE 0 — TWO-SIDED LEAF RASTER LANDED (free, lossless 2× on the geometry that dominates the
+  forest).** (Opus 4.8 1M, effort max.) The reversed-winding leaf geometry DUPLICATE is gone; the SW raster now re-winds
+  a two-sided back-face to CCW in place instead of culling it, so each leaf triangle is carried + rastered ONCE from
+  whichever side faces the camera. NOT a leaf special-case (separation + clean-code rules): a GENERAL per-mesh
+  `MESH_FLAG_TWO_SIDED` bit (word-6 flags byte, read free — `makeCtx` already loads w6) → `ctx.twoSided` → a new
+  `orientForRaster` module helper that swaps v1↔v2 when `twoSided && areaNdc<0` (`edgeFn=cross(v1−v0,v2−v0)` negates ⇒
+  the positive-area integer core handles it unchanged), else keeps the classic front-face cull. Plumbed through `makeCtx`
+  AND the `?wgcache` cooperative broadcast (slot 9, shU→10); HW near/big-tri queue → `DoubleSide` (nearer wins atomicMin,
+  payload only on depth-match ⇒ safe for opaque too). The shadow rasterizer REUSES `buildNaniteRaster` ⇒ leaf shadows go
+  two-sided FOR FREE. MEASURED (probe-leaf A/B via git-stash, hero bm7, leaf ON): leaf REGISTRY tris **13.171M → 6.585M
+  (exactly 2×)**, leaf CLUSTERS **131,769 → 66,294 (1.99×)**, forest visible-cluster queue **overflow (−1, >2.097M cap)
+  → 1.499M (now fits)** — the dup had been overflowing the queue (dropped clusters = latent holes). Visual A/B at the
+  IDENTICAL framing (s7): byte-indistinguishable, no holes (back-facing leaves still render), clean boot, no errors;
+  `leaf OFF` byte-unchanged (leaf-only). tsc clean. All edits in `src/nanite/` (+ the WorldRegistry caller) — nanite
+  stays self-contained. Files: GeometryRegistry / WorldRegistry / NaniteFetch / NaniteRaster. The per-instance FLOOD is
+  UNTOUCHED (that's Stage 1). USER NOTE captured into D-N43 Stage 1: for very long distances, make the cross-instance
+  aggregation MULTI-LEVEL (recursive merge bands → voxel apex), which the existing arbitrary-depth DAG cut supports for
+  free. NEXT = Stage 0.5 (perf sim to bound the Stage-1 win + integration/perf/mem codebase explore), after a compact.
+
 - 2026-06-15 (bo): **N8-HIC ROOT-CAUSED + REDEFINED (D-N43) — the dense-foliage flood is primitive OVER-EMISSION, the
   fix is cross-instance AGGREGATION (not "culling"), and the "reference does billions @ 120 fps, why are we 10× slower"
   puzzle is SOLVED.** (Opus 4.8 1M, ultracode.) Triggered by the user's two challenges: (1) the fix must be GENERAL

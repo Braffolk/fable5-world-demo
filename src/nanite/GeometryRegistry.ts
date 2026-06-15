@@ -115,6 +115,10 @@ export const MESH_FLAG_CAST_SHADOWS = 4;
  *  levels) and lodNext = NONE — the cull applies the per-cluster screen-error
  *  cut (project(own)≤τ AND project(parent)>τ) instead of the discrete LOD chain */
 export const MESH_FLAG_HASDAG = 8;
+/** N9-C2: mesh renders from BOTH faces. The SW raster re-winds a back-face to CCW
+ *  in place instead of culling it (NaniteRaster.orientForRaster), so the geometry
+ *  carries each triangle ONCE (no reversed-winding duplicate). Leaf crowns only. */
+export const MESH_FLAG_TWO_SIDED = 16;
 /** cluster-record flag bits (byte 1 of word 7) */
 export const CLUSTER_FLAG_HEIGHTFIELD = 1;
 /** N8-D1: this cluster carries a DAG record at the same global index in gpu.dag */
@@ -158,6 +162,9 @@ export interface RegisterOpts {
   aggregate?: boolean;
   /** default true */
   castShadows?: boolean;
+  /** N9-C2: render from both faces — the SW raster re-winds back-faces instead of
+   *  culling, so the source needs no reversed-winding duplicate (leaf crowns). */
+  twoSided?: boolean;
   /** max wind sway amplitude in meters — cluster-bound padding at cull (F6) */
   swayPad?: number;
   /** explicit-mesh material parameter (e.g. bark texture-array slice). Stored
@@ -1740,6 +1747,7 @@ export class GeometryRegistry {
     if (heightfield) flags |= MESH_FLAG_HEIGHTFIELD;
     if (opts.aggregate) flags |= MESH_FLAG_AGGREGATE;
     if (opts.castShadows !== false) flags |= MESH_FLAG_CAST_SHADOWS;
+    if (opts.twoSided) flags |= MESH_FLAG_TWO_SIDED;
     return {
       handle,
       label: opts.label ?? `mesh${handle}`,

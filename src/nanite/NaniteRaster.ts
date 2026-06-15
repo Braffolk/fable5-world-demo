@@ -17,7 +17,7 @@
  * checkpoint), face-normal lambert, real f32 depth out.
  */
 
-import { Mesh, Scene, Vector3 } from 'three';
+import { DoubleSide, Mesh, Scene, Vector3 } from 'three';
 import { BufferGeometry, Float32BufferAttribute, RenderTarget, Sphere } from 'three';
 import type { PerspectiveCamera, Texture } from 'three';
 import {
@@ -88,6 +88,29 @@ import type { BufOf, UV2 } from './Tsl';
 const HW_CAP = 2_097_152;
 const MAX_RASTER_SIZE = 16;
 const NEAR_EPS = 1e-4;
+
+/**
+ * N9-C2 two-sided raster orientation (D-N43 Stage 0). The integer scanline core
+ * below is built for POSITIVE-area (CCW) triangles — `area2`, `rcpArea`, the edge
+ * walk and the top-left coverage rule all assume it. A single-sided cluster keeps
+ * the classic back-face cull (accept front-faces, areaNdc > 0). A TWO-SIDED cluster
+ * (leaf crowns) instead RE-WINDS a back-face to CCW in place — swap v1↔v2, which
+ * negates the signed area (edgeFn = cross(v1−v0, v2−v0)) — so the SAME core rasters
+ * whichever side faces the camera, exactly once. This replaces the leaf geometry's
+ * reversed-winding triangle duplicate: half the leaf triangles, half the leaf
+ * clusters, identical pixels (the resolve flips the leaf normal camera-ward, so
+ * shading is unaffected by which winding rastered). `ndc1`/`ndc2` are the caller's
+ * toVar()'d apex-relative corners, mutated in place; ndc0 (the shared apex) is
+ * unchanged. Returns the accept gate — a degenerate area==0 still falls out at the
+ * downstream integer `area2 > 0` test.
+ */
+function orientForRaster(ndc1: NV3, ndc2: NV3, areaNdc: NF, twoSided: NB): NB {
+  const flip = twoSided.and(areaNdc.lessThan(0)).toVar();
+  const keep1 = vec3(ndc1).toVar(); // snapshot v1 before the in-place swap
+  ndc1.assign(flip.select(ndc2, ndc1));
+  ndc2.assign(flip.select(keep1, ndc2));
+  return twoSided.select(areaNdc.notEqual(0), areaNdc.greaterThan(0)) as unknown as NB;
+}
 
 interface ComputeKernel {
   setName(name: string): unknown;
@@ -241,7 +264,7 @@ export function buildNaniteRaster(
         // the workgroup, so every live thread reaches the barrier (no deadlock).
         // NOTE: TrunkWindFields is serialized field-by-field here — adding a wind
         // field (e.g. N9-C0 flutBase, slot 19) MUST extend shF + both halves below.
-        const shU = workgroupArray('uint', 9);
+        const shU = workgroupArray('uint', 10);
         const shF = workgroupArray('float', 20);
         // .element() is typed as a bare Node here — cast to the fluent TSL types
         const setU = (i: number, v: NU): void =>
@@ -261,6 +284,7 @@ export function buildNaniteRaster(
           setU(6, c.gx);
           setU(7, c.gz);
           setU(8, c.qxw);
+          setU(9, b2u(c.twoSided)); // N9-C2 two-sided flag (slot 9)
           setF(0, c.A.x as unknown as NF);
           setF(1, c.A.y as unknown as NF);
           setF(2, c.A.z as unknown as NF);
@@ -297,6 +321,7 @@ export function buildNaniteRaster(
           triCount: getU(3).toVar(),
           meshId: getU(4).toVar(),
           channel: getU(5).toVar(),
+          twoSided: getU(9).toVar().equal(uint(1)),
           wind: wind
             ? {
                 h0: getF(11).toVar(),
@@ -395,7 +420,10 @@ export function buildNaniteRaster(
             ndc1.xy as unknown as NV2,
             ndc2.xy as unknown as NV2,
           );
-          If(areaNdc.greaterThan(0), () => {
+          // N9-C2: front-faces pass; a two-sided (leaf) back-face is re-wound to CCW
+          // in place so the positive-area core below rasters it once (orientForRaster).
+          const accept = orientForRaster(ndc1 as unknown as NV3, ndc2 as unknown as NV3, areaNdc as unknown as NF, ctx.twoSided);
+          If(accept, () => {
             const W = float(cam.uW);
             const H = float(cam.uH);
             const s0 = ndc0.xy.add(1).mul(0.5).mul(vec2(W, H)).toVar();
@@ -698,6 +726,11 @@ export function buildNaniteRaster(
     mat.colorWrite = false;
     mat.fog = false;
     mat.lights = false;
+    // N9-C2: don't HW back-face-cull. Two-sided leaf tris that cross the near plane
+    // or oversize the i32 SW path land here with a single winding (the reversed dup
+    // is gone), so culling would hole them. Safe for opaque solids: the nearer face
+    // wins atomicMin and only the depth-match writes payload, so back-faces never win.
+    mat.side = DoubleSide;
     return mat;
   };
 

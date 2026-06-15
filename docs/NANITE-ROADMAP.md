@@ -27,19 +27,23 @@
      deterministic). The hard part is behind us. → **C2 IS NOW THE FRONTIER.**
   2. **N9-C2 — cut WIRED + VALIDATED (LOG bn); the flood FORCED N8-HIC (now active, below).** Aggregate attached to
      each leaf crown, envelope R0_FAR 26 m → TREE_GEO_FAR 496 m; `probe-leafzoom` τ-monotonic (2.8k→3.76M) + smooth +
-     no errors. PENDING after N8-HIC: the Worker build (15.5 s sync @ 4000 → off-thread), the two-sided raster
-     **N9-C2-2s** (drop the geometry-dup, halve HW+mem), perf ledger + close.
+     no errors. The two-sided raster **N9-C2-2s ✅ DONE (LOG bp** — geometry-dup dropped, leaf tris/clusters halved).
+     PENDING after N8-HIC: the Worker build (15.5 s sync @ 4000 → off-thread), perf ledger + close.
   3. **N9-C3** — impostor retirement: DO the judge shots + present them at the close, don't block per-ring on approval.
   4. **N9-C4** — close (perf ledger, battery, two-frame-vs-main gate).
   5. **N8-HIC ⬅ FRONTIER — REDEFINED by D-N43 (deep research + measurement, LOG bo).** Root-caused: the flood is
      primitive OVER-EMISSION (≥1 cluster per visible instance × ~340k visible crowns ⇒ ~16 tris/px vs the ~1 of a
      correct Nanite; τ-sweep proves frame ∝ visible-CLUSTER count). The reference-is-10×-faster puzzle is SOLVED (its
      "billions" = a marketing denominator; structurally-easy scene). The fix = cross-instance AGGREGATION (not culling),
-     STAGED with a compact between each: **(0) two-sided raster fix** = free lossless 2× (`N9-C2-2s`) → **(0.5) perf SIM**
-     (simulate region-collapse to BOUND the win) + **integration/perf/mem codebase exploration** → **(1) cross-instance
-     super-cluster DAG + opaque ≤1px VOXEL far-field** (Epic Nanite-Voxels model; 1 u32 atomic, fixes leaf double-siding
-     free). BINDING: the SEPARATION PRINCIPLE (nanite stays self-contained in `src/nanite/`, CALLED BY world/scene code,
-     no creep out). Stage-1 runtime shape is NOVEL (no published ms) → Stage 0.5 de-risks before the build.
+     STAGED with a compact between each: **(0) two-sided raster fix ✅ LANDED (LOG bp)** = free lossless 2× (`N9-C2-2s`):
+     leaf registry tris 13.171M→6.585M (2×), leaf clusters 131.8k→66.3k, forest vis-cluster overflow→1.499M, no holes,
+     tsc clean → **(0.5) perf SIM (NEXT)** (simulate region-collapse to BOUND the win) + **integration/perf/mem codebase
+     exploration** → **(1) MULTI-LEVEL cross-instance super-cluster DAG + opaque ≤1px VOXEL far-field** (Epic Nanite-Voxels
+     model; 1 u32 atomic, fixes leaf double-siding free). **MULTI-LEVEL** (user, 2026-06-15): for very long distances the
+     aggregation is RECURSIVE — merge bands (cell→region→…→voxel apex), which the existing arbitrary-depth DAG cut already
+     supports for free; design the region records for N levels from the outset. BINDING: the SEPARATION PRINCIPLE (nanite
+     stays self-contained in `src/nanite/`, CALLED BY world/scene code, no creep out). Stage-1 runtime shape is NOVEL (no
+     published ms) → Stage 0.5 de-risks before the build.
   6. **N8-2B4** — always-resident coarse terrain base (teleport no-hole backstop).
   **The user explicitly DEPRIORITISED polish (shadow S4, N6/N7, C0b fluffiness) BELOW the core DAG-culling pieces —
   do NOT pivot to polish until N8-HIC + N8-2B4 are done.** un-black-slating / two-frame-vs-main gate re-applies at C4.
@@ -127,7 +131,7 @@ N0 scaffold ✅ · N1 clusterize ✅ · N2 cull ✅ · N3 vis-buffer ✅ · N4 m
 | id | task | status | blockedBy | spec | scope |
 |----|------|--------|-----------|------|------|
 | `N8-D1e` | Full-world DAG wiring + ledger + CHECKPOINT | 🔵 | — | D-N41; LOG bj | VALIDATED (bark/deadwood/rock no-pop gate green, bark under wind) + MEASURED (rock+deadwood DAG free; bark ~1.7× raster + 3 s boot = the per-instance forest floor, τ/minPx don't help) + ledger row. AT the USER CHECKPOINT: (1) default-on rock+deadwood DAG? (free, rec) (2) bark stays opt-in until N8-HIC? Defaults NOT flipped (user-present rule). |
-| `N8-HIC` | Cross-instance AGGREGATION + opaque voxel far-field (THE flood fix) | 🔵 | — | **D-N43**; LOG bo, bn | **REDEFINED by D-N43 (research + measurement): "culling" was the wrong word — the fix is cross-instance AGGREGATION, not culling.** Root cause = primitive OVER-EMISSION (~16 tris/px vs ~1; per-mesh DAG floors at ≥1 cluster per visible instance; τ-sweep proves frame ∝ visible-CLUSTER count, per-cluster raster overhead). Reference-is-fast puzzle SOLVED (its "billions" = marketing denominator; easy scene). STAGED: **(0)** two-sided raster fix = free 2× (`N9-C2-2s`) → compact → **(0.5)** perf SIM (region-collapse, bound the win) + integration/perf/mem codebase explore → compact → **(1)** cross-instance super-cluster DAG (break the ≥1-cl/inst floor) + opaque ≤1px VOXEL far-field (Epic Nanite-Voxels model; 1 u32 atomic, fixes double-siding free). SEPARATION PRINCIPLE binding (nanite stays self-contained, called by others). Effort = hours of LLM grind/stage, not weeks. Stage-1 runtime shape is NOVEL (no published ms) ⇒ Stage 0.5 de-risks it. |
+| `N8-HIC` | Cross-instance AGGREGATION + opaque voxel far-field (THE flood fix) | 🔵 | — | **D-N43**; LOG bo, bn | **REDEFINED by D-N43 (research + measurement): "culling" was the wrong word — the fix is cross-instance AGGREGATION, not culling.** Root cause = primitive OVER-EMISSION (~16 tris/px vs ~1; per-mesh DAG floors at ≥1 cluster per visible instance; τ-sweep proves frame ∝ visible-CLUSTER count, per-cluster raster overhead). Reference-is-fast puzzle SOLVED (its "billions" = marketing denominator; easy scene). STAGED: **(0)** two-sided raster fix = free 2× (`N9-C2-2s`) **✅ LANDED LOG bp** (leaf tris/clusters halved, no holes) → compact → **(0.5) NEXT** perf SIM (region-collapse, bound the win) + integration/perf/mem codebase explore → compact → **(1)** MULTI-LEVEL cross-instance super-cluster DAG (break the ≥1-cl/inst floor; recursive merge bands per user 2026-06-15) + opaque ≤1px VOXEL far-field (Epic Nanite-Voxels model; 1 u32 atomic, fixes double-siding free). SEPARATION PRINCIPLE binding (nanite stays self-contained, called by others). Effort = hours of LLM grind/stage, not weeks. Stage-1 runtime shape is NOVEL (no published ms) ⇒ Stage 0.5 de-risks it. |
 | `N8-2b4` | Always-resident coarse terrain base | ⬜ | — | DAG (N8) | teleport no-hole backstop ring |
 
 ## C. POOLS / HYBRID / FOLIAGE (SPEC `## Phase plan`)
@@ -138,7 +142,7 @@ N0 scaffold ✅ · N1 clusterize ✅ · N2 cull ✅ · N3 vis-buffer ✅ · N4 m
 | `N9` | **Foliage as REAL geometry** (SCOPED — D-N42, SPEC `### Foliage (N9)`) | 🔵 | — | D-N42; `### Foliage (N9)` | surface the existing `foliageMesh` + the aggregate DAG; the DOMINANT shadow casters; unlocks `S4`. Chunks ↓ |
 | `N9-C0` | Leaf PLUMBING (material class + 'leaf' channel + hero-ring reg) | ✅ | — | `### Foliage (N9)`; LOG bl | LANDED, OKAY state (user-accepted). Real crowns ≤26 m: isL resolve (tint+hue+AO+backlight, OPAQUE, double-sided), full-vegWindOffset 'leaf' channel synced to trunk via shared world-pos key, `?naniteleaf=1`/`?naniteleafdensity=N`. Bugs fixed: wgcache `flutBase` slot (boot crash), HW_CAP 262k→2.1M (needle HW-queue overflow = the "dag/terrain vanish"). Same w/wo dag. |
 | `N9-C0b` | Leaf GENERATION rethink — fluffiness (DEFERRED, user, post-core) | ⬜ | — | `### Foliage (N9)` N9-C0 LANDED note | nanite crown LESS FLUFFY than non-nanite (old hero leaned on D-N3-banned alpha CARDS; conifer spray distribution spruce≠pine). GENERATION question (denser/bushier sprays) OR the aggregate fills it. NOT plumbing. Do AFTER core nanite. |
-| `N9-C2-2s` | Two-sided raster (per-mesh flag + back-face vert-swap) | ⬜ | `N9-C0` | `### Foliage (N9)` | drop the leaf geometry-dup → halve HW load + registry memory (the user's "selective culling"); non-leaf bit-identical. Do at C2 when leaves scale. |
+| `N9-C2-2s` | Two-sided raster (per-mesh flag + back-face vert-swap) | ✅ | `N9-C0` | `### Foliage (N9)`; **LOG bp**, D-N43 Stage 0 | DONE 2026-06-15. General `MESH_FLAG_TWO_SIDED` bit + `orientForRaster` (re-wind back-face to CCW in the SW core) + HW `DoubleSide`; geometry-dup dropped. MEASURED: leaf registry tris **13.171M→6.585M (2×)**, leaf clusters **131.8k→66.3k (1.99×)**, forest vis-cluster overflow→1.499M; visual A/B identical (no holes), `leaf OFF` byte-unchanged, tsc clean. Shadow raster reuses the core ⇒ leaf shadows two-sided free. |
 | `N9-C1` | AGGREGATE DAG builder (area-preserving leaf removal) | ✅ | `N9-C0` | D-N3; LOG bm; `BuildAggregateDag.ts` | DONE — net-new `BuildAggregateDag.ts` (+ shared `DagCommon.ts`; `probe-dag` still green). Per level: global connected-component islands → seed-det area-removal → grow survivors `g=√(total/kept)` (area EXACT) → per-group reclusterize w/ bit-exact sibling pairs. `probe-aggregate`: M/C/E/O/A crack-free + AREA 1.000× LOD0 at ALL distances (no balding) + 50%/level + deterministic + `?seed`-varied. Boot ~0.34 Mtri/s → C2 needs the Worker/time-slice path. |
 | `N9-C2` | Wire aggregate → GPU (continuous leaf LOD, full distance) | 🔵 | `N9-C1` | `### Foliage (N9)`; LOG bn | CUT DONE — `buildAggregateDag` per crown, `attachDag`, envelope→TREE_GEO_FAR; `probe-leafzoom` τ-monotonic (2.8k→3.76M) + smooth + no errors. RE-MEASURED the floor → **the flood is real → N8-HIC FORCED** (now active). PENDING after HIC: Worker build (15.5 s sync @ 4000), two-sided raster (N9-C2-2s), perf ledger, close. |
 | `N9-C3` | Impostor retirement (ring-by-ring, **USER JUDGE SHOTS**) | ⬜ | `N9-C2` | `### Foliage (N9)` | A/B real crowns vs cards+CanopyShell at vistas; retire where user signs off; CanopyShell dies after vista shots |

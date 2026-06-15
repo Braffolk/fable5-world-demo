@@ -118,10 +118,7 @@ function attrOf(node: StorageBufferNode<'vec4'>): StorageBufferAttribute {
 }
 
 /** BufferGeometry → packed ExplicitSource (vdata vec4 → 4×u8 word) */
-export function geometryToSource(
-  geo: BufferGeometry,
-  opts?: { doubleSided?: boolean },
-): ExplicitSource {
+export function geometryToSource(geo: BufferGeometry): ExplicitSource {
   const pos = geo.attributes.position;
   if (!pos || pos.itemSize !== 3) throw new Error('WorldRegistry: geometry lacks stride-3 positions');
   if (!geo.attributes.normal) geo.computeVertexNormals();
@@ -146,26 +143,13 @@ export function geometryToSource(
   }
   const idx = geo.index;
   if (!idx) throw new Error('WorldRegistry: geometry not indexed');
-  let indices =
+  const indices =
     idx.array instanceof Uint32Array ? idx.array : new Uint32Array(idx.array as ArrayLike<number>);
-  // N9-C0: leaves are DOUBLE-SIDED, but the SW raster backface-culls by winding
-  // (CCW only) so a single-winding leaf strip only rasters from its front face
-  // (visible looking UP the tree, culled looking down). Emit each triangle in
-  // BOTH windings (the terrain-skirt trick): whichever faces the camera passes
-  // the cull, the other is culled (no z-fight, ≈0 extra raster cost). Same verts;
-  // the resolve already flips the leaf normal toward the camera for lighting.
-  if (opts?.doubleSided) {
-    const triCount = indices.length / 3;
-    const doubled = new Uint32Array(indices.length * 2);
-    doubled.set(indices, 0);
-    for (let t = 0; t < triCount; t++) {
-      const b = t * 3;
-      doubled[indices.length + b] = indices[b] as number;
-      doubled[indices.length + b + 1] = indices[b + 2] as number; // swap 1↔2 → reversed winding
-      doubled[indices.length + b + 2] = indices[b + 1] as number;
-    }
-    indices = doubled;
-  }
+  // N9-C2: two-sided meshes (leaf crowns) carry each triangle ONCE — the SW raster
+  // re-winds a back-face to CCW in place (NaniteRaster.orientForRaster) instead of
+  // backface-culling it, so the old reversed-winding duplicate is gone (D-N43 Stage
+  // 0: half the leaf triangles/clusters). The resolve flips the leaf normal to face
+  // the camera for lighting, independent of which side rasterized.
   return { kind: 'mesh', positions, normals, uvs, vdata, indices };
 }
 
@@ -414,10 +398,14 @@ export async function buildWorldRegistry(input: {
     // area-preserving aggregate DAG (built below) extends the crown across the FULL
     // trunk envelope (TREE_GEO_FAR), tapering hero-detail → coarse with distance.
     if (leafOn && pool.leaf) {
-      const leafSource = geometryToSource(pool.leaf.geo, { doubleSided: true });
+      // N9-C2: leaves are TWO-SIDED via the SW raster's back-face re-winding, not a
+      // reversed-winding geometry duplicate — so the source carries each leaf tri
+      // ONCE (half the leaf clusters feeding the per-instance flood; D-N43 Stage 0).
+      const leafSource = geometryToSource(pool.leaf.geo);
       const leafHead = reg.registerMesh(leafSource, 'leaf', {
         transformChannel: 'leaf',
         castShadows: false,
+        twoSided: true,
         label: `${label}/leaf`,
         swayPad: LEAF_SWAY_PAD,
         matParam: packLeafTint(pool.leaf.color),
