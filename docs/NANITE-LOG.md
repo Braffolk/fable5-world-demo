@@ -9,6 +9,37 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-15 (be): **PERF-4 effects #2 BLOOM + #3 TAA — the surprising truth: BLOOM IS NOT INDEPENDENTLY
+  OPTIMIZABLE (its cost is drain-absorption, not pixel work — proven flat across resolution at native AND
+  GPU-bound high-res), and TAA is the REAL post bottleneck (fetch-bound ~6.8 ms) but reaching its 2–3 ms budget
+  needs a TRAANode resolve fork + the user's IN-MOTION quality review, which I won't ship blind.** (Opus 4.8 1M.)
+  **BLOOM (reverted, no change shipped):** built a `CheapBloomNode` subclass that starts three's mip chain at
+  quarter/eighth res (stock is half-res). The override WORKS — half↔eighth bloom is a 92.9% pixel change (the glow
+  visibly widens) — but the COST is flat: `bright`/`h0` read ~6 ms at native AND ~14.9 ms at high res (3888×2520,
+  GPU-bound) REGARDLESS of bloom's working resolution. Conclusion: bloom's own pixel work is sub-ms (it's a
+  half-res 1-tap high-pass + a few 6–22-tap blurs, deep mips 0.07 ms each); the ~6.5 ms `ablate=bloom` delta is the
+  `bright` pass — the first pass after TRAA — ABSORBING the drain/serialization of everything upstream into its
+  encoder-wall-span. Scaling bloom only changes the look for ZERO perf, so the change was reverted. Bloom's
+  attributed cost will fall when its UPSTREAM (TAA) is cut, not by touching bloom. **TAA (diagnosed + flagged, not
+  forked):** `TRAANode.resolve` is genuinely fetch-bound — per full-res pixel it does `sampleCurrentDepth` (3×3 =
+  9 depth loads, for velocity dilation + edge detect) + `varianceClipping` (8 beauty loads, the ghosting guard) +
+  history/velocity/disocclusion ≈ 18 fetches. At high res it's ~15 ms (scales with fetches), so reducing the
+  neighborhood loads is a REAL lever (unlike bloom). Projected: cut depth 9→5 + variance 8→4 ≈ half the fetches →
+  ~3–3.5 ms. BUT: (1) the variance taps are the ghosting guard and the depth neighborhood dilates velocity across
+  PARALLAX edges (our velocity is the analytic camera reprojection — smooth, but parallax-discontinuous at depth
+  edges), so both cuts are MOTION-quality properties; (2) static screenshots can't see ghosting/flicker; (3)
+  three exposes no neighborhood param ⇒ a ~300-line resolve fork (or a from-scratch resolve that risks worse-than-
+  three tuning). Per the methodology (hold the beauty bar — A/B the look) I will NOT ship an unvalidatable TAA
+  change; flagged as the biggest remaining PERF-4 lever, needs the user's in-motion review + a sanctioned fork.
+  **AERIAL (`rt#16`) / CLOUDS (`half.mrt`):** limited SAFE headroom — ablation already showed clouds only 1.4 ms
+  (half-res march), contact ~0.13, bounce ~0; the rest is froxel fog + Hillaire haze, beauty-critical atmospheric
+  math. AO's share of both was already cut (bd). **NET PERF-4 PICTURE:** AO shipped (~1.5 ms direct); bloom is a
+  measurement mirage (drain); TAA is the real ~3 ms prize gated behind a motion-quality call; aerial/clouds are
+  thin. The post chain's headroom is concentrated in TAA + the un-throttle compounding, NOT spread evenly — and
+  the per-pass timestamps that set the per-effect budgets are themselves distorted by drain-absorption. tsc clean,
+  bloom reverted, no code shipped this entry (findings only). **→ next: write up the PERF-4 findings in SPEC/
+  ROADMAP; the actionable build is the TAA fork, which is the user's call.**
+
 - 2026-06-15 (bd): **PERF-4 effect #1 — AO (GTAO + bilateral upsample): optimized to the user's 2 ms budget,
   ~1.5 ms direct saved (verified within-run) + ~4 ms render via thermal un-throttle; ALL changes beauty-validated
   (AO-term diff 0.00%). User drove PERF-4 effect-by-effect, AO first, budget 2 ms.** (Opus 4.8 1M.) **METHODOLOGY

@@ -11,16 +11,27 @@
 > must finish first. `spec` = the `## header` in NANITE-SPEC.md (+ D-N* / file refs).
 
 ## YOU ARE HERE — 2026-06-15
-**FRONTIER: PERF-4 = the POST CHAIN (user pick, after compaction). PERF-3 (depth rasterizer) is CLOSED:
-win #1 (makeCtx shared-mem cache) is LIVE (default ON, −0.59 ms / −11%); win #2 (the vertex cache) was BUILT,
-MEASURED, and found a MARGINAL / CONDITIONAL non-win (R≈4.7 vs makeCtx's R=128; far-terrain transform too cheap
-— texture-cache-absorbed), so it's kept OFF-by-default, isolated to `NaniteVertexCache.ts` (see LOG `bc`, D-N40
-MEASURED OUTCOME). The in-kernel raster wins are exhausted (fetchWorldVert irreducible by caching; 2-pass forced
-by no 64-bit atomics).**
-**→ BEFORE PERF-4: read the new `## PERF METHODOLOGY — the bar for a real win` in SPEC. Post (~60 ms, ~10× the
-raster budget) has MORE headroom and the gains should be LARGER, so the bar is HIGHER — target multi-ms wins, not
-the sub-quantum margins of the raster kernel; and post cuts COMPOUND via the 2.1× thermal throttle. Profile the
-post chain first (`r.UnrealBloomPass.*`, `r.TRAANode.resolve`, `r.half.mrt`, `r.rt#16` aerial) before touching it.**
+**FRONTIER: PERF-4 = the POST CHAIN, running effect-by-effect (user directive: one effect at a time, they review
+when back). PERF-3 CLOSED (win #1 makeCtx cache LIVE −0.59 ms; win #2 vertex cache off-by-default, LOG bc/D-N40).**
+**PERF-4 progress (LOG bd, be):**
+- **AO ✅ SHIPPED** (`1db0bfd`): far-fade early-out (march+upsample) + packed-view-z bilateral + samples 8→6 =
+  **~1.5 ms direct / ~4 ms render** (thermal un-throttle compounding); ALL beauty-validated 0.00% (`?aocheap`
+  master toggle, `?aodbg` AO-term view, `?aosamples`/`?aofar`). AO is a near-flat ~0.8 cue here (sparse black-slate).
+- **BLOOM ✅ INVESTIGATED — NOT optimizable.** Its ~6.5 ms is DRAIN-ABSORPTION, not pixel work: resolution-scaling
+  is FLAT at native AND GPU-bound high-res (the `bright` pass absorbs upstream TRAA/scene drain into its
+  wall-span). Reverted — scaling only changes the glow for zero perf. Bloom's cost falls when TAA is cut.
+- **TAA 🔵 = the real remaining prize** (`TRAANode.resolve` fetch-bound ~6.8 ms, ~18 fetches/px: 9 depth + 8
+  variance + history). Hitting 2–3 ms means cutting the variance ghosting-guard and/or the parallax-edge depth
+  neighborhood — **MOTION-quality properties unvalidatable by static screenshots**, needing a ~300-line TRAANode
+  resolve fork. **FLAGGED for the user: needs a sanctioned fork + their in-motion review; NOT forked solo** (the
+  methodology forbids shipping unvalidated beauty changes).
+- **AERIAL (`rt#16`) / CLOUDS (`half.mrt`):** thin safe headroom (clouds 1.4 ms half-res; rest is beauty-critical
+  froxel fog + Hillaire haze). AO's share already cut.
+**KEY MEASUREMENT REALITY (durable):** per-pass post timestamps LIE (drain-absorption — bloom reads 14 ms but is
+6.5 ms); headless `frameMs` is rAF-capped at 16.7 ms (use high-res 3888×2520 to go GPU-bound for real `Δframe`, or
+bracketed `Δrender`); big-effect marginals are thermally inflated. ABLATION is the truth. Tool: `probe-postablate.ts`.
+**→ NEXT: the actionable post win is the TAA fork — the user's call. Otherwise PERF-4's safe shippable wins (AO)
+are banked; bloom is a mirage; aerial/clouds are thin.**
 
 **PERF-1 (LOG `ay`): per-pass measurement is now TRUSTWORTHY, the PURE nanite
 renderer is ISOLATED (`?pure`), and the user's WORST view is decomposed with cool numbers.**
@@ -77,7 +88,8 @@ N0 scaffold ✅ · N1 clusterize ✅ · N2 cull ✅ · N3 vis-buffer ✅ · N4 m
 | `PERF-1` | Trustworthy per-pass measurement + `?pure` | ✅ | — | LOG `ay`; GpuProfiler/main.ts | DONE 1f2fdbc — hardened GpuProfiler vs garbage −timestamps (harness was lying: render=−97ms→0 samples); `?pure` master (postmin+nanshadow=0+nandbg=flat, keeps geometry, fixes "?pure=zero terrain"); probe-worstpos.ts. KEY: post chain THERMALLY THROTTLES nanite ~2.1×. |
 | `PERF-2` | Profile pure-nanite floor + worst-view decomp | ✅ | `PERF-1` | LOG `ay`,`az`; PERF LEDGER | DONE (folded) — worst view 82k visCl: SW raster depth 2.82 + payload 2.95 = 5.77ms, HW 2.62, flat resolve 2.10 (cool). SW depth+payload = the #1 nanite cost. |
 | `PERF-3` | Depth-rasterizer optimization (shared-mem caches) | ✅ | `PERF-2` | LOG `az`,`ba`,`bc`; D-N40; NaniteRaster/VertexCache | CLOSED. WIN #1 LANDED (`?wgcache` default ON): per-cluster makeCtx cache → **−0.59 ms (−11%)** camera SW raster (bit-identical, alternated) + the 6 shadow rasters. WIN #2 (vertex cache) BUILT + MEASURED = marginal/conditional non-win (R≈4.7 vs makeCtx R=128; far-terrain transform texture-cache-absorbed) → kept OFF-by-default, isolated to `NaniteVertexCache.ts`. In-kernel raster wins exhausted. |
-| `PERF-4` | Post-chain optimization (the 2.1× thermal throttle) | 🔵 | `PERF-3` | SPEC `## PERF METHODOLOGY`; PostStack | **FRONTIER (user pick).** Post (bloom/TRAA/aerial/half.mrt ~60 ms) heats the GPU ~2.1×, inflating nanite raster itself (2.82→5.96 ms). ~10× the raster budget ⇒ more headroom, LARGER expected gains, HIGHER bar (multi-ms, not sub-quantum); cuts COMPOUND via the throttle. STEP 1 = profile `r.UnrealBloomPass.*` / `r.TRAANode.resolve` / `r.half.mrt` / `r.rt#16` cool. Hold the beauty bar (A/B the look). |
+| `PERF-4` | Post-chain optimization (the 2.1× thermal throttle) | 🔵 | `PERF-3` | SPEC `## PERF METHODOLOGY`; LOG bd/be; PostStack/Gtao | **IN PROGRESS, effect-by-effect (user).** AO ✅ `1db0bfd`: early-out + packed-view-z bilateral + samples 8→6 = ~1.5 ms direct / ~4 ms render, beauty 0.00% (`?aocheap`/`?aodbg`). BLOOM ✅ = NOT optimizable (drain-absorption, resolution-FLAT at native + GPU-bound high-res; reverted). TAA 🔵 = the real prize (fetch-bound ~6.8 ms, ~18 fetches/px); 2–3 ms cut needs a TRAANode resolve fork + USER in-motion review (ghosting unvalidatable headless) — FLAGGED, not forked solo. Aerial/clouds = thin (clouds 1.4 ms; rest beauty-critical haze). |
+| `PERF-4-TAA` | TAA resolve fork: reduce neighborhood fetches 9-depth/8-variance → ~half | ⬜ | `PERF-4` | LOG be; TRAANode.js | **USER CALL** — projected ~3–3.5 ms (`TRAANode.resolve` 6.8→~3.5). Needs: (1) a sanctioned ~300-line resolve fork (or custom lean resolve), (2) in-MOTION quality review (variance taps = ghosting guard; depth neighborhood = parallax-edge velocity dilation; both motion-only, unvalidatable by static shots). Decide approach (fork three vs custom vs accept cost) before building. |
 | `AUDIT-1` | Deviation audit vs original Fable 5 spec | ⬜ | — | PROVENANCE; `reference/fable5-original-NANITE.md` | diff current state/impl vs the 937-line original; flag unjustified drops from my D-N* edits (shadows = D-N29, justified) |
 
 ## B. DAG (N8) — active workstream (SPEC `### DAG (N8)`)
