@@ -31,10 +31,15 @@
      **N9-C2-2s** (drop the geometry-dup, halve HW+mem), perf ledger + close.
   3. **N9-C3** — impostor retirement: DO the judge shots + present them at the close, don't block per-ring on approval.
   4. **N9-C4** — close (perf ledger, battery, two-frame-vs-main gate).
-  5. **N8-HIC ⬅ FRONTIER (pulled into C2 per directive)** — hierarchical instance culling. C2 CONFIRMED the flood
-     (LOG bn: 133 ms/frame, 1.13M crown instances traversed one-by-one by the flat per-cluster cull, D-N41). Cull
-     spatial GROUPS of instances → O(regions) not O(instances). THE core flood fix; unblocks shippable leaves + dense
-     bark DAG.
+  5. **N8-HIC ⬅ FRONTIER — REDEFINED by D-N43 (deep research + measurement, LOG bo).** Root-caused: the flood is
+     primitive OVER-EMISSION (≥1 cluster per visible instance × ~340k visible crowns ⇒ ~16 tris/px vs the ~1 of a
+     correct Nanite; τ-sweep proves frame ∝ visible-CLUSTER count). The reference-is-10×-faster puzzle is SOLVED (its
+     "billions" = a marketing denominator; structurally-easy scene). The fix = cross-instance AGGREGATION (not culling),
+     STAGED with a compact between each: **(0) two-sided raster fix** = free lossless 2× (`N9-C2-2s`) → **(0.5) perf SIM**
+     (simulate region-collapse to BOUND the win) + **integration/perf/mem codebase exploration** → **(1) cross-instance
+     super-cluster DAG + opaque ≤1px VOXEL far-field** (Epic Nanite-Voxels model; 1 u32 atomic, fixes leaf double-siding
+     free). BINDING: the SEPARATION PRINCIPLE (nanite stays self-contained in `src/nanite/`, CALLED BY world/scene code,
+     no creep out). Stage-1 runtime shape is NOVEL (no published ms) → Stage 0.5 de-risks before the build.
   6. **N8-2B4** — always-resident coarse terrain base (teleport no-hole backstop).
   **The user explicitly DEPRIORITISED polish (shadow S4, N6/N7, C0b fluffiness) BELOW the core DAG-culling pieces —
   do NOT pivot to polish until N8-HIC + N8-2B4 are done.** un-black-slating / two-frame-vs-main gate re-applies at C4.
@@ -122,7 +127,7 @@ N0 scaffold ✅ · N1 clusterize ✅ · N2 cull ✅ · N3 vis-buffer ✅ · N4 m
 | id | task | status | blockedBy | spec | scope |
 |----|------|--------|-----------|------|------|
 | `N8-D1e` | Full-world DAG wiring + ledger + CHECKPOINT | 🔵 | — | D-N41; LOG bj | VALIDATED (bark/deadwood/rock no-pop gate green, bark under wind) + MEASURED (rock+deadwood DAG free; bark ~1.7× raster + 3 s boot = the per-instance forest floor, τ/minPx don't help) + ledger row. AT the USER CHECKPOINT: (1) default-on rock+deadwood DAG? (free, rec) (2) bark stays opt-in until N8-HIC? Defaults NOT flipped (user-present rule). |
-| `N8-HIC` | Hierarchical instance culling (THE flood fix) | 🔵 | — | D-N41; LOG bn | **ACTIVE — pulled into C2 (the flood is confirmed, not speculation).** LOG bn: leaf @ τ=1 forest interior = 133 ms/frame, 1.13M crown instances traversed one-by-one (≈1.5 cl/inst ⇒ the cost is the INSTANCE COUNT, not DAG depth). Cull distant instance GROUPS at once → O(regions) not O(instances); breaks the per-instance floor so leaves (+ dense bark DAG, + the unbounded real-geometry far-field) become affordable. The real fix flagged by D-N31/D-N35/D-N41. |
+| `N8-HIC` | Cross-instance AGGREGATION + opaque voxel far-field (THE flood fix) | 🔵 | — | **D-N43**; LOG bo, bn | **REDEFINED by D-N43 (research + measurement): "culling" was the wrong word — the fix is cross-instance AGGREGATION, not culling.** Root cause = primitive OVER-EMISSION (~16 tris/px vs ~1; per-mesh DAG floors at ≥1 cluster per visible instance; τ-sweep proves frame ∝ visible-CLUSTER count, per-cluster raster overhead). Reference-is-fast puzzle SOLVED (its "billions" = marketing denominator; easy scene). STAGED: **(0)** two-sided raster fix = free 2× (`N9-C2-2s`) → compact → **(0.5)** perf SIM (region-collapse, bound the win) + integration/perf/mem codebase explore → compact → **(1)** cross-instance super-cluster DAG (break the ≥1-cl/inst floor) + opaque ≤1px VOXEL far-field (Epic Nanite-Voxels model; 1 u32 atomic, fixes double-siding free). SEPARATION PRINCIPLE binding (nanite stays self-contained, called by others). Effort = hours of LLM grind/stage, not weeks. Stage-1 runtime shape is NOVEL (no published ms) ⇒ Stage 0.5 de-risks it. |
 | `N8-2b4` | Always-resident coarse terrain base | ⬜ | — | DAG (N8) | teleport no-hole backstop ring |
 
 ## C. POOLS / HYBRID / FOLIAGE (SPEC `## Phase plan`)

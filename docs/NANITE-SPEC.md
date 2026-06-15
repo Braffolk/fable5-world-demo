@@ -1524,6 +1524,93 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   • Pre-wired + cheap: `MATERIAL_CLASS.leaf=4`, `TRANSFORM_CHANNEL.leaf=2`, the `WorldRegistry` deferral hook, the
     `NaniteResolve` material switch + `NaniteFetch` channel — all bark-pattern slot-ins.
 
+- D-N43 (2026-06-15, N8-HIC REDEFINED — the dense-foliage flood root-caused + the fix staged, grounded in a deep
+  open-source research sweep + this session's live measurements. SUPERSEDES the "hierarchical instance CULLING" framing
+  of D-N35/D-N41: culling was the wrong word — the fix is cross-instance AGGREGATION, not culling). Research = an
+  ultracode 17-agent workflow (Bevy/jms55, Scthe/nanite-webgpu, UE5 Nanite rasterizer + HLOD + Nanite Voxels/Foliage,
+  the many-instances floor, far-field representations, the reference-example dissection, academic LOD) + adversarial
+  verification; LOG bo. EVERY number below is measured this session (probe-hic / probe-hicsplit / probe-floodtau) or
+  primary-fetched.
+
+  THE PERF PUZZLE RESOLVED ("base examples do billions of tris at 120 fps, why are we 10× slower?"). The reference
+  `reference/three.js webgpu - compute rasterizer lighting.html` is a near-PEER architecture (it runs the SAME 64-tri
+  chunk hierarchy + two-phase HZB cull we do — verified lines 235-298, 627-707), rendering a structurally-EASY SCENE.
+  Its HUD "billions" = `instanceCount(129600) × lods[0].numTriangles` — a marketing DENOMINATOR (the authored total if
+  every instance drew at LOD0), NOT rastered work (lines 180-182). What it actually rasters is ~screen-pixel count
+  (~1 tri/px) because: (a) ONE shared mesh, hard-capped to 32768 tris across all 5 LODs (TRIANGLE_INDEX_BITS=15), so all
+  129600 instances touch ONE cache-hot vertex buffer — near-zero fetch divergence; (b) per-instance discrete LOD at 1px
+  error + `maxDistance=1000` on a small grid ⇒ distant instances collapse + frustum/HZB-cull; (c) a SINGLE-PASS packed
+  atomic (two u32 atomicMax: depth17|tri15 + depth15|inst17, atomicLoad early-depth pre-check, lines 904-920) — depth+
+  payload in ONE traversal. It is NOT faster per rastered triangle (its IBL+5-tex resolve is heavier than ours). "Easy
+  case, not magic." (elopezr's real captured Nanite frame = ~5M tris, >90% SW-rastered, ~1 tri/px — the correct target.)
+
+  THE ROOT CAUSE (measured, triple-confirmed) = PRIMITIVE OVER-EMISSION from the O(instances) floor, NOT a slow
+  rasterizer (the SW core is near-canonical; the in-kernel rdbg decomposition rules out the inner loop). The per-MESH DAG
+  bottoms out at the ROOT: ≥1 cluster per visible instance. Forest interior @ τ=1, density 4000, 1280×720 = 0.92 Mpx:
+  occl OFF = 133 ms / 1.89M visible clusters / 14.7M tris (= ~16 tris/PIXEL vs the ~1 of a correct Nanite); occl ON (the
+  default) HALVES it = 65.6 ms / 1.17M clusters. The visible INSTANCE count is ~340k crowns (chunks ≈517k), NOT 1.13M —
+  the 1.13M in the LOG bn ledger is TOTAL BOUND; most are already frustum/distance-culled. THE τ-SWEEP IS THE CLINCHER
+  (probe-floodtau, density 800, occl ON): frame + payload-raster track visible-CLUSTER COUNT almost linearly (47k→539k
+  clusters ⇒ 8→33 ms frame; payload 1.3→11.8 ms) at ~21 ms/Mcluster payload / ~50 ms/Mcluster full-frame, while SW
+  `trisK` stays FLAT and `nanClusterCull` stays FLAT at 1.64 ms. ⇒ the dominant cost is PER-CLUSTER raster-workgroup
+  overhead (makeCtx + launch + setup, one 128-thread workgroup per visible cluster, ~117 threads idle on ~11-tri leaf
+  clusters) × a cluster count that is ~50× screen-proportional. Secondary, NON-multiplied multipliers (illustrative, not
+  a measured decomposition): the 2-pass Option C (~2×, FORCED by no-u64-atomics — depth≈payload, byte-identical up to the
+  write) and the leaf geometry-DUP double-siding (~2× leaf tris, NaniteRaster.ts:398 single-sided cull). RECONCILES with
+  the repo's worst-view 2.95 ms @ 82k clusters (PERF-2): SAME per-cluster rate, different (smaller) scene — not a
+  contradiction. RULED OUT: a faster rasterizer (single-pass packing is BLOCKED by our 25-bit payload width until the
+  cluster count shrinks — NaniteCommon.ts:31; SW inner loop near-optimal); 3DGS/SVDAG far-field (need u64 atomics or
+  alpha-blend+sort — incompatible); stochastic/dithered thinning (user ruling: "we aren't reducing shit" — no density loss).
+
+  THE FIX — STAGED (effort is HOURS of focused LLM work per stage, NOT the "multi-week" the synthesis over-stated; user
+  correction). You cannot rasterize out of 16 tris/px — you must reduce VISIBLE PRIMITIVES toward screen density:
+  • STAGE 0 — TWO-SIDED RASTER (free, lossless, first). Drop the reversed-winding leaf duplicate from the registry; make
+    the SW core accept BOTH windings for leaf clusters (replace the single-sided `If(areaNdc.greaterThan(0))`,
+    NaniteRaster.ts:398) and shade with the camera-facing normal the resolve ALREADY flips (NaniteResolve.ts). A literal
+    2× on the geometry that dominates the forest + ~½ HW needle queue + ½ leaf vert memory, zero visual change. This is
+    the standing `N9-C2-2s` task.
+  • STAGE 0.5 — PERF SIMULATION + INTEGRATION EXPLORATION (before any builder). A "simple sim" that EMPIRICALLY bounds the
+    Stage-1 win BEFORE paying its build cost: simulate region-collapse (coarsen τ by distance band, or clamp per-instance
+    emission to a region budget) and measure the resulting visible-cluster count + tris/px on the same density-4000
+    capture. PLUS a codebase study of how to integrate the cross-instance layer with attention to PERF + MEMORY (region
+    record layout, the Worker build budget D-N30/D6, the 10-storage-buffer ceiling F9, the cull/cut wiring). De-risks the
+    novel builder and tells us whether aggregation ALONE approaches ~1 tri/px or whether the voxel far-field is mandatory.
+  • STAGE 1 — CROSS-INSTANCE AGGREGATION + OPAQUE VOXEL FAR-FIELD (the real fix; COUPLED, per Epic's production model).
+    (1) CROSS-INSTANCE AGGREGATION = continue the cluster DAG ABOVE the per-mesh root: spatially group neighbouring crown
+    instances (a forest cell), merge their geometry at world transforms + simplify into shared coarse "super-clusters"
+    that lose instance identity, emitting the SAME own/parent error+sphere cut metadata so a far region emits a HANDFUL of
+    clusters, then ONE, instead of N roots. The ONLY mechanism that breaks the ≥1-cluster/instance floor. (2) OPAQUE VOXEL
+    FAR-FIELD = below an error/screen-size threshold, switch a merged far crown from triangles to ≤1px OPAQUE voxels/
+    splats binned front-to-back into the SAME vis buffer with ONE u32 atomic each (NO u64). This is Epic's CURRENT
+    production answer (UE5.7 Nanite Voxels EXPLICITLY supersede the area-preserving aggregate-DAG as the foliage
+    mitigation): it hard-caps the far-field at pixel density, sidesteps the QEM-degenerates-on-disconnected-leaves wall
+    that pure cross-instance merge HITS (Aokana, primary), and FIXES leaf double-siding for free (stored normal
+    distribution sampled stochastically per pixel + the existing TRAA). Measured production wins: 62→119 fps @ 77k trees.
+    Couple them because neither alone reaches ~1 tri/px (cross-instance merge has its own per-region tri-floor; voxels are
+    the far tail).
+
+  HONESTY (adversarial verification, do NOT re-inflate): the cross-instance RUNTIME shape is a NOVEL design — NO engine
+  has published ms for it. UE's scattered-instance aggregation is World Partition HLOD, an OFFLINE proxy bake; "Nanite
+  Assemblies" is INTRA-asset part composition (twigs within one tree), NOT scattered-instance — so the Stage-1 win is
+  mechanism-inference, which is WHY Stage 0.5's sim exists. RND-2 measurements that could reorder this (cheap, do as
+  encountered): run the reference on THIS M1 Max to verify the 120 fps premise; re-measure the flood with SHADOWS ON
+  (1.13M crowns into the shadow clipmap may make shadow raster co-dominant); check whether HZB is degraded by foliage
+  depth-holes in the forest interior (a one-pixel hole pushes a depthMax HZB to the far plane → occlusion failure — would
+  mean the flood is partly a cull bug); the "shared cache-hot geometry buffer" axis (the reference's, vs our scattered
+  wind-displaced per-instance fetch — argues for instance/geometry-fetch compaction independent of HLOD).
+
+  SEPARATION PRINCIPLE (binding, user-mandated, applies to the whole Stage-1 build): the nanite engine stays SELF-
+  CONTAINED in `src/nanite/`, CALLED BY other parts (WorldRegistry / the build path / TerrainScene), never creeping into
+  them. The cross-instance partitioner, the merge-simplify builder, the voxelizer, and the region cull/cut all live
+  inside the nanite module behind the existing `registerMesh`/`bindInstances`/build contract; world/scene code keeps
+  feeding instance streams and knows NOTHING new. No nanite concepts leak outward — the engine stays "under the hood"
+  (the D-N2 single-path mandate). Honour the clean-code rule: new modules/extracted helpers, not bolted branches.
+
+  SEQUENCING (compact between EACH stage — durable state lives in these docs): Stage 0 two-sided fix → compact → Stage
+  0.5 sim + integration explore → compact → Stage 1 implement (aggregation + voxel) → compact. Evidence anchors: UE
+  Nanite Voxels/Foliage docs; elopezr "A Macro View of Nanite"; jms55 "Virtual Geometry in Bevy"; Scthe/nanite-webgpu;
+  thecandidstartup Nanite pipeline; Aokana (arXiv 2505.02017); reference HTML lines 180-182/235-298/627-707/904-920.
+
 ## PERF METHODOLOGY — the bar for a real win (2026-06-15, user directive)
 
 > Significant perf gains require this rigor; anything less is guessing and ships fake wins. This is the standard

@@ -9,6 +9,35 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-15 (bo): **N8-HIC ROOT-CAUSED + REDEFINED (D-N43) — the dense-foliage flood is primitive OVER-EMISSION, the
+  fix is cross-instance AGGREGATION (not "culling"), and the "reference does billions @ 120 fps, why are we 10× slower"
+  puzzle is SOLVED.** (Opus 4.8 1M, ultracode.) Triggered by the user's two challenges: (1) the fix must be GENERAL
+  whole-geometry aggregation, not a foliage special-case; (2) why is our perf so bad vs the base compute-rasterizer
+  example. Method: a 17-agent research workflow (Bevy/jms55, Scthe/nanite-webgpu, UE5 Nanite rasterizer + HLOD + Nanite
+  Voxels/Foliage, the many-instances floor, far-field reprs, the reference dissection, academic LOD) + adversarial
+  verification, PLUS live measurement (new probes `probe-hic`, `probe-hicsplit`, `probe-floodtau`). FINDINGS (all
+  measured/primary-fetched): • **occlusion ON (the default) HALVES the flood** — density 4000 forest interior 133 ms
+  (occl off, the bn ledger) → **65.6 ms / 1.17M visible clusters** (occl on); the bn "1.13M crown instances" is TOTAL
+  BOUND, the real visible count is ~340k crowns (chunks ≈517k). • **THE τ-SWEEP (the clincher):** frame + payload-raster
+  track visible-CLUSTER count near-linearly (47k→539k clusters ⇒ 8→33 ms; payload 1.3→11.8 ms) at ~21 ms/Mcluster
+  payload, while SW `trisK` and `nanClusterCull` stay FLAT ⇒ the cost is PER-CLUSTER raster-workgroup overhead × a
+  ~50×-too-many cluster count (one 128-thread workgroup per visible cluster, ~117 idle threads on ~11-tri leaf clusters).
+  Reconciles with PERF-2's worst-view 2.95 ms @ 82k clusters (same per-cluster rate, smaller scene). • **THE REFERENCE
+  PUZZLE:** its "billions" = `instanceCount(129600) × LOD0 tris` (a marketing DENOMINATOR, HUD lines 180-182), not
+  rastered work; it actually rasters ~1 tri/px via ONE shared 32768-tri-capped cache-hot mesh + per-instance LOD +
+  maxDistance + a single-pass packed dual-u32 atomic. A near-PEER architecture (same chunk hierarchy + two-phase HZB),
+  structurally EASY scene — "not magic". Our ~16 tris/px (14.7M tris / 0.92 Mpx) vs the correct ~1 (elopezr's real frame
+  ~5M tris >90% SW) is the gap. • **THE FIX (D-N43, staged, compact between each):** (0) two-sided raster fix = free 2×
+  → (0.5) perf SIM (region-collapse to bound the win) + integration/perf/mem codebase explore → (1) cross-instance
+  super-cluster DAG (break the ≥1-cl/inst floor) + opaque ≤1px VOXEL far-field (Epic Nanite-Voxels supersede the
+  aggregate-DAG; 1 u32 atomic, fits no-u64, fixes leaf double-siding free). RULED OUT: faster rasterizer (single-pass
+  blocked by our 25-bit payload until cluster count drops; SW core near-canonical), 3DGS/SVDAG (u64/transparency),
+  stochastic thinning (user: no reduction). HONESTY (adversarial verify): the cross-instance RUNTIME shape is NOVEL (no
+  published ms; UE's scattered-instance aggregation is OFFLINE World-Partition-HLOD, "Assemblies" is intra-asset) ⇒ the
+  Stage-0.5 sim de-risks it. BINDING: the SEPARATION PRINCIPLE (nanite stays self-contained, called by other parts).
+  Effort = hours of LLM grind/stage (user correction; the synthesis's "multi-week" was over-stated). No code yet — docs
+  only this turn (D-N43 + ROADMAP N8-HIC + this entry). NEXT = Stage 0 two-sided fix.
+
 - 2026-06-15 (bn): **N9-C2 — the leaf AGGREGATE wired to the GPU: continuous crown LOD to the full trunk envelope,
   the cut VALIDATED on-device. AND C2 did its other job — it RE-MEASURED the floor at leaf density and the flood is
   REAL, so N8-HIC is now DEFINITIVELY FORCED (pulled forward into C2, exactly as the directive pre-authorised).**
