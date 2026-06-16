@@ -9,6 +9,23 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-16 (by): **forest scene → FULL NaniteFrame pipe by default (`547bbfc`, #56). `?scene=forest&nanite=1` (no
+  `nanitedbg`) now renders the standard whole pipe — world1 raster → NaniteResolve (bark texture-array + leaf PBR) →
+  PostStack — so tree render speed is profilable through the REAL pipeline, not just the flat debug resolve. user:
+  "the standard whole pipe must apply... this is clearly something that stops actually investigating the main render
+  speed with trees".** (Opus 4.8 1M.)
+  - Built the minimal env in ForestScene: a real `Heightfield` (its maps bind but are NEVER sampled — the forest has no
+    terrain clusters, so terrain shading never runs; trees sit at y=0 over it), `SunSky` + `PostStack` (null clouds/froxels),
+    `setWindContext({noiseA: hf.noiseA, canopyTex:null})` (the trunk/leaf sway reads a module-global wind ctx — the missing
+    piece that crashed the first boot with "wind context not set"), `updateSunUniforms`, bark from `lib.barkArray`.
+    GI/CSM/canopy = null. `?nanitedbg=cluster|flat|lod` keeps the lean `NaniteView`.
+  - **NOTABLE — the forest is GPU-BOUND, a clean tree-render perf testbed.** 40k trees / 335k visCl → frameMs ~24 ms with
+    `world1` raster **~15 ms dominating** (vs the world vista, CPU-bound ~8.4 ms, where the raster is hidden). The cost is
+    LEAF-cluster-heavy (per-crown leaf aggregate DAGs ~5–9k clusters at lod0, collapsing to root=1 far). This is THE workload
+    to drive the cluster-floor / impostor / cross-instance-MERGE levers against. Probe: `probe-forestfull.ts`.
+  - Follow-up: no shadows in v1 (forest trees are `castShadows:false` ⇒ CSM would be a no-op; a shadow-cost profile needs
+    flipping casting + wiring CSM).
+
 - 2026-06-16 (bx): **PERF-VB4 (#55) — the WORLD raster is now SINGLE-PASS, shipped as the DEFAULT; the 2-pass world path is
   DELETED. ~1.85× on the raster (2.8–3.5 ms vs ~5.3 ms). user: "make this the default and drop the 2 pass version
   completely".** (Opus 4.8 1M.) See SPEC D-N45 (rewritten as RESOLVED).

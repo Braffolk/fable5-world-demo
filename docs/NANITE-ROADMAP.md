@@ -10,10 +10,17 @@
 > Status key: ✅ done · 🔵 active · ⬜ pending · 🚫 blocked. `blockedBy` = task ids that
 > must finish first. `spec` = the `## header` in NANITE-SPEC.md (+ D-N* / file refs).
 
-## YOU ARE HERE — 2026-06-16  →  **READ LOG `bx` (PERF-VB4: world raster now single-pass, default) then `bw` FIRST.**
-**TERRAIN-RW (`ff0511a`) + PERF-VB3 camera (`6123c60`) committed: HIER is the SOLE world cull, `nanitedag=all` default.**
-**SHADOW-HIER + S3-perf + BRUTE DELETION committed (`4daf005`, LOG bw). PERF-VB4 single-pass world DONE on top (LOG bx, NOT
-yet committed). The hierarchical DAG-BFS is now
+## YOU ARE HERE — 2026-06-16  →  **READ LOG `by` (forest full-pipe testbed) + `bx` (PERF-VB4 single-pass) FIRST.**
+**ALL COMMITTED this session — working tree clean. `41d2dd5` PERF-VB4 (world raster SINGLE-PASS, default; 2-pass deleted);
+`547bbfc` forest scene → full NaniteFrame pipe by default.**
+**NEXT = PERF on TREES.** The forest scene (`?scene=forest&nanite=1`, no `nanitedbg`) is now a GPU-BOUND tree testbed:
+40k trees / 335k visCl → frameMs ~24 ms with `world1` raster **~15 ms dominating** (vs the CPU-bound world vista that hides
+it). The tree raster is LEAF-cluster-heavy (per-crown leaf DAGs are ~5–9k clusters at lod0). The levers are already listed
+below: N9-C3 impostor retirement, N8-HIC cross-instance MERGE (#48), CLUSTER FLOOR / impostor far-field. Use the forest
+testbed (`probe-forestfull.ts`) to drive them. **User wants to discuss PARALLEL AGENT HARNESSES next to speed this up.**
+
+PRIOR (committed earlier): TERRAIN-RW (`ff0511a`) + PERF-VB3 camera (`6123c60`): HIER is the SOLE world cull, `nanitedag=all`
+default. SHADOW-HIER + S3-perf + BRUTE DELETION (`4daf005`, LOG bw). The hierarchical DAG-BFS is now
 the ONLY cull path in the engine — camera AND both shadow paths (clipmap + cascades). The legacy two-phase brute cull is
 DELETED (NaniteCull 975→643 lines; chunk/reject buffers gone; `?shadowhier`/`?shadowoccl`/NaniteView `?hier`/`?phase2`
 retired).** Highlights:
