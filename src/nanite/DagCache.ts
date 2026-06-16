@@ -14,14 +14,16 @@
  */
 import type { DagCluster } from './BuildDag';
 import type { HeightDagResult } from './DagWorkerClient';
-import type { HeightDagStats } from './BuildHeightDag';
+import type { HeightDagStats } from './BuildHeightGrid';
 
 const DB_NAME = 'laas-dag-cache';
 const STORE = 'heightdag';
 const DB_VERSION = 1;
 
-/** BUMP whenever worldgen or the DAG build changes → stale cached DAGs ignored. */
-export const DAG_CACHE_VERSION = 1;
+/** BUMP whenever worldgen or the DAG build changes → stale cached DAGs ignored.
+ *  v2: TERRAIN-RW — the heightmap-native regular-grid build replaces QEM, so every
+ *  v1 QEM tile is invalidated (a returning user never reloads stale fan geometry). */
+export const DAG_CACHE_VERSION = 2;
 
 /** packed numeric fields per cluster (the subset attachHeightDag reads) */
 const CF = 20;

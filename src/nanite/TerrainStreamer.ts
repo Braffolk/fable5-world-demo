@@ -29,7 +29,7 @@
  * outlives boot so update() can build new tiles as the camera roams.
  */
 import { type DagCluster } from './BuildDag';
-import { buildHeightDag, type HeightDagOpts } from './BuildHeightDag';
+import { buildHeightGrid, type HeightDagOpts } from './BuildHeightGrid';
 import { getCachedHeightDag, heightDagCacheKey, putCachedHeightDag } from './DagCache';
 import { type DagBuilder, type HeightDagResult } from './DagWorkerClient';
 import { clipmapTiles, clipmapMaxTiles, type ClipmapConfig, type ClipmapTile } from './TerrainClipmap';
@@ -121,10 +121,10 @@ export async function buildTerrainTile(
         built = await worker.buildHeight({ ...hfArgs, opts });
       } catch (e) {
         onDeferred(`terrain DAG tile ${suffix}: worker failed (${e instanceof Error ? e.message : String(e)}) → sync`);
-        built = buildHeightDag(hfArgs, opts);
+        built = buildHeightGrid(hfArgs, opts);
       }
     } else {
-      built = buildHeightDag(hfArgs, opts);
+      built = buildHeightGrid(hfArgs, opts);
     }
     if (cacheKey) void putCachedHeightDag(cacheKey, built); // fire-and-forget
     stats.nBuilt++;

@@ -7,7 +7,7 @@
  * to a synchronous build on the caller side without a detached input buffer.
  */
 import type { DagReq, DagRes, HeightDagOk } from './DagWorkerTypes';
-import type { HeightDagOpts } from './BuildHeightDag';
+import type { HeightDagOpts } from './BuildHeightGrid';
 
 export interface HeightDagResult {
   gridVerts: HeightDagOk['gridVerts'];

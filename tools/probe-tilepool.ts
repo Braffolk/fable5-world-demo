@@ -35,7 +35,7 @@ import {
   decodeMeshCPU,
   type ExplicitSource,
 } from '../src/nanite/GeometryRegistry';
-import { buildHeightDag, type HeightDagBuild } from '../src/nanite/BuildHeightDag';
+import { buildHeightGrid, type HeightDagBuild } from '../src/nanite/BuildHeightGrid';
 
 let failures = 0;
 const fail = (msg: string): void => {
@@ -73,7 +73,7 @@ const CELL = 1;
 function region(shape: Shape, r: number): { build: HeightDagBuild; gridVerts: Uint32Array } {
   const tx0 = r * GRID_N; // distinct global texel column per region
   const tz0 = 0;
-  const build = buildHeightDag(
+  const build = buildHeightGrid(
     { heights: heights(shape, GRID_N), gridN: GRID_N, cellSize: CELL, originX: tx0 * CELL, originZ: tz0 * CELL },
     {},
   );

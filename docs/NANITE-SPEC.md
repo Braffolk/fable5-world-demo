@@ -1664,6 +1664,35 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   Nanite Voxels/Foliage docs; elopezr "A Macro View of Nanite"; jms55 "Virtual Geometry in Bevy"; Scthe/nanite-webgpu;
   thecandidstartup Nanite pipeline; Aokana (arXiv 2505.02017); reference HTML lines 180-182/235-298/627-707/904-920.
 
+- D-N44 (2026-06-16, TERRAIN-RW — terrain coarse LOD is HEIGHTMAP-NATIVE REGULAR GRIDS, not QEM/RTIN. CHALLENGES +
+  REPLACES D-N32/D-N34's "feed the vertical-error metric into BuildDag's QEM" construction. User-driven: the QEM coarse
+  terrain produced TRIANGLE FANS + huge SPANNING triangles + was slow; the user's call — coarsen the heightmap DIRECTLY.
+  `src/nanite/BuildHeightGrid.ts`, node-validated `tools/probe-heightgrid.ts`; LOG bu.)
+  - WHY D-N32 WAS WRONG: it fed the heightfield's vertical error into `buildDag`'s QEM collapse (restricted to grid
+    endpoints) to inherit crack-freeness. But QEM collapses many verts onto ONE endpoint ⇒ a FAN of slivers radiating
+    from a point (the user's "flap into the center"), and emits big triangles spanning regions whose interior the 3
+    corners don't represent ⇒ the surface flaps off the terrain. D-N32's own premise ("on a heightfield the QEM cost
+    equals the vertical error so it's adaptive for free") is true but IRRELEVANT — the geometry it produces is a
+    disconnected-looking adaptive mesh, not a terrain-following surface. Plus the quadric heap is slow (~305 ms/tile).
+  - THE CONSTRUCTION: LOD level ℓ = the tile sampled at REGULAR stride 2^ℓ (geometry-clipmap / CDLOD, expressed through
+    the SAME flat `kClusterCull` cut — D-N31 honoured). A fan/spanning-tri is STRUCTURALLY impossible (every tri covers
+    one stride-cell; every vertex is a real heightmap texel, height fetched on the GPU as before). Crack-freeness is NOT
+    inherited from QEM groups (there are none) — it comes from a **TILE-UNIFORM cut**: set every cluster's ERROR sphere
+    (oe/pe, the LOD-projection sphere, which `kClusterCull` keeps SEPARATE from the geometric sphere it frustum-culls
+    with) to the whole-tile sphere ⇒ all clusters of a level select together ⇒ the tile renders ONE level ⇒ no intra-tile
+    T-junctions. Inter-tile seams (clipmap neighbours ≤1 effective stride apart) sealed by per-level perimeter skirts.
+    Adaptivity is per-TILE (equal-error level coalescing: flat tile → root ~2 tris, cliff tile → full pyramid) — the
+    clipmap rings + per-tile error give the gradation; per-CLUSTER adaptivity was the QEM-fan source, deliberately gone.
+  - EMITS the same `HeightDagBuild` (packed grid-coord verts + indices + DagCluster cut records) ⇒ streamer,
+    `attachHeightDagTile`, GPU fetch, the cut are ALL unchanged. It is the SOLE terrain-LOD builder — the QEM path
+    (`BuildHeightDag`/`probe-heightdag`/the `?nanitedgrid` flag) was DELETED once the user confirmed the grid (LOG bu);
+    `DAG_CACHE_VERSION` bumped to invalidate stale v1 QEM tiles.
+  - MEASURED: 0 fans (vs the old QEM's 3209 over-bound tris), build 14× faster (22 vs 305 ms/tile), boot 15× (149 vs
+    2246 ms), fewer clusters/tris, 3.5× less terrain vertex memory/slot; world = clean regular cluster blocks.
+  - FOLLOW-ONS (LOG bu): skirt depth → error-sized (∝ measured edge error, not fixed `24+12·level`); the regular grid
+    gives terrain CLEAN HIER ROOTS (coarsest level) for free ⇒ set rootBase/rootCount+dagLinks to solve PERF-VB3's
+    terrain blocker properly.
+
 ## PERF METHODOLOGY — the bar for a real win (2026-06-15, user directive)
 
 > Significant perf gains require this rigor; anything less is guessing and ships fake wins. This is the standard

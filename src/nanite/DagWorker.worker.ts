@@ -1,13 +1,13 @@
 /**
- * Off-thread DAG builder (N8-D1d, D-N30). Runs buildHeightDag (and later
- * buildDag for explicit pools) in a module Worker so the minutes-long terrain
- * build never blocks the boot critical path / render loop. The whole build
- * chain is three-free + typed-arrays in/out, so this bundle carries no GPU/DOM
- * code. Output arrays are transferred back zero-copy; cluster records (small
+ * Off-thread DAG builder (N8-D1d, D-N30). Runs buildHeightGrid (and later
+ * buildDag for explicit pools) in a module Worker so the terrain build never
+ * blocks the boot critical path / render loop. The whole build chain is
+ * three-free + typed-arrays in/out, so this bundle carries no GPU/DOM code.
+ * Output arrays are transferred back zero-copy; cluster records (small
  * plain-number structs) ride the structured clone.
  */
 /// <reference lib="webworker" />
-import { buildHeightDag } from './BuildHeightDag';
+import { buildHeightGrid } from './BuildHeightGrid';
 import type { DagReq, DagRes } from './DagWorkerTypes';
 
 // DOM and webworker libs both define `self`; the cast pins the worker scope so
@@ -18,16 +18,14 @@ ctx.onmessage = (e: MessageEvent<DagReq>): void => {
   const req = e.data;
   try {
     if (req.kind === 'height') {
-      const b = buildHeightDag(
-        {
-          heights: req.heights,
-          gridN: req.gridN,
-          cellSize: req.cellSize,
-          originX: req.originX,
-          originZ: req.originZ,
-        },
-        req.opts,
-      );
+      const hfArgs = {
+        heights: req.heights,
+        gridN: req.gridN,
+        cellSize: req.cellSize,
+        originX: req.originX,
+        originZ: req.originZ,
+      };
+      const b = buildHeightGrid(hfArgs, req.opts);
       const res: DagRes = {
         id: req.id,
         ok: true,

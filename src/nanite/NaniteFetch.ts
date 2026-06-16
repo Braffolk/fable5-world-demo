@@ -18,7 +18,7 @@ import { DISP } from '../render/TerrainMaterial';
 import { PERIOD_FBM, PERIOD_RID, PERIOD_VAL } from '../gpu/passes/NoiseBake';
 import { WORLD_SIZE } from '../world/WorldConst';
 import { gustAt, gustLagAt, windExposure, windU, WIND_LAG_M } from '../render/Wind';
-import { SKIRT_DEPTH_A, SKIRT_DEPTH_B } from './BuildHeightDag';
+import { SKIRT_DEPTH_A, SKIRT_DEPTH_B } from './BuildHeightGrid';
 import {
   CLUSTER_FLAG_DAG,
   MESH_FLAG_TWO_SIDED,
@@ -370,7 +370,7 @@ export function makeFetch(
     const code = packed.shiftRight(uint(13)).bitAnd(uint(0x7)).toVar();
     If(code.greaterThan(uint(0)), () => {
       // depth = SKIRT_DEPTH_A + SKIRT_DEPTH_B·level, level = code−1 (linear ⇒ hugs
-      // the saturating inter-level crack; see BuildHeightDag for the calibration)
+      // the saturating inter-level crack; see BuildHeightGrid for the calibration)
       skirtDrop.assign(float(SKIRT_DEPTH_A).add(float(SKIRT_DEPTH_B).mul(toF(code.sub(uint(1))))));
     });
     return hfWorld(ctx, sx as unknown as NU, sz as unknown as NU, skirtDrop as unknown as NF);

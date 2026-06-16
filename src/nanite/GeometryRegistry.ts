@@ -1300,7 +1300,7 @@ export class GeometryRegistry {
   }
 
   /**
-   * N8-D2b: attach a terrain LOD DAG (buildHeightDag output) to a
+   * N8-D2b: attach a terrain LOD DAG (buildHeightGrid output) to a
    * registerHeightDag mesh. Mirrors attachDag — same cluster records + 10-float
    * DAG cut records + the SAME flat kClusterCull cut — but the vertex pool packs
    * TEXEL grid coords (word0 = gx | gz<<16, already clamped to [0,res-1]; words
@@ -1485,7 +1485,7 @@ export class GeometryRegistry {
   }
 
   /**
-   * (Re)load a terrain tile (buildHeightDag output, global-texel gridVerts) into
+   * (Re)load a terrain tile (buildHeightGrid output, global-texel gridVerts) into
    * a slot's FIXED byte range — overwrites the previous occupant in place; no
    * cursor growth. Mirrors attachHeightDag's pack but addresses poolBase+slot*cap
    * and is REUSABLE (no already-has-DAG guard). The slot's mesh record is

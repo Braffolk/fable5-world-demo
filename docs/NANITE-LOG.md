@@ -9,6 +9,44 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-16 (bu): **TERRAIN-RW — the broken QEM coarse terrain REPLACED by a heightmap-native regular-grid LOD. The
+  user's fans / spanning-triangles / "flap into the center" are GONE by construction; boot ~15× faster.** (Opus 4.8 1M.)
+  - **ROOT CAUSE (user images, decisive):** the N8-D2 height-DAG ran RTIN/QEM decimation on the BUILT mesh. QEM collapses
+    many grid verts onto ONE surviving endpoint ⇒ a TRIANGLE FAN of slivers radiating from a point (the "flap"), plus
+    HUGE SPANNING triangles whose 3 corner-heights don't represent the floor between them ⇒ the coarse surface flaps off
+    the real terrain (the "pink triangle in the valley"). It was also slow (an iterative quadric heap). The user's insight
+    (correct): we HAVE a heightmap — coarsen it DIRECTLY, don't run a geometry-domain optimiser. This CHALLENGES + replaces
+    D-N32's "feed the vertical-error metric into BuildDag" construction (see new **D-N44**).
+  - **THE REWORK** (`src/nanite/BuildHeightGrid.ts`, emits the same `HeightDagBuild` → streamer/`attachHeightDagTile`/GPU
+    fetch/`kClusterCull` ALL unchanged): LOD level ℓ = the tile sampled at REGULAR stride 2^ℓ. Every triangle covers one
+    stride-cell, every vertex sits on a real heightmap texel (height fetched on the GPU) ⇒ a fan/spanning-tri is
+    STRUCTURALLY impossible. The ONLY error is bilinear deviation across a cell (measured per level, E[ℓ]).
+    - **TILE-UNIFORM cut** (the crack-free key): every cluster's ERROR sphere (oe/pe — what kClusterCull projects
+      ownError/parentError through, SEPARATE from the geometric sphere it frustum-culls with, NaniteCull:483-512) is the
+      whole-TILE sphere ⇒ all clusters of a level select together ⇒ the tile renders ONE level ⇒ NO intra-tile T-junction
+      cracks. Per-cluster geometric spheres stay the real block bounds so off-screen blocks still cull. Inter-tile seams
+      (≤1 effective stride apart, clipmap 2× nesting) sealed by PER-LEVEL perimeter skirts gated to their level.
+    - **ADAPTIVE per TILE for free:** equal-error level COALESCING (coarse→fine, keep a finer level only if it cuts error
+      ≥2 cm) ⇒ a FLAT tile collapses to its root (~2 tris), a CLIFF tile keeps every level. Per-CLUSTER adaptivity was the
+      QEM-fan source — deliberately dropped (the clipmap rings + per-tile error give plenty of gradation).
+  - **VALIDATION** `tools/probe-heightgrid.ts` (node, head-to-head vs QEM on a bimodal field): GRID **0** surface tris over
+    the grid bound vs QEM **3209** (the fans); **14× faster** build (22 vs 305 ms); watertight per-level + tile-uniform +
+    shape-faithful (rendered surface ≤ ownError) + on-grid + deterministic all green; flat tile → 2 tris, cliff → 4 levels.
+  - **WORLD A/B** (`tools/probe-terrainshape.ts`, `?nandbg=cluster` tint, settle-poll waits for the async tile bakes
+    before shooting — user caught the risk): GRID renders CLEAN REGULAR cluster BLOCKS following the terrain vs QEM's
+    chaotic irregular patches+slivers; boot **149 ms vs 2246 ms (15×)**, 20.3k vs 34.2k clusters, 2.48M vs 4.13M tris,
+    pool slot v26742 vs v95016 (**3.5× less terrain vertex memory**). 120 fps both. No holes after a re-stream fly.
+  - **THE OLD QEM PATH IS DELETED** (user confirmed the grid interactively — "looks fantastic, completely clean up the
+    old route"). Removed `BuildHeightDag.ts` + `probe-heightdag.ts` + `probe-heightdag-scale.ts`; the shared types
+    (`HeightField`/`HeightDagOpts`/`HeightDagStats`/`HeightDagBuild`) + `SKIRT_DEPTH_A/B` now live in `BuildHeightGrid.ts`;
+    the `?nanitedgrid` param + the `opts.regular` flag + the worker/streamer/WorldRegistry/TerrainScene branches are gone
+    (grid is the SOLE builder). `DAG_CACHE_VERSION` 1→2 invalidates every stale v1 QEM tile. tsc clean; probe-heightgrid +
+    probe-stream + probe-tilepool (now grid) + probe-skirtgap all green; world boots flagless at 120 fps, 153 ms terrain.
+  - **STILL OPEN (this task):** (a) skirt depth is still the fixed `24+12·level` formula — not visible in the A/B, but
+    should become ERROR-SIZED (∝ measured edge error) so smooth tiles get tiny curtains. (b) the regular grid gives terrain
+    CLEAN HIER ROOTS (coarsest-level clusters) for free ⇒ set `rootBase`/`rootCount` + `dagLinks` in `attachHeightDagTile`
+    to solve PERF-VB3's terrain blocker PROPERLY (vs the hybrid stopgap).
+
 - 2026-06-16 (bt): **SESSION HANDOFF — hier-in-world plan + terrain coarse-repr is broken (user). Read this first.**
   STATE: committed at `5ceda95`. The FOREST testbed (`?scene=forest`) is fast (16.7ms cold / race-free) and hier is the
   DEFAULT in `NaniteView` (forest + `?nanitedbg=`). The WORLD (`NaniteFrame`) is UNCHANGED — still brute-force two-pass,

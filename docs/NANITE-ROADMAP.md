@@ -10,16 +10,17 @@
 > Status key: ✅ done · 🔵 active · ⬜ pending · 🚫 blocked. `blockedBy` = task ids that
 > must finish first. `spec` = the `## header` in NANITE-SPEC.md (+ D-N* / file refs).
 
-## YOU ARE HERE — 2026-06-16  →  **READ LOG `bt` (session handoff) FIRST.**
-**The N8-HIC vis-buffer rewrite landed (forest 3× faster, race-free, hier default) — committed `5ceda95`. THREE jobs
-queued, full detail in LOG `bt`:**
+## YOU ARE HERE — 2026-06-16  →  **READ LOG `bu` then `bt` FIRST.**
+**The N8-HIC vis-buffer rewrite landed (forest 3× faster, race-free, hier default) — committed `5ceda95`.**
+**TERRAIN-RW (job 2) substantially DONE this session (LOG bu, NOT yet committed): the broken QEM coarse terrain is
+replaced by a heightmap-native REGULAR-GRID LOD (`BuildHeightGrid.ts`) — fans/spanning-tris gone by construction,
+boot 15× faster, DEFAULT ON (`?nanitedgrid=0` = old QEM A/B). Node + world A/B validated.** Remaining jobs:
 1. **PERF-VB3 — make hier apply in the WORLD** (`NaniteFrame` currently ignores `?hier`, runs brute-force, has NONE of
-   the wins). BLOCKER: terrain tiles have no hier roots (`attachHeightDagTile` never sets rootBase/Count) ⇒ naive flip
-   vanishes terrain. Start with a HYBRID cull (hier for veg + gated brute for terrain), keep the world's two-pass raster.
-2. **TERRAIN COARSE-REPR REWORK (user: "garbage, needs SIGNIFICANT rework")** — the N8-D2 height-DAG/RTIN coarse terrain
-   alters shape (holes / upward walls / random slopes / hides trees) and is slow. Rework to HEIGHTMAP-NATIVE coarse LOD
-   (downsample the height texture → regular grids; CDLOD/clipmap style), NOT geometry-domain simplification. This ALSO
-   gives terrain clean hier roots → solves job 1's blocker properly.
+   the wins). BLOCKER was terrain hier roots — TERRAIN-RW now makes them TRIVIAL (the regular grid's coarsest level IS
+   the roots). NEXT-STEP shift: set rootBase/rootCount+dagLinks in `attachHeightDagTile` (terrain is now grid-regular) ⇒
+   no hybrid stopgap needed, then flip `NaniteFrame` to hier + delete the brute path.
+2. **TERRAIN-RW close** (job 2 tail): (a) skirt depth → error-sized (∝ measured edge error, not the fixed `24+12·level`
+   "walls"); (b) terrain hier roots (dovetails job 1); (c) DELETE the QEM path after USER confirms the grid interactively.
 3. **CLUSTER FLOOR / impostor far-field** — the established big perf lever (cut on-screen triangle count).
 
 (Prior frontier, still open under N9: foliage-as-geometry. N9-C0 landed OKAY — see SPEC `### Foliage (N9)` + LOG bl.)

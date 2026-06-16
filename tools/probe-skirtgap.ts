@@ -17,7 +17,7 @@
  *   npx tsx tools/probe-skirtgap.ts        # needs the dev server on :5173
  */
 import { laasUrl, launchWebGPU } from './launch';
-import { SKIRT_DEPTH_A, SKIRT_DEPTH_B } from '../src/nanite/BuildHeightDag';
+import { SKIRT_DEPTH_A, SKIRT_DEPTH_B } from '../src/nanite/BuildHeightGrid';
 import { WORLD_SIZE, HEIGHT_RES } from '../src/world/WorldConst';
 
 // clipmap config mirrors TerrainStreamer: baseStride 1, M 4, levels sized so the
