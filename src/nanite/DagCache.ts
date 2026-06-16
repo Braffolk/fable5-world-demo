@@ -23,10 +23,10 @@ const DB_VERSION = 1;
 /** BUMP whenever worldgen or the DAG build changes → stale cached DAGs ignored.
  *  v2: TERRAIN-RW — the heightmap-native regular-grid build replaces QEM, so every
  *  v1 QEM tile is invalidated (a returning user never reloads stale fan geometry). */
-export const DAG_CACHE_VERSION = 2;
+export const DAG_CACHE_VERSION = 3;
 
 /** packed numeric fields per cluster (the subset attachHeightDag reads) */
-const CF = 20;
+const CF = 21;
 
 interface CachedBlob {
   gridVerts: Uint32Array;
@@ -82,6 +82,7 @@ function serialize(r: HeightDagResult): CachedBlob {
     cd[b + 17] = c.pey;
     cd[b + 18] = c.pez;
     cd[b + 19] = c.per;
+    cd[b + 20] = c.level; // LOD level — packed into cluster word7 for ?nanitedbg=lod
   }
   return { gridVerts: r.gridVerts, indices: r.indices, clusterData: cd, clusterCount: n, stats: r.stats };
 }
@@ -93,7 +94,7 @@ function deserialize(b: CachedBlob): HeightDagResult {
   for (let i = 0; i < b.clusterCount; i++) {
     const o = i * CF;
     clusters[i] = {
-      level: 0,
+      level: g(o + 20),
       triStart: g(o + 8),
       triCount: g(o + 9),
       sx: g(o),

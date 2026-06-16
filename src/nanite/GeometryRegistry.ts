@@ -1368,7 +1368,9 @@ export class GeometryRegistry {
       cArr[cb + 5] = f32Bits(dc.ccos);
       cArr[cb + 6] = tBase + dc.triStart;
       if (dc.triCount > MAX_CLUSTER_TRIS) throw new Error('GeometryRegistry: height-DAG cluster exceeds tri cap');
-      cArr[cb + 7] = ((dc.triCount & 0xff) | (hfFlags << 8) | (entry.handle << 16)) >>> 0;
+      // word7: triCount(0-7) | flags(8-9) | LOD level(10-15, for ?nanitedbg=lod) | handle(16-31)
+      cArr[cb + 7] =
+        ((dc.triCount & 0xff) | (hfFlags << 8) | ((dc.level & 0x3f) << 10) | (entry.handle << 16)) >>> 0;
 
       const db = (cBase + c) * DAG_WORDS;
       const root = !Number.isFinite(dc.parentError);
@@ -1551,7 +1553,9 @@ export class GeometryRegistry {
       cArr[cb + 5] = f32Bits(dc.ccos);
       cArr[cb + 6] = tBase + dc.triStart;
       if (dc.triCount > MAX_CLUSTER_TRIS) throw new Error('GeometryRegistry: tile cluster exceeds tri cap');
-      cArr[cb + 7] = ((dc.triCount & 0xff) | (hfFlags << 8) | (handle << 16)) >>> 0;
+      // word7: triCount(0-7) | flags(8-9) | LOD level(10-15, for ?nanitedbg=lod) | handle(16-31)
+      cArr[cb + 7] =
+        ((dc.triCount & 0xff) | (hfFlags << 8) | ((dc.level & 0x3f) << 10) | (handle << 16)) >>> 0;
 
       const db = (cBase + c) * DAG_WORDS;
       const root = !Number.isFinite(dc.parentError);

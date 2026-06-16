@@ -1,0 +1,297 @@
+/**
+ * S3-perf — SHARED cross-level cull for the shadow CLIPMAP (the brute-deletion
+ * unlock; D-N29, LOG bw/bx).
+ *
+ * The clipmap's L concentric ortho levels all select the SAME geometric LOD cut:
+ * the cut is `project(ownError) ≤ τ` with projK (constant ortho), cam.camPos (MAIN
+ * camera) and τ IDENTICAL across levels — only the FRUSTUM (each level's ortho box)
+ * and the HOLLOW (innerReject ring) differ. So running a full hier BFS per level (as
+ * the first SHADOW-HIER cut did) re-walks the SAME DAG L times. This module walks it
+ * ONCE into a shared CUT list, then runs a cheap single-pass FILTER per level that
+ * applies only that level's frustum + hollow and re-fills a shared raster queue:
+ *
+ *   runSharedCut : one buildNaniteCull(hier) traverse over the OUTER box (covers all
+ *                  levels; no hollow) → cut = the cluster list at the LOD cut, plus a
+ *                  one-shot filterArgs (dispatch sized to the cut count, reused by all
+ *                  level filters this frame).
+ *   runLevelFilter(k): clear the shared queue counter → kFilter_k (read cut, recompute
+ *                  each cluster's world sphere, test level-k frustum + level-k hollow,
+ *                  append survivors) → kRasterArgs_k (queue[0] = count, raster dispatch,
+ *                  countBuf[k] = count). The level's raster then consumes the shared
+ *                  queue (levels are processed sequentially, reusing one vis buffer +
+ *                  one queue — the clipmap already serializes them).
+ *
+ * Cost: 1 traverse + L single-pass filters, vs the per-level path's L traverses, vs
+ * brute's L inst-cull→chunk→cluster-cull chains. The traverse (the expensive 18-pass
+ * BFS) is paid ONCE; the filters are flat frustum+hollow tests over the cut. The cut
+ * only runs when ≥1 level re-rasters (the caller gates it on the R1 cadence), so a
+ * static camera stays ~0 cost.
+ *
+ * CAVEAT (the shared-cut precondition): valid ONLY while every level shares one τ (the
+ * clipmap default). A future per-level τ (S4-on-clipmap: coarsen far levels' GEOMETRY)
+ * would give each level a DIFFERENT cut ⇒ the shared traverse breaks. The cascades
+ * (NaniteShadow) already differ per cascade (CASCADE_TAU_MUL) and keep per-cascade hier.
+ */
+
+import { IndirectStorageBufferAttribute, StorageBufferAttribute } from 'three/webgpu';
+import type { Renderer } from 'three/webgpu';
+import {
+  Fn,
+  If,
+  Loop,
+  abs,
+  atomicAdd,
+  atomicStore,
+  dot,
+  float,
+  instanceIndex,
+  uint,
+  vec3,
+  vec4,
+} from 'three/tsl';
+import type { NB, NF, NU, NV3, NV4 } from '../gpu/TSLTypes';
+import { MESH_WORDS, readCluster } from './GeometryRegistry';
+import type { RegistryGpu } from './GeometryRegistry';
+import { buildNaniteCull, type NaniteCullChain } from './NaniteCull';
+import {
+  DISPATCH_ROW,
+  QRASTER_CAP,
+  instSphereRadius,
+  instTransformPoint,
+  instYaw,
+  type NaniteCam,
+} from './NaniteCommon';
+import {
+  aLoadU,
+  bcU2F,
+  dispatch,
+  dispatchIndirect,
+  elemU,
+  elemUW,
+  localX,
+  maxU,
+  minU,
+  readBuffer,
+  returnIf,
+  sU32Views,
+  sUvec2,
+  uv2,
+  wgLinear,
+  type UniformF,
+} from './Tsl';
+import type { BufOf, UV2 } from './Tsl';
+
+interface ComputeKernel {
+  setName(name: string): unknown;
+}
+
+/** the shared raster queue every clipmap level's raster consumes (sequential reuse) */
+export interface ClipLevelQueue {
+  qRasterRO: BufOf<UV2>;
+  rasterDispatchAttr: IndirectStorageBufferAttribute;
+  rasterDispatch2Attr: IndirectStorageBufferAttribute;
+  rasterDispatchFullAttr: IndirectStorageBufferAttribute;
+}
+
+export interface ClipCull {
+  /** the shared cut producer (one hier BFS over the outer box) */
+  shared: NaniteCullChain;
+  /** shared raster queue — pass to every level's buildNaniteRaster */
+  queue: ClipLevelQueue;
+  /** the ONE traverse + filterArgs; call once/frame when ≥1 level re-rasters */
+  runSharedCut(renderer: Renderer): void;
+  /** clear queue → filter the cut by level k's frustum+hollow → raster args */
+  runLevelFilter(renderer: Renderer, level: number): void;
+  /** cut size + per-level survivor counts (HUD) */
+  readCounts(renderer: Renderer): Promise<{ cut: number; perLevel: number[] }>;
+}
+
+export function buildClipCull(
+  gpu: RegistryGpu,
+  instanceCount: number,
+  /** the cut cam: projK (constant ortho) + camPos (MAIN camera) + the OUTER box
+   *  frustum + τ — set each frame by the caller before runSharedCut */
+  cutCam: NaniteCam,
+  /** per-level cams (each level's ortho VP + frustum planes, set each frame) */
+  levelCams: NaniteCam[],
+  /** per-level hollow uniform (1/E_k for k≥1, 0 for level 0) */
+  innerRejects: UniformF[],
+  opts: { minPx: UniformF; frontierCap: number },
+): ClipCull {
+  const LEVELS = levelCams.length;
+
+  // The shared cut: a normal hier cull over cutCam, NO hollow (innerReject default
+  // 0), shared minPx. Its qRaster IS the cut list (instId, ci) at the LOD cut within
+  // the outer box. runPhase1 also writes qRaster[0] = (count, 0) — the filter's size.
+  const shared = buildNaniteCull(gpu, instanceCount, cutCam, null, {
+    coneCull: false,
+    minPx: opts.minPx,
+    frontierCap: opts.frontierCap,
+  });
+  const cutRO = shared.qRasterRO;
+
+  // shared raster queue (one, refilled per level — levels raster sequentially)
+  const qLevelAttr = new StorageBufferAttribute(new Uint32Array((QRASTER_CAP + 1) * 2), 2);
+  const qLevel = sUvec2(qLevelAttr, QRASTER_CAP + 1);
+  // append counter (slot 0) — cleared before each level filter
+  const countAttr = new StorageBufferAttribute(new Uint32Array(1), 1);
+  const countV = sU32Views(countAttr, 1);
+  // per-level survivor counts for the HUD (persist across the frame, indexed by level)
+  const perLevelAttr = new StorageBufferAttribute(new Uint32Array(LEVELS), 1);
+  const perLevelV = sU32Views(perLevelAttr, LEVELS);
+
+  const rasterDispatchAttr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
+  const rasterDispatch = sU32Views(rasterDispatchAttr as unknown as StorageBufferAttribute, 3).rw;
+  const rasterDispatch2Attr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
+  const rasterDispatch2 = sU32Views(rasterDispatch2Attr as unknown as StorageBufferAttribute, 3).rw;
+  const rasterDispatchFullAttr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
+  const rasterDispatchFull = sU32Views(
+    rasterDispatchFullAttr as unknown as StorageBufferAttribute,
+    3,
+  ).rw;
+  const filterDispatchAttr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
+  const filterDispatch = sU32Views(filterDispatchAttr as unknown as StorageBufferAttribute, 3).rw;
+
+  const split2D = (args: ReturnType<typeof sU32Views>['rw'], n: NU): void => {
+    const rows = n.add(uint(DISPATCH_ROW - 1)).div(uint(DISPATCH_ROW));
+    elemUW(args, 0).assign(minU(n, uint(DISPATCH_ROW)));
+    elemUW(args, 1).assign(maxU(rows, uint(1)));
+    elemUW(args, 2).assign(uint(1));
+  };
+
+  // ---- world-sphere + frustum helpers (mirror NaniteCull's locals) -----------------
+  const frustumVisible = (planes: NaniteCam['planes'], center: NV3, radius: NF): NF => {
+    const visible = float(1).toVar();
+    Loop(6, ({ i: pi }) => {
+      const plane = planes.element(pi);
+      const d = dot(plane.xyz, center).add(plane.w) as unknown as NF;
+      If(d.lessThan(radius.negate()), () => {
+        visible.assign(0);
+      });
+    });
+    return visible as unknown as NF;
+  };
+  const instWorldSphere = (
+    A: NV4,
+    B: NV4,
+    isHF: NB,
+    localSphere: NV4,
+    swayPad: NF,
+  ): { center: NV3; radius: NF } => {
+    const yawSc = instYaw(B);
+    const centerW = vec3(0).toVar();
+    const radiusW = float(0).toVar();
+    If(isHF, () => {
+      centerW.assign(localSphere.xyz);
+      radiusW.assign(localSphere.w);
+    }).Else(() => {
+      centerW.assign(instTransformPoint(A, B, yawSc, localSphere.xyz as unknown as NV3));
+      radiusW.assign(instSphereRadius(A, B, localSphere.w, swayPad));
+    });
+    return { center: centerW as unknown as NV3, radius: radiusW as unknown as NF };
+  };
+
+  // ---- filterArgs: size the (shared) filter dispatch from the cut count -------------
+  const kFilterArgs = Fn(() => {
+    const n = minU(cutRO.element(0).x, uint(QRASTER_CAP));
+    split2D(filterDispatch, n.add(uint(63)).div(uint(64)));
+  })().compute(1, [1]);
+  (kFilterArgs as unknown as ComputeKernel).setName('nanClipFilterArgs');
+
+  // ---- per-level filter: cut → (frustum_k + hollow_k) → shared queue ----------------
+  const filters: unknown[] = [];
+  const rasterArgsKernels: unknown[] = [];
+  const clears: unknown[] = [];
+  for (let k = 0; k < LEVELS; k++) {
+    const cam = levelCams[k]!;
+    const innerInvHalf = innerRejects[k]!;
+
+    const kClear = Fn(() => {
+      If(instanceIndex.equal(uint(0)), () => {
+        atomicStore(countV.atomic.element(0), uint(0));
+      });
+    })().compute(1, [1]);
+    (kClear as unknown as ComputeKernel).setName(`nanClipClear${k}`);
+    clears.push(kClear);
+
+    const kFilter = Fn(() => {
+      const tid = wgLinear(DISPATCH_ROW).mul(uint(64)).add(localX()).toVar();
+      returnIf(tid.greaterThanEqual(minU(cutRO.element(0).x, uint(QRASTER_CAP))));
+      const item = cutRO.element(tid.add(uint(1)));
+      const instId = item.x.toVar();
+      const ci = item.y.toVar();
+      const c = readCluster(gpu.clusters, ci);
+      const A = gpu.instances.element(instId.mul(uint(2))).toVar() as unknown as NV4;
+      const B = gpu.instances
+        .element(instId.mul(uint(2)).add(uint(1)))
+        .toVar() as unknown as NV4;
+      const isHF = c.flags.bitAnd(uint(1)).notEqual(uint(0)).toVar();
+      const swayPad = bcU2F(elemU(gpu.meshes, c.meshId.mul(uint(MESH_WORDS)).add(uint(11))));
+      const s = instWorldSphere(A, B, isHF as unknown as NB, c.sphere, swayPad);
+      const visible = frustumVisible(cam.planes, s.center, s.radius).toVar();
+      // hollow: drop clusters wholly inside the next-finer level's [±0.5] box
+      If(visible.greaterThan(0.5).and(innerInvHalf.greaterThan(0)), () => {
+        const clip = cam.vp.mul(vec4(s.center, 1)) as unknown as NV4;
+        const rClip = s.radius.mul(innerInvHalf);
+        If(
+          abs(clip.x).add(rClip).lessThan(0.5).and(abs(clip.y).add(rClip).lessThan(0.5)),
+          () => {
+            visible.assign(0);
+          },
+        );
+      });
+      If(visible.greaterThan(0.5), () => {
+        const slot = atomicAdd(countV.atomic.element(0), uint(1)) as unknown as NU;
+        If(slot.lessThan(uint(QRASTER_CAP)), () => {
+          qLevel.rw.element(slot.add(uint(1))).assign(uv2(instId, ci));
+        });
+      });
+    })().compute(QRASTER_CAP, [64]);
+    (kFilter as unknown as ComputeKernel).setName(`nanClipFilter${k}`);
+    filters.push(kFilter);
+
+    const kRasterArgs = Fn(() => {
+      const n = minU(aLoadU(countV.atomic.element(0)), uint(QRASTER_CAP));
+      qLevel.rw.element(0).assign(uv2(n, 0));
+      elemUW(perLevelV.rw, uint(k)).assign(n);
+      split2D(rasterDispatch, n);
+      // depth-only shadow raster uses rasterDispatchAttr (phase-1); keep full/2 in
+      // sync so a shared raster's payload/combined path (unused here) stays valid.
+      split2D(rasterDispatchFull, n);
+      split2D(rasterDispatch2, uint(0));
+    })().compute(1, [1]);
+    (kRasterArgs as unknown as ComputeKernel).setName(`nanClipRasterArgs${k}`);
+    rasterArgsKernels.push(kRasterArgs);
+  }
+
+  const runSharedCut = (renderer: Renderer): void => {
+    shared.runPhase1(renderer); // the ONE hier BFS → cut in qRasterRO
+    dispatch(renderer, kFilterArgs as never); // size the per-level filter dispatch
+  };
+
+  const runLevelFilter = (renderer: Renderer, level: number): void => {
+    dispatch(renderer, clears[level] as never);
+    dispatchIndirect(renderer, filters[level] as never, filterDispatchAttr);
+    dispatch(renderer, rasterArgsKernels[level] as never);
+  };
+
+  const readCounts = async (
+    renderer: Renderer,
+  ): Promise<{ cut: number; perLevel: number[] }> => {
+    const [head, lv] = await Promise.all([
+      readBuffer(renderer, shared.qRasterAttr, 0, 8),
+      readBuffer(renderer, perLevelAttr, 0, LEVELS * 4),
+    ]);
+    const cut = new Uint32Array(head)[0] ?? 0;
+    const perLevel = Array.from(new Uint32Array(lv));
+    return { cut, perLevel };
+  };
+
+  return {
+    shared,
+    queue: { qRasterRO: qLevel.ro, rasterDispatchAttr, rasterDispatch2Attr, rasterDispatchFullAttr },
+    runSharedCut,
+    runLevelFilter,
+    readCounts,
+  };
+}

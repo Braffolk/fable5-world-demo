@@ -67,7 +67,7 @@ import { vogelDiskSample } from 'three/tsl';
 import type { NB, NF, NV2, NV3 } from '../gpu/TSLTypes';
 import type { RegistryGpu } from './GeometryRegistry';
 import { makeNaniteCam, type NaniteCam } from './NaniteCommon';
-import { buildNaniteCull, type NaniteCullChain } from './NaniteCull';
+import { buildClipCull, type ClipCull } from './NaniteClipCull';
 import type { TerrainDisp, TrunkWindOpt } from './NaniteFetch';
 import {
   buildNaniteRaster,
@@ -90,13 +90,19 @@ const NORMAL_BIAS_M = 0.12;
 const DEPTH_BIAS_M = 0.35;
 const TAU = 6.28318530718;
 
+/** hier BFS frontier capacity per shadow cull chain (SHADOW-HIER): shadow cuts are
+ *  bounded (clipmap ring / cascade box), far below the camera's QRASTER_CAP flood, so
+ *  the N×2 frontier buffers can be small. 2M entries = 16 MB/buffer (vs 64 MB at 8M). */
+const SHADOW_FRONTIER_CAP = 1 << 21; // 2,097,152
+
 interface NamedKernel {
   setName(n: string): unknown;
 }
 
 interface Level {
   cam: NaniteCam;
-  cull: NaniteCullChain;
+  /** this level's hollow uniform (1/E_k; 0 for level 0) */
+  innerReject: UniformF;
   raster: NaniteRasterHandles;
   depthTex: StorageTexture;
   kCopy: unknown;
@@ -156,19 +162,23 @@ export function buildNaniteShadowClip(
     Array.from({ length: LEVELS }, () => new Vector4(1, 1, 1 / SHADOW_MAP, 1.15)),
   );
 
+  // shared min-screen-size cull uniform (all levels share cfg.minPx) + the hier
+  // SHARED-cut cam (S3-perf): the cut is identical across levels, so ONE cull walks
+  // the DAG and per-level FILTERS apply each level's frustum + hollow (NaniteClipCull).
+  const minPxU: UniformF = uniformF(cfg.minPx);
+  const cutCam = makeNaniteCam(SHADOW_MAP, SHADOW_MAP);
+  const levelCams: NaniteCam[] = [];
+  const innerRejects: UniformF[] = [];
+
+  // pass 1: cams, hollow uniforms, depth textures, copy kernels, orthos (no cull/raster)
   for (let k = 0; k < LEVELS; k++) {
     const half = cfg.base * 2 ** k;
     const cam = makeNaniteCam(SHADOW_MAP, SHADOW_MAP);
     // hollow: levels ≥1 reject clusters fully inside the next-finer box. The
     // uniform carries 1/E_k (radius→clip). Level 0 is the innermost ⇒ no hollow.
     const innerReject: UniformF = uniformF(k === 0 ? 0 : 1 / half);
-    const minPx: UniformF = uniformF(cfg.minPx);
-    const cull = buildNaniteCull(gpu, instanceCount, cam, null, {
-      coneCull: false,
-      minPx,
-      innerReject,
-    });
-    const raster = buildNaniteRaster(gpu, heightTex, cam, cull, vis, 'flat', false, disp, wind);
+    levelCams.push(cam);
+    innerRejects.push(innerReject);
 
     const depthTex = new StorageTexture(SHADOW_MAP, SHADOW_MAP);
     depthTex.type = FloatType;
@@ -200,8 +210,8 @@ export function buildNaniteShadowClip(
     levelVP.push(uniformMat4(new Matrix4()));
     levels.push({
       cam,
-      cull,
-      raster,
+      innerReject,
+      raster: null as unknown as NaniteRasterHandles,
       depthTex,
       kCopy,
       half,
@@ -210,6 +220,21 @@ export function buildNaniteShadowClip(
       ran: false,
       count: -1,
     });
+  }
+
+  // ONE shared cross-level cull (S3-perf): the cut is identical across levels, so a
+  // single hier traverse + cheap per-level filters serve every level. Each level's
+  // raster consumes the shared ClipCull queue (refilled per level by the filter;
+  // levels raster sequentially over the one vis buffer).
+  const clipCull: ClipCull = buildClipCull(gpu, instanceCount, cutCam, levelCams, innerRejects, {
+    minPx: minPxU,
+    // the cut is bounded by the OUTER ring (~384 m), far below the camera's 8M
+    // far-field flood ⇒ a small frontier (16 MB/buf vs 64 MB at 8M) is ample.
+    frontierCap: SHADOW_FRONTIER_CAP,
+  });
+  for (let k = 0; k < LEVELS; k++) {
+    const lv = levels[k]!;
+    lv.raster = buildNaniteRaster(gpu, heightTex, lv.cam, clipCull.queue, vis, 'flat', false, disp, wind);
   }
 
   // ---- per-frame clipmap fit + raster -----------------------------------------
@@ -222,6 +247,12 @@ export function buildNaniteShadowClip(
   const worldUpZ = new Vector3(0, 0, 1);
   const vp = new Matrix4();
   const frustum = new Frustum();
+  // S3-perf: the shared cut's ortho — covers the OUTER ring every frame (unsnapped,
+  // centred on the camera) so the one traverse spans all levels. Extents are constant
+  // (outer half is fixed); only the pose + far (sun elevation) change per frame.
+  const cutOrtho = new OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  cutOrtho.coordinateSystem = WebGPUCoordinateSystem;
+  const reRaster: boolean[] = new Array(LEVELS).fill(false);
   let lastRasterMask = 0;
 
   const run = (renderer: Renderer, _csm: object | null, mainCamera: PerspectiveCamera): void => {
@@ -238,9 +269,13 @@ export function buildNaniteShadowClip(
     const cp = mainCamera.position;
     const cz = cp.dot(forward); // camera depth along the sun axis
 
+    // PASS A — fit every level (snap + R1 cadence gate). For a re-rastering level set
+    // its cam (filter frustum / brute cull) + resolve uniforms + lastVP. LOCKSTEP: a
+    // CACHED level keeps its old VP + levelVP so its depthTex sample stays aligned.
     let mask = 0;
     for (let k = 0; k < LEVELS; k++) {
       const lv = levels[k]!;
+      reRaster[k] = false;
       const texelWorld = (2 * lv.half) / SHADOW_MAP;
       // snap the centre onto THIS level's texel grid (anti-crawl + cadence)
       const cx = cp.dot(right);
@@ -268,6 +303,7 @@ export function buildNaniteShadowClip(
 
       // R1 cadence: skip if the snapped VP is bit-identical to the cached one.
       if (lv.ran && vp.equals(lv.lastVP)) continue;
+      reRaster[k] = true;
       mask |= 1 << k;
 
       const cam = lv.cam;
@@ -275,7 +311,7 @@ export function buildNaniteShadowClip(
       cam.prevVp.value.copy(vp);
       cam.camPos.value.copy(cp); // LOD by the MAIN camera (match the lit surface)
       cam.prevCamPos.value.copy(cp);
-      // frustum planes from the VP (the cull's frustumVisible reads cam.planes).
+      // frustum planes from the VP (the cull/filter's frustumVisible reads cam.planes).
       // Mirrors NaniteShadow.ts / NaniteCommon exactly (default coordinateSystem
       // arg — the L/R/T/B planes are convention-independent and do the culling;
       // near/far slack is absorbed by the generous depth range, as in the cascades).
@@ -286,14 +322,58 @@ export function buildNaniteShadowClip(
       }
       levelVP[k]!.value.copy(vp);
       (levelParam.array[k] as Vector4).set(2 * lv.half, 2 * dHalf, 1 / SHADOW_MAP, 1.15);
-
-      lv.raster.clearVis(renderer);
-      lv.cull.runPhase1(renderer);
-      lv.raster.depth1(renderer);
-      lv.raster.hwDepth(renderer, mainCamera);
-      dispatch(renderer, lv.kCopy);
       lv.lastVP.copy(vp);
       lv.ran = true;
+    }
+
+    // PASS B — SHARED cull (S3-perf): walk the DAG ONCE, only when ≥1 level re-rasters
+    // (a static camera ⇒ all cached ⇒ ~0 cost), then a cheap per-level filter + raster.
+    {
+      if (mask !== 0) {
+        // the cut only needs to span the re-rastering levels (cached far levels keep
+        // their depth) — size it to the LARGEST re-rastering level so slow drift (only
+        // the near levels tick) traverses a small region, not the whole 384 m disc.
+        let maxHalf = 0;
+        for (let k = 0; k < LEVELS; k++) if (reRaster[k]) maxHalf = Math.max(maxHalf, levels[k]!.half);
+        const cutDHalf = maxHalf / sinElev + 100;
+        const cutHalf = maxHalf + 2 * ((2 * maxHalf) / SHADOW_MAP);
+        center
+          .copy(right)
+          .multiplyScalar(cp.dot(right))
+          .addScaledVector(up, cp.dot(up))
+          .addScaledVector(forward, cz);
+        eye.copy(center).addScaledVector(forward, -cutDHalf);
+        cutOrtho.left = -cutHalf;
+        cutOrtho.right = cutHalf;
+        cutOrtho.top = cutHalf;
+        cutOrtho.bottom = -cutHalf;
+        cutOrtho.far = 2 * cutDHalf;
+        cutOrtho.position.copy(eye);
+        cutOrtho.up.copy(up);
+        cutOrtho.lookAt(center);
+        cutOrtho.updateMatrixWorld(true);
+        cutOrtho.updateProjectionMatrix();
+        vp.multiplyMatrices(cutOrtho.projectionMatrix, cutOrtho.matrixWorldInverse);
+        cutCam.vp.value.copy(vp);
+        cutCam.prevVp.value.copy(vp);
+        cutCam.camPos.value.copy(cp);
+        cutCam.prevCamPos.value.copy(cp);
+        frustum.setFromProjectionMatrix(vp);
+        for (let p = 0; p < 6; p++) {
+          const pl = frustum.planes[p];
+          if (pl) cutCam.planes.array[p]?.set(pl.normal.x, pl.normal.y, pl.normal.z, pl.constant);
+        }
+        clipCull.runSharedCut(renderer);
+      }
+      for (let k = 0; k < LEVELS; k++) {
+        if (!reRaster[k]) continue;
+        const lv = levels[k]!;
+        clipCull.runLevelFilter(renderer, k); // cut → level-k frustum+hollow → queue
+        lv.raster.clearVis(renderer);
+        lv.raster.depth1(renderer);
+        lv.raster.hwDepth(renderer, mainCamera);
+        dispatch(renderer, lv.kCopy);
+      }
     }
     lastRasterMask = mask;
   };
@@ -429,14 +509,13 @@ export function buildNaniteShadowClip(
     })() as unknown as NF;
 
   const readCounts = async (renderer: Renderer): Promise<number[]> => {
-    return Promise.all(
-      levels.map(async (lv) => {
-        if (!lv.ran) return -1;
-        const counts = await lv.cull.readCounts(renderer);
-        lv.count = counts.visClusters;
-        return counts.visClusters;
-      }),
-    );
+    // per-level survivor counts from the shared cut's filters
+    const { perLevel } = await clipCull.readCounts(renderer);
+    return levels.map((lv, k) => {
+      if (!lv.ran) return -1;
+      lv.count = perLevel[k] ?? 0;
+      return lv.count;
+    });
   };
 
   const rasteredMask = (): number => lastRasterMask;

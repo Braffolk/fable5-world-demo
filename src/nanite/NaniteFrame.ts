@@ -188,10 +188,10 @@ export function buildNaniteFrame(
     registry.instanceCount,
     cam,
     occl ? hzb.sphereOccluded : null,
-    // PERF-VB3: HIERARCHICAL DAG-BFS cull is now the SOLE world cull (every mesh is
+    // PERF-VB3: HIERARCHICAL DAG-BFS cull is the SOLE world cull (every mesh is
     // DAG'd — terrain via TERRAIN-RW, veg via the always-on nanitedag). Single-phase
     // BFS, NON-packed two-pass raster (depthV ⇒ HZB + exact-depth world resolve unchanged).
-    { tau, minPx, simBandD, lodNear, lodPow, instMinPx, hier: true },
+    { tau, minPx, simBandD, lodNear, lodPow, instMinPx },
   );
   if (!hf.biomeTex || !hf.fieldsTex || !hf.noiseA || !hf.noiseB) {
     throw new Error('NaniteFrame: heightfield derived maps missing (boot order)');

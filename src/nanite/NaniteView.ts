@@ -45,14 +45,6 @@ export function buildNaniteView(
   const size = renderer.getDrawingBufferSize(new Vector2());
   const params = new URLSearchParams(window.location.search);
   const occl = params.get('occl') !== '0';
-  /** ?phase2=0 — single-phase occlusion (disocclusion-hole A/B; probe-pan's
-   *  negative control proves the gate detects what phase 2 fixes) */
-  const phase2 = params.get('phase2') !== '0';
-  /** Hierarchical DAG-BFS cull + single-pass race-free packed vis buffer — now the
-   *  DEFAULT (the all-DAG forest/debug registries are fully hierarchical). `?hier=0`
-   *  falls back to the legacy brute-force two-phase path (kept only until the world +
-   *  shadow culls are migrated, then deleted — PERF-VB3). */
-  const hier = params.get('hier') !== '0';
   const frozenParam = params.get('cullfreeze') === '1';
   const hzbLevel = Number(params.get('hzblevel') ?? '1');
   /** ?audit=1 — per-frame raster consistency count (orphans must be 0) */
@@ -65,7 +57,7 @@ export function buildNaniteView(
   // HZB (prev frame's content), the raster fills it — no builder cycle
   const vis = makeVisBuffers(size.x * size.y);
   // packed (hier combined) path: the raster writes no depthV — the HZB reads visA's key
-  const hzb = buildNaniteHzb(hier ? vis.payloadV.ro : vis.depthV.ro, cam, hier);
+  const hzb = buildNaniteHzb(vis.payloadV.ro, cam, true);
   // N9-IMP test: ?instminpx=N drops instances smaller than N px on screen (the
   // imposter far-field). ?loderr=τ sets the screen-error cut. Both default off/1.
   const instMinPx = uniformF(Math.max(0, Number(params.get('instminpx') ?? '0')));
@@ -82,7 +74,7 @@ export function buildNaniteView(
     registry.instanceCount,
     cam,
     occl ? hzb.sphereOccluded : null,
-    { instMinPx, tau, hier, simBandD, lodNear, lodPow },
+    { instMinPx, tau, simBandD, lodNear, lodPow },
   );
   const raster = buildNaniteRaster(
     registry.gpu,
@@ -94,7 +86,7 @@ export function buildNaniteView(
     shade,
     undefined, // disp
     undefined, // wind
-    hier, // packed vis buffer — the race-free combined path only runs in hier mode
+    true, // packed vis buffer — the race-free combined path (the sole cull path)
   );
   // testbed hook: sweep the imposter cull / cut without re-booting (probe-forest)
   (window as unknown as { __naniteView?: unknown }).__naniteView = {
@@ -135,36 +127,18 @@ export function buildNaniteView(
       console.log('[nanite] cullfreeze: visibility frozen — fly to inspect');
     }
     cam.update(engine.camera);
-    if (hier) {
-      // VIS-BUFFER path (single-phase BFS): cull (reads LAST frame's HZB) → set the
-      // full raster args → ONE combined Z+payload pass → HZB (next frame's occluder).
-      // No depth prepass, no payload re-raster — depth + the winning triangle id are
-      // written together by a single atomicMin/speculative-claim pass.
-      if (!frozen) {
-        cull.runPhase1(renderer);
-        cull.syncFullArgs(renderer); // qRaster[0]=(nTotal,0) + full-range dispatch args
-      }
-      raster.clearVis(renderer);
-      raster.combined(renderer, engine.camera); // SW + HW, depth & payload in one
-      if (auditOn) raster.audit(renderer);
-      if (!frozen) hzb.build(renderer); // this frame's depth → next frame's occluder
-    } else {
-      // legacy two-phase path: depth prepass (×2 for occlusion) + payload re-raster
-      if (!frozen) cull.runPhase1(renderer); // tests read LAST frame's HZB
-      raster.clearVis(renderer);
-      raster.depth1(renderer);
-      raster.hwDepth(renderer, engine.camera);
-      if (!frozen) {
-        hzb.build(renderer); // phase-1 depth → fresh occluder
-        if (phase2) cull.runPhase2(renderer); // re-test rejects, current VP
-        else cull.syncFullArgs(renderer);
-      }
-      raster.depth2(renderer); // appended range (0 workgroups when none)
-      raster.hwDepth(renderer, engine.camera); // late big/near tris
-      raster.payload(renderer, engine.camera); // all items vs final depth
-      if (auditOn) raster.audit(renderer);
-      if (!frozen) hzb.build(renderer); // final — next frame's occluder
+    // VIS-BUFFER path (single-phase BFS): cull (reads LAST frame's HZB) → set the
+    // full raster args → ONE combined Z+payload pass → HZB (next frame's occluder).
+    // No depth prepass, no payload re-raster — depth + the winning triangle id are
+    // written together by a single atomicMin/speculative-claim pass.
+    if (!frozen) {
+      cull.runPhase1(renderer);
+      cull.syncFullArgs(renderer); // qRaster[0]=(nTotal,0) + full-range dispatch args
     }
+    raster.clearVis(renderer);
+    raster.combined(renderer, engine.camera); // SW + HW, depth & payload in one
+    if (auditOn) raster.audit(renderer);
+    if (!frozen) hzb.build(renderer); // this frame's depth → next frame's occluder
     renderer.render(viewScene, engine.camera);
     frame++;
   };

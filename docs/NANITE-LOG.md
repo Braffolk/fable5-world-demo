@@ -9,6 +9,54 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-16 (bw): **SHADOW-HIER (#54) — both shadow culls (clipmap + cascades) now run the hierarchical DAG-BFS, the
+  SAME path as the world camera. `?shadowhier` (default ON) A/Bs back to brute. PARITY EXACT; brute deletion DEFERRED on a
+  measured perf regression (the fix is the shared cross-level cull, S3-perf).** (Opus 4.8 1M.)
+  - **The migration was tiny — the hier kernels were already correct for shadows.** `buildNaniteCull(hier:true)` compiles
+    its emit from `coneCull` (false for shadows ⇒ no cone block) + `sphereOccluded` (null ⇒ no occlusion block) + `minPx`
+    (wired ⇒ the shadow size cull works), and the LOD cut is IDENTICAL to the brute DAG-cut (both project ownError through
+    the constant ortho `projK ≈ map/2` with `cam.camPos` = MAIN camera ⇒ casters track the lit-surface LOD). The ONE thing
+    the hier emit lacked vs brute `kClusterCull` was the **clipmap HOLLOW** (`innerReject`) — ported it into `kTraverse`
+    (mirrors the brute block: drop clusters whose light-clip bbox lies entirely in the next-finer level's [±0.5] box).
+    `NaniteShadowClip`/`NaniteShadow` read `?shadowhier` and pass `hier`; the cascade path forces S2-OCCL off under hier
+    (the two-phase occlusion is brute-only; the hier BFS is single-phase). Run() sequences UNCHANGED (clearVis→runPhase1→
+    depth1→hwDepth→copy; in hier `runPhase1` ends with `kRasterArgs` which is exactly what depth1/hwDepth consume).
+  - **MEMORY (clean-code fix): a per-chain `frontierCap`.** The hier BFS allocates 2 ping-pong frontier buffers; at the
+    camera's `QRASTER_CAP` (8M) that's 128 MB/chain — ×6 clipmap levels would be ~768 MB of NEW buffers. Shadow cuts are
+    bounded (clipmap ring ≤384 m, cascade box), worst observed single-chain cut ~410k clusters, so the shadow culls pass
+    `frontierCap = 2M` (16 MB/buffer). Validated: no frontier overflow (hier shTotal == brute) at 410k/chain.
+  - **PARITY (exact): clipmap bm7 517,850 vs brute 517,891 · cascade bm7 1,425,641 vs 1,425,822 · vista bm3 766,956 vs
+    766,996 (moving shTotal byte-identical 760,404). Visual A/B pixel-indistinguishable (shier-clip*-{0,1}-moving.png).**
+  - **PERF (first cut, per-level hier): hier shadows were SLOWER than brute** because the cut is the SAME size (no
+    draw-envelope win like the camera) so hier only ADDED internal-node descent + the fixed BFS-pass dispatch overhead ×N
+    levels. MOVING worst-case drift: clipmap bm7 63 vs 71 (−8), cascade −2.2, vista −2.4; STATIC tied. `probe-hierdepth`:
+    the cut CONVERGES at depth 9 in bm7 (=18) ⇒ ~9 empty tail passes ×N levels, but the safe bound is the leaf-DAG depth
+    (~14–16, shared with the camera) so the default stays 18 (`?hierdepth` knob).
+  - **S3-perf — SHARED CROSS-LEVEL CULL (the fix; `NaniteClipCull.ts`, USER-directed "S3-perf first then delete"):** the
+    clipmap's L levels select the SAME geometric cut (projK/camPos/τ identical — only FRUSTUM + HOLLOW differ), so walking
+    the DAG per level re-did the same work L×. Now ONE hier traverse (over the largest re-rastering level's box; gated on
+    the R1 cadence so a static camera stays ~0) writes a shared CUT list, then a cheap single-pass FILTER per level applies
+    only that level's frustum+hollow and re-fills a shared raster queue. Cost: 1 traverse + L flat filters, vs brute's L
+    inst-cull→chunk→cluster chains. **MEASURED tied-or-FASTER than brute + parity EXACT: bm7 71.6 vs 72.0 (−0.4, noise),
+    vista bm3 59.0 vs 58.7 (+0.3 FASTER); STATIC identical; many-levels-re-raster (fast motion / sun move) ⇒ the single
+    traverse decisively wins.** Memory ~3.6× lighter than per-level hier (one 64 MB cut + 2×16 MB frontiers + one 64 MB
+    queue ≈ 160 MB vs 6×96 = 576 MB). Visual A/B pixel-indistinguishable. Caveat: valid only while levels share one τ (a
+    future per-level-τ S4-on-clipmap breaks the shared cut; the cascades already differ per cascade → keep per-cascade hier).
+  - **BRUTE DELETED (the SHADOW-HIER end goal — user "then delete").** The legacy two-phase cull is GONE: NaniteCull lost
+    kClear/kInstCull/lodSelectAndPush/kChunkArgs/kClusterCull(+2)/kPhase2Args/kInstCull2/kClusterCull2b + the chunk queue +
+    rejInst/rejClust buffers + their dispatch args (**975 → 643 lines**); the `hier` opt is gone (the cull is hier, period;
+    runPhase1 = the BFS, runPhase2 = syncFullArgs). Callers de-bruted: `?shadowhier` retired (NaniteShadow + NaniteShadowClip
+    always hier), the cascade S2-OCCL two-phase removed (`?shadowoccl` gone — it was brute-only + measured weak), NaniteView's
+    `?hier`/`?phase2` brute branch removed (always the packed combined path), NaniteFrame/NaniteClipCull stop passing `hier`.
+    `NaniteRaster.depth2` + `runPhase2` survive as thin/unused shims (no interface churn). tsc clean (noUnusedLocals caught
+    every dangling buffer/import); world + NaniteView + clipmap + cascade all boot + render parity-identical.
+  - **BUGFIX (user-reported): `?nanitedbg=lod` showed terrain ALL SALMON (level 0).** The lod tint reads the cluster LOD
+    level from word7 bits 10-15, but the two TERRAIN packers in GeometryRegistry (attachHeightDag + attachHeightDagTile)
+    omitted `((dc.level & 0x3f) << 10)` that the VEG `attachDag` had (flags are only bits 8-9 = HEIGHTFIELD|DAG, so 10-15
+    were free) ⇒ terrain read level 0. ALSO the DagCache dropped `level` (serialize skipped it, deserialize hardcoded
+    `level: 0`) ⇒ cached terrain stayed salmon even after the packer fix. Fixed both packers + threaded `level` through the
+    cache (CF 20→21, `DAG_CACHE_VERSION` 2→3 ⇒ one-time terrain re-bake). The DagWorker already preserves it (structured
+    clone). Terrain now shows the near→far LOD-band gradient.
 - 2026-06-16 (bv): **PERF-VB3 — HIER is now the SOLE world-CAMERA cull + `nanitedag=all` is the DEFAULT. The whole world
   (terrain + veg) renders through the hierarchical BFS at 95-98 fps, FASTER than brute (130k cl vs brute's 188k @ 85).
   Brute kernels REMAIN only for the shadow culls (next task).** (Opus 4.8 1M.)

@@ -10,19 +10,24 @@
 > Status key: ✅ done · 🔵 active · ⬜ pending · 🚫 blocked. `blockedBy` = task ids that
 > must finish first. `spec` = the `## header` in NANITE-SPEC.md (+ D-N* / file refs).
 
-## YOU ARE HERE — 2026-06-16  →  **READ LOG `bv` then `bu` FIRST.**
-**TERRAIN-RW committed (`ff0511a`): QEM coarse terrain → heightmap-native REGULAR-GRID LOD; fans gone, boot 15× faster.**
-**PERF-VB3 camera path DONE this session (LOG bv, NOT yet committed): HIER is the SOLE world-camera cull, `nanitedag=all`
-is the DEFAULT, the whole world renders through the BFS at 95-98 fps (faster than brute) with full forest. The KEY fix
-was the missing DRAW ENVELOPE in `kSeedRoots` (hier had no far bound → 688k cl flood; with the per-mesh lodDist envelope
-→ 130k @ 98). Terrain hier roots via an ANCHOR-CHAIN (`buildHeightGridHierarchy`). The LOD knobs (instMinPx/lodNear/
-lodPow) were DEBUG-ONLY — now wired into `NaniteFrame`.** Remaining:
-1. **SHADOWS → HIER (NEXT — user-acked), then DELETE BRUTE.** The brute kernels (kInstCull/kChunkArgs/kClusterCull/
-   lodSelectAndPush/phase-2) + NaniteView `?hier` + raster depth2/phase-2 STAY only because the shadow culls
-   (`NaniteShadow`/`NaniteShadowClip`) still run brute on ORTHO light cams. Migrate them to hier (the traverse projects
-   ownError with PERSPECTIVE projK — ortho needs handling; S4 "DAG-decoupled caster LOD" suggests using the MAIN camera's
-   projK for the caster cut + the light ortho only for the frustum). THEN delete the whole brute path.
-2. **TERRAIN-RW tail:** skirt depth → error-sized (∝ measured edge error, not the fixed `24+12·level`).
+## YOU ARE HERE — 2026-06-16  →  **READ LOG `bw` then `bv` FIRST.**
+**TERRAIN-RW (`ff0511a`) + PERF-VB3 camera (`6123c60`) committed: HIER is the SOLE world cull, `nanitedag=all` default.**
+**SHADOW-HIER + S3-perf + BRUTE DELETION all DONE this session (LOG bw, NOT yet committed). The hierarchical DAG-BFS is now
+the ONLY cull path in the engine — camera AND both shadow paths (clipmap + cascades). The legacy two-phase brute cull is
+DELETED (NaniteCull 975→643 lines; chunk/reject buffers gone; `?shadowhier`/`?shadowoccl`/NaniteView `?hier`/`?phase2`
+retired).** Highlights:
+- **S3-perf SHARED CROSS-LEVEL clipmap cull (`NaniteClipCull.ts`):** the cut is identical across clipmap levels, so ONE
+  hier traverse (over the largest re-rastering level's box; gated on the R1 cadence) + cheap per-level frustum+hollow FILTERS
+  replace N full traversals. PARITY EXACT, tied-or-FASTER than brute (bm7 −0.4 noise, vista +0.3; static identical), ~3.6×
+  lighter memory. Caveat: assumes one τ across levels (a future per-level-τ S4-on-clipmap breaks the shared cut).
+- **First-cut per-level hier** (the simple migration) was −2..−8 fps vs brute (equal cut size ⇒ no draw-envelope win, only
+  added overhead); S3-perf was the user-chosen fix before deletion. `probe-shadowhier`/`probe-hierdepth` are the gates.
+- **Validated post-deletion:** world clipmap 119.9/70 fps @ 517,850 cl (== pre-deletion), cascades 120/71.8 @ 1.43M, Nanite
+  view boots — zero regression. `HIER_MAX_DEPTH` default 18 (BFS converges at 9 in bm7 but the safe bound is the leaf-DAG
+  ~14-16; `?hierdepth` knob).
+
+Remaining:
+1. **TERRAIN-RW tail:** skirt depth → error-sized (∝ measured edge error, not the fixed `24+12·level`).
 3. **N9 cross-instance MERGE (#48)** — the proper far-field bound (render distant forest as merged super-clusters instead
    of dropping it at the envelope) ⇒ removes the per-instance floor so instMinPx isn't a density/fps trade.
 4. **CLUSTER FLOOR / impostor far-field** — the established big perf lever (cut on-screen triangle count).
@@ -171,7 +176,8 @@ N0 scaffold ✅ · N1 clusterize ✅ · N2 cull ✅ · N3 vis-buffer ✅ · N4 m
 | id | task | status | blockedBy | spec | scope |
 |----|------|--------|-----------|------|------|
 | `S3` | Screen-density shadow clipmap | ✅ | — | D-N29(1) | DONE 6154604 — `NaniteShadowClip.ts`, `?shadowclip` default on |
-| `S3-perf` | Shared inst-cull across levels + variable-T | ⬜ | — | D-N29 | DAG-independent clipmap perf (~1ms each); BELOW `PERF-3` in priority |
+| `SHADOW-HIER` | Shadow culls → hier BFS + delete brute | ✅ | — | LOG bw | **DONE (uncommitted).** Both shadow culls run the hier BFS; the brute cull path is fully DELETED (NaniteCull 975→643, chunk/reject buffers gone, `?shadowhier`/`?shadowoccl`/NaniteView `?hier` retired). PARITY EXACT, visual A/B identical, validated post-deletion (zero regression). `probe-shadowhier`/`probe-hierdepth`. |
+| `S3-perf` | Shared cross-level clipmap cull (`NaniteClipCull.ts`) | ✅ | — | D-N29; LOG bw | **DONE (uncommitted) — the brute-deletion unlock.** ONE hier traverse (largest re-rastering level's box, R1-gated) + cheap per-level frustum+hollow FILTERS replace N full traversals. Tied-or-FASTER than brute (bm7 −0.4 noise, vista +0.3, static identical), ~3.6× lighter. Caveat: assumes one τ/level (per-level-τ S4 would break the shared cut). REMAINING: variable-T per level (a fill-cost lever, separate). |
 | `S1` | WPO-freeze / static-dynamic split | ⬜ | — | D-N29(2) | fixes stale static-camera wind shadows |
 | `S4` | DAG-decoupled caster coarsening | 🚫 | `N9` | D-N29(2) | full value needs foliage DAG; minPx+DAG on the clipmap's coarse far levels |
 | `S5` | Capsule-SDF + contact shadows | ⬜ | — | D-N29(5) | beauty ceiling, optional |
