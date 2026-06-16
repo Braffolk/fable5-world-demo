@@ -17,7 +17,14 @@
 40k trees / 335k visCl → frameMs ~24 ms with `world1` raster **~15 ms dominating** (vs the CPU-bound world vista that hides
 it). The tree raster is LEAF-cluster-heavy (per-crown leaf DAGs are ~5–9k clusters at lod0). The levers are already listed
 below: N9-C3 impostor retirement, N8-HIC cross-instance MERGE (#48), CLUSTER FLOOR / impostor far-field. Use the forest
-testbed (`probe-forestfull.ts`) to drive them. **User wants to discuss PARALLEL AGENT HARNESSES next to speed this up.**
+testbed (`probe-forestfull.ts`) to drive them.
+**PARALLEL AGENT HARNESS NOW EXISTS → see `docs/NANITE-PERF-WORKFLOW.md` (read it before any perf push).** A multi-agent
+workflow (RASTER-FORGE) does perf work via measurement-gated, adversarial parallel review — built to defeat the
+single-LLM "mirage" failure mode (LOG bd–bg) and reach novel levers. KEY CORRECTION baked in: with `instminpx=128` the
+far field is ALREADY impostored, so the ~15ms `world1` cost is the NEAR/MID crowns — far-field `merge` (#48) is the WRONG
+lever for it; per-cluster overhead on the drawn clusters is the prime suspect (TO BE MEASURED, not assumed). Run-1
+(`raster-forge-run1-diagnose`) is DIAGNOSIS-FIRST: measure what actually costs → adversarially confirm → open ideation
+(every idea must attack a CONFIRMED driver). Lean path = `?nanitedbg=flat` (NOT plain forest = full pipe).
 
 PRIOR (committed earlier): TERRAIN-RW (`ff0511a`) + PERF-VB3 camera (`6123c60`): HIER is the SOLE world cull, `nanitedag=all`
 default. SHADOW-HIER + S3-perf + BRUTE DELETION (`4daf005`, LOG bw). The hierarchical DAG-BFS is now

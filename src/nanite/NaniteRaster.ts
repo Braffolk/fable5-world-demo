@@ -210,10 +210,25 @@ export function buildNaniteRaster(
   // 0) but keeps the exact-depth sentinel (depthV → 0xffffffff, atomicMin).
   const packedClear = packed || singlePass;
   const pixelCount = width * height;
-  // PERF-3 raster ablation (?rdbg=1|2): BUILD-TIME gate — 0 / absent emits the
-  // depth kernel UNCHANGED (production pristine, zero instrumentation). Used to
-  // attribute nanRasterDepth's per-triangle setup (resolution scaling proved it
-  // ~70% setup-bound) to its sub-stages — see the two sinks in the depth kernel.
+  // PERF-3 raster ablation (?rdbg): BUILD-TIME gate — 0 / absent emits the kernel
+  // UNCHANGED (production pristine, zero instrumentation). Two independent stage
+  // splits live behind it, dispatched by which kernel actually runs in a config:
+  //
+  //  • DEPTH kernel (shadow-only): rdbg 1/2/3 attribute nanRasterDepth's per-triangle
+  //    setup (resolution scaling proved it ~70% setup-bound) — the three depth sinks.
+  //
+  //  • WORLD1 kernel (the full-pipe camera raster, the PERF LEVER #1 measure-first
+  //    gate): rdbg 4→1→2→3 are nested STOP points for the launch-vs-setup-vs-pixel
+  //    split — 4 = raw launch (before makeCtx), 1 = +makeCtx/wgcache FLOOR, 2 = +the
+  //    per-triangle edge-setup (skip per-pixel), 3 = full. See the four world1 sinks.
+  //    FINDING (2026-06-16 LEVER #1 run): at the forest operating point the per-PIXEL
+  //    coverage/election loop is ≈90% of world1; launch+makeCtx+edge-setup together
+  //    are < the 8.3 ms vsync floor even at 3.3M clusters / 2× res, and pure launch is
+  //    < 2.5 ns/wg (≤ ~1.2 ms at 477k cl) ⇒ triangle-granular re-dispatch (#1) is
+  //    bounded-marginal and was NOT implemented. CAVEAT for re-measuring: the gutted
+  //    variants run at the 120 fps rAF cap, where the c.nanRasterWorld1 GPU timestamp
+  //    reads a BOGUS constant ~15.2 ms (cross-frame pipelining span, not active GPU
+  //    time) — only GPU-BOUND (frameMs ≫ 8.3) readings of these variants are valid.
   const rdbg = Number(new URLSearchParams(window.location.search).get('rdbg') ?? '0');
   // PERF-3 (LOG az/ba): one workgroup == one cluster (128 threads share instId/ci),
   // but makeCtx ran PER THREAD (128×/cluster, incl. the trunk gust texture samples) =
@@ -296,6 +311,18 @@ export function buildNaniteRaster(
       const item = qRasterRO.element(itemIdx.add(uint(1)));
       const instId = item.x.toVar();
       const ci = item.y.toVar();
+      if (mode === 'world1' && rdbg === 4) {
+        // RAW LAUNCH floor (?rdbg=4): return BEFORE makeCtx + the wgcache broadcast —
+        // isolates the pure workgroup-launch cost of the QRASTER_CAP×128 grid (one
+        // wg/cluster) from makeCtx. (rdbg1 − rdbg4) = makeCtx + the wgcache barrier;
+        // rdbg4 = the launch overhead the triangle-granular re-shape directly attacks
+        // (it dispatches a flat ~visTris grid instead of one near-empty wg/cluster).
+        // Thread-0-only sink (1 atomic/wg) consumes item so the work-item read stays.
+        If(localTri.equal(uint(0)), () => {
+          atomicMin(visDepthV.atomic.element(instId.add(ci).mod(uint(pixelCount))), instId);
+        });
+        returnIf(itemCount.greaterThanEqual(uint(0)));
+      }
       let ctx: VertCtx;
       if (wgcache) {
         // Compute makeCtx ONCE (thread 0), broadcast through workgroup shared
@@ -401,6 +428,43 @@ export function buildNaniteRaster(
         const sinkV = ctx.A.x.add(toF(ctx.triCount)).add(wSink).clamp(0, 1);
         const sinkPx = itemIdx.mul(uint(2654435761)).add(localTri).mod(uint(pixelCount));
         atomicMin(visDepthV.atomic.element(sinkPx), bcF2U(sinkV as unknown as NF));
+        returnIf(itemCount.greaterThanEqual(uint(0)));
+      }
+
+      // PERF LEVER #1 STAGE-SPLIT (?rdbg on the WORLD single-pass kernel) — the
+      // measure-first STOP gate that sizes the launch+ctx FLOOR (killable by the
+      // triangle-granular re-shape) vs the per-triangle edge-setup (NOT killable —
+      // same triangles either way) vs the per-pixel coverage loop. Build-time gate,
+      // production pristine when rdbg==0. Numbering is world1-LOCAL (independent of
+      // the depth kernel's 1/2/3):
+      //   rdbg=1 → STOP right after makeCtx/wgcache broadcast = launch+ctx FLOOR
+      //            (workgroup launch + barrier + the per-cluster makeCtx broadcast;
+      //            skips ALL per-triangle work). The per-cluster slice of this floor
+      //            is the ~4.3 ms "fixed term" candidate the re-shape can reclaim.
+      //   rdbg=2 → ALSO do the per-triangle work (3× fetchWorldVert + vp transform +
+      //            ndc + fixed-point snap + bbox + edge setup) but SKIP the per-pixel
+      //            coverage loop + atomics (sink at the loop entry — see below).
+      //   rdbg=3 → full kernel (== rdbg unset for world1).
+      // (rdbg2 − rdbg1) = per-triangle edge-setup; (rdbg3 − rdbg2) = per-pixel loop.
+      if (mode === 'world1' && rdbg === 1) {
+        // launch+ctx FLOOR: consume the broadcast ctx so makeCtx + the wgcache
+        // barrier survive DCE, then unconditionally return BEFORE any corner fetch
+        // or triangle work. CRITICAL — the sink fires only on thread 0 (ONE atomic
+        // per workgroup, not 128): the idle lanes (localTri ≥ triCount) do NOTHING
+        // in the REAL kernel, so making all 128 lanes atomicMin here would inject
+        // ~61M atomics of artificial contention that the production floor never
+        // pays (the mirage trap). One atomic/workgroup matches the real coverage
+        // floor while still pinning makeCtx + the wgcache barrier (all 128 lanes
+        // reach the barrier, so the launch+barrier cost is fully timed). The sink
+        // folds A.x + triCount + wind so the per-cluster gust samples can't be DCE'd.
+        If(localTri.equal(uint(0)), () => {
+          const wSink = ctx.wind
+            ? ctx.wind.leanBase.add(ctx.wind.swayPhase).add(ctx.wind.branchBase)
+            : float(0);
+          const sinkV = ctx.A.x.add(toF(ctx.triCount)).add(wSink).clamp(0, 1);
+          const sinkPx = itemIdx.mod(uint(pixelCount));
+          atomicMin(visDepthV.atomic.element(sinkPx), bcF2U(sinkV as unknown as NF));
+        });
         returnIf(itemCount.greaterThanEqual(uint(0)));
       }
 
@@ -568,13 +632,16 @@ export function buildNaniteRaster(
                 const sy2 = ey2.mul(toI(256)).toVar();
                 const rcpArea = float(1).div(toF(area2 as unknown as NI)).toVar();
 
-                if (mode === 'depth' && rdbg === 2) {
+                if ((mode === 'depth' || mode === 'world1') && rdbg === 2) {
                   // ?rdbg=2 — stop right before the scanline loop. The sink folds
                   // the edge-setup vars (rcpArea, rw0..2, the per-pixel steps) so
                   // none are sunk past / DCE'd, forcing the full per-triangle
                   // setup to be timed. (rdbg2 − rdbg1) = near/backface + ndc +
-                  // fixed-point snap + bbox + edge setup; (full − rdbg2) = the
-                  // per-pixel loop (coverage + depth interp + atomicMin).
+                  // fixed-point snap + bbox + edge setup + the 3× fetchWorldVert
+                  // (world1's rdbg=1 stops BEFORE any corner fetch); (rdbg3 − rdbg2)
+                  // = the per-pixel loop (coverage + depth interp + the election
+                  // atomicMax/atomicStore). Shared by the depth + world1 kernels —
+                  // only the rdbg-gated CONFIG that's actually dispatched matters.
                   const sinkV = rcpArea
                     .add(toF(rw0 as unknown as NI))
                     .add(toF(rw1 as unknown as NI))

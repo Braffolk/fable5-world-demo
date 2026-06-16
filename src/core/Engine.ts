@@ -134,11 +134,15 @@ export class Engine {
     void this.renderer.setAnimationLoop((timeMs) => this.frame(timeMs));
   }
 
-  private frame(timeMs: number): void {
-    const t = timeMs / 1000;
-    const rawDt = this.lastT === null ? 1 / 60 : t - this.lastT;
-    this.lastT = t;
-    const dt = Math.min(Math.max(rawDt, 0), 0.1);
+  /**
+   * Advance + render ONE frame's worth of work (update fns → render/post),
+   * recording cpu.update/submit. Shared by the rAF loop AND the manual
+   * measurement harness (MeasureHarness) — the harness drives this directly,
+   * draining the GPU around it, so the per-pass timestamp is honest active
+   * GPU time and not the vsync cross-frame pipelining span (see MeasureHarness).
+   * Returns the wall-clock submit span (ms) so the caller can attribute.
+   */
+  renderStep(dt: number): void {
     this.elapsed += dt;
     if (!this.params.freeze) this.worldTime += dt;
 
@@ -158,6 +162,24 @@ export class Engine {
     const c2 = performance.now();
     this.stats.counters['cpu.updateMs100'] = Math.round((c1 - c0) * 100);
     this.stats.counters['cpu.submitMs100'] = Math.round((c2 - c1) * 100);
+  }
+
+  /** the WebGPU device (for GPU-drain barriers in the measurement harness) */
+  get device(): GPUDevice | null {
+    return (this.renderer.backend as unknown as { device?: GPUDevice }).device ?? null;
+  }
+
+  /** the live GpuProfiler, or null when timestamp-query is unsupported */
+  get gpuProfiler(): GpuProfiler | null {
+    return this.profiler;
+  }
+
+  private frame(timeMs: number): void {
+    const t = timeMs / 1000;
+    const rawDt = this.lastT === null ? 1 / 60 : t - this.lastT;
+    this.lastT = t;
+    const dt = Math.min(Math.max(rawDt, 0), 0.1);
+    this.renderStep(dt);
     this.collectStats(rawDt);
 
     if (this.settleWaiters.length > 0) {

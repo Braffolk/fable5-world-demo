@@ -144,6 +144,30 @@ async function boot(): Promise<void> {
   hooks.flyCamEnabled = (on) => {
     fly.enabled = on;
   };
+  // HONEST per-pass GPU timing (vsync-artifact-proof) — built lazily on first
+  // call (refresh measurement needs the rAF loop live) and reused. A single
+  // in-flight guard serializes concurrent calls (the GPU is one shared device).
+  {
+    const { MeasureHarness } = await import('./core/MeasureHarness');
+    let harness: Awaited<ReturnType<typeof MeasureHarness.create>> | null = null;
+    let inFlight: Promise<unknown> | null = null;
+    hooks.measureFrames = async (opts) => {
+      while (inFlight) await inFlight.catch(() => undefined);
+      const run = (async () => {
+        if (!harness) harness = await MeasureHarness.create(engine);
+        if (!harness) return [];
+        const frames = await harness.measure(opts);
+        const refreshMs = harness.refreshMs;
+        return frames.map((f) => ({ ...f, refreshMs }));
+      })();
+      inFlight = run;
+      try {
+        return await run;
+      } finally {
+        inFlight = null;
+      }
+    };
+  }
 
   engine.start();
   await engine.settle(6);

@@ -63,6 +63,35 @@ export interface LaasHooks {
   settle: ((frames?: number) => Promise<void>) | null;
   /** enable/disable fly-camera input (flythrough takes the wheel) */
   flyCamEnabled: ((on: boolean) => void) | null;
+  /**
+   * HONEST per-pass GPU timing — drives frames manually, GPU-bound + isolated,
+   * so the per-pass timestamp is real active GPU time and NOT the vsync
+   * cross-frame pipelining artifact (see MeasureHarness). Returns one entry per
+   * isolated frame. null when timestamp-query / device is unavailable.
+   */
+  measureFrames:
+    | ((opts: MeasureFramesOpts) => Promise<MeasuredFrameWire[]>)
+    | null;
+}
+
+/** options for __laas.measureFrames (serializable across the Playwright boundary) */
+export interface MeasureFramesOpts {
+  frames: number;
+  warmup?: number;
+  dt?: number;
+  /** idle cooldown (ms) between samples — defeats the flat-out thermal drift */
+  cooldownMs?: number;
+}
+
+/** a measured frame, serializable across the Playwright boundary */
+export interface MeasuredFrameWire {
+  passes: Record<string, number>;
+  gpuWallMs: number;
+  cpuSubmitMs: number;
+  counters: Record<string, number>;
+  capSuspect: boolean;
+  /** the harness's measured refresh interval (ms) — for cap-immunity reporting */
+  refreshMs: number;
 }
 
 declare global {
@@ -87,6 +116,7 @@ export function initHooks(): LaasHooks {
     setTimeOfDay: null,
     settle: null,
     flyCamEnabled: null,
+    measureFrames: null,
   };
   window.__laas = hooks;
   return hooks;
