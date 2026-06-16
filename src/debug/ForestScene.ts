@@ -25,7 +25,11 @@ import { type DagBuild, buildDag } from '../nanite/BuildDag';
 import { buildAggregateDag } from '../nanite/BuildAggregateDag';
 import { geometryToSource } from '../nanite/WorldRegistry';
 import { buildNaniteView } from '../nanite/NaniteView';
-import type { Heightfield } from '../world/Heightfield';
+import { Heightfield } from '../world/Heightfield';
+import { SunSky } from '../sky/SunSky';
+import { PostStack } from '../render/PostStack';
+import { updateSunUniforms } from '../render/VegMaterials';
+import { setWindContext } from '../render/Wind';
 
 /** per-species leaf tint → matParam (linear RGB low 3 bytes + hueVar high byte) */
 function packLeafTint(c: { r: number; g: number; b: number; hueVar: number }): number {
@@ -174,14 +178,54 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
     }
   }
 
-  // ── render: the lean cull→raster→resolve view (a dummy heightTex — tree
-  //    clusters never sample it; only terrain clusters do, and there are none) ─
-  const heightTex = new StorageTexture(1, 1);
-  heightTex.type = FloatType;
-  const hf = { heightTex } as unknown as Heightfield;
-  const view = buildNaniteView(engine, reg, hf, mode);
-  engine.post = view as unknown as typeof engine.post;
-  engine.onUpdate(() => view.meter(engine.renderer));
+  // ── render path ───────────────────────────────────────────────────────────
+  // DEFAULT (`?nanite=1` without `?nanitedbg`) = the STANDARD WHOLE PIPE on isolated
+  // trees: the real NaniteFrame (world1 raster → NaniteResolve bark/leaf PBR shading →
+  // PostStack), so tree render speed can be profiled through the actual pipeline, not
+  // just the flat debug resolve. `?nanitedbg=cluster|flat|lod` keeps the lean NaniteView.
+  const nanitedbg = q.get('nanitedbg');
+  const fullFrame = q.get('nanite') === '1' && !nanitedbg && q.get('naniteframe') !== '0';
+
+  if (fullFrame) {
+    // The forest has NO terrain clusters, so the resolve's required hf maps are bound
+    // but NEVER sampled (terrain shading is gated on terrain pixels). Generate a real
+    // heightfield purely so those bindings are valid + correctly formatted; the trees
+    // sit at y=0 over it (the terrain itself is not in the registry, so not rendered).
+    // GI/CSM/canopy = null (no GI bounce, no shadows — forest trees are castShadows:false
+    // anyway; a shadow profile is a separate follow-up). Bark textures come from VegLib.
+    ctx.progress(0.93, 'forest: env for the full pipe (heightfield + sky + post)');
+    const hf = await Heightfield.generate(engine.renderer, ctx.params, seed, (p, m) =>
+      ctx.progress(0.93 + p * 0.05, m),
+    );
+    const bootTod = ctx.params.timeOfDay;
+    const sunSky = new SunSky(engine, bootTod);
+    await sunSky.init(engine.renderer);
+    updateSunUniforms(sunSky.sun);
+    // trunk/leaf sway reads a module-global wind context (set by the world scene) — the
+    // raster + resolve both sample it, so it must exist before buildNaniteFrame.
+    if (hf.noiseA) setWindContext({ noiseA: hf.noiseA, canopyTex: null });
+    const post = new PostStack(engine, sunSky.atmosphere, bootTod);
+    const { buildNaniteFrame } = await import('../nanite/NaniteFrame');
+    const frame = buildNaniteFrame(engine, reg, hf, post, {
+      gi: null,
+      canopyTex: null,
+      csm: null,
+      barkTexA: lib.barkArray?.texA ?? null,
+      barkTexB: lib.barkArray?.texB ?? null,
+    });
+    engine.post = frame as unknown as typeof engine.post;
+    engine.onUpdate(() => frame.meter(engine.renderer));
+    // eslint-disable-next-line no-console
+    console.log('[forest] FULL-FRAME pipe (NaniteFrame resolve + post) — ?nanitedbg=cluster for the lean debug view');
+  } else {
+    // lean cull→raster→flat-resolve debug view (dummy 1×1 heightTex — never sampled).
+    const heightTex = new StorageTexture(1, 1);
+    heightTex.type = FloatType;
+    const hf = { heightTex } as unknown as Heightfield;
+    const view = buildNaniteView(engine, reg, hf, mode);
+    engine.post = view as unknown as typeof engine.post;
+    engine.onUpdate(() => view.meter(engine.renderer));
+  }
 
   // camera inside the forest at eye height, looking horizontally
   ctx.hooks.initialPose = { p: [0, 2, 0], yaw: 0.6, pitch: -0.02 };
