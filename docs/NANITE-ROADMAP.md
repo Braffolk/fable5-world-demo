@@ -10,9 +10,19 @@
 > Status key: ✅ done · 🔵 active · ⬜ pending · 🚫 blocked. `blockedBy` = task ids that
 > must finish first. `spec` = the `## header` in NANITE-SPEC.md (+ D-N* / file refs).
 
-## YOU ARE HERE — 2026-06-15
-**FRONTIER: N9 — foliage as REAL geometry. N9-C0 (leaf plumbing) LANDED at an OKAY state (user-accepted). Read SPEC
-`### Foliage (N9)` (esp. the "N9-C0 LANDED" note) + LOG bl before continuing.**
+## YOU ARE HERE — 2026-06-16  →  **READ LOG `bt` (session handoff) FIRST.**
+**The N8-HIC vis-buffer rewrite landed (forest 3× faster, race-free, hier default) — committed `5ceda95`. THREE jobs
+queued, full detail in LOG `bt`:**
+1. **PERF-VB3 — make hier apply in the WORLD** (`NaniteFrame` currently ignores `?hier`, runs brute-force, has NONE of
+   the wins). BLOCKER: terrain tiles have no hier roots (`attachHeightDagTile` never sets rootBase/Count) ⇒ naive flip
+   vanishes terrain. Start with a HYBRID cull (hier for veg + gated brute for terrain), keep the world's two-pass raster.
+2. **TERRAIN COARSE-REPR REWORK (user: "garbage, needs SIGNIFICANT rework")** — the N8-D2 height-DAG/RTIN coarse terrain
+   alters shape (holes / upward walls / random slopes / hides trees) and is slow. Rework to HEIGHTMAP-NATIVE coarse LOD
+   (downsample the height texture → regular grids; CDLOD/clipmap style), NOT geometry-domain simplification. This ALSO
+   gives terrain clean hier roots → solves job 1's blocker properly.
+3. **CLUSTER FLOOR / impostor far-field** — the established big perf lever (cut on-screen triangle count).
+
+(Prior frontier, still open under N9: foliage-as-geometry. N9-C0 landed OKAY — see SPEC `### Foliage (N9)` + LOG bl.)
 - **N9-C0 DONE (LOG bl):** the hero `foliageMesh` renders through the nanite path as MATERIAL_CLASS.leaf — lit (isL
   resolve: tint+hue+AO+warm backlight, OPAQUE, double-sided via geometry-dup), per-leaf flutter on the FULL
   vegWindOffset synced to the trunk (shared world-pos wind key), `?naniteleaf=1` / `?naniteleafdensity=N` (default 4000),

@@ -9,6 +9,47 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-16 (bt): **SESSION HANDOFF — hier-in-world plan + terrain coarse-repr is broken (user). Read this first.**
+  STATE: committed at `5ceda95`. The FOREST testbed (`?scene=forest`) is fast (16.7ms cold / race-free) and hier is the
+  DEFAULT in `NaniteView` (forest + `?nanitedbg=`). The WORLD (`NaniteFrame`) is UNCHANGED — still brute-force two-pass,
+  has received NONE of the vis-buffer/hier wins; `?hier` is not even read there. Two big jobs remain:
+
+  **(1) MAKE HIER APPLY IN THE WORLD (PERF-VB3).** Blocker found: TERRAIN is not hier-ready. `attachHeightDagTile`
+  (GeometryRegistry:1495, the terrain streaming attach) writes cluster+DAG records but NEVER sets `rootBase`/`rootCount`
+  or builds the `dagLinks` hierarchy (stays 0, line 1842). The hier seed does `returnIf(rootCount==0)` ⇒ a naive world→hier
+  flip makes TERRAIN VANISH. Vegetation IS hier-ready (goes through `attachDag` → `buildDagHierarchy`). Plan, in order:
+    - **a. HYBRID CULL first (pragmatic):** run hier-BFS for DAG meshes (veg) AND a gated brute pass for `rootCount==0`
+      meshes (terrain) in the same frame, both filling qRaster. MUST gate `kInstCull` to SKIP `rootCount>0` meshes (else
+      veg double-renders: once brute, once hier). This gets the hierarchical cull onto the WORLD'S TREES without touching
+      terrain. The alternative (build per-tile terrain roots) is deferred to the terrain rework below.
+    - **b. `NaniteFrame` → hier:** add `hier:true` to its `buildNaniteCull` opts (line 180); change the render sequence
+      (382-396) to the hier shape (runPhase1 → syncFullArgs → clearVis → depth1 → hwDepth → hzb → payload; SKIP depth2 +
+      late hwDepth, like PERF-VB1). KEEP the TWO-PASS raster (depth/payload, NON-packed) for the world initially — it's
+      race-free by construction and works with the world resolve + depth unchanged. (The `packed` combined single-pass is
+      a later step: the world resolve composites water/fog against depth, so its packed depthNode must RECOMPUTE exact cz
+      from the reconstructed triangle, not the forest's 16-bit visA-key approximation.)
+    - **c. SHADOWS** (`NaniteShadow`/`NaniteShadowClip`): own brute culls + ORTHO cams. The hier traverse projects ownError
+      with perspective `projK` — needs ortho handling before shadows can go hier. Lower priority; they only need the depth
+      raster (no payload), so leave them last.
+    - **d. DELETE** the brute-force kernels (kInstCull/kChunkArgs/kClusterCull + phase-2 kInstCull2/kClusterCull2/2b/
+      kPhase2Args + lodSelectAndPush + the rejInst/rejClust buffers) + the camera two-pass (depth2/payload modes) ONLY
+      after a/b/c so nothing references them. The `'depth'` raster mode STAYS (shadows use it).
+
+  **(2) TERRAIN COARSE REPRESENTATION IS BROKEN + SLOW — needs SIGNIFICANT REWORK (user, this session).** The N8-D2
+  height-DAG / RTIN adaptive coarse terrain SIGNIFICANTLY alters the terrain shape: HOLES, spurious UPWARD WALLS, random
+  SLOPES, and it HIDES TREES in some areas. It is also SLOW. USER'S KEY INSIGHT: we HAVE a heightmap, yet we run a slow
+  geometry-domain simplification (QEM/RTIN on the built mesh) to make the coarse LOD — we should instead generate the
+  coarse terrain DIRECTLY FROM THE HEIGHTMAP (downsample the height texture → regular coarse grids; geometry-clipmap /
+  CDLOD style) for a super-fast, shape-faithful coarse repr. This is a bigger task. NOTE it also dovetails with (1): a
+  heightmap-mip LOD pyramid gives terrain a CLEAN regular-grid hierarchy ⇒ natural hier roots ⇒ solves the (1a) terrain
+  blocker properly (vs the hybrid stopgap). So the right long-term order may be: terrain rework → terrain gets real hier
+  roots → full hier world (no hybrid needed).
+
+  **(3) THE BIG PERF LEVER (separate, established this session):** the raster is GPU-bound on the per-vertex transform
+  VOLUME, not any single op — the win is cutting ON-SCREEN TRIANGLE COUNT (the cluster floor): impostor far-field +
+  cross-instance merge so distant foliage stops emitting ≥1 cluster/tree. `?instminpx` proves the gain (0→256: GPU
+  24→14ms). This is orthogonal to (1)/(2).
+
 - 2026-06-16 (bs): **RACE-FREE PACKED VIS BUFFER (the combined-pass flicker fix) + hier DEFAULT + wind cheapened +
   the perf-investigation findings.** (Opus 4.8 1M.)
   - **RACE-FREE VIS BUFFER** (the user's "a branch behind the trunk flickers through it"). The PERF-VB2 combined pass
