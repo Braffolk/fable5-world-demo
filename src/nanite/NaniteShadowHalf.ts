@@ -44,7 +44,7 @@ import type { NB, NF, NU, NV3 } from '../gpu/TSLTypes';
 import type { NaniteCam } from './NaniteCommon';
 import type { NaniteShadow } from './NaniteShadow';
 import type { NaniteVisBuffers } from './NaniteRaster';
-import { bcU2F, dispatch, elemU, minU, toF } from './Tsl';
+import { dispatch, elemU, minU, toF } from './Tsl';
 
 interface NamedKernel {
   setName(n: string): unknown;
@@ -94,9 +94,11 @@ export function buildShadowHalf(
   const reconstruct = (x: NU, yTop: NU): { wp: NV3; empty: NB } => {
     const fy = uint(H - 1).sub(yTop); // bottom-up row index into the vis buffer
     const pixelIndex = fy.mul(uint(W)).add(x);
-    const dRaw = elemU(vis.depthV.ro, pixelIndex).toVar();
-    const empty = dRaw.equal(uint(0xffffffff)) as unknown as NB;
-    const visD = bcU2F(dRaw);
+    // PERF-VB4 single-pass: reconstruct from the 24-bit election key (visPayloadV high
+    // bits), empty = key 0. cz = 1 − (key>>8)/16777215; same wp expression as the resolve.
+    const elect = elemU(vis.payloadV.ro, pixelIndex).toVar();
+    const empty = elect.equal(uint(0)) as unknown as NB;
+    const visD = float(1).sub(toF(elect.shiftRight(uint(8))).div(16777215)) as unknown as NF;
     const ndcX = toF(x).add(0.5).div(float(W)).mul(2).sub(1);
     const ndcY = toF(fy).add(0.5).div(float(H)).mul(2).sub(1);
     const hp = (cam.invVp as unknown as { mul(v: unknown): NV3 }).mul(

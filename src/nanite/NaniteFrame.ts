@@ -141,11 +141,7 @@ export function buildNaniteFrame(
     tally('HF-DAG', (f) => (f & 1) !== 0 && (f & 2) !== 0);
   }
   const occl = params.get('occl') !== '0';
-  /** ?nanhw=0 — bisect: skip the HW big/near-tri passes (expect bbox-routed
-   *  holes; isolates which raster path wrote a disputed depth) */
-  const hwOn = params.get('nanhw') !== '0';
   const frozenParam = params.get('cullfreeze') === '1';
-  const auditOn = params.get('audit') === '1';
   // N8-D1 continuous-LOD cut threshold τ (screen-error px; 1 = sub-pixel error).
   // The cull applies it per DAG cluster (project(own)≤τ AND project(parent)>τ);
   // pre-DAG / terrain pools ignore it. ?loderr=N to coarsen/refine for A/B and
@@ -182,7 +178,9 @@ export function buildNaniteFrame(
 
   const cam = makeNaniteCam(size.x, size.y);
   const vis = makeVisBuffers(size.x * size.y);
-  const hzb = buildNaniteHzb(vis.depthV.ro, cam);
+  // PERF-VB4 (D-N45): the WORLD is single-pass — the HZB reads the packed depth key from
+  // the election anchor (visPayloadV high bits, packed=true), there is no exact depthV.
+  const hzb = buildNaniteHzb(vis.payloadV.ro, cam, true);
   const cull = buildNaniteCull(
     registry.gpu,
     registry.instanceCount,
@@ -213,7 +211,7 @@ export function buildNaniteFrame(
   // rastered geometry and the resolve's barycentric corners stay bit-identical)
   const windOn = params.get('nanwind') !== '0';
   const windOpt = windOn ? { camPos: cam.camPos } : undefined;
-  const raster = buildNaniteRaster(registry.gpu, hf.heightTex, cam, cull, vis, 'flat', true, disp, windOpt);
+  const raster = buildNaniteRaster(registry.gpu, hf.heightTex, cam, cull, vis, 'flat', true, disp, windOpt, false, true);
 
   // Nanite shadows (N5, D-N28): depth-only SW raster into own r32 cascade textures,
   // sampled by the resolve's own PCSS. R1 caches per cascade (re-raster only on a
@@ -402,11 +400,10 @@ export function buildNaniteFrame(
       cull.syncFullArgs(renderer); // full-range args for the payload pass
     }
     raster.clearVis(renderer);
-    raster.depth1(renderer); // SW depth over the hier-culled set
-    if (hwOn) raster.hwDepth(renderer, engine.camera); // big/near tris
-    raster.payload(renderer, engine.camera); // payload vs the depth just written
+    // PERF-VB4 (D-N45): single SW + single HW pass — 24-bit depth election (visPayloadV)
+    // + full-id side buffer (visBV). Replaced the old depth1 → hwDepth → payload 2-pass.
+    raster.world1(renderer, engine.camera);
     if (probeRun && params.get('nanprobeat') === 'payload') probeRun(renderer);
-    if (auditOn) raster.audit(renderer);
     if (!frozen) hzb.build(renderer); // this frame's depth → next frame's occluder
     if (probeRun && params.get('nanprobeat') === 'hzb') probeRun(renderer);
     // Nanite shadows (R0+R1): per-cascade light-frustum cull → depth-only SW
@@ -440,14 +437,9 @@ export function buildNaniteFrame(
     void Promise.all([
       cull.readCounts(r),
       raster.readHwCount(r),
-      auditOn ? raster.readAudit(r) : Promise.resolve(null),
       shadow ? shadow.readCounts(r) : Promise.resolve(null),
     ])
-      .then(([c, hw, aud, sh]) => {
-        if (aud) {
-          engine.stats.counters['nanite.orphans'] = aud.orphans;
-          engine.stats.counters['nanite.covered'] = aud.covered;
-        }
+      .then(([c, hw, sh]) => {
         if (sh) {
           let shTotal = 0;
           for (let i = 0; i < sh.length; i++) {

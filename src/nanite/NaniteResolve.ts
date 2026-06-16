@@ -69,7 +69,7 @@ import type { RegistryGpu } from './GeometryRegistry';
 import { makeFetch, slotHash } from './NaniteFetch';
 import { hashColor, instRotateDir, type NaniteCam } from './NaniteCommon';
 import type { NaniteVisBuffers } from './NaniteRaster';
-import { bcU2F, elemU, toF } from './Tsl';
+import { elemU, toF } from './Tsl';
 import type { BufOf, UV2 } from './Tsl';
 
 export interface NaniteResolveHandles {
@@ -214,6 +214,10 @@ export function buildNaniteResolve(
   // ON. With the producer on, world.naniteShadow drives the PCSS branch below; the
   // csm-only branch is the ?oldgeo fallback (receives the old caster maps).
   const shadowsOn = world.csm !== null && q.get('nanshadow') !== '0';
+  // PERF-VB4 (D-N45): the WORLD raster is single-pass — ONE SW+HW pass elects the 24-bit
+  // depth key into visPayloadV (high bits) and stores the full 25-bit id into the side
+  // buffer visBV. The resolve takes the id from visBV and reconstructs depth from the
+  // election key (cz = 1 − (key>>8)/16777215); there is no exact depthV.
 
   // CLIP-SPACE fullscreen triangle (covers ndc [-1,1]² via (-1,-1),(3,-1),(-1,3))
   const geometry = new BufferGeometry();
@@ -237,7 +241,9 @@ export function buildNaniteResolve(
       () => {
         const fy = float(cam.uH).sub(screenCoordinate.y);
         const pixelIndex = uint(fy).mul(uint(cam.uW)).add(uint(screenCoordinate.x));
-        const zDev = bcU2F(elemU(vis.depthV.ro, pixelIndex));
+        const zDev = float(1).sub(
+          toF(elemU(vis.payloadV.ro, pixelIndex).shiftRight(uint(8))).div(16777215),
+        ) as unknown as NF;
         const wpv = getViewPosition(
           screenUV,
           zDev,
@@ -257,17 +263,15 @@ export function buildNaniteResolve(
     // screenCoordinate is top-down, so flip)
     const fy = float(cam.uH).sub(screenCoordinate.y);
     const pixelIndex = uint(fy).mul(uint(cam.uW)).add(uint(screenCoordinate.x));
-    const dRaw = elemU(vis.depthV.ro, pixelIndex).toVar();
-    const pRaw = elemU(vis.payloadV.ro, pixelIndex).toVar();
-    If(dRaw.equal(uint(0xffffffff)), () => {
+    // id from the full-id side buffer (visBV); depth + covered-test from the 24-bit
+    // election key (visPayloadV high bits). Anchor 0 = no fragment (cleared) → background.
+    const pRaw = elemU(vis.visBV.ro, pixelIndex).toVar();
+    const elect = elemU(vis.payloadV.ro, pixelIndex).toVar();
+    If(elect.equal(uint(0)), () => {
       Discard();
     });
-    If(pRaw.equal(uint(0xffffffff)), () => {
-      Discard();
-    });
-
-    // reconstruct world position from the stored depth (post-chain's pattern)
-    const zDev = bcU2F(dRaw);
+    // 24-bit depth in the high bits (8-bit id tiebreak below) ⇒ cz = 1 − (key>>8)/16777215
+    const zDev = float(1).sub(toF(elect.shiftRight(uint(8))).div(16777215)) as unknown as NF;
     const wpv = getViewPosition(screenUV, zDev, cameraProjectionMatrixInverse) as unknown as NV3;
     const wp = (
       (cameraWorldMatrix as unknown as { mul(v: NV4): NV4 }).mul(
@@ -698,7 +702,8 @@ export function buildNaniteResolve(
   mat.depthNode = Fn(() => {
     const fy = float(cam.uH).sub(screenCoordinate.y);
     const pixelIndex = uint(fy).mul(uint(cam.uW)).add(uint(screenCoordinate.x));
-    return bcU2F(elemU(vis.depthV.ro, pixelIndex)) as unknown as NF;
+    const elect = elemU(vis.payloadV.ro, pixelIndex);
+    return float(1).sub(toF(elect.shiftRight(uint(8))).div(16777215)) as unknown as typeof mat.depthNode;
   })() as unknown as typeof mat.depthNode;
   mat.depthTest = false;
   mat.depthWrite = nandepth !== '0';

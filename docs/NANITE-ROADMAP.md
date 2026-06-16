@@ -10,9 +10,10 @@
 > Status key: ✅ done · 🔵 active · ⬜ pending · 🚫 blocked. `blockedBy` = task ids that
 > must finish first. `spec` = the `## header` in NANITE-SPEC.md (+ D-N* / file refs).
 
-## YOU ARE HERE — 2026-06-16  →  **READ LOG `bw` then `bv` FIRST.**
+## YOU ARE HERE — 2026-06-16  →  **READ LOG `bx` (PERF-VB4: world raster now single-pass, default) then `bw` FIRST.**
 **TERRAIN-RW (`ff0511a`) + PERF-VB3 camera (`6123c60`) committed: HIER is the SOLE world cull, `nanitedag=all` default.**
-**SHADOW-HIER + S3-perf + BRUTE DELETION all DONE this session (LOG bw, NOT yet committed). The hierarchical DAG-BFS is now
+**SHADOW-HIER + S3-perf + BRUTE DELETION committed (`4daf005`, LOG bw). PERF-VB4 single-pass world DONE on top (LOG bx, NOT
+yet committed). The hierarchical DAG-BFS is now
 the ONLY cull path in the engine — camera AND both shadow paths (clipmap + cascades). The legacy two-phase brute cull is
 DELETED (NaniteCull 975→643 lines; chunk/reject buffers gone; `?shadowhier`/`?shadowoccl`/NaniteView `?hier`/`?phase2`
 retired).** Highlights:
@@ -27,7 +28,16 @@ retired).** Highlights:
   ~14-16; `?hierdepth` knob).
 
 Remaining:
-1. **TERRAIN-RW tail:** skirt depth → error-sized (∝ measured edge error, not the fixed `24+12·level`).
+1. **`PERF-VB4` — WORLD raster → SINGLE-PASS ✅ DONE + SHIPPED as default; the 2-pass world path is DELETED (LOG bx, NOT
+   yet committed). user: "make this the default and drop the 2 pass version completely".** `world1` mode = a 24-bit depth
+   `atomicMax` election (`visPayloadV` = `depthKey24<<8|id8`) whose winner stores the full 25-bit id into the side buffer
+   `visBV`; the resolve/HZB/shadowHalf decode depth from the key (no exact depthV). **~1.85× on the raster** (2.8–3.5 vs
+   ~5.3 ms). KEY FINDING that overturned the D-N45 plan: keeping ANY exact-depth write in the pass (depthV = a 3rd atomic
+   storage buffer) is a hard **3× cliff + breaks the kernel's writes** — so depth MUST ride the election key; 16-bit banded
+   (user-caught) → 24-bit fixes it free. Residual: <0.1% wrong-cluster speckle very close to objects (user-accepted; the
+   zero-speckle fix needs native 64-bit atomics, not in browsers). frameMs is CPU-bound here ⇒ the win is GPU headroom, not
+   fps. See D-N45.
+2. **TERRAIN-RW tail:** skirt depth → error-sized (∝ measured edge error, not the fixed `24+12·level`).
 3. **N9 cross-instance MERGE (#48)** — the proper far-field bound (render distant forest as merged super-clusters instead
    of dropping it at the envelope) ⇒ removes the per-instance floor so instMinPx isn't a density/fps trade.
 4. **CLUSTER FLOOR / impostor far-field** — the established big perf lever (cut on-screen triangle count).
@@ -150,6 +160,7 @@ N0 scaffold ✅ · N1 clusterize ✅ · N2 cull ✅ · N3 vis-buffer ✅ · N4 m
 | `PERF-4-TAA` | TAA resolve fork — built, measured non-win, REMOVED | ✅→deleted | `PERF-4` | LOG bf/bg | **DONE — removed.** Built `LeanTraa.ts` (user-sanctioned fork: subclass + faithful resolve copy, neighborhoods shrunk). Measured ~0.45 ms native (NOT ~3 ms — `TRAANode.resolve` is ALU+drain-bound, not fetch-bound; cutting fetches saves ~0). Deleted in cleanup (bg) — not worth a vendored ~240-line library fork for sub-ms. |
 | `AUDIT-1` | Deviation audit vs original Fable 5 spec | ✅ DONE | — | LOG bh; `reference/fable5-original-NANITE.md` | **FAITHFUL.** Core technical contract honored (two-phase occlusion, Option C full-f32 vis-buffer, fixed-point edges, near→HW, HW writes same buffer, registerMesh/bindInstances, wind-phase variation). All deviations D-N*-justified (shadows D-N28/29, black-slate D-N21, terrain-lighting D-N22, velocity D-N16, flat-cut D-N31, terrain-DAG D-N32+). Gaps = unreached phases (N6 partial, N7 deferred by black-slate, N9–N11 pending). ONE drift → `AUDIT-1a`. META: two-frame-vs-main gate re-applies at N7/N10. |
 | `AUDIT-1a` | Per-instance TINT drift — ratify or restore (USER CALL) | ⬜ | — | LOG bh; NaniteResolve/NaniteFetch | Orig variation law needs BOTH `tint=slotHash(slot,17/91)` + `windPhase=slotHash(slot,211)` "or migration clones trees (banned)". Impl reproduces the wind phase but NOT the tint — bark hue is per-VERTEX `vdata.x` (shared across a mesh's ~4k instances). Trees vary by pose+wind, not colour. RESTORE = add `slotHash(instId,17/91)` to the bark/deadwood albedo (~few lines), or RATIFY if pose+wind+per-vertex hue reads varied enough. |
+| `PERF-VB4` | WORLD raster → SINGLE-PASS (drop the 2nd raster pass) | ✅ | LOG bx | **D-N45** | SHIPPED as default; 2-pass world DELETED (mode 'payload', `kRasterDepth2`, HW-payload, `?vb`/`?vbdepth`/`?nanhw`, world `?audit`). `world1` = a 24-bit depth `atomicMax` election (`visPayloadV` = `depthKey24<<8\|id8`) → winner `atomicStore`s the full 25-bit id into `visBV`; resolve/HZB/shadowHalf decode depth from the key (`cz = 1−(key>>8)/16777215`). **~1.85× raster** (2.8–3.5 vs ~5.3 ms). The D-N45 plan (recompute exact depth in the resolve) was OVERTURNED: any exact-depth write = depthV as a 3rd atomic storage buffer = a hard **3× cliff + broken kernel writes** (three.js/Metal), so depth rides the election key. 16-bit banded (user-caught grazing terracing) → 24-bit = sub-pixel, free. Residual <0.1% wrong-cluster speckle very close to objects (user-accepted; zero-speckle needs native 64-bit atomics). frameMs CPU-bound ⇒ GPU headroom, not fps. KEPT: mode 'depth'+depth1+hwDepth (shadows), mode 'combined'+audit (NaniteView debug). |
 
 ## B. DAG (N8) — active workstream (SPEC `### DAG (N8)`)
 | id | task | status | blockedBy | spec | scope |

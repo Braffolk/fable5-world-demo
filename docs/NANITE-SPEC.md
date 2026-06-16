@@ -337,6 +337,15 @@ measurement discipline; shot cycles ~2–3 min, cooled ABAB rounds 15–30 min e
   in one u32 and report "tons of artifacts like z-fighting or leaks"
   (github.com/Scthe/nanite-webgpu README). gpuweb #5071 exists precisely because
   this cannot be emulated.
+- SUPERSEDED 2026-06-16 → **D-N45 / `PERF-VB4`** (SHIPPED): the WORLD raster is now
+  SINGLE-PASS and Option C (the f32 two-pass) is DELETED for the world. A packed 32-bit
+  `atomicMax` elects a **24-bit** depth key (`visPayloadV` = `dk24<<8|id8`, coherent —
+  depth dominates) whose winner `atomicStore`s the full 25-bit id into a SINGLE side
+  buffer (`visBV`, not the tearing 2-buffer split); the resolve/HZB/shadows reconstruct
+  depth from the key. NO exact depthV — keeping it (a 3rd atomic storage buffer) measured
+  a 3× cliff AND broke the kernel's writes. Residual <0.1% wrong-cluster speckle at very
+  close range; the principled fix is native 64-bit atomics (Option B / CAS stays struck).
+  See D-N45 for the full measurement + scope.
 - SHADOW SW raster: single-u32 depth-only atomicMin — no payload, no second pass.
   Perfect fit per cascade (F5/N5).
 - HW big-tri path: fragment shader writes the SAME Option C buffers (pass-1
@@ -1692,6 +1701,45 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
   - FOLLOW-ONS (LOG bu): skirt depth → error-sized (∝ measured edge error, not fixed `24+12·level`); the regular grid
     gives terrain CLEAN HIER ROOTS (coarsest level) for free ⇒ set rootBase/rootCount+dagLinks to solve PERF-VB3's
     terrain blocker properly.
+- D-N45 (2026-06-16, WORLD RASTER → SINGLE-PASS — **RESOLVED + SHIPPED as the default; the 2-pass world path is DELETED.**
+  Task `PERF-VB4`. REVISITS the N3 "Option C two-pass is PRIMARY" decision. User: "yes. lets build it" → after the A/B,
+  "make this the default and drop the 2 pass version completely". Deep-research pass [background agent, this session;
+  sources at the bottom] framed the option space; the build then OVERTURNED the plan's chosen compromise — see below.)
+  - GOAL (met): drop the world camera's SECOND raster pass. The 2-pass = pass-1 `atomicMin` f32 depth, pass-2 equality-store
+    of the 25-bit payload (F3) where `myDepth == storedDepth` — the #1 nanite GPU cost (PERF-2 / re-measured: depth 2.69 +
+    payload 2.62 ≈ **5.3 ms** at 126k visCl). Now ONE SW + ONE HW pass.
+  - WHAT SHIPPED (NaniteRaster mode `world1`): a 32-bit packed `atomicMax` ELECTION into `visPayloadV` = `(depthKey24<<8 |
+    id8)` — 24-bit depth in the HIGH bits (coherent BY CONSTRUCTION: the (depth,tiebreak) pair can't tear when depth
+    dominates), 8-bit id tiebreak; the election WINNER write-stores (`atomicStore`) the FULL 25-bit id into a single side
+    buffer `visBV`. The resolve / HZB / shadowHalf reconstruct depth from the key: `cz = 1 − (key>>8)/16777215` (the HZB
+    reads the top 16, `key>>16`, ample for occlusion). NO exact depthV anywhere. **Measured 2.8–3.5 ms vs ~5.3 ms ≈ 1.85×**
+    on the raster; clean render, no banding.
+  - THE DECISIVE MEASUREMENT (why the plan's "RECOMPUTE exact f32 depth in the resolve" was DROPPED, and why exact-depth-
+    in-pass is dead): keeping ANY exact-depth write in the single pass — depthV as a 3rd atomic storage buffer, whether the
+    always-on `atomicMin` (my "Approach A") OR a gated write-only `atomicStore` on the election winner — measured a hard
+    **3× CLIFF (15–17 ms vs 2.75 ms)** AND silently BROKE the kernel's writes (the resolve discarded 100% of pixels → "all
+    gray, looks like nanite=0", user-caught). i.e. three.js/Metal cannot take 3 atomic storage buffers in this compute
+    kernel — both slow and incorrect. So the depth MUST ride the packed election key. 16-bit (the `combined()` split) banded
+    visibly at grazing angles (user-caught terracing) → widened to **24-bit** (256× finer ⇒ sub-pixel) at ZERO cost (same 2
+    atomic ops). The full-id SIDE buffer (vs `combined()`'s idLo/idHi 2-buffer split) means a depth-tie degrades to a
+    VALID-but-maybe-wrong cluster, NEVER a torn/garbage fetch (the franksteining the split causes = the debug flicker).
+  - RESIDUAL (user-accepted): **<0.1% of screen pixels** show a wrong-CLUSTER speckle when VERY close to objects (two
+    surfaces in the same 24-bit depth bucket AND an 8-bit id-tiebreak collision). No holes/tearing. The principled
+    zero-speckle fix is a native 64-bit `atomicMax(depth32|id32)` (UE5 Nanite + Bevy meshlet use exactly this) — WebGPU
+    LACKS it (accepted proposal `atomic-64-min-max`, `atomic<vec2u>`, ready for a spec PR 2025-12-09 but NOT in any browser;
+    the CAS fake-64-bit is slow + WGSL-unsafe — D-N Option-B strike, re-confirmed). Revisit when 64-bit atomics ship.
+  - PERF FRAMING (important): `frameMs` was ~8.4 ms in EVERY mode (the full-beauty frame is CPU/present-bound on this
+    machine), so the ~2.5 ms saved is GPU-budget/thermal HEADROOM, NOT fps here — it converts to fps on GPU-bound configs
+    (lower-end, higher-res, or as more GPU work lands). The PERF-2 "raster is the #1 cost" was a `?pure`-isolated number.
+  - SCOPE: `world1` is the SOLE world path (NaniteFrame, no flag). DELETED: the 2-pass world kernels/handles — mode
+    'payload', `kRasterPayload`, `kRasterDepth2` (the `phase2` arg), the HW 'payload' material, the `payload()`/`depth2()`
+    handles, the `?vb`/`?vbdepth`/`?nanhw` flags + the world's `?audit` use. NaniteResolve + NaniteShadowHalf are
+    single-pass-only now. KEPT (shared): mode 'depth' + `depth1` + `hwDepth` = the SHADOW depth-only raster; mode 'combined'
+    + `audit` = the NaniteView debug single-pass (its 16-bit idLo/idHi split is debug-only, franksteining tolerated there).
+  - SOURCES: Nanite SIGGRAPH 2021 (Karis) + elopezr "A Macro View of Nanite" (R32G32 64-bit atomic); philipturner
+    `ue5-nanite-macos` AtomicsWorkaround (CAS, "2.5×/5×, worst-case unbounded"); FreePipe (I3D/VRCAI 2010); Schütz arXiv
+    2104.07526 (early-z pre-read ≈ 34%, present as the election pre-read); gpuweb `proposals/atomic-64-min-max.md`;
+    `Scthe/nanite-webgpu` (16-bit depth, "tons of artifacts"); Aaltonen (depth-high packing). Full report in the transcript.
 
 ## PERF METHODOLOGY — the bar for a real win (2026-06-15, user directive)
 

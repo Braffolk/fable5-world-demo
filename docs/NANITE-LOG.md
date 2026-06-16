@@ -9,6 +9,43 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-16 (bx): **PERF-VB4 (#55) — the WORLD raster is now SINGLE-PASS, shipped as the DEFAULT; the 2-pass world path is
+  DELETED. ~1.85× on the raster (2.8–3.5 ms vs ~5.3 ms). user: "make this the default and drop the 2 pass version
+  completely".** (Opus 4.8 1M.) See SPEC D-N45 (rewritten as RESOLVED).
+  - **WHAT SHIPPED (NaniteRaster mode `world1`):** ONE SW + ONE HW pass. A 32-bit packed `atomicMax` ELECTION into
+    `visPayloadV` = `(depthKey24<<8 | id8)` — 24-bit depth in the HIGH bits (coherent: depth dominates ⇒ the (depth,id)
+    pair can't tear), 8-bit id tiebreak. The election WINNER `atomicStore`s the FULL 25-bit id into a single side buffer
+    `visBV`. The resolve / HZB / shadowHalf decode depth from the key: `cz = 1 − (key>>8)/16777215` (HZB reads the top 16,
+    `key>>16`). NO exact depthV. Covered-test = election anchor `!= 0`.
+  - **THE PLAN (D-N45) WAS OVERTURNED BY MEASUREMENT.** The plan: packed 16-bit election + RECOMPUTE exact f32 depth in the
+    resolve. I first tried to KEEP an exact f32 depthV in the pass ("Approach A": atomicMin depthV alongside the election).
+    Result = a hard **3× CLIFF: nanRasterWorld1 15.7 ms vs the election-only 2.75 ms** (3-way A/B at 126k visCl: 2-pass
+    5.31, world1+depthV 15.7, election-only/combined 2.75). Isolation (`?vbdepth=0`) proved it's the **3rd atomic storage
+    buffer** itself — a gated write-only `atomicStore` to depthV was ALSO 17 ms — three.js/Metal can't take depthV +
+    payloadV + visBV atomics in one compute kernel: both SLOW and it silently BROKE the writes (the resolve discarded 100%
+    of pixels → "all gray, looks like nanite=0", which the USER caught — "are you sure you are testing with nanite=1"). So
+    exact-depth-in-pass is DEAD; depth must ride the election key, and the resolve-recompute is unnecessary (depth from the
+    key is enough). The plan's "single full-id side buffer" idea (vs `combined()`'s idLo/idHi split that franksteins) was
+    RIGHT and IS what shipped — it's `atomicStore`, not a slow path.
+  - **16-bit → 24-bit (user-caught banding).** First render used a 16-bit key (`dk16<<16|idLo16`, the `combined` encoding) →
+    visible depth-quantization TERRACING on grazing slopes ("textures are... odd", with a striped slope shot). Widened to
+    24-bit (`dk24<<8|id8`): 256× finer ⇒ sub-pixel bands, gone. ZERO perf cost (same 2 atomic ops). The full 25-bit id is
+    in the side buffer, so the election word only needs depth + an 8-bit tiebreak.
+  - **RESIDUAL (user-accepted):** <0.1% of pixels show a wrong-CLUSTER speckle VERY close to objects (two surfaces sharing
+    a 24-bit depth bucket AND an 8-bit id-tiebreak collision). No holes/tearing. Zero-speckle needs a native 64-bit
+    `atomicMax(depth32|id32)` — WebGPU lacks it (D-N45). Watch in motion.
+  - **PERF FRAMING:** `frameMs` ~8.4 ms in EVERY mode (2-pass, world1, election-only) — the full-beauty frame is
+    CPU/present-bound on this machine, so the GPU raster swing (2.8↔15.7 ms) doesn't move it. The ~2.5 ms is GPU-budget /
+    thermal HEADROOM, converting to fps only on GPU-bound configs. (PERF-2's "raster = #1 cost" was `?pure`-isolated.)
+  - **DELETED (2-pass world, clean-code):** mode 'payload' + `kRasterPayload`, `kRasterDepth2` (the `phase2` arg), the HW
+    'payload' material + `hwPayloadMat`, the `payload()`/`depth2()` handles, the `?vb`/`?vbdepth`/`?nanhw` flags, the
+    world's `?audit` use. NaniteResolve + NaniteShadowHalf are single-pass-only (no `singlePass` branch). **KEPT (shared):**
+    mode 'depth' + `depth1` + `hwDepth` = the SHADOW depth-only raster (NaniteShadow/Clip, unchanged); mode 'combined' +
+    `audit` = the NaniteView debug single-pass (16-bit idLo/idHi split, franksteining tolerated in debug).
+  - **VALIDATED:** default world (no flag) renders clean at the grazing pose (vbdefault-graze.png) — terrain/trees/shadows/
+    occlusion all correct; NaniteView forest boots (`nanRasterCombined` runs, no errors); tsc clean. Probe: `probe-vbworld`
+    (replaces the throwaway `probe-vbsingle`/`probe-vbdepth`). NOT yet committed.
+
 - 2026-06-16 (bw): **SHADOW-HIER (#54) — both shadow culls (clipmap + cascades) now run the hierarchical DAG-BFS, the
   SAME path as the world camera. `?shadowhier` (default ON) A/Bs back to brute. PARITY EXACT; brute deletion DEFERRED on a
   measured perf regression (the fix is the shared cross-level cull, S3-perf).** (Opus 4.8 1M.)

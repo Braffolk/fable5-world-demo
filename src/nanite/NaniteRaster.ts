@@ -122,19 +122,17 @@ export interface NaniteRasterHandles {
   resolveScene: Scene;
   /** clear vis buffers + hw queue (every frame, before any pass) */
   clearVis(renderer: Renderer): void;
-  /** SW depth over phase-1 items */
+  /** SW depth-only pass (shadow cascades/clipmap; atomicMin Z) */
   depth1(renderer: Renderer): void;
-  /** SW depth over phase-2 appended items (slot base; 0 workgroups when none) */
-  depth2(renderer: Renderer): void;
   /** HW big/near-tri depth render (re-runs hwArgs; full-queue redraw is
    *  idempotent atomicMin) */
   hwDepth(renderer: Renderer, camera: PerspectiveCamera): void;
-  /** SW payload over ALL items vs final depth + HW payload render */
-  payload(renderer: Renderer, camera: PerspectiveCamera): void;
-  /** single-pass Z+payload over ALL items (hier path) — SW + HW in one go */
+  /** NaniteView debug single-pass packed Z+id (idLo/idHi split) — SW + HW in one go */
   combined(renderer: Renderer, camera: PerspectiveCamera): void;
+  /** PERF-VB4 WORLD single pass: 24-bit Z election + full-id side buffer (visBV) */
+  world1(renderer: Renderer, camera: PerspectiveCamera): void;
   readHwCount(renderer: Renderer): Promise<number>;
-  /** count covered/orphan pixels (dispatch after payload; ?audit=1) */
+  /** count covered/orphan pixels (NaniteView ?audit=1) */
   audit(renderer: Renderer): void;
   readAudit(renderer: Renderer): Promise<{ orphans: number; covered: number }>;
 }
@@ -195,8 +193,22 @@ export function buildNaniteRaster(
    *  it from those two. Only valid with the hier `combined()` pass. Default false keeps
    *  the legacy depthV/payloadV (two-pass + brute) encoding for the world/shadow paths. */
   packed = false,
+  /** WORLD single-pass (?vb=single / PERF-VB4 D-N45): ONE SW+HW pass writes EXACT f32
+   *  depth (visDepthV via atomicMin — so the HZB, shadows, and the resolve's wp
+   *  reconstruction stay byte-identical + exact) AND a COHERENT id (depth16-keyed
+   *  atomicMax election into visPayloadV, no branch-through-trunk) whose winner plain-
+   *  stores the FULL 25-bit id into ONE side buffer (visBV). Drops the 2nd (payload)
+   *  raster pass. DEVIATES from D-N45's "recompute depth in the resolve": keeping the
+   *  exact depthV is cheaper (folds into pass-1's atomicMin) and leaves every depth
+   *  consumer unchanged. The residual is the same artifact class — at a rare depth16
+   *  tie the id can pick the bucket-neighbour (a valid wrong-material pixel, never a
+   *  torn/garbage fetch). Differs from `packed` (NaniteView's 16-bit-depth combined). */
+  singlePass = false,
 ): NaniteRasterHandles {
   const { width, height } = cam;
+  // single-pass clears the id buffers like `packed` (election anchor → 0, side id →
+  // 0) but keeps the exact-depth sentinel (depthV → 0xffffffff, atomicMin).
+  const packedClear = packed || singlePass;
   const pixelCount = width * height;
   // PERF-3 raster ablation (?rdbg=1|2): BUILD-TIME gate — 0 / absent emits the
   // depth kernel UNCHANGED (production pristine, zero instrumentation). Used to
@@ -218,6 +230,13 @@ export function buildNaniteRaster(
   // depth → 16-bit key, INVERTED so nearer (smaller cz) ⇒ LARGER key ⇒ wins atomicMax.
   const depthKey16 = (cz: NF): NU =>
     uint(float(1).sub(cz).mul(65535).clamp(0, 65535)) as unknown as NU;
+  // PERF-VB4 world1: a 24-BIT key (8-bit id tiebreak below it). The full id is in the
+  // side buffer, so the election word only needs depth + a coarse tiebreak — 24 bits of
+  // depth (256× finer than the combined path's 16) makes the wp-reconstruction banding
+  // sub-pixel. The resolve/shadowHalf decode cz = 1 − (key>>8)/16777215; the HZB reads
+  // the top 16 bits (key>>16) which still decode as a valid coarse occluder.
+  const depthKey24 = (cz: NF): NU =>
+    uint(float(1).sub(cz).mul(16777215).clamp(0, 16777215)) as unknown as NU;
 
   // hwQueue: [0] = atomic count, then (payload, instId) pairs
   const hwQueueAttr = new StorageBufferAttribute(new Uint32Array(1 + HW_CAP * 2), 1);
@@ -249,10 +268,10 @@ export function buildNaniteRaster(
   const kVisClear = Fn(() => {
     If(instanceIndex.lessThan(uint(pixelCount)), () => {
       atomicStore(visDepthV.atomic.element(instanceIndex), uint(0xffffffff));
-      // packed: payload+visB are atomicMax targets ⇒ clear to 0 (the smallest, "no
-      // fragment"). legacy: payload keeps the 0xffffffff orphan sentinel.
-      atomicStore(visPayloadV.atomic.element(instanceIndex), uint(packed ? 0 : 0xffffffff));
-      if (packed) atomicStore(visBV.atomic.element(instanceIndex), uint(0));
+      // packed/single-pass: payload(+visB) are atomicMax/side targets ⇒ clear to 0 (the
+      // smallest, "no fragment"). legacy: payload keeps the 0xffffffff orphan sentinel.
+      atomicStore(visPayloadV.atomic.element(instanceIndex), uint(packedClear ? 0 : 0xffffffff));
+      if (packedClear) atomicStore(visBV.atomic.element(instanceIndex), uint(0));
     });
     If(instanceIndex.equal(uint(0)), () => {
       atomicStore(hwQueueV.atomic.element(0), uint(0));
@@ -262,24 +281,17 @@ export function buildNaniteRaster(
   })().compute(pixelCount, [256]);
   (kVisClear as unknown as ComputeKernel).setName('nanVisClear');
 
-  // ---- SW raster kernels (Option C two-pass; fixed-point integer scanline) ----------
-  // `phase2` offsets the work-item index by qRaster[0].y (the phase-2 base
-  // written by kRasterArgs2) so the appended range rasters without touching
-  // phase-1 items; depth1/payload start at 0.
-  // mode 'depth' = atomicMin Z only (two-pass occlusion path); 'payload' = equality
-  // store vs settled Z (pass 2 of that path); 'combined' = ONE pass that does both —
-  // atomicMin Z then speculatively claim the pixel's payload when we become the new
-  // nearest (same pattern the HW path uses). The single-pass payload write can lose a
-  // race to a stale farther writer (right Z, briefly the wrong tri's attrs — soft and
-  // self-healing, not sparkle), the price for collapsing the 3× raster into 1×.
-  const rasterKernel = (mode: 'depth' | 'payload' | 'combined', phase2 = false): unknown => {
+  // ---- SW raster kernels (fixed-point integer scanline) ------------------------------
+  // mode 'depth' = atomicMin Z only (the SHADOW depth-only path). 'combined' = single-pass
+  // packed Z+id for the NaniteView debug view (16-bit depth split idLo/idHi). 'world1' =
+  // the WORLD single pass (PERF-VB4): a 24-bit depth election (visPayloadV) whose winner
+  // stores the full 25-bit id into the side buffer visBV; the resolve reconstructs depth
+  // from the election key. No exact depthV (a 3rd hot-loop atomic buffer = a 3× cliff).
+  const rasterKernel = (mode: 'depth' | 'combined' | 'world1'): unknown => {
     const kn = Fn(() => {
-      const head = qRasterRO.element(0);
-      const itemIdx = phase2
-        ? head.y.add(wgLinear(DISPATCH_ROW)).toVar()
-        : wgLinear(DISPATCH_ROW).toVar();
+      const itemIdx = wgLinear(DISPATCH_ROW).toVar();
       const localTri = localX().toVar();
-      const itemCount = head.x;
+      const itemCount = qRasterRO.element(0).x;
       returnIf(itemIdx.greaterThanEqual(itemCount));
       const item = qRasterRO.element(itemIdx.add(uint(1)));
       const instId = item.x.toVar();
@@ -434,14 +446,12 @@ export function buildNaniteRaster(
 
         If(nearOK.not(), () => {
           // near-plane crossing → HW path clips it (never drop, F10c)
-          if (mode !== 'payload') {
-            const slot = atomicAdd(hwQueueV.atomic.element(0), uint(1)) as unknown as NU;
-            If(slot.lessThan(uint(HW_CAP)), () => {
-              const base = slot.mul(uint(2)).add(uint(1));
-              atomicStore(hwQueueV.atomic.element(base), payload);
-              atomicStore(hwQueueV.atomic.element(base.add(uint(1))), instId);
-            });
-          }
+          const slot = atomicAdd(hwQueueV.atomic.element(0), uint(1)) as unknown as NU;
+          If(slot.lessThan(uint(HW_CAP)), () => {
+            const base = slot.mul(uint(2)).add(uint(1));
+            atomicStore(hwQueueV.atomic.element(base), payload);
+            atomicStore(hwQueueV.atomic.element(base.add(uint(1))), instId);
+          });
         }).Else(() => {
           const ndc0 = p0.xyz.div(p0.w).toVar();
           const ndc1 = p1.xyz.div(p1.w).toVar();
@@ -631,12 +641,31 @@ export function buildNaniteRaster(
                               atomicMax(visPayloadV.atomic.element(px), dk.bitOr(payload.bitAnd(uint(0xffff))));
                               atomicMax(visBV.atomic.element(px), dk.bitOr(payload.shiftRight(uint(16)).bitAnd(uint(0xffff))));
                             });
-                          } else {
-                            const cur = elemU(visDepthV.ro, px);
-                            If(bits.equal(cur), () => {
-                              (visPayloadV.rw as unknown as { element(i: NU): { assign(v: NU): void } })
-                                .element(px)
-                                .assign(payload);
+                          } else if (mode === 'world1') {
+                            // PERF-VB4 single pass: EXACT f32 depth (atomicMin → HZB +
+                            // shadows + the resolve's wp reconstruction stay exact and
+                            // unchanged) AND a coherent id election. Depth16 in the high
+                            // bits of an atomicMax election (visPayloadV) ⇒ the nearest
+                            // fragment wins with no branch-through-trunk; the election
+                            // WINNER plain-stores the FULL 25-bit id into ONE side buffer
+                            // (visBV). A depth16 tie degrades to a valid-but-maybe-wrong
+                            // cluster (sparse wrong-material speckle), never a torn/garbage
+                            // id (the franksteining the idLo/idHi split would cause).
+                            const cand = depthKey24(cz as unknown as NF)
+                              .shiftLeft(uint(8))
+                              .bitOr(payload.bitAnd(uint(0xff)))
+                              .toVar();
+                            const prevE = aLoadU(visPayloadV.atomic.element(px));
+                            If(cand.greaterThan(prevE), () => {
+                              const wonE = atomicMax(visPayloadV.atomic.element(px), cand) as unknown as NU;
+                              If(cand.greaterThan(wonE), () => {
+                                // election WINNER stores the FULL 25-bit id into the single side
+                                // buffer (no franksteining). NO depthV write: a 3rd atomic storage
+                                // buffer in this kernel is the 3× cliff (15-17 ms) AND breaks its
+                                // writes — so the resolve takes the 16-bit depth from the election
+                                // key (visPayloadV high bits) instead of an exact depthV.
+                                atomicStore(visBV.atomic.element(px), payload);
+                              });
                             });
                           }
                         });
@@ -652,17 +681,15 @@ export function buildNaniteRaster(
                 });
               });
             }).Else(() => {
-              if (mode !== 'payload') {
-                If(validBB, () => {
-                  // big triangle → HW queue
-                  const slot = atomicAdd(hwQueueV.atomic.element(0), uint(1)) as unknown as NU;
-                  If(slot.lessThan(uint(HW_CAP)), () => {
-                    const base = slot.mul(uint(2)).add(uint(1));
-                    atomicStore(hwQueueV.atomic.element(base), payload);
-                    atomicStore(hwQueueV.atomic.element(base.add(uint(1))), instId);
-                  });
+              If(validBB, () => {
+                // big triangle → HW queue
+                const slot = atomicAdd(hwQueueV.atomic.element(0), uint(1)) as unknown as NU;
+                If(slot.lessThan(uint(HW_CAP)), () => {
+                  const base = slot.mul(uint(2)).add(uint(1));
+                  atomicStore(hwQueueV.atomic.element(base), payload);
+                  atomicStore(hwQueueV.atomic.element(base.add(uint(1))), instId);
                 });
-              }
+              });
             });
           });
         });
@@ -671,15 +698,15 @@ export function buildNaniteRaster(
     return kn;
   };
 
+  // SHADOW depth-only pass (atomicMin Z into the shadow vis buffer).
   const kRasterDepth = rasterKernel('depth');
   (kRasterDepth as ComputeKernel).setName('nanRasterDepth');
-  const kRasterDepth2 = rasterKernel('depth', true);
-  (kRasterDepth2 as ComputeKernel).setName('nanRasterDepth2');
-  const kRasterPayload = rasterKernel('payload');
-  (kRasterPayload as ComputeKernel).setName('nanRasterPayload');
-  // single-pass Z+payload (hier path) — replaces depth1+payload re-raster
+  // NaniteView debug single-pass (packed 16-bit Z + idLo/idHi split).
   const kRasterCombined = rasterKernel('combined');
   (kRasterCombined as ComputeKernel).setName('nanRasterCombined');
+  // PERF-VB4 WORLD single pass: 24-bit Z election + full-id side buffer (visBV).
+  const kRasterWorld1 = rasterKernel('world1');
+  (kRasterWorld1 as ComputeKernel).setName('nanRasterWorld1');
 
   // ---- kHwArgs ----------------------------------------------------------------------
   const kHwArgs = Fn(() => {
@@ -713,7 +740,7 @@ export function buildNaniteRaster(
   hwGeometry.setIndirect(hwDrawAttr, 0);
   hwGeometry.boundingSphere = new Sphere(new Vector3(), Number.POSITIVE_INFINITY);
 
-  const buildHwMaterial = (pass: 'depth' | 'payload' | 'combined'): NodeMaterial => {
+  const buildHwMaterial = (pass: 'depth' | 'combined' | 'world1'): NodeMaterial => {
     const mat = new NodeMaterial();
     const vPayLo = varyingProperty('float', `nanPayLo_${pass}`) as unknown as NF;
     const vPayHi = varyingProperty('float', `nanPayHi_${pass}`) as unknown as NF;
@@ -766,16 +793,16 @@ export function buildNaniteRaster(
             atomicMax(visPayloadV.atomic.element(px), dk.bitOr(pay.bitAnd(uint(0xffff))));
             atomicMax(visBV.atomic.element(px), dk.bitOr(pay.shiftRight(uint(16)).bitAnd(uint(0xffff))));
           });
-        } else {
-          // EXACT equality (N3a) — the N0 ±64-ulp cross-pipeline window is
-          // retired: 0 orphans measured at exact equality on real HW load
-          // (25k tris underfoot); the ?audit=1 oracle re-catches any future
-          // driver/three divergence
-          const cur = elemU(visDepthV.ro, px);
-          If(bits.equal(cur), () => {
-            (visPayloadV.rw as unknown as { element(i: NU): { assign(v: NU): void } })
-              .element(px)
-              .assign(pay);
+        } else if (pass === 'world1') {
+          // PERF-VB4 single-pass WORLD (mirrors the SW world1 path): a depth16-keyed
+          // atomicMax election whose WINNER write-stores the full id + its exact depth.
+          const cand = depthKey24(z as unknown as NF)
+            .shiftLeft(uint(8))
+            .bitOr(pay.bitAnd(uint(0xff)))
+            .toVar();
+          const wonE = atomicMax(visPayloadV.atomic.element(px), cand) as unknown as NU;
+          If(cand.greaterThan(wonE), () => {
+            atomicStore(visBV.atomic.element(px), pay);
           });
         }
       });
@@ -795,8 +822,8 @@ export function buildNaniteRaster(
   };
 
   const hwDepthMat = buildHwMaterial('depth');
-  const hwPayloadMat = buildHwMaterial('payload');
   const hwCombinedMat = buildHwMaterial('combined');
+  const hwWorld1Mat = buildHwMaterial('world1');
   const hwScene = new Scene();
   const hwMesh = new Mesh(hwGeometry, hwDepthMat);
   hwMesh.frustumCulled = false;
@@ -936,9 +963,6 @@ export function buildNaniteRaster(
   const depth1 = (renderer: Renderer): void => {
     dispatchIndirect(renderer, kRasterDepth, cull.rasterDispatchAttr);
   };
-  const depth2 = (renderer: Renderer): void => {
-    dispatchIndirect(renderer, kRasterDepth2, cull.rasterDispatch2Attr);
-  };
   const hwRender = (renderer: Renderer, camera: PerspectiveCamera, mat: NodeMaterial): void => {
     const prevRT = renderer.getRenderTarget();
     renderer.setRenderTarget(hwRT);
@@ -950,16 +974,21 @@ export function buildNaniteRaster(
     dispatch(renderer, kHwArgs);
     hwRender(renderer, camera, hwDepthMat);
   };
-  const payload = (renderer: Renderer, camera: PerspectiveCamera): void => {
-    dispatchIndirect(renderer, kRasterPayload, cull.rasterDispatchFullAttr);
-    hwRender(renderer, camera, hwPayloadMat);
-  };
   // single-pass Z+payload over the full set (hier path): replaces depth1 + the late
   // hwDepth + payload re-raster with ONE SW pass + ONE HW pass.
   const combined = (renderer: Renderer, camera: PerspectiveCamera): void => {
     dispatchIndirect(renderer, kRasterCombined, cull.rasterDispatchFullAttr);
     dispatch(renderer, kHwArgs); // SW pass filled hwQueue → build the indirect draw args
     hwRender(renderer, camera, hwCombinedMat);
+  };
+  // PERF-VB4 (D-N45) WORLD single pass over the full set (replaced depth1 → hwDepth →
+  // payload). ONE SW + ONE HW pass: a 24-bit depth election (visPayloadV) whose winner
+  // stores the full id into visBV; the resolve/shadows/HZB read depth from the election
+  // key (no exact depthV — a 3rd hot-loop atomic buffer was measured a 3× cliff).
+  const world1 = (renderer: Renderer, camera: PerspectiveCamera): void => {
+    dispatchIndirect(renderer, kRasterWorld1, cull.rasterDispatchFullAttr);
+    dispatch(renderer, kHwArgs); // SW pass filled hwQueue → build the indirect draw args
+    hwRender(renderer, camera, hwWorld1Mat);
   };
 
   const readHwCount = async (renderer: Renderer): Promise<number> => {
@@ -975,5 +1004,5 @@ export function buildNaniteRaster(
     return { orphans: u[0] ?? 0, covered: u[1] ?? 0 };
   };
 
-  return { resolveScene, clearVis, depth1, depth2, hwDepth, payload, combined, readHwCount, audit, readAudit };
+  return { resolveScene, clearVis, depth1, hwDepth, combined, world1, readHwCount, audit, readAudit };
 }
