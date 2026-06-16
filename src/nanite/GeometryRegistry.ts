@@ -41,7 +41,7 @@ import type { Renderer, StorageBufferNode } from 'three/webgpu';
 import { StorageBufferAttribute } from 'three/webgpu';
 import type { NF, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
 import type { DagBuild, DagCluster } from './BuildDag';
-import { buildDagHierarchy } from './DagHierarchy';
+import { buildDagHierarchy, buildHeightGridHierarchy } from './DagHierarchy';
 import { type BuiltClusters, type ClusterStats, clusterize } from './Clusterize';
 import {
   type BufOf,
@@ -798,9 +798,9 @@ export class GeometryRegistry {
   // (evictHeightDagTile — zeroes the mesh draw, no tombstoning needed since the
   // cull is instance-driven). Bounded memory + cull regardless of field size;
   // O(1) alloc/free, no fragmentation (the Nanite "page" model).
-  private tilePool: { slots: number; vertCap: number; triCap: number; clusterCap: number } | null = null;
-  /** `vert` indexes the stride-1 hf vertex buffer (2e); tri/cluster index the shared buffers. */
-  private tilePoolBase = { vert: 0, tri: 0, cluster: 0 };
+  private tilePool: { slots: number; vertCap: number; triCap: number; clusterCap: number; dagLinksCap: number } | null = null;
+  /** `vert` indexes the stride-1 hf vertex buffer (2e); tri/cluster/dagLinks index the shared buffers. */
+  private tilePoolBase = { vert: 0, tri: 0, cluster: 0, dagLinks: 0 };
   private tilePoolHandles: number[] = [];
   private tileFreeSlots: number[] = [];
   /** handle resident in each slot, or -1 if free (parallel to the free-stack) */
@@ -1057,10 +1057,16 @@ export class GeometryRegistry {
     if (this.tilePool) {
       // 2e: the pool's verts live in the stride-1 hf buffer (tilePoolBase.vert indexes
       // hfVertsArr); tris/clusters stay in the shared buffers.
-      this.tilePoolBase = { vert: this.hfVertCursor, tri: this.triCursor, cluster: this.clusterCursor };
+      this.tilePoolBase = {
+        vert: this.hfVertCursor,
+        tri: this.triCursor,
+        cluster: this.clusterCursor,
+        dagLinks: this.dagLinksCursor, // PERF-VB3: per-slot hierarchical-cull link region
+      };
       this.hfVertCursor += this.tilePool.slots * this.tilePool.vertCap;
       this.triCursor += this.tilePool.slots * this.tilePool.triCap;
       this.clusterCursor += this.tilePool.slots * this.tilePool.clusterCap;
+      this.dagLinksCursor += this.tilePool.slots * this.tilePool.dagLinksCap;
       this.tileFreeSlots = [];
       for (let s = this.tilePool.slots - 1; s >= 0; s--) this.tileFreeSlots.push(s);
       this.tileSlotOccupant = new Int32Array(this.tilePool.slots).fill(-1);
@@ -1429,7 +1435,10 @@ export class GeometryRegistry {
     if (slots <= 0 || vertCap <= 0 || triCap <= 0 || clusterCap <= 0) {
       throw new Error('GeometryRegistry: reserveTilePool caps must be positive');
     }
-    this.tilePool = { slots, vertCap, triCap, clusterCap };
+    // PERF-VB3: per-slot hierarchical-cull links = [roots][children] = totalClusters
+    // (roots + every non-root once) ≤ clusterCap. The dagLinks BUFFER is auto-sized
+    // 2× caps.clusters, which the pool's clusters (addLate below) already grow.
+    this.tilePool = { slots, vertCap, triCap, clusterCap, dagLinksCap: clusterCap };
     // 2e: pool verts are reserved in the stride-1 hf buffer (hfVerts), not the 6-word `verts`.
     this.addLate({ hfVerts: slots * vertCap, tris: slots * triCap, clusters: slots * clusterCap });
     const handles: MeshHandle[] = [];
@@ -1563,12 +1572,39 @@ export class GeometryRegistry {
       dagSpheres[c * 4 + 3] = dc.sr;
     }
 
+    // PERF-VB3: HIERARCHICAL-cull links for terrain. The regular grid is TILE-UNIFORM
+    // (all clusters at a level share the error sphere), so the hierarchy is an
+    // ANCHOR-CHAIN (buildHeightGridHierarchy), not a spatial tree: roots = coarsest
+    // level; one anchor per level carries ALL of the next-finer level as children. Pack
+    // into the slot's FIXED dagLinks region as [roots…][children…] (GLOBAL cluster ids);
+    // each DAG record gets childBase/childCount (words 10/11), the mesh gets rootBase/
+    // rootCount → kSeedRoots + the BFS traverse render terrain through the SAME hier cull
+    // as vegetation (no brute path, no hybrid).
+    const hier = buildHeightGridHierarchy(clusters);
+    const dlBase = this.tilePoolBase.dagLinks + slot * pool.dagLinksCap;
+    const rootCount = hier.rootIndices.length;
+    const childTotal = hier.childIndices.length;
+    if (rootCount + childTotal > pool.dagLinksCap) {
+      throw new Error(`GeometryRegistry: tile dagLinks ${rootCount + childTotal} > cap ${pool.dagLinksCap}`);
+    }
+    const dl = this.dagLinksArr;
+    for (let i = 0; i < rootCount; i++) dl[dlBase + i] = cBase + (hier.rootIndices[i] as number);
+    const childBlockBase = dlBase + rootCount;
+    for (let j = 0; j < childTotal; j++) dl[childBlockBase + j] = cBase + (hier.childIndices[j] as number);
+    for (let c = 0; c < cCount; c++) {
+      const db = (cBase + c) * DAG_WORDS;
+      dArr[db + 10] = bitsF32(childBlockBase + (hier.childStart[c] as number));
+      dArr[db + 11] = bitsF32(hier.childCount[c] as number);
+    }
+
     entry.vertBase = vBase;
     entry.vertCount = vCount;
     entry.triBase = tBase;
     entry.triCount = tCount;
     entry.clusterBase = cBase;
     entry.clusterCount = cCount;
+    entry.rootBase = dlBase;
+    entry.rootCount = rootCount;
     entry.lodNext = LOD_NONE;
     entry.lodDist = 0;
     entry.flags |= MESH_FLAG_HASDAG;
@@ -1579,6 +1615,7 @@ export class GeometryRegistry {
     this.pushRange(this.idxAttr, tBase * 3, tCount * 3);
     this.pushRange(this.clusterAttr, cBase * CLUSTER_WORDS, cCount * CLUSTER_WORDS);
     this.pushRange(this.dagAttr, cBase * DAG_WORDS, cCount * DAG_WORDS);
+    this.pushRange(this.dagLinksAttr, dlBase, rootCount + childTotal);
     this.pushRange(this.meshAttr, handle * MESH_WORDS, MESH_WORDS);
 
     if (this.tileSlotOccupant) this.tileSlotOccupant[slot] = handle;
@@ -1601,6 +1638,7 @@ export class GeometryRegistry {
     const handle = this.tilePoolHandles[slot] as number;
     const entry = this.entries[handle] as MeshEntry;
     entry.clusterCount = 0;
+    entry.rootCount = 0; // PERF-VB3: kSeedRoots skips rootCount==0 (+ the parked sphere frustum-rejects)
     entry.flags &= ~MESH_FLAG_HASDAG;
     entry.sphere = [TILE_EVICTED_FAR, TILE_EVICTED_FAR, TILE_EVICTED_FAR, 0];
     this.writeMeshRecord(entry);

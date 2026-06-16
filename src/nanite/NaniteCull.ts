@@ -708,9 +708,19 @@ export function buildNaniteCull(
         .element(instanceIndex.mul(uint(2)).add(uint(1)))
         .toVar() as unknown as NV4;
       const headId = elemU(gpu.instanceMesh, instanceIndex).toVar();
+      const headBase = headId.mul(uint(MESH_WORDS)).toVar();
       const head = readMesh(gpu.meshes, headId);
       const rootCount = head.rootCount.toVar();
       returnIf(rootCount.equal(uint(0)));
+      // PERF-VB3: the per-mesh DRAW ENVELOPE — drop an instance beyond its mesh's max
+      // draw distance (lodNext==LOD_NONE && lodDist>0 && dist>lodDist), EXACTLY as the
+      // brute lodSelectAndPush does. This is the hier far-field bound that was missing:
+      // without it every visible instance to the horizon seeds a root → the per-instance
+      // flood (trees the brute path culls at lodDist). Terrain lodDist=0 ⇒ unlimited.
+      const lodNext = elemU(gpu.meshes, headBase.add(uint(4)));
+      const lodDist = bcU2F(elemU(gpu.meshes, headBase.add(uint(5))));
+      const instDist = cam.camPos.sub(A.xyz).length();
+      returnIf(lodNext.equal(uint(LOD_NONE)).and(lodDist.greaterThan(0)).and(instDist.greaterThan(lodDist)));
       const isHF = head.flags.bitAnd(uint(MESH_FLAG_HEIGHTFIELD)).notEqual(uint(0));
       const s = instWorldSphere(A, B, isHF as unknown as NB, head.sphere, head.swayPad);
       returnIf(frustumVisible(s.center, s.radius).lessThan(0.5));

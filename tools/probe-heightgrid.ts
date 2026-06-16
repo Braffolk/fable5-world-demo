@@ -23,8 +23,9 @@
  *
  *   npx tsx tools/probe-heightgrid.ts
  */
-import type { DagCluster } from '../src/nanite/BuildDag';
+import type { DagBuild, DagCluster } from '../src/nanite/BuildDag';
 import { buildHeightGrid, type HeightField } from '../src/nanite/BuildHeightGrid';
+import { buildHeightGridHierarchy, validateDagHierarchy } from '../src/nanite/DagHierarchy';
 
 let failures = 0;
 const fail = (msg: string): void => {
@@ -292,6 +293,20 @@ console.log(`  SKIRTS: +${skirtCl} skirt clusters with skirtLevel=0 (gated per l
 if (skirtCl <= 0) fail(`skirt: skirtLevel=0 added no skirt clusters`);
 checkBoundedTris('skirt-surf', withSkirt, cellSize);
 checkWatertight('skirt', withSkirt, [0.0, 1, 8, 1e9], [extent / 2, 200, extent / 2]);
+
+// H — the anchor-chain hierarchy reproduces the tile-uniform cut at every threshold
+// (PERF-VB3: terrain hier roots). Reuse the DAG traversal gate on the grid clusters.
+for (const [name, b] of [
+  ['grid', grid],
+  ['cliff', cliff],
+  ['skirt', withSkirt],
+  ['flat', flat],
+] as const) {
+  const h = buildHeightGridHierarchy(b.clusters);
+  const r = validateDagHierarchy({ clusters: b.clusters } as unknown as DagBuild, h);
+  if (!r.ok) fail(`H(${name}): anchor-chain != cut — ${r.msg}`);
+  else if (name === 'grid') console.log(`  HIER: ${h.rootIndices.length} roots, ${h.childIndices.length} child links — ${r.msg}`);
+}
 
 if (failures > 0) {
   console.error(`[probe-heightgrid] ${failures} FAILURES`);

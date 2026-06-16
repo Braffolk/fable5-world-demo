@@ -10,18 +10,22 @@
 > Status key: ✅ done · 🔵 active · ⬜ pending · 🚫 blocked. `blockedBy` = task ids that
 > must finish first. `spec` = the `## header` in NANITE-SPEC.md (+ D-N* / file refs).
 
-## YOU ARE HERE — 2026-06-16  →  **READ LOG `bu` then `bt` FIRST.**
-**The N8-HIC vis-buffer rewrite landed (forest 3× faster, race-free, hier default) — committed `5ceda95`.**
-**TERRAIN-RW (job 2) substantially DONE this session (LOG bu, NOT yet committed): the broken QEM coarse terrain is
-replaced by a heightmap-native REGULAR-GRID LOD (`BuildHeightGrid.ts`) — fans/spanning-tris gone by construction,
-boot 15× faster, DEFAULT ON (`?nanitedgrid=0` = old QEM A/B). Node + world A/B validated.** Remaining jobs:
-1. **PERF-VB3 — make hier apply in the WORLD** (`NaniteFrame` currently ignores `?hier`, runs brute-force, has NONE of
-   the wins). BLOCKER was terrain hier roots — TERRAIN-RW now makes them TRIVIAL (the regular grid's coarsest level IS
-   the roots). NEXT-STEP shift: set rootBase/rootCount+dagLinks in `attachHeightDagTile` (terrain is now grid-regular) ⇒
-   no hybrid stopgap needed, then flip `NaniteFrame` to hier + delete the brute path.
-2. **TERRAIN-RW close** (job 2 tail): (a) skirt depth → error-sized (∝ measured edge error, not the fixed `24+12·level`
-   "walls"); (b) terrain hier roots (dovetails job 1); (c) DELETE the QEM path after USER confirms the grid interactively.
-3. **CLUSTER FLOOR / impostor far-field** — the established big perf lever (cut on-screen triangle count).
+## YOU ARE HERE — 2026-06-16  →  **READ LOG `bv` then `bu` FIRST.**
+**TERRAIN-RW committed (`ff0511a`): QEM coarse terrain → heightmap-native REGULAR-GRID LOD; fans gone, boot 15× faster.**
+**PERF-VB3 camera path DONE this session (LOG bv, NOT yet committed): HIER is the SOLE world-camera cull, `nanitedag=all`
+is the DEFAULT, the whole world renders through the BFS at 95-98 fps (faster than brute) with full forest. The KEY fix
+was the missing DRAW ENVELOPE in `kSeedRoots` (hier had no far bound → 688k cl flood; with the per-mesh lodDist envelope
+→ 130k @ 98). Terrain hier roots via an ANCHOR-CHAIN (`buildHeightGridHierarchy`). The LOD knobs (instMinPx/lodNear/
+lodPow) were DEBUG-ONLY — now wired into `NaniteFrame`.** Remaining:
+1. **SHADOWS → HIER (NEXT — user-acked), then DELETE BRUTE.** The brute kernels (kInstCull/kChunkArgs/kClusterCull/
+   lodSelectAndPush/phase-2) + NaniteView `?hier` + raster depth2/phase-2 STAY only because the shadow culls
+   (`NaniteShadow`/`NaniteShadowClip`) still run brute on ORTHO light cams. Migrate them to hier (the traverse projects
+   ownError with PERSPECTIVE projK — ortho needs handling; S4 "DAG-decoupled caster LOD" suggests using the MAIN camera's
+   projK for the caster cut + the light ortho only for the frustum). THEN delete the whole brute path.
+2. **TERRAIN-RW tail:** skirt depth → error-sized (∝ measured edge error, not the fixed `24+12·level`).
+3. **N9 cross-instance MERGE (#48)** — the proper far-field bound (render distant forest as merged super-clusters instead
+   of dropping it at the envelope) ⇒ removes the per-instance floor so instMinPx isn't a density/fps trade.
+4. **CLUSTER FLOOR / impostor far-field** — the established big perf lever (cut on-screen triangle count).
 
 (Prior frontier, still open under N9: foliage-as-geometry. N9-C0 landed OKAY — see SPEC `### Foliage (N9)` + LOG bl.)
 - **N9-C0 DONE (LOG bl):** the hero `foliageMesh` renders through the nanite path as MATERIAL_CLASS.leaf — lit (isL

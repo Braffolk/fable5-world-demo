@@ -9,6 +9,37 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-16 (bv): **PERF-VB3 — HIER is now the SOLE world-CAMERA cull + `nanitedag=all` is the DEFAULT. The whole world
+  (terrain + veg) renders through the hierarchical BFS at 95-98 fps, FASTER than brute (130k cl vs brute's 188k @ 85).
+  Brute kernels REMAIN only for the shadow culls (next task).** (Opus 4.8 1M.)
+  - **`nanitedag=all` DEFAULT (user: "should've been done a while ago").** `?nanitedag` retired (TerrainScene hardcodes
+    rock+bark+deadwood DAG'd). With terrain also DAG'd (TERRAIN-RW), NO discrete-LOD meshes remain ⇒ pure hier renders
+    everything (the discrete-veg-vanishes blocker is gone — confirmed by the user's all-DAG test).
+  - **TERRAIN HIER ROOTS** (the regular grid gives them for free). `buildHeightGridHierarchy` (DagHierarchy.ts) — the
+    tile-uniform cut means a whole LEVEL emits/descends together, so the hierarchy is an ANCHOR-CHAIN (NOT a spatial tree
+    — `buildDagHierarchy` needs QEM groups the grid lacks): roots = coarsest level; one ANCHOR per level carries ALL the
+    next-finer level as children. Reproduces the cut exactly (probe-heightgrid `validateDagHierarchy`, 17 thresholds).
+    Registry: per-slot `dagLinksCap` region in the tile pool (build() reserves it, evict zeros rootCount);
+    `attachHeightDagTile` packs `[roots][children]` (global ids) + childBase/childCount (DAG words 10/11) + mesh
+    rootBase/rootCount. `DAG_CACHE_VERSION` already bumped. (isHF mesh-flag NOT needed: identity-instance + world sphere
+    ⇒ `instWorldSphere(isHF=false)` is identical.)
+  - **`NaniteFrame` → hier** (`?hier` retired): single-phase BFS (runPhase1→syncFullArgs) → NON-packed two-pass raster
+    (depth1+hwDepth+payload; depthV written ⇒ HZB + the exact-depth world resolve UNCHANGED). The brute camera branch
+    (depth2 / phase-2) is deleted. The cull's brute kernels STAY (shadow culls still pass hier=false; NaniteView keeps
+    `?hier` as a debug A/B) — deleting them is the SHADOW-HIER task (ortho light cams need the traverse's perspective
+    projK reworked).
+  - **THE FLOOD FIX — the draw ENVELOPE was missing in `kSeedRoots`.** Hier seeded EVERY visible instance to the horizon
+    (no far bound) ⇒ 688k cl @ 35 fps. The brute path drops instances past their mesh `lodDist` (lodSelectAndPush); hier
+    didn't. Added the SAME per-mesh envelope (`lodNext==LOD_NONE && lodDist>0 && dist>lodDist`) to kSeedRoots ⇒ 130k @ 98
+    fps, FULL forest (terrain lodDist=0 = unlimited). This — not instMinPx or the N9 merge — is what bounds the world.
+  - **The LOD knobs were DEBUG-ONLY (user found it):** `NaniteFrame` never wired `instMinPx`/`lodNear`/`lodPow` — only
+    `NaniteView` did, so `?instminpx/?lodnear/?lodpow` were no-ops in the real renderer. Now wired. Defaults: instMinPx 0
+    (drop nothing — the envelope bounds the field; >0 trades density for fps until N9), lodNear 4 / simBandD 6 / lodPow
+    0.6 (the user's validated preset). `?nanitemin` stays the per-CLUSTER size cull.
+  - STATE: tsc clean; probe-heightgrid (incl. the hierarchy gate) green; world boots flagless 95-98 fps full scene +
+    shadows, no holes. NOT yet committed. NEXT: shadow culls → hier (ortho) ⇒ then DELETE the brute kernels + NaniteView
+    `?hier` + raster depth2/phase-2 methods.
+
 - 2026-06-16 (bu): **TERRAIN-RW — the broken QEM coarse terrain REPLACED by a heightmap-native regular-grid LOD. The
   user's fans / spanning-triangles / "flap into the center" are GONE by construction; boot ~15× faster.** (Opus 4.8 1M.)
   - **ROOT CAUSE (user images, decisive):** the N8-D2 height-DAG ran RTIN/QEM decimation on the BUILT mesh. QEM collapses

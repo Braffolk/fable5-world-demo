@@ -44,6 +44,7 @@ async function shoot(): Promise<void> {
   // ?nandbg=cluster — per-cluster hash tint (exposes the regular-grid cluster blocks).
   const nandbg = process.env.NANDBG ?? '';
   if (nandbg) extra.nandbg = nandbg;
+  const tagSuffix = nandbg ? `-${nandbg}` : '';
   const url = laasUrl({ scene: 'world', seed: Number(SEED), width: W, height: H, freeze: false, extra });
   console.log(`[terrainshape] → ${url}`);
   await page.goto(url, { waitUntil: 'domcontentloaded' });
@@ -92,7 +93,7 @@ async function shoot(): Promise<void> {
         fps: st?.fps ?? 0,
       };
     })) as Record<string, number>;
-    const path = `shots/terrain/${s.name}${nandbg ? `-${nandbg}` : ''}.png`;
+    const path = `shots/terrain/${s.name}${tagSuffix}.png`;
     await page.screenshot({ path });
     console.log(
       `  ${s.name.padEnd(11)} resident=${stats.resident} skipped=${stats.skipped} ` +

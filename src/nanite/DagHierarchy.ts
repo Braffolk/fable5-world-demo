@@ -23,7 +23,7 @@
  * refine together, the owner enqueues the children exactly once — no runtime logic.
  */
 
-import type { DagBuild } from './BuildDag';
+import type { DagBuild, DagCluster } from './BuildDag';
 
 export interface DagHierarchy {
   /** per-cluster [start,count) into childIndices — the finer clusters this cluster
@@ -67,6 +67,50 @@ export function buildDagHierarchy(dag: DagBuild): DagHierarchy {
   }
 
   return { childStart, childCount, childIndices, rootIndices: new Uint32Array(roots) };
+}
+
+/**
+ * Hierarchy for a TILE-UNIFORM regular-grid terrain build (TERRAIN-RW / D-N44) —
+ * `buildDagHierarchy` can't be used because the regular grid has NO QEM groups
+ * (its child links come from group structure). But the terrain cut is TILE-UNIFORM:
+ * every cluster at a level shares the SAME error sphere, so a whole level emits or
+ * descends together. The hierarchy is therefore an ANCHOR-CHAIN, not a spatial tree:
+ *   - roots = the coarsest-level clusters (parentError = +∞);
+ *   - for each level (coarse→fine) ONE designated ANCHOR cluster carries ALL of the
+ *     next-finer level's clusters as children; the other clusters at that level carry
+ *     none. When the level is too coarse, every cluster descends — but only the anchor
+ *     enqueues the finer level (once), exactly mirroring the owner-dedup in
+ *     `buildDagHierarchy`. When the level is the cut, every cluster emits.
+ * This reproduces the per-cluster cut (validated by `validateDagHierarchy`) while
+ * visiting O(levels-to-cut + cut) clusters, and the skirts ride along (they are just
+ * clusters at their level). Levels are keyed by ownError (coalescing dropped some ℓ).
+ */
+export function buildHeightGridHierarchy(clusters: DagCluster[]): DagHierarchy {
+  const n = clusters.length;
+  const childStart = new Uint32Array(n);
+  const childCount = new Uint32Array(n);
+  const roots: number[] = [];
+  // group cluster indices by ownError (= one distinct value per kept level)
+  const byErr = new Map<number, number[]>();
+  for (let c = 0; c < n; c++) {
+    const cl = clusters[c] as DagCluster;
+    if (!Number.isFinite(cl.parentError)) roots.push(c);
+    const k = cl.ownError;
+    const arr = byErr.get(k);
+    if (arr) arr.push(c);
+    else byErr.set(k, [c]);
+  }
+  const errsAsc = [...byErr.keys()].sort((a, b) => a - b); // fine (low err) → coarse
+  const childIndices: number[] = [];
+  // anchor(level j) → all clusters at level j-1 (the next finer level)
+  for (let j = 1; j < errsAsc.length; j++) {
+    const finer = byErr.get(errsAsc[j - 1] as number) as number[];
+    const anchor = (byErr.get(errsAsc[j] as number) as number[])[0] as number;
+    childStart[anchor] = childIndices.length;
+    childCount[anchor] = finer.length;
+    for (const c of finer) childIndices.push(c);
+  }
+  return { childStart, childCount, childIndices: Uint32Array.from(childIndices), rootIndices: Uint32Array.from(roots) };
 }
 
 /**

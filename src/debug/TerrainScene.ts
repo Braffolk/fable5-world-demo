@@ -241,17 +241,12 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
         classes = new Set(PORTED_CLASSES as readonly MatCls[]);
       }
       naniteClasses = classes ?? new Set(ALL);
-      // N8-D1: ?nanitedag=rock|bark|deadwood|all → continuous-LOD DAG for those
-      // explicit classes (built sync at boot for now; D1d moves it to a Worker).
-      const dagParam = qNan.get('nanitedag');
-      let dagClasses: Set<MatCls> | undefined;
-      if (dagParam) {
-        const want =
-          dagParam === 'all'
-            ? (['rock', 'bark', 'deadwood'] as MatCls[])
-            : dagParam.split(',').filter((c): c is MatCls => (ALL as readonly string[]).includes(c));
-        dagClasses = new Set(want.filter((c) => c !== 'terrain'));
-      }
+      // N8-D1 / PERF-VB3: continuous-LOD DAG for EVERY veg class (rock+bark+deadwood) —
+      // ALWAYS ON. With terrain (TERRAIN-RW) also DAG'd, the whole world rides the
+      // hierarchical cut: no discrete-LOD meshes remain ⇒ pure hier renders everything
+      // and the brute path is gone. (The old `?nanitedag=rock|bark|all|none` selector is
+      // retired — there is one mode now.)
+      const dagClasses: Set<MatCls> = new Set(['rock', 'bark', 'deadwood'] as MatCls[]);
       // N8-D2 Stage 2e (D-N39) — the "boot only to dag" FLIP: terrain is the full-res
       // clip-STREAMED DAG by default, no window-grid fallback. `?nanitedterrain` absent ⇒
       // production default (gridN 128, clip on). `?nanitedterrain=0` is the explicit opt-out

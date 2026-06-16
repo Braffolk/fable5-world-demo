@@ -141,7 +141,6 @@ export function buildNaniteFrame(
     tally('HF-DAG', (f) => (f & 1) !== 0 && (f & 2) !== 0);
   }
   const occl = params.get('occl') !== '0';
-  const phase2 = params.get('phase2') !== '0';
   /** ?nanhw=0 — bisect: skip the HW big/near-tri passes (expect bbox-routed
    *  holes; isolates which raster path wrote a disputed depth) */
   const hwOn = params.get('nanhw') !== '0';
@@ -160,14 +159,26 @@ export function buildNaniteFrame(
   // Default 0 = DISABLED ⇒ exact pre-D1e behaviour; ?nanitemin=N (px) to enable.
   const minpxParam = Number(params.get('nanitemin') ?? '0');
   const minPx = uniformF(Number.isFinite(minpxParam) && minpxParam > 0 ? minpxParam : 0);
-  // D-N43 Stage 0.5 SIM: distance-band scale (m) for the region-collapse sim that
-  // BOUNDS the Stage-1 cross-instance-aggregation win before its builder exists.
-  // τ_eff = τ·(1 + d/simBandD) ⇒ far clusters collapse to their per-mesh root (the
-  // ≥1-cluster/instance floor). 0 = OFF (default ⇒ shipped path bit-identical);
-  // ?simband=N or the live setter below sweeps it. Camera path only — shadows leave
-  // it 0 (separation). NOT a feature: a measurement scaffold (probe-simband).
-  const simbandParam = Number(params.get('simband') ?? '0');
+  // PERF-VB3: the LOD-WARP falloff — distance-banded τ (region collapse) + plateau +
+  // power. THESE WERE ONLY WIRED IN THE DEBUG VIEW (NaniteView) before — now wired here
+  // too. Defaults are the validated preset (NaniteView at lodnear=4/simband=6/lodpow=0.6/
+  // instminpx=256): full detail to lodNear m, τ doubles every simBandD m past it, lodPow
+  // <1 = detail drops fast near / slow far. ?simband/?lodnear/?lodpow override.
+  const simbandParam = Number(params.get('simband') ?? '6');
   const simBandD = uniformF(Number.isFinite(simbandParam) && simbandParam > 0 ? simbandParam : 0);
+  const lodnearParam = Number(params.get('lodnear') ?? '4');
+  const lodNear = uniformF(Number.isFinite(lodnearParam) && lodnearParam > 0 ? lodnearParam : 0);
+  const lodpowParam = Number(params.get('lodpow') ?? '0.6');
+  const lodPow = uniformF(Number.isFinite(lodpowParam) && lodpowParam > 0 ? Math.max(0.05, lodpowParam) : 1);
+  // PERF-VB3 / D-N33: per-INSTANCE min screen-SIZE cull (px diameter) — drops a whole
+  // instance whose projected sphere is smaller than this. THE far-field bound for the
+  // hier cull (hier has no brute draw-envelope; without a bound every visible instance
+  // seeds ≥1 root). Was wired only in NaniteView; now here. DEFAULT 0 = drop nothing
+  // (full forest; the lodWarp below still collapses far DETAIL to roots so the count
+  // stays bounded without losing trees). ?instminpx=N to trade density for fps until the
+  // N9 cross-instance MERGE removes the per-instance floor properly.
+  const instminpxParam = Number(params.get('instminpx') ?? '0');
+  const instMinPx = uniformF(Number.isFinite(instminpxParam) && instminpxParam > 0 ? instminpxParam : 0);
 
   const cam = makeNaniteCam(size.x, size.y);
   const vis = makeVisBuffers(size.x * size.y);
@@ -177,7 +188,10 @@ export function buildNaniteFrame(
     registry.instanceCount,
     cam,
     occl ? hzb.sphereOccluded : null,
-    { tau, minPx, simBandD },
+    // PERF-VB3: HIERARCHICAL DAG-BFS cull is now the SOLE world cull (every mesh is
+    // DAG'd — terrain via TERRAIN-RW, veg via the always-on nanitedag). Single-phase
+    // BFS, NON-packed two-pass raster (depthV ⇒ HZB + exact-depth world resolve unchanged).
+    { tau, minPx, simBandD, lodNear, lodPow, instMinPx, hier: true },
   );
   if (!hf.biomeTex || !hf.fieldsTex || !hf.noiseA || !hf.noiseB) {
     throw new Error('NaniteFrame: heightfield derived maps missing (boot order)');
@@ -379,21 +393,21 @@ export function buildNaniteFrame(
       console.log('[nanite] cullfreeze: visibility frozen — fly to inspect');
     }
     cam.update(jitteredCamera());
-    if (!frozen) cull.runPhase1(renderer); // tests read LAST frame's HZB
-    raster.clearVis(renderer);
-    raster.depth1(renderer);
-    if (hwOn) raster.hwDepth(renderer, engine.camera);
+    // PERF-VB3 HIER (single-phase BFS, the SOLE world cull): seed roots (terrain + veg)
+    // → BFS-descend the DAG (reads LAST frame's HZB for occlusion) → fills qRaster
+    // directly. Then ONE depth+payload over the NON-packed two-pass raster (depthV
+    // written ⇒ HZB + the exact-depth world resolve are unchanged). No depth2 / phase-2.
     if (!frozen) {
-      hzb.build(renderer); // phase-1 depth → fresh occluder
-      if (phase2) cull.runPhase2(renderer); // re-test rejects, current VP
-      else cull.syncFullArgs(renderer);
+      cull.runPhase1(renderer); // hier BFS → qRaster (+ kRasterArgs)
+      cull.syncFullArgs(renderer); // full-range args for the payload pass
     }
-    raster.depth2(renderer); // appended range (0 workgroups when none)
-    if (hwOn) raster.hwDepth(renderer, engine.camera); // late big/near tris
-    raster.payload(renderer, engine.camera); // all items vs final depth
+    raster.clearVis(renderer);
+    raster.depth1(renderer); // SW depth over the hier-culled set
+    if (hwOn) raster.hwDepth(renderer, engine.camera); // big/near tris
+    raster.payload(renderer, engine.camera); // payload vs the depth just written
     if (probeRun && params.get('nanprobeat') === 'payload') probeRun(renderer);
     if (auditOn) raster.audit(renderer);
-    if (!frozen) hzb.build(renderer); // final — next frame's occluder
+    if (!frozen) hzb.build(renderer); // this frame's depth → next frame's occluder
     if (probeRun && params.get('nanprobeat') === 'hzb') probeRun(renderer);
     // Nanite shadows (R0+R1): per-cascade light-frustum cull → depth-only SW
     // raster into our own r32 cascade textures (R1 skips a cascade when its VP is
