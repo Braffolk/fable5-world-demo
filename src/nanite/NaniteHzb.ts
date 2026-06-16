@@ -61,6 +61,11 @@ export interface NaniteHzb {
 export function buildNaniteHzb(
   visDepthRO: StorageBufferNode<'uint'>,
   cam: NaniteCam,
+  /** PACKED vis buffer (hier combined path): the source is visA = (depthKey16<<16 |
+   *  idLo), so depth = 1 − (src>>16)/65535 and empty = src==0 (vs the legacy f32-bits
+   *  depthV: depth = bcU2F(src), empty = src==0xffffffff). Same [0,1] polarity ⇒ the
+   *  pyramid + sphereOccluded are unchanged. */
+  packed = false,
 ): NaniteHzb {
   // ---- level layout (fixed per canvas size) -----------------------------------
   const levels: { offset: number; w: number; h: number }[] = [];
@@ -111,7 +116,9 @@ export function buildNaniteHzb(
               const tx = minU(sx.add(uint(dx)), sw);
               const ty = minU(sy.add(uint(dy)), sh);
               const bits = elemU(visDepthRO, ty.mul(uint(cam.width)).add(tx));
-              const d = bits.equal(uint(0xffffffff)).select(float(1), bcU2F(bits));
+              const d = packed
+                ? bits.equal(uint(0)).select(float(1), float(1).sub(toF(bits.shiftRight(uint(16))).div(65535)))
+                : bits.equal(uint(0xffffffff)).select(float(1), bcU2F(bits));
               depthMax.assign(depthMax.max(d));
             }
           }

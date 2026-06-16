@@ -43,10 +43,13 @@ async function main(): Promise<void> {
       dag: DAG,
       occl: OCCL,
       nanitedbg: MODE,
-      hier: process.env.HIER ?? '0',
+      hier: process.env.HIER ?? '1', // hier is the default now (?hier=0 = legacy)
       simband: process.env.SIMBAND ?? '0',
       lodnear: process.env.LODNEAR ?? '0',
       lodpow: process.env.LODPOW ?? '1',
+      rdbg: process.env.RDBG ?? '0',
+      wgcache: process.env.WGCACHE ?? '1',
+      vcompact: process.env.VCOMPACT ?? '0',
     },
   });
   console.log(`[forest] trees=${TREES} density=${LEAFDENSITY} dag=${DAG} occl=${OCCL} mode=${MODE} — px=${px}`);
@@ -61,9 +64,63 @@ async function main(): Promise<void> {
   if (err) throw new Error(`fatal boot: ${err}`);
   console.log(`[forest] booted in ${((Date.now() - tBoot) / 1000).toFixed(1)} s`);
 
+  // ?TIMESERIES=1 — sample the SAME boot over a long window to expose perf DRIFT
+  // (thermal throttle vs work accumulation vs a load transient). If GPU time grows
+  // at constant vis → thermal (same work, slower clocks); if vis grows → accumulation;
+  // if frameMs grows but GPU flat → CPU/present. The fixed camera holds the workload.
+  if (process.env.TIMESERIES) {
+    const samples = Number(process.env.SAMPLES ?? '40');
+    const stride = Number(process.env.STRIDE ?? '10');
+    const t0 = Date.now();
+    console.log('   t(s) |  fps | frameMs | gpuTot |  comb | visClust |  drawCl |    tris |  geo | tex | buffers');
+    for (let i = 0; i < samples; i++) {
+      await page.evaluate(async (s) => {
+        if (window.__laas.settle) await window.__laas.settle(s);
+      }, stride);
+      const r = (await page.evaluate(() => {
+        const st = window.__laas.stats;
+        const c = (st?.counters ?? {}) as Record<string, number>;
+        const g = (st?.gpuPasses ?? {}) as Record<string, number>;
+        return {
+          fps: st?.fps ?? 0,
+          frameMs: st?.frameMs ?? 0,
+          gpuTot: (g['compute'] ?? 0) + (g['render'] ?? 0),
+          comb: g['c.nanRasterCombined'] ?? 0,
+          vis: c['nanite.visClusters'] ?? -1,
+          drawCalls: st?.drawCalls ?? -1,
+          tris: st?.triangles ?? -1,
+          geo: c['gpu.geometries'] ?? -1,
+          tex: c['gpu.textures'] ?? -1,
+          buffers: c['gpu.buffers'] ?? -1,
+        };
+      })) as Record<string, number>;
+      const t = ((Date.now() - t0) / 1000).toFixed(1);
+      console.log(
+        `  ${t.padStart(5)} | ${(r.fps ?? 0).toFixed(1).padStart(4)} | ${(r.frameMs ?? 0).toFixed(1).padStart(7)} | ` +
+          `${(r.gpuTot ?? 0).toFixed(1).padStart(6)} | ${(r.comb ?? 0).toFixed(1).padStart(5)} | ${String(r.vis).padStart(8)} | ` +
+          `${String(r.drawCalls).padStart(7)} | ${String(r.tris).padStart(7)} | ${String(r.geo).padStart(4)} | ${String(r.tex).padStart(3)} | ${String(r.buffers).padStart(7)}`,
+      );
+    }
+    await page.screenshot({ path: `shots/forest/${SHOTNAME}-timeseries.png` });
+    await browser.close();
+    return;
+  }
+
   // sweep the imposter min-screen-size cull in ONE boot (0 = baseline geometry).
   // GPU PASS times (not frameMs — that's wall-clock): cull + depth + payload = the
   // real compute cost the HUD shows.
+  // THERMAL WARMUP — the GPU throttles ~3 s into sustained load (gpuTot ~2-3× cold),
+  // so measuring early reports a boosted lie. Run the workload until it settles before
+  // sampling. WARMUP=0 to get the old cold number. Default ~250 frames (~10 s warm).
+  const warmupFrames = Number(process.env.WARMUP ?? '250');
+  if (warmupFrames > 0) {
+    const tw = Date.now();
+    await page.evaluate(async (n) => {
+      if (window.__laas.settle) await window.__laas.settle(n);
+    }, warmupFrames);
+    const wf = await page.evaluate(() => window.__laas.stats?.fps ?? 0);
+    console.log(`[forest] thermal warmup ${warmupFrames} frames (${((Date.now() - tw) / 1000).toFixed(1)} s) → ${wf.toFixed(0)} fps steady`);
+  }
   const sweep = (process.env.INSTMINPX ?? '0').split(',');
   for (const v of sweep) {
     await page.evaluate((px) => {

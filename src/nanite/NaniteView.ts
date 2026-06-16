@@ -48,9 +48,11 @@ export function buildNaniteView(
   /** ?phase2=0 — single-phase occlusion (disocclusion-hole A/B; probe-pan's
    *  negative control proves the gate detects what phase 2 fixes) */
   const phase2 = params.get('phase2') !== '0';
-  /** ?hier=1 — hierarchical DAG-BFS cull (single-phase). In this mode depth1 already
-   *  rasters the full visible set, so depth2 + its late hwDepth are pure redundancy. */
-  const hier = params.get('hier') === '1';
+  /** Hierarchical DAG-BFS cull + single-pass race-free packed vis buffer — now the
+   *  DEFAULT (the all-DAG forest/debug registries are fully hierarchical). `?hier=0`
+   *  falls back to the legacy brute-force two-phase path (kept only until the world +
+   *  shadow culls are migrated, then deleted — PERF-VB3). */
+  const hier = params.get('hier') !== '0';
   const frozenParam = params.get('cullfreeze') === '1';
   const hzbLevel = Number(params.get('hzblevel') ?? '1');
   /** ?audit=1 — per-frame raster consistency count (orphans must be 0) */
@@ -62,7 +64,8 @@ export function buildNaniteView(
   // vis buffers first: the HZB views the depth buffer, the cull consumes the
   // HZB (prev frame's content), the raster fills it — no builder cycle
   const vis = makeVisBuffers(size.x * size.y);
-  const hzb = buildNaniteHzb(vis.depthV.ro, cam);
+  // packed (hier combined) path: the raster writes no depthV — the HZB reads visA's key
+  const hzb = buildNaniteHzb(hier ? vis.payloadV.ro : vis.depthV.ro, cam, hier);
   // N9-IMP test: ?instminpx=N drops instances smaller than N px on screen (the
   // imposter far-field). ?loderr=τ sets the screen-error cut. Both default off/1.
   const instMinPx = uniformF(Math.max(0, Number(params.get('instminpx') ?? '0')));
@@ -89,6 +92,9 @@ export function buildNaniteView(
     vis,
     mode === 'hzb' ? 'flat' : mode,
     shade,
+    undefined, // disp
+    undefined, // wind
+    hier, // packed vis buffer — the race-free combined path only runs in hier mode
   );
   // testbed hook: sweep the imposter cull / cut without re-booting (probe-forest)
   (window as unknown as { __naniteView?: unknown }).__naniteView = {

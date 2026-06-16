@@ -184,6 +184,12 @@ export class Engine {
     s.drawCalls = this.renderer.info.render.drawCalls;
     s.triangles = this.renderer.info.render.triangles;
     s.frame = this.frameCounter++;
+    // GPU resource accounting (perf-drift hunt): if these CLIMB frame-over-frame at a
+    // static camera, something is leaking GPU objects (the "accumulates with time" bug).
+    const mem = this.renderer.info.memory as { geometries?: number; textures?: number; buffers?: number };
+    s.counters['gpu.geometries'] = mem.geometries ?? -1;
+    s.counters['gpu.textures'] = mem.textures ?? -1;
+    s.counters['gpu.buffers'] = mem.buffers ?? -1;
 
     // resolve EVERY frame: the 2048-query pool only resets its write index
     // on resolve — the old every-10-frames cadence overflowed it (≈100

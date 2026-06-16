@@ -31,6 +31,7 @@ import {
   Fn,
   If,
   atomicAdd,
+  atomicMax,
   atomicMin,
   atomicStore,
   cross,
@@ -145,6 +146,11 @@ export interface NaniteVisBuffers {
   depthV: ReturnType<typeof sU32Views>;
   payloadAttr: StorageBufferAttribute;
   payloadV: ReturnType<typeof sU32Views>;
+  /** PACKED-mode 2nd id buffer (idHi). visA(payloadV) holds (dk16<<16|idLo16), visB
+   *  holds (dk16<<16|idHi16); both atomicMax'd so the nearest fragment wins BOTH and
+   *  the depth+id can't desync (the race-free fix for the payload "branch-through-trunk"). */
+  visBAttr: StorageBufferAttribute;
+  visBV: ReturnType<typeof sU32Views>;
 }
 
 export function makeVisBuffers(pixelCount: number): NaniteVisBuffers {
@@ -152,11 +158,15 @@ export function makeVisBuffers(pixelCount: number): NaniteVisBuffers {
   markFragmentWritable(depthAttr);
   const payloadAttr = new StorageBufferAttribute(new Uint32Array(pixelCount), 1);
   markFragmentWritable(payloadAttr);
+  const visBAttr = new StorageBufferAttribute(new Uint32Array(pixelCount), 1);
+  markFragmentWritable(visBAttr);
   return {
     depthAttr,
     depthV: sU32Views(depthAttr, pixelCount),
     payloadAttr,
     payloadV: sU32Views(payloadAttr, pixelCount),
+    visBAttr,
+    visBV: sU32Views(visBAttr, pixelCount),
   };
 }
 
@@ -180,6 +190,11 @@ export function buildNaniteRaster(
   /** trunk wind (frame mode) — MUST match the resolve's makeFetch so the
    *  rastered geometry and the resolve's barycentric corners agree */
   wind?: TrunkWindOpt,
+  /** PACKED vis-buffer (race-free combined path): the combined kernels write the id
+   *  split across visA(payloadV)+visB via depth-keyed atomicMax, and the resolve decodes
+   *  it from those two. Only valid with the hier `combined()` pass. Default false keeps
+   *  the legacy depthV/payloadV (two-pass + brute) encoding for the world/shadow paths. */
+  packed = false,
 ): NaniteRasterHandles {
   const { width, height } = cam;
   const pixelCount = width * height;
@@ -199,6 +214,10 @@ export function buildNaniteRaster(
   const qRasterRO = cull.qRasterRO;
   const visDepthV = vis.depthV;
   const visPayloadV = vis.payloadV;
+  const visBV = vis.visBV;
+  // depth → 16-bit key, INVERTED so nearer (smaller cz) ⇒ LARGER key ⇒ wins atomicMax.
+  const depthKey16 = (cz: NF): NU =>
+    uint(float(1).sub(cz).mul(65535).clamp(0, 65535)) as unknown as NU;
 
   // hwQueue: [0] = atomic count, then (payload, instId) pairs
   const hwQueueAttr = new StorageBufferAttribute(new Uint32Array(1 + HW_CAP * 2), 1);
@@ -230,7 +249,10 @@ export function buildNaniteRaster(
   const kVisClear = Fn(() => {
     If(instanceIndex.lessThan(uint(pixelCount)), () => {
       atomicStore(visDepthV.atomic.element(instanceIndex), uint(0xffffffff));
-      atomicStore(visPayloadV.atomic.element(instanceIndex), uint(0xffffffff));
+      // packed: payload+visB are atomicMax targets ⇒ clear to 0 (the smallest, "no
+      // fragment"). legacy: payload keeps the 0xffffffff orphan sentinel.
+      atomicStore(visPayloadV.atomic.element(instanceIndex), uint(packed ? 0 : 0xffffffff));
+      if (packed) atomicStore(visBV.atomic.element(instanceIndex), uint(0));
     });
     If(instanceIndex.equal(uint(0)), () => {
       atomicStore(hwQueueV.atomic.element(0), uint(0));
@@ -271,9 +293,9 @@ export function buildNaniteRaster(
         // resolve. The only prior early-out (itemIdx ≥ itemCount) is UNIFORM across
         // the workgroup, so every live thread reaches the barrier (no deadlock).
         // NOTE: TrunkWindFields is serialized field-by-field here — adding a wind
-        // field (e.g. N9-C0 flutBase, slot 19) MUST extend shF + both halves below.
+        // field (e.g. swayXPhase, slot 20) MUST extend shF + both halves below.
         const shU = workgroupArray('uint', 10);
-        const shF = workgroupArray('float', 20);
+        const shF = workgroupArray('float', 21);
         // .element() is typed as a bare Node here — cast to the fluent TSL types
         const setU = (i: number, v: NU): void =>
           void (shU.element(uint(i)) as unknown as { assign(x: NU): unknown }).assign(v);
@@ -311,10 +333,11 @@ export function buildNaniteRaster(
             setF(13, w.dirY);
             setF(14, w.leanBase);
             setF(15, w.swayABase);
-            setF(16, w.natW);
+            setF(16, w.swayPhase); // hoisted sin (was natW)
             setF(17, w.ph);
             setF(18, w.branchBase);
             setF(19, w.flutBase); // N9-C0 leaf flutter
+            setF(20, w.swayXPhase); // hoisted cross-sway sin
           }
         });
         workgroupBarrier();
@@ -337,10 +360,11 @@ export function buildNaniteRaster(
                 dirY: getF(13).toVar(),
                 leanBase: getF(14).toVar(),
                 swayABase: getF(15).toVar(),
-                natW: getF(16).toVar(),
+                swayPhase: getF(16).toVar(),
                 ph: getF(17).toVar(),
                 branchBase: getF(18).toVar(),
                 flutBase: getF(19).toVar(), // N9-C0 leaf flutter
+                swayXPhase: getF(20).toVar(),
               }
             : null,
           gx: getU(6).toVar(),
@@ -360,7 +384,7 @@ export function buildNaniteRaster(
         // run once per THREAD = 128×/cluster). The sink folds the wind scalars so
         // those gust samples can't be DCE'd. (rdbg1 − rdbg3) = the 3 fetchWorldVert.
         const wSink = ctx.wind
-          ? ctx.wind.leanBase.add(ctx.wind.natW).add(ctx.wind.branchBase)
+          ? ctx.wind.leanBase.add(ctx.wind.swayPhase).add(ctx.wind.branchBase)
           : float(0);
         const sinkV = ctx.A.x.add(toF(ctx.triCount)).add(wSink).clamp(0, 1);
         const sinkPx = itemIdx.mul(uint(2654435761)).add(localTri).mod(uint(pixelCount));
@@ -593,14 +617,19 @@ export function buildNaniteRaster(
                               atomicMin(visDepthV.atomic.element(px), bits);
                             });
                           } else if (mode === 'combined') {
-                            // single pass: become the nearest ⇒ claim Z and payload
-                            // together (speculative; a later nearer frag re-claims both)
-                            const cur = aLoadU(visDepthV.atomic.element(px));
-                            If(bits.lessThan(cur), () => {
-                              atomicMin(visDepthV.atomic.element(px), bits);
-                              (visPayloadV.rw as unknown as { element(i: NU): { assign(v: NU): void } })
-                                .element(px)
-                                .assign(payload);
+                            // RACE-FREE packed vis buffer, NO separate depthV (stays under
+                            // the storage-buffer ceiling): id packed as (depthKey16<<16 |
+                            // idPart) into visA(payload)+visB via atomicMax. Depth lives in
+                            // the high bits ⇒ the nearest fragment wins BOTH buffers ⇒
+                            // depth+id can NEVER desync (kills "branch through trunk" for
+                            // any separated depths; only truly equal-Z coplanar tris can
+                            // still hybridise — rare). The HZB reads visA's key (packed).
+                            const myDk = depthKey16(cz as unknown as NF).toVar();
+                            const stored = aLoadU(visPayloadV.atomic.element(px));
+                            If(myDk.greaterThan(stored.shiftRight(uint(16))), () => {
+                              const dk = myDk.shiftLeft(uint(16));
+                              atomicMax(visPayloadV.atomic.element(px), dk.bitOr(payload.bitAnd(uint(0xffff))));
+                              atomicMax(visBV.atomic.element(px), dk.bitOr(payload.shiftRight(uint(16)).bitAnd(uint(0xffff))));
                             });
                           } else {
                             const cur = elemU(visDepthV.ro, px);
@@ -728,13 +757,14 @@ export function buildNaniteRaster(
         if (pass === 'depth') {
           atomicMin(visDepthV.atomic.element(px), bits);
         } else if (pass === 'combined') {
-          // single-pass Z+payload for big/near HW tris (mirrors the SW combined path)
-          const cur = aLoadU(visDepthV.atomic.element(px));
-          If(bits.lessThan(cur), () => {
-            atomicMin(visDepthV.atomic.element(px), bits);
-            (visPayloadV.rw as unknown as { element(i: NU): { assign(v: NU): void } })
-              .element(px)
-              .assign(pay);
+          // RACE-FREE packed (mirrors the SW combined path): id packed by depth-keyed
+          // atomicMax into visA(payload)+visB, no separate depthV.
+          const myDk = depthKey16(z as unknown as NF).toVar();
+          const stored = aLoadU(visPayloadV.atomic.element(px));
+          If(myDk.greaterThan(stored.shiftRight(uint(16))), () => {
+            const dk = myDk.shiftLeft(uint(16));
+            atomicMax(visPayloadV.atomic.element(px), dk.bitOr(pay.bitAnd(uint(0xffff))));
+            atomicMax(visBV.atomic.element(px), dk.bitOr(pay.shiftRight(uint(16)).bitAnd(uint(0xffff))));
           });
         } else {
           // EXACT equality (N3a) — the N0 ±64-ulp cross-pipeline window is
@@ -787,18 +817,34 @@ export function buildNaniteRaster(
   resolveMat.fragmentNode = Fn(() => {
     const fy = float(cam.uH).sub(screenCoordinate.y);
     const pixelIndex = uint(fy).mul(uint(cam.uW)).add(uint(screenCoordinate.x));
-    const dRaw = elemU(visDepthV.ro, pixelIndex);
-    const pRaw = elemU(visPayloadV.ro, pixelIndex);
-    If(dRaw.equal(uint(0xffffffff)), () => {
-      Discard();
-    });
-    // orphan (pass-2 never matched pass-1's depth): background, not a garbage
-    // payload decode — black-pixel probes then see it as a hole
-    If(pRaw.equal(uint(0xffffffff)), () => {
-      Discard();
-    });
-    const itemIdx = pRaw.shiftRight(uint(7));
-    const localTri = pRaw.bitAnd(uint(127));
+    let itemIdx: NU;
+    let localTri: NU;
+    if (packed) {
+      // PACKED (combined): id is split across visA(payload)+visB, depth in the high
+      // bits. visA==0 ⇒ atomicMax never ran ⇒ empty pixel. (depthV is NOT read here —
+      // keeps the resolve at 2 vis buffers under the 10-storage Metal ceiling.)
+      const aRaw = elemU(visPayloadV.ro, pixelIndex);
+      const bRaw = elemU(visBV.ro, pixelIndex);
+      If(aRaw.equal(uint(0)), () => {
+        Discard();
+      });
+      const id = bRaw.bitAnd(uint(0xffff)).shiftLeft(uint(16)).bitOr(aRaw.bitAnd(uint(0xffff)));
+      itemIdx = id.shiftRight(uint(7)) as unknown as NU;
+      localTri = id.bitAnd(uint(127)) as unknown as NU;
+    } else {
+      const dRaw = elemU(visDepthV.ro, pixelIndex);
+      const pRaw = elemU(visPayloadV.ro, pixelIndex);
+      If(dRaw.equal(uint(0xffffffff)), () => {
+        Discard();
+      });
+      // orphan (pass-2 never matched pass-1's depth): background, not a garbage
+      // payload decode — black-pixel probes then see it as a hole
+      If(pRaw.equal(uint(0xffffffff)), () => {
+        Discard();
+      });
+      itemIdx = pRaw.shiftRight(uint(7)) as unknown as NU;
+      localTri = pRaw.bitAnd(uint(127)) as unknown as NU;
+    }
     const item = qRasterRO.element(itemIdx.add(uint(1)));
     const instId = item.x.toVar();
     const ci = item.y.toVar();
@@ -863,6 +909,14 @@ export function buildNaniteRaster(
   resolveMat.depthNode = Fn(() => {
     const fy = float(cam.uH).sub(screenCoordinate.y);
     const pixelIndex = uint(fy).mul(uint(cam.uW)).add(uint(screenCoordinate.x));
+    if (packed) {
+      // reconstruct cz from visA's 16-bit depth key (dk = (1−cz)·65535). Approximate
+      // (16-bit) — exact enough for the isolated debug view; depthV stays out of the
+      // resolve's binding set. (A future world-mode packed path can recompute exact
+      // cz from the reconstructed triangle instead.)
+      const dk = toF(elemU(visPayloadV.ro, pixelIndex).shiftRight(uint(16)));
+      return float(1).sub(dk.div(65535)) as unknown as typeof resolveMat.depthNode;
+    }
     return bcU2F(elemU(visDepthV.ro, pixelIndex));
   })() as unknown as typeof resolveMat.depthNode;
   resolveMat.depthTest = false;

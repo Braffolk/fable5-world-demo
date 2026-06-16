@@ -17,7 +17,7 @@ import type { NB, NF, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
 import { DISP } from '../render/TerrainMaterial';
 import { PERIOD_FBM, PERIOD_RID, PERIOD_VAL } from '../gpu/passes/NoiseBake';
 import { WORLD_SIZE } from '../world/WorldConst';
-import { gustAt, gustLagAt, leafFlutterAxes, windExposure, windU, WIND_LAG_M } from '../render/Wind';
+import { gustAt, gustLagAt, windExposure, windU, WIND_LAG_M } from '../render/Wind';
 import { SKIRT_DEPTH_A, SKIRT_DEPTH_B } from './BuildHeightDag';
 import {
   CLUSTER_FLAG_DAG,
@@ -58,7 +58,14 @@ interface TrunkWindFields {
   dirY: NF;
   leanBase: NF;
   swayABase: NF;
-  natW: NF;
+  /** PRECOMPUTED sin(time·natW + ph) — cluster-invariant (natW/ph are per-instance,
+   *  time per-frame), so the sine is hoisted out of the 384×/cluster per-vertex path
+   *  into makeCtx (cached 1×). fetchWorldVert just scales it by the per-vertex amp. */
+  swayPhase: NF;
+  /** PRECOMPUTED sin(time·natW·1.31 + ph·1.7) — the cross-sway sine, same hoist. */
+  swayXPhase: NF;
+  /** per-instance phase — KEPT (the leaf flutter coord still needs it to decorrelate
+   *  instances); natW is gone (folded into the two precomputed sines above). */
   ph: NF;
   branchBase: NF;
   /** N9-C0: leaf-flutter amplitude base (s·gust·exposure, ≤120 m faded); 0 on trunk */
@@ -243,13 +250,19 @@ export function makeFetch(
         const flutAtten = float(1).sub(dist.sub(40).div(80).clamp(0, 1));
         flutBase.assign(s.mul(g.mul(0.7).add(0.3)).mul(eks).mul(0.07).mul(flutAtten));
       });
+      // HOIST the per-vertex sines here: their args (natW, ph per-instance; time
+      // per-frame) are cluster-invariant, so compute the 2 sines ONCE per cluster
+      // instead of 384×/cluster in fetchWorldVert. Cached via wgcache like the rest.
+      const swayPhase = time.mul(natW).add(ph).sin().toVar();
+      const swayXPhase = time.mul(natW.mul(1.31)).add(ph.mul(1.7)).sin().toVar();
       windFields = {
         h0: h0 as unknown as NF,
         dirX: d.x as unknown as NF,
         dirY: d.y as unknown as NF,
         leanBase: leanBase as unknown as NF,
         swayABase: swayABase as unknown as NF,
-        natW: natW as unknown as NF,
+        swayPhase: swayPhase as unknown as NF,
+        swayXPhase: swayXPhase as unknown as NF,
         ph: ph as unknown as NF,
         branchBase: branchBase as unknown as NF,
         flutBase: flutBase as unknown as NF,
@@ -386,13 +399,8 @@ export function makeFetch(
         const yn = localY.div(localY.add(w.h0));
         const prof = yn.mul(yn).mul(1.7).add(flex.mul(0.3)).min(1.6);
         const swayA = w.swayABase.mul(prof);
-        const sway = time.mul(w.natW).add(w.ph).sin().mul(swayA);
-        const swayX = time
-          .mul(w.natW.mul(1.31))
-          .add(w.ph.mul(1.7))
-          .sin()
-          .mul(swayA)
-          .mul(0.45);
+        const sway = w.swayPhase.mul(swayA);
+        const swayX = w.swayXPhase.mul(swayA).mul(0.45);
         const along = w.leanBase.mul(prof).add(sway).add(w.branchBase.mul(flex));
         const dy = along.abs().add(swayX.abs()).mul(flex).mul(-0.2);
         out.assign(
@@ -415,34 +423,23 @@ export function makeFetch(
         const localY = (p as unknown as NV3).y.mul(ctx.A.w as unknown as NF);
         const vd = elemU(gpu.verts, vb.add(uint(5)));
         const flex = toF(vd.shiftRight(uint(8)).bitAnd(uint(0xff))).div(255);
-        const vphase = toF(vd.shiftRight(uint(16)).bitAnd(uint(0xff))).div(255);
         const yn = localY.div(localY.add(w.h0));
         const prof = yn.mul(yn).mul(1.7).add(flex.mul(0.3)).min(1.6);
         const swayA = w.swayABase.mul(prof);
-        const sway = time.mul(w.natW).add(w.ph).sin().mul(swayA);
-        const swayX = time
-          .mul(w.natW.mul(1.31))
-          .add(w.ph.mul(1.7))
-          .sin()
-          .mul(swayA)
-          .mul(0.45);
-        // term 4 flutter: the shared advected-fbm axes × per-instance flutBase × flex
-        const flutA = w.flutBase.mul(flex);
-        const instPhase = w.ph.div(6.2832);
-        const flutAx = leafFlutterAxes(ctx.A.xz as unknown as NV2, vphase as unknown as NF, instPhase as unknown as NF);
-        const along = w.leanBase
-          .mul(prof)
-          .add(sway)
-          .add(w.branchBase.mul(flex))
-          .add(flutAx.x.mul(flutA));
-        const across = swayX.add(flutAx.y.mul(flutA));
-        const dy = along.abs().add(across.abs()).mul(flex).mul(-0.2);
+        const sway = w.swayPhase.mul(swayA);
+        const swayX = w.swayXPhase.mul(swayA).mul(0.45);
+        // N9-C0 leaf flutter REMOVED (user: unnecessary — the crown's lean+sway is the
+        // motion that reads; the per-vertex advected-fbm TEXTURE tap was the dominant
+        // raster cost, ~96% of the per-vertex transform). The crown now uses the SAME
+        // lean+sway+branch as the trunk — zero per-vertex texture samples.
+        const along = w.leanBase.mul(prof).add(sway).add(w.branchBase.mul(flex));
+        const dy = along.abs().add(swayX.abs()).mul(flex).mul(-0.2);
         out.assign(
           out.add(
             vec3(
-              w.dirX.mul(along).sub(w.dirY.mul(across)),
+              w.dirX.mul(along).sub(w.dirY.mul(swayX)),
               dy,
-              w.dirY.mul(along).add(w.dirX.mul(across)),
+              w.dirY.mul(along).add(w.dirX.mul(swayX)),
             ),
           ),
         );

@@ -9,6 +9,38 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-16 (bs): **RACE-FREE PACKED VIS BUFFER (the combined-pass flicker fix) + hier DEFAULT + wind cheapened +
+  the perf-investigation findings.** (Opus 4.8 1M.)
+  - **RACE-FREE VIS BUFFER** (the user's "a branch behind the trunk flickers through it"). The PERF-VB2 combined pass
+    wrote depth (atomicMin) and payload (id) SEPARATELY ⇒ a farther fragment could win the payload race even with
+    correct depth (right Z, wrong tri's attrs). A re-read gate (write payload only if a fresh depth read still shows us
+    front) helped but heavy foliage overdraw still hit the residual window every frame ⇒ shimmer. FIX (reference's
+    approach, ref-tree.html:421): pack the id across TWO buffers keyed by depth — visA(payload)=`(depthKey16<<16|idLo16)`,
+    visB=`(depthKey16<<16|idHi16)`, both atomicMax. Depth in the high bits ⇒ the nearest fragment wins BOTH ⇒ depth+id
+    can NEVER desync. NO separate depthV in the combined path (would breach the 10-storage Metal ceiling); the HZB reads
+    visA's key (`buildNaniteHzb(packed)`, same [0,1] polarity ⇒ pyramid/occlusion unchanged — vis count matches), the
+    resolve decodes id from visA+visB and derives cz from visA's key (16-bit; exact recompute deferred to world mode).
+    Gated by a `packed` flag (combined-only); legacy depthV/payloadV path untouched. Cost +0.4ms (14.16→14.55). USER
+    CONFIRMED fixed in motion. Residual: only truly equal-Z coplanar tris hybridise (rare, like the reference).
+  - **hier is the DEFAULT** (`NaniteView`: `?hier=0` to opt out). Verified forest runs nanRasterCombined + correct vis
+    with no param. CAVEAT (user found): `?hier` is read ONLY by NaniteView (forest + `?nanitedbg=`). The WORLD'S regular
+    render (`NaniteFrame`) hardcodes `{tau,minPx,simBandD}` — no hier ⇒ the world still runs brute-force two-pass and has
+    received NONE of the vis-buffer wins. Migrating NaniteFrame + the 2 shadow culls to hier+packed = PERF-VB3 (next; it
+    BRINGS the 3× + race-free raster to the world, then deletes the brute path).
+  - **WIND CHEAPENED** (user: "drop the leaf flutter, the tree sway is enough"). (a) HOISTED the 2 per-vertex sway sines
+    into makeCtx — their args (natW, ph per-instance; time per-frame) are cluster-invariant, so compute ONCE/cluster
+    (cached via wgcache) not 384×; `natW`→`swayPhase`, kept `ph` for flutter, added `swayXPhase` (shF 20→21). (b) REMOVED
+    the leaf flutter (`leafFlutterAxes` per-vertex texture tap) — crown now uses the same lean+sway+branch as the trunk.
+    NOTE: both ~0 in the WIND-FREE forest testbed (the isolation view strips wind); they pay off in the WORLD scene only.
+  - **PERF INVESTIGATION (honest findings):** the raster is GPU-bound on the per-vertex transform VOLUME (instTransform
+    + memory reads, 384×/cluster), NOT any single hot op — sin hoist −3.5%, flutter removal 0%, wgcache-off WORSE (keep
+    it). The reference wins via (a) rigid 1-matrix transform + (b) far fewer on-screen tris. "Thermal throttle" was a
+    RED HERRING — one dirty sample after 12 back-to-back boots; isolated forest is stable + leak-free (geo/tex flat).
+    Lever forward: cut on-screen triangle COUNT (cluster floor / impostor far-field), not micro-opt the vertex path.
+  - **HARNESS** (`probe-forest`): `?TIMESERIES=1` drift curve, thermal `WARMUP` before sampling (steady-state not cold
+    boost), frameMs-vs-cpuSubmit-vs-gpuTotal binding verdict, `gpu.geometries/textures/buffers` counters (Engine) for
+    leak hunts, rdbg/vcompact/wgcache knobs. The old short-window medians were reporting the cold boost, not sustained.
+
 - 2026-06-16 (br): **HIERARCHICAL DAG CULL + SINGLE-PASS VIS-BUFFER RASTER — the forest testbed proved the renderer
   (not the geometry) was the bottleneck, and BOTH root causes are now fixed: brute-force cluster dispatch → top-down
   BFS, and 3× software raster → 1×. Net measured on `?scene=forest` (200k instanced trees, all-DAG, eye-level,
