@@ -64,6 +64,7 @@ import {
   aLoadU,
   bcU2F,
   dispatch,
+  dispatchBatch,
   dispatchIndirect,
   elemU,
   elemUW,
@@ -557,8 +558,9 @@ export function buildNaniteCull(
     (kArgsBA as ComputeKernel).setName('nanArgsBA');
 
     runPhase1 = (renderer: Renderer): void => {
-      dispatch(renderer, kClearHier as never);
-      dispatch(renderer, kSeedRoots as never);
+      // batched: kSeedRoots only depends on kClearHier via the counter UAV, which
+      // inter-dispatch auto-sync covers — one submit instead of two.
+      dispatchBatch(renderer, [kClearHier, kSeedRoots]);
       for (let p = 0; p < HIER_MAX_DEPTH; p++) {
         if (p % 2 === 0) {
           dispatch(renderer, kArgsAB as never);
