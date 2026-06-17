@@ -346,6 +346,12 @@ measurement discipline; shot cycles ~2–3 min, cooled ABAB rounds 15–30 min e
   a 3× cliff AND broke the kernel's writes. Residual <0.1% wrong-cluster speckle at very
   close range; the principled fix is native 64-bit atomics (Option B / CAS stays struck).
   See D-N45 for the full measurement + scope.
+- SUPERSEDED-IN-PLAN 2026-06-18 → **D-N46** (sort-middle TILED raster — PLANNED, not yet built): the packed-32b election
+  WORD above is KEPT unchanged, but WHERE it resolves moves from a GLOBAL per-fragment `atomicMax` (the one-workgroup-per-
+  cluster SCATTER model — the measured ~60%/14ms cost on foliage) to a PER-TILE `var<workgroup> atomic<u32>` owned by one
+  workgroup, flushed to `visBV`/`visPayloadV` at tile end. This DISSOLVES the no-64-bit-atomic constraint (the election
+  becomes workgroup-scoped) and is the credible ~2× foliage lever. The global SCATTER write-out described above is the
+  CURRENT impl; D-N46 is the target. See **D-N46**.
 - SHADOW SW raster: single-u32 depth-only atomicMin — no payload, no second pass.
   Perfect fit per cascade (F5/N5).
 - HW big-tri path: fragment shader writes the SAME Option C buffers (pass-1
@@ -1740,6 +1746,75 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
     `ue5-nanite-macos` AtomicsWorkaround (CAS, "2.5×/5×, worst-case unbounded"); FreePipe (I3D/VRCAI 2010); Schütz arXiv
     2104.07526 (early-z pre-read ≈ 34%, present as the election pre-read); gpuweb `proposals/atomic-64-min-max.md`;
     `Scthe/nanite-webgpu` (16-bit depth, "tons of artifacts"); Aaltonen (depth-high packing). Full report in the transcript.
+
+- D-N46 (2026-06-18, RASTER ARCHITECTURE → **SORT-MIDDLE TILED with workgroup-memory depth election** — the ~2×
+  foliage lever. **PLANNED / target architecture; NOT yet implemented** — tasks `TILE-*`/`Q*` in the ROADMAP. Grounded in
+  two measured workflows this session, both archived under `docs/perf-runs/`.)
+  - THE PROBLEM (measured, not assumed): on the forest worst view `nanRasterWorld1` ≈ 23 ms is the frame, and an in-kernel
+    `?rdbg` stage-split (machine cool, GPU-bound) plus the `perf-review` workflow established the split as **~60% (~14 ms)
+    PER-PIXEL COVERAGE LOOP / ~40% (~9 ms) per-triangle transform+setup+launch** (the in-source comment puts the loop even
+    higher, ~90% — RE-MEASURE at a fixed worst-frame camera; either way the loop dominates). The loop is driven by **~12–20×
+    OVERDRAW** (~36M visible tris over ~3M px) on holey OPAQUE foliage; per covered fragment = 3 int edge tests + barycentric-z
+    + a RELAXED `atomicLoad` of the GLOBAL election word + compare (losers early-out, so it is NOT atomic-contention bound —
+    that thesis was refuted). REFUTED this session too: sub-pixel LOD over-render (the cut already emits ≤1px error); and a
+    SECOND, never-attributed HW vertex-pull rasterizer was found doing an UNCONDITIONAL `atomicMax`/fragment — FIXED by porting
+    the SW relaxed-load guard (commit `153c374`, bit-identical).
+  - THE FINDING (prior-art research, 13 deep source briefs in `docs/perf-runs/prior-art/`, synthesis in
+    `docs/perf-runs/prior-art/IDEAS.md`): **every high-performance GPU SW rasterizer in the literature is SORT-MIDDLE TILED**
+    (bin tris→screen tiles, each tile owned by ONE workgroup that resolves depth in ON-CHIP `var<workgroup>` memory):
+    CudaRaster (Laine&Karras 2011), CuRast, LucidRaster, ComputeRaster, paraLLEl-GS. **We are the only one using
+    one-workgroup-per-cluster SCATTER with a GLOBAL per-fragment atomic.** CudaRaster Table 1 MEASURES our exact architecture
+    (FreePipe-style scatter) at **53.8×–107× slower than sort-middle on San Miguel vegetation** (≈ our holey foliage) vs a TIE
+    on large-triangle Buddha — the strongest single signal that our 60% bottleneck is STRUCTURAL to the scatter model, not a
+    micro-op. The two WebGPU peers (Scthe, Bevy) found no inner-loop magic under our constraint; they shaped the workload down
+    (impostors) instead.
+  - THE KEY UNLOCK — **tiling DISSOLVES the no-64-bit-atomic constraint** (the wall that has shaped D-N45 and every comparison):
+    when each pixel is owned by exactly one workgroup, the depth election becomes WORKGROUP-SCOPED. KEEP our packed
+    `(depthKey24<<8 | id8)` word but hold it in `var<workgroup> atomic<u32>` resolved by WORKGROUP `atomicMax` (WGSL has 32-bit
+    workgroup atomics); the winner writes its id to a workgroup-local side array; flush winners to the global
+    `visBV`/`visPayloadV` at tile completion. 8×8 tile = 64 px × (u32 depth + u32 id) = 512 B shared; 16×16 = 2 KB — well
+    within limits. The win is precisely: the GLOBAL relaxed `atomicLoad`+compare per ~36M-fragment round-trip becomes an
+    ON-CHIP shared read, and the winner's global `atomicMax`/`atomicStore` is dropped (losers already do no RMW today).
+  - THE PLAN (ROADMAP section E): **B1** = the tiled raster (a binning compute pass building per-tile cluster/tri lists via a
+    32-bit `atomicAdd` queue + `dispatchWorkgroupsIndirect`, then per-tile workgroup-memory election). RIDE-ONS on B1 (each
+    ZERO-quality-loss, all 32-bit): **B2** = per-tile LIVE EXACT zmax kill (skip a tri whose conservative `zmin` ≥ the EXACT
+    zmax of fragments ALREADY PAINTED in that tile — a DIFFERENT instrument from the refuted static max-Z HZB; it is exact,
+    live, per-tile, and pays off in the dense crown interior where overdraw lives); **B3** = front-to-back tile ordering with
+    opaque first-cover early-out (provably depth-buffer-equivalent for opaque — a leaf GAP simply emits no terminating
+    fragment, so back-leaves through gaps still appear; the reject MUST be per-pixel against the live election, never a
+    quantile). **B4** = far-field leaf-crown/billboard impostors injected directly as our 32-bit election word (collapses
+    distant-crown overdraw; this IS the long-planned far-field `N9-C3` — QUALITY-BUDGETED, the one big bet not inherently
+    zero-loss: pop/parallax must validate against the zero-perceptible-loss bar). QUICK WINS (cheap, stack-able, measure-gated):
+    **Q1** between-samples/sample-miss tiny-tri cull pre-scanline (4-source convergence, but our cut already emits ≤1px so the
+    payoff is UNCERTAIN for us — MEASURE; magnitude bounds the B1 small-tri binning cost too); **Q3** fold barycentric-z into an
+    incremental add (must reproduce the 24-bit depth key BIT-EXACT — see the unbiased-weight/N4-C0 trap); **Q4** resolve
+    early-discard on the clear election word.
+  - WHAT NOT TO CHASE (the research's equally-valuable saves — durable, do NOT resurface): (1) our packed-32b split-buffer
+    election is AHEAD of the literature (Tellusim WISHED for `imageAtomicPayloadMax`; Scthe's 16b = artifacts; Bevy panics
+    without r64) — do NOT "fix" the election; KEEP the 8-bit tiebreak (prevents FreePipe's equal-depth race). (2) The
+    shared-memory per-cluster VERTEX transform that SEVEN sources converge on — **we already built it (`vcompact`,
+    `NaniteVertexCache.ts`) and measured it MARGINAL** (R≈4.7 barely clears the barrier; `wgcache` already deduped the
+    expensive per-cluster context). Convergence MISLED here; the only residual lever is a COST-AWARE GATE (`B6`, demoted —
+    attacks the smaller 40% tier). (3) Do NOT micro-optimize the scanline toward exact per-fragment edge-clipping — CuRast
+    MEASURED a LOSS at ~1px ("avoiding wasted work is more expensive than the cheap wasted work"); our shipped scanline x-span
+    is at the favorable end (aligns with the reverted depth-DDA). (4) Persistent-thread work-queue raster (`B5`) attacks the
+    40% launch tier and our clusters are uniform (235/256) — modest; MEASURE before investing.
+  - CONFIRMED WALLS (prior art independently confirms — do NOT resurface): static/conservative max-Z HZB occlusion ≈ 0% on
+    holey foliage (a gap pins max-Z to far — Scthe "Swiss cheese", Nanite, Bevy, Schütz, Granite, CudaRaster); per-triangle
+    occlusion not worth it (Karis: re-raster nullifies + divergence); SW atomic CONTENTION is not the bottleneck (the cost is
+    the global round-trip, fixed by tiling); hardware early-Z / HW raster of sub-pixel tris wastes ~4× on mandatory 2×2 quads
+    (the reason SW raster exists; the `hwref` reference's free occlusion does NOT transfer); sub-pixel LOD is already past the
+    literature.
+  - SCOPE + RISK: BIG refactor of `nanRasterWorld1` (multi-week, real risk). Zero-quality-loss IN PRINCIPLE (a reorg of WHERE
+    depth lives — identical visibility); risk is watertight tile seams + the depth tiebreak staying bit-identical (our integer
+    scanline core already nails watertightness). GATE: prototype the binning + per-tile election in PLAIN WGSL on ONE view
+    first (TSL r184 has no subgroup ops; no source bounds the sort cost), pixel-diff vs the current raster for IDENTITY, and
+    profile global-atomic traffic before/after via a WebGPU-Inspector capture — commit to the full refactor only if the
+    prototype wins. SEPARATION PRINCIPLE binding (nanite stays self-contained in `src/nanite/`).
+  - SOURCES: `docs/perf-runs/prior-art/IDEAS.md` (synthesis) + the 13 per-source briefs alongside it (Scthe/nanite-webgpu,
+    Laine&Karras CudaRaster + ap1/cudaraster, m-schuetz/CuRast, FreePipe, nadult/LucidRaster, Nanite SIGGRAPH 2021 deep-dive,
+    StarsX/ComputeRaster, paraLLEl-GS, Tellusim compute-vs-HW, Granite, Bevy virtual-geometry, arxiv 2204.01287); the cost map
+    + the refuted theses in `docs/perf-runs/2026-06-17-webgpu-inspector/` (the `perf-review` capture analysis).
 
 ## PERF METHODOLOGY — the bar for a real win (2026-06-15, user directive)
 

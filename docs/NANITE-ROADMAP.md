@@ -10,39 +10,54 @@
 > Status key: ✅ done · 🔵 active · ⬜ pending · 🚫 blocked. `blockedBy` = task ids that
 > must finish first. `spec` = the `## header` in NANITE-SPEC.md (+ D-N* / file refs).
 
-## YOU ARE HERE — 2026-06-17  →  **READ LOG `ca` (UE5-gap: scanline win) + `bz` (capture method + banded-τ) FIRST.**
-**ALL COMMITTED this session — working tree clean. `19eb834` SCANLINE x-span (UE5-gap #1, ~2-4ms, bit-identical);
-`b490d03` UE5-gap report; `152c467` banded-τ defaults; `72fb8a7` submit lever marginal; `60430c8` HZB batch + meter
-fix; `6fb9ca1` capture-vs-intent analysis.** PRIOR: `41d2dd5` PERF-VB4 single-pass, `547bbfc` forest full-pipe testbed.
-**SHIPPED PERF THIS SESSION:** banded-τ defaults (loderr=3/nanitemin=2/instminpx≈128, ~1.55× whole-frame, quality-gated)
-+ the SCANLINE raster win (per-row covered x-span vs full-bbox walk; bit-identical; vista frame 20.5→16.3ms). The
-UE5-gap hunt's other wins: #2 depth-DDA = measured non-win (atomic-bound loop) REVERTED; #4 terrain `If(isT)` gate
-DONE (bit-identical, ~0.15ms — gates buildTerrainShading in NaniteResolve so non-terrain pixels skip the terrain
-prelude; world+forest validated); #3 same-frame Hi-Z (~0.5ms, capped) + #5 HW makeCtx cache (~0.04ms) low-priority, NOT done.
-**NEXT (post-compact, user-directed): N8-HIC cross-instance MERGE — the real ~2× vs UE5** (the cluster-count/overdraw
-floor; UE5 covers many trees with few far clusters at ~1 tri/px, we stay above it). UE5-GAP-REPORT §3+§4: biggest
-structural lever BUT NOT no-quality-loss as-is — merging far bark/rock/deadwood across instances loses the procedural
-per-instance tint/wind (`slotHash`) unless baked into per-super-cluster vertex attributes (a quality approximation + a
-cross-instance super-cluster BUILDER that doesn't exist). Needs an explicit quality budget. SPEC D-N43 +
-`BuildAggregateDag.ts` (closest existing machinery). SEPARATION PRINCIPLE: nanite self-contained in src/nanite. Stage it
-(builder → wire → judge shots), compact between stages.
-**THE PERF METHOD that worked = WebGPU-Inspector capture as GROUND TRUTH, not the statistical harness** (LOG bz; the
-harness dead-ended at "world1 ~90% per-pixel, nothing left" + the multi-agent RASTER-FORGE runs burned ~6M tokens
-without a coherent result — user: "dogshit"). `slice.py` slices a capture → per-resource-type intent-divergence analysis
-→ `docs/perf-runs/2026-06-17-webgpu-inspector/DIVERGENCE-REPORT.md`. **MEASURED CONCLUSION: the frame is genuinely
-raster-bound (`nanRasterWorld1` ~16.7 ms = 75%); the submit-overhead lever is MARGINAL (measured, not assumed — don't
-refactor the cull for it); ~1.5 GB dead full-world residency in the forest testbed is VRAM hygiene, not frame-time.**
-**LANDED THIS SESSION — banded-τ perf defaults (the real ~1.55× whole-frame win, user-chosen after browser A/B):**
-`NaniteFrame` defaults now `loderr=3` (τ error-px cut — coarsens LOD, never drops geometry), `nanitemin=2` (sub-2px
-cluster cull), `instminpx=round(0.075·min(fbW,fbH))≈128` (far instances→impostors, resolution-relative). Forest @1280×720:
-clusters ~2.5× fewer, raster ~2× (23→11 ms), whole-frame 30→19 ms; world scene validated (terrain/shadows fine at τ=3).
-`?loderr/nanitemin/instminpx` override live.
-**NEXT real frame-time lever = the per-pixel raster itself** (the 16.7 ms is now the dominant remaining cost): N8-HIC
-cross-instance MERGE (#48, cuts the visible-cluster count at no quality loss) or same-frame cluster Hi-Z (overdraw).
-Use the forest testbed (`?scene=forest&nanite=1`) + a WebGPU Inspector re-capture to validate structural changes.
-**NOTE:** the old RASTER-FORGE multi-agent perf workflow + per-pass-timestamp harness are DEPRECATED for diagnosis
-(LOG bz) — prefer capture-as-ground-truth + a single whole-frame `__laas.measureFrames` reading. The per-pass GPU
-timestamps overcount (umbrella `compute`/`render` groups double-count vs leaf passes); trust gpuWall + cpuSubmit.
+## YOU ARE HERE — 2026-06-18  →  **READ SPEC `D-N46` (sort-middle TILED raster = the next architecture) + `docs/perf-runs/prior-art/IDEAS.md` FIRST.**
+**THE DECISION (D-N46): pivot `nanRasterWorld1` from one-workgroup-per-cluster SCATTER (a GLOBAL per-fragment atomic) to
+SORT-MIDDLE TILED with a WORKGROUP-MEMORY depth election — the credible ~2× foliage lever, AND it dissolves the
+no-64-bit-atomic constraint.** Two measured workflows this session got us here (both archived under `docs/perf-runs/`):
+- **`perf-review` + an in-kernel `?rdbg` stage-split** (machine cool, GPU-bound, worst forest view, `nanRasterWorld1`≈23ms):
+  cost = **~60% PER-PIXEL COVERAGE LOOP / ~40% transform+launch** (in-source comment says loop ~90% — RE-MEASURE at a fixed
+  worst-frame cam; the loop dominates either way), driven by **~12–20× OVERDRAW** on holey opaque foliage. REFUTED two of my
+  own priors: NOT atomic-contention bound (losers early-out before the RMW); sub-pixel LOD over-render isn't happening (cut
+  ≤1px). Found + FIXED a SECOND, never-attributed HW vertex-pull rasterizer doing an unconditional atomicMax/fragment.
+- **`prior-art-sw-raster` research** (13 deep source briefs in `docs/perf-runs/prior-art/`, synthesis `IDEAS.md`): EVERY
+  high-perf SW rasterizer is sort-middle TILED with on-chip per-tile depth; we are the only SCATTER one. CudaRaster Table 1
+  MEASURES our architecture (FreePipe) **53.8–107× slower on vegetation** vs a tie on big tris ⇒ the 60% is STRUCTURAL.
+
+**SHIPPED THIS SESSION (committed):** `5092074` cluster tri-cap 128→256 (~1.56× fewer clusters); `5cee92f` lighting fix
+(hemisphere ambient floor — shaded sides no longer crush to black); `153c374` HW-raster relaxed-load guard (a "fewer
+atomics" win — occluded HW fragments now SKIP the RMW, matching the SW path; bit-identical); `29e0f0e` cull dispatch batch.
+
+**THE PLAN — do BOTH, B1 FIRST (user 2026-06-18). Detail = SPEC `D-N46`; tasks = ROADMAP section E below:**
+- **B1** = the tiled raster: a binning pass → per-tile `var<workgroup>` 32-bit `atomicMax` election on our KEPT packed
+  `(depthKey24<<8|id8)` word, flush winners to global `visBV`/`visPayloadV` at tile end. **THIS IS THE "FEWER ATOMICS"
+  ANSWER, done right:** the global per-fragment `atomicLoad` round-trip becomes an ON-CHIP shared read, and the winner's
+  global `atomicMax`/`atomicStore` collapses to ONE flush per tile (not per fragment). Contention was never the bottleneck
+  (refuted); the global round-trip IS — and tiling removes it. GATE: plain-WGSL binning PROTOTYPE on one view + pixel-diff
+  identity + profile global-atomic traffic BEFORE the multi-week refactor (TSL r184 has no subgroup ops; sort cost unbounded).
+- **Ride-ons on B1 (zero-loss):** B2 per-tile LIVE EXACT zmax kill (≠ the refuted static max-Z HZB — exact, live, per-tile);
+  B3 front-to-back tile order + opaque first-cover early-out (per-pixel reject only, never a quantile). **B4** far-field
+  leaf-crown/billboard impostors injected as the election word (= the long-planned far-field `N9-C3`; QUALITY-BUDGETED — the
+  one big bet not inherently zero-loss).
+- **Quick wins (parallel, cheap, measure-gated):** Q1 sample-miss tiny-tri cull (payoff UNCERTAIN — our cut already ≤1px);
+  Q3 incremental-z (must match the 24-bit key BIT-EXACT); Q4 resolve early-discard on the clear election word.
+- **DEMOTED / DON'T CHASE (research saves):** B5 persistent-thread launch (uniform clusters → modest); B6 cost-gated
+  `vcompact` (we ALREADY built `vcompact` + measured a WASH — convergence misled; only the gate has residual value, on the
+  smaller 40% tier). KEEP the election (AHEAD of the literature). DON'T micro-opt the scanline (CuRast measured a LOSS at
+  ~1px). Walls re-confirmed by 4–6 sources each: static max-Z HZB ~0% on holey foliage; per-tri occlusion not worth it; HW
+  early-Z / HW raster of sub-pixel tris = 4× quad waste (so the `?nanitedbg=hwref` reference's free occlusion does NOT port).
+
+**N8-HIC cross-instance MERGE = ABANDONED — WALL (tried, bad):** de-instancing bakes O(crowns) geometry (~2 GB buffer
+overflow); user redirected ("massive copies of essentially the same repeating parts… of no help"). Its far-field goal is now
+served by **B4 impostors**, its near-field overdraw by **B1/B2/B3**. The stale multi-stage MERGE BUILDER plan is PRUNED from
+the tables/prose below (a dead plan, not a wall — this paragraph is the durable record; the LOG keeps the blow-by-blow).
+
+**MEASUREMENT METHOD (unchanged, still the law):** WebGPU-Inspector capture as GROUND TRUTH (`slice.py` → offline slices);
+trust whole-frame gpuWall + cpuSubmit, NOT per-pass timestamps (umbrella `compute`/`render` double-count). `?rdbg=1/2/3/4`
+stage-splits `nanRasterWorld1` (CAVEAT: gutted variants render only skybox → vsync-capped → the per-pass timer reads a bogus
+~15 ms constant; read FRAME time for the gutted runs, the valid per-pass timer only for `rdbg=3`/full). Banded-τ perf
+DEFAULTS still hold (`loderr=3`/`nanitemin=2`/`instminpx≈128`; coarsen LOD, never drop geometry; live overrides). The old
+statistical harness + RASTER-FORGE multi-agent workflow are DEPRECATED for diagnosis (dead-ended at "~90% per-pixel, nothing
+left"); the measurement-gated, adversarial `perf-review` + `prior-art-sw-raster` workflows are what worked.
 
 PRIOR (committed earlier): TERRAIN-RW (`ff0511a`) + PERF-VB3 camera (`6123c60`): HIER is the SOLE world cull, `nanitedag=all`
 default. SHADOW-HIER + S3-perf + BRUTE DELETION (`4daf005`, LOG bw). The hierarchical DAG-BFS is now
@@ -70,9 +85,8 @@ Remaining:
    zero-speckle fix needs native 64-bit atomics, not in browsers). frameMs is CPU-bound here ⇒ the win is GPU headroom, not
    fps. See D-N45.
 2. **TERRAIN-RW tail:** skirt depth → error-sized (∝ measured edge error, not the fixed `24+12·level`).
-3. **N9 cross-instance MERGE (#48)** — the proper far-field bound (render distant forest as merged super-clusters instead
-   of dropping it at the envelope) ⇒ removes the per-instance floor so instMinPx isn't a density/fps trade.
-4. **CLUSTER FLOOR / impostor far-field** — the established big perf lever (cut on-screen triangle count).
+3. **Far-field overdraw** — was "cross-instance MERGE" (ABANDONED, see the WALL above); now `B4` leaf-crown impostors (D-N46).
+4. **Near-field overdraw / cluster floor** — now the `B1` tiled raster + `B2`/`B3` (D-N46): the on-screen-fragment-count lever.
 
 (Prior frontier, still open under N9: foliage-as-geometry. N9-C0 landed OKAY — see SPEC `### Foliage (N9)` + LOG bl.)
 - **N9-C0 DONE (LOG bl):** the hero `foliageMesh` renders through the nanite path as MATERIAL_CLASS.leaf — lit (isL
@@ -90,10 +104,12 @@ Remaining:
   2. **N9-C2 — cut WIRED + VALIDATED (LOG bn); the flood FORCED N8-HIC (now active, below).** Aggregate attached to
      each leaf crown, envelope R0_FAR 26 m → TREE_GEO_FAR 496 m; `probe-leafzoom` τ-monotonic (2.8k→3.76M) + smooth +
      no errors. The two-sided raster **N9-C2-2s ✅ DONE (LOG bp** — geometry-dup dropped, leaf tris/clusters halved).
-     PENDING after N8-HIC: the Worker build (15.5 s sync @ 4000 → off-thread), perf ledger + close.
+     PENDING (after `B1` tiled raster, D-N46): the Worker build (15.5 s sync @ 4000 → off-thread), perf ledger + close.
   3. **N9-C3** — impostor retirement: DO the judge shots + present them at the close, don't block per-ring on approval.
   4. **N9-C4** — close (perf ledger, battery, two-frame-vs-main gate).
-  5. **N8-HIC ⬅ FRONTIER — REDEFINED by D-N43 (deep research + measurement, LOG bo).** Root-caused: the flood is
+  5. **N8-HIC = ABANDONED — WALL (see YOU ARE HERE + section B). The cross-instance MERGE fix is DEAD (de-instancing =
+     O(crowns) baked geometry, ~2 GB overflow); the flood fix is now `B1`+`B4` (D-N46). The DIAGNOSIS below still stands;
+     the staged MERGE PLAN below does NOT — ignore it.** Root-caused: the flood is
      primitive OVER-EMISSION (≥1 cluster per visible instance × ~340k visible crowns ⇒ ~16 tris/px vs the ~1 of a
      correct Nanite; τ-sweep proves frame ∝ visible-CLUSTER count). The reference-is-10×-faster puzzle is SOLVED (its
      "billions" = a marketing denominator; structurally-easy scene). The fix = cross-instance AGGREGATION (not culling),
@@ -155,7 +171,8 @@ fetchWorldVert 1.11 (39%), edge 0.13 (5%), per-pixel loop 1.12 (40%); atomic NOT
 cluster, so compute makeCtx once (thread 0) + broadcast via `workgroupArray`/`workgroupBarrier`. **−0.59 ms
 (−11%)** on the camera SW raster (alternated, bit-identical), default ON (`?wgcache=0` A/Bs); also speeds the
 6 shadow rasters. First workgroup-shared-mem use in the codebase.
-**→ ACTIVE: PERF-3 win #2 — per-cluster VERTEX-TRANSFORM CACHE via build-time COMPACTION** (user-confirmed
+**PERF-3 win #2 — per-cluster VERTEX-TRANSFORM CACHE (`vcompact`) = BUILT + MEASURED A WASH → DEMOTED to `B6` (D-N46);
+kept as a WALL + build record (the feature EXISTS, OFF by default). The design notes below are HISTORY, not an active plan.** (user-confirmed
 "full compaction straight away"). `?vrange` data: explicit redund 4.13× (95% range ≤128), HF-DAG 3.76× (40%
 range >1024) ⇒ runtime range-cache FAILS terrain; workgroup atomics unsupported ⇒ only compaction generalizes
 (cache sized by vertCount ≤~190 fits 16 KB shared mem for ALL geo; race-free strided transform, no atomics;
@@ -194,11 +211,27 @@ N0 scaffold ✅ · N1 clusterize ✅ · N2 cull ✅ · N3 vis-buffer ✅ · N4 m
 | `AUDIT-1a` | Per-instance TINT drift — ratify or restore (USER CALL) | ⬜ | — | LOG bh; NaniteResolve/NaniteFetch | Orig variation law needs BOTH `tint=slotHash(slot,17/91)` + `windPhase=slotHash(slot,211)` "or migration clones trees (banned)". Impl reproduces the wind phase but NOT the tint — bark hue is per-VERTEX `vdata.x` (shared across a mesh's ~4k instances). Trees vary by pose+wind, not colour. RESTORE = add `slotHash(instId,17/91)` to the bark/deadwood albedo (~few lines), or RATIFY if pose+wind+per-vertex hue reads varied enough. |
 | `PERF-VB4` | WORLD raster → SINGLE-PASS (drop the 2nd raster pass) | ✅ | LOG bx | **D-N45** | SHIPPED as default; 2-pass world DELETED (mode 'payload', `kRasterDepth2`, HW-payload, `?vb`/`?vbdepth`/`?nanhw`, world `?audit`). `world1` = a 24-bit depth `atomicMax` election (`visPayloadV` = `depthKey24<<8\|id8`) → winner `atomicStore`s the full 25-bit id into `visBV`; resolve/HZB/shadowHalf decode depth from the key (`cz = 1−(key>>8)/16777215`). **~1.85× raster** (2.8–3.5 vs ~5.3 ms). The D-N45 plan (recompute exact depth in the resolve) was OVERTURNED: any exact-depth write = depthV as a 3rd atomic storage buffer = a hard **3× cliff + broken kernel writes** (three.js/Metal), so depth rides the election key. 16-bit banded (user-caught grazing terracing) → 24-bit = sub-pixel, free. Residual <0.1% wrong-cluster speckle very close to objects (user-accepted; zero-speckle needs native 64-bit atomics). frameMs CPU-bound ⇒ GPU headroom, not fps. KEPT: mode 'depth'+depth1+hwDepth (shadows), mode 'combined'+audit (NaniteView debug). |
 
+## E. RASTER ARCHITECTURE — B1 SORT-MIDDLE TILED (D-N46) ⬅ THE active frontier
+> The ~2× foliage lever + it dissolves the no-64-bit-atomic constraint. Detail + rationale + walls = SPEC `D-N46`;
+> synthesis = `docs/perf-runs/prior-art/IDEAS.md`. "Both, B1 first" (user 2026-06-18) — quick wins run in parallel.
+| id | task | status | blockedBy | spec | scope |
+|----|------|--------|-----------|------|------|
+| `B1-PROTO` | Plain-WGSL binning + per-tile election PROTOTYPE (the GATE) | 🔵 NEXT | — | D-N46 | one view: a binning pass (32-bit `atomicAdd` queue + `dispatchWorkgroupsIndirect`) → per-tile `var<workgroup>` 32-bit `atomicMax` election on the kept 24b\|8b word. PIXEL-DIFF IDENTITY vs the current raster + profile global-atomic traffic before/after via a capture. Commit to the full refactor ONLY if it wins. TSL r184 has no subgroup ops — plain WGSL. |
+| `B1` | Sort-middle TILED raster (full refactor of `nanRasterWorld1`) | ⬜ | `B1-PROTO` | D-N46 | replace one-wg-per-cluster SCATTER. The global per-fragment `atomicLoad` round-trip → on-chip shared read; the winner's global atomic → ONE flush/tile (= "far fewer global atomics", the right way). Bin at CLUSTER granularity; ComputeRaster small-tri bypass. Multi-week; watertight seams + bit-identical tiebreak the risk. |
+| `B2` | Per-tile LIVE EXACT zmax kill | ⬜ | `B1` | D-N46 | skip a tri whose conservative `zmin` ≥ the EXACT zmax of fragments already painted in that tile. ≠ the refuted static max-Z HZB (exact, live, per-tile). Zero-loss. |
+| `B3` | Front-to-back tile order + opaque first-cover early-out | ⬜ | `B1` | D-N46 | per-tile coarse depth-bucket sort; reject a covered opaque pixel that already has a nearer LIVE election winner. Per-pixel only (NEVER a per-tile quantile = pops). Depth-buffer-equivalent for opaque. |
+| `B4` | Far-field leaf-crown / billboard impostors (= `N9-C3`) | ⬜ | — | D-N46; `### Foliage (N9)` | bake octahedral atlas + inject impostor `depth\|id` directly as the 32-bit election word; per-instance distance/area swap. QUALITY-BUDGETED — the one big bet not inherently zero-loss (pop/parallax A/B vs the bar). |
+| `Q1` | Sample-miss tiny-triangle cull (pre-scanline) | ⬜ | — | D-N46 | conservative reject of tris whose snapped bbox covers no pixel center (match `tlBias` exactly). Payoff UNCERTAIN — our cut already emits ≤1px tris; pixel-diff identity + `auditV` reject count + rdbg timing. MEASURE. Also bounds B1's small-tri bin cost. |
+| `Q3` | Fold barycentric-z into an incremental add | ⬜ | — | D-N46 | `z += zStepX` per pixel, `zRow += zStepY` per row; kills the per-pixel multiply. MUST reproduce the 24-bit depth election key BIT-EXACT (unbiased-weight/N4-C0 trap; HZB+shadow parity). |
+| `Q4` | Resolve early-discard on the clear election word | ⬜ | — | D-N46 | whole resolve fragment early-outs when the election word is still clear (background), not just the terrain sub-branch. Small, free. |
+| `B5` | Persistent-thread work-queue raster | 🚫 DEMOTED | — | D-N46 | attacks the smaller 40% launch tier; clusters are uniform (235/256) so load-balance upside is modest — MEASURE a ~512-wg pool vs current dispatch before investing. |
+| `B6` | Cost-aware-GATED `vcompact` revival | 🚫 DEMOTED | — | D-N46; `NaniteVertexCache.ts` | the ONLY residual of the 7-source vertex-cache convergence — we already BUILT `vcompact` + measured a WASH; gate the barrier to expensive wind clusters only. 40% tier, modest. |
+
 ## B. DAG (N8) — active workstream (SPEC `### DAG (N8)`)
 | id | task | status | blockedBy | spec | scope |
 |----|------|--------|-----------|------|------|
-| `N8-D1e` | Full-world DAG wiring + ledger + CHECKPOINT | 🔵 | — | D-N41; LOG bj | VALIDATED (bark/deadwood/rock no-pop gate green, bark under wind) + MEASURED (rock+deadwood DAG free; bark ~1.7× raster + 3 s boot = the per-instance forest floor, τ/minPx don't help) + ledger row. AT the USER CHECKPOINT: (1) default-on rock+deadwood DAG? (free, rec) (2) bark stays opt-in until N8-HIC? Defaults NOT flipped (user-present rule). |
-| `N8-HIC` | Cross-instance AGGREGATION + opaque voxel far-field (THE flood fix) | 🔵 | — | **D-N43**; LOG bo, bn | **REDEFINED by D-N43 (research + measurement): "culling" was the wrong word — the fix is cross-instance AGGREGATION, not culling.** Root cause = primitive OVER-EMISSION (~16 tris/px vs ~1; per-mesh DAG floors at ≥1 cluster per visible instance; τ-sweep proves frame ∝ visible-CLUSTER count, per-cluster raster overhead). Reference-is-fast puzzle SOLVED (its "billions" = marketing denominator; easy scene). STAGED: **(0)** two-sided raster fix = free 2× (`N9-C2-2s`) **✅ LANDED LOG bp** (leaf tris/clusters halved, no holes) → compact → **(0.5) ✅ DONE LOG bq** perf SIM (banded-τ) + 3-agent integration study: flood = per-CLUSTER overhead NOT tri-density (LEAF floor **0.147 tris/px sub-pixel @ 1,667 cl**, 569k→1.7k = 341× range; SW raster ∝ visClusters), ⇒ merge alone suffices, **VOXELS DEFERRED** (updates bo "couple them"); super-clusters = synthetic identity meshes + attachDag on EXISTING buffers = ZERO new GPU plumbing; build reuses DagWorkerPool + TerrainStreamer pacing → compact → **(1) NEXT** MULTI-LEVEL cross-instance MERGE builder, **MERGE-FIRST** (voxels deferred to the far tail; recursive merge bands cell→region→… per user 2026-06-15; the arbitrary-depth cut selects them free). SEPARATION PRINCIPLE binding (nanite stays self-contained, called by others). Effort = hours of LLM grind/stage, not weeks. Stage-1 runtime de-risked by Stage 0.5 = "more meshes + more DAG parent links". |
+| `N8-D1e` | Full-world DAG wiring + ledger + CHECKPOINT | 🔵 | — | D-N41; LOG bj | VALIDATED (bark/deadwood/rock no-pop gate green, bark under wind) + MEASURED (rock+deadwood DAG free; bark ~1.7× raster + 3 s boot = the per-instance forest floor, τ/minPx don't help) + ledger row. AT the USER CHECKPOINT: (1) default-on rock+deadwood DAG? (free, rec) (2) bark stays opt-in until the `B1` tiled raster lands (D-N46)? Defaults NOT flipped (user-present rule). |
+| `N8-HIC` | Cross-instance MERGE (de-instancing) | 🚫 ABANDONED | — | LOG bo, bn (history) | **WALL — tried, abandoned (2026-06-17).** Cross-instance de-instancing bakes O(crowns) baked geometry → ~2 GB buffer overflow; user redirected ("massive copies of essentially the same repeating parts… of no help"). The diagnosis it produced is still valid (over-emission, frame ∝ visible-cluster count, ~12–20× overdraw) but the MERGE fix is dead. SUPERSEDED: far-field overdraw → `B4` impostors; near-field overdraw → `B1`/`B2`/`B3` tiled raster (D-N46). The DONE sub-steps it spawned are real + kept: `N9-C2-2s` two-sided raster (free 2×, LOG bp), the perf SIM + cluster-count finding (LOG bq). |
 | `N8-2b4` | Always-resident coarse terrain base | ⬜ | — | DAG (N8) | teleport no-hole backstop ring |
 
 ## C. POOLS / HYBRID / FOLIAGE (SPEC `## Phase plan`)

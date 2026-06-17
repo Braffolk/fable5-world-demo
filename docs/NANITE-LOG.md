@@ -9,6 +9,44 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-18 (cc): **PRIOR-ART RESEARCH → the architecture pivot: SORT-MIDDLE TILED raster (D-N46).** Ran the
+  `prior-art-sw-raster` dynamic workflow (Opus explore agents + Sonnet scouts; 13 deep source briefs in
+  `docs/perf-runs/prior-art/`, synthesis `IDEAS.md`) over the user's reading list (CudaRaster/Laine&Karras 2011 +
+  ap1/cudaraster, m-schuetz/CuRast, FreePipe, nadult/LucidRaster, Nanite SIGGRAPH-2021 deep-dive, Scthe/nanite-webgpu,
+  arxiv 2204.01287) + scout-found peers (StarsX/ComputeRaster, paraLLEl-GS, Tellusim, Granite, Bevy). **THE FINDING:** every
+  high-perf SW rasterizer is sort-middle TILED with on-chip per-tile depth; we are the only one-workgroup-per-cluster
+  SCATTER. CudaRaster Table 1 MEASURES our architecture (FreePipe) **53.8–107× slower on vegetation** vs a tie on big tris ⇒
+  the measured 60% per-pixel-loop cost is STRUCTURAL to scatter, not a micro-op. **KEY UNLOCK:** tiling makes the depth
+  election WORKGROUP-SCOPED → the no-64-bit-atomic wall DISSOLVES (keep the 24b|8b word in `var<workgroup> atomic<u32>`,
+  flush to global per tile; it is also the right "use far fewer global atomics" answer — the per-fragment global atomicLoad
+  round-trip becomes on-chip + the winner's global atomic flushes once/tile). DECISION + full plan + walls = **D-N46**;
+  tasks = ROADMAP section E. Plan: B1 tiled raster (the ~2×) + ride-ons B2 live-tile-zmax / B3 front-to-back / B4 far
+  impostors (= N9-C3); quick wins Q1/Q3/Q4; DEMOTED B5/B6. SAVES (equally valuable): the 7-source shared-vertex-transform
+  convergence = our already-built `vcompact` WASH (convergence MISLED — only the cost-aware gate B6 survives); our packed-32b
+  election is AHEAD of the literature (KEEP it; Tellusim wished for it, Scthe's 16b had artifacts, Bevy panics without r64);
+  don't micro-opt the scanline (CuRast MEASURED a LOSS at ~1px); HW early-Z dead (4× quad waste — so `?nanitedbg=hwref`'s
+  free occlusion does NOT port); static max-Z HZB ~0% on holey foliage. N8-HIC cross-instance MERGE = ABANDONED
+  (de-instancing = O(crowns) memory, ~2 GB overflow). User: "both, B1 first" — quick wins parallel. NEXT = `B1-PROTO`
+  (plain-WGSL binning + per-tile election on ONE view, pixel-diff IDENTITY, measure global-atomic traffic, BEFORE the
+  multi-week refactor; TSL r184 has no subgroup ops). Critic flagged: RE-MEASURE the loop% at a FIXED worst-frame cam (the
+  in-source comment says ~90%); depth IS the 24-bit election key (HZB+shadows read it) — Q3/B4 must quantize to it bit-exact.
+
+- 2026-06-18 (cb): **Perf-review + rdbg cost-map; 256-cap, lighting, HW-guard SHIPPED (committed).** Commits: `5092074`
+  cluster tri-cap 128→256 (triCount is an 8-bit record field → cap at 255; ~1.56× fewer clusters; root-caused the earlier
+  "holes" to the 8-bit overflow, NOT the cap itself); `5cee92f` LIGHTING FIX (bdb24c7 had dropped the hemisphere ambient
+  floor → foliage/bark BACK-faces crushed to pure black where the ProbeGI SH-L1 self-clamps to ~0 and `mat.lights=false`
+  gives no env IBL; restored as a MAX floor in NaniteResolve so LIT faces keep their energy-correct probe value — no
+  double-count); `153c374` HW-raster relaxed-load guard (the HW vertex-pull path did an UNCONDITIONAL `atomicMax`/fragment;
+  ported the SW world1 path's `prevE = aLoadU` guard so occluded HW fragments SKIP the RMW — bit-identical, a "fewer atomics"
+  win on the one path that actually RMW-contended every fragment); `29e0f0e` cull `kClearHier`+`kSeedRoots` dispatch batch.
+  **THE COST MAP** (`perf-review` workflow + an in-kernel `?rdbg` stage-split; machine cool + GPU-bound; worst forest view
+  `nanRasterWorld1`≈23ms): **~60% per-pixel coverage loop / ~40% transform+setup+launch** (CAVEAT — the gutted rdbg runs
+  render only skybox → vsync-capped → their per-pass timer reads a BOGUS ~15ms constant; the split came from FRAME time:
+  rdbg2 with no per-pixel loop hit vsync while full=16-23ms ⇒ the loop dominates). REFUTED two priors of mine: NOT
+  atomic-contention bound (losers early-out before the RMW; the LOG `az` atomic ablation agrees); sub-pixel LOD over-render
+  isn't happening (cut already ≤1px). FOUND a never-separately-attributed SECOND HW rasterizer (→ the `153c374` fix). Capture
+  corpus: `docs/perf-runs/2026-06-17-webgpu-inspector/`. This set up the prior-art research (cc, above).
+
 - 2026-06-17 (ca): **UE5-gap hunt (workflow on frame 1286) → win #1 SCANLINE shipped (~2-4ms, bit-identical),
   win #2 depth-DDA measured a non-win + reverted.** (Opus 4.8 1M.) The 21-agent workflow (`UE5-GAP-REPORT.md`,
   `UE5-NANITE-REFERENCE.md`) compared frame 1286 vs our code + spec + REAL UE5 Nanite for NON-quality-loss wins;
