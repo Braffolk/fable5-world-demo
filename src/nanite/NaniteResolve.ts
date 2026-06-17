@@ -290,34 +290,41 @@ export function buildNaniteResolve(
       .toVar();
     const isT = matClass.equal(uint(0));
 
-    // ---- TERRAIN shading on the reconstructed surface --------------------
+    // ---- TERRAIN shading on the reconstructed surface — GATED on isT (UE5-gap win #4):
+    // non-terrain pixels skip the terrain prelude tex fetches + shading. The isT.select
+    // below already discards this for non-terrain pixels, so the default (vec3(0.3) /
+    // up-normal) reaching the select changes nothing ⇒ BIT-IDENTICAL. Mirrors the
+    // isR/isBD/isL gating. (roughnessNode was computed-then-void'd/unused — dropped.)
     const camPos = vec3(cam.camPos) as unknown as NV3;
-    const shading = buildTerrainShading({
-      normalTex: hf.normalTex,
-      biomeTex: hf.biomeTex as StorageTexture,
-      fieldsTex: hf.fieldsTex as StorageTexture,
-      noiseA: hf.noiseA as StorageTexture,
-      noiseB: hf.noiseB as StorageTexture,
-      mp: hf.mp,
-      far: false,
-      surf: { wp, camPos },
+    const terrainCol = vec3(0.3).toVar() as unknown as NV3;
+    const terrainNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
+    If(isT, () => {
+      const shading = buildTerrainShading({
+        normalTex: hf.normalTex,
+        biomeTex: hf.biomeTex as StorageTexture,
+        fieldsTex: hf.fieldsTex as StorageTexture,
+        noiseA: hf.noiseA as StorageTexture,
+        noiseB: hf.noiseB as StorageTexture,
+        mp: hf.mp,
+        far: false,
+        surf: { wp, camPos },
+      });
+      let tc: NV3 = shading.colorNode;
+      const cctx = causticContext();
+      if (cctx) {
+        const d = causticDepth(wp);
+        const fringe = smoothstep(-0.45, -0.04, d);
+        const caust = causticTint(wp, d);
+        const biofilm = smoothstep(0.04, 0.5, d);
+        let wetCol = tc
+          .mul(fringe.mul(0.38).oneMinus())
+          .mul(biofilm.mul(0.42).oneMinus()) as unknown as NV3;
+        wetCol = mix(wetCol, wetCol.mul(vec3(0.72, 0.86, 0.55)), biofilm.mul(0.65)) as unknown as NV3;
+        tc = wetCol.mul(caust.mul(1.7).add(1)) as unknown as NV3;
+      }
+      terrainCol.assign(tc);
+      terrainNrm.assign(shading.worldNormalNode);
     });
-    let terrainCol: NV3 = shading.colorNode;
-    let terrainRough: NF = shading.roughnessNode;
-    const cctx = causticContext();
-    if (cctx) {
-      const d = causticDepth(wp);
-      const fringe = smoothstep(-0.45, -0.04, d);
-      const caust = causticTint(wp, d);
-      const biofilm = smoothstep(0.04, 0.5, d);
-      let wetCol = terrainCol
-        .mul(fringe.mul(0.38).oneMinus())
-        .mul(biofilm.mul(0.42).oneMinus()) as unknown as NV3;
-      wetCol = mix(wetCol, wetCol.mul(vec3(0.72, 0.86, 0.55)), biofilm.mul(0.65)) as unknown as NV3;
-      terrainCol = wetCol.mul(caust.mul(1.7).add(1)) as unknown as NV3;
-      terrainRough = shading.roughnessNode.sub(fringe.mul(0.42)).clamp(0.18, 1) as unknown as NF;
-    }
-    void terrainRough;
 
     // ---- ROCK shading (N4-C2): re-fetch the cluster triangle, barycentric-
     // interpolate vdata + normal at the reconstructed surface point, run the
@@ -569,7 +576,7 @@ export function buildNaniteResolve(
       .toVar() as unknown as NV3;
     const wNormal = isT
       .select(
-        shading.worldNormalNode,
+        terrainNrm,
         isR.select(rockNrm, isBD.select(barkNrm, isL.select(leafNrm, vec3(0, 1, 0)))),
       )
       .toVar() as unknown as NV3;

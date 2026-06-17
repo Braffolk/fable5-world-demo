@@ -17,7 +17,15 @@ fix; `6fb9ca1` capture-vs-intent analysis.** PRIOR: `41d2dd5` PERF-VB4 single-pa
 **SHIPPED PERF THIS SESSION:** banded-τ defaults (loderr=3/nanitemin=2/instminpx≈128, ~1.55× whole-frame, quality-gated)
 + the SCANLINE raster win (per-row covered x-span vs full-bbox walk; bit-identical; vista frame 20.5→16.3ms). The
 UE5-gap hunt's other wins: #2 depth-DDA = measured non-win (atomic-bound loop) REVERTED; #4 terrain `If(isT)` gate
-(~0.15ms, free) NOT yet done; #3 same-frame Hi-Z (~0.5ms, capped) + #5 HW makeCtx cache (~0.04ms) low-priority.
+DONE (bit-identical, ~0.15ms — gates buildTerrainShading in NaniteResolve so non-terrain pixels skip the terrain
+prelude; world+forest validated); #3 same-frame Hi-Z (~0.5ms, capped) + #5 HW makeCtx cache (~0.04ms) low-priority, NOT done.
+**NEXT (post-compact, user-directed): N8-HIC cross-instance MERGE — the real ~2× vs UE5** (the cluster-count/overdraw
+floor; UE5 covers many trees with few far clusters at ~1 tri/px, we stay above it). UE5-GAP-REPORT §3+§4: biggest
+structural lever BUT NOT no-quality-loss as-is — merging far bark/rock/deadwood across instances loses the procedural
+per-instance tint/wind (`slotHash`) unless baked into per-super-cluster vertex attributes (a quality approximation + a
+cross-instance super-cluster BUILDER that doesn't exist). Needs an explicit quality budget. SPEC D-N43 +
+`BuildAggregateDag.ts` (closest existing machinery). SEPARATION PRINCIPLE: nanite self-contained in src/nanite. Stage it
+(builder → wire → judge shots), compact between stages.
 **THE PERF METHOD that worked = WebGPU-Inspector capture as GROUND TRUTH, not the statistical harness** (LOG bz; the
 harness dead-ended at "world1 ~90% per-pixel, nothing left" + the multi-agent RASTER-FORGE runs burned ~6M tokens
 without a coherent result — user: "dogshit"). `slice.py` slices a capture → per-resource-type intent-divergence analysis

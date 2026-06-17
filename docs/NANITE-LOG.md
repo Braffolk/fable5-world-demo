@@ -25,6 +25,11 @@
     ±2-4ms thermal noise) — confirms the report's caveat that the covered-pixel loop is ATOMIC-LATENCY-bound, not
     ALU-bound (the ALU saving hides under the election atomic). Also NOT bit-identical (few-ULP depth drift, also
     perturbs the `depth`-mode shadow buffer). No gain + a quality/correctness cost ⇒ reverted, not shipped.
+  - **WIN #4 — terrain `If(isT)` gate (SHIPPED, bit-identical, ~0.15ms).** `NaniteResolve` called `buildTerrainShading`
+    UNCONDITIONALLY then discarded it for non-terrain pixels via `isT.select`; now gated in `If(isT)` (hoist terrainCol +
+    terrainNrm defaults, mirror the isR/isBD/isL pattern; the dead voided `roughnessNode` dropped). Non-terrain pixels skip
+    the terrain prelude tex fetches. Bit-identical (the select discards the default). Helps world (non-terrain px) + forest
+    (all px — no terrain). tsc clean; world terrain + forest render correctly.
   - **Method notes (durable):** cross-boot screenshot `cmp` is INVALID for bit-identity here (wind sway + TAA history
     + the world1 election's accepted atomic race ⇒ render is frame-nondeterministic) — bit-identity rests on the
     logic proof + a visual no-holes check. The `?rdbg` world1 stop points (rdbg2 = pre-loop, rdbg3 = full) are the
