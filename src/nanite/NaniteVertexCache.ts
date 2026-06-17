@@ -29,7 +29,7 @@
 
 import { If, uint, vec3, workgroupArray, workgroupBarrier } from 'three/tsl';
 import type { NU, NV3 } from '../gpu/TSLTypes';
-import { VCACHE_VERTS } from './GeometryRegistry';
+import { MAX_CLUSTER_TRIS, VCACHE_VERTS } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
 import type { NaniteFetch, VertCtx } from './NaniteFetch';
 import { elemU } from './Tsl';
@@ -67,8 +67,8 @@ export function makeVertexCache(gpu: RegistryGpu, fetch: NaniteFetch): VertexCac
     const vcCount = elemU(gpu.vcompact, ci.mul(uint(2)).add(uint(1))).toVar();
     // strided cooperative populate — thread t writes slots t, t+128, … to DISTINCT
     // cells (no atomics). VCACHE_VERTS ≤ 2·128 ⇒ ≤2 strides, unrolled at build time.
-    for (let s = 0; s < Math.ceil(VCACHE_VERTS / 128); s++) {
-      const slot = (s === 0 ? localTri : localTri.add(uint(s * 128))).toVar();
+    for (let s = 0; s < Math.ceil(VCACHE_VERTS / MAX_CLUSTER_TRIS); s++) {
+      const slot = (s === 0 ? localTri : localTri.add(uint(s * MAX_CLUSTER_TRIS))).toVar();
       If(slot.lessThan(vcCount), () => {
         (shVerts.element(slot) as { assign(x: NV3): void }).assign(
           fetchWorldVertByIndex(ctx, vcMin.add(slot)),

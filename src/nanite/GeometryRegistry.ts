@@ -21,7 +21,9 @@
  *
  * NOTE vs the NEXT-ACTIONS sketch: the cluster record's matClass byte became
  * meshId u16 — raster/resolve need cluster→mesh (heightfield params, channel,
- * matClass all live in the mesh record); triCount fits u8 at the 128-tri cap.
+ * matClass all live in the mesh record); triCount is a u8 field ⇒ the cluster tri cap
+ * is at most 255 (setClusterTriCap caps the ?clustertris=256 path at 255, not 256 — a
+ * 256-tri cluster would overflow triCount to 0 and raster nothing).
  *
  * Heightfield sources store NO vertices (F4): records carry grid-window
  * coordinates; kernels reconstruct positions from the resident heights buffer
@@ -82,13 +84,42 @@ export const DAG_VERT_STRIDE = 12;
 /** N8-D1: a root cluster's parentError is +∞ — stored as this finite sentinel
  *  so the GPU projection (errToPx) yields a huge value (> any τ) without inf/NaN. */
 export const DAG_ROOT_PARENT_ERR = 1e30;
-export const MAX_CLUSTER_TRIS = 128;
+/** cluster triangle cap. The SW raster runs ONE workgroup of MAX_CLUSTER_TRIS threads per
+ *  cluster (1 thread/triangle), and the resolve payload packs the triangle index in
+ *  CLUSTER_TRI_BITS low bits (itemIdx << BITS | localTri, MASK = cap−1). 128 is the Nanite
+ *  standard; `?clustertris=256` (setClusterTriCap, A/B) HALVES the cluster COUNT — fewer
+ *  per-cluster workgroup launches, the dominant SW-raster cost (D-N43 τ-sweep) — at the
+ *  cost of COARSER per-cluster culling granularity (frustum/cone/LOD-cut). Mutable for the
+ *  A/B; default 128. Read live by the raster/resolve/registry at build time. */
+export let MAX_CLUSTER_TRIS = 128;
+export let CLUSTER_TRI_BITS = 7; // log2(MAX_CLUSTER_TRIS) — payload localTri field width
+export let CLUSTER_TRI_MASK = 127; // MAX_CLUSTER_TRIS − 1 — payload localTri mask
 /** PERF-3 vertex-cache: a cluster whose vertex indices span ≤ this many entries is
  *  cooperatively transformed ONCE into a workgroup-shared vec3 array (3 f32 each →
  *  VCACHE_VERTS·12 B; 192 → 2.3 KB, well under the 16 KB workgroup limit). Bounds the
  *  shared array AND the per-cluster cache width. ≥ MAX_CLUSTER_TRIS so a 128-tri cluster
  *  with ~tight indexing always fits (avg unique 82, explicit 95% range ≤128). */
-export const VCACHE_VERTS = 192;
+export let VCACHE_VERTS = 192;
+
+/**
+ * A/B (`?clustertris`): set the cluster triangle cap to 128 or 256 + derive the payload
+ * bits/mask and the vertex-cache width. MUST run at boot BEFORE buildWorldRegistry + the
+ * nanite shaders build (all read these as live module bindings). Clamped to {128, 256} —
+ * 256 is the WebGPU baseline `maxComputeInvocationsPerWorkgroup`, and the resolve payload
+ * (`itemIdx<<BITS|localTri`, itemIdx 23 bits) has exactly 1 spare bit for an 8-bit index.
+ */
+export function setClusterTriCap(cap: number): void {
+  const bits = cap >= 256 ? 8 : 7;
+  CLUSTER_TRI_BITS = bits;
+  CLUSTER_TRI_MASK = (1 << bits) - 1; // 127 or 255 — the PAYLOAD localTri field width
+  // CRITICAL: triCount packs into an 8-bit cluster-record field (word 7, byte 0 — see the
+  // `(dc.triCount & 0xff)` in attachDag). So a cluster can hold at most 255 triangles. The
+  // 8-bit payload addresses 256, but a 256-tri cluster overflows the field (256 & 0xff = 0)
+  // → the GPU reads triCount = 0 → `if (localTri < 0)` never fires → the cluster rasters
+  // NOTHING → holes. So the high cap is 255, NOT 256 (identical cluster-count win).
+  MAX_CLUSTER_TRIS = bits === 8 ? 255 : 128;
+  VCACHE_VERTS = MAX_CLUSTER_TRIS + (MAX_CLUSTER_TRIS >> 1); // 192 @128, ~382 @255
+}
 export const LOD_NONE = 0xffffffff;
 /** N8-D2 Stage 2a: an evicted streaming-tile slot parks its mesh sphere here so
  *  kInstCull's frustum test always rejects it (belt + suspenders alongside the

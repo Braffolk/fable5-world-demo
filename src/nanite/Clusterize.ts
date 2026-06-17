@@ -89,6 +89,70 @@ function buildAdjacency(indices: Uint32Array, triCount: number): Int32Array {
   return adj;
 }
 
+/** Fill threshold: when the shared-edge adjacency frontier dies, a cluster that has
+ *  reached this fraction of maxTris FINALIZES rather than pulling in a DISCONNECTED next
+ *  piece. Lower = tighter bounding spheres (each cluster ≈ one connected component); higher
+ *  = fuller clusters (fewer total — joins disconnected leaf-chunks). 0.75 is the tight-
+ *  sphere default; `?clusterfill` raises it for foliage where chunky leaf-sprays (≥0.75·cap
+ *  connected tris) otherwise become one cluster each. A/B via setClusterFill at boot. */
+let clusterFillFrac = 0.75;
+export function setClusterFill(f: number): void {
+  clusterFillFrac = Math.max(0.1, Math.min(1, f));
+}
+
+/**
+ * Morton (Z-order) triangle ordering by centroid. The greedy grower follows shared-edge
+ * adjacency; when that frontier dies it must pull a DISCONNECTED next piece (foliage: each
+ * leaf is its own component, so this is hit constantly). Picking the next triangle in raw
+ * INDEX order can grab one from across the mesh → a LOOSE bounding sphere → which inflates
+ * the LOD cut's projected error (PROJ_K·e/√(d²−r²) grows as r grows) → the cut OVER-refines
+ * into finer children → MORE, smaller clusters. Seeding + refilling in spatial order keeps
+ * each cluster a tight local patch, so a fuller cluster stays tight and the cut is correct.
+ * Deterministic (tie-break by tri id) so builds stay reproducible.
+ */
+function buildSpatialOrder(cx: Float32Array, cy: Float32Array, cz: Float32Array, n: number): Uint32Array {
+  const order = new Uint32Array(n);
+  for (let i = 0; i < n; i++) order[i] = i;
+  if (n <= 1) return order;
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const x = cx[i] as number;
+    const y = cy[i] as number;
+    const z = cz[i] as number;
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+    if (z < minZ) minZ = z;
+    if (z > maxZ) maxZ = z;
+  }
+  const sx = maxX > minX ? 1023 / (maxX - minX) : 0;
+  const sy = maxY > minY ? 1023 / (maxY - minY) : 0;
+  const sz = maxZ > minZ ? 1023 / (maxZ - minZ) : 0;
+  // spread a 10-bit coord to every 3rd bit (Morton interleave)
+  const part = (v: number): number => {
+    let q = v & 0x3ff;
+    q = (q | (q << 16)) & 0x30000ff;
+    q = (q | (q << 8)) & 0x300f00f;
+    q = (q | (q << 4)) & 0x30c30c3;
+    q = (q | (q << 2)) & 0x9249249;
+    return q >>> 0;
+  };
+  const code = new Uint32Array(n);
+  for (let i = 0; i < n; i++) {
+    const qx = Math.min(1023, Math.max(0, Math.round(((cx[i] as number) - minX) * sx)));
+    const qy = Math.min(1023, Math.max(0, Math.round(((cy[i] as number) - minY) * sy)));
+    const qz = Math.min(1023, Math.max(0, Math.round(((cz[i] as number) - minZ) * sz)));
+    code[i] = (part(qx) | (part(qy) << 1) | (part(qz) << 2)) >>> 0;
+  }
+  return order.sort((a, b) => (code[a] as number) - (code[b] as number) || a - b);
+}
+
 export function clusterize(
   positions: Float32Array,
   posStride: number,
@@ -121,6 +185,10 @@ export function clusterize(
     cy[t] = (y0 + y1 + y2) / 3;
     cz[t] = (z0 + z1 + z2) / 3;
   }
+
+  // spatially-coherent seed + refill order — keeps clusters tight when the grower must
+  // jump across disconnected components (the foliage case). See buildSpatialOrder.
+  const spatialOrder = buildSpatialOrder(cx, cy, cz, triCount);
 
   const used = new Uint8Array(triCount);
   const inFrontier = new Uint8Array(triCount);
@@ -182,14 +250,14 @@ export function clusterize(
 
   while (true) {
     // next seed: previous cluster's frontier first (coherent surface sweep,
-    // fewer islands), index scan as fallback
+    // fewer islands), SPATIAL-order scan as fallback (seedScan cursors spatialOrder)
     let seed = -1;
     if (carrySeed >= 0 && (used[carrySeed] as number) === 0) {
       seed = carrySeed;
     } else {
-      while (seedScan < triCount && (used[seedScan] as number) === 1) seedScan++;
+      while (seedScan < triCount && (used[spatialOrder[seedScan] as number] as number) === 1) seedScan++;
       if (seedScan >= triCount) break;
-      seed = seedScan;
+      seed = spatialOrder[seedScan] as number;
     }
     carrySeed = -1;
 
@@ -203,14 +271,16 @@ export function clusterize(
 
     while (clusterTris.length < maxTris) {
       if (heapN === 0) {
-        // frontier died with the cluster underfull: refill from the index
-        // scan (generated meshes have spatially coherent index order) so
-        // clusters stay near-full instead of fragmenting into islands
-        if (clusterTris.length >= maxTris * 0.75) break;
-        while (seedScan < triCount && (used[seedScan] as number) === 1) seedScan++;
+        // frontier died with the cluster underfull: refill with the next triangle in
+        // SPATIAL (Morton) order — a spatially-near disconnected piece (the foliage case)
+        // so the cluster fills as a tight local patch, NOT a loose mesh-spanning sphere
+        // that would inflate the LOD cut's projected error and over-refine.
+        if (clusterTris.length >= maxTris * clusterFillFrac) break;
+        while (seedScan < triCount && (used[spatialOrder[seedScan] as number] as number) === 1) seedScan++;
         if (seedScan >= triCount) break;
-        heapPush(seedScan, 0);
-        inFrontier[seedScan] = 1;
+        const refill = spatialOrder[seedScan] as number;
+        heapPush(refill, 0);
+        inFrontier[refill] = 1;
         continue;
       }
       const t = heapPop();

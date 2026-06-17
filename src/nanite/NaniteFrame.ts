@@ -31,6 +31,7 @@ import type { Engine } from '../core/Engine';
 import type { PostStack } from '../render/PostStack';
 import type { Heightfield } from '../world/Heightfield';
 import type { GeometryRegistry } from './GeometryRegistry';
+import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK } from './GeometryRegistry';
 import { makeNaniteCam } from './NaniteCommon';
 import { buildNaniteCull } from './NaniteCull';
 import { buildNaniteHzb } from './NaniteHzb';
@@ -290,8 +291,8 @@ export function buildNaniteFrame(
       // and the vertex world position tells whether the triangle is where
       // its window says it should be
       const pay = elemU(vis.payloadV.ro, fy.mul(uint(size.x)).add(x)).toVar();
-      const itemIdx = pay.shiftRight(uint(7));
-      const localTri = pay.bitAnd(uint(127));
+      const itemIdx = pay.shiftRight(uint(CLUSTER_TRI_BITS));
+      const localTri = pay.bitAnd(uint(CLUSTER_TRI_MASK));
       const item = cull.qRasterRO.element(itemIdx.add(uint(1)));
       const instId = item.x.toVar();
       const ci = item.y.toVar();

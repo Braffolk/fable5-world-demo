@@ -64,7 +64,7 @@ import { BARK_RES } from '../gpu/passes/BarkSynth';
 import { fbm3, valueNoise3 } from '../gpu/noise/NoiseTSL';
 import type { ProbeGI } from '../gpu/passes/ProbeGI';
 import type { Heightfield } from '../world/Heightfield';
-import { MESH_WORDS, readVertex } from './GeometryRegistry';
+import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK, MESH_WORDS, readVertex } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
 import { makeFetch, slotHash } from './NaniteFetch';
 import { hashColor, instRotateDir, type NaniteCam } from './NaniteCommon';
@@ -280,7 +280,7 @@ export function buildNaniteResolve(
     ).xyz.toVar() as unknown as NV3;
 
     // payload → mesh → matClass
-    const itemIdx = pRaw.shiftRight(uint(7));
+    const itemIdx = pRaw.shiftRight(uint(CLUSTER_TRI_BITS));
     const item = cull.qRasterRO.element(itemIdx.add(uint(1)));
     const ci = item.y;
     const meshId = elemU(gpu.clusters, ci.mul(uint(8)).add(uint(7))).shiftRight(uint(16));
@@ -336,7 +336,7 @@ export function buildNaniteResolve(
     const rockAo = float(1).toVar() as unknown as NF;
     If(isR, () => {
       const instId = item.x;
-      const localTri = pRaw.bitAnd(uint(127));
+      const localTri = pRaw.bitAnd(uint(CLUSTER_TRI_MASK));
       const ctx = fetch.makeCtx(instId, ci);
       const w0 = fetch.fetchWorldVert(ctx, localTri, 0);
       const w1 = fetch.fetchWorldVert(ctx, localTri, 1);
@@ -380,7 +380,7 @@ export function buildNaniteResolve(
       const barkTexB = world.barkTexB;
       If(isBD, () => {
         const instId = item.x;
-        const localTri = pRaw.bitAnd(uint(127));
+        const localTri = pRaw.bitAnd(uint(CLUSTER_TRI_MASK));
         const ctx = fetch.makeCtx(instId, ci);
         const w0 = fetch.fetchWorldVert(ctx, localTri, 0);
         const w1 = fetch.fetchWorldVert(ctx, localTri, 1);
@@ -527,7 +527,7 @@ export function buildNaniteResolve(
     const leafNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
     If(isL, () => {
       const instId = item.x;
-      const localTri = pRaw.bitAnd(uint(127));
+      const localTri = pRaw.bitAnd(uint(CLUSTER_TRI_MASK));
       const ctx = fetch.makeCtx(instId, ci);
       const w0 = fetch.fetchWorldVert(ctx, localTri, 0);
       const w1 = fetch.fetchWorldVert(ctx, localTri, 1);

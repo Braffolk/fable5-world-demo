@@ -6,9 +6,11 @@
  * oversized triangles route to the HW queue whose fragment stage writes the
  * SAME buffers (depthWrite off — one resolve, one convention).
  *
- * Payload = (workItemIdx << 7) | localTri — qRaster doubles as the visible-
- * cluster list, so the resolve recovers (instance, cluster) in one
- * indirection (25-bit item headroom, F3).
+ * Payload = (workItemIdx << CLUSTER_TRI_BITS) | localTri — qRaster doubles as the
+ * visible-cluster list, so the resolve recovers (instance, cluster) in one
+ * indirection. CLUSTER_TRI_BITS = log2(MAX_CLUSTER_TRIS) (7 @128, 8 @256 — the
+ * ?clustertris A/B); itemIdx has 23 bits (QRASTER_CAP=2^23) ⇒ 23+8 = 31/32 at the
+ * 256 cap, 1 spare.
  *
  * Scanline core (N3a): FIXED-POINT integer edge functions — verts snapped to
  * a 1/256-px grid (8 subpixel bits, HW convention), coverage + top-left rule
@@ -53,7 +55,13 @@ import {
 } from 'three/tsl';
 import type { NB, NF, NI, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
 import { markFragmentWritable } from '../render/ThreePatches';
-import { CLUSTER_WORDS, MESH_WORDS } from './GeometryRegistry';
+import {
+  CLUSTER_TRI_BITS,
+  CLUSTER_TRI_MASK,
+  CLUSTER_WORDS,
+  MAX_CLUSTER_TRIS,
+  MESH_WORDS,
+} from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
 import { DISPATCH_ROW, QRASTER_CAP, hashColor, instYaw, type NaniteCam } from './NaniteCommon';
 import { makeFetch, type TerrainDisp, type TrunkWindOpt, type VertCtx } from './NaniteFetch';
@@ -501,7 +509,7 @@ export function buildNaniteRaster(
           returnIf(itemCount.greaterThanEqual(uint(0)));
         }
 
-        const payload = itemIdx.shiftLeft(uint(7)).bitOr(localTri).toVar();
+        const payload = itemIdx.shiftLeft(uint(CLUSTER_TRI_BITS)).bitOr(localTri).toVar();
 
         const nearOK = p0.w
           .greaterThan(NEAR_EPS)
@@ -794,7 +802,7 @@ export function buildNaniteRaster(
           });
         });
       });
-    })().compute(QRASTER_CAP * 128, [128]);
+    })().compute(QRASTER_CAP * MAX_CLUSTER_TRIS, [MAX_CLUSTER_TRIS]);
     return kn;
   };
 
@@ -853,8 +861,8 @@ export function buildNaniteRaster(
       const base = triIndex.mul(uint(2)).add(uint(1));
       const payload = elemU(hwQueueV.ro, base).toVar();
       const instId = elemU(hwQueueV.ro, base.add(uint(1))).toVar();
-      const itemIdx = payload.shiftRight(uint(7));
-      const localTri = payload.bitAnd(uint(127));
+      const itemIdx = payload.shiftRight(uint(CLUSTER_TRI_BITS));
+      const localTri = payload.bitAnd(uint(CLUSTER_TRI_MASK));
       const item = qRasterRO.element(itemIdx.add(uint(1)));
       const ci = item.y.toVar();
       const ctx = makeCtx(instId, ci);
@@ -956,8 +964,8 @@ export function buildNaniteRaster(
         Discard();
       });
       const id = bRaw.bitAnd(uint(0xffff)).shiftLeft(uint(16)).bitOr(aRaw.bitAnd(uint(0xffff)));
-      itemIdx = id.shiftRight(uint(7)) as unknown as NU;
-      localTri = id.bitAnd(uint(127)) as unknown as NU;
+      itemIdx = id.shiftRight(uint(CLUSTER_TRI_BITS)) as unknown as NU;
+      localTri = id.bitAnd(uint(CLUSTER_TRI_MASK)) as unknown as NU;
     } else {
       const dRaw = elemU(visDepthV.ro, pixelIndex);
       const pRaw = elemU(visPayloadV.ro, pixelIndex);
@@ -969,8 +977,8 @@ export function buildNaniteRaster(
       If(pRaw.equal(uint(0xffffffff)), () => {
         Discard();
       });
-      itemIdx = pRaw.shiftRight(uint(7)) as unknown as NU;
-      localTri = pRaw.bitAnd(uint(127)) as unknown as NU;
+      itemIdx = pRaw.shiftRight(uint(CLUSTER_TRI_BITS)) as unknown as NU;
+      localTri = pRaw.bitAnd(uint(CLUSTER_TRI_MASK)) as unknown as NU;
     }
     const item = qRasterRO.element(itemIdx.add(uint(1)));
     const instId = item.x.toVar();

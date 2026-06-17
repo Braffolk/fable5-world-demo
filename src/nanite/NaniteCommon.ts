@@ -31,7 +31,8 @@ export const QCHUNK_CAP = 1_048_576;
  *  visible-cluster list the resolve payload indexes — F3/F16: payload itemIdx
  *  has 25 bits of headroom). Raised 2M→8M (2^23) for dense far-field views that
  *  flooded the old 2M cap (trees flickering as clusters were dropped). Bit budget:
- *  itemIdx<<7|localTri ⇒ 23+7 = 30 of 32 bits, still 2 spare. Memory ceiling: the
+ *  itemIdx<<CLUSTER_TRI_BITS|localTri ⇒ 23+7 = 30 of 32 bits (2 spare) at the default
+ *  128-tri cap, 23+8 = 31 (1 spare) at ?clustertris=256. Memory ceiling: the
  *  buffers it sizes (qRaster (CAP+1)×2×u32 = 64 MB; two BFS frontiers ×2×u32 = 64
  *  MB each = 192 MB total) must each stay under WebGPU's default 128 MB
  *  per-storage-buffer binding limit — 8M is the largest clean power of 2 that does.

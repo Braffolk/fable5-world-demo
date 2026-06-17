@@ -20,9 +20,16 @@
 import { FloatType, StorageTexture } from 'three/webgpu';
 import type { WorldContext } from './Scenes';
 import { buildVegLibrary, type VegPool } from '../vegetation/VegLibrary';
-import { GeometryRegistry, DAG_VERT_STRIDE, explicitToDagVerts } from '../nanite/GeometryRegistry';
+import {
+  GeometryRegistry,
+  DAG_VERT_STRIDE,
+  MAX_CLUSTER_TRIS,
+  explicitToDagVerts,
+  setClusterTriCap,
+} from '../nanite/GeometryRegistry';
 import { type DagBuild, buildDag } from '../nanite/BuildDag';
 import { buildAggregateDag } from '../nanite/BuildAggregateDag';
+import { setClusterFill } from '../nanite/Clusterize';
 import { geometryToSource } from '../nanite/WorldRegistry';
 import { buildNaniteView } from '../nanite/NaniteView';
 import { Heightfield } from '../world/Heightfield';
@@ -45,6 +52,11 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
   const leafDensity = Math.max(1, Math.floor(Number(q.get('leafdensity') ?? '4000')));
   const wantDag = q.get('dag') !== '0';
   const mode = (q.get('nanitedbg') as 'flat' | 'cluster' | 'lod' | null) ?? 'cluster';
+  // A/B knobs — MUST be set before the DAG builds + the nanite shaders build (all read the
+  // cap live). ForestScene has its OWN build path (not buildWorldRegistry), so it wires these
+  // itself; without this `?clustertris`/`?clusterfill` are silently ignored here.
+  setClusterTriCap(Number(q.get('clustertris')) || 256);
+  setClusterFill(Number(q.get('clusterfill')) || 0.95);
 
   // ── tree geometry (real crowns, full leaf density) ────────────────────────
   ctx.progress(0.1, 'forest: building veg library');
@@ -88,11 +100,19 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
     if (wantDag) {
       dagJobs.push({
         handle: bark,
-        build: () => buildDag(explicitToDagVerts(barkSrc), DAG_VERT_STRIDE, barkSrc.indices, { normalOffset: 3 }),
+        build: () =>
+          buildDag(explicitToDagVerts(barkSrc), DAG_VERT_STRIDE, barkSrc.indices, {
+            normalOffset: 3,
+            maxTris: MAX_CLUSTER_TRIS,
+          }),
       });
       dagJobs.push({
         handle: leaf,
-        build: () => buildAggregateDag(explicitToDagVerts(leafSrc), DAG_VERT_STRIDE, leafSrc.indices, { seed: seed.seed }),
+        build: () =>
+          buildAggregateDag(explicitToDagVerts(leafSrc), DAG_VERT_STRIDE, leafSrc.indices, {
+            seed: seed.seed,
+            maxTris: MAX_CLUSTER_TRIS,
+          }),
       });
     }
     return { bark, leaf };

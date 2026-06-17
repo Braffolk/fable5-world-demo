@@ -26,6 +26,7 @@
 
 import { buildAggregateDag, type AggregateDagOpts } from '../src/nanite/BuildAggregateDag';
 import { type DagBuild } from '../src/nanite/BuildDag';
+import { setClusterFill } from '../src/nanite/Clusterize';
 import { Rng } from '../src/core/Seed';
 
 let failures = 0;
@@ -362,6 +363,23 @@ buildCrown('crown-dense', 2600);
     `  aggregate throughput ${(1000 / perMTri).toFixed(2)} Mtri/s -> 3.1M leaf tris ≈ ${((perMTri * 3.1) / 1000).toFixed(1)} s`,
   );
 }
+
+// CAP/FILL: does buildAggregateDag honor maxTris + the clusterfill threshold? Prints LOD0
+// tris/cluster for each (cap, fill) on the SAME crown — the number the forest HUD shows.
+console.log('  --- cap/fill LOD0 fill (crown-hero, 4800 tris) ---');
+for (const [cap, fill] of [[128, 0.75], [256, 0.75], [256, 0.95]] as const) {
+  setClusterFill(fill);
+  const m = makeCrown(new Rng(4242), 1200, 2.2, 0.13);
+  const d = buildAggregateDag(m.verts, STRIDE, m.indices, { maxTris: cap });
+  const l0 = d.stats.lod0Tris / Math.max(1, d.stats.lod0Clusters);
+  const tot = d.stats.totalTris / Math.max(1, d.stats.totalClusters);
+  console.log(
+    `  cap=${cap} fill=${fill}: LOD0 ${d.stats.lod0Tris}t / ${d.stats.lod0Clusters}cl = ${l0.toFixed(0)} tris/cl | all-levels avg ${tot.toFixed(0)}`,
+  );
+  // crack-free invariants at this (cap, fill) — does 256 / 0.95 still emit watertight pairs?
+  checkInvariants(`  cap${cap}/fill${fill}`, d);
+}
+setClusterFill(0.75);
 
 if (failures > 0) {
   console.error(`[probe-aggregate] ${failures} FAILURES`);

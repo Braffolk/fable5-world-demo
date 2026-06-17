@@ -198,7 +198,7 @@ function checkMesh(name: string, dag: DagBuild): void {
 
 /** build the DAG for any BufferGeometry (pos + normal interleaved, stride 6),
  *  run the determinism + invariant checks, return it */
-function dagFromGeometry(label: string, geo: BufferGeometry): DagBuild {
+function dagFromGeometry(label: string, geo: BufferGeometry, maxTris = 128): DagBuild {
   const pos = geo.attributes.position;
   const nrm = geo.attributes.normal;
   if (!pos) throw new Error(`${label}: no position attribute`);
@@ -221,10 +221,10 @@ function dagFromGeometry(label: string, geo: BufferGeometry): DagBuild {
   const indices = idx
     ? new Uint32Array(idx.array as ArrayLike<number>)
     : Uint32Array.from({ length: vCount }, (_, i) => i);
-  const dag = buildDag(verts, stride, indices, { normalOffset: 3 });
+  const dag = buildDag(verts, stride, indices, { normalOffset: 3, maxTris });
 
   // determinism: a second build must be bit-identical in structure
-  const dag2 = buildDag(verts, stride, indices, { normalOffset: 3 });
+  const dag2 = buildDag(verts, stride, indices, { normalOffset: 3, maxTris });
   if (
     dag2.stats.totalClusters !== dag.stats.totalClusters ||
     dag2.stats.totalTris !== dag.stats.totalTris ||
@@ -249,6 +249,11 @@ console.log('[probe-dag]');
 rockOf(3, 'rock-small');
 rockOf(5, 'rock-mid');
 const hero = rockOf(7, 'rock-hero');
+
+// 256-cap: does the QEM DAG hierarchy (owner-dedup BFS links) still reproduce the cut?
+// bark/rock use this; terrain doesn't (anchor-chain) — which is why terrain is immune.
+dagFromGeometry('rock-hero@256', buildRock('boulder', new Rng(1234 + 7), 7).geometry, 256);
+dagFromGeometry('rock-mid@256', buildRock('boulder', new Rng(1234 + 5), 5).geometry, 256);
 // open-tube topology (bark trunk/branches) — exercises open-boundary locking;
 // SNAG stands in for the DEADWOOD class. Both are the same ExplicitSource path.
 barkOf(BEECH, 1, 'bark-beech');

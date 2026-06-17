@@ -34,6 +34,7 @@ import type { Heightfield } from '../world/Heightfield';
 import { WORLD_SIZE } from '../world/WorldConst';
 import { type DagBuild, type DagCluster, buildDag } from './BuildDag';
 import { buildAggregateDag } from './BuildAggregateDag';
+import { setClusterFill } from './Clusterize';
 import { DagBuildWorker, DagWorkerPool, type DagBuilder, type HeightDagResult } from './DagWorkerClient';
 import { TerrainStreamer, buildTerrainTile, type TileBuildDeps, type TileBuildStats } from './TerrainStreamer';
 import {
@@ -41,10 +42,12 @@ import {
   DAG_VERT_STRIDE,
   type ExplicitSource,
   GeometryRegistry,
+  MAX_CLUSTER_TRIS,
   type MaterialClassId,
   type MeshHandle,
   type TransformChannel,
   explicitToDagVerts,
+  setClusterTriCap,
 } from './GeometryRegistry';
 import { readBuffer } from './Tsl';
 
@@ -277,6 +280,18 @@ export async function buildWorldRegistry(input: {
   const inSet = (c: MaterialClassId): boolean => !classes || classes.has(c);
   const t0 = performance.now();
   const deferred: string[] = [];
+
+  // A/B (?clustertris=256): set the cluster triangle cap BEFORE any registerMesh /
+  // buildDag clusterizes — 256 halves the cluster COUNT (fewer per-cluster raster
+  // workgroups, the dominant SW cost) at the cost of coarser per-cluster culling. The
+  // raster/resolve shaders (built after this) read the same live cap. Default 128.
+  const clusterParams = new URLSearchParams(window.location.search);
+  setClusterTriCap(Number(clusterParams.get('clustertris')) || 256);
+  // ?clusterfill: how full a cluster must be (fraction of the cap) before the clusterizer
+  // FINALIZES on a dead adjacency frontier instead of joining the next (disconnected) leaf.
+  // Default 0.75 (tight spheres); raise toward ~0.95 so chunky leaf-sprays pack fuller
+  // (fewer clusters) — at the cost of looser per-cluster bounding spheres (watch visTris).
+  setClusterFill(Number(clusterParams.get('clusterfill')) || 0.95);
 
   // ---- scatter readback (placements are boot-static) ------------------------
   const layers = await Promise.all([
@@ -691,6 +706,7 @@ export async function buildWorldRegistry(input: {
       try {
         built = buildDag(explicitToDagVerts(item.source), DAG_VERT_STRIDE, item.source.indices, {
           normalOffset: 3,
+          maxTris: MAX_CLUSTER_TRIS,
         });
       } catch (e) {
         deferred.push(`DAG ${item.label}: build failed (${e instanceof Error ? e.message : String(e)})`);
@@ -718,6 +734,7 @@ export async function buildWorldRegistry(input: {
       try {
         built = buildAggregateDag(explicitToDagVerts(item.source), DAG_VERT_STRIDE, item.source.indices, {
           seed: seed ?? 0,
+          maxTris: MAX_CLUSTER_TRIS,
         });
       } catch (e) {
         deferred.push(`AGG ${item.label}: build failed (${e instanceof Error ? e.message : String(e)})`);

@@ -22,8 +22,14 @@ const fail = (msg: string): void => {
   console.error(`  FAIL ${msg}`);
 };
 
-function checkMesh(name: string, positions: Float32Array, posStride: number, indices: Uint32Array): void {
-  const built = clusterize(positions, posStride, indices, 128);
+function checkMesh(
+  name: string,
+  positions: Float32Array,
+  posStride: number,
+  indices: Uint32Array,
+  maxTris = 128,
+): void {
+  const built = clusterize(positions, posStride, indices, maxTris);
   const st = built.stats;
 
   // P: permutation at triangle granularity
@@ -51,7 +57,7 @@ function checkMesh(name: string, positions: Float32Array, posStride: number, ind
     const start = built.triStart[c] as number;
     const count = built.triCount[c] as number;
     if (start !== covered) fail(`C: cluster ${c} start ${start} != ${covered}`);
-    if (count < 1 || count > 128) fail(`C: cluster ${c} count ${count}`);
+    if (count < 1 || count > maxTris) fail(`C: cluster ${c} count ${count}`);
     covered += count;
   }
   if (covered !== triN) fail(`C: covered ${covered} != ${triN}`);
@@ -129,6 +135,47 @@ console.log('[probe-clusterize]');
 geoOf(3, 'rock-small');
 geoOf(5, 'rock-mid');
 geoOf(7, 'rock-hero');
+
+// DISCONNECTED foliage: nLeaves separate quads on a golden-spiral shell. The spiral
+// emits consecutive leaves at SPREAD positions, so raw INDEX order is spatially loose —
+// this is exactly where the spatial (Morton) refill must keep clusters tight. A LOW rFrac
+// here = the refill is packing spatially-near leaves (tight spheres → cut stays correct);
+// a high rFrac would mean clusters span the crown (the loose-sphere over-refine trap).
+function makeDisconnectedCrown(rng: Rng, nLeaves: number, crownR: number, leafSize: number): { positions: Float32Array; indices: Uint32Array } {
+  const positions = new Float32Array(nLeaves * 4 * 3);
+  const indices = new Uint32Array(nLeaves * 2 * 3);
+  let vp = 0;
+  let ip = 0;
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < nLeaves; i++) {
+    const y = 1 - (i / Math.max(1, nLeaves - 1)) * 2;
+    const rxz = Math.sqrt(Math.max(0, 1 - y * y));
+    const phi = i * golden;
+    const jr = crownR * (0.82 + 0.18 * rng.float());
+    const cx = Math.cos(phi) * rxz * jr;
+    const cy = y * jr;
+    const cz = Math.sin(phi) * rxz * jr;
+    const base = vp;
+    for (const [du, dv] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
+      positions[vp * 3] = cx + du * leafSize;
+      positions[vp * 3 + 1] = cy + dv * leafSize;
+      positions[vp * 3 + 2] = cz;
+      vp++;
+    }
+    indices[ip++] = base;
+    indices[ip++] = base + 1;
+    indices[ip++] = base + 2;
+    indices[ip++] = base + 1;
+    indices[ip++] = base + 3;
+    indices[ip++] = base + 2;
+  }
+  return { positions, indices };
+}
+{
+  const crown = makeDisconnectedCrown(new Rng(77), 2000, 2.4, 0.06);
+  checkMesh('leaf-crown@128', crown.positions, 3, crown.indices, 128);
+  checkMesh('leaf-crown@256', crown.positions, 3, crown.indices, 256);
+}
 
 // extrapolation: time a 327k mesh, scale to the 10–20M all-pools budget
 {
