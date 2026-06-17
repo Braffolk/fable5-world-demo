@@ -642,6 +642,16 @@ export function buildNaniteResolve(
       }
       radiance = radiance.add(irr.mul(ao)) as unknown as NV3;
     }
+    // AMBIENT FLOOR (fixes black back-faces; bdb24c7 dropped the hemisphere ambient to
+    // de-bright TERRAIN, but foliage/bark have back-faces where the probe SH-L1 self-clamps
+    // to ~0 and mat.lights=false gives no env IBL ⇒ they crushed to pure black). A MAX floor
+    // (NOT the old ADD) only catches faces the probe leaves dark — lit faces keep their
+    // energy-correct probe value, so bdb24c7's no-double-count parity is preserved. Magnitude
+    // = the old hemisphere floor × π (radiance is ÷π just below), restoring the pre-bdb24c7
+    // soft dark on shaded sides. Tune the .mul() factor if it reads too bright/dark.
+    const ambUp = wNormal.y.mul(0.5).add(0.5).clamp(0, 1) as unknown as NF;
+    const ambFloor = mix(vec3(0.18, 0.16, 0.12), vec3(0.4, 0.5, 0.62), ambUp).mul(0.5 * Math.PI) as unknown as NV3;
+    radiance = max(radiance, ambFloor) as unknown as NV3;
     let lit: NV3 = albedo.mul(radiance).mul(float(1 / Math.PI)) as unknown as NV3;
     // N9-C0: leaf BACKLIGHT — warm translucent forward-scatter toward the sun
     // (port of VegMaterials.translucency, k=0.032), added on top of the diffuse
