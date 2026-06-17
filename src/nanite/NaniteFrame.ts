@@ -142,18 +142,20 @@ export function buildNaniteFrame(
   }
   const occl = params.get('occl') !== '0';
   const frozenParam = params.get('cullfreeze') === '1';
-  // N8-D1 continuous-LOD cut threshold τ (screen-error px; 1 = sub-pixel error).
-  // The cull applies it per DAG cluster (project(own)≤τ AND project(parent)>τ);
-  // pre-DAG / terrain pools ignore it. ?loderr=N to coarsen/refine for A/B and
-  // the continuous-zoom gate; the setter below lets a probe sweep it live.
-  const loderrParam = Number(params.get('loderr') ?? '1');
-  const tau = uniformF(Number.isFinite(loderrParam) && loderrParam > 0 ? loderrParam : 1);
+  // N8-D1 continuous-LOD cut threshold τ (screen-error px). The cull applies it per
+  // DAG cluster (project(own)≤τ AND project(parent)>τ); pre-DAG / terrain pools ignore
+  // it. DEFAULT 3 px (banded-τ perf landing 2026-06-17: ~2× fewer visible clusters vs
+  // τ=1, near-invisible at eye level — judge shots in docs/perf-runs). ?loderr=N for
+  // A/B (1 = finest/sub-pixel); the setter below lets a probe sweep it live.
+  const loderrParam = Number(params.get('loderr') ?? '3');
+  const tau = uniformF(Number.isFinite(loderrParam) && loderrParam > 0 ? loderrParam : 3);
   // N8-D1e min-screen-size cull (D-N33): drop any cluster whose projected sphere
   // radius < minPx, and for DAG'd meshes REPLACE the finite hybrid draw envelope
   // with this sub-pixel bound (Nanite-style "draw until it vanishes" — trees no
   // longer wink out at 496 m). Crack-safe: any gap left is sub-pixel by definition.
-  // Default 0 = DISABLED ⇒ exact pre-D1e behaviour; ?nanitemin=N (px) to enable.
-  const minpxParam = Number(params.get('nanitemin') ?? '0');
+  // DEFAULT 2 px (banded-τ perf landing) — drops clusters whose error-sphere projects
+  // sub-2px (safe: any gap is sub-pixel by definition). ?nanitemin=0 to disable.
+  const minpxParam = Number(params.get('nanitemin') ?? '2');
   const minPx = uniformF(Number.isFinite(minpxParam) && minpxParam > 0 ? minpxParam : 0);
   // PERF-VB3: the LOD-WARP falloff — distance-banded τ (region collapse) + plateau +
   // power. THESE WERE ONLY WIRED IN THE DEBUG VIEW (NaniteView) before — now wired here
@@ -171,10 +173,15 @@ export function buildNaniteFrame(
   // hier cull (hier has no brute draw-envelope; without a bound every visible instance
   // seeds ≥1 root). Was wired only in NaniteView; now here. DEFAULT 0 = drop nothing
   // (full forest; the lodWarp below still collapses far DETAIL to roots so the count
-  // stays bounded without losing trees). ?instminpx=N to trade density for fps until the
-  // N9 cross-instance MERGE removes the per-instance floor properly.
-  const instminpxParam = Number(params.get('instminpx') ?? '0');
-  const instMinPx = uniformF(Number.isFinite(instminpxParam) && instminpxParam > 0 ? instminpxParam : 0);
+  // stays bounded without losing trees). DEFAULT = resolution-relative 0.075 × min(framebuffer
+  // dim) (≈128 px at the dev res) so far trees hand off to impostors consistently across
+  // resolutions. ?instminpx=N overrides as an absolute px diameter; ?instminpx=0 disables
+  // (full forest). The N9 cross-instance MERGE will remove this per-instance floor properly.
+  const instMinPxDefault = Math.round(0.075 * Math.min(size.x, size.y));
+  const instminpxRaw = params.get('instminpx');
+  const instminpxParam =
+    instminpxRaw != null && Number.isFinite(Number(instminpxRaw)) ? Number(instminpxRaw) : instMinPxDefault;
+  const instMinPx = uniformF(instminpxParam > 0 ? instminpxParam : 0);
 
   const cam = makeNaniteCam(size.x, size.y);
   const vis = makeVisBuffers(size.x * size.y);

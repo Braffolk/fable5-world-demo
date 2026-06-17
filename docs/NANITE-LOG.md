@@ -9,6 +9,36 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-17 (bz): **WebGPU-Inspector capture-vs-intent analysis (the harness was a dead end) → 2 fixes + the
+  submit lever MEASURED MARGINAL + banded-τ perf defaults landed.** (Opus 4.8 1M.) user: "the harness is dogshit...
+  6m tokens, a complete waste... subagents to investigate the capture vs the actual intent of the code."
+  - **METHOD SHIFT.** Instead of re-running the statistical harness (which dead-ended at "world1 ~90% per-pixel,
+    nothing left"), treat a real WebGPU Inspector frame capture (`docs/perf-runs/2026-06-17-webgpu-inspector/`, frame
+    1244, full forest pipe) as GROUND TRUTH and diff the ACTUAL render flow vs the intended architecture (docs+code),
+    one subagent per resource type (8 + synthesis). `slice.py` = OFFLINE slicer (reads JSON only, NO GPU/browser) →
+    per-type slices + a reconstructed `timeline.md`. Findings → `DIVERGENCE-REPORT.md`. Commits `6fb9ca1`,`60430c8`,`72fb8a7`.
+  - **REFUTED** the worry "multiple full-res passes render the trees" — trees are compute-rastered single-pass; the only
+    indexed geometry is the 1984-tri SunSky dome. The single-pass D-N45 path is intact.
+  - **2 FIXES SHIPPED (`60430c8`):** (1) HZB mip chain 11→1 submit (`NaniteHzb.build` → one `renderer.compute([kernels])`;
+    WebGPU auto-syncs between dispatches in a pass, so dependent levels stay correct). (2) Removed the double `meter()`
+    wiring in ForestScene (`engine.onUpdate(()=>frame.meter)` + `Engine.renderStep`'s `post.meter` BOTH fired ⇒
+    autoExposure 2×/frame + double readbacks every 15th frame — a real correctness bug). 76→63 submits, verified by
+    re-capture (frame 1234, render byte-identical).
+  - **SUBMIT-OVERHEAD LEVER MEASURED MARGINAL (don't chase it).** The report ESTIMATED 76 submits ≈ 2.3-6 ms of bubbles.
+    Before/after via `__laas.measureFrames`: 76→63 moved NEITHER gpuWall (21.1 vs 20.7) NOR cpuSubmit (2.1 vs 2.2) past
+    noise. Per-submit boundary ≈ 9 µs (not 30-80); cpuSubmit (~2.1 ms) is encoding-VOLUME bound (binds/writeBuffer/
+    dispatch), which batching encoders doesn't reduce ⇒ the BFS batch (-30 submits) buys ~0.3 ms — NOT worth refactoring
+    the core cull. Frame is genuinely raster-bound (`nanRasterWorld1` 16.7 ms = 75%). Detail: report §7.
+  - **BANDED-τ PERF DEFAULTS (the real frame-time win, user-chosen after browser A/B):** `NaniteFrame` defaults
+    **`loderr` 1→3** (τ = max on-screen geometric error px; the cull picks the coarsest cluster whose project(ownError)≤τ
+    — coarsens LOD, never drops geometry), **`nanitemin` 0→2** (drop sub-2px-radius clusters; gaps are sub-pixel),
+    **`instminpx` 0→resolution-relative `round(0.075·min(fbW,fbH))`** (≈128 px at the dev res; far instances → impostors,
+    consistent across resolutions; `?instminpx=N` absolute override, `=0` disables). MEASURED (forest @1280×720): clusters
+    ~2.5× fewer, world1 raster ~2× (23→11 ms), whole-frame **30.3→19.4 ms alley / 27.6→17.9 ms vista (~1.55×)**; vista
+    live fps 32→67. Judge shots (`shots/banded-tau/`, `shots/defaults/`) — eye-level near-invisible, mild far-canopy
+    coarsening, no balding; WORLD scene validated (terrain smooth at τ=3, trees+shadows fine). `?loderr/nanitemin/instminpx`
+    still override live. NEXT real lever = the per-pixel raster itself (N8-HIC cross-instance merge / same-frame cluster Hi-Z).
+
 - 2026-06-16 (by): **forest scene → FULL NaniteFrame pipe by default (`547bbfc`, #56). `?scene=forest&nanite=1` (no
   `nanitedbg`) now renders the standard whole pipe — world1 raster → NaniteResolve (bark texture-array + leaf PBR) →
   PostStack — so tree render speed is profilable through the REAL pipeline, not just the flat debug resolve. user:

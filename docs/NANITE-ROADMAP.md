@@ -10,21 +10,27 @@
 > Status key: ✅ done · 🔵 active · ⬜ pending · 🚫 blocked. `blockedBy` = task ids that
 > must finish first. `spec` = the `## header` in NANITE-SPEC.md (+ D-N* / file refs).
 
-## YOU ARE HERE — 2026-06-16  →  **READ LOG `by` (forest full-pipe testbed) + `bx` (PERF-VB4 single-pass) FIRST.**
-**ALL COMMITTED this session — working tree clean. `41d2dd5` PERF-VB4 (world raster SINGLE-PASS, default; 2-pass deleted);
-`547bbfc` forest scene → full NaniteFrame pipe by default.**
-**NEXT = PERF on TREES.** The forest scene (`?scene=forest&nanite=1`, no `nanitedbg`) is now a GPU-BOUND tree testbed:
-40k trees / 335k visCl → frameMs ~24 ms with `world1` raster **~15 ms dominating** (vs the CPU-bound world vista that hides
-it). The tree raster is LEAF-cluster-heavy (per-crown leaf DAGs are ~5–9k clusters at lod0). The levers are already listed
-below: N9-C3 impostor retirement, N8-HIC cross-instance MERGE (#48), CLUSTER FLOOR / impostor far-field. Use the forest
-testbed (`probe-forestfull.ts`) to drive them.
-**PARALLEL AGENT HARNESS NOW EXISTS → see `docs/NANITE-PERF-WORKFLOW.md` (read it before any perf push).** A multi-agent
-workflow (RASTER-FORGE) does perf work via measurement-gated, adversarial parallel review — built to defeat the
-single-LLM "mirage" failure mode (LOG bd–bg) and reach novel levers. KEY CORRECTION baked in: with `instminpx=128` the
-far field is ALREADY impostored, so the ~15ms `world1` cost is the NEAR/MID crowns — far-field `merge` (#48) is the WRONG
-lever for it; per-cluster overhead on the drawn clusters is the prime suspect (TO BE MEASURED, not assumed). Run-1
-(`raster-forge-run1-diagnose`) is DIAGNOSIS-FIRST: measure what actually costs → adversarially confirm → open ideation
-(every idea must attack a CONFIRMED driver). Lean path = `?nanitedbg=flat` (NOT plain forest = full pipe).
+## YOU ARE HERE — 2026-06-17  →  **READ LOG `bz` (capture-vs-intent + banded-τ defaults) FIRST.**
+**ALL COMMITTED this session — working tree clean. `6fb9ca1` capture-vs-intent divergence analysis; `60430c8` HZB
+11→1 batch + double-meter fix (76→63 submits); `72fb8a7` submit lever measured marginal; banded-τ perf defaults (this
+commit).** PRIOR: `41d2dd5` PERF-VB4 single-pass, `547bbfc` forest full-pipe testbed.
+**THE PERF METHOD that worked = WebGPU-Inspector capture as GROUND TRUTH, not the statistical harness** (LOG bz; the
+harness dead-ended at "world1 ~90% per-pixel, nothing left" + the multi-agent RASTER-FORGE runs burned ~6M tokens
+without a coherent result — user: "dogshit"). `slice.py` slices a capture → per-resource-type intent-divergence analysis
+→ `docs/perf-runs/2026-06-17-webgpu-inspector/DIVERGENCE-REPORT.md`. **MEASURED CONCLUSION: the frame is genuinely
+raster-bound (`nanRasterWorld1` ~16.7 ms = 75%); the submit-overhead lever is MARGINAL (measured, not assumed — don't
+refactor the cull for it); ~1.5 GB dead full-world residency in the forest testbed is VRAM hygiene, not frame-time.**
+**LANDED THIS SESSION — banded-τ perf defaults (the real ~1.55× whole-frame win, user-chosen after browser A/B):**
+`NaniteFrame` defaults now `loderr=3` (τ error-px cut — coarsens LOD, never drops geometry), `nanitemin=2` (sub-2px
+cluster cull), `instminpx=round(0.075·min(fbW,fbH))≈128` (far instances→impostors, resolution-relative). Forest @1280×720:
+clusters ~2.5× fewer, raster ~2× (23→11 ms), whole-frame 30→19 ms; world scene validated (terrain/shadows fine at τ=3).
+`?loderr/nanitemin/instminpx` override live.
+**NEXT real frame-time lever = the per-pixel raster itself** (the 16.7 ms is now the dominant remaining cost): N8-HIC
+cross-instance MERGE (#48, cuts the visible-cluster count at no quality loss) or same-frame cluster Hi-Z (overdraw).
+Use the forest testbed (`?scene=forest&nanite=1`) + a WebGPU Inspector re-capture to validate structural changes.
+**NOTE:** the old RASTER-FORGE multi-agent perf workflow + per-pass-timestamp harness are DEPRECATED for diagnosis
+(LOG bz) — prefer capture-as-ground-truth + a single whole-frame `__laas.measureFrames` reading. The per-pass GPU
+timestamps overcount (umbrella `compute`/`render` groups double-count vs leaf passes); trust gpuWall + cpuSubmit.
 
 PRIOR (committed earlier): TERRAIN-RW (`ff0511a`) + PERF-VB3 camera (`6123c60`): HIER is the SOLE world cull, `nanitedag=all`
 default. SHADOW-HIER + S3-perf + BRUTE DELETION (`4daf005`, LOG bw). The hierarchical DAG-BFS is now
