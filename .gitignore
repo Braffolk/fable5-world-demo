@@ -9,3 +9,9 @@ shots/*
 *.log
 .claude/
 tools/geo/
+
+# WebGPU Inspector capture analysis: the raw capture + derived slices are large
+# and regenerable via docs/perf-runs/**/slice.py. Keep slice.py + the .md reports.
+docs/perf-runs/**/webgpu_capture_*.json
+docs/perf-runs/**/slices/*.json
+docs/perf-runs/**/slices/shaders/
