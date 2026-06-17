@@ -908,9 +908,19 @@ export function buildNaniteRaster(
             .shiftLeft(uint(8))
             .bitOr(pay.bitAnd(uint(0xff)))
             .toVar();
-          const wonE = atomicMax(visPayloadV.atomic.element(px), cand) as unknown as NU;
-          If(cand.greaterThan(wonE), () => {
-            atomicStore(visBV.atomic.element(px), pay);
+          // Mirror the SW world1 election's relaxed-load guard (the SW path at the
+          // .Else()-branch above has had this; the HW vertex-pull path was missing
+          // it — it RMW-contended visPayloadV on EVERY covered fragment). Bit-identical:
+          // atomicMax is monotone, so skipping it when cand<=prevE leaves the buffer
+          // value unchanged, and the store is already gated by cand>wonE which is false
+          // whenever cand<=prevE (the buffer only grows). The only effect is dropping
+          // the RMW for fragments behind the current front — the bulk of HW overdraw.
+          const prevE = aLoadU(visPayloadV.atomic.element(px));
+          If(cand.greaterThan(prevE), () => {
+            const wonE = atomicMax(visPayloadV.atomic.element(px), cand) as unknown as NU;
+            If(cand.greaterThan(wonE), () => {
+              atomicStore(visBV.atomic.element(px), pay);
+            });
           });
         }
       });
