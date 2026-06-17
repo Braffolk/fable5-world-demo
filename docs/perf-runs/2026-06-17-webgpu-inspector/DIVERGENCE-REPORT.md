@@ -381,3 +381,40 @@ to**:
 talking. The structure points to a submit-overhead floor (measurable only at whole-frame
 granularity) and ~1.5 GB of dead residency — both invisible to the harness, both cheaper to attack
 than the pixel shader, and the first (HZB batch + whole-frame timing) is a clean, falsifiable test.
+
+---
+
+## 7. Measured outcome (2026-06-17) — Theme A is MARGINAL, not a 2.3–6 ms lever
+
+The Theme A submit-overhead estimate was tested, not trusted, and it **did not hold**.
+
+Shipped (commit `60430c8`): HZB mip chain 11→1 submit (`NaniteHzb.build` → one
+`renderer.compute([kernels])`; correct because WebGPU auto-synchronizes between dispatches in a
+pass) + removed the double `meter()` wiring in `ForestScene` (autoExposure was dispatched 2×/frame).
+Net **76 → 63 submits/frame**, verified structurally by re-capture (frame 1234) — render/draw paths
+byte-identical, autoExposure now once, HZB now one compute group with 11 dispatches.
+
+Then a valid before/after via `__laas.measureFrames` (forest alley @1280×720, lowest-thermal of 5
+reps, the changed 3 files reverted for the "before"):
+
+| | submits | gpuWall | cpuSubmit |
+|---|---|---|---|
+| after (batched + single meter) | 63 | 21.1 ms | 2.1 ms |
+| before (11 HZB submits + double meter) | 74 | 20.7 ms | 2.2 ms |
+
+**−11 submits moved NEITHER metric beyond noise** (reps: gpuWall 20.9–22.5, cpuSubmit 2.0–3.1). Why
+the estimate was wrong: the per-submit *boundary* cost (`createCommandEncoder`/`finish`/`submit`) is
+~9 µs, not 30–80 µs — and `cpuSubmit` (~2.1 ms) is dominated by the actual *encoding work* (95
+`setBindGroup` + 74 `writeBuffer` + 56 dispatch + 75 `setPipeline`), which batching encoders does
+NOT remove. So the full BFS batch (−30 submits) buys ~0.3 ms at most — **not worth refactoring the
+core cull path** (shared by camera + both shadow culls). The CPU-bound world scene wouldn't benefit
+either: its CPU cost is encoding *volume*, not submit boundaries.
+
+**Conclusion: the submit-overhead lever is closed.** The frame is genuinely raster-bound
+(`nanRasterWorld1` 16.7 ms = 75% of the 21 ms gpuWall) — the harness's verdict, now confirmed with
+the structural red herring measured dead rather than assumed. KEPT from this work: the HZB batch
+(free, harmless) and the double-`meter()` fix (a real correctness bug — exposure was adapting at 2×
+rate + double readbacks every 15th frame). The real lever remains the per-pixel raster: overdraw
+reduction (same-frame cluster Hi-Z), banded-τ count cut (quality-gated), or N8-HIC cross-instance
+merge (cuts the ~334k visible-cluster count). Theme B (1.5 GB dead residency) stays a VRAM/clean-
+measurement-hygiene item, not a frame-time lever.
