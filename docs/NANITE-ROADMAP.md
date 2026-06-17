@@ -10,10 +10,14 @@
 > Status key: ✅ done · 🔵 active · ⬜ pending · 🚫 blocked. `blockedBy` = task ids that
 > must finish first. `spec` = the `## header` in NANITE-SPEC.md (+ D-N* / file refs).
 
-## YOU ARE HERE — 2026-06-17  →  **READ LOG `bz` (capture-vs-intent + banded-τ defaults) FIRST.**
-**ALL COMMITTED this session — working tree clean. `6fb9ca1` capture-vs-intent divergence analysis; `60430c8` HZB
-11→1 batch + double-meter fix (76→63 submits); `72fb8a7` submit lever measured marginal; banded-τ perf defaults (this
-commit).** PRIOR: `41d2dd5` PERF-VB4 single-pass, `547bbfc` forest full-pipe testbed.
+## YOU ARE HERE — 2026-06-17  →  **READ LOG `ca` (UE5-gap: scanline win) + `bz` (capture method + banded-τ) FIRST.**
+**ALL COMMITTED this session — working tree clean. `19eb834` SCANLINE x-span (UE5-gap #1, ~2-4ms, bit-identical);
+`b490d03` UE5-gap report; `152c467` banded-τ defaults; `72fb8a7` submit lever marginal; `60430c8` HZB batch + meter
+fix; `6fb9ca1` capture-vs-intent analysis.** PRIOR: `41d2dd5` PERF-VB4 single-pass, `547bbfc` forest full-pipe testbed.
+**SHIPPED PERF THIS SESSION:** banded-τ defaults (loderr=3/nanitemin=2/instminpx≈128, ~1.55× whole-frame, quality-gated)
++ the SCANLINE raster win (per-row covered x-span vs full-bbox walk; bit-identical; vista frame 20.5→16.3ms). The
+UE5-gap hunt's other wins: #2 depth-DDA = measured non-win (atomic-bound loop) REVERTED; #4 terrain `If(isT)` gate
+(~0.15ms, free) NOT yet done; #3 same-frame Hi-Z (~0.5ms, capped) + #5 HW makeCtx cache (~0.04ms) low-priority.
 **THE PERF METHOD that worked = WebGPU-Inspector capture as GROUND TRUTH, not the statistical harness** (LOG bz; the
 harness dead-ended at "world1 ~90% per-pixel, nothing left" + the multi-agent RASTER-FORGE runs burned ~6M tokens
 without a coherent result — user: "dogshit"). `slice.py` slices a capture → per-resource-type intent-divergence analysis

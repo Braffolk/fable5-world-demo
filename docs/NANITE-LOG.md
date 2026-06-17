@@ -9,6 +9,30 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-17 (ca): **UE5-gap hunt (workflow on frame 1286) → win #1 SCANLINE shipped (~2-4ms, bit-identical),
+  win #2 depth-DDA measured a non-win + reverted.** (Opus 4.8 1M.) The 21-agent workflow (`UE5-GAP-REPORT.md`,
+  `UE5-NANITE-REFERENCE.md`) compared frame 1286 vs our code + spec + REAL UE5 Nanite for NON-quality-loss wins;
+  disproves "only small wins left" — the hottest kernel did ~half its inner-loop work on empty pixels.
+  - **WIN #1 — SCANLINE x-span (`19eb834`, the real win).** `nanRasterWorld1`'s inner loop walked every pixel in
+    each triangle's AABB (3 i32 cmp + 3 adds on the ~half outside the tri). Now computes a per-row covered x-interval
+    `[xLo,xHi]` from the 3 edge crossings (÷-by-0 guarded, floor/ceil + ±1 pad ⇒ a guaranteed SUPERSET; the exact
+    per-pixel cw≥0 test is UNCHANGED, so skipped pixels are provably uncovered ⇒ BIT-IDENTICAL). UE5 does this
+    (Karis SIGGRAPH 2021). **Gate first** (`?rdbg` rdbg3−rdbg2 = 87% of raster ⇒ loop dominates), then measured
+    (drain-isolated gpuWall, defaults @1280×720): **vista raster 12.8→9.2ms / frame 20.5→16.3ms (−4.2ms); alley
+    19.3→17.3ms (−2ms)**. Visually identical (no holes). Pure WGSL, no platform feature.
+  - **WIN #2 — depth DDA (REVERTED, measured non-win).** Replacing the per-pixel barycentric dot with an
+    incremental cz DDA (gradients once, +dzdx/+dzdy) saved ALU but produced NO measurable raster delta (below the
+    ±2-4ms thermal noise) — confirms the report's caveat that the covered-pixel loop is ATOMIC-LATENCY-bound, not
+    ALU-bound (the ALU saving hides under the election atomic). Also NOT bit-identical (few-ULP depth drift, also
+    perturbs the `depth`-mode shadow buffer). No gain + a quality/correctness cost ⇒ reverted, not shipped.
+  - **Method notes (durable):** cross-boot screenshot `cmp` is INVALID for bit-identity here (wind sway + TAA history
+    + the world1 election's accepted atomic race ⇒ render is frame-nondeterministic) — bit-identity rests on the
+    logic proof + a visual no-holes check. The `?rdbg` world1 stop points (rdbg2 = pre-loop, rdbg3 = full) are the
+    cheap per-pixel-loop-cost probe. The UE5 STRUCTURAL gap (the real 2×) is the cluster-count/overdraw floor =
+    N8-HIC cross-instance merge, which FAILS the no-quality-loss bar (per-instance tint/wind needs a variation bake)
+    ⇒ next-quarter w/ a quality budget, not this round. WGSL has no 64-bit atomics ⇒ UE5's fused depth|payload write
+    is categorically unavailable (we keep the 32-bit election + visBV split).
+
 - 2026-06-17 (bz): **WebGPU-Inspector capture-vs-intent analysis (the harness was a dead end) → 2 fixes + the
   submit lever MEASURED MARGINAL + banded-τ perf defaults landed.** (Opus 4.8 1M.) user: "the harness is dogshit...
   6m tokens, a complete waste... subagents to investigate the capture vs the actual intent of the code."
