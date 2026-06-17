@@ -21,11 +21,12 @@ Outputs into ./slices/ next to this script:
   renderbundles.json            the render bundles
   summary.md / statistics.json  header stats, canvas resolution, validation errors
 """
-import json, os, collections
+import json, os, sys, collections
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CAP  = os.path.join(HERE, "webgpu_capture_frame_1244.json")
-OUT  = os.path.join(HERE, "slices")
+# args: [capture-filename] [output-subdir]   (defaults = the frame-1244 baseline)
+CAP  = os.path.join(HERE, sys.argv[1] if len(sys.argv) > 1 else "webgpu_capture_frame_1244.json")
+OUT  = os.path.join(HERE, sys.argv[2] if len(sys.argv) > 2 else "slices")
 os.makedirs(OUT, exist_ok=True)
 os.makedirs(os.path.join(OUT, "shaders"), exist_ok=True)
 

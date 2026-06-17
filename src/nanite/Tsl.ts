@@ -225,6 +225,19 @@ export function dispatch(renderer: Renderer, kernel: unknown): void {
   renderer.compute(kernel as Parameters<Renderer['compute']>[0]);
 }
 
+/**
+ * renderer.compute over an ARRAY of kernels → ONE command encoder, ONE compute
+ * pass, ONE queue.submit (three's `finishCompute`), instead of one submit per
+ * kernel. Safe for DEPENDENT chains (e.g. HZB mip levels, where level k reads
+ * level k−1): within a compute pass WebGPU treats each dispatch as its own usage
+ * scope and auto-synchronizes (UAV barrier) between them, so the dispatches are
+ * serialized as-if run one-by-one — no manual barrier needed. Each kernel must
+ * carry its own baked-in `.compute(count,[wg])` (the array shares no dispatchSize).
+ */
+export function dispatchBatch(renderer: Renderer, kernels: readonly unknown[]): void {
+  renderer.compute(kernels as Parameters<Renderer['compute']>[0]);
+}
+
 /** async storage-attribute readback (attr param is over-narrowed in @types) */
 export function readBuffer(
   renderer: Renderer,

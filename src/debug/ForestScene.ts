@@ -214,7 +214,9 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
       barkTexB: lib.barkArray?.texB ?? null,
     });
     engine.post = frame as unknown as typeof engine.post;
-    engine.onUpdate(() => frame.meter(engine.renderer));
+    // meter() is driven once/frame by Engine.renderStep (this.post.meter) — same as
+    // the world scene. Do NOT also wire it via onUpdate or it dispatches autoExposure
+    // (and the cull/raster/shadow readbacks) TWICE per frame.
     // eslint-disable-next-line no-console
     console.log('[forest] FULL-FRAME pipe (NaniteFrame resolve + post) — ?nanitedbg=cluster for the lean debug view');
   } else {
@@ -224,7 +226,7 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
     const hf = { heightTex } as unknown as Heightfield;
     const view = buildNaniteView(engine, reg, hf, mode);
     engine.post = view as unknown as typeof engine.post;
-    engine.onUpdate(() => view.meter(engine.renderer));
+    // metered once/frame by Engine.renderStep (this.post.meter) — see note above.
   }
 
   // camera inside the forest at eye height, looking horizontally

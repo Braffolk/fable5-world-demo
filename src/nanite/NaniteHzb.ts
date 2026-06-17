@@ -22,7 +22,7 @@ import type { NaniteCam } from './NaniteCommon';
 import type { SphereOccludedFn } from './NaniteCull';
 import {
   bcU2F,
-  dispatch,
+  dispatchBatch,
   elemU,
   minU,
   sF32Views,
@@ -148,7 +148,10 @@ export function buildNaniteHzb(
   }
 
   const build = (renderer: Renderer): void => {
-    for (const k of kernels) dispatch(renderer, k);
+    // ONE submit for the whole mip chain (was 11 — one per level). The levels are
+    // dependent (level k reads level k−1) but share one buffer and run in a single
+    // compute pass; WebGPU auto-synchronizes between dispatches in a pass.
+    dispatchBatch(renderer, kernels);
   };
 
   // ---- conservative sphere test (example-verbatim, caller picks the VP pair) ------
