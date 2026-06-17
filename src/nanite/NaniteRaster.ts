@@ -658,7 +658,40 @@ export function buildNaniteRaster(
                   const cw0 = rw0.toVar();
                   const cw1 = rw1.toVar();
                   const cw2 = rw2.toVar();
-                  loopI('sx', startX as unknown as NI, endX as unknown as NI, (x) => {
+                  // PERF (UE5-gap win 1) — SCANLINE x-span. The edge value at column x is
+                  // cw_i(x) = cw_i + (x−startX)·sx_i; the row is covered where all 3 are ≥0.
+                  // Solve each edge for the crossing x = startX − cw_i/sx_i (÷-by-0 guarded),
+                  // floor/ceil + ±1 pad so the span is a guaranteed SUPERSET (f32-safe). The
+                  // EXACT per-pixel cw≥0 test below still decides coverage — this only fast-
+                  // skips the ~half of the AABB that is provably outside the triangle. Bit-
+                  // identical (skipped pixels all fail the test).
+                  const den0 = sx0.equal(toI(0)).select(toI(1), sx0 as unknown as NI) as unknown as NI;
+                  const den1 = sx1.equal(toI(0)).select(toI(1), sx1 as unknown as NI) as unknown as NI;
+                  const den2 = sx2.equal(toI(0)).select(toI(1), sx2 as unknown as NI) as unknown as NI;
+                  const xc0 = toF(startX).sub(toF(cw0 as unknown as NI).div(toF(den0)));
+                  const xc1 = toF(startX).sub(toF(cw1 as unknown as NI).div(toF(den1)));
+                  const xc2 = toF(startX).sub(toF(cw2 as unknown as NI).div(toF(den2)));
+                  const lo0 = sx0.greaterThan(toI(0)).select(toI(xc0.floor().sub(float(1))), startX) as unknown as NI;
+                  const lo1 = sx1.greaterThan(toI(0)).select(toI(xc1.floor().sub(float(1))), startX) as unknown as NI;
+                  const lo2 = sx2.greaterThan(toI(0)).select(toI(xc2.floor().sub(float(1))), startX) as unknown as NI;
+                  const hi0 = sx0.lessThan(toI(0)).select(toI(xc0.ceil().add(float(1))), endX) as unknown as NI;
+                  const hi1 = sx1.lessThan(toI(0)).select(toI(xc1.ceil().add(float(1))), endX) as unknown as NI;
+                  const hi2 = sx2.lessThan(toI(0)).select(toI(xc2.ceil().add(float(1))), endX) as unknown as NI;
+                  // a zero-slope edge that is already negative ⇒ the whole row is empty
+                  const emptyRow = sx0
+                    .equal(toI(0))
+                    .and(cw0.lessThan(toI(0)))
+                    .or(sx1.equal(toI(0)).and(cw1.lessThan(toI(0))))
+                    .or(sx2.equal(toI(0)).and(cw2.lessThan(toI(0))));
+                  const xLo = maxI(maxI(maxI(startX, lo0), lo1), lo2).toVar();
+                  const xHi = minI(minI(minI(endX, hi0), hi1), hi2).toVar();
+                  xHi.assign(emptyRow.select(xLo.sub(toI(1)), xHi) as unknown as NI);
+                  // advance the incremental edge values from startX to xLo
+                  const dxL = xLo.sub(startX).toVar();
+                  cw0.addAssign(dxL.mul(sx0));
+                  cw1.addAssign(dxL.mul(sx1));
+                  cw2.addAssign(dxL.mul(sx2));
+                  loopI('sx', xLo as unknown as NI, xHi as unknown as NI, (x) => {
                     If(
                       cw0
                         .greaterThanEqual(toI(0))
