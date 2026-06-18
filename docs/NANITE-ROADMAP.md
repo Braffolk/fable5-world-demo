@@ -10,7 +10,42 @@
 > Status key: ✅ done · 🔵 active · ⬜ pending · 🚫 blocked. `blockedBy` = task ids that
 > must finish first. `spec` = the `## header` in NANITE-SPEC.md (+ D-N* / file refs).
 
-## YOU ARE HERE — 2026-06-18  →  **READ SPEC `D-N46` (sort-middle TILED raster = the next architecture) + `docs/perf-runs/prior-art/IDEAS.md` FIRST.**
+## YOU ARE HERE — 2026-06-18 (PM) → **B1 TILED raster BUILT + CORRECT; next = B3 FRONT-TO-BACK ORDERING.**
+
+**STATE.** The B1 sort-middle TILED raster is implemented and renders correctly (gated `?tileproto=1`;
+`world1` stays pristine). `NaniteTileRaster.ts`: device-portable BOUNDED depth-wave batching (the cut is
+processed in N_BATCHES waves of BATCH_CLUSTERS so the transformed-tri buffer is FIXED-SIZE on any GPU),
+7-word lossless vertex pack, global-visBuffer election (`depthKey24<<8|id8` atomicMax, bit-identical to
+`world1`), vcompact vertex-once, sample-miss cull. **It now tracks `world1`'s occlusion cut EXACTLY**
+(both oscillate the same ~42k on the dense forest = the PRE-EXISTING wind/occlusion-feedback wobble, in
+production `world1` too — NOT a raster bug).
+
+**FLICKER BUG — FOUND + FIXED** (via the `find-tiled-flicker` dynamic workflow): the bounded-batching
+xtri local index used `batchBase·MAX_CLUSTER_TRIS` (=255) while the payload packs `localTri` with stride
+`1<<CLUSTER_TRI_BITS` (=256). The mismatch wrote PAST the xtri region into the HW queue, stomping
+near/big-leaf HW triangles → HZB holes → the occlusion cut oscillated 94k↔209k. UNIQUELY a 256-cap
+defect (commit 5092074's 128→256 bump; at 128 the two values coincide). Fixed: index everything by
+`TRI_STRIDE = 1<<CLUSTER_TRI_BITS`.
+
+**KEY FINDINGS (hard, keep):** (1) **atomics are FREE on modern HW** — `world1` GUARDED == NAIVE
+FreePipe (`?noguard`); so the on-chip-election justification for tiling is VOID (no global-atomic cost
+to remove); the tiling win must come from the **front-to-back early-out**, not the election. (2)
+**vcompact = 1.8×** (the old "wash" was WRONG) and **sample-miss cull = −27% setup** — both banked.
+
+**NEXT — B3 FRONT-TO-BACK** (the planned ride-on; the canonical next step in every reference tiled
+impl — CuRast translucent / Lucid T6 / CudaRaster): the per-pixel opaque first-cover early-out HOOK is
+already coded (`nearKey > prevE` reject in kRasterTiled), but the tris are processed in BIN/cluster
+order, so it only skips ~half the occluded fragments. Build the **front-to-back ORDERING** (coarse
+per-tile depth-bucket sort so binned tris process near→far) → unlocks the early-out at full effect, then
+**B2** (per-tile live exact zmax kill) rides the same order. THEN measure tiled-vs-scatter perf honestly
+(`measureActiveGpu`, worst cam) + optimize (the 20-wave dispatch + naive round-trip are reducible). NOTE:
+an earlier "≈2.8× slower" was an UNOPTIMIZED impl at a degenerate cam — RETRACTED, perf is OPEN. The
+front-to-back early-out also exists in `world1` SCATTER as `?f2b=1` (loss-exact, no storage tax).
+
+---
+
+### (HISTORICAL — the D-N46 tiling decision, now SUPERSEDED by the UPDATE above)
+**READ SPEC `D-N46` + `docs/perf-runs/prior-art/IDEAS.md` for the prior-art briefs.**
 **THE DECISION (D-N46): pivot `nanRasterWorld1` from one-workgroup-per-cluster SCATTER (a GLOBAL per-fragment atomic) to
 SORT-MIDDLE TILED with a WORKGROUP-MEMORY depth election — the credible ~2× foliage lever, AND it dissolves the
 no-64-bit-atomic constraint.** Two measured workflows this session got us here (both archived under `docs/perf-runs/`):

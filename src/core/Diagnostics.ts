@@ -38,8 +38,10 @@ export function buildRequiredLimits(d: GpuDiagnostics): Record<string, number> {
     maxStorageBuffersPerShaderStage: 16,
     maxStorageTexturesPerShaderStage: 8,
     maxSampledTexturesPerShaderStage: 24,
-    maxBufferSize: 1 << 30,
-    maxStorageBufferBindingSize: 1 << 30,
+    // B1-PROTO needs a big transformed-triangle buffer on the dense forest. This adapter
+    // reports ~4 GB max; request just under it (clamps down on weaker adapters).
+    maxBufferSize: 4_290_000_000,
+    maxStorageBufferBindingSize: 4_290_000_000,
   };
   const out: Record<string, number> = {};
   for (const [k, v] of Object.entries(want)) {

@@ -24,8 +24,8 @@
  * Serialize ALL boots — one page / one GPU at a time.
  */
 
-import type { Page } from 'playwright';
-import { laasUrl, launchWebGPU, type LaasPageOptions } from './launch';
+import type { Page } from "playwright";
+import { laasUrl, launchWebGPU, type LaasPageOptions } from "./launch";
 
 // ---------------------------------------------------------------------------
 // wire types (mirror src/core/Hooks.ts — kept in sync; serializable over the
@@ -89,13 +89,16 @@ export function bootstrapDiffCI(
   const ca = a.filter(Number.isFinite);
   const cb = b.filter(Number.isFinite);
   const delta = median(cb) - median(ca);
-  if (ca.length === 0 || cb.length === 0) return { delta, lo: delta, hi: delta };
+  if (ca.length === 0 || cb.length === 0)
+    return { delta, lo: delta, hi: delta };
   const draws: number[] = [];
   for (let k = 0; k < B; k++) {
     const ra: number[] = [];
     const rb: number[] = [];
-    for (let i = 0; i < ca.length; i++) ra.push(ca[(Math.random() * ca.length) | 0]!);
-    for (let i = 0; i < cb.length; i++) rb.push(cb[(Math.random() * cb.length) | 0]!);
+    for (let i = 0; i < ca.length; i++)
+      ra.push(ca[(Math.random() * ca.length) | 0]!);
+    for (let i = 0; i < cb.length; i++)
+      rb.push(cb[(Math.random() * cb.length) | 0]!);
     draws.push(median(rb) - median(ra));
   }
   draws.sort((x, y) => x - y);
@@ -139,25 +142,30 @@ export async function measureActiveGpu(
   metricKey: string,
   opts: MeasureOpts = {},
 ): Promise<ActiveGpuResult> {
-  const frames = (await page.evaluate(async (o) => {
-    if (!window.__laas.measureFrames) return null;
-    return window.__laas.measureFrames(o);
-  }, {
-    frames: opts.frames ?? 30,
-    warmup: opts.warmup ?? 12,
-    dt: opts.dt,
-    cooldownMs: opts.cooldownMs,
-  })) as MeasuredFrameWire[] | null;
+  const frames = (await page.evaluate(
+    async (o) => {
+      if (!window.__laas.measureFrames) return null;
+      return window.__laas.measureFrames(o);
+    },
+    {
+      frames: opts.frames ?? 30,
+      warmup: opts.warmup ?? 12,
+      dt: opts.dt,
+      cooldownMs: opts.cooldownMs,
+    },
+  )) as MeasuredFrameWire[] | null;
   if (!frames || frames.length === 0) {
     throw new Error(
-      '__laas.measureFrames returned nothing — timestamp-query unavailable or harness not wired',
+      "__laas.measureFrames returned nothing — timestamp-query unavailable or harness not wired",
     );
   }
   const refreshMs = frames[0]!.refreshMs;
-  const good = frames.filter((f) => !f.capSuspect && Number.isFinite(f.passes[metricKey]));
+  const good = frames.filter(
+    (f) => !f.capSuspect && Number.isFinite(f.passes[metricKey]),
+  );
   const rejected = frames.length - good.length;
   const samples = good.map((f) => f.passes[metricKey] ?? 0);
-  const vis = good.map((f) => f.counters['nanite.visClusters'] ?? -1);
+  const vis = good.map((f) => f.counters["nanite.visClusters"] ?? -1);
   const wall = good.map((f) => f.gpuWallMs);
   return {
     key: metricKey,
@@ -219,22 +227,25 @@ export interface BootOpts extends LaasPageOptions {
 
 /** boot a page and wait until __laas is ready (or throw on fatal). */
 export async function bootPage(
-  browser: Awaited<ReturnType<typeof launchWebGPU>>['browser'],
+  browser: Awaited<ReturnType<typeof launchWebGPU>>["browser"],
   opts: BootOpts,
 ): Promise<Page> {
   const width = opts.width ?? 1280;
   const height = opts.height ?? 720;
-  const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 1 });
-  page.on('pageerror', (e) => console.error('[pageerror]', e.message));
+  const page = await browser.newPage({
+    viewport: { width, height },
+    deviceScaleFactor: 1,
+  });
+  page.on("pageerror", (e) => console.error("[pageerror]", e.message));
   if (opts.logPrefix) {
     const pre = opts.logPrefix;
-    page.on('console', (m) => {
+    page.on("console", (m) => {
       const t = m.text();
       if (t.startsWith(pre)) console.log(`   · ${t}`);
     });
   }
   const url = laasUrl({ ...opts, width, height, freeze: opts.freeze ?? false });
-  await page.goto(url, { waitUntil: 'domcontentloaded' });
+  await page.goto(url, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(
     () => window.__laas && (window.__laas.ready || window.__laas.error != null),
     undefined,
@@ -242,8 +253,10 @@ export async function bootPage(
   );
   const err = await page.evaluate(() => window.__laas.error ?? null);
   if (err) throw new Error(`fatal boot: ${err}`);
-  if (opts.T !== undefined) await page.evaluate((t) => window.__laas.setTimeOfDay?.(t), opts.T);
-  if (opts.settle) await page.evaluate(async (n) => window.__laas.settle?.(n), opts.settle);
+  if (opts.T !== undefined)
+    await page.evaluate((t) => window.__laas.setTimeOfDay?.(t), opts.T);
+  if (opts.settle)
+    await page.evaluate(async (n) => window.__laas.settle?.(n), opts.settle);
   return page;
 }
 
@@ -285,10 +298,17 @@ export function buildTrack(
     for (let f = 0; f < framesPerSeg; f++) {
       const t = f / framesPerSeg;
       poses.push({
-        p: [lerp(a.p[0], b.p[0], t), lerp(a.p[1], b.p[1], t), lerp(a.p[2], b.p[2], t)],
+        p: [
+          lerp(a.p[0], b.p[0], t),
+          lerp(a.p[1], b.p[1], t),
+          lerp(a.p[2], b.p[2], t),
+        ],
         yaw: lerp(a.yaw, b.yaw, t),
         pitch: lerp(a.pitch, b.pitch, t),
-        fov: a.fov !== undefined && b.fov !== undefined ? lerp(a.fov, b.fov, t) : a.fov,
+        fov:
+          a.fov !== undefined && b.fov !== undefined
+            ? lerp(a.fov, b.fov, t)
+            : a.fov,
       });
     }
   }
@@ -355,7 +375,10 @@ export async function replayMotionTrack(
   for (let pi = 0; pi < track.poses.length; pi++) {
     const pose = track.poses[pi]!;
     await page.evaluate((pp) => window.__laas.setPose?.(pp), pose);
-    const r = await measureActiveGpu(page, metricKey, { frames: framesPerPose, warmup: warmupPerPose });
+    const r = await measureActiveGpu(page, metricKey, {
+      frames: framesPerPose,
+      warmup: warmupPerPose,
+    });
     refreshMs = r.refreshMs;
     rejected += r.rejected;
     perPose.push(r.p50);
@@ -363,11 +386,17 @@ export async function replayMotionTrack(
     if (noiseEvery > 0 && pi % noiseEvery === 0) {
       // immediate second measurement at the SAME pose, SAME warmup + frames (HZB
       // already converged, cooldown holds both reps at steady state) ⇒ honest floor
-      const r2 = await measureActiveGpu(page, metricKey, { frames: framesPerPose, warmup: warmupPerPose });
+      const r2 = await measureActiveGpu(page, metricKey, {
+        frames: framesPerPose,
+        warmup: warmupPerPose,
+      });
       pairedNoise.push(Math.abs(r2.p50 - r.p50));
     }
   }
-  const worstPoseIndex = perPose.reduce((mi, v, i, arr) => (v > arr[mi]! ? i : mi), 0);
+  const worstPoseIndex = perPose.reduce(
+    (mi, v, i, arr) => (v > arr[mi]! ? i : mi),
+    0,
+  );
   return {
     key: metricKey,
     perPose,
@@ -443,7 +472,8 @@ export async function abAcceptance(
   // noise floor = first base replicate vs last base replicate
   const noise =
     baseSamples.length >= 2
-      ? bootstrapDiffCI(baseSamples[0]!, baseSamples[baseSamples.length - 1]!).delta
+      ? bootstrapDiffCI(baseSamples[0]!, baseSamples[baseSamples.length - 1]!)
+          .delta
       : 0;
   return {
     baseLabel: base.label,

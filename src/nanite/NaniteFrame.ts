@@ -335,6 +335,10 @@ export function buildNaniteFrame(
       simBandD.value = v;
     },
     simBand: () => simBandD.value,
+    /** B1-PROTO (?tileproto=1): [overflow, nearcross, binEntries, hwEnqueues].
+     *  overflow MUST be 0 (else TILE_CAP too small → dropped clusters → holes);
+     *  nearcross should be ~0 on the worst forest view (else a per-cluster cliff). */
+    tileStat: async (): Promise<number[]> => Array.from(await raster.readTileStat(renderer)),
   };
 
   // jitter-mirrored projection: scratch camera = engine camera + TRAA's
