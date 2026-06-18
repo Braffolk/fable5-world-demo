@@ -50,7 +50,29 @@ experiment (on-chip election + count-sort + indirect dispatch + impostors) was n
 xtri-store half is the irreducible sort-middle floor; whether the fixable half + cluster-count cuts flip
 the gap is the open question the implementation will answer.
 
-## Implementation order (workflows, each GPU-measured after)
+## RECALIBRATION (the occl=0 stress was misleading) — measure at the REALISTIC occl-on forest
+At the realistic target (~97k clusters, occl-on, vcompact off, 1280×800, GPU-bound):
+| | raster (p50/p95) | setup | HW | whole frame p50 |
+|---|---|---|---|---|
+| **world1 scatter** | 10.55 / 15.93 | — (fused) | — | **17.7 ms** |
+| **tiled (on-chip)** | **8.85** / 10.88 | 8.65 | 2.75 | **25.1 ms** |
+The tiled RASTER wins (8.85 < 10.55) but its 8.65ms SETUP (sort-middle transform→store, which scatter
+fuses away) loses the frame: tiled 25.1 vs world1 17.7. **NEITHER hits 60fps-p0.05** (≤16.6ms; the cut
+spikes to ~119k on wind ⇒ world1 p0.05 ~22ms, tiled ~30ms). **world1 is the closer, faster base.**
+- `?f2b=1` on world1 = **WASH** (raster 10.55→11.01; unordered scatter ⇒ early-out's read+gate cost >
+  its savings). Dropped (needs depth-ordered scatter, which world1 lacks).
+- **DECISION (user, 2026-06-18): WORLD1 SHORT PATH** — optimize the production scatter toward 60fps-p0.05;
+  tiled stays gated evidence (the longer path: its setup transform→store is a hard floor).
+
+### WORLD1 wins (the short path)
+| win | est | status |
+|---|---|---|
+| Sample-miss cull port (world1 LACKS it; the tiled's is verified conservative; CuRast −27% upper bound) | −raster% | 🔄 in workflow |
+| f2b front-to-back | wash | ❌ dropped (unordered scatter) |
+| vcompact vertex-once | wash @256 cap (barrier tax) | deferred (cost-gate #8, low) |
+| then: cluster-COUNT levers for the p0.05 worst frame (over-emission cull / impostors) | big | ⬜ |
+
+## Implementation order (TILED path — paused for the world1 short path; workflows, each GPU-measured)
 #2 on-chip election → #3 count-sort → #5 indirect dispatch → #6/#4ʹ HW → #7b/#8 vcompact → #10 impostors.
 Measure at the production **256 cap** (128 doubles cluster count → blows the 640k cut cap). Honest
 methodology: GPU-bound `measureActiveGpu` (not vsync-capped live gpuPasses); occl=0 deterministic A/B.

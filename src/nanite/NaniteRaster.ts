@@ -726,7 +726,21 @@ export function buildNaniteRaster(
                 .mul(xi1.sub(xi0))
                 .sub(xi2.sub(xi0).mul(yi1.sub(yi0)))
                 .toVar();
-              If(area2.greaterThan(toI(0)), () => {
+              // SAMPLE-MISS cull (CuRast): skip a small tri whose snapped extent contains NO pixel
+              // CENTRE (k·256+128 grid) on x OR y ⇒ it covers no sample ⇒ the scanline rasters
+              // nothing. Conservative + exact (the scanline samples at the same centres) ⇒ zero
+              // visible quality loss. Float ceil handles negative/off-screen xiMin. (Kept as
+              // leverage: ~neutral on world1's already-≤1px cut, a building block / helps the tiled.)
+              const xiMin = minI(xi0, minI(xi1, xi2));
+              const xiMax = maxI(xi0, maxI(xi1, xi2));
+              const yiMin = minI(yi0, minI(yi1, yi2));
+              const yiMax = maxI(yi0, maxI(yi1, yi2));
+              const firstCx = toF(xiMin.sub(toI(128)) as unknown as NI).div(256).ceil().mul(256).add(128);
+              const firstCy = toF(yiMin.sub(toI(128)) as unknown as NI).div(256).ceil().mul(256).add(128);
+              const coversSample = firstCx
+                .lessThanEqual(toF(xiMax as unknown as NI))
+                .and(firstCy.lessThanEqual(toF(yiMax as unknown as NI)));
+              If(area2.greaterThan(toI(0)).and(coversSample), () => {
                 // edge i is opposite vertex i; ex/ey = dE per +1 UNIT (1/256 px)
                 const ex0 = yi1.sub(yi2).toVar();
                 const ey0 = xi2.sub(xi1).toVar();

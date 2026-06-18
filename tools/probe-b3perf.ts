@@ -28,8 +28,10 @@ async function main(): Promise<void> {
   const { browser } = await launchWebGPU();
   const page = await browser.newPage({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
   page.on('pageerror', (e) => console.error('[pageerror]', e.message));
-  const extra: Record<string, string> = { nanite: '1', occl: '0' };
+  const extra: Record<string, string> = { nanite: '1' };
+  if ((process.env.OCCL ?? '0') === '0') extra.occl = '0'; // default deterministic; OCCL=1 ⇒ occlusion ON (realistic)
   if ((process.env.VCOMPACT ?? '1') === '1') extra.vcompact = '1';
+  if (process.env.F2B === '1') extra.f2b = '1';
   if (TILEPROTO) extra.tileproto = '1';
   const url = laasUrl({ scene: 'forest', width: W, height: H, freeze: false, extra });
   await page.goto(url, { waitUntil: 'domcontentloaded' });
