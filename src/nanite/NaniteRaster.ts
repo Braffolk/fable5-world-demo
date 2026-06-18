@@ -265,6 +265,21 @@ export function buildNaniteRaster(
   // the world1 kernel below stays built + byte-pristine; only the dispatch path swaps.
   const tileproto =
     singlePass && new URLSearchParams(window.location.search).get('tileproto') === '1';
+  // HW vertex-pull pass: by DEFAULT drop the redundant per-frame full-res color CLEAR. The HW
+  // fragment stage has colorWrite=false (it writes ONLY the vis storage buffers, never
+  // the color target — capture confirms the full-res rgba8 is a dead clear/store, never
+  // read downstream). The color attachment MUST stay full-res: r184 derives the HW
+  // render pass viewport/scissor from RenderTarget.viewport/.scissor (Renderer.js:1599 ->
+  // WebGPUBackend.js:1024-1034), so a 1x1 target would force a 1x1 viewport that squashes
+  // ALL HW geometry into pixel (0,0) and clips the rest -- the fragment stage would run
+  // for ~1 fragment, STARVING the vis-buffer writes (NOT byte-identical). Instead we keep
+  // the target full-res (coverage byte-identical) and skip the redundant clear of the
+  // dead rgba8 via autoClear=false around hwRender (loadOp Clear->Load). The store of the
+  // unchanged texture remains (the backend hardcodes storeOp=Store), but the per-frame
+  // full-res CLEAR -- the addressable waste -- is gone. Byte-identical: viewport/coverage
+  // unchanged, vis buffers unchanged, color target never read. DEFAULT skips the clear (the
+  // byte-exact win, A/B-validated); ?hwrt=1 RESTORES it (the A/B control). Read like ?tileproto above.
+  const hwrt = new URLSearchParams(window.location.search).get('hwrt') === '1';
   const qRasterRO = cull.qRasterRO;
   const visDepthV = vis.depthV;
   const visPayloadV = vis.payloadV;
@@ -1120,6 +1135,10 @@ export function buildNaniteRaster(
   const hwMesh = new Mesh(hwGeometry, hwDepthMat);
   hwMesh.frustumCulled = false;
   hwScene.add(hwMesh);
+  // The HW pass renders into this dead full-res rgba8 (colorWrite=false -> never read).
+  // It stays full-res unconditionally: r184 derives the render-pass viewport from
+  // RenderTarget.viewport (= texture size), so shrinking it would clip HW coverage and
+  // starve the vis buffers. ?hwrt=0 instead drops only the per-frame CLEAR (see hwRender).
   const hwRT = new RenderTarget(width, height, { depthBuffer: false });
   hwRT.texture.name = 'nanHwPass';
 
@@ -1259,7 +1278,17 @@ export function buildNaniteRaster(
     const prevRT = renderer.getRenderTarget();
     renderer.setRenderTarget(hwRT);
     hwMesh.material = mat;
+    // ?hwrt=0: skip the per-frame full-res CLEAR of the dead rgba8 color target. With
+    // autoClear=false the backend uses loadOp=Load (Background.js:209-217 -> the
+    // descriptor's loadOp becomes Load not Clear). The HW fragment has colorWrite=false,
+    // so it never writes the target; nothing downstream reads it; the only effect is the
+    // clear no longer runs. The viewport/coverage (full-res hwRT) and every vis-buffer
+    // write are unchanged -> byte-identical. hwScene has no .background, so forceClear
+    // stays false and autoClear=false is honored. RESTORED immediately after the render.
+    const prevAutoClear = renderer.autoClear;
+    if (!hwrt) renderer.autoClear = false;
     renderer.render(hwScene, camera);
+    if (!hwrt) renderer.autoClear = prevAutoClear;
     renderer.setRenderTarget(prevRT);
   };
   const hwDepth = (renderer: Renderer, camera: PerspectiveCamera): void => {
