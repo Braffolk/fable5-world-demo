@@ -21,5 +21,5 @@ export default defineConfig(({ command }) => ({
     // (re)optimization succeeds instead of relying on a warm .vite cache.
     esbuildOptions: { target: "esnext" },
   },
-  base: command === "build" ? "/laas/" : "/",
+  base: command === "build" ? "/laas-nanite/" : "/",
 }));
