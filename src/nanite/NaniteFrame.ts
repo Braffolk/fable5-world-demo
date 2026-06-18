@@ -335,10 +335,6 @@ export function buildNaniteFrame(
       simBandD.value = v;
     },
     simBand: () => simBandD.value,
-    /** B1-PROTO (?tileproto=1): [flatTileOvf, clusterOvf, hwCursor]. flatTileOvf & clusterOvf
-     *  MUST be 0 (flat per-tile list FLAT_TILE_CAP exceeded, or cluster out of batch window →
-     *  dropped tris → holes). B3 uses a flat list + K near→far passes (no per-bucket cap). */
-    tileStat: async (): Promise<number[]> => Array.from(await raster.readTileStat(renderer)),
   };
 
   // jitter-mirrored projection: scratch camera = engine camera + TRAA's

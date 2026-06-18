@@ -66,7 +66,6 @@ import type { RegistryGpu } from './GeometryRegistry';
 import { DISPATCH_ROW, QRASTER_CAP, hashColor, instYaw, type NaniteCam } from './NaniteCommon';
 import { makeFetch, type TerrainDisp, type TrunkWindOpt, type VertCtx } from './NaniteFetch';
 import { makeVertexCache } from './NaniteVertexCache';
-import { buildTileRaster } from './NaniteTileRaster';
 import {
   aLoadU,
   bcF2U,
@@ -138,12 +137,8 @@ export interface NaniteRasterHandles {
   hwDepth(renderer: Renderer, camera: PerspectiveCamera): void;
   /** NaniteView debug single-pass packed Z+id (idLo/idHi split) — SW + HW in one go */
   combined(renderer: Renderer, camera: PerspectiveCamera): void;
-  /** PERF-VB4 WORLD single pass: 24-bit Z election + full-id side buffer (visBV).
-   *  `?tileproto=1` routes the SW election through the B1-PROTO sort-middle tiled raster
-   *  (D-N46) instead of the per-cluster scatter kernel; the HW pass is identical. */
+  /** PERF-VB4 WORLD single pass: 24-bit Z election + full-id side buffer (visBV). */
   world1(renderer: Renderer, camera: PerspectiveCamera): void;
-  /** B1-PROTO tile stats [overflow, nearcross, binEntries, hwEnqueues] (zeros if off) */
-  readTileStat(renderer: Renderer): Promise<Uint32Array>;
   readHwCount(renderer: Renderer): Promise<number>;
   /** count covered/orphan pixels (NaniteView ?audit=1) */
   audit(renderer: Renderer): void;
@@ -260,11 +255,6 @@ export function buildNaniteRaster(
   // pixel's current winner BEFORE the z-interp; if the tri's nearest-possible key can't beat it
   // the fragment would lose → skip the dominant depth work. cand ≤ nearKey ⇒ loss-exact.
   const f2b = new URLSearchParams(window.location.search).get('f2b') === '1';
-  // B1-PROTO (D-N46): route the WORLD single-pass SW election through the sort-middle
-  // TILED raster (NaniteTileRaster) instead of the per-cluster scatter kernel. Gate only —
-  // the world1 kernel below stays built + byte-pristine; only the dispatch path swaps.
-  const tileproto =
-    singlePass && new URLSearchParams(window.location.search).get('tileproto') === '1';
   // HW vertex-pull pass: by DEFAULT drop the redundant per-frame full-res color CLEAR. The HW
   // fragment stage has colorWrite=false (it writes ONLY the vis storage buffers, never
   // the color target — capture confirms the full-res rgba8 is a dead clear/store, never
@@ -278,7 +268,7 @@ export function buildNaniteRaster(
   // unchanged texture remains (the backend hardcodes storeOp=Store), but the per-frame
   // full-res CLEAR -- the addressable waste -- is gone. Byte-identical: viewport/coverage
   // unchanged, vis buffers unchanged, color target never read. DEFAULT skips the clear (the
-  // byte-exact win, A/B-validated); ?hwrt=1 RESTORES it (the A/B control). Read like ?tileproto above.
+  // byte-exact win, A/B-validated); ?hwrt=1 RESTORES it (the A/B control).
   const hwrt = new URLSearchParams(window.location.search).get('hwrt') === '1';
   const qRasterRO = cull.qRasterRO;
   const visDepthV = vis.depthV;
@@ -316,117 +306,6 @@ export function buildNaniteRaster(
 
   const edgeFn = (a: NV2, b: NV2, p: NV2): NF =>
     p.y.sub(a.y).mul(b.x.sub(a.x)).sub(p.x.sub(a.x).mul(b.y.sub(a.y))) as unknown as NF;
-
-  // wgcache broadcast (the per-cluster makeCtx dedup) extracted as a reusable closure so the
-  // B1-PROTO setup pass gets the SAME once-per-cluster ctx (per-THREAD makeCtx is ~256× the
-  // wind-gust texture samples — the documented redundancy world1 fixes). Must be called with
-  // a UNIFORM-across-the-workgroup (instId,ci) so all threads reach the barrier. Same field
-  // serialization as world1's inline block above.
-  const primeCtx = (instId2: NU, ci2: NU, localTri2: NU): VertCtx => {
-    if (!wgcache) return makeCtx(instId2, ci2);
-    const shU = workgroupArray('uint', 10);
-    const shF = workgroupArray('float', 21);
-    const setU = (i: number, v: NU): void =>
-      void (shU.element(uint(i)) as unknown as { assign(x: NU): unknown }).assign(v);
-    const setF = (i: number, v: NF): void =>
-      void (shF.element(uint(i)) as unknown as { assign(x: NF): unknown }).assign(v);
-    const getU = (i: number): NU => shU.element(uint(i)) as unknown as NU;
-    const getF = (i: number): NF => shF.element(uint(i)) as unknown as NF;
-    If(localTri2.equal(uint(0)), () => {
-      const c = makeCtx(instId2, ci2);
-      setU(0, b2u(c.isHF));
-      setU(1, b2u(c.isDAG));
-      setU(2, c.triStart);
-      setU(3, c.triCount);
-      setU(4, c.meshId);
-      setU(5, c.channel);
-      setU(6, c.gx);
-      setU(7, c.gz);
-      setU(8, c.qxw);
-      setU(9, b2u(c.twoSided));
-      setF(0, c.A.x as unknown as NF);
-      setF(1, c.A.y as unknown as NF);
-      setF(2, c.A.z as unknown as NF);
-      setF(3, c.A.w as unknown as NF);
-      setF(4, c.B.x as unknown as NF);
-      setF(5, c.B.y as unknown as NF);
-      setF(6, c.B.z as unknown as NF);
-      setF(7, c.B.w as unknown as NF);
-      setF(8, c.oX);
-      setF(9, c.oZ);
-      setF(10, c.cell);
-      if (wind) {
-        const w = c.wind as NonNullable<VertCtx['wind']>;
-        setF(11, w.h0);
-        setF(12, w.dirX);
-        setF(13, w.dirY);
-        setF(14, w.leanBase);
-        setF(15, w.swayABase);
-        setF(16, w.swayPhase);
-        setF(17, w.ph);
-        setF(18, w.branchBase);
-        setF(19, w.flutBase);
-        setF(20, w.swayXPhase);
-      }
-    });
-    workgroupBarrier();
-    const cB = vec4(getF(4).toVar(), getF(5).toVar(), getF(6).toVar(), getF(7).toVar()) as unknown as NV4;
-    return {
-      isHF: getU(0).toVar().equal(uint(1)),
-      isDAG: getU(1).toVar().equal(uint(1)),
-      A: vec4(getF(0).toVar(), getF(1).toVar(), getF(2).toVar(), getF(3).toVar()) as unknown as NV4,
-      B: cB,
-      yawSc: instYaw(cB),
-      triStart: getU(2).toVar(),
-      triCount: getU(3).toVar(),
-      meshId: getU(4).toVar(),
-      channel: getU(5).toVar(),
-      twoSided: getU(9).toVar().equal(uint(1)),
-      wind: wind
-        ? {
-            h0: getF(11).toVar(),
-            dirX: getF(12).toVar(),
-            dirY: getF(13).toVar(),
-            leanBase: getF(14).toVar(),
-            swayABase: getF(15).toVar(),
-            swayPhase: getF(16).toVar(),
-            ph: getF(17).toVar(),
-            branchBase: getF(18).toVar(),
-            flutBase: getF(19).toVar(),
-            swayXPhase: getF(20).toVar(),
-          }
-        : null,
-      gx: getU(6).toVar(),
-      gz: getU(7).toVar(),
-      qxw: getU(8).toVar(),
-      oX: getF(8).toVar(),
-      oZ: getF(9).toVar(),
-      cell: getF(10).toVar(),
-    } as unknown as VertCtx;
-  };
-
-  // B1-PROTO tiled raster (D-N46) — built only under ?tileproto; reuses the SAME makeCtx /
-  // fetchWorldVert / depthKey24 / edgeFn / election buffers so the tiled candidates are
-  // bit-identical to world1's. world1() routes the SW dispatch to it; HW pass unchanged.
-  const tile = tileproto
-    ? buildTileRaster({
-        cam,
-        primeCtx,
-        vcache,
-        depthKey24,
-        edgeFn,
-        visPayloadV,
-        visBV,
-        hwQueueV,
-        HW_CAP,
-        MAX_RASTER_SIZE,
-        qRasterRO,
-        rasterDispatchFullAttr: cull.rasterDispatchFullAttr,
-        width,
-        height,
-        pixelCount,
-      })
-    : null;
 
   // ?wgcache bool→uint for packing isHF/isDAG into the shared-memory uint array
   const b2u = (b: NB): NU =>
@@ -1307,13 +1186,7 @@ export function buildNaniteRaster(
   // stores the full id into visBV; the resolve/shadows/HZB read depth from the election
   // key (no exact depthV — a 3rd hot-loop atomic buffer was measured a 3× cliff).
   const world1 = (renderer: Renderer, camera: PerspectiveCamera): void => {
-    if (tile) {
-      // B1-PROTO: clearBins → bin clusters → tiled SW election (workgroup-memory, flush
-      // to global). The HW pass is identical (the tiled kernel fills hwQueue the same way).
-      tile.dispatchTiled(renderer);
-    } else {
-      dispatchIndirect(renderer, kRasterWorld1, cull.rasterDispatchFullAttr);
-    }
+    dispatchIndirect(renderer, kRasterWorld1, cull.rasterDispatchFullAttr);
     dispatch(renderer, kHwArgs); // SW pass filled hwQueue → build the indirect draw args
     hwRender(renderer, camera, hwWorld1Mat);
   };
@@ -1331,9 +1204,6 @@ export function buildNaniteRaster(
     return { orphans: u[0] ?? 0, covered: u[1] ?? 0 };
   };
 
-  const readTileStat = async (renderer: Renderer): Promise<Uint32Array> =>
-    tile ? tile.readStat(renderer) : new Uint32Array(4);
-
   return {
     resolveScene,
     clearVis,
@@ -1341,7 +1211,6 @@ export function buildNaniteRaster(
     hwDepth,
     combined,
     world1,
-    readTileStat,
     readHwCount,
     audit,
     readAudit,
