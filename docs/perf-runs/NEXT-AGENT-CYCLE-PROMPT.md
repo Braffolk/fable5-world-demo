@@ -194,8 +194,10 @@ GATE.** Scripts used as templates: `submit-collapse-implement.mjs`, `res-scale-i
   **RESOLUTION-INDEPENDENT FLOOR** (CPU-submit/compute + the coverage cost) + nanite LOD coarsening with
   dpr. **Even native dpr1.0 = 31.5 ms ≈ 1.9× over 16.6.**
 - **THE BIG STRATEGIC FINDING:** NO single lever reaches 16.6 ms at retina+200k. The goal needs a
-  multi-lever STACK (an imperceptible resolution/reconstruction win + coverage/overdraw/LOD reduction +
-  loss-exact render trims) and the **resolution-independent floor is the dominant remaining target.**
+  multi-lever STACK. MEASURED FACT (feed as grounding, do NOT turn into a directive): a large
+  **resolution-independent COST** (~31.5 ms even at native dpr1.0; CPU-submit + compute setup + coverage)
+  does not scale with pixels and is the dominant remaining cost. The NEXT unbiased research must RE-DERIVE
+  the biggest lever itself from this + the code — do NOT pre-name "the floor", "vcompact", or any technique.
 
 ---
 
@@ -222,7 +224,10 @@ Production `nanite-raster` is UNCHANGED except the merged `nanHwPass` byte-exact
 - **NEXT (user-directed, in order):** (1) a SCOPED research round to FINE-TUNE the resolution lever — find
   an imperceptible reconstruction that banks the perf WITHOUT the visible blur (temporal upsampling /
   checkerboard / per-pass or variable-rate resolution / dynamic res / FSR-like — render cheaper, reconstruct
-  to dpr-1.5 quality). (2) BANK that refined win. (3) Move to NEW NOVEL research (attack the
-  resolution-independent floor: CPU-submit/compute + coverage VOLUME — e.g. cross-instance
-  aggregation/merge to cut visible-cluster/overdraw volume, loss-exact render-pass trims).
+  to dpr-1.5 quality). (2) BANK that refined win. (3) Run a NEW, UNBIASED novel-research round (the standard
+  8-stage research workflow) — given ONLY the goal + the cycle 1-3 measured grounding (incl. the large
+  resolution-independent cost). It DISCOVERS the next biggest win itself. CRITICAL: do NOT pre-lock the
+  topic — no "the floor", no "vcompact", no technique handed in. Feed the measurements as facts; let it
+  explore. (Orchestrator note: I once pre-named "the floor/vcompact" as the next topic — that is exactly
+  the anti-bias violation to avoid.)
 - The `nanHwPass` byte-exact cleanup (`?hwrt=0`) is a KEEP and is being merged up to `nanite-raster`.
