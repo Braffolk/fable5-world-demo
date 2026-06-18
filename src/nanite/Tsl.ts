@@ -119,8 +119,12 @@ export function toF(v: NU | NI): NF {
 }
 
 /** ranged uint loop: for (i = start; i < end; i++) */
-export function loopU(start: NU, end: NU, body: (i: NU) => void): void {
-  Loop({ start, end, type: 'uint', condition: '<' } as never, (lp: unknown) => {
+export function loopU(start: NU, end: NU, body: (i: NU) => void, step?: number): void {
+  const params =
+    step === undefined
+      ? { start, end, type: 'uint', condition: '<' }
+      : { start, end, type: 'uint', condition: '<', update: step };
+  Loop(params as never, (lp: unknown) => {
     body((lp as { i: NU }).i);
   });
 }

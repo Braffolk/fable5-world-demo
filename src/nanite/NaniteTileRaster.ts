@@ -47,9 +47,11 @@
  *
  * PROTO SIMPLIFICATIONS (perf/scale, not correctness): fixed per-tile capacity + overflow
  * tripwire (vs compacted prefix-sum); xtri sized for the world view (forest 36M needs tile
- * BATCHING — CudaRaster §6.2); kSetup has no wgcache yet (makeCtx per triangle); thread=
- * triangle scanline in the tile (not yet T2 coverage-mask / T6 density-flatten). These are
- * the optimization ladder, applied after the base is correct + measured.
+ * BATCHING — CudaRaster §6.2); kSetup IS wgcache'd — primeCtx broadcasts makeCtx ONCE per
+ * cluster (thread 0 → workgroupBarrier → 10 uint + 21 float fields), identical to world1, so
+ * there is NO per-triangle context redundancy; thread= triangle scanline in the tile (not yet
+ * T2 coverage-mask / T6 density-flatten). These are the optimization ladder, applied after the
+ * base is correct + measured.
  */
 import { IndirectStorageBufferAttribute, StorageBufferAttribute } from 'three/webgpu';
 import type { Renderer } from 'three/webgpu';
@@ -66,6 +68,8 @@ import {
   uniform,
   vec2,
   vec4,
+  workgroupArray,
+  workgroupBarrier,
 } from 'three/tsl';
 import type { NB, NF, NI, NU, NV2, NV3 } from '../gpu/TSLTypes';
 import { CLUSTER_TRI_BITS, MAX_CLUSTER_TRIS } from './GeometryRegistry';
@@ -171,8 +175,12 @@ export interface TileRasterDeps {
   HW_CAP: number;
   MAX_RASTER_SIZE: number;
   qRasterRO: BufOf<UV2>;
-  /** indirect dispatch args sized to the actual cut (world1 uses this) — kSetup shares it
-   *  so it launches ~count workgroups, not the full QRASTER_CAP×MAX_CLUSTER_TRIS grid. */
+  /** indirect dispatch args sized to the actual cut (world1 uses this). CURRENTLY UNUSED by
+   *  the tiled path: kSetup dispatches STATICALLY (`.compute(BATCH_CLUSTERS·MAX_CLUSTER_TRIS,
+   *  [MAX_CLUSTER_TRIS])`, line ~447) per wave, with an `itemIdx < itemCount` guard skipping the
+   *  out-of-cut waves (measured ~0.65 ms idle — low value). Wiring an indirect dispatch off this
+   *  attr would trim those idle waves; kept static for now (the dominant setup cost is the real
+   *  per-wave transform+bin+xtri-write work, not the idle guard). Retained in deps for parity. */
   rasterDispatchFullAttr: IndirectStorageBufferAttribute;
   width: number;
   height: number;
@@ -334,10 +342,17 @@ export function buildTileRaster(deps: TileRasterDeps): TileRasterHandles {
             const yi1 = toI(s1.y.mul(256).round()).toVar();
             const xi2 = toI(s2.x.mul(256).round()).toVar();
             const yi2 = toI(s2.y.mul(256).round()).toVar();
-            const bbMinX = minI(xi0, minI(xi1, xi2)).div(toI(256)).toVar();
-            const bbMaxX = maxI(xi0, maxI(xi1, xi2)).div(toI(256)).toVar();
-            const bbMinY = minI(yi0, minI(yi1, yi2)).div(toI(256)).toVar();
-            const bbMaxY = maxI(yi0, maxI(yi1, yi2)).div(toI(256)).toVar();
+            // ONE min/max tree over the 1/256-px coords (was computed twice — here for
+            // the whole-px bbox and again for the sample-miss cull below). The whole-px
+            // bbox is the SAME `.div(256)` trunc of these (bit-identical), so derive it.
+            const xiMin = minI(xi0, minI(xi1, xi2)).toVar();
+            const xiMax = maxI(xi0, maxI(xi1, xi2)).toVar();
+            const yiMin = minI(yi0, minI(yi1, yi2)).toVar();
+            const yiMax = maxI(yi0, maxI(yi1, yi2)).toVar();
+            const bbMinX = xiMin.div(toI(256)).toVar();
+            const bbMaxX = xiMax.div(toI(256)).toVar();
+            const bbMinY = yiMin.div(toI(256)).toVar();
+            const bbMaxY = yiMax.div(toI(256)).toVar();
             const smallEnough = bbMaxX
               .sub(bbMinX)
               .lessThanEqual(toI(MAX_RASTER_SIZE))
@@ -355,10 +370,7 @@ export function buildTileRaster(deps: TileRasterDeps): TileRasterHandles {
             // SAMPLE-MISS cull (CuRast :190-196, 27-40%): a tri whose snapped extent covers no
             // pixel CENTRE (k·256+128 grid) on x OR y produces zero fragments → skip before any
             // emit/raster. Conservative + exact (the scanline samples at the same centres).
-            const xiMin = minI(xi0, minI(xi1, xi2));
-            const xiMax = maxI(xi0, maxI(xi1, xi2));
-            const yiMin = minI(yi0, minI(yi1, yi2));
-            const yiMax = maxI(yi0, maxI(yi1, yi2));
+            // (xiMin/xiMax/yiMin/yiMax hoisted above — shared with the whole-px bbox.)
             const firstCx = toF(xiMin.sub(toI(128)) as unknown as NI).div(256).ceil().mul(256).add(128);
             const firstCy = toF(yiMin.sub(toI(128)) as unknown as NI).div(256).ceil().mul(256).add(128);
             const coversSample = firstCx
@@ -380,10 +392,13 @@ export function buildTileRaster(deps: TileRasterDeps): TileRasterHandles {
                 const pack2 = (hi: NI, lo: NI): NU => u16(hi).shiftLeft(uint(16)).bitOr(u16(lo));
                 const bbX = toI(toF(xiMin as unknown as NI).div(256).floor()).toVar();
                 const bbY = toI(toF(yiMin as unknown as NI).div(256).floor()).toVar();
+                // bbMin·256 — hoisted (was recomputed 3× each in the per-vert subtractions below)
+                const bbX256 = bbX.mul(toI(256)).toVar();
+                const bbY256 = bbY.mul(toI(256)).toVar();
                 put(0, pack2(bbX.add(toI(COORD_BIAS)) as unknown as NI, bbY.add(toI(COORD_BIAS)) as unknown as NI));
-                put(1, pack2(xi0.sub(bbX.mul(toI(256))) as unknown as NI, yi0.sub(bbY.mul(toI(256))) as unknown as NI));
-                put(2, pack2(xi1.sub(bbX.mul(toI(256))) as unknown as NI, yi1.sub(bbY.mul(toI(256))) as unknown as NI));
-                put(3, pack2(xi2.sub(bbX.mul(toI(256))) as unknown as NI, yi2.sub(bbY.mul(toI(256))) as unknown as NI));
+                put(1, pack2(xi0.sub(bbX256) as unknown as NI, yi0.sub(bbY256) as unknown as NI));
+                put(2, pack2(xi1.sub(bbX256) as unknown as NI, yi1.sub(bbY256) as unknown as NI));
+                put(3, pack2(xi2.sub(bbX256) as unknown as NI, yi2.sub(bbY256) as unknown as NI));
                 put(4, bcF2U(ndc0.z as unknown as NF));
                 put(5, bcF2U(ndc1.z as unknown as NF));
                 put(6, bcF2U(ndc2.z as unknown as NF));
@@ -440,12 +455,20 @@ export function buildTileRaster(deps: TileRasterDeps): TileRasterHandles {
   })().compute(BATCH_CLUSTERS * MAX_CLUSTER_TRIS, [MAX_CLUSTER_TRIS]);
   (kSetup as { setName(n: string): unknown }).setName('nanTileSetup');
 
-  // ---- kRasterTiled (FineRaster, election into GLOBAL visBuffer) ----------------------
-  // One workgroup per tile; thread owns binned triangles [local, local+WG, …]. Elects into
-  // the SAME global visPayloadV/visBV as world1 — atomicMax is FREE (proven: guarded==naive),
-  // so the on-chip shared election + flush bought nothing and blocked bounded batching; this
-  // is bit-identical to world1's election. The tiling's win is B3 (front-to-back per-pixel
-  // early-out below), NOT the atomic. Across bounded batches the global buffer accumulates.
+  // ---- kRasterTiled (FineRaster, ON-CHIP election → flush-merge into GLOBAL visBuffer) ----
+  // One workgroup per tile; thread owns binned triangles [local, local+WG, …]. The per-fragment
+  // depth election runs in WORKGROUP-SCOPED shared memory (wgElect/wgId, TILE_PX entries) and is
+  // flushed to the GLOBAL visPayloadV/visBV ONCE per pixel at tile end (CudaRaster FineRaster
+  // s_tileDepth). This moves the 12-20× foliage-overdraw global round-trips (aLoadU + atomicMax +
+  // atomicStore per covered fragment) on-chip: the B3 per-pixel early-out reads the ON-CHIP winner.
+  //
+  // CROSS-WAVE: the global buffer is cleared ONCE by NaniteFrame and ACCUMULATES across the
+  // N_BATCHES bounded waves. The on-chip election is per-WAVE (wgElect re-init to 0 each
+  // dispatch). The flush MUST therefore atomicMax-MERGE into global (NOT a plain overwrite): a
+  // nearer winner from a prior wave must not be clobbered by this wave's farther winner. Net
+  // result is bit-identical to the old global election — the nearest fragment across all waves
+  // wins every pixel. The benign equal-depth id race (the id side-store) is preserved.
+  const TILE_PX = TILE * TILE; // 256 pixels per tile
   const kRasterTiled = Fn(() => {
     const tileIdx = wgLinear(DISPATCH_ROW).toVar();
     const local = localX().toVar();
@@ -453,6 +476,19 @@ export function buildTileRaster(deps: TileRasterDeps): TileRasterHandles {
     const tileY = tileIdx.div(uint(tilesX));
     const px0 = tileX.mul(uint(TILE)).toVar();
     const py0 = tileY.mul(uint(TILE)).toVar();
+
+    // ON-CHIP election (per WAVE): wgElect[lpx] = packed (depthKey24<<8 | id8) election word
+    // (atomic<u32>, exactly the old shElect); wgId[lpx] = the winner's full payload. lpx =
+    // (y-py0)*TILE + (x-px0) ∈ [0,256). 2 × 256 × 4 B = 2 KB workgroup memory (fine on Apple).
+    const wgElect = workgroupArray('uint', TILE_PX);
+    (wgElect as unknown as { bufferType: string }).bufferType = 'atomic<u32>';
+    const wgId = workgroupArray('uint', TILE_PX);
+    // cooperative init: the 64 threads loop over the 256 entries (4 each), zero both, then barrier.
+    loopU(local, uint(TILE_PX), (i) => {
+      atomicStore(wgElect.element(i), uint(0));
+      (wgId.element(i) as unknown as { assign(x: NU): void }).assign(uint(0));
+    }, WG);
+    workgroupBarrier();
 
     const tileX0 = int(px0) as unknown as NI;
     const tileY0 = int(py0) as unknown as NI;
@@ -574,8 +610,10 @@ export function buildTileRaster(deps: TileRasterDeps): TileRasterHandles {
                     // → skip the dominant z-interp + depthKey + election entirely. Read the winner
                     // BEFORE the z-interp. With near→far tile order, occluded fragments (the 11-19
                     // of ~20 overdraw) skip the depth work. Loss-exact ⇒ zero quality loss.
-                    const px = uint(y).mul(uint(width)).add(uint(x)).toVar();
-                    const prevE = aLoadU(visPayloadV.atomic.element(px)).toVar();
+                    // ON-CHIP local pixel index lpx = (y-py0)*TILE + (x-px0) ∈ [0,256). The B3
+                    // early-out reads the ON-CHIP winner (cheap shared atomicLoad) — the point.
+                    const lpx = uint(y).sub(py0).mul(uint(TILE)).add(uint(x).sub(px0)).toVar();
+                    const prevE = aLoadU(wgElect.element(lpx)).toVar();
                     If(nearKey.greaterThan(prevE), () => {
                       const uw0 = cw0.sub(bias0).toVar();
                       const uw1 = cw1.sub(bias1).toVar();
@@ -592,9 +630,11 @@ export function buildTileRaster(deps: TileRasterDeps): TileRasterHandles {
                           .bitOr(payload.bitAnd(uint(0xff)))
                           .toVar();
                         If(cand.greaterThan(prevE), () => {
-                          const wonE = atomicMax(visPayloadV.atomic.element(px), cand) as unknown as NU;
+                          // WORKGROUP-scoped election (was global). Winner plain-stores its full
+                          // payload into wgId; the global merge happens once per pixel at flush.
+                          const wonE = atomicMax(wgElect.element(lpx), cand) as unknown as NU;
                           If(cand.greaterThan(wonE), () => {
-                            atomicStore(visBV.atomic.element(px), payload);
+                            (wgId.element(lpx) as unknown as { assign(x: NU): void }).assign(payload);
                           });
                         });
                       });
@@ -615,6 +655,29 @@ export function buildTileRaster(deps: TileRasterDeps): TileRasterHandles {
       });
      }); // inner slot loop (re-walks the flat list for bucket bk)
     }); // outer bucket loop (near→far K passes)
+
+    // FLUSH (once per pixel): all K passes done, all threads' on-chip elections are committed.
+    workgroupBarrier();
+    // The 64 threads loop over the 256 tile pixels. For each elected pixel (wgElect != 0; out-of-
+    // image pixels are never elected so they stay 0), MERGE into the GLOBAL accumulating buffer
+    // with atomicMax — NOT a plain store — so a NEARER winner from a PRIOR wave is never clobbered
+    // by this wave's farther winner (cross-wave accumulation; the buffer is cleared once by
+    // NaniteFrame). When this wave's word is the new global max, store its full id into visBV
+    // (mirrors the per-fragment `cand > wonE` guard, preserving world1's benign equal-depth race).
+    loopU(local, uint(TILE_PX), (i) => {
+      const e = aLoadU(wgElect.element(i)).toVar();
+      If(e.notEqual(uint(0)), () => {
+        const lx = i.mod(uint(TILE));
+        const ly = i.div(uint(TILE));
+        const gx = px0.add(lx);
+        const gy = py0.add(ly);
+        const px = gy.mul(uint(width)).add(gx).toVar();
+        const won = atomicMax(visPayloadV.atomic.element(px), e) as unknown as NU;
+        If(e.greaterThan(won), () => {
+          atomicStore(visBV.atomic.element(px), wgId.element(i) as unknown as NU);
+        });
+      });
+    }, WG);
   })().compute(nTiles * WG, [WG]);
   (kRasterTiled as { setName(n: string): unknown }).setName('nanRasterTiled');
 
