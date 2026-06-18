@@ -96,7 +96,29 @@ import type { AtomicBuf, BufOf, UV2 } from './Tsl';
 
 const TILE = 16; // px per tile edge
 const WG = 64; // raster workgroup threads (thread-per-triangle over the tile's binned list)
-const TILE_CAP = 8192; // max triangles binned per tile PER BATCH (overflow → tripwire stat)
+const FLAT_TILE_CAP = 8192; // ORIGINAL flat per-tile list cap (its overflow behaviour is the
+// original, fine one: a dropped tri is simply not rasterized — same as the old per-tile overflow,
+// NOT mis-elected. It was the per-BUCKET split that introduced the real DROP: a single dense
+// depth-bucket needs the full 8192, and per-bucket fixed caps × K is infeasible memory at
+// high-DPI. So we revert to ONE flat list and move ordering into the FINE raster via K passes.)
+// FRONT-TO-BACK DEPTH BUCKETS (B3 ordering, loss-exact) — now WITHOUT a per-bucket cap. Each
+// tile keeps ONE flat list; each ENTRY packs its depth bucket in the high bits:
+//   entry = payload | (bucket << BUCKET_SHIFT),  bucket = top KBITS of depthKey24(min ndc.z).
+// LARGER depthKey = NEARER ⇒ HIGHER bucket index = NEARER. kRasterTiled then makes K passes over
+// the flat list, near→far (bk = K-1..0), processing ONLY entries whose bucket==bk, so the
+// per-pixel early-out (nearKey<=prevE) fires against an already-near winner ⇒ occluded fragments
+// skip the z-interp. Bucketing only REORDERS processing — the final atomicMax election is
+// unchanged, so quality is identical regardless of K. Because the list is a single flat 8192 cap
+// (NOT split per bucket), a dense single-bucket tile can use the full 8192 headroom ⇒ the
+// per-bucket overflow that dropped ~10% of binned tris CANNOT fire (there is no per-bucket cap).
+const K_BUCKETS = 8;
+const KBITS = 3; // log2(K_BUCKETS) — top KBITS of the 24-bit depthKey select the bucket
+// BUCKET_SHIFT: bit position of the bucket field inside a flat-list entry. payload =
+// itemIdx<<CLUSTER_TRI_BITS | localTri; with MAX_CUT_CLUSTERS=640000 and the 256-tri cap
+// (CLUSTER_TRI_BITS=8) the max payload is 639999·256 + 255 = 163,839,999 < 2^28, so the bucket
+// (KBITS≤4) lives in bits 28..31 and CANNOT collide with the payload. Asserted at build below.
+const BUCKET_SHIFT = 28;
+const PAYLOAD_MASK = (1 << BUCKET_SHIFT) - 1; // low 28 bits = payload; high bits = bucket
 // xtri entry (7 words, LOSSLESS pack — tris are ≤MAX_RASTER_SIZE px per instminpx/minpx, so
 // verts fit 16-bit offsets from the bbox-min): w0 = (bbMinX+BIAS)<<16 | (bbMinY+BIAS); w1..3
 // = (dx<<16 | dy) per vert in 1/256 units relative to bbMin·256; w4..6 = ndc.z (f32 bits).
@@ -116,6 +138,22 @@ const BATCH_CLUSTERS = 32_000;
 const MAX_CUT_CLUSTERS = 640_000;
 const N_BATCHES = Math.ceil(MAX_CUT_CLUSTERS / BATCH_CLUSTERS);
 const NEAR_EPS = 1e-4;
+
+// BIT-BUDGET ASSERT (D-N46 flat-list bucket pack): the max payload (itemIdx<<CLUSTER_TRI_BITS |
+// localTri, itemIdx<MAX_CUT_CLUSTERS) MUST fit below BUCKET_SHIFT so the bucket field (above it)
+// never collides with payload bits. CLUSTER_TRI_BITS is mutable (128→7 / 256→8 cap), so verify
+// with the LIVE value. Also verify the bucket field itself fits in a u32 above BUCKET_SHIFT.
+{
+  const maxPayload = ((MAX_CUT_CLUSTERS - 1) << CLUSTER_TRI_BITS) | ((1 << CLUSTER_TRI_BITS) - 1);
+  if (maxPayload >= 1 << BUCKET_SHIFT) {
+    throw new Error(
+      `NaniteTileRaster: payload ${maxPayload} >= 1<<BUCKET_SHIFT (${1 << BUCKET_SHIFT}) — bucket field collides with payload`,
+    );
+  }
+  if (BUCKET_SHIFT + KBITS > 32) {
+    throw new Error(`NaniteTileRaster: bucket field overflows u32 (BUCKET_SHIFT ${BUCKET_SHIFT} + KBITS ${KBITS} > 32)`);
+  }
+}
 
 export interface TileRasterDeps {
   cam: NaniteCam;
@@ -143,7 +181,10 @@ export interface TileRasterDeps {
 
 export interface TileRasterHandles {
   dispatchTiled: (renderer: Renderer) => void;
-  /** [overflowTri, droppedXtri, binEntries, smallTris] — overflow/dropped MUST be 0 */
+  /** [reserved(0), clusterOvf, hwCursor] — clusterOvf MUST be 0 (a cluster fell outside the
+   *  current batch window ⇒ raise MAX_CUT_CLUSTERS). The per-bucket bucketOvf stat is REMOVED:
+   *  there is no per-bucket cap any more (the flat list + K fine-raster passes replaced it), so
+   *  the dense-canopy bucket overflow that dropped ~10% of binned tris can no longer occur. */
   readStat: (renderer: Renderer) => Promise<Uint32Array>;
   tilesX: number;
   tilesY: number;
@@ -177,18 +218,22 @@ export function buildTileRaster(deps: TileRasterDeps): TileRasterHandles {
   // Mixing atomic+rw views of one buffer in a kernel is illegal aliasing, AND atomicStore
   // for the ~120M unique-owner writes WAS the 34 ms — so two buffers, one per access type.
   //
-  // atomicBuf (atomicAdd targets — the only true contention): [0,nTiles) per-tile counts ·
-  //   [STAT_BASE+0..1] overflow stats · [HW_CURSOR] HW-queue append cursor.
-  const STAT_BASE = nTiles;
-  const HW_CURSOR = nTiles + 2;
-  const atomicWords = nTiles + 3;
+  // atomicBuf (atomicAdd targets — the only true contention): [0,nTiles) per-tile FLAT-list
+  //   counts · [STAT_BASE+0..1] overflow stats (reserved, cluster ovf) · [HW_CURSOR] HW-queue
+  //   append cursor. (The per-BUCKET ovf stat is GONE — there is no per-bucket cap any more;
+  //   ordering moved into the fine raster's K passes, so a dense bucket uses the full flat cap.)
+  const COUNTS = nTiles;
+  const STAT_BASE = COUNTS;
+  const HW_CURSOR = COUNTS + 2;
+  const atomicWords = COUNTS + 3;
   const atomicBufAttr = new StorageBufferAttribute(new Uint32Array(atomicWords), 1);
   const atomicBuf = sU32Views(atomicBufAttr, atomicWords);
-  // dataBuf (PLAIN stores, unique owner per slot): [tile·TILE_CAP + slot] tile lists ·
-  //   [XENTRY + payload·XTRI_WORDS] xtri entry · [HW_BASE + slot·2] HW (payload,instId) pairs.
-  //   HW routing lives HERE (not hwQueueV) so the setup binds 10 storage buffers, not 11
-  //   (vcompact's gpu.vcompact needs the slot); a tiny copy pass moves it to hwQueueV.
-  const XENTRY = nTiles * TILE_CAP;
+  // dataBuf (PLAIN stores, unique owner per slot): [tile·FLAT_TILE_CAP + slot] per-tile FLAT
+  //   list (each entry = payload | bucket<<BUCKET_SHIFT) · [XENTRY + payload·XTRI_WORDS] xtri
+  //   entry · [HW_BASE + slot·2] HW (payload,instId) pairs. HW routing lives HERE (not hwQueueV)
+  //   so the setup binds 10 storage buffers, not 11 (vcompact's gpu.vcompact needs the slot); a
+  //   tiny copy pass moves it to hwQueueV. The flat list is the ORIGINAL footprint, nTiles·8192.
+  const XENTRY = nTiles * FLAT_TILE_CAP;
   // xtri sized to ONE batch (not the whole cut) — this is the device-portable bound.
   // payload packs localTri with stride 2^CLUSTER_TRI_BITS (line below), NOT MAX_CLUSTER_TRIS —
   // at the 256 cap those DIFFER (256 vs 255). The xtri local index MUST use the payload stride
@@ -214,14 +259,14 @@ export function buildTileRaster(deps: TileRasterDeps): TileRasterHandles {
   })().compute(atomicWords, [256]);
   (kClearBins as { setName(n: string): unknown }).setName('nanTileClearBins');
 
-  // ---- kClearCounts: clear ONLY the per-tile counts [0,nTiles), per batch (HW cursor + the
-  // already-appended HW survive so big tris accumulate across waves; the global visBuffer too).
+  // ---- kClearCounts: clear ONLY the per-(tile,bucket) counts [0,COUNTS), per batch (HW cursor
+  // + the already-appended HW survive so big tris accumulate across waves; the visBuffer too).
   const kClearCounts = Fn(() => {
     const i = instanceIndex.toVar();
-    If(i.lessThan(uint(nTiles)), () => {
+    If(i.lessThan(uint(COUNTS)), () => {
       atomicStore(atomicBuf.atomic.element(i), uint(0));
     });
-  })().compute(nTiles, [256]);
+  })().compute(COUNTS, [256]);
   (kClearCounts as { setName(n: string): unknown }).setName('nanTileClearCounts');
 
   // ---- kSetup (TriangleSetup, transform ONCE) ----------------------------------------
@@ -342,7 +387,19 @@ export function buildTileRaster(deps: TileRasterDeps): TileRasterHandles {
                 put(4, bcF2U(ndc0.z as unknown as NF));
                 put(5, bcF2U(ndc1.z as unknown as NF));
                 put(6, bcF2U(ndc2.z as unknown as NF));
-                // scatter payload to tiles the bbox overlaps (clamped to screen → tiles)
+                // FRONT-TO-BACK bucket = top KBITS of the tri's NEAREST-depth key. LARGER
+                // depthKey = NEARER ⇒ HIGHER bucket index = NEARER. Computed ONCE per tri (the
+                // nearest NDC z across its 3 verts), shared by every tile the bbox overlaps.
+                // It is packed into the HIGH bits of each FLAT-list entry (above BUCKET_SHIFT),
+                // NOT used to address a sub-list — the fine raster's K passes do the ordering.
+                const bucket = minU(
+                  depthKey24(ndc0.z.min(ndc1.z).min(ndc2.z) as unknown as NF).shiftRight(
+                    uint(24 - KBITS),
+                  ),
+                  uint(K_BUCKETS - 1),
+                ).toVar();
+                const entry = payload.bitOr(bucket.shiftLeft(uint(BUCKET_SHIFT))).toVar();
+                // scatter the (bucket-tagged) entry to tiles the bbox overlaps (clamped → tiles)
                 const tMinX = maxI(toI(0), startX.div(toI(TILE)));
                 const tMaxX = minI(toI(tilesX - 1), endX.div(toI(TILE)));
                 const tMinY = maxI(toI(0), startY.div(toI(TILE)));
@@ -350,16 +407,21 @@ export function buildTileRaster(deps: TileRasterDeps): TileRasterHandles {
                 loopI('ty', tMinY as unknown as NI, tMaxY as unknown as NI, (ty) => {
                   loopI('tx', tMinX as unknown as NI, tMaxX as unknown as NI, (tx) => {
                     const tileIdx = ty.mul(toI(tilesX)).add(tx);
+                    // ONE flat per-tile list: count = atomicBuf[tile]; the list occupies
+                    // [tile·FLAT_TILE_CAP, +FLAT_TILE_CAP). This is the ORIGINAL flat layout —
+                    // no per-bucket split, so a dense single-bucket tile uses the full 8192.
                     const slot = atomicAdd(
                       atomicBuf.atomic.element(uint(tileIdx)),
                       uint(1),
                     ) as unknown as NU;
-                    If(slot.lessThan(uint(TILE_CAP)), () => {
-                      const base = uint(tileIdx).mul(uint(TILE_CAP)).add(slot);
-                      (dataBuf.rw.element(base) as unknown as { assign(x: NU): void }).assign(payload);
-                    }).Else(() => {
-                      atomicAdd(atomicBuf.atomic.element(uint(STAT_BASE)), uint(1)); // tile ovf
+                    If(slot.lessThan(uint(FLAT_TILE_CAP)), () => {
+                      const base = uint(tileIdx).mul(uint(FLAT_TILE_CAP)).add(slot);
+                      (dataBuf.rw.element(base) as unknown as { assign(x: NU): void }).assign(entry);
                     });
+                    // FLAT-list overflow is the ORIGINAL behaviour: a dropped tri is simply not
+                    // rasterized (NOT mis-elected). It was fine before the per-bucket split; the
+                    // flat 8192 cap was never the source of the dense-canopy drop. No tripwire
+                    // here (the per-bucket bucketOvf stat is removed); kept memory-neutral.
                   });
                 });
               }).Else(() => {
@@ -392,16 +454,33 @@ export function buildTileRaster(deps: TileRasterDeps): TileRasterHandles {
     const px0 = tileX.mul(uint(TILE)).toVar();
     const py0 = tileY.mul(uint(TILE)).toVar();
 
-    const count = minU(elemU(atomicBuf.ro, tileIdx), uint(TILE_CAP));
     const tileX0 = int(px0) as unknown as NI;
     const tileY0 = int(py0) as unknown as NI;
     const tileX1 = minI(tileX0.add(toI(TILE - 1)), toI(width - 1));
     const tileY1 = minI(tileY0.add(toI(TILE - 1)), toI(height - 1));
 
-    loopU(uint(0), uint(Math.ceil(TILE_CAP / WG)), (r) => {
+    // FRONT-TO-BACK: ONE flat per-tile list, processed in K near→far PASSES. bk counts down
+    // K-1 (NEAREST) .. 0 (FARTHEST); each pass walks the WHOLE flat list and processes ONLY the
+    // entries whose packed bucket==bk. So near-bucket tris are rasterized before far ones, and
+    // the per-pixel early-out below (nearKey<=prevE) fires against an already-near winner ⇒
+    // occluded fragments skip the z-interp. Election is still exact atomicMax, so order ≠ result;
+    // each tri is processed exactly ONCE (on its own bucket pass). The flat list is re-READ K
+    // times (1-word entries) — a known, accepted bandwidth cost; the 7-word xtri is read once.
+    const count = minU(elemU(atomicBuf.ro, tileIdx), uint(FLAT_TILE_CAP)).toVar();
+    const listBase = tileIdx.mul(uint(FLAT_TILE_CAP)).toVar();
+    // Inner-loop bound = ceil(count/WG) rounds, NOT ceil(FLAT_TILE_CAP/WG): a sparse tile runs
+    // only as many rounds as it has entries. `count` is uniform across the WG's 64 threads.
+    const nRounds = count.add(uint(WG - 1)).div(uint(WG)).toVar();
+    loopU(uint(0), uint(K_BUCKETS), (bi) => {
+     const bk = uint(K_BUCKETS - 1).sub(bi).toVar();
+     loopU(uint(0), nRounds, (r) => {
       const slot = local.add(r.mul(uint(WG))).toVar();
       If(slot.lessThan(count), () => {
-        const payload = elemU(dataBuf.ro, tileIdx.mul(uint(TILE_CAP)).add(slot)).toVar();
+        const entry = elemU(dataBuf.ro, listBase.add(slot)).toVar();
+        const eBucket = entry.shiftRight(uint(BUCKET_SHIFT)).toVar();
+        // process ONLY this pass's bucket (near→far). Each entry hits exactly one bk.
+        If(eBucket.equal(bk), () => {
+        const payload = entry.bitAnd(uint(PAYLOAD_MASK)).toVar();
         const b = uint(XENTRY).add(payload.sub(batchBase.shiftLeft(uint(CLUSTER_TRI_BITS))).mul(uint(XTRI_WORDS)));
         // unpack the 7-word LOSSLESS layout (see kSetup): bbMin px + 3 (dx|dy) verts + 3 z.
         const w0 = elemU(dataBuf.ro, b).toVar();
@@ -532,8 +611,10 @@ export function buildTileRaster(deps: TileRasterDeps): TileRasterHandles {
             });
           });
         });
+        }); // close If(eBucket == bk) — process only this pass's bucket
       });
-    });
+     }); // inner slot loop (re-walks the flat list for bucket bk)
+    }); // outer bucket loop (near→far K passes)
   })().compute(nTiles * WG, [WG]);
   (kRasterTiled as { setName(n: string): unknown }).setName('nanRasterTiled');
 
@@ -569,7 +650,8 @@ export function buildTileRaster(deps: TileRasterDeps): TileRasterHandles {
   };
 
   const readStat = async (renderer: Renderer): Promise<Uint32Array> => {
-    const buf = await readBuffer(renderer, atomicBufAttr, STAT_BASE * 4, 16);
+    // 3 words: [reserved(0), clusterOvf, hwCursor]. (bucketOvf is gone — no per-bucket cap.)
+    const buf = await readBuffer(renderer, atomicBufAttr, STAT_BASE * 4, 12);
     return new Uint32Array(buf);
   };
 
