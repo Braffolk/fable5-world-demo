@@ -162,10 +162,10 @@ export interface NaniteCullChain {
   /** all items (payload passes) */
   rasterDispatchFullAttr: IndirectStorageBufferAttribute;
   /** voxel-foliage (spec §6.2): the fanned voxel-cluster work queue [0]=(count,0),
-   *  items at 1.. (same (instId, ci) uvec2 as qRaster). Stage-2 kVoxBin reads it. */
+   *  items at 1.. (same (instId, ci) uvec2 as qRaster). The voxel raster reads it. */
   qVoxRasterRO: BufOf<UV2>;
   qVoxRasterAttr: StorageBufferAttribute;
-  /** 2D-split dispatch args over the fanned voxel-cluster count (Stage-2 kVoxBin). */
+  /** 2D-split dispatch args over the fanned voxel-cluster count (the voxel raster). */
   voxRasterDispatchAttr: IndirectStorageBufferAttribute;
   /** phase 1: clear → instance cull → cluster cull → raster args */
   runPhase1(renderer: Renderer): void;
@@ -176,8 +176,6 @@ export interface NaniteCullChain {
    *  safe ONLY between culls that share no writable buffer (verified: the camera cull
    *  and the shadow shared-cut cull each own fresh counters/qRaster/qFrontier). */
   phase1Batch(): readonly unknown[];
-  /** phase 2 (call after phase-1 raster + HZB build): re-test rejects */
-  runPhase2(renderer: Renderer): void;
   /** write full-range args WITHOUT re-testing (?phase2=0 A/B + no-occl path) */
   syncFullArgs(renderer: Renderer): void;
   /** voxel-foliage (spec §4.6): post-traverse fan-out — qRaster → qVoxRaster by
@@ -290,7 +288,7 @@ export function buildNaniteCull(
   // room for a 2nd queue there, §4.6); a TINY post-traverse FAN-OUT pass (kVoxFanout
   // below) then re-scans the emitted qRaster, tests each cluster's mesh matClass, and
   // fans the voxel(7) entries here. qVoxRaster[0] = (count, 0); items at 1.. are the
-  // SAME (instId, ci) uvec2 as qRaster (Stage-2 kVoxBin reads bricks via ci's word6/7).
+  // SAME (instId, ci) uvec2 as qRaster (the voxel raster reads bricks via ci's word6/7).
   const qVoxRasterAttr = new StorageBufferAttribute(new Uint32Array((QVOX_CAP + 1) * 2), 2);
   const qVoxRasterV = sUvec2(qVoxRasterAttr, QVOX_CAP + 1);
   // voxel fan-out cursor (its OWN atomic counter so it doesn't contend the BFS counters).
@@ -421,7 +419,7 @@ export function buildNaniteCull(
   })().compute(QRASTER_CAP, [64]);
   (kVoxFanout as unknown as ComputeKernel).setName('nanVoxFanout');
 
-  // kVoxRasterArgs: publish qVoxRaster[0] = (count, 0) + the Stage-2 voxel-bin/raster
+  // kVoxRasterArgs: publish qVoxRaster[0] = (count, 0) + the Stage-2 voxel-raster
   // 2D-split dispatch args (over the fanned voxel-cluster count). The count read goes
   // through the SAME rw view that writes slot 0 (N0 same-scope law, like kRasterArgs).
   const kVoxRasterArgs = Fn(() => {
@@ -717,17 +715,11 @@ export function buildNaniteCull(
     dispatch(renderer, kRasterArgs2);
   };
 
-  // single-phase hier: runPhase1's BFS already produced the full qRaster, so the
-  // "phase 2" the payload pass needs is just the full-range dispatch args.
-  const runPhase2 = (renderer: Renderer): void => {
-    syncFullArgs(renderer);
-  };
-
   // voxel-foliage (spec §4.6 / §6.2): run the post-traverse FAN-OUT — clear+size args,
   // scan qRaster → matClass==voxel → qVoxRaster, publish the voxel-raster dispatch args.
-  // Call AFTER runPhase1 (qRaster + counters[1] are live). The Stage-2 kVoxBin/kRasterVox
-  // then dispatch over voxRasterDispatchAttr. No-op-safe if no voxel clusters were emitted
-  // (qVoxRaster[0]=(0,0) ⇒ the bin dispatches 0 workgroups).
+  // Call AFTER runPhase1 (qRaster + counters[1] are live). The voxel raster then
+  // dispatches over voxRasterDispatchAttr. No-op-safe if no voxel clusters were emitted
+  // (qVoxRaster[0]=(0,0) ⇒ the raster dispatches 0 workgroups).
   const runVoxFanout = (renderer: Renderer): void => {
     dispatch(renderer, kVoxFanoutArgs);
     dispatchIndirect(renderer, kVoxFanout as never, voxFanoutDispatchAttr);
@@ -787,7 +779,6 @@ export function buildNaniteCull(
     voxRasterDispatchAttr,
     runPhase1,
     phase1Batch: () => phase1BatchList,
-    runPhase2,
     syncFullArgs,
     runVoxFanout,
     readVoxCount,

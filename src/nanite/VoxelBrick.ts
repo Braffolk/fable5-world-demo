@@ -3,7 +3,7 @@
  * (docs/perf-runs/nanite-voxel-foliage-spec.md §4.3 / §6.4).
  *
  * THE AUTHORITATIVE BRICK LAYOUT. The offline voxelizer (Stage 1, §5.4) WRITES
- * bricks with the CPU helpers here; the runtime voxel raster (`kVoxBin`/`kRasterVox`,
+ * bricks with the CPU helpers here; the runtime voxel raster (`kVoxScatter`,
  * Stage 2 §6) and the resolve voxel branch (§7.2) DECODE them on the GPU via
  * `elemU(gpu.voxelBricks, brickWord(bi, BRICK_*))` + the TSL helpers below. Both
  * sides MUST agree on this single layout — change it HERE only.

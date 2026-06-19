@@ -484,7 +484,7 @@ export function prepareVoxelCrown(
  *
  * The occupied bricks (appended in grid order) are split into ≤MAX_BRICKS_PER_CLUSTER
  * contiguous BLOCKS (the §5.3 per-coarse-cluster fit), one cluster each, with a per-block
- * brick-AABB bound (the kVoxBin AABB projection, §6.2). `matParam` should be the same
+ * brick-AABB bound (the voxel raster's AABB projection, §6.2). `matParam` should be the same
  * packed leaf tint as the leaf head (§7.2.6). `leafSource` is unused (kept for signature
  * stability — the head no longer carries a placeholder tri from it).
  */

@@ -203,7 +203,7 @@ export function buildNaniteRaster(
     rasterDispatchFullAttr: IndirectStorageBufferAttribute;
     /** voxel-foliage (Stage 2 §6): the voxel-raster work queue + its 2D-split dispatch
      *  args (cull §A1). Present only when ?voxreg/?forcevox is active; when present the
-     *  kVoxBin/kRasterVox depth-bucketed brick raster runs in world1() after hwRender. */
+     *  scatter voxel-brick raster runs in world1() after hwRender. */
     qVoxRasterRO?: BufOf<UV2>;
     voxRasterDispatchAttr?: IndirectStorageBufferAttribute;
   },
@@ -233,8 +233,8 @@ export function buildNaniteRaster(
    *  tie the id can pick the bucket-neighbour (a valid wrong-material pixel, never a
    *  torn/garbage fetch). Differs from `packed` (NaniteView's 16-bit-depth combined). */
   singlePass = false,
-  /** voxel-foliage (Stage 2 §6): build + dispatch the kVoxBin/kRasterVox depth-bucketed
-   *  brick raster. Requires cull.qVoxRasterRO + cull.voxRasterDispatchAttr. OFF by
+  /** voxel-foliage (Stage 2 §6): build + dispatch the scatter voxel-brick
+   *  raster. Requires cull.qVoxRasterRO + cull.voxRasterDispatchAttr. OFF by
    *  default so a pure-triangle world never binds the voxel permutation. */
   voxActive = false,
 ): NaniteRasterHandles {
@@ -530,7 +530,7 @@ export function buildNaniteRaster(
       // bail before any vertex work. UNIFORM across the workgroup (matClass is per
       // cluster, broadcast via ctx.meshId), so every live thread returns (no barrier
       // deadlock; the wgcache barrier above already ran for thread 0's makeCtx). The
-      // bricks render via kVoxBin/kRasterVox (Stage 2) into the same vis buffers.
+      // bricks render via the scatter voxel raster (Stage 2) into the same vis buffers.
       {
         const mcVox = elemU(gpu.meshes, ctx.meshId.mul(uint(MESH_WORDS)).add(uint(6)))
           .shiftRight(uint(8))
@@ -1359,8 +1359,8 @@ export function buildNaniteRaster(
     dispatch(renderer, kHwArgs); // SW pass filled hwQueue → build the indirect draw args
     hwRender(renderer, camera, hwCombinedMat);
   };
-  // voxel-foliage (Stage 2 §6): the DEPTH-BUCKETED voxel-brick raster (kVoxBin +
-  // kRasterVox). Built only when the cull supplied the voxel work queue (?voxreg/
+  // voxel-foliage (Stage 2 §6): the SCATTER voxel-brick raster (kVoxScatter).
+  // Built only when the cull supplied the voxel work queue (?voxreg/
   // ?forcevox active); a separate permutation that DROPS tri-only verts/indices/hfVerts
   // (≤10 buffers, §4.6) and reuses the SAME 32-bit depthKey24 election + visPayloadV/
   // visBV. Dispatched in world1() AFTER hwRender so the on-chip election pre-seeds from
@@ -1400,7 +1400,7 @@ export function buildNaniteRaster(
   const world1 = (renderer: Renderer, camera: PerspectiveCamera): void => {
     dispatchBatchMixed(renderer, [kVisClear, kRasterWorld1, kHwArgs]);
     hwRender(renderer, camera, hwWorld1Mat);
-    // voxel bin + K-pass brick raster (§6.6 insertion point: right after hwRender so the
+    // scatter voxel-brick raster (§6.6 insertion point: right after hwRender so the
     // SW+HW near-field triangle election is already in global visPayloadV to pre-seed).
     if (voxRaster) voxRaster.dispatchVoxel(renderer);
   };

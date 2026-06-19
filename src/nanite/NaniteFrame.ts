@@ -452,9 +452,9 @@ export function buildNaniteFrame(
       if (!cameraCullDispatched) cull.runPhase1(renderer); // hier BFS → qRaster (+ kRasterArgs)
       cull.syncFullArgs(renderer); // full-range args for the payload pass
       // voxel-foliage (spec §4.6 / §A1): fan the emitted voxel(7) clusters out of
-      // qRaster into qVoxRaster + publish the voxel-bin dispatch args. No-op-cheap
+      // qRaster into qVoxRaster + publish the voxel-raster dispatch args. No-op-cheap
       // (one re-scan) when no voxel heads were registered; gated to ?voxreg/?forcevox
-      // so a pure-triangle world pays nothing. Stage-2 kVoxBin/kRasterVox consume it.
+      // so a pure-triangle world pays nothing. The Stage-2 voxel raster consumes it.
       if (voxActive) cull.runVoxFanout(renderer);
     }
     // PERF-VB4 (D-N45): single SW + single HW pass — 24-bit depth election (visPayloadV)
@@ -513,8 +513,8 @@ export function buildNaniteFrame(
         // into qVoxRaster and the Stage-2 bin/raster has work to consume.
         if (voxCount !== null) engine.stats.counters['nanite.voxClusters'] = voxCount;
         // Stage-2 §A2: the per-pixel BRICK-WRITE count (occlusion-skip overlay number) —
-        // the elections the K-pass actually committed (FAR below the overlapping triangle
-        // fragments if the depth-skip is working). > 0 ⇒ kVoxBin/kRasterVox produced winners.
+        // the elections the scatter raster actually committed (FAR below the overlapping
+        // triangle fragments if the occlusion cull works). > 0 ⇒ the voxel raster produced winners.
         if (voxWrites !== null && voxWrites !== undefined)
           engine.stats.counters['nanite.voxBrickWrites'] = voxWrites;
         if (scar) {
