@@ -654,6 +654,15 @@ export function buildNaniteResolve(
     // camera-ward via the EXISTING leaf idiom (voxels are inherently two-sided), and colors via
     // the leaf matParam TINT (§7.2.6 — brick word4 albedo is raster/build-only). Built ONLY in
     // the 'vox' pass, so voxelBricks/qVoxRasterRO are referenced ONLY there.
+    // GRAY-SLAB FIX (§7.2): in the 'vox' pass EVERY surviving pixel is a bit31 voxel
+    // winner (non-voxel pixels were Discarded at the isV gate above), so the foliage
+    // shade + default MUST be gated on `isV` (the bit31 marker), NOT on `isVox`
+    // (matClass==7). A stale/garbage visBV id can decode a matClass != 7 even on a real
+    // voxel pixel; gating the fall-through on `isVox` then dropped that pixel to the gray
+    // `palette` ⇒ the GRAY SLABS. Gating on `isV` keeps every vox-pass pixel reading as
+    // FOLIAGE (the brick-mean normal when the decode is clean, the dark-green foliage
+    // default otherwise) — never gray. The 'tri' pass is unchanged (its grass/debris
+    // fall-through still uses `palette`; voxel pixels were already Discarded there).
     const isVox = matClass.equal(uint(7)).toVar();
     const voxCol = vec3(0.1, 0.2, 0.08).toVar() as unknown as NV3;
     const voxNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
@@ -682,11 +691,15 @@ export function buildNaniteResolve(
       });
     }
 
-    // unported explicit classes (grass/debris — N10) keep a flat gray; voxel(7) takes the
-    // innermost fall-through (its own isVox.select replaces the flat default, §7.2).
+    // unported explicit classes (grass/debris — N10) keep a flat gray; voxel pixels take
+    // the innermost fall-through. In the 'vox' pass gate on `isV` (every surviving pixel
+    // IS a voxel) so a mis-decoded matClass never drops to the gray slab; in the 'tri'
+    // pass voxel pixels were Discarded, so `isVTri` is the original `isVox` (matClass==7),
+    // leaving grass/debris on the gray `palette` exactly as before (loss-exact for tri).
     const palette = vec3(0.35, 0.33, 0.3) as unknown as NV3;
-    const voxAlbDefault = isVox.select(voxCol, palette) as unknown as NV3;
-    const voxNrmDefault = isVox.select(voxNrm, vec3(0, 1, 0)) as unknown as NV3;
+    const isVoxDefault = pass === 'vox' ? isV.equal(uint(1)) : isVox;
+    const voxAlbDefault = isVoxDefault.select(voxCol, palette) as unknown as NV3;
+    const voxNrmDefault = isVoxDefault.select(voxNrm, vec3(0, 1, 0)) as unknown as NV3;
     const albedo = isT
       .select(terrainCol, isR.select(rockCol, isBD.select(barkCol, isL.select(leafCol, voxAlbDefault))))
       .toVar() as unknown as NV3;

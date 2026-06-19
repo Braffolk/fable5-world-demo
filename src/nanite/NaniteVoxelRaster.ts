@@ -58,6 +58,7 @@ import {
 import type { NF, NI, NU, NV3, NV4 } from '../gpu/TSLTypes';
 import { CLUSTER_WORDS } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
+import { BRICK_ALBEDO, BRICK_WORDS } from './VoxelBrick';
 import { DISPATCH_ROW, QVOX_CAP } from './NaniteCommon';
 import type { NaniteCam } from './NaniteCommon';
 import { instTransformPoint, instYaw, instSphereRadius } from './NaniteCommon';
@@ -97,6 +98,18 @@ const PAYLOAD_MASK = (1 << BUCKET_SHIFT) - 1;
 const NEAR_EPS = 1e-4;
 // voxel namespace bit (§4.5): the only bit free at BOTH the 128- and 256-tri caps.
 const VOX_BIT = 0x80000000;
+// DENSITY-MODULATED COVERAGE (§3 Risk #1 / §4.3 word4.A) — the bloat-to-blob fix.
+// A coarse low-density block (conifer crown density ~0.16-0.26) must paint only a
+// ~density FRACTION of its projected footprint so (1-density) sees THROUGH to the
+// bricks/background behind ⇒ the band reads as sparse FOLIAGE, not a solid slab.
+// Each kept pixel stays OPAQUE + depth-correct (the election is unchanged); we just
+// DROP (1-density) of the footprint pixels via a STABLE per-(pixel,block) dither.
+//   COVER_FLOOR — a block never vanishes (keeps a minimum see-through-but-present
+//                 coverage even for the sparsest brick), so silhouettes survive.
+//   COVER_CEIL  — even a dense block stays a touch see-through (real leaves are never
+//                 a perfect wall), which also bounds the added overdraw from the win.
+const COVER_FLOOR = 0.1;
+const COVER_CEIL = 0.92;
 
 // BUILD-TIME BIT-BUDGET ASSERT (§6.2): the max payload (a qVoxRaster item index, < QVOX_CAP)
 // MUST fit below BUCKET_SHIFT so the bucket field never collides with payload bits, and the
@@ -174,6 +187,26 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // workgroup-array plain store (wgId is a non-atomic workgroupArray).
   const wgSet = (arr: ReturnType<typeof workgroupArray>, i: NU, v: NU): void => {
     (arr.element(i) as unknown as { assign(x: NU): void }).assign(v);
+  };
+
+  // STABLE per-(pixel,block) dither in [0,1) for the density-coverage gate (above).
+  // PCG-style integer hash (mirror of NaniteCommon.hashColor's mixer) keyed on the
+  // pixel position AND the block payload, so a given footprint pixel of a given block
+  // always lands the SAME side of the density threshold → ZERO temporal shimmer under a
+  // moving camera (the dither pattern is locked to screen-space, intentionally — TAA
+  // sees a steady stipple, not crawling noise; a temporal jitter is a deliberate
+  // future option, NOT added here so the default is rock-stable, §Risk #1).
+  const coverHash = (px: NU, py: NU, salt: NU): NF => {
+    const a = px
+      .mul(uint(0x9e3779b9))
+      .add(py.mul(uint(0x85ebca77)))
+      .add(salt.mul(uint(0xc2b2ae3d)))
+      .add(uint(0x27d4eb2f))
+      .toVar();
+    const b = a.shiftRight(uint(15)).bitXor(a).mul(uint(0x2c1b3c6d)).toVar();
+    const c = b.shiftRight(uint(12)).bitXor(b).mul(uint(0x297a2d39)).toVar();
+    const h = c.shiftRight(uint(15)).bitXor(c).toVar();
+    return toF(h.bitAnd(uint(0xffffff))).div(16777216) as unknown as NF;
   };
 
   // ---- kVoxBin (§6.2): one thread = one VOXEL CLUSTER work-item -----------------------
@@ -368,6 +401,22 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
               const wc = instTransformPoint(bA, bB, byaw, cl);
               const wr = instSphereRadius(bA, bB, rl as unknown as NF, float(0)).toVar();
 
+              // DENSITY-MODULATED COVERAGE (§3 Risk #1 / §4.3 word4.A) — the bloat fix.
+              // Read the block's representative coverage from its FIRST brick's density
+              // (word4.A): brickBase = the voxel cluster's word6 (§4.1). This is the
+              // coarse one-sample-per-block proxy (§6.4) — one buffer read per block,
+              // loop-invariant over the footprint. Clamp into [FLOOR,CEIL] so the block
+              // never fully vanishes (silhouette survives) nor paints a perfect wall.
+              const brickBase = elemU(gpu.clusters, cbase.add(uint(6))).toVar();
+              const albWord = elemU(
+                gpu.voxelBricks,
+                brickBase.mul(uint(BRICK_WORDS)).add(uint(BRICK_ALBEDO)),
+              ).toVar();
+              const density = toF(albWord.shiftRight(uint(24)).bitAnd(uint(0xff)))
+                .div(255)
+                .clamp(COVER_FLOOR, COVER_CEIL)
+                .toVar();
+
               // screen bbox + nearest+farthest NDC z of the 8 world-AABB corners
               const W = float(cam.uW);
               const H = float(cam.uH);
@@ -421,9 +470,23 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
                   loopI('vx', startX as unknown as NI, endX as unknown as NI, (x) => {
                     const lpx = uint(y).sub(py0).mul(uint(TILE)).add(uint(x).sub(px0)).toVar();
                     const prevE = aLoadU(wgElect.element(lpx)).toVar();
+                    // DENSITY-MODULATED COVERAGE GATE (§3 Risk #1 / §4.3 word4.A) — the
+                    // bloat-to-blob fix. The block keeps THIS pixel only if a STABLE
+                    // per-(pixel,block) dither falls below the block density: a 0.16-density
+                    // conifer block covers ~16% of its footprint, and the dropped ~84% of
+                    // pixels are never elected here ⇒ the bricks/background BEHIND win there
+                    // ⇒ the coarse band reads as sparse, see-through FOLIAGE, not a solid
+                    // slab. Salt the hash with the block payload so each block has its OWN
+                    // stipple (no aligned holes across overlapping blocks). Dropped pixels
+                    // pay NOTHING (the election + the whole voxCz/atomicMax below is skipped),
+                    // which is also why the see-through is "free" — less occlusion, more
+                    // bricks visible, the correct foliage behaviour (perf tune is Stage-3b).
+                    const keep = coverHash(uint(x), uint(y), payload).lessThan(density).toVar();
                     // OCCLUSION SKIP (§6.3): nearKey can't beat the on-chip winner ⇒ this
-                    // block loses at this pixel ⇒ skip the election entirely.
-                    If(nearKey.greaterThan(prevE), () => {
+                    // block loses at this pixel ⇒ skip the election entirely. (loss-exact
+                    // occlusion gate; the coverage gate above is the only NEW intentional
+                    // drop — every KEPT pixel stays opaque + depth-correct.)
+                    If(keep.and(nearKey.greaterThan(prevE)), () => {
                       // BUILD `cand` HERE, INSIDE the skip conditional — verbatim the working
                       // tileproto shape (dfe6518:NaniteTileRaster.ts:617-639: `cand` is declared
                       // inside `If(nearKey>prevE)`, in the SAME ConditionalNode flow as the
