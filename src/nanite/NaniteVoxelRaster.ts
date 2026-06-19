@@ -1,11 +1,27 @@
 /**
- * NaniteVoxelRaster — the DEPTH-BUCKETED voxel-brick raster (spec §6.2/§6.3/§6.4).
+ * NaniteVoxelRaster — the voxel-brick raster. TWO interchangeable backends behind
+ * ?voxraster= (the SCAR fix; spec §6.0):
  *
- * Stage 2 of the 2-tier voxel-foliage subsystem. PORTED from the deleted sort-middle
- * TILED triangle prototype (`git show dfe6518:src/nanite/NaniteTileRaster.ts`,
- * commits b037f4d/43e4aa1/fed6771) with BRICKS (block clusters) as the binned
- * primitive instead of triangles. Two kernels, mirroring the tileproto kSetup→
- * kRasterTiled split, with buffers split by ACCESS TYPE (the 34 ms lesson):
+ *   ?voxraster=scatter (DEFAULT — kVoxScatter, ONE kernel): each voxel BLOCK directly
+ *     atomicMax-elects its footprint into the GLOBAL visPayloadV/visBV — EXACTLY like
+ *     world1 rasterizes triangles (NaniteRaster.ts:937-959). NO per-tile bin, NO K
+ *     near→far passes, NO on-chip wgElect/flush-merge. The rigorous sweep proved the
+ *     bin's SETUP FLOOR — not the leaf-overdraw it replaces — is what net-LOSES at
+ *     every config (the SCAR §6.0): it is the SAME bin/K-pass mechanism that was
+ *     REFUTED + DELETED for triangles (eecf046). For small opaque sub-pixel blocks the
+ *     per-pixel overlap is low, so direct scatter is cheap and the bin's early-skip is
+ *     unnecessary overhead. The atomicMax handles depth (nearest block wins, order-free
+ *     + loss-exact, exactly as world1's unordered triangle scatter). A coarse PER-BLOCK
+ *     OCCLUSION CULL (?voxoccl=1, one global depth read at the projected centre) replaces
+ *     the bin's per-pixel early-skip for the deep-canopy occluded blocks — one read per
+ *     block, not per footprint pixel.
+ *
+ *   ?voxraster=bin (A/B FALLBACK — kVoxBin + kRasterVox): the DEPTH-BUCKETED two-kernel
+ *     binned path below, kept for comparison. PORTED from the deleted sort-middle TILED
+ *     triangle prototype (`git show dfe6518:src/nanite/NaniteTileRaster.ts`, commits
+ *     b037f4d/43e4aa1/fed6771) with BRICKS (block clusters) as the binned primitive
+ *     instead of triangles. Two kernels, mirroring the tileproto kSetup→kRasterTiled
+ *     split, with buffers split by ACCESS TYPE (the 34 ms lesson):
  *
  *   kVoxBin (§6.2 — one thread per VOXEL CLUSTER work-item from qVoxRaster):
  *     project the cluster's BLOCK AABB through cam.vp → screen bbox + nearest NDC z →
@@ -173,6 +189,24 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // dither mode the hash now runs AFTER the occlusion skip (cheap reorder — occluded pixels
   // never pay the hash). DEFAULT OPAQUE so the sweep measures the cheap path first.
   const voxDither = new URLSearchParams(window.location.search).get('voxdither') === '1';
+
+  // ?voxraster=scatter|bin — THE PER-BRICK-COST LEVER (the task; spec §6.0 THE SCAR).
+  //   scatter (DEFAULT): each voxel block DIRECTLY atomicMax-elects its footprint into the
+  //     GLOBAL visPayloadV/visBV — EXACTLY like world1 rasterizes triangles (NaniteRaster.ts
+  //     :947-960). NO kVoxBin per-tile binning, NO kRasterVox K near→far passes, NO on-chip
+  //     wgElect/flush-merge. The rigorous sweep proved the bin's SETUP FLOOR (the SCAR) — not
+  //     the leaf-overdraw it replaces — is what makes the bin path net-LOSE at every config
+  //     (+4.8..+14.1 ms vs the 41.3 ms triangle baseline). This is precisely the bin/K-pass
+  //     mechanism that was REFUTED + DELETED for triangles (eecf046, +11.7/+18.1 ms). The
+  //     production triangle raster that WON is SCATTER (world1). So the principled fix is a
+  //     SCATTER voxel raster: for small opaque sub-pixel blocks the per-pixel overlap is low,
+  //     so direct scatter is cheap and the bin's early-skip machinery is unnecessary overhead.
+  //     The atomicMax handles depth (nearest block wins). A coarse PER-BLOCK OCCLUSION CULL
+  //     (one global depth read at the projected centre) replaces the bin's per-pixel early-skip
+  //     for the deep-canopy occluded blocks — one read per block, not per footprint pixel.
+  //   bin: the prior code (kVoxBin + kRasterVox) kept as the A/B fallback behind the flag.
+  const voxRasterMode = new URLSearchParams(window.location.search).get('voxraster') ?? 'scatter';
+  const useScatter = voxRasterMode !== 'bin';
 
   const tilesX = Math.ceil(width / TILE);
   const tilesY = Math.ceil(height / TILE);
@@ -620,7 +654,196 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   })().compute(nTiles * WG, [WG]);
   (kRasterVox as { setName(n: string): unknown }).setName('nanRasterVox');
 
+  // ---- kVoxScatter (?voxraster=scatter, the DEFAULT — the SCAR fix) -------------------
+  // ONE thread = ONE voxel CLUSTER work-item from qVoxRaster (the SAME cull fanout the bin
+  // uses). Each block DIRECTLY atomicMax-elects its footprint into the GLOBAL visPayloadV/
+  // visBV — VERBATIM the world1 triangle election (NaniteRaster.ts:947-960): read prevE,
+  // gate cand>prevE, atomicMax(visPayloadV), and the WINNER atomicStore's the full id into
+  // visBV. NO per-tile bin, NO K near→far passes, NO on-chip wgElect/flush-merge — those
+  // are the bin SETUP FLOOR (the SCAR §6.0) the rigorous sweep proved is the net-loss.
+  //
+  // DEPTH is handled by the atomicMax alone (nearest block wins per pixel) — order-free,
+  // loss-exact across all overlapping blocks, exactly as the unordered world1 scatter is
+  // for triangles. Because the elected key carries depthKey24 in the high 24 bits, two
+  // scatter threads racing the same pixel resolve to the NEAREST block deterministically.
+  //
+  // PER-BLOCK OCCLUSION CULL (lever 2): BEFORE the footprint loop, read the current GLOBAL
+  // winner ONCE at the block's projected-centre pixel; if the block's NEAREST-possible key
+  // (nearKey, the AABB front-slab) can't beat it, the block is fully behind the near mesh /
+  // a nearer block ⇒ SKIP the whole block. ONE global read per block (vs the bin's per-
+  // footprint-pixel early-skip) culls the deep-canopy occluded blocks (worst poses #78-111)
+  // cheaply. This is COARSE+CONSERVATIVE: a block whose centre is occluded but whose silhou-
+  // ette edge peeks past the occluder is dropped — acceptable for sub-pixel foliage blocks
+  // (the same coarse-grain tradeoff the triangle world1 + HZB make at cluster level), and
+  // never produces a WRONG winner (it only ever DROPS a would-be loser-or-edge-sliver, never
+  // overwrites a nearer pixel). ?voxoccl=0 disables it for the A/B.
+  const voxOccl = (new URLSearchParams(window.location.search).get('voxoccl') ?? '1') !== '0';
+  const kVoxScatter = Fn(() => {
+    const itemIdx = wgLinear(DISPATCH_ROW).toVar();
+    const itemCount = qVoxRasterRO.element(0).x;
+    If(itemIdx.lessThan(itemCount), () => {
+      const item = qVoxRasterRO.element(itemIdx.add(uint(1)));
+      const instId = item.x.toVar();
+      const ci = item.y.toVar();
+      const A = gpu.instances.element(instId.mul(uint(2))).toVar() as unknown as NV4;
+      const B = gpu.instances.element(instId.mul(uint(2)).add(uint(1))).toVar() as unknown as NV4;
+      const yawSc = instYaw(B);
+      const cBase = ci.mul(uint(CLUSTER_WORDS)).toVar();
+      const cLocal = vec3(
+        bcU2F(elemU(gpu.clusters, cBase)),
+        bcU2F(elemU(gpu.clusters, cBase.add(uint(1)))),
+        bcU2F(elemU(gpu.clusters, cBase.add(uint(2)))),
+      ) as unknown as NV3;
+      const rLocal = bcU2F(elemU(gpu.clusters, cBase.add(uint(3)))).toVar();
+      const wCenter = instTransformPoint(A, B, yawSc, cLocal);
+      const wR = instSphereRadius(A, B, rLocal as unknown as NF, float(0)).toVar();
+
+      // DENSITY-MODULATED COVERAGE (?voxdither=1 only) — the bloat-to-blob fix (§3 Risk #1).
+      // Read the block's representative density from its first brick (word4.A); skip the read
+      // entirely in the OPAQUE default (no coverage gate ⇒ pure overhead). Loop-invariant.
+      const density = voxDither
+        ? (() => {
+            const brickBase = elemU(gpu.clusters, cBase.add(uint(6))).toVar();
+            const albWord = elemU(
+              gpu.voxelBricks,
+              brickBase.mul(uint(BRICK_WORDS)).add(uint(BRICK_ALBEDO)),
+            ).toVar();
+            return toF(albWord.shiftRight(uint(24)).bitAnd(uint(0xff)))
+              .div(255)
+              .clamp(COVER_FLOOR, COVER_CEIL)
+              .toVar();
+          })()
+        : null;
+
+      // project the 8 corners of the world AABB cube [wCenter ± wR] → screen bbox + nearest z
+      const W = float(cam.uW);
+      const H = float(cam.uH);
+      const sMinX = float(1e9).toVar();
+      const sMinY = float(1e9).toVar();
+      const sMaxX = float(-1e9).toVar();
+      const sMaxY = float(-1e9).toVar();
+      const nearZ = float(1e9).toVar();
+      const allBehind = uint(1).toVar();
+      loopI('sz3', toI(0), toI(1), (zc) => {
+        loopI('sy3', toI(0), toI(1), (yc) => {
+          loopI('sx3', toI(0), toI(1), (xc) => {
+            const sx = toF(xc).mul(2).sub(1);
+            const sy = toF(yc).mul(2).sub(1);
+            const sz = toF(zc).mul(2).sub(1);
+            const wp = vec3(
+              wCenter.x.add(sx.mul(wR)),
+              wCenter.y.add(sy.mul(wR)),
+              wCenter.z.add(sz.mul(wR)),
+            ) as unknown as NV3;
+            const p = (cam.vp.mul(vec4(wp, 1)) as unknown as NV4).toVar();
+            If(p.w.greaterThan(float(NEAR_EPS)), () => {
+              allBehind.assign(uint(0));
+              const ndc = p.xyz.div(p.w).toVar();
+              sMinX.assign(sMinX.min(ndc.x.add(1).mul(0.5).mul(W)));
+              sMaxX.assign(sMaxX.max(ndc.x.add(1).mul(0.5).mul(W)));
+              sMinY.assign(sMinY.min(ndc.y.add(1).mul(0.5).mul(H)));
+              sMaxY.assign(sMaxY.max(ndc.y.add(1).mul(0.5).mul(H)));
+              nearZ.assign(nearZ.min(ndc.z));
+            });
+          });
+        });
+      });
+      If(allBehind.equal(uint(0)), () => {
+        const startX = maxI(toI(0), toI(sMinX.floor())).toVar();
+        const endX = minI(toI(width - 1), toI(sMaxX.ceil())).toVar();
+        const startY = maxI(toI(0), toI(sMinY.floor())).toVar();
+        const endY = minI(toI(height - 1), toI(sMaxY.ceil())).toVar();
+        const validBB = startX.lessThanEqual(endX).and(startY.lessThanEqual(endY));
+        If(validBB, () => {
+          const nz = nearZ.clamp(0, 1).toVar();
+          // nearKey = the block's NEAREST-possible election key (AABB front-slab; exact for
+          // the coarse one-sample-per-block path, §6.4). cand ≤ nearKey at EVERY pixel, so a
+          // block that can't beat the current winner here can't win ANY of its pixels.
+          const nearKey = depthKey24(nz as unknown as NF).shiftLeft(uint(8)).bitOr(uint(0xff)).toVar();
+          // ONE voxCz per block (coarse one-sample default, §6.4) — the AABB front-slab depth.
+          const voxCz = nz.toVar();
+          const payload = itemIdx.bitAnd(uint(PAYLOAD_MASK)).toVar();
+          const voxId = uint(VOX_BIT).bitOr(payload).toVar();
+
+          // PER-BLOCK OCCLUSION CULL (lever 2): one global depth read at the projected centre.
+          // If the block's nearKey can't beat the current global winner there, the block is
+          // occluded by the near mesh / a nearer block ⇒ skip the whole footprint. Conservative
+          // (a centre-occluded block whose edge peeks is dropped — fine for sub-pixel foliage).
+          // The per-pixel footprint election (the world1 scatter shape) is factored into a
+          // closure so it runs EITHER directly (?voxoccl=0) OR under the occlusion If (default).
+          const rasterFootprint = (): void => {
+            loopI('vsy', startY as unknown as NI, endY as unknown as NI, (y) => {
+              loopI('vsx', startX as unknown as NI, endX as unknown as NI, (x) => {
+                const px = uint(y).mul(uint(width)).add(uint(x)).toVar();
+                // emit closure — built INSIDE the per-pixel conditional flow so `cand`'s use as
+                // the atomicMax value-arg stays in the same conditional subtree (codegen-safe).
+                const electHere = (): void => {
+                  // VERBATIM the world1 election (NaniteRaster.ts:937-959): BUILD `cand` HERE,
+                  // inside the per-pixel election flow, so its FIRST build is in the SAME
+                  // ConditionalNode subtree as the atomicMax that consumes it. The bin's comments
+                  // document the TSL r184 pathology of hoisting this `cand` .toVar() to an outer
+                  // scope: AtomicFunctionNode.generate calls valueNode.build(builder,'uint'), a
+                  // hoisted var yields '' in that nested scope ⇒ Node.build's result==='' guard ⇒
+                  // "Invalid generated code, expected a uint" ⇒ generateConst('uint') (0u) ⇒ the
+                  // election word is silently corrupted. voxCz is loop-invariant (one voxCz/block,
+                  // §6.4), so re-deriving `cand` per pixel here is loss-EXACT (identical bits) —
+                  // the node-graph PLACEMENT is what matters, exactly as world1 builds cand per-
+                  // fragment. read prevE, gate cand>prevE, atomicMax(visPayloadV), winner stores
+                  // the full id into visBV.
+                  const cand = depthKey24(voxCz as unknown as NF)
+                    .shiftLeft(uint(8))
+                    .bitOr(payload.bitAnd(uint(0xff)))
+                    .toVar();
+                  const prevE = aLoadU(visPayloadV.atomic.element(px)).toVar();
+                  If(cand.greaterThan(prevE), () => {
+                    const wonE = atomicMax(visPayloadV.atomic.element(px), cand) as unknown as NU;
+                    If(cand.greaterThan(wonE), () => {
+                      atomicStore(visBV.atomic.element(px), voxId);
+                      // debug per-pixel BRICK-WRITE counter (Stage-2 overlay, §A2) — shared with
+                      // the bin path's WRITE_CTR so the A/B compares like-for-like write counts.
+                      atomicAdd(atomicBuf.atomic.element(uint(WRITE_CTR)), uint(1));
+                    });
+                  });
+                };
+                if (voxDither && density) {
+                  // density-modulated see-through dither (?voxdither=1) — stable per-(pixel,block)
+                  // stipple drops (1-density) of the footprint. The hash runs FIRST here (no
+                  // occlusion early-skip in scatter), so a dropped pixel pays only the hash.
+                  const keep = coverHash(uint(x), uint(y), payload).lessThan(density).toVar();
+                  If(keep, electHere);
+                } else {
+                  electHere();
+                }
+              });
+            });
+          };
+          if (voxOccl) {
+            const cx = startX.add(endX).div(toI(2)).toVar();
+            const cy = startY.add(endY).div(toI(2)).toVar();
+            const cpx = uint(cy).mul(uint(width)).add(uint(cx)).toVar();
+            const centreE = aLoadU(visPayloadV.atomic.element(cpx)).toVar();
+            If(nearKey.greaterThan(centreE), rasterFootprint);
+          } else {
+            rasterFootprint();
+          }
+        });
+      });
+    });
+    // one single-thread workgroup per voxel cluster work-item (the cull's voxRasterDispatchAttr
+    // is split2D over the fanned count — identical dispatch to kVoxBin).
+  })().compute(DISPATCH_ROW, [1]);
+  (kVoxScatter as { setName(n: string): unknown }).setName('nanVoxScatter');
+
   const dispatchVoxel = (renderer: Renderer): void => {
+    if (useScatter) {
+      // SCATTER (DEFAULT): no bins to clear except the shared WRITE_CTR (slot WRITE_CTR). The
+      // per-tile counts are unused here, but kClearBins also zeroes the WRITE_CTR debug counter
+      // cheaply (one small dispatch); then ONE kernel directly elects into the global vis buffer.
+      dispatch(renderer, kClearBins);
+      dispatchIndirect(renderer, kVoxScatter as never, voxRasterDispatchAttr);
+      return;
+    }
+    // BIN (A/B fallback, ?voxraster=bin): the prior two-kernel binned path.
     dispatch(renderer, kClearBins);
     // kVoxBin: one workgroup-thread per voxel cluster (2D-split over the fanned count).
     dispatchIndirect(renderer, kVoxBin as never, voxRasterDispatchAttr);
