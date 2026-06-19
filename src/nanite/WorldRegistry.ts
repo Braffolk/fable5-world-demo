@@ -50,6 +50,13 @@ import {
   setClusterTriCap,
 } from './GeometryRegistry';
 import { readBuffer } from './Tsl';
+import {
+  appendVoxelCrown,
+  DEFAULT_VOXEL_GRID_DIM,
+  type PreparedVoxelCrown,
+  prepareVoxelCrown,
+} from './VoxelizeCrown';
+import { BRICK_WORDS, MAX_BRICKS_PER_CLUSTER } from './VoxelBrick';
 
 /** Forests ring radii (Forests.ts) — discrete LOD switch distances until N8 */
 const R0_FAR = 26;
@@ -63,6 +70,12 @@ const TREE_GEO_FAR = 496;
  *  vegWindOffset (lean+sway+branch+flutter) and sits at the tree top where sway
  *  is maximal, so it rides the trunk's envelope — match the tree swayPad (3.8). */
 const LEAF_SWAY_PAD = 3.8;
+/** voxel-foliage (spec §3.2 / Stage 3a): the DEFAULT mesh→voxel handoff distance (m).
+ *  NEARER than UE (~40 m for beech, inside the instMinPx envelope) so the voxelizable
+ *  band is the high-overdraw mid/far zone — the Stage-1-calibrated default; ?voxnear=
+ *  tunes it (Stage 5 sweep). The leaf head culls beyond it, the voxel head seeds beyond
+ *  it → a clean hard switch (cross-fade BAND is Stage 3b; here popping at the line is OK). */
+export const DEFAULT_TRANSITION_DIST = 35;
 /** terrain window size: 7 quads → 98 tris, divides 4095 exactly (4096² field) */
 const TERRAIN_WIN_QUADS = 7;
 
@@ -347,6 +360,39 @@ export async function buildWorldRegistry(input: {
   // QEM degenerates on disconnected leaves) instead of QEM. Same DagBuild contract,
   // so it rides the identical attachDag + cut; extends the crown to TREE_GEO_FAR.
   const toAggregate: { handle: MeshHandle; source: ExplicitSource; label: string }[] = [];
+  // voxel-foliage (spec §5.2/§5.3): ?voxreg=1 voxelizes each leaf crown OFFLINE and
+  // collects the prepared bricks so the brick budget can be reserved BEFORE build()
+  // (addLate freezes caps) and a voxel:7 sibling head appended AFTER. OFF by default —
+  // the registry/raster wiring lands in Stage 2; this proves the reserve→append path.
+  const qVox = new URLSearchParams(window.location.search);
+  // ?forcevox=<idF> (or =1 / =all for every voxelized crown) — DEBUG override (spec §A1).
+  // Forces the VOXEL path for the chosen crown(s) REGARDLESS of distance by voxelizing
+  // them AND suppressing their LEAF mesh (leaf maxDist → ~0), with the voxel head's
+  // nearDist=0 so it renders at ALL distances — the raster/resolve voxel path in isolation
+  // WITHOUT the distance transition. Implies ?voxreg. Stage-3a makes the transition the
+  // DEFAULT route (no flag): voxelize + register voxel heads + the mesh→voxel handoff.
+  const forceVoxRaw = qVox.get('forcevox');
+  const forceVoxAll = forceVoxRaw === '1' || forceVoxRaw === 'all';
+  const forceVoxId = forceVoxRaw !== null && !forceVoxAll ? Number(forceVoxRaw) : null;
+  const forceVoxOn = forceVoxRaw !== null;
+  // ?voxreg=1 enables the automatic mesh→voxel transition in the WORLD scene (opt-in here
+  // to keep the world boot budget untouched by default; the canonical ?scene=forest perf
+  // path wires it on its OWN path — ForestScene). ?forcevox implies it.
+  const voxReg = qVox.get('voxreg') === '1' || forceVoxOn;
+  const voxGridDim = Number(qVox.get('voxgrid') ?? DEFAULT_VOXEL_GRID_DIM) || DEFAULT_VOXEL_GRID_DIM;
+  // ?voxnear= — the mesh→voxel handoff distance (m), TUNEABLE (spec §3.2.bis). Default
+  // DEFAULT_TRANSITION_DIST (~35 m). The leaf head culls beyond it; the voxel head seeds
+  // beyond it. ?forcevox overrides to 0 (voxel everywhere) per the debug semantics.
+  const transitionDist = Number(qVox.get('voxnear') ?? DEFAULT_TRANSITION_DIST) || DEFAULT_TRANSITION_DIST;
+  /** idF → leaf head, for the ?forcevox leaf-suppression pass (filled in the loop). */
+  const leafHeadForVox = new Map<number, MeshHandle>();
+  const toVoxel: {
+    idF: number;
+    prep: PreparedVoxelCrown;
+    source: ExplicitSource;
+    matParam: number;
+    label: string;
+  }[] = [];
   let deferredTris = 0;
   const notePart = (label: string, parts: PoolPart[] | null | undefined, from: number): void => {
     if (!parts) return;
@@ -429,7 +475,48 @@ export async function buildWorldRegistry(input: {
       reg.setMaxDistance(leafHead, TREE_GEO_FAR);
       toAggregate.push({ handle: leafHead, source: leafSource, label: `${label}/leaf` });
       leafHeads.set(idF, leafHead);
+      // voxel-foliage (§5.2): voxelize this crown OFFLINE now (cost-tolerant) so the
+      // brick total is known before the addLate reservation freezes (§5.3). The voxel
+      // sibling head + brick append happen post-build (a voxel cluster points at bricks,
+      // not tris — that authoring is Stage 2; here we only reserve+upload the bricks).
+      if (voxReg && (!forceVoxOn || forceVoxAll || forceVoxId === idF)) {
+        const matParam = packLeafTint(pool.leaf.color);
+        const prep = prepareVoxelCrown(leafSource, pool.leaf.color, voxGridDim);
+        // a degenerate empty crown (0 bricks) would crash registerVoxelHead — skip it so
+        // the leaf head keeps its full mesh envelope (set below to TREE_GEO_FAR, no handoff).
+        if (prep.brickCount > 0) {
+          toVoxel.push({ idF, prep, source: leafSource, matParam, label: `${label}/voxel` });
+          leafHeadForVox.set(idF, leafHead);
+        }
+      }
     }
+  }
+
+  // Stage-3a: the mesh→voxel handoff, MESH side. For every voxelized crown, lower the LEAF
+  // head's max draw distance to transitionDist so it renders ONLY nearer than the handoff;
+  // its voxel sibling (nearDist=transitionDist, set at append) owns the mid/far band → a
+  // clean hard switch (either mesh OR voxel at a distance — no double-render, no gap; the
+  // cross-fade BAND is Stage 3b, here a hard line is acceptable, EXPECT some popping at the
+  // boundary). ?forcevox is the DEBUG override: SUPPRESS the leaf entirely (maxDist→~0) so
+  // the voxel head (nearDist=0) is the sole renderer at all distances — voxel path in
+  // isolation. Pre-build, so a plain field set. (NaniteCull kSeedRoots reads both bounds.)
+  if (leafHeadForVox.size > 0) {
+    let handed = 0;
+    let suppressed = 0;
+    for (const [idF, leafHead] of leafHeadForVox) {
+      const forced = forceVoxOn && (forceVoxAll || forceVoxId === idF);
+      if (forced) {
+        reg.setMaxDistance(leafHead, 0.001);
+        suppressed++;
+      } else {
+        reg.setMaxDistance(leafHead, transitionDist);
+        handed++;
+      }
+    }
+    console.log(
+      `[worldreg] voxel transition: ${handed} leaf head(s) handed off at ${transitionDist} m → voxel` +
+        (suppressed > 0 ? `, ${suppressed} suppressed (?forcevox=${forceVoxRaw})` : ''),
+    );
   }
 
   // bind partitioned instances to chain heads. ?stress=N (synthetic, F3/F16
@@ -752,12 +839,77 @@ export async function buildWorldRegistry(input: {
   if (toAggregate.length > 0) {
     console.log(`[worldreg] leaf aggregate DAG: ${toAggregate.length} crowns in ${aggBuildMs.toFixed(0)} ms`);
   }
+  // voxel-foliage (§5.3 HARD precondition): reserve the brick budget BEFORE build()
+  // freezes the caps. Total = Σ occupied bricks across the voxelized crowns. Also
+  // reserve the voxel sibling heads (1 mesh each) + their instance streams (each
+  // voxel head re-binds its leaf sibling's stream — same instances, a second mesh).
+  if (toVoxel.length > 0) {
+    let lateBricks = 0;
+    let lateVoxInst = 0;
+    let lateVoxClusters = 0;
+    for (const v of toVoxel) {
+      lateBricks += v.prep.brickCount;
+      // each voxel head (registerVoxelHead) authors ceil(occupiedBricks/128) CLUSTERS
+      // (the §5.3 ≤128-brick per-coarse-cluster blocks), 0 verts / 0 tris — the bricks
+      // ARE the payload. Reserve that cluster headroom (frozen caps else throw, §5.3).
+      lateVoxClusters += Math.max(1, Math.ceil(v.prep.brickCount / MAX_BRICKS_PER_CLUSTER));
+      const s = perId.get(v.idF);
+      // the voxel head re-binds ONE copy of the leaf stream (no ?stress fan-out)
+      if (s) lateVoxInst += s.fill;
+    }
+    const lateVoxHeads = toVoxel.length;
+    reg.addLate({
+      bricks: lateBricks,
+      meshes: lateVoxHeads,
+      instances: lateVoxInst,
+      clusters: lateVoxClusters,
+    });
+    console.log(
+      `[worldreg] voxel-foliage: reserving ${lateBricks} bricks across ${toVoxel.length} crowns ` +
+        `(grid ${voxGridDim}) = ${((lateBricks * BRICK_WORDS * 4) / (1024 * 1024)).toFixed(3)} MB, ` +
+        `+${lateVoxClusters} voxel clusters (${MAX_BRICKS_PER_CLUSTER} bricks/cluster), ` +
+        `+${lateVoxInst} voxel instances, +${lateVoxHeads} voxel:7 heads`,
+    );
+  }
+
   const tBuild0 = performance.now();
   const dagBuildMs = tBuild0 - tDag0;
 
   // ---- build ------------------------------------------------------------------
   const report = reg.build(renderer, counters);
   for (const b of dagBuilds) reg.attachDag(b.handle, b.dag);
+  // voxel-foliage (§5.2): append the prepared crown bricks + register voxel:7 sibling
+  // heads now that build() has frozen the caps. Bound to the SAME instances as the
+  // leaf head (the per-mesh distance handoff is Stage 3 — here both heads draw full).
+  if (toVoxel.length > 0) {
+    const tVox0 = performance.now();
+    let appended = 0;
+    for (const v of toVoxel) {
+      const r = appendVoxelCrown(reg, v.prep, v.source, {
+        matParam: v.matParam,
+        swayPad: LEAF_SWAY_PAD,
+        maxDist: TREE_GEO_FAR,
+        // Stage-3a: the voxel head seeds only beyond transitionDist (the mesh→voxel
+        // handoff); ?forcevox forces nearDist=0 (voxel everywhere, leaf suppressed below).
+        nearDist: forceVoxOn && (forceVoxAll || forceVoxId === v.idF) ? 0 : transitionDist,
+        label: v.label,
+      });
+      appended += r.brickCount;
+      // bind the voxel head to the SAME instances as its leaf sibling
+      const s = perId.get(v.idF);
+      if (s) reg.bindInstances(r.head, { a: s.a, b: s.b });
+    }
+    console.log(
+      `[worldreg] voxel-foliage: appended ${appended} bricks (${reg.brickCount}/${reg.brickCapacity}) ` +
+        `+ ${toVoxel.length} voxel:7 heads in ${(performance.now() - tVox0).toFixed(0)} ms`,
+    );
+    // Stage-2 A1: the voxel heads + their instance streams were registered/bound
+    // POST-build (registerMesh/bindInstances stage clusterRecs + cpuStreams) — flush()
+    // copies them into the mega-buffers + uploads the partial ranges so the cull sees
+    // the voxel clusters (and their repointed brick word6/word7) this frame. Without
+    // this the late heads never reach the GPU (build() only uploads pre-build entries).
+    reg.flush(renderer, counters);
+  }
   for (const t of dagTerrainTileAttaches) reg.attachHeightDag(t.handle, t);
   // N8-D2 Stage 2b-1: load the collected terrain tiles into pool slots (one per
   // tile here — all resident, render-parity with the per-tile path; the per-frame

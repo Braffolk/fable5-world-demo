@@ -77,6 +77,18 @@ export const MESH_WORDS = 18;
  *  parent carries them; 0 = leaf/non-owner). Sidecar keeps the cut kernel ≤10
  *  storage bindings (F9). */
 export const DAG_WORDS = 12;
+/** voxel-foliage (spec §4.3): u32 words per packed brick record in gpu.voxelBricks.
+ *  A brick is a 4×4×4 = 64-cell block: occupancy 2×u32 (no u64 in WGSL r184) +
+ *  mean-normal oct snorm2x16 + normal-spread f32 + packed albedo RGBA8 = 5 u32, PLUS
+ *  the per-brick LOCAL-SPACE position so the raster paints each brick's OWN small
+ *  footprint at its real grid cell — NOT the whole ≤128-brick BLOCK as one giant slab
+ *  (the oversized-square bug). word5..7 = brick local center xyz (f32 bits), word8 =
+ *  brick local half-extent (f32 bits, = BRICK_DIM·cellSize·0.5) = 9 u32 (36 B). The
+ *  cluster's block sphere (word0-3) is now used ONLY as the instance-cull / per-block
+ *  occlusion bound; the raster iterates the block's bricks and projects each brick AABB.
+ *  The authoritative read/write codec is VoxelBrick.ts; this stride is shared so the
+ *  registry can size the buffer without importing the codec. */
+export const BRICK_WORDS = 9;
 /** N8-D1: vertex layout fed to buildDag for a registry mesh — pos@0..2,
  *  nrm@3..5, uv@6..7, vdata@8..11 (UNPACKED to 0..1 floats so QEM can
  *  interpolate them). attachDag re-packs this back into VERT_WORDS. */
@@ -134,6 +146,11 @@ export const MATERIAL_CLASS = {
   leaf: 4,
   grass: 5,
   debris: 6,
+  /** voxel-foliage sibling mesh (spec §4.1 / §0.2). The voxel decision rides the
+   *  MESH record's matClass — there is NO free cluster-flag bit (§0.1). The resolve
+   *  derives "is voxel" from gpu.meshes[meshId].matClass for free (§4.4). matClass is
+   *  byte 1 of mesh word6 ((w6>>>8)&0xff), so the 8-bit field has room past debris(6). */
+  voxel: 7,
 } as const;
 export type MaterialClassId = keyof typeof MATERIAL_CLASS;
 
@@ -241,6 +258,12 @@ export interface LateBudget {
   clusters: number;
   meshes: number;
   instances: number;
+  /** voxel-foliage (spec §4.2/§5.3): number of BRICKS (BRICK_WORDS each) to reserve
+   *  in gpu.voxelBricks. HARD precondition — addLate freezes caps at build(), and the
+   *  voxelizer appends bricks post-build, so the per-palette brick total (§5.3) MUST
+   *  be reserved here first. Sized to the BrickCPU layout (mean-normal default, §4.3).
+   *  0 on worlds with no voxel foliage ⇒ a 1-word placeholder buffer (never bound). */
+  bricks: number;
 }
 
 export interface MeshReport {
@@ -268,6 +291,8 @@ export interface BuildReport {
     clusters: number;
     meshTable: number;
     instances: number;
+    /** voxel-foliage: gpu.voxelBricks bytes actually used (brickCount × BRICK_WORDS × 4). */
+    bricks: number;
     total: number;
   };
   clusterizeMs: number;
@@ -742,6 +767,14 @@ interface MeshEntry {
   instCount: number;
   lodNext: number;
   lodDist: number;
+  /** voxel-foliage (spec §3 / Stage 3a): per-mesh NEAR draw envelope (m). The cull
+   *  SEEDS this mesh's roots only when the instance distance ≥ nearDist (0 = unlimited
+   *  near, the default). The mesh→voxel transition uses it: the VOXEL sibling head sets
+   *  nearDist = transitionDist (renders only beyond the handoff) while the LEAF head's
+   *  lodDist = transitionDist (renders only nearer) — a clean hard switch, no overlap.
+   *  Stored in mesh word 8 (free on explicit/voxel meshes; only heightfields use word 8
+   *  for hfOriginZ, and a heightfield is never a voxel head). */
+  nearDist: number;
   /** N8-HIC: root seed range into gpu.dagLinks (the hierarchical-cull seeds);
    *  0/0 until attachDag wires the DAG. */
   rootBase: number;
@@ -805,6 +838,15 @@ export interface RegistryGpu {
    *  (dag.childBase/childCount). The BFS traversal seeds from the roots and descends
    *  via the children, replacing the brute-force all-clusters dispatch. */
   dagLinks: StorageBufferNode<'uint'>;
+  /** voxel-foliage (spec §4.2): the 11th RegistryGpu buffer. Flat u32, BRICK_WORDS
+   *  per brick (VoxelBrick.ts codec). A VOXEL cluster (matClass=voxel(7)) points at
+   *  its brick range via word6=brickBase and word7-lowbyte=brickCount (§4.1) — the
+   *  cluster mega-buffer stride/layout is UNCHANGED (those reinterpret triStart/triCount
+   *  ONLY on voxel meshes, never fed to the triangle raster). MUST NOT be bound on
+   *  every stage — only the voxel raster permutation + a resolve slice (§4.2/§4.6);
+   *  the DAG sidecar precedent (kept off the cut kernel to stay ≤10 bindings, §4.2).
+   *  Empty worlds get a 1-word placeholder so the node always exists. */
+  voxelBricks: StorageBufferNode<'uint'>;
 }
 
 export class GeometryRegistry {
@@ -819,6 +861,9 @@ export class GeometryRegistry {
   private triCursor = 0;
   private clusterCursor = 0;
   private instCursor = 0;
+  /** voxel-foliage: monotonic cursor into voxelBricksArr (in BRICKS). The offline
+   *  voxelizer appends bricks post-build; capped at this.late.bricks (frozen at build). */
+  private brickCursor = 0;
   private clusterizeMs = 0;
   private built = false;
 
@@ -854,6 +899,8 @@ export class GeometryRegistry {
   private dagLinksArr!: Uint32Array;
   /** monotonic cursor into dagLinksArr; attachDag appends [roots, children] per DAG */
   private dagLinksCursor = 0;
+  /** voxel-foliage: flat brick records (BRICK_WORDS u32 each) — see RegistryGpu.voxelBricks */
+  private voxelBricksArr!: Uint32Array;
 
   private vertsAttr!: StorageBufferAttribute;
   private hfVertsAttr!: StorageBufferAttribute;
@@ -865,10 +912,14 @@ export class GeometryRegistry {
   private dagAttr!: StorageBufferAttribute;
   private vcompactAttr!: StorageBufferAttribute;
   private dagLinksAttr!: StorageBufferAttribute;
+  private voxelBricksAttr!: StorageBufferAttribute;
 
   private caps!: { verts: number; tris: number; clusters: number; meshes: number; instances: number };
   /** N8-D2 Stage 2e: capacity (in verts = words) of the stride-1 terrain-DAG buffer. */
   private hfCap = 0;
+  /** voxel-foliage: capacity (in BRICKS) of voxelBricksArr — frozen at build() from
+   *  this.late.bricks (§5.3). 0 ⇒ a 1-word placeholder buffer. */
+  private brickCap = 0;
   private instRW!: BufOf<V4W>;
   private instMeshRW!: StorageBufferNode<'uint'>;
 
@@ -883,6 +934,7 @@ export class GeometryRegistry {
       clusters: 0,
       meshes: 0,
       instances: 0,
+      bricks: 0,
       ...opts?.late,
     };
   }
@@ -902,6 +954,14 @@ export class GeometryRegistry {
   get instanceCount(): number {
     return this.instCursor;
   }
+  /** voxel-foliage: bricks appended so far (≤ brickCap, frozen at build). */
+  get brickCount(): number {
+    return this.brickCursor;
+  }
+  /** voxel-foliage: reserved brick capacity (frozen at build from late.bricks). */
+  get brickCapacity(): number {
+    return this.brickCap;
+  }
   get isBuilt(): boolean {
     return this.built;
   }
@@ -920,6 +980,149 @@ export class GeometryRegistry {
     this.late.clusters += b.clusters ?? 0;
     this.late.meshes += b.meshes ?? 0;
     this.late.instances += b.instances ?? 0;
+    this.late.bricks += b.bricks ?? 0;
+  }
+
+  /**
+   * voxel-foliage (§4.2/§5.4): append `count` brick records post-build and upload
+   * them. Returns the BASE brick index of the allocated contiguous range — the voxel
+   * cluster record's word6 (brickBase) points here, word7-lowbyte = brickCount (§4.1).
+   *
+   * The voxelizer fills the freshly-allocated records via `fill(bricks, base)`, which
+   * receives the WHOLE backing array + the base brick index (use the VoxelBrick.ts
+   * `writeBrick(bricks, base + i, …)` codec). Throws on capacity overflow (caps froze
+   * at build — raise late.bricks, F14: explicit never silent). build() must have run.
+   */
+  appendBricks(count: number, fill: (bricks: Uint32Array, base: number) => void): number {
+    if (!this.built) throw new Error('GeometryRegistry: appendBricks before build()');
+    if (count <= 0) return this.brickCursor;
+    if (this.brickCursor + count > this.brickCap) {
+      throw new Error(
+        `GeometryRegistry: voxel brick capacity exceeded (${this.brickCursor}+${count}/${this.brickCap}) — ` +
+          `raise the late.bricks budget`,
+      );
+    }
+    const base = this.brickCursor;
+    fill(this.voxelBricksArr, base);
+    this.brickCursor += count;
+    this.pushRange(this.voxelBricksAttr, base * BRICK_WORDS, count * BRICK_WORDS);
+    return base;
+  }
+
+  /**
+   * voxel-foliage (spec §4.1 / Stage-2 A1): register a VOXEL sibling head whose clusters
+   * carry BRICK ranges (word6=brickBase, word7-lowbyte=brickCount ≤ MAX_BRICKS_PER_CLUSTER)
+   * instead of triangles. NO geometry (0 verts / 0 tris) — the placeholder triangle path
+   * the draft used (re-clusterizing the full leaf crown) OVERFLOWED the late caps (§A1);
+   * authoring cluster records DIRECTLY costs only `clusterBlocks.length` clusters and
+   * keeps the bricks as the sole payload. The cluster mega-buffer stride/layout is
+   * UNCHANGED — word6/word7 are reinterpreted on voxel meshes (matClass=voxel keeps them
+   * out of the triangle raster, §4.1). The brick band is split into ≤128-brick BLOCKS
+   * (the §5.3 per-coarse-cluster fit), each one cluster with its own brick-AABB bound.
+   *
+   * The cull is HIER-ONLY (kSeedRoots SKIPS rootCount==0 meshes, NaniteCull.ts:469), so
+   * each cluster gets a MINIMAL single-root DAG record (ownError=0 ⇒ pOwn=0 ≤ τ ⇒ always
+   * CUT/emit, never descend; childCount=0; root sentinel parent keeps the sqrt(d²−r²)
+   * denominator well-formed) and a dagLinks root, with rootBase/rootCount = block count.
+   * Runs AFTER build() within the late budget (reserve clusters = Σ blocks, meshes = 1).
+   */
+  registerVoxelHead(
+    matParam: number,
+    blocks: { brickBase: number; brickCount: number; aabb: { min: [number, number, number]; max: [number, number, number] } }[],
+    opts: { swayPad?: number; maxDist?: number; label?: string },
+  ): MeshHandle {
+    if (!this.built) throw new Error('GeometryRegistry: registerVoxelHead before build()');
+    if (blocks.length === 0) throw new Error('GeometryRegistry: registerVoxelHead with no brick blocks');
+    const handle = this.entries.length;
+    if (handle >= 0xffff) throw new Error('GeometryRegistry: mesh id exceeds u16');
+    if (handle >= this.caps.meshes) {
+      throw new Error(`GeometryRegistry: mesh capacity ${this.caps.meshes} exceeded — raise late.meshes`);
+    }
+    const n = blocks.length;
+    this.checkRoom(0, 0, n, 0); // n clusters, 0 verts/tris (bricks are the payload)
+    const cBase = this.clusterCursor;
+    const linkBase = this.dagLinksCursor;
+    if (linkBase + n > this.dagLinksArr.length) {
+      throw new Error(`GeometryRegistry: dagLinks overflow authoring voxel head (${linkBase + n} > ${this.dagLinksArr.length})`);
+    }
+    const entry = this.newEntry(handle, 'voxel', {
+      transformChannel: 'leaf',
+      castShadows: false,
+      twoSided: true,
+      aggregate: true,
+      matParam,
+      swayPad: opts.swayPad ?? 0,
+      label: opts.label ?? 'voxel',
+    }, false, 0);
+    entry.vertBase = this.vertCursor;
+    entry.vertCount = 0;
+    entry.triBase = this.triCursor;
+    entry.triCount = 0;
+    entry.clusterBase = cBase;
+    entry.clusterCount = n;
+    entry.rootBase = linkBase;
+    entry.rootCount = n;
+    entry.flags |= MESH_FLAG_HASDAG; // hier mesh: kSeedRoots seeds it; resolve/dbg consistent
+    entry.lodNext = LOD_NONE;
+    entry.lodDist = opts.maxDist ?? 0;
+
+    const recs = new Uint32Array(n * CLUSTER_WORDS);
+    const dArr = this.dagArr;
+    const dl = this.dagLinksArr;
+    // union AABB → mesh sphere (the instance-cull seed bound)
+    let uMinX = Infinity, uMinY = Infinity, uMinZ = Infinity;
+    let uMaxX = -Infinity, uMaxY = -Infinity, uMaxZ = -Infinity;
+    for (let c = 0; c < n; c++) {
+      const blk = blocks[c] as { brickBase: number; brickCount: number; aabb: { min: [number, number, number]; max: [number, number, number] } };
+      if (blk.brickCount > MAX_CLUSTER_TRIS) {
+        // word7 low byte is a u8 AND the brick-granular id is ≤7 bits (§4.5/§6.4).
+        throw new Error(
+          `GeometryRegistry: voxel cluster brickCount ${blk.brickCount} > ${MAX_CLUSTER_TRIS} — split into finer blocks (§5.3)`,
+        );
+      }
+      const mn = blk.aabb.min, mx = blk.aabb.max;
+      const cx = (mn[0] + mx[0]) * 0.5, cy = (mn[1] + mx[1]) * 0.5, cz = (mn[2] + mx[2]) * 0.5;
+      const rr = Math.hypot((mx[0] - mn[0]) * 0.5, (mx[1] - mn[1]) * 0.5, (mx[2] - mn[2]) * 0.5);
+      uMinX = Math.min(uMinX, mn[0]); uMinY = Math.min(uMinY, mn[1]); uMinZ = Math.min(uMinZ, mn[2]);
+      uMaxX = Math.max(uMaxX, mx[0]); uMaxY = Math.max(uMaxY, mx[1]); uMaxZ = Math.max(uMaxZ, mx[2]);
+      const b = c * CLUSTER_WORDS;
+      recs[b] = f32Bits(cx);
+      recs[b + 1] = f32Bits(cy);
+      recs[b + 2] = f32Bits(cz);
+      recs[b + 3] = f32Bits(rr);
+      recs[b + 4] = octEncode(0, 1, 0);
+      recs[b + 5] = f32Bits(-1); // cone disabled (bricks two-sided)
+      recs[b + 6] = blk.brickBase >>> 0; // word6 = brickBase (was triStart)
+      // word7: brickCount(0-7) | flags(8-9)=0 | LOD level(10-15)=0 | handle(16-31).
+      // flags=0 (NOT CLUSTER_FLAG_DAG): the raster SKIPS voxel clusters by matClass, so
+      // their vert-addressing path is never taken; keep it plain to avoid surprises.
+      recs[b + 7] = ((blk.brickCount & 0xff) | (handle << 16)) >>> 0;
+      // single-root DAG record per cluster (always-cut, no children) + a dagLinks root
+      const db = (cBase + c) * DAG_WORDS;
+      dArr[db] = 0; // ownError = 0 → pOwn=0 ≤ τ → always cut → emit
+      dArr[db + 1] = cx; dArr[db + 2] = cy; dArr[db + 3] = cz; dArr[db + 4] = rr; // ownSphere
+      dArr[db + 5] = DAG_ROOT_PARENT_ERR; // root sentinel parentError
+      dArr[db + 6] = cx; dArr[db + 7] = cy; dArr[db + 8] = cz; dArr[db + 9] = rr; // parentSphere←own
+      dArr[db + 10] = bitsF32(0); // childBase
+      dArr[db + 11] = bitsF32(0); // childCount = 0 (leaf root)
+      dl[linkBase + c] = cBase + c;
+    }
+    entry.sphere = [
+      (uMinX + uMaxX) * 0.5,
+      (uMinY + uMaxY) * 0.5,
+      (uMinZ + uMaxZ) * 0.5,
+      Math.hypot((uMaxX - uMinX) * 0.5, (uMaxY - uMinY) * 0.5, (uMaxZ - uMinZ) * 0.5),
+    ];
+    entry.clusterRecs = recs;
+    this.entries.push(entry);
+    this.clusterCursor += n;
+    this.dagLinksCursor = linkBase + n;
+
+    // upload: copyEntry (clusters + mesh record) at flush; the DAG/dagLinks ranges are
+    // written directly here (copyEntry does not touch them), so push them now.
+    this.pushRange(this.dagAttr, cBase * DAG_WORDS, n * DAG_WORDS);
+    this.pushRange(this.dagLinksAttr, linkBase, n);
+    return handle;
   }
 
   meshEntry(h: MeshHandle): Readonly<MeshEntry> {
@@ -982,6 +1185,21 @@ export class GeometryRegistry {
     if (this.built && tail.uploaded) this.rewriteMeshRecord(tail);
   }
 
+  /**
+   * voxel-foliage (spec §3 / Stage 3a): set the mesh's NEAR draw envelope (m) — the cull
+   * seeds the mesh's roots ONLY when the instance distance ≥ d (0 = unlimited near). The
+   * VOXEL sibling head sets this to transitionDist so it renders only BEYOND the handoff,
+   * while the LEAF head's maxDist = transitionDist keeps it nearer — a clean hard switch
+   * (no overlap, no gap). The head carries it; LODs are irrelevant (voxel heads are flat).
+   * The mesh is the explicit/voxel kind (hf undefined), so word 8 is free for nearDist.
+   */
+  setNearDistance(h: MeshHandle, d: number): void {
+    const e = this.meshEntry(h) as MeshEntry;
+    if (e.hf) throw new Error('GeometryRegistry: setNearDistance on a heightfield mesh (word 8 = hfOriginZ)');
+    e.nearDist = d;
+    if (this.built && e.uploaded) this.rewriteMeshRecord(e);
+  }
+
   bindInstances(h: MeshHandle, stream: InstanceStream): void {
     const e = this.meshEntry(h) as MeshEntry;
     const count = 'a' in stream ? stream.a.length / 4 : stream.count;
@@ -1026,6 +1244,10 @@ export class GeometryRegistry {
     // N8-D2 Stage 2e: the stride-1 terrain-DAG buffer is sized independently — every
     // hf vert is 1 word (a packed texel coord), vs VERT_WORDS=6 for explicit verts.
     this.hfCap = this.hfVertCursor + this.late.hfVerts;
+    // voxel-foliage (§4.2/§5.3): the brick buffer is sized in BRICKS (BRICK_WORDS each),
+    // frozen here. The offline voxelizer appends bricks post-build (like attachDag) up to
+    // this cap — under-reservation throws (appendBricks), over-reservation wastes memory.
+    this.brickCap = this.brickCursor + this.late.bricks;
     this.vertsArr = new Uint32Array(Math.max(1, this.caps.verts * VERT_WORDS));
     this.hfVertsArr = new Uint32Array(Math.max(1, this.hfCap));
     this.idxArr = new Uint32Array(Math.max(1, this.caps.tris * 3));
@@ -1043,6 +1265,10 @@ export class GeometryRegistry {
     // no caller reservation. Cursor appended alongside the DAG in attachDag.
     const dagLinksLen = Math.max(1, this.caps.clusters * 2);
     this.dagLinksArr = new Uint32Array(dagLinksLen);
+    // voxel-foliage: BRICK_WORDS per brick; 1-word placeholder when no bricks reserved
+    // (the node must always exist so the voxel-raster permutation can reference it).
+    const voxelBricksLen = Math.max(1, this.brickCap * BRICK_WORDS);
+    this.voxelBricksArr = new Uint32Array(voxelBricksLen);
 
     this.vertsAttr = new StorageBufferAttribute(this.vertsArr, 1);
     this.hfVertsAttr = new StorageBufferAttribute(this.hfVertsArr, 1);
@@ -1054,6 +1280,7 @@ export class GeometryRegistry {
     this.dagAttr = new StorageBufferAttribute(this.dagArr, 1);
     this.vcompactAttr = new StorageBufferAttribute(this.vcompactArr, 1);
     this.dagLinksAttr = new StorageBufferAttribute(this.dagLinksArr, 1);
+    this.voxelBricksAttr = new StorageBufferAttribute(this.voxelBricksArr, 1);
 
     const verts = sU32Views(this.vertsAttr, Math.max(1, this.caps.verts * VERT_WORDS));
     const hfVerts = sU32Views(this.hfVertsAttr, Math.max(1, this.hfCap));
@@ -1065,6 +1292,7 @@ export class GeometryRegistry {
     const dag = sF32Views(this.dagAttr, dagLen);
     const vcompact = sU32Views(this.vcompactAttr, vcompactLen);
     const dagLinks = sU32Views(this.dagLinksAttr, dagLinksLen);
+    const voxelBricks = sU32Views(this.voxelBricksAttr, voxelBricksLen);
     this.instRW = inst.rw;
     this.instMeshRW = instMesh.rw;
     this.gpu = {
@@ -1078,6 +1306,7 @@ export class GeometryRegistry {
       dag: dag.ro,
       vcompact: vcompact.ro,
       dagLinks: dagLinks.ro,
+      voxelBricks: voxelBricks.ro,
     };
 
     // N8-D2 Stage 2a: claim the tile pool as ONE fixed region just past the
@@ -1740,6 +1969,7 @@ export class GeometryRegistry {
     const clusters = this.clusterCursor * CLUSTER_WORDS * 4;
     const meshTable = this.entries.length * MESH_WORDS * 4;
     const instances = this.instCursor * (32 + 4);
+    const bricks = this.brickCursor * BRICK_WORDS * 4;
     return {
       verts,
       hfVerts,
@@ -1747,7 +1977,8 @@ export class GeometryRegistry {
       clusters,
       meshTable,
       instances,
-      total: verts + hfVerts + indices + clusters + meshTable + instances,
+      bricks,
+      total: verts + hfVerts + indices + clusters + meshTable + instances + bricks,
     };
   }
 
@@ -1918,6 +2149,7 @@ export class GeometryRegistry {
       instCount: 0,
       lodNext: LOD_NONE,
       lodDist: 0,
+      nearDist: 0,
       sphere: [0, 0, 0, 0],
       uploaded: false,
     };
@@ -2019,7 +2251,11 @@ export class GeometryRegistry {
     // word 7: hfOriginX (heightfield) | matParam raw-u32 (explicit, e.g. bark
     // texture-array slice — read raw by the resolve, never as a float)
     m[b + 7] = e.hf ? f32Bits(e.hf.originX) : e.matParam >>> 0;
-    m[b + 8] = f32Bits(e.hf?.originZ ?? 0);
+    // word 8: hfOriginZ (heightfield) | nearDist f32 (explicit/voxel — the cull's
+    // per-mesh NEAR draw envelope, Stage-3a mesh→voxel handoff). A heightfield is never
+    // a voxel head, so the two readings never collide; the cull only reads nearDist on
+    // hierarchical meshes (rootCount>0), where hf is undefined.
+    m[b + 8] = e.hf ? f32Bits(e.hf.originZ) : f32Bits(e.nearDist);
     m[b + 9] = f32Bits(e.hf?.cellSize ?? 0);
     m[b + 10] = ((e.hf?.quadsX ?? 0) | ((e.hf?.quadsZ ?? 0) << 16)) >>> 0;
     m[b + 11] = f32Bits(e.swayPad);

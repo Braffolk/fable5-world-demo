@@ -66,6 +66,7 @@ import type { RegistryGpu } from './GeometryRegistry';
 import { DISPATCH_ROW, QRASTER_CAP, hashColor, instYaw, type NaniteCam } from './NaniteCommon';
 import { makeFetch, type TerrainDisp, type TrunkWindOpt, type VertCtx } from './NaniteFetch';
 import { makeVertexCache } from './NaniteVertexCache';
+import { buildNaniteVoxelRaster, type VoxelRasterHandles } from './NaniteVoxelRaster';
 import {
   aLoadU,
   bcF2U,
@@ -83,6 +84,7 @@ import {
   sU32Views,
   toF,
   toI,
+  uniformF,
   wgLinear,
 } from './Tsl';
 import type { BufOf, UV2 } from './Tsl';
@@ -143,6 +145,18 @@ export interface NaniteRasterHandles {
   /** count covered/orphan pixels (NaniteView ?audit=1) */
   audit(renderer: Renderer): void;
   readAudit(renderer: Renderer): Promise<{ orphans: number; covered: number }>;
+  /** 0a SCAR calibration (?scar=1): run the per-pixel covered-pixel counter for the
+   *  mid/far foliage band AFTER world1. No-op unless ?scar=1. (The per-fragment band
+   *  + total counters are accumulated inside the world1 raster itself.) */
+  scar(renderer: Renderer): void;
+  /** read the SCAR band counters back: band fragments (numerator), band covered
+   *  pixels (denominator), total frame fragments, band cluster-emit count. */
+  readScar(
+    renderer: Renderer,
+  ): Promise<{ bandFrags: number; bandPx: number; totalFrags: number; bandClusters: number }>;
+  /** Stage-2 voxel BRICK-WRITE count (the occlusion-skip overlay number, §A2) — total
+   *  per-pixel wgElect wins across all tiles this frame. null when no voxel raster. */
+  readVoxWrites(renderer: Renderer): Promise<number | null>;
 }
 
 /** Option C vis buffers — created OUTSIDE the raster so the HZB (which the
@@ -185,6 +199,11 @@ export function buildNaniteRaster(
     rasterDispatchAttr: IndirectStorageBufferAttribute;
     rasterDispatch2Attr: IndirectStorageBufferAttribute;
     rasterDispatchFullAttr: IndirectStorageBufferAttribute;
+    /** voxel-foliage (Stage 2 §6): the voxel-raster work queue + its 2D-split dispatch
+     *  args (cull §A1). Present only when ?voxreg/?forcevox is active; when present the
+     *  kVoxBin/kRasterVox depth-bucketed brick raster runs in world1() after hwRender. */
+    qVoxRasterRO?: BufOf<UV2>;
+    voxRasterDispatchAttr?: IndirectStorageBufferAttribute;
   },
   vis: NaniteVisBuffers,
   tint: 'flat' | 'cluster' | 'lod',
@@ -212,6 +231,10 @@ export function buildNaniteRaster(
    *  tie the id can pick the bucket-neighbour (a valid wrong-material pixel, never a
    *  torn/garbage fetch). Differs from `packed` (NaniteView's 16-bit-depth combined). */
   singlePass = false,
+  /** voxel-foliage (Stage 2 §6): build + dispatch the kVoxBin/kRasterVox depth-bucketed
+   *  brick raster. Requires cull.qVoxRasterRO + cull.voxRasterDispatchAttr. OFF by
+   *  default so a pure-triangle world never binds the voxel permutation. */
+  voxActive = false,
 ): NaniteRasterHandles {
   const { width, height } = cam;
   // single-pass clears the id buffers like `packed` (election anchor → 0, side id →
@@ -270,6 +293,24 @@ export function buildNaniteRaster(
   // unchanged, vis buffers unchanged, color target never read. DEFAULT skips the clear (the
   // byte-exact win, A/B-validated); ?hwrt=1 RESTORES it (the A/B control).
   const hwrt = new URLSearchParams(window.location.search).get('hwrt') === '1';
+  // ?scar=1 — 0a SCAR CALIBRATION (voxel-foliage spec §11 Stage 0a / §6.0). A
+  // lightweight, BUILD-TIME-gated overdraw counter on the EXISTING world1 triangle
+  // raster (production pristine when off — zero atomics injected). It measures, for
+  // the MID/FAR FOLIAGE BAND (leaf clusters whose instance sits in [scarNear, scarFar],
+  // ≈ the voxelizable distance window from transitionDist out to the instMinPx cull
+  // edge): (1) the OVERDRAW factor = band fragments / band covered-pixels, and (2) the
+  // band's share of frame fragments. This is the cheapest disproof of the SCAR (§6.0):
+  // voxels only win if the band overdraws enough that (covered-px + brick-bin cost) <
+  // the triangle fragments this counter reports. NOTHING about raster behaviour changes
+  // — only atomic counters are added, gated on `scar`. The band is classified per
+  // CLUSTER on instance distance (== the same A.xyz the cull uses), matching the
+  // covered-pixel post-pass so numerator and denominator share one band definition.
+  const scarParams = new URLSearchParams(window.location.search);
+  const scar = scarParams.get('scar') === '1';
+  // band bounds (m), tuneable: DEFAULT ≈ the spec's transitionDist (~40 m) out to the
+  // instMinPx ~110 px cull edge (~90 m for R≈3.5 m). ?scarnear= / ?scarfar= override.
+  const scarNear = uniformF(Number(scarParams.get('scarnear') ?? '40'));
+  const scarFar = uniformF(Number(scarParams.get('scarfar') ?? '90'));
   const qRasterRO = cull.qRasterRO;
   const visDepthV = vis.depthV;
   const visPayloadV = vis.payloadV;
@@ -285,9 +326,15 @@ export function buildNaniteRaster(
   const depthKey24 = (cz: NF): NU =>
     uint(float(1).sub(cz).mul(16777215).clamp(0, 16777215)) as unknown as NU;
 
-  // hwQueue: [0] = atomic count, then (payload, instId) pairs
-  const hwQueueAttr = new StorageBufferAttribute(new Uint32Array(1 + HW_CAP * 2), 1);
-  const hwQueueV = sU32Views(hwQueueAttr, 1 + HW_CAP * 2);
+  // hwQueue: [0] = atomic count, then (payload, instId) pairs.
+  // ⚠ SCAR FOLD (?scar=1): world1's compute stage is ALREADY at the WebGPU 10-storage-
+  // buffer per-stage ceiling, so a SEPARATE scar buffer makes it 11 (validation error →
+  // invalid pipeline → black frame, no counters). The scar counters (4 u32) are therefore
+  // CARVED INTO THE TAIL of this already-bound hwQueue buffer at [SCAR_BASE..+4) — they
+  // never overlap the queue's [0 .. 1+HW_CAP*2) range, so no new binding, stays at 10.
+  const SCAR_BASE = 1 + HW_CAP * 2;
+  const hwQueueAttr = new StorageBufferAttribute(new Uint32Array(SCAR_BASE + 4), 1);
+  const hwQueueV = sU32Views(hwQueueAttr, SCAR_BASE + 4);
   const hwDrawAttr = new IndirectStorageBufferAttribute(new Uint32Array(4), 4);
   const hwDrawBuf = sU32Views(hwDrawAttr as unknown as StorageBufferAttribute, 4).rw;
 
@@ -296,6 +343,24 @@ export function buildNaniteRaster(
   // [1] = covered pixels
   const auditAttr = new StorageBufferAttribute(new Uint32Array(4), 1);
   const auditV = sU32Views(auditAttr, 4);
+
+  // 0a SCAR band counters (?scar=1). [0] = band fragments (the OVERDRAW numerator —
+  // every covered fragment a band leaf cluster rasterizes, incl. occluded ones),
+  // [1] = band covered PIXELS (the denominator — filled by the kScarCovered post-pass:
+  // exactly 1 per pixel whose FINAL winner is a band leaf cluster), [2] = total frame
+  // fragments (all clusters → the band's fragment share), [3] = band cluster-emit count
+  // (diagnostic). Overdraw = [0]/[1]; band share = [0]/[2].
+  // ⚠ BINDING BUDGET (see hwQueue above): world1's compute stage is already at the WebGPU
+  // 10-storage-buffer ceiling, so scar's 4 counters are FOLDED into the hwQueue buffer at
+  // [SCAR_BASE..+4) — same buffer object = same binding = no 11th slot. `scarV` aliases
+  // `hwQueueV`; every scar access below is offset by SCAR_BASE (helper `scarEl`). The
+  // readback reads hwQueueAttr at byte offset SCAR_BASE*4.
+  const scarAttr = hwQueueAttr;
+  const scarV = hwQueueV;
+  // scar atomic element [i] lives at hwQueue slot SCAR_BASE+i. Returns the atomic ref
+  // (what atomicStore/atomicAdd take), so call sites read like the old scarV.atomic.element.
+  const scarEl = (i: number): ReturnType<typeof scarV.atomic.element> =>
+    scarV.atomic.element(uint(SCAR_BASE + i));
 
   // ---- shared fetch helpers (NaniteFetch.ts — also the resolve's decode) ----------
   const nfetch = makeFetch(gpu, heightTex, disp, wind);
@@ -324,6 +389,12 @@ export function buildNaniteRaster(
       atomicStore(hwQueueV.atomic.element(0), uint(0));
       atomicStore(auditV.atomic.element(0), uint(0));
       atomicStore(auditV.atomic.element(1), uint(0));
+      if (scar) {
+        atomicStore(scarEl(0), uint(0));
+        atomicStore(scarEl(1), uint(0));
+        atomicStore(scarEl(2), uint(0));
+        atomicStore(scarEl(3), uint(0));
+      }
     });
   })().compute(pixelCount, [256]);
   (kVisClear as unknown as ComputeKernel).setName('nanVisClear');
@@ -447,6 +518,45 @@ export function buildNaniteRaster(
         } as unknown as VertCtx;
       } else {
         ctx = makeCtx(instId, ci);
+      }
+
+      // voxel-foliage (spec §4.1 / §A1): SKIP voxel(7) clusters in the TRIANGLE raster.
+      // The cut emits voxel clusters into the SAME qRaster as triangles (§4.6); the
+      // post-traverse fan-out copies them to qVoxRaster for the Stage-2 voxel bin, but
+      // they REMAIN in qRaster. A voxel cluster's word6/word7 point at BRICKS, not tris
+      // (registerVoxelHead), so fetchWorldVert would read garbage triangle data —
+      // bail before any vertex work. UNIFORM across the workgroup (matClass is per
+      // cluster, broadcast via ctx.meshId), so every live thread returns (no barrier
+      // deadlock; the wgcache barrier above already ran for thread 0's makeCtx). The
+      // bricks render via kVoxBin/kRasterVox (Stage 2) into the same vis buffers.
+      {
+        const mcVox = elemU(gpu.meshes, ctx.meshId.mul(uint(MESH_WORDS)).add(uint(6)))
+          .shiftRight(uint(8))
+          .bitAnd(uint(0xff));
+        returnIf(mcVox.equal(uint(7)));
+      }
+
+      // 0a SCAR per-cluster band classification (?scar=1, world1 only). Computed ONCE
+      // per cluster (hoisted out of the per-fragment loop): is this a LEAF (matClass==4)
+      // cluster whose instance sits in the voxelizable mid/far band [scarNear, scarFar]?
+      // Distance is instance-A → camera (the SAME center the cull screen-sizes on,
+      // NaniteCull.ts:393), so this matches the covered-pixel post-pass band exactly.
+      // `bandFlag` is the per-fragment gate; null when scar is off (production pristine).
+      let bandFlag: NB | null = null;
+      if (scar && mode === 'world1') {
+        const mc = elemU(gpu.meshes, ctx.meshId.mul(uint(MESH_WORDS)).add(uint(6)))
+          .shiftRight(uint(8))
+          .bitAnd(uint(0xff));
+        const isLeaf = mc.equal(uint(4));
+        const distC = vec3(cam.camPos).sub(ctx.A.xyz).length();
+        bandFlag = isLeaf
+          .and(distC.greaterThanEqual(scarNear))
+          .and(distC.lessThanEqual(scarFar))
+          .toVar() as unknown as NB;
+        // count band cluster emits (diagnostic), once per cluster (thread 0).
+        If(localTri.equal(uint(0)).and(bandFlag), () => {
+          atomicAdd(scarEl(3), uint(1));
+        });
       }
 
       if (mode === 'depth' && rdbg === 3) {
@@ -798,6 +908,23 @@ export function buildNaniteRaster(
                               atomicMax(visBV.atomic.element(px), dk.bitOr(payload.shiftRight(uint(16)).bitAnd(uint(0xffff))));
                             });
                           } else if (mode === 'world1') {
+                            // 0a SCAR (?scar=1): count this covered fragment. [2] = ALL
+                            // covered fragments (the band's fragment-share denominator);
+                            // [0] = band leaf fragments (the OVERDRAW numerator, gated on
+                            // the runtime per-cluster `bandFlag`). Both are pure atomic adds
+                            // gated on `scar` — the election below is BYTE-IDENTICAL whether
+                            // or not scar is on. This is exactly the overdraw signal §6.0
+                            // needs disproven: band fragments / band covered-pixels (the
+                            // latter from kScarCovered) is the per-pixel triangle overdraw
+                            // the voxel bin must undercut.
+                            if (scar) {
+                              atomicAdd(scarEl(2), uint(1));
+                              if (bandFlag) {
+                                If(bandFlag, () => {
+                                  atomicAdd(scarEl(0), uint(1));
+                                });
+                              }
+                            }
                             // PERF-VB4 single pass: EXACT f32 depth (atomicMin → HZB +
                             // shadows + the resolve's wp reconstruction stay exact and
                             // unchanged) AND a coherent id election. Depth16 in the high
@@ -910,6 +1037,45 @@ export function buildNaniteRaster(
   })().compute(pixelCount, [256]);
   (kAudit as unknown as ComputeKernel).setName('nanAudit');
 
+  // ---- kScarCovered (?scar=1) — the 0a OVERDRAW DENOMINATOR -------------------------
+  // Runs AFTER world1: one thread per pixel. Decodes the pixel's FINAL winner (the same
+  // visBV→qRaster→cluster→mesh chain the resolve uses, NaniteResolve.ts:283-290) and, if
+  // it is a BAND leaf cluster (matClass==4 + its instance in [scarNear, scarFar]), counts
+  // exactly ONE covered pixel into scarV[1]. So scarV[1] is the EXACT count of unique
+  // pixels finally owned by the mid/far foliage band, and overdraw = scarV[0]/scarV[1]
+  // (band fragments rasterized per band pixel covered). The band test mirrors the raster
+  // side (instance-A distance), so numerator and denominator share one definition.
+  const kScarCovered = Fn(() => {
+    returnIf(instanceIndex.greaterThanEqual(uint(pixelCount)));
+    // world1/single-pass covered-test: election anchor 0 = cleared (no fragment).
+    const elect = elemU(visPayloadV.ro, instanceIndex);
+    If(elect.notEqual(uint(0)), () => {
+      const pRaw = elemU(visBV.ro, instanceIndex);
+      const itemIdx = pRaw.shiftRight(uint(CLUSTER_TRI_BITS));
+      const item = qRasterRO.element(itemIdx.add(uint(1)));
+      const instId = item.x;
+      const ci = item.y;
+      const meshId = elemU(gpu.clusters, ci.mul(uint(CLUSTER_WORDS)).add(uint(7))).shiftRight(
+        uint(16),
+      );
+      const matClass = elemU(gpu.meshes, meshId.mul(uint(MESH_WORDS)).add(uint(6)))
+        .shiftRight(uint(8))
+        .bitAnd(uint(0xff));
+      const A = gpu.instances.element(instId.mul(uint(2))) as unknown as NV4;
+      const distC = vec3(cam.camPos).sub(A.xyz as unknown as NV3).length();
+      If(
+        matClass
+          .equal(uint(4))
+          .and(distC.greaterThanEqual(scarNear))
+          .and(distC.lessThanEqual(scarFar)),
+        () => {
+          atomicAdd(scarEl(1), uint(1));
+        },
+      );
+    });
+  })().compute(pixelCount, [256]);
+  (kScarCovered as unknown as ComputeKernel).setName('nanScarCovered');
+
   // ---- HW big/near-triangle passes (vertex pulling; fragment writes vis bufs) --------
   const hwGeometry = new BufferGeometry();
   hwGeometry.setAttribute('position', new Float32BufferAttribute(new Float32Array(3), 3));
@@ -970,6 +1136,12 @@ export function buildNaniteRaster(
             atomicMax(visBV.atomic.element(px), dk.bitOr(pay.shiftRight(uint(16)).bitAnd(uint(0xffff))));
           });
         } else if (pass === 'world1') {
+          // 0a SCAR (?scar=1): count this HW fragment into the whole-frame total [2] so
+          // the band-share denominator includes the large/near tris the HW vertex-pull
+          // path carries (terrain, trunks, near-plane-crossing leaf edges). The band
+          // NUMERATOR [0] stays SW-only by design — mid/far foliage leaves rasterize on
+          // the SW path; the HW path holds non-band near geometry. No band classify here.
+          if (scar) atomicAdd(scarEl(2), uint(1));
           // PERF-VB4 single-pass WORLD (mirrors the SW world1 path): a depth16-keyed
           // atomicMax election whose WINNER write-stores the full id + its exact depth.
           const cand = depthKey24(z as unknown as NF)
@@ -1181,6 +1353,27 @@ export function buildNaniteRaster(
     dispatch(renderer, kHwArgs); // SW pass filled hwQueue → build the indirect draw args
     hwRender(renderer, camera, hwCombinedMat);
   };
+  // voxel-foliage (Stage 2 §6): the DEPTH-BUCKETED voxel-brick raster (kVoxBin +
+  // kRasterVox). Built only when the cull supplied the voxel work queue (?voxreg/
+  // ?forcevox active); a separate permutation that DROPS tri-only verts/indices/hfVerts
+  // (≤10 buffers, §4.6) and reuses the SAME 32-bit depthKey24 election + visPayloadV/
+  // visBV. Dispatched in world1() AFTER hwRender so the on-chip election pre-seeds from
+  // the global near-field TRIANGLE winners (§6.2/§6.6).
+  const voxRaster: VoxelRasterHandles | null =
+    voxActive && cull.qVoxRasterRO && cull.voxRasterDispatchAttr
+      ? buildNaniteVoxelRaster({
+          gpu,
+          cam,
+          qVoxRasterRO: cull.qVoxRasterRO,
+          voxRasterDispatchAttr: cull.voxRasterDispatchAttr,
+          depthKey24,
+          visPayloadV,
+          visBV,
+          width,
+          height,
+        })
+      : null;
+
   // PERF-VB4 (D-N45) WORLD single pass over the full set (replaced depth1 → hwDepth →
   // payload). ONE SW + ONE HW pass: a 24-bit depth election (visPayloadV) whose winner
   // stores the full id into visBV; the resolve/shadows/HZB read depth from the election
@@ -1189,6 +1382,9 @@ export function buildNaniteRaster(
     dispatchIndirect(renderer, kRasterWorld1, cull.rasterDispatchFullAttr);
     dispatch(renderer, kHwArgs); // SW pass filled hwQueue → build the indirect draw args
     hwRender(renderer, camera, hwWorld1Mat);
+    // voxel bin + K-pass brick raster (§6.6 insertion point: right after hwRender so the
+    // SW+HW near-field triangle election is already in global visPayloadV to pre-seed).
+    if (voxRaster) voxRaster.dispatchVoxel(renderer);
   };
 
   const readHwCount = async (renderer: Renderer): Promise<number> => {
@@ -1203,6 +1399,28 @@ export function buildNaniteRaster(
     const u = new Uint32Array(buf);
     return { orphans: u[0] ?? 0, covered: u[1] ?? 0 };
   };
+  // 0a SCAR: the per-fragment band/total counters are accumulated INSIDE world1; this
+  // runs the covered-pixel denominator post-pass. No-op unless ?scar=1 (so production
+  // pays nothing — neither the dispatch nor the world1 atomics fire).
+  const scarRun = (renderer: Renderer): void => {
+    if (scar) dispatch(renderer, kScarCovered);
+  };
+  const readScar = async (
+    renderer: Renderer,
+  ): Promise<{ bandFrags: number; bandPx: number; totalFrags: number; bandClusters: number }> => {
+    // scar counters live in the hwQueue tail at slot SCAR_BASE (byte offset SCAR_BASE*4).
+    const buf = await readBuffer(renderer, scarAttr, SCAR_BASE * 4, 16);
+    const u = new Uint32Array(buf);
+    return {
+      bandFrags: u[0] ?? 0,
+      bandPx: u[1] ?? 0,
+      totalFrags: u[2] ?? 0,
+      bandClusters: u[3] ?? 0,
+    };
+  };
+
+  const readVoxWrites = async (renderer: Renderer): Promise<number | null> =>
+    voxRaster ? voxRaster.readWriteCount(renderer) : null;
 
   return {
     resolveScene,
@@ -1214,5 +1432,8 @@ export function buildNaniteRaster(
     readHwCount,
     audit,
     readAudit,
+    scar: scarRun,
+    readScar,
+    readVoxWrites,
   };
 }

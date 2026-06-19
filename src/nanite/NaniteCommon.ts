@@ -39,6 +39,13 @@ export const QCHUNK_CAP = 1_048_576;
  *  Raising further needs a smaller stride or split buffers. The real fix for the
  *  flood is the cluster floor (impostor/merge far-field), not a bigger queue. */
 export const QRASTER_CAP = 8_388_608;
+/** voxel-foliage (spec §6.2): the VOXEL raster work queue capacity (one item per
+ *  visible voxel BRICK-cluster fanned out of qRaster by matClass=voxel(7)). Far
+ *  smaller than QRASTER_CAP — the coarse voxel band has far fewer cluster work-items
+ *  than the 388k-cluster triangle cut (§6.0). Bit-budget (spec §6.2 verbatim assert):
+ *  the kVoxBin payload (a brick work-item index into qVoxRaster) must stay < 1<<28
+ *  (BUCKET_SHIFT) — 2^21 = 2M is trivially below that. Sized at uvec2 = 16 MB. */
+export const QVOX_CAP = 2_097_152;
 /** indirect-dispatch row size (maxComputeWorkgroupsPerDimension) */
 export const DISPATCH_ROW = 65_535;
 /** cone-test slack (radians, conservative on cos: sin(θ+Δ) ≤ sinθ + Δ) —
