@@ -72,6 +72,7 @@ import {
   bcF2U,
   bcU2F,
   dispatch,
+  dispatchBatchMixed,
   dispatchIndirect,
   elemU,
   localX,
@@ -82,6 +83,7 @@ import {
   readBuffer,
   returnIf,
   sU32Views,
+  setIndirectDispatch,
   toF,
   toI,
   uniformF,
@@ -1010,6 +1012,10 @@ export function buildNaniteRaster(
   // PERF-VB4 WORLD single pass: 24-bit Z election + full-id side buffer (visBV).
   const kRasterWorld1 = rasterKernel('world1');
   (kRasterWorld1 as ComputeKernel).setName('nanRasterWorld1');
+  // SUBMIT-COALESCE enabler (item 3): tag kRasterWorld1 with its full-range indirect
+  // attr so the batched world1 below dispatches it at its tight rasterDispatchFull size
+  // instead of the baked QRASTER_CAP×MAX_CLUSTER_TRIS (~1B-thread) grid.
+  setIndirectDispatch(kRasterWorld1, cull.rasterDispatchFullAttr);
 
   // ---- kHwArgs ----------------------------------------------------------------------
   const kHwArgs = Fn(() => {
@@ -1378,9 +1384,21 @@ export function buildNaniteRaster(
   // payload). ONE SW + ONE HW pass: a 24-bit depth election (visPayloadV) whose winner
   // stores the full id into visBV; the resolve/shadows/HZB read depth from the election
   // key (no exact depthV — a 3rd hot-loop atomic buffer was measured a 3× cliff).
+  //
+  // SUBMIT-COALESCE (item 3): the vis CLEAR + the SW world1 raster + kHwArgs run in ONE
+  // batched submit (was 3 separate queue.submit drains). Order is load-bearing and
+  // preserved: [kVisClear, kRasterWorld1, kHwArgs].
+  //   - kVisClear WAW-before kRasterWorld1 on vis* (depth→0xffffffff, payload/visB→0,
+  //     hwQueue[0]→0) — the raster's atomicMin/atomicMax election + hwQueue appends MUST
+  //     see the cleared sentinels;
+  //   - kRasterWorld1 is INDIRECT over rasterDispatchFull (tagged via setIndirectDispatch
+  //     above, so it keeps its tight size in this dispatchSize=null batch);
+  //   - kHwArgs RAW-reads hwQueue[0] (the SW pass's near/big-tri appends) → hwDraw args.
+  // hwRender STAYS its own renderer.render submit (a render pass + a compute pass cannot
+  // share one command encoder). Because world1 now OWNS the clear, the frame must NOT call
+  // clearVis() separately for the world path (it does not — NaniteFrame updated).
   const world1 = (renderer: Renderer, camera: PerspectiveCamera): void => {
-    dispatchIndirect(renderer, kRasterWorld1, cull.rasterDispatchFullAttr);
-    dispatch(renderer, kHwArgs); // SW pass filled hwQueue → build the indirect draw args
+    dispatchBatchMixed(renderer, [kVisClear, kRasterWorld1, kHwArgs]);
     hwRender(renderer, camera, hwWorld1Mat);
     // voxel bin + K-pass brick raster (§6.6 insertion point: right after hwRender so the
     // SW+HW near-field triangle election is already in global visPayloadV to pre-seed).

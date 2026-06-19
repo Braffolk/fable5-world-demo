@@ -34,7 +34,7 @@ import {
 } from 'three/tsl';
 import type { Matrix4, Texture, Vector3, Vector4 } from 'three';
 import type { Renderer, StorageBufferNode } from 'three/webgpu';
-import type { StorageBufferAttribute } from 'three/webgpu';
+import type { IndirectStorageBufferAttribute, StorageBufferAttribute } from 'three/webgpu';
 import type { NB, NF, NI, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
 
 /** structural view of a uint vec2/vec4 storage element */
@@ -239,6 +239,69 @@ export function dispatch(renderer: Renderer, kernel: unknown): void {
  * carry its own baked-in `.compute(count,[wg])` (the array shares no dispatchSize).
  */
 export function dispatchBatch(renderer: Renderer, kernels: readonly unknown[]): void {
+  renderer.compute(kernels as Parameters<Renderer['compute']>[0]);
+}
+
+/**
+ * SUBMIT-COALESCE enabler — the ONE app-level mechanism that lets a BATCHED
+ * (single-encoder, single-pass, single-submit) compute mix DIRECT and INDIRECT
+ * dispatches while each indirect kernel KEEPS its own tight indirect dispatchSize.
+ *
+ * THE BLOCKER (three r184, verified): the array path forwards a SINGLE
+ * `dispatchSize=null` to every node (Renderer.js:2773), so a batched indirect
+ * kernel would fall back to its BAKED `.compute(count,[wg])` grid — for kTraverse/
+ * kRaster* that is QRASTER_CAP(·MAX_CLUSTER_TRIS) threads = a ~1B-thread
+ * over-dispatch regression. ComputeNode has no per-node indirect slot exposed to
+ * the array path.
+ *
+ * THE FIX (NO node_modules edit): the backend's PER-NODE fallback at
+ * WebGPUBackend.js:1433 is `dispatchSize = computeNode.dispatchSize ||
+ * computeNode.count`, and lines 1439-1446 take the INDIRECT path whenever that
+ * value `.isIndirectStorageBufferAttribute`. ComputeNode already stores a non-number
+ * `count` arg into `.dispatchSize` (ComputeNode.js:295-302). So we simply ATTACH the
+ * per-node indirect attribute onto `computeNode.dispatchSize`. In the batched call
+ * the null outer arg makes the backend read THIS node's `.dispatchSize` (the attr,
+ * truthy) and dispatch the tight indirect grid — per kernel, in ONE submit. Direct
+ * kernels (dispatchSize null, count set) keep their baked `.compute(1,[1])` grid.
+ * This touches only public ComputeNode fields + the documented `||` fallback; it is
+ * isolated to src/ and breaks nothing if three changes the field (tsc/runtime would
+ * surface it immediately).
+ *
+ * OVER-DISPATCH GUARD: the tagged kernel's baked grid is NEVER used while the attr
+ * is attached (the `||` short-circuits on the truthy attr), so the 1B-thread fallback
+ * cannot fire. Detaching (setIndirectDispatch(k, null)) restores the baked grid.
+ */
+interface IndirectTaggable {
+  /** ComputeNode.dispatchSize — the slot the backend's `||` fallback reads first */
+  dispatchSize: unknown;
+}
+
+/** Attach (or clear with null) a per-node INDIRECT dispatch attribute so a BATCHED
+ *  run dispatches this kernel indirect at its tight size. Returns the kernel for
+ *  chaining. Idempotent; safe to call once at build time (the attr is read fresh
+ *  from the GPU buffer every dispatch). */
+export function setIndirectDispatch(
+  kernel: unknown,
+  attr: IndirectStorageBufferAttribute | null,
+): unknown {
+  (kernel as IndirectTaggable).dispatchSize = attr;
+  return kernel;
+}
+
+/** one batched compute element: either a plain (direct, baked-grid) kernel, or a
+ *  kernel that has been tagged via setIndirectDispatch (indirect, per-node size). */
+export type BatchKernel = unknown;
+
+/**
+ * dispatchBatch for a MIXED direct+indirect batch — ONE encoder, ONE compute pass,
+ * ONE queue.submit, with each setIndirectDispatch-tagged kernel keeping its tight
+ * indirect size (the enabler above). Identical submit semantics to dispatchBatch;
+ * the only difference is callers may pass kernels carrying an indirect dispatchSize.
+ * Inter-dispatch UAV auto-sync inside the pass preserves every producer→consumer
+ * RAW/WAW exactly as if the kernels ran one-by-one (the array order IS the execution
+ * order). Tag indirect kernels with setIndirectDispatch BEFORE adding them here.
+ */
+export function dispatchBatchMixed(renderer: Renderer, kernels: readonly BatchKernel[]): void {
   renderer.compute(kernels as Parameters<Renderer['compute']>[0]);
 }
 

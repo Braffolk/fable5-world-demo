@@ -146,6 +146,10 @@ export function buildNaniteShadowClip(
   heightTex: Texture,
   disp?: TerrainDisp,
   wind?: TrunkWindOpt,
+  /** item 6: the measured deepest DAG anchor-chain (registry.maxDagDepth + margin) — the
+   *  BFS pass count for the SHARED cut (paid once/frame when a level re-rasters). Omitted ⇒
+   *  the cull's legacy default. ?hierdepth still overrides. */
+  hierDepth?: number,
 ): NaniteShadow {
   const cfg = readClipParams();
   const LEVELS = cfg.levels;
@@ -231,6 +235,7 @@ export function buildNaniteShadowClip(
     // the cut is bounded by the OUTER ring (~384 m), far below the camera's 8M
     // far-field flood ⇒ a small frontier (16 MB/buf vs 64 MB at 8M) is ample.
     frontierCap: SHADOW_FRONTIER_CAP,
+    hierDepth,
   });
   for (let k = 0; k < LEVELS; k++) {
     const lv = levels[k]!;
@@ -254,8 +259,16 @@ export function buildNaniteShadowClip(
   cutOrtho.coordinateSystem = WebGPUCoordinateSystem;
   const reRaster: boolean[] = new Array(LEVELS).fill(false);
   let lastRasterMask = 0;
+  // item 4 (CLIP camera||shadow overlap): when cullPrepass() ran the CPU fit + folded the
+  // shared cut into the camera-cull submit this frame, it stores the mask here so the
+  // following run() skips the re-fit + the cut dispatch (already done) and only runs the
+  // per-level filter+raster. -1 = no prepass this frame (run() does the full thing itself).
+  let prepassMask = -1;
 
-  const run = (renderer: Renderer, _csm: object | null, mainCamera: PerspectiveCamera): void => {
+  // PASS A (CPU, no GPU) — fit every level (snap + R1 cadence gate) → reRaster[] + mask.
+  // For a re-rastering level set its cam (filter frustum) + resolve uniforms + lastVP. A
+  // CACHED level keeps its old VP + levelVP so its depthTex sample stays aligned.
+  const fitLevels = (mainCamera: PerspectiveCamera): { mask: number; sinElev: number } => {
     // sun "L" points surface→sun; the shadow view looks the other way.
     forward.copy(sunU.dir.value).normalize().multiplyScalar(-1);
     const sinElev = Math.max(0.12, sunU.dir.value.y); // sun elevation (≈ -forward.y)
@@ -269,9 +282,6 @@ export function buildNaniteShadowClip(
     const cp = mainCamera.position;
     const cz = cp.dot(forward); // camera depth along the sun axis
 
-    // PASS A — fit every level (snap + R1 cadence gate). For a re-rastering level set
-    // its cam (filter frustum / brute cull) + resolve uniforms + lastVP. LOCKSTEP: a
-    // CACHED level keeps its old VP + levelVP so its depthTex sample stays aligned.
     let mask = 0;
     for (let k = 0; k < LEVELS; k++) {
       const lv = levels[k]!;
@@ -325,55 +335,93 @@ export function buildNaniteShadowClip(
       lv.lastVP.copy(vp);
       lv.ran = true;
     }
+    return { mask, sinElev };
+  };
 
-    // PASS B — SHARED cull (S3-perf): walk the DAG ONCE, only when ≥1 level re-rasters
-    // (a static camera ⇒ all cached ⇒ ~0 cost), then a cheap per-level filter + raster.
-    {
-      if (mask !== 0) {
-        // the cut only needs to span the re-rastering levels (cached far levels keep
-        // their depth) — size it to the LARGEST re-rastering level so slow drift (only
-        // the near levels tick) traverses a small region, not the whole 384 m disc.
-        let maxHalf = 0;
-        for (let k = 0; k < LEVELS; k++) if (reRaster[k]) maxHalf = Math.max(maxHalf, levels[k]!.half);
-        const cutDHalf = maxHalf / sinElev + 100;
-        const cutHalf = maxHalf + 2 * ((2 * maxHalf) / SHADOW_MAP);
-        center
-          .copy(right)
-          .multiplyScalar(cp.dot(right))
-          .addScaledVector(up, cp.dot(up))
-          .addScaledVector(forward, cz);
-        eye.copy(center).addScaledVector(forward, -cutDHalf);
-        cutOrtho.left = -cutHalf;
-        cutOrtho.right = cutHalf;
-        cutOrtho.top = cutHalf;
-        cutOrtho.bottom = -cutHalf;
-        cutOrtho.far = 2 * cutDHalf;
-        cutOrtho.position.copy(eye);
-        cutOrtho.up.copy(up);
-        cutOrtho.lookAt(center);
-        cutOrtho.updateMatrixWorld(true);
-        cutOrtho.updateProjectionMatrix();
-        vp.multiplyMatrices(cutOrtho.projectionMatrix, cutOrtho.matrixWorldInverse);
-        cutCam.vp.value.copy(vp);
-        cutCam.prevVp.value.copy(vp);
-        cutCam.camPos.value.copy(cp);
-        cutCam.prevCamPos.value.copy(cp);
-        frustum.setFromProjectionMatrix(vp);
-        for (let p = 0; p < 6; p++) {
-          const pl = frustum.planes[p];
-          if (pl) cutCam.planes.array[p]?.set(pl.normal.x, pl.normal.y, pl.normal.z, pl.constant);
-        }
-        clipCull.runSharedCut(renderer);
-      }
-      for (let k = 0; k < LEVELS; k++) {
-        if (!reRaster[k]) continue;
-        const lv = levels[k]!;
-        clipCull.runLevelFilter(renderer, k); // cut → level-k frustum+hollow → queue
-        lv.raster.clearVis(renderer);
-        lv.raster.depth1(renderer);
-        lv.raster.hwDepth(renderer, mainCamera);
-        dispatch(renderer, lv.kCopy);
-      }
+  // PASS B fit (CPU, no GPU) — set cutCam to span the re-rastering levels. Must be called
+  // with mask != 0. Mirrors the cut-ortho fit from the original run().
+  const fitCut = (mainCamera: PerspectiveCamera, sinElev: number): void => {
+    const cp = mainCamera.position;
+    const cz = cp.dot(forward);
+    // size the cut to the LARGEST re-rastering level so slow drift (only near levels tick)
+    // traverses a small region, not the whole 384 m disc.
+    let maxHalf = 0;
+    for (let k = 0; k < LEVELS; k++) if (reRaster[k]) maxHalf = Math.max(maxHalf, levels[k]!.half);
+    const cutDHalf = maxHalf / sinElev + 100;
+    const cutHalf = maxHalf + 2 * ((2 * maxHalf) / SHADOW_MAP);
+    center
+      .copy(right)
+      .multiplyScalar(cp.dot(right))
+      .addScaledVector(up, cp.dot(up))
+      .addScaledVector(forward, cz);
+    eye.copy(center).addScaledVector(forward, -cutDHalf);
+    cutOrtho.left = -cutHalf;
+    cutOrtho.right = cutHalf;
+    cutOrtho.top = cutHalf;
+    cutOrtho.bottom = -cutHalf;
+    cutOrtho.far = 2 * cutDHalf;
+    cutOrtho.position.copy(eye);
+    cutOrtho.up.copy(up);
+    cutOrtho.lookAt(center);
+    cutOrtho.updateMatrixWorld(true);
+    cutOrtho.updateProjectionMatrix();
+    vp.multiplyMatrices(cutOrtho.projectionMatrix, cutOrtho.matrixWorldInverse);
+    cutCam.vp.value.copy(vp);
+    cutCam.prevVp.value.copy(vp);
+    cutCam.camPos.value.copy(cp);
+    cutCam.prevCamPos.value.copy(cp);
+    frustum.setFromProjectionMatrix(vp);
+    for (let p = 0; p < 6; p++) {
+      const pl = frustum.planes[p];
+      if (pl) cutCam.planes.array[p]?.set(pl.normal.x, pl.normal.y, pl.normal.z, pl.constant);
+    }
+  };
+
+  // the per-level filter + raster (after the shared cut is on the GPU). Reused by run()'s
+  // default path and the overlap path (where the cut was folded into the camera submit).
+  const rasterLevels = (renderer: Renderer, mainCamera: PerspectiveCamera): void => {
+    for (let k = 0; k < LEVELS; k++) {
+      if (!reRaster[k]) continue;
+      const lv = levels[k]!;
+      clipCull.runLevelFilter(renderer, k); // cut → level-k frustum+hollow → queue
+      lv.raster.clearVis(renderer);
+      lv.raster.depth1(renderer);
+      lv.raster.hwDepth(renderer, mainCamera);
+      dispatch(renderer, lv.kCopy);
+    }
+  };
+
+  // item 4 (camera||shadow overlap, opt-in): do the CPU fit NOW and RETURN the shadow-cut
+  // cull batch (camera-disjoint) without dispatching, so the caller folds it into the
+  // camera-cull submit. Stores prepassMask so the following run() skips its own cut.
+  // Returns null when no level re-rasters (the caller then dispatches nothing extra).
+  const cullPrepass = (
+    _renderer: Renderer,
+    mainCamera: PerspectiveCamera,
+  ): readonly unknown[] | null => {
+    const { mask, sinElev } = fitLevels(mainCamera);
+    prepassMask = mask;
+    if (mask === 0) return null;
+    fitCut(mainCamera, sinElev);
+    return clipCull.sharedCutBatch();
+  };
+
+  const run = (renderer: Renderer, _csm: object | null, mainCamera: PerspectiveCamera): void => {
+    // OVERLAP PATH: cullPrepass() already fit + dispatched the shared cut (folded into the
+    // camera-cull submit). Consume that mask, skip the re-fit + runSharedCut, raster levels.
+    if (prepassMask >= 0) {
+      const mask = prepassMask;
+      prepassMask = -1; // consume (so a run() without a prepass next frame refits itself)
+      if (mask !== 0) rasterLevels(renderer, mainCamera);
+      lastRasterMask = mask;
+      return;
+    }
+    // DEFAULT PATH (no prepass): fit + cut + raster in this submit-set, as before.
+    const { mask, sinElev } = fitLevels(mainCamera);
+    if (mask !== 0) {
+      fitCut(mainCamera, sinElev);
+      clipCull.runSharedCut(renderer);
+      rasterLevels(renderer, mainCamera);
     }
     lastRasterMask = mask;
   };
@@ -522,6 +570,7 @@ export function buildNaniteShadowClip(
 
   return {
     run,
+    cullPrepass,
     shadowFactor,
     cascadeTint,
     debugDepth,

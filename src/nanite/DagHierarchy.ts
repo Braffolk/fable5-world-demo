@@ -37,6 +37,70 @@ export interface DagHierarchy {
   rootIndices: Uint32Array;
 }
 
+/**
+ * MAX ANCHOR-CHAIN DEPTH (item 6) — the deepest root→leaf chain in a DagHierarchy, counted
+ * in NODES (roots = depth 1). The GPU BFS (NaniteCull kTraverse) processes a node at chain
+ * depth d in pass d-1, so it needs AT LEAST `maxChainDepth` ping-pong passes to EMIT every
+ * leaf — fewer ⇒ under-traversal ⇒ the tail clusters never emit ⇒ HOLES. The cull's
+ * hierDepth must be ≥ this over EVERY mesh. Iterative longest-path over the child links
+ * (memoized; the links form a DAG ⇒ no cycles, but a `visiting` guard makes it safe even if
+ * a malformed link sneaks one in — it just caps that branch). Cost is O(nodes+links), build
+ * time only. Returns 1 for a flat (no-child) hierarchy.
+ */
+export function maxChainDepth(hier: DagHierarchy): number {
+  const { childStart, childCount, childIndices, rootIndices } = hier;
+  const n = childStart.length;
+  const memo = new Int32Array(n).fill(-1); // longest chain (in nodes) STARTING at this node
+  const state = new Uint8Array(n); // 0=unseen, 1=visiting, 2=done
+  // iterative post-order DFS (avoid call-stack blowups on deep chains)
+  const stack: number[] = [];
+  const longestFrom = (start: number): number => {
+    stack.length = 0;
+    stack.push(start);
+    while (stack.length > 0) {
+      const c = stack[stack.length - 1] as number;
+      if (state[c] === 2) {
+        stack.pop();
+        continue;
+      }
+      if (state[c] === 1) {
+        // all children resolved → fold
+        let best = 0;
+        const cs = childStart[c] as number;
+        const cc = childCount[c] as number;
+        for (let i = 0; i < cc; i++) {
+          const ch = childIndices[cs + i] as number;
+          const d = ch >= 0 && ch < n ? (memo[ch] as number) : 0;
+          if (d > best) best = d;
+        }
+        memo[c] = 1 + best;
+        state[c] = 2;
+        stack.pop();
+        continue;
+      }
+      // first visit
+      state[c] = 1;
+      const cs = childStart[c] as number;
+      const cc = childCount[c] as number;
+      for (let i = 0; i < cc; i++) {
+        const ch = childIndices[cs + i] as number;
+        if (ch >= 0 && ch < n && state[ch] === 0) stack.push(ch);
+        // a child already `visiting` (1) ⇒ a cycle: skip it (its memo folds as 0 / partial),
+        // which bounds the branch instead of looping forever.
+      }
+    }
+    return memo[start] as number;
+  };
+  let maxD = 1;
+  for (let r = 0; r < rootIndices.length; r++) {
+    const root = rootIndices[r] as number;
+    if (root < 0 || root >= n) continue;
+    const d = state[root] === 2 ? (memo[root] as number) : longestFrom(root);
+    if (d > maxD) maxD = d;
+  }
+  return maxD;
+}
+
 /** Derive child links (owner-gated) + the root seed list from a built DAG. */
 export function buildDagHierarchy(dag: DagBuild): DagHierarchy {
   const n = dag.clusters.length;

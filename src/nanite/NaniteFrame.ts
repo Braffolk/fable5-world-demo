@@ -41,7 +41,7 @@ import { buildNaniteResolve } from './NaniteResolve';
 import { buildNaniteShadow, type NaniteShadow } from './NaniteShadow';
 import { buildNaniteShadowClip } from './NaniteShadowClip';
 import { buildShadowHalf, type ShadowHalf } from './NaniteShadowHalf';
-import { bcU2F, dispatch, elemU, readBuffer, returnIf, texLoadR, toF, uniformArrV4, uniformF } from './Tsl';
+import { bcU2F, dispatch, dispatchBatchMixed, elemU, readBuffer, returnIf, texLoadR, toF, uniformArrV4, uniformF } from './Tsl';
 
 export interface NaniteFrameHandles {
   render(): void;
@@ -195,6 +195,14 @@ export function buildNaniteFrame(
   // PERF-VB4 (D-N45): the WORLD is single-pass — the HZB reads the packed depth key from
   // the election anchor (visPayloadV high bits, packed=true), there is no exact depthV.
   const hzb = buildNaniteHzb(vis.payloadV.ro, cam, true);
+  // item 6: the BFS pass count = the MEASURED deepest DAG anchor-chain + a small safety
+  // margin (defends against a streaming tile attaching a slightly deeper chain after this
+  // point — terrain tiles share one uniform grid depth, so +2 is ample). This replaces the
+  // old constant 18 (the comment estimated the real depth ~13), shedding the empty-tail
+  // passes paid TWICE/frame (camera + shadow shared-cut). ?hierdepth still overrides inside
+  // buildNaniteCull. Clamped ≥ 1. Going too LOW under-traverses = holes, so we never go
+  // below the measured value; the margin only ever ADDS passes.
+  const measuredHierDepth = Math.max(1, registry.maxDagDepth + 2);
   const cull = buildNaniteCull(
     registry.gpu,
     registry.instanceCount,
@@ -203,7 +211,7 @@ export function buildNaniteFrame(
     // PERF-VB3: HIERARCHICAL DAG-BFS cull is the SOLE world cull (every mesh is
     // DAG'd — terrain via TERRAIN-RW, veg via the always-on nanitedag). Single-phase
     // BFS, NON-packed two-pass raster (depthV ⇒ HZB + exact-depth world resolve unchanged).
-    { tau, minPx, simBandD, lodNear, lodPow, instMinPx },
+    { tau, minPx, simBandD, lodNear, lodPow, instMinPx, hierDepth: measuredHierDepth },
   );
   if (!hf.biomeTex || !hf.fieldsTex || !hf.noiseA || !hf.noiseB) {
     throw new Error('NaniteFrame: heightfield derived maps missing (boot order)');
@@ -241,9 +249,15 @@ export function buildNaniteFrame(
   const useClip = params.get('shadowclip') !== '0';
   const shadow: NaniteShadow | null = shadowOn
     ? useClip
-      ? buildNaniteShadowClip(registry.gpu, registry.instanceCount, hf.heightTex, disp, windOpt)
-      : buildNaniteShadow(registry.gpu, registry.instanceCount, hf.heightTex, disp, windOpt)
+      ? buildNaniteShadowClip(registry.gpu, registry.instanceCount, hf.heightTex, disp, windOpt, measuredHierDepth)
+      : buildNaniteShadow(registry.gpu, registry.instanceCount, hf.heightTex, disp, windOpt, measuredHierDepth)
     : null;
+  // CAMERA||SHADOW CULL OVERLAP (item 4): fold the (CLIP-path) shadow shared-cut cull into
+  // the SAME submit as the camera cull so Dawn can overlap the two disjoint culls on frames
+  // where shadows re-raster. OFF by default — the proven separate-submit ordering ships; the
+  // overlap is a measured A/B (its win only fires when the camera moves enough to re-raster a
+  // shadow level). Requires the clip shadow's cullPrepass (cascade path has no shared cut).
+  const cullOverlap = params.get('culloverlap') === '1' && typeof shadow?.cullPrepass === 'function';
 
   // S0 (D-N29): half-res PCSS eval + depth-aware bilateral upsample — quarters the
   // per-pixel shadow SAMPLE cost (paid every frame, static or moving). Built from
@@ -419,7 +433,23 @@ export function buildNaniteFrame(
     // directly. Then ONE depth+payload over the NON-packed two-pass raster (depthV
     // written ⇒ HZB + the exact-depth world resolve are unchanged). No depth2 / phase-2.
     if (!frozen) {
-      cull.runPhase1(renderer); // hier BFS → qRaster (+ kRasterArgs)
+      // CAMERA||SHADOW CULL OVERLAP (item 4): when enabled, fold the shadow shared-cut
+      // cull's batch into the SAME submit as the camera cull (they write DISJOINT buffers
+      // — fresh counters/qRaster/qFrontier, sphereOccluded=null ⇒ no HZB dep), so Dawn may
+      // overlap the two on re-raster frames. The shadow's later run() consumes the prepass
+      // mask and SKIPS its own cut dispatch. Camera-cull half is dispatched FIRST in the
+      // combined list (its order is internally self-consistent); the shadow half follows.
+      let cameraCullDispatched = false;
+      if (cullOverlap && shadow?.cullPrepass) {
+        const shadowCutBatch = shadow.cullPrepass(renderer, engine.camera);
+        if (shadowCutBatch && shadowCutBatch.length > 0) {
+          dispatchBatchMixed(renderer, [...cull.phase1Batch(), ...shadowCutBatch]);
+          cameraCullDispatched = true;
+        }
+        // shadowCutBatch null ⇒ no level re-rasters this frame; fall through to the plain
+        // camera cull (the shadow run() will see prepassMask===0 and raster nothing).
+      }
+      if (!cameraCullDispatched) cull.runPhase1(renderer); // hier BFS → qRaster (+ kRasterArgs)
       cull.syncFullArgs(renderer); // full-range args for the payload pass
       // voxel-foliage (spec §4.6 / §A1): fan the emitted voxel(7) clusters out of
       // qRaster into qVoxRaster + publish the voxel-bin dispatch args. No-op-cheap
@@ -427,9 +457,11 @@ export function buildNaniteFrame(
       // so a pure-triangle world pays nothing. Stage-2 kVoxBin/kRasterVox consume it.
       if (voxActive) cull.runVoxFanout(renderer);
     }
-    raster.clearVis(renderer);
     // PERF-VB4 (D-N45): single SW + single HW pass — 24-bit depth election (visPayloadV)
     // + full-id side buffer (visBV). Replaced the old depth1 → hwDepth → payload 2-pass.
+    // SUBMIT-COALESCE (item 3): world1() now OWNS the vis CLEAR (kVisClear is the first
+    // dispatch in its batched submit), so the prior standalone raster.clearVis() call is
+    // gone — folding the clear into the world1 submit removes one full queue.submit drain.
     raster.world1(renderer, engine.camera);
     // 0a SCAR (?scar=1): the per-pixel covered-pixel denominator post-pass over the
     // FINAL world1 winners. No-op unless ?scar=1. The per-fragment band/total counters

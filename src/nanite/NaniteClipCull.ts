@@ -100,6 +100,13 @@ export interface ClipCull {
   queue: ClipLevelQueue;
   /** the ONE traverse + filterArgs; call once/frame when ≥1 level re-rasters */
   runSharedCut(renderer: Renderer): void;
+  /** CAMERA||SHADOW OVERLAP (item 4): the shared-cut cull's ordered batch (the hier BFS
+   *  + kFilterArgs), as ONE list, so a caller can CONCATENATE it with the camera cull's
+   *  phase1Batch() into a SINGLE submit and let Dawn overlap the two (they write DISJOINT
+   *  buffers: this cull owns fresh counters/qRaster/qFrontier, sphereOccluded=null ⇒ no
+   *  HZB dep). Same internal order/RAW as runSharedCut. The caller dispatches the combined
+   *  batch INSTEAD of runSharedCut (do not call both). */
+  sharedCutBatch(): readonly unknown[];
   /** clear queue → filter the cut by level k's frustum+hollow → raster args */
   runLevelFilter(renderer: Renderer, level: number): void;
   /** cut size + per-level survivor counts (HUD) */
@@ -116,7 +123,7 @@ export function buildClipCull(
   levelCams: NaniteCam[],
   /** per-level hollow uniform (1/E_k for k≥1, 0 for level 0) */
   innerRejects: UniformF[],
-  opts: { minPx: UniformF; frontierCap: number },
+  opts: { minPx: UniformF; frontierCap: number; hierDepth?: number },
 ): ClipCull {
   const LEVELS = levelCams.length;
 
@@ -127,6 +134,7 @@ export function buildClipCull(
     coneCull: false,
     minPx: opts.minPx,
     frontierCap: opts.frontierCap,
+    hierDepth: opts.hierDepth, // item 6: BFS passes = measured max DAG depth (no holes, sheds tail)
   });
   const cutRO = shared.qRasterRO;
 
@@ -269,6 +277,13 @@ export function buildClipCull(
     dispatch(renderer, kFilterArgs as never); // size the per-level filter dispatch
   };
 
+  // item 4: the shared-cut batch = the camera-disjoint hier BFS + kFilterArgs, as ONE
+  // ordered list. RAW inside: shared.phase1Batch() ends with its kRasterArgs (writes the
+  // cut's qRaster[0]); kFilterArgs reads cutRO.element(0).x (the cut count) → sizes the
+  // per-level filter dispatch. Concatenated after the camera cull's phase1Batch() the two
+  // halves touch no common writable buffer, so Dawn may overlap them in the one submit.
+  const sharedCutBatch = (): readonly unknown[] => [...shared.phase1Batch(), kFilterArgs];
+
   const runLevelFilter = (renderer: Renderer, level: number): void => {
     dispatch(renderer, clears[level] as never);
     dispatchIndirect(renderer, filters[level] as never, filterDispatchAttr);
@@ -291,6 +306,7 @@ export function buildClipCull(
     shared,
     queue: { qRasterRO: qLevel.ro, rasterDispatchAttr, rasterDispatch2Attr, rasterDispatchFullAttr },
     runSharedCut,
+    sharedCutBatch,
     runLevelFilter,
     readCounts,
   };

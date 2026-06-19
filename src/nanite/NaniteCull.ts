@@ -65,7 +65,7 @@ import {
   aLoadU,
   bcU2F,
   dispatch,
-  dispatchBatch,
+  dispatchBatchMixed,
   dispatchIndirect,
   elemU,
   elemUW,
@@ -73,6 +73,7 @@ import {
   loopU,
   maxU,
   minU,
+  setIndirectDispatch,
   readBuffer,
   returnIf,
   sU32Views,
@@ -168,6 +169,13 @@ export interface NaniteCullChain {
   voxRasterDispatchAttr: IndirectStorageBufferAttribute;
   /** phase 1: clear → instance cull → cluster cull → raster args */
   runPhase1(renderer: Renderer): void;
+  /** CAMERA||SHADOW OVERLAP (item 4): the EXACT ordered kernel list runPhase1 would
+   *  batch-submit (one element per dispatch), so a caller can CONCATENATE two culls'
+   *  batches into ONE submit and let Dawn overlap them (they write DISJOINT buffers).
+   *  The internal order/RAW correctness is identical to runPhase1; concatenation is
+   *  safe ONLY between culls that share no writable buffer (verified: the camera cull
+   *  and the shadow shared-cut cull each own fresh counters/qRaster/qFrontier). */
+  phase1Batch(): readonly unknown[];
   /** phase 2 (call after phase-1 raster + HZB build): re-test rejects */
   runPhase2(renderer: Renderer): void;
   /** write full-range args WITHOUT re-testing (?phase2=0 A/B + no-occl path) */
@@ -209,6 +217,10 @@ export function buildNaniteCull(
      *  far-forest flood). SHADOW culls run many chains with small cuts and pass a far
      *  smaller cap so N×2 frontier buffers don't waste GBs. */
     frontierCap?: number;
+    /** item 6: the BFS pass count (≥ the deepest DAG anchor-chain or leaves never emit =
+     *  holes). Callers pass registry.maxDagDepth (+ a small margin). ?hierdepth overrides.
+     *  Omitted ⇒ the legacy constant. Each pass is paid TWICE/frame (camera + shadow cut). */
+    hierDepth?: number;
   },
 ): NaniteCullChain {
   // N8-HIC: the cull is HIERARCHICAL — seed each mesh's roots + BFS-descend the DAG.
@@ -217,11 +229,18 @@ export function buildNaniteCull(
   const frontierCap = Math.min(QRASTER_CAP, Math.max(1, Math.round(opts?.frontierCap ?? QRASTER_CAP)));
   // hier BFS pass count — a CPU-fixed loop (the GPU frontier count isn't visible to
   // the CPU mid-frame). Must be ≥ the deepest DAG anchor-chain or the tail clusters
-  // never emit (holes). ?hierdepth=N tunes it (default below); a lower value sheds
-  // the empty-tail passes that dominate the SHADOW culls' per-frame dispatch count.
+  // never emit (holes). PRIORITY: ?hierdepth=N override > opts.hierDepth (the MEASURED
+  // registry.maxDagDepth, item 6 — exact, no holes, sheds the empty-tail passes the old
+  // constant 18 paid twice/frame) > the legacy constant 18 (safe fallback when no measured
+  // depth is threaded). Each pass is paid TWICE/frame (camera + shadow shared-cut).
+  const hierDepthOverride = new URLSearchParams(window.location.search).get('hierdepth');
   const hierDepth = Math.max(
     1,
-    Math.round(Number(new URLSearchParams(window.location.search).get('hierdepth') ?? 18)),
+    hierDepthOverride != null && Number.isFinite(Number(hierDepthOverride))
+      ? Math.round(Number(hierDepthOverride))
+      : opts?.hierDepth != null && Number.isFinite(opts.hierDepth)
+        ? Math.round(opts.hierDepth)
+        : 18,
   );
   const coneCull = opts?.coneCull !== false;
   // S3 SHADOW CLIPMAP hollow (D-N29): a clipmap level rasters only the RING
@@ -422,6 +441,9 @@ export function buildNaniteCull(
   // vs the brute-force; the cut it produces is the SAME, just reached top-down).
   // ──────────────────────────────────────────────────────────────────────────
   let runPhase1: (renderer: Renderer) => void;
+  // item 4: the exact ordered BFS batch (assigned inside the block below) — exposed so a
+  // caller can concatenate disjoint culls into one submit (phase1Batch()).
+  let phase1BatchList: readonly unknown[] = [];
   {
     const HIER_MAX_DEPTH = hierDepth; // ≥ the deepest DAG (measured ~13) + margin
     // Frontier capacity (items in flight during the BFS). The CAMERA needs the full
@@ -633,6 +655,13 @@ export function buildNaniteCull(
     (kTraverseAB as ComputeKernel).setName('nanTraverseAB');
     const kTraverseBA = makeTraverse(qFrontierB, qFrontierA, FB, FA);
     (kTraverseBA as ComputeKernel).setName('nanTraverseBA');
+    // SUBMIT-COALESCE enabler: attach each traverse's per-node INDIRECT dispatch attr
+    // so the batched BFS (below) dispatches them at their tight traverseDispatch size
+    // (NOT the baked QRASTER_CAP grid — the ~1B-thread over-dispatch trap). Both share
+    // the one traverseDispatchAttr; the strict [kArgs(p), kTraverse(p)] order makes the
+    // shared-buffer WAW/WAR between passes serialize correctly inside the single pass.
+    setIndirectDispatch(kTraverseAB, traverseDispatchAttr);
+    setIndirectDispatch(kTraverseBA, traverseDispatchAttr);
 
     // args before each pass: reset the OUTPUT count, dispatch over the INPUT count
     const makeArgs = (inIdx: number, outIdx: number): unknown => {
@@ -649,20 +678,38 @@ export function buildNaniteCull(
     const kArgsBA = makeArgs(FB, FA);
     (kArgsBA as ComputeKernel).setName('nanArgsBA');
 
-    runPhase1 = (renderer: Renderer): void => {
-      // batched: kSeedRoots only depends on kClearHier via the counter UAV, which
-      // inter-dispatch auto-sync covers — one submit instead of two.
-      dispatchBatch(renderer, [kClearHier, kSeedRoots]);
-      for (let p = 0; p < HIER_MAX_DEPTH; p++) {
-        if (p % 2 === 0) {
-          dispatch(renderer, kArgsAB as never);
-          dispatchIndirect(renderer, kTraverseAB as never, traverseDispatchAttr);
-        } else {
-          dispatch(renderer, kArgsBA as never);
-          dispatchIndirect(renderer, kTraverseBA as never, traverseDispatchAttr);
-        }
+    // SUBMIT-COALESCE: the WHOLE cull BFS in ONE batched submit (was kClearHier,
+    // kSeedRoots, then 2×HIER_MAX_DEPTH separate dispatches + kRasterArgs = up to ~38
+    // queue.submit drains/cull). The exact ORDER is load-bearing and PRESERVED here:
+    //   [kClearHier, kSeedRoots, (kArgsAB, kTraverseAB, kArgsBA, kTraverseBA)×depth/2,
+    //    kRasterArgs]
+    // RAW/WAW correctness inside the single compute pass (inter-dispatch UAV auto-sync,
+    // each dispatch its own usage scope):
+    //   - kSeedRoots AFTER kClearHier (reads cleared counters / FA frontier count);
+    //   - kArgs(p) writes traverseDispatch + zeroes the OUTPUT frontier count, then
+    //     kTraverse(p) reads traverseDispatch INDIRECT (RAW on the STORAGE|INDIRECT
+    //     buffer) and reads/writes the ping-pong frontiers (read inV.ro, write outV.rw
+    //     — disjoint, N0 law). NEVER reorder kArgs(p) after kTraverse(p).
+    //   - the single shared traverseDispatch is rewritten each kArgs: the strict
+    //     interleave makes kArgsBA's write WAR-ordered after kTraverseAB's indirect read.
+    //   - kRasterArgs LAST reads counters[1] (the BFS emit cursor, RAW) → qRaster[0] +
+    //     rasterDispatch. (kRasterArgs2/syncFullArgs stays its own call: it RAW-depends
+    //     on qRaster[0] written here and is invoked separately by the frame after the
+    //     voxel fan-out — kept out of this batch on purpose.)
+    // The traverse kernels were setIndirectDispatch-tagged above so they keep their
+    // tight indirect size in this batched (single dispatchSize=null) path.
+    const bfsBatch: unknown[] = [kClearHier, kSeedRoots];
+    for (let p = 0; p < HIER_MAX_DEPTH; p++) {
+      if (p % 2 === 0) {
+        bfsBatch.push(kArgsAB, kTraverseAB);
+      } else {
+        bfsBatch.push(kArgsBA, kTraverseBA);
       }
-      dispatch(renderer, kRasterArgs);
+    }
+    bfsBatch.push(kRasterArgs);
+    phase1BatchList = bfsBatch;
+    runPhase1 = (renderer: Renderer): void => {
+      dispatchBatchMixed(renderer, bfsBatch);
     };
   }
 
@@ -739,6 +786,7 @@ export function buildNaniteCull(
     qVoxRasterAttr,
     voxRasterDispatchAttr,
     runPhase1,
+    phase1Batch: () => phase1BatchList,
     runPhase2,
     syncFullArgs,
     runVoxFanout,

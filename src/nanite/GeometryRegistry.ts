@@ -43,7 +43,7 @@ import type { Renderer, StorageBufferNode } from 'three/webgpu';
 import { StorageBufferAttribute } from 'three/webgpu';
 import type { NF, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
 import type { DagBuild, DagCluster } from './BuildDag';
-import { buildDagHierarchy, buildHeightGridHierarchy } from './DagHierarchy';
+import { buildDagHierarchy, buildHeightGridHierarchy, maxChainDepth } from './DagHierarchy';
 import { type BuiltClusters, type ClusterStats, clusterize } from './Clusterize';
 import {
   type BufOf,
@@ -899,6 +899,11 @@ export class GeometryRegistry {
   private dagLinksArr!: Uint32Array;
   /** monotonic cursor into dagLinksArr; attachDag appends [roots, children] per DAG */
   private dagLinksCursor = 0;
+  /** item 6: the deepest root->leaf anchor chain (in NODES) across every attached DAG -
+   *  the MINIMUM number of GPU BFS passes (NaniteCull hierDepth) that still emits every
+   *  leaf (fewer => HOLES). Folded up as DAGs attach; exposed via maxDagDepth. Starts 1
+   *  (a flat / no-DAG world traverses in one pass). */
+  private _maxDagDepth = 1;
   /** voxel-foliage: flat brick records (BRICK_WORDS u32 each) — see RegistryGpu.voxelBricks */
   private voxelBricksArr!: Uint32Array;
 
@@ -944,6 +949,13 @@ export class GeometryRegistry {
   }
   get clusterCount(): number {
     return this.clusterCursor;
+  }
+  /** item 6: deepest root->leaf DAG anchor chain (in NODES) over all attached DAGs.
+   *  The cull's BFS pass count (hierDepth) MUST be >= this to emit every leaf (under
+   *  = holes). Stable by first frame (veg DAGs attach at build; terrain tiles share one
+   *  uniform grid depth). >= 1 always. */
+  get maxDagDepth(): number {
+    return this._maxDagDepth;
   }
   get triCount(): number {
     return this.triCursor;
@@ -1433,6 +1445,9 @@ export class GeometryRegistry {
     // dagLinks as [roots…][children…]. childBase per cluster (DAG words 10/11) +
     // rootBase/Count on the mesh seed the BFS traversal that replaces brute-force.
     const hier = buildDagHierarchy(dag);
+    // item 6: fold this DAG's deepest anchor chain into the global max (sets the
+    // minimum BFS pass count the cull needs to emit every leaf — under = holes).
+    this._maxDagDepth = Math.max(this._maxDagDepth, maxChainDepth(hier));
     const linkBase = this.dagLinksCursor;
     const rootCount = hier.rootIndices.length;
     const childTotal = hier.childIndices.length;
@@ -1845,6 +1860,8 @@ export class GeometryRegistry {
     // rootCount → kSeedRoots + the BFS traverse render terrain through the SAME hier cull
     // as vegetation (no brute path, no hybrid).
     const hier = buildHeightGridHierarchy(clusters);
+    // item 6: the terrain anchor-chain depth also counts toward the global BFS pass floor.
+    this._maxDagDepth = Math.max(this._maxDagDepth, maxChainDepth(hier));
     const dlBase = this.tilePoolBase.dagLinks + slot * pool.dagLinksCap;
     const rootCount = hier.rootIndices.length;
     const childTotal = hier.childIndices.length;

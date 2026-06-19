@@ -131,6 +131,15 @@ export interface NaniteShadow {
   /** per-cascade: refresh cascade VP/planes, cull, depth-raster, copy → texture.
    *  Call BEFORE post.render() (the resolve samples the textures that frame). */
   run(renderer: Renderer, csm: object | null, mainCamera: PerspectiveCamera): void;
+  /** CAMERA||SHADOW OVERLAP (item 4, CLIP path only, opt-in): do the CPU-side VP fit +
+   *  cadence decision NOW and return the camera-DISJOINT shadow-cut cull BATCH (or null
+   *  when no level re-rasters this frame), WITHOUT dispatching it. The caller concatenates
+   *  it with the camera cull's phase1Batch() into ONE submit (Dawn can then overlap the two
+   *  disjoint culls). A subsequent run() with cutAlreadyDispatched=true SKIPS its own cut
+   *  dispatch (it was folded into the combined submit) and only runs the per-level
+   *  filter+raster. Undefined on the cascade path (no shared cut) ⇒ caller falls back to the
+   *  default ordering. The fit is pose-only (no GPU), so doing it early is safe. */
+  cullPrepass?(renderer: Renderer, mainCamera: PerspectiveCamera): readonly unknown[] | null;
   /** TSL shadow factor in [0,1] for the resolve: nearest-covering-cascade select
    *  + PCSS over our own per-cascade depth textures. worldPos+normal world-space. */
   /** pix: the pixel coord for the IGN sample-rotation noise. Defaults to
@@ -157,6 +166,9 @@ export function buildNaniteShadow(
   disp?: TerrainDisp,
   /** trunk wind — MUST match the camera raster's makeFetch */
   wind?: TrunkWindOpt,
+  /** item 6: the measured deepest DAG anchor-chain (registry.maxDagDepth + margin) — the
+   *  per-cascade BFS pass count. Omitted ⇒ the cull's legacy default. ?hierdepth overrides. */
+  hierDepth?: number,
 ): NaniteShadow {
   const cascades: Cascade[] = [];
   const cascVP: UniformMat4[] = [];
@@ -200,6 +212,7 @@ export function buildNaniteShadow(
       tau: cullTau,
       minPx: cullMinPx,
       frontierCap: SHADOW_FRONTIER_CAP,
+      hierDepth, // item 6: BFS passes = measured max DAG depth (no holes, sheds tail passes)
     });
     // REUSE the raster depth-only: clearVis/depth1/hwDepth.
     const raster = buildNaniteRaster(gpu, heightTex, cam, cull, vis, 'flat', false, disp, wind);
