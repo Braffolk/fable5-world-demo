@@ -703,13 +703,9 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // ── COOPERATIVE-RASTER WORKGROUP MEMORY (the close-up overdraw-imbalance fix) ──────
   // Per-cluster shared brick records (Phase A fills, Phase B consumes). MAX_BRICKS_PER_
   // CLUSTER=128 entries each. wgCand packs the brick's election key (depthKey24<<8|id8);
-  // bbX0/bbY0/bbW/bbH are the brick's CLAMPED screen bbox; wgPrefix[b] is the running
-  // flat-pixel start of brick b (Σ area of bricks < b); wgBrickAbs[b]/wgDensBits[b] are
-  // only consumed in dither mode. ~7×128×4B ≈ 3.5 KB workgroup memory — comfortable.
+  // bbX0/bbY0/bbW/bbH are the brick's CLAMPED screen bbox; wgBrickAbs[b]/wgDensBits[b] are
+  // only consumed in dither mode. ~6×128×4B ≈ 3 KB workgroup memory — comfortable.
   const WG_RASTER = MAX_BRICKS_PER_CLUSTER; // 128 lanes per cluster workgroup
-  // ceil(log2(WG_RASTER)) — fixed binary-search iterations to map a flat pixel index to its
-  // owning brick over the monotonic prefix array (covers up to 2^PREFIX_BITS bricks).
-  const PREFIX_BITS = Math.ceil(Math.log2(WG_RASTER)) + 1;
   const kVoxScatter = Fn(() => {
     // ── WORKGROUP-COOPERATIVE FOOTPRINT RASTER (CudaRaster T6/T8 + Lucid balanced ──────
     // dispatch; the residual-overdraw / per-lane-imbalance fix). Iteration-1 went
@@ -730,14 +726,15 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
     //   PHASE A (1 lane = 1 brick): decode + project + CLAMP each brick → store its bbox +
     //     election key into workgroup shared arrays; area = bbW·bbH. (Same per-brick math
     //     as before, but it now only SETS UP the footprint, it does not RASTER it.)
-    //   PREFIX SCAN (thread 0): running Σ area → wgPrefix[b] + wgTotalPx. ≤128 serial adds
-    //     (replaces the 16K-px-per-lane inner loop with 128 cheap adds on one lane).
-    //   PHASE B (ALL lanes, flat cooperative): every lane strides the cluster's FLAT pixel
-    //     space (loopU(local, wgTotalPx, …, WG_RASTER)). A flat index f maps to (brick,lx,
-    //     ly) by a short scan over wgPrefix; then the election runs. A 16K-px brick's
-    //     pixels are now spread across all 128 lanes (~128 iters/lane) instead of 16K on
-    //     one — the footprint cost becomes O(area/WG) per lane, not O(area). The waves
-    //     stay full regardless of per-brick footprint variance.
+    //   PHASE B (ALL lanes, cooperative per-BRICK): loop b over the cluster's bricks; WITHIN
+    //     each brick stride its OWN footprint [0, area) across all WG_RASTER lanes
+    //     (loopU(brickLocal, area, …, WG_RASTER)). A 16K-px brick's pixels are spread across
+    //     all 128 lanes (~128 iters/lane) instead of 16K on one — O(area/WG) per lane, not
+    //     O(area); waves stay full regardless of per-brick footprint variance. localPx is
+    //     [0, area) BY CONSTRUCTION, so every footprint pixel of every non-empty brick reaches
+    //     the election (54c3947 density) and the ly = localPx/bbW overflow column is
+    //     STRUCTURALLY impossible — no flat-index reconstruction, no prefix array, no binary
+    //     search (the old flat-domain scheme's 99.2% loss + duplicate-prefix hazard, deleted).
     //
     // The election (depthKey24 atomicMax + winner visBV store), the per-brick geometry
     // (54c3947), the BRICK_MAX_EXT clamp, the per-block occlusion cull, and the ?voxdither
@@ -752,10 +749,8 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
     const wgBbW = workgroupArray('uint', WG_RASTER);
     const wgBbH = workgroupArray('uint', WG_RASTER);
     const wgCand = workgroupArray('uint', WG_RASTER); // depthKey24<<8 | id8 (loss-exact key)
-    const wgPrefix = workgroupArray('uint', WG_RASTER); // Σ area of bricks < b (flat start)
     const wgBrickAbs = voxDither ? workgroupArray('uint', WG_RASTER) : null; // dither salt
     const wgDensBits = voxDither ? workgroupArray('uint', WG_RASTER) : null; // dither raw density byte (0..255)
-    const wgScan = workgroupArray('uint', 2); // [0]=brickCount, [1]=wgTotalPx (thread-0 scan)
     If(itemIdx.lessThan(itemCount), () => {
       const item = qVoxRasterRO.element(itemIdx.add(uint(1)));
       const instId = item.x.toVar();
@@ -952,20 +947,28 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
             endX.assign(minI(minI(toI(width - 1), toI(sMaxX.ceil())), capX));
             endY.assign(minI(minI(toI(height - 1), toI(sMaxY.ceil())), capY));
           }).Else(() => {
-            // straddler → small box at the STABLE projected centre (only if centre is in front).
+            // straddler → small box at the STABLE projected centre. CLAMP, do not DROP: a brick
+            // the camera sits INSIDE is the NEAREST thing on screen, so it MUST win its election,
+            // not vanish (the iter-1 close-up sparseness bug = this centre being dropped when it
+            // fell behind the near plane). Clamp w to a small positive epsilon so a centre at/
+            // behind the near plane still yields a STABLE on-screen position; paint the bounded
+            // BRICK_MAX_EXT centre box there (NOT the degenerate sMin/sMax slab ⇒ no columns),
+            // and pin bbNearZ via the centre's clamped ndc.z (nz.clamp(0,1) below maps an at/
+            // behind-near depth to 0 = nearest). This keeps the 048f451 silhouette fix (bounded
+            // box, no tall sky monolith) while recovering every close-up brick.
             const cp = (cam.vp.mul(vec4(brWCenter, 1)) as unknown as NV4).toVar();
-            If(cp.w.greaterThan(float(NEAR_EPS)), () => {
-              const cndc = cp.xyz.div(cp.w).toVar();
-              const ccx = cndc.x.add(1).mul(0.5).mul(W).toVar();
-              const ccy = cndc.y.add(1).mul(0.5).mul(H).toVar();
-              startX.assign(maxI(toI(0), toI(ccx.sub(float(BRICK_MAX_EXT)).floor())));
-              startY.assign(maxI(toI(0), toI(ccy.sub(float(BRICK_MAX_EXT)).floor())));
-              endX.assign(minI(toI(width - 1), toI(ccx.add(float(BRICK_MAX_EXT)).ceil())));
-              endY.assign(minI(toI(height - 1), toI(ccy.add(float(BRICK_MAX_EXT)).ceil())));
-              // depth from the centre (the in-front corners may all have been excluded ⇒ nearZ
-              // would still be its 1e9 seed). min with any surviving corner nearZ, then clamp.
-              bbNearZ.assign(bbNearZ.min(cndc.z));
-            });
+            const cw = cp.w.max(float(NEAR_EPS)).toVar(); // clamp w ≥ ε so a behind-near centre is still placeable
+            const cndc = cp.xyz.div(cw).toVar();
+            const ccx = cndc.x.add(1).mul(0.5).mul(W).toVar();
+            const ccy = cndc.y.add(1).mul(0.5).mul(H).toVar();
+            startX.assign(maxI(toI(0), toI(ccx.sub(float(BRICK_MAX_EXT)).floor())));
+            startY.assign(maxI(toI(0), toI(ccy.sub(float(BRICK_MAX_EXT)).floor())));
+            endX.assign(minI(toI(width - 1), toI(ccx.add(float(BRICK_MAX_EXT)).ceil())));
+            endY.assign(minI(toI(height - 1), toI(ccy.add(float(BRICK_MAX_EXT)).ceil())));
+            // depth from the centre (the in-front corners may all have been excluded ⇒ nearZ
+            // would still be its 1e9 seed). min with the centre's clamped ndc.z, then clamp to
+            // [0,1] below — a behind-near centre lands at/below 0 ⇒ nearest, wins its election.
+            bbNearZ.assign(bbNearZ.min(cndc.z));
           });
           const validBB = startX.lessThanEqual(endX).and(startY.lessThanEqual(endY));
           If(validBB, () => {
@@ -989,77 +992,36 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
           });
         });
       });
-      workgroupBarrier(); // Phase A records complete before the prefix scan reads them
+      workgroupBarrier(); // Phase A records complete before Phase B reads them
 
-      // ── PREFIX SCAN (thread 0): running Σ(bbW·bbH) → wgPrefix[b] + total flat pixels.
-      // ≤128 serial adds on one lane — the cheap replacement for the per-lane O(16K) inner
-      // footprint loop. wgPrefix[b] = first flat-pixel index owned by brick b.
-      If(brickLocal.equal(uint(0)), () => {
-        const nB = minU(brickCount, uint(WG_RASTER)).toVar();
-        wgSet(wgScan, uint(0), nB);
-        const acc = uint(0).toVar();
-        loopU(uint(0), nB, (b) => {
-          wgSet(wgPrefix, b, acc);
-          const w = (wgBbW.element(b) as unknown as NU).toVar();
-          const h = (wgBbH.element(b) as unknown as NU).toVar();
-          acc.assign(acc.add(w.mul(h)));
-        });
-        wgSet(wgScan, uint(1), acc); // total flat-pixel count for this cluster
-      });
-      workgroupBarrier(); // prefix + total visible to every lane before Phase B
-
-      // ── PHASE B (ALL lanes, flat cooperative raster): every lane strides the cluster's
-      // FLAT pixel space [0, wgTotalPx). A flat index f → (brick b, lx, ly) by a short scan
-      // over wgPrefix (≤ brickCount, monotonic). Then the election runs. This spreads a big
-      // brick's footprint EVENLY across all WG_RASTER lanes (CudaRaster T8 flatten-emit /
-      // Lucid balanced dispatch) — the per-lane cost is O(area/WG), never O(area).
-      const nBricks = (wgScan.element(uint(0)) as unknown as NU).toVar();
-      const totalPx = (wgScan.element(uint(1)) as unknown as NU).toVar();
-      loopU(brickLocal, totalPx, (f) => {
-        // map flat index f → brick b: largest b with wgPrefix[b] <= f. BINARY SEARCH over the
-        // monotonic prefix array (CudaRaster T8 "flatten-total + per-task binary-search" —
-        // O(log nBricks) per task, NOT a linear O(nBricks) scan that would re-add a 128×
-        // per-pixel factor). PREFIX_BITS=7 fixed iterations cover the ≤128-brick range. Empty
-        // bricks (bbW=0) share a prefix with their successor; the bbW>0 guard below rejects a
-        // landing on a zero-width brick, and the search lands on the LAST equal prefix (the
-        // real owner) because we move lo up whenever wgPrefix[mid] <= f.
-        const lo = uint(0).toVar();
-        const hi = nBricks.toVar(); // exclusive upper bound
-        loopU(uint(0), uint(PREFIX_BITS), () => {
-          If(lo.add(uint(1)).lessThan(hi), () => {
-            const mid = lo.add(hi).shiftRight(uint(1)).toVar();
-            If((wgPrefix.element(mid) as unknown as NU).lessThanEqual(f), () => {
-              lo.assign(mid);
-            }).Else(() => {
-              hi.assign(mid);
-            });
-          });
-        });
-        const b = lo.toVar();
-        // recover this brick's record + local pixel.
+      // ── PHASE B (ALL lanes, cooperative per-BRICK raster): loop over every brick in the
+      // cluster; WITHIN each brick, stride its OWN footprint [0, area) across all WG_RASTER
+      // lanes. localPx is BY CONSTRUCTION in [0, area) ⇒ it can NEVER exceed bbW·bbH, so the
+      // ly = localPx/bbW overflow column is structurally impossible and NO pixel is ever
+      // dropped. This restores 54c3947's density (every footprint pixel of every non-empty
+      // brick reaches the election) with no flat-index reconstruction, no prefix array, and
+      // no binary search (the 99.2%-loss + duplicate-prefix hazard, all deleted). A big brick
+      // still spreads across all 128 lanes via its inner stride ⇒ the 4fe6821 stall-fix
+      // (O(area/WG) per lane, BRICK_MAX_EXT caps any one brick at ≤128×128) is preserved;
+      // tiny/empty bricks (area 0) contribute a zero-trip inner loop.
+      const nBricks = minU(brickCount, uint(WG_RASTER)).toVar();
+      loopU(uint(0), nBricks, (b) => {
+        // recover this brick's footprint RECORD (set up in Phase A).
         const bbX0 = (wgBbX0.element(b) as unknown as NU).toVar();
         const bbY0 = (wgBbY0.element(b) as unknown as NU).toVar();
         const bbW = (wgBbW.element(b) as unknown as NU).toVar();
         const bbH = (wgBbH.element(b) as unknown as NU).toVar();
         const cand = (wgCand.element(b) as unknown as NU).toVar();
-        // AREA BOUND (the column-regression fix): localPx = f − wgPrefix[b] is only a valid
-        // local pixel of brick b if it lies inside b's TRUE footprint (bbW·bbH). The binary
-        // search can mismatch by one at a prefix boundary or land on a zero-area brick that
-        // shares a prefix with its successor, leaving localPx ≥ bbW·bbH; with only the bbW>0
-        // guard, ly = localPx/bbW then OVERFLOWS past bbH and the pixel walks straight up/down
-        // the framebuffer at a constant x = bbX0 + localPx%bbW — a full-height vertical column.
-        // Gating on localPx < bbW·bbH turns a search mismatch into a silent no-op (drop the
-        // stray flat index — loss-exact) instead of a vertical smear. wgBbH was stored in
-        // Phase A but never read until now; this is the missing read.
-        const localPx = f.sub(wgPrefix.element(b) as unknown as NU).toVar();
-        If(bbW.greaterThan(uint(0)).and(localPx.lessThan(bbW.mul(bbH))), () => {
+        const area = bbW.mul(bbH).toVar(); // 0 for a culled/idle brick ⇒ zero-trip inner loop
+        // each lane strides this brick's footprint: localPx = brickLocal, brickLocal+128, …
+        loopU(brickLocal, area, (localPx) => {
           const lx = localPx.mod(bbW).toVar();
-          const ly = localPx.div(bbW).toVar();
+          const ly = localPx.div(bbW).toVar(); // < bbH since localPx < bbW·bbH (no column)
           const x = bbX0.add(lx).toVar();
           const y = bbY0.add(ly).toVar();
           const px = y.mul(uint(width)).add(x).toVar();
-          // emit closure — built INSIDE the per-pixel conditional flow so `cand`'s use as the
-          // atomicMax value-arg stays in the same conditional subtree (TSL r184 codegen-safe).
+          // emit closure — built INSIDE the per-pixel flow so `cand`'s use as the atomicMax
+          // value-arg stays in the same conditional subtree (TSL r184 codegen-safe).
           const electHere = (): void => {
             // VERBATIM the world1 election (NaniteRaster.ts:937-959). `cand` was precomputed
             // per brick (loss-exact); copy it into a local var HERE so its FIRST build is in
@@ -1090,8 +1052,8 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
           } else {
             electHere();
           }
-        });
-      }, WG_RASTER);
+        }, WG_RASTER);
+      });
     });
     // ONE WORKGROUP per voxel cluster work-item (split2D indirect args over the fanned count,
     // unchanged), WG_RASTER (=MAX_BRICKS_PER_CLUSTER) threads each. Phase A = 1 lane/brick;
