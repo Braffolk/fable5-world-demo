@@ -132,3 +132,40 @@
   (bit-exact on healthy pixels), plain tap-average fallback below it. A
   global additive weight floor is NOT equivalent — it perturbs the blend
   on every partially-weighted pixel (printed a ~1% wash on a hero trunk).
+
+## queue.submit() granularity + GPU inter-kernel concurrency (CRITICAL — 2026-06-19)
+
+**The single most overlooked perf lever in this project** (it never came up across ~30M tokens of
+optimization). WebGPU has no async-compute queue (exactly one `GPUQueue` per device), so it was
+assumed nothing could run concurrently. WRONG: GPUs + Dawn (Chromium's WebGPU impl) overlap
+independent dispatches **automatically — but ONLY when they share one command buffer / submit.**
+
+**How three.js r184 maps calls → submits (verify in `WebGPUBackend.js`):**
+- Each `renderer.compute(node)` and each `renderer.render(scene)` opens its OWN command encoder and
+  fires its OWN `queue.submit()`. They are NOT batched with each other.
+- `clear()`, `copyTextureToTexture()`, `copyFramebufferToTexture()` each fire their own extra submit.
+- `beginRender` opens one encoder for the whole render context; `finishRender` submits it — so all
+  render passes inside ONE `render()` ride a single command buffer. But `compute()` then `render()`
+  = 2 submits; N separate `compute()` calls = N submits.
+- **THE BATCHING LEVER:** `compute()` accepts an ARRAY. `renderer.compute([a,b,c])` →
+  `Array.isArray(computeNodes) ? computeNodes : [computeNodes]` → opens ONE encoder via
+  `beginCompute`, dispatches every node, submits ONCE in `finishCompute`. So `compute([a,b,c])` = 1
+  submit; three separate `compute()` calls = 3 submits. Our `dispatchBatch` helper (`src/.../Tsl.ts:241-243`)
+  uses this array form and is the only place we currently batch.
+
+**Why it matters (the real cost — NOT just CPU submit overhead):**
+Within ONE submit, Dawn can OVERLAP two dispatches iff (a) they do not write the same resource
+(read-only sharing is fine) and (b) neither's output is the other's input. If one writes what the
+other reads → they serialize (Dawn inserts the UAV barrier). Across SEPARATE submits the GPU drains
+between every dispatch → ALL inter-kernel concurrency + latency hiding is forfeit. This is the only
+"async-ish" parallelism WebGPU offers, and maximally-isolated submits give it zero headroom.
+
+**Rules:**
+- Batch INDEPENDENT dispatches into one `compute([...])` → Dawn overlaps them (the real GPU win).
+- Batch DEPENDENT chains into one `compute([...])` too → still skips the per-submit drain; in-pass
+  UAV barriers + preserved array order keep it correct. Net: far fewer submits, no race.
+- NEVER co-batch a write+read / write+write on the same resource OUT OF dependency order. Same-order
+  dependent chains ARE safe (dispatchBatch preserves order + auto-barriers).
+- Measured state (2026-06-19 audit): frame fired ~45 submits static / ~92 moving, nearly all isolated
+  (only `[kClearHier,kSeedRoots]` + the HZB mip chain batched). The cull BFS (~36 submits) and shadow
+  BFS (~36) dominate and are strict producer-consumer chains → each collapses to ~1 submit, zero race.
