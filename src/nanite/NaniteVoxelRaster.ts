@@ -157,6 +157,23 @@ export interface VoxelRasterHandles {
 export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandles {
   const { gpu, cam, qVoxRasterRO, voxRasterDispatchAttr, depthKey24, visPayloadV, visBV, width, height } = deps;
 
+  // ?voxdither=0|1 — the PERF-QUALITY TENSION knob (Stage-3b-perf, spec §3/§6.0/§6.4).
+  //   0 = OPAQUE bricks (DEFAULT): every covered pixel that survives the occlusion skip is
+  //       elected OPAQUE — NO coverHash, NO per-block density buffer read (both are pure
+  //       overhead here). This is the CHEAP-AND-CORRECT path: a sub-pixel (≤1-2 px) opaque
+  //       brick is not visibly blocky, and because it OCCLUDES, the front-to-back early-skip
+  //       eliminates everything behind it ⇒ the occlusion-collapse that makes voxels net-win.
+  //       The lever to make it look correct is SMALL bricks (finer ?voxgrid= / farther
+  //       ?voxnear=), NOT see-through dither.
+  //   1 = the Stage-3b density-modulated DITHER: a stable per-(pixel,block) coverHash drops
+  //       (1-density) of the footprint so the band reads as SPARSE see-through foliage. Looks
+  //       correct when bricks are COARSE/near, but see-through ⇒ no occlusion ⇒ the election
+  //       explodes (the +18.7 ms regression the task is resolving). Kept as the A/B control.
+  // The coverHash + density read are emitted ONLY in dither mode (build-time gate); and in
+  // dither mode the hash now runs AFTER the occlusion skip (cheap reorder — occluded pixels
+  // never pay the hash). DEFAULT OPAQUE so the sweep measures the cheap path first.
+  const voxDither = new URLSearchParams(window.location.search).get('voxdither') === '1';
+
   const tilesX = Math.ceil(width / TILE);
   const tilesY = Math.ceil(height / TILE);
   const nTiles = tilesX * tilesY;
@@ -407,15 +424,21 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
               // coarse one-sample-per-block proxy (§6.4) — one buffer read per block,
               // loop-invariant over the footprint. Clamp into [FLOOR,CEIL] so the block
               // never fully vanishes (silhouette survives) nor paints a perfect wall.
-              const brickBase = elemU(gpu.clusters, cbase.add(uint(6))).toVar();
-              const albWord = elemU(
-                gpu.voxelBricks,
-                brickBase.mul(uint(BRICK_WORDS)).add(uint(BRICK_ALBEDO)),
-              ).toVar();
-              const density = toF(albWord.shiftRight(uint(24)).bitAnd(uint(0xff)))
-                .div(255)
-                .clamp(COVER_FLOOR, COVER_CEIL)
-                .toVar();
+              // OPAQUE MODE (?voxdither=0): this buffer read is pure overhead (no coverage
+              // gate downstream) ⇒ skip it entirely at build time (the spec §6.4 cheap path).
+              const density = voxDither
+                ? (() => {
+                    const brickBase = elemU(gpu.clusters, cbase.add(uint(6))).toVar();
+                    const albWord = elemU(
+                      gpu.voxelBricks,
+                      brickBase.mul(uint(BRICK_WORDS)).add(uint(BRICK_ALBEDO)),
+                    ).toVar();
+                    return toF(albWord.shiftRight(uint(24)).bitAnd(uint(0xff)))
+                      .div(255)
+                      .clamp(COVER_FLOOR, COVER_CEIL)
+                      .toVar();
+                  })()
+                : null;
 
               // screen bbox + nearest+farthest NDC z of the 8 world-AABB corners
               const W = float(cam.uW);
@@ -470,41 +493,31 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
                   loopI('vx', startX as unknown as NI, endX as unknown as NI, (x) => {
                     const lpx = uint(y).sub(py0).mul(uint(TILE)).add(uint(x).sub(px0)).toVar();
                     const prevE = aLoadU(wgElect.element(lpx)).toVar();
-                    // DENSITY-MODULATED COVERAGE GATE (§3 Risk #1 / §4.3 word4.A) — the
-                    // bloat-to-blob fix. The block keeps THIS pixel only if a STABLE
-                    // per-(pixel,block) dither falls below the block density: a 0.16-density
-                    // conifer block covers ~16% of its footprint, and the dropped ~84% of
-                    // pixels are never elected here ⇒ the bricks/background BEHIND win there
-                    // ⇒ the coarse band reads as sparse, see-through FOLIAGE, not a solid
-                    // slab. Salt the hash with the block payload so each block has its OWN
-                    // stipple (no aligned holes across overlapping blocks). Dropped pixels
-                    // pay NOTHING (the election + the whole voxCz/atomicMax below is skipped),
-                    // which is also why the see-through is "free" — less occlusion, more
-                    // bricks visible, the correct foliage behaviour (perf tune is Stage-3b).
-                    const keep = coverHash(uint(x), uint(y), payload).lessThan(density).toVar();
-                    // OCCLUSION SKIP (§6.3): nearKey can't beat the on-chip winner ⇒ this
-                    // block loses at this pixel ⇒ skip the election entirely. (loss-exact
-                    // occlusion gate; the coverage gate above is the only NEW intentional
-                    // drop — every KEPT pixel stays opaque + depth-correct.)
-                    If(keep.and(nearKey.greaterThan(prevE)), () => {
-                      // BUILD `cand` HERE, INSIDE the skip conditional — verbatim the working
-                      // tileproto shape (dfe6518:NaniteTileRaster.ts:617-639: `cand` is declared
-                      // inside `If(nearKey>prevE)`, in the SAME ConditionalNode flow as the
-                      // atomicMax that consumes it). The Stage-2 port DEVIATED by HOISTING this
-                      // `cand` `.toVar()` to the OUTER function scope (it's loop-invariant per
-                      // block) — but in TSL r184 a `.toVar()` whose declaration sits in the outer
-                      // scope while its FIRST build is the value argument of an atomicMax nested
-                      // several ConditionalNodes deep gets its flow-code placed in the wrong block.
-                      // When AtomicFunctionNode.generate (three/src/nodes/gpgpu/AtomicFunctionNode.js)
-                      // calls `valueNode.build(builder,'uint')`, the hoisted var yields '' in that
-                      // scope ⇒ Node.build hits the `result===''` guard (three/src/nodes/core/Node.js
-                      // :969-976) ⇒ "TSL: Invalid generated code, expected a uint" ⇒ three falls back
-                      // to `generateConst('uint')` (a const 0u) ⇒ the election word/depth is silently
-                      // corrupted (blocky slabs; the occlusion early-skip never fires). Declaring
-                      // `cand` in the atomic's own conditional flow (the tileproto position) keeps
-                      // its var declaration and the atomic in the same block ⇒ valid uint code.
-                      // voxCz is loop-invariant (one voxCz per block, §6.4), so moving only the
-                      // node-graph PLACEMENT of `cand` here is loss-EXACT — identical arithmetic.
+                    // THE ELECTION (loss-exact, the codegen-safe tileproto shape). Factored
+                    // into a closure so both modes emit IDENTICAL flow: the `cand` `.toVar()`
+                    // declaration and the `atomicMax` that consumes it stay in the SAME
+                    // ConditionalNode block (whether that block is the occlusion-skip `If` in
+                    // opaque mode, or the nested coverage `If(keep)` in dither mode).
+                    //
+                    // BUILD `cand` HERE, INSIDE the election conditional — verbatim the working
+                    // tileproto shape (dfe6518:NaniteTileRaster.ts:617-639: `cand` is declared
+                    // inside the skip `If`, in the SAME ConditionalNode flow as the atomicMax
+                    // that consumes it). The Stage-2 port originally DEVIATED by HOISTING this
+                    // `cand` `.toVar()` to the OUTER function scope (it's loop-invariant per
+                    // block) — but in TSL r184 a `.toVar()` whose declaration sits in the outer
+                    // scope while its FIRST build is the value argument of an atomicMax nested
+                    // several ConditionalNodes deep gets its flow-code placed in the wrong block.
+                    // When AtomicFunctionNode.generate (three/src/nodes/gpgpu/AtomicFunctionNode.js)
+                    // calls `valueNode.build(builder,'uint')`, the hoisted var yields '' in that
+                    // scope ⇒ Node.build hits the `result===''` guard (three/src/nodes/core/Node.js
+                    // :969-976) ⇒ "TSL: Invalid generated code, expected a uint" ⇒ three falls back
+                    // to `generateConst('uint')` (a const 0u) ⇒ the election word/depth is silently
+                    // corrupted (blocky slabs; the occlusion early-skip never fires). Declaring
+                    // `cand` in the atomic's own conditional flow (the tileproto position) keeps
+                    // its var declaration and the atomic in the same block ⇒ valid uint code.
+                    // voxCz is loop-invariant (one voxCz per block, §6.4), so the node-graph
+                    // PLACEMENT of `cand` here is loss-EXACT — identical arithmetic.
+                    const electHere = (): void => {
                       const cand = depthKey24(voxCz as unknown as NF)
                         .shiftLeft(uint(8))
                         .bitOr(payload.bitAnd(uint(0xff)))
@@ -517,6 +530,36 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
                           atomicAdd(atomicBuf.atomic.element(uint(WRITE_CTR)), uint(1));
                         });
                       });
+                    };
+                    // OCCLUSION SKIP (§6.3) FIRST: nearKey can't beat the on-chip winner ⇒ this
+                    // block loses at this pixel ⇒ skip the election entirely (loss-exact: cand ≤
+                    // nearKey at every pixel). This is the cheapest gate (an on-chip atomic load
+                    // + compare), so it runs BEFORE any density read / coverHash — occluded
+                    // pixels pay NOTHING, including (in dither mode) the hash. This reorder is a
+                    // pure win: the Stage-3b code ran coverHash on every covered pixel up front
+                    // and `.and()`ed it with the occlusion test, paying the hash even on pixels
+                    // the skip would reject. Now the hash runs ONLY past the skip.
+                    If(nearKey.greaterThan(prevE), () => {
+                      if (voxDither && density) {
+                        // DENSITY-MODULATED COVERAGE GATE (§3 Risk #1 / §4.3 word4.A) — the
+                        // bloat-to-blob fix. The block keeps THIS pixel only if a STABLE
+                        // per-(pixel,block) dither falls below the block density: a 0.16-density
+                        // conifer block covers ~16% of its footprint, and the dropped ~84% of
+                        // pixels are never elected ⇒ the bricks/background BEHIND win there ⇒
+                        // the coarse band reads as sparse, see-through FOLIAGE, not a solid slab.
+                        // Salt the hash with the block payload so each block has its OWN stipple
+                        // (no aligned holes across overlapping blocks). Computed HERE, after the
+                        // occlusion skip — occluded pixels never pay it. NOTE the tension this
+                        // knob resolves: see-through ⇒ no occlusion ⇒ the election explodes; the
+                        // OPAQUE default (?voxdither=0) drops this gate entirely.
+                        const keep = coverHash(uint(x), uint(y), payload).lessThan(density).toVar();
+                        If(keep, electHere);
+                      } else {
+                        // OPAQUE (?voxdither=0, DEFAULT): every pixel past the occlusion skip is
+                        // elected opaque — no hash, no see-through. Cheap AND (at sub-pixel brick
+                        // size via finer ?voxgrid / farther ?voxnear) correct (spec §6.4).
+                        electHere();
+                      }
                     });
                   });
                 });

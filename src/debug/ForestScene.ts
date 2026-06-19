@@ -74,6 +74,10 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
   //   ?forcevox   — DEBUG: voxel EVERYWHERE (suppress the leaf head; nearDist=0)
   //   ?voxnear=M  — mesh→voxel handoff distance (m), default DEFAULT_TRANSITION_DIST (~35)
   //   ?voxgrid=N  — voxel DETAIL (cell edge count / crown), default DEFAULT_VOXEL_GRID_DIM
+  //   ?voxdither=0|1 — voxel-band raster coverage (read in NaniteVoxelRaster): 0 = OPAQUE
+  //                    bricks (DEFAULT, cheap — no coverHash, occlusion-collapse intact;
+  //                    correct at sub-pixel brick size via finer ?voxgrid / farther ?voxnear);
+  //                    1 = Stage-3b density DITHER (see-through sparse-foliage, no occlusion).
   const forceVox = q.get('forcevox') !== null;
   const voxOn = q.get('voxreg') !== '0' || forceVox;
   const voxGridDim = Number(q.get('voxgrid') ?? DEFAULT_VOXEL_GRID_DIM) || DEFAULT_VOXEL_GRID_DIM;
