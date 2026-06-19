@@ -1,0 +1,532 @@
+/**
+ * NaniteVoxelRaster — the DEPTH-BUCKETED voxel-brick raster (spec §6.2/§6.3/§6.4).
+ *
+ * Stage 2 of the 2-tier voxel-foliage subsystem. PORTED from the deleted sort-middle
+ * TILED triangle prototype (`git show dfe6518:src/nanite/NaniteTileRaster.ts`,
+ * commits b037f4d/43e4aa1/fed6771) with BRICKS (block clusters) as the binned
+ * primitive instead of triangles. Two kernels, mirroring the tileproto kSetup→
+ * kRasterTiled split, with buffers split by ACCESS TYPE (the 34 ms lesson):
+ *
+ *   kVoxBin (§6.2 — one thread per VOXEL CLUSTER work-item from qVoxRaster):
+ *     project the cluster's BLOCK AABB through cam.vp → screen bbox + nearest NDC z →
+ *     bucket = top KBITS of depthKey24(nearestZ) → scatter a 1-word bucket-tagged entry
+ *     (payload = the qVoxRaster item index) into every 16×16 tile the bbox overlaps,
+ *     via an atomicAdd cursor into a flat per-tile list. atomicBuf(counts)/dataBuf(list).
+ *
+ *   kRasterVox (§6.3 — one workgroup per 16×16 tile, on-chip election):
+ *     PRE-SEED wgElect from the GLOBAL visPayloadV (so near-field TRIANGLE winners
+ *     occlude far bricks across the tri/voxel tier boundary). Then K near→far passes
+ *     (bk = 7..0) over the single flat list, processing only entries with eBucket==bk.
+ *     Per covered pixel: read prevE BEFORE the per-pixel z-interp; if the block's
+ *     nearestZ key can't beat prevE → SKIP the whole election (occlusion skip). Else
+ *     derive voxCz (AABB-slab front depth) + elect into the on-chip wgElect/wgId via
+ *     atomicMax. After all passes, FLUSH-MERGE wgElect/wgId into global visPayloadV/
+ *     visBV via atomicMax (merge, never overwrite — preserves nearer near-field tris).
+ *
+ * SPATIAL UNIT = the CLUSTER (≤128-brick BLOCK), not the individual brick (§A1 blocking
+ * decision): the brick record has NO per-brick position, and the cluster sphere (word0-3)
+ * bounds the whole block AABB. So kVoxBin projects the block, and the election id is the
+ * qVoxRaster item index (brick range recovered in the resolve via the cluster's word6/7).
+ * A block covers ONE or SEVERAL pixels — coarse, NOT a 1-write/pixel model (§6.1).
+ *
+ * BIT BUDGET (§4.5): the election WORD is `depthKey24(24) | id8`; the full id is plain-
+ * stored into visBV by the winner. The voxel id carries bit31=1 (the only bit free at
+ * both the 128- and 256-tri caps) + the qVoxRaster item index in the low ≤30 bits.
+ *
+ * ≤10 STORAGE BUFFERS per kernel (the hard constraint): kVoxBin drops tri-only
+ * verts/indices/hfVerts and binds clusters/meshes/instances/voxelBricks/qVoxRaster +
+ * atomicBuf/dataBuf = 7; kRasterVox binds voxelBricks/qVoxRaster/atomicBuf/dataBuf/
+ * visPayloadV/visBV = 6 (split atomicBuf/dataBuf like the tileproto).
+ */
+import { IndirectStorageBufferAttribute, StorageBufferAttribute } from 'three/webgpu';
+import type { Renderer } from 'three/webgpu';
+import {
+  Fn,
+  If,
+  atomicAdd,
+  atomicMax,
+  atomicStore,
+  float,
+  instanceIndex,
+  int,
+  uint,
+  vec3,
+  vec4,
+  workgroupArray,
+  workgroupBarrier,
+} from 'three/tsl';
+import type { NF, NI, NU, NV3, NV4 } from '../gpu/TSLTypes';
+import { CLUSTER_WORDS } from './GeometryRegistry';
+import type { RegistryGpu } from './GeometryRegistry';
+import { DISPATCH_ROW, QVOX_CAP } from './NaniteCommon';
+import type { NaniteCam } from './NaniteCommon';
+import { instTransformPoint, instYaw, instSphereRadius } from './NaniteCommon';
+import {
+  aLoadU,
+  bcU2F,
+  dispatch,
+  dispatchIndirect,
+  elemU,
+  elemUW,
+  loopI,
+  loopU,
+  localX,
+  maxI,
+  minI,
+  minU,
+  readBuffer,
+  sU32Views,
+  toF,
+  toI,
+  wgLinear,
+} from './Tsl';
+import type { AtomicBuf, BufOf, UV2 } from './Tsl';
+
+const TILE = 16; // px per tile edge (matches the tileproto)
+const WG = 64; // raster workgroup threads
+// FLAT per-tile list cap (the tileproto's original, fine overflow behaviour: a dropped
+// block is simply not rasterized — NOT mis-elected). A voxel band has FAR fewer
+// primitives per tile than the 388k-cluster triangle cut, so this is generous.
+const FLAT_TILE_CAP = 4096;
+// FRONT-TO-BACK depth buckets (§6.2, loss-exact). entry = payload | (bucket<<BUCKET_SHIFT);
+// bucket = top KBITS of depthKey24(nearest NDC z). LARGER depthKey = NEARER = HIGHER bucket.
+const K_BUCKETS = 8;
+const KBITS = 3; // log2(K_BUCKETS) — top KBITS of the 24-bit depthKey select the bucket
+const BUCKET_SHIFT = 28; // bucket field bit position; low 28 bits = payload
+const PAYLOAD_MASK = (1 << BUCKET_SHIFT) - 1;
+const NEAR_EPS = 1e-4;
+// voxel namespace bit (§4.5): the only bit free at BOTH the 128- and 256-tri caps.
+const VOX_BIT = 0x80000000;
+
+// BUILD-TIME BIT-BUDGET ASSERT (§6.2): the max payload (a qVoxRaster item index, < QVOX_CAP)
+// MUST fit below BUCKET_SHIFT so the bucket field never collides with payload bits, and the
+// bucket field itself must fit in a u32 above BUCKET_SHIFT. QVOX_CAP=2M ≪ 1<<28 (268M).
+{
+  if (QVOX_CAP - 1 >= 1 << BUCKET_SHIFT) {
+    throw new Error(
+      `NaniteVoxelRaster: payload cap ${QVOX_CAP - 1} >= 1<<BUCKET_SHIFT (${1 << BUCKET_SHIFT}) — bucket collides with payload`,
+    );
+  }
+  if (BUCKET_SHIFT + KBITS > 32) {
+    throw new Error(`NaniteVoxelRaster: bucket field overflows u32 (BUCKET_SHIFT ${BUCKET_SHIFT} + KBITS ${KBITS} > 32)`);
+  }
+}
+
+export interface VoxelRasterDeps {
+  gpu: RegistryGpu;
+  cam: NaniteCam;
+  /** voxel-raster work queue (cull §A1): [0]=(count,0); items 1.. = (instId, ci). */
+  qVoxRasterRO: BufOf<UV2>;
+  /** 2D-split dispatch args over the voxel-cluster count (cull.voxRasterDispatchAttr). */
+  voxRasterDispatchAttr: IndirectStorageBufferAttribute;
+  /** the SAME 24-bit depth key the world1 raster + resolve use (§6.7). */
+  depthKey24: (cz: NF) => NU;
+  /** global election buffers (the on-chip wgElect flushes here via atomicMax). */
+  visPayloadV: { atomic: AtomicBuf };
+  visBV: { atomic: AtomicBuf };
+  width: number;
+  height: number;
+}
+
+export interface VoxelRasterHandles {
+  /** dispatch kVoxBin then kRasterVox (call AFTER world1+hwRender so the on-chip
+   *  election can pre-seed from the global near-field triangle winners, §6.6). */
+  dispatchVoxel: (renderer: Renderer) => void;
+  /** [0] = per-pixel BRICK-WRITE counter (the Stage-2 overdraw-overlay number, §A2):
+   *  one increment per wgElect win — the occlusion-skip should drive this FAR below the
+   *  overlapping triangle fragments. Read AFTER dispatchVoxel. */
+  readWriteCount: (renderer: Renderer) => Promise<number>;
+  tilesX: number;
+  tilesY: number;
+  nTiles: number;
+}
+
+export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandles {
+  const { gpu, cam, qVoxRasterRO, voxRasterDispatchAttr, depthKey24, visPayloadV, visBV, width, height } = deps;
+
+  const tilesX = Math.ceil(width / TILE);
+  const tilesY = Math.ceil(height / TILE);
+  const nTiles = tilesX * tilesY;
+
+  // ---- buffers (split by ACCESS TYPE, tileproto §6.6) -------------------------------
+  // atomicBuf (atomicAdd targets — the only true contention): [0,nTiles) per-tile flat-
+  // list counts · [WRITE_CTR] the debug brick-write counter (Stage-2 overlay, §A2).
+  const COUNTS = nTiles;
+  const WRITE_CTR = COUNTS;
+  const atomicWords = COUNTS + 1;
+  const atomicBufAttr = new StorageBufferAttribute(new Uint32Array(atomicWords), 1);
+  const atomicBuf = sU32Views(atomicBufAttr, atomicWords);
+  // dataBuf (PLAIN stores, unique owner per slot): [tile·FLAT_TILE_CAP + slot] per-tile
+  // flat list, each entry = payload | bucket<<BUCKET_SHIFT.
+  const dataWords = nTiles * FLAT_TILE_CAP;
+  const dataBufAttr = new StorageBufferAttribute(new Uint32Array(Math.max(1, dataWords)), 1);
+  const dataBuf = sU32Views(dataBufAttr, Math.max(1, dataWords));
+
+  // ---- kClearBins: clear per-tile counts + the write counter, before kVoxBin ----------
+  const kClearBins = Fn(() => {
+    const i = instanceIndex.toVar();
+    If(i.lessThan(uint(atomicWords)), () => {
+      atomicStore(atomicBuf.atomic.element(i), uint(0));
+    });
+  })().compute(atomicWords, [256]);
+  (kClearBins as { setName(n: string): unknown }).setName('nanVoxClearBins');
+
+  // workgroup-array plain store (wgId is a non-atomic workgroupArray).
+  const wgSet = (arr: ReturnType<typeof workgroupArray>, i: NU, v: NU): void => {
+    (arr.element(i) as unknown as { assign(x: NU): void }).assign(v);
+  };
+
+  // ---- kVoxBin (§6.2): one thread = one VOXEL CLUSTER work-item -----------------------
+  const kVoxBin = Fn(() => {
+    const itemIdx = wgLinear(DISPATCH_ROW).toVar();
+    const itemCount = qVoxRasterRO.element(0).x;
+    If(itemIdx.lessThan(itemCount), () => {
+      const item = qVoxRasterRO.element(itemIdx.add(uint(1)));
+      const instId = item.x.toVar();
+      const ci = item.y.toVar();
+      // instance transform (rigid — voxels carry NO wind, §8)
+      const A = gpu.instances.element(instId.mul(uint(2))).toVar() as unknown as NV4;
+      const B = gpu.instances.element(instId.mul(uint(2)).add(uint(1))).toVar() as unknown as NV4;
+      const yawSc = instYaw(B);
+      // the cluster's BLOCK AABB bound: word0-2 = local-space center, word3 = radius
+      // (the block AABB half-diagonal, §A1). Build a conservative world-space AABB cube
+      // of half-extent = the block radius about the transformed center, then project its
+      // 8 corners (spec §6.2 step 2: "its 8 corners through cam.vp"). The cube is a
+      // conservative superset of the block (radius = half-diagonal ≥ any half-axis).
+      const cBase = ci.mul(uint(CLUSTER_WORDS)).toVar();
+      const cxL = elemU(gpu.clusters, cBase).toVar();
+      const cyL = elemU(gpu.clusters, cBase.add(uint(1))).toVar();
+      const czL = elemU(gpu.clusters, cBase.add(uint(2))).toVar();
+      const rL = elemU(gpu.clusters, cBase.add(uint(3))).toVar();
+      // bitcast the f32-bits cluster sphere words
+      const cLocal = vec3(bcU2F(cxL), bcU2F(cyL), bcU2F(czL)) as unknown as NV3;
+      const rLocal = bcU2F(rL).toVar();
+      // conservative world center + radius under the contract transform (no swayPad).
+      const wCenter = instTransformPoint(A, B, yawSc, cLocal);
+      const wR = instSphereRadius(A, B, rLocal as unknown as NF, float(0)).toVar();
+
+      // project 8 corners of the world AABB cube [wCenter ± wR] → screen bbox + nearest z
+      const sMinX = float(1e9).toVar();
+      const sMinY = float(1e9).toVar();
+      const sMaxX = float(-1e9).toVar();
+      const sMaxY = float(-1e9).toVar();
+      const nearZ = float(1e9).toVar(); // nearest NDC z (= smallest cz)
+      const allBehind = uint(1).toVar(); // 1 until any corner has w>NEAR_EPS
+      const W = float(cam.uW);
+      const H = float(cam.uH);
+      loopI('cz3', toI(0), toI(1), (zc) => {
+        loopI('cy3', toI(0), toI(1), (yc) => {
+          loopI('cx3', toI(0), toI(1), (xc) => {
+            const sx = toF(xc).mul(2).sub(1);
+            const sy = toF(yc).mul(2).sub(1);
+            const sz = toF(zc).mul(2).sub(1);
+            const wp = vec3(
+              wCenter.x.add(sx.mul(wR)),
+              wCenter.y.add(sy.mul(wR)),
+              wCenter.z.add(sz.mul(wR)),
+            ) as unknown as NV3;
+            const p = (cam.vp.mul(vec4(wp, 1)) as unknown as NV4).toVar();
+            If(p.w.greaterThan(float(NEAR_EPS)), () => {
+              allBehind.assign(uint(0));
+              const ndc = p.xyz.div(p.w).toVar();
+              const scx = ndc.x.add(1).mul(0.5).mul(W);
+              const scy = ndc.y.add(1).mul(0.5).mul(H);
+              sMinX.assign(sMinX.min(scx));
+              sMaxX.assign(sMaxX.max(scx));
+              sMinY.assign(sMinY.min(scy));
+              sMaxY.assign(sMaxY.max(scy));
+              nearZ.assign(nearZ.min(ndc.z));
+            });
+          });
+        });
+      });
+      If(allBehind.equal(uint(0)), () => {
+        // clamp the screen bbox to the framebuffer; cull if it falls fully outside
+        const bbMinX = maxI(toI(0), toI(sMinX.floor())).toVar();
+        const bbMaxX = minI(toI(width - 1), toI(sMaxX.ceil())).toVar();
+        const bbMinY = maxI(toI(0), toI(sMinY.floor())).toVar();
+        const bbMaxY = minI(toI(height - 1), toI(sMaxY.ceil())).toVar();
+        const validBB = bbMinX.lessThanEqual(bbMaxX).and(bbMinY.lessThanEqual(bbMaxY));
+        If(validBB, () => {
+          // nearest NDC z clamped to [0,1] for the depth key (near-plane crossing
+          // corners are dropped above; a fully-near block keeps nearZ ≥ 0).
+          const nz = nearZ.clamp(0, 1).toVar();
+          const bucket = minU(
+            depthKey24(nz as unknown as NF).shiftRight(uint(24 - KBITS)),
+            uint(K_BUCKETS - 1),
+          ).toVar();
+          const payload = itemIdx.bitAnd(uint(PAYLOAD_MASK)).toVar();
+          const entry = payload.bitOr(bucket.shiftLeft(uint(BUCKET_SHIFT))).toVar();
+          // scatter the bucket-tagged entry into each 16×16 tile the bbox overlaps
+          const tMinX = maxI(toI(0), bbMinX.div(toI(TILE)));
+          const tMaxX = minI(toI(tilesX - 1), bbMaxX.div(toI(TILE)));
+          const tMinY = maxI(toI(0), bbMinY.div(toI(TILE)));
+          const tMaxY = minI(toI(tilesY - 1), bbMaxY.div(toI(TILE)));
+          loopI('ty', tMinY as unknown as NI, tMaxY as unknown as NI, (ty) => {
+            loopI('tx', tMinX as unknown as NI, tMaxX as unknown as NI, (tx) => {
+              const tileIdx = ty.mul(toI(tilesX)).add(tx);
+              const slot = atomicAdd(atomicBuf.atomic.element(uint(tileIdx)), uint(1)) as unknown as NU;
+              If(slot.lessThan(uint(FLAT_TILE_CAP)), () => {
+                const base = uint(tileIdx).mul(uint(FLAT_TILE_CAP)).add(slot);
+                elemUW(dataBuf.rw, base).assign(entry);
+              });
+              // FLAT-list overflow drops a block silently (NOT mis-elected) — the
+              // original tileproto behaviour; far fewer voxel blocks than tri cut.
+            });
+          });
+        });
+      });
+    });
+    // [1] local size: the cull's voxRasterDispatchAttr is split2D OVER the voxel-cluster
+    // count (n workgroups), so one single-thread workgroup == one cluster work-item.
+  })().compute(DISPATCH_ROW, [1]);
+  (kVoxBin as { setName(n: string): unknown }).setName('nanVoxBin');
+
+  // ---- kRasterVox (§6.3): one workgroup per 16×16 tile, on-chip election --------------
+  const TILE_PX = TILE * TILE;
+  const kRasterVox = Fn(() => {
+    const tileIdx = wgLinear(DISPATCH_ROW).toVar();
+    const local = localX().toVar();
+    const tileX = tileIdx.mod(uint(tilesX));
+    const tileY = tileIdx.div(uint(tilesX));
+    const px0 = tileX.mul(uint(TILE)).toVar();
+    const py0 = tileY.mul(uint(TILE)).toVar();
+    // tiles past the grid (the last partial dispatch row) do nothing.
+    If(tileIdx.lessThan(uint(nTiles)), () => {
+      // ON-CHIP election (§6.3): wgElect[lpx] = packed (depthKey24<<8|id8); wgId = full
+      // voxel payload. 2 × 256 × 4 B = 2 KB workgroup memory.
+      const wgElect = workgroupArray('uint', TILE_PX);
+      (wgElect as unknown as { bufferType: string }).bufferType = 'atomic<u32>';
+      const wgId = workgroupArray('uint', TILE_PX);
+
+      // PRE-SEED (§6.2): copy the GLOBAL near-field triangle winners into wgElect, so
+      // bricks occluded by NEAR-FIELD leaves also early-skip (extends the occlusion skip
+      // across the tri/voxel tier boundary). The wgId stays 0 for seeded pixels — the
+      // flush only writes visBV when THIS wave's election strictly beats the global, so a
+      // seeded triangle winner is never overwritten by a 0 id.
+      loopU(local, uint(TILE_PX), (i) => {
+        const lx = i.mod(uint(TILE));
+        const ly = i.div(uint(TILE));
+        const gx = px0.add(lx);
+        const gy = py0.add(ly);
+        const inImg = gx.lessThan(uint(width)).and(gy.lessThan(uint(height)));
+        // FORCE the atomic-load result into a plain uint VAR at the loop-body root BEFORE it
+        // becomes the value-arg of the atomicStore. An atomicLoad (AtomicFunctionNode) wrapped
+        // in a .select() and then handed straight to atomicStore is the SAME TSL r184 pathology
+        // as the inner cand/e bugs: AtomicFunctionNode.generate calls valueNode.build(...,'uint'),
+        // and the un-materialized select-over-atomicLoad yields '' in that nested scope ⇒
+        // "Invalid generated code, expected a uint" ⇒ generateConst('uint') (0u) ⇒ the pre-seed
+        // is silently dropped (no cross-tier occlusion) AND three logs the codegen error. Reading
+        // the atomic INTO `loaded` (its own statement) materializes a real uint temp first; the
+        // select then composes plain uint temps, and the atomicStore value-arg is a built var.
+        const loaded = aLoadU(visPayloadV.atomic.element(gy.mul(uint(width)).add(gx))).toVar();
+        const seed = inImg.select(loaded, uint(0)).toVar();
+        atomicStore(wgElect.element(i), seed);
+        wgSet(wgId, i, uint(0));
+      }, WG);
+      workgroupBarrier();
+
+      const tileX0 = (int(px0) as unknown as NI).toVar();
+      const tileY0 = (int(py0) as unknown as NI).toVar();
+      const tileX1 = minI(tileX0.add(toI(TILE - 1)), toI(width - 1));
+      const tileY1 = minI(tileY0.add(toI(TILE - 1)), toI(height - 1));
+
+      // read the per-tile count + increment the WRITE_CTR through the SAME atomic view
+      // (mixing the .ro and .atomic views of one buffer in a single kernel is illegal
+      // aliasing — the N0 same-scope law). aLoadU is a relaxed atomic load.
+      const count = minU(aLoadU(atomicBuf.atomic.element(tileIdx)), uint(FLAT_TILE_CAP)).toVar();
+      const listBase = tileIdx.mul(uint(FLAT_TILE_CAP)).toVar();
+      const nRounds = count.add(uint(WG - 1)).div(uint(WG)).toVar();
+
+      // K near→far passes (bk = 7 NEAREST .. 0 FARTHEST). Each pass walks the single flat
+      // list and processes ONLY entries whose bucket==bk; each block hits exactly one pass.
+      loopU(uint(0), uint(K_BUCKETS), (bi) => {
+        const bk = uint(K_BUCKETS - 1).sub(bi).toVar();
+        loopU(uint(0), nRounds, (r) => {
+          const slot = local.add(r.mul(uint(WG))).toVar();
+          If(slot.lessThan(count), () => {
+            const entry = elemU(dataBuf.ro, listBase.add(slot)).toVar();
+            const eBucket = entry.shiftRight(uint(BUCKET_SHIFT)).toVar();
+            If(eBucket.equal(bk), () => {
+              const payload = entry.bitAnd(uint(PAYLOAD_MASK)).toVar();
+              // re-decode the block (the bin computed it; we re-project here — the bin
+              // stored only the 1-word bucket-tagged entry, §6.2 "read ONCE in the fine
+              // pass via the work-item index"). Cheap: 8-corner project of the AABB cube.
+              const bitem = qVoxRasterRO.element(payload.add(uint(1)));
+              const binstId = bitem.x.toVar();
+              const bci = bitem.y.toVar();
+              const bA = gpu.instances.element(binstId.mul(uint(2))).toVar() as unknown as NV4;
+              const bB = gpu.instances.element(binstId.mul(uint(2)).add(uint(1))).toVar() as unknown as NV4;
+              const byaw = instYaw(bB);
+              const cbase = bci.mul(uint(CLUSTER_WORDS)).toVar();
+              const cl = vec3(
+                bcU2F(elemU(gpu.clusters, cbase)),
+                bcU2F(elemU(gpu.clusters, cbase.add(uint(1)))),
+                bcU2F(elemU(gpu.clusters, cbase.add(uint(2)))),
+              ) as unknown as NV3;
+              const rl = bcU2F(elemU(gpu.clusters, cbase.add(uint(3)))).toVar();
+              const wc = instTransformPoint(bA, bB, byaw, cl);
+              const wr = instSphereRadius(bA, bB, rl as unknown as NF, float(0)).toVar();
+
+              // screen bbox + nearest+farthest NDC z of the 8 world-AABB corners
+              const W = float(cam.uW);
+              const H = float(cam.uH);
+              const sMinX = float(1e9).toVar();
+              const sMinY = float(1e9).toVar();
+              const sMaxX = float(-1e9).toVar();
+              const sMaxY = float(-1e9).toVar();
+              const zNear = float(1e9).toVar();
+              loopI('rz3', toI(0), toI(1), (zc) => {
+                loopI('ry3', toI(0), toI(1), (yc) => {
+                  loopI('rx3', toI(0), toI(1), (xc) => {
+                    const sx = toF(xc).mul(2).sub(1);
+                    const sy = toF(yc).mul(2).sub(1);
+                    const sz = toF(zc).mul(2).sub(1);
+                    const wp = vec3(
+                      wc.x.add(sx.mul(wr)),
+                      wc.y.add(sy.mul(wr)),
+                      wc.z.add(sz.mul(wr)),
+                    ) as unknown as NV3;
+                    const p = (cam.vp.mul(vec4(wp, 1)) as unknown as NV4).toVar();
+                    If(p.w.greaterThan(float(NEAR_EPS)), () => {
+                      const ndc = p.xyz.div(p.w).toVar();
+                      sMinX.assign(sMinX.min(ndc.x.add(1).mul(0.5).mul(W)));
+                      sMaxX.assign(sMaxX.max(ndc.x.add(1).mul(0.5).mul(W)));
+                      sMinY.assign(sMinY.min(ndc.y.add(1).mul(0.5).mul(H)));
+                      sMaxY.assign(sMaxY.max(ndc.y.add(1).mul(0.5).mul(H)));
+                      zNear.assign(zNear.min(ndc.z));
+                    });
+                  });
+                });
+              });
+              const nz = zNear.clamp(0, 1).toVar();
+              // nearKey = the block's NEAREST-possible election key (AABB front-slab, exact
+              // for the coarse one-sample-per-block path, §6.4); cand ≤ nearKey at EVERY
+              // pixel ⇒ the skip discards a provable loser (loss-exact, §6.3 proof).
+              const nearKey = depthKey24(nz as unknown as NF).shiftLeft(uint(8)).bitOr(uint(0xff)).toVar();
+              // voxCz: the block's AABB-slab front depth (ONE voxCz per block — coarse
+              // one-sample default, §6.4). NDC-z clamped, biased toward the nearest corner.
+              const voxCz = nz.toVar();
+              // the full voxel id: bit31 marker + the qVoxRaster item index (≤30 bits)
+              const voxId = uint(VOX_BIT).bitOr(payload.bitAnd(uint(PAYLOAD_MASK))).toVar();
+
+              // intersect the screen bbox with the tile + framebuffer
+              const startX = maxI(maxI(toI(0), toI(sMinX.floor())), tileX0).toVar();
+              const endX = minI(minI(toI(width - 1), toI(sMaxX.ceil())), tileX1).toVar();
+              const startY = maxI(maxI(toI(0), toI(sMinY.floor())), tileY0).toVar();
+              const endY = minI(minI(toI(height - 1), toI(sMaxY.ceil())), tileY1).toVar();
+              const validBB = startX.lessThanEqual(endX).and(startY.lessThanEqual(endY));
+              If(validBB, () => {
+                loopI('vy', startY as unknown as NI, endY as unknown as NI, (y) => {
+                  loopI('vx', startX as unknown as NI, endX as unknown as NI, (x) => {
+                    const lpx = uint(y).sub(py0).mul(uint(TILE)).add(uint(x).sub(px0)).toVar();
+                    const prevE = aLoadU(wgElect.element(lpx)).toVar();
+                    // OCCLUSION SKIP (§6.3): nearKey can't beat the on-chip winner ⇒ this
+                    // block loses at this pixel ⇒ skip the election entirely.
+                    If(nearKey.greaterThan(prevE), () => {
+                      // BUILD `cand` HERE, INSIDE the skip conditional — verbatim the working
+                      // tileproto shape (dfe6518:NaniteTileRaster.ts:617-639: `cand` is declared
+                      // inside `If(nearKey>prevE)`, in the SAME ConditionalNode flow as the
+                      // atomicMax that consumes it). The Stage-2 port DEVIATED by HOISTING this
+                      // `cand` `.toVar()` to the OUTER function scope (it's loop-invariant per
+                      // block) — but in TSL r184 a `.toVar()` whose declaration sits in the outer
+                      // scope while its FIRST build is the value argument of an atomicMax nested
+                      // several ConditionalNodes deep gets its flow-code placed in the wrong block.
+                      // When AtomicFunctionNode.generate (three/src/nodes/gpgpu/AtomicFunctionNode.js)
+                      // calls `valueNode.build(builder,'uint')`, the hoisted var yields '' in that
+                      // scope ⇒ Node.build hits the `result===''` guard (three/src/nodes/core/Node.js
+                      // :969-976) ⇒ "TSL: Invalid generated code, expected a uint" ⇒ three falls back
+                      // to `generateConst('uint')` (a const 0u) ⇒ the election word/depth is silently
+                      // corrupted (blocky slabs; the occlusion early-skip never fires). Declaring
+                      // `cand` in the atomic's own conditional flow (the tileproto position) keeps
+                      // its var declaration and the atomic in the same block ⇒ valid uint code.
+                      // voxCz is loop-invariant (one voxCz per block, §6.4), so moving only the
+                      // node-graph PLACEMENT of `cand` here is loss-EXACT — identical arithmetic.
+                      const cand = depthKey24(voxCz as unknown as NF)
+                        .shiftLeft(uint(8))
+                        .bitOr(payload.bitAnd(uint(0xff)))
+                        .toVar();
+                      If(cand.greaterThan(prevE), () => {
+                        const wonE = atomicMax(wgElect.element(lpx), cand) as unknown as NU;
+                        If(cand.greaterThan(wonE), () => {
+                          wgSet(wgId, lpx, voxId);
+                          // debug per-pixel BRICK-WRITE counter (Stage-2 overlay, §A2)
+                          atomicAdd(atomicBuf.atomic.element(uint(WRITE_CTR)), uint(1));
+                        });
+                      });
+                    });
+                  });
+                });
+              });
+            });
+          });
+        });
+      });
+
+      // FLUSH-MERGE (§6.3): one barrier, then merge wgElect/wgId into the GLOBAL
+      // visPayloadV/visBV via atomicMax — preserving any nearer near-field-tri winner
+      // (since we pre-seeded, this is a no-op where the tri already won). The id is
+      // written only when THIS wave's word strictly beats the global (so a seeded tri's
+      // visBV id is never clobbered by a 0 wgId).
+      workgroupBarrier();
+      loopU(local, uint(TILE_PX), (i) => {
+        const e = aLoadU(wgElect.element(i)).toVar();
+        // GATE ON `e` AT THE BODY ROOT — verbatim the working tileproto flush shape
+        // (dfe6518:NaniteTileRaster.ts:667-680: `If(e.notEqual(uint(0)))` wraps the
+        // atomicMax, so `e`'s FIRST build is this root-level condition, NOT the deeply-
+        // nested atomicMax value-arg). The Stage-2 port DEVIATED by gating on `id` and
+        // adding an extra `If(inImg)` layer, so `e`.toVar()'s declaration sat at body root
+        // while its FIRST build was the value argument of `atomicMax` two ConditionalNodes
+        // deep — the SAME TSL r184 pathology as the inner `cand` bug: AtomicFunctionNode
+        // .generate calls `e.build(builder,'uint')`, the hoisted var yields '' in that
+        // scope ⇒ Node.build's `result===''` guard ⇒ "Invalid generated code, expected a
+        // uint" ⇒ three substitutes `generateConst('uint')` (a const 0u) ⇒ the flush
+        // atomicMax merges 0 (no-op) ⇒ wave winners never reach the GLOBAL visPayloadV.
+        // Building `e` in this root condition forces its declaration to emit before the
+        // nested atomic ⇒ valid uint code. (Out-of-image pixels are never elected — the
+        // election clamps to width-1/height-1 — so they keep wgElect==seed/0; a seeded-
+        // only pixel re-merges its own already-global value, a harmless atomicMax no-op,
+        // and its wgId==0 guard below skips the id store. The pre-seed `id != 0` semantics
+        // are preserved as the INNER gate, loss-exact.)
+        If(e.notEqual(uint(0)), () => {
+          const id = (wgId.element(i) as unknown as NU).toVar();
+          // only flush pixels THIS wave actually elected a voxel into (wgId != 0). Seeded-
+          // only pixels (wgId==0) carry a triangle winner already in the global buffer.
+          If(id.notEqual(uint(0)), () => {
+            const lx = i.mod(uint(TILE));
+            const ly = i.div(uint(TILE));
+            const gx = px0.add(lx);
+            const gy = py0.add(ly);
+            const inImg = gx.lessThan(uint(width)).and(gy.lessThan(uint(height)));
+            If(inImg, () => {
+              const px = gy.mul(uint(width)).add(gx).toVar();
+              const won = atomicMax(visPayloadV.atomic.element(px), e) as unknown as NU;
+              If(e.greaterThan(won), () => {
+                atomicStore(visBV.atomic.element(px), id);
+              });
+            });
+          });
+        });
+      }, WG);
+    });
+    // one workgroup per 16×16 tile (nTiles workgroups of WG threads). wgLinear handles
+    // the >65535-workgroup 2D tiling three.js applies (workgroupId.y) transparently.
+  })().compute(nTiles * WG, [WG]);
+  (kRasterVox as { setName(n: string): unknown }).setName('nanRasterVox');
+
+  const dispatchVoxel = (renderer: Renderer): void => {
+    dispatch(renderer, kClearBins);
+    // kVoxBin: one workgroup-thread per voxel cluster (2D-split over the fanned count).
+    dispatchIndirect(renderer, kVoxBin as never, voxRasterDispatchAttr);
+    // kRasterVox: one workgroup per 16×16 tile (static — every tile runs the K passes;
+    // an empty tile's count==0 ⇒ zero rounds, but it still pre-seeds+flushes cheaply).
+    dispatch(renderer, kRasterVox);
+  };
+
+  const readWriteCount = async (renderer: Renderer): Promise<number> => {
+    const buf = await readBuffer(renderer, atomicBufAttr, WRITE_CTR * 4, 4);
+    return new Uint32Array(buf)[0] ?? 0;
+  };
+
+  return { dispatchVoxel, readWriteCount, tilesX, tilesY, nTiles };
+}

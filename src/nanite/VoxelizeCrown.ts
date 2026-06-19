@@ -461,74 +461,29 @@ export function prepareVoxelCrown(
 }
 
 /**
- * Append a prepared crown's OCCUPIED bricks to the registry post-build and register
- * a `voxel:7` sibling mesh head over the SAME instances (§5.2). Returns the head +
- * the appended brick range. The first ≤MAX_BRICKS_PER_CLUSTER bricks would map to a
- * voxel cluster's word6=brickBase / word7-lowbyte=brickCount (§4.1) — that cluster
- * authoring is the Stage-2 raster's job; Stage 1 only proves the buffer round-trips.
+ * Append a prepared crown's OCCUPIED bricks to the registry post-build and register a
+ * `voxel:7` sibling mesh head over the SAME instances (§5.2 / Stage-2 A1). Returns the
+ * head + the appended brick range. The head carries NO triangle geometry — its clusters
+ * point at BRICKS (word6=brickBase, word7-lowbyte=brickCount) and its matClass=voxel
+ * keeps them out of the triangle raster (§4.1). Re-clusterizing the full leaf crown
+ * OVERFLOWED the late caps (§A1), so the head is authored DIRECTLY via registerVoxelHead
+ * (0 verts/tris, only `blocks.length` clusters — within the `?voxreg` reservation).
  *
- * `leafSource` is the crown foliage ExplicitSource. The voxel head does NOT carry the
- * full leaf triangle crown: its clusters point at BRICKS (word6=brickBase) in Stage 2,
- * not triangles, and its matClass=voxel keeps them out of the triangle raster (§4.1).
- * Re-clusterizing the full leaf crown here would consume verts/tris/clusters that the
- * `addLate` budget froze at build() with zero headroom (the reservation reserves only
- * `bricks` for these heads — §5.3). So we register the head from a TRIVIAL 1-triangle
- * placeholder (the crown's first leaf tri — in-bounds, so the head's bounding sphere
- * sits inside the crown) costing exactly 3 verts / 1 tri / 1 cluster, which the
- * `?voxreg` reservation accounts for. `matParam` should be the same packed leaf tint
- * as the leaf head (§7.2.6).
+ * The occupied bricks (appended in grid order) are split into ≤MAX_BRICKS_PER_CLUSTER
+ * contiguous BLOCKS (the §5.3 per-coarse-cluster fit), one cluster each, with a per-block
+ * brick-AABB bound (the kVoxBin AABB projection, §6.2). `matParam` should be the same
+ * packed leaf tint as the leaf head (§7.2.6). `leafSource` is unused (kept for signature
+ * stability — the head no longer carries a placeholder tri from it).
  */
-/**
- * A trivial 1-triangle ExplicitSource carved from the crown's first leaf triangle. The
- * voxel:7 head registers from this instead of the full crown so it costs the per-head
- * minimum (3 verts / 1 tri / 1 cluster, what the §5.3 `?voxreg` reservation budgets) —
- * its real payload is the bricks, and Stage 2 repoints its cluster at them. Reusing a
- * real in-bounds tri keeps the head's bounding sphere inside the crown (sane cull). If
- * the crown has no triangles (degenerate) we fall back to a zero tri at the origin.
- */
-function placeholderTriSource(leafSource: ExplicitSource): ExplicitSource {
-  const i0 = (leafSource.indices[0] ?? 0) as number;
-  const i1 = (leafSource.indices[1] ?? i0) as number;
-  const i2 = (leafSource.indices[2] ?? i0) as number;
-  const src = leafSource.positions;
-  const nrm = leafSource.normals;
-  const positions = new Float32Array(9);
-  const normals = new Float32Array(9);
-  const idxs = [i0, i1, i2];
-  for (let k = 0; k < 3; k++) {
-    const j = (idxs[k] as number) * 3;
-    positions[k * 3] = (src[j] ?? 0) as number;
-    positions[k * 3 + 1] = (src[j + 1] ?? 0) as number;
-    positions[k * 3 + 2] = (src[j + 2] ?? 0) as number;
-    normals[k * 3] = (nrm[j] ?? 0) as number;
-    normals[k * 3 + 1] = (nrm[j + 1] ?? 1) as number;
-    normals[k * 3 + 2] = (nrm[j + 2] ?? 0) as number;
-  }
-  return { kind: 'mesh', positions, normals, indices: new Uint32Array([0, 1, 2]) };
-}
-
 export function appendVoxelCrown(
   reg: GeometryRegistry,
   prep: PreparedVoxelCrown,
-  leafSource: ExplicitSource,
+  _leafSource: ExplicitSource,
   opts: { matParam: number; swayPad?: number; maxDist: number; label?: string },
-): { head: MeshHandle; brickBase: number; brickCount: number } {
-  // register the voxel:7 sibling head (matClass routes "is voxel" for free, §4.4) from
-  // a placeholder so it costs the per-head minimum (3 verts / 1 tri / 1 cluster) the
-  // §5.3 reservation budgets — NOT the full leaf crown (whose verts/tris/clusters the
-  // frozen caps lack headroom for). Stage 2 rewrites word6/word7 to point at bricks.
-  const head = reg.registerMesh(placeholderTriSource(leafSource), 'voxel', {
-    transformChannel: 'leaf',
-    castShadows: false,
-    twoSided: true,
-    aggregate: true,
-    matParam: opts.matParam,
-    swayPad: opts.swayPad ?? 3.8,
-    label: opts.label ?? 'voxel',
-  });
-  reg.setMaxDistance(head, opts.maxDist);
-  // append the occupied bricks into gpu.voxelBricks (uploads via pushRange)
+): { head: MeshHandle; brickBase: number; brickCount: number; clusters: number } {
   const { vox, brickCount } = prep;
+  // append the occupied bricks into gpu.voxelBricks (uploads via pushRange), in grid
+  // (occupied[]) order so the cluster BLOCKS below address contiguous brick sub-ranges.
   const brickBase = reg.appendBricks(brickCount, (bricks, base) => {
     for (let i = 0; i < brickCount; i++) {
       const bi = vox.occupied[i] as number;
@@ -536,6 +491,34 @@ export function appendVoxelCrown(
       if (brick) writeBrick(bricks, base + i, brick);
     }
   });
-  void MAX_BRICKS_PER_CLUSTER; // pinned for the Stage-2 cluster-authoring split
-  return { head, brickBase, brickCount };
+  // split into ≤MAX_BRICKS_PER_CLUSTER blocks (§5.3) + per-block AABB (over the occupied
+  // bricks' local-space centers; brick half-extent = BRICK_DIM·cellSize·0.5).
+  const halfBrick = BRICK_DIM * vox.cellSize * 0.5;
+  const blocks: {
+    brickBase: number;
+    brickCount: number;
+    aabb: { min: [number, number, number]; max: [number, number, number] };
+  }[] = [];
+  for (let start = 0; start < brickCount; start += MAX_BRICKS_PER_CLUSTER) {
+    const count = Math.min(MAX_BRICKS_PER_CLUSTER, brickCount - start);
+    let mnX = Infinity, mnY = Infinity, mnZ = Infinity;
+    let mxX = -Infinity, mxY = -Infinity, mxZ = -Infinity;
+    for (let i = 0; i < count; i++) {
+      const c = brickCenterLocal(vox, vox.occupied[start + i] as number);
+      mnX = Math.min(mnX, c[0] - halfBrick); mxX = Math.max(mxX, c[0] + halfBrick);
+      mnY = Math.min(mnY, c[1] - halfBrick); mxY = Math.max(mxY, c[1] + halfBrick);
+      mnZ = Math.min(mnZ, c[2] - halfBrick); mxZ = Math.max(mxZ, c[2] + halfBrick);
+    }
+    blocks.push({
+      brickBase: brickBase + start,
+      brickCount: count,
+      aabb: { min: [mnX, mnY, mnZ], max: [mxX, mxY, mxZ] },
+    });
+  }
+  const head = reg.registerVoxelHead(opts.matParam, blocks, {
+    swayPad: opts.swayPad ?? 3.8,
+    maxDist: opts.maxDist,
+    label: opts.label ?? 'voxel',
+  });
+  return { head, brickBase, brickCount, clusters: blocks.length };
 }

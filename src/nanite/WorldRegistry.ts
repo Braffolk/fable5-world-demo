@@ -56,6 +56,7 @@ import {
   type PreparedVoxelCrown,
   prepareVoxelCrown,
 } from './VoxelizeCrown';
+import { MAX_BRICKS_PER_CLUSTER } from './VoxelBrick';
 
 /** Forests ring radii (Forests.ts) — discrete LOD switch distances until N8 */
 const R0_FAR = 26;
@@ -358,8 +359,19 @@ export async function buildWorldRegistry(input: {
   // (addLate freezes caps) and a voxel:7 sibling head appended AFTER. OFF by default —
   // the registry/raster wiring lands in Stage 2; this proves the reserve→append path.
   const qVox = new URLSearchParams(window.location.search);
-  const voxReg = qVox.get('voxreg') === '1';
+  // ?forcevox=<idF> (or =1 / =all for every voxelized crown) — Stage-2 DEBUG route
+  // (spec §A1). Forces the VOXEL path for the chosen crown(s) REGARDLESS of distance
+  // by voxelizing them AND suppressing their LEAF mesh (leaf maxDist → ~0), so the
+  // voxel head is the sole renderer and the raster/resolve voxel path is testable in
+  // isolation WITHOUT the Stage-3 mesh→voxel transition. Implies ?voxreg.
+  const forceVoxRaw = qVox.get('forcevox');
+  const forceVoxAll = forceVoxRaw === '1' || forceVoxRaw === 'all';
+  const forceVoxId = forceVoxRaw !== null && !forceVoxAll ? Number(forceVoxRaw) : null;
+  const forceVoxOn = forceVoxRaw !== null;
+  const voxReg = qVox.get('voxreg') === '1' || forceVoxOn;
   const voxGridDim = Number(qVox.get('voxgrid') ?? DEFAULT_VOXEL_GRID_DIM) || DEFAULT_VOXEL_GRID_DIM;
+  /** idF → leaf head, for the ?forcevox leaf-suppression pass (filled in the loop). */
+  const leafHeadForVox = new Map<number, MeshHandle>();
   const toVoxel: {
     idF: number;
     prep: PreparedVoxelCrown;
@@ -453,12 +465,31 @@ export async function buildWorldRegistry(input: {
       // brick total is known before the addLate reservation freezes (§5.3). The voxel
       // sibling head + brick append happen post-build (a voxel cluster points at bricks,
       // not tris — that authoring is Stage 2; here we only reserve+upload the bricks).
-      if (voxReg) {
+      if (voxReg && (!forceVoxOn || forceVoxAll || forceVoxId === idF)) {
         const matParam = packLeafTint(pool.leaf.color);
         const prep = prepareVoxelCrown(leafSource, pool.leaf.color, voxGridDim);
         toVoxel.push({ idF, prep, source: leafSource, matParam, label: `${label}/voxel` });
+        leafHeadForVox.set(idF, leafHead);
       }
     }
+  }
+
+  // ?forcevox DEBUG route (spec §A1): suppress the LEAF mesh of the forced crown(s) so
+  // its VOXEL sibling head is the sole renderer at ALL distances — the Stage-2 raster/
+  // resolve voxel path is then testable in isolation, WITHOUT the Stage-3 distance
+  // handoff. Lowering the leaf head's maxDist to ~0 culls it everywhere (the cull's
+  // per-mesh draw envelope, NaniteCull.ts:394). Pre-build, so it's a plain field set.
+  if (forceVoxOn) {
+    let suppressed = 0;
+    for (const [idF, leafHead] of leafHeadForVox) {
+      if (forceVoxAll || forceVoxId === idF) {
+        reg.setMaxDistance(leafHead, 0.001);
+        suppressed++;
+      }
+    }
+    console.log(
+      `[worldreg] ?forcevox=${forceVoxRaw}: ${suppressed} leaf mesh head(s) suppressed → voxel-only render`,
+    );
   }
 
   // bind partitioned instances to chain heads. ?stress=N (synthetic, F3/F16
@@ -788,27 +819,28 @@ export async function buildWorldRegistry(input: {
   if (toVoxel.length > 0) {
     let lateBricks = 0;
     let lateVoxInst = 0;
+    let lateVoxClusters = 0;
     for (const v of toVoxel) {
       lateBricks += v.prep.brickCount;
+      // each voxel head (registerVoxelHead) authors ceil(occupiedBricks/128) CLUSTERS
+      // (the §5.3 ≤128-brick per-coarse-cluster blocks), 0 verts / 0 tris — the bricks
+      // ARE the payload. Reserve that cluster headroom (frozen caps else throw, §5.3).
+      lateVoxClusters += Math.max(1, Math.ceil(v.prep.brickCount / MAX_BRICKS_PER_CLUSTER));
       const s = perId.get(v.idF);
       // the voxel head re-binds ONE copy of the leaf stream (no ?stress fan-out)
       if (s) lateVoxInst += s.fill;
     }
-    // each voxel head registers from a 1-tri placeholder (appendVoxelCrown), so it
-    // consumes exactly 3 verts / 1 tri / 1 cluster post-build — reserve that headroom
-    // too (the frozen caps would otherwise throw 'late capacity exceeded', §5.3).
     const lateVoxHeads = toVoxel.length;
     reg.addLate({
       bricks: lateBricks,
       meshes: lateVoxHeads,
       instances: lateVoxInst,
-      verts: lateVoxHeads * 3,
-      tris: lateVoxHeads,
-      clusters: lateVoxHeads,
+      clusters: lateVoxClusters,
     });
     console.log(
       `[worldreg] voxel-foliage: reserving ${lateBricks} bricks across ${toVoxel.length} crowns ` +
         `(grid ${voxGridDim}) = ${((lateBricks * 5 * 4) / (1024 * 1024)).toFixed(3)} MB, ` +
+        `+${lateVoxClusters} voxel clusters (${MAX_BRICKS_PER_CLUSTER} bricks/cluster), ` +
         `+${lateVoxInst} voxel instances, +${lateVoxHeads} voxel:7 heads`,
     );
   }
@@ -841,6 +873,12 @@ export async function buildWorldRegistry(input: {
       `[worldreg] voxel-foliage: appended ${appended} bricks (${reg.brickCount}/${reg.brickCapacity}) ` +
         `+ ${toVoxel.length} voxel:7 heads in ${(performance.now() - tVox0).toFixed(0)} ms`,
     );
+    // Stage-2 A1: the voxel heads + their instance streams were registered/bound
+    // POST-build (registerMesh/bindInstances stage clusterRecs + cpuStreams) — flush()
+    // copies them into the mega-buffers + uploads the partial ranges so the cull sees
+    // the voxel clusters (and their repointed brick word6/word7) this frame. Without
+    // this the late heads never reach the GPU (build() only uploads pre-build entries).
+    reg.flush(renderer, counters);
   }
   for (const t of dagTerrainTileAttaches) reg.attachHeightDag(t.handle, t);
   // N8-D2 Stage 2b-1: load the collected terrain tiles into pool slots (one per

@@ -77,6 +77,10 @@ export function buildNaniteFrame(
   const renderer = engine.renderer;
   const size = renderer.getDrawingBufferSize(new Vector2());
   const params = new URLSearchParams(window.location.search);
+  // voxel-foliage (spec §A1): the voxel subsystem is active when crowns were voxelized
+  // (?voxreg) or a crown was force-routed to the voxel path (?forcevox). Gates the
+  // per-frame fan-out (and Stage-2 voxel raster) so a pure-triangle world pays nothing.
+  const voxActive = params.get('voxreg') === '1' || params.get('forcevox') !== null;
   // ?vrange=1 — PERF-3 diagnostic: per-cluster vertex-INDEX range distribution +
   // redundancy, to size/justify a vertex-transform cache. range = max−min global
   // index over a cluster's tri corners; a runtime [vMin,vMax] shared-mem cache of
@@ -219,7 +223,7 @@ export function buildNaniteFrame(
   // rastered geometry and the resolve's barycentric corners stay bit-identical)
   const windOn = params.get('nanwind') !== '0';
   const windOpt = windOn ? { camPos: cam.camPos } : undefined;
-  const raster = buildNaniteRaster(registry.gpu, hf.heightTex, cam, cull, vis, 'flat', true, disp, windOpt, false, true);
+  const raster = buildNaniteRaster(registry.gpu, hf.heightTex, cam, cull, vis, 'flat', true, disp, windOpt, false, true, voxActive);
 
   // Nanite shadows (N5, D-N28): depth-only SW raster into own r32 cascade textures,
   // sampled by the resolve's own PCSS. R1 caches per cascade (re-raster only on a
@@ -247,7 +251,10 @@ export function buildNaniteFrame(
   const shadowHalf: ShadowHalf | null =
     shadow && halfResShadow ? buildShadowHalf(vis, cam, shadow) : null;
 
-  const resolve = buildNaniteResolve(registry.gpu, hf.heightTex, cam, cull, vis, {
+  // voxel-foliage (Stage 2 §7): give the resolve the voxel work-queue ONLY when active, so
+  // a pure-triangle world's resolve never binds qVoxRaster/voxelBricks (stays at 8 buffers).
+  const resolveCull = voxActive ? { qRasterRO: cull.qRasterRO, qVoxRasterRO: cull.qVoxRasterRO } : cull;
+  const resolve = buildNaniteResolve(registry.gpu, hf.heightTex, cam, resolveCull, vis, {
     hf,
     gi: world.gi,
     canopyTex: world.canopyTex,
@@ -258,6 +265,12 @@ export function buildNaniteFrame(
     shadowHalf,
   });
   engine.scene.add(resolve.mesh);
+  // voxel-foliage two-pass resolve (spec §4.6): the SECOND fullscreen pass that shades only
+  // voxel-winner pixels (present only when ?voxreg/?forcevox wired the voxel queue). Splitting
+  // the resolve in two keeps BOTH materials ≤10 fragment storage buffers — the single-pass
+  // design bound the tri-fetch set + voxelBricks + qVoxRasterRO together and busted the Metal
+  // ceiling, invalidating the pipeline so NOTHING shaded.
+  if (resolve.voxMesh) engine.scene.add(resolve.voxMesh);
 
   // ?nanprobe=1 — exact-number depth forensics: a compute kernel reads the
   // SCENE PASS depth texture and the vis buffer at up to 8 pixels into a
@@ -406,6 +419,11 @@ export function buildNaniteFrame(
     if (!frozen) {
       cull.runPhase1(renderer); // hier BFS → qRaster (+ kRasterArgs)
       cull.syncFullArgs(renderer); // full-range args for the payload pass
+      // voxel-foliage (spec §4.6 / §A1): fan the emitted voxel(7) clusters out of
+      // qRaster into qVoxRaster + publish the voxel-bin dispatch args. No-op-cheap
+      // (one re-scan) when no voxel heads were registered; gated to ?voxreg/?forcevox
+      // so a pure-triangle world pays nothing. Stage-2 kVoxBin/kRasterVox consume it.
+      if (voxActive) cull.runVoxFanout(renderer);
     }
     raster.clearVis(renderer);
     // PERF-VB4 (D-N45): single SW + single HW pass — 24-bit depth election (visPayloadV)
@@ -452,8 +470,19 @@ export function buildNaniteFrame(
       raster.readHwCount(r),
       shadow ? shadow.readCounts(r) : Promise.resolve(null),
       scarOn ? raster.readScar(r) : Promise.resolve(null),
+      voxActive ? cull.readVoxCount(r) : Promise.resolve(null),
+      voxActive ? raster.readVoxWrites(r) : Promise.resolve(null),
     ])
-      .then(([c, hw, sh, scar]) => {
+      .then(([c, hw, sh, scar, voxCount, voxWrites]) => {
+        // voxel-foliage (§A1): the fanned voxel-cluster count → HUD (the Verify agent
+        // reads window.__laas.stats.counters). > 0 ⇒ the cull is emitting voxel clusters
+        // into qVoxRaster and the Stage-2 bin/raster has work to consume.
+        if (voxCount !== null) engine.stats.counters['nanite.voxClusters'] = voxCount;
+        // Stage-2 §A2: the per-pixel BRICK-WRITE count (occlusion-skip overlay number) —
+        // the elections the K-pass actually committed (FAR below the overlapping triangle
+        // fragments if the depth-skip is working). > 0 ⇒ kVoxBin/kRasterVox produced winners.
+        if (voxWrites !== null && voxWrites !== undefined)
+          engine.stats.counters['nanite.voxBrickWrites'] = voxWrites;
         if (scar) {
           // 0a SCAR readouts → HUD / window.__laas.stats.counters (the Verify agent
           // reads these). overdraw = band fragments / band covered pixels; bandShare =

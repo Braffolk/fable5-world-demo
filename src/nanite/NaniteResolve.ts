@@ -64,10 +64,11 @@ import { BARK_RES } from '../gpu/passes/BarkSynth';
 import { fbm3, valueNoise3 } from '../gpu/noise/NoiseTSL';
 import type { ProbeGI } from '../gpu/passes/ProbeGI';
 import type { Heightfield } from '../world/Heightfield';
-import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK, MESH_WORDS, readVertex } from './GeometryRegistry';
+import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK, CLUSTER_WORDS, MESH_WORDS, readVertex } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
+import { brickNormalTsl, brickWord, BRICK_NORMAL } from './VoxelBrick';
 import { makeFetch, slotHash } from './NaniteFetch';
-import { hashColor, instRotateDir, type NaniteCam } from './NaniteCommon';
+import { hashColor, instRotateDir, instYaw, type NaniteCam } from './NaniteCommon';
 import type { NaniteVisBuffers } from './NaniteRaster';
 import { elemU, toF } from './Tsl';
 import type { BufOf, UV2 } from './Tsl';
@@ -75,6 +76,14 @@ import type { BufOf, UV2 } from './Tsl';
 export interface NaniteResolveHandles {
   /** add to engine.scene; renderOrder −1000, castShadow off */
   mesh: Mesh;
+  /** voxel-foliage two-pass resolve (spec §4.6 / §7): a SECOND fullscreen pass that
+   *  shades ONLY voxel-winner pixels (bit31 marker). Present only when the voxel queue
+   *  is wired (?voxreg/?forcevox). The MAIN `mesh` above then DROPS voxelBricks/
+   *  qVoxRasterRO entirely (skips voxel pixels via Discard) so it stays ≤10 fragment
+   *  storage buffers, and THIS pass drops the tri-only verts/indices/qRasterRO (a voxel
+   *  pixel never re-derives a triangle) so it also stays ≤10. Add to engine.scene right
+   *  after `mesh` (renderOrder −999, just after the main resolve). */
+  voxMesh?: Mesh;
 }
 
 export interface ResolveWorld {
@@ -186,7 +195,13 @@ export function buildNaniteResolve(
   gpu: RegistryGpu,
   heightTex: Texture,
   cam: NaniteCam,
-  cull: { qRasterRO: BufOf<UV2> },
+  cull: {
+    qRasterRO: BufOf<UV2>;
+    /** voxel-foliage (Stage 2 §7): the voxel-raster work queue — present only when
+     *  ?voxreg/?forcevox is active. A bit31 winner (the voxel marker) decodes its
+     *  (instId, ci) here, then the cluster's brickBase + gpu.voxelBricks normal slice. */
+    qVoxRasterRO?: BufOf<UV2>;
+  },
   vis: NaniteVisBuffers,
   world: ResolveWorld,
 ): NaniteResolveHandles {
@@ -227,6 +242,22 @@ export function buildNaniteResolve(
   );
   geometry.boundingSphere = new Sphere(new Vector3(), Number.POSITIVE_INFINITY);
 
+  // voxel-foliage (spec §4.6 / §7): the resolve is TWO fullscreen passes when the voxel
+  // queue is wired. The single-pass design bound the full tri-fetch set PLUS voxelBricks +
+  // qVoxRasterRO in ONE fragment shader (WGSL/NodeMaterial binds every REFERENCED storage
+  // buffer regardless of the runtime isV branch) → it busts the Metal storage-buffer ceiling
+  // ⇒ the pipeline is INVALID and NOTHING shades. Fix: build the material TWICE —
+  //   pass 'tri': the MAIN resolve. Shades TRIANGLE pixels (terrain/rock/bark/leaf), and
+  //     SKIPS voxel-winner pixels via Discard. Does NOT reference voxelBricks/qVoxRasterRO at
+  //     all, so it stays at its prior ≤10 (8: payloadV/visBV/qRasterRO/clusters/meshes +
+  //     verts/indices/instances).
+  //   pass 'vox': a SECOND small resolve. Shades ONLY voxel-winner pixels (bit31 marker) and
+  //     SKIPS triangle pixels via Discard. DROPS the tri-only verts/indices/qRasterRO (a voxel
+  //     pixel never re-derives a triangle), binding instead voxelBricks + qVoxRasterRO — so it
+  //     stays at 7 (payloadV/visBV/clusters/meshes/instances + voxelBricks/qVoxRasterRO).
+  // Both passes are provably ≤10 fragment storage buffers. The 'vox' pass is built only when
+  // the voxel queue is present (cull.qVoxRasterRO) — a pure-triangle world has ONE pass.
+  const buildMat = (pass: 'tri' | 'vox'): NodeMaterial => {
   const mat = new NodeMaterial();
   mat.vertexNode = vec4(positionGeometry.xy, 0, 1) as unknown as typeof mat.vertexNode;
 
@@ -279,15 +310,54 @@ export function buildNaniteResolve(
       ) as unknown as NV4
     ).xyz.toVar() as unknown as NV3;
 
-    // payload → mesh → matClass
-    const itemIdx = pRaw.shiftRight(uint(CLUSTER_TRI_BITS));
-    const item = cull.qRasterRO.element(itemIdx.add(uint(1)));
-    const ci = item.y;
-    const meshId = elemU(gpu.clusters, ci.mul(uint(8)).add(uint(7))).shiftRight(uint(16));
+    // voxel-foliage (Stage 2 §7.1 + two-pass §4.6): the bit31 VOXEL marker partitions the
+    // two fullscreen passes. A voxel id is NOT a triangle itemIdx, so the tri pass must NOT
+    // index qRasterRO with one (it would read garbage). Each pass keeps ONLY the buffers it
+    // needs (so neither busts the storage-buffer ceiling): the 'tri' pass Discards voxel
+    // pixels and never touches voxelBricks/qVoxRasterRO; the 'vox' pass Discards non-voxel
+    // pixels and never touches verts/indices/qRasterRO.
+    const isV = pRaw.shiftRight(uint(31)).bitAnd(uint(1)).toVar();
+    if (pass === 'tri') {
+      // MAIN pass: skip voxel-winner pixels (the 'vox' pass shades them). On a pure-triangle
+      // world (no voxel queue) bit31 is never set, so this never fires.
+      If(isV.equal(uint(1)), () => {
+        Discard();
+      });
+    } else {
+      // VOXEL pass: skip every pixel that is NOT a voxel winner (the 'tri' pass shades them).
+      If(isV.equal(uint(0)), () => {
+        Discard();
+      });
+    }
+    // (instId, ci): the 'tri' pass decodes from qRasterRO (the unchanged triangle path); the
+    // 'vox' pass decodes from qVoxRaster (low 30 bits = the qVoxRaster item index → the voxel
+    // cluster's (instId, ci); its word6 = brickBase points at gpu.voxelBricks, §4.1). The two
+    // decodes are in mutually-exclusive branches, so only ONE of qRasterRO / qVoxRasterRO is
+    // referenced per material build ⇒ each pass binds only its own queue.
+    let instId: NU;
+    let ci: NU;
+    if (pass === 'tri') {
+      const triItemIdx = pRaw.shiftRight(uint(CLUSTER_TRI_BITS)).toVar();
+      const triItem = cull.qRasterRO.element(triItemIdx.add(uint(1)));
+      instId = triItem.x.toVar();
+      ci = triItem.y.toVar();
+    } else {
+      const qVox = cull.qVoxRasterRO;
+      if (!qVox) throw new Error('NaniteResolve: vox pass built without qVoxRasterRO');
+      const voxIdx = pRaw.bitAnd(uint(0x7fffffff)).toVar();
+      const voxItem = qVox.element(voxIdx.add(uint(1)));
+      instId = voxItem.x.toVar();
+      ci = voxItem.y.toVar();
+    }
+    const meshId = elemU(gpu.clusters, ci.mul(uint(CLUSTER_WORDS)).add(uint(7))).shiftRight(uint(16));
+    // (localTri = pRaw & CLUSTER_TRI_MASK is read inside the rock/bark/leaf branches; those
+    // branches run ONLY in the 'tri' pass, where pRaw IS a triangle id. In the 'vox' pass the
+    // low bits are the qVoxRaster index and the explicit-mesh branches are not built at all.)
     const matClass = elemU(gpu.meshes, meshId.mul(uint(MESH_WORDS)).add(uint(6)))
       .shiftRight(uint(8))
       .bitAnd(uint(0xff))
       .toVar();
+    const item = { x: instId, y: ci } as unknown as { x: NU; y: NU };
     const isT = matClass.equal(uint(0));
 
     // ---- TERRAIN shading on the reconstructed surface — GATED on isT (UE5-gap win #4):
@@ -298,6 +368,13 @@ export function buildNaniteResolve(
     const camPos = vec3(cam.camPos) as unknown as NV3;
     const terrainCol = vec3(0.3).toVar() as unknown as NV3;
     const terrainNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
+    // The ROCK/BARK/LEAF material branches re-fetch the cluster triangle (gpu.verts /
+    // gpu.indices) — the tri-only buffers the 'vox' pass must NOT bind. Each of those three
+    // If() blocks is therefore guarded by `pass === 'tri'` below: in the 'vox' pass they would
+    // never fire anyway (matClass=voxel(7) ⇒ isR/isBD/isL all false), and skipping their
+    // CONSTRUCTION is what keeps verts/indices out of the voxel material's binding set. The
+    // const declarations stay at top-level so the shared mux + lighting compile in BOTH passes;
+    // TERRAIN reads only textures (no storage buffer) so it can run in both harmlessly.
     If(isT, () => {
       const shading = buildTerrainShading({
         normalTex: hf.normalTex,
@@ -334,7 +411,7 @@ export function buildNaniteResolve(
     const rockCol = vec3(0.3).toVar() as unknown as NV3;
     const rockNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
     const rockAo = float(1).toVar() as unknown as NF;
-    If(isR, () => {
+    if (pass === 'tri') If(isR, () => {
       const instId = item.x;
       const localTri = pRaw.bitAnd(uint(CLUSTER_TRI_MASK));
       const ctx = fetch.makeCtx(instId, ci);
@@ -375,7 +452,7 @@ export function buildNaniteResolve(
     const barkCol = vec3(0.3).toVar() as unknown as NV3;
     const barkNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
     const barkAo = float(1).toVar() as unknown as NF;
-    if (world.barkTexA && world.barkTexB) {
+    if (pass === 'tri' && world.barkTexA && world.barkTexB) {
       const barkTexA = world.barkTexA;
       const barkTexB = world.barkTexB;
       If(isBD, () => {
@@ -525,7 +602,7 @@ export function buildNaniteResolve(
     const isL = matClass.equal(uint(4)).toVar();
     const leafCol = vec3(0.1, 0.2, 0.08).toVar() as unknown as NV3;
     const leafNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
-    If(isL, () => {
+    if (pass === 'tri') If(isL, () => {
       const instId = item.x;
       const localTri = pRaw.bitAnd(uint(CLUSTER_TRI_MASK));
       const ctx = fetch.makeCtx(instId, ci);
@@ -569,15 +646,54 @@ export function buildNaniteResolve(
       leafNrm.assign(dot(gnrm, toCam).lessThan(0).select(gnrm.negate(), gnrm) as unknown as NV3);
     });
 
-    // unported explicit classes (grass/debris — N10) keep a flat gray
+    // ---- VOXEL shading (Stage 2 §7.2): matClass=voxel(7). The SECOND resolve pass shades
+    // ONLY voxel-winner pixels (the 'tri' pass Discarded them). Reuses the SAME reconstructed
+    // wp (no new depth math), decodes the BRICK-MEAN normal from gpu.voxelBricks (the coarse
+    // one-sample-per-brick default §6.4; word3 spread is carried for a future SGGX fallback but
+    // the mean-normal path ignores it, §7.2.3), rotates it by the instance yaw + flips it
+    // camera-ward via the EXISTING leaf idiom (voxels are inherently two-sided), and colors via
+    // the leaf matParam TINT (§7.2.6 — brick word4 albedo is raster/build-only). Built ONLY in
+    // the 'vox' pass, so voxelBricks/qVoxRasterRO are referenced ONLY there.
+    const isVox = matClass.equal(uint(7)).toVar();
+    const voxCol = vec3(0.1, 0.2, 0.08).toVar() as unknown as NV3;
+    const voxNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
+    if (pass === 'vox') {
+      If(isVox, () => {
+        const vInstId = item.x;
+        const vB = gpu.instances.element(vInstId.mul(uint(2)).add(uint(1))).toVar() as unknown as NV4;
+        const yawSc = instYaw(vB);
+        // brickBase = the voxel cluster's word6 (§4.1). The block shades with brick[brickBase]
+        // mean normal (coarse: the whole block is one representative sample, §6.4).
+        const brickBase = elemU(gpu.clusters, ci.mul(uint(CLUSTER_WORDS)).add(uint(6))).toVar();
+        const nrmWord = elemU(gpu.voxelBricks, brickWord(brickBase, uint(BRICK_NORMAL)));
+        const localN = brickNormalTsl(nrmWord) as unknown as NV3;
+        const gn = normalize(instRotateDir(yawSc, localN)) as unknown as NV3;
+        const toCamV = normalize(camPos.sub(wp)) as unknown as NV3;
+        voxNrm.assign(dot(gn, toCamV).lessThan(0).select(gn.negate(), gn) as unknown as NV3);
+        // leaf-tint color path (§7.2.6): mesh word7 = packed linear RGB + hueVar. No per-leaf
+        // vdata jitter (no triangle) — use the mid tint (k=0 ⇒ base) × a mid crown-AO (0.6).
+        const mp = fetch.meshWord(meshId, 7);
+        const base = vec3(
+          toF(mp.bitAnd(uint(0xff))),
+          toF(mp.shiftRight(uint(8)).bitAnd(uint(0xff))),
+          toF(mp.shiftRight(uint(16)).bitAnd(uint(0xff))),
+        ).div(255) as unknown as NV3;
+        voxCol.assign(base.mul(0.8) as unknown as NV3);
+      });
+    }
+
+    // unported explicit classes (grass/debris — N10) keep a flat gray; voxel(7) takes the
+    // innermost fall-through (its own isVox.select replaces the flat default, §7.2).
     const palette = vec3(0.35, 0.33, 0.3) as unknown as NV3;
+    const voxAlbDefault = isVox.select(voxCol, palette) as unknown as NV3;
+    const voxNrmDefault = isVox.select(voxNrm, vec3(0, 1, 0)) as unknown as NV3;
     const albedo = isT
-      .select(terrainCol, isR.select(rockCol, isBD.select(barkCol, isL.select(leafCol, palette))))
+      .select(terrainCol, isR.select(rockCol, isBD.select(barkCol, isL.select(leafCol, voxAlbDefault))))
       .toVar() as unknown as NV3;
     const wNormal = isT
       .select(
         terrainNrm,
-        isR.select(rockNrm, isBD.select(barkNrm, isL.select(leafNrm, vec3(0, 1, 0)))),
+        isR.select(rockNrm, isBD.select(barkNrm, isL.select(leafNrm, voxNrmDefault))),
       )
       .toVar() as unknown as NV3;
     // aoNode (rock + bark cavity): applied to indirect only — 1 elsewhere
@@ -726,12 +842,30 @@ export function buildNaniteResolve(
   mat.depthWrite = nandepth !== '0';
   mat.fog = false;
   mat.lights = false;
+  return mat;
+  }; // end buildMat
 
-  const mesh = new Mesh(geometry, mat);
+  // MAIN pass (always): shades triangle pixels, skips voxel pixels.
+  const mesh = new Mesh(geometry, buildMat('tri'));
   mesh.name = 'naniteResolve';
   mesh.frustumCulled = false;
   mesh.renderOrder = -1000;
   mesh.castShadow = false;
   mesh.receiveShadow = false;
-  return { mesh };
+
+  // VOXEL pass (only when the voxel queue is wired): shades ONLY voxel-winner pixels. Both the
+  // MAIN and the VOXEL material have depthTest=false + the same depthNode, so the two fullscreen
+  // draws composite by Discard partition (each pass discards the OTHER tier's pixels + uncovered
+  // pixels) with no read-modify-write conflict; renderOrder −999 runs it right after the main
+  // resolve, still well before the sky/scene remainder.
+  let voxMesh: Mesh | undefined;
+  if (cull.qVoxRasterRO) {
+    voxMesh = new Mesh(geometry, buildMat('vox'));
+    voxMesh.name = 'naniteResolveVox';
+    voxMesh.frustumCulled = false;
+    voxMesh.renderOrder = -999;
+    voxMesh.castShadow = false;
+    voxMesh.receiveShadow = false;
+  }
+  return { mesh, voxMesh };
 }

@@ -995,6 +995,122 @@ export class GeometryRegistry {
     return base;
   }
 
+  /**
+   * voxel-foliage (spec §4.1 / Stage-2 A1): register a VOXEL sibling head whose clusters
+   * carry BRICK ranges (word6=brickBase, word7-lowbyte=brickCount ≤ MAX_BRICKS_PER_CLUSTER)
+   * instead of triangles. NO geometry (0 verts / 0 tris) — the placeholder triangle path
+   * the draft used (re-clusterizing the full leaf crown) OVERFLOWED the late caps (§A1);
+   * authoring cluster records DIRECTLY costs only `clusterBlocks.length` clusters and
+   * keeps the bricks as the sole payload. The cluster mega-buffer stride/layout is
+   * UNCHANGED — word6/word7 are reinterpreted on voxel meshes (matClass=voxel keeps them
+   * out of the triangle raster, §4.1). The brick band is split into ≤128-brick BLOCKS
+   * (the §5.3 per-coarse-cluster fit), each one cluster with its own brick-AABB bound.
+   *
+   * The cull is HIER-ONLY (kSeedRoots SKIPS rootCount==0 meshes, NaniteCull.ts:469), so
+   * each cluster gets a MINIMAL single-root DAG record (ownError=0 ⇒ pOwn=0 ≤ τ ⇒ always
+   * CUT/emit, never descend; childCount=0; root sentinel parent keeps the sqrt(d²−r²)
+   * denominator well-formed) and a dagLinks root, with rootBase/rootCount = block count.
+   * Runs AFTER build() within the late budget (reserve clusters = Σ blocks, meshes = 1).
+   */
+  registerVoxelHead(
+    matParam: number,
+    blocks: { brickBase: number; brickCount: number; aabb: { min: [number, number, number]; max: [number, number, number] } }[],
+    opts: { swayPad?: number; maxDist?: number; label?: string },
+  ): MeshHandle {
+    if (!this.built) throw new Error('GeometryRegistry: registerVoxelHead before build()');
+    if (blocks.length === 0) throw new Error('GeometryRegistry: registerVoxelHead with no brick blocks');
+    const handle = this.entries.length;
+    if (handle >= 0xffff) throw new Error('GeometryRegistry: mesh id exceeds u16');
+    if (handle >= this.caps.meshes) {
+      throw new Error(`GeometryRegistry: mesh capacity ${this.caps.meshes} exceeded — raise late.meshes`);
+    }
+    const n = blocks.length;
+    this.checkRoom(0, 0, n, 0); // n clusters, 0 verts/tris (bricks are the payload)
+    const cBase = this.clusterCursor;
+    const linkBase = this.dagLinksCursor;
+    if (linkBase + n > this.dagLinksArr.length) {
+      throw new Error(`GeometryRegistry: dagLinks overflow authoring voxel head (${linkBase + n} > ${this.dagLinksArr.length})`);
+    }
+    const entry = this.newEntry(handle, 'voxel', {
+      transformChannel: 'leaf',
+      castShadows: false,
+      twoSided: true,
+      aggregate: true,
+      matParam,
+      swayPad: opts.swayPad ?? 0,
+      label: opts.label ?? 'voxel',
+    }, false, 0);
+    entry.vertBase = this.vertCursor;
+    entry.vertCount = 0;
+    entry.triBase = this.triCursor;
+    entry.triCount = 0;
+    entry.clusterBase = cBase;
+    entry.clusterCount = n;
+    entry.rootBase = linkBase;
+    entry.rootCount = n;
+    entry.flags |= MESH_FLAG_HASDAG; // hier mesh: kSeedRoots seeds it; resolve/dbg consistent
+    entry.lodNext = LOD_NONE;
+    entry.lodDist = opts.maxDist ?? 0;
+
+    const recs = new Uint32Array(n * CLUSTER_WORDS);
+    const dArr = this.dagArr;
+    const dl = this.dagLinksArr;
+    // union AABB → mesh sphere (the instance-cull seed bound)
+    let uMinX = Infinity, uMinY = Infinity, uMinZ = Infinity;
+    let uMaxX = -Infinity, uMaxY = -Infinity, uMaxZ = -Infinity;
+    for (let c = 0; c < n; c++) {
+      const blk = blocks[c] as { brickBase: number; brickCount: number; aabb: { min: [number, number, number]; max: [number, number, number] } };
+      if (blk.brickCount > MAX_CLUSTER_TRIS) {
+        // word7 low byte is a u8 AND the brick-granular id is ≤7 bits (§4.5/§6.4).
+        throw new Error(
+          `GeometryRegistry: voxel cluster brickCount ${blk.brickCount} > ${MAX_CLUSTER_TRIS} — split into finer blocks (§5.3)`,
+        );
+      }
+      const mn = blk.aabb.min, mx = blk.aabb.max;
+      const cx = (mn[0] + mx[0]) * 0.5, cy = (mn[1] + mx[1]) * 0.5, cz = (mn[2] + mx[2]) * 0.5;
+      const rr = Math.hypot((mx[0] - mn[0]) * 0.5, (mx[1] - mn[1]) * 0.5, (mx[2] - mn[2]) * 0.5);
+      uMinX = Math.min(uMinX, mn[0]); uMinY = Math.min(uMinY, mn[1]); uMinZ = Math.min(uMinZ, mn[2]);
+      uMaxX = Math.max(uMaxX, mx[0]); uMaxY = Math.max(uMaxY, mx[1]); uMaxZ = Math.max(uMaxZ, mx[2]);
+      const b = c * CLUSTER_WORDS;
+      recs[b] = f32Bits(cx);
+      recs[b + 1] = f32Bits(cy);
+      recs[b + 2] = f32Bits(cz);
+      recs[b + 3] = f32Bits(rr);
+      recs[b + 4] = octEncode(0, 1, 0);
+      recs[b + 5] = f32Bits(-1); // cone disabled (bricks two-sided)
+      recs[b + 6] = blk.brickBase >>> 0; // word6 = brickBase (was triStart)
+      // word7: brickCount(0-7) | flags(8-9)=0 | LOD level(10-15)=0 | handle(16-31).
+      // flags=0 (NOT CLUSTER_FLAG_DAG): the raster SKIPS voxel clusters by matClass, so
+      // their vert-addressing path is never taken; keep it plain to avoid surprises.
+      recs[b + 7] = ((blk.brickCount & 0xff) | (handle << 16)) >>> 0;
+      // single-root DAG record per cluster (always-cut, no children) + a dagLinks root
+      const db = (cBase + c) * DAG_WORDS;
+      dArr[db] = 0; // ownError = 0 → pOwn=0 ≤ τ → always cut → emit
+      dArr[db + 1] = cx; dArr[db + 2] = cy; dArr[db + 3] = cz; dArr[db + 4] = rr; // ownSphere
+      dArr[db + 5] = DAG_ROOT_PARENT_ERR; // root sentinel parentError
+      dArr[db + 6] = cx; dArr[db + 7] = cy; dArr[db + 8] = cz; dArr[db + 9] = rr; // parentSphere←own
+      dArr[db + 10] = bitsF32(0); // childBase
+      dArr[db + 11] = bitsF32(0); // childCount = 0 (leaf root)
+      dl[linkBase + c] = cBase + c;
+    }
+    entry.sphere = [
+      (uMinX + uMaxX) * 0.5,
+      (uMinY + uMaxY) * 0.5,
+      (uMinZ + uMaxZ) * 0.5,
+      Math.hypot((uMaxX - uMinX) * 0.5, (uMaxY - uMinY) * 0.5, (uMaxZ - uMinZ) * 0.5),
+    ];
+    entry.clusterRecs = recs;
+    this.entries.push(entry);
+    this.clusterCursor += n;
+    this.dagLinksCursor = linkBase + n;
+
+    // upload: copyEntry (clusters + mesh record) at flush; the DAG/dagLinks ranges are
+    // written directly here (copyEntry does not touch them), so push them now.
+    this.pushRange(this.dagAttr, cBase * DAG_WORDS, n * DAG_WORDS);
+    this.pushRange(this.dagLinksAttr, linkBase, n);
+    return handle;
+  }
+
   meshEntry(h: MeshHandle): Readonly<MeshEntry> {
     const e = this.entries[h];
     if (!e) throw new Error(`GeometryRegistry: unknown mesh handle ${h}`);

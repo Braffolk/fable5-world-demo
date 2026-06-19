@@ -54,6 +54,7 @@ import {
   DISPATCH_ROW,
   QCHUNK_CAP,
   QRASTER_CAP,
+  QVOX_CAP,
   instRotateDir,
   instSphereRadius,
   instTransformPoint,
@@ -159,12 +160,23 @@ export interface NaniteCullChain {
   rasterDispatch2Attr: IndirectStorageBufferAttribute;
   /** all items (payload passes) */
   rasterDispatchFullAttr: IndirectStorageBufferAttribute;
+  /** voxel-foliage (spec §6.2): the fanned voxel-cluster work queue [0]=(count,0),
+   *  items at 1.. (same (instId, ci) uvec2 as qRaster). Stage-2 kVoxBin reads it. */
+  qVoxRasterRO: BufOf<UV2>;
+  qVoxRasterAttr: StorageBufferAttribute;
+  /** 2D-split dispatch args over the fanned voxel-cluster count (Stage-2 kVoxBin). */
+  voxRasterDispatchAttr: IndirectStorageBufferAttribute;
   /** phase 1: clear → instance cull → cluster cull → raster args */
   runPhase1(renderer: Renderer): void;
   /** phase 2 (call after phase-1 raster + HZB build): re-test rejects */
   runPhase2(renderer: Renderer): void;
   /** write full-range args WITHOUT re-testing (?phase2=0 A/B + no-occl path) */
   syncFullArgs(renderer: Renderer): void;
+  /** voxel-foliage (spec §4.6): post-traverse fan-out — qRaster → qVoxRaster by
+   *  matClass. Call AFTER runPhase1. Publishes voxRasterDispatchAttr for Stage-2. */
+  runVoxFanout(renderer: Renderer): void;
+  /** voxel-foliage: readback of the fanned voxel-cluster count (HUD/overflow). */
+  readVoxCount(renderer: Renderer): Promise<number>;
   readCounts(renderer: Renderer): Promise<NaniteCullCounts>;
 }
 
@@ -254,6 +266,24 @@ export function buildNaniteCull(
   const qRasterAttr = new StorageBufferAttribute(new Uint32Array((QRASTER_CAP + 1) * 2), 2);
   const qRasterV = sUvec2(qRasterAttr, QRASTER_CAP + 1);
 
+  // voxel-foliage (spec §4.6 / §6.2): the VOXEL raster work queue. The cut emits voxel
+  // clusters into the SAME qRaster as triangles (kTraverse is pinned ≤10 buffers — no
+  // room for a 2nd queue there, §4.6); a TINY post-traverse FAN-OUT pass (kVoxFanout
+  // below) then re-scans the emitted qRaster, tests each cluster's mesh matClass, and
+  // fans the voxel(7) entries here. qVoxRaster[0] = (count, 0); items at 1.. are the
+  // SAME (instId, ci) uvec2 as qRaster (Stage-2 kVoxBin reads bricks via ci's word6/7).
+  const qVoxRasterAttr = new StorageBufferAttribute(new Uint32Array((QVOX_CAP + 1) * 2), 2);
+  const qVoxRasterV = sUvec2(qVoxRasterAttr, QVOX_CAP + 1);
+  // voxel fan-out cursor (its OWN atomic counter so it doesn't contend the BFS counters).
+  const voxCountAttr = new StorageBufferAttribute(new Uint32Array(1), 1);
+  const voxCount = sU32Views(voxCountAttr, 1).atomic;
+  // 2D-split dispatch args for the voxel BIN/raster (over qVoxRaster count, Stage 2).
+  const voxRasterDispatchAttr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
+  const voxRasterDispatch = sU32Views(voxRasterDispatchAttr as unknown as StorageBufferAttribute, 3).rw;
+  // ONE-THREAD-PER-qRaster-ENTRY fan-out dispatch args (ceil(qRaster/64) workgroups).
+  const voxFanoutDispatchAttr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
+  const voxFanoutDispatch = sU32Views(voxFanoutDispatchAttr as unknown as StorageBufferAttribute, 3).rw;
+
   const rasterDispatchAttr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
   const rasterDispatch = sU32Views(rasterDispatchAttr as unknown as StorageBufferAttribute, 3).rw;
   const rasterDispatch2Attr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
@@ -327,6 +357,60 @@ export function buildNaniteCull(
     split2D(rasterDispatchFull, nT);
   })().compute(1, [1]);
   (kRasterArgs2 as unknown as ComputeKernel).setName('nanRasterArgs2');
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // voxel-foliage (spec §4.6 / §6.2): the POST-TRAVERSE FAN-OUT. The cut emits voxel
+  // clusters into the SAME qRaster as triangles (no room for a 2nd queue inside the
+  // ≤10-buffer kTraverse, §4.6). This tiny pass re-scans the emitted qRaster ONCE,
+  // tests each cluster's mesh matClass, and fans the voxel(7) entries into qVoxRaster.
+  // The voxel clusters STAY in qRaster too — the triangle world1 raster SKIPS them by
+  // the same matClass test (NaniteRaster), so they don't rasterize as garbage tris.
+  // Cost = one re-scan of up to qRaster-count entries (a Stage-0a/3 perf line item).
+  // ──────────────────────────────────────────────────────────────────────────
+  const VOXEL_MATCLASS = 7; // MATERIAL_CLASS.voxel (spec §4.1)
+
+  // kVoxFanoutArgs: clear the voxel cursor + size the one-thread-per-entry dispatch
+  // over the live qRaster count. Runs BEFORE kVoxFanout (its cursor + dispatch args).
+  const kVoxFanoutArgs = Fn(() => {
+    atomicStore(voxCount.element(0), uint(0));
+    const n = minU(aLoadU(counters.element(1)), uint(QRASTER_CAP));
+    // one workgroup (64 threads) per 64 qRaster entries
+    split2D(voxFanoutDispatch, n.add(uint(63)).div(uint(64)));
+  })().compute(1, [1]);
+  (kVoxFanoutArgs as unknown as ComputeKernel).setName('nanVoxFanoutArgs');
+
+  // kVoxFanout: one thread per qRaster entry → matClass==voxel ⇒ append to qVoxRaster.
+  const kVoxFanout = Fn(() => {
+    const tid = wgLinear(DISPATCH_ROW).mul(uint(64)).add(localX()).toVar();
+    const itemCount = minU(aLoadU(counters.element(1)), uint(QRASTER_CAP));
+    returnIf(tid.greaterThanEqual(itemCount));
+    const item = qRasterV.ro.element(tid.add(uint(1)));
+    const instId = item.x.toVar();
+    const ci = item.y.toVar();
+    // mesh matClass = byte 1 of mesh word6 ((w6>>8)&0xff), reached via the cluster's
+    // meshId (cluster word7>>16). readCluster gives meshId; read the mesh word6 byte.
+    const meshId = readCluster(gpu.clusters, ci).meshId.toVar();
+    const matClass = elemU(gpu.meshes, meshId.mul(uint(MESH_WORDS)).add(uint(6)))
+      .shiftRight(uint(8))
+      .bitAnd(uint(0xff));
+    If(matClass.equal(uint(VOXEL_MATCLASS)), () => {
+      const slot = atomicAdd(voxCount.element(0), uint(1)) as unknown as NU;
+      If(slot.lessThan(uint(QVOX_CAP)), () => {
+        qVoxRasterV.rw.element(slot.add(uint(1))).assign(uv2(instId, ci));
+      });
+    });
+  })().compute(QRASTER_CAP, [64]);
+  (kVoxFanout as unknown as ComputeKernel).setName('nanVoxFanout');
+
+  // kVoxRasterArgs: publish qVoxRaster[0] = (count, 0) + the Stage-2 voxel-bin/raster
+  // 2D-split dispatch args (over the fanned voxel-cluster count). The count read goes
+  // through the SAME rw view that writes slot 0 (N0 same-scope law, like kRasterArgs).
+  const kVoxRasterArgs = Fn(() => {
+    const n = minU(aLoadU(voxCount.element(0)), uint(QVOX_CAP)).toVar();
+    qVoxRasterV.rw.element(0).assign(uv2(n, 0));
+    split2D(voxRasterDispatch, n);
+  })().compute(1, [1]);
+  (kVoxRasterArgs as unknown as ComputeKernel).setName('nanVoxRasterArgs');
 
   // ──────────────────────────────────────────────────────────────────────────
   // N8-HIC: HIERARCHICAL traversal (opts.hier). Instead of dispatching every
@@ -584,6 +668,22 @@ export function buildNaniteCull(
     syncFullArgs(renderer);
   };
 
+  // voxel-foliage (spec §4.6 / §6.2): run the post-traverse FAN-OUT — clear+size args,
+  // scan qRaster → matClass==voxel → qVoxRaster, publish the voxel-raster dispatch args.
+  // Call AFTER runPhase1 (qRaster + counters[1] are live). The Stage-2 kVoxBin/kRasterVox
+  // then dispatch over voxRasterDispatchAttr. No-op-safe if no voxel clusters were emitted
+  // (qVoxRaster[0]=(0,0) ⇒ the bin dispatches 0 workgroups).
+  const runVoxFanout = (renderer: Renderer): void => {
+    dispatch(renderer, kVoxFanoutArgs);
+    dispatchIndirect(renderer, kVoxFanout as never, voxFanoutDispatchAttr);
+    dispatch(renderer, kVoxRasterArgs);
+  };
+
+  const readVoxCount = async (renderer: Renderer): Promise<number> => {
+    const buf = await readBuffer(renderer, voxCountAttr, 0, 4);
+    return new Uint32Array(buf)[0] ?? 0;
+  };
+
   const readCounts = async (renderer: Renderer): Promise<NaniteCullCounts> => {
     const [buf, head] = await Promise.all([
       readBuffer(renderer, countersAttr, 0, 32),
@@ -627,9 +727,14 @@ export function buildNaniteCull(
     rasterDispatchAttr,
     rasterDispatch2Attr,
     rasterDispatchFullAttr,
+    qVoxRasterRO: qVoxRasterV.ro,
+    qVoxRasterAttr,
+    voxRasterDispatchAttr,
     runPhase1,
     runPhase2,
     syncFullArgs,
+    runVoxFanout,
+    readVoxCount,
     readCounts,
   };
 }
