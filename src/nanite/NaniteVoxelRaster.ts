@@ -74,7 +74,7 @@ import {
 import type { NF, NI, NU, NV3, NV4 } from '../gpu/TSLTypes';
 import { CLUSTER_WORDS } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
-import { BRICK_ALBEDO, BRICK_HALF, BRICK_POS_X, BRICK_WORDS } from './VoxelBrick';
+import { BRICK_ALBEDO, BRICK_HALF, BRICK_POS_X, BRICK_WORDS, MAX_BRICKS_PER_CLUSTER } from './VoxelBrick';
 import { DISPATCH_ROW, QVOX_CAP } from './NaniteCommon';
 import type { NaniteCam } from './NaniteCommon';
 import { instTransformPoint, instYaw, instSphereRadius } from './NaniteCommon';
@@ -126,6 +126,22 @@ const VOX_BIT = 0x80000000;
 //                 a perfect wall), which also bounds the added overdraw from the win.
 const COVER_FLOOR = 0.1;
 const COVER_CEIL = 0.92;
+
+// PER-THREAD FOOTPRINT CAP (the close-up pathology fix, RC2 / missed-cause-6).
+// One-thread-per-brick still makes each lane O(footprint-area). A single brick
+// straddling the near plane (forcevox=all → nearDist=0, camera in the crown) can
+// project to extreme screen coords and clamp its bbox to the FULL framebuffer
+// (2268×1473 ≈ 3.3M px) ⇒ ONE lane loops the whole screen ⇒ the ~500 ms whole-OS
+// stall. UE's invariant: every SW-rasterized primitive is provably small. We apply
+// it to the RASTER itself: clamp each thread's footprint to a hard pixel-extent box
+// (BRICK_MAX_EXT per side) AROUND the projected brick CENTRE. A correct foliage brick
+// at any sane on-screen size is a few px; a brick that projects larger than this is
+// either degenerate (near-plane straddle) or a debug-only (forcevox) up-close voxel
+// that should be a triangle, not a screen-filling slab. Clamping the FOOTPRINT (not
+// the election) keeps every painted pixel depth-correct + loss-exact within the box;
+// it only DROPS the pathological skirt that no real foliage brick has. The cap is
+// generous (a real near brick is ≪ this) so it never clips a legitimate footprint.
+const BRICK_MAX_EXT = 64; // max px per side a single brick thread may scan
 
 // BUILD-TIME BIT-BUDGET ASSERT (§6.2): the max payload (a qVoxRaster item index, < QVOX_CAP)
 // MUST fit below BUCKET_SHIFT so the bucket field never collides with payload bits, and the
@@ -678,9 +694,62 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // never produces a WRONG winner (it only ever DROPS a would-be loser-or-edge-sliver, never
   // overwrites a nearer pixel). ?voxoccl=0 disables it for the A/B.
   const voxOccl = (new URLSearchParams(window.location.search).get('voxoccl') ?? '1') !== '0';
+  // ── COOPERATIVE-RASTER WORKGROUP MEMORY (the close-up overdraw-imbalance fix) ──────
+  // Per-cluster shared brick records (Phase A fills, Phase B consumes). MAX_BRICKS_PER_
+  // CLUSTER=128 entries each. wgCand packs the brick's election key (depthKey24<<8|id8);
+  // bbX0/bbY0/bbW/bbH are the brick's CLAMPED screen bbox; wgPrefix[b] is the running
+  // flat-pixel start of brick b (Σ area of bricks < b); wgBrickAbs[b]/wgDensBits[b] are
+  // only consumed in dither mode. ~7×128×4B ≈ 3.5 KB workgroup memory — comfortable.
+  const WG_RASTER = MAX_BRICKS_PER_CLUSTER; // 128 lanes per cluster workgroup
+  // ceil(log2(WG_RASTER)) — fixed binary-search iterations to map a flat pixel index to its
+  // owning brick over the monotonic prefix array (covers up to 2^PREFIX_BITS bricks).
+  const PREFIX_BITS = Math.ceil(Math.log2(WG_RASTER)) + 1;
   const kVoxScatter = Fn(() => {
+    // ── WORKGROUP-COOPERATIVE FOOTPRINT RASTER (CudaRaster T6/T8 + Lucid balanced ──────
+    // dispatch; the residual-overdraw / per-lane-imbalance fix). Iteration-1 went
+    // [1]-thread-per-workgroup → ONE thread per BRICK (localX), filling the SIMD waves and
+    // removing the single-lane near-plane blowup. BUT each brick-thread still SERIALLY
+    // looped its OWN footprint, so a brick that projects large at close range (up to the
+    // BRICK_MAX_EXT box) grinds ~16K px on ONE lane while sibling lanes (small bricks)
+    // sit idle — EXACTLY the "one thread per primitive, loop its pixels" model the GPU-
+    // rasterizer literature condemns as badly under-utilized on MIXED-SIZE primitives
+    // (Laine&Karras CudaRaster §2/§6/Fig.5: FreePipe's scheme; the per-lane footprint
+    // variance flattens the waves to the WORST brick). UE/Nanite keeps every SW-rasterized
+    // primitive PROVABLY SMALL (clusters ≥32 px go to the HW raster, never SW-looped),
+    // and CudaRaster's fix (T6/T8) is to DECOUPLE coverage from work-distribution: flatten
+    // the whole batch's footprint into one flat pixel space and spread it EVENLY across
+    // all lanes (Lucid's dispatchLargeTriBalanced splits a wide primitive's per-row writes
+    // across the subgroup the same way). We apply that here:
+    //
+    //   PHASE A (1 lane = 1 brick): decode + project + CLAMP each brick → store its bbox +
+    //     election key into workgroup shared arrays; area = bbW·bbH. (Same per-brick math
+    //     as before, but it now only SETS UP the footprint, it does not RASTER it.)
+    //   PREFIX SCAN (thread 0): running Σ area → wgPrefix[b] + wgTotalPx. ≤128 serial adds
+    //     (replaces the 16K-px-per-lane inner loop with 128 cheap adds on one lane).
+    //   PHASE B (ALL lanes, flat cooperative): every lane strides the cluster's FLAT pixel
+    //     space (loopU(local, wgTotalPx, …, WG_RASTER)). A flat index f maps to (brick,lx,
+    //     ly) by a short scan over wgPrefix; then the election runs. A 16K-px brick's
+    //     pixels are now spread across all 128 lanes (~128 iters/lane) instead of 16K on
+    //     one — the footprint cost becomes O(area/WG) per lane, not O(area). The waves
+    //     stay full regardless of per-brick footprint variance.
+    //
+    // The election (depthKey24 atomicMax + winner visBV store), the per-brick geometry
+    // (54c3947), the BRICK_MAX_EXT clamp, the per-block occlusion cull, and the ?voxdither
+    // path are all PRESERVED bit-exact — only the WORK DISTRIBUTION of the footprint loop
+    // changes. ≤10 buffers unchanged (no new storage buffers; only workgroup memory added).
     const itemIdx = wgLinear(DISPATCH_ROW).toVar();
+    const brickLocal = localX().toVar(); // Phase A: this lane's brick index within the cluster
     const itemCount = qVoxRasterRO.element(0).x;
+    // shared per-brick records (Phase A → Phase B). Plain (non-atomic) workgroup arrays.
+    const wgBbX0 = workgroupArray('uint', WG_RASTER);
+    const wgBbY0 = workgroupArray('uint', WG_RASTER);
+    const wgBbW = workgroupArray('uint', WG_RASTER);
+    const wgBbH = workgroupArray('uint', WG_RASTER);
+    const wgCand = workgroupArray('uint', WG_RASTER); // depthKey24<<8 | id8 (loss-exact key)
+    const wgPrefix = workgroupArray('uint', WG_RASTER); // Σ area of bricks < b (flat start)
+    const wgBrickAbs = voxDither ? workgroupArray('uint', WG_RASTER) : null; // dither salt
+    const wgDensBits = voxDither ? workgroupArray('uint', WG_RASTER) : null; // dither raw density byte (0..255)
+    const wgScan = workgroupArray('uint', 2); // [0]=brickCount, [1]=wgTotalPx (thread-0 scan)
     If(itemIdx.lessThan(itemCount), () => {
       const item = qVoxRasterRO.element(itemIdx.add(uint(1)));
       const instId = item.x.toVar();
@@ -689,15 +758,13 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
       const B = gpu.instances.element(instId.mul(uint(2)).add(uint(1))).toVar() as unknown as NV4;
       const yawSc = instYaw(B);
       const cBase = ci.mul(uint(CLUSTER_WORDS)).toVar();
-      // PER-BRICK FIX (the oversized-square bug): the raster used to project the cluster's
-      // BLOCK AABB (word0-3) as ONE footprint, so ~18 ≤128-brick blocks each painted a slab
-      // spanning much of the crown ⇒ giant overlapping squares bigger than the tree. Now we
-      // iterate the block's bricks and paint EACH brick's OWN small AABB at its real grid
-      // cell (§6.2). word6 = brickBase, word7 low byte = brickCount (§4.1).
+      // PER-BRICK FIX (the oversized-square bug, 54c3947): paint EACH brick's OWN small AABB
+      // at its real grid cell (§6.2), NOT the whole block slab. word6 = brickBase, word7 low
+      // byte = brickCount (§4.1). One thread = brick (brickBase + brickLocal).
       const brickBase = elemU(gpu.clusters, cBase.add(uint(6))).toVar();
       const brickCount = elemU(gpu.clusters, cBase.add(uint(7))).bitAnd(uint(0xff)).toVar();
-      // the block sphere (word0-3) is now used ONLY as the coarse PER-BLOCK occlusion-cull
-      // bound (one global read at the projected block centre), not as the painted footprint.
+      // the block sphere (word0-3) is the coarse PER-BLOCK occlusion-cull bound (one global
+      // read at the projected block centre, computed once on thread 0), not a footprint.
       const blkLocal = vec3(
         bcU2F(elemU(gpu.clusters, cBase)),
         bcU2F(elemU(gpu.clusters, cBase.add(uint(1)))),
@@ -712,141 +779,258 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
       const payload = itemIdx.bitAnd(uint(PAYLOAD_MASK)).toVar();
       const voxId = uint(VOX_BIT).bitOr(payload).toVar();
 
-      // PER-BLOCK OCCLUSION CULL (lever 2): project the block centre once; if the block's
-      // NEAREST-possible key (its AABB front-slab) can't beat the current global winner at
-      // its centre pixel, the whole block is occluded by the near mesh / a nearer block ⇒
-      // skip ALL its bricks. ONE global read per block (vs per-footprint-pixel), conservative
-      // (a centre-occluded block whose silhouette edge peeks is dropped — fine for sub-pixel
-      // foliage; never produces a WRONG winner). ?voxoccl=0 disables it for the A/B.
-      const blockVisible = uint(1).toVar();
+      // PER-BLOCK OCCLUSION CULL (lever 2) — computed ONCE per workgroup on thread 0 into a
+      // workgroup-shared flag, then broadcast via a barrier. One global read per BLOCK (not
+      // per-brick, not per-pixel). If the block's NEAREST-possible key (its AABB front-slab)
+      // can't beat the global winner at its centre pixel, every brick-thread skips. Conserva-
+      // tive (a centre-occluded block whose silhouette edge peeks is dropped — fine for sub-
+      // pixel foliage; never produces a WRONG winner). ?voxoccl=0 disables it for the A/B.
+      const wgVisible = workgroupArray('uint', 1);
       if (voxOccl) {
-        const bp = (cam.vp.mul(vec4(blkWCenter, 1)) as unknown as NV4).toVar();
-        If(bp.w.greaterThan(float(NEAR_EPS)), () => {
-          const bndc = bp.xyz.div(bp.w).toVar();
-          // nearest NDC z of the block = centre z minus the block's projected z half-extent;
-          // a conservative front-slab bound for the block sphere (radius blkWR / w).
-          const bnz = bndc.z.sub(blkWR.div(bp.w)).clamp(0, 1).toVar();
-          const bNearKey = depthKey24(bnz as unknown as NF).shiftLeft(uint(8)).bitOr(uint(0xff)).toVar();
-          const bscx = minI(maxI(toI(0), toI(bndc.x.add(1).mul(0.5).mul(W))), toI(width - 1)).toVar();
-          const bscy = minI(maxI(toI(0), toI(bndc.y.add(1).mul(0.5).mul(H))), toI(height - 1)).toVar();
-          const bcpx = uint(bscy).mul(uint(width)).add(uint(bscx)).toVar();
-          const centreE = aLoadU(visPayloadV.atomic.element(bcpx)).toVar();
-          If(bNearKey.lessThanEqual(centreE), () => {
-            blockVisible.assign(uint(0)); // block centre fully occluded ⇒ skip its bricks
+        If(brickLocal.equal(uint(0)), () => {
+          wgSet(wgVisible, uint(0), uint(1));
+          const bp = (cam.vp.mul(vec4(blkWCenter, 1)) as unknown as NV4).toVar();
+          If(bp.w.greaterThan(float(NEAR_EPS)), () => {
+            const bndc = bp.xyz.div(bp.w).toVar();
+            const bnz = bndc.z.sub(blkWR.div(bp.w)).clamp(0, 1).toVar();
+            const bNearKey = depthKey24(bnz as unknown as NF).shiftLeft(uint(8)).bitOr(uint(0xff)).toVar();
+            const bscx = minI(maxI(toI(0), toI(bndc.x.add(1).mul(0.5).mul(W))), toI(width - 1)).toVar();
+            const bscy = minI(maxI(toI(0), toI(bndc.y.add(1).mul(0.5).mul(H))), toI(height - 1)).toVar();
+            const bcpx = uint(bscy).mul(uint(width)).add(uint(bscx)).toVar();
+            const centreE = aLoadU(visPayloadV.atomic.element(bcpx)).toVar();
+            If(bNearKey.lessThanEqual(centreE), () => {
+              wgSet(wgVisible, uint(0), uint(0)); // centre fully occluded ⇒ skip the block
+            });
           });
         });
+        workgroupBarrier();
+      } else {
+        // no occl cull → every live brick-thread proceeds; seed the flag so the read below
+        // is uniform (thread 0 still writes it; barrier makes the broadcast well-defined).
+        If(brickLocal.equal(uint(0)), () => {
+          wgSet(wgVisible, uint(0), uint(1));
+        });
+        workgroupBarrier();
       }
 
-      If(blockVisible.equal(uint(1)), () => {
-        // ITERATE THE BLOCK'S BRICKS — each paints its OWN small footprint (§6.2/§6.4).
-        loopU(uint(0), brickCount, (bk) => {
-          const bAbs = brickBase.add(bk).toVar();          // absolute brick index
-          const bWordBase = bAbs.mul(uint(BRICK_WORDS)).toVar();
-          // per-brick LOCAL center (words 5..7) + half-extent (word8) — the real grid cell.
-          const brLocal = vec3(
-            bcU2F(elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_POS_X)))),
-            bcU2F(elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_POS_X + 1)))),
-            bcU2F(elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_POS_X + 2)))),
-          ) as unknown as NV3;
-          const brHalf = bcU2F(elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_HALF)))).toVar();
-          const brWCenter = instTransformPoint(A, B, yawSc, brLocal);
-          const brWR = instSphereRadius(A, B, brHalf as unknown as NF, float(0)).toVar();
+      // ── PHASE A (1 lane = 1 brick): decode + project + CLAMP → store the brick's footprint
+      // RECORD into shared memory. This lane does NOT raster the footprint — it only SETS UP
+      // the bbox + election key so Phase B can spread the pixels across all lanes. Seed the
+      // record EMPTY (bbW=0) for every lane first so a culled/idle lane contributes 0 area.
+      wgSet(wgBbW, brickLocal, uint(0));
+      wgSet(wgBbH, brickLocal, uint(0));
+      wgSet(wgCand, brickLocal, uint(0));
+      wgSet(wgBbX0, brickLocal, uint(0));
+      wgSet(wgBbY0, brickLocal, uint(0));
+      const brickActive = brickLocal.lessThan(brickCount).and((wgVisible.element(uint(0)) as unknown as NU).equal(uint(1)));
+      If(brickActive, () => {
+        const bAbs = brickBase.add(brickLocal).toVar();      // absolute brick index
+        const bWordBase = bAbs.mul(uint(BRICK_WORDS)).toVar();
+        // per-brick LOCAL center (words 5..7) + half-extent (word8) — the real grid cell.
+        const brLocal = vec3(
+          bcU2F(elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_POS_X)))),
+          bcU2F(elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_POS_X + 1)))),
+          bcU2F(elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_POS_X + 2)))),
+        ) as unknown as NV3;
+        const brHalf = bcU2F(elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_HALF)))).toVar();
+        const brWCenter = instTransformPoint(A, B, yawSc, brLocal);
+        const brWR = instSphereRadius(A, B, brHalf as unknown as NF, float(0)).toVar();
 
-          // DENSITY-MODULATED COVERAGE (?voxdither=1 only): read THIS brick's own density
-          // (word4.A). Skip the read entirely in the OPAQUE default (no coverage gate).
-          const density = voxDither
-            ? toF(elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_ALBEDO))).shiftRight(uint(24)).bitAnd(uint(0xff)))
-                .div(255)
-                .clamp(COVER_FLOOR, COVER_CEIL)
-                .toVar()
-            : null;
+        // DENSITY-MODULATED COVERAGE (?voxdither=1 only): stash THIS brick's salt + its RAW
+        // density byte (word4.A, the high byte of BRICK_ALBEDO — already a uint, no float
+        // cast needed) for Phase B, which rebuilds the clamped float. Skip both entirely in
+        // the OPAQUE default (no coverage gate ⇒ no per-brick density read).
+        if (voxDither && wgBrickAbs && wgDensBits) {
+          const densByte = elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_ALBEDO)))
+            .shiftRight(uint(24))
+            .bitAnd(uint(0xff))
+            .toVar();
+          wgSet(wgBrickAbs, brickLocal, bAbs);
+          wgSet(wgDensBits, brickLocal, densByte);
+        }
 
-          // project the 8 corners of THIS brick's world AABB cube [brWCenter ± brWR] → bbox + near z
-          const sMinX = float(1e9).toVar();
-          const sMinY = float(1e9).toVar();
-          const sMaxX = float(-1e9).toVar();
-          const sMaxY = float(-1e9).toVar();
-          const nearZ = float(1e9).toVar();
-          const allBehind = uint(1).toVar();
-          loopI('sz3', toI(0), toI(1), (zc) => {
-            loopI('sy3', toI(0), toI(1), (yc) => {
-              loopI('sx3', toI(0), toI(1), (xc) => {
-                const sx = toF(xc).mul(2).sub(1);
-                const sy = toF(yc).mul(2).sub(1);
-                const sz = toF(zc).mul(2).sub(1);
-                const wp = vec3(
-                  brWCenter.x.add(sx.mul(brWR)),
-                  brWCenter.y.add(sy.mul(brWR)),
-                  brWCenter.z.add(sz.mul(brWR)),
-                ) as unknown as NV3;
-                const p = (cam.vp.mul(vec4(wp, 1)) as unknown as NV4).toVar();
-                If(p.w.greaterThan(float(NEAR_EPS)), () => {
-                  allBehind.assign(uint(0));
-                  const ndc = p.xyz.div(p.w).toVar();
-                  sMinX.assign(sMinX.min(ndc.x.add(1).mul(0.5).mul(W)));
-                  sMaxX.assign(sMaxX.max(ndc.x.add(1).mul(0.5).mul(W)));
-                  sMinY.assign(sMinY.min(ndc.y.add(1).mul(0.5).mul(H)));
-                  sMaxY.assign(sMaxY.max(ndc.y.add(1).mul(0.5).mul(H)));
-                  nearZ.assign(nearZ.min(ndc.z));
-                });
+        // project the 8 corners of THIS brick's world AABB cube [brWCenter ± brWR] → bbox +
+        // near z. Also project the brick CENTRE (cx,cy in px) — the anchor for the per-thread
+        // footprint clamp below: a near-plane-straddling brick's surviving in-front corners
+        // can fling the bbox to extreme coords, so we re-centre + clamp around cx,cy.
+        const sMinX = float(1e9).toVar();
+        const sMinY = float(1e9).toVar();
+        const sMaxX = float(-1e9).toVar();
+        const sMaxY = float(-1e9).toVar();
+        const nearZ = float(1e9).toVar();
+        const allBehind = uint(1).toVar();
+        loopI('sz3', toI(0), toI(1), (zc) => {
+          loopI('sy3', toI(0), toI(1), (yc) => {
+            loopI('sx3', toI(0), toI(1), (xc) => {
+              const sx = toF(xc).mul(2).sub(1);
+              const sy = toF(yc).mul(2).sub(1);
+              const sz = toF(zc).mul(2).sub(1);
+              const wp = vec3(
+                brWCenter.x.add(sx.mul(brWR)),
+                brWCenter.y.add(sy.mul(brWR)),
+                brWCenter.z.add(sz.mul(brWR)),
+              ) as unknown as NV3;
+              const p = (cam.vp.mul(vec4(wp, 1)) as unknown as NV4).toVar();
+              If(p.w.greaterThan(float(NEAR_EPS)), () => {
+                allBehind.assign(uint(0));
+                const ndc = p.xyz.div(p.w).toVar();
+                sMinX.assign(sMinX.min(ndc.x.add(1).mul(0.5).mul(W)));
+                sMaxX.assign(sMaxX.max(ndc.x.add(1).mul(0.5).mul(W)));
+                sMinY.assign(sMinY.min(ndc.y.add(1).mul(0.5).mul(H)));
+                sMaxY.assign(sMaxY.max(ndc.y.add(1).mul(0.5).mul(H)));
+                nearZ.assign(nearZ.min(ndc.z));
               });
             });
           });
-          If(allBehind.equal(uint(0)), () => {
-            const startX = maxI(toI(0), toI(sMinX.floor())).toVar();
-            const endX = minI(toI(width - 1), toI(sMaxX.ceil())).toVar();
-            const startY = maxI(toI(0), toI(sMinY.floor())).toVar();
-            const endY = minI(toI(height - 1), toI(sMaxY.ceil())).toVar();
-            const validBB = startX.lessThanEqual(endX).and(startY.lessThanEqual(endY));
-            If(validBB, () => {
-              const nz = nearZ.clamp(0, 1).toVar();
-              // ONE voxCz per BRICK (coarse one-sample default, §6.4) — the brick AABB front-slab.
-              const voxCz = nz.toVar();
-              // the per-pixel footprint election (the world1 scatter shape).
-              loopI('vsy', startY as unknown as NI, endY as unknown as NI, (y) => {
-                loopI('vsx', startX as unknown as NI, endX as unknown as NI, (x) => {
-                  const px = uint(y).mul(uint(width)).add(uint(x)).toVar();
-                  // emit closure — built INSIDE the per-pixel conditional flow so `cand`'s use as
-                  // the atomicMax value-arg stays in the same conditional subtree (codegen-safe).
-                  const electHere = (): void => {
-                    // VERBATIM the world1 election (NaniteRaster.ts:937-959): BUILD `cand` HERE,
-                    // inside the per-pixel election flow, so its FIRST build is in the SAME
-                    // ConditionalNode subtree as the atomicMax that consumes it (the TSL r184
-                    // hoist-pathology documented in the bin path). voxCz is loop-invariant per
-                    // brick, so re-deriving `cand` per pixel is loss-EXACT (identical bits).
-                    const cand = depthKey24(voxCz as unknown as NF)
-                      .shiftLeft(uint(8))
-                      .bitOr(payload.bitAnd(uint(0xff)))
-                      .toVar();
-                    const prevE = aLoadU(visPayloadV.atomic.element(px)).toVar();
-                    If(cand.greaterThan(prevE), () => {
-                      const wonE = atomicMax(visPayloadV.atomic.element(px), cand) as unknown as NU;
-                      If(cand.greaterThan(wonE), () => {
-                        atomicStore(visBV.atomic.element(px), voxId);
-                        // debug per-pixel BRICK-WRITE counter (Stage-2 overlay, §A2)
-                        atomicAdd(atomicBuf.atomic.element(uint(WRITE_CTR)), uint(1));
-                      });
-                    });
-                  };
-                  if (voxDither && density) {
-                    // density-modulated see-through dither (?voxdither=1) — stable per-(pixel,brick)
-                    // stipple drops (1-density) of the footprint; salt with the absolute brick index
-                    // so neighbouring bricks have independent stipples.
-                    const keep = coverHash(uint(x), uint(y), bAbs).lessThan(density).toVar();
-                    If(keep, electHere);
-                  } else {
-                    electHere();
-                  }
-                });
-              });
-            });
+        });
+        // CENTRE projection (clamped) — the clamp anchor. If the centre is behind the near
+        // plane (camera literally inside the brick), fall back to the brick's bbox midpoint.
+        const cAnchorX = sMinX.add(sMaxX).mul(0.5).toVar();
+        const cAnchorY = sMinY.add(sMaxY).mul(0.5).toVar();
+        const cp = (cam.vp.mul(vec4(brWCenter, 1)) as unknown as NV4).toVar();
+        If(cp.w.greaterThan(float(NEAR_EPS)), () => {
+          const cndc = cp.xyz.div(cp.w).toVar();
+          cAnchorX.assign(cndc.x.add(1).mul(0.5).mul(W));
+          cAnchorY.assign(cndc.y.add(1).mul(0.5).mul(H));
+        });
+        If(allBehind.equal(uint(0)), () => {
+          // PER-THREAD FOOTPRINT CLAMP (RC2 / missed-cause-6): bound the bbox to a hard
+          // ±BRICK_MAX_EXT box AROUND the projected centre BEFORE clamping to the framebuffer.
+          // A near-plane-straddling brick whose surviving corners project to extreme screen
+          // coords can otherwise expand startX..endX to the FULL 2268×1473 framebuffer ⇒ a huge
+          // footprint (the catastrophic blowup the user flagged). With the cooperative Phase B
+          // the cost of a big footprint is now spread across all lanes (O(area/WG) per lane),
+          // but the clamp stays as the loss-exact safety floor (UE's "provably small primitive"
+          // invariant applied to the raster) — a real foliage brick is ≪ this cap.
+          const clMinX = cAnchorX.sub(float(BRICK_MAX_EXT)).toVar();
+          const clMaxX = cAnchorX.add(float(BRICK_MAX_EXT)).toVar();
+          const clMinY = cAnchorY.sub(float(BRICK_MAX_EXT)).toVar();
+          const clMaxY = cAnchorY.add(float(BRICK_MAX_EXT)).toVar();
+          const startX = maxI(toI(0), toI(sMinX.max(clMinX).floor())).toVar();
+          const endX = minI(toI(width - 1), toI(sMaxX.min(clMaxX).ceil())).toVar();
+          const startY = maxI(toI(0), toI(sMinY.max(clMinY).floor())).toVar();
+          const endY = minI(toI(height - 1), toI(sMaxY.min(clMaxY).ceil())).toVar();
+          const validBB = startX.lessThanEqual(endX).and(startY.lessThanEqual(endY));
+          If(validBB, () => {
+            const nz = nearZ.clamp(0, 1).toVar();
+            // ONE voxCz per BRICK (coarse one-sample default, §6.4) — the brick AABB front-slab.
+            // Precompute the FULL election key ONCE per brick (loss-exact — voxCz is loop-
+            // invariant, exactly as the prior per-pixel re-derivation produced) so Phase B
+            // never re-derives depthKey24 per pixel.
+            const cand = depthKey24(nz as unknown as NF)
+              .shiftLeft(uint(8))
+              .bitOr(payload.bitAnd(uint(0xff)))
+              .toVar();
+            // store the brick's footprint RECORD (clamped bbox origin + width/height + key).
+            const bbW = uint(endX).sub(uint(startX)).add(uint(1)).toVar();
+            const bbH = uint(endY).sub(uint(startY)).add(uint(1)).toVar();
+            wgSet(wgBbX0, brickLocal, uint(startX));
+            wgSet(wgBbY0, brickLocal, uint(startY));
+            wgSet(wgBbW, brickLocal, bbW);
+            wgSet(wgBbH, brickLocal, bbH);
+            wgSet(wgCand, brickLocal, cand);
           });
         });
       });
+      workgroupBarrier(); // Phase A records complete before the prefix scan reads them
+
+      // ── PREFIX SCAN (thread 0): running Σ(bbW·bbH) → wgPrefix[b] + total flat pixels.
+      // ≤128 serial adds on one lane — the cheap replacement for the per-lane O(16K) inner
+      // footprint loop. wgPrefix[b] = first flat-pixel index owned by brick b.
+      If(brickLocal.equal(uint(0)), () => {
+        const nB = minU(brickCount, uint(WG_RASTER)).toVar();
+        wgSet(wgScan, uint(0), nB);
+        const acc = uint(0).toVar();
+        loopU(uint(0), nB, (b) => {
+          wgSet(wgPrefix, b, acc);
+          const w = (wgBbW.element(b) as unknown as NU).toVar();
+          const h = (wgBbH.element(b) as unknown as NU).toVar();
+          acc.assign(acc.add(w.mul(h)));
+        });
+        wgSet(wgScan, uint(1), acc); // total flat-pixel count for this cluster
+      });
+      workgroupBarrier(); // prefix + total visible to every lane before Phase B
+
+      // ── PHASE B (ALL lanes, flat cooperative raster): every lane strides the cluster's
+      // FLAT pixel space [0, wgTotalPx). A flat index f → (brick b, lx, ly) by a short scan
+      // over wgPrefix (≤ brickCount, monotonic). Then the election runs. This spreads a big
+      // brick's footprint EVENLY across all WG_RASTER lanes (CudaRaster T8 flatten-emit /
+      // Lucid balanced dispatch) — the per-lane cost is O(area/WG), never O(area).
+      const nBricks = (wgScan.element(uint(0)) as unknown as NU).toVar();
+      const totalPx = (wgScan.element(uint(1)) as unknown as NU).toVar();
+      loopU(brickLocal, totalPx, (f) => {
+        // map flat index f → brick b: largest b with wgPrefix[b] <= f. BINARY SEARCH over the
+        // monotonic prefix array (CudaRaster T8 "flatten-total + per-task binary-search" —
+        // O(log nBricks) per task, NOT a linear O(nBricks) scan that would re-add a 128×
+        // per-pixel factor). PREFIX_BITS=7 fixed iterations cover the ≤128-brick range. Empty
+        // bricks (bbW=0) share a prefix with their successor; the bbW>0 guard below rejects a
+        // landing on a zero-width brick, and the search lands on the LAST equal prefix (the
+        // real owner) because we move lo up whenever wgPrefix[mid] <= f.
+        const lo = uint(0).toVar();
+        const hi = nBricks.toVar(); // exclusive upper bound
+        loopU(uint(0), uint(PREFIX_BITS), () => {
+          If(lo.add(uint(1)).lessThan(hi), () => {
+            const mid = lo.add(hi).shiftRight(uint(1)).toVar();
+            If((wgPrefix.element(mid) as unknown as NU).lessThanEqual(f), () => {
+              lo.assign(mid);
+            }).Else(() => {
+              hi.assign(mid);
+            });
+          });
+        });
+        const b = lo.toVar();
+        // recover this brick's record + local pixel.
+        const bbX0 = (wgBbX0.element(b) as unknown as NU).toVar();
+        const bbY0 = (wgBbY0.element(b) as unknown as NU).toVar();
+        const bbW = (wgBbW.element(b) as unknown as NU).toVar();
+        const cand = (wgCand.element(b) as unknown as NU).toVar();
+        If(bbW.greaterThan(uint(0)), () => {
+          const localPx = f.sub(wgPrefix.element(b) as unknown as NU).toVar();
+          const lx = localPx.mod(bbW).toVar();
+          const ly = localPx.div(bbW).toVar();
+          const x = bbX0.add(lx).toVar();
+          const y = bbY0.add(ly).toVar();
+          const px = y.mul(uint(width)).add(x).toVar();
+          // emit closure — built INSIDE the per-pixel conditional flow so `cand`'s use as the
+          // atomicMax value-arg stays in the same conditional subtree (TSL r184 codegen-safe).
+          const electHere = (): void => {
+            // VERBATIM the world1 election (NaniteRaster.ts:937-959). `cand` was precomputed
+            // per brick (loss-exact); copy it into a local var HERE so its FIRST build is in
+            // the SAME ConditionalNode subtree as the atomicMax that consumes it (the hoist-
+            // pathology fix). prevE relaxed-load gates the atomic.
+            const candL = cand.toVar();
+            const prevE = aLoadU(visPayloadV.atomic.element(px)).toVar();
+            If(candL.greaterThan(prevE), () => {
+              const wonE = atomicMax(visPayloadV.atomic.element(px), candL) as unknown as NU;
+              If(candL.greaterThan(wonE), () => {
+                atomicStore(visBV.atomic.element(px), voxId);
+                // debug per-pixel BRICK-WRITE counter (Stage-2 overlay, §A2)
+                atomicAdd(atomicBuf.atomic.element(uint(WRITE_CTR)), uint(1));
+              });
+            });
+          };
+          if (voxDither && wgBrickAbs && wgDensBits) {
+            // density-modulated see-through dither (?voxdither=1): stable per-(pixel,brick)
+            // stipple drops (1-density) of the footprint. The raw density byte (0..255) was
+            // stashed in Phase A; rebuild the clamped [FLOOR,CEIL] float exactly as before.
+            // Salt with the absolute brick index so neighbouring bricks have independent stipples.
+            const dens = toF(wgDensBits.element(b) as unknown as NU)
+              .div(255)
+              .clamp(COVER_FLOOR, COVER_CEIL)
+              .toVar();
+            const keep = coverHash(x, y, wgBrickAbs.element(b) as unknown as NU).lessThan(dens).toVar();
+            If(keep, electHere);
+          } else {
+            electHere();
+          }
+        });
+      }, WG_RASTER);
     });
-    // one single-thread workgroup per voxel cluster work-item (the cull's voxRasterDispatchAttr
-    // is split2D over the fanned count — identical dispatch to kVoxBin).
-  })().compute(DISPATCH_ROW, [1]);
+    // ONE WORKGROUP per voxel cluster work-item (split2D indirect args over the fanned count,
+    // unchanged), WG_RASTER (=MAX_BRICKS_PER_CLUSTER) threads each. Phase A = 1 lane/brick;
+    // Phase B = all lanes cooperatively rasterize the cluster's flat footprint. The baked
+    // `.compute(count,[wg])` is the static fallback; the indirect args drive the real WG count.
+  })().compute(DISPATCH_ROW * WG_RASTER, [WG_RASTER]);
   (kVoxScatter as { setName(n: string): unknown }).setName('nanVoxScatter');
 
   const dispatchVoxel = (renderer: Renderer): void => {
