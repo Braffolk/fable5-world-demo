@@ -74,7 +74,7 @@ import {
 import type { NF, NI, NU, NV3, NV4 } from '../gpu/TSLTypes';
 import { CLUSTER_WORDS } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
-import { BRICK_ALBEDO, BRICK_WORDS } from './VoxelBrick';
+import { BRICK_ALBEDO, BRICK_HALF, BRICK_POS_X, BRICK_WORDS } from './VoxelBrick';
 import { DISPATCH_ROW, QVOX_CAP } from './NaniteCommon';
 import type { NaniteCam } from './NaniteCommon';
 import { instTransformPoint, instYaw, instSphereRadius } from './NaniteCommon';
@@ -689,143 +689,158 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
       const B = gpu.instances.element(instId.mul(uint(2)).add(uint(1))).toVar() as unknown as NV4;
       const yawSc = instYaw(B);
       const cBase = ci.mul(uint(CLUSTER_WORDS)).toVar();
-      const cLocal = vec3(
+      // PER-BRICK FIX (the oversized-square bug): the raster used to project the cluster's
+      // BLOCK AABB (word0-3) as ONE footprint, so ~18 ≤128-brick blocks each painted a slab
+      // spanning much of the crown ⇒ giant overlapping squares bigger than the tree. Now we
+      // iterate the block's bricks and paint EACH brick's OWN small AABB at its real grid
+      // cell (§6.2). word6 = brickBase, word7 low byte = brickCount (§4.1).
+      const brickBase = elemU(gpu.clusters, cBase.add(uint(6))).toVar();
+      const brickCount = elemU(gpu.clusters, cBase.add(uint(7))).bitAnd(uint(0xff)).toVar();
+      // the block sphere (word0-3) is now used ONLY as the coarse PER-BLOCK occlusion-cull
+      // bound (one global read at the projected block centre), not as the painted footprint.
+      const blkLocal = vec3(
         bcU2F(elemU(gpu.clusters, cBase)),
         bcU2F(elemU(gpu.clusters, cBase.add(uint(1)))),
         bcU2F(elemU(gpu.clusters, cBase.add(uint(2)))),
       ) as unknown as NV3;
-      const rLocal = bcU2F(elemU(gpu.clusters, cBase.add(uint(3)))).toVar();
-      const wCenter = instTransformPoint(A, B, yawSc, cLocal);
-      const wR = instSphereRadius(A, B, rLocal as unknown as NF, float(0)).toVar();
-
-      // DENSITY-MODULATED COVERAGE (?voxdither=1 only) — the bloat-to-blob fix (§3 Risk #1).
-      // Read the block's representative density from its first brick (word4.A); skip the read
-      // entirely in the OPAQUE default (no coverage gate ⇒ pure overhead). Loop-invariant.
-      const density = voxDither
-        ? (() => {
-            const brickBase = elemU(gpu.clusters, cBase.add(uint(6))).toVar();
-            const albWord = elemU(
-              gpu.voxelBricks,
-              brickBase.mul(uint(BRICK_WORDS)).add(uint(BRICK_ALBEDO)),
-            ).toVar();
-            return toF(albWord.shiftRight(uint(24)).bitAnd(uint(0xff)))
-              .div(255)
-              .clamp(COVER_FLOOR, COVER_CEIL)
-              .toVar();
-          })()
-        : null;
-
-      // project the 8 corners of the world AABB cube [wCenter ± wR] → screen bbox + nearest z
+      const blkRLocal = bcU2F(elemU(gpu.clusters, cBase.add(uint(3)))).toVar();
+      const blkWCenter = instTransformPoint(A, B, yawSc, blkLocal);
+      const blkWR = instSphereRadius(A, B, blkRLocal as unknown as NF, float(0)).toVar();
       const W = float(cam.uW);
       const H = float(cam.uH);
-      const sMinX = float(1e9).toVar();
-      const sMinY = float(1e9).toVar();
-      const sMaxX = float(-1e9).toVar();
-      const sMaxY = float(-1e9).toVar();
-      const nearZ = float(1e9).toVar();
-      const allBehind = uint(1).toVar();
-      loopI('sz3', toI(0), toI(1), (zc) => {
-        loopI('sy3', toI(0), toI(1), (yc) => {
-          loopI('sx3', toI(0), toI(1), (xc) => {
-            const sx = toF(xc).mul(2).sub(1);
-            const sy = toF(yc).mul(2).sub(1);
-            const sz = toF(zc).mul(2).sub(1);
-            const wp = vec3(
-              wCenter.x.add(sx.mul(wR)),
-              wCenter.y.add(sy.mul(wR)),
-              wCenter.z.add(sz.mul(wR)),
-            ) as unknown as NV3;
-            const p = (cam.vp.mul(vec4(wp, 1)) as unknown as NV4).toVar();
-            If(p.w.greaterThan(float(NEAR_EPS)), () => {
-              allBehind.assign(uint(0));
-              const ndc = p.xyz.div(p.w).toVar();
-              sMinX.assign(sMinX.min(ndc.x.add(1).mul(0.5).mul(W)));
-              sMaxX.assign(sMaxX.max(ndc.x.add(1).mul(0.5).mul(W)));
-              sMinY.assign(sMinY.min(ndc.y.add(1).mul(0.5).mul(H)));
-              sMaxY.assign(sMaxY.max(ndc.y.add(1).mul(0.5).mul(H)));
-              nearZ.assign(nearZ.min(ndc.z));
-            });
+
+      const payload = itemIdx.bitAnd(uint(PAYLOAD_MASK)).toVar();
+      const voxId = uint(VOX_BIT).bitOr(payload).toVar();
+
+      // PER-BLOCK OCCLUSION CULL (lever 2): project the block centre once; if the block's
+      // NEAREST-possible key (its AABB front-slab) can't beat the current global winner at
+      // its centre pixel, the whole block is occluded by the near mesh / a nearer block ⇒
+      // skip ALL its bricks. ONE global read per block (vs per-footprint-pixel), conservative
+      // (a centre-occluded block whose silhouette edge peeks is dropped — fine for sub-pixel
+      // foliage; never produces a WRONG winner). ?voxoccl=0 disables it for the A/B.
+      const blockVisible = uint(1).toVar();
+      if (voxOccl) {
+        const bp = (cam.vp.mul(vec4(blkWCenter, 1)) as unknown as NV4).toVar();
+        If(bp.w.greaterThan(float(NEAR_EPS)), () => {
+          const bndc = bp.xyz.div(bp.w).toVar();
+          // nearest NDC z of the block = centre z minus the block's projected z half-extent;
+          // a conservative front-slab bound for the block sphere (radius blkWR / w).
+          const bnz = bndc.z.sub(blkWR.div(bp.w)).clamp(0, 1).toVar();
+          const bNearKey = depthKey24(bnz as unknown as NF).shiftLeft(uint(8)).bitOr(uint(0xff)).toVar();
+          const bscx = minI(maxI(toI(0), toI(bndc.x.add(1).mul(0.5).mul(W))), toI(width - 1)).toVar();
+          const bscy = minI(maxI(toI(0), toI(bndc.y.add(1).mul(0.5).mul(H))), toI(height - 1)).toVar();
+          const bcpx = uint(bscy).mul(uint(width)).add(uint(bscx)).toVar();
+          const centreE = aLoadU(visPayloadV.atomic.element(bcpx)).toVar();
+          If(bNearKey.lessThanEqual(centreE), () => {
+            blockVisible.assign(uint(0)); // block centre fully occluded ⇒ skip its bricks
           });
         });
-      });
-      If(allBehind.equal(uint(0)), () => {
-        const startX = maxI(toI(0), toI(sMinX.floor())).toVar();
-        const endX = minI(toI(width - 1), toI(sMaxX.ceil())).toVar();
-        const startY = maxI(toI(0), toI(sMinY.floor())).toVar();
-        const endY = minI(toI(height - 1), toI(sMaxY.ceil())).toVar();
-        const validBB = startX.lessThanEqual(endX).and(startY.lessThanEqual(endY));
-        If(validBB, () => {
-          const nz = nearZ.clamp(0, 1).toVar();
-          // nearKey = the block's NEAREST-possible election key (AABB front-slab; exact for
-          // the coarse one-sample-per-block path, §6.4). cand ≤ nearKey at EVERY pixel, so a
-          // block that can't beat the current winner here can't win ANY of its pixels.
-          const nearKey = depthKey24(nz as unknown as NF).shiftLeft(uint(8)).bitOr(uint(0xff)).toVar();
-          // ONE voxCz per block (coarse one-sample default, §6.4) — the AABB front-slab depth.
-          const voxCz = nz.toVar();
-          const payload = itemIdx.bitAnd(uint(PAYLOAD_MASK)).toVar();
-          const voxId = uint(VOX_BIT).bitOr(payload).toVar();
+      }
 
-          // PER-BLOCK OCCLUSION CULL (lever 2): one global depth read at the projected centre.
-          // If the block's nearKey can't beat the current global winner there, the block is
-          // occluded by the near mesh / a nearer block ⇒ skip the whole footprint. Conservative
-          // (a centre-occluded block whose edge peeks is dropped — fine for sub-pixel foliage).
-          // The per-pixel footprint election (the world1 scatter shape) is factored into a
-          // closure so it runs EITHER directly (?voxoccl=0) OR under the occlusion If (default).
-          const rasterFootprint = (): void => {
-            loopI('vsy', startY as unknown as NI, endY as unknown as NI, (y) => {
-              loopI('vsx', startX as unknown as NI, endX as unknown as NI, (x) => {
-                const px = uint(y).mul(uint(width)).add(uint(x)).toVar();
-                // emit closure — built INSIDE the per-pixel conditional flow so `cand`'s use as
-                // the atomicMax value-arg stays in the same conditional subtree (codegen-safe).
-                const electHere = (): void => {
-                  // VERBATIM the world1 election (NaniteRaster.ts:937-959): BUILD `cand` HERE,
-                  // inside the per-pixel election flow, so its FIRST build is in the SAME
-                  // ConditionalNode subtree as the atomicMax that consumes it. The bin's comments
-                  // document the TSL r184 pathology of hoisting this `cand` .toVar() to an outer
-                  // scope: AtomicFunctionNode.generate calls valueNode.build(builder,'uint'), a
-                  // hoisted var yields '' in that nested scope ⇒ Node.build's result==='' guard ⇒
-                  // "Invalid generated code, expected a uint" ⇒ generateConst('uint') (0u) ⇒ the
-                  // election word is silently corrupted. voxCz is loop-invariant (one voxCz/block,
-                  // §6.4), so re-deriving `cand` per pixel here is loss-EXACT (identical bits) —
-                  // the node-graph PLACEMENT is what matters, exactly as world1 builds cand per-
-                  // fragment. read prevE, gate cand>prevE, atomicMax(visPayloadV), winner stores
-                  // the full id into visBV.
-                  const cand = depthKey24(voxCz as unknown as NF)
-                    .shiftLeft(uint(8))
-                    .bitOr(payload.bitAnd(uint(0xff)))
-                    .toVar();
-                  const prevE = aLoadU(visPayloadV.atomic.element(px)).toVar();
-                  If(cand.greaterThan(prevE), () => {
-                    const wonE = atomicMax(visPayloadV.atomic.element(px), cand) as unknown as NU;
-                    If(cand.greaterThan(wonE), () => {
-                      atomicStore(visBV.atomic.element(px), voxId);
-                      // debug per-pixel BRICK-WRITE counter (Stage-2 overlay, §A2) — shared with
-                      // the bin path's WRITE_CTR so the A/B compares like-for-like write counts.
-                      atomicAdd(atomicBuf.atomic.element(uint(WRITE_CTR)), uint(1));
-                    });
-                  });
-                };
-                if (voxDither && density) {
-                  // density-modulated see-through dither (?voxdither=1) — stable per-(pixel,block)
-                  // stipple drops (1-density) of the footprint. The hash runs FIRST here (no
-                  // occlusion early-skip in scatter), so a dropped pixel pays only the hash.
-                  const keep = coverHash(uint(x), uint(y), payload).lessThan(density).toVar();
-                  If(keep, electHere);
-                } else {
-                  electHere();
-                }
+      If(blockVisible.equal(uint(1)), () => {
+        // ITERATE THE BLOCK'S BRICKS — each paints its OWN small footprint (§6.2/§6.4).
+        loopU(uint(0), brickCount, (bk) => {
+          const bAbs = brickBase.add(bk).toVar();          // absolute brick index
+          const bWordBase = bAbs.mul(uint(BRICK_WORDS)).toVar();
+          // per-brick LOCAL center (words 5..7) + half-extent (word8) — the real grid cell.
+          const brLocal = vec3(
+            bcU2F(elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_POS_X)))),
+            bcU2F(elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_POS_X + 1)))),
+            bcU2F(elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_POS_X + 2)))),
+          ) as unknown as NV3;
+          const brHalf = bcU2F(elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_HALF)))).toVar();
+          const brWCenter = instTransformPoint(A, B, yawSc, brLocal);
+          const brWR = instSphereRadius(A, B, brHalf as unknown as NF, float(0)).toVar();
+
+          // DENSITY-MODULATED COVERAGE (?voxdither=1 only): read THIS brick's own density
+          // (word4.A). Skip the read entirely in the OPAQUE default (no coverage gate).
+          const density = voxDither
+            ? toF(elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_ALBEDO))).shiftRight(uint(24)).bitAnd(uint(0xff)))
+                .div(255)
+                .clamp(COVER_FLOOR, COVER_CEIL)
+                .toVar()
+            : null;
+
+          // project the 8 corners of THIS brick's world AABB cube [brWCenter ± brWR] → bbox + near z
+          const sMinX = float(1e9).toVar();
+          const sMinY = float(1e9).toVar();
+          const sMaxX = float(-1e9).toVar();
+          const sMaxY = float(-1e9).toVar();
+          const nearZ = float(1e9).toVar();
+          const allBehind = uint(1).toVar();
+          loopI('sz3', toI(0), toI(1), (zc) => {
+            loopI('sy3', toI(0), toI(1), (yc) => {
+              loopI('sx3', toI(0), toI(1), (xc) => {
+                const sx = toF(xc).mul(2).sub(1);
+                const sy = toF(yc).mul(2).sub(1);
+                const sz = toF(zc).mul(2).sub(1);
+                const wp = vec3(
+                  brWCenter.x.add(sx.mul(brWR)),
+                  brWCenter.y.add(sy.mul(brWR)),
+                  brWCenter.z.add(sz.mul(brWR)),
+                ) as unknown as NV3;
+                const p = (cam.vp.mul(vec4(wp, 1)) as unknown as NV4).toVar();
+                If(p.w.greaterThan(float(NEAR_EPS)), () => {
+                  allBehind.assign(uint(0));
+                  const ndc = p.xyz.div(p.w).toVar();
+                  sMinX.assign(sMinX.min(ndc.x.add(1).mul(0.5).mul(W)));
+                  sMaxX.assign(sMaxX.max(ndc.x.add(1).mul(0.5).mul(W)));
+                  sMinY.assign(sMinY.min(ndc.y.add(1).mul(0.5).mul(H)));
+                  sMaxY.assign(sMaxY.max(ndc.y.add(1).mul(0.5).mul(H)));
+                  nearZ.assign(nearZ.min(ndc.z));
+                });
               });
             });
-          };
-          if (voxOccl) {
-            const cx = startX.add(endX).div(toI(2)).toVar();
-            const cy = startY.add(endY).div(toI(2)).toVar();
-            const cpx = uint(cy).mul(uint(width)).add(uint(cx)).toVar();
-            const centreE = aLoadU(visPayloadV.atomic.element(cpx)).toVar();
-            If(nearKey.greaterThan(centreE), rasterFootprint);
-          } else {
-            rasterFootprint();
-          }
+          });
+          If(allBehind.equal(uint(0)), () => {
+            const startX = maxI(toI(0), toI(sMinX.floor())).toVar();
+            const endX = minI(toI(width - 1), toI(sMaxX.ceil())).toVar();
+            const startY = maxI(toI(0), toI(sMinY.floor())).toVar();
+            const endY = minI(toI(height - 1), toI(sMaxY.ceil())).toVar();
+            const validBB = startX.lessThanEqual(endX).and(startY.lessThanEqual(endY));
+            If(validBB, () => {
+              const nz = nearZ.clamp(0, 1).toVar();
+              // ONE voxCz per BRICK (coarse one-sample default, §6.4) — the brick AABB front-slab.
+              const voxCz = nz.toVar();
+              // the per-pixel footprint election (the world1 scatter shape).
+              loopI('vsy', startY as unknown as NI, endY as unknown as NI, (y) => {
+                loopI('vsx', startX as unknown as NI, endX as unknown as NI, (x) => {
+                  const px = uint(y).mul(uint(width)).add(uint(x)).toVar();
+                  // emit closure — built INSIDE the per-pixel conditional flow so `cand`'s use as
+                  // the atomicMax value-arg stays in the same conditional subtree (codegen-safe).
+                  const electHere = (): void => {
+                    // VERBATIM the world1 election (NaniteRaster.ts:937-959): BUILD `cand` HERE,
+                    // inside the per-pixel election flow, so its FIRST build is in the SAME
+                    // ConditionalNode subtree as the atomicMax that consumes it (the TSL r184
+                    // hoist-pathology documented in the bin path). voxCz is loop-invariant per
+                    // brick, so re-deriving `cand` per pixel is loss-EXACT (identical bits).
+                    const cand = depthKey24(voxCz as unknown as NF)
+                      .shiftLeft(uint(8))
+                      .bitOr(payload.bitAnd(uint(0xff)))
+                      .toVar();
+                    const prevE = aLoadU(visPayloadV.atomic.element(px)).toVar();
+                    If(cand.greaterThan(prevE), () => {
+                      const wonE = atomicMax(visPayloadV.atomic.element(px), cand) as unknown as NU;
+                      If(cand.greaterThan(wonE), () => {
+                        atomicStore(visBV.atomic.element(px), voxId);
+                        // debug per-pixel BRICK-WRITE counter (Stage-2 overlay, §A2)
+                        atomicAdd(atomicBuf.atomic.element(uint(WRITE_CTR)), uint(1));
+                      });
+                    });
+                  };
+                  if (voxDither && density) {
+                    // density-modulated see-through dither (?voxdither=1) — stable per-(pixel,brick)
+                    // stipple drops (1-density) of the footprint; salt with the absolute brick index
+                    // so neighbouring bricks have independent stipples.
+                    const keep = coverHash(uint(x), uint(y), bAbs).lessThan(density).toVar();
+                    If(keep, electHere);
+                  } else {
+                    electHere();
+                  }
+                });
+              });
+            });
+          });
         });
       });
     });

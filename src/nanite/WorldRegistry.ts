@@ -56,7 +56,7 @@ import {
   type PreparedVoxelCrown,
   prepareVoxelCrown,
 } from './VoxelizeCrown';
-import { MAX_BRICKS_PER_CLUSTER } from './VoxelBrick';
+import { BRICK_WORDS, MAX_BRICKS_PER_CLUSTER } from './VoxelBrick';
 
 /** Forests ring radii (Forests.ts) — discrete LOD switch distances until N8 */
 const R0_FAR = 26;
@@ -866,7 +866,7 @@ export async function buildWorldRegistry(input: {
     });
     console.log(
       `[worldreg] voxel-foliage: reserving ${lateBricks} bricks across ${toVoxel.length} crowns ` +
-        `(grid ${voxGridDim}) = ${((lateBricks * 5 * 4) / (1024 * 1024)).toFixed(3)} MB, ` +
+        `(grid ${voxGridDim}) = ${((lateBricks * BRICK_WORDS * 4) / (1024 * 1024)).toFixed(3)} MB, ` +
         `+${lateVoxClusters} voxel clusters (${MAX_BRICKS_PER_CLUSTER} bricks/cluster), ` +
         `+${lateVoxInst} voxel instances, +${lateVoxHeads} voxel:7 heads`,
     );

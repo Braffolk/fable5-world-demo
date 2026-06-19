@@ -79,10 +79,16 @@ export const MESH_WORDS = 18;
 export const DAG_WORDS = 12;
 /** voxel-foliage (spec §4.3): u32 words per packed brick record in gpu.voxelBricks.
  *  A brick is a 4×4×4 = 64-cell block: occupancy 2×u32 (no u64 in WGSL r184) +
- *  mean-normal oct snorm2x16 + normal-spread f32 + packed albedo RGBA8 = 5 u32 (20 B).
+ *  mean-normal oct snorm2x16 + normal-spread f32 + packed albedo RGBA8 = 5 u32, PLUS
+ *  the per-brick LOCAL-SPACE position so the raster paints each brick's OWN small
+ *  footprint at its real grid cell — NOT the whole ≤128-brick BLOCK as one giant slab
+ *  (the oversized-square bug). word5..7 = brick local center xyz (f32 bits), word8 =
+ *  brick local half-extent (f32 bits, = BRICK_DIM·cellSize·0.5) = 9 u32 (36 B). The
+ *  cluster's block sphere (word0-3) is now used ONLY as the instance-cull / per-block
+ *  occlusion bound; the raster iterates the block's bricks and projects each brick AABB.
  *  The authoritative read/write codec is VoxelBrick.ts; this stride is shared so the
  *  registry can size the buffer without importing the codec. */
-export const BRICK_WORDS = 5;
+export const BRICK_WORDS = 9;
 /** N8-D1: vertex layout fed to buildDag for a registry mesh — pos@0..2,
  *  nrm@3..5, uv@6..7, vdata@8..11 (UNPACKED to 0..1 floats so QEM can
  *  interpolate them). attachDag re-packs this back into VERT_WORDS. */

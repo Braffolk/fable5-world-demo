@@ -326,6 +326,11 @@ export function voxelizeCrown(
   const bricks: BrickCPU[] = [];
   const occupied: number[] = [];
   let densitySum = 0;
+  // per-brick LOCAL-space size/half-extent (§6.2): every brick is a BRICK_DIM-cell cube,
+  // so its world edge is constant; the raster paints each brick's OWN footprint (not the
+  // whole block) so it MUST know each brick's center+half — stored in the brick record.
+  const brickWorld = BRICK_DIM * cellSize;
+  const brickHalf = brickWorld * 0.5;
   for (let bz = 0; bz < brickGridZ; bz++) {
     for (let by = 0; by < brickGridY; by++) {
       for (let bx = 0; bx < brickGridX; bx++) {
@@ -364,11 +369,19 @@ export function voxelizeCrown(
           }
         }
         const bi = bricks.length;
+        // brick LOCAL-space center (crown-local): the min corner is origin + brick·brickWorld;
+        // center = + half a brick. This is the per-brick footprint origin the raster projects.
+        const bCenter: [number, number, number] = [
+          originX + (bx + 0.5) * brickWorld,
+          originY + (by + 0.5) * brickWorld,
+          originZ + (bz + 0.5) * brickWorld,
+        ];
         if (bcov <= 0 || bcolW <= 0) {
           // empty brick — still emit a record so the grid addresses linearly, but
           // mark it density 0 (callers skip via `occupied`)
           bricks.push({
             occLo: 0, occHi: 0, normal: [0, 1, 0], spread: 0, albedo: [0, 0, 0], density: 0,
+            center: bCenter, half: brickHalf,
           });
           continue;
         }
@@ -384,7 +397,7 @@ export function voxelizeCrown(
         // density = mean cell coverage over the brick's 64 cells (Σcov / 64, §5.4.3)
         const density = Math.min(1, bcov / (BRICK_DIM * BRICK_DIM * BRICK_DIM));
         const color: [number, number, number] = [bcr / bcolW, bcg / bcolW, bcb / bcolW];
-        bricks.push({ occLo, occHi, normal, spread, albedo: color, density });
+        bricks.push({ occLo, occHi, normal, spread, albedo: color, density, center: bCenter, half: brickHalf });
         occupied.push(bi);
         densitySum += density;
       }

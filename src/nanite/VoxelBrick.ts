@@ -9,7 +9,7 @@
  * sides MUST agree on this single layout — change it HERE only.
  *
  *   ──────────────────────────────────────────────────────────────────────────
- *   BRICK = a 4×4×4 = 64-cell block. BRICK_WORDS = 5 u32 (20 B), §4.3 "~4-5 u32".
+ *   BRICK = a 4×4×4 = 64-cell block. BRICK_WORDS = 9 u32 (36 B).
  *   ──────────────────────────────────────────────────────────────────────────
  *   word 0  occupancy LO  — cells 0..31  (1 bit/cell; bit c = cell occupied)
  *   word 1  occupancy HI  — cells 32..63 (no u64 in WGSL r184 ⇒ 2×u32, §4.3)
@@ -21,6 +21,18 @@
  *                           §4.3 "size the frozen reservation to the winner").
  *   word 4  albedo        — RGBA8 packed: RGB = density-weighted brick-mean color
  *                           (§5.4.3), A = brick coverage/density in [0,1] (§5.4.3).
+ *   word 5  posX          — brick LOCAL-space center X (f32 bits)
+ *   word 6  posY          — brick LOCAL-space center Y (f32 bits)
+ *   word 7  posZ          — brick LOCAL-space center Z (f32 bits)
+ *   word 8  half-extent   — brick LOCAL half-extent (f32 bits, = BRICK_DIM·cellSize·0.5)
+ *                           ──────────────────────────────────────────────────────
+ *                           THE OVERSIZED-SQUARE FIX: the raster (NaniteVoxelRaster.ts)
+ *                           used to project the ≤128-brick BLOCK AABB (cluster word0-3)
+ *                           as ONE footprint, so ~18 overlapping block-slabs painted
+ *                           squares bigger than the whole tree. With a per-BRICK center
+ *                           + extent here, the raster iterates the block's bricks and
+ *                           paints each brick's SMALL footprint at its real grid cell ⇒
+ *                           the voxel crown becomes tree-shaped (§6.2/§6.4).
  *   ──────────────────────────────────────────────────────────────────────────
  *
  * COARSE one-sample-per-brick is the HARD default (§6.4, correction #6). So:
@@ -56,6 +68,13 @@ export const BRICK_OCC_HI = 1;
 export const BRICK_NORMAL = 2;
 export const BRICK_SPREAD = 3;
 export const BRICK_ALBEDO = 4;
+/** per-brick LOCAL-space center (f32 bits) — the oversized-square fix (§6.2): the raster
+ *  projects EACH brick's own AABB, not the whole ≤128-brick block. */
+export const BRICK_POS_X = 5;
+export const BRICK_POS_Y = 6;
+export const BRICK_POS_Z = 7;
+/** per-brick LOCAL half-extent (f32 bits) = BRICK_DIM·cellSize·0.5. */
+export const BRICK_HALF = 8;
 
 /** §4.1: a VOXEL cluster's word7 low-byte holds brickCount (reuses the triCount
  *  byte). ≤128 so it fits the u8 field AND keeps the brick-granular id ≤7 bits. */
@@ -101,6 +120,10 @@ export interface BrickCPU {
   albedo: [number, number, number];
   /** brick coverage/density in [0,1] (Σcov/total). */
   density: number;
+  /** brick LOCAL-space center (crown-local) — the per-brick footprint origin (§6.2). */
+  center: [number, number, number];
+  /** brick LOCAL half-extent (= BRICK_DIM·cellSize·0.5) — the per-brick AABB radius. */
+  half: number;
 }
 
 /** write one brick record into `bricks` at brick index `bi` (stride BRICK_WORDS). */
@@ -111,6 +134,10 @@ export function writeBrick(bricks: Uint32Array, bi: number, v: BrickCPU): void {
   bricks[b + BRICK_NORMAL] = octEncode(v.normal[0], v.normal[1], v.normal[2]);
   bricks[b + BRICK_SPREAD] = f32Bits(Math.max(0, Math.min(1, v.spread)));
   bricks[b + BRICK_ALBEDO] = packRGBA8(v.albedo[0], v.albedo[1], v.albedo[2], v.density);
+  bricks[b + BRICK_POS_X] = f32Bits(v.center[0]);
+  bricks[b + BRICK_POS_Y] = f32Bits(v.center[1]);
+  bricks[b + BRICK_POS_Z] = f32Bits(v.center[2]);
+  bricks[b + BRICK_HALF] = f32Bits(v.half);
 }
 
 /** read one brick record back (probe / validation mirror of the GPU decode). */
@@ -124,6 +151,12 @@ export function readBrick(bricks: Uint32Array, bi: number): BrickCPU {
     spread: bitsF32(bricks[b + BRICK_SPREAD] as number),
     albedo: [(alb & 0xff) / 255, ((alb >>> 8) & 0xff) / 255, ((alb >>> 16) & 0xff) / 255],
     density: ((alb >>> 24) & 0xff) / 255,
+    center: [
+      bitsF32(bricks[b + BRICK_POS_X] as number),
+      bitsF32(bricks[b + BRICK_POS_Y] as number),
+      bitsF32(bricks[b + BRICK_POS_Z] as number),
+    ],
+    half: bitsF32(bricks[b + BRICK_HALF] as number),
   };
 }
 
