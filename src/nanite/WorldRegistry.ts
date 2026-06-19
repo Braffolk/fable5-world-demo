@@ -50,6 +50,12 @@ import {
   setClusterTriCap,
 } from './GeometryRegistry';
 import { readBuffer } from './Tsl';
+import {
+  appendVoxelCrown,
+  DEFAULT_VOXEL_GRID_DIM,
+  type PreparedVoxelCrown,
+  prepareVoxelCrown,
+} from './VoxelizeCrown';
 
 /** Forests ring radii (Forests.ts) — discrete LOD switch distances until N8 */
 const R0_FAR = 26;
@@ -347,6 +353,20 @@ export async function buildWorldRegistry(input: {
   // QEM degenerates on disconnected leaves) instead of QEM. Same DagBuild contract,
   // so it rides the identical attachDag + cut; extends the crown to TREE_GEO_FAR.
   const toAggregate: { handle: MeshHandle; source: ExplicitSource; label: string }[] = [];
+  // voxel-foliage (spec §5.2/§5.3): ?voxreg=1 voxelizes each leaf crown OFFLINE and
+  // collects the prepared bricks so the brick budget can be reserved BEFORE build()
+  // (addLate freezes caps) and a voxel:7 sibling head appended AFTER. OFF by default —
+  // the registry/raster wiring lands in Stage 2; this proves the reserve→append path.
+  const qVox = new URLSearchParams(window.location.search);
+  const voxReg = qVox.get('voxreg') === '1';
+  const voxGridDim = Number(qVox.get('voxgrid') ?? DEFAULT_VOXEL_GRID_DIM) || DEFAULT_VOXEL_GRID_DIM;
+  const toVoxel: {
+    idF: number;
+    prep: PreparedVoxelCrown;
+    source: ExplicitSource;
+    matParam: number;
+    label: string;
+  }[] = [];
   let deferredTris = 0;
   const notePart = (label: string, parts: PoolPart[] | null | undefined, from: number): void => {
     if (!parts) return;
@@ -429,6 +449,15 @@ export async function buildWorldRegistry(input: {
       reg.setMaxDistance(leafHead, TREE_GEO_FAR);
       toAggregate.push({ handle: leafHead, source: leafSource, label: `${label}/leaf` });
       leafHeads.set(idF, leafHead);
+      // voxel-foliage (§5.2): voxelize this crown OFFLINE now (cost-tolerant) so the
+      // brick total is known before the addLate reservation freezes (§5.3). The voxel
+      // sibling head + brick append happen post-build (a voxel cluster points at bricks,
+      // not tris — that authoring is Stage 2; here we only reserve+upload the bricks).
+      if (voxReg) {
+        const matParam = packLeafTint(pool.leaf.color);
+        const prep = prepareVoxelCrown(leafSource, pool.leaf.color, voxGridDim);
+        toVoxel.push({ idF, prep, source: leafSource, matParam, label: `${label}/voxel` });
+      }
     }
   }
 
@@ -752,12 +781,67 @@ export async function buildWorldRegistry(input: {
   if (toAggregate.length > 0) {
     console.log(`[worldreg] leaf aggregate DAG: ${toAggregate.length} crowns in ${aggBuildMs.toFixed(0)} ms`);
   }
+  // voxel-foliage (§5.3 HARD precondition): reserve the brick budget BEFORE build()
+  // freezes the caps. Total = Σ occupied bricks across the voxelized crowns. Also
+  // reserve the voxel sibling heads (1 mesh each) + their instance streams (each
+  // voxel head re-binds its leaf sibling's stream — same instances, a second mesh).
+  if (toVoxel.length > 0) {
+    let lateBricks = 0;
+    let lateVoxInst = 0;
+    for (const v of toVoxel) {
+      lateBricks += v.prep.brickCount;
+      const s = perId.get(v.idF);
+      // the voxel head re-binds ONE copy of the leaf stream (no ?stress fan-out)
+      if (s) lateVoxInst += s.fill;
+    }
+    // each voxel head registers from a 1-tri placeholder (appendVoxelCrown), so it
+    // consumes exactly 3 verts / 1 tri / 1 cluster post-build — reserve that headroom
+    // too (the frozen caps would otherwise throw 'late capacity exceeded', §5.3).
+    const lateVoxHeads = toVoxel.length;
+    reg.addLate({
+      bricks: lateBricks,
+      meshes: lateVoxHeads,
+      instances: lateVoxInst,
+      verts: lateVoxHeads * 3,
+      tris: lateVoxHeads,
+      clusters: lateVoxHeads,
+    });
+    console.log(
+      `[worldreg] voxel-foliage: reserving ${lateBricks} bricks across ${toVoxel.length} crowns ` +
+        `(grid ${voxGridDim}) = ${((lateBricks * 5 * 4) / (1024 * 1024)).toFixed(3)} MB, ` +
+        `+${lateVoxInst} voxel instances, +${lateVoxHeads} voxel:7 heads`,
+    );
+  }
+
   const tBuild0 = performance.now();
   const dagBuildMs = tBuild0 - tDag0;
 
   // ---- build ------------------------------------------------------------------
   const report = reg.build(renderer, counters);
   for (const b of dagBuilds) reg.attachDag(b.handle, b.dag);
+  // voxel-foliage (§5.2): append the prepared crown bricks + register voxel:7 sibling
+  // heads now that build() has frozen the caps. Bound to the SAME instances as the
+  // leaf head (the per-mesh distance handoff is Stage 3 — here both heads draw full).
+  if (toVoxel.length > 0) {
+    const tVox0 = performance.now();
+    let appended = 0;
+    for (const v of toVoxel) {
+      const r = appendVoxelCrown(reg, v.prep, v.source, {
+        matParam: v.matParam,
+        swayPad: LEAF_SWAY_PAD,
+        maxDist: TREE_GEO_FAR,
+        label: v.label,
+      });
+      appended += r.brickCount;
+      // bind the voxel head to the SAME instances as its leaf sibling
+      const s = perId.get(v.idF);
+      if (s) reg.bindInstances(r.head, { a: s.a, b: s.b });
+    }
+    console.log(
+      `[worldreg] voxel-foliage: appended ${appended} bricks (${reg.brickCount}/${reg.brickCapacity}) ` +
+        `+ ${toVoxel.length} voxel:7 heads in ${(performance.now() - tVox0).toFixed(0)} ms`,
+    );
+  }
   for (const t of dagTerrainTileAttaches) reg.attachHeightDag(t.handle, t);
   // N8-D2 Stage 2b-1: load the collected terrain tiles into pool slots (one per
   // tile here — all resident, render-parity with the per-tile path; the per-frame

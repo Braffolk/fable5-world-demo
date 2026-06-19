@@ -411,6 +411,10 @@ export function buildNaniteFrame(
     // PERF-VB4 (D-N45): single SW + single HW pass — 24-bit depth election (visPayloadV)
     // + full-id side buffer (visBV). Replaced the old depth1 → hwDepth → payload 2-pass.
     raster.world1(renderer, engine.camera);
+    // 0a SCAR (?scar=1): the per-pixel covered-pixel denominator post-pass over the
+    // FINAL world1 winners. No-op unless ?scar=1. The per-fragment band/total counters
+    // are already accumulated inside world1 itself.
+    raster.scar(renderer);
     if (probeRun && params.get('nanprobeat') === 'payload') probeRun(renderer);
     if (!frozen) hzb.build(renderer); // this frame's depth → next frame's occluder
     if (probeRun && params.get('nanprobeat') === 'hzb') probeRun(renderer);
@@ -442,12 +446,30 @@ export function buildNaniteFrame(
     // frame 0: no dispatch has created the GPU buffers yet — readback throws
     if (frame === 0 || frame % 15 !== 0 || reading) return;
     reading = true;
+    const scarOn = params.get('scar') === '1';
     void Promise.all([
       cull.readCounts(r),
       raster.readHwCount(r),
       shadow ? shadow.readCounts(r) : Promise.resolve(null),
+      scarOn ? raster.readScar(r) : Promise.resolve(null),
     ])
-      .then(([c, hw, sh]) => {
+      .then(([c, hw, sh, scar]) => {
+        if (scar) {
+          // 0a SCAR readouts → HUD / window.__laas.stats.counters (the Verify agent
+          // reads these). overdraw = band fragments / band covered pixels; bandShare =
+          // band fragments / all frame fragments. Counters scaled ×100 where fractional
+          // (the HUD/stats are integers): scarOverdrawX100, scarBandShareX1000.
+          const bandPx = scar.bandPx;
+          const ovX100 = bandPx > 0 ? Math.round((scar.bandFrags / bandPx) * 100) : 0;
+          const shareX1000 =
+            scar.totalFrags > 0 ? Math.round((scar.bandFrags / scar.totalFrags) * 1000) : 0;
+          engine.stats.counters['nanite.scarBandFrags'] = scar.bandFrags;
+          engine.stats.counters['nanite.scarBandPx'] = bandPx;
+          engine.stats.counters['nanite.scarTotalFrags'] = scar.totalFrags;
+          engine.stats.counters['nanite.scarBandClusters'] = scar.bandClusters;
+          engine.stats.counters['nanite.scarOverdrawX100'] = ovX100;
+          engine.stats.counters['nanite.scarBandShareX1000'] = shareX1000;
+        }
         if (sh) {
           let shTotal = 0;
           for (let i = 0; i < sh.length; i++) {

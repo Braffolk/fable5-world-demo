@@ -20,6 +20,7 @@ import { buildRasterSpikeScene } from './debug/RasterSpikeScene';
 import { buildSanityScene } from './debug/SanityScene';
 import { buildShadowTestScene } from './debug/ShadowTestScene';
 import { buildTerrainScene } from './debug/TerrainScene';
+import { buildVoxelDebugScene } from './debug/VoxelDebugScene';
 import { buildScene, registerScene, type WorldContext } from './debug/Scenes';
 
 /**
@@ -109,6 +110,8 @@ async function boot(): Promise<void> {
   registerScene('shadowtest', buildShadowTestScene);
   registerScene('rasterspike', buildRasterSpikeScene);
   registerScene('forest', buildForestScene);
+  // THROWAWAY voxel-crown inspection view (voxel-foliage spec §11 Stage 1).
+  registerScene('voxdbg', buildVoxelDebugScene);
   // 'world' becomes the streamed open world once terrain tiles land.
   registerScene('world', buildTerrainScene);
 
