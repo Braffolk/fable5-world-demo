@@ -142,6 +142,12 @@ const COVER_CEIL = 0.92;
 // it only DROPS the pathological skirt that no real foliage brick has. The cap is
 // generous (a real near brick is ≪ this) so it never clips a legitimate footprint.
 const BRICK_MAX_EXT = 64; // max px per side a single brick thread may scan
+// NDC magnitude past which a projected AABB corner is treated as a near-plane BLOWUP (its tiny
+// positive w makes ndc = p/w shoot off-screen). Such a corner has no trustworthy 2D position and
+// is excluded from the brick's screen bbox (it would otherwise smear the footprint into empty sky
+// — the iter-1 monolith columns). 3 = three screens past centre: looser than any real on-screen
+// foliage brick, so it never reclassifies a legitimately on-screen corner.
+const NDC_EXPLODE = 3;
 
 // BUILD-TIME BIT-BUDGET ASSERT (§6.2): the max payload (a qVoxRaster item index, < QVOX_CAP)
 // MUST fit below BUCKET_SHIFT so the bucket field never collides with payload bits, and the
@@ -849,16 +855,26 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
           wgSet(wgDensBits, brickLocal, densByte);
         }
 
-        // project the 8 corners of THIS brick's world AABB cube [brWCenter ± brWR] → bbox +
-        // near z. Also project the brick CENTRE (cx,cy in px) — the anchor for the per-thread
-        // footprint clamp below: a near-plane-straddling brick's surviving in-front corners
-        // can fling the bbox to extreme coords, so we re-centre + clamp around cx,cy.
+        // project the 8 corners of THIS brick's world AABB cube [brWCenter ± brWR] → screen bbox
+        // + near z. A near-plane-straddling brick's surviving corners can fling the bbox to
+        // extreme coords; those degenerate corners are detected + excluded (see STRADDLE FLAG)
+        // and the brick is routed to a stable centre-box footprint instead.
         const sMinX = float(1e9).toVar();
         const sMinY = float(1e9).toVar();
         const sMaxX = float(-1e9).toVar();
         const sMaxY = float(-1e9).toVar();
         const nearZ = float(1e9).toVar();
         const allBehind = uint(1).toVar();
+        // STRADDLE FLAG: set if ANY of the 8 AABB corners is degenerate — i.e. at/behind the
+        // near plane (w ≤ NEAR_EPS) OR projecting wildly off-screen (|ndc.x|>NDC_EXPLODE or
+        // |ndc.y|>NDC_EXPLODE). Both signal a corner near the near plane whose tiny positive w
+        // makes ndc = p/w shoot to extreme coords; such a corner has NO trustworthy 2D position,
+        // so we EXCLUDE it from sMin/sMax (it would otherwise drag the bbox into empty sky — the
+        // root of the iter-1 monolith columns) and route the whole brick to the stable centre-box
+        // SILHOUETTE branch below. A genuinely on-screen corner (|ndc| ≤ NDC_EXPLODE=3, i.e. up
+        // to three screens past centre — far looser than any real foliage brick) is UNCHANGED, so
+        // every normal in-front brick keeps 54c3947's exact column-free footprint.
+        const straddles = uint(0).toVar();
         loopI('sz3', toI(0), toI(1), (zc) => {
           loopI('sy3', toI(0), toI(1), (yc) => {
             loopI('sx3', toI(0), toI(1), (xc) => {
@@ -872,47 +888,88 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
               ) as unknown as NV3;
               const p = (cam.vp.mul(vec4(wp, 1)) as unknown as NV4).toVar();
               If(p.w.greaterThan(float(NEAR_EPS)), () => {
-                allBehind.assign(uint(0));
                 const ndc = p.xyz.div(p.w).toVar();
-                sMinX.assign(sMinX.min(ndc.x.add(1).mul(0.5).mul(W)));
-                sMaxX.assign(sMaxX.max(ndc.x.add(1).mul(0.5).mul(W)));
-                sMinY.assign(sMinY.min(ndc.y.add(1).mul(0.5).mul(H)));
-                sMaxY.assign(sMaxY.max(ndc.y.add(1).mul(0.5).mul(H)));
-                nearZ.assign(nearZ.min(ndc.z));
+                const exploded = ndc.x
+                  .abs()
+                  .greaterThan(float(NDC_EXPLODE))
+                  .or(ndc.y.abs().greaterThan(float(NDC_EXPLODE)));
+                If(exploded, () => {
+                  straddles.assign(uint(1)); // near-plane blowup ⇒ exclude this corner from the bbox
+                }).Else(() => {
+                  allBehind.assign(uint(0));
+                  // RAW projected corner — bit-IDENTICAL to 54c3947's per-brick bbox accumulation
+                  // for an all-in-front (non-straddling) brick: the COLUMN-FREE, KNOWN-CORRECT path.
+                  sMinX.assign(sMinX.min(ndc.x.add(1).mul(0.5).mul(W)));
+                  sMaxX.assign(sMaxX.max(ndc.x.add(1).mul(0.5).mul(W)));
+                  sMinY.assign(sMinY.min(ndc.y.add(1).mul(0.5).mul(H)));
+                  sMaxY.assign(sMaxY.max(ndc.y.add(1).mul(0.5).mul(H)));
+                  nearZ.assign(nearZ.min(ndc.z));
+                });
+              }).Else(() => {
+                straddles.assign(uint(1)); // a corner at/behind the near plane ⇒ degenerate bbox
               });
             });
           });
         });
-        // CENTRE projection (clamped) — the clamp anchor. If the centre is behind the near
-        // plane (camera literally inside the brick), fall back to the brick's bbox midpoint.
-        const cAnchorX = sMinX.add(sMaxX).mul(0.5).toVar();
-        const cAnchorY = sMinY.add(sMaxY).mul(0.5).toVar();
-        const cp = (cam.vp.mul(vec4(brWCenter, 1)) as unknown as NV4).toVar();
-        If(cp.w.greaterThan(float(NEAR_EPS)), () => {
-          const cndc = cp.xyz.div(cp.w).toVar();
-          cAnchorX.assign(cndc.x.add(1).mul(0.5).mul(W));
-          cAnchorY.assign(cndc.y.add(1).mul(0.5).mul(H));
-        });
-        If(allBehind.equal(uint(0)), () => {
-          // PER-THREAD FOOTPRINT CLAMP (RC2 / missed-cause-6): bound the bbox to a hard
-          // ±BRICK_MAX_EXT box AROUND the projected centre BEFORE clamping to the framebuffer.
-          // A near-plane-straddling brick whose surviving corners project to extreme screen
-          // coords can otherwise expand startX..endX to the FULL 2268×1473 framebuffer ⇒ a huge
-          // footprint (the catastrophic blowup the user flagged). With the cooperative Phase B
-          // the cost of a big footprint is now spread across all lanes (O(area/WG) per lane),
-          // but the clamp stays as the loss-exact safety floor (UE's "provably small primitive"
-          // invariant applied to the raster) — a real foliage brick is ≪ this cap.
-          const clMinX = cAnchorX.sub(float(BRICK_MAX_EXT)).toVar();
-          const clMaxX = cAnchorX.add(float(BRICK_MAX_EXT)).toVar();
-          const clMinY = cAnchorY.sub(float(BRICK_MAX_EXT)).toVar();
-          const clMaxY = cAnchorY.add(float(BRICK_MAX_EXT)).toVar();
-          const startX = maxI(toI(0), toI(sMinX.max(clMinX).floor())).toVar();
-          const endX = minI(toI(width - 1), toI(sMaxX.min(clMaxX).ceil())).toVar();
-          const startY = maxI(toI(0), toI(sMinY.max(clMinY).floor())).toVar();
-          const endY = minI(toI(height - 1), toI(sMaxY.min(clMaxY).ceil())).toVar();
+        // ENTER if the brick has ANY usable footprint: a clean non-straddle bbox (some in-front
+        // corner survived ⇒ allBehind=0) OR a straddle whose stable centre is in front (handled
+        // inside). A brick with no in-front corner AND no in-front centre is genuinely off-screen
+        // /behind and is dropped.
+        If(allBehind.equal(uint(0)).or(straddles.equal(uint(1))), () => {
+          // ── FOOTPRINT BBOX. Two regimes — the fix for the iter-1 monolith columns:
+          //
+          //  (1) NON-STRADDLER (all 8 corners in front + on-screen, the normal/far/mid case): use
+          //      54c3947's RAW framebuffer-clamped projected AABB EXACTLY (floor(sMin)..ceil(sMax)
+          //      clamped to the framebuffer). This is the column-free, KNOWN-CORRECT footprint,
+          //      restored bit-for-bit. A SPAN CAP to 2·BRICK_MAX_EXT px (measured from the bbox
+          //      min) is applied purely as the cooperative-raster stall guard; a real foliage
+          //      brick is ≪ this, so it is a no-op here and the silhouette matches 54c3947.
+          //
+          //  (2) STRADDLER (≥1 corner near/behind the near plane — camera literally inside the
+          //      brick, forcevox=all close-up): the projected AABB is DEGENERATE — a surviving
+          //      near-plane corner with tiny w explodes ndc, which dragged sMin/sMax to extreme
+          //      coords, and 4fe6821's centre-anchored ±64 box then painted a SOLID 128-px slab
+          //      of EMPTY SKY ⇒ the tall vertical monolith columns. For a straddler we IGNORE the
+          //      degenerate sMin/sMax and instead paint a small BRICK_MAX_EXT box centred on the
+          //      brick's STABLE projected centre IF that centre is in front (depth taken from the
+          //      centre, clamped near so the up-close brick still wins its election); if the
+          //      centre itself is behind the near plane (camera dead-centre in the brick) we DROP
+          //      the brick rather than smear a column. This bounds the close-up footprint to the
+          //      brick's true on-screen position — no sky columns.
+          const startX = toI(0).toVar();
+          const startY = toI(0).toVar();
+          const endX = toI(-1).toVar(); // endX<startX ⇒ invalid until a regime sets it
+          const endY = toI(-1).toVar();
+          const bbNearZ = nearZ.toVar();
+          If(straddles.equal(uint(0)), () => {
+            const sx0 = maxI(toI(0), toI(sMinX.floor())).toVar();
+            const sy0 = maxI(toI(0), toI(sMinY.floor())).toVar();
+            // SPAN CAP (stall guard only): far edge ≤ near edge + 2·BRICK_MAX_EXT px.
+            const capX = minI(toI(width - 1), sx0.add(toI(2 * BRICK_MAX_EXT))).toVar();
+            const capY = minI(toI(height - 1), sy0.add(toI(2 * BRICK_MAX_EXT))).toVar();
+            startX.assign(sx0);
+            startY.assign(sy0);
+            endX.assign(minI(minI(toI(width - 1), toI(sMaxX.ceil())), capX));
+            endY.assign(minI(minI(toI(height - 1), toI(sMaxY.ceil())), capY));
+          }).Else(() => {
+            // straddler → small box at the STABLE projected centre (only if centre is in front).
+            const cp = (cam.vp.mul(vec4(brWCenter, 1)) as unknown as NV4).toVar();
+            If(cp.w.greaterThan(float(NEAR_EPS)), () => {
+              const cndc = cp.xyz.div(cp.w).toVar();
+              const ccx = cndc.x.add(1).mul(0.5).mul(W).toVar();
+              const ccy = cndc.y.add(1).mul(0.5).mul(H).toVar();
+              startX.assign(maxI(toI(0), toI(ccx.sub(float(BRICK_MAX_EXT)).floor())));
+              startY.assign(maxI(toI(0), toI(ccy.sub(float(BRICK_MAX_EXT)).floor())));
+              endX.assign(minI(toI(width - 1), toI(ccx.add(float(BRICK_MAX_EXT)).ceil())));
+              endY.assign(minI(toI(height - 1), toI(ccy.add(float(BRICK_MAX_EXT)).ceil())));
+              // depth from the centre (the in-front corners may all have been excluded ⇒ nearZ
+              // would still be its 1e9 seed). min with any surviving corner nearZ, then clamp.
+              bbNearZ.assign(bbNearZ.min(cndc.z));
+            });
+          });
           const validBB = startX.lessThanEqual(endX).and(startY.lessThanEqual(endY));
           If(validBB, () => {
-            const nz = nearZ.clamp(0, 1).toVar();
+            const nz = bbNearZ.clamp(0, 1).toVar();
             // ONE voxCz per BRICK (coarse one-sample default, §6.4) — the brick AABB front-slab.
             // Precompute the FULL election key ONCE per brick (loss-exact — voxCz is loop-
             // invariant, exactly as the prior per-pixel re-derivation produced) so Phase B
@@ -983,9 +1040,19 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
         const bbX0 = (wgBbX0.element(b) as unknown as NU).toVar();
         const bbY0 = (wgBbY0.element(b) as unknown as NU).toVar();
         const bbW = (wgBbW.element(b) as unknown as NU).toVar();
+        const bbH = (wgBbH.element(b) as unknown as NU).toVar();
         const cand = (wgCand.element(b) as unknown as NU).toVar();
-        If(bbW.greaterThan(uint(0)), () => {
-          const localPx = f.sub(wgPrefix.element(b) as unknown as NU).toVar();
+        // AREA BOUND (the column-regression fix): localPx = f − wgPrefix[b] is only a valid
+        // local pixel of brick b if it lies inside b's TRUE footprint (bbW·bbH). The binary
+        // search can mismatch by one at a prefix boundary or land on a zero-area brick that
+        // shares a prefix with its successor, leaving localPx ≥ bbW·bbH; with only the bbW>0
+        // guard, ly = localPx/bbW then OVERFLOWS past bbH and the pixel walks straight up/down
+        // the framebuffer at a constant x = bbX0 + localPx%bbW — a full-height vertical column.
+        // Gating on localPx < bbW·bbH turns a search mismatch into a silent no-op (drop the
+        // stray flat index — loss-exact) instead of a vertical smear. wgBbH was stored in
+        // Phase A but never read until now; this is the missing read.
+        const localPx = f.sub(wgPrefix.element(b) as unknown as NU).toVar();
+        If(bbW.greaterThan(uint(0)).and(localPx.lessThan(bbW.mul(bbH))), () => {
           const lx = localPx.mod(bbW).toVar();
           const ly = localPx.div(bbW).toVar();
           const x = bbX0.add(lx).toVar();
