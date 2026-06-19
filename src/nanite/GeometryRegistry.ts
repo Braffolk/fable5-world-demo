@@ -761,6 +761,14 @@ interface MeshEntry {
   instCount: number;
   lodNext: number;
   lodDist: number;
+  /** voxel-foliage (spec §3 / Stage 3a): per-mesh NEAR draw envelope (m). The cull
+   *  SEEDS this mesh's roots only when the instance distance ≥ nearDist (0 = unlimited
+   *  near, the default). The mesh→voxel transition uses it: the VOXEL sibling head sets
+   *  nearDist = transitionDist (renders only beyond the handoff) while the LEAF head's
+   *  lodDist = transitionDist (renders only nearer) — a clean hard switch, no overlap.
+   *  Stored in mesh word 8 (free on explicit/voxel meshes; only heightfields use word 8
+   *  for hfOriginZ, and a heightfield is never a voxel head). */
+  nearDist: number;
   /** N8-HIC: root seed range into gpu.dagLinks (the hierarchical-cull seeds);
    *  0/0 until attachDag wires the DAG. */
   rootBase: number;
@@ -1169,6 +1177,21 @@ export class GeometryRegistry {
     while (tail.lodNext !== LOD_NONE) tail = this.entries[tail.lodNext] as MeshEntry;
     tail.lodDist = d;
     if (this.built && tail.uploaded) this.rewriteMeshRecord(tail);
+  }
+
+  /**
+   * voxel-foliage (spec §3 / Stage 3a): set the mesh's NEAR draw envelope (m) — the cull
+   * seeds the mesh's roots ONLY when the instance distance ≥ d (0 = unlimited near). The
+   * VOXEL sibling head sets this to transitionDist so it renders only BEYOND the handoff,
+   * while the LEAF head's maxDist = transitionDist keeps it nearer — a clean hard switch
+   * (no overlap, no gap). The head carries it; LODs are irrelevant (voxel heads are flat).
+   * The mesh is the explicit/voxel kind (hf undefined), so word 8 is free for nearDist.
+   */
+  setNearDistance(h: MeshHandle, d: number): void {
+    const e = this.meshEntry(h) as MeshEntry;
+    if (e.hf) throw new Error('GeometryRegistry: setNearDistance on a heightfield mesh (word 8 = hfOriginZ)');
+    e.nearDist = d;
+    if (this.built && e.uploaded) this.rewriteMeshRecord(e);
   }
 
   bindInstances(h: MeshHandle, stream: InstanceStream): void {
@@ -2120,6 +2143,7 @@ export class GeometryRegistry {
       instCount: 0,
       lodNext: LOD_NONE,
       lodDist: 0,
+      nearDist: 0,
       sphere: [0, 0, 0, 0],
       uploaded: false,
     };
@@ -2221,7 +2245,11 @@ export class GeometryRegistry {
     // word 7: hfOriginX (heightfield) | matParam raw-u32 (explicit, e.g. bark
     // texture-array slice — read raw by the resolve, never as a float)
     m[b + 7] = e.hf ? f32Bits(e.hf.originX) : e.matParam >>> 0;
-    m[b + 8] = f32Bits(e.hf?.originZ ?? 0);
+    // word 8: hfOriginZ (heightfield) | nearDist f32 (explicit/voxel — the cull's
+    // per-mesh NEAR draw envelope, Stage-3a mesh→voxel handoff). A heightfield is never
+    // a voxel head, so the two readings never collide; the cull only reads nearDist on
+    // hierarchical meshes (rootCount>0), where hf is undefined.
+    m[b + 8] = e.hf ? f32Bits(e.hf.originZ) : f32Bits(e.nearDist);
     m[b + 9] = f32Bits(e.hf?.cellSize ?? 0);
     m[b + 10] = ((e.hf?.quadsX ?? 0) | ((e.hf?.quadsZ ?? 0) << 16)) >>> 0;
     m[b + 11] = f32Bits(e.swayPad);

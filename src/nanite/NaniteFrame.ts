@@ -77,10 +77,12 @@ export function buildNaniteFrame(
   const renderer = engine.renderer;
   const size = renderer.getDrawingBufferSize(new Vector2());
   const params = new URLSearchParams(window.location.search);
-  // voxel-foliage (spec §A1): the voxel subsystem is active when crowns were voxelized
-  // (?voxreg) or a crown was force-routed to the voxel path (?forcevox). Gates the
-  // per-frame fan-out (and Stage-2 voxel raster) so a pure-triangle world pays nothing.
-  const voxActive = params.get('voxreg') === '1' || params.get('forcevox') !== null;
+  // voxel-foliage (spec §A1 / Stage 3a): the voxel subsystem is active iff the registry
+  // actually holds bricks — i.e. crowns were voxelized + voxel:7 heads registered (the
+  // automatic ?scene=forest transition, ?voxreg in the world scene, or ?forcevox). Keying
+  // off registry.brickCount (NOT a query param) means the per-frame fan-out + voxel raster
+  // turn on wherever the build path wired voxels; a pure-triangle build pays nothing.
+  const voxActive = registry.brickCount > 0;
   // ?vrange=1 — PERF-3 diagnostic: per-cluster vertex-INDEX range distribution +
   // redundancy, to size/justify a vertex-transform cache. range = max−min global
   // index over a cluster's tri corners; a runtime [vMin,vMax] shared-mem cache of

@@ -479,7 +479,7 @@ export function appendVoxelCrown(
   reg: GeometryRegistry,
   prep: PreparedVoxelCrown,
   _leafSource: ExplicitSource,
-  opts: { matParam: number; swayPad?: number; maxDist: number; label?: string },
+  opts: { matParam: number; swayPad?: number; maxDist: number; nearDist?: number; label?: string },
 ): { head: MeshHandle; brickBase: number; brickCount: number; clusters: number } {
   const { vox, brickCount } = prep;
   // append the occupied bricks into gpu.voxelBricks (uploads via pushRange), in grid
@@ -520,5 +520,10 @@ export function appendVoxelCrown(
     maxDist: opts.maxDist,
     label: opts.label ?? 'voxel',
   });
+  // voxel-foliage (spec §3 / Stage 3a): the NEAR side of the mesh→voxel handoff — the
+  // voxel head seeds ONLY beyond nearDist (= transitionDist) so it renders the mid/far
+  // band; the leaf sibling's maxDist=transitionDist owns nearer. 0/undefined = voxel
+  // everywhere (the ?forcevox debug route, with the leaf head suppressed).
+  if (opts.nearDist && opts.nearDist > 0) reg.setNearDistance(head, opts.nearDist);
   return { head, brickBase, brickCount, clusters: blocks.length };
 }

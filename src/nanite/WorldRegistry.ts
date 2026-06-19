@@ -70,6 +70,12 @@ const TREE_GEO_FAR = 496;
  *  vegWindOffset (lean+sway+branch+flutter) and sits at the tree top where sway
  *  is maximal, so it rides the trunk's envelope — match the tree swayPad (3.8). */
 const LEAF_SWAY_PAD = 3.8;
+/** voxel-foliage (spec §3.2 / Stage 3a): the DEFAULT mesh→voxel handoff distance (m).
+ *  NEARER than UE (~40 m for beech, inside the instMinPx envelope) so the voxelizable
+ *  band is the high-overdraw mid/far zone — the Stage-1-calibrated default; ?voxnear=
+ *  tunes it (Stage 5 sweep). The leaf head culls beyond it, the voxel head seeds beyond
+ *  it → a clean hard switch (cross-fade BAND is Stage 3b; here popping at the line is OK). */
+export const DEFAULT_TRANSITION_DIST = 35;
 /** terrain window size: 7 quads → 98 tris, divides 4095 exactly (4096² field) */
 const TERRAIN_WIN_QUADS = 7;
 
@@ -359,17 +365,25 @@ export async function buildWorldRegistry(input: {
   // (addLate freezes caps) and a voxel:7 sibling head appended AFTER. OFF by default —
   // the registry/raster wiring lands in Stage 2; this proves the reserve→append path.
   const qVox = new URLSearchParams(window.location.search);
-  // ?forcevox=<idF> (or =1 / =all for every voxelized crown) — Stage-2 DEBUG route
-  // (spec §A1). Forces the VOXEL path for the chosen crown(s) REGARDLESS of distance
-  // by voxelizing them AND suppressing their LEAF mesh (leaf maxDist → ~0), so the
-  // voxel head is the sole renderer and the raster/resolve voxel path is testable in
-  // isolation WITHOUT the Stage-3 mesh→voxel transition. Implies ?voxreg.
+  // ?forcevox=<idF> (or =1 / =all for every voxelized crown) — DEBUG override (spec §A1).
+  // Forces the VOXEL path for the chosen crown(s) REGARDLESS of distance by voxelizing
+  // them AND suppressing their LEAF mesh (leaf maxDist → ~0), with the voxel head's
+  // nearDist=0 so it renders at ALL distances — the raster/resolve voxel path in isolation
+  // WITHOUT the distance transition. Implies ?voxreg. Stage-3a makes the transition the
+  // DEFAULT route (no flag): voxelize + register voxel heads + the mesh→voxel handoff.
   const forceVoxRaw = qVox.get('forcevox');
   const forceVoxAll = forceVoxRaw === '1' || forceVoxRaw === 'all';
   const forceVoxId = forceVoxRaw !== null && !forceVoxAll ? Number(forceVoxRaw) : null;
   const forceVoxOn = forceVoxRaw !== null;
+  // ?voxreg=1 enables the automatic mesh→voxel transition in the WORLD scene (opt-in here
+  // to keep the world boot budget untouched by default; the canonical ?scene=forest perf
+  // path wires it on its OWN path — ForestScene). ?forcevox implies it.
   const voxReg = qVox.get('voxreg') === '1' || forceVoxOn;
   const voxGridDim = Number(qVox.get('voxgrid') ?? DEFAULT_VOXEL_GRID_DIM) || DEFAULT_VOXEL_GRID_DIM;
+  // ?voxnear= — the mesh→voxel handoff distance (m), TUNEABLE (spec §3.2.bis). Default
+  // DEFAULT_TRANSITION_DIST (~35 m). The leaf head culls beyond it; the voxel head seeds
+  // beyond it. ?forcevox overrides to 0 (voxel everywhere) per the debug semantics.
+  const transitionDist = Number(qVox.get('voxnear') ?? DEFAULT_TRANSITION_DIST) || DEFAULT_TRANSITION_DIST;
   /** idF → leaf head, for the ?forcevox leaf-suppression pass (filled in the loop). */
   const leafHeadForVox = new Map<number, MeshHandle>();
   const toVoxel: {
@@ -468,27 +482,40 @@ export async function buildWorldRegistry(input: {
       if (voxReg && (!forceVoxOn || forceVoxAll || forceVoxId === idF)) {
         const matParam = packLeafTint(pool.leaf.color);
         const prep = prepareVoxelCrown(leafSource, pool.leaf.color, voxGridDim);
-        toVoxel.push({ idF, prep, source: leafSource, matParam, label: `${label}/voxel` });
-        leafHeadForVox.set(idF, leafHead);
+        // a degenerate empty crown (0 bricks) would crash registerVoxelHead — skip it so
+        // the leaf head keeps its full mesh envelope (set below to TREE_GEO_FAR, no handoff).
+        if (prep.brickCount > 0) {
+          toVoxel.push({ idF, prep, source: leafSource, matParam, label: `${label}/voxel` });
+          leafHeadForVox.set(idF, leafHead);
+        }
       }
     }
   }
 
-  // ?forcevox DEBUG route (spec §A1): suppress the LEAF mesh of the forced crown(s) so
-  // its VOXEL sibling head is the sole renderer at ALL distances — the Stage-2 raster/
-  // resolve voxel path is then testable in isolation, WITHOUT the Stage-3 distance
-  // handoff. Lowering the leaf head's maxDist to ~0 culls it everywhere (the cull's
-  // per-mesh draw envelope, NaniteCull.ts:394). Pre-build, so it's a plain field set.
-  if (forceVoxOn) {
+  // Stage-3a: the mesh→voxel handoff, MESH side. For every voxelized crown, lower the LEAF
+  // head's max draw distance to transitionDist so it renders ONLY nearer than the handoff;
+  // its voxel sibling (nearDist=transitionDist, set at append) owns the mid/far band → a
+  // clean hard switch (either mesh OR voxel at a distance — no double-render, no gap; the
+  // cross-fade BAND is Stage 3b, here a hard line is acceptable, EXPECT some popping at the
+  // boundary). ?forcevox is the DEBUG override: SUPPRESS the leaf entirely (maxDist→~0) so
+  // the voxel head (nearDist=0) is the sole renderer at all distances — voxel path in
+  // isolation. Pre-build, so a plain field set. (NaniteCull kSeedRoots reads both bounds.)
+  if (leafHeadForVox.size > 0) {
+    let handed = 0;
     let suppressed = 0;
     for (const [idF, leafHead] of leafHeadForVox) {
-      if (forceVoxAll || forceVoxId === idF) {
+      const forced = forceVoxOn && (forceVoxAll || forceVoxId === idF);
+      if (forced) {
         reg.setMaxDistance(leafHead, 0.001);
         suppressed++;
+      } else {
+        reg.setMaxDistance(leafHead, transitionDist);
+        handed++;
       }
     }
     console.log(
-      `[worldreg] ?forcevox=${forceVoxRaw}: ${suppressed} leaf mesh head(s) suppressed → voxel-only render`,
+      `[worldreg] voxel transition: ${handed} leaf head(s) handed off at ${transitionDist} m → voxel` +
+        (suppressed > 0 ? `, ${suppressed} suppressed (?forcevox=${forceVoxRaw})` : ''),
     );
   }
 
@@ -862,6 +889,9 @@ export async function buildWorldRegistry(input: {
         matParam: v.matParam,
         swayPad: LEAF_SWAY_PAD,
         maxDist: TREE_GEO_FAR,
+        // Stage-3a: the voxel head seeds only beyond transitionDist (the mesh→voxel
+        // handoff); ?forcevox forces nearDist=0 (voxel everywhere, leaf suppressed below).
+        nearDist: forceVoxOn && (forceVoxAll || forceVoxId === v.idF) ? 0 : transitionDist,
         label: v.label,
       });
       appended += r.brickCount;

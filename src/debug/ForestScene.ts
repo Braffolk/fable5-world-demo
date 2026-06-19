@@ -30,7 +30,14 @@ import {
 import { type DagBuild, buildDag } from '../nanite/BuildDag';
 import { buildAggregateDag } from '../nanite/BuildAggregateDag';
 import { setClusterFill } from '../nanite/Clusterize';
-import { geometryToSource } from '../nanite/WorldRegistry';
+import { DEFAULT_TRANSITION_DIST, geometryToSource } from '../nanite/WorldRegistry';
+import {
+  appendVoxelCrown,
+  DEFAULT_VOXEL_GRID_DIM,
+  type PreparedVoxelCrown,
+  prepareVoxelCrown,
+} from '../nanite/VoxelizeCrown';
+import { MAX_BRICKS_PER_CLUSTER } from '../nanite/VoxelBrick';
 import { buildNaniteView } from '../nanite/NaniteView';
 import { Heightfield } from '../world/Heightfield';
 import { SunSky } from '../sky/SunSky';
@@ -58,6 +65,20 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
   setClusterTriCap(Number(q.get('clustertris')) || 256);
   setClusterFill(Number(q.get('clusterfill')) || 0.95);
 
+  // voxel-foliage (spec §3 / Stage 3a): the canonical perf config is ?scene=forest, so the
+  // mesh→voxel transition is wired HERE (ForestScene has its OWN build path). Voxelize each
+  // leaf crown OFFLINE, register a voxel:7 sibling head over the same instances, and hand
+  // the leaf head off to the voxel head at transitionDist. ON by default at scene=forest so
+  // the NET-WIN is measurable at the canonical config; ?voxreg=0 = pure-triangle A/B.
+  //   ?voxreg=0   — disable voxels (pure-triangle baseline)
+  //   ?forcevox   — DEBUG: voxel EVERYWHERE (suppress the leaf head; nearDist=0)
+  //   ?voxnear=M  — mesh→voxel handoff distance (m), default DEFAULT_TRANSITION_DIST (~35)
+  //   ?voxgrid=N  — voxel DETAIL (cell edge count / crown), default DEFAULT_VOXEL_GRID_DIM
+  const forceVox = q.get('forcevox') !== null;
+  const voxOn = q.get('voxreg') !== '0' || forceVox;
+  const voxGridDim = Number(q.get('voxgrid') ?? DEFAULT_VOXEL_GRID_DIM) || DEFAULT_VOXEL_GRID_DIM;
+  const transitionDist = Number(q.get('voxnear') ?? DEFAULT_TRANSITION_DIST) || DEFAULT_TRANSITION_DIST;
+
   // ── tree geometry (real crowns, full leaf density) ────────────────────────
   ctx.progress(0.1, 'forest: building veg library');
   const lib = await buildVegLibrary(
@@ -74,7 +95,11 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
   ctx.progress(0.5, 'forest: registering tree meshes');
   const reg = new GeometryRegistry();
   const dagJobs: { handle: number; build: () => DagBuild }[] = [];
-  const meshes = pools.map((pool) => {
+  // voxel-foliage (§5.2/§5.3): per-species voxelization collected here so the brick budget
+  // can be reserved BEFORE build() (addLate freezes caps) and the voxel:7 sibling heads
+  // appended AFTER. The leaf head index lets the transition hand it off post-build.
+  const toVoxel: { poolIdx: number; leafHead: number; prep: PreparedVoxelCrown; src: ReturnType<typeof geometryToSource>; matParam: number }[] = [];
+  const meshes = pools.map((pool, poolIdx) => {
     const barkPart = pool.r0?.[0];
     if (!barkPart) throw new Error('forest: bark part missing');
     const barkSrc = geometryToSource(barkPart.geo);
@@ -86,17 +111,30 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
       label: `c${pool.cls}/bark`,
     });
     const leafSrc = geometryToSource(pool.leaf!.geo);
+    const leafTint = packLeafTint(pool.leaf!.color);
     const leaf = reg.registerMesh(leafSrc, 'leaf', {
       transformChannel: 'leaf',
       castShadows: false,
       twoSided: true,
       swayPad: 3.8,
-      matParam: packLeafTint(pool.leaf!.color),
+      matParam: leafTint,
       aggregate: true,
       label: `c${pool.cls}/leaf`,
     });
     reg.setMaxDistance(bark, 2000);
-    reg.setMaxDistance(leaf, 2000);
+    // Stage-3a: the LEAF head culls beyond transitionDist when this crown is voxelized
+    // (its voxel sibling owns mid/far); pure-triangle (voxreg=0) keeps the full envelope.
+    reg.setMaxDistance(leaf, voxOn ? transitionDist : 2000);
+    if (voxOn) {
+      const prep = prepareVoxelCrown(leafSrc, pool.leaf!.color, voxGridDim);
+      // a real leaf crown always voxelizes to >0 bricks; guard a degenerate empty crown
+      // (registerVoxelHead throws on 0 blocks) so the leaf keeps its full mesh envelope.
+      if (prep.brickCount > 0) {
+        toVoxel.push({ poolIdx, leafHead: leaf, prep, src: leafSrc, matParam: leafTint });
+      } else {
+        reg.setMaxDistance(leaf, 2000);
+      }
+    }
     if (wantDag) {
       dagJobs.push({
         handle: bark,
@@ -142,13 +180,16 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
       planted++;
     }
   }
-  // bind the SAME instance stream to each species' bark + leaf (trunk + crown)
+  // bind the SAME instance stream to each species' bark + leaf (trunk + crown). Keep the
+  // per-pool arrays so the voxel sibling head can re-bind the SAME stream post-build.
+  const poolStreams: ({ a: Float32Array; b: Float32Array } | null)[] = pools.map(() => null);
   for (let i = 0; i < pools.length; i++) {
     const list = lists[i];
     const m = meshes[i];
     if (!list || !m || list.a.length === 0) continue;
     const a = new Float32Array(list.a);
     const b = new Float32Array(list.b);
+    poolStreams[i] = { a, b };
     reg.bindInstances(m.bark, { a, b });
     reg.bindInstances(m.leaf, { a, b });
   }
@@ -169,9 +210,58 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
     }
     reg.addLate({ verts: lateV, tris: lateT, clusters: lateC });
   }
+  // voxel-foliage (§5.3 HARD precondition): reserve the brick budget + voxel sibling heads
+  // (1 mesh + 1 instance stream + ceil(bricks/128) clusters each) BEFORE build() freezes the
+  // late caps. Σ occupied bricks across the per-species crowns. The append happens post-build.
+  if (toVoxel.length > 0) {
+    let lateBricks = 0;
+    let lateVoxClusters = 0;
+    let lateVoxInst = 0;
+    for (const v of toVoxel) {
+      lateBricks += v.prep.brickCount;
+      lateVoxClusters += Math.max(1, Math.ceil(v.prep.brickCount / MAX_BRICKS_PER_CLUSTER));
+      lateVoxInst += poolStreams[v.poolIdx]?.a.length ? (poolStreams[v.poolIdx] as { a: Float32Array }).a.length / 4 : 0;
+    }
+    reg.addLate({ bricks: lateBricks, meshes: toVoxel.length, instances: lateVoxInst, clusters: lateVoxClusters });
+    // eslint-disable-next-line no-console
+    console.log(
+      `[forest] voxel-foliage: reserving ${lateBricks} bricks across ${toVoxel.length} crowns ` +
+        `(grid ${voxGridDim}) = ${((lateBricks * 5 * 4) / (1024 * 1024)).toFixed(2)} MB, ` +
+        `+${lateVoxClusters} clusters / +${lateVoxInst} instances / +${toVoxel.length} voxel:7 heads, ` +
+        `handoff ${transitionDist} m${forceVox ? ' (?forcevox: voxel-only)' : ''}`,
+    );
+  }
   ctx.progress(0.9, 'forest: building registry');
   const report = reg.build(engine.renderer, engine.stats.counters);
   for (const b of builds) reg.attachDag(b.handle, b.dag);
+  // voxel-foliage (§5.2 / Stage 3a): append each crown's bricks + register a voxel:7 sibling
+  // head over the SAME instances now that build() froze the caps, then hand off the leaf head
+  // to the voxel head at transitionDist (the leaf maxDist was already lowered above). ?forcevox
+  // suppresses the leaf entirely (voxel everywhere, nearDist=0). flush() uploads the late ranges.
+  if (toVoxel.length > 0) {
+    const tVox0 = performance.now();
+    let appended = 0;
+    for (const v of toVoxel) {
+      const r = appendVoxelCrown(reg, v.prep, v.src, {
+        matParam: v.matParam,
+        swayPad: 3.8,
+        maxDist: 2000,
+        nearDist: forceVox ? 0 : transitionDist,
+        label: `c${pools[v.poolIdx]?.cls}/voxel`,
+      });
+      appended += r.brickCount;
+      const s = poolStreams[v.poolIdx];
+      if (s) reg.bindInstances(r.head, { a: s.a, b: s.b });
+      // ?forcevox DEBUG: the voxel head renders everywhere ⇒ suppress the leaf head.
+      if (forceVox) reg.setMaxDistance(v.leafHead, 0.001);
+    }
+    reg.flush(engine.renderer, engine.stats.counters);
+    // eslint-disable-next-line no-console
+    console.log(
+      `[forest] voxel-foliage: appended ${appended} bricks (${reg.brickCount}/${reg.brickCapacity}) ` +
+        `+ ${toVoxel.length} voxel:7 heads in ${(performance.now() - tVox0).toFixed(0)} ms`,
+    );
+  }
   // eslint-disable-next-line no-console
   console.log(
     `[forest] ${planted} trees · ${pools.length} species · ${report.meshes} meshes / ` +

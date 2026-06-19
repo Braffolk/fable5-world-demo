@@ -476,6 +476,14 @@ export function buildNaniteCull(
       const lodDist = bcU2F(elemU(gpu.meshes, headBase.add(uint(5))));
       const instDist = cam.camPos.sub(A.xyz).length();
       returnIf(lodNext.equal(uint(LOD_NONE)).and(lodDist.greaterThan(0)).and(instDist.greaterThan(lodDist)));
+      // voxel-foliage (spec §3 / Stage 3a) — the mesh→voxel HANDOFF, NEAR side. The mesh's
+      // word-8 nearDist is the per-mesh NEAR draw envelope: drop an instance NEARER than it
+      // (the VOXEL sibling sets nearDist=transitionDist so it seeds only BEYOND the handoff,
+      // while the LEAF head's lodDist=transitionDist keeps it nearer → a clean hard switch,
+      // either mesh OR voxel at a distance, no double-render, no gap). 0 = unlimited near
+      // (every non-voxel mesh). The cull picks tier by distance — NOT a per-cluster math path.
+      const nearDist = bcU2F(elemU(gpu.meshes, headBase.add(uint(8))));
+      returnIf(nearDist.greaterThan(0).and(instDist.lessThan(nearDist)));
       const isHF = head.flags.bitAnd(uint(MESH_FLAG_HEIGHTFIELD)).notEqual(uint(0));
       const s = instWorldSphere(A, B, isHF as unknown as NB, head.sphere, head.swayPad);
       returnIf(frustumVisible(s.center, s.radius).lessThan(0.5));
