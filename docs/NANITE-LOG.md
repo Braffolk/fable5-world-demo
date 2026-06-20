@@ -9,6 +9,58 @@
 
 ## PROGRESS LOG (append-only, newest first)
 
+- 2026-06-20 (cf): **VOXEL DEPTH-BUCKET FRONT-TO-BACK SCATTER (T1) DONE + DEFAULT-ON.** `02618d8` + merge
+  `4bcb5f7` (branch `nanite-voxf2b` → `nanite-raster`). The committed SCATTER voxel raster now elects in K
+  near→far depth slabs. Buckets by **LINEAR view depth** = clip-w = `(cam.vp·worldCentre).w` (`NaniteCull.ts:529-543`,
+  `voxClusterDepth`), explicitly **NOT** the perspective NDC-z = clip.z/clip.w — that was the prior attempt's bug
+  that collapsed the far field into one bucket. The range is a **self-tightening per-frame atomic `[dMin,dMax]`**
+  over the live voxel-cluster depths (`kVoxRange` :576-593; `voxDepthBucket` :549-557), NOT the static
+  `[transitionDist..lodDist]` constants. **K=16** default (`?voxf2bk`, :301-302, "iter-2 NET-BEST"), clamped
+  `[1,32]`. K near→far dispatches of the **UNCHANGED** `kVoxScatter` in **ONE** `dispatchBatchMixed` submit
+  (`NaniteVoxelRaster.ts:660-668`; in-pass barriers serialize buckets so the per-pixel early-Z gate fires across
+  slabs). **DEFAULT-ON, TOGGLEABLE** via `?voxf2b=0` (`NaniteCull.ts:292` — reverts to EXACTLY the legacy single
+  unordered `atomicAdd` append + single `dispatchIndirect`). Two depth metrics stay distinct: (a) f2b
+  ORDERING/bucketing = LINEAR clip-w above; (b) the per-pixel software early-Z **ELECTION** key = `depthKey24` from
+  NDC-z (`NaniteRaster.ts:335-336`), UNCHANGED, shared with the triangle raster (monotone per pixel). f2b feeds the
+  pre-existing per-block occlusion gate (the coarse `?voxoccl` skip; detailed in T2 within this entry). **PUNCHLIST STATE** (verified vs code/git): T1 (this) DONE +
+  default-on; **T2 Hi-Z per-block occlusion IN-PROGRESS** — a COARSE per-block skip already ships (`?voxoccl`
+  default-on, `NaniteVoxelRaster.ts:254,342-374`: thread 0 does ONE global `visPayloadV` read at the projected
+  block-centre pixel, skips the whole block if its nearest-possible AABB-front-slab key can't beat the centre
+  winner; broadcast via `workgroupBarrier`), NOT Hi-Z — the only HZB token in the voxel raster is a comment (:251);
+  HZB/`sphereOccluded` lives only in the triangle cull (`NaniteCull.ts:213,875-881`); the Hi-Z footprint-max
+  upgrade is in-flight on the separate `nanite-voxoccl` worktree, NOT in this HEAD. **T3 DAG-LOD voxels NEXT** —
+  voxels are single fixed-resolution; `registerVoxelHead` attaches a degenerate always-cut DAG (`ownError=0`
+  `GeometryRegistry.ts:1114`; `childCount=0` :1119), and the cull's `makeTraverse` ALREADY does error-driven cut +
+  child-descent (`NaniteCull.ts:809-817,891-902`) ⇒ ZERO kernel change once voxels carry real per-level error +
+  children (mip/per-level-error machinery uncommitted on `nanite-voxlod`). **T4 world-scene voxels opt-in** — the
+  world path is fully wired (`WorldRegistry.ts:482-912`) but gated `?voxreg=1` (:381); forest defaults voxels ON
+  (`ForestScene.ts:82`); default-on-for-world is the remaining delta (status TBD). **T5 NaniteView drifted** — its
+  debug `combined()`/`packed=true` path (`NaniteView.ts:89,139`) is frozen at `4daf005` (pre-voxel), zero
+  vox/f2b/shadow/GI refs, out of sync with the production `world1()`/`NaniteFrame` pipeline (status TBD).
+
+- 2026-06-19 (ce): **REFUTED voxel-BIN raster REMOVED — SCATTER is the sole committed voxel raster.** `a3a1059`
+  (−578 lines in `NaniteVoxelRaster.ts`, +dead `cull.runPhase2` removed). The depth-bucketed BIN raster
+  (`?voxraster=bin`, kernels `kVoxBin`→`kRasterVox`) measured **+4.8..+14.1 ms** at every config (the SCAR §6.0
+  setup floor) and was superseded by scatter. Removed: `kVoxBin`/`kRasterVox` + their per-tile flat-list bin state
+  (`FLAT_TILE_CAP`/`K_BUCKETS`/`TILE_PX`/…), the `?voxraster` branch (scatter now UNCONDITIONAL; the param is read
+  defensively so a stale `?voxraster=bin` URL is a harmless no-op), `atomicBuf` shrunk to the single shared
+  `WRITE_CTR`. KEPT (shared with scatter, audited): the `VoxelBrick` codec, per-brick reading, the `atomicMax`
+  election into the shared `visPayloadV`/`visBV`, the two-pass `vox` resolve, the voxel cull/fanout/transition, and
+  the per-block occlusion cull. Verified IDENTICAL: forest-200k + forced-voxel-scatter both boot clean,
+  `__laas.error` null, dense voxel crown intact.
+
+- 2026-06-19 (cd): **REFUTED TILED sort-middle raster REMOVED (D-N46) — frame is COVERAGE-bound, not submit-bound.**
+  `eecf046` (+3/−1004; net residual refs 0). The `?tileproto` sort-middle TILED SW raster measured **+11.7/+18.1 ms**
+  vs the scatter `world1` path — refuting the cc (D-N46) pivot's core bet that tiling's workgroup-scoped depth would
+  beat scatter; the per-pixel coverage loop, not submit/atomic traffic, dominates. Deleted `NaniteTileRaster.ts`
+  (722 lines) + all `?tileproto`/`buildTileRaster`/`primeCtx`/`readTileStat` wiring in `NaniteRaster.ts`, the
+  `tileStat` accessor in `NaniteFrame.ts`, and the two tiled-only probes (`probe-tileflick.ts`, `probe-b3perf.ts`).
+  `world1()` collapses back to the **unconditional scatter `dispatchIndirect(kRasterWorld1, …)`**. Scatter dispatch,
+  resolve, cull, shadows, HZB byte-identical; forest boots/renders/no-holes; whole-frame p0.95 unchanged. The cc
+  TILED architecture body above is kept as history; this is its refutation banner. (The B1/B3 tiled-raster commits
+  `fed6771`/`b037f4d`/`43e4aa1` are likewise superseded — their front-to-back insight was re-landed loss-exact in
+  the SCATTER path; see cf/T1.)
+
 - 2026-06-18 (cc): **PRIOR-ART RESEARCH → the architecture pivot: SORT-MIDDLE TILED raster (D-N46).** Ran the
   `prior-art-sw-raster` dynamic workflow (Opus explore agents + Sonnet scouts; 13 deep source briefs in
   `docs/perf-runs/prior-art/`, synthesis `IDEAS.md`) over the user's reading list (CudaRaster/Laine&Karras 2011 +

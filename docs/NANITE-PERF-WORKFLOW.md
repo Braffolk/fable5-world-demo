@@ -73,9 +73,19 @@ that feeds it. Extend the skeleton, don't fork it per task.
 
 ### B2. Current task brief (the forest investigation — the per-run meat, *an example of §A args in action*)
 
+> **CANONICAL CONFIG (2026-06-20) — supersedes the Run-1 operating point below.** The voxel-foliage perf
+> campaign measures **`scene=forest`, `trees=200000`, retina backbuffer 2268×1473** (boot viewport `1512×982`
+> + `?dpr=1.5`), `voxdither=0` (opaque). The probe **default** of `trees=40000` @ `1280×720` is
+> **NON-representative** (~5× too few trees, ~3.6× too few pixels) and reads a falsely-LOW frame cost —
+> **do NOT measure there** (trace: `docs/perf-runs/VOXEL-PERF-BUILD-STATE.md` + `NEXT-AGENT-CYCLE-PROMPT.md`).
+> `gpuWall` is **thermally noisy** at that load → prefer **deterministic counters**, primarily
+> `nanite.voxBrickWrites` (`NaniteFrame.ts:519`). The optimization target is **raster/depth overdraw** —
+> per-pixel voxel-brick election overlap **N ≈ 5.2–6.2 wins/px in the distant canopy, ≈0 near** (shading
+> overdraw is already ~1/px via the vis-buffer two-pass resolve, at the floor — not the target).
+
 - **Target:** 200k-tree forest blazing fast, no noticeable quality loss, **avg >60 fps during movement**; debug
   (lean) path first, then full pipe.
-- **Operating point (verified):** lean vis-buffer = `?nanitedbg=flat`; plain `?scene=forest&nanite=1` = the FULL
+- **Operating point (verified — STALE, see CANONICAL CONFIG banner above):** lean vis-buffer = `?nanitedbg=flat`; plain `?scene=forest&nanite=1` = the FULL
   pipe (`nanitedbg=1` is not valid). Canonical flags `trees=40000 lodnear=4 simband=6 lodpow=0.6 instminpx=128`,
   1280×720 → frameMs ~24 ms, `world1` ~15 ms (dominant), ~335k visClusters.
 - **The meat that reframes the problem:** with `instminpx=128` the **far field is already impostored**, so the

@@ -10,7 +10,25 @@
 > Status key: ✅ done · 🔵 active · ⬜ pending · 🚫 blocked. `blockedBy` = task ids that
 > must finish first. `spec` = the `## header` in NANITE-SPEC.md (+ D-N* / file refs).
 
-## YOU ARE HERE — 2026-06-18 (PM) → **B1 TILED raster BUILT + CORRECT; next = B3 FRONT-TO-BACK ORDERING.**
+## YOU ARE HERE — 2026-06-20 → **Voxel foliage is the frontier; TILED + voxel-BIN rasters REFUTED+REMOVED, SCATTER committed. f2b front-to-back DONE (T1); Hi-Z occlusion IN-PROGRESS (T2); DAG-LOD voxels NEXT (T3).**
+
+**STATE.** The committed voxel raster is the **SCATTER** path (`kVoxScatter`, cooperative per-block, an
+`atomicMax` election on the packed `depthKey24<<8|id8` word into the shared `visPayloadV`/`visBV`, then a
+two-pass resolve that **shades once at ~1/px** = the SHADING-overdraw FLOOR, not the target). The
+sort-middle **TILED** raster (`NaniteTileRaster.ts`) was **REFUTED** (+11.7/+18.1 ms vs scatter `world1`;
+the frame is **COVERAGE-bound, NOT submit-bound**) and **REMOVED** (`eecf046`); the **voxel-BIN** raster
+(`kVoxBin`→`kRasterVox`) was likewise refuted + removed (`a3a1059`, −578 lines). `world1()` collapsed back
+to an **unconditional scatter** `dispatchIndirect`; scatter is the SOLE committed voxel raster. The
+optimization target is **RASTER/DEPTH overdraw** — how many bricks run the `atomicMax` election per pixel
+before the nearest wins (per-pixel brick overlap **N≈5.2–6.2** in the distant canopy, **≈0** near), NOT
+shading overdraw (already at the floor). Measure at the canonical config — **scene=forest, trees=200000,
+retina 2268×1473** (NOT the old probe-default 40k/720p) — and prefer **deterministic counters** (e.g.
+`nanite.voxBrickWrites`) over `gpuWall`, which is thermally noisy at that load. The 5 voxel-arc tasks
+(`T1`–`T5`) live in **section F** below; build state = `docs/perf-runs/VOXEL-PERF-BUILD-STATE.md`.
+
+---
+
+**(HISTORICAL — tiled raster refuted+removed `eecf046`; see section E banner)**
 
 **STATE.** The B1 sort-middle TILED raster is implemented and renders correctly (gated `?tileproto=1`;
 `world1` stays pristine). `NaniteTileRaster.ts`: device-portable BOUNDED depth-wave batching (the cut is
@@ -246,21 +264,40 @@ N0 scaffold ✅ · N1 clusterize ✅ · N2 cull ✅ · N3 vis-buffer ✅ · N4 m
 | `AUDIT-1a` | Per-instance TINT drift — ratify or restore (USER CALL) | ⬜ | — | LOG bh; NaniteResolve/NaniteFetch | Orig variation law needs BOTH `tint=slotHash(slot,17/91)` + `windPhase=slotHash(slot,211)` "or migration clones trees (banned)". Impl reproduces the wind phase but NOT the tint — bark hue is per-VERTEX `vdata.x` (shared across a mesh's ~4k instances). Trees vary by pose+wind, not colour. RESTORE = add `slotHash(instId,17/91)` to the bark/deadwood albedo (~few lines), or RATIFY if pose+wind+per-vertex hue reads varied enough. |
 | `PERF-VB4` | WORLD raster → SINGLE-PASS (drop the 2nd raster pass) | ✅ | LOG bx | **D-N45** | SHIPPED as default; 2-pass world DELETED (mode 'payload', `kRasterDepth2`, HW-payload, `?vb`/`?vbdepth`/`?nanhw`, world `?audit`). `world1` = a 24-bit depth `atomicMax` election (`visPayloadV` = `depthKey24<<8\|id8`) → winner `atomicStore`s the full 25-bit id into `visBV`; resolve/HZB/shadowHalf decode depth from the key (`cz = 1−(key>>8)/16777215`). **~1.85× raster** (2.8–3.5 vs ~5.3 ms). The D-N45 plan (recompute exact depth in the resolve) was OVERTURNED: any exact-depth write = depthV as a 3rd atomic storage buffer = a hard **3× cliff + broken kernel writes** (three.js/Metal), so depth rides the election key. 16-bit banded (user-caught grazing terracing) → 24-bit = sub-pixel, free. Residual <0.1% wrong-cluster speckle very close to objects (user-accepted; zero-speckle needs native 64-bit atomics). frameMs CPU-bound ⇒ GPU headroom, not fps. KEPT: mode 'depth'+depth1+hwDepth (shadows), mode 'combined'+audit (NaniteView debug). |
 
-## E. RASTER ARCHITECTURE — B1 SORT-MIDDLE TILED (D-N46) ⬅ THE active frontier
+## E. RASTER ARCHITECTURE — SORT-MIDDLE TILED (D-N46) 🚫 REFUTED + REMOVED (eecf046, 2026-06-19) — historical
+> 🚫 REFUTED 2026-06-19: the `?tileproto` tiled raster measured **+11.7/+18.1 ms** vs scatter `world1` (the
+> frame is **COVERAGE-bound, not submit-bound**); `NaniteTileRaster.ts` deleted (`eecf046`). The voxel-BIN
+> raster (`kVoxBin`→`kRasterVox`) was likewise refuted + removed (`a3a1059`). Committed path = **SCATTER**.
+> Frontier moved to **VOXEL FOLIAGE** — see section F below + `docs/perf-runs/VOXEL-PERF-BUILD-STATE.md`.
+> Table kept as history.
 > The ~2× foliage lever + it dissolves the no-64-bit-atomic constraint. Detail + rationale + walls = SPEC `D-N46`;
 > synthesis = `docs/perf-runs/prior-art/IDEAS.md`. "Both, B1 first" (user 2026-06-18) — quick wins run in parallel.
 | id | task | status | blockedBy | spec | scope |
 |----|------|--------|-----------|------|------|
-| `B1-PROTO` | Plain-WGSL binning + per-tile election PROTOTYPE (the GATE) | 🔵 NEXT | — | D-N46 | one view: a binning pass (32-bit `atomicAdd` queue + `dispatchWorkgroupsIndirect`) → per-tile `var<workgroup>` 32-bit `atomicMax` election on the kept 24b\|8b word. PIXEL-DIFF IDENTITY vs the current raster + profile global-atomic traffic before/after via a capture. Commit to the full refactor ONLY if it wins. TSL r184 has no subgroup ops — plain WGSL. |
-| `B1` | Sort-middle TILED raster (full refactor of `nanRasterWorld1`) | ⬜ | `B1-PROTO` | D-N46 | replace one-wg-per-cluster SCATTER. The global per-fragment `atomicLoad` round-trip → on-chip shared read; the winner's global atomic → ONE flush/tile (= "far fewer global atomics", the right way). Bin at CLUSTER granularity; ComputeRaster small-tri bypass. Multi-week; watertight seams + bit-identical tiebreak the risk. |
-| `B2` | Per-tile LIVE EXACT zmax kill | ⬜ | `B1` | D-N46 | skip a tri whose conservative `zmin` ≥ the EXACT zmax of fragments already painted in that tile. ≠ the refuted static max-Z HZB (exact, live, per-tile). Zero-loss. |
-| `B3` | Front-to-back tile order + opaque first-cover early-out | ⬜ | `B1` | D-N46 | per-tile coarse depth-bucket sort; reject a covered opaque pixel that already has a nearer LIVE election winner. Per-pixel only (NEVER a per-tile quantile = pops). Depth-buffer-equivalent for opaque. |
-| `B4` | Far-field leaf-crown / billboard impostors (= `N9-C3`) | ⬜ | — | D-N46; `### Foliage (N9)` | bake octahedral atlas + inject impostor `depth\|id` directly as the 32-bit election word; per-instance distance/area swap. QUALITY-BUDGETED — the one big bet not inherently zero-loss (pop/parallax A/B vs the bar). |
-| `Q1` | Sample-miss tiny-triangle cull (pre-scanline) | ⬜ | — | D-N46 | conservative reject of tris whose snapped bbox covers no pixel center (match `tlBias` exactly). Payoff UNCERTAIN — our cut already emits ≤1px tris; pixel-diff identity + `auditV` reject count + rdbg timing. MEASURE. Also bounds B1's small-tri bin cost. |
-| `Q3` | Fold barycentric-z into an incremental add | ⬜ | — | D-N46 | `z += zStepX` per pixel, `zRow += zStepY` per row; kills the per-pixel multiply. MUST reproduce the 24-bit depth election key BIT-EXACT (unbiased-weight/N4-C0 trap; HZB+shadow parity). |
-| `Q4` | Resolve early-discard on the clear election word | ⬜ | — | D-N46 | whole resolve fragment early-outs when the election word is still clear (background), not just the terrain sub-branch. Small, free. |
+| `B1-PROTO` | Plain-WGSL binning + per-tile election PROTOTYPE (the GATE) | 🚫 REFUTED | — | D-N46 | one view: a binning pass (32-bit `atomicAdd` queue + `dispatchWorkgroupsIndirect`) → per-tile `var<workgroup>` 32-bit `atomicMax` election on the kept 24b\|8b word. PIXEL-DIFF IDENTITY vs the current raster + profile global-atomic traffic before/after via a capture. Commit to the full refactor ONLY if it wins. TSL r184 has no subgroup ops — plain WGSL. |
+| `B1` | Sort-middle TILED raster (full refactor of `nanRasterWorld1`) | 🚫 SUPERSEDED | `B1-PROTO` | D-N46 | replace one-wg-per-cluster SCATTER. The global per-fragment `atomicLoad` round-trip → on-chip shared read; the winner's global atomic → ONE flush/tile (= "far fewer global atomics", the right way). Bin at CLUSTER granularity; ComputeRaster small-tri bypass. Multi-week; watertight seams + bit-identical tiebreak the risk. |
+| `B2` | Per-tile LIVE EXACT zmax kill | 🚫 SUPERSEDED | `B1` | D-N46 | skip a tri whose conservative `zmin` ≥ the EXACT zmax of fragments already painted in that tile. ≠ the refuted static max-Z HZB (exact, live, per-tile). Zero-loss. |
+| `B3` | Front-to-back tile order + opaque first-cover early-out | 🚫 SUPERSEDED | `B1` | D-N46 | per-tile coarse depth-bucket sort; reject a covered opaque pixel that already has a nearer LIVE election winner. Per-pixel only (NEVER a per-tile quantile = pops). Depth-buffer-equivalent for opaque. |
+| `B4` | Far-field leaf-crown / billboard impostors (= `N9-C3`) | 🚫 SUPERSEDED | — | D-N46; `### Foliage (N9)` | bake octahedral atlas + inject impostor `depth\|id` directly as the 32-bit election word; per-instance distance/area swap. QUALITY-BUDGETED — the one big bet not inherently zero-loss (pop/parallax A/B vs the bar). |
+| `Q1` | Sample-miss tiny-triangle cull (pre-scanline) | 🚫 SUPERSEDED | — | D-N46 | conservative reject of tris whose snapped bbox covers no pixel center (match `tlBias` exactly). Payoff UNCERTAIN — our cut already emits ≤1px tris; pixel-diff identity + `auditV` reject count + rdbg timing. MEASURE. Also bounds B1's small-tri bin cost. |
+| `Q3` | Fold barycentric-z into an incremental add | 🚫 SUPERSEDED | — | D-N46 | `z += zStepX` per pixel, `zRow += zStepY` per row; kills the per-pixel multiply. MUST reproduce the 24-bit depth election key BIT-EXACT (unbiased-weight/N4-C0 trap; HZB+shadow parity). |
+| `Q4` | Resolve early-discard on the clear election word | 🚫 SUPERSEDED | — | D-N46 | whole resolve fragment early-outs when the election word is still clear (background), not just the terrain sub-branch. Small, free. |
 | `B5` | Persistent-thread work-queue raster | 🚫 DEMOTED | — | D-N46 | attacks the smaller 40% launch tier; clusters are uniform (235/256) so load-balance upside is modest — MEASURE a ~512-wg pool vs current dispatch before investing. |
 | `B6` | Cost-aware-GATED `vcompact` revival | 🚫 DEMOTED | — | D-N46; `NaniteVertexCache.ts` | the ONLY residual of the 7-source vertex-cache convergence — we already BUILT `vcompact` + measured a WASH; gate the barrier to expensive wind clusters only. 40% tier, modest. |
+
+## F. VOXEL FOLIAGE — ⬅ THE active frontier (SPEC `## Phase plan`; `docs/perf-runs/nanite-voxel-foliage-spec.md`; `docs/perf-runs/VOXEL-PERF-BUILD-STATE.md`)
+> Two-tier: **mesh near**, **voxel mid→far**. The committed raster is **SCATTER** (`kVoxScatter`, `atomicMax`
+> election on `depthKey24<<8|id8` → two-pass resolve shading ~1/px); TILED + voxel-BIN rasters refuted+removed
+> (section E banner). The lever is **RASTER/DEPTH overdraw** (per-pixel brick election overlap N≈5.2–6.2 distant,
+> ≈0 near), NOT shading overdraw (already at the floor). Measure @ scene=forest/200k/retina 2268×1473 via
+> deterministic counters (`nanite.voxBrickWrites`). The canonical 5-task list — verified states:
+| id | task | status | blockedBy | spec | scope |
+|----|------|--------|-----------|------|------|
+| `T1` | Front-to-back depth-bucket scatter | ✅ DONE | — | f2b | Buckets by **LINEAR view depth = clip-w** (`NaniteCull.ts:529-543`), explicitly NOT NDC-z (the prior attempt's bug — collapsed the far field into one bucket). Range = a self-tightening per-frame atomic `[dMin,dMax]` over live voxel-cluster depths (`kVoxRange` `NaniteCull.ts:576-593`; `voxDepthBucket` 549-557), NOT the static `[transitionDist..lodDist]`. K=16 default (`?voxf2bk`, clamp [1,32]). K near→far dispatches of the UNCHANGED `kVoxScatter` in ONE `dispatchBatchMixed` submit (`NaniteVoxelRaster.ts:660-668`). **Default-on, toggle `?voxf2b=0`** (`NaniteCull.ts:292`). Activates the pre-existing per-pixel SW early-Z election (depthKey24 from NDC-z, distinct from the linear ordering metric). MERGED `02618d8`/`4bcb5f7`. |
+| `T2` | Hi-Z per-block occlusion cull | 🔵 IN-PROGRESS | — | — | Production ALREADY ships a **COARSE** per-block occlusion skip (`?voxoccl` default-on, `NaniteVoxelRaster.ts:254,342-374`): thread 0 does ONE global `visPayloadV` read at the projected block-centre pixel, broadcasts via barrier, skips the block if its nearest-possible AABB-front-slab key can't beat the centre winner. A **single point-sample, NOT Hi-Z/HZB footprint-max** (HZB/`sphereOccluded` lives only in the triangle cull, `NaniteCull.ts:213,875-881`). The Hi-Z footprint-max upgrade is in-flight on the separate `nanite-voxoccl` worktree, **NOT merged to this HEAD**. |
+| `T3` | DAG-LOD voxels (coarse-far / fine-near) | 🔵 NEXT | `T2` | — | Voxels are single fixed-res: `registerVoxelHead` attaches a degenerate **always-cut DAG** (`ownError=0` `GeometryRegistry.ts:1114`; `childCount=0` line 1119). `makeTraverse` ALREADY does error-driven cut + child-descent (`NaniteCull.ts:809-817,891-902`) → **ZERO kernel change** once voxels carry real per-level `ownError` + `childCount>0`. Folded constraints: voxels render **OPAQUE** (dither dropped, `voxDither` default FALSE `NaniteVoxelRaster.ts:183`); keep bricks **A FEW PX** (`BRICK_MAX_EXT=64`), NEVER shrink toward 1px / over-coarsen into solid blobs (correctness lever = smaller bricks, not see-through dither). Mip/per-level-error machinery is uncommitted on `nanite-voxlod`, NOT in this worktree. |
+| `T4` | Enable voxels for the WORLD scene | ⬜ backlog / status TBD | — | — | World-scene voxel path is **FULLY wired** (NOT a stub): `buildWorldRegistry` voxelizes (`WorldRegistry.ts:482-491`), reserves (846-872), appends+flushes the `voxel:7` heads (884-912) — but **OPT-IN via `?voxreg=1`** (`WorldRegistry.ts:381`) to keep the world boot budget untouched; forest defaults voxels ON (`ForestScene.ts:82`). World scene = `TerrainScene` (default `scene='world'`). Remaining delta = **flip the world default** / wire a world perf path; NOT done. Unverified as a default-on change → backlog/TBD. |
+| `T5` | Sync NaniteView debug views to main renderer + strip legacy bindings | ⬜ backlog / status TBD | — | — | `NaniteView` has **DRIFTED** from production `NaniteFrame`: uses a NaniteView-only `combined()`/`packed=true` entry (`NaniteView.ts:89,139`; `world1()` is `NaniteFrame`-only), lacks the entire voxel arc / f2b / shadows / GI / PBR resolve (zero voxel refs), header doc stale. Git: `NaniteView.ts` frozen at `4daf005` (N5 SHADOW-HIER, pre-voxel), untouched by every voxel commit. Neither half done → backlog/TBD. |
 
 ## B. DAG (N8) — active workstream (SPEC `### DAG (N8)`)
 | id | task | status | blockedBy | spec | scope |

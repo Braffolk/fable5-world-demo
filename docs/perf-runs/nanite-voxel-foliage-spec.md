@@ -172,6 +172,12 @@ home in the cluster record" blocker entirely.
 
 ### 3.2.bis BOTH KNOBS ARE TUNEABLE UNIFORMS WITH BROWSER-BUDGET DEFAULTS — NOT a "1 voxel = 1 px" target
 
+> **GUARD (reinforced 2026-06-20):** voxels are **A FEW PX, not 1 px** (UE's "near-pixel-sized" ≠ 1 px). The
+> §3.2.bis knobs are tuned so bricks stay a few px — **NEVER shrink toward 1 px, and NEVER over-coarsen into
+> solid blobs.** Confirmed in code: `BRICK_MAX_EXT = 64` (`NaniteVoxelRaster.ts:108`), bricks render **OPAQUE**
+> (`voxDither` default FALSE), and the correctness lever is **finer `?voxgrid` / farther `?voxnear`** —
+> smaller bricks, **not** see-through dither.
+
 The two values above are **knobs found by TESTING, with browser-budget DEFAULTS — not hardcoded
 constants and NOT UE's sub-pixel "1 voxel ≈ 1 pixel" goal.** We **explicitly reject** that goal:
 under the WebGPU/browser raster budget we deliberately accept **COARSER voxels — a voxel may cover
@@ -452,6 +458,16 @@ or every cold boot pays voxelization on top of the ~16 s leaf-DAG build.
 ---
 
 ## 6. RUNTIME RASTER INTEGRATION (voxel-brick bin, depth-bucketed front-to-back, reusing the 32-bit election)
+
+> **OUTCOME 2026-06-20: the SCAR §6.0 warned of FIRED.** The two-kernel **BIN raster** (`kVoxBin` →
+> `kRasterVox`, K near→far) **LOST and was REMOVED** (`a3a1059`, a ~578-line removal in `NaniteVoxelRaster.ts`
+> — 526 deleted / 52 added, net −474; commit-wide net −556) — same coverage-bound failure mode as the deleted
+> `?tileproto` tiled raster. The **COMMITTED** voxel raster is a **SINGLE SCATTER kernel** (`kVoxScatter`,
+> cooperative per-block, `atomicMax` election into shared `visPayloadV`/`visBV`, two-pass resolve that shades
+> once at ~1/px) **+ per-block occlusion cull** (`?voxoccl` default-on) **+ f2b depth buckets** (T1, `02618d8`).
+> Read **§6.1 (depth-bucketed front-to-back)** as the **DESIGN that survived** — it lives on inside the scatter
+> path as K near→far `dispatchBatchMixed` of the unchanged `kVoxScatter`. Read **§6.2 (`kVoxBin`) / §6.3
+> (`kRasterVox`)** as the **refuted BIN approach**, kept for history.
 
 ### 6.0 LEAD WITH THE SCAR — the entire net-win rests on ONE unproven inequality
 
@@ -747,6 +763,13 @@ Add `voxel:7` to the enum and an `isV` block + mux entries at `NaniteResolve.ts:
    SHARED lighting (`:586-668`) + `depthNode` unchanged.
 
 ### 7.3 Cross-fade / dither (Risk #3, in the cull — a HARD Stage-3 dependency with a WIDTH BUDGET)
+
+> **SUPERSEDED 2026-06-20:** the per-cluster **COVERAGE DITHER was DROPPED** — voxels render **OPAQUE by
+> default** (`voxDither` default FALSE, `NaniteVoxelRaster.ts:183` — gated on `?voxdither=1`). Coverage dither
+> is now a **dormant opt-in** measured as a **+18.7 ms regression** (see-through ⇒ no occlusion ⇒ the per-pixel
+> election explodes). For comparison, UE uses **stochastic NORMAL sampling + TSR**, not coverage dither. The
+> mesh→voxel transition **CROSS-FADE survives** as a design concern; the per-cluster **coverage dither does NOT**.
+> Body below kept as history.
 
 In a distance window `[d_lo, d_hi]` around `transitionDist`, emit a cluster to **BOTH** the leaf mesh
 (Tier 1) and the voxel mesh (Tier 2) with a **per-cluster** (NOT per-pixel — per-pixel dither + TAA =

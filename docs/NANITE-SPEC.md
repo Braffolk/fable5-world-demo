@@ -346,12 +346,14 @@ measurement discipline; shot cycles ~2–3 min, cooled ABAB rounds 15–30 min e
   a 3× cliff AND broke the kernel's writes. Residual <0.1% wrong-cluster speckle at very
   close range; the principled fix is native 64-bit atomics (Option B / CAS stays struck).
   See D-N45 for the full measurement + scope.
-- SUPERSEDED-IN-PLAN 2026-06-18 → **D-N46** (sort-middle TILED raster — PLANNED, not yet built): the packed-32b election
-  WORD above is KEPT unchanged, but WHERE it resolves moves from a GLOBAL per-fragment `atomicMax` (the one-workgroup-per-
-  cluster SCATTER model — the measured ~60%/14ms cost on foliage) to a PER-TILE `var<workgroup> atomic<u32>` owned by one
-  workgroup, flushed to `visBV`/`visPayloadV` at tile end. This DISSOLVES the no-64-bit-atomic constraint (the election
-  becomes workgroup-scoped) and is the credible ~2× foliage lever. The global SCATTER write-out described above is the
-  CURRENT impl; D-N46 is the target. See **D-N46**.
+- NOTE 2026-06-18 (the packed-32b election WORD is UNCHANGED + COMMITTED) → see **D-N46** for the once-explored TILED
+  alternative for WHERE it resolves. The election WORD above is the live, committed convention: WHERE it resolves is a
+  GLOBAL per-fragment `atomicMax` (the one-workgroup-per-cluster SCATTER model). D-N46 once PLANNED to move that resolution
+  to a PER-TILE `var<workgroup> atomic<u32>` (flushed to `visBV`/`visPayloadV` at tile end) as a credible ~2× foliage lever —
+  but that TILED sort-middle raster was **REFUTED (+11.7/+18.1 ms; the frame is COVERAGE-bound, not submit-bound) and REMOVED
+  (eecf046, 2026-06-19)**; the voxel-BIN raster variant was likewise refuted+removed (a3a1059). The global SCATTER write-out
+  described above is therefore the PERMANENT COMMITTED + VALIDATED path — NOT "just the current impl", and NOT superseded by
+  D-N46. See the REFUTED banner on **D-N46** for the full verdict.
 - SHADOW SW raster: single-u32 depth-only atomicMin — no payload, no second pass.
   Perfect fit per cascade (F5/N5).
 - HW big-tri path: fragment shader writes the SAME Option C buffers (pass-1
@@ -1643,7 +1645,10 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
     validate the mechanism, then stack bands until the far-field meets the voxel apex — design the region-record layout
     and the builder for N levels from the outset so the second band is data, not a rewrite. (2) OPAQUE VOXEL
     FAR-FIELD = below an error/screen-size threshold, switch a merged far crown from triangles to ≤1px OPAQUE voxels/
-    splats binned front-to-back into the SAME vis buffer with ONE u32 atomic each (NO u64). This is Epic's CURRENT
+    splats binned front-to-back into the SAME vis buffer with ONE u32 atomic each (NO u64).
+    GUARD (2026-06-20): voxels are A FEW PX, not 1px — UE's near-pixel-sized brick != 1px; NEVER shrink toward 1px or
+    over-coarsen into solid blobs (BRICK_MAX_EXT=64; correctness lever = finer `?voxgrid` / farther `?voxnear`, not
+    see-through dither). Voxels render OPAQUE (no coverage dither). This is Epic's CURRENT
     production answer (UE5.7 Nanite Voxels EXPLICITLY supersede the area-preserving aggregate-DAG as the foliage
     mitigation): it hard-caps the far-field at pixel density, sidesteps the QEM-degenerates-on-disconnected-leaves wall
     that pure cross-instance merge HITS (Aokana, primary), and FIXES leaf double-siding for free (stored normal
@@ -1750,6 +1755,11 @@ draws + tris per bookmark into the ledger. Also 1280×720 row (CI-speed checks).
 - D-N46 (2026-06-18, RASTER ARCHITECTURE → **SORT-MIDDLE TILED with workgroup-memory depth election** — the ~2×
   foliage lever. **PLANNED / target architecture; NOT yet implemented** — tasks `TILE-*`/`Q*` in the ROADMAP. Grounded in
   two measured workflows this session, both archived under `docs/perf-runs/`.)
+  - REFUTED + REMOVED 2026-06-19 (eecf046): the `?tileproto` tiled raster measured **+11.7/+18.1 ms slower** than the
+    scatter `world1` path (the frame is COVERAGE-bound, not submit-bound); `NaniteTileRaster.ts` + `probe-tileflick` /
+    `probe-b3perf` deleted. The voxel-BIN raster variant was likewise refuted + removed (a3a1059). **SCATTER is the
+    committed + validated raster.** Frontier moved to VOXEL FOLIAGE. Body below kept as the design rationale +
+    measurements that led here.
   - THE PROBLEM (measured, not assumed): on the forest worst view `nanRasterWorld1` ≈ 23 ms is the frame, and an in-kernel
     `?rdbg` stage-split (machine cool, GPU-bound) plus the `perf-review` workflow established the split as **~60% (~14 ms)
     PER-PIXEL COVERAGE LOOP / ~40% (~9 ms) per-triangle transform+setup+launch** (the in-source comment puts the loop even

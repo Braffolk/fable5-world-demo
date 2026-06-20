@@ -1,5 +1,11 @@
 # Tiled raster — maximize + 60fps-p0.05 forest research (2026-06-18)
 
+> 🚫 SUPERSEDED / OUTCOME 2026-06-19: the open question this run framed was ANSWERED — the tiled
+> sort-middle raster LOST. `?tileproto` measured **+11.7 / +18.1 ms** vs the scatter `world1` (the frame
+> is COVERAGE-bound, not submit-bound); `NaniteTileRaster.ts` was removed in **eecf046**. The frontier
+> moved to **VOXEL FOLIAGE** — see `docs/perf-runs/VOXEL-PERF-BUILD-STATE.md` for the current voxel-raster
+> frontier and task state. Body below kept as the research record.
+
 5-stage dynamic workflow (research → analyze → ideate → synthesize → adversarial-review; 18 agents,
 ~1.9M tokens). Full result: the task output for run `wf_b5b2efce-f9d`. This is the durable digest +
 the implementation tracker.
