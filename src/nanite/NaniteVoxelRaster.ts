@@ -27,7 +27,8 @@
  * hfVerts and binds clusters/meshes/instances/voxelBricks/qVoxRaster + visPayloadV/visBV.
  */
 import { IndirectStorageBufferAttribute, StorageBufferAttribute } from 'three/webgpu';
-import type { Renderer } from 'three/webgpu';
+import type { Renderer, StorageBufferNode } from 'three/webgpu';
+import { Vector4 } from 'three';
 import {
   Fn,
   If,
@@ -62,11 +63,14 @@ import {
   maxI,
   minI,
   minU,
+  dispatchBatch,
   readBuffer,
   sU32Views,
   setIndirectDispatch,
   toF,
   toI,
+  uniformArrV4,
+  uniformF,
   wgLinear,
 } from './Tsl';
 import type { AtomicBuf, BufOf, UV2 } from './Tsl';
@@ -145,8 +149,11 @@ export interface VoxelRasterDeps {
   voxF2bEnabled: boolean;
   /** the SAME 24-bit depth key the world1 raster + resolve use (§6.7). */
   depthKey24: (cz: NF) => NU;
-  /** global election buffers (the on-chip wgElect flushes here via atomicMax). */
-  visPayloadV: { atomic: AtomicBuf };
+  /** global election buffers (the on-chip wgElect flushes here via atomicMax). The
+   *  per-block occlusion cull also needs a NON-atomic read-only view of payloadV to BUILD
+   *  the min-pooled footprint pyramid (a reduction, no atomicity needed); the full
+   *  sU32Views bundle is passed at the call site so `.ro` is present at runtime. */
+  visPayloadV: { atomic: AtomicBuf; ro: StorageBufferNode<'uint'> };
   visBV: { atomic: AtomicBuf };
   width: number;
   height: number;
@@ -252,6 +259,111 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // never produces a WRONG winner (it only ever DROPS a would-be loser-or-edge-sliver, never
   // overwrites a nearer pixel). ?voxoccl=0 disables it for the A/B.
   const voxOccl = (new URLSearchParams(window.location.search).get('voxoccl') ?? '1') !== '0';
+
+  // ── MIN-POOLED FOOTPRINT PYRAMID over THIS-frame visPayloadV (the per-block occlusion
+  // cull's conservative occluder structure). REPLACES the old sparse FP_TAPS×FP_TAPS raw
+  // grid: a fixed N-tap sample of a wide footprint box is NOT conservative — as the block
+  // sphere grows (up to 128 bricks ⇒ rPx is tens-to-hundreds of px) the inter-tap gaps are
+  // large, so a VISIBLE pixel (empty key 0 / a see-through canopy gap) BETWEEN taps is
+  // missed, occK overestimates the nearest occluder, and the cull can fire on a block that
+  // has a visible pixel = a HOLE (the FIX-review blocker). A min/max-POOLED pyramid is the
+  // only structure that conservatively tests a WHOLE box at any size: it aggregates EVERY
+  // texel (no gaps), and a mip level is picked so the footprint fits a 2×2 window — exactly
+  // the NaniteHzb.sphereOccluded pattern, but:
+  //   • MIN-pooled (not max): the election packs depthKey24(cz)<<8|id8 and is atomicMax, so
+  //     NEARER ⇒ LARGER key. The conservative occluder over a window is the SMALLEST key =
+  //     FARTHEST occluder surface = the most see-through pixel = the EASIEST pixel for the
+  //     block to win. Cull iff bNearKey ≤ that min ⇒ even the block's nearest point is behind
+  //     the FARTHEST occluder anywhere it projects ⇒ zero visible pixels (loss-exact). Any
+  //     EMPTY texel (key 0, the kVisClear sentinel) drives the window min to 0 ⇒ KEEP — a
+  //     block peeking through ANY canopy gap is never culled (no holes). MIN, and a pyramid
+  //     that pools EVERY pixel (not a sparse sample), are jointly load-bearing for no-holes.
+  //   • SOURCED FROM FRESH visPayloadV (THIS frame's SW+HW triangle election; dispatchVoxel
+  //     runs AFTER hwRender per §6.6), NOT the HZB. The HZB at voxel-raster time holds LAST
+  //     frame's depth (built later in NaniteFrame) and would downgrade the occluder + add
+  //     prev-VP disocclusion-hole risk.
+  //   • NO Y-FLIP — visPayloadV rows are bottom-up (SW raster s.y=(ndc.y+1)/2·H); the centre
+  //     mapping bndc.y·0.5+0.5 is copied verbatim (a texture-style Y-flip would over-cull).
+  // INITIAL fill = 0 ⇒ "all see-through" ⇒ KEEP everything before the first build (frame-0 /
+  // resize pass-through, the safe direction). The pyramid is built ONLY when voxOccl (no
+  // extra cost under ?voxoccl=0). ≤2 storage buffers per build kernel; the cull reads ONE
+  // extra ro view (voxOccPyr) in kVoxScatter — still within the ≤10-buffer cap (§4.6).
+  const VOX_PYR_LEVELS = 16;
+  const pyrLevels: { offset: number; w: number; h: number }[] = [];
+  {
+    let lw = Math.max(1, Math.ceil(width / 2));
+    let lh = Math.max(1, Math.ceil(height / 2));
+    let off = 0;
+    while (pyrLevels.length < VOX_PYR_LEVELS) {
+      pyrLevels.push({ offset: off, w: lw, h: lh });
+      off += lw * lh;
+      if (lw === 1 && lh === 1) break;
+      lw = Math.max(1, Math.ceil(lw / 2));
+      lh = Math.max(1, Math.ceil(lh / 2));
+    }
+  }
+  const pyrLevelCount = pyrLevels.length;
+  const pyrTotal = pyrLevels.reduce((a, l) => a + l.w * l.h, 0);
+  // level lookup table (offset, w, h, 0) — clamped pad to VOX_PYR_LEVELS for a fixed uniform.
+  const pyrTable = uniformArrV4(
+    Array.from({ length: VOX_PYR_LEVELS }, (_, k) => {
+      const l = pyrLevels[Math.min(k, pyrLevelCount - 1)] as { offset: number; w: number; h: number };
+      return new Vector4(l.offset, l.w, l.h, 0);
+    }),
+  );
+  const pyrLevelCountU = uniformF(pyrLevelCount);
+  // ALL-SEE-THROUGH (key 0) initial fill ⇒ before the first build nothing occludes ⇒ KEEP.
+  const voxOccPyrAttr = new StorageBufferAttribute(new Uint32Array(Math.max(1, pyrTotal)), 1);
+  const voxOccPyr = sU32Views(voxOccPyrAttr, Math.max(1, pyrTotal));
+  // per-level 2×2-MIN reduction kernels (built only when the cull is on). Level 0 reduces
+  // full-res visPayloadV.ro; level k reduces level k−1 THROUGH THE SAME rw view (a 2nd ro
+  // view of one buffer in one dispatch is a same-scope usage violation — same as NaniteHzb).
+  const voxPyrKernels: unknown[] = [];
+  if (voxOccl) {
+    for (let k = 0; k < pyrLevelCount; k++) {
+      const info = pyrLevels[k] as { offset: number; w: number; h: number };
+      const kn = Fn(() => {
+        const lw = uint(info.w);
+        const lh = uint(info.h);
+        If(instanceIndex.lessThan(lw.mul(lh)), () => {
+          const x = instanceIndex.mod(lw);
+          const y = instanceIndex.div(lw);
+          const sx = x.mul(uint(2));
+          const sy = y.mul(uint(2));
+          // seed MAX so the running reduction is a true MIN over the 2×2 window.
+          const m = uint(0xffffffff).toVar();
+          if (k === 0) {
+            const sw = uint(width - 1);
+            const sh = uint(height - 1);
+            for (let dy = 0; dy < 2; dy++) {
+              for (let dx = 0; dx < 2; dx++) {
+                const tx = minU(sx.add(uint(dx)), sw);
+                const ty = minU(sy.add(uint(dy)), sh);
+                const e = elemU(visPayloadV.ro, ty.mul(uint(width)).add(tx)).toVar();
+                m.assign(minU(m, e));
+              }
+            }
+          } else {
+            const srcL = pyrLevels[k - 1] as { offset: number; w: number; h: number };
+            const srcW = uint(srcL.w);
+            const swMax = uint(srcL.w - 1);
+            const shMax = uint(srcL.h - 1);
+            for (let dy = 0; dy < 2; dy++) {
+              for (let dx = 0; dx < 2; dx++) {
+                const tx = minU(sx.add(uint(dx)), swMax);
+                const ty = minU(sy.add(uint(dy)), shMax);
+                const e = elemU(voxOccPyr.rw, uint(srcL.offset).add(ty.mul(srcW)).add(tx)).toVar();
+                m.assign(minU(m, e));
+              }
+            }
+          }
+          (voxOccPyr.rw.element(uint(info.offset).add(y.mul(lw)).add(x)) as unknown as { assign(v: NU): void }).assign(m);
+        });
+      })().compute(info.w * info.h, [64]);
+      (kn as { setName(n: string): unknown }).setName(`nanVoxOccPyrL${k}`);
+      voxPyrKernels.push(kn);
+    }
+  }
   // ── COOPERATIVE-RASTER WORKGROUP MEMORY (the close-up overdraw-imbalance fix) ──────
   // Per-cluster shared brick records (Phase A fills, Phase B consumes). MAX_BRICKS_PER_
   // CLUSTER=128 entries each. wgCand packs the brick's election key (depthKey24<<8|id8);
@@ -340,11 +452,30 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
       const voxId = uint(VOX_BIT).bitOr(payload).toVar();
 
       // PER-BLOCK OCCLUSION CULL (lever 2) — computed ONCE per workgroup on thread 0 into a
-      // workgroup-shared flag, then broadcast via a barrier. One global read per BLOCK (not
-      // per-brick, not per-pixel). If the block's NEAREST-possible key (its AABB front-slab)
-      // can't beat the global winner at its centre pixel, every brick-thread skips. Conserva-
-      // tive (a centre-occluded block whose silhouette edge peeks is dropped — fine for sub-
-      // pixel foliage; never produces a WRONG winner). ?voxoccl=0 disables it for the A/B.
+      // workgroup-shared flag, then broadcast via a barrier. CONSERVATIVE FOOTPRINT test via a
+      // MIN-POOLED PYRAMID (voxOccPyr, built fresh THIS frame above): pick the mip level whose
+      // 2×2 window covers the block's projected footprint, take the MIN election key (the
+      // farthest-conservative occluder) over that window, and cull iff the block's NEAREST-
+      // possible key (its AABB front-slab) is at-or-behind it. This REPLACES the prior sparse
+      // FP_TAPS×FP_TAPS RAW grid, which was NOT conservative: a fixed N-tap sample of a wide box
+      // (rPx grows to tens-to-hundreds of px for a ≤128-brick block) leaves large inter-tap gaps,
+      // so a VISIBLE pixel (empty key 0 / a see-through canopy gap) between taps is missed and the
+      // cull can drop a block that has a visible pixel = a HOLE. The pooled pyramid aggregates
+      // EVERY texel under the window (no gaps) ⇒ conservative at ANY footprint size.
+      //
+      // CONSERVATIVE (NEVER drops a block with ANY visible pixel). Polarity: the election packs
+      // depthKey24(cz)<<8|id8 and is atomicMax ⇒ NEARER = LARGER key. occK = MIN over the 2×2
+      // window = SMALLEST key = FARTHEST occluder surface = the most see-through pixel the
+      // footprint covers (the EASIEST pixel for the block to win). bNearKey = the block front
+      // slab's key (the LARGEST key any block pixel could elect; |0xff id-tiebreak ⇒ keep-on-tie).
+      // Cull iff bNearKey ≤ occK ⇒ even the block's nearest point is behind the FARTHEST occluder
+      // anywhere it projects ⇒ zero visible pixels (loss-exact). Any EMPTY texel under the window
+      // (key 0, the kVisClear/initial-fill sentinel) drives the pooled min to 0 ⇒ block KEPT — a
+      // block peeking through ANY canopy gap is never culled (no holes). MIN-pooling + a pyramid
+      // that pools EVERY pixel are jointly load-bearing for that no-hole property. NO Y-FLIP
+      // (visPayloadV rows are bottom-up; the centre mapping bndc.y·0.5+0.5 is verbatim — a
+      // texture-style Y-flip would over-cull). ?voxoccl=0 disables it for the A/B; with NO param
+      // the upgraded footprint cull is the DEFAULT production path.
       const wgVisible = workgroupArray('uint', 1);
       if (voxOccl) {
         If(brickLocal.equal(uint(0)), () => {
@@ -354,12 +485,46 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
             const bndc = bp.xyz.div(bp.w).toVar();
             const bnz = bndc.z.sub(blkWR.div(bp.w)).clamp(0, 1).toVar();
             const bNearKey = depthKey24(bnz as unknown as NF).shiftLeft(uint(8)).bitOr(uint(0xff)).toVar();
-            const bscx = minI(maxI(toI(0), toI(bndc.x.add(1).mul(0.5).mul(W))), toI(width - 1)).toVar();
-            const bscy = minI(maxI(toI(0), toI(bndc.y.add(1).mul(0.5).mul(H))), toI(height - 1)).toVar();
-            const bcpx = uint(bscy).mul(uint(width)).add(uint(bscx)).toVar();
-            const centreE = aLoadU(visPayloadV.atomic.element(bcpx)).toVar();
-            If(bNearKey.lessThanEqual(centreE), () => {
-              wgSet(wgVisible, uint(0), uint(0)); // centre fully occluded ⇒ skip the block
+            // FULL-RES projected pixel-radius of the block sphere (world→pixel scale = cotHalfFov·
+            // H/2; bp.w is the view-space distance for a standard proj ⇒ rPx = blkWR·cotHalfFov·H/
+            // (2·bp.w)). Level 0 of voxOccPyr is HALF-res, so a full-res radius rPx maps to rPx/2
+            // texels at level 0; the level whose 2×2 window COVERS the footprint diameter (2·rPx
+            // full-res) is ceil(log2(max(1, rPx))) — exactly NaniteHzb.ts:176's
+            // radiusTexels·2 .max(1).log2().ceil() with radiusTexels = rPx/2. Clamp to the valid
+            // level range. Over-coarse is SAFE (a larger window only pools more far/neighbour
+            // texels ⇒ min trends toward KEEP); under-coarse is the hole risk and is precluded by
+            // the ceil + the 2×2 (not 1×1) window.
+            const rPx = blkWR
+              .mul(cam.cotHalfFov as unknown as NF)
+              .mul(H)
+              .div(bp.w.mul(2))
+              .toVar();
+            const levelF = (rPx as unknown as { max(o: number): NF })
+              .max(1)
+              .log2()
+              .ceil()
+              .clamp(0, (pyrLevelCountU as unknown as { sub(o: number): NF }).sub(1))
+              .toVar();
+            const info = pyrTable.element(uint(levelF));
+            const lw = uint(info.y).toVar();
+            const lh = uint(info.z).toVar();
+            const lo = uint(info.x).toVar();
+            // projected centre → level-lvl texel coords (NO Y-FLIP, bottom-up rows). 2×2 window
+            // around the centre texel (NaniteHzb.sphereOccluded pattern); the level pick guarantees
+            // the footprint diameter ≤ one window edge, so this 2×2 fully covers the footprint.
+            const px = bndc.x.mul(0.5).add(0.5).mul(toF(lw)).toVar();
+            const py = bndc.y.mul(0.5).add(0.5).mul(toF(lh)).toVar();
+            const x0 = uint((px.sub(0.5) as unknown as { clamp(a: number, b: NF): NF }).clamp(0, toF(lw.sub(uint(1))))).toVar();
+            const y0 = uint((py.sub(0.5) as unknown as { clamp(a: number, b: NF): NF }).clamp(0, toF(lh.sub(uint(1))))).toVar();
+            const x1 = minU(x0.add(uint(1)), lw.sub(uint(1))).toVar();
+            const y1 = minU(y0.add(uint(1)), lh.sub(uint(1))).toVar();
+            const z00 = elemU(voxOccPyr.ro, lo.add(y0.mul(lw)).add(x0)).toVar();
+            const z01 = elemU(voxOccPyr.ro, lo.add(y0.mul(lw)).add(x1)).toVar();
+            const z10 = elemU(voxOccPyr.ro, lo.add(y1.mul(lw)).add(x0)).toVar();
+            const z11 = elemU(voxOccPyr.ro, lo.add(y1.mul(lw)).add(x1)).toVar();
+            const occK = minU(minU(z00, z01), minU(z10, z11)).toVar();
+            If(bNearKey.lessThanEqual(occK), () => {
+              wgSet(wgVisible, uint(0), uint(0)); // footprint fully occluded ⇒ skip the block
             });
           });
         });
@@ -654,6 +819,13 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   }
 
   const dispatchVoxel = (renderer: Renderer): void => {
+    // PER-BLOCK OCCLUSION CULL prerequisite: build the MIN-POOLED footprint pyramid over THIS
+    // frame's visPayloadV (already holds the SW+HW triangle election — world1/hwRender ran
+    // before this). ONE submit for the whole min-pool chain (level k reads level k−1; they share
+    // one buffer + one compute pass ⇒ WebGPU auto-syncs between dispatches, same as NaniteHzb).
+    // Built ONLY when voxOccl (no cost under ?voxoccl=0, where voxPyrKernels is empty). The
+    // scatter's per-block cull below then reads voxOccPyr.ro at the footprint-covering level.
+    if (voxOccl && voxPyrKernels.length > 0) dispatchBatch(renderer, voxPyrKernels);
     // zero the debug WRITE_CTR (one small dispatch), then the scatter elects each voxel
     // block's footprint into the global vis buffer (the per-block occlusion cull reads the
     // near-field triangle winners already in visPayloadV from world1/hwRender).
