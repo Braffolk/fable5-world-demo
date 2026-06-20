@@ -59,9 +59,16 @@ RESEARCH workflow  →  the SINGLE biggest win
       →  loop (feed the measured result back into the next research's grounding)
 ```
 
+**⚠️ EVERY workflow (research AND implement) carries a PREMISE-AUDIT stage** (see §5) — a wide step back that
+puts the CONTEXT on trial (params, metric, the structure one level up) BEFORE implementing and AGAIN before
+any "not-doable/refuted/disappointing" conclusion. A negative result triggers the premise-audit, not a method
+tweak. The repo `CLAUDE.md` holds the verbatim "go up a level" directive; embed it in agent prompts (they
+don't inherit it).
+
 **Checkpoint the user on every STRATEGIC fork** (which win, which build path, accept a quality budget,
 reconsider the goal). They steer direction; you run the machinery. They have repeatedly corrected
-direction — relay honestly and ask before big/risky/quality-budgeted builds.
+direction — relay honestly and ask before big/risky/quality-budgeted builds. **Never park/drop/reframe work
+without surfacing it for their call.**
 
 **Merge a KEPT, genuine win UP to `nanite-raster`** — but ASK FIRST. Experimental work lives in worktree
 branches; only merge to production on the user's OK (so they see it in git).
@@ -104,9 +111,22 @@ only after it works.
 
 ## 5. THE IMPLEMENT WORKFLOW (one dynamic Workflow per cycle; MEASURE-FIRST)
 
-Shape (adapt per win): **MEASURE-FIRST baseline of the relevant arm → IMPLEMENT (edit the worktree) →
-adversarial REVIEW (parallel, multi-lens, NO GPU) → conditional FIX → single-serial-GPU A/B → keep/drop
-GATE.** Scripts used as templates: `submit-collapse-implement.mjs`, `res-scale-implement.mjs`.
+Shape (adapt per win): **MEASURE-FIRST baseline of the relevant arm → ⚠️ PREMISE-AUDIT → IMPLEMENT (edit
+the worktree) → adversarial REVIEW (parallel, multi-lens, NO GPU) → conditional FIX → single-serial-GPU A/B
+→ ⚠️ PREMISE-RECHECK (before any drop) → keep/drop GATE.** Scripts used as templates:
+`submit-collapse-implement.mjs`, `res-scale-implement.mjs`.
+
+- **⚠️ PREMISE-AUDIT stage (MANDATORY — runs BEFORE implement; and a RE-CHECK before any "refuted/not-doable"
+  drop).** Step WIDE back from the task and put the CONTEXT on trial, not the method: are the PARAMS right?
+  is the METRIC right (e.g. linear view-depth vs NDC-z, which compresses the far field)? is the structure
+  ONE LEVEL UP — the setup that generated this task — the actual flaw? Can the generating context be changed
+  instead of out-thinking the problem? **A workflow may NOT conclude "refuted / not-doable / disappointing"
+  until this audit has fired and explicitly cleared the params, metric, and upstream structure as sound.** A
+  negative result is the TRIGGER to audit the premise, not to vary the method. (Exists because flawed
+  premises one level up — wrong depth metric, too-coarse buckets — kept getting misdiagnosed as the
+  implementation being undoable, e.g. the f2b NDC-z bucketing that collapsed the far canopy into one bucket.)
+  Embed the "go up a level" directive from the repo `CLAUDE.md` VERBATIM in the design/diagnose/verify agent
+  prompts — subagents do NOT inherit CLAUDE.md or the project memory; they only get the prompt you write.
 
 - **The A/B is the ONLY GPU stage**, a SINGLE agent, never inside a `parallel()`. Gate on **whole-frame
   p0.95 vs scatter past the ~1.5-2 ms noise floor, at the WORST camera, with parity (no holes, overflow
