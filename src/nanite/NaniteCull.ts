@@ -31,6 +31,8 @@ import {
   Loop,
   abs,
   atomicAdd,
+  atomicMax,
+  atomicMin,
   atomicStore,
   dot,
   float,
@@ -63,6 +65,7 @@ import {
 } from './NaniteCommon';
 import {
   aLoadU,
+  bcF2U,
   bcU2F,
   dispatch,
   dispatchBatchMixed,
@@ -78,6 +81,7 @@ import {
   returnIf,
   sU32Views,
   sUvec2,
+  toI,
   uniformF,
   uv2,
   wgLinear,
@@ -167,6 +171,21 @@ export interface NaniteCullChain {
   qVoxRasterAttr: StorageBufferAttribute;
   /** 2D-split dispatch args over the fanned voxel-cluster count (the voxel raster). */
   voxRasterDispatchAttr: IndirectStorageBufferAttribute;
+  /** DEPTH-BUCKET F2B (?voxf2b): per-bucket (base,count) the K near→far scatter
+   *  dispatches read (STORAGE, not a CPU uniform — all K share ONE submit). */
+  voxBucketRangeRO: BufOf<UV2>;
+  /** DEPTH-BUCKET F2B: per-bucket 2D-split indirect dispatch args (length = voxF2bK),
+   *  ordered NEAR→FAR (index 0 = nearest). The voxel raster issues one dispatch each. */
+  voxBucketDispatchAttr: IndirectStorageBufferAttribute[];
+  /** DEPTH-BUCKET F2B: the BUILD-TIME bucket count K (the voxel raster bakes the SAME K
+   *  kernel instances). 1 when ?voxf2b=0 effectively (the K dispatches are still built
+   *  but the cull only fills one contiguous list — see runVoxFanout). */
+  voxF2bK: number;
+  /** DEPTH-BUCKET F2B: whether front-to-back ordering is ON (?voxf2b, DEFAULT TRUE —
+   *  loss-exact + feeds the per-block occlusion cull the near depths it needs to skip
+   *  whole far blocks; ?voxf2b=0 disables for the A/B). When false the cull runs today's
+   *  single unordered append + the raster issues ONE dispatch over voxRasterDispatchAttr. */
+  voxF2bEnabled: boolean;
   /** phase 1: clear → instance cull → cluster cull → raster args */
   runPhase1(renderer: Renderer): void;
   /** CAMERA||SHADOW OVERLAP (item 4): the EXACT ordered kernel list runPhase1 would
@@ -240,6 +259,47 @@ export function buildNaniteCull(
         ? Math.round(opts.hierDepth)
         : 18,
   );
+  // ── DEPTH-BUCKET FRONT-TO-BACK voxel scatter (?voxf2b) ───────────────────────
+  // Order the fanned voxel clusters NEAR→FAR so the per-pixel early-Z gate in
+  // kVoxScatter (NaniteVoxelRaster: If(candL>prevE) … elect) actually FIRES: the
+  // nearest opaque brick writes first, farther bricks at that pixel then read the
+  // now-near depth and SKIP their atomicMax+atomicStore (UE's "depth buckets,
+  // rasterized front-to-back"). The fanout quantizes each cluster's LINEAR VIEW
+  // DEPTH (cam.vp·centre .w — NOT NDC z, which perspective-collapses the far field)
+  // into K contiguous buckets sliced across the live voxel depth range [dMin,dMax];
+  // the voxel raster then issues K near→far dispatches over those slices in ONE
+  // submit. LOSS-EXACT (atomicMax is monotone+commutative ⇒ reordering cannot
+  // change the winner; ordering only skips redundant stores). ?voxf2b=0 reverts
+  // EXACTLY to today's single-atomicAdd unordered append + single dispatch.
+  //
+  // DEFAULT ON (?voxf2b=0 disables for the A/B). The reorder is REAL and loss-exact
+  // (image byte-identical, voxBrickWrites −38..−45 % monotone in K). The FRAME WIN it
+  // exists to UNLOCK is the per-BLOCK FOOTPRINT-OCCLUSION early-out that ALREADY lives
+  // in the scatter body (?voxoccl, default ON, NaniteVoxelRaster ~342-374): thread 0
+  // reads the GLOBAL visPayloadV at the block-centre pixel and, if the block's NEAREST-
+  // possible key can't beat the winner there, skips the WHOLE block — eliding its entire
+  // Phase-A project + Phase-B per-pixel footprint loop (not just the minority losing
+  // atomicMax+store). That cull only BITES across voxels when the near voxel depths are
+  // ALREADY in visPayloadV by the time a far block runs — which is EXACTLY what F2B
+  // ordering guarantees: the K near→far bucket dispatches ride ONE submit and the in-pass
+  // UAV barriers serialize bucket b's writes before bucket b+1's occlusion-cull reads.
+  // So near voxel blocks pre-seed the far blocks' whole-block skip — the iter-1/2 store-
+  // saving PLUS the per-block VISIT-saving the occlusion cull now harvests. The kVox-
+  // Scatter ELECTION body is UNCHANGED — F2B only (a) reorders the input into K linear-
+  // view-depth slabs and (b) issues K near→far dispatches; the occlusion cull is the
+  // pre-existing separate gate F2B feeds, not an election edit.
+  const voxParams = new URLSearchParams(window.location.search);
+  const voxf2b = (voxParams.get('voxf2b') ?? '1') !== '0';
+  // K is a BUILD-TIME constant: it bakes K bucket counters + K indirect attrs and
+  // (in the voxel raster) K kernel instances. ?voxf2bk default 16 (iter-2 NET-BEST: the
+  // canopy write-drop SATURATES at K16 over the tight linear-view-depth [dMin,dMax]
+  // range, so K16 captures the full separation while paying the fewest in-pass barriers;
+  // K24 keeps separating only in the tall canopyFar column at +1 barrier-cost each. With
+  // F2B feeding the per-block occlusion cull, finer K also means a far block's near
+  // occluders are published in an earlier bucket ⇒ more whole-block skips. Try 8/12/24
+  // via ?voxf2bk). Clamped [1,32]. buildNaniteVoxelRaster reads the SAME K.
+  const voxF2bKraw = parseInt(voxParams.get('voxf2bk') ?? '16', 10);
+  const VOX_F2B_K = Math.min(32, Math.max(1, Number.isFinite(voxF2bKraw) ? voxF2bKraw : 16));
   const coneCull = opts?.coneCull !== false;
   // S3 SHADOW CLIPMAP hollow (D-N29): a clipmap level rasters only the RING
   // outside the next-finer level — a cluster whose light-space clip bbox lies
@@ -300,6 +360,33 @@ export function buildNaniteCull(
   // ONE-THREAD-PER-qRaster-ENTRY fan-out dispatch args (ceil(qRaster/64) workgroups).
   const voxFanoutDispatchAttr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
   const voxFanoutDispatch = sU32Views(voxFanoutDispatchAttr as unknown as StorageBufferAttribute, 3).rw;
+
+  // ── DEPTH-BUCKET F2B build-time buffers (?voxf2b) ────────────────────────────
+  // Per-bucket atomic count (kVoxCount), exclusive-prefix base (kVoxPrefix), the
+  // published (base,count) pair per bucket the K scatter kernels read (STORAGE, not
+  // a CPU uniform — all K dispatches share ONE submit so a single uniform would
+  // collapse to the last value written), and a per-bucket scatter cursor.
+  const K = VOX_F2B_K;
+  const voxBucketCountAttr = new StorageBufferAttribute(new Uint32Array(K), 1);
+  const voxBucketCount = sU32Views(voxBucketCountAttr, K).atomic;
+  const voxBucketRangeAttr = new StorageBufferAttribute(new Uint32Array(2 * K), 2);
+  const voxBucketRangeV = sUvec2(voxBucketRangeAttr, K); // [b] = (base_b, count_b)
+  const voxCursorAttr = new StorageBufferAttribute(new Uint32Array(K), 1);
+  const voxCursor = sU32Views(voxCursorAttr, K).atomic;
+  // 2-word atomic depth RANGE (kVoxRange): [0]=min(d) bits, [1]=max(d) bits. View
+  // depth d>0 ⇒ raw IEEE-754 bits are monotone as uint, so bcF2U feeds atomicMin/Max
+  // directly. Seeded +inf/0 so the first cluster sets a real range; self-tightening,
+  // exactly brackets the live voxel depths (the anti-NDC fix the prior attempt lacked).
+  const voxRangeAttr = new StorageBufferAttribute(new Uint32Array(2), 1);
+  const voxRange = sU32Views(voxRangeAttr, 2).atomic;
+  // K per-bucket 2D-split INDIRECT dispatch args (one bucket = one near→far dispatch).
+  const voxBucketDispatchAttr: IndirectStorageBufferAttribute[] = [];
+  const voxBucketDispatch: ReturnType<typeof sU32Views>['rw'][] = [];
+  for (let b = 0; b < K; b++) {
+    const a = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
+    voxBucketDispatchAttr.push(a);
+    voxBucketDispatch.push(sU32Views(a as unknown as StorageBufferAttribute, 3).rw);
+  }
 
   const rasterDispatchAttr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
   const rasterDispatch = sU32Views(rasterDispatchAttr as unknown as StorageBufferAttribute, 3).rw;
@@ -430,6 +517,174 @@ export function buildNaniteCull(
   (kVoxRasterArgs as unknown as ComputeKernel).setName('nanVoxRasterArgs');
 
   // ──────────────────────────────────────────────────────────────────────────
+  // DEPTH-BUCKET FRONT-TO-BACK fan-out (?voxf2b). Replaces the single-atomicAdd
+  // append above with a RANGE → COUNT → PREFIX → SCATTER pipeline that partitions
+  // the voxel clusters into K contiguous depth slabs of qVoxRaster, ordered NEAR→FAR.
+  // All passes are one-thread-per-qRaster-entry like kVoxFanout (cheap; the voxel cut
+  // is ≪ the tri cut). Each cluster is assigned to EXACTLY ONE bucket and appended
+  // ONCE (count==scatter via the prefix) ⇒ the SET of work-items is unchanged, only
+  // partitioned + reordered ⇒ byte-exact image, only redundant atomicMax+stores skipped.
+  // ──────────────────────────────────────────────────────────────────────────
+
+  // LINEAR VIEW DEPTH of a voxel cluster: transform its LOCAL sphere centre (cluster
+  // word0-2) by the instance transform → world, then cam.vp·world .w = clip-w = the
+  // camera-space distance along the view axis (NOT the perspective NDC z = clip.z/clip.w,
+  // which collapses the far field into one bucket — the prior attempt's bug). Always > 0
+  // for in-front clusters (a behind-camera cluster gets a finite small/neg w → clamped to
+  // bucket 0; still loss-exact). Returns the f32 depth.
+  const voxClusterDepth = (instId: NU, ci: NU): NF => {
+    const A = gpu.instances.element(instId.mul(uint(2))).toVar() as unknown as NV4;
+    const B = gpu.instances.element(instId.mul(uint(2)).add(uint(1))).toVar() as unknown as NV4;
+    const yawSc = instYaw(B);
+    const c = readCluster(gpu.clusters, ci);
+    const wc = instTransformPoint(A, B, yawSc, c.sphere.xyz as unknown as NV3);
+    const d = (cam.vp.mul(vec4(wc, 1)) as unknown as NV4).w as unknown as NF;
+    return d.max(float(1e-3)) as unknown as NF; // keep strictly positive (bit-monotone)
+  };
+
+  // bucket = clamp(floor((d-dMin)/(dMax-dMin)·K), 0, K-1) using the live [dMin,dMax]
+  // read from voxRange (kVoxRange's atomicMin/atomicMax). Degenerate range (dMax≤dMin,
+  // e.g. ≤1 cluster) ⇒ bucket 0 (still loss-exact, just one slab). t is clamped to
+  // [0,1) BEFORE the floor so the uint cast never sees a negative (no wrap).
+  const voxDepthBucket = (d: NF): NU => {
+    const dMin = bcU2F(aLoadU(voxRange.element(0))).toVar();
+    const dMax = bcU2F(aLoadU(voxRange.element(1))).toVar();
+    const span = dMax.sub(dMin).toVar();
+    const tRaw = span.greaterThan(float(1e-6)).select(d.sub(dMin).div(span), float(0)) as unknown as NF;
+    const t = tRaw.clamp(float(0), float(0.999999)).toVar();
+    const bIdx = (uint(toI(t.mul(float(K)).floor())) as unknown as NU).toVar();
+    return minU(bIdx, uint(K - 1));
+  };
+
+  // kVoxRangeArgs: clear voxRange (min=+inf, max=0) + the K bucket counters → 0, and
+  // size the one-thread-per-entry dispatch over the live qRaster count (shared
+  // voxFanoutDispatch — kVoxRange/kVoxCount/kVoxScatterFan all run this same grid).
+  const kVoxRangeArgs = Fn(() => {
+    atomicStore(voxRange.element(0), bcF2U(float(3.4e38))); // +inf-ish for atomicMin
+    atomicStore(voxRange.element(1), uint(0)); // 0 bits for atomicMax (smallest +float)
+    for (let b = 0; b < K; b++) {
+      atomicStore(voxBucketCount.element(uint(b)), uint(0));
+    }
+    const n = minU(aLoadU(counters.element(1)), uint(QRASTER_CAP));
+    split2D(voxFanoutDispatch, n.add(uint(63)).div(uint(64)));
+  })().compute(1, [1]);
+  (kVoxRangeArgs as unknown as ComputeKernel).setName('nanVoxRangeArgs');
+
+  // kVoxRange: one thread per qRaster entry → voxel ⇒ atomicMin/atomicMax its linear
+  // view depth into voxRange. Self-tightening, exactly brackets the live voxel depths
+  // (anti-NDC: linear, so a 60 m and a 90 m crown land in DIFFERENT buckets).
+  const kVoxRange = Fn(() => {
+    const tid = wgLinear(DISPATCH_ROW).mul(uint(64)).add(localX()).toVar();
+    const itemCount = minU(aLoadU(counters.element(1)), uint(QRASTER_CAP));
+    returnIf(tid.greaterThanEqual(itemCount));
+    const item = qRasterV.ro.element(tid.add(uint(1)));
+    const instId = item.x.toVar();
+    const ci = item.y.toVar();
+    const meshId = readCluster(gpu.clusters, ci).meshId.toVar();
+    const matClass = elemU(gpu.meshes, meshId.mul(uint(MESH_WORDS)).add(uint(6)))
+      .shiftRight(uint(8))
+      .bitAnd(uint(0xff));
+    If(matClass.equal(uint(VOXEL_MATCLASS)), () => {
+      const dBits = bcF2U(voxClusterDepth(instId, ci));
+      atomicMin(voxRange.element(0), dBits);
+      atomicMax(voxRange.element(1), dBits);
+    });
+  })().compute(QRASTER_CAP, [64]);
+  (kVoxRange as unknown as ComputeKernel).setName('nanVoxRange');
+
+  // kVoxCount: one thread per qRaster entry → voxel ⇒ atomicAdd the cluster's bucket
+  // counter (the histogram). Range is final (kVoxRange ran first in the batch).
+  const kVoxCount = Fn(() => {
+    const tid = wgLinear(DISPATCH_ROW).mul(uint(64)).add(localX()).toVar();
+    const itemCount = minU(aLoadU(counters.element(1)), uint(QRASTER_CAP));
+    returnIf(tid.greaterThanEqual(itemCount));
+    const item = qRasterV.ro.element(tid.add(uint(1)));
+    const instId = item.x.toVar();
+    const ci = item.y.toVar();
+    const meshId = readCluster(gpu.clusters, ci).meshId.toVar();
+    const matClass = elemU(gpu.meshes, meshId.mul(uint(MESH_WORDS)).add(uint(6)))
+      .shiftRight(uint(8))
+      .bitAnd(uint(0xff));
+    If(matClass.equal(uint(VOXEL_MATCLASS)), () => {
+      const bIdx = voxDepthBucket(voxClusterDepth(instId, ci));
+      atomicAdd(voxBucketCount.element(bIdx), uint(1));
+    });
+  })().compute(QRASTER_CAP, [64]);
+  (kVoxCount as unknown as ComputeKernel).setName('nanVoxCount');
+
+  // kVoxPrefix (1 thread): exclusive prefix-sum the K bucket counts → per-bucket base;
+  // publish voxBucketRange[b]=(base_b,count_b); qVoxRaster[0]=(total,0); clear voxCursor.
+  // Unrolled over K on the CPU (K is a build-time constant). Bases clamped to QVOX_CAP so
+  // the scatter never writes past the queue (graceful overflow). The per-bucket 2D-split
+  // INDIRECT args are written by the K tiny kVoxBucketArgs kernels below (NOT here): each
+  // dispatch attr is its OWN storage buffer, so writing K of them in one kernel would bind
+  // K+ buffers and blow the per-stage storage-buffer limit at K=16/24. Splitting it keeps
+  // each kernel at ≤2 buffers; the K args kernels are 1-thread direct dispatches.
+  const kVoxPrefix = Fn(() => {
+    const acc = uint(0).toVar();
+    for (let b = 0; b < K; b++) {
+      const cnt = minU(aLoadU(voxBucketCount.element(uint(b))), uint(QVOX_CAP)).toVar();
+      const base = minU(acc, uint(QVOX_CAP)).toVar();
+      const room = uint(QVOX_CAP).sub(base).toVar();
+      const cClamp = minU(cnt, room).toVar();
+      voxBucketRangeV.rw.element(uint(b)).assign(uv2(base, cClamp));
+      atomicStore(voxCursor.element(uint(b)), uint(0));
+      acc.assign(acc.add(cClamp));
+    }
+    const total = minU(acc, uint(QVOX_CAP)).toVar();
+    qVoxRasterV.rw.element(0).assign(uv2(total, 0));
+    atomicStore(voxCount.element(0), total); // keep readVoxCount (HUD/overflow) correct in F2B
+    split2D(voxRasterDispatch, total); // legacy full-range args still published (HUD/A-B)
+  })().compute(1, [1]);
+  (kVoxPrefix as unknown as ComputeKernel).setName('nanVoxPrefix');
+
+  // kVoxBucketArgs[b] (1 thread each): read this bucket's count from voxBucketRange[b].y →
+  // 2D-split into its OWN indirect dispatch attr (one workgroup per cluster in the bucket).
+  // Each binds only {voxBucketRange.ro, voxBucketDispatch[b]} = 2 storage buffers, so K of
+  // them never exceed the per-stage limit (vs cramming all K attrs into kVoxPrefix). They
+  // run AFTER kVoxPrefix in the batch (RAW on voxBucketRange). voxBucketRange.ro reads the
+  // value kVoxPrefix wrote via .rw — a cross-dispatch RAW, auto-synced inside the pass.
+  const kVoxBucketArgs: unknown[] = [];
+  for (let b = 0; b < K; b++) {
+    const kb = Fn(() => {
+      const cnt = voxBucketRangeV.ro.element(uint(b)).y.toVar();
+      split2D(voxBucketDispatch[b], cnt);
+    })().compute(1, [1]);
+    (kb as unknown as ComputeKernel).setName(`nanVoxBucketArgs${b}`);
+    kVoxBucketArgs.push(kb);
+  }
+
+  // kVoxScatterFan: one thread per qRaster entry → voxel ⇒ slot = base_b +
+  // atomicAdd(cursor_b) → qVoxRaster[slot+1]=(instId,ci). Recomputes d+bucket (cheap).
+  // The bucket's contiguous slice [base_b, base_b+count_b) is filled here.
+  const kVoxScatterFan = Fn(() => {
+    const tid = wgLinear(DISPATCH_ROW).mul(uint(64)).add(localX()).toVar();
+    const itemCount = minU(aLoadU(counters.element(1)), uint(QRASTER_CAP));
+    returnIf(tid.greaterThanEqual(itemCount));
+    const item = qRasterV.ro.element(tid.add(uint(1)));
+    const instId = item.x.toVar();
+    const ci = item.y.toVar();
+    const meshId = readCluster(gpu.clusters, ci).meshId.toVar();
+    const matClass = elemU(gpu.meshes, meshId.mul(uint(MESH_WORDS)).add(uint(6)))
+      .shiftRight(uint(8))
+      .bitAnd(uint(0xff));
+    If(matClass.equal(uint(VOXEL_MATCLASS)), () => {
+      const bIdx = voxDepthBucket(voxClusterDepth(instId, ci)).toVar();
+      const range = voxBucketRangeV.ro.element(bIdx);
+      const base = range.x.toVar();
+      const cnt = range.y.toVar();
+      const off = atomicAdd(voxCursor.element(bIdx), uint(1)) as unknown as NU;
+      // guard the (clamped-bucket) overflow tail: drop entries past count_b.
+      If(off.lessThan(cnt), () => {
+        const slot = base.add(off).toVar();
+        qVoxRasterV.rw.element(slot.add(uint(1))).assign(uv2(instId, ci));
+      });
+    });
+  })().compute(QRASTER_CAP, [64]);
+  (kVoxScatterFan as unknown as ComputeKernel).setName('nanVoxScatterFan');
+
+  // ──────────────────────────────────────────────────────────────────────────
+
   // N8-HIC: HIERARCHICAL traversal (opts.hier). Instead of dispatching every
   // cluster of every visible instance, seed each hierarchical mesh's ROOTS into a
   // frontier and BFS-descend: project(ownError) ≤ τ ⇒ emit (frustum + cone + size
@@ -720,10 +975,32 @@ export function buildNaniteCull(
   // Call AFTER runPhase1 (qRaster + counters[1] are live). The voxel raster then
   // dispatches over voxRasterDispatchAttr. No-op-safe if no voxel clusters were emitted
   // (qVoxRaster[0]=(0,0) ⇒ the raster dispatches 0 workgroups).
+  // F2B indirect kernels keep their tight one-thread-per-qRaster-entry grid in the
+  // single batched submit (sized once by kVoxRangeArgs into voxFanoutDispatch).
+  setIndirectDispatch(kVoxRange, voxFanoutDispatchAttr);
+  setIndirectDispatch(kVoxCount, voxFanoutDispatchAttr);
+  setIndirectDispatch(kVoxScatterFan, voxFanoutDispatchAttr);
+  // The whole F2B fan-out in ONE submit. Order is load-bearing (RAW chain): args →
+  // range(min/max) → count(reads range) → prefix(reads counts, writes bases/ranges/
+  // qVoxRaster[0]/cursor + per-bucket dispatch args) → scatter(reads bases/ranges).
+  const voxF2bBatch: unknown[] = [
+    kVoxRangeArgs,
+    kVoxRange,
+    kVoxCount,
+    kVoxPrefix,
+    ...kVoxBucketArgs, // K tiny 1-thread args kernels (per-bucket indirect dispatch sizes)
+    kVoxScatterFan,
+  ];
   const runVoxFanout = (renderer: Renderer): void => {
-    dispatch(renderer, kVoxFanoutArgs);
-    dispatchIndirect(renderer, kVoxFanout as never, voxFanoutDispatchAttr);
-    dispatch(renderer, kVoxRasterArgs);
+    if (voxf2b) {
+      dispatchBatchMixed(renderer, voxF2bBatch);
+    } else {
+      // ?voxf2b=0 — EXACTLY today's path: single-atomicAdd unordered append + single
+      // dispatch. Byte-identical to the pre-F2B behaviour for the A/B control.
+      dispatch(renderer, kVoxFanoutArgs);
+      dispatchIndirect(renderer, kVoxFanout as never, voxFanoutDispatchAttr);
+      dispatch(renderer, kVoxRasterArgs);
+    }
   };
 
   const readVoxCount = async (renderer: Renderer): Promise<number> => {
@@ -777,6 +1054,10 @@ export function buildNaniteCull(
     qVoxRasterRO: qVoxRasterV.ro,
     qVoxRasterAttr,
     voxRasterDispatchAttr,
+    voxBucketRangeRO: voxBucketRangeV.ro,
+    voxBucketDispatchAttr,
+    voxF2bK: K,
+    voxF2bEnabled: voxf2b,
     runPhase1,
     phase1Batch: () => phase1BatchList,
     syncFullArgs,
