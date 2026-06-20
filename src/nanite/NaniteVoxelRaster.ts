@@ -42,7 +42,7 @@ import {
   workgroupArray,
   workgroupBarrier,
 } from 'three/tsl';
-import type { NF, NU, NV3, NV4 } from '../gpu/TSLTypes';
+import type { NB, NF, NU, NV3, NV4 } from '../gpu/TSLTypes';
 import { CLUSTER_WORDS } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
 import { BRICK_ALBEDO, BRICK_HALF, BRICK_POS_X, BRICK_WORDS, MAX_BRICKS_PER_CLUSTER } from './VoxelBrick';
@@ -53,6 +53,7 @@ import {
   aLoadU,
   bcU2F,
   dispatch,
+  dispatchBatchMixed,
   dispatchIndirect,
   elemU,
   loopI,
@@ -63,6 +64,7 @@ import {
   minU,
   readBuffer,
   sU32Views,
+  setIndirectDispatch,
   toF,
   toI,
   wgLinear,
@@ -128,6 +130,19 @@ export interface VoxelRasterDeps {
   qVoxRasterRO: BufOf<UV2>;
   /** 2D-split dispatch args over the voxel-cluster count (cull.voxRasterDispatchAttr). */
   voxRasterDispatchAttr: IndirectStorageBufferAttribute;
+  /** DEPTH-BUCKET F2B (?voxf2b): per-bucket (base,count) the K near→far scatter
+   *  instances read (STORAGE, cull.voxBucketRangeRO). */
+  voxBucketRangeRO: BufOf<UV2>;
+  /** DEPTH-BUCKET F2B: per-bucket 2D-split indirect dispatch args (cull.voxBucketDispatchAttr,
+   *  length = voxF2bK), ordered NEAR→FAR (index 0 = nearest). */
+  voxBucketDispatchAttr: IndirectStorageBufferAttribute[];
+  /** DEPTH-BUCKET F2B: the BUILD-TIME bucket count K (must equal cull.voxF2bK so the K
+   *  baked scatter instances line up with the K cull dispatch attrs). */
+  voxF2bK: number;
+  /** DEPTH-BUCKET F2B: front-to-back ordering ON (?voxf2b, DEFAULT TRUE — near→far
+   *  ordering lets the per-block occlusion cull skip whole occluded far blocks;
+   *  ?voxf2b=0 ⇒ the single unordered whole-list dispatch, the A/B control). */
+  voxF2bEnabled: boolean;
   /** the SAME 24-bit depth key the world1 raster + resolve use (§6.7). */
   depthKey24: (cz: NF) => NU;
   /** global election buffers (the on-chip wgElect flushes here via atomicMax). */
@@ -148,6 +163,7 @@ export interface VoxelRasterHandles {
 
 export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandles {
   const { gpu, cam, qVoxRasterRO, voxRasterDispatchAttr, depthKey24, visPayloadV, visBV, width, height } = deps;
+  const { voxBucketRangeRO, voxBucketDispatchAttr, voxF2bK, voxF2bEnabled } = deps;
 
   // ?voxdither=0|1 — the PERF-QUALITY TENSION knob (Stage-3b-perf, spec §3/§6.0/§6.4).
   //   0 = OPAQUE bricks (DEFAULT): every covered pixel that survives the occlusion skip is
@@ -242,7 +258,14 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // bbX0/bbY0/bbW/bbH are the brick's CLAMPED screen bbox; wgBrickAbs[b]/wgDensBits[b] are
   // only consumed in dither mode. ~6×128×4B ≈ 3 KB workgroup memory — comfortable.
   const WG_RASTER = MAX_BRICKS_PER_CLUSTER; // 128 lanes per cluster workgroup
-  const kVoxScatter = Fn(() => {
+  // ── DEPTH-BUCKET F2B: the scatter body is a FACTORY closed over a per-dispatch RANGE.
+  // getRange() yields this dispatch's absolute itemIdx + the live/guard predicate. The
+  // WHOLE-LIST instance (F2B off) reads qVoxRaster[0].x; each per-bucket instance (F2B
+  // on) reads voxBucketRange[b]=(base_b,count_b) from STORAGE (NOT a CPU uniform — all K
+  // share ONE submit) and offsets itemIdx by base_b. EVERYTHING below the range hook is
+  // BYTE-IDENTICAL across instances (election math, Phase-A/B cooperative loop, per-block
+  // occlusion cull, dither path) — only the input slice changes.
+  const makeVoxScatter = (getRange: () => { itemIdx: NU; guard: NB }) => Fn(() => {
     // ── WORKGROUP-COOPERATIVE FOOTPRINT RASTER (CudaRaster T6/T8 + Lucid balanced ──────
     // dispatch; the residual-overdraw / per-lane-imbalance fix). Iteration-1 went
     // [1]-thread-per-workgroup → ONE thread per BRICK (localX), filling the SIMD waves and
@@ -276,9 +299,9 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
     // (54c3947), the BRICK_MAX_EXT clamp, the per-block occlusion cull, and the ?voxdither
     // path are all PRESERVED bit-exact — only the WORK DISTRIBUTION of the footprint loop
     // changes. ≤10 buffers unchanged (no new storage buffers; only workgroup memory added).
-    const itemIdx = wgLinear(DISPATCH_ROW).toVar();
+    // RANGE HOOK (the ONLY F2B-vs-legacy difference): absolute itemIdx + the live guard.
+    const { itemIdx, guard } = getRange();
     const brickLocal = localX().toVar(); // Phase A: this lane's brick index within the cluster
-    const itemCount = qVoxRasterRO.element(0).x;
     // shared per-brick records (Phase A → Phase B). Plain (non-atomic) workgroup arrays.
     const wgBbX0 = workgroupArray('uint', WG_RASTER);
     const wgBbY0 = workgroupArray('uint', WG_RASTER);
@@ -287,7 +310,7 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
     const wgCand = workgroupArray('uint', WG_RASTER); // depthKey24<<8 | id8 (loss-exact key)
     const wgBrickAbs = voxDither ? workgroupArray('uint', WG_RASTER) : null; // dither salt
     const wgDensBits = voxDither ? workgroupArray('uint', WG_RASTER) : null; // dither raw density byte (0..255)
-    If(itemIdx.lessThan(itemCount), () => {
+    If(guard, () => {
       const item = qVoxRasterRO.element(itemIdx.add(uint(1)));
       const instId = item.x.toVar();
       const ci = item.y.toVar();
@@ -596,14 +619,54 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
     // Phase B = all lanes cooperatively rasterize the cluster's flat footprint. The baked
     // `.compute(count,[wg])` is the static fallback; the indirect args drive the real WG count.
   })().compute(DISPATCH_ROW * WG_RASTER, [WG_RASTER]);
+
+  // WHOLE-LIST scatter (F2B OFF, ?voxf2b=0): the legacy unordered single dispatch over the
+  // full qVoxRaster — itemIdx = wgLinear, guard = itemIdx < qVoxRaster[0].x. Byte-identical
+  // to today's kVoxScatter for the A/B control.
+  const kVoxScatter = makeVoxScatter(() => {
+    const itemIdx = wgLinear(DISPATCH_ROW).toVar();
+    const itemCount = qVoxRasterRO.element(0).x;
+    return { itemIdx, guard: itemIdx.lessThan(itemCount) as unknown as NB };
+  });
   (kVoxScatter as { setName(n: string): unknown }).setName('nanVoxScatter');
 
+  // K PER-BUCKET scatter instances (F2B ON), ordered NEAR→FAR (bucket 0 = nearest). Each
+  // closes over its bucket's (base_b, count_b) read from the voxBucketRange STORAGE buffer:
+  // local = wgLinear; itemIdx = local + base_b (absolute slot); guard = local < count_b. The
+  // qVoxRaster slice [base_b, base_b+count_b) is this bucket's contiguous depth slab. In-pass
+  // UAV auto-sync (dispatchBatchMixed) serializes bucket b's visPayloadV/visBV writes before
+  // bucket b+1's early-Z reads — so the near bricks pre-seed the far bricks' skip.
+  const kVoxScatterB: unknown[] = [];
+  if (voxF2bEnabled) {
+    for (let b = 0; b < voxF2bK; b++) {
+      const kb = makeVoxScatter(() => {
+        const range = voxBucketRangeRO.element(uint(b));
+        const base = range.x.toVar();
+        const count = range.y.toVar();
+        const local = wgLinear(DISPATCH_ROW).toVar();
+        const itemIdx = local.add(base).toVar();
+        return { itemIdx, guard: local.lessThan(count) as unknown as NB };
+      });
+      (kb as { setName(n: string): unknown }).setName(`nanVoxScatterB${b}`);
+      setIndirectDispatch(kb, voxBucketDispatchAttr[b]);
+      kVoxScatterB.push(kb);
+    }
+  }
+
   const dispatchVoxel = (renderer: Renderer): void => {
-    // zero the debug WRITE_CTR (one small dispatch), then ONE scatter kernel directly elects
-    // each voxel block's footprint into the global vis buffer (the per-block occlusion cull
-    // reads the near-field triangle winners already in visPayloadV from world1/hwRender).
-    dispatch(renderer, kClearBins);
-    dispatchIndirect(renderer, kVoxScatter as never, voxRasterDispatchAttr);
+    // zero the debug WRITE_CTR (one small dispatch), then the scatter elects each voxel
+    // block's footprint into the global vis buffer (the per-block occlusion cull reads the
+    // near-field triangle winners already in visPayloadV from world1/hwRender).
+    if (voxF2bEnabled) {
+      // K near→far dispatches in ONE submit: kClearBins then dispatchBatchMixed over the K
+      // bucket kernels (each tagged with its tight per-bucket indirect args). The in-pass
+      // barriers serialize the buckets near→far so the early-Z gate fires across slabs.
+      dispatchBatchMixed(renderer, [kClearBins, ...kVoxScatterB]);
+    } else {
+      // ?voxf2b=0 — EXACTLY today: kClearBins + ONE dispatchIndirect over the whole list.
+      dispatch(renderer, kClearBins);
+      dispatchIndirect(renderer, kVoxScatter as never, voxRasterDispatchAttr);
+    }
   };
 
   const readWriteCount = async (renderer: Renderer): Promise<number> => {

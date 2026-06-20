@@ -206,6 +206,13 @@ export function buildNaniteRaster(
      *  scatter voxel-brick raster runs in world1() after hwRender. */
     qVoxRasterRO?: BufOf<UV2>;
     voxRasterDispatchAttr?: IndirectStorageBufferAttribute;
+    /** DEPTH-BUCKET F2B (?voxf2b): per-bucket (base,count) + per-bucket indirect args +
+     *  the build-time K + the on/off flag (cull.voxBucketRangeRO / voxBucketDispatchAttr /
+     *  voxF2bK / voxF2bEnabled). Present whenever the voxel queue is. */
+    voxBucketRangeRO?: BufOf<UV2>;
+    voxBucketDispatchAttr?: IndirectStorageBufferAttribute[];
+    voxF2bK?: number;
+    voxF2bEnabled?: boolean;
   },
   vis: NaniteVisBuffers,
   tint: 'flat' | 'cluster' | 'lod',
@@ -1372,6 +1379,11 @@ export function buildNaniteRaster(
           cam,
           qVoxRasterRO: cull.qVoxRasterRO,
           voxRasterDispatchAttr: cull.voxRasterDispatchAttr,
+          // DEPTH-BUCKET F2B: the cull always publishes these alongside the voxel queue.
+          voxBucketRangeRO: cull.voxBucketRangeRO as BufOf<UV2>,
+          voxBucketDispatchAttr: cull.voxBucketDispatchAttr ?? [],
+          voxF2bK: cull.voxF2bK ?? 1,
+          voxF2bEnabled: cull.voxF2bEnabled ?? false,
           depthKey24,
           visPayloadV,
           visBV,
