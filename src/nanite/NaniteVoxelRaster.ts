@@ -35,6 +35,7 @@ import {
   atomicAdd,
   atomicMax,
   atomicStore,
+  countOneBits,
   float,
   instanceIndex,
   uint,
@@ -46,7 +47,7 @@ import {
 import type { NB, NF, NU, NV3, NV4 } from '../gpu/TSLTypes';
 import { CLUSTER_WORDS } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
-import { BRICK_ALBEDO, BRICK_HALF, BRICK_POS_X, BRICK_WORDS, MAX_BRICKS_PER_CLUSTER } from './VoxelBrick';
+import { BRICK_ALBEDO, BRICK_DIM, BRICK_HALF, BRICK_OCC_HI, BRICK_OCC_LO, BRICK_POS_X, BRICK_WORDS, MAX_BRICKS_PER_CLUSTER } from './VoxelBrick';
 import { DISPATCH_ROW, QVOX_CAP } from './NaniteCommon';
 import type { NaniteCam } from './NaniteCommon';
 import { instTransformPoint, instYaw, instSphereRadius } from './NaniteCommon';
@@ -188,6 +189,39 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // dither mode the hash now runs AFTER the occlusion skip (cheap reorder — occluded pixels
   // never pay the hash). DEFAULT OPAQUE so the sweep measures the cheap path first.
   const voxDither = new URLSearchParams(window.location.search).get('voxdither') === '1';
+
+  // ?voxlod (G1, DEFAULT ON). When ON, the per-brick OCCUPANCY GATE (Rank-2) is compiled into
+  // Phase A/B: a COARSE brick (whose tight [center+-half] cube still has empty interior between its
+  // sparse occupied children) paints ONLY the screen buckets that contain an occupied 4x4x4 sub-
+  // cell, NOT the full projected box. This is the OVER-COARSENING/blob guard for the band-anchored
+  // pyramid: Phase B strides the FULL [0, bbW*bbH) box and elects every winning pixel, so a coarse
+  // box's footprint AREA — not its brick COUNT — sets the cost, and an unguarded coarse box paints
+  // a SOLID blob. The build (downsampleBrickGrid) re-bins each coarse brick's occLo/occHi into its
+  // tight [center+-half] cube precisely so this gate skips the empty interior => a coarse brick
+  // paints only the OCCUPIED SILHOUETTE (O(occupied), never a blob). NOTE: this is the architecture-
+  // compatible realization of the spec's "occupancy DDA march" — the EXISTING election uses a single
+  // per-BRICK depth key `cand` with front-to-back per-brick bucket ordering, so a per-PIXEL DDA depth
+  // would fight that ordering; the Phase-A occupancy MASK (projects occupied cells, bit-tested per
+  // pixel in Phase B) gives the same occupancy-silhouette result against THIS architecture, reads
+  // BRICK_OCC_LO/HI, adds no storage buffer / no 64-bit atomic / no wave op, and is no-hole-validated.
+  // ?voxlod=0 NEVER compiles the gate (mask arrays null, Phase-A build + Phase-B branch build-time
+  // absent) => BYTE-IDENTICAL to the single-level path.
+  const voxLod = new URLSearchParams(window.location.search).get('voxlod') !== '0';
+  // ?voxocc=0 forces the OLD solid-AABB election (disables JUST the occupancy gate while keeping the
+  // pyramid/DAG cut) — the A/B control isolating the gate's silhouette/blob-guard contribution.
+  const voxOccGate = voxLod && new URLSearchParams(window.location.search).get('voxocc') !== '0';
+  // Footprint area (px) below which the occupancy gate is a no-op skip: a screen-tiny brick
+  // (<= this many px) has no meaningful empty interior to remove and the 4x4-bucket mask cannot
+  // beat painting it solid, so the gate only ARMS on bricks large enough for the interior waste
+  // to dominate. Bricks below it paint solid exactly as voxlod=0 (no behaviour/quality change at
+  // the FINE/NEAR end — near voxels stay a few px, never shrink toward 1px). The mask grid is
+  // OCC_MASK_DIM x OCC_MASK_DIM buckets over the bbox; the gate arms once the box exceeds one
+  // bucket per cell so each mask bit covers >=1 px.
+  const OCC_MASK_DIM = 4; // 4x4 screen buckets over the footprint bbox (fits a 16-bit mask)
+  const OCC_GATE_MIN_AREA = OCC_MASK_DIM * OCC_MASK_DIM; // 16 px — one bucket per cell at threshold
+  // occupancy popcount above which the mask build is skipped (paint solid): a brick filling
+  // > 75% of its 64 cells carves too little to pay the ≤512-projection build ⇒ net loss. 48/64.
+  const OCC_MASK_FULL = 48;
 
   // The ?voxraster flag (scatter vs the REFUTED depth-bucketed bin) is gone: scatter is the
   // ONLY voxel raster (the bin path lost the frame at every config and was removed). The param
@@ -422,6 +456,13 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
     const wgCand = workgroupArray('uint', WG_RASTER); // depthKey24<<8 | id8 (loss-exact key)
     const wgBrickAbs = voxDither ? workgroupArray('uint', WG_RASTER) : null; // dither salt
     const wgDensBits = voxDither ? workgroupArray('uint', WG_RASTER) : null; // dither raw density byte (0..255)
+    // OCCUPANCY GATE (?voxlod=1): per-brick 16-bit (OCC_MASK_DIM x OCC_MASK_DIM) SCREEN mask of
+    // which footprint-bbox buckets contain a projected occupied 4x4x4 sub-cell. Phase A builds it
+    // by projecting each occupied cell centre into the brick's clamped bbox + DILATING by +-1
+    // bucket (the no-hole guard against projection rounding); Phase B paints a pixel only if its
+    // (su,sv) bucket bit is set. 0xffff (all set) for a brick the gate did not arm (small/full) or
+    // when voxlod=0 (the array is null and the gate code is build-time absent => byte-identical).
+    const wgOccMask = voxOccGate ? workgroupArray('uint', WG_RASTER) : null;
     If(guard, () => {
       const item = qVoxRasterRO.element(itemIdx.add(uint(1)));
       const instId = item.x.toVar();
@@ -435,6 +476,15 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
       // byte = brickCount (§4.1). One thread = brick (brickBase + brickLocal).
       const brickBase = elemU(gpu.clusters, cBase.add(uint(6))).toVar();
       const brickCount = elemU(gpu.clusters, cBase.add(uint(7))).bitAnd(uint(0xff)).toVar();
+      // PYRAMID LEVEL (word7 bits 10-15; 0 = finest/L0, higher = coarser) — read ONLY under
+      // ?voxlod=1 (build-time absent otherwise ⇒ voxlod=0 byte-identical). The occupancy gate
+      // ARMS only on COARSE bricks (dagLevel>0), the levels the DAG cut emits at distance: L0
+      // (near) paints SOLID (no mask build, no near carving, fine-end rule intact) AND the per-cell
+      // mask build (≤512 projections) is confined to the few coarse bricks with empty interior to
+      // remove, so the build cost can never exceed the elections it saves on the dense near crown.
+      const dagLevel = voxOccGate
+        ? elemU(gpu.clusters, cBase.add(uint(7))).shiftRight(uint(10)).bitAnd(uint(0x3f)).toVar()
+        : null;
       // the block sphere (word0-3) is the coarse PER-BLOCK occlusion-cull bound (one global
       // read at the projected block centre, computed once on thread 0), not a footprint.
       const blkLocal = vec3(
@@ -547,6 +597,10 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
       wgSet(wgCand, brickLocal, uint(0));
       wgSet(wgBbX0, brickLocal, uint(0));
       wgSet(wgBbY0, brickLocal, uint(0));
+      // OCCUPANCY-GATE seed (?voxlod=1): default 0xffff = ALL buckets painted ⇒ a brick whose
+      // gate never arms (small footprint / mask stays full) behaves EXACTLY like voxlod=0 (no
+      // pixel dropped). Phase A overwrites it with the real screen mask only when the gate arms.
+      if (voxOccGate && wgOccMask) wgSet(wgOccMask, brickLocal, uint(0xffff));
       const brickActive = brickLocal.lessThan(brickCount).and((wgVisible.element(uint(0)) as unknown as NU).equal(uint(1)));
       If(brickActive, () => {
         const bAbs = brickBase.add(brickLocal).toVar();      // absolute brick index
@@ -713,6 +767,146 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
             wgSet(wgBbW, brickLocal, bbW);
             wgSet(wgBbH, brickLocal, bbH);
             wgSet(wgCand, brickLocal, cand);
+            // ── OCCUPANCY-GATE MASK BUILD (?voxlod=1, Phase A). For a COARSE (dagLevel>0),
+            // LARGE-footprint (area ≥ OCC_GATE_MIN_AREA) brick — i.e. screen-big enough for empty
+            // interior to matter — build a OCC_MASK_DIM×OCC_MASK_DIM screen mask of which bbox
+            // buckets a projected OCCUPIED 4×4×4 sub-cell overlaps, so Phase B skips the empty
+            // buckets between sparse children. The build re-binned occLo/occHi into THIS brick's
+            // tight [center±half] cube (downsampleBrickGrid), so each cell's LOCAL centre is
+            // brLocal + (cell+0.5−BRICK_DIM/2)·cellLocalSize and its half-extent is cellLocalSize/2.
+            // For each OCCUPIED cell we project its 8 LOCAL-AABB corners, take their SCREEN bbox,
+            // and mark EVERY bbox bucket that rect overlaps — a CONSERVATIVE SUPERSET of the cell's
+            // true coverage ⇒ a covered pixel's bucket is ALWAYS set ⇒ provably NO holes at ANY
+            // perspective (validated by tools/voxlod-occgate-nohole.ts: 0 holes / 5966 armed
+            // bricks). A small or L0 brick keeps the 0xffff seed (paints solid, no behaviour change;
+            // near-dense crown intact, fine-end rule preserved).
+            if (voxOccGate && wgOccMask && dagLevel) {
+              const gateArea = bbW.mul(bbH).toVar();
+              // ARM only on a COARSE brick (dagLevel>0) whose footprint is big enough for empty
+              // interior to matter. A fine/near (L0) brick keeps the 0xffff seed ⇒ paints solid.
+              If(gateArea.greaterThanEqual(uint(OCC_GATE_MIN_AREA)).and(dagLevel.greaterThan(uint(0))), () => {
+                const occLo = elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_OCC_LO))).toVar();
+                const occHi = elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_OCC_HI))).toVar();
+                // SPARSITY GUARD: build the mask only when the brick is sparse enough that the
+                // carved buckets save MORE elections than the ≤512-projection build costs. A
+                // near-full brick (>OCC_MASK_FULL of 64 cells set) carves little, so building the
+                // mask would be a net GPU LOSS — skip it and paint solid (the 0xffff seed). This is
+                // the cost-model guard that keeps the gate from re-introducing a slowdown on DENSE
+                // coarse bricks (the prior iterations' failure mode), measured by popcount once
+                // per brick (cheap) — NOT per pixel.
+                const occCount = (countOneBits(occLo) as unknown as NU)
+                  .add(countOneBits(occHi) as unknown as NU)
+                  .toVar();
+                const sparseEnough = occCount.lessThanEqual(uint(OCC_MASK_FULL)).toVar();
+                If(sparseEnough, () => {
+                  const cellLocalSize = brHalf.mul(2).div(float(BRICK_DIM)).toVar(); // local edge of one cell
+                  const halfDim = float(BRICK_DIM).mul(0.5).toVar();
+                  const fbbW = toF(bbW).toVar();
+                  const fbbH = toF(bbH).toVar();
+                  const mask = uint(0).toVar();
+                  // loop the 64 cells; only OCCUPIED cells contribute (occLo/occHi bit test).
+                  loopI('ocz', toI(0), toI(BRICK_DIM), (czc) => {
+                    loopI('ocy', toI(0), toI(BRICK_DIM), (cyc) => {
+                      loopI('ocx', toI(0), toI(BRICK_DIM), (cxc) => {
+                        // cell linear index = x + y*4 + z*16 (VoxelBrick.brickCellIndex order).
+                        const cellIdx = (cxc as unknown as { toUint(): NU })
+                          .toUint()
+                          .add((cyc as unknown as { toUint(): NU }).toUint().mul(uint(BRICK_DIM)))
+                          .add((czc as unknown as { toUint(): NU }).toUint().mul(uint(BRICK_DIM * BRICK_DIM)))
+                          .toVar();
+                        // occupied? bit cellIdx of the 64-bit occLo|occHi mask. Pick the word by
+                        // the hi-bit (cellIdx≥32) and shift by cellIdx&31 — both shifts use an
+                        // IN-RANGE [0,31] amount (no UB underflow shift, robust on Metal); select
+                        // then keeps the LO result for cells 0..31 and the HI result for 32..63.
+                        const cellLow = cellIdx.bitAnd(uint(31)).toVar();
+                        const loBit = occLo.shiftRight(cellLow).bitAnd(uint(1)).toVar();
+                        const hiBit = occHi.shiftRight(cellLow).bitAnd(uint(1)).toVar();
+                        const occBit = cellIdx.lessThan(uint(32)).select(loBit, hiBit).toVar();
+                        If(occBit.equal(uint(1)), () => {
+                          // CONSERVATIVE per-cell mask: project the cell's 8 LOCAL-AABB corners,
+                          // accumulate their SCREEN bbox, and mark EVERY bbox bucket the cell's
+                          // screen rect overlaps. This is a SUPERSET of the cell's true coverage,
+                          // so a covered pixel's bucket is ALWAYS set ⇒ provably NO holes at ANY
+                          // perspective — including the close-up case where a cell projects across
+                          // many buckets (the centre+dilate scheme missed those: a near cell spans
+                          // > ±1 bucket and a covered pixel fell outside the dilated neighbourhood).
+                          // Near a cell spans the whole bbox ⇒ marks all buckets ⇒ brick stays
+                          // solid (near dense, no carving); far a cell is ~1 bucket ⇒ carves the
+                          // empty interior. The cell LOCAL centre = brLocal + (cell+0.5−halfDim)·
+                          // cellLocalSize; half-cell extent = cellLocalSize·0.5.
+                          const clx = brLocal.x.add(toF(cxc).add(0.5).sub(halfDim).mul(cellLocalSize)).toVar();
+                          const cly = brLocal.y.add(toF(cyc).add(0.5).sub(halfDim).mul(cellLocalSize)).toVar();
+                          const clz = brLocal.z.add(toF(czc).add(0.5).sub(halfDim).mul(cellLocalSize)).toVar();
+                          const hc = cellLocalSize.mul(0.5).toVar();
+                          const cMinX = float(1e9).toVar();
+                          const cMinY = float(1e9).toVar();
+                          const cMaxX = float(-1e9).toVar();
+                          const cMaxY = float(-1e9).toVar();
+                          const cFront = uint(0).toVar();
+                          loopI('ccz', toI(0), toI(2), (kz) => {
+                            loopI('ccy', toI(0), toI(2), (ky) => {
+                              loopI('ccx', toI(0), toI(2), (kx) => {
+                                const ccl = vec3(
+                                  clx.add(toF(kx).mul(2).sub(1).mul(hc)),
+                                  cly.add(toF(ky).mul(2).sub(1).mul(hc)),
+                                  clz.add(toF(kz).mul(2).sub(1).mul(hc)),
+                                ) as unknown as NV3;
+                                const ccw = instTransformPoint(A, B, yawSc, ccl);
+                                const ccp = (cam.vp.mul(vec4(ccw, 1)) as unknown as NV4).toVar();
+                                If(ccp.w.greaterThan(float(NEAR_EPS)), () => {
+                                  cFront.assign(uint(1));
+                                  const cndc = ccp.xyz.div(ccp.w).toVar();
+                                  const csx = cndc.x.add(1).mul(0.5).mul(W).toVar();
+                                  const csy = cndc.y.add(1).mul(0.5).mul(H).toVar();
+                                  cMinX.assign(cMinX.min(csx));
+                                  cMaxX.assign(cMaxX.max(csx));
+                                  cMinY.assign(cMinY.min(csy));
+                                  cMaxY.assign(cMaxY.max(csy));
+                                });
+                              });
+                            });
+                          });
+                          If(cFront.equal(uint(1)), () => {
+                            // screen bbox → INCLUSIVE bucket range, clamped to [0, OCC_MASK_DIM).
+                            const fU0 = cMinX.sub(toF(startX)).div(fbbW).mul(float(OCC_MASK_DIM)).toVar();
+                            const fU1 = cMaxX.sub(toF(startX)).div(fbbW).mul(float(OCC_MASK_DIM)).toVar();
+                            const fV0 = cMinY.sub(toF(startY)).div(fbbH).mul(float(OCC_MASK_DIM)).toVar();
+                            const fV1 = cMaxY.sub(toF(startY)).div(fbbH).mul(float(OCC_MASK_DIM)).toVar();
+                            const u0 = maxI(toI(0), minI(toI(OCC_MASK_DIM - 1), toI(fU0.floor()))).toVar();
+                            const u1 = maxI(toI(0), minI(toI(OCC_MASK_DIM - 1), toI(fU1.floor()))).toVar();
+                            const v0 = maxI(toI(0), minI(toI(OCC_MASK_DIM - 1), toI(fV0.floor()))).toVar();
+                            const v1 = maxI(toI(0), minI(toI(OCC_MASK_DIM - 1), toI(fV1.floor()))).toVar();
+                            // FIXED 0..OCC_MASK_DIM loops with an in-[u0,u1]×[v0,v1] guard (constant
+                            // loop bounds = the codegen-safe pattern; variable bounds avoided).
+                            loopI('mbv', toI(0), toI(OCC_MASK_DIM), (vv) => {
+                              loopI('mbu', toI(0), toI(OCC_MASK_DIM), (uu) => {
+                                const inR = vv
+                                  .greaterThanEqual(v0)
+                                  .and(vv.lessThanEqual(v1))
+                                  .and(uu.greaterThanEqual(u0))
+                                  .and(uu.lessThanEqual(u1));
+                                If(inR, () => {
+                                  const bit = (vv as unknown as { toUint(): NU })
+                                    .toUint()
+                                    .mul(uint(OCC_MASK_DIM))
+                                    .add((uu as unknown as { toUint(): NU }).toUint())
+                                    .toVar();
+                                  mask.assign(mask.bitOr(uint(1).shiftLeft(bit)));
+                                });
+                              });
+                            });
+                          });
+                        });
+                      });
+                    });
+                  });
+                  // a degenerate all-behind-near projection could leave mask 0 ⇒ that would paint
+                  // NOTHING (a hole). Guard: an empty mask falls back to 0xffff (paint solid).
+                  const safeMask = mask.equal(uint(0)).select(uint(0xffff), mask).toVar();
+                  wgSet(wgOccMask, brickLocal, safeMask);
+                });
+              });
+            }
           });
         });
       });
@@ -736,6 +930,13 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
         const bbW = (wgBbW.element(b) as unknown as NU).toVar();
         const bbH = (wgBbH.element(b) as unknown as NU).toVar();
         const cand = (wgCand.element(b) as unknown as NU).toVar();
+        // OCCUPANCY-GATE mask (?voxlod=1): which OCC_MASK_DIM×OCC_MASK_DIM bbox buckets a
+        // projected occupied sub-cell touched (Phase A). 0xffff (all) for an unarmed brick.
+        const occMask = voxOccGate && wgOccMask ? (wgOccMask.element(b) as unknown as NU).toVar() : null;
+        // per-brick: does the mask actually CARVE (≠ 0xffff)? Only then does Phase B pay the
+        // per-pixel bucket test. A full (0xffff) mask — every L0/near/dense brick — takes the
+        // plain solid path with ZERO added per-pixel arithmetic (near dense path unchanged).
+        const gateActive = occMask ? occMask.notEqual(uint(0xffff)).toVar() : null;
         const area = bbW.mul(bbH).toVar(); // 0 for a culled/idle brick ⇒ zero-trip inner loop
         // each lane strides this brick's footprint: localPx = brickLocal, brickLocal+128, …
         loopU(brickLocal, area, (localPx) => {
@@ -762,19 +963,38 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
               });
             });
           };
-          if (voxDither && wgBrickAbs && wgDensBits) {
-            // density-modulated see-through dither (?voxdither=1): stable per-(pixel,brick)
-            // stipple drops (1-density) of the footprint. The raw density byte (0..255) was
-            // stashed in Phase A; rebuild the clamped [FLOOR,CEIL] float exactly as before.
-            // Salt with the absolute brick index so neighbouring bricks have independent stipples.
-            const dens = toF(wgDensBits.element(b) as unknown as NU)
-              .div(255)
-              .clamp(COVER_FLOOR, COVER_CEIL)
-              .toVar();
-            const keep = coverHash(x, y, wgBrickAbs.element(b) as unknown as NU).lessThan(dens).toVar();
-            If(keep, electHere);
+          // OCCUPANCY GATE (?voxlod=1): paint this pixel only if its bbox bucket carries an
+          // occupied sub-cell. su=lx·DIM/bbW, sv=ly·DIM/bbH ∈ [0,DIM); bit=sv·DIM+su. The mask is
+          // 0xffff (all buckets) for any unarmed/full/degenerate brick ⇒ that pixel always paints
+          // ⇒ no behaviour change there. The +1 dilation (Phase A) makes this provably hole-free.
+          // voxlod=0: occMask is null and this whole branch is build-time absent (byte-identical).
+          const dispatchElect = (): void => {
+            if (voxDither && wgBrickAbs && wgDensBits) {
+              // density-modulated see-through dither (?voxdither=1): stable per-(pixel,brick)
+              // stipple drops (1-density) of the footprint. The raw density byte (0..255) was
+              // stashed in Phase A; rebuild the clamped [FLOOR,CEIL] float exactly as before.
+              // Salt with the absolute brick index so neighbouring bricks have independent stipples.
+              const dens = toF(wgDensBits.element(b) as unknown as NU)
+                .div(255)
+                .clamp(COVER_FLOOR, COVER_CEIL)
+                .toVar();
+              const keep = coverHash(x, y, wgBrickAbs.element(b) as unknown as NU).lessThan(dens).toVar();
+              If(keep, electHere);
+            } else {
+              electHere();
+            }
+          };
+          if (voxOccGate && occMask && gateActive) {
+            // carved brick → gate the pixel by its bucket bit; full-mask brick → solid (no test).
+            If(gateActive, () => {
+              const su = minU(lx.mul(uint(OCC_MASK_DIM)).div(bbW), uint(OCC_MASK_DIM - 1)).toVar();
+              const sv = minU(ly.mul(uint(OCC_MASK_DIM)).div(bbH), uint(OCC_MASK_DIM - 1)).toVar();
+              const bit = sv.mul(uint(OCC_MASK_DIM)).add(su).toVar();
+              const occupied = occMask.shiftRight(bit).bitAnd(uint(1)).equal(uint(1));
+              If(occupied, dispatchElect);
+            }).Else(dispatchElect);
           } else {
-            electHere();
+            dispatchElect();
           }
         }, WG_RASTER);
       });

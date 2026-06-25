@@ -27,6 +27,7 @@
 
 import type { Renderer, StorageBufferAttribute, StorageBufferNode } from 'three/webgpu';
 import type { BufferGeometry } from 'three';
+import { Vector2 } from 'three';
 import type { ScatterLayer, ScatterResult } from '../gpu/passes/Scatter';
 import { VegClass } from '../gpu/passes/Scatter';
 import type { VegLib, PoolPart } from '../vegetation/VegLibrary';
@@ -54,9 +55,12 @@ import {
   appendVoxelCrown,
   DEFAULT_VOXEL_GRID_DIM,
   type PreparedVoxelCrown,
+  computeVoxlodAnchorL0,
   prepareVoxelCrown,
+  setVoxlodConfig,
+  voxlodLevels,
 } from './VoxelizeCrown';
-import { BRICK_WORDS, MAX_BRICKS_PER_CLUSTER } from './VoxelBrick';
+import { BRICK_WORDS } from './VoxelBrick';
 
 /** Forests ring radii (Forests.ts) — discrete LOD switch distances until N8 */
 const R0_FAR = 26;
@@ -384,6 +388,36 @@ export async function buildWorldRegistry(input: {
   // DEFAULT_TRANSITION_DIST (~35 m). The leaf head culls beyond it; the voxel head seeds
   // beyond it. ?forcevox overrides to 0 (voxel everywhere) per the debug semantics.
   const transitionDist = Number(qVox.get('voxnear') ?? DEFAULT_TRANSITION_DIST) || DEFAULT_TRANSITION_DIST;
+  // ?voxlod (G1, DEFAULT ON): build the voxel MIP PYRAMID + a REAL multi-level DAG so the SAME
+  // crown coarsens with distance through a BAND-ANCHORED octave ladder (far => bigger/fewer
+  // voxels, near => finer), selected by the cull's screen-error cut (like UE5 Nanite Voxels).
+  // ?voxlod=0 forces today's single-level degenerate always-cut DAG (the A/B baseline).
+  const voxLod = qVox.get('voxlod') !== '0';
+  // ANCHOR the ladder to the band (correction 1): ownError(L0) = transitionDist*tau/projK so the
+  // FINEST level's cut lands at the handoff and each octave of distance descends one level (spans
+  // [35,2000] m). projK mirrors the cull (cot(fovY/2)*renderHeight*0.5); no camera here, so the
+  // app FOV (Engine.ts PerspectiveCamera = 55°) is used — the ladder SHAPE is projK-robust anyway.
+  {
+    const APP_FOV_DEG = 55; // Engine.ts camera FOV
+    const anchorL0 = computeVoxlodAnchorL0(
+      transitionDist,
+      input.renderer.getDrawingBufferSize(new Vector2()).y,
+      APP_FOV_DEG,
+    );
+    // ?voxlodk= (anchor multiplier) / ?voxlodlevels= / ?voxlodsparse= / ?voxlodshell= sweep the
+    // ladder for A/B; unset = the band-anchored defaults (7 levels, K=1, sparse off, shell off).
+    const kRaw = qVox.get('voxlodk');
+    const lRaw = qVox.get('voxlodlevels');
+    const spRaw = qVox.get('voxlodsparse');
+    const shRaw = qVox.get('voxlodshell');
+    setVoxlodConfig({
+      anchorL0,
+      errorK: kRaw !== null ? Number(kRaw) : undefined,
+      levels: lRaw !== null ? Number(lRaw) : undefined,
+      sparseK: spRaw !== null ? Number(spRaw) : undefined,
+      shell: shRaw !== null ? Number(shRaw) : undefined,
+    });
+  }
   /** idF → leaf head, for the ?forcevox leaf-suppression pass (filled in the loop). */
   const leafHeadForVox = new Map<number, MeshHandle>();
   const toVoxel: {
@@ -481,7 +515,7 @@ export async function buildWorldRegistry(input: {
       // not tris — that authoring is Stage 2; here we only reserve+upload the bricks).
       if (voxReg && (!forceVoxOn || forceVoxAll || forceVoxId === idF)) {
         const matParam = packLeafTint(pool.leaf.color);
-        const prep = prepareVoxelCrown(leafSource, pool.leaf.color, voxGridDim);
+        const prep = prepareVoxelCrown(leafSource, pool.leaf.color, voxGridDim, voxLod);
         // a degenerate empty crown (0 bricks) would crash registerVoxelHead — skip it so
         // the leaf head keeps its full mesh envelope (set below to TREE_GEO_FAR, no handoff).
         if (prep.brickCount > 0) {
@@ -848,11 +882,14 @@ export async function buildWorldRegistry(input: {
     let lateVoxInst = 0;
     let lateVoxClusters = 0;
     for (const v of toVoxel) {
+      // voxlod=0: occupied bricks of the single grid. voxlod=1 (G4): Σ over all pyramid
+      // levels (~1.0–1.36× the L0 count — the coarse tail is small). prep.brickCount carries
+      // whichever it is, so the reservation auto-grows for the pyramid (no overflow/clipping).
       lateBricks += v.prep.brickCount;
-      // each voxel head (registerVoxelHead) authors ceil(occupiedBricks/128) CLUSTERS
-      // (the §5.3 ≤128-brick per-coarse-cluster blocks), 0 verts / 0 tris — the bricks
-      // ARE the payload. Reserve that cluster headroom (frozen caps else throw, §5.3).
-      lateVoxClusters += Math.max(1, Math.ceil(v.prep.brickCount / MAX_BRICKS_PER_CLUSTER));
+      // each voxel head authors prep.clusterCount CLUSTERS, 0 verts / 0 tris — the bricks ARE
+      // the payload. voxlod=0: ceil(occupied/128). voxlod=1: Σ over levels of ceil(occ_L/128).
+      // dagLinks (roots+children) ride the auto-sized caps.clusters*2 headroom (no reservation).
+      lateVoxClusters += v.prep.clusterCount;
       const s = perId.get(v.idF);
       // the voxel head re-binds ONE copy of the leaf stream (no ?stress fan-out)
       if (s) lateVoxInst += s.fill;
@@ -866,8 +903,8 @@ export async function buildWorldRegistry(input: {
     });
     console.log(
       `[worldreg] voxel-foliage: reserving ${lateBricks} bricks across ${toVoxel.length} crowns ` +
-        `(grid ${voxGridDim}) = ${((lateBricks * BRICK_WORDS * 4) / (1024 * 1024)).toFixed(3)} MB, ` +
-        `+${lateVoxClusters} voxel clusters (${MAX_BRICKS_PER_CLUSTER} bricks/cluster), ` +
+        `(grid ${voxGridDim}${voxLod ? `, voxlod ${voxlodLevels()}L pyramid` : ''}) = ${((lateBricks * BRICK_WORDS * 4) / (1024 * 1024)).toFixed(3)} MB, ` +
+        `+${lateVoxClusters} voxel clusters, ` +
         `+${lateVoxInst} voxel instances, +${lateVoxHeads} voxel:7 heads`,
     );
   }
