@@ -151,8 +151,9 @@ export function voxlodShell(): boolean { return VOXLOD_CFG.shell !== 0; }
 
 /** voxlod (verify lever): override the pyramid tuning at runtime BEFORE build(). Called from
  *  WorldRegistry/ForestScene with ?voxlodk= / ?voxlodlevels=. Out-of-range/NaN args are ignored
- *  so a bad query string can never break the build. levels clamped to [1,6], errorK to (0, 32]
- *  (default 6 = 2*tau; sweep room up for pushing the floor crossover farther), sparseK to [1, 64]. */
+ *  so a bad query string can never break the build. levels clamped to [1,8] (default 7), errorK to
+ *  (0, 32] (the ANCHOR MULTIPLIER, default 1 = the exact band anchor — NOT the old 6=2*tau
+ *  floor-crossover framing), sparseK to [1, 64] (default 1 = OFF). */
 export function setVoxlodConfig(cfg: { levels?: number; errorK?: number; sparseK?: number; shell?: number; anchorL0?: number }): void {
   if (cfg.levels !== undefined && Number.isFinite(cfg.levels)) {
     // [1,8] — 7 (default) = ceil(log2(2000/35))+1 spans the band; headroom to 8 for a sweep.
@@ -204,10 +205,11 @@ export interface VoxelBlock {
   count: number;
   /** OWN sphere = bound CONTAINING all the block's brick footprints (local space). */
   own: Sphere;
-  /** OWN geometric error. BASE = voxlodErrorK()*cellSize(level); RAISED per-block by the
-   *  sparsity multiplier (see buildVoxelPyramid) so a SPARSE coarse block (whose solid AABB
-   *  footprint fills see-through gaps the raster paints SOLID) is selected LATER (stays fine)
-   *  while a DENSE block coarsens early. Monotone child<parent is enforced bottom-up. */
+  /** OWN geometric error (local-space metres). BASE = the BAND-ANCHORED ladder
+   *  anchorL0*voxlodErrorK()*2^L for L>=1, L0=0 (anchorL0 = transitionDist*tau/projK — see
+   *  VOXLOD_CFG); NOT cellSize-tied (the superseded cellSize ladder pinned every transition below
+   *  the mesh->voxel handoff). RAISED per-block by the sparsity multiplier ONLY when ?voxlodsparse>1
+   *  (default 1 = OFF). Monotone child<parent is enforced bottom-up. */
   ownError: number;
   /** Sum over this block's bricks of (2*half)^2 — the SOLID screen-area PROXY the raster paints
    *  (Phase B strides each brick's full [center+-half] AABB rect, occupancy IGNORED, so a brick's
@@ -239,7 +241,8 @@ export interface VoxelLevel {
   brickGrid: { x: number; y: number; z: number };
   /** world size of ONE cell at this level (= cellSize(0) * 2^level). */
   cellSize: number;
-  /** geometric error for this level = voxlodErrorK() * cellSize (local-space metres). */
+  /** geometric error for this level = the band-anchored ownError anchorL0*voxlodErrorK()*2^level
+   *  (L0=0), local-space metres — NOT voxlodErrorK()*cellSize (the superseded cellSize ladder). */
   geomError: number;
   /** the level's blocks (one voxel cluster each), in `occupied[]` order. */
   blocks: VoxelBlock[];
@@ -659,8 +662,8 @@ export function voxelizeCrown(
 //     has EXACTLY ONE parent (a strict tree => no double-emit, every block reachable from a
 //     root => no orphan => no hole), and every coarse block has children by construction (it
 //     was BUILT from them => a coarse block can never want-to-refine-but-have-none).
-//   - roots = the coarsest level's blocks. Per-level ownError(L>=1) = voxlodErrorK() *
-//     cellSize(L) (G2: local-space metres, the mesh-DAG scale), monotone across levels.
+//   - roots = the coarsest level's blocks. Per-level ownError(L>=1) = anchorL0 * voxlodErrorK() *
+//     2^L (L0=0; band-anchored, local-space metres, the mesh-DAG scale), monotone across levels.
 // validateDagHierarchy still GATES the result (exact-cut at every threshold + reach + once).
 // ---------------------------------------------------------------------------
 
@@ -1082,6 +1085,18 @@ export function buildVoxelPyramid(
         cblk.childBlocks.push(pick);
         parentOf[pick] = cb;
       }
+      // POST-REPAIR GUARD: the single-pass steal above can empty an already-processed donor
+      // (it steals the donor's last child after that donor was repaired), leaving a childless
+      // coarse block that refines to nothing. Reviewer-verified NOT a hole (the region renders
+      // via the finer blocks' real parents, and validateVoxelPyramid still HARD-gates reachability),
+      // but the donor-emptying path is non-obvious — warn LOUD so it surfaces rather than relying
+      // purely on the argued invariant. Non-throwing: a throw here would block build on a benign case.
+      for (let cb = 0; cb < coarser.blocks.length; cb++) {
+        if ((coarser.blocks[cb] as VoxelBlock).childBlocks.length === 0) {
+          // eslint-disable-next-line no-console
+          console.warn(`[voxlod] coarse block L${L + 1} #${cb} has no children after coverage-repair — refine would descend to nothing; validateVoxelPyramid gates reachability`);
+        }
+      }
     }
     // parent SPHERE only here (provably contains child). parentERROR is set by the bottom-up
     // sparsity pass below — it must read the parent's PER-BLOCK effective ownError, which is not
@@ -1112,7 +1127,7 @@ export function buildVoxelPyramid(
   for (let L = 1; L < levels.length; L++) {
     const lvl = levels[L] as VoxelLevel;
     const finer = levels[L - 1] as VoxelLevel;
-    const base = lvl.geomError; // = ERR_K * cellSize(L)
+    const base = lvl.geomError; // = band-anchored ownError anchorL0*ERR_K*2^L (L0=0), NOT ERR_K*cellSize
     for (const blk of lvl.blocks) {
       // childArea = summed SOLID area of the fine blocks this coarse block replaces.
       let childArea = 0;
@@ -1233,7 +1248,11 @@ export interface PreparedVoxelCrown {
    *  ceil(occupied/128). voxlod=1: Σ over all levels of ceil(level.occupied/128). */
   clusterCount: number;
   /** number of dagLinks entries this crown needs (roots + child links). voxlod=0: one root
-   *  per cluster, 0 children. voxlod=1: roots(coarsest blocks) + Σ spatial-tree child links. */
+   *  per cluster, 0 children. voxlod=1: roots(coarsest blocks) + Σ spatial-tree child links.
+   *  NOTE: NOT consumed by callers — dagLinks usage == clusterCount exactly (every non-root block
+   *  has exactly one parent => one child link; roots + nonRoots = clusters), so the clusters
+   *  reservation already covers it and it is intentionally not reserved separately. Kept as a
+   *  diagnostic/self-check field. */
   dagLinkCount: number;
 }
 
