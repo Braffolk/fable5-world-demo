@@ -77,7 +77,13 @@ import {
 // correction-3 needs; the old footprint-cost theory is superseded by the anchor + Rank-2 gate).
 // shell: 0 = no interior-brick removal (removes geometry => hole risk on concave/thin crowns; the
 // HARD "no holes" constraint wins, Rank-2's occupancy silhouette handles the far-overdraw instead).
-const VOXLOD_CFG = { levels: 7, errorK: 1, sparseK: 1, shell: 0, anchorL0: 0 };
+// errorK 3 (NOT 1): with the FIX-B root re-derive (ownError = brick world half-extent, projK-
+// independent), errorK=1 is the geometrically-exact "one brick ≈ tau px" ladder — but that makes a
+// thin crown's coarsest grid-floor shell collapse to a tiny 2-3 brick blob by ~150-200 m. errorK=3
+// holds a FINER pyramid level out to ~200 m so a far crown still reads as a multi-brick CROWN SHAPE
+// (the user's "never a single square" cap), while near (≤20 m) stays the finest L0 regardless. The
+// visual distance-sweep gate (8/20/50/100/200 m) drove this value; ?voxlodk= still sweeps it live.
+const VOXLOD_CFG = { levels: 7, errorK: 3, sparseK: 1, shell: 0, anchorL0: 0 };
 
 /** voxlod: number of MIP-pyramid levels (see VOXLOD_CFG). Read via the getter so a runtime
  *  ?voxlodlevels= override (set before build) takes effect without re-threading signatures. */
@@ -788,13 +794,23 @@ function downsampleBrickGrid(
         const tMinX = Math.max(fMinX, gMinX), tMaxX = Math.min(fMaxX, gMaxX);
         const tMinY = Math.max(fMinY, gMinY), tMaxY = Math.min(fMaxY, gMaxY);
         const tMinZ = Math.max(fMinZ, gMinZ), tMaxZ = Math.min(fMaxZ, gMaxZ);
-        const center: [number, number, number] = [
-          (tMinX + tMaxX) * 0.5, (tMinY + tMaxY) * 0.5, (tMinZ + tMaxZ) * 0.5,
-        ];
-        // scalar AABB radius = half the LARGEST clamped-axis span; ≤ coarseHalf by construction.
-        // The cube centered here with this radius still CONTAINS every (clamped) child box => no
-        // holes, because each axis half-span ≤ this max and the center is the box midpoint.
-        const half = Math.min(coarseHalf, Math.max(tMaxX - tMinX, tMaxY - tMinY, tMaxZ - tMinZ) * 0.5);
+        // FIX A (offset): the coarse brick CENTER is the SYMMETRIC grid-cube center `gridCenter`
+        // (origin + (c+0.5)*coarseWorld) — tiling EXACTLY like L0 (originX+(bx+0.5)*brickWorld) — NOT
+        // the occupancy-centroid (tMin+tMax)*0.5 of the clamped child box, which slides the brick off
+        // the trunk axis (the lopsided crown drift). `half` is SYMMETRIZED about gridCenter: the max
+        // over axes of the LARGER side-distance from gridCenter out to the clamped child box. The cube
+        // [gridCenter ± half] still CONTAINS every clamped child (no holes — each child sits within
+        // [tMin,tMax] which is within [gridCenter ± half]) while staying centered. ≤ coarseHalf since
+        // tMin/tMax are already clamped into the full grid cube, so it never exceeds the full cube.
+        const center: [number, number, number] = gridCenter;
+        const half = Math.min(
+          coarseHalf,
+          Math.max(
+            Math.max(gridCenter[0] - tMinX, tMaxX - gridCenter[0]),
+            Math.max(gridCenter[1] - tMinY, tMaxY - gridCenter[1]),
+            Math.max(gridCenter[2] - tMinZ, tMaxZ - gridCenter[2]),
+          ),
+        );
         // RE-BIN occupancy into THIS coarse brick's TIGHT [center ± half] cube (the far-cheaper
         // fix). The 4×4×4 occLo/occHi bitmask must describe the SAME cube the raster projects so
         // the raster's per-pixel occupancy gate skips the EMPTY interior between sparse children.
@@ -948,29 +964,27 @@ export function buildVoxelPyramid(
   // -- build the level pyramid (bricks + per-level blocks) -------------------
   // L0 ownError = 0 (the finest level ALWAYS emits — it has no children, so a near block can
   // never want-to-refine-but-have-none; matches the mesh DAG's LOD0 own=0). Coarser levels carry
-  // the BAND-ANCHORED error anchorL0*errorK*2^L (local-space metres) — see the VOXLOD_CFG block.
+  // the REAL brick-world-size error curCell*BRICK_DIM*0.5*errorK (local-space metres) — see below.
   let curBricks = l0Bricks;
   let curGrid = l0Grid;
   let curCell = l0CellSize;
   // per-level: which level-L block each level-L OCCUPIED-brick belongs to (occ-index -> block).
   const blockOfOccByLevel: number[][] = [];
   const N_LEVELS = voxlodLevels();
-  const ERR_K = voxlodErrorK();        // anchor MULTIPLIER (default 1)
-  const ANCHOR = voxlodAnchorL0();     // ownError(L0) = transitionDist*tau/projK (0 = unset)
-  if (!(ANCHOR > 0)) {
-    // eslint-disable-next-line no-console
-    console.warn('[voxlod] anchorL0 unset — falling back to the legacy cellSize ladder (UNDER-coarsens; set it via computeVoxlodAnchorL0 in WorldRegistry/ForestScene)');
-  }
+  const ERR_K = voxlodErrorK();        // ladder MULTIPLIER (default 1; ?voxlodk= sweeps it)
   for (let L = 0; L < N_LEVELS; L++) {
     const occupied: number[] = [];
     for (let i = 0; i < curBricks.length; i++) if ((curBricks[i] as BrickCPU).density > 0) occupied.push(i);
-    // BAND-ANCHORED octave ladder (correction 1): ownError(L) = anchorL0 * errorK * 2^L for L>=1,
-    // L0 = 0 (always-emit finest, hole-safe). Each level's cut then fires one octave of distance
-    // later than the last => the band [35,2000] m is spanned with one real 2x level per octave.
-    // Fallback (anchor unset) = the legacy ERR_K*cellSize ladder (under-coarsens — warned above).
-    const ownError = L === 0
-      ? 0
-      : (ANCHOR > 0 ? ANCHOR * ERR_K * Math.pow(2, L) : ERR_K * curCell);
+    // FIX B (too-coarse-near): ownError(L) = the REAL local-space brick WORLD HALF-extent at this
+    // level, curCell*BRICK_DIM*0.5 (= l0CellSize*BRICK_DIM*0.5 * 2^L, since curCell = l0CellSize*2^L),
+    // times errorK. This is projK-INDEPENDENT and dimensionally the SAME unit (object-space metres)
+    // the mesh DAG qemErr uses, so the cull's pOwn = projK*A.w*ownError/d selects level L EXACTLY
+    // when its brick subtends ~tau px (projK*A.w*brickHalf_L/d <= tau) — fine near, coarsening one
+    // octave per distance-doubling. This dissolves the prior build-time-projK anchor (computed from
+    // a 1080-height floor decoupled from BOTH the runtime/retina projK AND the L0 brick world-size,
+    // which made coarse levels engage far too NEAR — the massive flat squares at ~10 m). L0 = 0
+    // (always-emit finest, hole-safe). errorK scales the whole ladder farther (>1) / nearer (<1).
+    const ownError = L === 0 ? 0 : curCell * BRICK_DIM * 0.5 * ERR_K;
     const { blocks, order } = partitionLevelBlocks(curBricks, occupied, ownError);
     // reorder `occupied` so each block's bricks are CONTIGUOUS (block.start/count index it);
     // also record, per (reordered) occupied slot, which block owns it.
@@ -982,8 +996,14 @@ export function buildVoxelPyramid(
     }
     blockOfOccByLevel.push(blockOfOcc);
     levels.push({ level: L, bricks: curBricks, occupied: reordered, brickGrid: curGrid, cellSize: curCell, geomError: ownError, blocks });
-    // stop coarsening once a level is a single block or the grid bottomed out
-    if (L === N_LEVELS - 1 || occupied.length <= 1 || (curGrid.x <= 1 && curGrid.y <= 1 && curGrid.z <= 1)) break;
+    // FIX C (coarseness CAP — a crown must NEVER be one square): stop coarsening once the LARGEST
+    // brick-grid axis reaches K_FLOOR bricks, so the coarsest level stays a MULTI-brick shell that
+    // still reads as a crown SHAPE (up to ~3×3×3 → a ~26-brick occupancy shell after the Rank-2
+    // gate), never collapsing to a single 1×1×1 brick. MAX axis (not all-≤1) so thin/flat crowns
+    // still coarsen on their large axes while keeping ≥K_FLOOR bricks there. (occupied≤1 kept as a
+    // safety net for degenerate crowns.)
+    const K_FLOOR = 3;
+    if (L === N_LEVELS - 1 || occupied.length <= 1 || Math.max(curGrid.x, curGrid.y, curGrid.z) <= K_FLOOR) break;
     const next = downsampleBrickGrid(curBricks, curGrid, curCell * 2, gridOrigin);
     // voxlod FAR-CHEAPER (iteration-6): SHELL the coarse grid we just produced — drop bricks fully
     // enclosed by occupied neighbours (invisible interior) so this coarser level renders a ~2-deep
