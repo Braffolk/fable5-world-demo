@@ -144,9 +144,12 @@ export interface VoxelRasterDeps {
   /** DEPTH-BUCKET F2B: the BUILD-TIME bucket count K (must equal cull.voxF2bK so the K
    *  baked scatter instances line up with the K cull dispatch attrs). */
   voxF2bK: number;
-  /** DEPTH-BUCKET F2B: front-to-back ordering ON (?voxf2b, DEFAULT TRUE — near→far
-   *  ordering lets the per-block occlusion cull skip whole occluded far blocks;
-   *  ?voxf2b=0 ⇒ the single unordered whole-list dispatch, the A/B control). */
+  /** DEPTH-BUCKET F2B: front-to-back ordering. DEFAULT FALSE since 2026-06-26 — the K
+   *  bucket dispatches are barrier-serialized and the intended per-block-cull pre-seed is
+   *  never realized (the occlusion pyramid is built once, not rebuilt between buckets), so
+   *  F2B measured a pure net-loss scaling with K (worst single-tree pose 25.4→10.8 ms gpuWall,
+   *  42→121 fps with it OFF). The default is now the single unordered whole-list dispatch;
+   *  ?voxf2b=1 restores the old K-bucket path (A/B control / future large-batch opt-in). */
   voxF2bEnabled: boolean;
   /** the SAME 24-bit depth key the world1 raster + resolve use (§6.7). */
   depthKey24: (cz: NF) => NU;
@@ -230,6 +233,12 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
 
   // ---- atomicBuf: a single debug BRICK-WRITE counter (Stage-2 overdraw overlay, §A2).
   // One word [WRITE_CTR]; scatter atomicAdds it per election win and kClearWrite zeroes it.
+  // DEFAULT OFF: that per-win atomicAdd targets ONE global word, so every election win on the
+  // GPU serializes on a single cache line (cross-core ping-pong). At a close single tree that is
+  // ~1.5-2.1M wins/frame all contending on one address — measured as the dominant cost of the
+  // close-up 120→30fps cliff (wf wlbc8kgla, 2026-06-26). Build-time flag ⇒ when off, the atomicAdd
+  // node is never built (byte-identical removal). ?voxwrites=1 restores the counter for debugging.
+  const voxWrites = new URLSearchParams(window.location.search).get('voxwrites') === '1';
   const WRITE_CTR = 0;
   const atomicWords = 1;
   const atomicBufAttr = new StorageBufferAttribute(new Uint32Array(atomicWords), 1);
@@ -958,8 +967,12 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
               const wonE = atomicMax(visPayloadV.atomic.element(px), candL) as unknown as NU;
               If(candL.greaterThan(wonE), () => {
                 atomicStore(visBV.atomic.element(px), voxId);
-                // debug per-pixel BRICK-WRITE counter (Stage-2 overlay, §A2)
-                atomicAdd(atomicBuf.atomic.element(uint(WRITE_CTR)), uint(1));
+                // debug per-pixel BRICK-WRITE counter (Stage-2 overlay, §A2). DEFAULT OFF —
+                // single-global-address atomicAdd per win serializes ~1.5-2.1M wins/frame on one
+                // cache line (the close-up cliff; see voxWrites note above). ?voxwrites=1 restores it.
+                if (voxWrites) {
+                  atomicAdd(atomicBuf.atomic.element(uint(WRITE_CTR)), uint(1));
+                }
               });
             });
           };

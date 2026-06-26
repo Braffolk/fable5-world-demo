@@ -307,37 +307,50 @@ export async function buildVegLibrary(
   }
 
   // ---- tree impostors (variant 0 R1 geometry, relightable octahedral) -------
+  // Impostors are the FAR-FIELD LOD ring (>424 m, ImpostorRuntime). Under ?forcevox the voxel
+  // foliage path represents that whole band instead, so baking impostors (6 species × 8×8 views
+  // × 3 RTTs each) is pure wasted LOAD time — they are never sampled. Skip the bake when voxels
+  // supersede them, or on an explicit ?noimpostors / ?ablate=impostors. DEFAULT (no forcevox) is
+  // unchanged: impostors still bake, so the normal far field is visually intact.
+  const impParams = new URLSearchParams(
+    typeof window !== "undefined" ? window.location.search : "",
+  );
+  const skipImpostors =
+    impParams.get("forcevox") !== null ||
+    impParams.get("noimpostors") === "1" ||
+    (impParams.get("ablate") ?? "").includes("impostors");
   progress(0.56, "veg: capturing octahedral impostors");
   const impostors = new Map<number, ImpostorAtlas>();
-  for (let ci = 0; ci < TREE_SPECIES.length; ci++) {
-    const sp = TREE_SPECIES[ci] as SpeciesParams;
-    const t = buildTree(sp, seed.rng(`veg/${sp.id}/0`), {
-      lod: 1,
-      inst: variantInstance(seed, sp.id, 0),
-    });
-    const parts: ImpostorPart[] = [
-      { geometry: t.bark, kind: "bark", barkTex: barkOf(sp.barkLayer) },
-    ];
-    const atlas = atlases.get(sp.id);
-    if (t.foliage && atlas)
-      parts.push({ geometry: t.foliage, kind: "cards", atlas });
-    const radius = Math.max(
-      t.stats.height * 0.55,
-      t.skeleton.crownRadius * 1.4,
-      2,
-    );
-    impostors.set(
-      ci,
-      await captureImpostor(renderer, parts, {
-        centerY: t.stats.height * 0.5,
-        radius,
-      }),
-    );
-    progress(
-      0.56 + 0.18 * ((ci + 1) / TREE_SPECIES.length),
-      `veg: impostor ${sp.id}`,
-    );
-  }
+  if (!skipImpostors)
+    for (let ci = 0; ci < TREE_SPECIES.length; ci++) {
+      const sp = TREE_SPECIES[ci] as SpeciesParams;
+      const t = buildTree(sp, seed.rng(`veg/${sp.id}/0`), {
+        lod: 1,
+        inst: variantInstance(seed, sp.id, 0),
+      });
+      const parts: ImpostorPart[] = [
+        { geometry: t.bark, kind: "bark", barkTex: barkOf(sp.barkLayer) },
+      ];
+      const atlas = atlases.get(sp.id);
+      if (t.foliage && atlas)
+        parts.push({ geometry: t.foliage, kind: "cards", atlas });
+      const radius = Math.max(
+        t.stats.height * 0.55,
+        t.skeleton.crownRadius * 1.4,
+        2,
+      );
+      impostors.set(
+        ci,
+        await captureImpostor(renderer, parts, {
+          centerY: t.stats.height * 0.5,
+          radius,
+        }),
+      );
+      progress(
+        0.56 + 0.18 * ((ci + 1) / TREE_SPECIES.length),
+        `veg: impostor ${sp.id}`,
+      );
+    }
 
   // ---- understory: shrubs / fern / flowers (R1 only) -------------------------
   progress(0.76, "veg: understory pools");
