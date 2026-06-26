@@ -106,7 +106,45 @@ atmosphere background (SunSky.ts:63) — common-mode, cancels in same-pose A/B.
 - Follow-on: collapse the 2 fullscreen resolve passes (tri −1000 / vox −999) into a coverage-binned compute.
 - Workflow: voxel-shading-localize (wf_0c37ebd7-bb1).
 
-### 6. THE EARLIEST FRAMING (workflow `wlbc8kgla`) — SUPERSEDED, see 6b then 6c
+### 6e. UPDATE 2026-06-26 pm4 — single-tree cliff SOLVED + 200k forest MEASURED (workflows wfg5a16gz, wlw4h11oh)
+SINGLE TREE (wfg5a16gz, unbiased measure-first, NO fed hypothesis): the close-up 42→25fps cliff was the
+voxel-raster front-to-back path `voxf2b` (default-ON) splitting the scatter into K=16 BARRIER-serialized
+bucket dispatches (~2 clusters/bucket → catastrophic occupancy, ~16ms serialization floor scaling with K not
+coverage; its occlusion-pyramid payoff was structurally dead — built once, never rebuilt between buckets).
+FIX = voxf2b default 1→0 (single unordered scatter; atomicMax is order-independent ⇒ image-identical). Worst
+pose 25.4→10.5ms gpuWall, **42→121fps, all angles at the 120Hz cap.** SHIPPED (commit 1e80a1c, on nanite-raster).
+⚠️ ALL the prior r.scene/decode-chain/terrain-guard theories were REFUTED: r.scene is a PER-PASS PROFILER
+ARTIFACT for this pipeline (resflat=3 made the shader free, r.scene 22→0.07ms, ZERO live-frame change; the
+indirect-dispatched voxel raster never appears in `passes` at all). **TRUST gpuWall + live-fps, NEVER `passes`.**
+
+200k FOREST @ forcevox=all (wlw4h11oh, unbiased, UE5-cross-ref): canonical config ~20-25fps. Clean gpuWall
+A/Bs (premise-audit FORCED the decisive ?nores=1 test, refuting a 3-way converged "overdraw→occlusion-cull"
+story). MEASURED:
+- Frame is **COMPUTE/FILL-BOUND in the voxel-scatter Phase-B per-footprint-pixel loop** (NaniteVoxelRaster.ts
+  ~:973). NOT the resolve (?nores=1 skip both fullscreen passes = −2.2ms only; `render:63ms` was the artifact),
+  NOT shading/post/shadow (pure=1 ≈ baseline), NOT tree count (50k≡200k byte-identical — cull saturates <50k),
+  NOT primitive count (aerial_high 25.5M tris=26ms vs ground_canopy 8.6M=40ms). Cost = covered-pixels × overdraw.
+- **voxoccl (the default-on per-block occlusion cull) is NET-NEGATIVE at 200k** (−4.4ms when DISABLED, counters
+  byte-identical) — gappy canopy can't be conservatively occluded (min-key 0 → never culls). It pays its own
+  GPU cost for ~zero benefit at forest poses. **OPEN DECISION: flip voxoccl default OFF? — needs a single-tree
+  close-up regression check first (it was tuned for that case).**
+- voxlod coarsening IS load-bearing + working: voxlod=0 → voxClusters 9.7k→240k (25×) → 80ms.
+- FIX SHIPPED: `voxrecip` (commit a927a1f, default-on, ?voxrecip=0 disables) — per-brick float reciprocal
+  replaces the per-fragment int div/mod (Apple has no HW int-divide). Bit-identical. Worst pose 49.1→40.3ms
+  (−8.8ms/−18%), eye-walk 35.5→32.7ms (30→33fps). Added default-off ablations ?nores=1, ?voxrdbg=2.
+- **STILL ~24ms from 16.6 at worst pose.** Residual = overdraw-bound scattered global-mem traffic (one uncached
+  visPayloadV[px] relaxed-load per footprint fragment) — ALU fixes can't touch it. **THE path to 60fps =
+  reduce FRAGMENT COUNT: shell-only bricks (carve interior, paint only silhouette) + finer/occupancy-tightened
+  footprints. Quality-sensitive structural change (= the Rank-2 lever in `nanite-voxel-vs-ue5-structural-gap`),
+  surfaced for the user's call.** This is ALSO entangled with the user's "far trees → single SQUARE" coarseness-
+  limit complaint (over-coarsening = solid blobs); the right LOD is both visually fine AND low-fragment.
+- Method note: BOOT IS EXPENSIVE at 200k → harness boots once/config + teleports poses; thermal throttling
+  inflates gpuWall absolutes ~30-60% (track refreshMs: cool~33ms, hot 50-73; counters + within-run ratios are
+  thermal-invariant). Harnesses: forest-sweep.mjs, ab.mjs, sweep-multi.mjs, shotdiff.mjs (in worktree, untracked).
+- Impostor bake now skipped under ?forcevox / ?noimpostors (committed 1e80a1c) — impostors ARE the live >424m
+  far-field LOD in the NORMAL path, so default unchanged; only the voxel-superseded path skips the bake.
+
+### 6. THE EARLIEST FRAMING (workflow `wlbc8kgla`) — SUPERSEDED, see 6b/6c then 6e
 Single tree, camera ~2-3m (inside crown), `forcevox=all`: close-up fps 120→30 (~33ms) at **BOTH voxlod=0 AND
 voxlod=1**. So it's the **BASE SW voxel raster**, PRE-EXISTING on nanite-raster, NOT the new pyramid/occupancy.
 User: it's a code pathology (hundreds of squares should be ~free), it's FUNDAMENTAL, and probably a main thing
