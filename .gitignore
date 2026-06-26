@@ -16,3 +16,4 @@ docs/perf-runs/**/webgpu_capture_*.json
 docs/perf-runs/**/slices/*.json
 docs/perf-runs/**/slices/shaders/
 docs/perf-runs/**/slices-*/
+docs/perf-runs/Nanite-UE5-shaders/
