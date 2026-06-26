@@ -83,6 +83,10 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
   //                    1 = Stage-3b density DITHER (see-through sparse-foliage, no occlusion).
   const forceVox = q.get('forcevox') !== null;
   const voxOn = q.get('voxreg') !== '0' || forceVox;
+  // ?noleaves — DEBUG ablation: render TRUNKS/BARK ONLY (no leaf crown at all — neither the
+  // triangle leaf head nor its voxel sibling). For isolating how much of the forest frame the
+  // foliage (voxel crowns) actually costs vs the woody-skeleton triangles + the cull.
+  const noLeaves = q.get('noleaves') !== null;
   const voxGridDim = Number(q.get('voxgrid') ?? DEFAULT_VOXEL_GRID_DIM) || DEFAULT_VOXEL_GRID_DIM;
   const transitionDist = Number(q.get('voxnear') ?? DEFAULT_TRANSITION_DIST) || DEFAULT_TRANSITION_DIST;
   // ?voxlod (G1, DEFAULT ON): voxel MIP pyramid + a REAL multi-level DAG (UE5-style: far coarsens
@@ -158,8 +162,8 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
     reg.setMaxDistance(bark, 2000);
     // Stage-3a: the LEAF head culls beyond transitionDist when this crown is voxelized
     // (its voxel sibling owns mid/far); pure-triangle (voxreg=0) keeps the full envelope.
-    reg.setMaxDistance(leaf, voxOn ? transitionDist : 2000);
-    if (voxOn) {
+    reg.setMaxDistance(leaf, noLeaves ? 0.001 : voxOn ? transitionDist : 2000);
+    if (voxOn && !noLeaves) {
       const prep = prepareVoxelCrown(leafSrc, pool.leaf!.color, voxGridDim, voxLod);
       // a real leaf crown always voxelizes to >0 bricks; guard a degenerate empty crown
       // (registerVoxelHead throws on 0 blocks) so the leaf keeps its full mesh envelope.
