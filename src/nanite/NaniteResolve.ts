@@ -229,6 +229,16 @@ export function buildNaniteResolve(
   // ON. With the producer on, world.naniteShadow drives the PCSS branch below; the
   // csm-only branch is the ?oldgeo fallback (receives the old caster maps).
   const shadowsOn = world.csm !== null && q.get('nanshadow') !== '0';
+  // ?voxao=0 — disable the per-brick DIRECTIONAL self-shading on VOXEL foliage. Voxels are shaded
+  // with each brick's BAKED mean normal (VoxelBrick word2), which drives the sun N·L (line ~722) +
+  // the normal.y ambient floor (line ~782) below, so brick faces angled away from the sun read
+  // darker — the "shadow/AO on the voxel cube faces" the user sees (it is NOT ?nanshadow, the sun
+  // SHADOW pass, nor ?occl, the cull). Default ON. =0 skips the brick-normal decode (also drops the
+  // gpu.voxelBricks read in the vox material) and leaves the flat up-normal ⇒ uniformly flat-lit
+  // voxels, for an A/B of the LOOK. HONEST PERF NOTE: the normal is baked, so this term is one
+  // storage read + a dot/normalize per voxel pixel in a pass that runs regardless — disabling it
+  // is expected to change GPU cost ~negligibly; the value is the visual A/B, not a perf win.
+  const voxShade = q.get('voxao') !== '0';
   // PERF-VB4 (D-N45): the WORLD raster is single-pass — ONE SW+HW pass elects the 24-bit
   // depth key into visPayloadV (high bits) and stores the full 25-bit id into the side
   // buffer visBV. The resolve takes the id from visBV and reconstructs depth from the
@@ -373,9 +383,15 @@ export function buildNaniteResolve(
     // If() blocks is therefore guarded by `pass === 'tri'` below: in the 'vox' pass they would
     // never fire anyway (matClass=voxel(7) ⇒ isR/isBD/isL all false), and skipping their
     // CONSTRUCTION is what keeps verts/indices out of the voxel material's binding set. The
-    // const declarations stay at top-level so the shared mux + lighting compile in BOTH passes;
-    // TERRAIN reads only textures (no storage buffer) so it can run in both harmlessly.
-    If(isT, () => {
+    // const declarations stay at top-level so the shared mux + lighting compile in BOTH passes.
+    // TERRAIN reads no storage buffer, so it was previously left unguarded as "harmless" — but it
+    // is NOT free in the 'vox' pass: buildTerrainShading's implicit-derivative texture() samples are
+    // the vox shader's ONLY demote-forcing op, and the whole subgraph (~14 samples + fbm + caustics)
+    // inflates register/instruction pressure → collapsed occupancy → the per-pixel voxel-decode
+    // latency chain can't be hidden. Measured as the dominant driver of the close-up voxel r.scene
+    // cliff (37.5ms inside a crown). Voxel pixels are never matClass 0 (isT always false in 'vox'),
+    // so guarding by `pass === 'tri'` is output-identical and strips the graph from the vox shader.
+    if (pass === 'tri') If(isT, () => {
       const shading = buildTerrainShading({
         normalTex: hf.normalTex,
         biomeTex: hf.biomeTex as StorageTexture,
@@ -668,17 +684,23 @@ export function buildNaniteResolve(
     const voxNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
     if (pass === 'vox') {
       If(isVox, () => {
-        const vInstId = item.x;
-        const vB = gpu.instances.element(vInstId.mul(uint(2)).add(uint(1))).toVar() as unknown as NV4;
-        const yawSc = instYaw(vB);
-        // brickBase = the voxel cluster's word6 (§4.1). The block shades with brick[brickBase]
-        // mean normal (coarse: the whole block is one representative sample, §6.4).
-        const brickBase = elemU(gpu.clusters, ci.mul(uint(CLUSTER_WORDS)).add(uint(6))).toVar();
-        const nrmWord = elemU(gpu.voxelBricks, brickWord(brickBase, uint(BRICK_NORMAL)));
-        const localN = brickNormalTsl(nrmWord) as unknown as NV3;
-        const gn = normalize(instRotateDir(yawSc, localN)) as unknown as NV3;
-        const toCamV = normalize(camPos.sub(wp)) as unknown as NV3;
-        voxNrm.assign(dot(gn, toCamV).lessThan(0).select(gn.negate(), gn) as unknown as NV3);
+        // ?voxao= (default ON): the per-brick DIRECTIONAL self-shading. Decode the BAKED brick-mean
+        // normal, rotate by instance yaw, flip camera-ward — it then drives the sun N·L + ambient
+        // floor below, giving the darkening on faces angled away from the sun. =0 SKIPS this block
+        // (drops the gpu.voxelBricks normal read) so voxNrm stays the flat up-normal ⇒ flat-lit.
+        if (voxShade) {
+          const vInstId = item.x;
+          const vB = gpu.instances.element(vInstId.mul(uint(2)).add(uint(1))).toVar() as unknown as NV4;
+          const yawSc = instYaw(vB);
+          // brickBase = the voxel cluster's word6 (§4.1). The block shades with brick[brickBase]
+          // mean normal (coarse: the whole block is one representative sample, §6.4).
+          const brickBase = elemU(gpu.clusters, ci.mul(uint(CLUSTER_WORDS)).add(uint(6))).toVar();
+          const nrmWord = elemU(gpu.voxelBricks, brickWord(brickBase, uint(BRICK_NORMAL)));
+          const localN = brickNormalTsl(nrmWord) as unknown as NV3;
+          const gn = normalize(instRotateDir(yawSc, localN)) as unknown as NV3;
+          const toCamV = normalize(camPos.sub(wp)) as unknown as NV3;
+          voxNrm.assign(dot(gn, toCamV).lessThan(0).select(gn.negate(), gn) as unknown as NV3);
+        }
         // leaf-tint color path (§7.2.6): mesh word7 = packed linear RGB + hueVar. No per-leaf
         // vdata jitter (no triangle) — use the mid tint (k=0 ⇒ base) × a mid crown-AO (0.6).
         const mp = fetch.meshWord(meshId, 7);

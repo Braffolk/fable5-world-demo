@@ -1040,7 +1040,25 @@ export class GeometryRegistry {
    */
   registerVoxelHead(
     matParam: number,
-    blocks: { brickBase: number; brickCount: number; aabb: { min: [number, number, number]; max: [number, number, number] } }[],
+    blocks: {
+      brickBase: number;
+      brickCount: number;
+      aabb: { min: [number, number, number]; max: [number, number, number] };
+      /** voxlod (G1 voxlod=1): real multi-level DAG cut metadata. ABSENT on EVERY block =>
+       *  the degenerate single-resolution path (voxlod=0): each block its own always-cut root,
+       *  byte-identical to before. PRESENT => author a real per-level DAG (own/parent error +
+       *  sphere, spatial-tree child links, roots=coarsest). MIXED is rejected. */
+      dag?: {
+        ownError: number;
+        ownSphere: [number, number, number, number];
+        parentError?: number;
+        parentSphere?: [number, number, number, number];
+        /** finer child cluster ids as GLOBAL block indices into THIS `blocks` list. */
+        childClusterIdx: number[];
+        isRoot: boolean;
+        dagLevel: number;
+      };
+    }[],
     opts: { swayPad?: number; maxDist?: number; label?: string },
   ): MeshHandle {
     if (!this.built) throw new Error('GeometryRegistry: registerVoxelHead before build()');
@@ -1054,8 +1072,31 @@ export class GeometryRegistry {
     this.checkRoom(0, 0, n, 0); // n clusters, 0 verts/tris (bricks are the payload)
     const cBase = this.clusterCursor;
     const linkBase = this.dagLinksCursor;
-    if (linkBase + n > this.dagLinksArr.length) {
-      throw new Error(`GeometryRegistry: dagLinks overflow authoring voxel head (${linkBase + n} > ${this.dagLinksArr.length})`);
+
+    // voxlod (G1): does this head carry a REAL multi-level DAG? Either ALL blocks have `dag`
+    // (voxlod=1) or NONE (voxlod=0) — a mix is a build bug. The dagLinks layout is the SAME
+    // [roots…][children…] the mesh DAG (attachDag) uses, so it reuses the cull verbatim.
+    const dagOn = (blocks[0] as { dag?: unknown }).dag !== undefined;
+    let rootIdx: number[]; // GLOBAL-block indices that seed the traversal
+    let childTotal = 0;    // total child links across all blocks
+    if (dagOn) {
+      rootIdx = [];
+      for (let c = 0; c < n; c++) {
+        const d = (blocks[c] as { dag?: { isRoot: boolean; childClusterIdx: number[] } }).dag;
+        if (!d) throw new Error('GeometryRegistry: registerVoxelHead mixed dag/non-dag blocks');
+        if (d.isRoot) rootIdx.push(c);
+        childTotal += d.childClusterIdx.length;
+      }
+      if (rootIdx.length === 0) throw new Error('GeometryRegistry: voxel DAG has no roots');
+    } else {
+      // voxlod=0: every block is its own root, no children (the degenerate always-cut DAG).
+      rootIdx = [];
+      for (let c = 0; c < n; c++) rootIdx.push(c);
+    }
+    const rootCount = rootIdx.length;
+    const linkTotal = rootCount + childTotal;
+    if (linkBase + linkTotal > this.dagLinksArr.length) {
+      throw new Error(`GeometryRegistry: dagLinks overflow authoring voxel head (${linkBase + linkTotal} > ${this.dagLinksArr.length})`);
     }
     const entry = this.newEntry(handle, 'voxel', {
       transformChannel: 'leaf',
@@ -1073,7 +1114,7 @@ export class GeometryRegistry {
     entry.clusterBase = cBase;
     entry.clusterCount = n;
     entry.rootBase = linkBase;
-    entry.rootCount = n;
+    entry.rootCount = rootCount;
     entry.flags |= MESH_FLAG_HASDAG; // hier mesh: kSeedRoots seeds it; resolve/dbg consistent
     entry.lodNext = LOD_NONE;
     entry.lodDist = opts.maxDist ?? 0;
@@ -1081,11 +1122,34 @@ export class GeometryRegistry {
     const recs = new Uint32Array(n * CLUSTER_WORDS);
     const dArr = this.dagArr;
     const dl = this.dagLinksArr;
+    // dagLinks layout (mirrors attachDag): [roots…][children…]. Roots first; the children
+    // section is a flat concat of each block's child cluster ids, in block order. Each
+    // block's childBase (DAG word10) points into the children section; childCount = word11.
+    for (let i = 0; i < rootCount; i++) dl[linkBase + i] = cBase + (rootIdx[i] as number);
+    const childSectionBase = linkBase + rootCount;
+    let childCursor = childSectionBase;
+    // pre-pass: per-block childBase/childCount within the children section (0 unless owner)
+    const blockChildBase = new Int32Array(n);
+    const blockChildCount = new Int32Array(n);
+    if (dagOn) {
+      for (let c = 0; c < n; c++) {
+        const d = (blocks[c] as { dag: { childClusterIdx: number[] } }).dag;
+        const kids = d.childClusterIdx;
+        blockChildBase[c] = childCursor;
+        blockChildCount[c] = kids.length;
+        for (let k = 0; k < kids.length; k++) dl[childCursor + k] = cBase + (kids[k] as number);
+        childCursor += kids.length;
+      }
+    }
     // union AABB → mesh sphere (the instance-cull seed bound)
     let uMinX = Infinity, uMinY = Infinity, uMinZ = Infinity;
     let uMaxX = -Infinity, uMaxY = -Infinity, uMaxZ = -Infinity;
     for (let c = 0; c < n; c++) {
-      const blk = blocks[c] as { brickBase: number; brickCount: number; aabb: { min: [number, number, number]; max: [number, number, number] } };
+      const blk = blocks[c] as {
+        brickBase: number; brickCount: number;
+        aabb: { min: [number, number, number]; max: [number, number, number] };
+        dag?: { ownError: number; ownSphere: [number, number, number, number]; parentError?: number; parentSphere?: [number, number, number, number]; dagLevel: number };
+      };
       if (blk.brickCount > MAX_CLUSTER_TRIS) {
         // word7 low byte is a u8 AND the brick-granular id is ≤7 bits (§4.5/§6.4).
         throw new Error(
@@ -1105,19 +1169,44 @@ export class GeometryRegistry {
       recs[b + 4] = octEncode(0, 1, 0);
       recs[b + 5] = f32Bits(-1); // cone disabled (bricks two-sided)
       recs[b + 6] = blk.brickBase >>> 0; // word6 = brickBase (was triStart)
-      // word7: brickCount(0-7) | flags(8-9)=0 | LOD level(10-15)=0 | handle(16-31).
-      // flags=0 (NOT CLUSTER_FLAG_DAG): the raster SKIPS voxel clusters by matClass, so
-      // their vert-addressing path is never taken; keep it plain to avoid surprises.
-      recs[b + 7] = ((blk.brickCount & 0xff) | (handle << 16)) >>> 0;
-      // single-root DAG record per cluster (always-cut, no children) + a dagLinks root
+      // word7: brickCount(0-7) | flags(8-9)=0 | LOD level(10-15) | handle(16-31). flags=0
+      // (NOT CLUSTER_FLAG_DAG): the raster SKIPS voxel clusters by matClass + the cull reads
+      // childBase/Count straight from the DAG record, so the flag is unneeded; bits 10-15
+      // carry the PYRAMID level for ?nanitedbg=lod (0 on voxlod=0; 0=finest/L0 … higher=coarser
+      // on voxlod=1). The raster is UNCHANGED (G3) — these bits are debug-only.
+      const dagLevel = dagOn ? (blk.dag?.dagLevel ?? 0) & 0x3f : 0;
+      recs[b + 7] = ((blk.brickCount & 0xff) | (dagLevel << 10) | (handle << 16)) >>> 0;
+
       const db = (cBase + c) * DAG_WORDS;
-      dArr[db] = 0; // ownError = 0 → pOwn=0 ≤ τ → always cut → emit
-      dArr[db + 1] = cx; dArr[db + 2] = cy; dArr[db + 3] = cz; dArr[db + 4] = rr; // ownSphere
-      dArr[db + 5] = DAG_ROOT_PARENT_ERR; // root sentinel parentError
-      dArr[db + 6] = cx; dArr[db + 7] = cy; dArr[db + 8] = cz; dArr[db + 9] = rr; // parentSphere←own
-      dArr[db + 10] = bitsF32(0); // childBase
-      dArr[db + 11] = bitsF32(0); // childCount = 0 (leaf root)
-      dl[linkBase + c] = cBase + c;
+      if (dagOn) {
+        // REAL per-level cut record: ownError = the level's geometric error (LOCAL metres,
+        // matched to the mesh DAG scale, G2); ownSphere = the block's containing sphere; the
+        // parent pair (the coarser level) drives the descend; childBase/Count wire the finer
+        // level. Roots: parentError +∞ sentinel + parentSphere←own (keeps sqrt(d²−r²) sane).
+        const d = blk.dag as { ownError: number; ownSphere: [number, number, number, number]; parentError?: number; parentSphere?: [number, number, number, number] };
+        const root = d.parentError === undefined || !Number.isFinite(d.parentError);
+        const os = d.ownSphere;
+        dArr[db] = d.ownError;
+        dArr[db + 1] = os[0]; dArr[db + 2] = os[1]; dArr[db + 3] = os[2]; dArr[db + 4] = os[3];
+        if (root) {
+          dArr[db + 5] = DAG_ROOT_PARENT_ERR;
+          dArr[db + 6] = os[0]; dArr[db + 7] = os[1]; dArr[db + 8] = os[2]; dArr[db + 9] = os[3];
+        } else {
+          const ps = d.parentSphere as [number, number, number, number];
+          dArr[db + 5] = d.parentError as number;
+          dArr[db + 6] = ps[0]; dArr[db + 7] = ps[1]; dArr[db + 8] = ps[2]; dArr[db + 9] = ps[3];
+        }
+        dArr[db + 10] = bitsF32(blockChildBase[c] as number);
+        dArr[db + 11] = bitsF32(blockChildCount[c] as number);
+      } else {
+        // voxlod=0: single-root DAG record per cluster (always-cut, no children) + a root.
+        dArr[db] = 0; // ownError = 0 → pOwn=0 ≤ τ → always cut → emit
+        dArr[db + 1] = cx; dArr[db + 2] = cy; dArr[db + 3] = cz; dArr[db + 4] = rr; // ownSphere
+        dArr[db + 5] = DAG_ROOT_PARENT_ERR; // root sentinel parentError
+        dArr[db + 6] = cx; dArr[db + 7] = cy; dArr[db + 8] = cz; dArr[db + 9] = rr; // parentSphere←own
+        dArr[db + 10] = bitsF32(0); // childBase
+        dArr[db + 11] = bitsF32(0); // childCount = 0 (leaf root)
+      }
     }
     entry.sphere = [
       (uMinX + uMaxX) * 0.5,
@@ -1128,12 +1217,37 @@ export class GeometryRegistry {
     entry.clusterRecs = recs;
     this.entries.push(entry);
     this.clusterCursor += n;
-    this.dagLinksCursor = linkBase + n;
+    this.dagLinksCursor = linkBase + linkTotal;
+    // voxlod: a deeper DAG needs more BFS ping-pong passes to EMIT every leaf (the hierDepth
+    // floor). The pyramid is a SPATIAL TREE (roots=coarsest -> ... -> finest=L0), so the TRUE
+    // longest root->leaf chain is the depth. Build the block-local hierarchy from each block's
+    // child-cluster ids + roots and fold the real longest chain into the global max (under =>
+    // holes; over => wasted pass).
+    if (dagOn) {
+      const lcStart = new Uint32Array(n);
+      const lcCount = new Uint32Array(n);
+      const lcIdx: number[] = [];
+      const lcRoots: number[] = [];
+      for (let c = 0; c < n; c++) {
+        const d = (blocks[c] as { dag: { childClusterIdx: number[]; isRoot: boolean } }).dag;
+        if (d.isRoot) lcRoots.push(c);
+        lcStart[c] = lcIdx.length;
+        lcCount[c] = d.childClusterIdx.length;
+        for (const k of d.childClusterIdx) lcIdx.push(k);
+      }
+      const localHier = {
+        childStart: lcStart,
+        childCount: lcCount,
+        childIndices: Uint32Array.from(lcIdx),
+        rootIndices: Uint32Array.from(lcRoots),
+      };
+      this._maxDagDepth = Math.max(this._maxDagDepth, maxChainDepth(localHier));
+    }
 
     // upload: copyEntry (clusters + mesh record) at flush; the DAG/dagLinks ranges are
     // written directly here (copyEntry does not touch them), so push them now.
     this.pushRange(this.dagAttr, cBase * DAG_WORDS, n * DAG_WORDS);
-    this.pushRange(this.dagLinksAttr, linkBase, n);
+    this.pushRange(this.dagLinksAttr, linkBase, linkTotal);
     return handle;
   }
 

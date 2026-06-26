@@ -289,7 +289,21 @@ export function buildNaniteCull(
   // view-depth slabs and (b) issues K near→far dispatches; the occlusion cull is the
   // pre-existing separate gate F2B feeds, not an election edit.
   const voxParams = new URLSearchParams(window.location.search);
-  const voxf2b = (voxParams.get('voxf2b') ?? '1') !== '0';
+  // DEFAULT FLIPPED TO OFF (2026-06-26, measured). The K near→far bucket dispatches ride ONE
+  // submit with an in-pass UAV barrier BETWEEN each bucket — K serialized drains. The intended
+  // payoff (near blocks pre-seed far blocks' WHOLE-BLOCK occlusion skip) is NOT realized: the
+  // per-block cull reads voxOccPyr, a pyramid built ONCE in dispatchVoxel BEFORE any bucket and
+  // never rebuilt between buckets, so bucket b+1's cull sees the STALE pre-scatter pyramid (trunk
+  // triangles only under forcevox=all), NOT bucket b's fresh voxel depth. So F2B pays K barriers
+  // for ~zero block-cull benefit + only the marginal per-pixel write-drop the unordered gate
+  // already gives. MEASURED single voxelised tree, worst pose (camera below/beside crown looking
+  // up): gpuWall 25.4 ms (K16 default) → 15.8 (K4) → 10.3 (K1) → 10.8 (unordered, F2B off); LIVE
+  // 25 ms/42 fps → 8.3 ms/121 fps. The cost scales ~linearly with K = the bucket-barrier
+  // serialization floor (≈2 clusters/bucket ⇒ catastrophic GPU occupancy), the SAME K-pass floor
+  // the depth-bucketed BIN path was REFUTED + REMOVED for (file header §6.0). LOSS-EXACT: atomicMax
+  // is order-independent, so the unordered path is image-identical (verified). ?voxf2b=1 restores
+  // the old K-bucket path (the A/B control / opt-in for any future large-batch retune).
+  const voxf2b = (voxParams.get('voxf2b') ?? '0') !== '0';
   // K is a BUILD-TIME constant: it bakes K bucket counters + K indirect attrs and
   // (in the voxel raster) K kernel instances. ?voxf2bk default 16 (iter-2 NET-BEST: the
   // canopy write-drop SATURATES at K16 over the tight linear-view-depth [dMin,dMax]

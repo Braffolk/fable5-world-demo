@@ -35,9 +35,12 @@ import {
   appendVoxelCrown,
   DEFAULT_VOXEL_GRID_DIM,
   type PreparedVoxelCrown,
+  computeVoxlodAnchorL0,
   prepareVoxelCrown,
+  setVoxlodConfig,
+  voxlodLevels,
 } from '../nanite/VoxelizeCrown';
-import { MAX_BRICKS_PER_CLUSTER } from '../nanite/VoxelBrick';
+import { Vector2 } from 'three';
 import { buildNaniteView } from '../nanite/NaniteView';
 import { Heightfield } from '../world/Heightfield';
 import { SunSky } from '../sky/SunSky';
@@ -82,6 +85,33 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
   const voxOn = q.get('voxreg') !== '0' || forceVox;
   const voxGridDim = Number(q.get('voxgrid') ?? DEFAULT_VOXEL_GRID_DIM) || DEFAULT_VOXEL_GRID_DIM;
   const transitionDist = Number(q.get('voxnear') ?? DEFAULT_TRANSITION_DIST) || DEFAULT_TRANSITION_DIST;
+  // ?voxlod (G1, DEFAULT ON): voxel MIP pyramid + a REAL multi-level DAG (UE5-style: far coarsens
+  // the SAME crown through a band-anchored octave ladder, near refines, picked by the screen-error
+  // cut). ?voxlod=0 forces the old single-level degenerate always-cut DAG (the A/B baseline).
+  const voxLod = q.get('voxlod') !== '0';
+  // ANCHOR the ladder to the band (correction 1): ownError(L0) = transitionDist*tau/projK so the
+  // FINEST level's cut lands at the mesh→voxel handoff and each octave of distance descends one
+  // level (spans [35,2000] m). projK mirrors the cull (cot(fovY/2)*renderHeight*0.5).
+  {
+    const anchorL0 = computeVoxlodAnchorL0(
+      transitionDist,
+      engine.renderer.getDrawingBufferSize(new Vector2()).y,
+      engine.camera.fov,
+    );
+    // ?voxlodk= (anchor multiplier) / ?voxlodlevels= / ?voxlodsparse= / ?voxlodshell= sweep the
+    // ladder for A/B; unset = the band-anchored defaults (7 levels, K=1, sparse off, shell off).
+    const kRaw = q.get('voxlodk');
+    const lRaw = q.get('voxlodlevels');
+    const spRaw = q.get('voxlodsparse');
+    const shRaw = q.get('voxlodshell');
+    setVoxlodConfig({
+      anchorL0,
+      errorK: kRaw !== null ? Number(kRaw) : undefined,
+      levels: lRaw !== null ? Number(lRaw) : undefined,
+      sparseK: spRaw !== null ? Number(spRaw) : undefined,
+      shell: shRaw !== null ? Number(shRaw) : undefined,
+    });
+  }
 
   // ── tree geometry (real crowns, full leaf density) ────────────────────────
   ctx.progress(0.1, 'forest: building veg library');
@@ -130,7 +160,7 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
     // (its voxel sibling owns mid/far); pure-triangle (voxreg=0) keeps the full envelope.
     reg.setMaxDistance(leaf, voxOn ? transitionDist : 2000);
     if (voxOn) {
-      const prep = prepareVoxelCrown(leafSrc, pool.leaf!.color, voxGridDim);
+      const prep = prepareVoxelCrown(leafSrc, pool.leaf!.color, voxGridDim, voxLod);
       // a real leaf crown always voxelizes to >0 bricks; guard a degenerate empty crown
       // (registerVoxelHead throws on 0 blocks) so the leaf keeps its full mesh envelope.
       if (prep.brickCount > 0) {
@@ -223,14 +253,14 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
     let lateVoxInst = 0;
     for (const v of toVoxel) {
       lateBricks += v.prep.brickCount;
-      lateVoxClusters += Math.max(1, Math.ceil(v.prep.brickCount / MAX_BRICKS_PER_CLUSTER));
+      lateVoxClusters += v.prep.clusterCount;
       lateVoxInst += poolStreams[v.poolIdx]?.a.length ? (poolStreams[v.poolIdx] as { a: Float32Array }).a.length / 4 : 0;
     }
     reg.addLate({ bricks: lateBricks, meshes: toVoxel.length, instances: lateVoxInst, clusters: lateVoxClusters });
     // eslint-disable-next-line no-console
     console.log(
       `[forest] voxel-foliage: reserving ${lateBricks} bricks across ${toVoxel.length} crowns ` +
-        `(grid ${voxGridDim}) = ${((lateBricks * 5 * 4) / (1024 * 1024)).toFixed(2)} MB, ` +
+        `(grid ${voxGridDim}${voxLod ? `, voxlod ${voxlodLevels()}L` : ''}) = ${((lateBricks * 5 * 4) / (1024 * 1024)).toFixed(2)} MB, ` +
         `+${lateVoxClusters} clusters / +${lateVoxInst} instances / +${toVoxel.length} voxel:7 heads, ` +
         `handoff ${transitionDist} m${forceVox ? ' (?forcevox: voxel-only)' : ''}`,
     );
