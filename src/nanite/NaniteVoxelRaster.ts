@@ -239,6 +239,23 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // close-up 120→30fps cliff (wf wlbc8kgla, 2026-06-26). Build-time flag ⇒ when off, the atomicAdd
   // node is never built (byte-identical removal). ?voxwrites=1 restores the counter for debugging.
   const voxWrites = new URLSearchParams(window.location.search).get('voxwrites') === '1';
+  // ?voxrdbg=2 — MEASUREMENT ablation (default 0/OFF), mirror of world1's ?rdbg=2: BUILD-TIME
+  // STOP point right before the Phase-B per-footprint-pixel election loop. Phase A still runs
+  // (decode + project + clamp + occ-mask build per brick), but NO pixel is ever elected into
+  // visPayloadV/visBV. (baseline − voxrdbg2) gpuWall = the voxel-scatter per-pixel FILL share —
+  // the ONLY isolating ablation for the forcevox=all canopy fill the prior pass could not split.
+  const voxRdbg = Number(new URLSearchParams(window.location.search).get('voxrdbg') ?? '0');
+  // ?voxrecip=0 disables — DEFAULT ON (FIX): in Phase B, derive the per-pixel (lx,ly) from a
+  // per-BRICK float reciprocal (invW = 1/bbW) instead of a per-PIXEL integer div+mod. Apple/Metal
+  // has no native integer divide — `localPx % bbW` / `localPx / bbW` each lower to a microcoded
+  // multi-instruction sequence, paid on EVERY footprint fragment (tens of millions/frame at the
+  // canopy poses). The reciprocal is computed ONCE per brick; per pixel it costs a float mul +
+  // floor + an int mul-sub. Measured −8.8ms at the worst 200k pose (49.1→40.3ms). Loss-EXACT
+  // (bit-identical, not just within-noise): ly = floor((localPx+0.5)·invW) reproduces the integer
+  // quotient for ALL localPx∈[0,area) — fp32 error in the product is ≤ area·2⁻²³ ≈ 1.5e-5, far
+  // below the +0.5 bias's 0.5/bbW ≥ 0.004 rounding margin — so px and election are identical.
+  // ?voxrecip=0 restores the int div+mod path (A/B control).
+  const voxRecip = new URLSearchParams(window.location.search).get('voxrecip') !== '0';
   const WRITE_CTR = 0;
   const atomicWords = 1;
   const atomicBufAttr = new StorageBufferAttribute(new Uint32Array(atomicWords), 1);
@@ -932,6 +949,9 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
       // (O(area/WG) per lane, BRICK_MAX_EXT caps any one brick at ≤128×128) is preserved;
       // tiny/empty bricks (area 0) contribute a zero-trip inner loop.
       const nBricks = minU(brickCount, uint(WG_RASTER)).toVar();
+      // ?voxrdbg=2 STOP point: skip the ENTIRE Phase-B election (no per-pixel atomicMax / visBV
+      // store). Build-time gate ⇒ when OFF (production) this whole block is emitted byte-identical.
+      if (voxRdbg < 2)
       loopU(uint(0), nBricks, (b) => {
         // recover this brick's footprint RECORD (set up in Phase A).
         const bbX0 = (wgBbX0.element(b) as unknown as NU).toVar();
@@ -947,10 +967,19 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
         // plain solid path with ZERO added per-pixel arithmetic (near dense path unchanged).
         const gateActive = occMask ? occMask.notEqual(uint(0xffff)).toVar() : null;
         const area = bbW.mul(bbH).toVar(); // 0 for a culled/idle brick ⇒ zero-trip inner loop
+        // ?voxrecip: ONE reciprocal per brick replaces the per-pixel integer div+mod below
+        // (footprint addressing AND, for carved bricks, the occupancy-gate su/sv bucket index).
+        const invW = voxRecip ? float(1).div(toF(bbW)).toVar() : null;
+        const invH = voxRecip ? float(1).div(toF(bbH)).toVar() : null;
         // each lane strides this brick's footprint: localPx = brickLocal, brickLocal+128, …
         loopU(brickLocal, area, (localPx) => {
-          const lx = localPx.mod(bbW).toVar();
-          const ly = localPx.div(bbW).toVar(); // < bbH since localPx < bbW·bbH (no column)
+          // ly/lx: integer div+mod by default; per-brick float reciprocal under ?voxrecip
+          // (loss-exact, see flag note) — Apple has no HW int-divide so the default path pays
+          // a microcoded sequence on every fragment.
+          const ly = (voxRecip && invW
+            ? uint(toF(localPx).add(0.5).mul(invW).floor())
+            : localPx.div(bbW)).toVar(); // < bbH since localPx < bbW·bbH (no column)
+          const lx = (voxRecip ? localPx.sub(ly.mul(bbW)) : localPx.mod(bbW)).toVar();
           const x = bbX0.add(lx).toVar();
           const y = bbY0.add(ly).toVar();
           const px = y.mul(uint(width)).add(x).toVar();
@@ -1000,8 +1029,12 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
           if (voxOccGate && occMask && gateActive) {
             // carved brick → gate the pixel by its bucket bit; full-mask brick → solid (no test).
             If(gateActive, () => {
-              const su = minU(lx.mul(uint(OCC_MASK_DIM)).div(bbW), uint(OCC_MASK_DIM - 1)).toVar();
-              const sv = minU(ly.mul(uint(OCC_MASK_DIM)).div(bbH), uint(OCC_MASK_DIM - 1)).toVar();
+              const su = (voxRecip && invW
+                ? minU(uint(toF(lx.mul(uint(OCC_MASK_DIM))).add(0.5).mul(invW).floor()), uint(OCC_MASK_DIM - 1))
+                : minU(lx.mul(uint(OCC_MASK_DIM)).div(bbW), uint(OCC_MASK_DIM - 1))).toVar();
+              const sv = (voxRecip && invH
+                ? minU(uint(toF(ly.mul(uint(OCC_MASK_DIM))).add(0.5).mul(invH).floor()), uint(OCC_MASK_DIM - 1))
+                : minU(ly.mul(uint(OCC_MASK_DIM)).div(bbH), uint(OCC_MASK_DIM - 1))).toVar();
               const bit = sv.mul(uint(OCC_MASK_DIM)).add(su).toVar();
               const occupied = occMask.shiftRight(bit).bitAnd(uint(1)).equal(uint(1));
               If(occupied, dispatchElect);

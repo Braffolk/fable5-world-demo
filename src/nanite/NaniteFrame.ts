@@ -280,13 +280,18 @@ export function buildNaniteFrame(
     naniteShadow: shadow,
     shadowHalf,
   });
-  engine.scene.add(resolve.mesh);
+  // ?nores=1 — MEASUREMENT ablation (default OFF): skip BOTH fullscreen resolve passes
+  // (the tri `mesh` + vox `voxMesh`). Decomposes the frame: (baseline − nores) gpuWall =
+  // the cost of the two per-pixel resolve passes, which survive ?pure=1 and have no other
+  // isolating flag. Nothing shades when ON (the scene pass renders sky only) — perf probe only.
+  const noResolve = params.get('nores') === '1';
+  if (!noResolve) engine.scene.add(resolve.mesh);
   // voxel-foliage two-pass resolve (spec §4.6): the SECOND fullscreen pass that shades only
   // voxel-winner pixels (present only when ?voxreg/?forcevox wired the voxel queue). Splitting
   // the resolve in two keeps BOTH materials ≤10 fragment storage buffers — the single-pass
   // design bound the tri-fetch set + voxelBricks + qVoxRasterRO together and busted the Metal
   // ceiling, invalidating the pipeline so NOTHING shaded.
-  if (resolve.voxMesh) engine.scene.add(resolve.voxMesh);
+  if (resolve.voxMesh && !noResolve) engine.scene.add(resolve.voxMesh);
 
   // ?nanprobe=1 — exact-number depth forensics: a compute kernel reads the
   // SCENE PASS depth texture and the vis buffer at up to 8 pixels into a
