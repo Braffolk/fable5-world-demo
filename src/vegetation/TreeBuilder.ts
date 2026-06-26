@@ -43,6 +43,8 @@ export function buildTree(
     foliageMode?: 'cards' | 'mesh' | 'hybrid';
     /** budgets the lod-0 hero down from gallery scale (~1.2M) to a ring cost */
     hero?: HeroDiet;
+    /** false → legacy independent open-tube bark (G5 A/B ablation, ?nojunctions) */
+    junctions?: boolean;
   },
 ): BuiltTree {
   const lod = opts?.lod ?? 0;
@@ -63,6 +65,7 @@ export function buildTree(
     flare: { ...sp.flare, phase: rng.float() * Math.PI * 2 },
     maxLevel,
     branchStride: lod === 2 ? 2 : 1,
+    junctions: opts?.junctions ?? true,
   });
   const barkTris = barkG.triCount;
   const bark = barkG.build();

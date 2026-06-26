@@ -153,6 +153,10 @@ export interface SkelBranch {
   tParent: number;
   /** broken/stub branches get a jagged cap */
   broken: boolean;
+  /** index into Skeleton.branches of the parent branch; -1 for the trunk.
+   *  Used by the junction-aware bark mesher to cut a hole in the parent wall
+   *  and weld this branch's base ring to it (TubeMesh.tubesForSkeleton). */
+  parentIdx: number;
 }
 
 export interface LeafAnchor {

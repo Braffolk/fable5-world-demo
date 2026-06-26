@@ -44,7 +44,7 @@ export function buildLog(rng: Rng, decay: DecayState): BuiltDeadfall {
     radii.push(r0 * (1 - t * (1 - taper)) * (1 + Math.sin(t * 13 + wob) * 0.05));
     dirs.push(new Vector3(1, 0, Math.cos(t * 2.2 + wob) * 0.08).normalize());
   }
-  const br: SkelBranch = { level: 0, pts, radii, dirs, len, tParent: 0, broken: true };
+  const br: SkelBranch = { level: 0, pts, radii, dirs, len, tParent: 0, broken: true, parentIdx: -1 };
   tubeForBranch(
     g, br,
     {
@@ -81,7 +81,7 @@ export function buildStump(rng: Rng): BuiltDeadfall {
     radii.push(r0 * (1 - t * 0.18));
     dirs.push(new Vector3(0, 1, 0));
   }
-  const br: SkelBranch = { level: 0, pts, radii, dirs, len: h, tParent: 0, broken: true };
+  const br: SkelBranch = { level: 0, pts, radii, dirs, len: h, tParent: 0, broken: true, parentIdx: -1 };
   tubeForBranch(
     g, br,
     {

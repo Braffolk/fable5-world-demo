@@ -308,7 +308,255 @@ export function ringsForLevel(level: number, lodK: number): number {
   return Math.max(4, Math.round(base * lodK));
 }
 
-/** mesh every branch of a skeleton into the grower */
+// ───────────────────────── junction-aware bark meshing ───────────────────────
+//
+// The legacy path meshed every branch INDEPENDENTLY: each branch's base ring sat
+// on the parent centerline, buried, and OPEN. An open ring is an edge loop used
+// by ≠2 triangles, which the QEM simplifier LOCKS (BuildDag.ts:393-422) — so the
+// far-field never collapsed (~46M stuck sub-pixel tris).
+//
+// This path makes the whole bark skin ONE connected closed manifold:
+//   • trunk base  → smooth fan disc (buried; the only legit cap — no parent).
+//   • every branch → a HOLE is stencilled in the parent wall and the branch's
+//     flared MOUTH ring is ZIPPER-WELDED (shared vertex IDs) to that hole rim.
+//   • degenerate junctions (fork / childR≈parentR / overlap / coarse grid) fall
+//     back to a closed buried collar cap — still 0 open edges, perf preserved.
+//   • tips stay capped (taper / jagged-break) exactly as before.
+// Result: 0 open-boundary edges ⇒ QEM collapses each tree to ~1 root.
+//
+// Determinism: this pass draws ZERO rng (pure functions of stored skeleton
+// fields); the per-branch swayPhase/hue/broken-tip draws keep their order, so a
+// twin build is bit-identical (probe-dag determinism gate).
+
+interface EmittedRing {
+  /** length segsAround+1; index segsAround is the UV-seam duplicate of 0 */
+  ids: number[];
+  pos: Vector3[];
+}
+
+/** ref-vector frame for a tube axis — IDENTICAL to tubeForBranch's frame init,
+ *  so the base ring winds consistently. */
+function axisFrame(dir: Vector3, outN: Vector3, outB: Vector3): void {
+  const ref = Math.abs(dir.y) < 0.94 ? new Vector3(0, 1, 0) : new Vector3(1, 0, 0);
+  outN.crossVectors(ref, dir).normalize();
+  outB.crossVectors(dir, outN).normalize();
+}
+
+/** smooth fan disc over a ring (trunk ground cap / buried fallback base cap).
+ *  rng-free. Winding is non-critical (these caps are always buried/invisible). */
+function smoothDisc(
+  g: MeshGrower,
+  ring: EmittedRing,
+  center: Vector3,
+  normal: Vector3,
+  hue: number,
+  flex: number,
+  swayPhase: number,
+): void {
+  const seg = ring.ids.length - 1;
+  const c = g.vertex(
+    center.x, center.y, center.z,
+    normal.x, normal.y, normal.z,
+    0.5, 0.5, hue, flex, swayPhase, 0.6,
+  );
+  for (let k = 0; k < seg; k++) {
+    g.tri(ring.ids[k] as number, c, ring.ids[k + 1] as number);
+  }
+}
+
+interface MeshBranchOpts {
+  ringSegs: number;
+  uRepeats: number;
+  vScale: number;
+  flare?: { amp: number; height: number; lobes: number; phase: number };
+  swayPhase: number;
+  swayFlexBase: number;
+  swayFlexTip: number;
+  hue: number;
+}
+
+/** Mesh one branch as a closed tube: full wall + tip cap + (when junctions on) a
+ *  small buried disc closing the base ring so the open boundary loop is gone and
+ *  the QEM simplifier can collapse the tree. The parent wall is left SOLID — the
+ *  child just interpenetrates it (legacy poke-through), which is what is actually
+ *  visible. */
+function meshBranch(
+  g: MeshGrower,
+  br: SkelBranch,
+  o: MeshBranchOpts,
+  rng: Rng,
+  jx: {
+    junctions: boolean;
+  },
+): void {
+  const n = br.pts.length;
+  if (n < 2) return;
+  const seg = Math.max(4, o.ringSegs);
+  // CAP-ONLY junctions: every branch meshes its FULL tube from the base ring (i=0,
+  // buried on the parent centerline exactly like legacy) and CLOSES that base ring
+  // with a small buried disc. No hole is cut in the parent and no mouth/collar/
+  // zipper is welded. Rationale (root cause of the "blobs"): the parent wall grid
+  // is coarse — sized for a thick trunk (~0.2–1 m quads) — while children are thin
+  // (~0.02–0.1 m radius). A hole cut in that grid can never be smaller than ~one
+  // parent quad, so the welded mouth (sized to the hole rim, then lifted out) was
+  // always a giant faceted funnel many times wider than the tube → the angular
+  // cube/wedge blobs. Closing the buried base ring still yields 0 open edges, so
+  // the QEM simplifier collapses each tree identically (the perf win is preserved),
+  // and the visible result is the legacy clean poke-through tube.
+  const iStart = 0;
+
+  const T = new Vector3().copy(br.dirs[0] as Vector3);
+  const N = new Vector3();
+  const B = new Vector3();
+  axisFrame(T, N, B);
+
+  let vAlong = 0;
+  const baseR = Math.max(br.radii[0] as number, 1e-4);
+  const rings: EmittedRing[] = [];
+  let lastRingPos: number[] = [];
+
+  for (let i = 0; i < n; i++) {
+    const p = br.pts[i] as Vector3;
+    const r = br.radii[i] as number;
+    if (i > 0) {
+      const prev = br.pts[i - 1] as Vector3;
+      vAlong += _v.subVectors(p, prev).length();
+      const tPrev = br.dirs[i - 1] as Vector3;
+      const tCur = br.dirs[i] as Vector3;
+      const axis = _v.crossVectors(tPrev, tCur);
+      const sLen = axis.length();
+      if (sLen > 1e-6) {
+        axis.multiplyScalar(1 / sLen);
+        const ang = Math.asin(Math.min(1, sLen));
+        N.applyAxisAngle(axis, ang).normalize();
+        B.applyAxisAngle(axis, ang).normalize();
+      }
+    }
+    if (i < iStart) continue;
+    const rNext = br.radii[Math.min(n - 1, i + 1)] as number;
+    const rPrev = br.radii[Math.max(0, i - 1)] as number;
+    const slope = ((rPrev - rNext) * (n - 1)) / Math.max(0.05, br.len) * 0.5;
+    const tt = i / (n - 1);
+    const flex = o.swayFlexBase + (o.swayFlexTip - o.swayFlexBase) * tt;
+    const ids: number[] = [];
+    const pos: Vector3[] = [];
+    for (let k = 0; k <= seg; k++) {
+      const a = (k / seg) * Math.PI * 2;
+      const ca = Math.cos(a);
+      const sa = Math.sin(a);
+      let rr = r;
+      if (o.flare && br.level === 0) {
+        const h = (br.pts[i] as Vector3).y - (br.pts[0] as Vector3).y;
+        const lobe = Math.pow(Math.max(0, Math.cos(o.flare.lobes * a + o.flare.phase)), 1.6);
+        rr *= 1 + o.flare.amp * Math.exp(-h / o.flare.height) * (0.45 + 0.9 * lobe);
+      }
+      const dx = N.x * ca + B.x * sa;
+      const dy = N.y * ca + B.y * sa;
+      const dz = N.z * ca + B.z * sa;
+      const tan = br.dirs[i] as Vector3;
+      let nx = dx + tan.x * slope;
+      let ny = dy + tan.y * slope;
+      let nz = dz + tan.z * slope;
+      const nl = Math.hypot(nx, ny, nz) || 1;
+      nx /= nl; ny /= nl; nz /= nl;
+      const wx = p.x + dx * rr;
+      const wy = p.y + dy * rr;
+      const wz = p.z + dz * rr;
+      pos.push(new Vector3(wx, wy, wz));
+      ids.push(
+        g.vertex(
+          wx, wy, wz, nx, ny, nz,
+          (k / seg) * o.uRepeats,
+          (vAlong / (Math.PI * 2 * baseR)) * o.uRepeats * o.vScale,
+          o.hue, flex, o.swayPhase, 1,
+        ),
+      );
+    }
+    rings.push({ ids, pos });
+    lastRingPos = [];
+    for (const v of pos) lastRingPos.push(v.x, v.y, v.z);
+  }
+
+  const R = rings.length;
+  if (R < 1) return;
+
+  // ── PARENT role: none. CAP-ONLY junctions keep the parent wall SOLID (no hole
+  // stencil); children simply interpenetrate it as in legacy, then cap their base.
+  // (childFps/rimMap are still threaded through jx for the A/B plumbing but unused.)
+  const removed = new Set<number>();
+
+  // ── wall quads (full solid wall) ────────────────────────────────────────────
+  for (let r = 0; r < R - 1; r++) {
+    const a = rings[r] as EmittedRing;
+    const b = rings[r + 1] as EmittedRing;
+    for (let kmod = 0; kmod < seg; kmod++) {
+      if (removed.has(r * seg + kmod)) continue;
+      g.quad(a.ids[kmod] as number, a.ids[kmod + 1] as number, b.ids[kmod + 1] as number, b.ids[kmod] as number);
+    }
+  }
+
+  // ── CHILD role base: close the (buried) base ring with a small disc ──────────
+  const ring0 = rings[0] as EmittedRing;
+  if (jx.junctions) {
+    // close the open base ring (trunk ground cap AND every child base). The disc is
+    // buried just behind the base ring inside the opaque parent, so it is invisible
+    // yet removes the open edge loop the QEM simplifier would otherwise lock.
+    const baseP = br.pts[0] as Vector3;
+    const baseD = br.dirs[0] as Vector3;
+    const center = new Vector3(
+      baseP.x - baseD.x * baseR * 0.4,
+      baseP.y - baseD.y * baseR * 0.4,
+      baseP.z - baseD.z * baseR * 0.4,
+    );
+    smoothDisc(g, ring0, center, new Vector3(-baseD.x, -baseD.y, -baseD.z), o.hue, o.swayFlexBase, o.swayPhase);
+  }
+  // (junctions === false → base left open, reproducing legacy geometry for A/B)
+
+  // ── tip cap (unchanged; keeps its rng draws so the stream stays in order) ────
+  const last = rings[R - 1] as EmittedRing;
+  const tipP = br.pts[n - 1] as Vector3;
+  const tipD = br.dirs[n - 1] as Vector3;
+  const tipR = br.radii[n - 1] as number;
+  if (br.broken && tipR > 0.015) {
+    const center = g.vertex(
+      tipP.x + tipD.x * tipR * 0.4, tipP.y + tipD.y * tipR * 0.4, tipP.z + tipD.z * tipR * 0.4,
+      tipD.x, tipD.y, tipD.z, 0.5, 0.5, o.hue, o.swayFlexTip, o.swayPhase, 0.55,
+    );
+    // jag ring has exactly `seg` verts and WRAPS modularly — a seam-duplicate
+    // (k=seg) would carry an independent random spike, so jag[seg]≠jag[0] and the
+    // cap would leak 4 open edges at the UV seam (the disc/taper caps avoid this
+    // by reusing the ring's own seam-dup, which welds).
+    const jag: number[] = [];
+    for (let k = 0; k < seg; k++) {
+      const px = tipP.x + ((lastRingPos[k * 3] as number) - tipP.x) * 0.45;
+      const py = tipP.y + ((lastRingPos[k * 3 + 1] as number) - tipP.y) * 0.45;
+      const pz = tipP.z + ((lastRingPos[k * 3 + 2] as number) - tipP.z) * 0.45;
+      const spike = (rng.float() * 0.9 + 0.25) * tipR * 1.4;
+      jag.push(
+        g.vertex(
+          px + tipD.x * spike, py + tipD.y * spike, pz + tipD.z * spike,
+          tipD.x, tipD.y, tipD.z, 0.5, 0.5, o.hue, o.swayFlexTip, o.swayPhase, 0.5,
+        ),
+      );
+    }
+    for (let k = 0; k < seg; k++) {
+      const k1 = (k + 1) % seg;
+      g.quad(last.ids[k] as number, last.ids[k + 1] as number, jag[k1] as number, jag[k] as number);
+      g.tri(jag[k1] as number, center, jag[k] as number);
+    }
+  } else {
+    const tip = g.vertex(
+      tipP.x + tipD.x * tipR * 2.0, tipP.y + tipD.y * tipR * 2.0, tipP.z + tipD.z * tipR * 2.0,
+      tipD.x, tipD.y, tipD.z, 0.5, vAlong / (Math.PI * 2 * baseR) + 0.2,
+      o.hue, o.swayFlexTip, o.swayPhase, 1,
+    );
+    for (let k = 0; k < seg; k++) {
+      g.tri(last.ids[k + 1] as number, tip, last.ids[k] as number);
+    }
+  }
+}
+
+/** mesh every branch of a skeleton into the grower (junction-aware) */
 export function tubesForSkeleton(
   g: MeshGrower,
   skel: Skeleton,
@@ -321,18 +569,34 @@ export function tubesForSkeleton(
     maxLevel?: number;
     /** keep only every Nth branch of level ≥ 1 (far-LOD bark diet) */
     branchStride?: number;
+    /** false → legacy independent open-tube meshing (G5 A/B ablation) */
+    junctions?: boolean;
   },
 ): void {
   const maxLevel = opts.maxLevel ?? 99;
   const stride = opts.branchStride ?? 1;
-  let bi = 0;
-  for (const br of skel.branches) {
-    if (br.level > maxLevel) continue;
-    if (br.level >= 1 && stride > 1 && bi++ % stride !== 0) continue;
-    // sway: trunk rigid, outer levels flexible
+  const junctions = opts.junctions ?? true;
+  const branches = skel.branches;
+
+  // keptSet — replicate the legacy filter EXACTLY (incl. the level≥1 stride
+  // counter), so the rng draw order and LOD selection are byte-identical.
+  const kept = new Uint8Array(branches.length);
+  {
+    let bi = 0;
+    for (let i = 0; i < branches.length; i++) {
+      const br = branches[i] as SkelBranch;
+      if (br.level > maxLevel) continue;
+      if (br.level >= 1 && stride > 1 && bi++ % stride !== 0) continue;
+      kept[i] = 1;
+    }
+  }
+
+  for (let i = 0; i < branches.length; i++) {
+    if (!kept[i]) continue;
+    const br = branches[i] as SkelBranch;
     const flexB = br.level === 0 ? 0 : br.level === 1 ? 0.12 : 0.3;
     const flexT = br.level === 0 ? 0.05 : br.level === 1 ? 0.35 : 0.7;
-    tubeForBranch(
+    meshBranch(
       g,
       br,
       {
@@ -346,6 +610,7 @@ export function tubesForSkeleton(
         hue: rng.float() * 2 - 1,
       },
       rng,
+      { junctions },
     );
   }
 }

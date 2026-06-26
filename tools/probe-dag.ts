@@ -25,7 +25,7 @@ import { buildDagHierarchy, validateDagHierarchy } from '../src/nanite/DagHierar
 import { Rng } from '../src/core/Seed';
 import { buildRock } from '../src/vegetation/RockBuilder';
 import { buildTree } from '../src/vegetation/TreeBuilder';
-import { BEECH, SNAG } from '../src/vegetation/Species';
+import { SPRUCE, PINE, BEECH, BIRCH, KARST_GNARL, SNAG } from '../src/vegetation/Species';
 import type { BufferGeometry } from 'three';
 import type { SpeciesParams } from '../src/vegetation/VegTypes';
 
@@ -245,6 +245,32 @@ function barkOf(sp: SpeciesParams, lod: 0 | 1 | 2, label: string): DagBuild {
   return dagFromGeometry(label, buildTree(sp, new Rng(77), { lod }).bark);
 }
 
+/** G2 COLLAPSE GATE — the junction rework's payoff: a CONNECTED closed tree must
+ *  collapse to ~1 root at rock-range tris with a clean ~50%/level decay and NO
+ *  early STUCK. (A locked open boundary used to floor this at dozens of stuck
+ *  roots.) Runs barkOf first (all M/C/E/O/A + twin-build determinism), then the
+ *  collapse asserts on top. */
+function barkGate(sp: SpeciesParams, lod: 0 | 1 | 2, label: string): void {
+  const dag = barkOf(sp, lod, label);
+  const roots = dag.stats.roots;
+  let rootTris = 0;
+  for (const c of dag.clusters) if (!Number.isFinite(c.parentError)) rootTris += c.triCount;
+  if (roots > 4) {
+    fail(`${label} GATE: ${roots} roots (>4) — open boundary still locking the far field`);
+  }
+  if (rootTris > 512) {
+    fail(`${label} GATE: ${rootTris} root tris (>512) — did not collapse to a coarse root`);
+  }
+  for (const ls of dag.levelStats) {
+    if (ls.stuckGroups > 0) {
+      fail(`${label} GATE: L${ls.level}→${ls.level + 1} has ${ls.stuckGroups} STUCK groups (locked boundary)`);
+    }
+    if (ls.triReduction < 0.3) {
+      fail(`${label} GATE: L${ls.level}→${ls.level + 1} tri-reduce ${(ls.triReduction * 100).toFixed(0)}% < 30% (no clean decay)`);
+    }
+  }
+}
+
 console.log('[probe-dag]');
 rockOf(3, 'rock-small');
 rockOf(5, 'rock-mid');
@@ -254,10 +280,19 @@ const hero = rockOf(7, 'rock-hero');
 // bark/rock use this; terrain doesn't (anchor-chain) — which is why terrain is immune.
 dagFromGeometry('rock-hero@256', buildRock('boulder', new Rng(1234 + 7), 7).geometry, 256);
 dagFromGeometry('rock-mid@256', buildRock('boulder', new Rng(1234 + 5), 5).geometry, 256);
-// open-tube topology (bark trunk/branches) — exercises open-boundary locking;
-// SNAG stands in for the DEADWOOD class. Both are the same ExplicitSource path.
-barkOf(BEECH, 1, 'bark-beech');
-barkOf(SNAG, 0, 'deadwood-snag');
+// CONNECTED-junction bark (trunk+branches welded into ONE closed manifold) —
+// the rework's collapse gate: every species must reach ~1 root with clean decay
+// at LOD0 (the hero), where the old disjoint open tubes floored at dozens of
+// stuck sub-pixel roots. LOD1/LOD2 also checked (stride/maxLevel coherence).
+console.log('  -- bark G2 collapse gate (connected junctions → ~1 root) --');
+barkGate(SPRUCE, 0, 'bark-spruce-l0');
+barkGate(PINE, 0, 'bark-pine-l0');
+barkGate(BEECH, 0, 'bark-beech-l0');
+barkGate(BIRCH, 0, 'bark-birch-l0');
+barkGate(KARST_GNARL, 0, 'bark-karst-l0');
+barkGate(SNAG, 0, 'bark-snag-l0');
+barkGate(BEECH, 1, 'bark-beech-l1');
+barkGate(SNAG, 2, 'bark-snag-l2');
 
 // boot-budget extrapolation (F15): DAG build ms per source Mtri, scaled to the
 // 3–4M all-pools source-tri budget (per N1: 1.52M explicit tris today).

@@ -236,6 +236,13 @@ export async function buildVegLibrary(
     return parts;
   };
 
+  // ?nojunctions — G5 A/B ablation: legacy independent open-tube bark (no welded
+  // junctions). DEFAULT is the connected-junction rework (junctions on).
+  const junctionsOn =
+    (typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("nojunctions")
+      : null) === null;
+
   for (let ci = 0; ci < TREE_SPECIES.length; ci++) {
     const sp = TREE_SPECIES[ci] as SpeciesParams;
     for (let v = 0; v < TREE_VARIANTS; v++) {
@@ -247,6 +254,7 @@ export async function buildVegLibrary(
       const t0 = buildTree(sp, seed.rng(label), {
         lod: 0,
         inst,
+        junctions: junctionsOn,
         foliageMode: "hybrid",
         // N9-C0: the nanite leaf head renders foliageMesh as the WHOLE crown — there
         // are NO cards in the SW raster (alpha-test, D-N3). The card-era
@@ -259,8 +267,8 @@ export async function buildVegLibrary(
           meshAnchorTarget: leafAnchorTarget,
         },
       });
-      const t1 = buildTree(sp, seed.rng(label), { lod: 1, inst });
-      const t2 = buildTree(sp, seed.rng(label), { lod: 2, inst });
+      const t1 = buildTree(sp, seed.rng(label), { lod: 1, inst, junctions: junctionsOn });
+      const t2 = buildTree(sp, seed.rng(label), { lod: 2, inst, junctions: junctionsOn });
       const r0 = treeParts(sp, t0);
       if (t0.foliageMesh) {
         r0.push({

@@ -94,6 +94,10 @@ function labelSprite(text: string, sub: string): Mesh {
 export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
   const { engine, params, seed } = ctx;
   const q = new URLSearchParams(window.location.search);
+  // ?noleaves — DEBUG: bark-only (skip foliage) so trunk/branch junctions are visible
+  const noLeaves = q.get('noleaves') !== null;
+  // ?nojunctions — A/B ablation: legacy independent open-tube bark in the gallery too
+  const junctionsOn = q.get('nojunctions') === null;
 
   ctx.progress(0.05, 'gallery: sky');
   const sunSky = new SunSky(engine, params.timeOfDay);
@@ -214,7 +218,7 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
       // yield so boot UI can paint between heavy builds
       await new Promise((r) => setTimeout(r, 0));
       const rng = seed.rng(`tree/${sp.id}/${vi}`);
-      const built = buildTree(sp, rng);
+      const built = buildTree(sp, rng, { junctions: junctionsOn });
       totalTris += built.stats.tris;
       const at = exhibit(
         x,
@@ -229,7 +233,7 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
       barkMesh.receiveShadow = true;
       engine.scene.add(barkMesh);
       const atlas = atlases.get(sp.id);
-      if (built.foliage && atlas) {
+      if (built.foliage && atlas && !noLeaves) {
         const folMesh = new Mesh(
           built.foliage,
           foliageCardMaterial(atlas, { color: sp.foliageColor }),
@@ -516,7 +520,7 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
     let hx = -14;
     for (const sp of heroSpecs) {
       if (!sp) continue;
-      const built = buildTree(sp, seed.rng(`hero/${sp.id}`), { foliageMode: 'hybrid' });
+      const built = buildTree(sp, seed.rng(`hero/${sp.id}`), { foliageMode: 'hybrid', junctions: junctionsOn });
       const at = exhibit(hx, HZ, `HERO ${sp.label}`, `${(built.stats.tris / 1000).toFixed(0)}k tris (mesh foliage)`);
       const bm = new Mesh(built.bark, barkTexturedMaterial(barks.get(sp.barkLayer) as BarkTextures));
       bm.position.set(at.x, 0.42, at.z);
@@ -524,14 +528,14 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
       bm.receiveShadow = true;
       engine.scene.add(bm);
       const heroAtlas = atlases.get(sp.id);
-      if (built.foliage && heroAtlas) {
+      if (built.foliage && heroAtlas && !noLeaves) {
         const fm = new Mesh(built.foliage, foliageCardMaterial(heroAtlas, { color: sp.foliageColor }));
         fm.position.copy(bm.position);
         fm.castShadow = true;
         fm.receiveShadow = true;
         engine.scene.add(fm);
       }
-      if (built.foliageMesh) {
+      if (built.foliageMesh && !noLeaves) {
         const fm2 = new Mesh(built.foliageMesh, foliageMaterial({ color: sp.foliageColor }));
         fm2.position.copy(bm.position);
         fm2.castShadow = true;

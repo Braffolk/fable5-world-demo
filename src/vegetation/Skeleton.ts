@@ -65,6 +65,8 @@ interface BranchSpec {
   /** phyllotaxis azimuth on the parent (for anchor frames) */
   azimuth: number;
   stub: boolean;
+  /** index of the parent branch in ctx.branches; -1 for the trunk */
+  parentIdx: number;
 }
 
 function growBranch(ctx: GrowCtx, spec: BranchSpec): SkelBranch | null {
@@ -134,7 +136,10 @@ function growBranch(ctx: GrowCtx, spec: BranchSpec): SkelBranch | null {
     len: effLen,
     tParent: spec.tParent,
     broken,
+    parentIdx: spec.parentIdx,
   };
+  // capture this branch's own index BEFORE the push so children can reference it
+  const myIdx = ctx.branches.length;
   ctx.branches.push(branch);
   if (spec.stub) return branch;
 
@@ -210,6 +215,7 @@ function growBranch(ctx: GrowCtx, spec: BranchSpec): SkelBranch | null {
             tParent: t,
             azimuth: az,
             stub,
+            parentIdx: myIdx,
           });
         }
       }
@@ -320,6 +326,7 @@ export function growSkeleton(
     tParent: 0,
     azimuth: 0,
     stub: false,
+    parentIdx: -1,
   });
 
   // crown bounds for normal bending + capture framing
