@@ -70,8 +70,8 @@ import { brickNormalTsl, brickWord, BRICK_NORMAL } from './VoxelBrick';
 import { makeFetch, slotHash } from './NaniteFetch';
 import { hashColor, instRotateDir, instYaw, type NaniteCam } from './NaniteCommon';
 import type { NaniteVisBuffers } from './NaniteRaster';
-import { elemU, toF } from './Tsl';
-import type { BufOf, UV2 } from './Tsl';
+import { elemU, toF, uniformF } from './Tsl';
+import type { BufOf, UV2, UniformF } from './Tsl';
 
 export interface NaniteResolveHandles {
   /** add to engine.scene; renderOrder −1000, castShadow off */
@@ -84,6 +84,9 @@ export interface NaniteResolveHandles {
    *  pixel never re-derives a triangle) so it also stays ≤10. Add to engine.scene right
    *  after `mesh` (renderOrder −999, just after the main resolve). */
   voxMesh?: Mesh;
+  /** runtime gate for the full-screen three-CSM `keep` sample (1=full, 0=corner-only). Shared
+   *  by both resolve passes. Exposed for a thermal-invariant within-boot A/B (setKeepFull). */
+  keepFullU: UniformF;
 }
 
 export interface ResolveWorld {
@@ -239,6 +242,23 @@ export function buildNaniteResolve(
   // storage read + a dot/normalize per voxel pixel in a pass that runs regardless — disabling it
   // is expected to change GPU cost ~negligibly; the value is the visual A/B, not a perf win.
   const voxShade = q.get('voxao') !== '0';
+  // ?reskeep=0 — drop the redundant three-CSM `keep` factor in the lighting (below).
+  // When OUR nanite depth-shadow is active (default), the resolve ALSO references three's
+  // CSMShadowNode purely to multiply in `keep` — but three's cascade maps are EMPTY in the
+  // black slate (all casters render through the nanite path, castShadow=false), so every
+  // PCSS/PCF tap returns "lit" ⇒ keep≡1 and the whole per-pixel sample is wasted work that the
+  // half-res shadow optimisation does NOT quarter (it is full-res). Dropping it also makes
+  // `receivedShadowPositionNode` (which exists ONLY to feed that CSM node) dead → a SECOND
+  // per-pixel wp reconstruction vanishes. Default ON (=keep present = bit-identical old path).
+  // CAVEAT: referencing the CSM node is also what makes three run its per-frame cascade FIT
+  // that NaniteShadow.run consumes; with keep dropped the fit is driven explicitly (see
+  // NaniteFrame). Static measurement + shotdiff are fit-independent. Naniteshadow-active only.
+  const keepOn = q.get('reskeep') !== '0';
+  // Runtime-toggleable gate for the keep sample (see the lighting block). Default mirrors the
+  // reskeep flag; window.__laasNanite.setKeepFull(0|1) flips it WITHIN a boot for a clean,
+  // thermal-invariant A/B of the full-screen CSM sample cost (cross-boot gpuWall is thermally
+  // noisy). Shared by both resolve passes so the toggle affects tri + vox together.
+  const keepFullU = uniformF(keepOn ? 1 : 0);
   // PERF-VB4 (D-N45): the WORLD raster is single-pass — ONE SW+HW pass elects the 24-bit
   // depth key into visPayloadV (high bits) and stores the full 25-bit id into the side
   // buffer visBV. The resolve takes the id from visBV and reconstructs depth from the
@@ -750,9 +770,6 @@ export function buildNaniteResolve(
       // (keep) so three runs its per-frame cascade FIT (NaniteShadow.run reads the
       // fitted cascade VPs); its own map is EMPTY in the black slate → keep == 1 →
       // folds out (and a cheap blocker-search-only sample). ?oldgeo → csm path.
-      const keep = world.csm
-        ? ((nodeObject(world.csm) as unknown as NV4).x.clamp(0, 1) as unknown as NF)
-        : (float(1) as unknown as NF);
       // S0: half-res PCSS + bilateral upsample when wired (default), else the
       // full-res per-pixel sample (?shalfres=0). camDist drives the bilateral.
       const camDist = (wp as unknown as { sub(o: NV3): { length(): NF } })
@@ -762,7 +779,24 @@ export function buildNaniteResolve(
         ? world.shadowHalf.upsample(wp as unknown as NV3, camDist)
         : world.naniteShadow.shadowFactor(wp as unknown as NV3, wNormal as unknown as NV3);
       const my = (myRaw as unknown as { clamp(a: number, b: number): NF }).clamp(0, 1);
-      const sf = (my as unknown as { mul(o: NF): { toVar(): NF } }).mul(keep).toVar();
+      const sf = (my as unknown as { toVar(): NF }).toVar();
+      // keep ≡ three's CSM factor — ≈1 here (empty black-slate maps). keepFullU (default =
+      // !reskeep) gates whether the FULL-SCREEN per-pixel CSM cascade-select + PCSS sample runs:
+      //   1 → sampled on every covered pixel (old path, value = sf·keep).
+      //   0 → sampled ONLY the [0,0] corner pixel, so three's CSM node stays BUILT (its per-frame
+      //       cascade FIT — consumed by NaniteShadow.run, NaniteFrame:484 — keeps running) while
+      //       every real pixel skips the wasted ≈1 sample. That sample is FULL-res, NOT quartered
+      //       by the half-res shadow, so it is pure waste when our nanite shadow is active.
+      // Bit-identical for real pixels (keep≡1); the corner pixel only keeps the node alive.
+      if (world.csm) {
+        const keep = (nodeObject(world.csm) as unknown as NV4).x.clamp(0, 1) as unknown as NF;
+        const isCorner = (screenCoordinate.x as unknown as NF)
+          .lessThan(float(1))
+          .and((screenCoordinate.y as unknown as NF).lessThan(float(1)));
+        If(isCorner.or((keepFullU as unknown as NF).greaterThan(float(0.5))), () => {
+          sf.assign((sf as unknown as { mul(o: NF): NF }).mul(keep));
+        });
+      }
       direct = nDotL.mul(sf) as unknown as NF;
     } else if (shadowsOn && world.csm) {
       const sf = (nodeObject(world.csm) as unknown as NV4).x.clamp(0, 1).toVar() as unknown as NF;
@@ -902,5 +936,5 @@ export function buildNaniteResolve(
     voxMesh.castShadow = false;
     voxMesh.receiveShadow = false;
   }
-  return { mesh, voxMesh };
+  return { mesh, voxMesh, keepFullU };
 }

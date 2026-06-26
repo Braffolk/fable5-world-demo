@@ -358,6 +358,11 @@ export function buildNaniteFrame(
   (window as unknown as { __laasNanite?: object }).__laasNanite = {
     setProbe: probeSet,
     readProbe: probeRead,
+    /** within-boot A/B of the three-CSM keep sample: 1=full-screen (old), 0=corner-only (the
+     *  ?reskeep=0 optimisation). Thermal-invariant — flip it inside ONE boot to read the cost. */
+    setKeepFull: (v: number) => {
+      resolve.keepFullU.value = v;
+    },
     vp: () => cam.vp.value.toArray(),
     /** N8-D1: live τ (screen-error px) for the continuous-zoom gate / A-B */
     setTau: (v: number) => {
