@@ -144,7 +144,176 @@ story). MEASURED:
 - Impostor bake now skipped under ?forcevox / ?noimpostors (committed 1e80a1c) — impostors ARE the live >424m
   far-field LOD in the NORMAL path, so default unchanged; only the voxel-superseded path skips the bake.
 
-### 6. THE EARLIEST FRAMING (workflow `wlbc8kgla`) — SUPERSEDED, see 6b/6c then 6e
+### 6f. UPDATE 2026-06-26 pm5 — occlusion audit + UE5-port design (workflows whpx1vxrn, wz5abjqsv, CODE-ONLY)
+AUDIT (whpx1vxrn): we have ~8 empty/hidden skip mechanisms (not 2); the two runtime carvers BOTH fail at
+forest/forcevox — voxoccl net-negative (near-plane gate + any see-through gap pins min-pool key 0 → never
+culls), voxocc self-disables on the costly bricks (arms only dagLevel>0 ∧ area≥16 ∧ occCount≤48/64). Root =
+upstream solid [center±half] brick-cube footprint projected with occupancy IGNORED at L0.
+UE5-PORT DESIGN (wz5abjqsv, skeptical) — KEY NEGATIVE FINDINGS (save future-us from chasing these):
+- ⚠️ **Occupancy-tightened BOUNDS (UE BlockBounds) ≈0 win on the dominant near-DENSE bricks.** Fill = screen-rect
+  area `bbW·bbH` (NaniteVoxelRaster.ts:969), DEPTH-INDEPENDENT; a front-facing dense canopy brick fills the
+  screen plane (all 4 cells on both screen axes), its empty cells are behind in DEPTH → tightening the AABB buys
+  ~0 screen pixels. Also a silhouette-thinning/popping quality risk. SHELVE bounds-tightening.
+- ⚠️ **Per-fragment DDA discard (UE RayCastBrick) is NET-NEGATIVE for us** — no ROP/HiZ to make a discarded
+  fragment free, so a missed fragment still pays its march; carves ≈0 on dense. DO NOT implement.
+- Per-cell scatter (UE ScatterBricks): ≈0 perf on dense; only a possible voxocc SIMPLIFICATION (removes the mask
+  buffer), adopt iff measured ≥ neutral.
+- THE residual is CROSS-BRICK OVERDRAW (class C): the unconditional per-fragment `aLoadU(visPayloadV[px])`
+  :994 (the `If(candL>prevE)` :995 gates only the store, never the load). NO occupancy lever touches it.
+- DROP-LIST: **voxoccl → DROP** (dead weight; caveat: confirm net-neg outside forcevox before flipping the
+  production default). **voxocc → KEEP** (still earns on the coarse/far sparse band). per-pixel earlyZ = the
+  election, nothing to drop.
+- The ONE small UE-derived portable lever worth a MEASURED shot: **1a silhouette-corner reject** (`?voxsil`) —
+  reject the ~20-35% of footprint-rect fragments outside the projected cube's hexagon silhouette; occupancy-
+  INDEPENDENT so it DOES hit dense bricks; ~1.3× ceiling. Cheap octagon form: in Phase A accumulate min/max of
+  (x+y) and (x−y) over the already-projected 8 corners (:701-705), reject in Phase B before :994 (~8 ALU, no
+  matrix/rcp, no new buffer). ADOPT IFF measured net-positive (must beat the partially-cached load it dodges).
+- **PREMISE-AUDIT (both design agents independently): none of these is "the fix."** The real levers are one
+  level up and OUT of the occupancy charge: **(1) near-LOD brick-COUNT reduction** (fewer L0 bricks = the
+  multiplier on everything) and **(2) per-pixel FRONT-TO-BACK early-out** (UE TileBricks-style; kills cross-brick
+  overdraw). Both need leaving brick-parallel for tile/pixel-parallel or changing the DAG cut. The whole-pipeline
+  review (wxdbsv124, running) is expected to rank LOD/F2B ABOVE anything occupancy.
+- NEXT: await wxdbsv124's whole-frame cost map + ranked levers; implement in priority order (likely F2B-overdraw
+  / near-LOD, + 1a as a small measured add-on, + drop voxoccl). Nothing to implement until GPU frees + the review
+  ranks. Workflow scripts: voxel-occlusion-systems-audit (wf_1f79696a), ue5-voxel-occupancy-port-design (wf_05675d3c).
+
+### 6g. UPDATE 2026-06-26 pm6 — "could we BUILD a software early-Z?" answered (workflow wuqn7vfvw, CODE-ONLY)
+The "DDA discard net-negative bc no ROP" conclusion was challenged (user: when you say "can't bc we lack Y",
+first ask "could we HAVE Y?"). Costed, not hand-waved. VERDICT:
+- ✅ YES, software early-Z is BUILDABLE — form (c) tile-F2B IS one, built TWICE; "no ROP" is REFUTED by
+  measurement (the tile raster's per-pixel early-out half WON ~16%, 8.85 vs 10.55ms).
+- ❌ BUT it does NOT net-positively kill the residual on OUR structure, for a deeper reason than "no ROP":
+  UE's early-Z pays off because it gates a heavy per-fragment DDA occupancy ray-march. WE resolve occupancy at
+  Phase A (baked mask), so our fragment's only cost is addressing + one global load — and **the load IS the test**
+  (must read nearest-depth to reject). Nothing expensive left to gate ⇒ the early-Z prize collapses to a single
+  per-fragment LOAD CONSTANT, cuts ZERO fragments.
+- Buildable forms COSTED + REFUTED: (a) depth-only prepass = net-NEGATIVE (runs all F to build depth, then all F
+  to read ⇒ DOUBLES the load; fused variant hits the hard 3-atomic-storage-buffer Metal cliff 15-17ms + broken
+  writes, D-N45). (c) tile-F2B = MEASURED net-neg, removed TWICE (?voxraster=bin +4.8..+14.1ms; ?tileproto
+  +11.7/+18.1ms — frame is COVERAGE-bound not submit-bound; bin floor taxes the brick-count multiplier). (b)
+  software Hi-Z = dominated, min-pool gap-pins to 0 on canopy.
+- SURVIVOR (one-probe follow-on): **depth-mirror** — swap the :994 atomic load for a plain cached load from a
+  +1 plain `depthMirror` buffer seeded by f2b winners (visPayloadV atomicMax stays source of truth ⇒ provably
+  pixel-identical), gated in electHere :993-998. RETIRES voxoccl. BUT benefit = atomic_load − plain_load only,
+  which on Apple/Metal/Dawn may be ~0 (same cache; miss cost identical). Speculative constant-factor, not a kill.
+- ⭐ **PRIORITY CORRECTION (premise-audit, the consolidated conclusion across ALL voxel design workflows):**
+  overdraw residual = brick_count × footprint × depth-complexity-D. Early-Z attacks only the occluded FRACTION
+  (D−1)/D. **NEAR-LOD brick-count reduction (rank-1 distance-LOD) attacks the MULTIPLIER directly** — cuts F
+  itself (L0 brick count = the over-emission, the portable ~10× gap) AND deflates the D that bounds every
+  early-Z's ceiling. Early-Z is downstream of + largely SUBSUMED by near-LOD. **ORDER FIXED: near-LOD FIRST;
+  depth-mirror only after, on the smaller surviving F, only if its A/B pays.**
+- DECISIVE PROBES (when GPU frees): (1) near-LOD brick-count reduction = the prime lever, prototype + measure at
+  canopy/200k. (2) depth-mirror A/B = is an atomic-relaxed load materially costlier than a plain load on Metal at
+  canopy? (settles the mirror's whole sign + retires voxoccl). Workflow: software-early-z-design (wf_f61f1533).
+- DESIGN PHASE IS CONVERGED — next step is GPU IMPLEMENTATION (near-LOD), gated on the big pipeline review
+  (wxdbsv124) freeing the GPU + ranking near-LOD whole-frame. No more design workflows needed for the voxel path.
+
+### 6h. UPDATE 2026-06-26 pm7 — FULL-PIPELINE REVIEW reframes everything (workflow wxdbsv124, 10 agents, GPU-measured)
+THE BIG MEASURED REFRAMING (supersedes the voxel-only framing for prioritisation):
+- **FOREST IS COMPUTE-BOUND.** Matched-refreshMs nores pair: removing BOTH resolve passes did NOT reduce gpuWall
+  (render collapsed 99→6.9ms, compute rose 60→69ms) ⇒ resolve/post/shadow OVERLAP and HIDE under the geometry
+  compute critical path. **In the forest, post/resolve/shadow contribute ~0; the whole lever is compute (cull +
+  SW triangle raster + voxel scatter).** (General world is the OPPOSITE: resolve ~22%/6ms, post ~11%, shadow ~9%.)
+- ⭐ **PREMISE CATCH #1 (stands): the 8.5–32.6M triangles dominating forest compute are tree TRUNK/BARK, NOT
+  foliage.** Under forcevox=all, ForestScene.ts:158 keeps bark maxDist=2000 (trunks raster as TRIANGLES to 2000m)
+  while :290 suppresses the leaf head (leaves→voxel). visClusters:voxClusters ≈ 15:1 = bark-trunk : voxel-crown.
+  The "voxel forest" cost is mostly the woody-skeleton triangle raster, by design.
+- CATCH #2 (REFUTED by measurement — good news): forcevox=all is NOT a cost-inflating debug mode. At aerial,
+  forcevox vs no-forcevox geometry is IDENTICAL (impostors don't engage there); at ground it's LIGHTER than
+  shipping. **Our 200k forcevox benchmark is legitimate.**
+- CATCH #3 (stands): the "per-pixel loop ≈90% of world1" claim is UNVERIFIED — the rdbg/voxrdbg stage-split flags
+  are CONFOUNDED by HZB feedback (gutting a raster stage changes next frame's emitted geom 3–10× via the
+  occlusion cull reading last-frame depth). Clean stage isolation needs geometry-neutral flags, not rdbg.
+- CONFIRMED LEVERS (measured, thermal-invariant ratios):
+  1. **Lever 3 — voxel per-pixel fill: CONFIRMED DOMINANT at the representative ground_canopy pose** (the real
+     ~33fps target; voxrecip A/B ground/far ratio 1.75→2.55 when only the fill math changes). Forest-only,
+     QUALITY-SENSITIVE (DDA-discard → foliage see-through) → USER'S CALL. Safe first step: build-time L0
+     occupancy-tighten (?voxtight, no per-pixel cost). ⚠️ NOTE the wz5abjqsv design said bounds-tighten ≈0 on
+     DENSE bricks while this review cites ~0.2 density (75–84% empty rect) → the two DISAGREE on brick density;
+     ?voxrdbg=2 + ?voxtight + voxBrickWrites must settle it before building.
+  2. **Lever 4 — resolve per-material specialization: CONFIRMED ~5–8ms/25–37% of the GENERAL frame** (~0 in
+     forest). Quality-neutral, shippable. **FIX SHIPPED THIS RUN (uncommitted in worktree): `?reskeep=0`** drops
+     a redundant full-screen CSM `keep` sample (three's cascade maps are EMPTY in the black slate ⇒ keep≡1);
+     measured −3.9ms/~19% on depth-diverse general vistas, quality-neutral (shotdiff ≈ TAA floor); cascade fit
+     preserved via a [0,0]-corner reference. NaniteResolve.ts:245,256,261,783-799,939 + NaniteFrame.ts:362.
+     Recommended default-on after a fast-motion spot-check. ~0 forest benefit.
+  3. **Lever 1 — SW trunk-tri raster ALU (rcp-hoist + 2-FMA depth plane + rect-small for ≤4px tris):** real &
+     large (8.6M ground / 32.5M aerial tris), QUALITY-NEUTRAL, also speeds general + 6 shadow cascades. PRIMARY
+     at aerial, SECONDARY at ground. Per-pixel SHARE UNVERIFIED (confounded flags) → implement behind
+     ?rcphoist/?rectsmall to BOTH ship the win AND finally measure the split. UE: NaniteRasterizer.ush:238.
+- KILLED: HW/SW reclassify (hwTris <3%), persistent-threads (non-portable Dawn/Metal), R64 election, F2B/tile
+  voxel march (refuted prior), shade-binning (no wave ops), WPO velocity MRT.
+- ⚠️ **THERMAL BLOCKER:** shared/busy machine this session → cross-boot gpuWall absolutes useless (refreshMs
+  17→150; 200k boot pins it 58–75). Forest perf MUST be measured via within-boot ratios + geometry-neutral
+  load-preserving A/Bs, or with a heavier cooldown / freeze-render idle hook. This gates precise forest lever ms.
+- WHAT UE DOES BETTER (user's Q): sparse voxel ray-march+discard+tight block-bounds (vs our dense ~80%-empty-rect
+  election); per-triangle rcp-hoist + 2-FMA depth + adaptive Rect raster (vs per-row div + per-pixel 9-ALU bary);
+  one-material-per-dispatch shade (vs uber-shader). Workflow: pipeline-shader-review-vs-ue5 (wf_eba1bf81).
+- OPEN DECISION (user's call): next lever = Lever 1 (trunk raster, quality-neutral, resolves the split,
+  generalizes) vs Lever 3 (voxel fill, dominant at gameplay, quality-sensitive); + commit reskeep? + solve the
+  thermal-measurement problem first.
+
+### 6i. UPDATE 2026-06-26 pm8 — BOTH levers implemented + MEASURED → DROP; the real lever found (workflow wzzwsum7x)
+"Do both" → implemented + validated behind flags, matched-condition A/B (machine now has CONSTANT 2-core load
+8h → deltas/ratios reliable). Both DROP for shipping. Honest negative result that redirects.
+- **LEVER 1 (trunk-tri raster ALU: rcphoist/rectsmall) — DROP, premise REFUTED.** Matched cross-boot A/B: 0.0
+  ground / +1.8 aerial (rcphoist), ≤0.4 (rectsmall). visTris identical (geometry-neutral), quality-neutral.
+  WGSL confirmed changed (not DCE'd) yet gpuWall flat ⇒ **Tint→Metal ALREADY hoists the rcp / FMA-contracts the
+  depth plane** — our "optimization" is what the compiler does. AND the trunk raster is NOT frame-dominant: the
+  heavy compute is **nanTraverseAB (cull) + nanVoxScatter (voxel fill)**. (Also caught a thermal confound — a hot
+  baseline faked a −8/−11ms "win"; matched comparison erased it.) Revert the flags.
+- **LEVER 3 (voxel crown fill: voxtight/voxdda) — DROP default-on, SURFACE.** Density disagreement SETTLED via
+  ?voxdenslog: L0 bricks ~24% mean occupancy, 67% have ≤16/64 cells ⇒ bricks ARE SPARSE (the review was right,
+  the "dense" camp wrong). So a real empty-rect fill ceiling exists — BUT:
+  - Pure-fill A/B (occl DECOUPLED, occl=0, 24/24 kept): tight = −1.4ms ground / −0.9ms aerial = **REAL but SMALL
+    (~3%)**, not the "big ceiling."
+  - Shipping config (occl=1): **the saving EVAPORATES.** ⭐ ROOT CAUSE (go-up-a-level): the solid-AABB crowns
+    DOUBLE AS the depth occluders feeding our voxel occlusion cull (voxoccl). Tightening/DDA-carving makes them
+    see-through → the cull sees THROUGH them → more occluded foliage survives (voxClusters +14%, visTris +17%) →
+    the revealed raster cost ≈ the fill saved. **FILL AND OCCLUSION ARE COUPLED.** UE's brick win doesn't port
+    because UE ray-marches bricks AND its HZB occluder is SEPARATE geometry; ours uses the solid bricks
+    themselves as the occlusion frontier, so carving them defeats our own cull.
+  - QUALITY: voxtight is NOT quality-neutral (changes 56% of ground px — the "empty margin" was load-bearing
+    phantom fill); voxdda is see-through (18% px). Both visible, default-off, surfaced.
+- **⭐ THE REAL STRUCTURAL LEVER (surfaced, user's call):** DECOUPLE the occluder from the shaded fill — keep the
+  solid AABB as the cull occluder but DDA/ray-march only the SHADED pixels (what UE effectively does). Larger
+  redesign. OR attack the cull (nanTraverseAB) directly — newly visible as a heavy compute item, never
+  investigated. Distance to 60fps UNCHANGED: ground_canopy ~29.6ms floor (~13ms over), aerial ~37.2ms (~21ms over).
+- CODE STATE: worktree has uncommitted experiments (rcphoist/rectsmall=DROP/revert; voxtight=refuted; voxdda+
+  voxdenslog=keep-as-knob/diagnostic if pursuing decouple) + the ready-to-commit reskeep general-scene win
+  (NaniteResolve/NaniteFrame, −3.9ms vista, quality-neutral) + throwaway .mjs harnesses. Untangle on direction.
+- Workflow: implement-levers-1-and-3 (wf_7d20765e). Harnesses: l3v-final.mjs, tight-ab.mjs, l1-ab.mjs (worktree root).
+
+### 6j. UPDATE 2026-06-26 pm9 — decouple REFUTED at gate; DEFINITIVE convergence on near-LOD (workflow wvhr07zzj)
+The occluder/fill decouple (user-chosen) was REFUTED at the go/no-go gate (no GPU burned). Sound + buildable +
+occlusion-preservable, but: (1) ceiling is the ~1.4ms isolated carve (a thin slice; frame mass is trunk-tris
+15:1 + cull nanTraverseAB + scatter); (2) **my "decouple unlocks near-LOD" premise was FALSE** — near-LOD
+coarsens far crowns into FEWER/BIGGER/STILL-SOLID bricks, which STRENGTHENS the solid-AABB occluder and cuts the
+multiplier directly; the cull only fights per-pixel CARVING, never COUNT reduction, so near-LOD needs no
+decouple; (3) quality-negative (solid occluder + carved fill → gaps resolve to SKY, 56% px change).
+⭐ **DEFINITIVE CONVERGENCE (all ~10 workflows): the ONE real lever is NEAR-LOD BRICK-COUNT REDUCTION** (UE
+`Level = floor(log2(Distance·factor))` MIP) — attacks the ~2-5x STRUCTURAL multiplier (work emitted), cuts the
+cull + scatter + raster simultaneously, strengthens the occluder. EVERY voxel micro-lever is DEAD/subsumed:
+occupancy-bounds, DDA-discard, software-early-Z, decouple, raster-ALU (compiler already does it). #2 lever = the
+never-profiled CULL (nanTraverseAB), the actual compute bottleneck. The frame is also 15:1 trunk-TRIANGLES whose
+LOD-τ coarsening was NEVER measured (big-review Lever 2) → trunk count reduction cuts the same cull+raster.
+⭐ **near-LOD IS the user's original "far trees → single SQUARE" coarsening concern** — the perf lever and the
+quality limit are the SAME knob. The fix = a LOD curve fine-near, aggressively-coarse-far, CAPPED so it never
+reads as rectangles. voxlodk=8 (the user's calibration) is FINER (more bricks, slower) precisely to dodge
+squares — so there's a real perf↔quality tradeoff to get right. QUALITY-SENSITIVE ⇒ USER MUST EYEBALL (the
+'does far coarsen without squares' observable, memory verify-user-observable-output).
+SHELVED (cleared design, do NOT delete): ?voxoccdecouple (half-res per-brick atomicMin-splat occluder buffer
+voxOccDepth + kVoxOccSplat between scatter & hzb.build NaniteFrame.ts:481 + HZB L0 merge NaniteHzb.ts:97-124) —
+only relevant AFTER near-LOD lands AND if a residual per-pixel carve still pays; even then UE's per-pixel
+occupancy hit-depth (one buffer, empty→discard, gaps show REAL depth) beats the parallel solid occluder.
+CONSOLIDATED CODE STATE: reskeep SHIPPED (nanite-raster e46ec9c, default-off ?reskeep=0, general-scene −3.9ms
+vista, quality-neutral, default-on pending fast-motion eyeball). All refuted experiments REVERTED (rcphoist/
+rectsmall/voxtight/voxdda/voxdenslog). Worktree clean. Distance to 60fps: ground_canopy ~13ms over, aerial ~21ms.
+NEXT: near-LOD brick-count reduction — understand current band-anchor/voxlodk curve → design aggressive capped
+far-coarsening → implement behind flag → USER eyeballs coarseness + measure brick-count/gpuWall. Then cull
+(nanTraverseAB). Workflow: voxel-decouple-occluder-from-fill (wf_a470218f).
+
+### 6. THE EARLIEST FRAMING (workflow `wlbc8kgla`) — SUPERSEDED, see 6b/6c/6e/6f/6g/6h/6i then 6j
 Single tree, camera ~2-3m (inside crown), `forcevox=all`: close-up fps 120→30 (~33ms) at **BOTH voxlod=0 AND
 voxlod=1**. So it's the **BASE SW voxel raster**, PRE-EXISTING on nanite-raster, NOT the new pyramid/occupancy.
 User: it's a code pathology (hundreds of squares should be ~free), it's FUNDAMENTAL, and probably a main thing
