@@ -95,7 +95,11 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
   // voxel shell it replaces — measured eye 45.9→36.9 / oblique 52.3→40.0 ms at 200k — AND it
   // directly fixes the user-reported "voxels start way too close / entry bricks too large"
   // (entry bricks at 60 m project ~6 px vs ~11 px at 35 m). World scene keeps its own default.
-  const transitionDist = Number(q.get('voxnear') ?? 60) || 60;
+  // 45 (2026-07-02c, was 60): user eyeball — the aggregate leaf ladder's coarse levels read
+  // as SPIKY crowns near the band end, while small voxel cells read fine; a shorter mesh
+  // band (45 m) + milder ladder (leaflodk 0.4) hides the spikes and was measured perf-
+  // NEUTRAL vs 60/0.25 (eye 33.2 vs 33.0 ms at 200k).
+  const transitionDist = Number(q.get('voxnear') ?? 45) || 45;
   // ?voxlod (G1, DEFAULT ON): voxel MIP pyramid + a REAL multi-level DAG (UE5-style: far coarsens
   // the SAME crown through a band-anchored octave ladder, near refines, picked by the screen-error
   // cut). ?voxlod=0 forces the old single-level degenerate always-cut DAG (the A/B baseline).
@@ -138,10 +142,12 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
   // coarsening in-band (0.25 ≈ L1 at ~14 m). Baked at DAG build; set before buildAggregateDag.
   {
     const lk = q.get('leaflodk');
-    // DEFAULT 0.25 (2026-07-02): eye-pose A/B at 200k/dpr1.5 measured visTris 12.44M→5.08M
-    // (−59%) and gpuWall 44.4→36.7 ms with an eye-level screenshot indistinguishable from
-    // LOD0 (leaves ≤14 m stay finest). ?leaflodk=1 restores the legacy no-coarsening band.
-    setAggLodErrorK(lk !== null ? Number(lk) : 0.25);
+    // DEFAULT 0.4 (2026-07-02c, was 0.25): with the mesh band shortened to 45 m the milder
+    // ladder hides the user-reported SPIKY coarse crowns at the band end at neutral perf
+    // (33.2 vs 33.0 ms eye at 200k). 0.25's deeper coarsening also measured a POSE TRADE
+    // (oblique +7 via grown leaves leaving the cheap-tiny raster regime). ?leaflodk=1 =
+    // legacy no-coarsening band.
+    setAggLodErrorK(lk !== null ? Number(lk) : 0.4);
   }
 
   // ── tree geometry (real crowns, full leaf density) ────────────────────────
