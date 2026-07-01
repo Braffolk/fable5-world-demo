@@ -1,0 +1,12 @@
+import { chromium } from 'playwright';
+const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+const page = await browser.newPage({ viewport: { width: 800, height: 520 } });
+const errs = [];
+page.on('console', (m) => { const t = m.text(); if (m.type() === 'error' || /error|Error|invalid|Invalid|validation|Tint|WGSL/.test(t)) errs.push(t.slice(0, 1500)); });
+page.on('pageerror', (e) => errs.push('PAGEERROR ' + e.message.slice(0, 800)));
+await page.goto('http://localhost:5173/?scene=forest&trees=500&nanite=1&dpr=1&vcompact=1&hud=0', { waitUntil: 'domcontentloaded' });
+await page.waitForFunction(() => window.__laas && (window.__laas.ready || window.__laas.error != null), undefined, { timeout: 240000, polling: 300 });
+await page.evaluate(async () => window.__laas.settle && (await window.__laas.settle(20)));
+console.log('boot ok; errors captured:', errs.length);
+for (const e of errs.slice(0, 6)) console.log('---\n' + e);
+await browser.close();

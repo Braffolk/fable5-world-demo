@@ -529,6 +529,15 @@ export function buildNaniteRaster(
         ctx = makeCtx(instId, ci);
       }
 
+      // PERF-3 win #2 — cooperative vertex-transform cache (own module; ?vcompact=1).
+      // MUST run BEFORE the voxel returnIf below: prime() emits a workgroupBarrier, and
+      // a barrier after a storage-derived returnIf is non-uniform control flow to naga
+      // ⇒ WGSL validation failure ⇒ the whole world1 pipeline silently dies (the
+      // "?vcompact renders an empty scene" bitrot, found 2026-07-02). Voxel clusters
+      // have vcCount=0 (no compact range) so their populate no-ops — they pay only the
+      // barrier before bailing.
+      const corner = vcache.prime(ctx, ci, localTri);
+
       // voxel-foliage (spec §4.1 / §A1): SKIP voxel(7) clusters in the TRIANGLE raster.
       // The cut emits voxel clusters into the SAME qRaster as triangles (§4.6); the
       // post-traverse fan-out copies them to qVoxRaster for the Stage-2 voxel bin, but
@@ -536,8 +545,8 @@ export function buildNaniteRaster(
       // (registerVoxelHead), so fetchWorldVert would read garbage triangle data —
       // bail before any vertex work. UNIFORM across the workgroup (matClass is per
       // cluster, broadcast via ctx.meshId), so every live thread returns (no barrier
-      // deadlock; the wgcache barrier above already ran for thread 0's makeCtx). The
-      // bricks render via the scatter voxel raster (Stage 2) into the same vis buffers.
+      // deadlock; the wgcache + vcache barriers above already ran). The bricks render
+      // via the scatter voxel raster (Stage 2) into the same vis buffers.
       {
         const mcVox = elemU(gpu.meshes, ctx.meshId.mul(uint(MESH_WORDS)).add(uint(6)))
           .shiftRight(uint(8))
@@ -619,11 +628,8 @@ export function buildNaniteRaster(
         returnIf(itemCount.greaterThanEqual(uint(0)));
       }
 
-      // PERF-3 win #2 — cooperative vertex-transform cache (own module; default off,
-      // measured marginal). prime() emits the populate + barrier (or nothing when off)
-      // and returns the corner fetcher; all 128 threads are live here (uniform early-out).
-      const corner = vcache.prime(ctx, ci, localTri);
-
+      // (vcache.prime moved ABOVE the voxel returnIf — its barrier must precede any
+      // storage-derived return; see the note there.)
       If(localTri.lessThan(ctx.triCount), () => {
         const w0 = corner(localTri, 0);
         const w1 = corner(localTri, 1);

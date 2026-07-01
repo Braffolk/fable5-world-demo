@@ -53,6 +53,14 @@ export interface VertexCache {
  *  (cooperative populate) and the plain fetchWorldVert (fallback / disabled path). */
 export function makeVertexCache(gpu: RegistryGpu, fetch: NaniteFetch): VertexCache {
   const { fetchWorldVert, fetchWorldVertByIndex } = fetch;
+  // ⚠️ BITROT (2026-07-02): ?vcompact=1 currently renders an EMPTY SCENE — binding
+  // gpu.vcompact is the 11th storage buffer in the world1 compute stage, over the
+  // 10-per-stage Metal limit ("The number of storage buffers (11) ... exceeds the
+  // maximum") → the pipeline never builds. The voxel-era buffers consumed the slot
+  // this cache used when it was measured. Re-enabling requires FREEING one binding
+  // (e.g. fold hwCount into hwQueue[0], or pack vcompact into spare cluster words).
+  // The barrier-ordering fix in NaniteRaster (prime before the voxel returnIf) is
+  // already in place for when that lands.
   const enabled = new URLSearchParams(window.location.search).get('vcompact') === '1';
 
   if (!enabled) {
