@@ -123,6 +123,67 @@ measured the individual levers larger (leaflodk eye −17% alone; voxlodk obliqu
 - `?voxbn` per-brick shading **ON** (strict visual improvement, ~0 measured cost).
 - ForestScene boot skips the impostor bake (−~7 s; remaining boot = tree gen + 48 sync DAG builds).
 
+## 6. Wave 2 (same day, autonomous session): ?voxcell — the massive-square killer
+
+User feedback after wave 1: 25-30 fps, far crowns STILL collapse to single massive squares
+(disqualifying), and "don't just look at voxels — measure standard nanite (noleaves) too."
+
+Root cause of the squares, precisely: `lodWarp` (production-default τ warp, its own header says
+"this knob never ships") balloons τ_eff to ~27 px @200 m / ~45 px @500 m; a voxel cluster emitted
+that coarse painted bricks as SOLID SCREEN RECTS. Also `instMinPx≈110 px` silently deletes whole
+trees beyond ~300 m in the forest scene (no impostor exists there to take over) — a separate
+latent issue (far field literally ends).
+
+Fix shipped (`6c1fd51` + `597d1cf`): **?voxcell** — per-pixel ray→brick raster for big
+(>?voxcellmin=64 px²) non-straddling COARSE (dagLevel>0) bricks: slab test against the brick's
+local AABB (rotated-cube silhouette, not a rect), 6-step DDA through the 4³ occupancy mask to
+the first occupied cell (sub-brick detail with ZERO extra bricks; exhaustion = conservative
+hit), exact per-pixel hit depth for the election. Perf engineering: ray dir + clip depth are
+LINEAR in ndc (invVp w-row constant across x,y) → per-cluster bases, ~6 FMAs/pixel; front-slab
+key = upper bound on any hit key → overdraw early-out (1 load + compare for buried bricks).
+Blind alleys measured on the way: a τ_eff cap in the traverse (?voxtaucap) fights the warp at
+~8× brick count per level (aerial 36→81 ms @4k at cap=8) — default 0, voxcell subsumes it;
+running rays on the dense near-L0 shell or on ≤8 px far bricks cost +6/+17/+19 ms @200k —
+hence the coarse-only + area>64 gating.
+
+Final measured state: 4k voxcell vs off ≈ 26.5/39.9/32.2 vs 25.1/40.9/36.2 (aerial WINS via
+early-out). 200k same-session ordered: off 43.5/46.9/27.0 → v4 on 44.7/53.3/35.1 (+1.2/+6.4/
++8.1, v4 measured hotter). Screenshots: fine-grained carved voxel foliage to the horizon,
+zero flat squares, per-brick color variation. NOTE: all absolute ms in this section are from a
+thermally-cooked machine (hours of load; ~15-40% above the morning's numbers) — trust ratios.
+
+## 7. Wave-2 final state (rested machine, post vite-watcher fix)
+
+The vite dev-server watcher was polling 7 GB (worktrees+shots) every 200 ms = a constant
+50-60% CPU — almost certainly the long-suspected "background load" inflating absolutes for
+weeks (`ad248bf` fixes it; 0.2% after). Rested 200k numbers with ALL shipped defaults
+(leaflodk 0.25, voxnear 60, errorK **1**, voxbn, voxcell v4):
+
+| config                     | eye  | oblique | aerial |
+|----------------------------|------|---------|--------|
+| full defaults              | 40.2 | 38.5    | 26.0   |
+| `?noleaves` (base)         | 15.8 | 15.2    | 11.4   |
+
+Additional A/B facts (rested): `noguard` no-win (guard stays); `nanbark=const` −1.5-2.4 ms
+(bark texturing cost, visible — a cheaper-not-flat bark is a candidate); `leaflodk 0.15`
+is a POSE TRADE (eye −3.3, oblique +6.8, reproduced ×2 — coarse leaf levels grow leaves
+past the cheap-tiny raster regime; a `growMax` cap is the smarter future knob, backlog);
+`?vcompact` (vertex cache) renders an EMPTY SCENE — the 11th storage buffer exceeds the
+10-per-stage Metal limit (diagnosed via tools/vcdebug.mjs; barrier-ordering also fixed in
+`6193ca6`) — re-enabling requires freeing a binding (fold hwCount into hwQueue[0]).
+⚠️ Method lesson: ALWAYS screenshot-gate flag A/Bs — vcompact's "3× win" was an empty frame.
+
+**Distance to goal:** worst poses ~38-40 ms isolated (~25-30 sustained live est.) vs 16.6.
+Identified micro-levers left (vcache after binding-fold, rect fast path, bark slim, voxel
+eye-shell) plausibly sum to 5-8 ms. The remaining 2×+ structural lever is **cross-instance
+far-field aggregation**: beyond ~120-150 m, merge many trees into per-tile super-voxel
+grids (64-128 m tiles voxelized at boot from planted instances, own LOD ladder, registered
+as identity-instance voxel heads — the registry primitives already support this, see the
+DAG review agent's finding #8). It simultaneously collapses far brick+cluster counts,
+removes the per-instance cull floor (`instMinPx` ≈110 px currently DELETES trees beyond
+~300 m — the forest visibly ends there), and is the UE5-HLOD-equivalent move. That is the
+recommended next big rock.
+
 **Status vs the 16.6 ms goal:** not yet reached — on the hot machine the best config reads
 eye ~37 / oblique ~40; cool-machine estimate ~28-33. Roughly half the original gap closed with
 zero eye-level visual change. The remaining eye/oblique cost is (a) the L0 voxel shell 60-250 m
