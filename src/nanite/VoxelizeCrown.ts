@@ -77,13 +77,13 @@ import {
 // correction-3 needs; the old footprint-cost theory is superseded by the anchor + Rank-2 gate).
 // shell: 0 = no interior-brick removal (removes geometry => hole risk on concave/thin crowns; the
 // HARD "no holes" constraint wins, Rank-2's occupancy silhouette handles the far-overdraw instead).
-// errorK 3 (NOT 1): with the FIX-B root re-derive (ownError = brick world half-extent, projK-
-// independent), errorK=1 is the geometrically-exact "one brick ≈ tau px" ladder — but that makes a
-// thin crown's coarsest grid-floor shell collapse to a tiny 2-3 brick blob by ~150-200 m. errorK=3
-// holds a FINER pyramid level out to ~200 m so a far crown still reads as a multi-brick CROWN SHAPE
-// (the user's "never a single square" cap), while near (≤20 m) stays the finest L0 regardless. The
-// visual distance-sweep gate (8/20/50/100/200 m) drove this value; ?voxlodk= still sweeps it live.
-const VOXLOD_CFG = { levels: 7, errorK: 3, sparseK: 1, shell: 0, anchorL0: 0 };
+// errorK 2 (2026-07-02, was 3): errorK=3 made L0 own the band out to ~380 m at τ=3 — i.e. the
+// pyramid did essentially NO coarsening anywhere visible; measured cost at 200k/dpr1.5 was
+// oblique 59→38.5 ms (−34%) and aerial 37→17.7 ms (−52%) for ?voxlodk=1. K_FLOOR=3 alone already
+// guarantees a far crown never collapses to one square, and ?voxbn per-brick shading (2026-07-02)
+// carries most of the "reads as a crown" load that errorK=3 was buying. errorK=2 is the visual
+// compromise (L0 to ~250 m); ?voxlodk=1 is the full-perf dial, =3 the legacy fine ladder.
+const VOXLOD_CFG = { levels: 7, errorK: 2, sparseK: 1, shell: 0, anchorL0: 0 };
 
 /** voxlod: number of MIP-pyramid levels (see VOXLOD_CFG). Read via the getter so a runtime
  *  ?voxlodlevels= override (set before build) takes effect without re-threading signatures. */

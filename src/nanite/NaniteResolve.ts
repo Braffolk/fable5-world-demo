@@ -66,7 +66,7 @@ import type { ProbeGI } from '../gpu/passes/ProbeGI';
 import type { Heightfield } from '../world/Heightfield';
 import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK, CLUSTER_WORDS, MESH_WORDS, readVertex } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
-import { brickNormalTsl, brickWord, BRICK_NORMAL } from './VoxelBrick';
+import { brickNormalTsl, brickWord, BRICK_ALBEDO, BRICK_NORMAL } from './VoxelBrick';
 import { makeFetch, slotHash } from './NaniteFetch';
 import { hashColor, instRotateDir, instYaw, type NaniteCam } from './NaniteCommon';
 import type { NaniteVisBuffers } from './NaniteRaster';
@@ -242,6 +242,11 @@ export function buildNaniteResolve(
   // storage read + a dot/normalize per voxel pixel in a pass that runs regardless — disabling it
   // is expected to change GPU cost ~negligibly; the value is the visual A/B, not a perf win.
   const voxShade = q.get('voxao') !== '0';
+  // ?voxbn (DEFAULT ON — must match NaniteVoxelRaster): the election payload carries the
+  // winning brick's index in bits 21-27, so shade with THAT brick's baked normal + albedo
+  // instead of brick[0]-of-the-block. Fixes the per-block flat shading that fused adjacent
+  // bricks into giant single-color plates / near-black crowns (2026-07-01 review).
+  const voxBrickShade = q.get('voxbn') !== '0';
   // ?reskeep=0 — drop the redundant three-CSM `keep` factor in the lighting (below).
   // When OUR nanite depth-shadow is active (default), the resolve ALSO references three's
   // CSMShadowNode purely to multiply in `keep` — but three's cascade maps are EMPTY in the
@@ -374,7 +379,9 @@ export function buildNaniteResolve(
     } else {
       const qVox = cull.qVoxRasterRO;
       if (!qVox) throw new Error('NaniteResolve: vox pass built without qVoxRasterRO');
-      const voxIdx = pRaw.bitAnd(uint(0x7fffffff)).toVar();
+      // item index = bits 0-20 (QVOX_CAP = 2^21). Bits 21-27 carry the winning BRICK index
+      // under ?voxbn (default on; zero when off — masking is safe in both modes).
+      const voxIdx = pRaw.bitAnd(uint(0x1fffff)).toVar();
       const voxItem = qVox.element(voxIdx.add(uint(1)));
       instId = voxItem.x.toVar();
       ci = voxItem.y.toVar();
@@ -708,28 +715,47 @@ export function buildNaniteResolve(
         // normal, rotate by instance yaw, flip camera-ward — it then drives the sun N·L + ambient
         // floor below, giving the darkening on faces angled away from the sun. =0 SKIPS this block
         // (drops the gpu.voxelBricks normal read) so voxNrm stays the flat up-normal ⇒ flat-lit.
+        // ?voxbn: the winning BRICK index rides visBV bits 21-27 (0 when the flag is off in
+        // the raster ⇒ brickBase+0 = the legacy block-representative decode, byte-identical).
+        const brickSel = voxBrickShade
+          ? pRaw.shiftRight(uint(21)).bitAnd(uint(0x7f)).toVar()
+          : uint(0).toVar();
+        const brickBase = elemU(gpu.clusters, ci.mul(uint(CLUSTER_WORDS)).add(uint(6))).toVar();
+        const bi = brickBase.add(brickSel).toVar();
         if (voxShade) {
           const vInstId = item.x;
           const vB = gpu.instances.element(vInstId.mul(uint(2)).add(uint(1))).toVar() as unknown as NV4;
           const yawSc = instYaw(vB);
-          // brickBase = the voxel cluster's word6 (§4.1). The block shades with brick[brickBase]
-          // mean normal (coarse: the whole block is one representative sample, §6.4).
-          const brickBase = elemU(gpu.clusters, ci.mul(uint(CLUSTER_WORDS)).add(uint(6))).toVar();
-          const nrmWord = elemU(gpu.voxelBricks, brickWord(brickBase, uint(BRICK_NORMAL)));
+          // per-brick mean normal (word BRICK_NORMAL of the WINNING brick under ?voxbn;
+          // brick[brickBase] block-representative otherwise, §6.4).
+          const nrmWord = elemU(gpu.voxelBricks, brickWord(bi, uint(BRICK_NORMAL)));
           const localN = brickNormalTsl(nrmWord) as unknown as NV3;
           const gn = normalize(instRotateDir(yawSc, localN)) as unknown as NV3;
           const toCamV = normalize(camPos.sub(wp)) as unknown as NV3;
           voxNrm.assign(dot(gn, toCamV).lessThan(0).select(gn.negate(), gn) as unknown as NV3);
         }
-        // leaf-tint color path (§7.2.6): mesh word7 = packed linear RGB + hueVar. No per-leaf
-        // vdata jitter (no triangle) — use the mid tint (k=0 ⇒ base) × a mid crown-AO (0.6).
-        const mp = fetch.meshWord(meshId, 7);
-        const base = vec3(
-          toF(mp.bitAnd(uint(0xff))),
-          toF(mp.shiftRight(uint(8)).bitAnd(uint(0xff))),
-          toF(mp.shiftRight(uint(16)).bitAnd(uint(0xff))),
-        ).div(255) as unknown as NV3;
-        voxCol.assign(base.mul(0.8) as unknown as NV3);
+        if (voxBrickShade) {
+          // per-brick baked ALBEDO (BRICK_ALBEDO rgb of the winning brick) — breaks the
+          // single-tint plate look; same 0.8 factor as the tint path so overall crown
+          // brightness is unchanged.
+          const albWord = elemU(gpu.voxelBricks, brickWord(bi, uint(BRICK_ALBEDO)));
+          const bAlb = vec3(
+            toF(albWord.bitAnd(uint(0xff))),
+            toF(albWord.shiftRight(uint(8)).bitAnd(uint(0xff))),
+            toF(albWord.shiftRight(uint(16)).bitAnd(uint(0xff))),
+          ).div(255) as unknown as NV3;
+          voxCol.assign(bAlb.mul(0.8) as unknown as NV3);
+        } else {
+          // leaf-tint color path (§7.2.6): mesh word7 = packed linear RGB + hueVar. No per-leaf
+          // vdata jitter (no triangle) — use the mid tint (k=0 ⇒ base) × a mid crown-AO (0.6).
+          const mp = fetch.meshWord(meshId, 7);
+          const base = vec3(
+            toF(mp.bitAnd(uint(0xff))),
+            toF(mp.shiftRight(uint(8)).bitAnd(uint(0xff))),
+            toF(mp.shiftRight(uint(16)).bitAnd(uint(0xff))),
+          ).div(255) as unknown as NV3;
+          voxCol.assign(base.mul(0.8) as unknown as NV3);
+        }
       });
     }
 

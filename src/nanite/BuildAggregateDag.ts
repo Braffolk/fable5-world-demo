@@ -65,6 +65,23 @@ export interface AggregateDagOpts {
 
 type FullOpts = Required<AggregateDagOpts>;
 
+/** ?leaflodk= — SCALE on the aggregate ladder's reported error (growError). The measured
+ *  2026-07-01 disease: growError for L1 is small enough that its cut distance (a node EMITS
+ *  when projK·err/d ≤ τ, i.e. beyond d₁ = projK·err/τ ≈ 57 m at retina) lands BEYOND the
+ *  35 m mesh→voxel handoff, so the leaf-mesh band renders LOD0 everywhere → ~10.3M of the
+ *  12.4M eye-pose visTris. errorK<1 SHRINKS the reported error, pulling each level's
+ *  engagement K× nearer (L1 at ~57·K m — e.g. K=0.25 → ~14 m), engaging real coarsening
+ *  INSIDE the band; K>1 pushes detail farther (more tris). Baked at DAG build; set BEFORE
+ *  buildAggregateDag (ForestScene wires ?leaflodk=). Default 1 = the legacy ladder (no
+ *  behavior change without the flag). */
+const AGG_LOD_CFG = { errorK: 1 };
+export function setAggLodErrorK(k: number): void {
+  if (Number.isFinite(k) && k > 0) AGG_LOD_CFG.errorK = k;
+}
+export function aggLodErrorK(): number {
+  return AGG_LOD_CFG.errorK;
+}
+
 /** the per-level decision + grown geometry the group loop consumes. Islands are
  *  pre-grown into `gverts`; `keepTri` already folds in each tri's island keep
  *  flag — so the group loop never touches island bookkeeping. */
@@ -482,8 +499,9 @@ export function buildAggregateDag(
         continue;
       }
 
-      // group error: strictly monotone above every child's own error
-      const groupErr = Math.max(soup.growError, childErr * (1 + 1e-6) + 1e-7);
+      // group error: strictly monotone above every child's own error. ?leaflodk= scales the
+      // geometric term so the cut engages K× nearer (in-band leaf coarsening — see AGG_LOD_CFG).
+      const groupErr = Math.max(soup.growError * AGG_LOD_CFG.errorK, childErr * (1 + 1e-6) + 1e-7);
       if (groupErr > maxError) maxError = groupErr;
 
       // append the grown soup, re-clusterize into PARENTS

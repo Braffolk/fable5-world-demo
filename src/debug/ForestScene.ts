@@ -28,9 +28,9 @@ import {
   setClusterTriCap,
 } from '../nanite/GeometryRegistry';
 import { type DagBuild, buildDag } from '../nanite/BuildDag';
-import { buildAggregateDag } from '../nanite/BuildAggregateDag';
+import { buildAggregateDag, setAggLodErrorK } from '../nanite/BuildAggregateDag';
 import { setClusterFill } from '../nanite/Clusterize';
-import { DEFAULT_TRANSITION_DIST, geometryToSource } from '../nanite/WorldRegistry';
+import { geometryToSource } from '../nanite/WorldRegistry';
 import {
   appendVoxelCrown,
   DEFAULT_VOXEL_GRID_DIM,
@@ -88,7 +88,12 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
   // foliage (voxel crowns) actually costs vs the woody-skeleton triangles + the cull.
   const noLeaves = q.get('noleaves') !== null;
   const voxGridDim = Number(q.get('voxgrid') ?? DEFAULT_VOXEL_GRID_DIM) || DEFAULT_VOXEL_GRID_DIM;
-  const transitionDist = Number(q.get('voxnear') ?? DEFAULT_TRANSITION_DIST) || DEFAULT_TRANSITION_DIST;
+  // forest default 60 m (2026-07-02, was DEFAULT_TRANSITION_DIST=35): with the leaf ladder
+  // coarsening in-band (?leaflodk), the 35-60 m coarse-MESH ring is much cheaper than the L0
+  // voxel shell it replaces — measured eye 45.9→36.9 / oblique 52.3→40.0 ms at 200k — AND it
+  // directly fixes the user-reported "voxels start way too close / entry bricks too large"
+  // (entry bricks at 60 m project ~6 px vs ~11 px at 35 m). World scene keeps its own default.
+  const transitionDist = Number(q.get('voxnear') ?? 60) || 60;
   // ?voxlod (G1, DEFAULT ON): voxel MIP pyramid + a REAL multi-level DAG (UE5-style: far coarsens
   // the SAME crown through a band-anchored octave ladder, near refines, picked by the screen-error
   // cut). ?voxlod=0 forces the old single-level degenerate always-cut DAG (the A/B baseline).
@@ -116,6 +121,17 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
       shell: shRaw !== null ? Number(shRaw) : undefined,
     });
   }
+  // ?leaflodk= — aggregate LEAF ladder error scale (see BuildAggregateDag AGG_LOD_CFG). The
+  // 2026-07-01 cost-map found the leaf-mesh band (<35 m) renders LOD0 everywhere (~10.3M of
+  // 12.4M eye visTris) because the ladder's L1 cut lands beyond the voxel handoff; K<1 pulls
+  // coarsening in-band (0.25 ≈ L1 at ~14 m). Baked at DAG build; set before buildAggregateDag.
+  {
+    const lk = q.get('leaflodk');
+    // DEFAULT 0.25 (2026-07-02): eye-pose A/B at 200k/dpr1.5 measured visTris 12.44M→5.08M
+    // (−59%) and gpuWall 44.4→36.7 ms with an eye-level screenshot indistinguishable from
+    // LOD0 (leaves ≤14 m stay finest). ?leaflodk=1 restores the legacy no-coarsening band.
+    setAggLodErrorK(lk !== null ? Number(lk) : 0.25);
+  }
 
   // ── tree geometry (real crowns, full leaf density) ────────────────────────
   ctx.progress(0.1, 'forest: building veg library');
@@ -123,7 +139,9 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
     engine.renderer,
     seed,
     (p, m) => ctx.progress(0.1 + p * 0.4, m),
-    { leafAnchorTarget: leafDensity },
+    // impostors:false — ForestScene never builds an ImpostorRuntime, so the octahedral bake
+    // (6 species × 192 GPU renders + readbacks) was pure wasted boot time (~confirmed 2026-07-01).
+    { leafAnchorTarget: leafDensity, impostors: false },
   );
   // canopy species with a bark trunk + a real leaf crown (cls 0–4)
   const pools = lib.pools.filter((p): p is VegPool => p.cls <= 4 && !!p.r0?.[0] && !!p.leaf);

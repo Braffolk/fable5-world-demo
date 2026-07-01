@@ -161,7 +161,14 @@ export async function buildVegLibrary(
    *  detail layer (~850); the nanite path has NO cards (D-N3), so it must carry the crown.
    *  Full density (all anchors) is ~827 MB / the D-N41 cluster wall — the aggregate (C2) is the
    *  real fix; this caps it to a stable hero density. Default 2500; higher = fuller + heavier. */
-  opts?: { leafAnchorTarget?: number },
+  opts?: {
+    leafAnchorTarget?: number;
+    /** false = the caller never samples impostor atlases (e.g. ForestScene, which builds no
+     *  ImpostorRuntime) — skips the octahedral bake: 6 species × 64 views × 3 passes of GPU
+     *  renders + readback stalls + dilate floods, a large count-independent boot chunk that
+     *  was pure wasted load time when unused. Default true (world scene behavior unchanged). */
+    impostors?: boolean;
+  },
 ): Promise<VegLib> {
   // N9-C0: per-crown real-leaf anchor budget for the nanite leaf head. Default 4000
   // — the density the user signed off on for spruce + pine; ?naniteleafdensity=N dials it.
@@ -324,6 +331,7 @@ export async function buildVegLibrary(
     typeof window !== "undefined" ? window.location.search : "",
   );
   const skipImpostors =
+    opts?.impostors === false ||
     impParams.get("forcevox") !== null ||
     impParams.get("noimpostors") === "1" ||
     (impParams.get("ablate") ?? "").includes("impostors");

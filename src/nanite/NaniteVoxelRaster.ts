@@ -256,6 +256,16 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // below the +0.5 bias's 0.5/bbW ≥ 0.004 rounding margin — so px and election are identical.
   // ?voxrecip=0 restores the int div+mod path (A/B control).
   const voxRecip = new URLSearchParams(window.location.search).get('voxrecip') !== '0';
+  // ?voxbn (DEFAULT ON, =0 restores the legacy payload): pack the winning BRICK's index
+  // (7 bits, <128/cluster) into visBV bits 21-27 so the resolve can shade with THAT brick's
+  // baked normal+albedo instead of brick[0]-of-the-block. The per-BLOCK flat shading fused
+  // hundreds of adjacent ~10px bricks into giant single-color plates (the "Minecraft slabs" /
+  // near-black crowns, 2026-07-01 review); per-brick decode breaks them back into a crown.
+  // Bit budget: itemIdx < QVOX_CAP = 2^21 (bits 0-20), brickIdx bits 21-27, VOX_BIT = 31.
+  const voxBrickShade = new URLSearchParams(window.location.search).get('voxbn') !== '0';
+  if (voxBrickShade && QVOX_CAP - 1 >= 1 << 21) {
+    throw new Error(`NaniteVoxelRaster: QVOX_CAP ${QVOX_CAP} overflows the 21-bit item field under ?voxbn`);
+  }
   const WRITE_CTR = 0;
   const atomicWords = 1;
   const atomicBufAttr = new StorageBufferAttribute(new Uint32Array(atomicWords), 1);
@@ -959,6 +969,10 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
         const bbW = (wgBbW.element(b) as unknown as NU).toVar();
         const bbH = (wgBbH.element(b) as unknown as NU).toVar();
         const cand = (wgCand.element(b) as unknown as NU).toVar();
+        // ?voxbn: this brick's id for the election store — voxId with the brick index in
+        // bits 21-27 (see the flag note at voxBrickShade). Built at per-brick scope so the
+        // per-pixel election below stores the WINNING brick, not just the block.
+        const voxIdB = voxBrickShade ? voxId.bitOr(b.shiftLeft(uint(21))).toVar() : voxId;
         // OCCUPANCY-GATE mask (?voxlod=1): which OCC_MASK_DIM×OCC_MASK_DIM bbox buckets a
         // projected occupied sub-cell touched (Phase A). 0xffff (all) for an unarmed brick.
         const occMask = voxOccGate && wgOccMask ? (wgOccMask.element(b) as unknown as NU).toVar() : null;
@@ -995,7 +1009,7 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
             If(candL.greaterThan(prevE), () => {
               const wonE = atomicMax(visPayloadV.atomic.element(px), candL) as unknown as NU;
               If(candL.greaterThan(wonE), () => {
-                atomicStore(visBV.atomic.element(px), voxId);
+                atomicStore(visBV.atomic.element(px), voxIdB);
                 // debug per-pixel BRICK-WRITE counter (Stage-2 overlay, §A2). DEFAULT OFF —
                 // single-global-address atomicAdd per win serializes ~1.5-2.1M wins/frame on one
                 // cache line (the close-up cliff; see voxWrites note above). ?voxwrites=1 restores it.
