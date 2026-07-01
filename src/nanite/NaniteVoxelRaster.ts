@@ -277,8 +277,12 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // the ?voxdither=1 stipple mode keep the legacy flat path unchanged.
   const voxCell =
     new URLSearchParams(window.location.search).get('voxcell') !== '0' && !voxDither;
-  const voxCellMinAreaRaw = Number(new URLSearchParams(window.location.search).get('voxcellmin') ?? '12');
-  const voxCellMinArea = Number.isFinite(voxCellMinAreaRaw) && voxCellMinAreaRaw >= 0 ? voxCellMinAreaRaw : 12;
+  // 64 (not 12): at 200k the far field is THOUSANDS of small (≤8px) sparse coarse bricks;
+  // running the ray+DDA on them measured +6/+17/+19 ms (eye/oblique/aerial) because carved
+  // pixels pay the full DDA miss. A ≤8px brick never reads as a square — only the BIG
+  // warp-inflated bricks do, and those are exactly the area>64 set the ray path keeps.
+  const voxCellMinAreaRaw = Number(new URLSearchParams(window.location.search).get('voxcellmin') ?? '64');
+  const voxCellMinArea = Number.isFinite(voxCellMinAreaRaw) && voxCellMinAreaRaw >= 0 ? voxCellMinAreaRaw : 64;
   const WRITE_CTR = 0;
   const atomicWords = 1;
   const atomicBufAttr = new StorageBufferAttribute(new Uint32Array(atomicWords), 1);
@@ -1257,7 +1261,10 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
                   const tMz = bmnZ.add(toF(ciz.add(offZ)).mul(cellSz)).sub(roLz).mul(invDz).toVar();
                   const done = uint(0).toVar();
                   const tCur = tEnter.toVar();
-                  loopU(uint(0), uint(10), () => {
+                  // 6 steps (not the worst-case 10): on exhaustion the pixel is ACCEPTED at the
+                  // current cell (conservative fill — a slightly denser far brick, never a hole).
+                  // Misses through sparse masks were the 200k cost driver; this bounds them.
+                  loopU(uint(0), uint(6), () => {
                     If(done.equal(uint(0)), () => {
                       const bit = uint(cix).add(uint(ciy).mul(uint(4))).add(uint(ciz).mul(uint(16))).toVar();
                       const occ = bit
@@ -1299,6 +1306,13 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
                         });
                       });
                     });
+                  });
+                  // step budget exhausted while STILL IN-BOUNDS (done=0 ⇒ neither hit nor
+                  // walked out) ⇒ conservative HIT at the current march point — a slightly
+                  // denser far brick, never a hole. Bounds the sparse-mask miss cost.
+                  If(done.equal(uint(0)), () => {
+                    hit.assign(uint(1));
+                    tHit.assign(tCur);
                   });
                 });
                 If(hit.equal(uint(1)), () => {
