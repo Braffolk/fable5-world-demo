@@ -105,37 +105,49 @@ export function buildFarTiles(opts: {
   const accNY = new Float32Array(nBricks);
   const accNZ = new Float32Array(nBricks);
 
-  // bucket instances by tile (indices into a flat [poolIdx, instIdx] list)
+  // bucket instances into EVERY tile their crown can reach (boundary-crossing crowns
+  // were silently clipped when bucketed by trunk position only — the user-visible HOLES
+  // and white slabs at tile borders). reach = per-species max XZ brick extent × max scale.
+  const reachOf = pools.map((p) => {
+    let r = 1;
+    for (const b of p.species.bricks) {
+      r = Math.max(r, Math.abs(b.center[0]) + b.half, Math.abs(b.center[2]) + b.half);
+    }
+    return r * 1.45; // max instance scale ≈ 1.4
+  });
   const tileOf = new Map<number, [number, number][]>();
   for (let pi = 0; pi < pools.length; pi++) {
     const a = (pools[pi] as { a: Float32Array }).a;
+    const reach = reachOf[pi] as number;
     for (let ii = 0; ii * 4 < a.length; ii++) {
       const x = a[ii * 4] as number;
       const z = a[ii * 4 + 2] as number;
-      const tx = Math.min(tilesX - 1, Math.max(0, Math.floor((x - mnX) / tileSize)));
-      const tz = Math.min(tilesZ - 1, Math.max(0, Math.floor((z - mnZ) / tileSize)));
-      const key = tz * tilesX + tx;
-      let list = tileOf.get(key);
-      if (!list) {
-        list = [];
-        tileOf.set(key, list);
+      const tx0 = Math.min(tilesX - 1, Math.max(0, Math.floor((x - reach - mnX) / tileSize)));
+      const tx1 = Math.min(tilesX - 1, Math.max(0, Math.floor((x + reach - mnX) / tileSize)));
+      const tz0 = Math.min(tilesZ - 1, Math.max(0, Math.floor((z - reach - mnZ) / tileSize)));
+      const tz1 = Math.min(tilesZ - 1, Math.max(0, Math.floor((z + reach - mnZ) / tileSize)));
+      for (let tz = tz0; tz <= tz1; tz++) {
+        for (let tx = tx0; tx <= tx1; tx++) {
+          const key = tz * tilesX + tx;
+          let list = tileOf.get(key);
+          if (!list) {
+            list = [];
+            tileOf.set(key, list);
+          }
+          list.push([pi, ii]);
+        }
       }
-      list.push([pi, ii]);
     }
   }
 
   const splatCell = (
-    lx: number,
-    ly: number,
-    lz: number,
+    cx: number,
+    cy: number,
+    cz: number,
     alb: [number, number, number],
     nrm: [number, number, number],
     w: number,
   ): void => {
-    // cell coords in the tile grid
-    const cx = Math.floor(lx / cellSize);
-    const cy = Math.floor(ly / cellSize);
-    const cz = Math.floor(lz / cellSize);
     if (cx < 0 || cy < 0 || cz < 0 || cx >= cellsXZ || cy >= cellsY || cz >= cellsXZ) return;
     const bx = (cx / nCellsPerBrickRow) | 0;
     const by = (cy / nCellsPerBrickRow) | 0;
@@ -151,6 +163,28 @@ export function buildFarTiles(opts: {
     accNX[bi] = (accNX[bi] as number) + nrm[0] * w;
     accNY[bi] = (accNY[bi] as number) + nrm[1] * w;
     accNZ[bi] = (accNZ[bi] as number) + nrm[2] * w;
+  };
+  // VOLUME splat: cover every cell the source brick's AABB overlaps. Point-splatting the
+  // center produced a sampling BEAT against the tile grid (0.53 m source bricks vs 0.75 m
+  // cells → regular missed columns = the user-visible "wireframe" stripe artifact).
+  const splatBox = (
+    lx: number,
+    ly: number,
+    lz: number,
+    half: number,
+    alb: [number, number, number],
+    nrm: [number, number, number],
+    w: number,
+  ): void => {
+    const x0 = Math.floor((lx - half) / cellSize);
+    const x1 = Math.floor((lx + half) / cellSize);
+    const y0 = Math.floor((ly - half) / cellSize);
+    const y1 = Math.floor((ly + half) / cellSize);
+    const z0 = Math.floor((lz - half) / cellSize);
+    const z1 = Math.floor((lz + half) / cellSize);
+    for (let cz = z0; cz <= z1; cz++)
+      for (let cy = y0; cy <= y1; cy++)
+        for (let cx = x0; cx <= x1; cx++) splatCell(cx, cy, cz, alb, nrm, w);
   };
 
   const out: FarTileBuild[] = [];
@@ -195,12 +229,12 @@ export function buildFarTiles(opts: {
         // rotate the baked normal by yaw
         const nx = (b.normal[0] as number) * cy + (b.normal[2] as number) * sy;
         const nz = (b.normal[2] as number) * cy - (b.normal[0] as number) * sy;
-        splatCell(wx, py, wz, b.albedo as [number, number, number], [nx, b.normal[1] as number, nz], Math.max(0.05, b.density));
+        splatBox(wx, py, wz, b.half * s, b.albedo as [number, number, number], [nx, b.normal[1] as number, nz], Math.max(0.05, b.density));
       }
       // trunk column: ground → crown base, radial horizontal normals
       const topY = Math.max(cellSize, sp.crownMinY * s);
       for (let y = cellSize * 0.5; y < topY; y += cellSize) {
-        splatCell(lx0, y, lz0, [sp.bark.r, sp.bark.g, sp.bark.b], [cy, 0.15, -sy], 1);
+        splatCell(Math.floor(lx0 / cellSize), Math.floor(y / cellSize), Math.floor(lz0 / cellSize), [sp.bark.r, sp.bark.g, sp.bark.b], [cy, 0.15, -sy], 1);
       }
     }
 

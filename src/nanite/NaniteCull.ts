@@ -305,15 +305,17 @@ export function buildNaniteCull(
   // is order-independent, so the unordered path is image-identical (verified). ?voxf2b=1 restores
   // the old K-bucket path (the A/B control / opt-in for any future large-batch retune).
   const voxf2b = (voxParams.get('voxf2b') ?? '0') !== '0';
-  // ?voxtaucap — voxel-cluster τ_eff clamp (px); see the traverse cut note. DEFAULT 0 (OFF):
-  // the cap fights the lodWarp by whole pyramid levels and each level is ~8× the brick COUNT
-  // (per-brick Phase-A setup is NOT area-invariant) — 8px measured aerial 36→81 ms and 16px
-  // still +15 ms at 4k trees. ?voxcell subsumes the cap's purpose: a warped 20-30 px brick
-  // renders as its occupied 4³ CELLS (~5-8 px each, carved silhouette, per-pixel depth), so
-  // the "one massive square" read is gone without any extra bricks (4k A/B: voxcell+cap0 ≈
-  // baseline perf; aerial even −4 ms from the overdraw early-out). Kept as an experiment dial.
-  const voxTauCapRaw = Number(voxParams.get('voxtaucap') ?? '0');
-  const voxTauCap = Number.isFinite(voxTauCapRaw) && voxTauCapRaw >= 0 ? voxTauCapRaw : 0;
+  // ?voxtaucap — voxel-cluster τ_eff clamp (px); see the traverse cut note. DEFAULT 12
+  // (2026-07-02c): pre-?fartiles this cap was ruinous — it fought the lodWarp across
+  // THOUSANDS of per-tree crowns (~8× bricks per forced level; aerial 36→81 ms at 8px).
+  // With ?fartiles the far field is ~1 head per 64 m TILE, so descending a level or two
+  // costs a bounded few hundred bricks per visible tile — and WITHOUT the cap the warp
+  // selects 12-24 m tile bricks from ~200 m whose occupancy masks are FULL (dense canopy
+  // union), so ?voxcell paints them as solid tree-sized cubes (the user-reported "cube
+  // landscape"). 12 px caps the emitted brick size so far tiles stay at 3-6 m bricks whose
+  // carved cells read as foliage. ?voxcell still handles the silhouette; 0 disables.
+  const voxTauCapRaw = Number(voxParams.get('voxtaucap') ?? '12');
+  const voxTauCap = Number.isFinite(voxTauCapRaw) && voxTauCapRaw >= 0 ? voxTauCapRaw : 12;
   // K is a BUILD-TIME constant: it bakes K bucket counters + K indirect attrs and
   // (in the voxel raster) K kernel instances. ?voxf2bk default 16 (iter-2 NET-BEST: the
   // canopy write-drop SATURATES at K16 over the tight linear-view-depth [dMin,dMax]
