@@ -247,6 +247,10 @@ export function buildNaniteResolve(
   // instead of brick[0]-of-the-block. Fixes the per-block flat shading that fused adjacent
   // bricks into giant single-color plates / near-black crowns (2026-07-01 review).
   const voxBrickShade = q.get('voxbn') !== '0';
+  // ?resfar=N — bark micro-detail distance gate (m); beyond it moss fbm + normal-map are
+  // skipped (sub-texel there). 0 disables (legacy full-detail everywhere). Default 60.
+  const resFarRaw = Number(q.get('resfar') ?? '60');
+  const resFarDist = Number.isFinite(resFarRaw) && resFarRaw >= 0 ? resFarRaw : 60;
   // ?reskeep=0 — drop the redundant three-CSM `keep` factor in the lighting (below).
   // When OUR nanite depth-shadow is active (default), the resolve ALSO references three's
   // CSMShadowNode purely to multiply in `keep` — but three's cascade maps are EMPTY in the
@@ -596,25 +600,44 @@ export function buildNaniteResolve(
           return (base.depth(layer) as unknown as { level(n: unknown): NV4 }).level(lod);
         };
         const tA = sample(barkTexA);
-        const tB = sample(barkTexB);
 
         // albedo: sqrt-decoded texture, bark (hue+cavity) vs deadwood (dim+moss+rot)
         const tex = tA.rgb.mul(tA.rgb) as unknown as NV3;
         const barkAlb = hueShift(tex, dv.x, 0.14).mul(dv.w.mul(0.45).add(0.55)) as unknown as NV3;
+        // ?resfar (default 60 m, 0 = off): DISTANCE-GATED micro-detail. Beyond the gate the
+        // 3-octave fbm moss noise and the tangent-frame + normal-map perturbation are
+        // sub-texel (<1 px) — pure per-pixel ALU with no visible contribution. The pixel-
+        // scaling law (2026-07-02) makes per-pixel cost 60-73% of the frame, so far bark
+        // pixels take the cheap side: geometric normal + no moss. Branches are distance-
+        // coherent on screen (low divergence).
+        const detailNear = resFarDist > 0 ? dist.lessThan(float(resFarDist)) : null;
         // deadwood dim (logDim, representative — energy-correct, not per-pool)
         let deadAlb = tex.mul(vec3(0.6, 0.52, 0.44)) as unknown as NV3;
-        const mossN = smoothstep(0.24, 0.58, fbm3(wp.mul(2.6), 3).mul(0.5).add(0.5));
-        const moss = smoothstep(0.05, 0.65, gnrm.y).mul(dv.z).mul(mossN).clamp(0, 1);
+        const moss = float(0).toVar();
+        const mossBody = (): void => {
+          const mossN = smoothstep(0.24, 0.58, fbm3(wp.mul(2.6), 3).mul(0.5).add(0.5));
+          moss.assign(smoothstep(0.05, 0.65, gnrm.y).mul(dv.z).mul(mossN).clamp(0, 1));
+        };
+        if (detailNear) If(detailNear, mossBody);
+        else mossBody();
         deadAlb = mix(deadAlb, vec3(0.05, 0.1, 0.032), moss) as unknown as NV3;
         deadAlb = deadAlb.mul(float(1).sub(dv.z.mul(0.25))) as unknown as NV3; // rot
         deadAlb = hueShift(deadAlb, dv.x, 0.1) as unknown as NV3;
 
-        // tangent-space normal map (three normalMap: n = tex·2−1, z kept = 1)
-        const pert = normalize(
-          T.mul(tB.x.mul(2).sub(1))
-            .add(Bi.mul(tB.y.mul(2).sub(1)))
-            .add(gnrm),
-        ) as unknown as NV3;
+        // tangent-space normal map (three normalMap: n = tex·2−1, z kept = 1) — near only
+        const pert = (vec3(gnrm.x, gnrm.y, gnrm.z) as unknown as NV3).toVar();
+        const pertBody = (): void => {
+          const tB = sample(barkTexB); // the normal-map sample is paid on the near side only
+          pert.assign(
+            normalize(
+              T.mul(tB.x.mul(2).sub(1))
+                .add(Bi.mul(tB.y.mul(2).sub(1)))
+                .add(gnrm),
+            ) as unknown as NV3,
+          );
+        };
+        if (detailNear) If(detailNear, pertBody);
+        else pertBody();
 
         // AUDIT-1a: per-instance warm/cool + value jitter (slotHash 17/91) — the
         // variation law the old path applied via applyInstanceTint (tintK 0.12).
