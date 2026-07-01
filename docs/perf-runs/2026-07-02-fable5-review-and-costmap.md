@@ -208,6 +208,24 @@ BETTER far-field fidelity (no massive squares, per-brick shading, carved cell si
 forest to the horizon). Live sustained + cool-machine numbers still to be captured; the
 16.6 ms target is CLOSE at aerial/oblique-class poses and ~10 ms away at eye.
 
+## 9. Wave 3b: user-eyeball fixes + the pixel-scaling law
+
+User round (stutters GONE confirmed; "significantly faster"): tile-border HOLES, a
+"wireframe" splat-beat lattice, a far "cube landscape", and spiky coarse mesh-crowns.
+Fixed in `1a944e0` (boundary bucketing + volume splat + voxtaucap=12 — cheap per-TILE now)
+and `502662c` (voxnear 45 + leaflodk 0.4, perf-neutral). Aerial screenshot: 96 fps organic
+canopy; oblique 50 fps, artifact-free. New nit: thin trunk-column "antennas" on the far
+skyline. Tile build grew to 36 s (volume splat ×3) — needs worker/cache.
+
+**Pixel-scaling law (dpr sweep 0.75/1.0/1.5 at 200k):** gpuWall ≈ fixed + k·Mpx with
+eye 13 + 6.0/Mpx, oblique 12 + 8.1/Mpx, aerial 5 + 3.9/Mpx — **60-73% of the frame is
+per-pixel cost at retina** (matches the user's 120 fps-at-tiny-window observation). The
+endgame for locked 60 fps is therefore: (a) resolve slimming (per-pixel re-decode; bark
+const measured −1.5-2.4 ms), (b) election/overdraw micro, (c) internal render scale +
+TAA upscale (industry-standard; engine already jitters for TRAA), (d) the fixed-term
+nibbles (vcache binding-fold, rect path). Also open: isolated p95≫med spreads, trunk
+antennas, 36 s tile build, boot 100 s total.
+
 **Status vs the 16.6 ms goal:** materially closer, not yet locked — on the hot machine the best config reads
 eye ~37 / oblique ~40; cool-machine estimate ~28-33. Roughly half the original gap closed with
 zero eye-level visual change. The remaining eye/oblique cost is (a) the L0 voxel shell 60-250 m
