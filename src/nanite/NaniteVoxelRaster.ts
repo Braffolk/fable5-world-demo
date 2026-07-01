@@ -266,6 +266,19 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   if (voxBrickShade && QVOX_CAP - 1 >= 1 << 21) {
     throw new Error(`NaniteVoxelRaster: QVOX_CAP ${QVOX_CAP} overflows the 21-bit item field under ?voxbn`);
   }
+  // ?voxcell (DEFAULT ON, =0 legacy): per-pixel RAY→BRICK raster for the footprint pixels of
+  // big (area > ?voxcellmin px², default 12), non-straddling bricks. Each pixel's camera ray is
+  // slab-tested against the brick's LOCAL AABB — the painted shape becomes the brick's ROTATED
+  // CUBE silhouette instead of the solid screen-aligned rect (the rect is what read as "far
+  // crown = one massive square"). A non-full 4³ occupancy mask is then DDA-marched to the first
+  // occupied CELL (sparse bricks carve to their real cells ⇒ effective 4× finer voxels), and
+  // the election key is the EXACT per-pixel depth of the hit (replaces the brick-constant
+  // front-slab key ⇒ correct intra-brick occlusion + better HZB). Small/straddler bricks and
+  // the ?voxdither=1 stipple mode keep the legacy flat path unchanged.
+  const voxCell =
+    new URLSearchParams(window.location.search).get('voxcell') !== '0' && !voxDither;
+  const voxCellMinAreaRaw = Number(new URLSearchParams(window.location.search).get('voxcellmin') ?? '12');
+  const voxCellMinArea = Number.isFinite(voxCellMinAreaRaw) && voxCellMinAreaRaw >= 0 ? voxCellMinAreaRaw : 12;
   const WRITE_CTR = 0;
   const atomicWords = 1;
   const atomicBufAttr = new StorageBufferAttribute(new Uint32Array(atomicWords), 1);
@@ -283,6 +296,10 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // workgroup-array plain store (wgId is a non-atomic workgroupArray).
   const wgSet = (arr: ReturnType<typeof workgroupArray>, i: NU, v: NU): void => {
     (arr.element(i) as unknown as { assign(x: NU): void }).assign(v);
+  };
+  // float variant for the ?voxcell per-brick local-AABB records.
+  const wgSetF = (arr: ReturnType<typeof workgroupArray>, i: NU, v: NF): void => {
+    (arr.element(i) as unknown as { assign(x: NF): void }).assign(v);
   };
 
   // STABLE per-(pixel,block) dither in [0,1) for the density-coverage gate (above).
@@ -499,6 +516,16 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
     // (su,sv) bucket bit is set. 0xffff (all set) for a brick the gate did not arm (small/full) or
     // when voxlod=0 (the array is null and the gate code is build-time absent => byte-identical).
     const wgOccMask = voxOccGate ? workgroupArray('uint', WG_RASTER) : null;
+    // ?voxcell per-brick ray-path records (Phase A fills, Phase B ray-tests):
+    // local AABB center/half + the 4³ occupancy words + an eligibility flag
+    // (1 = non-straddler; straddlers keep the stable centre-box flat path).
+    const wgBrCx = voxCell ? workgroupArray('float', WG_RASTER) : null;
+    const wgBrCy = voxCell ? workgroupArray('float', WG_RASTER) : null;
+    const wgBrCz = voxCell ? workgroupArray('float', WG_RASTER) : null;
+    const wgBrHf = voxCell ? workgroupArray('float', WG_RASTER) : null;
+    const wgCellLo = voxCell ? workgroupArray('uint', WG_RASTER) : null;
+    const wgCellHi = voxCell ? workgroupArray('uint', WG_RASTER) : null;
+    const wgCellOk = voxCell ? workgroupArray('uint', WG_RASTER) : null;
     If(guard, () => {
       const item = qVoxRasterRO.element(itemIdx.add(uint(1)));
       const instId = item.x.toVar();
@@ -637,6 +664,8 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
       // gate never arms (small footprint / mask stays full) behaves EXACTLY like voxlod=0 (no
       // pixel dropped). Phase A overwrites it with the real screen mask only when the gate arms.
       if (voxOccGate && wgOccMask) wgSet(wgOccMask, brickLocal, uint(0xffff));
+      // ?voxcell seed: ineligible until Phase A proves a clean non-straddle record.
+      if (voxCell && wgCellOk) wgSet(wgCellOk, brickLocal, uint(0));
       const brickActive = brickLocal.lessThan(brickCount).and((wgVisible.element(uint(0)) as unknown as NU).equal(uint(1)));
       If(brickActive, () => {
         const bAbs = brickBase.add(brickLocal).toVar();      // absolute brick index
@@ -803,6 +832,23 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
             wgSet(wgBbW, brickLocal, bbW);
             wgSet(wgBbH, brickLocal, bbH);
             wgSet(wgCand, brickLocal, cand);
+            // ?voxcell record: local AABB + 4³ occupancy; eligible only for a clean
+            // NON-straddling COARSE brick (dagLevel>0). Near/fine L0 bricks are ≤~6 px at
+            // the handoff — they never read as squares, and running the ray on the dense L0
+            // shell was measured +7-16 ms at 4k trees; they keep the cheap flat path. (A
+            // camera-inside straddler keeps the flat centre-box regardless.)
+            if (voxCell && wgBrCx && wgBrCy && wgBrCz && wgBrHf && wgCellLo && wgCellHi && wgCellOk) {
+              wgSetF(wgBrCx, brickLocal, brLocal.x);
+              wgSetF(wgBrCy, brickLocal, brLocal.y);
+              wgSetF(wgBrCz, brickLocal, brLocal.z);
+              wgSetF(wgBrHf, brickLocal, brHalf as unknown as NF);
+              wgSet(wgCellLo, brickLocal, elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_OCC_LO))));
+              wgSet(wgCellHi, brickLocal, elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_OCC_HI))));
+              const coarse = dagLevel
+                ? dagLevel.greaterThan(uint(0)).select(uint(1), uint(0))
+                : uint(1);
+              wgSet(wgCellOk, brickLocal, uint(1).sub(straddles).mul(coarse));
+            }
             // ── OCCUPANCY-GATE MASK BUILD (?voxlod=1, Phase A). For a COARSE (dagLevel>0),
             // LARGE-footprint (area ≥ OCC_GATE_MIN_AREA) brick — i.e. screen-big enough for empty
             // interior to matter — build a OCC_MASK_DIM×OCC_MASK_DIM screen mask of which bbox
@@ -959,6 +1005,66 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
       // (O(area/WG) per lane, BRICK_MAX_EXT caps any one brick at ≤128×128) is preserved;
       // tiny/empty bricks (area 0) contribute a zero-trip inner loop.
       const nBricks = minU(brickCount, uint(WG_RASTER)).toVar();
+      // ?voxcell per-CLUSTER ray/clip bases (uniform across the workgroup — A/B/yawSc are
+      // per-cluster). Two linearizations make the per-pixel ray path cheap:
+      //  (1) RAY DIRECTION IS LINEAR IN NDC. invVp·(x,y,1,1) has a CONSTANT w across x,y
+      //      (the w-row of invP depends only on z for a perspective projection; TAA jitter
+      //      shifts x,y rows only), so the far-plane point is (K + Bx·x + Cy·y)/K.w and
+      //      dW(x,y) = baseW + dxW·x + dyW·y — 6 FMAs per pixel instead of a mat4 mul +
+      //      divide. The instance-local rotation/shear/scale is linear too, so the basis is
+      //      pre-transformed to LOCAL space here.
+      //  (2) CLIP DEPTH IS LINEAR IN t. clip(t) = vp·(camPos + dW·t) ⇒ (z,w) = P0zw + Dzw·t
+      //      where Dzw(x,y) is itself linear in ndc — per pixel the exact depth costs a few
+      //      FMAs + one divide instead of transform→mat4.
+      let roLx: NF | null = null;
+      let roLy: NF | null = null;
+      let roLz: NF | null = null;
+      let rayBaseL: NV3 | null = null;
+      let rayDxL: NV3 | null = null;
+      let rayDyL: NV3 | null = null;
+      let clipP0zw: { z: NF; w: NF } | null = null;
+      let clipDb: { z: NF; w: NF } | null = null;
+      let clipDx: { z: NF; w: NF } | null = null;
+      let clipDy: { z: NF; w: NF } | null = null;
+      if (voxCell) {
+        const q = (cam.camPos.sub(A.xyz) as unknown as NV3).toVar();
+        const invS = float(1).div(A.w).toVar();
+        const xp = q.x.sub(B.y.mul(q.y)).toVar();
+        const zp = q.z.sub(B.z.mul(q.y)).toVar();
+        roLx = yawSc.cy.mul(xp).sub(yawSc.sy.mul(zp)).mul(invS).toVar() as unknown as NF;
+        roLy = q.y.mul(invS).toVar() as unknown as NF;
+        roLz = yawSc.sy.mul(xp).add(yawSc.cy.mul(zp)).mul(invS).toVar() as unknown as NF;
+        // world-space far-plane ray basis
+        const K = (cam.invVp.mul(vec4(0, 0, 1, 1)) as unknown as NV4).toVar();
+        const Bx = (cam.invVp.mul(vec4(1, 0, 1, 1)) as unknown as NV4).sub(K).toVar();
+        const Cy = (cam.invVp.mul(vec4(0, 1, 1, 1)) as unknown as NV4).sub(K).toVar();
+        const invW1 = float(1).div(K.w).toVar();
+        const baseW = K.xyz.mul(invW1).sub(cam.camPos).toVar();
+        const dxW = Bx.xyz.mul(invW1).toVar();
+        const dyW = Cy.xyz.mul(invW1).toVar();
+        // direction → instance-local (un-shear, un-yaw, un-scale; linear ⇒ per-basis-vector)
+        const dirToLocal = (d: NV3): NV3 => {
+          const dxp = d.x.sub(B.y.mul(d.y));
+          const dzp = d.z.sub(B.z.mul(d.y));
+          return vec3(
+            yawSc.cy.mul(dxp).sub(yawSc.sy.mul(dzp)).mul(invS),
+            d.y.mul(invS),
+            yawSc.sy.mul(dxp).add(yawSc.cy.mul(dzp)).mul(invS),
+          ) as unknown as NV3;
+        };
+        rayBaseL = (dirToLocal(baseW as unknown as NV3) as unknown as NV3).toVar() as unknown as NV3;
+        rayDxL = (dirToLocal(dxW as unknown as NV3) as unknown as NV3).toVar() as unknown as NV3;
+        rayDyL = (dirToLocal(dyW as unknown as NV3) as unknown as NV3).toVar() as unknown as NV3;
+        // clip-depth basis
+        const p0 = (cam.vp.mul(vec4(cam.camPos, 1)) as unknown as NV4).toVar();
+        const db = (cam.vp.mul(vec4(baseW as unknown as NV3, 0)) as unknown as NV4).toVar();
+        const dx4 = (cam.vp.mul(vec4(dxW as unknown as NV3, 0)) as unknown as NV4).toVar();
+        const dy4 = (cam.vp.mul(vec4(dyW as unknown as NV3, 0)) as unknown as NV4).toVar();
+        clipP0zw = { z: p0.z as unknown as NF, w: p0.w as unknown as NF };
+        clipDb = { z: db.z as unknown as NF, w: db.w as unknown as NF };
+        clipDx = { z: dx4.z as unknown as NF, w: dx4.w as unknown as NF };
+        clipDy = { z: dy4.z as unknown as NF, w: dy4.w as unknown as NF };
+      }
       // ?voxrdbg=2 STOP point: skip the ENTIRE Phase-B election (no per-pixel atomicMax / visBV
       // store). Build-time gate ⇒ when OFF (production) this whole block is emitted byte-identical.
       if (voxRdbg < 2)
@@ -985,6 +1091,25 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
         // (footprint addressing AND, for carved bricks, the occupancy-gate su/sv bucket index).
         const invW = voxRecip ? float(1).div(toF(bbW)).toVar() : null;
         const invH = voxRecip ? float(1).div(toF(bbH)).toVar() : null;
+        // ?voxcell per-brick ray data: eligibility (non-straddler AND big enough for the ray
+        // path to pay), local AABB, occupancy words, full-mask shortcut.
+        const cellOn =
+          voxCell && wgCellOk && wgBrCx && wgBrCy && wgBrCz && wgBrHf && wgCellLo && wgCellHi;
+        const cellElig = cellOn
+          ? (wgCellOk!.element(b) as unknown as NU)
+              .equal(uint(1))
+              .and(area.greaterThan(uint(voxCellMinArea)))
+              .toVar()
+          : null;
+        const brCx = cellOn ? (wgBrCx!.element(b) as unknown as NF).toVar() : null;
+        const brCy = cellOn ? (wgBrCy!.element(b) as unknown as NF).toVar() : null;
+        const brCz = cellOn ? (wgBrCz!.element(b) as unknown as NF).toVar() : null;
+        const brHf = cellOn ? (wgBrHf!.element(b) as unknown as NF).toVar() : null;
+        const cOccLo = cellOn ? (wgCellLo!.element(b) as unknown as NU).toVar() : null;
+        const cOccHi = cellOn ? (wgCellHi!.element(b) as unknown as NU).toVar() : null;
+        const cMaskFull = cellOn
+          ? cOccLo!.equal(uint(0xffffffff)).and(cOccHi!.equal(uint(0xffffffff))).toVar()
+          : null;
         // each lane strides this brick's footprint: localPx = brickLocal, brickLocal+128, …
         loopU(brickLocal, area, (localPx) => {
           // ly/lx: integer div+mod by default; per-brick float reciprocal under ?voxrecip
@@ -1040,21 +1165,170 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
               electHere();
             }
           };
-          if (voxOccGate && occMask && gateActive) {
-            // carved brick → gate the pixel by its bucket bit; full-mask brick → solid (no test).
-            If(gateActive, () => {
-              const su = (voxRecip && invW
-                ? minU(uint(toF(lx.mul(uint(OCC_MASK_DIM))).add(0.5).mul(invW).floor()), uint(OCC_MASK_DIM - 1))
-                : minU(lx.mul(uint(OCC_MASK_DIM)).div(bbW), uint(OCC_MASK_DIM - 1))).toVar();
-              const sv = (voxRecip && invH
-                ? minU(uint(toF(ly.mul(uint(OCC_MASK_DIM))).add(0.5).mul(invH).floor()), uint(OCC_MASK_DIM - 1))
-                : minU(ly.mul(uint(OCC_MASK_DIM)).div(bbH), uint(OCC_MASK_DIM - 1))).toVar();
-              const bit = sv.mul(uint(OCC_MASK_DIM)).add(su).toVar();
-              const occupied = occMask.shiftRight(bit).bitAnd(uint(1)).equal(uint(1));
-              If(occupied, dispatchElect);
-            }).Else(dispatchElect);
+          // legacy flat path (front-slab key, solid footprint, optional bucket gate) —
+          // wrapped so ?voxcell can route only its eligible bricks to the ray path.
+          const flatPath = (): void => {
+            if (voxOccGate && occMask && gateActive) {
+              // carved brick → gate the pixel by its bucket bit; full-mask brick → solid (no test).
+              If(gateActive, () => {
+                const su = (voxRecip && invW
+                  ? minU(uint(toF(lx.mul(uint(OCC_MASK_DIM))).add(0.5).mul(invW).floor()), uint(OCC_MASK_DIM - 1))
+                  : minU(lx.mul(uint(OCC_MASK_DIM)).div(bbW), uint(OCC_MASK_DIM - 1))).toVar();
+                const sv = (voxRecip && invH
+                  ? minU(uint(toF(ly.mul(uint(OCC_MASK_DIM))).add(0.5).mul(invH).floor()), uint(OCC_MASK_DIM - 1))
+                  : minU(ly.mul(uint(OCC_MASK_DIM)).div(bbH), uint(OCC_MASK_DIM - 1))).toVar();
+                const bit = sv.mul(uint(OCC_MASK_DIM)).add(su).toVar();
+                const occupied = occMask.shiftRight(bit).bitAnd(uint(1)).equal(uint(1));
+                If(occupied, dispatchElect);
+              }).Else(dispatchElect);
+            } else {
+              dispatchElect();
+            }
+          };
+          // ── ?voxcell RAY PATH: slab-test the pixel ray against the brick's LOCAL AABB
+          // (rotated-cube silhouette), DDA a non-full 4³ occupancy mask to the first occupied
+          // cell, elect with the EXACT per-pixel hit depth. Misses paint nothing (the carve).
+          if (cellOn && cellElig && brCx && brCy && brCz && brHf && cOccLo && cOccHi && cMaskFull && roLx && roLy && roLz && rayBaseL && rayDxL && rayDyL && clipP0zw && clipDb && clipDx && clipDy) {
+            If(cellElig, () => {
+              // OVERDRAW EARLY-OUT: the Phase-A front-slab key `cand` is an UPPER BOUND on any
+              // per-pixel hit key of this brick (a hit is at/behind the front slab ⇒ farther ⇒
+              // smaller key). If it already loses the election, the ray can't win — skip it.
+              // Canopy poses are overdraw-bound; this reduces buried bricks to 1 load + compare.
+              const prevE = aLoadU(visPayloadV.atomic.element(px)).toVar();
+              If(cand.greaterThan(prevE), () => {
+              // pixel-center NDC (bottom-up rows — the same mapping Phase A used, no Y flip)
+              const ndcX = toF(x).add(0.5).div(W).mul(2).sub(1).toVar();
+              const ndcY = toF(y).add(0.5).div(H).mul(2).sub(1).toVar();
+              // ray direction in instance-LOCAL space — linear in ndc (per-cluster basis)
+              // clamp each component away from 0 (sign-preserving) so 1/d never divides by 0
+              const fix = (d: NF): NF =>
+                d.lessThan(0).select(d.min(float(-1e-9)), d.max(float(1e-9))) as unknown as NF;
+              const rdX = fix(
+                rayBaseL.x.add(rayDxL.x.mul(ndcX)).add(rayDyL.x.mul(ndcY)) as unknown as NF,
+              ).toVar();
+              const rdY = fix(
+                rayBaseL.y.add(rayDxL.y.mul(ndcX)).add(rayDyL.y.mul(ndcY)) as unknown as NF,
+              ).toVar();
+              const rdZ = fix(
+                rayBaseL.z.add(rayDxL.z.mul(ndcX)).add(rayDyL.z.mul(ndcY)) as unknown as NF,
+              ).toVar();
+              const invDx = float(1).div(rdX).toVar();
+              const invDy = float(1).div(rdY).toVar();
+              const invDz = float(1).div(rdZ).toVar();
+              // slab test vs [brC ± brHf]
+              const bmnX = brCx.sub(brHf).toVar();
+              const bmnY = brCy.sub(brHf).toVar();
+              const bmnZ = brCz.sub(brHf).toVar();
+              const t1x = bmnX.sub(roLx).mul(invDx).toVar();
+              const t2x = brCx.add(brHf).sub(roLx).mul(invDx).toVar();
+              const t1y = bmnY.sub(roLy).mul(invDy).toVar();
+              const t2y = brCy.add(brHf).sub(roLy).mul(invDy).toVar();
+              const t1z = bmnZ.sub(roLz).mul(invDz).toVar();
+              const t2z = brCz.add(brHf).sub(roLz).mul(invDz).toVar();
+              const tEnter = t1x.min(t2x).max(t1y.min(t2y)).max(t1z.min(t2z)).max(0).toVar();
+              const tExit = t1x.max(t2x).min(t1y.max(t2y)).min(t1z.max(t2z)).toVar();
+              If(tExit.greaterThanEqual(tEnter), () => {
+                const hit = uint(0).toVar();
+                const tHit = tEnter.toVar();
+                If(cMaskFull, () => {
+                  hit.assign(uint(1)); // dense brick ⇒ the cube face itself is the hit
+                }).Else(() => {
+                  // DDA through the 4³ mask from the entry cell (≤10 crossable cells)
+                  const cellSz = brHf.mul(0.5).toVar(); // brick edge 2·half / 4 cells
+                  const invCell = float(1).div(cellSz).toVar();
+                  const pEx = roLx.add(rdX.mul(tEnter)).toVar();
+                  const pEy = roLy.add(rdY.mul(tEnter)).toVar();
+                  const pEz = roLz.add(rdZ.mul(tEnter)).toVar();
+                  const cix = maxI(toI(0), minI(toI(3), toI(pEx.sub(bmnX).mul(invCell).floor()))).toVar();
+                  const ciy = maxI(toI(0), minI(toI(3), toI(pEy.sub(bmnY).mul(invCell).floor()))).toVar();
+                  const ciz = maxI(toI(0), minI(toI(3), toI(pEz.sub(bmnZ).mul(invCell).floor()))).toVar();
+                  const stx = rdX.lessThan(0).select(toI(-1), toI(1)).toVar();
+                  const sty = rdY.lessThan(0).select(toI(-1), toI(1)).toVar();
+                  const stz = rdZ.lessThan(0).select(toI(-1), toI(1)).toVar();
+                  const tDx = cellSz.mul(invDx.abs()).toVar();
+                  const tDy = cellSz.mul(invDy.abs()).toVar();
+                  const tDz = cellSz.mul(invDz.abs()).toVar();
+                  // t of the next boundary along the ray, per axis
+                  const offX = stx.greaterThan(toI(0)).select(toI(1), toI(0));
+                  const offY = sty.greaterThan(toI(0)).select(toI(1), toI(0));
+                  const offZ = stz.greaterThan(toI(0)).select(toI(1), toI(0));
+                  const tMx = bmnX.add(toF(cix.add(offX)).mul(cellSz)).sub(roLx).mul(invDx).toVar();
+                  const tMy = bmnY.add(toF(ciy.add(offY)).mul(cellSz)).sub(roLy).mul(invDy).toVar();
+                  const tMz = bmnZ.add(toF(ciz.add(offZ)).mul(cellSz)).sub(roLz).mul(invDz).toVar();
+                  const done = uint(0).toVar();
+                  const tCur = tEnter.toVar();
+                  loopU(uint(0), uint(10), () => {
+                    If(done.equal(uint(0)), () => {
+                      const bit = uint(cix).add(uint(ciy).mul(uint(4))).add(uint(ciz).mul(uint(16))).toVar();
+                      const occ = bit
+                        .lessThan(uint(32))
+                        .select(cOccLo.shiftRight(bit), cOccHi.shiftRight(bit.sub(uint(32))))
+                        .bitAnd(uint(1))
+                        .toVar();
+                      If(occ.equal(uint(1)), () => {
+                        hit.assign(uint(1));
+                        tHit.assign(tCur);
+                        done.assign(uint(1));
+                      }).Else(() => {
+                        // advance to the neighbour cell across the nearest boundary
+                        If(tMx.lessThanEqual(tMy).and(tMx.lessThanEqual(tMz)), () => {
+                          tCur.assign(tMx);
+                          cix.assign(cix.add(stx));
+                          tMx.assign(tMx.add(tDx));
+                        }).Else(() => {
+                          If(tMy.lessThanEqual(tMz), () => {
+                            tCur.assign(tMy);
+                            ciy.assign(ciy.add(sty));
+                            tMy.assign(tMy.add(tDy));
+                          }).Else(() => {
+                            tCur.assign(tMz);
+                            ciz.assign(ciz.add(stz));
+                            tMz.assign(tMz.add(tDz));
+                          });
+                        });
+                        // walked out of the brick ⇒ miss
+                        const out = cix
+                          .lessThan(toI(0))
+                          .or(cix.greaterThan(toI(3)))
+                          .or(ciy.lessThan(toI(0)))
+                          .or(ciy.greaterThan(toI(3)))
+                          .or(ciz.lessThan(toI(0)))
+                          .or(ciz.greaterThan(toI(3)));
+                        If(out, () => {
+                          done.assign(uint(1));
+                        });
+                      });
+                    });
+                  });
+                });
+                If(hit.equal(uint(1)), () => {
+                  // exact per-pixel depth via the linear clip basis: clip.zw = P0zw + Dzw·t,
+                  // Dzw itself linear in ndc — a handful of FMAs + one divide.
+                  const dz = clipDb.z.add(clipDx.z.mul(ndcX)).add(clipDy.z.mul(ndcY));
+                  const dw = clipDb.w.add(clipDx.w.mul(ndcX)).add(clipDy.w.mul(ndcY));
+                  const cw = clipP0zw.w.add(dw.mul(tHit)).toVar();
+                  If(cw.greaterThan(float(NEAR_EPS)), () => {
+                    const czPx = clipP0zw.z.add(dz.mul(tHit)).div(cw).clamp(0, 1);
+                    // per-pixel key built INSIDE the consuming subtree (TSL hoist-safe);
+                    // prevE (the early-out load above) is a valid stale guard — atomicMax
+                    // remains the authoritative arbiter.
+                    const candL = depthKey24(czPx as unknown as NF)
+                      .shiftLeft(uint(8))
+                      .bitOr(payload.bitAnd(uint(0xff)))
+                      .toVar();
+                    If(candL.greaterThan(prevE), () => {
+                      const wonE = atomicMax(visPayloadV.atomic.element(px), candL) as unknown as NU;
+                      If(candL.greaterThan(wonE), () => {
+                        atomicStore(visBV.atomic.element(px), voxIdB);
+                      });
+                    });
+                  });
+                });
+              });
+              }); // early-out: cand ≤ prevE ⇒ the brick cannot win this pixel
+            }).Else(flatPath);
           } else {
-            dispatchElect();
+            flatPath();
           }
         }, WG_RASTER);
       });

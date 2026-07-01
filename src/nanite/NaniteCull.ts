@@ -43,6 +43,7 @@ import {
 } from 'three/tsl';
 import type { NB, NF, NU, NV3, NV4 } from '../gpu/TSLTypes';
 import {
+  CLUSTER_WORDS,
   LOD_NONE,
   MESH_FLAG_HEIGHTFIELD,
   MESH_WORDS,
@@ -304,6 +305,15 @@ export function buildNaniteCull(
   // is order-independent, so the unordered path is image-identical (verified). ?voxf2b=1 restores
   // the old K-bucket path (the A/B control / opt-in for any future large-batch retune).
   const voxf2b = (voxParams.get('voxf2b') ?? '0') !== '0';
+  // ?voxtaucap — voxel-cluster τ_eff clamp (px); see the traverse cut note. DEFAULT 0 (OFF):
+  // the cap fights the lodWarp by whole pyramid levels and each level is ~8× the brick COUNT
+  // (per-brick Phase-A setup is NOT area-invariant) — 8px measured aerial 36→81 ms and 16px
+  // still +15 ms at 4k trees. ?voxcell subsumes the cap's purpose: a warped 20-30 px brick
+  // renders as its occupied 4³ CELLS (~5-8 px each, carved silhouette, per-pixel depth), so
+  // the "one massive square" read is gone without any extra bricks (4k A/B: voxcell+cap0 ≈
+  // baseline perf; aerial even −4 ms from the overdraw early-out). Kept as an experiment dial.
+  const voxTauCapRaw = Number(voxParams.get('voxtaucap') ?? '0');
+  const voxTauCap = Number.isFinite(voxTauCapRaw) && voxTauCapRaw >= 0 ? voxTauCapRaw : 0;
   // K is a BUILD-TIME constant: it bakes K bucket counters + K indirect attrs and
   // (in the voxel raster) K kernel instances. ?voxf2bk default 16 (iter-2 NET-BEST: the
   // canopy write-drop SATURATES at K16 over the tight linear-view-depth [dMin,dMax]
@@ -827,7 +837,25 @@ export function buildNaniteCull(
           simBandD,
           lodNear,
           lodPow,
-        );
+        ).toVar();
+        // ?voxtaucap (DEFAULT 8 px, 0 = off): the lodWarp balloons τ_eff to ~27-45 px at
+        // 200-500 m (its own header says "this knob never ships", yet it is the production
+        // default). A VOXEL cluster emitted at that error paints its bricks as solid screen
+        // rects — the user-visible "far crown becomes one massive square". Clamp τ_eff for
+        // brick-backed clusters only (trunk/mesh clusters keep the warp: their coarse
+        // triangles still have real silhouettes), so no brick can be emitted coarser than
+        // ~cap px — a far crown then always descends to a multi-brick level. Costs bricks
+        // only in the warped band (60-300 m); painted-pixel area is invariant to brick size,
+        // so the added cost is per-brick setup, not fill.
+        if (voxTauCap > 0) {
+          const mid7 = elemU(gpu.clusters, ci.mul(uint(CLUSTER_WORDS)).add(uint(7))).shiftRight(uint(16));
+          const mc = elemU(gpu.meshes, mid7.mul(uint(MESH_WORDS)).add(uint(6)))
+            .shiftRight(uint(8))
+            .bitAnd(uint(0xff));
+          If(mc.equal(uint(VOXEL_MATCLASS)), () => {
+            tauEff.assign(tauEff.min(float(voxTauCap)));
+          });
+        }
         If(pOwn.lessThanEqual(tauEff), () => {
           // ── CUT: this cluster is the right LOD here → emit (with culls) ──────
           const c = readCluster(gpu.clusters, ci);
