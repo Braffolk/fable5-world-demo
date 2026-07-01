@@ -9,8 +9,24 @@ export default defineConfig(({ command }) => ({
     port: 5173,
     strictPort: true,
     // tool-driven file writes are missed by fsevents on this setup; poll so
-    // the module graph never serves stale code (cost: dev-only CPU)
-    watch: { usePolling: true, interval: 200 },
+    // the module graph never serves stale code (cost: dev-only CPU). BUT: polling
+    // stats EVERY watched file per interval — with .claude/worktrees (3.9 GB, 12
+    // full repo copies) + shots (3 GB) in-tree that was a constant 50-60% CPU on
+    // the dev-server node process (found 2026-07-02). Ignore everything the module
+    // graph can never import; 500 ms is plenty for tool-driven src edits.
+    watch: {
+      usePolling: true,
+      interval: 500,
+      ignored: [
+        "**/.claude/**",
+        "**/shots/**",
+        "**/docs/**",
+        "**/.cache/**",
+        "**/dist/**",
+        "**/.git/**",
+        "**/tools/**",
+      ],
+    },
   },
   esbuild: {
     target: "esnext",
