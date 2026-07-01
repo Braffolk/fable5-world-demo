@@ -848,10 +848,11 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
               wgSetF(wgBrHf, brickLocal, brHalf as unknown as NF);
               wgSet(wgCellLo, brickLocal, elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_OCC_LO))));
               wgSet(wgCellHi, brickLocal, elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_OCC_HI))));
-              const coarse = dagLevel
-                ? dagLevel.greaterThan(uint(0)).select(uint(1), uint(0))
-                : uint(1);
-              wgSet(wgCellOk, brickLocal, uint(1).sub(straddles).mul(coarse));
+              // eligibility = non-straddler only. (An earlier dagLevel>0 gate was REMOVED:
+              // the Phase-B area>voxcellmin gate already excludes the dense near L0 shell
+              // (≤6px bricks at the 60m handoff), and ?fartiles tile L0 bricks are dagLevel=0
+              // yet BIG on screen — they need the ray path or they paint as solid rects.)
+              wgSet(wgCellOk, brickLocal, uint(1).sub(straddles));
             }
             // ── OCCUPANCY-GATE MASK BUILD (?voxlod=1, Phase A). For a COARSE (dagLevel>0),
             // LARGE-footprint (area ≥ OCC_GATE_MIN_AREA) brick — i.e. screen-big enough for empty

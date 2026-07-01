@@ -29,6 +29,8 @@ import {
 } from '../nanite/GeometryRegistry';
 import { type DagBuild, buildDag } from '../nanite/BuildDag';
 import { buildAggregateDag, setAggLodErrorK } from '../nanite/BuildAggregateDag';
+import { appendFarTiles, buildFarTiles, type FarTileSpecies } from '../nanite/FarTiles';
+import type { BrickCPU } from '../nanite/VoxelBrick';
 import { setClusterFill } from '../nanite/Clusterize';
 import { geometryToSource } from '../nanite/WorldRegistry';
 import {
@@ -121,6 +123,15 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
       shell: shRaw !== null ? Number(shRaw) : undefined,
     });
   }
+  // ?fartiles=1 (wave 3, EXPERIMENTAL): cross-instance far-field aggregation — beyond
+  // ?aggdist (default 140 m) whole 64 m tiles of trees render as ONE merged voxel head
+  // (crowns + trunk columns splatted at boot; see FarTiles.ts). Collapses far cluster/brick
+  // counts by orders of magnitude AND extends the forest past the instMinPx (~300 m) edge.
+  // DEFAULT ON (2026-07-02 wave 3): 200k A/B eye 40.2→27.4 / oblique 38.5→31.3 / aerial
+  // 26.0→19.5 ms, aerial whole-frame clusters 30k→290, forest extends past the old ~300 m
+  // instMinPx pop-out to the horizon. ?fartiles=0 reverts to per-tree-only.
+  const farTilesOn = q.get('fartiles') !== '0';
+  const aggDist = Number(q.get('aggdist') ?? '140') || 140;
   // ?leaflodk= — aggregate LEAF ladder error scale (see BuildAggregateDag AGG_LOD_CFG). The
   // 2026-07-01 cost-map found the leaf-mesh band (<35 m) renders LOD0 everywhere (~10.3M of
   // 12.4M eye visTris) because the ladder's L1 cut lands beyond the voxel handoff; K<1 pulls
@@ -287,6 +298,57 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
         `handoff ${transitionDist} m${forceVox ? ' (?forcevox: voxel-only)' : ''}`,
     );
   }
+  // ?fartiles=1 (wave 3): build the far-tile aggregation pre-build (needs exact counts for
+  // the reservation), append post-build. Each tile = 64 m of trees merged into one voxel
+  // head; per-tree heads then END at aggDist (their maxDist is clamped in the append loop
+  // below and setMaxDistance for bark).
+  let farTiles: import('../nanite/FarTiles').FarTileBuild[] = [];
+  if (farTilesOn && toVoxel.length > 0 && !noLeaves) {
+    const tFt0 = performance.now();
+    // 0.75 m cells (not 0.5): 200k extrapolates to ~10.7M bricks at 0.5 (386 MB — over the
+    // 256 MB buffer cliff); 0.75 lands ~4-5M (~170 MB). ?voxcell renders CELLS, so visible
+    // granularity at the 140 m handoff is ~0.75 m ≈ 8 px — close to the per-tree side.
+    const TILE_CELL = Number(q.get('ftcell') ?? '0.75') || 0.75;
+    const ftPools: { a: Float32Array; b: Float32Array; species: FarTileSpecies }[] = [];
+    for (const v of toVoxel) {
+      const s = poolStreams[v.poolIdx];
+      const levels = v.prep.vox.levels;
+      if (!s || !levels || levels.length === 0) continue;
+      // pick the crown pyramid level whose brick size best matches the tile cell size
+      let pick = 0;
+      let bestD = Infinity;
+      for (let L = 0; L < levels.length; L++) {
+        const bw = (levels[L] as { cellSize: number }).cellSize * 4;
+        const d = Math.abs(bw - TILE_CELL);
+        if (d < bestD) {
+          bestD = d;
+          pick = L;
+        }
+      }
+      const lvl = levels[pick] as { bricks: BrickCPU[]; occupied: number[] };
+      const bricks = lvl.occupied.map((i) => lvl.bricks[i] as BrickCPU);
+      let crownMinY = 2;
+      for (const b of bricks) crownMinY = Math.min(crownMinY, b.center[1] - b.half);
+      ftPools.push({
+        a: s.a,
+        b: s.b,
+        species: { bricks, crownMinY: Math.max(0.5, crownMinY), bark: { r: 0.42, g: 0.33, b: 0.24 } },
+      });
+    }
+    farTiles = buildFarTiles({ tileSize: 64, cellSize: TILE_CELL, pools: ftPools });
+    let ftBricks = 0;
+    let ftClusters = 0;
+    for (const t of farTiles) {
+      ftBricks += t.prep.brickCount;
+      ftClusters += t.prep.clusterCount;
+    }
+    reg.addLate({ bricks: ftBricks, meshes: farTiles.length, instances: farTiles.length, clusters: ftClusters });
+    // eslint-disable-next-line no-console
+    console.log(
+      `[forest] fartiles: ${farTiles.length} tiles, ${ftBricks} bricks (${((ftBricks * 36) / 1048576).toFixed(1)} MB), ` +
+        `${ftClusters} clusters, aggDist ${aggDist} m, built in ${(performance.now() - tFt0).toFixed(0)} ms`,
+    );
+  }
   ctx.progress(0.9, 'forest: building registry');
   const report = reg.build(engine.renderer, engine.stats.counters);
   for (const b of builds) reg.attachDag(b.handle, b.dag);
@@ -301,7 +363,9 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
       const r = appendVoxelCrown(reg, v.prep, v.src, {
         matParam: v.matParam,
         swayPad: 3.8,
-        maxDist: 2000,
+        // ?fartiles: the per-tree voxel crown ENDS at aggDist — the merged tile head owns
+        // the far field beyond it (ranges overlap by the tile radius, see FarTiles.ts).
+        maxDist: farTilesOn && farTiles.length > 0 ? aggDist : 2000,
         nearDist: forceVox ? 0 : transitionDist,
         label: `c${pools[v.poolIdx]?.cls}/voxel`,
       });
@@ -310,6 +374,15 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
       if (s) reg.bindInstances(r.head, { a: s.a, b: s.b });
       // ?forcevox DEBUG: the voxel head renders everywhere ⇒ suppress the leaf head.
       if (forceVox) reg.setMaxDistance(v.leafHead, 0.001);
+    }
+    // ?fartiles: clamp the per-tree BARK envelope to aggDist too, then append the tiles.
+    if (farTilesOn && farTiles.length > 0) {
+      for (const m of meshes) reg.setMaxDistance(m.bark, aggDist);
+      const ftTint = toVoxel[0]?.matParam ?? 0;
+      const ftBricks = appendFarTiles(reg, farTiles, { nearDist: Math.max(10, aggDist - 46), matParam: ftTint });
+      // eslint-disable-next-line no-console
+      console.log(`[forest] fartiles: appended ${ftBricks} bricks across ${farTiles.length} tile heads`);
+      farTiles = []; // release the CPU-side pyramids
     }
     reg.flush(engine.renderer, engine.stats.counters);
     // eslint-disable-next-line no-console
