@@ -184,7 +184,31 @@ removes the per-instance cull floor (`instMinPx` ≈110 px currently DELETES tre
 ~300 m — the forest visibly ends there), and is the UE5-HLOD-equivalent move. That is the
 recommended next big rock.
 
-**Status vs the 16.6 ms goal:** not yet reached — on the hot machine the best config reads
+## 8. Wave 3: ?fartiles — cross-instance far-field aggregation (`d636353`, DEFAULT ON)
+
+The structural 2× lever from §7, built and shipped the same night. Beyond `?aggdist` (140 m)
+whole 64 m tiles of trees render as ONE merged voxel head: at boot each tile splats its
+members' coarse crown bricks + trunk columns (radial normals) into a 0.75 m-cell tile grid
+(`?ftcell`), runs the SAME buildVoxelPyramid → blocks → appendVoxelCrown machinery as a
+single crown, and binds one identity instance. Per-tree heads end at aggDist; tile
+nearDist = aggDist − tileRadius (overlap ⇒ hole-free). The voxcell dagLevel gate was removed
+(area>voxcellmin suffices — tile L0 bricks are dagLevel=0 yet big and need the ray path).
+
+200k: 784 tiles, 3.7M bricks (127 MB — mind the 256 MB buffer cliff; 0.5 m cells would
+overflow it), tile build 11.9 s at boot. **A/B same session: eye 40.2→27.4, oblique
+38.5→31.3, aerial 26.0→19.5 ms; aerial whole-frame clusters 30k→290.** The forest now runs
+past the old instMinPx ~300 m EDGE to the horizon; HUD showed 62 fps at the 200k oblique
+pose. Known nits: chunky skyline silhouette at extreme distance (coarsest tile level =
+tile/3 ≈ 21 m bricks), eye p95 spikes (63.8 vs med 27.4 — uninvestigated), boot +12 s
+(tile build is sync main-thread; worker/cache later).
+
+**Cumulative day summary (200k/dpr1.5, eye/oblique/aerial isolated gpuWall):** start of day
+~44/59/38 (thermally clean equivalents) → end of day **27.4/31.3/19.5 (warm)** with strictly
+BETTER far-field fidelity (no massive squares, per-brick shading, carved cell silhouettes,
+forest to the horizon). Live sustained + cool-machine numbers still to be captured; the
+16.6 ms target is CLOSE at aerial/oblique-class poses and ~10 ms away at eye.
+
+**Status vs the 16.6 ms goal:** materially closer, not yet locked — on the hot machine the best config reads
 eye ~37 / oblique ~40; cool-machine estimate ~28-33. Roughly half the original gap closed with
 zero eye-level visual change. The remaining eye/oblique cost is (a) the L0 voxel shell 60-250 m
 (election/overdraw-bound — coarsening in that band is visual-risky), (b) ~3M remaining leaf tris,
