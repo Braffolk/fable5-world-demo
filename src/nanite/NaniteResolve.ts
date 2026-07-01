@@ -671,45 +671,69 @@ export function buildNaniteResolve(
     if (pass === 'tri') If(isL, () => {
       const instId = item.x;
       const localTri = pRaw.bitAnd(uint(CLUSTER_TRI_MASK));
-      const ctx = fetch.makeCtx(instId, ci);
-      const w0 = fetch.fetchWorldVert(ctx, localTri, 0);
-      const w1 = fetch.fetchWorldVert(ctx, localTri, 1);
-      const w2 = fetch.fetchWorldVert(ctx, localTri, 2);
-      const bw = baryWeights(wp, w0, w1, w2);
-      const tb = ctx.triStart.add(localTri).mul(uint(3));
-      const va = readVertex(gpu.verts, elemU(gpu.indices, tb));
-      const vb = readVertex(gpu.verts, elemU(gpu.indices, tb.add(uint(1))));
-      const vc = readVertex(gpu.verts, elemU(gpu.indices, tb.add(uint(2))));
-      const dv = unpackVdata(va.vdata)
-        .mul(bw.x)
-        .add(unpackVdata(vb.vdata).mul(bw.y))
-        .add(unpackVdata(vc.vdata).mul(bw.z)) as unknown as NV4;
-      // per-species tint from matParam (mesh word 7): linear RGB + hueVar (4×u8)
-      const mp = fetch.meshWord(ctx.meshId, 7);
+      // per-species tint from matParam (mesh word 7): linear RGB + hueVar (4×u8) —
+      // needed by BOTH the full and the ?resfar cheap path (meshId is already decoded).
+      const mp = fetch.meshWord(meshId, 7);
       const base = vec3(
         toF(mp.bitAnd(uint(0xff))),
         toF(mp.shiftRight(uint(8)).bitAnd(uint(0xff))),
         toF(mp.shiftRight(uint(16)).bitAnd(uint(0xff))),
       ).div(255) as unknown as NV3;
-      const hueVar = toF(mp.shiftRight(uint(24)).bitAnd(uint(0xff))).div(255);
-      // hueShift with a NODE amount (per-species hueVar) — inline of the resolve
-      // hueShift helper, whose `amount` is a compile-time constant for bark.
-      const k = (dv.x as unknown as NF).mul(hueVar);
-      const tintedHue = base
-        .mul(vec3(1.18, 1.0, 0.55))
-        .mul(k.clamp(0, 1))
-        .add(base.mul(vec3(0.7, 0.95, 1.25)).mul(k.negate().clamp(0, 1)))
-        .add(base.mul(float(1).sub(k.abs()))) as unknown as NV3;
-      leafCol.assign(tintedHue.mul(dv.w.mul(0.8).add(0.2)) as unknown as NV3);
-      // instance-rotated geometric normal, flipped to face the camera (two-sided)
-      const gnrm = normalize(
-        instRotateDir(ctx.yawSc, va.nrm)
+      const fullLeaf = (): void => {
+        const ctx = fetch.makeCtx(instId, ci);
+        const w0 = fetch.fetchWorldVert(ctx, localTri, 0);
+        const w1 = fetch.fetchWorldVert(ctx, localTri, 1);
+        const w2 = fetch.fetchWorldVert(ctx, localTri, 2);
+        const bw = baryWeights(wp, w0, w1, w2);
+        const tb = ctx.triStart.add(localTri).mul(uint(3));
+        const va = readVertex(gpu.verts, elemU(gpu.indices, tb));
+        const vb = readVertex(gpu.verts, elemU(gpu.indices, tb.add(uint(1))));
+        const vc = readVertex(gpu.verts, elemU(gpu.indices, tb.add(uint(2))));
+        const dv = unpackVdata(va.vdata)
           .mul(bw.x)
-          .add(instRotateDir(ctx.yawSc, vb.nrm).mul(bw.y))
-          .add(instRotateDir(ctx.yawSc, vc.nrm).mul(bw.z)),
-      ) as unknown as NV3;
-      const toCam = normalize(camPos.sub(wp)) as unknown as NV3;
-      leafNrm.assign(dot(gnrm, toCam).lessThan(0).select(gnrm.negate(), gnrm) as unknown as NV3);
+          .add(unpackVdata(vb.vdata).mul(bw.y))
+          .add(unpackVdata(vc.vdata).mul(bw.z)) as unknown as NV4;
+        const hueVar = toF(mp.shiftRight(uint(24)).bitAnd(uint(0xff))).div(255);
+        // hueShift with a NODE amount (per-species hueVar) — inline of the resolve
+        // hueShift helper, whose `amount` is a compile-time constant for bark.
+        const k = (dv.x as unknown as NF).mul(hueVar);
+        const tintedHue = base
+          .mul(vec3(1.18, 1.0, 0.55))
+          .mul(k.clamp(0, 1))
+          .add(base.mul(vec3(0.7, 0.95, 1.25)).mul(k.negate().clamp(0, 1)))
+          .add(base.mul(float(1).sub(k.abs()))) as unknown as NV3;
+        leafCol.assign(tintedHue.mul(dv.w.mul(0.8).add(0.2)) as unknown as NV3);
+        // instance-rotated geometric normal, flipped to face the camera (two-sided)
+        const gnrm = normalize(
+          instRotateDir(ctx.yawSc, va.nrm)
+            .mul(bw.x)
+            .add(instRotateDir(ctx.yawSc, vb.nrm).mul(bw.y))
+            .add(instRotateDir(ctx.yawSc, vc.nrm).mul(bw.z)),
+        ) as unknown as NV3;
+        const toCam = normalize(camPos.sub(wp)) as unknown as NV3;
+        leafNrm.assign(dot(gnrm, toCam).lessThan(0).select(gnrm.negate(), gnrm) as unknown as NV3);
+      };
+      if (resFarDist > 0) {
+        // ?resfar cheap FAR-leaf path (beyond resfar·0.6 ≈ 36 m by default; the voxel band
+        // takes over at 45 m with flat brick shading anyway): species tint × mid crown-AO +
+        // the leaf QUAD's single-vertex normal (leaves are flat quads — va.nrm ≈ the face),
+        // no makeCtx (its gust samples + instance decode were paid PER PIXEL), no wind, no
+        // 3-vertex interp. Matches the voxel handoff look; per-leaf hue jitter is ≤2 px there.
+        const distL = wp.sub(vec3(camPos) as unknown as NV3).length();
+        If(distL.greaterThan(float(resFarDist * 0.6)), () => {
+          const triStart = elemU(gpu.clusters, ci.mul(uint(CLUSTER_WORDS)).add(uint(6)));
+          const vi = elemU(gpu.indices, triStart.add(localTri).mul(uint(3)));
+          const va = readVertex(gpu.verts, vi);
+          const B = gpu.instances.element(instId.mul(uint(2)).add(uint(1))) as unknown as NV4;
+          const yawSc = instYaw(B);
+          const gn = normalize(instRotateDir(yawSc, va.nrm)) as unknown as NV3;
+          const toCam = normalize(camPos.sub(wp)) as unknown as NV3;
+          leafNrm.assign(dot(gn, toCam).lessThan(0).select(gn.negate(), gn) as unknown as NV3);
+          leafCol.assign(base.mul(0.68) as unknown as NV3);
+        }).Else(fullLeaf);
+      } else {
+        fullLeaf();
+      }
     });
 
     // ---- VOXEL shading (Stage 2 §7.2): matClass=voxel(7). The SECOND resolve pass shades
@@ -756,6 +780,16 @@ export function buildNaniteResolve(
           const gn = normalize(instRotateDir(yawSc, localN)) as unknown as NV3;
           const toCamV = normalize(camPos.sub(wp)) as unknown as NV3;
           voxNrm.assign(dot(gn, toCamV).lessThan(0).select(gn.negate(), gn) as unknown as NV3);
+          // SUN-WRAP (user report: crowns "suddenly very dark, with a triangle cutting
+          // them into dark spots"): a brick MEAN normal facing away from the sun drove
+          // nDotL to 0 and the whole carved cube face (a triangle at most view angles)
+          // crashed to the ambient floor. Foliage is translucent — pull the shading
+          // normal 30% sunward so no crown face ever goes black.
+          voxNrm.assign(
+            normalize(
+              voxNrm.add((normalize(vec3(sunU.dir)) as unknown as NV3).mul(0.3)),
+            ) as unknown as NV3,
+          );
         }
         if (voxBrickShade) {
           // per-brick baked ALBEDO (BRICK_ALBEDO rgb of the winning brick) — breaks the
@@ -894,11 +928,16 @@ export function buildNaniteResolve(
       const viewDir = normalize(wp.sub(camPos)) as unknown as NV3;
       const toward = dot(viewDir, sunDir.negate()).clamp(0, 1);
       const glow = toward.pow(5).mul(float(sunU.intensity)).mul(0.032);
-      const backlight = leafCol
+      // VOXEL pixels get the same translucent forward-scatter (they ARE foliage) —
+      // its absence was part of the "suddenly very dark trees" report: mesh crowns
+      // glowed toward the sun while voxel crowns did not.
+      const blSrc = pass === 'vox' ? voxCol : leafCol;
+      const blGate = pass === 'vox' ? (isV.equal(uint(1)) as unknown as typeof isL) : isL;
+      const backlight = blSrc
         .mul(sunU.color as unknown as NV3)
         .mul(glow)
         .mul(vec3(0.9, 1.05, 0.55)) as unknown as NV3;
-      lit = lit.add(isL.select(backlight, vec3(0))) as unknown as NV3;
+      lit = lit.add(blGate.select(backlight, vec3(0))) as unknown as NV3;
     }
 
     // ---- debug overrides ------------------------------------------------------
