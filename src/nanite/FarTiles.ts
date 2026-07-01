@@ -104,6 +104,14 @@ export function buildFarTiles(opts: {
   const accNX = new Float32Array(nBricks);
   const accNY = new Float32Array(nBricks);
   const accNZ = new Float32Array(nBricks);
+  // per-CELL coverage accumulator: occupancy bits are set in a POST-pass only where
+  // accumulated coverage crosses OCC_COVER — inter-crown GAPS then survive L0 and
+  // propagate up the pyramid, so coarse-level masks keep tree structure and the raster's
+  // cell carve breaks far silhouettes up instead of painting solid cubes (the user-
+  // reported "large squares that stop looking like trees").
+  const nCells = cellsXZ * cellsY * cellsXZ;
+  const cellW = new Float32Array(nCells);
+  const OCC_COVER = 0.22;
 
   // bucket instances into EVERY tile their crown can reach (boundary-crossing crowns
   // were silently clipped when bucketed by trunk position only — the user-visible HOLES
@@ -147,15 +155,15 @@ export function buildFarTiles(opts: {
     alb: [number, number, number],
     nrm: [number, number, number],
     w: number,
+    cover: number,
   ): void => {
     if (cx < 0 || cy < 0 || cz < 0 || cx >= cellsXZ || cy >= cellsY || cz >= cellsXZ) return;
     const bx = (cx / nCellsPerBrickRow) | 0;
     const by = (cy / nCellsPerBrickRow) | 0;
     const bz = (cz / nCellsPerBrickRow) | 0;
     const bi = bx + by * bricksX + bz * bricksX * bricksY;
-    const cellBit = (cx & 3) + (cy & 3) * 4 + (cz & 3) * 16;
-    if (cellBit < 32) occLo[bi] = ((occLo[bi] as number) | (1 << cellBit)) >>> 0;
-    else occHi[bi] = ((occHi[bi] as number) | (1 << (cellBit - 32))) >>> 0;
+    cellW[cx + cy * cellsXZ + cz * cellsXZ * cellsY] =
+      (cellW[cx + cy * cellsXZ + cz * cellsXZ * cellsY] as number) + cover;
     accW[bi] = (accW[bi] as number) + w;
     accR[bi] = (accR[bi] as number) + alb[0] * w;
     accG[bi] = (accG[bi] as number) + alb[1] * w;
@@ -164,9 +172,9 @@ export function buildFarTiles(opts: {
     accNY[bi] = (accNY[bi] as number) + nrm[1] * w;
     accNZ[bi] = (accNZ[bi] as number) + nrm[2] * w;
   };
-  // VOLUME splat: cover every cell the source brick's AABB overlaps. Point-splatting the
-  // center produced a sampling BEAT against the tile grid (0.53 m source bricks vs 0.75 m
-  // cells → regular missed columns = the user-visible "wireframe" stripe artifact).
+  // VOLUME splat with per-cell COVERAGE: cover every cell the source brick's AABB
+  // overlaps (point-splatting produced the "wireframe" sampling beat), weighting each
+  // cell by the overlap fraction so a grazing corner touch doesn't fill a whole cell.
   const splatBox = (
     lx: number,
     ly: number,
@@ -182,9 +190,17 @@ export function buildFarTiles(opts: {
     const y1 = Math.floor((ly + half) / cellSize);
     const z0 = Math.floor((lz - half) / cellSize);
     const z1 = Math.floor((lz + half) / cellSize);
-    for (let cz = z0; cz <= z1; cz++)
-      for (let cy = y0; cy <= y1; cy++)
-        for (let cx = x0; cx <= x1; cx++) splatCell(cx, cy, cz, alb, nrm, w);
+    const inv = 1 / cellSize;
+    for (let cz = z0; cz <= z1; cz++) {
+      const fz = Math.max(0, Math.min((cz + 1) * cellSize, lz + half) - Math.max(cz * cellSize, lz - half)) * inv;
+      for (let cy = y0; cy <= y1; cy++) {
+        const fy = Math.max(0, Math.min((cy + 1) * cellSize, ly + half) - Math.max(cy * cellSize, ly - half)) * inv;
+        for (let cx = x0; cx <= x1; cx++) {
+          const fx = Math.max(0, Math.min((cx + 1) * cellSize, lx + half) - Math.max(cx * cellSize, lx - half)) * inv;
+          splatCell(cx, cy, cz, alb, nrm, w, fx * fy * fz);
+        }
+      }
+    }
   };
 
   const out: FarTileBuild[] = [];
@@ -200,6 +216,7 @@ export function buildFarTiles(opts: {
 
     occLo.fill(0);
     occHi.fill(0);
+    cellW.fill(0);
     accW.fill(0);
     accR.fill(0);
     accG.fill(0);
@@ -231,10 +248,26 @@ export function buildFarTiles(opts: {
         const nz = (b.normal[2] as number) * cy - (b.normal[0] as number) * sy;
         splatBox(wx, py, wz, b.half * s, b.albedo as [number, number, number], [nx, b.normal[1] as number, nz], Math.max(0.05, b.density));
       }
-      // trunk column: ground → crown base, radial horizontal normals
+      // trunk column: ground → crown base, radial horizontal normals, full coverage
       const topY = Math.max(cellSize, sp.crownMinY * s);
       for (let y = cellSize * 0.5; y < topY; y += cellSize) {
-        splatCell(Math.floor(lx0 / cellSize), Math.floor(y / cellSize), Math.floor(lz0 / cellSize), [sp.bark.r, sp.bark.g, sp.bark.b], [cy, 0.15, -sy], 1);
+        splatCell(Math.floor(lx0 / cellSize), Math.floor(y / cellSize), Math.floor(lz0 / cellSize), [sp.bark.r, sp.bark.g, sp.bark.b], [cy, 0.15, -sy], 1, 1);
+      }
+    }
+
+    // POST-pass: occupancy bits from per-cell coverage (gap-preserving threshold)
+    for (let cz = 0; cz < cellsXZ; cz++) {
+      for (let cy2 = 0; cy2 < cellsY; cy2++) {
+        for (let cx = 0; cx < cellsXZ; cx++) {
+          if ((cellW[cx + cy2 * cellsXZ + cz * cellsXZ * cellsY] as number) < OCC_COVER) continue;
+          const bi =
+            ((cx / nCellsPerBrickRow) | 0) +
+            ((cy2 / nCellsPerBrickRow) | 0) * bricksX +
+            ((cz / nCellsPerBrickRow) | 0) * bricksX * bricksY;
+          const cellBit = (cx & 3) + (cy2 & 3) * 4 + (cz & 3) * 16;
+          if (cellBit < 32) occLo[bi] = ((occLo[bi] as number) | (1 << cellBit)) >>> 0;
+          else occHi[bi] = ((occHi[bi] as number) | (1 << (cellBit - 32))) >>> 0;
+        }
       }
     }
 
@@ -244,8 +277,9 @@ export function buildFarTiles(opts: {
     let occupied = 0;
     for (let bi = 0; bi < nBricks; bi++) {
       const w = accW[bi] as number;
-      // prune featherweight bricks (a lone grazing splat) — they add memory, not shape
-      if (w <= 0.15) {
+      // prune featherweight bricks AND bricks whose every cell fell below the coverage
+      // threshold (no occupancy bits ⇒ nothing for the raster to paint or carve)
+      if (w <= 0.15 || ((occLo[bi] as number) === 0 && (occHi[bi] as number) === 0)) {
         dense[bi] = EMPTY_BRICK;
         continue;
       }
