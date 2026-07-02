@@ -260,3 +260,121 @@ at most ~2 ms of quality-identical waste exists here (L1+L2+L3), eye-skewed. The
 lives in voxel coverage + the per-pixel infra floor. The valuable outputs here are the
 premise corrections (§Premise audit 1-3) and probe #1, which gives the whole review
 exact class-level attribution for one instrumented run.
+
+## Reconciliation & verification (2026-07-02, post-limit continuation)
+
+Scope: this doc (canon) + sibling `03-base-mesh-pipe.md` (fleet A). Every load-bearing
+file:line below was re-read from the working tree (HEAD 4ca9cd9); all counter numbers
+re-derived from `fresh-voxbocc.json` / `fresh-noleaves-now.json` / `fresh-base-{bl,ng,vc,vc2}.json`.
+
+### Corrections (both docs)
+
+1. **Forest scene has NO shadow/GI system at all — doc 10's flag is CONFIRMED and it is
+   stronger than either doc assumed.** `ForestScene.ts:457-459` passes `gi: null,
+   canopyTex: null, csm: null` into `buildNaniteFrame`; `NaniteFrame.ts:244` gates
+   `shadowOn` on `world.csm !== null` ⇒ `shadow = null`, `shadowHalf = null`. The shadow
+   clipmap **never builds in the forest scene** — not "cached at static poses" (this doc's
+   frame-order line), not "runs only when moving" (doc 03 §3.5). Every canonical number,
+   live or isolated, contains ZERO shadow work; "shadows ≈ free" attribution rows are
+   vacuous. Master-plan consequence: the whole budget is provisional against the mission's
+   zero-quality-sacrifice law — when shadows/GI are actually wired into the forest, the
+   frame gains a currently-unmeasured cost class that no lever in this area offsets.
+2. **SW workgroup = 255 threads, not 128** (re-confirming Premise §5 against doc 03 §2.1):
+   `ForestScene.ts:70` / `WorldRegistry.ts:306` call `setClusterTriCap(…|| 256)` →
+   `MAX_CLUSTER_TRIS = 255` (`GeometryRegistry.ts:123-133`); the kernel dispatches
+   `[MAX_CLUSTER_TRIS]` (`NaniteRaster.ts:1015`). Doc 03's "128 threads = 1 tri each" (and
+   its rdbg quotes) echo the STALE comments at `NaniteRaster.ts:273-275` / `GeometryRegistry.ts:106`.
+3. **Vox fan-out default path cite fixed:** default is `voxf2b` OFF (`NaniteCull.ts:307`,
+   `?? '0'`), so the production fan-out is the 3-dispatch unordered path
+   `NaniteCull.ts:1042-1047` (kVoxFanoutArgs → kVoxFanout indirect → kVoxRasterArgs) — this
+   doc's `:1024-1037` cite pointed at the non-default F2B batch. Doc 03 had it right.
+4. **HZB is 12 levels at 2268×1473, not 14** (`NaniteHzb.ts:71-83`: halving chain from
+   half-res 1134×737 → 1×1 = 12 levels; ~1.11M texels total stands). `hierDepth ≈ 14`
+   (BFS passes, `NaniteFrame.ts:205` = maxDagDepth 12 + 2) is a DIFFERENT number and stands.
+5. **`voxTauCap` default is 12 px** (`NaniteCull.ts:317-318`); the "DEFAULT 8 px" in the
+   traverse comment (`NaniteCull.ts:843`) is stale. Matches doc 14. Mesh/bark clusters are
+   NOT capped (voxel-matClass-only, `NaniteCull.ts:852-859`) — this doc's bark τ_eff numbers stand.
+6. **L1 risk is real:** `fetchWorldVert`'s corner is a BUILD-TIME literal
+   (`NaniteFetch.ts:124` signature `v: 0|1|2`; def `:451`) — a dynamic-corner call is not
+   possible as written. The single-fetch refactor goes through `fetchWorldVertByIndex`
+   (`:130`, exists) with the window-grid HF branch kept on the 3-fetch form (no index
+   buffer). L1 effort S → S/M. Doc 03 §3.4 already said exactly this; adopted.
+7. **kAudit confirmed dead in world1 mode** (doc 03 §3.2): world1's SW election writes only
+   visPayloadV/visBV (`NaniteRaster.ts:952-975`), the HW world1 frag likewise
+   (`:1177-1183`); visDepthV holds only the kVisClear sentinel (`:391`) ⇒ kAudit
+   (`:1046-1057`) can never count. Coverage probes must be shot-based (P5) or scar-based (probe #1).
+8. **HW world1 fragment election already carries the relaxed-load guard**
+   (`NaniteRaster.ts:1177-1183`) — no missing-guard waste on the HW path; the HW waste is
+   solely the 3×-fetch + per-vertex makeCtx (`:1121-1128`).
+
+### Contradictions resolved (canon vs doc 03)
+
+- **"Base is a flat pixel-bound ~10-11 ms pool" (03) vs "base mesh raster ≈ 2-4 ms at the
+  money pose" (canon).** Both verified, different objects: the noleaves floor
+  (F + kpx·3.34Mpx ≈ 10-11 ms) is coverage+infra and includes full-frame terrain coverage
+  + the 140→~230 m bark ring that the DEFAULT config does not render
+  (`ForestScene.ts:312,388`); in the default frame those pixels are mostly owned by
+  foliage/vox (their coverage cost is foliage-area budget). Transferable to the default
+  frame: the infra floor (clears/HZB/cull/submits ≈ small) + mesh emit ≈ 2-4 ms oblique.
+  Doc 03's own §3.1 tri-swing disproof (3.7× fewer tris, +1.1 ms) supports c·P dominance;
+  numbers re-verified against the JSONs (eye 2.093M/11,375/234k; obl 2.105M/11,935/175k;
+  aerial 0.558M/3,180/38.5k; default-obl 1.27M visTris of which ~0.62M vox pseudo-tris,
+  9,185/11,614 vox clusters; default-aerial 661 all-vox/44.7k/hwTris 0).
+- **f2b expected magnitude: −0.5..−2 (03) vs −0..−0.5 (canon).** Canon stands. The
+  election guard (`NaniteRaster.ts:963-974`) already skips the RMW for losing fragments;
+  f2b (`:697-703`, `:983-989`) additionally saves only the z-interp + range check
+  (~6-10 ALU) per provably-losing fragment and ADDS a redundant load for surviving ones.
+  Loss-exact quality claim confirmed in code (atomicMax monotone, `cand ≤ nearKey`).
+  Probe stays (it's one flag), expectation is the canon's.
+- **Two-pass occlusion (03 L2):** mechanism + buffer budget verified — kTraverse is at 10
+  bindings; counters slot 3 is genuinely free (`NaniteCull.ts:742-744`; the "slots 2/3"
+  comment at `:738-739` is stale — code uses FA=0/FB=4); reject records CAN fold into the
+  qRaster top end (scar-fold precedent `NaniteRaster.ts:339-345`). Kept as a
+  quality-IMPROVING lever (motion correctness), NOT a perf lever: isolated cost
+  +0.1..+0.3 ms; live ms effect unproven until P3's moving-vs-static visTris ratio.
+- **noleaves oblique bimodality (03 Q-A) re-verified from the JSON:** oblique alternates
+  7-9.6 vs 15-17.4 ms with voxActive=false (brickCount=0 ⇒ no vox raster/voxOccPyr,
+  `NaniteFrame.ts:85`) ⇒ voxOccPyr excluded as sole bimodality cause — stands, routed to
+  the bimodality owner. noleaves eye max 17.5 (low outliers only) ⇒ eye p95 spikes need
+  foliage — stands.
+
+### New code-confirmed defect (cull-side, cross-cited from doc 11)
+
+**Perspective `sphereOccluded` has no on-screen gate:** `NaniteHzb.ts:158-205` clamps the
+footprint to edge texels (`:189-192`) and returns without any `|ndc|<1` test (`:200-204`),
+while the ortho variant HAS the gate (`:246-247`). A frustum-SURVIVING cluster whose
+sphere straddles the screen edge (center off-screen, `centerClip.w>0`) tests against an
+arbitrary edge texel's depth → over-cull → pan/pose-arrival pop-in. This is a
+CONSERVATIVE-CULL violation, i.e. a quality bug in the base cull, not a perf lever.
+Fix is one line (mirror `:246`); costs only extra survivors. Gate: shotdiff at pan poses
++ visClusters delta. Pairs with (and is cheaper than) the two-pass occlusion lever.
+
+### Surviving lever table (merged, this area)
+
+| # | Lever | Mechanism (1-liner) | eye / obl / aerial (ms) | Quality | Probe (serial queue) | Effort | Conf |
+|---|---|---|---|---|---|---|---|
+| B1 | HW 1-corner fetch (canon L1 = 03 L5) | HW vertex stage fetches 3 corners, uses 1 (`NaniteRaster.ts:1123-1128`); refactor via `fetchWorldVertByIndex`, keep HF-window branch | −0.3..−1.0 / −0..−0.1 / 0 | IDENTICAL (same selected vertex) | `?hw1fetch=1` A/B eye + shotdiff | S/M | med |
+| B2 | `?f2b=1` default flip (canon L3 = 03 L1) | skip z-interp for provably-losing frags (`:983-989`); guard already kills their RMW | −0..−0.5 each pose | IDENTICAL (loss-exact) | `EXTRA=f2b=1` 3 poses + noleaves variant | S | low that it ≥0.5 |
+| B3 | vcache re-measure post-binding-fix (canon L2) | cooperative vertex-transform cache; currently 11th-buffer bitrot (`NaniteVertexCache.ts:56-64`) | −0..−1.0 / −0..−0.5 / ~0 | IDENTICAL by construction | fixed `?vcompact=1` vs 0, screenshot-gate + hwTris>0 | M | low |
+| B4 | Two-pass occlusion (03 L2) | record HZB rejects → re-test vs fresh pyramid → append raster; slot-3 counter + qRaster-tail records = zero new bindings | +0.1..+0.3 isolated; live: removes 1-frame disocclusion holes | IMPROVING | P3 moving/static visTris ratio first; static shotdiff=0 gate | M | med |
+| B5 | `sphereOccluded` on-screen gate (new, from doc 11 verify) | mirror ortho's `onScreen` (`NaniteHzb.ts:246`) into the perspective test | ~0 / ~0 / ~0 (may cost a hair: more survivors) | IMPROVING (kills edge-pop) | pan-pose shotdiff + visClusters delta | S | high (bug), med (visibility) |
+
+Probe #1 (per-matClass emit/frag split via scar-style counters) remains the area's
+highest-value deliverable — unchanged, see §Open questions.
+
+**Master-plan budget from this area (reconciled):** quality-identical headroom ≈ 1-2 ms,
+eye-skewed (B1+B2+B3); oblique contribution realistically −0..−1 ms. Doc 03's "−2 to −3
+oblique" included the resolve-pass probe (`?nores`) which belongs to the resolve area and
+an overstated f2b. The oblique −11..13 ms gap is NOT in this area (unchanged conclusion).
+
+### Killed claims (one line each)
+
+- **[03 §2.1] "SW raster = 128 threads/WG"** — 255 (`setClusterTriCap(256)→255`, dispatch `[MAX_CLUSTER_TRIS]` at `NaniteRaster.ts:1015`); stale comments echoed.
+- **[03 §3.5 + L3] "shadow clipmap is a live/moving base cost" + `?culloverlap` lever (−0.5..−1.5 live)** — forest passes `csm:null` (`ForestScene.ts:459`) ⇒ shadow system never built (`NaniteFrame.ts:244`); `cullOverlap` requires `shadow?.cullPrepass` (`:260`) ⇒ can never fire. Dead in every canonical config; revisit only if shadows get wired into the forest.
+- **[03 L1] "f2b −0.5..−2 ms"** — guard already skips losers' RMW; only z-interp saved ⇒ −0..−0.5 (see resolution above).
+- **[03 P3] shRaster live counter half of the probe** — counter never set (shadow null, `NaniteFrame.ts:507`); keep only the visTris/culloverlap-free parts of P3.
+- **[canon L4] voxel clusters out of qRaster** — confirmed dead: bail after broadcast (`NaniteRaster.ts:550-555`) bounded by the <2.5 ns/wg launch floor ⇒ ≲0.1 ms at 9.2k WGs; do not build.
+- **[both] "HZB 14-level chain"** — 12 levels at the canonical res (`NaniteHzb.ts:71-83`).
+- **[canon frame-order] "shadows (cached at static poses) → shadowHalf"** — those passes do not exist in the forest scene (correction #1).
+- **[carried from earlier memory, re-killed] "base is TRIANGLE-EMIT-bound / 46M tris / 97% sub-pixel"** — bark 1-root collapse re-confirmed in boot logs (`[forest] c0: bark lod0 263→root 1 (550cl/9lvl)`, fresh-voxbocc consoleLines); tri-swing disproof re-verified.
+- **[both] `fresh-base-vc*.json` 5.4-5.7 ms runs** — vcompact empty-scene artifact re-confirmed (hwTris=0 in both files); not data.

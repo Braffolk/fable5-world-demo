@@ -336,3 +336,137 @@ Open questions:
 - Where should the oblique −11..13 come from? Not from cull-hzb alone: the honest
   in-area ceiling is ≈ −3..−7 (L1/L2/L3 compounding). The remainder must come from
   the per-pixel coverage side (vox Phase B fill + resolve + post) or base raster.
+
+## Reconciliation & verification (2026-07-02, post-limit continuation)
+
+Adversarial verify pass re-ran after the session-limit death. Every load-bearing file:line in
+this doc was re-read at HEAD (nanite-raster 6a93dfb + uncommitted); every ≥1 ms claim was
+re-checked against the scratchpad JSONs. Verdict: the doc's premises and levers SURVIVE with
+the corrections below. No sibling doc exists for this area; overlapping claims in docs 01, 10,
+12, 13, 14 were reconciled here (their own docs left untouched — flagged for their owners).
+
+### Code-cite verification (all CONFIRMED unless noted)
+
+- Premise §1 (two occlusion structures): voxOccPyr min-pool NaniteVoxelRaster.ts:399-474, built
+  in dispatchVoxel :1461 over mesh-only visPayloadV (world1 order NaniteRaster.ts:1419-1423);
+  main HZB built NaniteFrame.ts:481 after dispatchVoxel ⇒ full-content, prev-frame at the emit
+  test NaniteCull.ts:919-925 (prevVp/prevCamPos saved NaniteCommon.ts:109-110). CONFIRMED.
+- Premise §3 (lodWarp ships): defaults simband=6/lodnear=4/lodpow=0.6 NaniteFrame.ts:172-177,
+  τ=3 :157-158 ⇒ τ_eff(100 m)=3·(1+16^0.6)=18.8 px, τ_eff(300 m)=34.1 px — arithmetic verified;
+  voxtaucap=12 default NaniteCull.ts:317-318, clamp :852-860. CONFIRMED (agrees with doc 14).
+- Premise §4 (missing off-screen guard): perspective clamps with no |ndc|<1 test
+  NaniteHzb.ts:187-198; ortho guard exists :246-247; behind-camera w>0 guards DO exist
+  :202-203, so the exposure is lateral/vertical screen-edge entry + teleports (refinement, not
+  a kill). CONFIRMED.
+- Premise §5 (visTris counts bricks): counters[6] += c.triCount NaniteCull.ts:931; triCount =
+  word7&0xff (GeometryRegistry.ts:601); voxel clusters pack brickCount there
+  (GeometryRegistry.ts:1172, NaniteVoxelRaster.ts:562). CONFIRMED.
+- Block cull :588-673 (thread-0 test :615-664), ?voxbocc :838-884 (straddler exemption :844,
+  default ON :282), per-pixel early-out :1266-1267, waves rebuild loop :1466-1480, F2B fanout
+  :553-710, batched BFS :998-1010, kSeedRoots bounds :776-795, descend-no-tests :935-947,
+  owner dedup DagHierarchy.ts:18-23, shadow shared cut occlusion-null NaniteClipCull.ts:133,
+  makeOrthoOccluded zero call sites (dead). ALL CONFIRMED.
+- Conservativity re-derived from code for L1/L2/L3: keep-on-tie (`|0xff` + atomicMax means an
+  equal key cannot displace the incumbent), min-pool superset, bbNearZ = true box minimum.
+  The IDENTICAL quality classes below are honest.
+
+### Measurement verification (scratchpad JSONs)
+
+- voxbocc deltas: fresh-bead-v2-base 36.0/43.1/16.8 → fresh-voxbocc 18.8/37.2/16.4 =
+  −17.2/−5.9/−0.4. CONFIRMED (doc's −17.2/−6.0/0).
+- voxf2b=1 (fresh-voxf2b-ctl 40.9/49.3/32.8 vs bead-v2-base): +4.9/+6.2/+16.0. CONFIRMED.
+- voxwaves=4 vs f2b-ctl (fresh-voxwaves4 41.1/48.8/28.0): +0.2/−0.5/−4.8. CONFIRMED
+  (doc said eye +0.1; measured med +0.2 — the ≲0.3 ms/rebuild bound stands).
+- aggdist=60 oblique −10.8 (43.1→32.3). CONFIRMED (~10 ms ring).
+- Per-frame arrays: voxbocc-aerial period-3 lows, ablate-post3 aerial 6.5/11.5/9.5→steady
+  14-19 (one 11.5), final-rested aerial 8.7/8.1 arrival dip, oblique bands (voxbocc 33.5-41.5;
+  final-rested 33.7-40.5 vs 42.9-47.4; persist under full post ablation). ALL CONFIRMED verbatim.
+- Counters: eye/oblique/aerial visClusters 22,897/11,614/661; voxClusters 5,935/9,185/661;
+  oblique visTris 1,270,591; aerial visTris 44,693 ⇒ 67.6 bricks/cluster (measured, all-vox
+  pose). CONFIRMED.
+
+### Corrections (this doc)
+
+1. **Premise §2 / waste §3 / L6 — "jitter-linked" downgraded to "post-ablation-linked; TAA
+   unisolated."** fresh-ablate-post3's extra is `ablate=clouds+ao+bounce+bloom+taa` (verified
+   in the JSON), NOT taa-only. The aerial period-3 lows vanished under FULL post ablation. TAA
+   remains the only cost-consistent member of the ablated set (post totals ≈0 ms at aerial, so
+   clouds/AO/bounce/bloom cannot produce ±5-9 ms swings; jitter is the only ablated element
+   that feeds back into cull/raster work via cam.update), but this is inference by
+   elimination, and a DVFS-shape interaction (doc 10 hypothesis H) is not excluded. P6
+   (`ablate=taa` ALONE, 64 frames) is REQUIRED before L6 is built — it does not merely
+   "half-confirm". The oblique conclusion (bands persist with post+TAA off) is UNAFFECTED
+   (ablating more still leaves bands).
+2. **Work model — HZB build is 12 dispatches, not 14.** Level layout (NaniteHzb.ts:72-81) at
+   2268×1473: 1134×737 → 1×1 = 12 levels, ~1.115 M texels. Cost estimate unaffected.
+   (Docs 12 and 13 repeat "14"; doc 10's "12" is correct — flagged for their owners.)
+3. **Premise §5 — the oblique mesh/brick split is a point estimate, now a range.** This doc
+   assumed ~105 bricks/cluster ⇒ ~0.3 M mesh tris; doc 12 applied the AERIAL-measured 67.6 ⇒
+   ~0.65 M. Only aerial's average is measured; oblique mixes per-tree crowns (≤128) with
+   FarTile heads (67.6). Truth: oblique real mesh tris ∈ [0.3, 0.65] M — either way ≪
+   noleaves-oblique's 2.11 M, so doc 12's "noleaves OVERSTATES base at oblique" and this doc's
+   "tris cheap at oblique needs the brick subtraction" BOTH survive. Discriminator (S): split
+   counters[6] by matClass, or CPU-sum brick counts over the oblique cut.
+4. **Shadow paragraph — "shadows ≈ free" is trivially true, and void as a budget line.**
+   ForestScene.ts:456-459 passes gi:null/canopyTex:null/csm:null; NaniteFrame.ts:244 then
+   makes shadowOn false ⇒ the ENTIRE nanite shadow system (incl. the NaniteClipCull.ts:133
+   occlusion-less shared cut) never builds in ANY canonical forest measurement (doc 10 P1
+   CONFIRMED by code). "nanshadow=0 measured free" turned nothing off. Consequence kept from
+   doc 10: the shadow shared-cut's cost (and its missing occlusion) is UNKNOWN-not-free the
+   day shadows ship in forest; makeOrthoOccluded stays dead code until then.
+5. **L2 detail — the fanout binds ~6 storage buffers today** (counters, qRaster.ro, clusters,
+   meshes, voxCount, qVoxRaster.rw), not 4. Adding the HZB read + a partition output stays ≤10.
+   Feasibility unchanged.
+
+### Cross-doc reconciliations (owners of 01/10/12/13 should pick these up)
+
+- **Doc 01 L3 (sorted vox queue, ONE dispatch, no barriers) — mechanism half-wrong, lever
+  survives smaller.** Its claim that "the per-block cull and ?voxbocc see near canopy depth
+  earlier" is FALSE: both read the voxOccPyr SNAPSHOT built once pre-scatter
+  (NaniteVoxelRaster.ts:1461), which intra-dispatch ordering never updates. Only the per-PIXEL
+  live-buffer guards (:1266-1267 and the flat-path prevE guard) benefit — consistent with the
+  measured −38..−45 % brick WRITES from the old F2B data. So doc-01-L3 (store-skips, no
+  barriers) COMPOSES with, and does not subsume, this doc's L1/L2 (block/brick VISIT elision
+  via a vox-inclusive pyramid). Adopted below as L7.
+- **Doc 01 L2 = this doc's L3** (finer/tighter occlusion window). Expected-ms brackets merged:
+  oblique −0.5..−4 (doc 11 low, doc 01 high); the disagreement is exactly whether oblique's
+  voxbocc residual is bound-looseness or genuine visibility — the skip-counter probe settles
+  it. One lever, one gate.
+- **Doc 10 P1/P3/P4** (forest gi/csm null; gpuWall includes event-loop latency; DVFS suspect):
+  P1 code-verified here; P3's 70-91 ms spikes appear in ablate-post3 oblique (91.5, 70) —
+  consistent; P4 remains open and is the H-arm of P5/P6.
+- **Doc 14 §3** ("effective vox τ is voxTauCap=12, not loderr=3") — agrees with premise §3;
+  code-verified.
+
+### Surviving lever table (post-verification)
+
+| # | Lever | Mechanism (1-liner) | eye / oblique / aerial (ms) | Quality | Probe / gate | Effort | Conf |
+|---|-------|---------------------|------------------------------|---------|--------------|--------|------|
+| L1 | Wave-split brick vox-behind-vox | voxf2b=1&voxf2bk=2&voxwaves=2: 1 pyramid rebuild between 2 depth slabs; wave-2's voxbocc sees wave-1's vox depth; deferral+conservative cull = byte-identical | ~0 / −1..−4 net / −1..+1 (chain tax) | IDENTICAL (verified conservative) | P1-P4 serial probes; (P3−P2) = the money number | S (measure now) | med — brick-vs-vox occupancy unknown (the open 2×2 cell) |
+| L2 | Two-pass vox deferral by prev-HZB partition | fanout splits qVoxRaster into visible/probably-occluded via prev full-content HZB; scatter A → rebuild pyramid (now vox-inclusive) → scatter B; partition only picks the pass, drops nothing | −0..2 / −2..6 / −0..2 | IDENTICAL | build after L1 probes prove brick-vs-vox gain exists; A/B ?voxtwopass | M | med |
+| L3 | Tighter occluder window (exact-rect / finer mip) | sample the exact ≤3×3 covering rect one level finer (or UE-style 4×4) in sphereOccluded + block + voxbocc tests; smaller superset ⇒ strictly more culls, still conservative | −0..0.5 / −0.5..−4 (merged with doc-01 L2) / ~0 | IDENTICAL | voxbocc-kill counter +≥20 % at oblique AND ≥2 ms interleaved A/B, else discard; no-hole eyeball + shotdiff | S-M | med |
+| L4 | Off-screen guard in perspective sphereOccluded | mirror ortho's |ndc|<1 refusal (NaniteHzb.ts:246-247) so screen-edge/teleport clusters aren't tested against clamped stale texels | ~0 / ~0 / ~0 (cleans aerial arrival dips; slight +cost during pans = the correct image) | IMPROVING (strictly more conservative; removes pop-in class) | teleport-frame shots; aerial per-frame array loses the 6-12 ms dip | S | high |
+| L5 | Cluster two-phase occlusion (record + re-test vs fresh HZB) | phase 1 records HZB rejects (REJ_CLUST scaffolding exists :97-99, :743-744, :419-425, :482-488); re-test vs THIS frame's HZB post-world1; rasters survivors | iso ~0/0/0; live-moving lever (stale-HZB inflation ~9-11 ms measured 2026-06-26, pre-voxbocc — REMEASURE first) | IMPROVING (fixes motion holes; static identical) | live-moving occl=0 vs default A/B (TICKS=600) BEFORE building; then rescued-clusters/frame counter | M-L | med-high mechanism, stale magnitude |
+| L6 | Aerial jitter-flicker stabilization | jitter-invariant occlusion decision (unjittered VP or one-texel depth pad, keep-more direction) for the 661 FarTile clusters | ~0 / ? / med ~0..−1, p95 −2..4 | IDENTICAL (pad only keeps more) | P6 (ablate=taa ALONE, 64 f) MUST run first — see correction 1 | S probe / S-M fix | low until P6 |
+| L7 | Sorted vox queue consumed by ONE dispatch (adopted from doc 01 L3, corrected) | existing F2B counting sort (kVoxPrefix already publishes whole-list args, NaniteCull.ts:663) + single kVoxScatter dispatch: near bricks launch first ⇒ per-pixel prevE/early-out guards hit more; ZERO barriers | −0..0.5 / −1..−3 / ~0 | IDENTICAL (order-free atomicMax; reorder only) | A/B flag; voxBrickWrites (?voxwrites=1) before/after — expect −30..45 % writes | S | med (store-skips proven; ms value at current guards unknown) |
+| L8 | Zero-coverage emit cull (adopted from doc 01 W4) | drop clusters whose projected rect provably covers no pixel CENTER (they raster nothing); must use a CONSERVATIVE over-rect | −0.3..1 / −0.2..0.5 / ~0 | IDENTICAL only if the rect is provably conservative; else RISK — gate: shotdiff must be exactly 0 | shotdiff=0 at all poses + visClusters delta | S-M | low-med |
+
+Ceiling honesty (unchanged): L1+L2+L3+L7 compound to an honest in-area oblique ceiling of
+≈ −3..−7 ms. The oblique −11..13 gap does NOT close inside cull-hzb; the rest is per-pixel
+coverage (vox fill/resolve/post) and base raster. L4/L5 are quality/live-p95 levers, not
+isolated-median levers.
+
+### Killed claims
+
+- **"Aerial bimodality is TAA-jitter-linked, gone under ablate=taa" (fact pack + this doc's
+  premise §2 as originally worded)** — the run ablated the entire post stack; taa-only was
+  never measured. Downgraded, not reversed (see correction 1).
+- **"HZB build = 14 dispatches / 14-level chain" (docs 11, 12, 13)** — it is 12 at 2268×1473.
+- **Doc 01 L3's "sorted single dispatch lets the block cull and voxbocc see near canopy
+  depth earlier"** — they read the pre-scatter snapshot pyramid; only per-pixel guards see
+  live depth.
+- **"~0.3 M real mesh tris at oblique" (this doc) and "≈0.65 M" (doc 12) as point facts** —
+  both rest on an unmeasured bricks/cluster average; replaced by the [0.3, 0.65] M range.
+- **"Shadow-cull occlusion absence measured ≈ free" as a forest budget line** — nothing ran;
+  trivially true, void for any future forest-with-shadows budget (doc 10 P1 confirmed).
+- **"L2's fanout binds 4 buffers"** — it binds ~6; conclusion (≤10 budget OK) unchanged.

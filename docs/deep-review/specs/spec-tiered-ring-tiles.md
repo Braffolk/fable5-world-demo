@@ -143,7 +143,16 @@ VoxelizeCrown.ts:192) ⇒ per-tree emitted level at 60 m is L2 (brick ≈ 0.98·
 
 - At the 60 m seam, ring cells (0.25 m ≈ 5.9 px) equal the mean per-tree emitted cell
   (0.244·A.w m). Deeper in the band both reps coarsen under the SAME τ ceiling ⇒ projected
-  cells stay in (1.5, 6] px on both sides.
+  cells stay in (1.5, 6] px on both sides. **[REVIEW-FIX]** — with one bounded exception:
+  ring L0 has ownError=0 (always-cut, VoxelizeCrown.ts:988), so NEARER than the seam the ring
+  never refines below 0.25 m cells while per-tree does (τ pushes per-tree to L1 ≈ 0.122 m
+  cells below ≈57 m). Ring content is visible down to ≈ nearDist − halfDiag ≈ 37 m
+  (tile-CENTER gating), where 0.25 m cells project up to ≈9.6 px > the 6 px bound. This
+  applies ONLY in the [37, 60] m double-draw band, where a finer live representation always
+  coexists and elections decide; §3.5's near-gate shrinks it to ≈[44, 60] and the per-brick
+  variant shrinks it further. It is bounded by (and strictly smaller than) the SHIPPED 94 m
+  seam's same class (0.75 m cells from ≈49 m ≈ 21 px). The G2 `midring`/`graze` poses target
+  exactly this band.
 - Honest caveat (do not hide it from the user): equal-or-finer is exact vs the SPECIES-MEAN
   tree. Small instances (A.w=0.8) emit ~0.195 m cells at 60 m — up to ~25% finer than the
   ring's 0.25 m. Octave PHASE also differs (tile ladder vs tree ladder), so locally the ring
@@ -162,12 +171,20 @@ FarTilesSplat.ts is contractually bit-identical for the existing 64 m path
      (real bark meshes cover 60–140 m; splatting columns would double-draw trunks AND resurrect
      the antenna class, doc 06 §3.6).
    - when `origins`: two extra per-brick accumulators `accOX, accOZ` (Float32Array(nBricks),
-     alongside FarTilesSplat.ts:100–108) accumulating `w·(treeX − brickCenterX)` — wait, at
-     accumulate time the brick center is derivable from `bi`; accumulate `w·treeLocalX/Z`
-     (`lx0, lz0` at FarTilesSplat.ts:153–154) and let emit subtract the brick center. Extend
-     `splatCell` (FarTilesSplat.ts:124–139) with the two writes; two extra arrays in
+     alongside FarTilesSplat.ts:100–108) accumulating `w·treeLocalX/Z` (`lx0, lz0` at
+     FarTilesSplat.ts:153–154; these are tile **MIN-CORNER**-frame coords, `x − originX`).
+     Emit then subtracts the brick center. **[REVIEW-FIX] Frame discipline:** the emitted
+     `brick.center` (FarTiles.ts:237–240) is tile-**CENTERED** (`… − tileSize·0.5`), while
+     `accO` is min-corner. The §3.7 offset MUST be computed in ONE frame:
+     `off = accO/accW − (b?·brickWorld + 0.5·brickWorld)` using the min-corner brick center
+     (`bx·brickWorld + 0.5·brickWorld`, NOT the tile-centered `brick.center`) — mixing frames
+     silently shifts every shading origin by tileSize/2 = 8 m and the G2 shotdiff would fail
+     mysteriously. Extend `splatCell` (FarTilesSplat.ts:124–139, body :125–139) with the two
+     writes (`accOX[bi] += w·lx0`, `accOZ[bi] += w·lz0` — same summation structure as `accW`,
+     so `accO/accW` is the exact w-weighted mean); two extra OPTIONAL arrays in
      `TileSplatOut` (FarTilesSplat.ts:63–74) + the worker transfer list
-     (FarTiles.worker.ts:29–42). Purpose: §3.7 crown-identity shading.
+     (FarTiles.worker.ts:29–42; arrays absent when `origins=0` — boot path transfers stay
+     9-wide, byte-identical). Purpose: §3.7 crown-identity shading.
 2. **`planFarTiles`** (FarTiles.ts:91–198): already parameterized by `tileSize`/`cellSize`
    via `FarTileOpts`. Export it (currently module-private) plus `emitTile` (FarTiles.ts:201–283)
    so the ring streamer plans/emits per tile. Add to `emitTile`: when `origins`, write
@@ -190,14 +207,17 @@ All gating uses EXISTING per-mesh words — no cull changes:
   FarTiles.ts:361–381), `nearDist = ringNear − 12` = 48 (word-8 gate, NaniteCull.ts:786–787;
   setNearDistance GeometryRegistry.ts:1322–1327), `maxDist = aggDist + 12` = 152 (lodDist).
   Overlap = tile half-diagonal (11.31 ≤ 12) ⇒ a tree dropped by one tier is ALWAYS covered by
-  the other: tree at instDist ≥ 60 ⇒ its tile center ≥ 60 − 11.31 > 48 ⇒ tile seeded; tree at
-  instDist ≤ 140 covered per… (ring tile ON through 152 ≥ 140 + 11.31). Same algebra as the
-  shipped 94 m seam.
+  the other: tree at instDist ≥ 60 ⇒ its tile center ≥ 60 − 11.31 > 48 ⇒ tile seeded;
+  **[REVIEW-FIX]** (completing the far-side sentence) tree at instDist ≤ 152 − 11.31 ≈ 140.7 ⇒
+  its tile center ≤ instDist + 11.31 ≤ 152 ⇒ tile still ON, and beyond 94 m the 64 m FarTiles
+  are ALSO on (their nearDist 94 unchanged) — so at the far seam the ring hands off inside the
+  [94, 152] ring∩FarTiles overlap with no gap. Same algebra as the shipped 94 m seam.
 - FarTiles (64 m) heads: UNCHANGED (nearDist 94, maxDist 100000). Bark: UNCHANGED (maxDist 140).
 - Boundary crowns: instances bucket into EVERY tile their reach touches
   (FarTiles.ts:153–189) — reused verbatim ⇒ no tile-border holes.
 
-Double-draw bands after this spec: [48,60] ring-vs-per-tree (killed by §3.5's near-gate),
+Double-draw bands after this spec: [≈37,60] ring-vs-per-tree (shrunk to ≈[44,60] by §3.5's
+cluster-granular near-gate; per-brick variant tightens further — **[REVIEW-FIX]** was "killed"),
 [94,152] ring-vs-FarTiles (pre-existing class; the tile-wave lever and/or a mirrored far-gate
 own it — out of scope here, noted in §8).
 
@@ -247,19 +267,37 @@ authoring path.
 Edit site: inside kVoxFanout's `If(matClass == VOXEL_MATCLASS)` (NaniteCull.ts:526–531).
 Read mesh word 6 flags byte (idiom :523–525 reads the matClass byte of the same word); if
 `MESH_FLAG_RINGTILE` set, read the cluster sphere (readCluster, already used at :522) and the
-identity instance A (gpu.instances — new read in THIS kernel; binding count goes ~5→6, well
-under the 10-buffer Metal cliff), and skip the qVoxRaster append when
+identity instance A (gpu.instances — new read in THIS kernel; **[REVIEW-FIX]** binding count
+goes 6→7 — kVoxFanout today binds qRasterV.ro, counters, gpu.clusters, gpu.meshes, voxCount,
+qVoxRasterV.rw — still well under the 10-buffer Metal cliff), and skip the qVoxRaster append
+when
 
     dist(camPos, sphereCenter + A.xyz) + sphereRadius < ringNear − reachMax
 
 with `reachMax` = max over species of `reachOf` (FarTiles.ts:153–165) baked into a uniform
-(≈ 12–16 m). Every tree contributing content to such a cluster has instDist < ringNear ⇒ its
-per-tree head is live (per-tree maxDist = ringNear) ⇒ provably hole-free (the doc-06 L2
-argument at the new seam). TSL note: build the whole test inside the existing `If` closure —
-do NOT hoist the elemU reads to Fn scope (r184 hoist hazard; precedent comment
-NaniteVoxelRaster.ts:1194-area and doc 90 §3.1). This also removes the only place where a
-coarser ring brick could WIN an election against a live finer per-tree brick (the doc-15 §waste-2
-"coarse bleed" class) ⇒ strictly quality-improving.
+(≈ 12–16 m). Every tree contributing content to such a cluster has instDist < ringNear ⇒ SOME
+per-tree representation is live for it (mesh leaves < 45 m, per-tree voxel head 45→ringNear) ⇒
+provably hole-free (the doc-06 L2 argument at the new seam). TSL note: build the whole test
+inside the existing `If` closure — do NOT hoist the elemU reads to Fn scope (r184 hoist
+hazard; precedent comment NaniteVoxelRaster.ts:1194–1200 and doc 90 §3.1).
+**[REVIEW-FIX] Scope honesty — the gate is cluster-granular, not a full fix:** it drops only
+clusters ENTIRELY inside `ringNear − reachMax` (≈44 m). A cluster STRADDLING that radius
+(sphere ~2–5 m) keeps rendering, and its ring-resolution content in ≈[44, 60] m competes in
+elections against finer per-tree content there (ring cells 0.25 m ≈ 5.9–8 px vs per-tree
+emitted cells ≈ 3.5–3.8 px at 45–60 m, and mesh leaves < 45 m) — the doc-15 §waste-2 "coarse
+bleed" class SHRINKS but is not eliminated. (Perspective: today's SHIPPED seam has the same
+class, larger — 64 m tiles' content reaches ≈49 m at 0.75 m cells, FarTiles.ts:24–28 +
+ForestScene.ts:390 — so this band is strictly no worse than the accepted baseline, but it is
+not "strictly quality-improving" either; it is G2's `midring`/`graze` poses' job to judge.)
+Tightening fallback if G2 flags the band: move the SAME test per-BRICK into the vox-raster
+brick loop (brick center + halfDiag vs `ringNear − reachMax`; the reach argument holds
+per-brick verbatim and brick granularity ≈1 m ≪ cluster ≈4 m) — costs a few ALU per brick in
+the setup phase, no new reads (brick center/half already loaded).
+**[REVIEW-FIX] voxf2b path:** the edit patches kVoxFanout, which is the DEFAULT fanout
+(?voxf2b defaults '0', NaniteCull.ts:307). Under `?voxf2b=1` the fanout is the RANGE→COUNT→
+PREFIX→SCATTER pipeline (:546+) and ringgate is silently inert — acceptable (A/B-only path),
+but R3 MUST log a one-line console warning when ringgate=1 ∧ voxf2b=1 so a sweep never
+"measures" a gate that is not running (doc 90 §6 trap 2).
 
 ### 3.6 Per-ring OCC_COVER + the floater root-cause fix (bake-time, Stage R1)
 
@@ -277,8 +315,16 @@ must be retuned per ring, not inherited:
   has < 3 bricks AND component mean w < 0.5 (keeps legitimate saplings, kills 1–2-brick
   specks). Pure deterministic CPU, ~O(occupied).
 - **Re-pin the w-scale constants**: brick `w ≤ 0.15` prune (FarTiles.ts:220) and
-  `density = min(1, w/8)` (FarTiles.ts:235) were tuned at 0.75 m contribution counts; scale
-  both by (ringcell/0.75)³ as a starting point and validate against the §7.2 brick-count gate.
+  `density = min(1, w/8)` (FarTiles.ts:235) were tuned at 0.75 m tiles. **[REVIEW-FIX]** do
+  NOT scale them by (ringcell/0.75)³ (the original text's starting point): `accW[brick]` =
+  Σ over 64 cells × overlapping source bricks × density (FarTilesSplat.ts:132, 159–195), and
+  since BOTH paths pick the species pyramid level whose brick size matches the cell size
+  (ForestScene.ts:324–333: 0.75 m tiles splat ≈0.98 m L2 source bricks, ring 0.25 m tiles
+  splat ≈0.244 m L0 source bricks), the per-cell overlap count is ≈scale-invariant (~5–8)
+  and accW per brick is roughly UNCHANGED across resolutions. Cubing would set the prune to
+  ≈0.0055 (i.e. no prune — floaters sail through) and saturate density. Start UNSCALED
+  (0.15 / w/8), inspect the ring brick-w histogram in the R1 boot log, and sweep only if the
+  §7.2 brick-count gate or G2 floaters demand it.
 - Trunk antennas cannot arise (no trunk columns in ring tiles, §3.2). The `crownMinY = 2`
   initializer-as-cap bug (ForestScene.ts:336–337, flagged in doc 15) is therefore untouched
   here — leave it to the FarTiles quality lever.
@@ -293,17 +339,42 @@ without a fix, crown shading flattens to a near-constant per-tile field (the com
 NO layout change and NO new buffers:
 
 - **Bake**: per ring brick, the w-weighted mean source-tree XZ offset (accOX/accOZ from §3.2)
-  minus the brick center = `(dx, dz)`, |d| ≤ halfDiag + reach ≈ 23.3 m. Pack snorm2x16 at
+  minus the brick center (SAME frame — §3.2) = `(dx, dz)`; bound: a tree can contribute only
+  within `reach` of its base, so |d| ≤ reach + brickHalfDiag ≈ 17 m. Pack snorm2x16 at
   scale **RING_ORIGIN_R = 24 m** into brick word 3 (BRICK_SPREAD, VoxelBrick.ts:69,77).
   Safe: no runtime kernel reads BRICK_SPREAD today (grep: only VoxelBrick.ts's CPU
   readBrick mirror), the mean-normal resolve path ignores spread by design
-  (VoxelBrick.ts:38–44). Add `packOriginOffsetXZ`/`BrickCPU.originPacked?` to VoxelBrick.ts
-  (writeBrick :130–141 writes it raw to word 3 when present — document in the layout header,
-  "change it HERE only" rule).
+  (VoxelBrick.ts:38–44). Add `packOriginOffsetXZ`/`BrickCPU.originPacked?` to VoxelBrick.ts.
+  **[REVIEW-FIX]** writeBrick (:130–141) today writes `f32Bits(clamp(v.spread, 0, 1))` — the
+  edit is an explicit branch: `bricks[b+BRICK_SPREAD] = v.originPacked !== undefined ?
+  v.originPacked >>> 0 : f32Bits(clamp(spread))` (+ mirror note in readBrick :144–161, whose
+  `spread` field is garbage on ring bricks — validation tooling must not interpret it).
+  Document in the layout header ("change it HERE only" rule).
+  **[REVIEW-FIX] Pyramid propagation (MANDATORY, was missing):** `buildVoxelPyramid` L0 uses
+  the input BrickCPU array as-is, but every COARSER level is synthesized by
+  `downsampleBrickGrid` (VoxelizeCrown.ts:715–837), which computes `spread` from normal
+  variance (:781) and has NO originPacked — so L1+ ring bricks would carry a plain spread
+  float in word 3 and the resolve would unpackSnorm2x16 garbage. This is IN-BAND: with
+  errorK=1 the ring cut emits L1 (2 m bricks) beyond ≈118 m, i.e. across [118, 152] m at
+  every oblique pose. Fix in `downsampleBrickGrid`: when ≥1 contributing child carries
+  `originPacked`, set the coarse brick's
+  `originPacked = pack( Σ w_c·(unpack(child)·24 + childCenter.xz) / Σ w_c − coarseCenter.xz )`
+  (w_c = the same density weight the albedo mean uses; child offsets re-based from child
+  center to coarse center — offsets are center-relative, so a straight mean of packed values
+  is WRONG). Per-tree crowns never set originPacked ⇒ the propagation branch never fires
+  there ⇒ per-tree/64 m-tile builds byte-identical. Fallback if the propagation is deferred:
+  gate the resolve reconstruction on dagLevel==0 (cluster word7 bits 10–15, already read in
+  the vox pass) and use today's tile-center field for coarse bricks — but that visibly
+  flattens the 118–140 m shading field vs today's per-crown field, so it is a G2-gated
+  stopgap, not the landing state.
 - **Resolve**: in the bead block (NaniteResolve.ts:812–824), when the winning brick's mesh has
-  `MESH_FLAG_RINGTILE` (mesh word 6 flags byte via the existing fetch path), reconstruct
-  `treeOriginW = (ctrW.xz − unpackSnorm2x16(word3)·24, y=0)` and feed the UNCHANGED formula
-  `d0 = ctrW − treeOriginW`. The 25%-weight `beadPix` term keeps using ctrW (brick centers
+  `MESH_FLAG_RINGTILE` (mesh word 6 flags byte = `(w6>>>16)&0xff`, via the existing fetch path —
+  readMesh decodes exactly this, GeometryRegistry.ts:727), reconstruct
+  `treeOriginW = (ctrW.xz **+** unpackSnorm2x16(word3)·24, y=0)` and feed the UNCHANGED formula
+  `d0 = ctrW − treeOriginW`. **[REVIEW-FIX]** sign: the bake packs `meanTreeOrigin − brickCenter`,
+  so reconstruction ADDS the offset to the brick center (the original text subtracted — that
+  points every crown field at the mirrored origin). TSL has the WGSL builtin wrapped as
+  `unpackSnormU` (src/nanite/Tsl.ts:172–174) — use it, no manual bit math needed. The 25%-weight `beadPix` term keeps using ctrW (brick centers
   differ ≤ half a cell between representations — sub-element). Result: the ring's shading
   field radiates from the SAME per-tree origins as the per-tree rep. Where crowns
   interpenetrate, the weighted-mean origin blends — those pixels were already a cross-crown
@@ -327,8 +398,13 @@ NO layout change and NO new buffers:
   splat ≈ 20–50 ms (measured 44–52 ms per 64 m tile at 0.75 m — doc 06 L3; ring tiles have
   ~10× fewer members × ~3× more source bricks). 16 tiles/s ≈ 0.3–0.8 worker-s/s — fits.
   Main-thread emit+pyramid ≈ 2–5 ms/tile (64 m emit measured 3477 ms/812 ≈ 4.3 ms,
-  `fresh-aggdist60.json` console), budgeted **≤1 tile per frame** (doc 20: live CPU is
-  1.15 ms/frame with ~15 ms headroom; 0 longtasks must stay 0).
+  `fresh-aggdist60.json` console). **[REVIEW-FIX]** note the ring tile's DENSE grid is
+  LARGER than the 64 m tile's (16×48×16 = 12288 brick slots vs 22×16×22 = 7744 at
+  64 m/0.75 m — FarTiles.ts:114–115), with similar occupied counts (~4.3 k vs ~5.0 k), so
+  budget the worst case at ~5–7 ms/tile, still under the ~15 ms headroom; the emitTile dense
+  loop (FarTiles.ts:216–243) is O(nBricks). Budgeted **≤1 tile per frame** (doc 20: live CPU
+  is 1.15 ms/frame; 0 longtasks must stay 0 — G3 is the tripwire, and the worker-side
+  pyramid extraction is the pre-planned fallback, §8).
 - **Boot prefetch**: initial annulus ≈ 300 tiles ≈ 6–15 worker-s ≈ 1–2 s wall on the 8-worker
   boot pool (run it alongside the existing 64 m build; boot budget +≤3 s on 72 s,
   `fresh-voxbocc.json` bootS).
@@ -363,8 +439,15 @@ share, `fresh-aggdist60.json`). Ring tiles replace them with ~40–60 visible ti
 ~70 bricks/cluster of MERGED occupancy: cross-tree interpenetration dedup (trees at 4 m
 spacing, ~11 m crowns) collapses inter-crown depth overdraw — the measured ≈2.5–3 ms share at
 0.75 m cells (§1.1); at 0.25 m cells the dedup factor on ELECTIONS is the same (occupancy
-union is resolution-independent in coverage terms) while granularity stays parity. Plus the
-[48,60] near-gate removes the seam double-draw. **Expected: oblique −2..−5 ms (mid 3), eye ~0
+union is resolution-independent in coverage terms) while granularity stays parity.
+**[REVIEW-FIX] counter-cost stated:** a 0.25 m merged ring carries ≈3^2.39 ≈ 14× the bricks
+of the 0.75 m merge the −2.5..−3 was measured on; painted-pixel area is τ-invariant but
+per-brick SETUP (project/clip/occlusion-test, NaniteVoxelRaster) is not — the honest
+comparison is 0.25-ring bricks vs the per-tree ring bricks they REPLACE (similar count at
+parity granularity, §3.1), minus the dedup factor, so the net stays plausibly −2..−3; the
+−5 top end requires the seam double-draw kill AND a strong dedup factor. G1's −2.0 floor is
+the arbiter — do not bank the mid estimate. Plus the [48,60] near-gate removes the seam
+double-draw. **Expected: oblique −2..−5 ms (mid 3), eye ~0
 (the eye ring is behind the <45 m mesh canopy — already voxbocc-culled,
 doc 06 §3.1 eye note), aerial 0** (aerial is 100% 64 m tiles, doc 15 PA2 — untouched).
 
@@ -400,9 +483,14 @@ trim; state this to the user if that fallback is ever proposed.
    rewrites follow the attachHeightDagTile upload discipline (§3.4) — records + pushRange, no
    partial-state frames (mesh record is pushed LAST; until then rootCount=0 hides the slot).
 3. **Granularity parity**: visible element (cell) ≤ 6 px in both representations under the
-   same τ machinery; ring cell = species-mean per-tree L0 brick at the seam (§3.1). No pixel
-   can become coarser than the accepted per-tree look bound; the residual difference class is
-   octave-phase + sub-6px resampling, not "massive voxels".
+   same τ machinery ACROSS THE BAND PROPER (60–140 m); ring cell = species-mean per-tree L0
+   brick at the seam (§3.1). **[REVIEW-FIX]** two bounded exceptions, stated honestly rather
+   than claimed away: (a) the [≈44, 60] m near double-draw band, where always-cut ring L0
+   cells (5.9–9.6 px) can win elections against finer per-tree content (§3.1/§3.5) — smaller
+   than the shipped 94 m seam's identical class and shrinkable per-brick, but present; (b) the
+   ±25% species/instance-scale spread around the 0.25 m mean (§3.1 caveat). Outside those, no
+   pixel becomes coarser than the accepted per-tree look bound; the residual difference class
+   is octave-phase + sub-6px resampling, not "massive voxels".
 4. **Shading identity**: per-brick albedo = source-brick mean; `?voxjit` world-anchored;
    crownDir field reconstructed per SOURCE TREE via the word-3 origin bake (§3.7); vox has no
    sway in either rep (identity contract transform — NaniteCommon.ts:137–148 contract, cited
@@ -427,7 +515,9 @@ trim; state this to the user if that fallback is ever proposed.
 - **R2 — `?ringbead=1`** (origin bake + resolve crownDir, §3.7). Measurable: shotdiff delta
   at oblique/eye vs R1 (expect strictly smaller diff); zero perf cost expected (same ALU path).
 - **R3 — `?ringgate=1`** (fanout near-gate, §3.5). Measurable: voxClusters delta at eye/oblique
-  + gate G1 rerun; quality strictly improving (removes coarse bleed).
+  + gate G1 rerun; **[REVIEW-FIX]** quality monotonically improving (removes fully-near
+  coarse-bleed clusters; the [≈44,60] straddler residual remains — §3.5 — and is G2's call;
+  the per-brick gate variant is the pre-planned tightening).
 - **R4 — default-flip proposal**: only after G1+G2+G3 pass AND user sign-off on the shotdiff
   set. Flip = `ringtiles` default-on in ForestScene; keep `?ringtiles=0` as the A/B reverter.
 
@@ -461,9 +551,13 @@ on top of it — the ring estimate in §4.1 assumes the post-L1 world.
 Decision (ALL required):
 - oblique med gpuWall Δ ≤ −2.0 ms in both orderings (target −3);
 - eye and aerial Δ within +0.5 ms;
-- **engagement counters**: oblique `nanite.voxClusters` drops from ~9.2 k toward
-  ~4.5–6 k (per-tree ring clusters gone, ring-tile clusters added) — if unchanged, the
-  mechanism never fired ⇒ null is INVALID (doc 90 §6.2); `nanite.visTris` ~unchanged
+- **engagement counters**: oblique `nanite.voxClusters` drops from ~9.2 k — **[REVIEW-FIX]**
+  expected landing ~4.5–7 k, not a hard 4.5–6 k: non-ring share ≈4.4 k (`fresh-aggdist60.json`)
+  plus ring-tile clusters ≈ visible in-band tiles (~50 at oblique) × ~40–80 clusters/tile ÷
+  the cross-tree dedup factor — the number depends on dedup, so treat the counter as
+  DIRECTIONAL (must drop materially; if unchanged the mechanism never fired ⇒ null is
+  INVALID, doc 90 §6.2) and pair it with the DIRECT engagement counter: resident-slot count
+  + per-frame ring-tile clusters in qVoxRaster (log both). `nanite.visTris` ~unchanged
   (bark untouched — the control that no triangle-side confound entered);
 - boot Δ ≤ +3 s; nanite.mb ≤ 1500; oversized-skip counter < 2% of tiles.
 
@@ -505,7 +599,7 @@ doc 90 §7 P3 context).
 | Emit hitches (main-thread pyramid) | G3 longtasks / slot regressions | ≤1 emit/frame budget already; then extract buildVoxelPyramid three-free (its imports are pure — doc 06 L3) into the worker |
 | Per-slot cap overflow on dense clumps | skip counter in G1 | raise `?ringcap` (memory re-check §4.3) — safe meanwhile (slot skipped ⇒ per-tree fallback holds) |
 | Handoff flip visible as a field "pop" | G2 graze/midring shots at the flip; ringFlips counter | flip only when resident (already) + hysteresis; if still visible, per-SPECIES staggered flip over 4 frames |
-| Coarse ring brick wins vs finer per-tree brick in [48,60] | G2 midring crop | R3 near-gate removes the overlap band entirely |
+| Coarse ring brick wins vs finer per-tree brick in [≈37,60] | G2 midring/graze crops | **[REVIEW-FIX]** R3 near-gate shrinks the band to ≈[44,60] (cluster-granular, §3.5); then the per-BRICK gate variant (≈[44+,60], brick-tight); then `?ringnear=75` (shrinks the win; re-run G1); band is strictly smaller than the shipped 94 m seam's same class |
 | Fine-cell floater regrowth | G2 block-diff + skyline crop | `?ringocc` up, `?ringcc` component prune is the root-cause fix (§3.6) |
 | Shading identity insufficient (crowns read flat/merged) | G2 with vs without `?ringbead` | ringbead is the designed fix; then `ringcell=0.1875`; then user call |
 | Oblique win < 2 ms with counters proving engagement | G1 | genuine null: the dedup share was over-estimated — revert default, keep flag, record in the review corpus + memory (do NOT retry aggdist/coarsen variants — red-listed) |

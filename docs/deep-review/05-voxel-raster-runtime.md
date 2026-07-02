@@ -1,3 +1,5 @@
+> Reconciled into 13-vox-raster.md §Reconciliation (2026-07-02); this doc kept for detail.
+
 # 05 — Voxel raster runtime: the scatter/election engine
 
 Scope: `src/nanite/NaniteVoxelRaster.ts` (whole file — Phase A brick record + voxbocc cull, Phase B

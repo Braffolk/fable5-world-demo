@@ -1,3 +1,5 @@
+> Reconciled into 12-base-raster.md §Reconciliation (2026-07-02); this doc kept for detail. ⚠️ Known kills: "128 threads/WG" (actual 255); §3.5+L3 shadow-clipmap live cost & `?culloverlap` (forest passes csm:null ⇒ shadow system never built); f2b expectation reconciled to −0..−0.5.
+
 # 03 — Base mesh pipe (trunks/bark/terrain SW raster + cull + HZB)
 
 Reader 03. Sources: src/nanite/{NaniteRaster,NaniteCull,NaniteHzb,NaniteFrame,DagHierarchy,BuildDag,

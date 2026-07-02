@@ -322,3 +322,146 @@ confirms serialization; ~+16 flat would mean fixed overhead (contradicting the v
    thermal CPU or code drift between runs? Worth one paired re-measure before trusting any
    CPU-side conclusions.
 4. When shadows/GI ship in forest (P1), the whole budget moves — re-baseline then.
+
+---
+
+## Reconciliation & verification (2026-07-02, post-limit continuation)
+
+Adversarial verify pass (the original one died on a session limit). Method: every load-bearing
+`path:line` above re-read at HEAD, every ≥1 ms number recomputed from the `fresh-*.json`
+raw arrays (`node -e`, no GPU). Overlapping docs reconciled: 11 (cull-hzb), 20 (live-loop),
+90 (premise-audit), 03/08/12/13/14/16 (spot claims). This is a single-fleet area — no sibling
+doc; cross-area disagreements are resolved here by reference.
+
+### Verified — the load-bearing skeleton stands
+
+- **P1 (gi/csm/canopy null)** CONFIRMED: `ForestScene.ts:456-459` passes all three nulls;
+  `NaniteFrame.ts:244` `shadowOn = … && world.csm !== null` → false; `:267-268` shadowHalf
+  needs shadow. Docs 08/16/17 independently corroborate; "shadows/GI ≈ free" is vacuous in
+  forest. (Docs 90 §P3-probe and 08 §refuted agree.)
+- **Frame graph table** CONFIRMED cite-by-cite, with one clarification: `dispatchVoxel` is
+  called INSIDE `raster.world1` (`NaniteRaster.ts:1423`, after `hwRender`), not by
+  NaniteFrame directly — so `hzb.build` at `NaniteFrame.ts:481` is indeed post-vox
+  (validates doc 11's "main HZB is full-content, prev-frame-stale at cull time").
+  Verified submit floor: cull 1 (`NaniteCull.ts:1008-1010`) + syncFullArgs 1 (`:1013-1015`,
+  stale rationale comment at `:993-995` confirmed) + fanout 3 (`:1044-1046`) + world1 1
+  (`NaniteRaster.ts:1419`) + hwRender 1 + dispatchVoxel 3 (`NaniteVoxelRaster.ts:1461,1489,1490`)
+  + hzb 1 (`NaniteHzb.ts:150-155`) = 11 compute-side, plus exposure meter + post renders.
+- **Mission 2 (F2B +16 aerial = serialization at collapsed occupancy)** CONFIRMED:
+  K default 16 (`NaniteCull.ts:327-328`); one-submit in-pass-barrier bucket chain
+  (`NaniteVoxelRaster.ts:1485`); counters verified (aerial 659-661 vox clusters — and they are
+  ALL of aerial's visClusters: default-aerial emits ~0 mesh clusters); deltas re-derived
+  against the same-era control `fresh-bead-v2-base` (36.0/43.1/16.8): +5.0/+6.3/+16.0 exact.
+  voxwaves eye bound re-verified: 41.0→41.1 while adding 3 pyramid rebuilds + extra submits.
+  Doc 13 independently agrees (K16 barrier cost; single-tree 25.4 K16 → 10.3 K1).
+  **Caveat (from doc 12, accepted):** the "5.7 ms wide-parallel vox" term uses noleaves-aerial
+  11.1 as base, but noleaves-aerial draws 3,180 bark-mesh clusters / 558 k tris that the
+  default frame does not — the true non-vox base is <11.1, so the wide-parallel vox share is
+  ≥5.7 and the "3.8×" serialization ratio is an upper-ish estimate. Direction and law unchanged.
+- **Mission 1 data** CONFIRMED against raw arrays: voxbocc-aerial period-3 cycles and
+  ACF(1/3/6) = −0.43/+0.31/+0.44 exact (trim-3); final-rested-oblique acf3 −0.58 / acf6 +0.41
+  exact, stable frames 0-13 then bands; ablate-post3 oblique spikes are 91.5/70.0 ms at
+  0-indexed frames 3/14 (text said "4 and 15", 1-indexed — immaterial). Doc 20's differing
+  ACF values (0.28/0.35) are the SAME data without trimming — no contradiction.
+- **B-loop mechanism** structurally real: emit-time occlusion tests `prevVp/prevCamPos`
+  against the persistent (prev-frame, full-content) pyramid (`NaniteCull.ts:919-925`), and
+  voxbocc reads THIS frame's mesh election (`NaniteVoxelRaster.ts:1455-1461`).
+- **Waste inventory** all cites verified. W1: the clear at `NaniteRaster.ts:391` is
+  unconditional; forest-path readers of `depthV` are none (HZB reads payload; resolve packed
+  branch never touches it). W3: WRITE_CTR atomicAdd is gated on `?voxwrites=1`
+  (`NaniteVoxelRaster.ts:1210-1211`) — dropping kClearBins by default is byte-identical.
+  W6 phrasing corrected: hierDepth is MEASURED (`registry.maxDagDepth + 2`,
+  `NaniteFrame.ts:205`), not a fixed 16 — the empty-tail waste is already the post-fix small one.
+
+### Corrections (7)
+
+1. **P2 quantifier wrong.** capRejects is 13-32 across runs/poses, not "30-32 on every
+   run/pose": `fresh-voxf2b-ctl` aerial had capRejects 13 → 19 good frames ≥ half → the filter
+   ENGAGED there and that median is a filtered subset. Everywhere else checked (capRejects ≥ 23)
+   the `probe-fresh-stutter.ts:211-212` fallback used all frames. Substantive conclusion stands:
+   filtering is USUALLY dead and medians are honest gpuWall.
+2. **coalesce-submits live claim killed** (see Killed #1): expected value is ISOLATED hygiene
+   only (0.2-0.5 ms) + modeling cleanliness. Live frames never starve the queue between submits
+   (live cpu.submit avg 1.12 ms, max 2.2, vs GPU 14+ ms — milestone JSON, corroborating doc 20's
+   queue analysis). Do NOT book live ms for it in the master plan.
+3. **cpuSubmit cross-run drift is protocol contamination, not code.** Isolated cpuSubmit
+   medians: milestone 1.1-1.2, voxbocc 1.4-1.5, final-rested 3.2, noleaves-now 4.7-5.3,
+   bead-v2-base 5.2-5.5 — while LIVE cpu.submit is stable at ~1.1 in every live capture. The
+   isolated protocol (50 ms sleeps) plausibly drops CPU clocks/efficiency-cores exactly like P4's
+   GPU suspect. Consequence: never draw CPU conclusions from isolated cpuSubmit deltas; this also
+   defuses doc 90 §2.1(b)'s "voxbocc cut cpu.submit 5.3→1.4" causal claim (unsubstantiated —
+   same-era non-voxbocc runs span the whole range). Open question 3 above is answered.
+4. **Mission 1 source A (TAA) was over-strong in BOTH directions across the fleet — reconciled:**
+   the oblique TAA-refutation is solid (bands persist in ablate-post3, TAA off). But at AERIAL
+   the attribution is CONFOUNDED both ways: `fresh-ablate-post3` ablates the ENTIRE post stack
+   (clouds+ao+bounce+bloom+taa), is pre-voxbocc code, and a different thermal era — so doc 11
+   §P2/L6's "aerial lows vanish under ablate=taa ⇒ jitter-linked" is PLAUSIBLE, not established,
+   and this doc's flat "modulator, not driver" is oblique-evidence stretched to all poses.
+   New datum from the warm re-run (`fresh-voxbocc-milestone`): oblique/aerial band AMPLITUDE
+   persists but the PERIODICITY is gone (|ACF| ≤ 0.26) — the metronome is era/run-dependent,
+   which weakly favors H (or a feedback whose period depends on clock state) and decides
+   nothing. B3 (== doc 11 P6, `ablate=taa` ONLY, post-voxbocc, aerial) remains the decider.
+5. **skip-depthv-clear needs a second gate.** `vis.depthV.ro` is read by the nanite shadow
+   rasters (`NaniteShadow.ts:232`, `NaniteShadowClip.ts:198`) — null in forest today, but the
+   build-time skip must be `packedClear && !shadowOn && !nanprobe`, or shipping shadows later
+   silently reads a never-cleared buffer.
+6. **Meter readbacks precise count:** forest default = 5 mapAsyncs every 15th frame
+   (readCounts reads TWO buffers, `NaniteCull.ts:1055-1058`, + readHwCount + readVoxCount +
+   readVoxWrites; shadow/scar are null/off). "4-5" → 5.
+7. **Bimodality scope widened (doc 03, accepted):** noleaves-oblique alternates 7.0-9.6 vs
+   15.7-17.4 ms with FLAT ACF (sporadic ~half-cost lows, verified) — the phenomenon exists with
+   ZERO vox content, so voxOccPyr/vox-anything is excluded as the sole driver; any single-driver
+   story must explain a trunks+terrain-only scene. Both B (the mesh HZB feedback exists there
+   too) and H survive this filter; pure-vox explanations do not.
+
+### Contradictions resolved against other docs
+
+- **vs doc 11:** its P1 (full-content prev-frame HZB) and P4 (perspective `sphereOccluded`
+  missing the `|ndc|<1` guard the ortho variant has — verified `NaniteHzb.ts:187-204` vs `:246`)
+  are CONFIRMED and adopted; its aerial-TAA attribution downgraded (Correction 4). Note its L6
+  "epsilon-pad occlusion = identical" should read IMPROVING/conservative — padding keeps more
+  content, pixels can change (in the correct direction).
+- **vs doc 20:** its slot-quantization model verified to the digit (slots {1:28,2:451,3:121},
+  mean |residual| 0.181 ms, 3-slot frames are 119 singletons + 1 pair, NOT workload spikes —
+  visTris 4.295M vs 4.320M). Adopted: live-neutrality of submit coalescing; "live eye bands are
+  boundary straddle, not periodic" (partially answers Open Q1 for EYE; oblique/aerial live still
+  unmeasured — its pose-complete live milestone probe is endorsed as the r-pinning step this
+  area's mission math depends on). Its PA5 inherits Correction 1's quantifier fix.
+- **vs doc 90:** §3.7(a) mischaracterizes the capSuspect mechanism (Killed #2). Its thermal-era
+  warning (§3.7c) and 2 ms floor for cross-run claims are adopted — every ms estimate in the
+  lever table below is same-session-A/B-gated for exactly that reason.
+
+### Surviving lever table (post-verification)
+
+| lever | mechanism (1-liner) | eye / oblique / aerial (ms, isolated) | quality | probe | effort | confidence |
+|---|---|---|---|---|---|---|
+| coalesce-submits | fold syncFullArgs + fanout(3) + vox(3) + hzb submits into the adjacent batches (order preserved, UAV auto-sync) | 0.2-0.5 / 0.2-0.5 / 0.2-0.4; **live ~0** | IDENTICAL (bit-equal) | C1 same-session A/B `?coalesce=1/0` | S/M | high (mechanism), low (ms — below the 2 ms cross-run floor, needs same-session A/B) |
+| skip-depthv-clear | build-time skip of the dead full-res depthV clear in packed world path | 0.05-0.15 / same / same | IDENTICAL (gate: `!shadowOn && !nanprobe`) | A/B flag | S | med |
+| fuse-pyramid-tails | single-WG multi-level reduce for levels ≥5 of both chains (12→6 dispatches each) | 0.1-0.3 total | IDENTICAL | `?pyrfuse` A/B + `?nanitedbg=hzb` + shotdiff | M | med (bounded above by the voxwaves barrier law) |
+| bimodality-diagnosis → fix | B1 per-frame counters / B2 cooldown sweep (== doc 20 probe 2) / B3 taa-only aerial (== doc 11 P6) / B4 cullfreeze; if B: two-pass occlusion (re-test vs THIS frame's HZB) | if B: ~0 / −2-4 / −3-5 AND kills 1-frame over-cull holes; if H: 0 renderer ms, ~3× tighter all future A/Bs | probes n/a; fix IMPROVING | B1-B4 (serial queue) | S probe / L fix | high that the probes discriminate; open which wins |
+| probe-hygiene | `?meterevery=0` in phase B + per-frame drained readCounts (feeds B1) | measurement-only (5 mapAsyncs off the measured frames) | n/a | — | S | high |
+| (endorsed, doc 20) pose-complete live milestone | live slot histograms at oblique/aerial — pins r, converts the oblique target from 21-26 interval to a number | 0 direct; up to ~5 ms of mission ledger | n/a (measurement) | doc 20 probe 1 | S | high |
+| (endorsed, doc 20) gate-timestamps-off-live | `trackTimestamp:false` + skip per-frame resolves unless `?prof=1` (`Engine.ts:73, 219-239` verified) | 0-0.5 live (unmeasured) | IDENTICAL | doc 20 probe 3 | S | low-med |
+| (endorsed, doc 11 L4) off-screen guard in perspective sphereOccluded | mirror the ortho `|ndc|<1` gate; kills spurious edge-culls / pose-arrival over-cull ramp | ~0 isolated; cleans aerial median contamination | IMPROVING | teleport-frame shots + aerial per-frame array | S | high (asymmetry verified in code) |
+
+### Killed claims
+
+1. "coalesce-submits: … larger live-frame CPU win (cpuSubmit med 1.4-5.5 ms shrinks by the
+   per-submit share)" — KILLED: live cpu.submit is 1.12 ms avg / 2.2 max and never gates; the
+   1.4-5.5 spread is isolated-protocol contamination (Correction 3), not a live cost to shave.
+2. Doc 90 §3.7(a) "capSuspect rejection discarded ~30 samples per 32 kept … a selection filter
+   that can bias medians" — KILLED as stated: with capRejects ≥ 17 nothing is discarded (the
+   fallback keeps ALL frames, `probe-fresh-stutter.ts:211-212`); the defect is NO filtering,
+   not biased selection. (Exception: runs where capRejects < 16 — e.g. voxf2b-ctl aerial —
+   DO get a filtered subset; only those medians carry selection risk.)
+3. Doc 11's established-fact form of "aerial bimodality is TAA-jitter-linked (gone under
+   ablate=taa)" — KILLED as a conclusion, kept as a hypothesis: the cited run ablates the whole
+   post stack on pre-voxbocc code. B3/P6 is the test.
+4. This doc's P2 quantifier "capRejects = 30-32 of 32 on every run/pose" — corrected to 13-32
+   (Correction 1).
+5. W6's "hierDepth fixed ≈16" framing — hierDepth is measured (`maxDagDepth+2`); the fixed-18
+   empty-tail era is already fixed. W6 stays only as the bounded ≤0.3 ms residual it is.
+6. "4-5 async readbacks" — 5 in forest default (Correction 6). Trivial, corrected for precision.
+
+No RISK-class lever was found smuggled in this area (nothing here touches pixels except the
+two-pass-occlusion fix and doc 11 L4, both re-classed IMPROVING with their gates named).

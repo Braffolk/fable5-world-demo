@@ -298,3 +298,147 @@ Bottom line: no single kernel-level lever closes the oblique gap. L1+L2+L3(+L4/L
 realistically total **3–6 ms at oblique**, all quality-identical. The remaining 6–9 ms at
 oblique is generated one level up — the 45–140 m per-tree ring's cluster count (needs the
 quality-parity tiered-tile design) — plus the ~5–6 ms post stack owned elsewhere.
+
+## Reconciliation & verification (2026-07-02, post-limit continuation)
+
+The adversarial verify pass died mid-run; this section is the completed RECONCILE+VERIFY
+for the vox-raster area. Sibling doc: `05-voxel-raster-runtime.md` (fleet A, same area,
+different brief). Method: every load-bearing file:line cite re-read in code
+(NaniteVoxelRaster.ts, VoxelBrick.ts, NaniteCull.ts, NaniteCommon.ts, NaniteRaster.ts,
+NaniteFrame.ts, Tsl.ts, the vendored UE5 shaders under `docs/perf-runs/Nanite-UE5-shaders/`);
+every ≥1 ms measured claim recomputed from the scratchpad `fresh-*.json` medians. Premise
+audit fired before every kill below (metric = same-session isolated gpuWall medians;
+counter = `nanite.voxClusters` = fanned BLOCK count, NaniteFrame.ts:524 — both sound).
+
+### Verified (mechanism lens) — the load-bearing skeleton is CORRECT
+
+- **The µs/cluster slope table reproduces EXACTLY** from the JSONs vs fresh-bead-v2-base
+  (36.0/43.1/16.8): aggdist60 32.3 obl, Δclusters −4759, −10.8 ms → 2.27 µs; voxlodk07
+  36.3 obl, −4283, −6.8 → 1.59 µs; voxlodk085 41.1 obl, −2233, −2.0 → 0.90 µs; eye
+  aggdist60 −3586/−9.9 → 2.76 µs. COUNT-bound premise **CONFIRMED**.
+- **voxbocc deltas confirmed**: fresh-voxbocc 18.8/37.2/16.4 vs base ⇒ −17.2 eye / −5.9
+  oblique / −0.4 aerial. **f2b-ctl** 40.9/49.3/32.8 ⇒ +4.9/+6.2/+16.0. **waves4**
+  41.1/48.8/28.0 vs f2b-ctl ⇒ +0.2/−0.5/−4.8 (aerial wave gain real). noleaves-now
+  16.8/15.2/11.1 (oblique med reproduces as 15.2, not 15.4 — foliage 22.0 ms, immaterial).
+- **Doc 05's W2 granularity argument VERIFIED against the JSONs**: fresh-voxwaves4's
+  `extra` has NO voxbocc ⇒ only the BLOCK-level test (:614-665) ever saw the rebuilt
+  pyramid; the PER-BRICK bocc (:843-884) did not exist in that run. Brick-granular
+  vox-behind-vox has genuinely never been measured — the waves-null does not transfer.
+- Code cites all check out: kernel factory + WG_RASTER=128 (:480, :488, VoxelBrick.ts:81);
+  block test :614-665 (keep-on-tie |0xff, cull iff bNearKey ≤ occK); corners :737-772;
+  non-straddler bbox+cap :803-812; straddler box :813-836 (up to 129×129); voxbocc
+  :842-884 (straddler-exempt, mask build runs only for bocc SURVIVORS — :885 wraps it);
+  record store :891-902; voxcell records :908-920 (occLo/occHi double-fetch :913-914 vs
+  :939-940 confirmed); mask arm gate :938 (area ≥ 16, dagLevel>0, popcount ≤ 48 at :951,
+  **no upper area bound** — confirmed); Phase-B setup :1142-1181; strict
+  `area > voxCellMinArea` (default 64) at :1170; mask consumed ONLY in flatPath
+  :1240-1252 — **the ray path never reads it: L1's dead-work claim is PROVEN**; ray
+  early-out :1266-1267; DDA :1332-1381 (fixed-6 loop keeps issuing after `done` —
+  confirmed); guarded elections :1202-1204 and :1398-1402 (world1-verbatim,
+  NaniteRaster.ts:963-967); dispatch :1454-1492; F2B build gate :1438; histogram chain
+  only under ?voxf2b (NaniteCull.ts:1030-1048); K clamp [1,32] default 16
+  (NaniteCull.ts:327-328); depthKey24 NEARER=LARGER (NaniteRaster.ts:335-336); vox after
+  hwRender (NaniteRaster.ts:1423); Tsl batch helpers = ONE submit each (Tsl.ts:241-243,
+  :283-288, :304-306). UE5 cites verified in the vendored shaders (MipLevelForRect
+  firstbithigh at NaniteHZBCull.ush:54, 4×4 gather :144-158; EarlyDepthTest
+  NaniteWritePixel.ush:48-66; two-pass culling NaniteCulling.ush:10-11).
+- **The #9 yaw correctness nit is REAL**: `instSphereRadius` (NaniteCommon.ts:164-167)
+  = rLocal·scale·(1+|leanX|+|leanZ|) — no yaw term — and :743-747 projects the
+  WORLD-axis box [center ± brWR]. A yaw-rotated cube's world AABB needs up to √2·h in
+  x/z ⇒ the footprint bbox under-covers up to ~29 % linear at yaw≈45°. Second-order leak:
+  the voxbocc front-slab key (:845-846) comes from the same under-sized box, so a brick's
+  true nearest point can be nearer than bKey ⇒ a (tiny, depth-scale) conservativeness
+  leak in the brick cull too. Stays a ride-along fix (see L4 restatement).
+
+### Corrections (killed or corrected claims)
+
+1. **KILLED (this doc): "voxOccPyr = 14-16 levels / 14 fixed dispatches."** At
+   2268×1473 the half-res chain is 1134×737 → 1×1 = **12 levels = 12 dispatches**
+   (:399-413 computes it; VOX_PYR_LEVELS=16 is only the uniform-table cap). Doc 05's 12
+   is right (~1.12 M texels ≈ 4.5 MB — arithmetic checked). The "constant per-frame
+   work, not the periodicity source" conclusion stands unchanged.
+2. **KILLED (doc 05 W6): "~10 ms over ~8.5k ring blocks ≈ ~1.2 µs per block."** The
+   oblique ring is 9188−4429 = **4,759 blocks at ~2.3 µs each** (8.5k mixes the eye and
+   oblique removals). This doc's slope table is the correct one. W6's conclusion (cost
+   scales with block count, not final pixels) survives — the unit cost just doubles.
+3. **CORRECTED (doc 05 W3): "up to 4× the needed area pooled"** understates its own
+   mechanism: the centre-anchored window edge = 2^(ℓ+2) px ∈ [2×, 4×) of the footprint
+   diameter per axis ⇒ **4–16× the area** of a rect-aligned minimal cover. Direction and
+   lever (exact-rect mip pick) unchanged; magnitude still needs the P3 cull counter.
+4. **KILLED-AS-WRITTEN (both docs' L4 formula): "M\* = VP·(instance linear) columns" is
+   NOT a refactor of today's math.** Today projects the world-axis box [center ± brWR]
+   (:743-747), not the local cube; the docs' formula projects the true rotated-cube
+   corners — a DIFFERENT (truer) shape. Restated as two variants below (L4a/L4b) with
+   honest quality classes; the original "identical (provably)" phrasing was wrong for
+   the formula as given.
+5. **KILLED (this doc, open probe #4): "nanite.voxBricks — CPU-only change, no GPU
+   cost."** Summing word7&0xff during fanout requires a GPU counter (or a full-buffer
+   readback). Subsumed by doc 05's P3 `?voxstats` workgroup-aggregated counter design,
+   which is the correct shape (one atomicAdd per WORKGROUP — the per-event global
+   atomicAdd is the measured close-up-cliff pathology, :236-241).
+6. **Minor**: cluster counts 9188 vs 9185/9187 across docs are both right (different
+   runs; counter stable ±3 at fixed pose — re-verified). Aerial 659 (bead-v2-base) vs
+   661 (voxbocc): same. Phase-B per-brick shared reads: counted from code = **~13**
+   (5 bbox/cand + 1 mask + 7 voxcell) — "5-12" (05) and "~15" (13) both roughly ok.
+
+### Contradictions resolved
+
+- **L2(here) vs L1(05) — same lever, different forecasts** (~1 ms vs −2..−5 oblique).
+  Resolution: gross gain = buried-brick fraction of the ~10 ms oblique ring pool
+  (UNMEASURED — that's exactly what the probe determines), minus chain cost ≈ one
+  barrier + one pyramid rebuild ≈ 0.5–1.0 ms (K16's +6.2 obl ≈ 15 barriers ⇒ ~0.4
+  ms/barrier forest-scale; rebuild ~0.3). Reconciled expectation: **oblique −0..−4,
+  aerial −0..−3, eye ~0**, wide bars; P1's decision rule (05 §6) governs. Zero code.
+- **Straddler path: "leave alone" (here #8) vs L6 lever (05).** Both true: ~0 at
+  canonical poses (vox starts ≥45 m — verified no straddlers can arm), but a live
+  camera clipping a crown paints up to 129×129 px per brick ⇒ real live-p95 hazard.
+  Kept as a deprioritized RISK lever (stress-pose gate), NOT in the canonical sums.
+- **Phase-B rebalancing: L3(here, workgroup-local, M) vs L5(05, global queue, L).**
+  Not competitors — stages of one attack on the same waste (#3/#5 here, W6 there).
+  Stage 1 = wgVisible gate + compacted shared list (+ subgroup distribution if TSL
+  allows); stage 2 = global survivor compaction, only if P2/P3 show per-brick fixed
+  cost still dominates after stage 1. 05's scar note verified: the deleted flat-domain
+  scheme died of a correctness hazard (:1066-1075 header), not measured slowness.
+- **Targets**: 05's "oblique ≤21" is the premise-audit budget; this doc's "−11..13 ms"
+  matches the live-quantum gap (37.2 → ~24-26). Not a contradiction — different budget
+  allocations; the gap statement here is current.
+- **05's L3 (single-submit + dead kClearBins) — VERIFIED SAFE**, adopted into canon:
+  the counter is incremented only under ?voxwrites (:1210-1212) and reads 0 either way
+  (buffer zero-initialized); NaniteFrame's readVoxWrites keeps returning 0. The
+  setIndirectDispatch enabler already exists (Tsl.ts:283-288). Default path is
+  genuinely 3 submits today (:1461, :1489, :1490).
+
+### SURVIVING LEVER TABLE (canonical, reconciled)
+
+Expected ms = savings (eye / oblique / aerial), same-session isolated gpuWall.
+
+| # | lever (source) | mechanism | eye | obl | aer | quality | probe / gate | effort | conf |
+|---|---|---|---|---|---|---|---|---|---|
+| V1 | Dead occ-mask-build skip (13-L1) | arm gate (:938) gains the complement of ray eligibility (`straddles==1 OR area ≤ voxcellmin OR !voxcell`); mask is provably unread on the ray path | 0.2 | 1–2 | 0.1 | IDENTICAL (dead value elided) | `?voxmaskray=0` A/B + shotdiff maxDiff=0 | S | med |
+| V2 | K=2 F2B ± 1 pyramid rebuild (13-L2 ≡ 05-L1) | coarse near→far ordering seeds the guards; rebuilt pyramid gives PER-BRICK bocc vox-behind-vox on the far slab | ~0 | 0–4 | 0–3 | IDENTICAL (order-free atomicMax; conservative cull) | `?voxf2b=1&voxf2bk=2[&voxwaves=2]` — zero-code P1, decision rule 05 §6 | S probe / M productize | low-med |
+| V3 | Exact-rect mip pick + rect-aligned window (05-L2) | UE5 MipLevelForRect idiom for BOTH cull tests (:636-654, :847-874); recovers culls the 4–16×-area over-pool misses | 0–1 | 1–3 | ~0 | IDENTICAL (strictly-more-culls, still conservative) | culled-brick counter Δ (needs P3) + shotdiff maxDiff=0 | S | low |
+| V4 | Phase-B distribution, staged (13-L3 → 05-L5) | stage 1: `If(wgVisible)` Phase-B gate + compacted live-brick list (+ subgroup-per-brick); stage 2: global survivor queue + packed indirect Phase B | 0.3 | 1–2 (st.1); 2–5 (st.2, IF P3 says fixed-cost-bound) | 0.1–1.5 | IDENTICAL (same election set) | P2+P3 FIRST (do not build stage 2 blind); `?voxsgb=0` revert + shotdiff | M / L | med |
+| V5 | Single-submit dispatchVoxel + drop dead kClearBins (05-L3) | 3 submits → 1 via dispatchBatchMixed + setIndirectDispatch tag; clear only feeds ?voxwrites | 0.2–0.8 | 0.2–0.8 | 0.2–0.8 | IDENTICAL (no math change) | gpuWall + cpu.submit A/B + shotdiff maxDiff=0 | S | high |
+| V6 | Linear-clip Phase-A projection, SPLIT (13-L4 ≡ 05-L4, restated) | L4a: shape-preserving basis = brWR·(VP world columns) — pure algebra vs today; L4b (ray-eligible bricks only): true local-corner basis = brHalf·(VP·instance-linear columns) — tighter at yaw≈0 AND fixes the #9 yaw clip; also linearizes surviving mask builds (512 transforms → adds) | 0.2 | 0.7–2.5 | 0.1–1 | L4a: IDENTICAL-with-shotdiff-gate (fp reassoc, ulp); L4b ray-path: IMPROVING (silhouette ⊆ corner-hull bbox, provable); L4b flat-path: RISK — gate = shotdiff + user sign-off | P2 sizes Phase A first; `?voxlinproj=0` revert | M | med |
+| V7 | Early sphere pre-bocc (13-L5) | sphere test (√3·brWR — yaw-safe) before the 8-corner walk; eye-leaning | 0.4 | 0.3 | 0 | IDENTICAL (conservative-only) | A/B; accept net-0 oblique risk | S/M | low |
+| V8 | Straddler footprint tightening (05-L6) | live-spike guard only; ~0 at canonical poses | ~0 | ~0 | ~0 | RISK — gate = camera-inside-crown crops + user sign-off | forcevox close-up pose gpuWall + crops | S | n/a |
+| V9 | Micro bundle (13) | occLo/occHi dedupe; group-0 ray bases; DDA loop break on `done` | — | ≲0.3 | — | IDENTICAL | ride along V1/V6 | S | high |
+
+Honest reconciled oblique sum: **3–7 ms quality-identical** (13 said 3–6, 05 said 4–8;
+the overlap is the range). The remaining ~6–9 ms oblique is generated ONE LEVEL UP (the
+45–140 m per-tree ring's cluster count — aggregation area, not this kernel), consistent
+with both docs and the premise audit.
+
+### Killed claims (one-liners)
+
+- "voxOccPyr is 14-16 levels / 14 dispatches" (13) — it's 12 at canonical res (:399-413).
+- "Oblique ring ≈ 8.5k blocks @ ~1.2 µs/block" (05 W6) — 4,759 blocks @ ~2.3 µs (JSON-recomputed).
+- "L4 basis projection is a pure refactor / provably identical" (both) — today projects
+  the world-axis brWR box, not the local cube; as-written it changes the footprint shape
+  (→ split L4a/L4b, flat-path L4b reclassified RISK).
+- "nanite.voxBricks counter is CPU-only, no GPU cost" (13 probe #4) — needs a GPU
+  counter; superseded by 05-P3's workgroup-aggregated ?voxstats.
+- "cull window pools up to 4× the needed area" (05 W3) — 4–16× area (2–4× per axis);
+  lever unchanged.
+- Oblique foliage pool "21.8 ms" (13 premise 1) — reproduces as 22.0 (noleaves-now
+  oblique med = 15.2, not 15.4); immaterial to any verdict.

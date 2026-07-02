@@ -266,3 +266,124 @@ because the master plan needs them when shadows/GI return.
    arrays are too short — see Premise audit §4).
 4. **Is `?oldgeo` still a supported A/B?** Lever 2's gating needs to know whether real CSM maps
    must survive anywhere but debug.
+
+## Reconciliation & verification (2026-07-02, post-limit continuation)
+
+The adversarial verify pass died mid-run; this section is the completed verification for the
+shadows-gi area. Every load-bearing file:line below was re-read in code; every measurement number
+was recomputed from the scratchpad JSONs.
+
+### Verified (mechanism lens) — the central premise HOLDS in code
+
+- `ForestScene.ts:456-459` — `buildNaniteFrame(…, { gi: null, canopyTex: null, csm: null })`,
+  comment at :441 ("no GI bounce, no shadows — forest trees are castShadows:false"). CONFIRMED.
+- `NaniteFrame.ts:244` `shadowOn = params.get('nanshadow') !== '0' && world.csm !== null` →
+  false in forest; `shadow = null` (:250-254), `shadowHalf = null` (:266-268),
+  `culloverlap` gate (:260), `shadow.run` gate (:489), `shadowHalf.run` every frame when built
+  (:493). ALL CONFIRMED.
+- `NaniteResolve.ts:237` `shadowsOn = world.csm !== null && …`; `receivedShadowPositionNode`
+  behind `if (shadowsOn)` (:330-350); PCSS/upsample block behind
+  `if (shadowsOn && world.naniteShadow)` (:922); `keep` fold (:938-952); `if (world.gi)` (:973);
+  `ambFloor` (:1000-1001). ALL CONFIRMED — with csm null NONE of these compile.
+- `new ProbeGI` exists ONLY at `TerrainScene.ts:113`; `gi.tick` ONLY at `TerrainScene.ts:120`
+  (repo-wide grep). CONFIRMED: ProbeGI never dispatches in any canonical forest measurement.
+- ProbeGI structure: `PROBES_PER_FRAME=3072` (:61), TOTAL=256·256·6=393,216 (:55-60), tick
+  advances `frameBase` by 3072 mod TOTAL (:329-334) ⇒ exact 128-frame wrap; gather = 16 dirs ×
+  16 march steps with NO early-out (`hitT` latch only, :247-253); EMA blend 0.22 (:95, :289-291);
+  publish = 3×3072 textureStores (:295-309); warm loop (:312-325). ALL CONFIRMED.
+- Clipmap: defaults levels=6/base=12/res=1024/minPx=0 (`readClipParams`, NaniteShadowClip.ts:128-141
+  ⇒ E_k={12,24,48,96,192,384}, texel_k={0.0234…0.75} m); ONE shared vis buffer (:159-160); shared
+  cut `buildClipCull` (:233); snap+VP-equality cache (`fitLevels` :271-339, gate :315); LOD by
+  main camera (:322); `fitCut` maxHalf (:343-378, :348-351); `rasterLevels` = runLevelFilter →
+  clearVis → depth1 → hwDepth → kCopy (:382-392); `cullPrepass` (:398-407); PCSS 6 blocker +
+  9 PCF taps (BLOCKER_TAPS/PCF_TAPS at :84-85, sample :437-516). ALL CONFIRMED.
+- Cascade fallback: SHADOW_CASCADES=4, SHADOW_MAP=2048 (NaniteShadow.ts:78-79); per-cascade vis
+  buffers (:203); VP exact-equality gate (:279); shadowtau/shadowminpx (:189-199). CONFIRMED.
+- ShadowHalf: ceil(W/2)×ceil(H/2) threads (1134×737=835,758 at canonical res); sky pixels gated
+  (empty → lit, :119-121); COVERED pixels do 3 wp reconstructions (:118, :124-125 — sky does 1,
+  not 3: minor precision fix to §How-it-works); PCSS via shadow.shadowFactor (:134); 4-tap
+  bilateral upsample (:149-190). CONFIRMED (with the 3-vs-1 precision note).
+- CsmCached: PERIODS=[1,2,3,6] (:44) ⇒ Σ1/P = 2.0 empty 2048² renders/frame avg; cadence +
+  drift + `shadow.needsUpdate = true` (:294-312, :308). CONFIRMED.
+- Voxel casters: class-7 skip is INSIDE `rasterKernel(mode)` unconditionally — applies to the
+  depth-only shadow kernels too (NaniteRaster.ts:541-555; the `returnIf(mcVox.equal(uint(7)))`
+  is at :554, not :549 — cite range corrected). Shadow paths never dispatch the voxel raster
+  (rasterLevels above). CONFIRMED: far crowns + far-tile heads cast no shadows.
+- Measurement claims: `fresh-attr-noshadow.json` extra `{nanshadow:'0'}` on config=default,
+  medians 32.6/37.0/15.6 vs `fresh-final-rested.json` 31.2/38.8/14.6; both 32-frame isolated
+  arrays; rested-oblique run-lengths 4,3,1,1,5,4,3,3,3,4,1; autocorr lag-3 −0.54, lag-6/7
+  +0.41/+0.40. ALL RECOMPUTED AND CONFIRMED.
+- `tools/probe-fresh-stutter.ts:72` hardcodes `scene:'forest'`. CONFIRMED.
+
+### Corrections to THIS doc
+
+1. **Storm mechanism corrected (consequence intact).** The claim "the texel grids are NESTED …
+   crossing a level-5 boundary re-rasters ALL SIX levels in the same frame" is WRONG as stated:
+   with `Math.round` snapping (:293-294), level k's snap flips at ODD multiples of texel_k/2,
+   and an odd multiple of texel_k/2 is an EVEN multiple of texel_{k-1}/2 — flip boundaries of
+   adjacent levels are exactly INTERLEAVED, never coincident. What actually happens: at speed,
+   fine levels re-raster ~every frame anyway (P≈1 for k≤3 at 10 m/s), so any frame where level 5
+   flips (~every 0.75 m of light-plane travel ≈ every 4-5 frames at 10 m/s) still pays ~5-6
+   levels AND `fitCut` sizes the shared cut to the full 384 m disc (maxHalf, :348-351). The
+   periodic spike generator is real; the "aligned grids" explanation is not. Lever 4 unaffected.
+2. **Lever 4 (clip-storm-budget) quality class corrected: identical → RISK.** A deferred coarse
+   level serves a one-snap-stale (VP-consistent) map — bounded by texel_k/2 (≤0.375 m at level
+   5) for 1-2 frames during fast motion, but NOT bit-equal and not conservative-cull-equal.
+   Gate: fly-speed moving shotdiff on far shadow edges + teleport force-flush test + storm-frame
+   p95 histogram. (The same-magnitude staleness already exists between snaps, which is why the
+   risk is small — but per the quality law it is a RISK class, not identical.)
+3. **ShadowHalf precision**: "each doing 3 world-pos reconstructions" → covered pixels do 3,
+   sky pixels do 1 (the initial reconstruct at :118 runs before the empty gate).
+4. **Cite fixes**: NaniteRaster class-7 skip = :541-555 (returnIf at :554); NaniteShadow
+   per-cascade vis buffer = :203.
+
+### Contradictions with sibling docs — resolved
+
+- **Doc 07 (resolve-lighting, fleet B) §1/§3: "the whole shadow system is 0–2ms (nanshadow=0)"**
+  — RESOLVED AGAINST 07, per code: with `csm === null` the flag gates a system that was never
+  built (NaniteFrame.ts:244); the 32.6/37.0/15.6 vs 31.2/38.8/14.6 delta is same-session noise.
+  Correct statement: "the shadow flag does nothing in this scene; shadow cost in forest is
+  structurally 0 because the system is absent." Doc 07's own W1 row already half-knew this
+  ("~0 forest").
+- **Doc 07 TL;DR: reskeep "expected ~0–1ms forest — flip default after A/B"** — RESOLVED AGAINST
+  07: the `keep` sample compiles only under `shadowsOn` (NaniteResolve.ts:922-956, :330), which
+  is FALSE in forest. Forest pool for W1+W2 is EXACTLY 0 — no A/B needed there. `reskeep=0` is a
+  world-scene-only lever (−3.9 ms prior measurement was a general-vista/world context).
+- **Doc 90 (premise audit) §7-P3: "ProbeGI 3072/frame, 128-frame cycle — the strongest surviving
+  suspect" for oblique/aerial bimodality** — KILLED: ProbeGI is never constructed or ticked in
+  the forest scene (TerrainScene.ts:113/:120 are the only sites); even where it runs, per-frame
+  work is constant by construction (fixed dispatch sizes, fixed loop bounds, no early-outs); and
+  the verified autocorrelation shows a ~6-7-frame quasi-period, not 128. P3's probe budget should
+  go to the voxOccPyr/HZB + submit-batching suspects instead (doc 10/11 territory).
+- **Doc 90 §5: "resolve lighting+shadows measured ~FREE (nandbg=flat, nanshadow=0 ≈ baseline)"**
+  — PARTIALLY KILLED: the `nandbg=flat` half stands (real ablation of lighting math); the
+  `nanshadow=0` half is a no-op-vs-no-op and is NOT evidence of shadow freeness.
+- **Docs 10 and 16** independently reached the same gi:null/csm:null finding — AGREE with this
+  doc; no conflict.
+
+### Surviving lever table (all 0.0 ms on canonical poses — this area holds none of the oblique gap)
+
+| # | Lever | Mechanism | ms eye/obl/aer (canonical) | ms world-scene est | Quality | Probe | Effort | Conf |
+|---|---|---|---|---|---|---|---|---|
+| 1 | forest-scene-shadow-parity | wire optional setupSunShadows+ProbeGI into ForestScene behind `?forestshadow=1` (csm/gi pass-through instead of hard null) | 0/0/0 (instrument) | measures the real +2-6 ms bill | IDENTICAL (default-off) | shadow-off vs `forestshadow=1` vs `+shalfres=0`, 600-tick live + isolated (§Open-questions 2) | M | High |
+| 2 | empty-csm-cascade-skip | stop `needsUpdate=true` (CsmCached.ts:308) / clamp mapSize when nanite owns all casters — maps already black, keep≡1 folds out | 0/0/0 | ~0.1-0.4 + 2 passes/frame | IDENTICAL (gate on caster count for `?oldgeo`) | world-scene A/B after lever 1 | S | High |
+| 3 | shadow-cut-voxel-emit-skip | drop class-7 at shadow-cull EMIT instead of per-thread raster discard (NaniteRaster.ts:554) | 0/0/0 | ~0.1-0.3 per re-raster frame | IDENTICAL (vox clusters already write zero shadow texels) | world-scene re-raster frame delta | S | High |
+| 4 | clip-storm-budget | cap re-rasters at K levels/frame finest-first; deferred coarse level keeps frozen VP+map | 0/0/0 | p95 smoothing ~1-3 on storm frames, mean ~0 | RISK — gate: fly-speed shotdiff on far shadow edges + teleport flush | world-scene p95 histogram | M | Med |
+| 5 | culloverlap-default-on | `?culloverlap=1` folds shadow shared cut into camera-cull submit (built; NaniteFrame.ts:453-461, disjoint buffers, no HZB dep) | 0/0/0 | ~0.2-0.5 on re-raster frames | IDENTICAL (ordering only) | world-scene A/B; keep flag | S | Med |
+| 6 | gi-sleep-when-converged | skip gather/publish after ≥128+boost unchanged frames until invalidate()/sun-delta | 0/0/0 | ~0.1-0.5 | IDENTICAL (removes only sub-noise jitter wobble) — gate: invalidate() coverage audit on canopy/ToD edit paths | world-scene steady-state A/B | S | High |
+| 7 | vox-shadow-splat | brick→atomicMin depth splat for shadow levels ≥2 so far crowns/far tiles cast shadows (they cast NONE today) | 0/0/0 | NEGATIVE (−0.5-2, spends budget) | IMPROVING — gate: peter-panning shotdiff + user sign-off on the spend | world-scene shot + cost | L | Med |
+| 8 | reskeep-default-flip (owned by doc 07/16, reconciled here) | corner-only CSM keep sample; bit-identical for real pixels (keep≡1) | 0/0/0 (NOT compiled in forest) | ~0.3-1 where nanite-shadow + csm coexist | IDENTICAL | world-scene within-boot setKeepFull A/B | S | High |
+
+### Killed claims (one-line reasons)
+
+- "Shadows ≈ FREE (0-2 ms), measured via nanshadow=0" (doc 07 §1/§3, doc 90 §5, fact pack) —
+  no-op vs no-op: csm===null means the flag gated an absent system; delta is session noise.
+- "reskeep=0 worth ~0-1 ms in forest, flip after A/B" (doc 07 TL;DR) — the keep block never
+  compiles in forest (shadowsOn=false); forest value is exactly 0; world-scene lever only.
+- "ProbeGI 128-frame cycle is the strongest surviving bimodality suspect" (doc 90 P3) — ProbeGI
+  never runs in forest; its per-frame work is constant; observed period is ~6-7 frames.
+- "GI cycle boundary matching runs-of-4 was testable on the isolated JSONs" — 32-frame windows
+  cannot contain one 128-frame cycle; structurally untestable (this doc §Premise-audit 4, upheld).
+- "Nested texel grids align ⇒ level-5 crossing re-rasters ALL SIX levels" (this doc §Work-model)
+  — round-snap flip boundaries interleave exactly; storm period 0.75 m survives via
+  always-ticking fine levels + maxHalf cut sizing, not grid alignment.

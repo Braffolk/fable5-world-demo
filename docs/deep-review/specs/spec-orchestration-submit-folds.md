@@ -3,7 +3,10 @@
 **Lever id:** `frame-orchestration:coalesce-submits` + `skip-depthv-clear` + `fuse-pyramid-tails` +
 `probe-hygiene` (doc 10, `docs/deep-review/10-frame-orchestration.md` §Waste inventory W1-W5).
 **Branch:** `nanite-raster` (HEAD 6a93dfb + uncommitted). **Expected:** ~0.35-0.95 ms GPU per pose
-(oblique ≈ **-0.7 ms** mid-estimate) + **-0.5-1.5 ms cpu.submit** (live frames benefit most).
+(oblique ≈ **-0.7 ms** only if the doc-10 per-submit bound is saturated) + **-0.5-1.5 ms cpu.submit**
+(live frames benefit most). **[REVIEW-FIX]** The doc-10 work model gives UPPER bounds (≤ ~100 µs/submit,
+≤ ~10 µs/barrier-dispatch, from the voxwaves A/B) — plan on the 0.35-0.95 band, not the 0.7 point;
+the §4 gates only require ≥0.2-0.3 ms to keep a stage, so the spec stands even at the low end.
 **Quality:** every stage is argued bit-identical or byte-identical below — no conservative-cull
 slack is even needed. Stage 4 is measurement-infra only (no frame change).
 
@@ -99,21 +102,34 @@ when the outer arg is null, so tagging is also harmless to the legacy explicit
      : [kVoxFanoutArgs, kVoxFanout, kVoxRasterArgs]),
    ```
    Keep `syncFullArgs`/`runVoxFanout` (1013-1048) untouched for the legacy path.
+   **[REVIEW-FIX]** the return object is typed by the exported `NaniteCullChain` interface
+   (NaniteCull.ts:159-207) — add the two members there too
+   (`fullArgsBatch(): readonly unknown[]; voxFanoutBatch(): readonly unknown[];`) next to
+   `phase1Batch()` or tsc rejects the literal/call sites.
 3. Fix the stale comment at 992-995 ("kept out of this batch on purpose … invoked after the
    voxel fan-out") — the frame has called `syncFullArgs` BEFORE `runVoxFanout` since the
    single-phase rewrite (`NaniteFrame.ts:463` vs `:468`); the separation reason no longer exists.
 
 **Edits — `src/nanite/NaniteFrame.ts` (lines 445-469):** read `const coalesce =
-params.get('coalesce') === '1';` at build time; in `render()` replace the three calls:
+params.get('coalesce') === '1';` at build time (`params` exists at line 79); in `render()` replace
+the three calls. **[REVIEW-FIX]** the culloverlap leg is spelled out (call `cullPrepass` ONCE and
+keep its null fall-through — today's lines 453-461 fall back to the plain camera cull when no
+shadow level re-rasters):
 
 ```ts
 if (!frozen) {
   if (coalesce) {
+    // culloverlap (default-off; forest-dormant since csm=null): ONE cullPrepass call.
+    // null ⇒ no level re-rasters ⇒ empty tail (the shadow run() sees prepassMask===0).
+    const shadowCut =
+      cullOverlap && shadow?.cullPrepass ? (shadow.cullPrepass(renderer, engine.camera) ?? []) : [];
     const batch = [
       ...cull.phase1Batch(),        // [kClearHier, kSeedRoots, (args,traverse)×D, kRasterArgs]
       ...cull.fullArgsBatch(),      // [kRasterArgs2]
       ...(voxActive ? cull.voxFanoutBatch() : []),
-      ...(shadowCutBatchOrEmpty),   // culloverlap path only, appended LAST as today (line 456)
+      ...shadowCut,                 // NOTE: today it sits right after phase1 (line 456) and thus
+                                    // BEFORE kRasterArgs2 in queue order; appending it last is
+                                    // equivalent because its buffers are disjoint (audit below)
     ];
     dispatchBatchMixed(renderer, batch);
   } else {
@@ -150,7 +166,12 @@ same barrier semantics ⇒ **bit-identical**.
    ```ts
    setIndirectDispatch(kVoxScatter, voxRasterDispatchAttr);
    ```
-2. `dispatchVoxel` (1454-1492) gets an optional tail and a coalesced default path:
+2. **[REVIEW-FIX]** define the flag in THIS file (it does not exist here): next to the other
+   build-time flags (e.g. `voxWrites`, line 241) add
+   `const coalesce = new URLSearchParams(window.location.search).get('coalesce') === '1';`
+   and update the `VoxelRasterHandles` interface (`NaniteVoxelRaster.ts:166-173`) —
+   `dispatchVoxel: (renderer: Renderer, tail?: readonly unknown[]) => void;` (line 169).
+3. `dispatchVoxel` (1454-1492) gets an optional tail and a coalesced default path:
    ```ts
    const dispatchVoxel = (renderer: Renderer, tail: readonly unknown[] = []): void => {
      if (coalesce && !voxF2bEnabled) {
@@ -162,7 +183,8 @@ same barrier semantics ⇒ **bit-identical**.
        ]);
        return;
      }
-     /* existing body 1455-1491 verbatim; if tail.length, dispatchBatch(renderer, tail) at the end */
+     /* existing body 1455-1491 verbatim; if tail.length, dispatchBatch(renderer, tail) at the
+        end (dispatchBatch IS already imported in NaniteVoxelRaster.ts) */
    };
    ```
    The F2B / voxwaves paths (default-off A/B controls) keep their exact current shape — do NOT
@@ -185,14 +207,19 @@ a no-op. The every-15-frame `readVoxWrites` (`NaniteFrame.ts:518` → `NaniteRas
 **Edits:**
 
 - `src/nanite/NaniteHzb.ts`: add `batch: () => kernels` to the returned handles (150-155 keep
-  `build` as-is — `dispatchBatch(kernels)`).
-- `src/nanite/NaniteRaster.ts` `world1` (1418-1424): accept + forward the tail:
+  `build` as-is — `dispatchBatch(kernels)`). **[REVIEW-FIX]** also add
+  `batch(): readonly unknown[];` to the exported `NaniteHzb` interface (NaniteHzb.ts:43-59) or
+  tsc rejects the call site.
+- `src/nanite/NaniteRaster.ts` `world1` (1418-1424): accept + forward the tail. **[REVIEW-FIX]**
+  `dispatchBatch` is NOT imported in NaniteRaster.ts — use `dispatchBatchMixed` (already imported,
+  line 75; identical submit semantics, Tsl.ts:296-306). Update the `NaniteRasterHandles.world1`
+  signature too (NaniteRaster.ts:145):
   ```ts
   const world1 = (renderer, camera, hzbTail: readonly unknown[] = []): void => {
     dispatchBatchMixed(renderer, [kVisClear, kRasterWorld1, kHwArgs]);
     hwRender(renderer, camera, hwWorld1Mat);
     if (voxRaster) voxRaster.dispatchVoxel(renderer, hzbTail);
-    else if (hzbTail.length) dispatchBatch(renderer, hzbTail); // noleaves: same 1 submit as today
+    else if (hzbTail.length) dispatchBatchMixed(renderer, hzbTail); // noleaves: same 1 submit as today
   };
   ```
 - `src/nanite/NaniteFrame.ts`: compute per-frame
@@ -245,7 +272,12 @@ if (!skipDepthClear) atomicStore(visDepthV.atomic.element(instanceIndex), uint(0
 
 With no reader and no writer, the buffer holds its boot-time zeros forever; skipping the clear
 changes no observable value. **Byte-identical frame output.** (Shadow/View raster instances have
-`singlePass=false` ⇒ never gated.)
+`singlePass=false` ⇒ never gated. **[REVIEW-FIX]** verified cites: NaniteView passes `packed=true`
+and omits `singlePass` — NaniteView.ts:79-90 — and its `combined()` path + `resolveScene` read
+payload/visB, never depthV; the shadow systems read `depthV` only from their OWN
+`makeVisBuffers(SHADOW_PIX)` instances — NaniteShadow.ts:203/232, NaniteShadowClip.ts:160/198 —
+whose rasters are `singlePass=false` 'depth'-mode writers, untouched by this gate. `singlePass`
+is the buildNaniteRaster param at NaniteRaster.ts:242, in scope of kVisClear.)
 
 ### Stage 3 — `?pyrfuse=1`: fuse both pyramid tails (W4)
 
@@ -260,10 +292,17 @@ barrier synchronizes ALL participating invocations.
 
 ```ts
 const FUSE_MAX_TEXELS = 1024;
-const fuseFrom = pyrfuse ? levels.findIndex(l => l.w * l.h <= FUSE_MAX_TEXELS) : -1;
+// [REVIEW-FIX] clamp fuseFrom ≥ 1: the fused body reuses the k>0 pool body (reads the previous
+// LEVEL through the rw view); k=0 reads the full-res SOURCE with a different decode (packed
+// election key, NaniteHzb.ts:110-124 / visPayloadV.ro, NaniteVoxelRaster.ts:443-453) and must
+// stay a per-level dispatch. findIndex()===-1 (no level small enough) ⇒ disabled.
+const rawFrom = levels.findIndex(l => l.w * l.h <= FUSE_MAX_TEXELS);
+const fuseFrom = pyrfuse && rawFrom !== -1 ? Math.max(1, rawFrom) : -1;
 // build per-level kernels only for k < fuseFrom (or all, when disabled), then when enabled:
 const kFusedTail = Fn(() => {
-  const tid = localX();                       // 256 lanes, ONE workgroup
+  // [REVIEW-FIX] use instanceIndex (already imported in NaniteHzb.ts:19) — for a single-workgroup
+  // dispatch it equals the local lane id; localX() is not imported in NaniteHzb.ts.
+  const tid = instanceIndex;                  // 256 lanes, ONE workgroup
   for (let k = fuseFrom; k < levelCount; k++) {          // STATIC unroll — uniform control flow
     const info = levels[k]; const src = levels[k - 1];
     const n = info.w * info.h;
@@ -279,6 +318,14 @@ const kFusedTail = Fn(() => {
 })().compute(256, [256]);
 kernels.push(kFusedTail);   // kernels[] = [L0..L(fuseFrom-1), fused] → build()/batch() unchanged
 ```
+
+**[REVIEW-FIX]** import `storageBarrier` from `'three/tsl'` in both files (verified exported:
+`node_modules/three/src/Three.TSL.js:520`; it is `barrier('storage').toStack()` —
+`BarrierNode.js:86` — so the bare call statement lands on the TSL stack exactly like the
+`workgroupBarrier()` calls already in production, e.g. `NaniteVoxelRaster.ts:1064`). Define the
+flag per file (`const pyrfuse = new URLSearchParams(window.location.search).get('pyrfuse') === '1';`
+— same build-time idiom as `rdbg`, NaniteRaster.ts:272). In the voxel mirror, `instanceIndex` is
+likewise already imported (NaniteVoxelRaster.ts uses it in the per-level kernels, line 436).
 
 Mirror identically in `src/nanite/NaniteVoxelRaster.ts` for the min-pool chain (429-474): same
 shape, `minU` instead of `.max`, `voxOccPyr.rw` (uint) instead of `hzbF.rw` (float), same
@@ -398,7 +445,9 @@ re-runs (thermal noise discipline). After all gates: flip the four defaults
 (`coalesce=1`, `dvclear=0`, `pyrfuse=1`, infra unconditional) in one commit citing the JSONs, and
 re-baseline the canonical numbers (the infra fixes change capRejects semantics, not medians).
 
-**Expected final deltas** (isolated, per doc-10 bounds): eye −0.35-0.95 ms, **oblique −0.35-0.95 ms
-(mid ≈ −0.7)**, aerial −0.3-0.85 ms; live cpuSubmit −0.5-1.5 ms; plus every future probe stops
+**Expected final deltas** (isolated, per doc-10 bounds): eye −0.35-0.95 ms, **oblique
+−0.35-0.95 ms**, aerial −0.3-0.85 ms; live cpuSubmit −0.5-1.5 ms; plus every future probe stops
 mismeasuring (dead outlier filter fixed, meter contamination gone, per-frame counters available
-for the bimodality discrimination B1).
+for the bimodality discrimination B1). **[REVIEW-FIX]** the band tops are doc-10 UPPER bounds
+(≤ ~100 µs/submit, ≤ ~10 µs/barrier-dispatch — the voxwaves A/B); quote the achieved number from
+the gate JSONs, not the −0.7 midpoint, when re-baselining.

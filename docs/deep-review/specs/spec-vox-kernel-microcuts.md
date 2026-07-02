@@ -2,7 +2,12 @@
 
 Status: SPEC (buildable, not yet implemented). Branch: `nanite-raster`.
 Target file: `src/nanite/NaniteVoxelRaster.ts` (all four items live in the one scatter kernel).
-Expected bundle win: **~3–6 ms oblique** (point estimate 4.0), ~0.9 eye, ~0.25 aerial.
+Expected bundle win: **~2–5 ms oblique** (point estimate ~3.5), ~0.9 eye, ~0.25 aerial.
+**[REVIEW-FIX]** was "~3–6 (point 4.0)": doc 13's 3–6 bottom line INCLUDES L2 (F2B K=2,
++1.0 obl), which is NOT in this bundle; the doc-13 per-item bounds for A–D are 1–3 + 1–2 +
+~0.7 + 0–0.3 and the spec itself declares the savings sub-additive (A/B overlap on dead-brick
+cost, D shrinks the population A/C act on). 4.0 is the non-overlapping straight sum = the
+optimistic edge, not the point estimate.
 Quality class: every item is bit-identical, provably-dead-value-elided, or conservative-cull —
 argued per item in §A–§D. Any visible pixel change at the gate poses = the stage is rejected.
 
@@ -19,8 +24,12 @@ Per-item flags (each independently revertible, so gates can isolate regressions)
 
 ## 0. Context: how the kernel works today (self-contained; no corpus needed)
 
-All line numbers are against `src/nanite/NaniteVoxelRaster.ts` at HEAD `6a93dfb` unless
-prefixed. Read the cited ranges before editing — the file is dense with load-bearing comments.
+All line numbers are against `src/nanite/NaniteVoxelRaster.ts` at nanite-raster HEAD
+`d02a9f4` (1500 lines) unless prefixed. **[REVIEW-FIX]** was "`6a93dfb`" — wrong: the cited
+code (?voxbocc :842-884, ?voxcell, ?fartiles) landed AFTER 6a93dfb (cc73e88/d636353/…;
++404 lines); every line number was re-verified against d02a9f4 and matches THAT tree. Do not
+check out 6a93dfb. Read the cited ranges before editing — the file is dense with load-bearing
+comments.
 
 **Dispatch shape.** `buildNaniteVoxelRaster` (:175) builds ONE compute kernel per scatter
 variant via the `makeVoxScatter` factory (:488). One WORKGROUP of `WG_RASTER = 128` lanes
@@ -73,7 +82,9 @@ screen with 659 clusters for 5.4 ms of foliage while oblique covers ~90% with 91
 for ~20 ms — i.e. ~75-80% of the oblique voxel cost is per-brick/per-cluster machinery, not
 per-pixel work. This bundle attacks exactly that machinery. It cannot close the whole
 −11 ms oblique gap (the cluster COUNT is generated upstream by the 45–140 m per-tree ring);
-its honest ceiling is ~3–6 ms.
+its honest range is ~2–5 ms (**[REVIEW-FIX]** was "~3–6"; see the header correction — 6 is
+the no-overlap optimistic edge of the doc-13 waste bounds, not a ceiling this bundle's four
+items support jointly).
 
 **Environment constraints that shape every edit below:**
 - **TSL r184 hoist hazard**: any value consumed by an atomic (or inside a deep conditional)
@@ -151,7 +162,13 @@ ANY `?voxcellmin` value because both sites read the same `voxCellMinArea` (:301-
 **Fold-in micro (same diff, bit-identical):** dedupe the double `occLo/occHi` fetch — the
 voxcell record loads words BRICK_OCC_LO/HI at :913-914 and the mask build re-loads them at
 :939-940. Hoist the two `elemU` loads into `.toVar()`s just above :908 and consume in both
-places. Same buffer words, same values; pure load elimination.
+places. Same buffer words, same values; pure load elimination. **[REVIEW-FIX]** the hoist
+MUST be compile-gated `if (voxCell)`: when voxCell is ON, :913-914 already load these words
+for EVERY stored brick, so the hoist adds zero loads. When voxCell is OFF
+(`?voxcell=0`/`?voxdither=1`) and voxOccGate is ON, legacy loads them ONLY inside the armed
+`If` (:938→:939-940); an unguarded hoist would add two loads per stored brick in that
+config — a pessimization, not a dedupe. `if (voxCell)` → hoisted vars consumed at both
+sites; `else` → keep :939-940 exactly as today.
 
 ### Quality-equivalence argument
 **Bit-identical, provable statically.** The skipped mask's only runtime reader is the flat
@@ -198,6 +215,10 @@ scheduling-independent and no feature/extension is needed.
 Edit sites: everything between the Phase-A barrier (:1064) and the Phase-B loop head
 (:1140), the loop head itself, and the inner-stride call (:1183, :1412). The per-brick setup
 body (:1142-1181) and the entire per-pixel body (:1183-1411) are **moved, not modified**.
+**[REVIEW-FIX]** ordering: `nBricks` is currently defined at :1076 (AFTER the :1064 barrier,
+before the voxcell bases) — the sgb=2 compaction scan below consumes it, so move the :1076
+declaration ABOVE the compaction block (it depends only on `brickCount`, defined :562;
+trivially legal). Landing the sketch verbatim without the move is a use-before-def.
 
 ```ts
 const VOX_GROUPS = 4;                       // WG_RASTER / 32 — virtual groups, not HW subgroups
@@ -254,14 +275,27 @@ compiles today's exact loop — keep both code paths build-time selected, like `
 The set of (pixel, key, id) election candidates is **unchanged** — only which lane visits
 which (brick, pixel) pair changes. The election is an unordered `atomicMax` on the packed
 key with a strictly-greater guard on both the pre-load and the winner store (:1201-1206,
-:1394-1403): the final key per pixel is the max over the same candidate set ⇒ identical.
-Tie case (two bricks of one cluster, identical 32-bit key, different `voxIdB`): the winner
-was ALREADY scheduler-order-dependent today — the serial `b` loop is not lockstep across the
-4 SIMD groups (no barrier inside Phase B), so group 2 can run brick 5 before group 0 runs
-brick 2. Item B preserves that nondeterminism class; it introduces no new one. Verified by
-the shot gate (§Gates); depth-distinct winners are bit-identical by the max argument.
-The block-cull gate skips only clusters whose records are all empty seeds (Phase A stores
-records only under `brickActive`, which includes `wgVisible==1`, :690) — skipping a no-op.
+:1394-1403): the final key per pixel is the max over the same candidate set ⇒ for every
+pixel whose winning KEY is unique, the output is bit-identical.
+**[REVIEW-FIX] Tie case, corrected — the original "introduces no new nondeterminism class"
+claim was too strong.** A tie = two bricks of one cluster with the identical 32-bit key
+(same quantized front-slab depth, same id8) but different `voxIdB` bits 21-27 → a tie flip
+changes which brick's baked normal/albedo shades that pixel (a real, if subtle, pixel
+change). Ties are realistic: adjacent same-cluster bricks in a screen-parallel crown face
+share the quantized depth, and their inclusive floor/ceil bboxes overlap by ~1 px at edges.
+Today the winner is scheduler-order-dependent ONLY when the two candidates' visiting lanes
+sit in DIFFERENT SIMD groups; when both lanes land in the SAME SIMD group the serial `b`
+loop resolves the tie deterministically (lower brick index first ⇒ its store is the one the
+strictly-greater guard lets through... note the SECOND candidate loses the guard, so the
+FIRST stays) — and stably so, frame after frame. Item B can move such a pair cross-group
+(or reorder it), flipping a today-stable tie winner PERSISTENTLY. Consequence: the §Gates
+shot protocol is **load-bearing for item B**, not belt-and-braces — the expected diff is a
+sparse set of brick-edge pixels whose depth is identical but whose brick shading flips; it
+must land within the base-vs-base TRAA noise floor or the stage is rejected
+(`?voxsgb=0` reverts; nothing else in the bundle depends on B).
+Depth-distinct winners are bit-identical by the max argument. The block-cull gate skips
+only clusters whose records are all empty seeds (Phase A stores records only under
+`brickActive`, which includes `wgVisible==1`, :690) — skipping a no-op.
 
 ### Expected
 0.3 eye / **1.5 oblique** / 0.1 aerial. Watch eye specifically: bocc-culled bricks (the eye
@@ -278,6 +312,12 @@ majority) currently pay 4× setup for zero pixels; sgb may over-deliver there.
   rounds), but 4 bricks run concurrently — net utilization ≥ today on mixed sizes; the probe
   decides between sgb=1 and sgb=2 (the serial scan may cost more than dead-record visits
   save on brick-light clusters).
+- **[REVIEW-FIX]** Perf-expectation caveat: the "setup issued 4× → 1×" claim assumes Apple's
+  SIMD width is 32 for this kernel. Metal drops thread_execution_width to 16 under high
+  register pressure — and this monolith is exactly the register-pressure suspect (doc 13
+  open Q5). At width 16 a 32-lane virtual group spans 2 HW SIMD groups ⇒ dedup is 2×, not
+  4× — still a win, correctness unaffected, but halve the expectation if the probe
+  under-delivers before blaming the design.
 - Effort: M. The moved body must be moved verbatim — diff review should show pure
   indentation/loop-head changes plus the two new prologue blocks.
 
@@ -297,8 +337,11 @@ Two projection hot spots in Phase A:
    ≈ 12 ALU + mat4·vec4 ≈ 28 ALU) ≈ ~320 ALU/cell, ≤64 cells/armed brick. Item A removes
    most builds; survivors (small flat bricks, 16 < area ≤ 64) still pay it.
 
-Clip transforms are linear, so both collapse to basis-add form. Doc 13/05 bound the item at
-~0.7 oblique.
+Clip transforms are linear, so both collapse to basis-add form. **[REVIEW-FIX]** attribution
+corrected: doc 13 (L4) bounds the item at ~0.7 oblique; doc 05 (its L4, "shared clip-basis
+Phase A projection") estimates −1 to −2.5 oblique. Plan on 0.7 (the conservative number used
+in the bundle estimate); treat doc 05's range as upside the gate may or may not confirm —
+do NOT promise it.
 
 ### Design
 **Site 1** — per-cluster, before Phase A (uniform scope, after :586):
@@ -324,8 +367,10 @@ const dZ = (vpCz.mul(brWR) as unknown as NV4).toVar();
 const p = clipC.add(dX.mul(sx)).add(dY.mul(sy)).add(dZ.mul(sz)).toVar();
 ```
 
-~34→~12 ALU per corner; 1 extra mat4·vec4 + 12 muls per brick amortized over 8 corners.
-(A ±sign add-tree — 14 vec4 adds for all 8 — is a further cut; optional, same class.)
+**[REVIEW-FIX]** ~34→~24 ALU per corner as written (3 vec4 scaled-adds = 12 mul + 12 add);
+the "~12" figure holds only for the ±sign add-tree variant (sx/sy/sz = ±1 folded to
+add/sub — 14 vec4 adds for all 8 corners), which is optional and the same quality class.
+Cost added per brick: 1 mat4·vec4 (clipC) + 12 muls (dX/dY/dZ), amortized over 8 corners.
 
 **Site 2** — per-cluster local-axis basis (only when `voxOccGate`; place next to site 1):
 `instTransformPoint(p) = L·p + A.xyz` with `L = scale∘yaw∘shear` (`NaniteCommon.ts:141-148`),
@@ -442,6 +487,16 @@ live path (live p95 is eye-dominated).
 - Double pyramid reads for visible bricks — measured, not argued.
 - The level pick + window MUST be copied from the block test verbatim (:636-659) with only
   `rPx` sourced as above; a hand-rolled variant risks the under-coarse/hole direction.
+- **[REVIEW-FIX]** honesty note on the coverage argument (§1 above): the
+  `rPx = r·cot·H/(2·w)`-family level pick treats the sphere's screen footprint as the
+  isotropic centered-sphere radius; a sphere near the screen EDGE projects slightly wider
+  (off-center anisotropy, up to ~1 missing level in the worst corner). This is INHERITED
+  from the shipped block test (:631-635) — D's variant is strictly safer than it (wSafe
+  denominator ⊃ r/(d−r) over-bound, √3 circumradius) — and the shipped idiom gated
+  shot-identical at all poses, with under-pick further absorbed by the ceil, the 2×2 (not
+  1×1) window, and min-pool-keeps-on-any-empty-texel. So the static argument is
+  "conservative modulo the same approximation the production block cull already ships";
+  the §Gates shot protocol is the arbiter of the residual, exactly as it was for voxbocc.
 - Effort: S/M. Fallback `?voxsphocc=0` (and it never compiles unless voxbocc+voxoccl are on).
 
 ---
@@ -502,8 +557,10 @@ npx tsx tools/diff.ts --a $SCRATCH/shots/mc-base-1-<pose>.png --b $SCRATCH/shots
 ```
 
 PASS iff, per pose, item-vs-base `changed%` AND `mean max-channel delta` are ≤ the
-base-vs-base values (the TRAA/temporal noise floor). For items A/B/D this is belt-and-braces
-on top of the static arguments; for item C it IS the gate — any excess diff rejects the
+base-vs-base values (the TRAA/temporal noise floor). For items A/D this is belt-and-braces
+on top of the static arguments; for item B it is **load-bearing for the tie-flip class**
+(**[REVIEW-FIX]** see §B — same-SIMD-group ties are stable today and sgb can flip them
+persistently); for item C it IS the gate — any excess diff rejects the
 stage outright (no +1 px "conservative" rescue; see §C). If a stage fails quality, revert
 the default, keep the flag for diagnosis, and file the failure against the stage — do not
 re-tune within the stage without re-running the full triple.

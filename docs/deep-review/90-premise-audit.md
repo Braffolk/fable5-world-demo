@@ -1,3 +1,5 @@
+> Shadow/GI claims reconciled into 17-shadows-gi.md §Reconciliation (2026-07-02); this doc kept for detail. Corrections: §7-P3's "ProbeGI 128-frame cycle = strongest surviving bimodality suspect" is KILLED (ProbeGI never runs in the forest scene — TerrainScene.ts:113/:120 only — and its per-frame work is constant); §5's "shadows measured ~FREE (nanshadow=0)" is not evidence (flag gated an absent system).
+
 # 90 — Premise audit: the review framing itself, one level up
 
 Scope: audits the FRAMING the 12 specialist readers will inherit — budget math, the assumed-fixed

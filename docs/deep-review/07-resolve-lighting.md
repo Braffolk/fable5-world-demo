@@ -1,3 +1,5 @@
+> Shadow/GI claims reconciled into 17-shadows-gi.md §Reconciliation (2026-07-02); this doc kept for detail. Corrections: "shadow system 0–2ms via nanshadow=0" was a no-op vs no-op (csm===null in forest — system absent); reskeep forest pool is EXACTLY 0 (keep block not compiled, NaniteResolve.ts:922/:330), world-scene lever only.
+
 # 07 — Resolve + lighting (NaniteResolve.ts): measured ~FREE, and why
 
 Scope: the two fullscreen resolve passes (`src/nanite/NaniteResolve.ts`, 1108 lines), the fetch

@@ -268,3 +268,121 @@ Open questions:
   *quality-improving* AO/contact spend has headroom.)
 - One level up, for the user: does the locked-60 plan need headroom reserved for shadows/GI/clouds
   in forest-parity scenes (P2, Consequence C)? That decision changes what "gap closed" means.
+
+## Reconciliation & verification (2026-07-02, post-limit continuation)
+
+Adversarial verify pass for this area, re-run after the session-limit death. Inputs: this doc
+(canon), siblings `07-resolve-lighting.md` + `08-post-stack.md`. Every load-bearing file:line
+below was re-read against the working tree (nanite-raster); numbers recomputed from the scratchpad
+JSONs (`fresh-bead-v2-base.json`, `fresh-ablate-post3.json`, `fresh-attr-flat/noshadow.json`,
+`fresh-leafcheap.json`, `fresh-voxbocc-milestone.json`).
+
+### Corrections to this doc (canon)
+
+1. **L3 / W2 KILLED — "haze evaluated on sky pixels then discarded by `select`" is FALSE.**
+   three r184 `ConditionalNode.generate` (node_modules/three/src/nodes/math/ConditionalNode.js:146-186)
+   emits a REAL `if (cond) { } else { }` with per-branch nodeBlock scoping (setup(), :118-121);
+   the ternary path requires `uniformFlow`, which is opt-in (`ContextNode.js:192`) and unused in
+   PostStack. `hazed` (PostStack.ts:283) is consumed only by the `isSky.select(col, hazed)` at
+   :285, so the whole aerial() chain is emitted inside the else-branch — sky waves already skip
+   it. The proposed `If(isSky.not())` is a no-op rewrite of what the compiler already emits.
+2. **Measured pool re-pinned: 6.7 / 5.2 / −0.05** (med gpuWall, `fresh-bead-v2-base` 35.95/43.05/16.80
+   → `fresh-ablate-post3` 29.25/37.90/16.85). P4's "6.8/5.1/−0.3" was rounding drift; sibling 08's
+   6.7/5.2/~0 is the correct read. Aerial post ≈ 0 stands. (Ablate-oblique tail verified: p95 = 70.0,
+   max 91.5 — the known spike mode, present with TAA off.)
+3. **Numeric re-pin on P2's noise-floor examples:** `nanshadow=0` eye med is **31.75** (not 32.6)
+   and `nandbg=flat` is 29.80/39.25/17.60 (`fresh-attr-*.json`). Conclusion unchanged (deltas =
+   noise; system absent in forest — `NaniteResolve.ts:237` `shadowsOn = world.csm !== null && …`,
+   ForestScene.ts:457-459 passes gi/csm null — re-verified).
+4. **P3 downgraded from fact to leading hypothesis.** The gather-radius-∝1/dist model explains the
+   eye/oblique cost and predicts small-but-nonzero aerial cost (contact still walks ≤12 in-cache
+   taps on most aerial pixels, dist≈150 < 240). Sibling 08's alternative — aerial partly
+   submission-bound, post hiding in bubbles — is still live. Probe P-B (aerial quartiles under
+   `ablate=ao,bounce,taa,bloom`) discriminates; until then neither story is citable as mechanism.
+   Note: `fresh-voxbocc-milestone` (post ON, cpuSubmit med 1.05-1.20) confounds but does not settle it.
+5. **Probe #5 semantics were incomplete.** With `ablate=taa`, `taaed = withBounce` (PostStack.ts:537-539)
+   AND `bloom()` does **not** convertToTexture its input (BloomNode.js:532 `nodeObject(node)`), so the
+   bright pass (BloomNode.js:353-362 evaluates `inputNode`) inlines the ENTIRE composite a second
+   time at half-res. `ablate=taa` alone is biased LOW for TAA cost. Adopt sibling 08's method:
+   TAA = Δ(`ablate=taa,bloom`) − Δ(`ablate=bloom`). Probe list amended.
+6. **L1 boot-side caveat:** "skip the boot `Heightfield.generate`" must carve out `noiseA` — the
+   wind context reads it (ForestScene.ts:453 `setWindContext({ noiseA: hf.noiseA, … })`) and makeCtx's
+   gust/exposure taps sample it per pixel on near leaves. Also relax the derived-maps throw
+   (NaniteResolve.ts:214-217) when the terrain branch is stripped. Shader-side claim unchanged
+   (bit-identical; forest registers no terrain/rock clusters — ForestScene.ts:437-440 + no rock
+   pools in the file).
+7. Typo: "How it works today" step 2 says "see waste W2" for the terrain subgraph — should be **W1**.
+8. **CPU-side expectations are stale post-voxbocc.** The "post ablation removed ~3ms cpu.submit"
+   comparison (5.3→1.8) is pre-voxbocc; `fresh-voxbocc-milestone` shows whole-frame cpuSubmit med
+   **1.05/1.10/1.20 with post ON**. Post encode CPU is now bounded ≤~1ms total; pass-count cuts
+   (bloom fold, ping-pong) buy ~0.1-0.3ms CPU at best, not 1-2ms.
+
+### Contradictions resolved against siblings
+
+- **reskeep / CSM `keep` in forest (07-L1 vs this doc's W7/L6): this doc is right.** In forest
+  `csm: null` ⇒ `shadowsOn=false` (NaniteResolve.ts:237) ⇒ the entire keep block (:946-954) and
+  `receivedShadowPositionNode` (:330-350) are **not built**. `reskeep`/`setKeepFull` is a structural
+  no-op at every canonical pose. 07's "expected ~0-0.5/0-1 ms forest" and its **R1 probe as written
+  (forest boot) are void** — R1 must run in a csm-enabled scene (TerrainScene/world). The −3.9ms
+  general-vista figure is confirmed provenance (2026-06-26-voxel-lod-session-state.md:235-239,
+  shotdiff ≈ TAA floor, jitter UNPINNED — so the Class-I gate 07 specifies still applies).
+- **AO attachment format (08-L2b vs this doc's L4): this doc is right.** `HalfResEntry` has only a
+  `red?: boolean` hook = RedFormat + **UnsignedByteType** (HalfResMrt.ts:32-37, :70-73) — using it
+  would destroy the packed view-z guide (.y, Gtao.ts:304) and quantize AO to 8-bit. rg16f needs a
+  NEW `rg` option (RGFormat + keep HalfFloatType). Still Class-IDENTICAL, effort S.
+- **Bloom pass count (08): 12 rasters, not 13** (1 bright + 5 mips × 2 blurs + 1 composite,
+  BloomNode.js:301-335). Post encoder total ~19 passes stands.
+- **08-L2c bloom bright-fold "IDENTICAL (bit-equal)" downgraded to IDENTICAL-pending-proof.**
+  Folding the threshold into the first H-blur is bit-equal only if every blur tap lands on exact
+  half-res texel centers (threshold is nonlinear; threshold(bilinear mix) ≠ bilinear mix of
+  thresholds). The maxDiff=0 shotdiff gate (08 P-E) is mandatory, not belt-and-braces.
+- **TRAA mechanics confirmed** for both docs: `traa()` wraps input in convertToTexture
+  (TRAANode.js:767); resolve→history + depth→history copies every frame (TRAANode.js:404-427);
+  history/resolve RTs HalfFloatType (:145,:154). Ping-pong lever (L7 = 08-L2a) survives as IDENTICAL.
+- **Both siblings' scene-membership findings confirmed**: no clouds/froxels/ProbeGI/CSM/GI in
+  ForestScene (ForestScene.ts:444-462); `ablate=clouds` no-op; ProbeGI-as-bimodality-suspect struck.
+  This doc's P1/P2 and 08 §2.3 agree; premise-audit P3 must be re-aimed (08's P-C `?lockexp=1`
+  probe is the replacement; PostStack.ts:670 verified).
+
+### Surviving lever table (this area, post-verification)
+
+| lever | mechanism (1-line) | eye | oblique | aerial | quality | probe / gate | effort | conf |
+|---|---|---|---|---|---|---|---|---|
+| RP-1 tri-class specialization (canon L1) | strip dead terrain+rock subgraphs from forest tri resolve → register pressure/occupancy (precedent: vox-pass 37.5ms cliff, NaniteResolve.ts:439-445) | 0–1 | 0–0.8 | 0–0.3 | IDENTICAL | `?resclasses=auto` A/B + shotdiff maxDiff=0 (probe #8) | M | mechanism proven, magnitude unknown |
+| RP-2 half-res contact (08-L1) | move 12-step SSCS march (PostStack.ts:424-470) into merged MRT .z, reuse AO joint-bilateral | 1.5–2.3 | 0.6–1.1 | 0–1.5 | **RISK** | P-A confirms contact >2ms eye; then shotdiff (jitter pinned, 3+2 poses) + **user sign-off** | M | model-only until P-A |
+| RP-3 hygiene bundle: TRAA ping-pong + AO rg16f (canon L7+L4 = 08-L2a/b) | kill 2 full-res copies/frame (TRAANode.js:404-427); halve AO attachment bandwidth (new `rg` flag) | 0.3–0.8 | 0.3–0.8 | 0.3–0.6 | IDENTICAL | P-E interleaved A/B, shotdiff maxDiff=0 | M (fork) | high |
+| RP-3c bloom bright-fold (08-L2c) | fold threshold into first H-blur, −1 raster | ~0.1 | ~0.1 | ~0.1 | IDENTICAL-pending-proof | maxDiff=0 shotdiff mandatory | S | med |
+| RP-4 single-pass resolve when union ≤10 (canon L2) | merge tri+vox passes in forest (union exactly 10 storage buffers) — removes W5 prologue pass | ~0.3 | ~0.3 | ~0.25 | IDENTICAL | `?respass=1` + `tools/vcdebug.mjs` silent-death check + shotdiff=0 | M | high on identity, risk = the cliff |
+| RP-5 early-discard reorder (canon L5) | move wp reconstruction (:365-371) below the partition discard (:380-390) | 0–0.1 | 0–0.1 | ~0 | IDENTICAL | piggyback A/B | S | compiler may already sink |
+| RP-6 reskeep=0 default (canon L6 = 07-L1) | corner-only CSM keep sample; keep≡1 on empty maps | **0 (forest)** | **0 (forest)** | 0 | IDENTICAL (gated) | R1 **in a csm-enabled scene** + jitter-pinned maxDiff=0 shotdiff + fast-motion check | S | −3.9ms vista measured |
+| RP-7 bead-v2 crown polish (07-L2 a/b/c) | crown-height anchor / per-species tilt / far-tile bead weight | ~0 | ~0 | ~0 | **IMPROVING** | side-by-side crops + user sign-off | S | code paths verified |
+| RP-8 shared center prelude (canon L8) | hoist one center depth+view-pos for AO+bounce in merged MRT | ~0.05 | ~0.05 | ~0 | IDENTICAL | verify `uv()`≡`screenUV` value-equality in the quad pass first | S | low value |
+| (listed, deprioritized) rg11b10 diet (08-L3) | TRAA/composite RT format cut | 0.3–0.6 | 0.3–0.6 | 0.3–0.6 | **RISK** (banding under AgX) | shotdiff + dark-scene crops + sign-off | S–M | shipped-TAA precedent |
+
+Honest area ceiling unchanged: ~0.5–2 ms eye / ~0.5–1.5 ms oblique quality-identical (+~2 more at
+eye only via the Class-R contact lever with sign-off). The oblique gap closes elsewhere.
+
+### Killed claims (one line each)
+
+- **[canon W2+L3] skip-haze-on-sky**: TSL `select` emits a real if/else (ConditionalNode.js:146-186);
+  the haze is already branch-gated — lever is a no-op, waste item does not exist.
+- **[07] reskeep forest expectation (~0–1 ms) + R1-in-forest probe**: keep block not built when
+  csm null (NaniteResolve.ts:237, :946) — structurally 0 in forest; probe void as written.
+- **[08] "HalfResMrt already supports per-entry format overrides"**: hook is red-only r8unorm
+  (HalfResMrt.ts:70-73); as-is it would break the view-z guide — new `rg` flag required.
+- **[08] "bloom = 13 passes"**: 12 (BloomNode.js:301-335).
+- **[08] post levers recover "−1..−2 cpu.submit"**: stale — whole-frame cpuSubmit is ~1.1 ms
+  post-voxbocc with post ON (`fresh-voxbocc-milestone.json`).
+- **[canon P4] aerial post "−0.3"**: −0.05 recomputed (16.80→16.85 med); conclusion (≈0) unchanged.
+- **[canon probe #5] `ablate=taa` isolates TRAA**: biased LOW (bloom bright pass double-evaluates
+  the composite at half-res when TAA is ablated); use Δ(taa,bloom)−Δ(bloom).
+- **[canon P3 as stated] "the 6/5/0 asymmetry IS gather-radius"**: demoted to leading hypothesis;
+  P-B discriminates vs the submission-bound alternative.
+
+### Probe queue for this area (serial, unchanged order, amended semantics)
+
+Baseline first each session (post-voxbocc numbers are the new reference — the singles double as
+07-R2's honesty re-pin). #1-#4 + #6 as in the list above; **#5 replaced** by the pair
+`ablate=bloom` and `ablate=taa,bloom` (TAA = difference); #7 (haze single) is **dropped** (L3 dead);
+#8 (`resclasses`) and #9 (`respass`) unchanged; add 08's P-B (aerial quartiles) and P-C
+(`?lockexp=1` bimodality) — both cheap and decision-bearing.
