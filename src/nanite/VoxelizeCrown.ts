@@ -414,7 +414,7 @@ interface CellAccum {
  */
 export function voxelizeCrown(
   src: ExplicitSource,
-  albedo: { r: number; g: number; b: number },
+  albedo: { r: number; g: number; b: number; hueVar?: number },
   voxelGridDim: number = DEFAULT_VOXEL_GRID_DIM,
   voxlod = false,
 ): CrownVoxelization {
@@ -647,6 +647,14 @@ export function voxelizeCrown(
     }
   }
 
+  // BAKED within-crown LOOK (2026-07-03, user report "far trees blend into one mush"):
+  // the L0 albedo above is the FLAT species tint (zero per-brick variation), while the
+  // MESH leaf path gets per-leaf hueVar jitter + crown-depth AO (vdata.w·0.8+0.2) at
+  // runtime — so the voxel band loses exactly those two channels and distant crowns
+  // read as one flat tone. Bake the SAME statistics into the bricks (free at runtime;
+  // the dominant-child pyramid albedo then carries them to every coarse level).
+  bakeCrownBrickLook(bricks, occupied, albedo.hueVar ?? 0);
+
   // voxlod (G1): build the MIP pyramid ONLY when asked. levels[0] is the finest grid
   // (the bricks/occupied just produced); coarser levels 2x-downsample the brick grid.
   // voxlod=0 leaves `levels` undefined => the single-resolution path is byte-identical.
@@ -655,6 +663,8 @@ export function voxelizeCrown(
         bricks,
         { x: brickGridX, y: brickGridY, z: brickGridZ },
         cellSize,
+        [originX, originY, originZ],
+        { blobNormals: true },
       )
     : undefined;
 
@@ -753,6 +763,11 @@ function downsampleBrickGrid(
   fineGrid: { x: number; y: number; z: number },
   coarseCellSize: number,
   origin: [number, number, number],
+  /** ellipsoid-normal blend for this OUTPUT level (crowns only): blend the mean-of-
+   *  children normal toward (brickCenter − crown centroid) by k — restores the
+   *  sun-side/shade-side gradient a distant blob-like crown must have (the plain
+   *  mean converges to ~one direction per crown ⇒ flat, directionless far shading). */
+  blob?: { cx: number; cy: number; cz: number; k: number },
 ): { bricks: BrickCPU[]; grid: { x: number; y: number; z: number } } {
   const gx = Math.max(1, Math.ceil(fineGrid.x / 2));
   const gy = Math.max(1, Math.ceil(fineGrid.y / 2));
@@ -824,6 +839,21 @@ function downsampleBrickGrid(
         }
         const nlen = Math.hypot(nx, ny, nz);
         const normal: [number, number, number] = nlen > 1e-8 ? [nx / nlen, ny / nlen, nz / nlen] : [0, 1, 0];
+        if (blob) {
+          // ellipsoid blend (see param doc): outward direction from the crown centroid
+          // through THIS brick's grid center, mixed in by k (grows with level).
+          const dx = origin[0] + (cx + 0.5) * coarseWorld - blob.cx;
+          const dy = origin[1] + (cy + 0.5) * coarseWorld - blob.cy;
+          const dz = origin[2] + (cz + 0.5) * coarseWorld - blob.cz;
+          const dl = Math.hypot(dx, dy, dz);
+          if (dl > 1e-6) {
+            const bx2 = normal[0] * (1 - blob.k) + (dx / dl) * blob.k;
+            const by2 = normal[1] * (1 - blob.k) + (dy / dl) * blob.k;
+            const bz2 = normal[2] * (1 - blob.k) + (dz / dl) * blob.k;
+            const bl = Math.hypot(bx2, by2, bz2);
+            if (bl > 1e-6) { normal[0] = bx2 / bl; normal[1] = by2 / bl; normal[2] = bz2 / bl; }
+          }
+        }
         const spread = Math.max(0, Math.min(1, 1 - nlen / aw));
         // density MEAN over the contributing finer bricks (a coarse brick that subsumes
         // a sparse smear stays sparse — keeps the see-through look at distance, §5.4.3).
@@ -997,11 +1027,81 @@ function partitionLevelBlocks(
  *  (a finer brick (fx,fy,fz) maps to coarse brick (fx>>1,fy>>1,fz>>1)). Single-parent voting +
  *  a coverage repair guarantee EXACTLY one parent per finer block AND >=1 child per coarse
  *  block, so the GPU per-block cut descends to the WHOLE finer level with no holes/double-emit. */
+/** BAKE the mesh-leaf look channels into the L0 bricks (2026-07-03, "far-tree mush").
+ *  Post-pass over the occupied bricks of one crown, crown-LOCAL space:
+ *
+ *  1. HUE JITTER — a deterministic hash on a ~0.75 m CLUMP lattice of the brick center,
+ *     scaled by the species hueVar and applied with the EXACT warm/cool palette the
+ *     mesh resolve uses per leaf (NaniteResolve fullLeaf: base·[1.18,1.0,0.55]·max(k,0)
+ *     + base·[0.7,0.95,1.25]·max(−k,0) + base·(1−|k|)) — so the 60 m seam keeps one
+ *     color statistic across representations.
+ *  2. CROWN-DEPTH AO — the mesh path multiplies vdata.w·0.8+0.2 (baked crown-depth per
+ *     vertex); bricks get the analogue: radial surface factor (interior → dark; mostly
+ *     hidden by occupancy, but it darkens inner-surface pixels) × a vertical gradient
+ *     (canopy self-shadowing: bottom ~0.78). GTAO fades out by 240 m (aofade), so this
+ *     baked term is what keeps distant crowns from reading uniformly BRIGHT.
+ *
+ *  Bake-time only — zero runtime cost; composes up the pyramid via the dominant-child
+ *  albedo. Deterministic (integer hash), so the boot cache stays reproducible. */
+function bakeCrownBrickLook(bricks: BrickCPU[], occupied: number[], hueVar: number): void {
+  if (occupied.length === 0) return;
+  // density-weighted centroid + extents of the OCCUPIED crown
+  let cx = 0, cy = 0, cz = 0, wSum = 0;
+  let minY = Infinity, maxY = -Infinity;
+  for (const oi of occupied) {
+    const b = bricks[oi] as BrickCPU;
+    const w = Math.max(1e-4, b.density);
+    cx += b.center[0] * w; cy += b.center[1] * w; cz += b.center[2] * w; wSum += w;
+    if (b.center[1] < minY) minY = b.center[1];
+    if (b.center[1] > maxY) maxY = b.center[1];
+  }
+  cx /= wSum; cy /= wSum; cz /= wSum;
+  let maxR = 1e-4;
+  for (const oi of occupied) {
+    const b = bricks[oi] as BrickCPU;
+    const r = Math.hypot(b.center[0] - cx, b.center[1] - cy, b.center[2] - cz);
+    if (r > maxR) maxR = r;
+  }
+  const ySpan = Math.max(1e-4, maxY - minY);
+  const CLUMP = 0.75; // hue-jitter lattice (m) — foliage-clump scale, not per-voxel noise
+  for (const oi of occupied) {
+    const b = bricks[oi] as BrickCPU;
+    const a = b.albedo;
+    // 1. clump hue jitter (k ∈ [−1,1] × hueVar), mesh-palette warm/cool
+    if (hueVar > 0) {
+      const ix = Math.floor(b.center[0] / CLUMP) | 0;
+      const iy = Math.floor(b.center[1] / CLUMP) | 0;
+      const iz = Math.floor(b.center[2] / CLUMP) | 0;
+      const h = ((Math.imul(ix, 73856093) ^ Math.imul(iy, 19349663) ^ Math.imul(iz, 83492791)) >>> 0) & 0xffff;
+      const k = (h / 0xffff * 2 - 1) * hueVar;
+      const kw = Math.max(0, k), kc = Math.max(0, -k), kb = 1 - Math.abs(k);
+      const r0 = a[0], g0 = a[1], b0 = a[2];
+      a[0] = r0 * 1.18 * kw + r0 * 0.7 * kc + r0 * kb;
+      a[1] = g0 * 1.0 * kw + g0 * 0.95 * kc + g0 * kb;
+      a[2] = b0 * 0.55 * kw + b0 * 1.25 * kc + b0 * kb;
+    }
+    // 2. crown-depth AO: radial (surface 1 → deep interior 0.2, mesh's dv.w·0.8+0.2
+    //    analogue) × vertical canopy self-shadow (top 1 → bottom 0.78)
+    const r = Math.hypot(b.center[0] - cx, b.center[1] - cy, b.center[2] - cz) / maxR;
+    const radial = 0.2 + 0.8 * Math.max(0, Math.min(1, (r - 0.25) / 0.6));
+    const vertical = 0.78 + 0.22 * (b.center[1] - minY) / ySpan;
+    const ao = radial * vertical;
+    a[0] *= ao; a[1] *= ao; a[2] *= ao;
+  }
+}
+
 export function buildVoxelPyramid(
   l0Bricks: BrickCPU[],
   l0Grid: { x: number; y: number; z: number },
   l0CellSize: number,
   origin: [number, number, number] = [0, 0, 0],
+  opts?: {
+    /** blend coarse-brick normals toward "outward from the crown centroid" as levels
+     *  coarsen (a distant crown shades like an ellipsoid: bright sun side, dark shade
+     *  side — the mean-of-children normal converges to one direction and kills that).
+     *  CROWNS ONLY — a 64 m far-TILE is many trees, not one blob (leave unset there). */
+    blobNormals?: boolean;
+  },
 ): VoxelLevel[] {
   const levels: VoxelLevel[] = [];
   // recover the L0 grid origin from any L0 brick so coarse centers tile exactly on it
@@ -1020,6 +1120,17 @@ export function buildVoxelPyramid(
   let curBricks = l0Bricks;
   let curGrid = l0Grid;
   let curCell = l0CellSize;
+  // crown centroid for the ellipsoid-normal blend (opts.blobNormals — crowns only)
+  let blobC: { cx: number; cy: number; cz: number } | null = null;
+  if (opts?.blobNormals) {
+    let sx = 0, sy = 0, sz = 0, sw = 0;
+    for (const b of l0Bricks) {
+      if (b.density <= 0) continue;
+      const w = b.density;
+      sx += b.center[0] * w; sy += b.center[1] * w; sz += b.center[2] * w; sw += w;
+    }
+    if (sw > 0) blobC = { cx: sx / sw, cy: sy / sw, cz: sz / sw };
+  }
   // per-level: which level-L block each level-L OCCUPIED-brick belongs to (occ-index -> block).
   const blockOfOccByLevel: number[][] = [];
   const N_LEVELS = voxlodLevels();
@@ -1056,7 +1167,15 @@ export function buildVoxelPyramid(
     // safety net for degenerate crowns.)
     const K_FLOOR = 3;
     if (L === N_LEVELS - 1 || occupied.length <= 1 || Math.max(curGrid.x, curGrid.y, curGrid.z) <= K_FLOOR) break;
-    const next = downsampleBrickGrid(curBricks, curGrid, curCell * 2, gridOrigin);
+    // ellipsoid-normal strength for the level being PRODUCED (L+1): none at the fine
+    // levels (their mean normals still carry real variation), ramping to 0.7 by L3+.
+    const next = downsampleBrickGrid(
+      curBricks,
+      curGrid,
+      curCell * 2,
+      gridOrigin,
+      blobC ? { ...blobC, k: Math.min(0.7, 0.28 * (L + 1)) } : undefined,
+    );
     // voxlod FAR-CHEAPER (iteration-6): SHELL the coarse grid we just produced — drop bricks fully
     // enclosed by occupied neighbours (invisible interior) so this coarser level renders a ~2-deep
     // SHELL, not a ~10-deep VOLUME ⇒ far depth-overdraw falls below the fine level it replaces
@@ -1341,7 +1460,7 @@ function blockCountOf(occupied: number): number {
  */
 export function prepareVoxelCrown(
   src: ExplicitSource,
-  albedo: { r: number; g: number; b: number },
+  albedo: { r: number; g: number; b: number; hueVar?: number },
   voxelGridDim: number = DEFAULT_VOXEL_GRID_DIM,
   voxlod = false,
 ): PreparedVoxelCrown {
