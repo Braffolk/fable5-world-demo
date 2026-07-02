@@ -204,6 +204,23 @@ unproven — voxBrickWrites counter is dead); the prev-frame spec avoids the reb
 Remaining oblique gap to ≤21-24 target: −8..−11. Next per plan: spec B (?voxsgb Phase-B
 distribution), submit folds 1a/1b, prev-frame occlusion (pool A), resolve/post pool D.
 
+## 5f. Spec-B verdict + CLEAN-STATE CHECKPOINT (pre-compact, ~15:00)
+
+- **?voxsgb KILLED as default** (d66d53c, flag kept): −1.0 oblique but +2.0/+3.9 eye at
+  sgb=1/2 — the 32-lane-underfill risk on eye's many small bricks + lane-0 serial compaction
+  latency. Eye holds the line. Control run proved the restructure regression-free (sgb=0
+  emits the legacy loop: 32.5/21.0 ≈ milestone2).
+- STATE AT CHECKPOINT (all committed, tree clean): isolated eye ~21-24.6 / oblique ~31.5-32.5
+  / aerial ~17.2 (warm session; rested will read lower); live p50 16.7 p95 ~25-27.
+- NEXT PER 00-MASTER-PLAN (in order): (1) submit folds 1a/1b from
+  specs/spec-orchestration-submit-folds.md (E-pool, ~0.5-1ms + cpu.submit); (2) pool D
+  resolve/post restructures (doc 16, ~1ms); (3) pool A prev-frame occlusion build
+  (specs/spec-prev-frame-occlusion.md — the −3..8 oblique big rock; its zero-code stage-0
+  came back entangled with the rebuild bubble, engagement counters must be wired first);
+  (4) Q3 live r-pin (POSE_PATH probe patch) + Q5/Q6/Q7 bimodality discriminators;
+  (5) OPEN USER RULING: forest-vs-world scope for locked-60 (shadows/GI are ABSENT from
+  the forest scene — every canonical number has zero shadow work).
+
 ### Post-voxbocc LIVE milestone (fresh-voxbocc-milestone.json, 600 ticks, 06:5x warm)
 - **live p50 = 16.7ms (= 60fps vsync quantum!), avg 17.96, p90/p95 = 25.0/25.1, max 26.0**
 - 210/600 frames >16.7 (all sitting at the NEXT 120Hz quantum, 25.0); 0 >33ms; 0 longtasks; heap flat.
