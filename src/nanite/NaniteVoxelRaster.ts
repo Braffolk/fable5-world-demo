@@ -165,8 +165,11 @@ export interface VoxelRasterDeps {
 
 export interface VoxelRasterHandles {
   /** dispatch the scatter voxel raster (call AFTER world1+hwRender so the per-block
-   *  occlusion cull reads the global near-field triangle winners, §6.6). */
-  dispatchVoxel: (renderer: Renderer) => void;
+   *  occlusion cull reads the global near-field triangle winners, §6.6). tail
+   *  (SUBMIT-COALESCE ?coalesce=1): extra kernels — the frame's HZB chain — appended
+   *  after kVoxScatter (folded into the same submit on the coalesced non-F2B path,
+   *  or dispatched as one trailing batch on the legacy/F2B paths). */
+  dispatchVoxel: (renderer: Renderer, tail?: readonly unknown[]) => void;
   /** [WRITE_CTR] = per-pixel BRICK-WRITE counter (the Stage-2 overdraw-overlay number,
    *  §A2): one increment per election win. Read AFTER dispatchVoxel. */
   readWriteCount: (renderer: Renderer) => Promise<number>;
@@ -239,6 +242,11 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // close-up 120→30fps cliff (wf wlbc8kgla, 2026-06-26). Build-time flag ⇒ when off, the atomicAdd
   // node is never built (byte-identical removal). ?voxwrites=1 restores the counter for debugging.
   const voxWrites = new URLSearchParams(window.location.search).get('voxwrites') === '1';
+  // SUBMIT-COALESCE (?coalesce=1, spec-orchestration-submit-folds §1b): fold voxOccPyr +
+  // (kClearBins) + kVoxScatter + the frame's HZB tail into ONE submit. Same kernels, same
+  // order, in-pass UAV auto-sync ⇒ bit-identical; F2B/voxwaves (default-off A/B controls)
+  // keep their exact legacy shape. DEFAULT OFF; flip after the spec §4 gate.
+  const coalesce = new URLSearchParams(window.location.search).get('coalesce') === '1';
   // ?voxrdbg=2 — MEASUREMENT ablation (default 0/OFF), mirror of world1's ?rdbg=2: BUILD-TIME
   // STOP point right before the Phase-B per-footprint-pixel election loop. Phase A still runs
   // (decode + project + clamp + occ-mask build per brick), but NO pixel is ever elected into
@@ -1494,6 +1502,9 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
     return { itemIdx, guard: itemIdx.lessThan(itemCount) as unknown as NB };
   });
   (kVoxScatter as { setName(n: string): unknown }).setName('nanVoxScatter');
+  // SUBMIT-COALESCE §1b: tag the whole-list scatter so it keeps its tight indirect grid
+  // inside the coalesced batch. Harmless to the legacy explicit dispatchIndirect path.
+  setIndirectDispatch(kVoxScatter, voxRasterDispatchAttr);
 
   // K PER-BUCKET scatter instances (F2B ON), ordered NEAR→FAR (bucket 0 = nearest). Each
   // closes over its bucket's (base_b, count_b) read from the voxBucketRange STORAGE buffer:
@@ -1518,7 +1529,20 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
     }
   }
 
-  const dispatchVoxel = (renderer: Renderer): void => {
+  const dispatchVoxel = (renderer: Renderer, tail: readonly unknown[] = []): void => {
+    // SUBMIT-COALESCE §1b (?coalesce=1, non-F2B — the default forest path): voxOccPyr +
+    // (kClearBins) + kVoxScatter + the frame's HZB tail in ONE submit. Identical kernel
+    // order to the legacy path below; in-pass UAV auto-sync preserves every RAW (pyramid
+    // → scatter reads voxOccPyr.ro; scatter → HZB reads the post-vox visPayload election).
+    if (coalesce && !voxF2bEnabled) {
+      dispatchBatchMixed(renderer, [
+        ...(voxOccl ? voxPyrKernels : []),
+        ...(voxWrites ? [kClearBins] : []), // W3: dropped when the producer can't increment
+        kVoxScatter,
+        ...tail, // the HZB chain (§1c), possibly empty
+      ]);
+      return;
+    }
     // PER-BLOCK OCCLUSION CULL prerequisite: build the MIN-POOLED footprint pyramid over THIS
     // frame's visPayloadV (already holds the SW+HW triangle election — world1/hwRender ran
     // before this). ONE submit for the whole min-pool chain (level k reads level k−1; they share
@@ -1560,6 +1584,9 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
       if (voxWrites) dispatch(renderer, kClearBins);
       dispatchIndirect(renderer, kVoxScatter as never, voxRasterDispatchAttr);
     }
+    // coalesce + F2B/voxwaves: the HZB tail still folds out of the frame's separate
+    // hzb.build() into ONE trailing batch here (strictly after every scatter above).
+    if (tail.length > 0) dispatchBatchMixed(renderer, tail);
   };
 
   const readWriteCount = async (renderer: Renderer): Promise<number> => {

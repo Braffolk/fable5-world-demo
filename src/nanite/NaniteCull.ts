@@ -198,6 +198,15 @@ export interface NaniteCullChain {
   phase1Batch(): readonly unknown[];
   /** write full-range args WITHOUT re-testing (?phase2=0 A/B + no-occl path) */
   syncFullArgs(renderer: Renderer): void;
+  /** SUBMIT-COALESCE (?coalesce=1): the syncFullArgs kernel as a batchable list
+   *  ([kRasterArgs2]) so the frame folds it into the ONE cull submit. RAW-safe:
+   *  it reads qRaster[0]/counters written by phase1Batch's kRasterArgs, and in-pass
+   *  dispatch order == queue order (Tsl dispatchBatchMixed). */
+  fullArgsBatch(): readonly unknown[];
+  /** SUBMIT-COALESCE (?coalesce=1): the exact ordered kernel list runVoxFanout would
+   *  submit (F2B batch, or [kVoxFanoutArgs, kVoxFanout, kVoxRasterArgs] when voxf2b=0)
+   *  for folding into the same cull submit. Order is load-bearing (RAW chain). */
+  voxFanoutBatch(): readonly unknown[];
   /** voxel-foliage (spec §4.6): post-traverse fan-out — qRaster → qVoxRaster by
    *  matClass. Call AFTER runPhase1. Publishes voxRasterDispatchAttr for Stage-2. */
   runVoxFanout(renderer: Renderer): void;
@@ -990,9 +999,10 @@ export function buildNaniteCull(
     //   - the single shared traverseDispatch is rewritten each kArgs: the strict
     //     interleave makes kArgsBA's write WAR-ordered after kTraverseAB's indirect read.
     //   - kRasterArgs LAST reads counters[1] (the BFS emit cursor, RAW) → qRaster[0] +
-    //     rasterDispatch. (kRasterArgs2/syncFullArgs stays its own call: it RAW-depends
-    //     on qRaster[0] written here and is invoked separately by the frame after the
-    //     voxel fan-out — kept out of this batch on purpose.)
+    //     rasterDispatch. (kRasterArgs2/syncFullArgs RAW-depends on qRaster[0] written
+    //     here; the frame invokes it right after this batch — separately on the legacy
+    //     path, or folded in via fullArgsBatch() under ?coalesce=1. Either way it runs
+    //     strictly after kRasterArgs, so the RAW holds.)
     // The traverse kernels were setIndirectDispatch-tagged above so they keep their
     // tight indirect size in this batched (single dispatchSize=null) path.
     const bfsBatch: unknown[] = [kClearHier, kSeedRoots];
@@ -1024,6 +1034,10 @@ export function buildNaniteCull(
   setIndirectDispatch(kVoxRange, voxFanoutDispatchAttr);
   setIndirectDispatch(kVoxCount, voxFanoutDispatchAttr);
   setIndirectDispatch(kVoxScatterFan, voxFanoutDispatchAttr);
+  // SUBMIT-COALESCE (?coalesce=1): tag the non-F2B fan-out too so voxFanoutBatch() keeps
+  // its tight indirect grid inside the frame's single folded submit. Harmless to the
+  // legacy explicit dispatchIndirect path (the outer arg short-circuits the node tag).
+  setIndirectDispatch(kVoxFanout, voxFanoutDispatchAttr);
   // The whole F2B fan-out in ONE submit. Order is load-bearing (RAW chain): args →
   // range(min/max) → count(reads range) → prefix(reads counts, writes bases/ranges/
   // qVoxRaster[0]/cursor + per-bucket dispatch args) → scatter(reads bases/ranges).
@@ -1105,6 +1119,9 @@ export function buildNaniteCull(
     runPhase1,
     phase1Batch: () => phase1BatchList,
     syncFullArgs,
+    fullArgsBatch: () => [kRasterArgs2],
+    voxFanoutBatch: () =>
+      voxf2b ? voxF2bBatch : [kVoxFanoutArgs, kVoxFanout, kVoxRasterArgs],
     runVoxFanout,
     readVoxCount,
     readCounts,

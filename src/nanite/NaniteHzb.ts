@@ -43,6 +43,11 @@ interface ComputeKernel {
 export interface NaniteHzb {
   /** run the reduction chain (call AFTER the raster wrote visDepth) */
   build(renderer: Renderer): void;
+  /** SUBMIT-COALESCE (?coalesce=1): the exact ordered kernel list build() submits,
+   *  so the frame can fold the whole chain as a TAIL into the voxel raster's submit
+   *  (level k reads k−1 through the shared rw view; in-pass UAV auto-sync preserves
+   *  the same happens-before as build()'s own single batch). */
+  batch(): readonly unknown[];
   /**
    * conservative occlusion test vs the pyramid contents at dispatch time.
    * Phase 1 passes the PREV frame's (vp, camPos) — the pyramid then holds
@@ -290,5 +295,5 @@ export function buildNaniteHzb(
     return scene;
   };
 
-  return { build, sphereOccluded, makeOrthoOccluded, makeViewer, levelCount };
+  return { build, batch: () => kernels, sphereOccluded, makeOrthoOccluded, makeViewer, levelCount };
 }

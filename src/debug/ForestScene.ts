@@ -48,7 +48,7 @@ import { Heightfield } from '../world/Heightfield';
 import { SunSky } from '../sky/SunSky';
 import { PostStack } from '../render/PostStack';
 import { updateSunUniforms } from '../render/VegMaterials';
-import { setWindContext } from '../render/Wind';
+import { setWindContext, windU } from '../render/Wind';
 
 /** per-species leaf tint → matParam (linear RGB low 3 bytes + hueVar high byte) */
 function packLeafTint(c: { r: number; g: number; b: number; hueVar: number }): number {
@@ -449,8 +449,18 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
     await sunSky.init(engine.renderer);
     updateSunUniforms(sunSky.sun);
     // trunk/leaf sway reads a module-global wind context (set by the world scene) — the
-    // raster + resolve both sample it, so it must exist before buildNaniteFrame.
+    // raster + resolve both sample it, so it must exist before buildNaniteFrame (the
+    // vegetation materials THROW without it — the context cannot be skipped).
     if (hf.noiseA) setWindContext({ noiseA: hf.noiseA, canopyTex: null });
+    // ?wind=N strength override (same knob as TerrainScene). ?wind=0 = still air —
+    // every sway term scales by strength, so 0 is exactly static. MEASUREMENT USE:
+    // sway rides three's wall-clock `time` node, so two probe runs are never at the
+    // same gust phase; screenshot-equivalence gates (spec-orchestration-submit-folds
+    // §4) need a still scene to compare builds. Default unchanged.
+    {
+      const ws = Number(q.get('wind') ?? NaN);
+      if (Number.isFinite(ws)) windU.strength.value = ws;
+    }
     const post = new PostStack(engine, sunSky.atmosphere, bootTod);
     const { buildNaniteFrame } = await import('../nanite/NaniteFrame');
     const frame = buildNaniteFrame(engine, reg, hf, post, {

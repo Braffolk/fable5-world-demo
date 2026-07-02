@@ -141,8 +141,10 @@ export interface NaniteRasterHandles {
   hwDepth(renderer: Renderer, camera: PerspectiveCamera): void;
   /** NaniteView debug single-pass packed Z+id (idLo/idHi split) — SW + HW in one go */
   combined(renderer: Renderer, camera: PerspectiveCamera): void;
-  /** PERF-VB4 WORLD single pass: 24-bit Z election + full-id side buffer (visBV). */
-  world1(renderer: Renderer, camera: PerspectiveCamera): void;
+  /** PERF-VB4 WORLD single pass: 24-bit Z election + full-id side buffer (visBV).
+   *  hzbTail (SUBMIT-COALESCE ?coalesce=1): the HZB kernel chain to fold into the
+   *  voxel raster's submit (or its own single submit when no voxRaster). */
+  world1(renderer: Renderer, camera: PerspectiveCamera, hzbTail?: readonly unknown[]): void;
   readHwCount(renderer: Renderer): Promise<number>;
   /** count covered/orphan pixels (NaniteView ?audit=1) */
   audit(renderer: Renderer): void;
@@ -386,9 +388,22 @@ export function buildNaniteRaster(
     (b as unknown as { select(a: NU, c: NU): NU }).select(uint(1), uint(0));
 
   // ---- kVisClear ------------------------------------------------------------------
+  // W1 (?dvclear=0, spec-orchestration-submit-folds §Stage-2): in the world single-pass
+  // path NOTHING reads or writes visDepthV (exhaustive consumer table in the spec — the
+  // election lives in visPayloadV; HZB/resolve/shadowHalf read payload, never depthV), so
+  // its 3.3M-pixel 0xffffffff clear is pure store traffic. Build-time gated + auto-kept
+  // under every debug flag that DOES read it (nanprobe/audit/rdbg). Shadow/View raster
+  // instances have singlePass=false ⇒ never gated. DEFAULT OFF (clear kept).
+  const dvParams = new URLSearchParams(window.location.search);
+  const skipDepthClear =
+    singlePass &&
+    dvParams.get('dvclear') === '0' &&
+    dvParams.get('nanprobe') !== '1' && // probe reads vis.depthV.ro
+    dvParams.get('audit') !== '1' && // kAudit reads visDepthV.ro
+    rdbg === 0; // rdbg sinks atomicMin depthV
   const kVisClear = Fn(() => {
     If(instanceIndex.lessThan(uint(pixelCount)), () => {
-      atomicStore(visDepthV.atomic.element(instanceIndex), uint(0xffffffff));
+      if (!skipDepthClear) atomicStore(visDepthV.atomic.element(instanceIndex), uint(0xffffffff));
       // packed/single-pass: payload(+visB) are atomicMax/side targets ⇒ clear to 0 (the
       // smallest, "no fragment"). legacy: payload keeps the 0xffffffff orphan sentinel.
       atomicStore(visPayloadV.atomic.element(instanceIndex), uint(packedClear ? 0 : 0xffffffff));
@@ -1415,12 +1430,20 @@ export function buildNaniteRaster(
   // hwRender STAYS its own renderer.render submit (a render pass + a compute pass cannot
   // share one command encoder). Because world1 now OWNS the clear, the frame must NOT call
   // clearVis() separately for the world path (it does not — NaniteFrame updated).
-  const world1 = (renderer: Renderer, camera: PerspectiveCamera): void => {
+  const world1 = (
+    renderer: Renderer,
+    camera: PerspectiveCamera,
+    hzbTail: readonly unknown[] = [],
+  ): void => {
     dispatchBatchMixed(renderer, [kVisClear, kRasterWorld1, kHwArgs]);
     hwRender(renderer, camera, hwWorld1Mat);
     // scatter voxel-brick raster (§6.6 insertion point: right after hwRender so the
     // SW+HW near-field triangle election is already in global visPayloadV to pre-seed).
-    if (voxRaster) voxRaster.dispatchVoxel(renderer);
+    // SUBMIT-COALESCE §1c: the HZB chain rides as the TAIL of the voxel submit (it must
+    // run strictly after kVoxScatter — in-pass UAV sync gives that). noleaves/no-vox:
+    // dispatch the tail as its own single submit, same 1 submit as legacy hzb.build().
+    if (voxRaster) voxRaster.dispatchVoxel(renderer, hzbTail);
+    else if (hzbTail.length > 0) dispatchBatchMixed(renderer, hzbTail);
   };
 
   const readHwCount = async (renderer: Renderer): Promise<number> => {

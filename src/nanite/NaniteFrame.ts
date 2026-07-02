@@ -258,6 +258,12 @@ export function buildNaniteFrame(
   // overlap is a measured A/B (its win only fires when the camera moves enough to re-raster a
   // shadow level). Requires the clip shadow's cullPrepass (cascade path has no shared cut).
   const cullOverlap = params.get('culloverlap') === '1' && typeof shadow?.cullPrepass === 'function';
+  // SUBMIT-COALESCE (?coalesce=1, spec-orchestration-submit-folds §1): fold the frame's
+  // 7 foldable submits into 2 — cull side (BFS + kRasterArgs2 + voxel fan-out [+ shadow
+  // cut]) becomes ONE dispatchBatchMixed, and the raster side folds the HZB chain into
+  // dispatchVoxel's submit (voxPyr + scatter + HZB, §1b/§1c). Same kernels, same order,
+  // same indirect grids ⇒ bit-identical; only submit granularity changes. DEFAULT OFF.
+  const coalesce = params.get('coalesce') === '1';
 
   // S0 (D-N29): half-res PCSS eval + depth-aware bilateral upsample — quarters the
   // per-pixel shadow SAMPLE cost (paid every frame, static or moving). Built from
@@ -449,36 +455,64 @@ export function buildNaniteFrame(
       // overlap the two on re-raster frames. The shadow's later run() consumes the prepass
       // mask and SKIPS its own cut dispatch. Camera-cull half is dispatched FIRST in the
       // combined list (its order is internally self-consistent); the shadow half follows.
-      let cameraCullDispatched = false;
-      if (cullOverlap && shadow?.cullPrepass) {
-        const shadowCutBatch = shadow.cullPrepass(renderer, engine.camera);
-        if (shadowCutBatch && shadowCutBatch.length > 0) {
-          dispatchBatchMixed(renderer, [...cull.phase1Batch(), ...shadowCutBatch]);
-          cameraCullDispatched = true;
+      if (coalesce) {
+        // SUBMIT-COALESCE §1a: BFS + kRasterArgs2 + voxel fan-out [+ shadow cut] in ONE
+        // submit. RAW audit (spec): kRasterArgs2 reads qRaster[0] written by kRasterArgs
+        // one dispatch earlier; the fan-out chain reads counters[1]/qRaster and writes
+        // its own args/queues; the shadow cut writes DISJOINT buffers (own counters/
+        // queues), so appending it last is equivalent to today's order. culloverlap is
+        // default-off + forest-dormant (csm=null); null cut ⇒ empty tail (shadow run()
+        // sees prepassMask===0, same fall-through semantics as the legacy leg).
+        const shadowCut =
+          cullOverlap && shadow?.cullPrepass
+            ? (shadow.cullPrepass(renderer, engine.camera) ?? [])
+            : [];
+        dispatchBatchMixed(renderer, [
+          ...cull.phase1Batch(), // [kClearHier, kSeedRoots, (args,traverse)×D, kRasterArgs]
+          ...cull.fullArgsBatch(), // [kRasterArgs2]
+          ...(voxActive ? cull.voxFanoutBatch() : []),
+          ...shadowCut,
+        ]);
+      } else {
+        let cameraCullDispatched = false;
+        if (cullOverlap && shadow?.cullPrepass) {
+          const shadowCutBatch = shadow.cullPrepass(renderer, engine.camera);
+          if (shadowCutBatch && shadowCutBatch.length > 0) {
+            dispatchBatchMixed(renderer, [...cull.phase1Batch(), ...shadowCutBatch]);
+            cameraCullDispatched = true;
+          }
+          // shadowCutBatch null ⇒ no level re-rasters this frame; fall through to the plain
+          // camera cull (the shadow run() will see prepassMask===0 and raster nothing).
         }
-        // shadowCutBatch null ⇒ no level re-rasters this frame; fall through to the plain
-        // camera cull (the shadow run() will see prepassMask===0 and raster nothing).
+        if (!cameraCullDispatched) cull.runPhase1(renderer); // hier BFS → qRaster (+ kRasterArgs)
+        cull.syncFullArgs(renderer); // full-range args for the payload pass
+        // voxel-foliage (spec §4.6 / §A1): fan the emitted voxel(7) clusters out of
+        // qRaster into qVoxRaster + publish the voxel-raster dispatch args. No-op-cheap
+        // (one re-scan) when no voxel heads were registered; gated to ?voxreg/?forcevox
+        // so a pure-triangle world pays nothing. The Stage-2 voxel raster consumes it.
+        if (voxActive) cull.runVoxFanout(renderer);
       }
-      if (!cameraCullDispatched) cull.runPhase1(renderer); // hier BFS → qRaster (+ kRasterArgs)
-      cull.syncFullArgs(renderer); // full-range args for the payload pass
-      // voxel-foliage (spec §4.6 / §A1): fan the emitted voxel(7) clusters out of
-      // qRaster into qVoxRaster + publish the voxel-raster dispatch args. No-op-cheap
-      // (one re-scan) when no voxel heads were registered; gated to ?voxreg/?forcevox
-      // so a pure-triangle world pays nothing. The Stage-2 voxel raster consumes it.
-      if (voxActive) cull.runVoxFanout(renderer);
     }
     // PERF-VB4 (D-N45): single SW + single HW pass — 24-bit depth election (visPayloadV)
     // + full-id side buffer (visBV). Replaced the old depth1 → hwDepth → payload 2-pass.
     // SUBMIT-COALESCE (item 3): world1() now OWNS the vis CLEAR (kVisClear is the first
     // dispatch in its batched submit), so the prior standalone raster.clearVis() call is
     // gone — folding the clear into the world1 submit removes one full queue.submit drain.
-    raster.world1(renderer, engine.camera);
+    // SUBMIT-COALESCE §1c: fold the HZB chain into the raster side's last compute submit
+    // (dispatchVoxel's pyr+scatter batch — HZB still runs strictly AFTER kVoxScatter,
+    // UAV-synced in-pass, so it pools the identical post-vox election). Excluded when
+    // frozen (HZB must NOT rebuild — legacy line below) and under ?nanprobe=1 (keeps the
+    // probe insertion points' semantics exact). Folded order runs HZB before raster.scar;
+    // audited disjoint (scar reads visPayload/visB + writes scar counters; HZB reads
+    // visPayload + writes hzbF — zero shared writes ⇒ swap cannot change any value).
+    const foldHzb = coalesce && !frozen && !probeOn;
+    raster.world1(renderer, engine.camera, foldHzb ? hzb.batch() : []);
     // 0a SCAR (?scar=1): the per-pixel covered-pixel denominator post-pass over the
     // FINAL world1 winners. No-op unless ?scar=1. The per-fragment band/total counters
     // are already accumulated inside world1 itself.
     raster.scar(renderer);
     if (probeRun && params.get('nanprobeat') === 'payload') probeRun(renderer);
-    if (!frozen) hzb.build(renderer); // this frame's depth → next frame's occluder
+    if (!frozen && !foldHzb) hzb.build(renderer); // this frame's depth → next frame's occluder
     if (probeRun && params.get('nanprobeat') === 'hzb') probeRun(renderer);
     // Nanite shadows (R0+R1): per-cascade light-frustum cull → depth-only SW
     // raster into our own r32 cascade textures (R1 skips a cascade when its VP is
