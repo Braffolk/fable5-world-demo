@@ -581,6 +581,35 @@ With this, the master plan's self-serve IDENTICAL ledger is EXHAUSTED at full cl
 every remaining engine lever is user-gated (IMPROVING/RISK sign-offs) or the boot-cache
 (0 frame-ms, boot 73s→~18s, next up).
 
+## 5p. BOOT CACHE SHIPPED (commit e69978a): forest warm boot 72s → 16s, pixel-identical (2026-07-02)
+
+Boot stage map (200k, [forest][boot] lines, now permanent): veg lib 5.4s (GPU bakes,
+uncacheable) / crown voxelization 34.4s / DAG builds ~16s / fartiles splat 10.5s /
+vox append + heightfield ~3.7s / rest ≪1s.
+
+SHIPPED src/nanite/BootCache.ts + ForestScene integration — IndexedDB DDC for the three
+deterministic whales. Warm: crowns HIT 20ms (stage 34.4s→3.7s, residual = unpack + regist-
+ration), dags HIT 0.9s (stage →1.5s), fartiles HIT 0.3s read + 0.7s emit. **Cold 71.8s →
+warm 15.8-16.1s (4.5×), reproduced.** Key = FNV-1a(builder sources via vite ?raw — ANY
+builder edit auto-invalidates, so stale caches cannot poison perf A/Bs) + all build params
+(seed/counts/LOD knobs/anchorH/fov) + CACHE_REV(transitive deps). Packing: occupied-only
+f64/u32 lanes (bit-exact reconstruction); appends verified occupied-only read-only.
+IDENTITY GATE PASS: cold-vs-warm TAA-on still diffs (eye 0.18%/obl 0.09%) EQUAL the
+warm-vs-warm ctl floor (0.18/0.09) at both poses on a persistent profile.
+
+Hazards/notes (surfaced):
+- Ephemeral (incognito/playwright-default) contexts FAIL large IDB value reads
+  ("Failed to read large IndexedDB value") — the probe harness boots ephemeral contexts,
+  so PROBES STAY COLD (~72s; consistent measurement, unchanged). Opting probes into a
+  persistent profile (launchPersistentContext) would triple probe throughput but changes
+  isolation properties — user call, not done.
+- Chrome's structured-clone serializer OOMs on one multi-hundred-MB value → dags are
+  chunked per-dag (putMany/getMany; count record written LAST so partial writes = clean miss).
+- No eviction: each param-set key holds ~300-500MB; stale keys accumulate until
+  ?cacheclear=1. LRU eviction = trivial follow-up if quota ever bites.
+- First gate run used ablate=taa stills for cross-boot identity — WRONG recipe (~5-6%
+  ambient floor, §5m); cross-boot identity gates must use TAA-ON stills (D0 family floor).
+
 §5m addendum — flip-verify + live attempt (same day, later session):
 - Flip-verify iso at plain defaults (merged active): eye 13.1 / obl 16.7 / aerial 9.4 —
   matches the §5l full-clock canonical. Same-session iso pair on-vs-off (adverse slot
