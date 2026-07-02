@@ -265,8 +265,10 @@ export function buildNaniteFrame(
   // 7 foldable submits into 2 — cull side (BFS + kRasterArgs2 + voxel fan-out [+ shadow
   // cut]) becomes ONE dispatchBatchMixed, and the raster side folds the HZB chain into
   // dispatchVoxel's submit (voxPyr + scatter + HZB, §1b/§1c). Same kernels, same order,
-  // same indirect grids ⇒ bit-identical; only submit granularity changes. DEFAULT OFF.
-  const coalesce = params.get('coalesce') === '1';
+  // same indirect grids ⇒ bit-identical; only submit granularity changes.
+  // DEFAULT ON (gated 2026-07-02: shot-diff at D0 band all poses, live p50 16.6/p95 17.3
+  // 0×>33ms, gpu medians sub-noise — fresh-w0-*/fold-*-live2 JSONs). ?coalesce=0 = legacy.
+  const coalesce = params.get('coalesce') !== '0';
 
   // S0 (D-N29): half-res PCSS eval + depth-aware bilateral upsample — quarters the
   // per-pixel shadow SAMPLE cost (paid every frame, static or moving). Built from

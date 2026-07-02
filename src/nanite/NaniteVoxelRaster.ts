@@ -246,8 +246,8 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // SUBMIT-COALESCE (?coalesce=1, spec-orchestration-submit-folds §1b): fold voxOccPyr +
   // (kClearBins) + kVoxScatter + the frame's HZB tail into ONE submit. Same kernels, same
   // order, in-pass UAV auto-sync ⇒ bit-identical; F2B/voxwaves (default-off A/B controls)
-  // keep their exact legacy shape. DEFAULT OFF; flip after the spec §4 gate.
-  const coalesce = new URLSearchParams(window.location.search).get('coalesce') === '1';
+  // keep their exact legacy shape. DEFAULT ON (gate passed 2026-07-02); ?coalesce=0 = legacy.
+  const coalesce = new URLSearchParams(window.location.search).get('coalesce') !== '0';
   // ?voxrdbg=2 — MEASUREMENT ablation (default 0/OFF), mirror of world1's ?rdbg=2: BUILD-TIME
   // STOP point right before the Phase-B per-footprint-pixel election loop. Phase A still runs
   // (decode + project + clamp + occ-mask build per brick), but NO pixel is ever elected into

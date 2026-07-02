@@ -393,11 +393,12 @@ export function buildNaniteRaster(
   // election lives in visPayloadV; HZB/resolve/shadowHalf read payload, never depthV), so
   // its 3.3M-pixel 0xffffffff clear is pure store traffic. Build-time gated + auto-kept
   // under every debug flag that DOES read it (nanprobe/audit/rdbg). Shadow/View raster
-  // instances have singlePass=false ⇒ never gated. DEFAULT OFF (clear kept).
+  // instances have singlePass=false ⇒ never gated. DEFAULT ON — clear SKIPPED (gate
+  // passed 2026-07-02: shot-diff at D0 band, medians sub-noise). ?dvclear=1 = keep clear.
   const dvParams = new URLSearchParams(window.location.search);
   const skipDepthClear =
     singlePass &&
-    dvParams.get('dvclear') === '0' &&
+    dvParams.get('dvclear') !== '1' &&
     dvParams.get('nanprobe') !== '1' && // probe reads vis.depthV.ro
     dvParams.get('audit') !== '1' && // kAudit reads visDepthV.ro
     rdbg === 0; // rdbg sinks atomicMin depthV
