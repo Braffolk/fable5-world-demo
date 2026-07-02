@@ -309,3 +309,25 @@ burst). Reversed-order re-measure in flight (coal FIRST). w0-pyr isolated obliqu
   Metal 10-buffer cliff risk, silent-death check mandatory), RP-3c bloom bright-fold
   (S), RP-5 early-discard reorder (S, compiler may already sink), RP-7 bead polish
   (user sign-off), RP-2 half-res contact (Class RISK — needs user sign-off, skip).
+
+## 5i. RP-1 verdict + CLEAN-STATE CHECKPOINT 2 (18:0x, HEAD bb35028)
+
+- **SHIPPED DEFAULT-ON: RP-1 tri-class specialization** (bb35028) — forest resolve
+  strips terrain/rock/deadwood subgraphs (registry-presence-keyed; ?resclasses=0
+  legacy). Shots at D0 band; perf neutral-in-noise on the clean reversed pair.
+- ⚠️ APPARATUS: the session burst class inflated a whole isolated PHASE-B pose block
+  (rp1-on oblique med 45.8 → 31.7 on re-measure, first-run position) — it is NOT
+  confined to live capture. ANY implausible single-run pose delta ⇒ order-reversed
+  re-measure before verdict. All four second-run anomalies today (fold-coal-live burst,
+  ctl-live2 burst, w0-pyr +3.8, rp1-on +13.6) followed RUN POSITION, never the build.
+- SESSION WINS BANKED TODAY (all default-on, all pixel-equivalent at the wind=0 D0
+  shot band): submit folds coalesce+dvclear (532aaa4/5a7d0c0), RP-3 TRAA ping-pong
+  fork + rg16f AO (860da13), RP-1 class strip (bb35028); harness fixed (capRejects
+  0/32, per-frame counters, meter quiet); ?wind=N + ?pyrfuse + ?traapp + ?aorg +
+  ?resclasses knobs. Perf: all individually neutral-in-noise floor-sweeps (the doc-10
+  bounds said ≤~1ms each); oblique gap unchanged ~31-32 warm — the remaining big rock
+  is pool A prev-frame occlusion (spec ready, engagement counters now wired via 4b).
+- NEXT per 00-MASTER-PLAN: pool A prev-frame occlusion build
+  (specs/spec-prev-frame-occlusion.md, −3..8 oblique) — the only remaining lever with
+  headline-size booking; then Q3 r-pin + Q5-Q7 bimodality; pool D leftovers (RP-4
+  respass, RP-3c bloom fold, RP-7 bead polish [user sign-off]) are small.
