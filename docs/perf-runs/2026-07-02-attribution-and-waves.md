@@ -445,3 +445,46 @@ NEXT: Q3 live r-pin now largely mooted by direct live captures (p95 16.9 @ defau
 remaining: eye p95≫med spikes (task #14), Q5/Q6 bimodality, pool D leftovers (RP-4
 respass, RP-3c bloom fold, RP-5 early-discard; RP-7/RP-2 need user sign-off),
 aerial 17.5-18 vs 16.7 gap, iso-oblique stress pose ~25 vs 16.7 (non-live).
+
+## 5l. THE ISO GAP WAS DVFS — task #14 + Q5/Q6-iso SOLVED; full-clock canonical (2026-07-02)
+
+Premise-audit result of the "eye ~22.7 widest gap" step: the metric itself was the flaw.
+measureFrames sleeps cooldownMs (default 50) before EVERY isolated sample → the M1 Max GPU
+downclocks during the idle → most samples measure the DOWNCLOCKED cost. The 32-frame series
+were bimodal all along (plateau + ~15-30% fast frames 6-12ms below med, universal across
+poses/configs; heavy configs show NO low mode because long frames ramp the clock mid-frame).
+
+DISCRIMINATORS (all 200k @2268×1473, wind=0, TICKS=0 still recipe, serial):
+1. per-frame counters (probe now emits frameCounters, measure-infra 4b): fast-vs-slow frames
+   have IDENTICAL workload — visTris equal to 0.01%, visClusters/voxB0/voxB1 flat, aerial
+   literally bit-identical (45,779 visTris both modes) ⇒ NOT workload.
+2. ?ablate=taa (traaNode null ⇒ nanite mirror unjittered ⇒ bit-identical frames): bimodality
+   PERSISTS (6-7 fast/32) ⇒ NOT jitter-linked. (?nanshadow=0 arm = ctl replicate: forest has
+   csm:null, ForestScene.ts:469 — the nanite shadow system never builds in forest at all.)
+3. CAUSAL: MF_COOLDOWN sweep (probe env → measureFrames cooldownMs), same session, cd5 ran
+   COOLER-SLOT-ADVERSE (7th, warmer) yet:
+     cd5:   eye 14.1 (p95 15.4) / obl 16.5 (p95 17.6) / aerial 9.2 (p95 10.6) — TIGHT, unimodal
+     cd50:  eye 16.2-21.3 / obl 19.5-20.3 (today's ctl band)
+     cd250: eye 22.6 (p95 26.2) / obl 23.9 (p95 29.1) / aerial 17.2 — the "canonical" wide mess
+   cd5's frame 0 (no pre-sleep but post-settle) = 31.0ms — the cold-ramp penalty visible raw.
+
+VERDICTS:
+- task #14 (eye p95≫med spikes) SOLVED: DVFS downclock mode. No renderer fix exists or is needed.
+- Q5/Q6 bimodality (iso side) SOLVED: machine state. (Live-side noleaves alternation plausibly
+  same cause — light frames idle at vsync → clocks sag; not separately proven.)
+- **FULL-CLOCK CANONICAL (MF_COOLDOWN=5): eye 14.1 / oblique 16.5 / aerial 9.2 — the workload
+  is AT/UNDER the 16.7 budget at ALL THREE canonical stress poses.** The weeks-old "iso gap"
+  (obl ~25 vs 16.7) was ~7-9ms of clock artifact.
+- cd50 iso numbers remain comparable ONLY within-session (session-to-session ctl swings up to
+  ~5-10ms observed: yesterday obl ctl 30.6 vs today 19.5-20.3). All shipped A/B verdicts were
+  same-session interleaved-control — they stand.
+- NEW RECIPE: iso workload truth = MF_COOLDOWN=5 (tight ±1ms); cd50 still fine for same-session
+  A/B deltas. Mission metric stays live p95 (16.9 vs 16.7 — and that residual is partly clock
+  too; ZERO >33 stutters stands).
+- Aerial voxprevlvl "+0.6 tax" and similar sub-ms cd50 residuals are inside the DVFS noise
+  floor — re-verify at cd5 only if a decision hangs on them.
+
+CONSEQUENCE for the 6-step list: steps 1 (eye gap), 2 (aerial residual), 3 (bimodality) and
+the step-6 iso-oblique stress gap COLLAPSE under this finding. Remaining real work: pool D
+leftovers (RP-4 respass / RP-3c bloom / RP-5 early-discard), RP-7/RP-2 user sign-offs, then
+the user's BEAUTIFICATION arc (user-provided list; do not start early).

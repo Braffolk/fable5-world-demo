@@ -24,6 +24,10 @@ const OUT_DIR =
 const TICKS = Number(process.env.TICKS ?? '2200');
 const FRAMES = Number(process.env.FRAMES ?? '32');
 const WARMUP = Number(process.env.WARMUP ?? '20');
+// per-sample idle cooldown (ms) inside measureFrames — MF_COOLDOWN sweeps the
+// DVFS suspicion: 50ms idle may downclock the GPU before each isolated sample
+// (harness default 50 when unset).
+const MF_COOLDOWN = process.env.MF_COOLDOWN ? Number(process.env.MF_COOLDOWN) : undefined;
 // thermal guidance (user): iterate at reduced tree count; 200k only for the
 // one-time ground-truth characterization run.
 const TREES = process.env.TREES ?? '200000';
@@ -191,14 +195,24 @@ async function main(): Promise<void> {
   console.log('[probe] phase B: isolated measureFrames at canonical poses…');
   const posesOut: Record<
     string,
-    { gpu: number[]; cpuSubmit: number[]; capRejects: number; counters: Record<string, number> }
+    {
+      gpu: number[];
+      cpuSubmit: number[];
+      capRejects: number;
+      counters: Record<string, number>;
+      frameCounters: Record<string, number>[];
+    }
   > = {};
   for (const pose of POSES) {
     const frames = (await page.evaluate(
-      async ({ pose, FRAMES, WARMUP }) => {
+      async ({ pose, FRAMES, WARMUP, MF_COOLDOWN }) => {
         window.__laas.setPose!({ p: pose.p, yaw: pose.yaw, pitch: pose.pitch });
         if (window.__laas.settle) await window.__laas.settle(20);
-        const fs = await window.__laas.measureFrames!({ frames: FRAMES, warmup: WARMUP });
+        const fs = await window.__laas.measureFrames!({
+          frames: FRAMES,
+          warmup: WARMUP,
+          ...(MF_COOLDOWN !== undefined ? { cooldownMs: MF_COOLDOWN } : {}),
+        });
         return fs.map((f) => ({
           gpu: f.gpuWallMs,
           cpu: f.cpuSubmitMs,
@@ -206,7 +220,7 @@ async function main(): Promise<void> {
           c: f.counters,
         }));
       },
-      { pose, FRAMES, WARMUP },
+      { pose, FRAMES, WARMUP, MF_COOLDOWN },
     )) as { gpu: number; cpu: number; cap: number; c: Record<string, number> }[];
     const good = frames.filter((f) => f.cap === 0);
     const use = good.length >= frames.length / 2 ? good : frames;
@@ -222,6 +236,10 @@ async function main(): Promise<void> {
       cpuSubmit: use.map((f) => f.cpu),
       capRejects: frames.length - good.length,
       counters: frames[frames.length - 1]!.c,
+      // per-frame counter series (measure-infra 4b) — the bimodality discriminator:
+      // fast-vs-slow frames with EQUAL visTris/visClusters ⇒ machine state (DVFS),
+      // unequal ⇒ jitter-phase-dependent workload (cull/voxprev routing).
+      frameCounters: use.map((f) => f.c),
     };
     console.log(
       `  [${pose.name}] gpuWall med=${pct(posesOut[pose.name]!.gpu, 0.5).toFixed(2)} ` +
