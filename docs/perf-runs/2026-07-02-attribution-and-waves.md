@@ -488,3 +488,58 @@ CONSEQUENCE for the 6-step list: steps 1 (eye gap), 2 (aerial residual), 3 (bimo
 the step-6 iso-oblique stress gap COLLAPSE under this finding. Remaining real work: pool D
 leftovers (RP-4 respass / RP-3c bloom / RP-5 early-discard), RP-7/RP-2 user sign-offs, then
 the user's BEAUTIFICATION arc (user-provided list; do not start early).
+
+## 5m. Pool D closeout: RP-4 single-pass resolve SHIPPED default-on, RP-5 shipped, RP-3c skipped (2026-07-02)
+
+RP-5 (early-discard reorder, canon L5): the tri/vox partition Discard now runs BEFORE the
+per-pixel wp reconstruction in NaniteResolve's fragment (pure reorder of side-effect-free
+statements — identical by construction; expected 0-0.1ms, unmeasurable, possibly
+compiler-subsumed). Default on, no flag.
+
+RP-4 (single-pass resolve, canon L2): NEW 'both' material mode merges tri+vox into ONE
+fullscreen draw — no partition Discard; per-pixel isV branch picks the qRaster/qVoxRaster
+decode; binds the full 10-buffer union (forest exact: payloadV visBV qRasterRO qVoxRasterRO
+clusters meshes verts indices instances voxelBricks). Removes W5 (second pass's full-screen
+payloadV+visBV loads + discard + ROP).
+- **DEFAULT ON in exactly the proven config shape: qVox && !gi && csm===null (= forest).**
+  ?respass=0 two-pass revert; ?respass=1 forces merge in any gi-free config. Configs with a
+  probe-GI buffer are REFUSED (11th binding = silent pipeline death, the ?vcompact lesson).
+- PERF (200k wind=0 TICKS=0 cd5, serial ctl→on→ctl2, STRONG thermal ramp ctl1 eye 12.7 →
+  ctl2 21.1): respass mid-slot eye 15.7 / obl 17.9 / aerial 9.6 — inside brackets, ~0.3-1.2
+  UNDER linear-interp control at every pose. Direction consistent with the ~0.3ms W5
+  estimate; magnitude unresolvable vs ramp. KEY NEGATIVE CLEARED: no occupancy cliff (the
+  vox-pass 37.5ms precedent) — eye is the sensitive pose and it's fine.
+- IDENTITY (quality law): TAA-on still pairs in the D0 family band (test 0.70/0.20/0.39 &
+  0.64/0.21/0.38 vs same-day floor 0.40/0.12/0.32, family 0.40-0.62); DECISIVE gate =
+  ablate=taa+wind=0 stills: cross-boot ambient floor is HUGE without TAA (~4.6-6.1% — raw
+  per-frame jitter phase TAA normally integrates; ablate=taa is NOT cross-boot-deterministic,
+  §5l's "bit-identical" was within-session), yet phase-aligned pairs witness the merge at
+  eye 0.28 / obl 0.13 / aerial 0.45 — 10-40× BELOW that floor. A real shading change could
+  not diff cleaner than ctl-vs-ctl. Pixel-identity confirmed at all three poses.
+- Flip-verify + live sanity at plain defaults: see numbers below (§5m addendum).
+
+RP-3c (bloom bright-fold, canon 08-L2c): SKIPPED, surfaced. Read BloomNode.js: fold is
+texel-exact (bright RT and mip0 blur RTs are same half-res size; blur taps land on integer
+texel offsets) but NOT bit-equal — it bypasses the fp16 quantization of the intermediate
+bright RT. Buys ~0.1ms (one half-res raster) for a ~600-line BloomNode fork + a subtle
+identity argument under the ABSOLUTE quality law. At full clock (workload at/under budget,
+§5l) this is below the measurement floor. Shelved, not killed — resurface if bloom cost
+regrows or a three upgrade forks BloomNode anyway.
+
+Pool D is now CLOSED: RP-1 (shipped), RP-3/rg16f (shipped), RP-4 (shipped §5m), RP-5
+(shipped §5m), RP-3c (shelved ~0.1ms), RP-8 (shelved ~0.05ms). Remaining engine-side items
+ALL need user sign-off (RP-7 bead polish = IMPROVING-class, RP-2 half-res contact = RISK
+class) or the user's beautification list.
+
+§5m addendum — flip-verify + live attempt (same day, later session):
+- Flip-verify iso at plain defaults (merged active): eye 13.1 / obl 16.7 / aerial 9.4 —
+  matches the §5l full-clock canonical. Same-session iso pair on-vs-off (adverse slot
+  order, ramp eye 14.6→17.8 across 3 slots): on 14.6/17.1/9.5 vs off 15.3/18.0/9.1 —
+  merged ≤ two-pass at eye/oblique, aerial in-noise. No regression anywhere.
+- LIVE today is UNBOOKABLE: the whole session carried artifacts — 5.5GB-heap signature on
+  three captures (p50 quantum-flipped to ~16, p95 17.2-17.3, both configs equally), and the
+  one clean-heap capture (3.53GB) took a 753ms SYSTEM stall (i=462, cpuSubmit 5.6, visTris
+  normal, zero longtasks — not workload) + end-of-ramp heat (p95 25.8). Config-attributable
+  live delta: none resolvable; both merged arms bracket the two-pass arm. The §5k live
+  canonical (p50 9.2 / p95 16.9 / zero >33, heap 3.53GB clean) REMAINS the reference —
+  re-pin live on a rested session.

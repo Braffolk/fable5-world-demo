@@ -335,7 +335,7 @@ export function buildNaniteResolve(
   //     stays at 7 (payloadV/visBV/clusters/meshes/instances + voxelBricks/qVoxRasterRO).
   // Both passes are provably ≤10 fragment storage buffers. The 'vox' pass is built only when
   // the voxel queue is present (cull.qVoxRasterRO) — a pure-triangle world has ONE pass.
-  const buildMat = (pass: 'tri' | 'vox'): NodeMaterial => {
+  const buildMat = (pass: 'tri' | 'vox' | 'both'): NodeMaterial => {
   const mat = new NodeMaterial();
   mat.vertexNode = vec4(positionGeometry.xy, 0, 1) as unknown as typeof mat.vertexNode;
 
@@ -379,6 +379,33 @@ export function buildNaniteResolve(
     If(elect.equal(uint(0)), () => {
       Discard();
     });
+
+    // voxel-foliage (Stage 2 §7.1 + two-pass §4.6): the bit31 VOXEL marker partitions the
+    // two fullscreen passes. A voxel id is NOT a triangle itemIdx, so the tri pass must NOT
+    // index qRasterRO with one (it would read garbage). Each pass keeps ONLY the buffers it
+    // needs (so neither busts the storage-buffer ceiling): the 'tri' pass Discards voxel
+    // pixels and never touches voxelBricks/qVoxRasterRO; the 'vox' pass Discards non-voxel
+    // pixels and never touches verts/indices/qRasterRO. The 'both' pass (?respass=1, RP-4)
+    // shades the WHOLE partition in one draw — no partition Discard — and binds BOTH queues:
+    // legal ONLY where the fragment storage-buffer union is ≤10 (forest, gi null → exactly
+    // 10); a config with a probe buffer must keep two-pass or the 11th binding silently
+    // kills the pipeline.
+    // RP-5: the partition Discard runs BEFORE the wp reconstruction below, so the majority
+    // tier each pass skips never pays the view-pos math (pure reorder — the discard needs
+    // only pRaw; the reconstruction is side-effect-free).
+    const isV = pRaw.shiftRight(uint(31)).bitAnd(uint(1)).toVar();
+    if (pass === 'tri') {
+      // MAIN pass: skip voxel-winner pixels (the 'vox' pass shades them). On a pure-triangle
+      // world (no voxel queue) bit31 is never set, so this never fires.
+      If(isV.equal(uint(1)), () => {
+        Discard();
+      });
+    } else if (pass === 'vox') {
+      // VOXEL pass: skip every pixel that is NOT a voxel winner (the 'tri' pass shades them).
+      If(isV.equal(uint(0)), () => {
+        Discard();
+      });
+    }
     // 24-bit depth in the high bits (8-bit id tiebreak below) ⇒ cz = 1 − (key>>8)/16777215
     const zDev = float(1).sub(toF(elect.shiftRight(uint(8))).div(16777215)) as unknown as NF;
     const wpv = getViewPosition(screenUV, zDev, cameraProjectionMatrixInverse) as unknown as NV3;
@@ -387,31 +414,12 @@ export function buildNaniteResolve(
         (vec4 as unknown as (a: NV3, b: number) => NV4)(wpv, 1),
       ) as unknown as NV4
     ).xyz.toVar() as unknown as NV3;
-
-    // voxel-foliage (Stage 2 §7.1 + two-pass §4.6): the bit31 VOXEL marker partitions the
-    // two fullscreen passes. A voxel id is NOT a triangle itemIdx, so the tri pass must NOT
-    // index qRasterRO with one (it would read garbage). Each pass keeps ONLY the buffers it
-    // needs (so neither busts the storage-buffer ceiling): the 'tri' pass Discards voxel
-    // pixels and never touches voxelBricks/qVoxRasterRO; the 'vox' pass Discards non-voxel
-    // pixels and never touches verts/indices/qRasterRO.
-    const isV = pRaw.shiftRight(uint(31)).bitAnd(uint(1)).toVar();
-    if (pass === 'tri') {
-      // MAIN pass: skip voxel-winner pixels (the 'vox' pass shades them). On a pure-triangle
-      // world (no voxel queue) bit31 is never set, so this never fires.
-      If(isV.equal(uint(1)), () => {
-        Discard();
-      });
-    } else {
-      // VOXEL pass: skip every pixel that is NOT a voxel winner (the 'tri' pass shades them).
-      If(isV.equal(uint(0)), () => {
-        Discard();
-      });
-    }
     // (instId, ci): the 'tri' pass decodes from qRasterRO (the unchanged triangle path); the
     // 'vox' pass decodes from qVoxRaster (low 30 bits = the qVoxRaster item index → the voxel
     // cluster's (instId, ci); its word6 = brickBase points at gpu.voxelBricks, §4.1). The two
     // decodes are in mutually-exclusive branches, so only ONE of qRasterRO / qVoxRasterRO is
-    // referenced per material build ⇒ each pass binds only its own queue.
+    // referenced per material build ⇒ each pass binds only its own queue. The 'both' pass
+    // branches per PIXEL on isV instead (same partition, same decodes — both queues bound).
     let instId: NU;
     let ci: NU;
     if (pass === 'tri') {
@@ -419,7 +427,7 @@ export function buildNaniteResolve(
       const triItem = cull.qRasterRO.element(triItemIdx.add(uint(1)));
       instId = triItem.x.toVar();
       ci = triItem.y.toVar();
-    } else {
+    } else if (pass === 'vox') {
       const qVox = cull.qVoxRasterRO;
       if (!qVox) throw new Error('NaniteResolve: vox pass built without qVoxRasterRO');
       // item index = bits 0-20 (QVOX_CAP = 2^21). Bits 21-27 carry the winning BRICK index
@@ -428,6 +436,24 @@ export function buildNaniteResolve(
       const voxItem = qVox.element(voxIdx.add(uint(1)));
       instId = voxItem.x.toVar();
       ci = voxItem.y.toVar();
+    } else {
+      const qVox = cull.qVoxRasterRO;
+      if (!qVox) throw new Error('NaniteResolve: both pass built without qVoxRasterRO');
+      const instIdV = uint(0).toVar();
+      const ciV = uint(0).toVar();
+      If(isV.equal(uint(0)), () => {
+        const triItemIdx = pRaw.shiftRight(uint(CLUSTER_TRI_BITS));
+        const triItem = cull.qRasterRO.element(triItemIdx.add(uint(1)));
+        instIdV.assign(triItem.x);
+        ciV.assign(triItem.y);
+      }).Else(() => {
+        const voxIdx = pRaw.bitAnd(uint(0x1fffff));
+        const voxItem = qVox.element(voxIdx.add(uint(1)));
+        instIdV.assign(voxItem.x);
+        ciV.assign(voxItem.y);
+      });
+      instId = instIdV as unknown as NU;
+      ci = ciV as unknown as NU;
     }
     const meshId = elemU(gpu.clusters, ci.mul(uint(CLUSTER_WORDS)).add(uint(7))).shiftRight(uint(16));
     // (localTri = pRaw & CLUSTER_TRI_MASK is read inside the rock/bark/leaf branches; those
@@ -461,7 +487,7 @@ export function buildNaniteResolve(
     // latency chain can't be hidden. Measured as the dominant driver of the close-up voxel r.scene
     // cliff (37.5ms inside a crown). Voxel pixels are never matClass 0 (isT always false in 'vox'),
     // so guarding by `pass === 'tri'` is output-identical and strips the graph from the vox shader.
-    if (pass === 'tri' && hasClass(0)) If(isT, () => {
+    if (pass !== 'vox' && hasClass(0)) If(isT, () => {
       const shading = buildTerrainShading({
         normalTex: hf.normalTex,
         biomeTex: hf.biomeTex as StorageTexture,
@@ -497,7 +523,7 @@ export function buildNaniteResolve(
     const rockCol = vec3(0.3).toVar() as unknown as NV3;
     const rockNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
     const rockAo = float(1).toVar() as unknown as NF;
-    if (pass === 'tri' && hasClass(1)) If(isR, () => {
+    if (pass !== 'vox' && hasClass(1)) If(isR, () => {
       const instId = item.x;
       const localTri = pRaw.bitAnd(uint(CLUSTER_TRI_MASK));
       const ctx = fetch.makeCtx(instId, ci);
@@ -538,7 +564,7 @@ export function buildNaniteResolve(
     const barkCol = vec3(0.3).toVar() as unknown as NV3;
     const barkNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
     const barkAo = float(1).toVar() as unknown as NF;
-    if (pass === 'tri' && world.barkTexA && world.barkTexB && (hasClass(2) || hasClass(3))) {
+    if (pass !== 'vox' && world.barkTexA && world.barkTexB && (hasClass(2) || hasClass(3))) {
       const barkTexA = world.barkTexA;
       const barkTexB = world.barkTexB;
       If(isBD, () => {
@@ -707,7 +733,7 @@ export function buildNaniteResolve(
     const isL = matClass.equal(uint(4)).toVar();
     const leafCol = vec3(0.1, 0.2, 0.08).toVar() as unknown as NV3;
     const leafNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
-    if (pass === 'tri' && hasClass(4)) If(isL, () => {
+    if (pass !== 'vox' && hasClass(4)) If(isL, () => {
       const instId = item.x;
       const localTri = pRaw.bitAnd(uint(CLUSTER_TRI_MASK));
       // per-species tint from matParam (mesh word 7): linear RGB + hueVar (4×u8) —
@@ -795,7 +821,7 @@ export function buildNaniteResolve(
     const isVox = matClass.equal(uint(7)).toVar();
     const voxCol = vec3(0.1, 0.2, 0.08).toVar() as unknown as NV3;
     const voxNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
-    if (pass === 'vox') {
+    if (pass !== 'tri') {
       If(isVox, () => {
         // ?voxao= (default ON): the per-brick DIRECTIONAL self-shading. Decode the BAKED brick-mean
         // normal, rotate by instance yaw, flip camera-ward — it then drives the sun N·L + ambient
@@ -893,7 +919,7 @@ export function buildNaniteResolve(
     // pass voxel pixels were Discarded, so `isVTri` is the original `isVox` (matClass==7),
     // leaving grass/debris on the gray `palette` exactly as before (loss-exact for tri).
     const palette = vec3(0.35, 0.33, 0.3) as unknown as NV3;
-    const isVoxDefault = pass === 'vox' ? isV.equal(uint(1)) : isVox;
+    const isVoxDefault = pass === 'tri' ? isVox : isV.equal(uint(1));
     const voxAlbDefault = isVoxDefault.select(voxCol, palette) as unknown as NV3;
     const voxNrmDefault = isVoxDefault.select(voxNrm, vec3(0, 1, 0)) as unknown as NV3;
     const albedo = isT
@@ -923,7 +949,7 @@ export function buildNaniteResolve(
     // — top bricks point up regardless of yaw). Foliage is translucent: use the standard
     // wrapped diffuse N·L·0.5+0.5 for voxel pixels — per-brick variation survives, but
     // no yaw can crash a crown to the floor.
-    if (pass === 'vox') {
+    if (pass !== 'tri') {
       // FLOOR at 0.18: albedo-debug proved the residual far dark clumps are lighting-side —
       // deeply down/away-facing tile-brick mean normals bottom the plain wrap out at ~0.05.
       // No foliage pixel drops below ~0.16·sun; per-brick variation survives above the floor.
@@ -1012,7 +1038,7 @@ export function buildNaniteResolve(
     // otherwise gets the dark ground ambient (3× darker than sky) and reads as an oddly
     // dark tree even with the wrapped sun floor (user round 3: "still some, half less").
     // A canopy always sees sky; floor its ambient mix at 0.6.
-    if (pass === 'vox') {
+    if (pass !== 'tri') {
       ambUp = (isV.equal(uint(1)).select(ambUp.max(0.6), ambUp) as unknown as NF).toVar() as unknown as NF;
     }
     const ambFloor = mix(vec3(0.18, 0.16, 0.12), vec3(0.4, 0.5, 0.62), ambUp).mul(0.5 * Math.PI) as unknown as NV3;
@@ -1028,8 +1054,20 @@ export function buildNaniteResolve(
       // VOXEL pixels get the same translucent forward-scatter (they ARE foliage) —
       // its absence was part of the "suddenly very dark trees" report: mesh crowns
       // glowed toward the sun while voxel crowns did not.
-      const blSrc = pass === 'vox' ? voxCol : leafCol;
-      const blGate = pass === 'vox' ? (isV.equal(uint(1)) as unknown as typeof isL) : isL;
+      // 'both': voxel pixels glow with voxCol, leaf pixels with leafCol — the per-pixel
+      // union of what the two split passes each applied to their own tier.
+      const blSrc =
+        pass === 'tri'
+          ? leafCol
+          : pass === 'vox'
+            ? voxCol
+            : (isV.equal(uint(1)).select(voxCol, leafCol) as unknown as NV3);
+      const blGate =
+        pass === 'tri'
+          ? isL
+          : pass === 'vox'
+            ? (isV.equal(uint(1)) as unknown as typeof isL)
+            : (isV.equal(uint(1)).or(isL) as unknown as typeof isL);
       const backlight = blSrc
         .mul(sunU.color as unknown as NV3)
         .mul(glow)
@@ -1099,8 +1137,33 @@ export function buildNaniteResolve(
   return mat;
   }; // end buildMat
 
-  // MAIN pass (always): shades triangle pixels, skips voxel pixels.
-  const mesh = new Mesh(geometry, buildMat('tri'));
+  // RP-4 ?respass — SINGLE merged resolve pass (tri+vox in one fullscreen draw, removes
+  // the second pass's payloadV+visBV loads + discard over every pixel). Legal only where
+  // the union binding set is ≤10 storage buffers: forest (gi null) is EXACTLY 10 — any
+  // config with a probe buffer (world.gi) would hit the 11th-binding silent pipeline death,
+  // so the merge is refused there. DEFAULT ON in exactly the proven config shape (voxel
+  // queue + no gi + no csm = forest; identity gates 2026-07-02 §5m: TAA-still pairs in the
+  // D0 band + no-TAA phase-aligned pairs 0.13-0.45% vs ~5-6% ambient floor). ?respass=0
+  // reverts to two-pass; ?respass=1 forces the merge in any gi-free config (e.g. with csm).
+  const respassFlag = q.get('respass');
+  const singlePass =
+    respassFlag === '0'
+      ? false
+      : respassFlag === '1'
+        ? !!cull.qVoxRasterRO && !world.gi
+        : !!cull.qVoxRasterRO && !world.gi && world.csm === null;
+  if (respassFlag === '1' && cull.qVoxRasterRO && world.gi)
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[nanite] ?respass=1 refused: probe-GI buffer would push the merged resolve past the 10-storage-buffer cliff — keeping two-pass',
+    );
+  if (singlePass)
+    // eslint-disable-next-line no-console
+    console.log('[nanite] resolve single-pass (RP-4): tri+vox merged into one fullscreen draw');
+
+  // MAIN pass (always): shades triangle pixels, skips voxel pixels — or, under ?respass=1,
+  // shades BOTH tiers in one draw.
+  const mesh = new Mesh(geometry, buildMat(singlePass ? 'both' : 'tri'));
   mesh.name = 'naniteResolve';
   mesh.frustumCulled = false;
   mesh.renderOrder = -1000;
@@ -1113,7 +1176,7 @@ export function buildNaniteResolve(
   // pixels) with no read-modify-write conflict; renderOrder −999 runs it right after the main
   // resolve, still well before the sky/scene remainder.
   let voxMesh: Mesh | undefined;
-  if (cull.qVoxRasterRO) {
+  if (cull.qVoxRasterRO && !singlePass) {
     voxMesh = new Mesh(geometry, buildMat('vox'));
     voxMesh.name = 'naniteResolveVox';
     voxMesh.frustumCulled = false;
