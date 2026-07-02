@@ -295,3 +295,17 @@ burst). Reversed-order re-measure in flight (coal FIRST). w0-pyr isolated obliqu
   never gate on it without an order-reversed pair.
 - NEXT per 00-MASTER-PLAN: pool D resolve/post restructures (doc 16), then pool A
   prev-frame occlusion (engagement counters now READY via 4b meterRead).
+
+## 5h. Pool D (resolve/post) — RP-3 shipped (17:5x, commit 860da13)
+
+- **SHIPPED DEFAULT-ON: RP-3 hygiene bundle** — ping-pong TRAA history fork
+  (src/render/TRAAPingPong.ts, kills the stock 26.7MB/frame resolve→history copy;
+  ?traapp=0 = stock) + AO attachment rg16f (?aorg=0 = legacy). Shot gate at D0 band
+  through a DIFFERENT history code path (0.55/0.16/0.35%); perf flat-in-noise (bounded
+  0.3-0.8 — bandwidth hides in pipelining); kept as strictly-less-work.
+- ⚠️ fork maintenance: re-diff TRAAPingPong.ts against upstream on any three upgrade.
+- Pool D remaining (doc 16 table): RP-1 tri-class specialization (?resclasses probe #8,
+  mechanism proven / magnitude unknown), RP-4 single-pass resolve union≤10 (?respass,
+  Metal 10-buffer cliff risk, silent-death check mandatory), RP-3c bloom bright-fold
+  (S), RP-5 early-discard reorder (S, compiler may already sink), RP-7 bead polish
+  (user sign-off), RP-2 half-res contact (Class RISK — needs user sign-off, skip).
