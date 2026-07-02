@@ -274,7 +274,12 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // fully behind the pooled occluder skips its record ⇒ Phase B never spreads its pixels.
   // Pays ~4 pyramid loads per brick-lane. Pairs with ?voxwaves: later waves' pyramid holds
   // earlier waves' voxel depth, so this also kills vox-behind-vox at BRICK granularity.
-  const voxBocc = new URLSearchParams(window.location.search).get('voxbocc') === '1';
+  // DEFAULT ON (2026-07-02): 200k isolated eye 36.1→18.9 / oblique 43.2→37.2 / aerial ~=
+  // (fresh-voxbocc.json vs fresh-bead-v2-base.json) at IDENTICAL output (conservative cull;
+  // shot-gated eye+oblique). The vox field hiding behind the near MESH canopy was the
+  // eye-pose whale — brick granularity vs the mesh pyramid, NOT block-level vox-behind-vox.
+  // ?voxbocc=0 reverts.
+  const voxBocc = new URLSearchParams(window.location.search).get('voxbocc') !== '0';
   if (voxBrickShade && QVOX_CAP - 1 >= 1 << 21) {
     throw new Error(`NaniteVoxelRaster: QVOX_CAP ${QVOX_CAP} overflows the 21-bit item field under ?voxbn`);
   }
