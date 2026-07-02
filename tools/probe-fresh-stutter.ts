@@ -60,7 +60,7 @@ async function main(): Promise<void> {
   });
   page.on('console', (m) => {
     const t = m.text();
-    if (/\[(forest|nanite|laas|vox)/i.test(t)) consoleLines.push(t);
+    if (/\[(forest|nanite|laas|vox|fartiles)/i.test(t)) consoleLines.push(t);
   });
 
   const extra: Record<string, string> = { trees: TREES, nanite: '1', dpr: DPR };
