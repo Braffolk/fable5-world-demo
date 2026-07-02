@@ -853,7 +853,7 @@ export function buildNaniteResolve(
         .mul(0.5)
         .add(0.5)
         .clamp(0, 1)
-        .max(0.18)
+        .max(0.25)
         .mul(0.9) as unknown as NF;
       nDotL = (isV.equal(uint(1)).select(wrapped, nDotL) as unknown as NF).toVar() as unknown as NF;
     }
@@ -929,7 +929,14 @@ export function buildNaniteResolve(
     // energy-correct probe value, so bdb24c7's no-double-count parity is preserved. Magnitude
     // = the old hemisphere floor × π (radiance is ÷π just below), restoring the pre-bdb24c7
     // soft dark on shaded sides. Tune the .mul() factor if it reads too bright/dark.
-    const ambUp = wNormal.y.mul(0.5).add(0.5).clamp(0, 1) as unknown as NF;
+    let ambUp = wNormal.y.mul(0.5).add(0.5).clamp(0, 1) as unknown as NF;
+    // VOX pixels: up-bias the hemisphere — a crown chunk whose MEAN normal tilts down
+    // otherwise gets the dark ground ambient (3× darker than sky) and reads as an oddly
+    // dark tree even with the wrapped sun floor (user round 3: "still some, half less").
+    // A canopy always sees sky; floor its ambient mix at 0.6.
+    if (pass === 'vox') {
+      ambUp = (isV.equal(uint(1)).select(ambUp.max(0.6), ambUp) as unknown as NF).toVar() as unknown as NF;
+    }
     const ambFloor = mix(vec3(0.18, 0.16, 0.12), vec3(0.4, 0.5, 0.62), ambUp).mul(0.5 * Math.PI) as unknown as NV3;
     radiance = max(radiance, ambFloor) as unknown as NV3;
     let lit: NV3 = albedo.mul(radiance).mul(float(1 / Math.PI)) as unknown as NV3;
