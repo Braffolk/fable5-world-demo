@@ -180,6 +180,30 @@ DEFAULT ON — committed by the USER themselves (cc73e88) while watching the ses
 gap to locked-60 ≈ −11..13, all of it to come from QUALITY-NEUTRAL waste.**
 Next: ultracode deep review (docs/deep-review/) → ranked quality-neutral path.
 
+## 5e. THE DEEP-REVIEW HARVEST (2026-07-02 11:00-14:00) — see docs/deep-review/00-MASTER-PLAN.md
+
+Review executed (3 workflows, ~9M subagent tokens, 23 docs + 4 impl specs, adversarially
+verified). Plan booked ≈11.2ms oblique across 6 pools vs a measured 12.2ms ring re-pin (Q8,
+aggdist=60 diagnostic post-voxbocc: oblique 44.9→32.7, eye untouched — voxbocc ate eye's ring
+share but oblique's is vox-behind-VOX + per-cluster overhead).
+
+SHIPPED from the plan (same-session gates, all quality-identical/improving, commit e00cfab):
+- **?voxmaskray DEFAULT ON: oblique 43.9→31.9 (−12.0!!), eye 28.3→22.2 (−6.1)** — every
+  ray-eligible far-field brick was running a ≤512-projection occ-mask build that ONLY the flat
+  path ever reads. Dead work, pixel-identical. (spec-vox-kernel-microcuts A; attribution clean
+  via 3-way A/B: base 44.9 / ctl-without-flag 43.9 / with-flag 31.9.)
+- fix(hzb): perspective sphereOccluded |ndc|<1 on-screen guard (pan pop-in + arrival-ramp
+  over-cull fixed; +30-240 clusters/pose correctly kept — quality-IMPROVING).
+- W3 kClearBins dead submit skipped; meter readback short-circuited (measurement hygiene).
+
+**MILESTONE 2 (fresh-mp-milestone2.json): live p50 16.7 (at the 60fps quantum), p95 26.8,
+isolated eye 24.6 / oblique 31.7 / aerial 17.4** (warm session). One anomalous 7-frame burst
+@tick 220 (334ms max, cpuSub 31 — external/system suspect, content constant; watch in Q5/Q6).
+Q2b note: waves-vehicle for brick-vs-vox = net-negative (rebuild bubble > gain, engagement
+unproven — voxBrickWrites counter is dead); the prev-frame spec avoids the rebuild entirely.
+Remaining oblique gap to ≤21-24 target: −8..−11. Next per plan: spec B (?voxsgb Phase-B
+distribution), submit folds 1a/1b, prev-frame occlusion (pool A), resolve/post pool D.
+
 ### Post-voxbocc LIVE milestone (fresh-voxbocc-milestone.json, 600 ticks, 06:5x warm)
 - **live p50 = 16.7ms (= 60fps vsync quantum!), avg 17.96, p90/p95 = 25.0/25.1, max 26.0**
 - 210/600 frames >16.7 (all sitting at the NEXT 120Hz quantum, 25.0); 0 >33ms; 0 longtasks; heap flat.
