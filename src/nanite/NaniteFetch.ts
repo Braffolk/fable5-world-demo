@@ -128,6 +128,12 @@ export interface NaniteFetch {
    *  ONCE through this. Defined for the explicit and adaptive-DAG conventions;
    *  the window-grid heightfield has no index buffer (count=0 ⇒ never called). */
   fetchWorldVertByIndex(ctx: VertCtx, vi: NU): NV3;
+  /** fetchWorldVert with a RUNTIME corner (0..2). Selects the index / grid offset
+   *  by `corner` BEFORE fetching, so exactly ONE vertex is reconstructed — the
+   *  hw1fetch lever (M2l): the HW vertex stage previously fetched all 3 corners
+   *  and selected 1. Same selected vertex by construction (identical per-corner
+   *  math as the static-v arms of fetchWorldVert). */
+  fetchWorldVertDyn(ctx: VertCtx, localTri: NU, corner: NU): NV3;
   /** mesh-record word 6: matClass u8 (bits 8–15) etc. */
   meshWord(meshId: NU, word: number): NU;
 }
@@ -484,6 +490,36 @@ export function makeFetch(
     return out as unknown as NV3;
   };
 
+  const fetchWorldVertDyn = (ctx: VertCtx, localTri: NU, corner: NU): NV3 => {
+    const out = vec3(0).toVar();
+    If(ctx.isHF, () => {
+      If(ctx.isDAG, () => {
+        const vi = elemU(gpu.indices, ctx.triStart.add(localTri).mul(uint(3)).add(corner));
+        out.assign(dagWorldByIndex(ctx, vi));
+      }).Else(() => {
+        // window-procedural grid — per-corner (dx,dz) selected at runtime; the
+        // select arms are EXACTLY the static v=0/1/2 values in fetchWorldVert.
+        const quad = localTri.shiftRight(uint(1));
+        const odd = localTri.bitAnd(uint(1)).equal(uint(1));
+        const col = quad.mod(ctx.qxw);
+        const row = quad.div(ctx.qxw);
+        const dx = corner
+          .equal(uint(1))
+          .select(odd.select(uint(1), uint(0)), corner.equal(uint(2)).select(uint(1), uint(0))) as unknown as NU;
+        const dz = corner
+          .equal(uint(1))
+          .select(uint(1), corner.equal(uint(2)).select(odd.select(uint(0), uint(1)), uint(0))) as unknown as NU;
+        const sx = ctx.gx.add(col).add(dx);
+        const sz = ctx.gz.add(row).add(dz);
+        out.assign(hfWorld(ctx, sx as unknown as NU, sz as unknown as NU, float(0) as unknown as NF));
+      });
+    }).Else(() => {
+      const vi = elemU(gpu.indices, ctx.triStart.add(localTri).mul(uint(3)).add(corner));
+      out.assign(explicitWorldByIndex(ctx, vi));
+    });
+    return out as unknown as NV3;
+  };
+
   const fetchWorldVertByIndex = (ctx: VertCtx, vi: NU): NV3 => {
     const out = vec3(0).toVar();
     If(ctx.isHF, () => {
@@ -499,5 +535,5 @@ export function makeFetch(
   const meshWord = (meshId: NU, word: number): NU =>
     elemU(gpu.meshes, meshId.mul(uint(MESH_WORDS)).add(uint(word)));
 
-  return { makeCtx, fetchWorldVert, fetchWorldVertByIndex, meshWord };
+  return { makeCtx, fetchWorldVert, fetchWorldVertDyn, fetchWorldVertByIndex, meshWord };
 }

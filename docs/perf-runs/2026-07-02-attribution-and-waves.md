@@ -558,6 +558,29 @@ majority quantum. Heap ruled out (this section), RP-4 ruled out (A/B above).
 re-pin OPPORTUNISTICALLY on the next naturally-rested boot — no work is gated on it.
 Today's warm-session live envelope: p95 17.2-17.4, zero >33, misses 69-80/600.
 
+## 5o. Phase-1/2 stragglers CLOSED: hw1fetch NULL (engaged), f2b NULL, pool-B shelved (2026-07-02)
+
+Combined cd5 session (ctl 12.7/16.9/9.4 → hw1fetch=1 12.5/16.6/9.4 → f2b=1 12.9/16.5/9.3
+→ ctl2 12.7/16.5/9.7; wind=0 stills):
+- **M2l ?hw1fetch=1 BUILT + NULL**: fetchWorldVertDyn (NaniteFetch) — HW vertex stage
+  reconstructs ONE runtime-selected corner instead of 3-fetch+select. Perf Δ ≤0.2ms at
+  every pose WITH STRONG ENGAGEMENT (eye hwTris 1.1M ≈ 25% of visTris) ⇒ real null:
+  vertex re-fetch is not an eye cost at full clock; the cd50-era −0.6 estimate is dead.
+  Identity: candidate shotdiffs (0.60/0.19/0.31 e/o/a) EQUAL the identity-by-construction
+  f2b profile (0.58/0.16/0.35) = ambient TAA-phase band. DEFAULT OFF — kept as a flag
+  lever (window-grid dyn arm is unwitnessable in forest: zero HF clusters; a default
+  flip would ship an untested path — flip only after a terrain-scene gate).
+- **S5 ?f2b=1 NULL**: +0.2 eye in-noise, obl/aerial flat ⇒ stays OFF (plan rule).
+- **Pool B tgmem diet (M2c) SHELVED, surfaced**: M2d/voxsgb already built+gated OFF
+  (d66d53c: −1 obl but +2..4 eye); census is ~6.2KB/WG (NaniteVoxelRaster.ts:643 comment,
+  doc-18's 6.6KB stale), bit-exact-packable ≈ the 4 bbox u16 arrays ~1KB ⇒ residency
+  5→6 WGs best case, expected ≪ the cd5 noise floor at the §5l full-clock numbers.
+  Same class as RP-3c: below measurement floor since DVFS collapsed the target.
+
+With this, the master plan's self-serve IDENTICAL ledger is EXHAUSTED at full clock —
+every remaining engine lever is user-gated (IMPROVING/RISK sign-offs) or the boot-cache
+(0 frame-ms, boot 73s→~18s, next up).
+
 §5m addendum — flip-verify + live attempt (same day, later session):
 - Flip-verify iso at plain defaults (merged active): eye 13.1 / obl 16.7 / aerial 9.4 —
   matches the §5l full-clock canonical. Same-session iso pair on-vs-off (adverse slot

@@ -376,7 +376,10 @@ export function buildNaniteRaster(
 
   // ---- shared fetch helpers (NaniteFetch.ts — also the resolve's decode) ----------
   const nfetch = makeFetch(gpu, heightTex, disp, wind);
-  const { makeCtx, fetchWorldVert } = nfetch;
+  const { makeCtx, fetchWorldVert, fetchWorldVertDyn } = nfetch;
+  // M2l hw1fetch: HW vertex stage reconstructs ONE corner (runtime-selected) instead
+  // of fetching all 3 and selecting — same selected vertex by construction.
+  const hw1fetch = new URLSearchParams(window.location.search).get('hw1fetch') === '1';
   // PERF-3 win #2 — the cooperative vertex-transform cache lives in its own module
   // (default OFF, ?vcompact=1; measured marginal/conditional — see NaniteVertexCache).
   const vcache = makeVertexCache(gpu, nfetch);
@@ -1137,12 +1140,17 @@ export function buildNaniteRaster(
       const ci = item.y.toVar();
       const ctx = makeCtx(instId, ci);
 
-      const w0 = fetchWorldVert(ctx, localTri, 0);
-      const w1 = fetchWorldVert(ctx, localTri, 1);
-      const w2 = fetchWorldVert(ctx, localTri, 2);
-      const world = corner
-        .equal(uint(1))
-        .select(w1, corner.equal(uint(2)).select(w2, w0)) as unknown as NV3;
+      let world: NV3;
+      if (hw1fetch) {
+        world = fetchWorldVertDyn(ctx, localTri, corner);
+      } else {
+        const w0 = fetchWorldVert(ctx, localTri, 0);
+        const w1 = fetchWorldVert(ctx, localTri, 1);
+        const w2 = fetchWorldVert(ctx, localTri, 2);
+        world = corner
+          .equal(uint(1))
+          .select(w1, corner.equal(uint(2)).select(w2, w0)) as unknown as NV3;
+      }
       const clip = cam.vp.mul(vec4(world, 1)).toVar();
 
       (vPayLo as unknown as { assign: (v: unknown) => void }).assign(toF(payload.bitAnd(uint(0xffff))));
