@@ -263,6 +263,18 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // near-black crowns, 2026-07-01 review); per-brick decode breaks them back into a crown.
   // Bit budget: itemIdx < QVOX_CAP = 2^21 (bits 0-20), brickIdx bits 21-27, VOX_BIT = 31.
   const voxBrickShade = new URLSearchParams(window.location.search).get('voxbn') !== '0';
+  // ?voxwaves=N (with ?voxf2b=1): chunk the K F2B bucket dispatches into N near→far waves
+  // with a voxOccPyr rebuild between waves, so later waves' per-block occlusion cull sees
+  // earlier waves' voxel elections (vox-behind-vox). See dispatchVoxel. 0/1 = off (old path).
+  const voxWavesRaw = parseInt(new URLSearchParams(window.location.search).get('voxwaves') ?? '0', 10);
+  const voxWaves = Number.isFinite(voxWavesRaw) ? Math.min(16, Math.max(0, voxWavesRaw)) : 0;
+  // ?voxbocc=1 — PER-BRICK occlusion test in Phase A (block-level cull granularity refined
+  // to each brick's own bbox + front-slab key vs the same min-pooled voxOccPyr; identical
+  // conservative polarity/window idiom). A brick in a PARTIALLY-visible block that is itself
+  // fully behind the pooled occluder skips its record ⇒ Phase B never spreads its pixels.
+  // Pays ~4 pyramid loads per brick-lane. Pairs with ?voxwaves: later waves' pyramid holds
+  // earlier waves' voxel depth, so this also kills vox-behind-vox at BRICK granularity.
+  const voxBocc = new URLSearchParams(window.location.search).get('voxbocc') === '1';
   if (voxBrickShade && QVOX_CAP - 1 >= 1 << 21) {
     throw new Error(`NaniteVoxelRaster: QVOX_CAP ${QVOX_CAP} overflows the 21-bit item field under ?voxbn`);
   }
@@ -818,7 +830,54 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
             bbNearZ.assign(bbNearZ.min(cndc.z));
           });
           const validBB = startX.lessThanEqual(endX).and(startY.lessThanEqual(endY));
-          If(validBB, () => {
+          // ?voxbocc — PER-BRICK occlusion (flag comment above): the brick's own clamped bbox
+          // + front-slab key vs voxOccPyr, exact mirror of the per-block test's conservative
+          // idiom (min-pool ⇒ any see-through texel keeps the brick; |0xff ⇒ keep-on-tie).
+          // Straddlers (camera inside the brick) are exempt — they must always win.
+          const bVis = uint(1).toVar();
+          if (voxBocc && voxOccl) {
+            If(validBB.and(straddles.equal(uint(0))), () => {
+              const nzT = bbNearZ.clamp(0, 1);
+              const bKey = depthKey24(nzT as unknown as NF).shiftLeft(uint(8)).bitOr(uint(0xff)).toVar();
+              const rPx = toF(endX.sub(startX).add(toI(1)))
+                .max(toF(endY.sub(startY).add(toI(1))))
+                .mul(0.5)
+                .toVar();
+              const levelF = (rPx as unknown as { max(o: number): NF })
+                .max(1)
+                .log2()
+                .ceil()
+                .clamp(0, (pyrLevelCountU as unknown as { sub(o: number): NF }).sub(1))
+                .toVar();
+              const info = pyrTable.element(uint(levelF));
+              const lw = uint(info.y).toVar();
+              const lh = uint(info.z).toVar();
+              const lo = uint(info.x).toVar();
+              const px = toF(startX.add(endX).add(toI(1)))
+                .mul(0.5)
+                .div(float(width))
+                .mul(toF(lw))
+                .toVar();
+              const py = toF(startY.add(endY).add(toI(1)))
+                .mul(0.5)
+                .div(float(height))
+                .mul(toF(lh))
+                .toVar();
+              const x0 = uint((px.sub(0.5) as unknown as { clamp(a: number, b: NF): NF }).clamp(0, toF(lw.sub(uint(1))))).toVar();
+              const y0 = uint((py.sub(0.5) as unknown as { clamp(a: number, b: NF): NF }).clamp(0, toF(lh.sub(uint(1))))).toVar();
+              const x1 = minU(x0.add(uint(1)), lw.sub(uint(1))).toVar();
+              const y1 = minU(y0.add(uint(1)), lh.sub(uint(1))).toVar();
+              const z00 = elemU(voxOccPyr.ro, lo.add(y0.mul(lw)).add(x0)).toVar();
+              const z01 = elemU(voxOccPyr.ro, lo.add(y0.mul(lw)).add(x1)).toVar();
+              const z10 = elemU(voxOccPyr.ro, lo.add(y1.mul(lw)).add(x0)).toVar();
+              const z11 = elemU(voxOccPyr.ro, lo.add(y1.mul(lw)).add(x1)).toVar();
+              const occK = minU(minU(z00, z01), minU(z10, z11));
+              If(bKey.lessThanEqual(occK), () => {
+                bVis.assign(uint(0));
+              });
+            });
+          }
+          If(validBB.and(bVis.equal(uint(1))), () => {
             const nz = bbNearZ.clamp(0, 1).toVar();
             // ONE voxCz per BRICK (coarse one-sample default, §6.4) — the brick AABB front-slab.
             // Precompute the FULL election key ONCE per brick (loss-exact — voxCz is loop-
@@ -1399,10 +1458,27 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
     // block's footprint into the global vis buffer (the per-block occlusion cull reads the
     // near-field triangle winners already in visPayloadV from world1/hwRender).
     if (voxF2bEnabled) {
-      // K near→far dispatches in ONE submit: kClearBins then dispatchBatchMixed over the K
-      // bucket kernels (each tagged with its tight per-bucket indirect args). The in-pass
-      // barriers serialize the buckets near→far so the early-Z gate fires across slabs.
-      dispatchBatchMixed(renderer, [kClearBins, ...kVoxScatterB]);
+      if (voxWaves > 1) {
+        // ?voxwaves=N (needs ?voxf2b=1): the fix for the F2B postmortem's "per-block-cull
+        // pre-seed is never realized" — the pyramid was built ONCE (mesh-only), so bucket
+        // b+1's occlusion cull never saw bucket b's voxel depth and F2B paid K barriers for
+        // zero occlusion gain. Here the K near→far bucket kernels are chunked into N
+        // contiguous WAVES with a voxOccPyr REBUILD between waves: wave w+1's per-block
+        // cull then tests against the near canopy wave w just elected, so far blocks fully
+        // behind it are skipped WHOLE (vox-behind-vox occlusion, invisible to the mesh-only
+        // pyramid). Cost per extra wave = one pyramid chain + inter-dispatch barriers.
+        const per = Math.ceil(kVoxScatterB.length / voxWaves);
+        dispatchBatchMixed(renderer, [kClearBins, ...kVoxScatterB.slice(0, per)]);
+        for (let w = per; w < kVoxScatterB.length; w += per) {
+          if (voxOccl && voxPyrKernels.length > 0) dispatchBatch(renderer, voxPyrKernels);
+          dispatchBatchMixed(renderer, kVoxScatterB.slice(w, w + per));
+        }
+      } else {
+        // K near→far dispatches in ONE submit: kClearBins then dispatchBatchMixed over the K
+        // bucket kernels (each tagged with its tight per-bucket indirect args). The in-pass
+        // barriers serialize the buckets near→far so the early-Z gate fires across slabs.
+        dispatchBatchMixed(renderer, [kClearBins, ...kVoxScatterB]);
+      }
     } else {
       // ?voxf2b=0 — EXACTLY today: kClearBins + ONE dispatchIndirect over the whole list.
       dispatch(renderer, kClearBins);
