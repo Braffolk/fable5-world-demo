@@ -77,8 +77,9 @@ export class PostStack {
     const q = new URLSearchParams(window.location.search);
     const cloudview = q.get('cloudview');
     // perf attribution: ?ablate=clouds,ao,taa,bloom disables stages
-    // (',', space, or '+' separated — '+' decodes to space in query strings)
-    const ablate = new Set((q.get('ablate') ?? '').split(/[,\s]+/));
+    // (',', space, or '+' separated — probe EXTRA can't carry commas and its
+    // URL builder %2B-encodes '+', which decodes back to a literal '+')
+    const ablate = new Set((q.get('ablate') ?? '').split(/[,\s+]+/));
     // PERF-4 AO (the one post effect that costs real frame time — bloom/TAA are
     // ~0; LOG bf). GTAO sample count: 6 (= 3 dir × 2 steps × 2 sides = 12 march
     // samples) holds the look — AO is a near-flat ~0.8 cue here, over-sampled at 8.
