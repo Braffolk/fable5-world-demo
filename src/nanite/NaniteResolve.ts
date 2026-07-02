@@ -780,16 +780,9 @@ export function buildNaniteResolve(
           const gn = normalize(instRotateDir(yawSc, localN)) as unknown as NV3;
           const toCamV = normalize(camPos.sub(wp)) as unknown as NV3;
           voxNrm.assign(dot(gn, toCamV).lessThan(0).select(gn.negate(), gn) as unknown as NV3);
-          // SUN-WRAP (user report: crowns "suddenly very dark, with a triangle cutting
-          // them into dark spots"): a brick MEAN normal facing away from the sun drove
-          // nDotL to 0 and the whole carved cube face (a triangle at most view angles)
-          // crashed to the ambient floor. Foliage is translucent — pull the shading
-          // normal 30% sunward so no crown face ever goes black.
-          voxNrm.assign(
-            normalize(
-              voxNrm.add((normalize(vec3(sunU.dir)) as unknown as NV3).mul(0.3)),
-            ) as unknown as NV3,
-          );
+          // (the earlier 30% sunward normal wrap was REPLACED by proper WRAP LIGHTING on
+          // the sun term below — bending the normal also skewed the ambient hemisphere
+          // and still let fully-away crowns crash; see the nDotL wrap.)
         }
         if (voxBrickShade) {
           // per-brick baked ALBEDO (BRICK_ALBEDO rgb of the winning brick) — breaks the
@@ -844,7 +837,18 @@ export function buildNaniteResolve(
     // gate, sampling at receivedShadowPositionNode set above. Exact IBL
     // parity for the ambient is the remaining N4-C1 term.
     const sunDir = normalize(vec3(sunU.dir)) as unknown as NV3;
-    const nDotL = max(dot(wNormal, sunDir), 0) as unknown as NF;
+    let nDotL = max(dot(wNormal, sunDir), 0) as unknown as NF;
+    // WRAP LIGHTING for VOXEL foliage (user report round 2: whole trees "extremely dark
+    // next to lit ones" at oblique, aerial fine): the baked crown mean-normals rotate
+    // with each instance's YAW, so a tree whose rotated normals face away from the sun
+    // dropped to the ambient floor as a UNIT while its neighbor glowed (aerial is immune
+    // — top bricks point up regardless of yaw). Foliage is translucent: use the standard
+    // wrapped diffuse N·L·0.5+0.5 for voxel pixels — per-brick variation survives, but
+    // no yaw can crash a crown to the floor.
+    if (pass === 'vox') {
+      const wrapped = dot(wNormal, sunDir).mul(0.5).add(0.5).clamp(0, 1).mul(0.9) as unknown as NF;
+      nDotL = (isV.equal(uint(1)).select(wrapped, nDotL) as unknown as NF).toVar() as unknown as NF;
+    }
     const sunCol = (sunU.color as unknown as NV3).mul(float(sunU.intensity)) as unknown as NV3;
     let direct: NF = nDotL;
     if (shadowsOn && world.naniteShadow) {
