@@ -110,6 +110,15 @@ export interface ResolveWorld {
    *  reconstructed positions select the right cascade (?shadowcache=0 falls
    *  back to the base positionView.z select — a debug-only A/B). */
   csm: CSMShadowNode | null;
+  /** P2 (shadow arc): "scene has sun shadows" WITHOUT a legacy CSM node. The
+   *  nanite-only world severs the CSM entirely (its maps were empty; the keepalive
+   *  rendered ~2 blank 2048² cascades/frame and the full-screen `keep` sample paid
+   *  a per-pixel CSM PCSS purely to keep the node built). */
+  sunShadows?: boolean;
+  /** P2: world-space cloud sun-transmittance gate — pre-sever it rode the CSM
+   *  filterNode (pcssFilter × clouds.shadowAt) and reached us through `keep`; now
+   *  multiplied into the sun term directly (full-res, NaN-guarded). */
+  cloudShadow?: ((wxz: NV2) => NF) | null;
   /** bark/deadwood texture-array (texA albedo+cavity, texB normal+rough+height);
    *  sampled at the per-mesh layer slice (mesh word 7). null = bark unported. */
   barkTexA: Texture | null;
@@ -252,7 +261,8 @@ export function buildNaniteResolve(
   // term AND the per-cascade producer in NaniteFrame read the same flag). Default
   // ON. With the producer on, world.naniteShadow drives the PCSS branch below; the
   // csm-only branch is the ?oldgeo fallback (receives the old caster maps).
-  const shadowsOn = world.csm !== null && q.get('nanshadow') !== '0';
+  const shadowsOn =
+    (world.csm !== null || world.sunShadows === true) && q.get('nanshadow') !== '0';
   // ?voxao=0 — disable the per-brick DIRECTIONAL self-shading on VOXEL foliage. Voxels are shaded
   // with each brick's BAKED mean normal (VoxelBrick word2), which drives the sun N·L (line ~722) +
   // the normal.y ambient floor (line ~782) below, so brick faces angled away from the sun read
@@ -359,7 +369,9 @@ export function buildNaniteResolve(
   // positionWorld is the clip-space vertex (useless), so supply the
   // per-pixel RECONSTRUCTED world position — self-contained like depthNode,
   // not a closure var, so it builds inside the shadow subgraph cleanly.
-  if (shadowsOn) {
+  // P2: exists ONLY to feed the legacy CSM node — gate on csm (the severed
+  // world skips this SECOND per-pixel wp reconstruction entirely).
+  if (shadowsOn && world.csm) {
     (mat as unknown as { receivedShadowPositionNode?: unknown }).receivedShadowPositionNode = Fn(
       () => {
         const fy = float(cam.uH).sub(screenCoordinate.y);
@@ -1050,6 +1062,15 @@ export function buildNaniteResolve(
         If(isCorner.or((keepFullU as unknown as NF).greaterThan(float(0.5))), () => {
           sf.assign((sf as unknown as { mul(o: NF): NF }).mul(keep));
         });
+      }
+      if (world.cloudShadow) {
+        // P2: the cloud sun-transmittance gate, applied directly (it used to reach
+        // this pixel through the CSM filterNode via `keep`). Clamp + self-equality
+        // guard mirror ShadowSetup: one NaN from the cloud sample would otherwise
+        // poison the multiply and erase ALL cast shadows.
+        const c = world.cloudShadow(wp.xz as unknown as NV2);
+        const safe = c.equal(c).select(c.clamp(0, 1), float(1)) as unknown as NF;
+        sf.assign((sf as unknown as { mul(o: NF): NF }).mul(safe));
       }
       direct = nDotL.mul(sf) as unknown as NF;
     } else if (shadowsOn && world.csm) {

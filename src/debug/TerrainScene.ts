@@ -344,10 +344,19 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     lastWt = wt;
   });
 
-  // 4-cascade CSM + PCSS contact hardening; cloud shadows gate the sun term
-  const shadowRig = setupSunShadows(sunSky.sun, engine.camera, (wxz) =>
-    clouds.shadowAt(wxz),
-  );
+  // 4-cascade CSM + PCSS contact hardening; cloud shadows gate the sun term.
+  // P2 (shadow arc 2026-07-03): in the default nanite-only world (?oldgeo off, clip
+  // shadow path) the legacy CSM is SEVERED — with old geometry disabled its render
+  // lists hold ZERO casters, so CachedCsmShadowNode rendered ~2 empty 2048² maps per
+  // frame purely to drive a fit the clip path ignores, and the resolve paid a
+  // full-screen `keep` sample only to keep the node alive. The cloud gate (the one
+  // real thing the CSM filter carried) moves into the resolve via world.cloudShadow.
+  // The cascade fallback (?shadowclip=0) still reads the fitted cascade VPs → keeps
+  // the rig; ?oldgeo keeps the full legacy pipeline.
+  const severCsm = DISABLE_OLD_GEOMETRY && qNan.get('shadowclip') !== '0';
+  const shadowRig = severCsm
+    ? { csm: null as unknown as import('three/addons/csm/CSMShadowNode.js').CSMShadowNode }
+    : setupSunShadows(sunSky.sun, engine.camera, (wxz) => clouds.shadowAt(wxz));
   // cascade cameras drive the per-cascade caster cull in Forests
   forestsRef?.setCSM(shadowRig.csm ?? null);
   (window as unknown as { __laasDbg?: Record<string, unknown> }).__laasDbg = {
@@ -411,6 +420,13 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       gi: ablate.has('gi') ? null : gi,
       canopyTex,
       csm: shadowRig.csm ?? null,
+      // P2: with the CSM severed, sunShadows carries the "scene has sun shadows"
+      // signal (was csm !== null) and the cloud gate is applied by the resolve.
+      sunShadows: severCsm && !ablate.has('shadows'),
+      cloudShadow:
+        severCsm && !ablate.has('cloudshadow')
+          ? (wxz: import('../gpu/TSLTypes').NV2) => clouds.shadowAt(wxz)
+          : null,
       barkTexA: naniteBark?.texA ?? null,
       barkTexB: naniteBark?.texB ?? null,
     });

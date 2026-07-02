@@ -51,10 +51,12 @@ import { StorageTexture, type Renderer } from 'three/webgpu';
 import {
   Fn,
   If,
+  dot,
   float,
   instanceIndex,
   int,
   interleavedGradientNoise,
+  normalize,
   screenCoordinate,
   textureLoad,
   textureStore,
@@ -75,10 +77,25 @@ import {
   type NaniteRasterHandles,
   type NaniteVisBuffers,
 } from './NaniteRaster';
-import { bcU2F, dispatch, elemU, minU, uniformArrV4, uniformF, uniformMat4 } from './Tsl';
+import { bcU2F, dispatch, elemU, minU, toF, uniformArrV4, uniformF, uniformMat4 } from './Tsl';
 import type { UniformArrV4, UniformF, UniformMat4 } from './Tsl';
 import { sunU } from '../render/VegMaterials';
 import type { NaniteShadow } from './NaniteShadow';
+
+// P5 TOROIDAL CLIPMAP (shadow arc 2026-07-03): depth is stored as GLOBAL-normalized
+// sun-axis distance z_g = (dot(p, fwd) + D_OFF)/D_RANGE — a texel's value is a pure
+// world property (independent of the camera), so a level's stored content survives
+// ANY camera translation. On a snap shift the level rasters ONLY the newly-exposed
+// texel strips (outer leading edges + the hollow-reveal trailing edges) into the
+// shared vis buffer, and a strip-scoped kCopy publishes them into the PERSISTENT
+// per-level texture at toroidally-wrapped addresses. Full re-rasters remain only for
+// sun-direction changes. Math note: PCSS is EXACTLY equivalent — the blocker gap in
+// metres is (receiver−blocker)·D_RANGE, identical to the old per-level depthRange
+// formulation; the bias constants are metres either way. Precision: f32 over 16 km
+// ≈ 1 mm steps ≪ the 0.35 m depth bias. ?shtoro=0 = legacy full-level re-raster on
+// VP change (the strips become one full-window rect, gate = VP equality).
+const D_OFF = 8192;
+const D_RANGE = 16384;
 
 // PCSS (mirrors NaniteShadow.ts / ShadowSetup.ts — world-metric penumbra)
 const BLOCKER_TAPS = 6;
@@ -116,6 +133,13 @@ interface Level {
   lastVP: Matrix4;
   ran: boolean;
   count: number;
+  /** P5: snapped centre in integer texel units (light-plane axes) last frame */
+  prevSx: number;
+  prevSy: number;
+  /** P5: toroidal origin (texels) — window texel (0,0) lives at texture
+   *  ((originX)%RES, (originY)%RES); advanced by the snap delta each shift. */
+  originX: number;
+  originY: number;
 }
 
 export interface ShadowClipParams {
@@ -155,16 +179,41 @@ export function buildNaniteShadowClip(
   const LEVELS = cfg.levels;
   const SHADOW_MAP = cfg.res;
   const SHADOW_PIX = SHADOW_MAP * SHADOW_MAP;
+  // P5: ?shtoro=0 — legacy full-level re-raster on VP change (A/B escape)
+  const toro = new URLSearchParams(window.location.search).get('shtoro') !== '0';
 
   // ONE shared vis buffer: raster level k → copy to depthTex_k → reuse for k+1.
   const vis: NaniteVisBuffers = makeVisBuffers(SHADOW_PIX);
 
   const levels: Level[] = [];
   const levelVP: UniformMat4[] = [];
-  // per-level (span_m, depthRange_m, texel, radius) for the world-metric PCSS
+  // per-level (span_m, depthRange_m, texel, radius) for the world-metric PCSS.
+  // P5: depthRange is the GLOBAL D_RANGE (the metres-per-z_g factor).
   const levelParam: UniformArrV4 = uniformArrV4(
-    Array.from({ length: LEVELS }, () => new Vector4(1, 1, 1 / SHADOW_MAP, 1.15)),
+    Array.from({ length: LEVELS }, () => new Vector4(1, D_RANGE, 1 / SHADOW_MAP, 1.15)),
   );
+  // P5 per-level (originX texels, originY texels, zScale, zBias): toroidal origin for
+  // the wrap addressing + the affine level-z → global-z remap the kCopy applies
+  // (z_g = z·zScale + zBias with zScale = 2·dHalf/D_RANGE, zBias = (scz − dHalf +
+  // D_OFF)/D_RANGE — monotone-affine, so the raster's atomicMin election is unchanged).
+  const levelOrigin: UniformArrV4 = uniformArrV4(
+    Array.from({ length: LEVELS }, () => new Vector4(0, 0, 1, 0)),
+  );
+  // P5 per-level active strip rects (4 × [x0,y0,x1,y1] in window UV; empty = x1<=x0):
+  // shared by the cull filter (drop clusters missing every rect) and kCopy (publish
+  // only strip texels). A full update = one (0,0,1,1) rect.
+  const strips: UniformArrV4[] = Array.from({ length: LEVELS }, () =>
+    uniformArrV4(Array.from({ length: 4 }, () => new Vector4(0, 0, 0, 0))),
+  );
+  const setStripRects = (k: number, rects: [number, number, number, number][]): void => {
+    const u = strips[k]!;
+    for (let r = 0; r < 4; r++) {
+      const v = u.array[r] as Vector4;
+      const rect = rects[r];
+      if (rect) v.set(rect[0], rect[1], rect[2], rect[3]);
+      else v.set(0, 0, 0, 0);
+    }
+  };
 
   // shared min-screen-size cull uniform (all levels share cfg.minPx) + the hier
   // SHARED-cut cam (S3-perf): the cut is identical across levels, so ONE cull walks
@@ -192,14 +241,42 @@ export function buildNaniteShadowClip(
     depthTex.generateMipmaps = false;
     depthTex.name = `nanClipDepth${k}`;
 
+    // P5 strip-scoped publish: window texel → (in an active rect?) → remap the level
+    // z to GLOBAL z_g → store at the toroidally-wrapped texture address. Empty vis
+    // texels inside a rect store 1 (far) — a strip with no caster must still
+    // overwrite the stale world content that scrolled out.
     const kCopy = Fn(() => {
       const px = instanceIndex;
       If(px.lessThan(uint(SHADOW_PIX)), () => {
-        const raw = elemU(vis.depthV.ro, px).toVar();
-        const d = raw.equal(uint(0xffffffff)).select(float(1), bcU2F(raw));
         const x = px.mod(uint(SHADOW_MAP));
         const y = px.div(uint(SHADOW_MAP));
-        textureStore(depthTex, uvec2(x, y), vec4(d, 0, 0, 1)).toWriteOnly();
+        const ux = toF(x).add(0.5).div(SHADOW_MAP);
+        const uy = toF(y).add(0.5).div(SHADOW_MAP);
+        const rectsU = strips[k]!;
+        const hit = float(0).toVar();
+        for (let r = 0; r < 4; r++) {
+          const rect = rectsU.element(int(r));
+          If(
+            ux
+              .greaterThanEqual(rect.x)
+              .and(ux.lessThan(rect.z))
+              .and(uy.greaterThanEqual(rect.y))
+              .and(uy.lessThan(rect.w)),
+            () => {
+              hit.assign(1);
+            },
+          );
+        }
+        If(hit.greaterThan(0.5), () => {
+          const raw = elemU(vis.depthV.ro, px).toVar();
+          const org = levelOrigin.element(int(k));
+          const zg = raw
+            .equal(uint(0xffffffff))
+            .select(float(1), bcU2F(raw).mul(org.z).add(org.w));
+          const tx = x.add(uint(org.x)).mod(uint(SHADOW_MAP));
+          const ty = y.add(uint(org.y)).mod(uint(SHADOW_MAP));
+          textureStore(depthTex, uvec2(tx, ty), vec4(zg, 0, 0, 1)).toWriteOnly();
+        });
       });
     })().compute(SHADOW_PIX, [256]);
     (kCopy as unknown as NamedKernel).setName(`nanClipCopy${k}`);
@@ -223,6 +300,10 @@ export function buildNaniteShadowClip(
       lastVP: new Matrix4(),
       ran: false,
       count: -1,
+      prevSx: 0,
+      prevSy: 0,
+      originX: 0,
+      originY: 0,
     });
   }
 
@@ -236,6 +317,9 @@ export function buildNaniteShadowClip(
     // far-field flood ⇒ a small frontier (16 MB/buf vs 64 MB at 8M) is ample.
     frontierCap: SHADOW_FRONTIER_CAP,
     hierDepth,
+    // P5: the per-level strip rects — the filter drops clusters missing every rect
+    strips,
+    levelHalves: levels.map((lv) => lv.half),
   });
   for (let k = 0; k < LEVELS; k++) {
     const lv = levels[k]!;
@@ -265,9 +349,16 @@ export function buildNaniteShadowClip(
   // per-level filter+raster. -1 = no prepass this frame (run() does the full thing itself).
   let prepassMask = -1;
 
-  // PASS A (CPU, no GPU) — fit every level (snap + R1 cadence gate) → reRaster[] + mask.
-  // For a re-rastering level set its cam (filter frustum) + resolve uniforms + lastVP. A
-  // CACHED level keeps its old VP + levelVP so its depthTex sample stays aligned.
+  // P5: sun-direction change detection — the ONLY remaining full invalidation
+  // (stored z_g is a world property; camera translation never invalidates texels).
+  const lastSunFwd = new Vector3(0, 0, 0);
+
+  // PASS A (CPU, no GPU) — fit every level → strip rects + reRaster[] + mask.
+  // TOROIDAL (default): a level re-rasters ONLY its newly-exposed window strips
+  // (outer leading edges from the snap shift + the hollow-reveal trailing edges
+  // around the central hole); dx=dy=0 ⇒ fully cached, ANY camera motion along the
+  // sun axis included (stored depth is global — cz affects only the raster slab).
+  // LEGACY (?shtoro=0): full-window rect on any VP change (the old R1 gate).
   const fitLevels = (mainCamera: PerspectiveCamera): { mask: number; sinElev: number } => {
     // sun "L" points surface→sun; the shadow view looks the other way.
     forward.copy(sunU.dir.value).normalize().multiplyScalar(-1);
@@ -282,21 +373,32 @@ export function buildNaniteShadowClip(
     const cp = mainCamera.position;
     const cz = cp.dot(forward); // camera depth along the sun axis
 
+    // sun moved ⇒ the light basis (and every stored z_g) is stale ⇒ full re-raster
+    const sunMoved = forward.distanceToSquared(lastSunFwd) > 1e-12;
+    if (sunMoved) lastSunFwd.copy(forward);
+
     let mask = 0;
     for (let k = 0; k < LEVELS; k++) {
       const lv = levels[k]!;
       reRaster[k] = false;
       const texelWorld = (2 * lv.half) / SHADOW_MAP;
-      // snap the centre onto THIS level's texel grid (anti-crawl + cadence)
+      // snap the centre onto THIS level's texel grid (anti-crawl + toroidal shift).
+      // ALL THREE axes: scx/scy is the classic anti-crawl; the SUN-AXIS depth snaps
+      // too so the raster slab is stable between texel crossings (P1; an unsnapped
+      // cz invalidated the old VP-equality cache on ANY motion — measured 598/600
+      // frames re-rastering ALL 6 levels, the whole +17.6 ms moving shadow bill).
       const cx = cp.dot(right);
       const cy = cp.dot(up);
-      const scx = Math.round(cx / texelWorld) * texelWorld;
-      const scy = Math.round(cy / texelWorld) * texelWorld;
+      const sx = Math.round(cx / texelWorld); // integer texel units
+      const sy = Math.round(cy / texelWorld);
+      const scx = sx * texelWorld;
+      const scy = sy * texelWorld;
+      const scz = Math.round(cz / texelWorld) * texelWorld;
       center
         .copy(right)
         .multiplyScalar(scx)
         .addScaledVector(up, scy)
-        .addScaledVector(forward, cz);
+        .addScaledVector(forward, scz);
       // depth half-span: generous along the sun (covers terrain relief + canopy +
       // the grazing reach across the level). f32 depth precision ⇒ a big range is
       // fine. Scales with the level so per-level precision is consistent.
@@ -311,8 +413,78 @@ export function buildNaniteShadowClip(
       lv.ortho.updateProjectionMatrix();
       vp.multiplyMatrices(lv.ortho.projectionMatrix, lv.ortho.matrixWorldInverse);
 
-      // R1 cadence: skip if the snapped VP is bit-identical to the cached one.
-      if (lv.ran && vp.equals(lv.lastVP)) continue;
+      // ---- strip decision -------------------------------------------------------
+      const R = SHADOW_MAP;
+      let rects: [number, number, number, number][] | null = null;
+      let full = false;
+      if (!toro) {
+        // legacy: full-window re-raster on any VP change (R1 exact-equality gate)
+        if (!lv.ran || !vp.equals(lv.lastVP)) full = true;
+      } else if (!lv.ran || sunMoved) {
+        full = true;
+      } else {
+        const dx = sx - lv.prevSx;
+        const dy = sy - lv.prevSy;
+        if (dx !== 0 || dy !== 0) {
+          if (Math.abs(dx) >= R || Math.abs(dy) >= R) {
+            full = true; // teleport — nothing survives
+          } else {
+            // CONTENT shift in WINDOW texels. three's lookAt makes the ortho x-axis
+            // −right (xAxis = up×(−fwd) = −right) and y-axis +up — verified
+            // empirically: ndc(center+10·right).x < 0. Camera +dx along `right`
+            // ⇒ static world content moves +dx in uv.x; camera +dy along `up` ⇒
+            // content moves −dy in uv.y.
+            const sxShift = dx;
+            const syShift = -dy;
+            const ax = Math.abs(sxShift);
+            const ay = Math.abs(syShift);
+            // toroidal origin: address (w + origin) mod R stays fixed for a world
+            // texel ⇒ origin advances OPPOSITE the content shift.
+            lv.originX = ((lv.originX - sxShift) % R + R) % R;
+            lv.originY = ((lv.originY - syShift) % R + R) % R;
+            rects = [];
+            // outer exposure strips — new world enters on the side content moves
+            // AWAY from (shift>0 ⇒ low edge; shift<0 ⇒ high edge).
+            if (sxShift > 0) rects.push([0, 0, ax / R, 1]);
+            else if (sxShift < 0) rects.push([(R - ax) / R, 0, 1, 1]);
+            if (syShift > 0) rects.push([0, 0, 1, ay / R]);
+            else if (syShift < 0) rects.push([0, (R - ay) / R, 1, 1]);
+            // hollow-reveal strips (k≥1: world content exiting the central hole was
+            // never rastered at THIS level — the finer level owned it). Content
+            // exits the hole [0.25,0.75)² on the side it moves TOWARD, padded by
+            // the cross-axis delta (overlap is harmless).
+            if (k > 0) {
+              const py0 = Math.max(0, 0.25 - ay / R);
+              const py1 = Math.min(1, 0.75 + ay / R);
+              if (sxShift > 0) rects.push([0.75, py0, 0.75 + ax / R, py1]);
+              else if (sxShift < 0) rects.push([0.25 - ax / R, py0, 0.25, py1]);
+              const px0 = Math.max(0, 0.25 - ax / R);
+              const px1 = Math.min(1, 0.75 + ax / R);
+              if (syShift > 0) rects.push([px0, 0.75, px1, 0.75 + ay / R]);
+              else if (syShift < 0) rects.push([px0, 0.25 - ay / R, px1, 0.25]);
+            }
+          }
+        }
+      }
+      lv.prevSx = sx;
+      lv.prevSy = sy;
+      if (full) {
+        lv.originX = 0;
+        lv.originY = 0;
+        rects = [[0, 0, 1, 1]];
+      }
+      // sampling must track the CURRENT window every frame (uv mapping follows the
+      // snap even on cached frames; stored z_g is window-independent).
+      levelVP[k]!.value.copy(vp);
+      (levelParam.array[k] as Vector4).set(2 * lv.half, D_RANGE, 1 / SHADOW_MAP, 1.15);
+      const org = levelOrigin.array[k] as Vector4;
+      org.set(lv.originX, lv.originY, (2 * dHalf) / D_RANGE, (scz - dHalf + D_OFF) / D_RANGE);
+      lv.lastVP.copy(vp);
+      lv.ran = true;
+
+      if (!rects || rects.length === 0) continue; // cached — no strips this frame
+      if (rects.length > 4) rects.length = 4; // 4 slots (outer 2 + reveal 2)
+      setStripRects(k, rects);
       reRaster[k] = true;
       mask |= 1 << k;
 
@@ -330,10 +502,6 @@ export function buildNaniteShadowClip(
         const pl = frustum.planes[p];
         if (pl) cam.planes.array[p]?.set(pl.normal.x, pl.normal.y, pl.normal.z, pl.constant);
       }
-      levelVP[k]!.value.copy(vp);
-      (levelParam.array[k] as Vector4).set(2 * lv.half, 2 * dHalf, 1 / SHADOW_MAP, 1.15);
-      lv.lastVP.copy(vp);
-      lv.ran = true;
     }
     return { mask, sinElev };
   };
@@ -427,10 +595,15 @@ export function buildNaniteShadowClip(
   };
 
   // ---- resolve-side PCSS over our own textures (level-select = finest cover) ---
+  // P5: window uv → toroidal texture address (clamp to the window FIRST — an
+  // out-of-window tap must clamp to the window edge, never wrap to the far side).
   const depthAt = (k: number, uv: NV2): NF => {
     const u = (uv as unknown as { clamp(a: number, b: number): NV2 }).clamp(0, 1);
-    const tx = minU(uint((u as unknown as { x: NF }).x.mul(SHADOW_MAP)), uint(SHADOW_MAP - 1));
-    const ty = minU(uint((u as unknown as { y: NF }).y.mul(SHADOW_MAP)), uint(SHADOW_MAP - 1));
+    const wx = minU(uint((u as unknown as { x: NF }).x.mul(SHADOW_MAP)), uint(SHADOW_MAP - 1));
+    const wy = minU(uint((u as unknown as { y: NF }).y.mul(SHADOW_MAP)), uint(SHADOW_MAP - 1));
+    const org = levelOrigin.element(int(k));
+    const tx = wx.add(uint(org.x)).mod(uint(SHADOW_MAP));
+    const ty = wy.add(uint(org.y)).mod(uint(SHADOW_MAP));
     return (textureLoad(levels[k]!.depthTex, uvec2(tx, ty)) as unknown as { x: NF }).x;
   };
 
@@ -501,14 +674,23 @@ export function buildNaniteShadowClip(
       const wp = (worldPos as unknown as { add(o: unknown): NV3 }).add(
         (normal as unknown as { mul(o: number): NV3 }).mul(NORMAL_BIAS_M),
       ).toVar();
+      // P5: the receiver depth is GLOBAL z_g = (dot(p, fwd) + D_OFF)/D_RANGE —
+      // computed once from the sun uniform (fwd = −sunDir), compared against the
+      // stored global texel values. levelCoord's z stays the per-window slab
+      // coordinate and is used only for the inside test.
+      const fwdN = (normalize(vec3(sunU.dir)) as unknown as { mul(o: number): NV3 }).mul(-1);
+      const zg = (dot(wp as unknown as NV3, fwdN as unknown as NV3) as unknown as NF)
+        .add(D_OFF)
+        .div(D_RANGE)
+        .toVar();
       const sf = float(1).toVar();
       const found = float(0).toVar();
       for (let k = 0; k < LEVELS; k++) {
         If(found.equal(0), () => {
-          const { uv, z, inside } = levelCoord(k, wp as unknown as NV3);
+          const { uv, inside } = levelCoord(k, wp as unknown as NV3);
           If(inside, () => {
             found.assign(1);
-            sf.assign(pcss(k, uv, z, pc));
+            sf.assign(pcss(k, uv, zg as unknown as NF, pc));
           });
         });
       }

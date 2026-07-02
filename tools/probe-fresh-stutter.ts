@@ -17,6 +17,10 @@ import { launchWebGPU, laasUrl } from './launch';
 import { writeFileSync, mkdirSync } from 'node:fs';
 
 const BASE = process.env.BASE ?? 'http://localhost:5173/';
+// SCENE=world — measure the real world scene (shadows/GI/CSM live there; forest has
+// csm:null so the whole shadow system never builds — deep-review/17 harness gap).
+// World poses are ground-RELATIVE (pose y = heightAtCpu(x,z) + y).
+const SCENE = process.env.SCENE ?? 'forest';
 const CONFIG = (process.env.CONFIG ?? 'default') as 'default' | 'noleaves';
 const OUT_DIR =
   process.env.OUT_DIR ??
@@ -73,8 +77,8 @@ async function main(): Promise<void> {
     const [k, v] = kv.split('=');
     if (k) extra[k] = v ?? '1';
   }
-  const url = laasUrl({ scene: 'forest', freeze: false, hud: false, extra }, BASE);
-  console.log(`[probe] CONFIG=${CONFIG} url=${url}`);
+  const url = laasUrl({ scene: SCENE, freeze: false, hud: false, extra }, BASE);
+  console.log(`[probe] SCENE=${SCENE} CONFIG=${CONFIG} url=${url}`);
   const t0 = Date.now();
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(
@@ -112,7 +116,10 @@ async function main(): Promise<void> {
   mkdirSync(`${OUT_DIR}/shots`, { recursive: true });
   // static eye shot (visual reference for the voxel-band-too-close bug)
   await page.evaluate(async () => {
-    window.__laas.setPose!({ p: [0, 2, 0], yaw: 0.6, pitch: -0.02 });
+    const hf = (window as unknown as { __laasDbg?: { engine?: { heightfield?: { heightAtCpu?(x: number, z: number): number } } } })
+      .__laasDbg?.engine?.heightfield;
+    const g = hf?.heightAtCpu ? hf.heightAtCpu(0, 0) : 0;
+    window.__laas.setPose!({ p: [0, g + 2, 0], yaw: 0.6, pitch: -0.02 });
     if (window.__laas.settle) await window.__laas.settle(30);
   });
   await page.screenshot({ path: `${OUT_DIR}/shots/${LABEL}-eye-static.png` });
@@ -140,6 +147,9 @@ async function main(): Promise<void> {
       const visTris: number[] = [];
       const visCl: number[] = [];
       const gpuBuf: number[] = [];
+      // shadow-arc: per-tick clipmap re-raster bitmask (nanite.shRaster — set every frame
+      // by meter(); -1 = no shadow system). popcount = levels re-rastered that frame.
+      const shR: number[] = [];
       const tAbs: number[] = [];
       const spikes: { i: number; t: number; delta: number; counters: Record<string, number> }[] = [];
       const p0 = h.getPose!();
@@ -175,6 +185,7 @@ async function main(): Promise<void> {
             visTris.push(c['nanite.visTris'] ?? -1);
             visCl.push(c['nanite.visClusters'] ?? -1);
             gpuBuf.push(c['gpu.buffers'] ?? -1);
+            shR.push(c['nanite.shRaster'] ?? -1);
             if (d > 33.4 && spikes.length < 80) {
               spikes.push({ i: delta.length - 1, t, delta: d, counters: { ...c } });
             }
@@ -185,7 +196,7 @@ async function main(): Promise<void> {
         };
         requestAnimationFrame(tick);
       });
-      return { delta, tAbs, cpuUp, cpuSub, heap, visTris, visCl, gpuBuf, spikes, longtasks, endPose: h.getPose!() };
+      return { delta, tAbs, cpuUp, cpuSub, heap, visTris, visCl, gpuBuf, shR, spikes, longtasks, endPose: h.getPose!() };
     },
     { TICKS },
   )) as {
@@ -197,6 +208,7 @@ async function main(): Promise<void> {
     visTris: number[];
     visCl: number[];
     gpuBuf: number[];
+    shR: number[];
     spikes: { i: number; t: number; delta: number; counters: Record<string, number> }[];
     longtasks: { t: number; d: number }[];
     endPose: unknown;
@@ -222,7 +234,10 @@ async function main(): Promise<void> {
   for (const pose of POSES) {
     const frames = (await page.evaluate(
       async ({ pose, FRAMES, WARMUP, MF_COOLDOWN }) => {
-        window.__laas.setPose!({ p: pose.p, yaw: pose.yaw, pitch: pose.pitch });
+        const hf = (window as unknown as { __laasDbg?: { engine?: { heightfield?: { heightAtCpu?(x: number, z: number): number } } } })
+          .__laasDbg?.engine?.heightfield;
+        const g = hf?.heightAtCpu ? hf.heightAtCpu(pose.p[0], pose.p[2]) : 0;
+        window.__laas.setPose!({ p: [pose.p[0], g + pose.p[1], pose.p[2]], yaw: pose.yaw, pitch: pose.pitch });
         if (window.__laas.settle) await window.__laas.settle(20);
         const fs = await window.__laas.measureFrames!({
           frames: FRAMES,
@@ -285,6 +300,22 @@ async function main(): Promise<void> {
     `frames >16.7ms: ${d.filter((x) => x > 16.7).length}  >33ms: ${d.filter((x) => x > 33.4).length}  >100ms: ${d.filter((x) => x > 100).length}`,
   );
   console.log(`longtasks: ${live.longtasks.length} (total ${live.longtasks.reduce((a, b) => a + b.d, 0).toFixed(0)}ms)`);
+  if (live.shR.some((m) => m > 0)) {
+    // shadow-arc: distribution of clipmap levels re-rastered per frame (popcount of mask)
+    const pop = (m: number): number => {
+      let n = 0;
+      for (let v = m; v > 0; v >>= 1) n += v & 1;
+      return n;
+    };
+    const counts = live.shR.map((m) => (m >= 0 ? pop(m) : 0));
+    const hist = new Array<number>(8).fill(0);
+    for (const n of counts) hist[Math.min(n, 7)] = (hist[Math.min(n, 7)] ?? 0) + 1;
+    const avg = counts.reduce((a, b) => a + b, 0) / counts.length;
+    console.log(
+      `shadow re-raster levels/frame: avg=${avg.toFixed(2)} hist[0..7]=${hist.join(',')} ` +
+        `(frames with ≥5 levels: ${counts.filter((n) => n >= 5).length})`,
+    );
+  }
   console.log(`heapMB first/last: ${live.heap[0]} / ${live.heap[live.heap.length - 1]}`);
   for (const s of live.spikes.slice(0, 25)) {
     const lt = live.longtasks.find((l) => l.t + l.d > s.t - s.delta && l.t < s.t);

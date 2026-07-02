@@ -45,6 +45,7 @@ import {
   dot,
   float,
   instanceIndex,
+  int,
   uint,
   vec3,
   vec4,
@@ -77,6 +78,7 @@ import {
   sUvec2,
   uv2,
   wgLinear,
+  type UniformArrV4,
   type UniformF,
 } from './Tsl';
 import type { BufOf, UV2 } from './Tsl';
@@ -123,7 +125,20 @@ export function buildClipCull(
   levelCams: NaniteCam[],
   /** per-level hollow uniform (1/E_k for k≥1, 0 for level 0) */
   innerRejects: UniformF[],
-  opts: { minPx: UniformF; frontierCap: number; hierDepth?: number },
+  opts: {
+    minPx: UniformF;
+    frontierCap: number;
+    hierDepth?: number;
+    /** P5 TOROIDAL STRIPS (shadow arc 2026-07-03): per-level active-rect uniforms —
+     *  4 rects in the level's WINDOW UV space (x0,y0,x1,y1; empty = x1<=x0). When
+     *  present, the level filter ALSO drops clusters whose uv-box misses every
+     *  active rect, so the raster only touches the newly-exposed texel strips
+     *  (the strip-scoped kCopy publishes exactly those texels). */
+    strips?: UniformArrV4[];
+    /** per-level ortho half-extents E_k (static) — bakes radius→uv scale into the
+     *  strip test as a compile-time constant. Required when strips is set. */
+    levelHalves?: number[];
+  },
 ): ClipCull {
   const LEVELS = levelCams.length;
 
@@ -248,6 +263,37 @@ export function buildClipCull(
           },
         );
       });
+      // P5 strips: drop clusters whose uv-box misses every active rect — the level
+      // only publishes strip texels this frame, so anything else is dead raster work.
+      // Ortho ⇒ clip.w ≡ 1, ndc = clip; uv = ndc·0.5+0.5; radius→uv = r/(2·E_k).
+      if (opts.strips) {
+        const rects = opts.strips[k]!;
+        const rUvK = 1 / (2 * (opts.levelHalves?.[k] ?? 1));
+        If(visible.greaterThan(0.5), () => {
+          const clip = cam.vp.mul(vec4(s.center, 1)) as unknown as NV4;
+          const ux = clip.x.mul(0.5).add(0.5);
+          const uy = clip.y.mul(0.5).add(0.5);
+          const rUv = s.radius.mul(rUvK);
+          const hit = float(0).toVar();
+          for (let r = 0; r < 4; r++) {
+            const rect = rects.element(int(r)) as unknown as NV4;
+            If(
+              ux
+                .add(rUv)
+                .greaterThanEqual(rect.x)
+                .and(ux.sub(rUv).lessThan(rect.z))
+                .and(uy.add(rUv).greaterThanEqual(rect.y))
+                .and(uy.sub(rUv).lessThan(rect.w)),
+              () => {
+                hit.assign(1);
+              },
+            );
+          }
+          If(hit.equal(0), () => {
+            visible.assign(0);
+          });
+        });
+      }
       If(visible.greaterThan(0.5), () => {
         const slot = atomicAdd(countV.atomic.element(0), uint(1)) as unknown as NU;
         If(slot.lessThan(uint(QRASTER_CAP)), () => {

@@ -73,6 +73,12 @@ export function buildNaniteFrame(
     gi: import('../gpu/passes/ProbeGI').ProbeGI | null;
     canopyTex: import('three/webgpu').StorageTexture | null;
     csm: import('three/addons/csm/CSMShadowNode.js').CSMShadowNode | null;
+    /** P2 (shadow arc): "scene has sun shadows" WITHOUT a legacy CSM node — the
+     *  nanite-only world severs the CSM (empty-map keepalive) and signals here. */
+    sunShadows?: boolean;
+    /** P2: world-space cloud sun-transmittance gate (rode the CSM filterNode before
+     *  the sever; the resolve now multiplies it into the sun term directly). */
+    cloudShadow?: ((wxz: import('../gpu/TSLTypes').NV2) => NF) | null;
     barkTexA: import('three').Texture | null;
     barkTexB: import('three').Texture | null;
   },
@@ -258,7 +264,8 @@ export function buildNaniteFrame(
   // ?nanshadow=0 disables the whole system (producer here + receive in the resolve,
   // same flag). Built BEFORE the resolve so the resolve binds shadowFactor; needs
   // the CSM (its cascade ortho cameras provide the per-cascade light VPs).
-  const shadowOn = params.get('nanshadow') !== '0' && world.csm !== null;
+  const shadowOn =
+    params.get('nanshadow') !== '0' && (world.csm !== null || world.sunShadows === true);
   // S3 (D-N29): the SCREEN-DENSITY SHADOW CLIPMAP replaces the 4 fixed CSM
   // cascades (the resolved sun-shadow rethink — CSM dropped for shadow geometry).
   // ?shadowclip=0 A/Bs back to the cascade path (NaniteShadow.ts). world.csm stays
@@ -302,6 +309,8 @@ export function buildNaniteFrame(
     gi: world.gi,
     canopyTex: world.canopyTex,
     csm: world.csm,
+    sunShadows: world.sunShadows,
+    cloudShadow: world.cloudShadow,
     barkTexA: world.barkTexA,
     barkTexB: world.barkTexB,
     naniteShadow: shadow,
