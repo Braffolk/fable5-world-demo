@@ -846,7 +846,15 @@ export function buildNaniteResolve(
     // wrapped diffuse N·L·0.5+0.5 for voxel pixels — per-brick variation survives, but
     // no yaw can crash a crown to the floor.
     if (pass === 'vox') {
-      const wrapped = dot(wNormal, sunDir).mul(0.5).add(0.5).clamp(0, 1).mul(0.9) as unknown as NF;
+      // FLOOR at 0.18: albedo-debug proved the residual far dark clumps are lighting-side —
+      // deeply down/away-facing tile-brick mean normals bottom the plain wrap out at ~0.05.
+      // No foliage pixel drops below ~0.16·sun; per-brick variation survives above the floor.
+      const wrapped = dot(wNormal, sunDir)
+        .mul(0.5)
+        .add(0.5)
+        .clamp(0, 1)
+        .max(0.18)
+        .mul(0.9) as unknown as NF;
       nDotL = (isV.equal(uint(1)).select(wrapped, nDotL) as unknown as NF).toVar() as unknown as NF;
     }
     const sunCol = (sunU.color as unknown as NV3).mul(float(sunU.intensity)) as unknown as NV3;
