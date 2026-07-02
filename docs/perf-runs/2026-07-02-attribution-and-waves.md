@@ -331,3 +331,57 @@ burst). Reversed-order re-measure in flight (coal FIRST). w0-pyr isolated obliqu
   (specs/spec-prev-frame-occlusion.md, −3..8 oblique) — the only remaining lever with
   headline-size booking; then Q3 r-pin + Q5-Q7 bimodality; pool D leftovers (RP-4
   respass, RP-3c bloom fold, RP-7 bead polish [user sign-off]) are small.
+
+## 5j. Pool A prev-frame occlusion SHIPPED (commits 268a942 + 2a34acd) — the big rock landed
+
+STAGE 0 (zero-code discriminator, cool rested session, wind=0, order base→k2ctl→k2w2):
+base 19.4/22.3/14.2 — k2ctl (voxf2b=1,k=2) 22.1/26.2/18.8 — k2w2 (+voxwaves=2)
+23.8/24.7/19.5 (eye/obl/aerial med). Money number k2ctl−k2w2 @oblique = **−1.5 ms
+vox-behind-vox occlusion** even under the depth partition (under-measures: slabs
+straddle the canopy) with thermal against run 3 ⇒ met the build threshold.
+
+BUILT (268a942, tsc clean):
+- STAGE 1 `?occg` (default ON, =0 → shipped centre guard): sphereOccluded FOOTPRINT-
+  fully-inside guard (NaniteHzb) — strictly-conservative upgrade of e00cfab's centre
+  guard (edge-straddling prev footprints sample clamped edge texels blind to the
+  off-screen sliver ⇒ must KEEP). Perf neutral-in-noise; shots at D0.
+- STAGE 2 `?voxprev` — visibility-partitioned TWO-PASS vox scatter on the F2B plumbing
+  at K=2: NaniteHzb.sphereProbablyOccluded (LIBERAL centre classifier, ?voxprevlvl=Δ
+  default 2 mips finer than the diameter-fits pick; Δ=0 provably degenerate — every
+  queue entry already passed the conservative emit test at emit, so the partition MUST
+  NOT be the emit closure); voxPrevBucket partition (self-contained inside
+  If(matClass==7), hoist-safe); kVoxRange dropped from the fanout batch; raster forces
+  waves=2 (pass A scatter → vox-inclusive voxOccPyr rebuild → pass B, whose block+brick
+  culls finally see vox occluders); voxB0/voxB1 meter counters; inert at ?occl=0.
+  NOTHING dropped by the prev-frame verdict — it only ROUTES between two passes that
+  both end at the same exact-conservative same-frame culls (quality argument spec §3).
+- Buffer budgets: kVoxCount 7 / kVoxScatterFan 9 bindings (voxRange↔hzb swap; both
+  already bound instances via voxClusterDepth) — under the Metal 10 cliff.
+
+GATES (200k @2268×1473, wind=0, thermal-ordered):
+- perf med (eye/obl/aerial): pfo1-ctl(occg=0) 22.0/31.5/17.7 → pfo1-on(defaults)
+  22.8/31.7/17.1 → **pfo2-on(voxprev=1) 21.2/27.1/17.5** in the hottest slot.
+- partition (200k medians): B1 share **eye 71.7%** (vox behind the near mesh canopy —
+  the eye win mechanism, stacking ON TOP of voxbocc's brick-vs-mesh) / **oblique
+  23.6%** (≥20% R9 bar) / aerial 9.7% (top-down ⇒ pass B near-empty ⇒ tax ≈ one
+  rebuild = +0.4). The predicted shape exactly.
+- shots: both stages AT the D0 band (stage1 0.35/0.16/0.34, stage2 0.39/0.19/0.32 vs
+  D0 0.40/0.18/0.37) ⇒ pixel-equivalent.
+- live (600 ticks): ctl avg 13.31 p50 15.8 p95 17.4 → voxprev avg 12.44 **p50 10.1
+  (−5.7)** p95 17.5 (=); the single 48.8ms spike carries the 5.5GB-heap session-
+  artifact signature (position-locked class). Same-run isolated: oblique 31.5→28.5.
+- STAGE 3 flip (2a34acd): voxprev DEFAULT ON; raster reads cull.voxPrevEnabled through
+  deps (no URL re-parse — ?occl=0 / ?voxprev=0+?voxf2b=1 combos keep exact legacy
+  shapes). Flip-verify: counters identical (obl 7027/2187 vs 7040/2173), shots
+  0.62/0.21/0.32 (D0 family). ?voxprev=0 = permanent A/B control.
+
+HONEST OBLIQUE BOOKING: voxprev oblique read −4.6 / −3.0 / −1.5 across three thermal
+positions while ctls held 31.5-31.7 — centre ≈ **−3 ms** (the spec's point estimate),
+first read was the generous cool slot. Rested canonical re-baseline pending (next
+session): expect oblique ~27-29 warm / lower rested; eye ~21-22.6; aerial ~17.5.
+
+OPEN AFTER THIS: stage-4 cluster-level record+re-test (clust2p, the live-motion
+stale-HZB lever, ~9-11ms moving inflation measured 2026-06-26 pre-voxbocc) — spec it
+only after a live-moving occl=0 A/B re-quantifies the prize post-voxbocc/voxprev.
+?voxprevlvl sweep (3/4) unswept — Δ=2 already material; possible small further oblique
+upside, diagnostics-grade until swept.
