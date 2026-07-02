@@ -338,8 +338,11 @@ export function buildNaniteCull(
   // ?voxf2bk/?voxwaves values are ignored while it is set. NOTHING is ever dropped by
   // the prev-frame verdict — it only picks the pass; both passes end at the same
   // exact-conservative same-frame culls (quality-law argument: spec §3).
+  // DEFAULT ON (2026-07-02 gates: oblique −4.6/−3.0 two sessions, eye −1.6, aerial +0.4;
+  // live p50 15.8→10.1 p95 =; shots at D0 band; B1 share eye 71.7%/obl 23.6%/aer 9.7%).
+  // ?voxprev=0 reverts to the single-pass unordered scatter (the permanent A/B control).
   const voxPrevTest = opts?.voxPrevTest ?? null;
-  const voxPrev = voxParams.get('voxprev') === '1' && voxPrevTest !== null;
+  const voxPrev = voxParams.get('voxprev') !== '0' && voxPrevTest !== null;
   const voxf2b = voxPrev || (voxParams.get('voxf2b') ?? '0') !== '0';
   // ?voxtaucap — voxel-cluster τ_eff clamp (px); see the traverse cut note. DEFAULT 12
   // (2026-07-02c): pre-?fartiles this cap was ruinous — it fought the lodWarp across

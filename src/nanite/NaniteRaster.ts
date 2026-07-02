@@ -215,6 +215,7 @@ export function buildNaniteRaster(
     voxBucketDispatchAttr?: IndirectStorageBufferAttribute[];
     voxF2bK?: number;
     voxF2bEnabled?: boolean;
+    voxPrevEnabled?: boolean;
   },
   vis: NaniteVisBuffers,
   tint: 'flat' | 'cluster' | 'lod',
@@ -1406,6 +1407,7 @@ export function buildNaniteRaster(
           voxBucketDispatchAttr: cull.voxBucketDispatchAttr ?? [],
           voxF2bK: cull.voxF2bK ?? 1,
           voxF2bEnabled: cull.voxF2bEnabled ?? false,
+          voxPrevEnabled: cull.voxPrevEnabled ?? false,
           depthKey24,
           visPayloadV,
           visBV,

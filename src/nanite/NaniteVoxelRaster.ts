@@ -152,6 +152,11 @@ export interface VoxelRasterDeps {
    *  42→121 fps with it OFF). The default is now the single unordered whole-list dispatch;
    *  ?voxf2b=1 restores the old K-bucket path (A/B control / future large-batch opt-in). */
   voxF2bEnabled: boolean;
+  /** ?voxprev two-pass visibility partition active in the cull (implies voxF2bEnabled,
+   *  K=2). Forces the 2-wave dispatch: pass A → vox-inclusive voxOccPyr rebuild → pass B
+   *  (spec-prev-frame-occlusion §2.4.2). Threaded from cull.voxPrevEnabled — NOT re-parsed
+   *  from the URL, so the ?occl=0 / explicit-?voxf2b diagnostic combos stay exact. */
+  voxPrevEnabled: boolean;
   /** the SAME 24-bit depth key the world1 raster + resolve use (§6.7). */
   depthKey24: (cz: NF) => NU;
   /** global election buffers (the on-chip wgElect flushes here via atomicMax). The
@@ -276,13 +281,13 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // with a voxOccPyr rebuild between waves, so later waves' per-block occlusion cull sees
   // earlier waves' voxel elections (vox-behind-vox). See dispatchVoxel. 0/1 = off (old path).
   const voxWavesRaw = parseInt(new URLSearchParams(window.location.search).get('voxwaves') ?? '0', 10);
-  // ?voxprev=1 (spec-prev-frame-occlusion §2.4.2) forces the 2-wave dispatch: pass A
-  // (probably-visible) scatters first, voxOccPyr REBUILDS (now vox-inclusive), pass B
-  // (probably-occluded) then culls against real same-frame vox occluders. Overrides an
-  // explicit ?voxwaves while set. INERT under ?occl=0: the cull's voxPrev gate fails ⇒
-  // voxF2bEnabled arrives false ⇒ the waves path below is never taken.
-  const voxPrevR = new URLSearchParams(window.location.search).get('voxprev') === '1';
-  const voxWaves = voxPrevR
+  // ?voxprev (DEFAULT ON, spec-prev-frame-occlusion §2.4.2) forces the 2-wave dispatch:
+  // pass A (probably-visible) scatters first, voxOccPyr REBUILDS (now vox-inclusive),
+  // pass B (probably-occluded) then culls against real same-frame vox occluders.
+  // Overrides an explicit ?voxwaves while active. deps.voxPrevEnabled is the CULL's
+  // resolved gate (flag && classifier non-null), so ?occl=0 and ?voxprev=0+?voxf2b=1
+  // diagnostic combos keep their exact legacy dispatch shapes.
+  const voxWaves = deps.voxPrevEnabled
     ? 2
     : Number.isFinite(voxWavesRaw)
       ? Math.min(16, Math.max(0, voxWavesRaw))
