@@ -309,9 +309,12 @@ export function buildNaniteHzb(
   // kTraverse) against these same pyramid bytes, so the Δ=0 verdict is false for all of
   // them. Off-screen/behind-camera prev projections return FALSE (route to pass A, the
   // behaves-like-today default) via the CENTRE on-screen guard — routing needs no
-  // conservatism. ?voxprevlvl=Δ (default 2, clamp [1,8]) is the liberality knob.
-  const prevLvlRaw = Number(new URLSearchParams(window.location.search).get('voxprevlvl') ?? '2');
-  const prevFiner = Number.isFinite(prevLvlRaw) ? Math.max(1, Math.min(8, prevLvlRaw)) : 2;
+  // conservatism. ?voxprevlvl=Δ (default 4, clamp [1,8]) is the liberality knob.
+  // Δ swept 2/3/4/5 (2026-07-02 rested series): oblique med 27.5-30.6 / 26.1 / 24.7-24.9 /
+  // 25.2 — knee at 4 (aerial +0.6 accepted vs the gap pose −3..−5.7; eye in-noise;
+  // still-pair shots at the D0 band ⇒ pixel-equivalent, routing-only by construction).
+  const prevLvlRaw = Number(new URLSearchParams(window.location.search).get('voxprevlvl') ?? '4');
+  const prevFiner = Number.isFinite(prevLvlRaw) ? Math.max(1, Math.min(8, prevLvlRaw)) : 4;
   const sphereProbablyOccluded = (
     center: NV3,
     radius: NF,

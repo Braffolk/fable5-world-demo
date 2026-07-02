@@ -385,3 +385,63 @@ stale-HZB lever, ~9-11ms moving inflation measured 2026-06-26 pre-voxbocc) — s
 only after a live-moving occl=0 A/B re-quantifies the prize post-voxbocc/voxprev.
 ?voxprevlvl sweep (3/4) unswept — Δ=2 already material; possible small further oblique
 upside, diagnostics-grade until swept.
+
+
+## 5k. Rested re-baseline + clust2p prize EVAPORATED + ?voxprevlvl=4 flip (2026-07-02 rested session)
+
+All runs 200k @2268×1473, wind=0, serial thermal-ordered (slots 1→N warm monotonically).
+
+RESTED CANONICAL RE-BASELINE (slot 1, defaults = voxprev ON Δ=2):
+- iso med (eye/obl/aerial): **23.4 / 29.3 / 16.9** — §5j expectation band confirmed.
+- live 600 ticks (slot 3, defaults): avg **12.42** p50 **9.2** p90 16.7 p95 **16.9**
+  max 17.7, **45/600 >16.7, ZERO >33**, heap flat 3.53GB. Cleanest live capture to
+  date — p95 is 0.2ms off the 16.7 mission target; p50 sits in the 120Hz ProMotion
+  bucket (8.3ms quantum ⇒ most frames render at 120fps).
+
+CLUST2P PRIZE RE-QUANTIFIED (master-plan stage-4 gate; doubles as Q7):
+- `?occl=0` disables the stale-main-HZB emit test + voxprev classifier ONLY (verified
+  NaniteFrame.ts:213,227); same-frame voxOccPyr block/brick culls stay live.
+- static buy (iso, occl0−on): +0.2..+1.4 eye / **+2.0..+3.6 obl** / ±0.2 aerial
+  (two bracketing pairs, slots 2v1 and 4v3).
+- live buy (600 ticks, occl0 vs on): avg **+1.16**, p95 +0.8, misses 117 vs 45/600;
+  p50 16.1 vs 9.2 = the ProMotion quantum flip (most frames drop 120→60fps without
+  the emit test — occlusion still matters for the QUANTUM, not for the tail).
+- ⇒ the ~9-11ms live-moving stale-HZB inflation (2026-06-26, pre-voxbocc) is **GONE**
+  — absorbed by voxbocc+voxprev same-frame vox culls, which never go stale. clust2p
+  ceiling ≈ static−live buy ≈ **~1-2ms oblique**. **STAGE-4 CLUST2P DEMOTED to the
+  shelf** (not killed — resurface if the emit-test value regrows). Surfaced to user.
+
+?VOXPREVLVL SWEEP (Δ = mips finer than diameter-fits; liberality of the pass-B router):
+- iso oblique med: Δ2 **27.5 / 29.9 / 30.6** (three controls, slots 3/7/10) → Δ3
+  **26.1** (slot 5) → Δ4 **24.7 / 24.9** (slots 6/9) → Δ5 **25.2** (slot 8, knee).
+  Monotone into the thermal wind; reversed-order controls confirm NOT drift.
+- oblique B1 share 23.8% (Δ2) → 42.1% (Δ3) → **55.9%** (Δ4); aerial 9.7→26.7%
+  (+0.6ms deferral tax top-down, accepted); eye 71→81% (eye med in-noise all day,
+  band 21.1-23.4 both arms).
+- live (600 ticks): avg 12.4-12.9 flat across Δ; two Δ3/Δ5 runs carried the 5.5GB-heap
+  session-artifact signature (live tails suspect, iso unaffected).
+- SHOT GATES: moving-recipe diffs vs ctl 6.87% obl BUT same-day ctl-vs-ctl floor =
+  6.78% (TICKS=600 runs leave differing TRAA/motion phase — moving-recipe floor is
+  ~7%, NOT the 0.18 D0; recipe must match). TIGHT gate on a TICKS=0 still pair:
+  **0.62 / 0.17 / 0.35** (+ eye-static 0.18) vs D0 family 0.40-0.62/0.18/0.37 ⇒
+  pixel-equivalent (routing-only by construction; both passes end at the same
+  exact-conservative same-frame culls).
+- STILL-PAIR PERF (slots 9v10, ctl hotter): Δ4 **24.9** vs ctl **30.6** oblique;
+  eye 22.2 vs 23.3; aerial 17.6 vs 17.0.
+- **FLIPPED default voxprevlvl 2→4** (NaniteHzb.ts; ?voxprevlvl=2 = old behavior).
+  Flip-verify (slot 11, hottest): plain defaults read **22.7 / 25.6 / 16.8** with
+  B1 shares 80.8/55.8/26.6% — bit-match of the explicit Δ4 run (80.8/55.9/26.7).
+
+BOOKING (honest): oblique −3..−5.7 vs Δ2 controls, centre ≈ **−4**; aerial +0.6;
+eye neutral. Post-flip canonical expectation: eye ~22-23.5 / **obl ~25** / aerial
+~17.5-18; live p95 ~17.
+
+USER SCOPE NOTE (2026-07-02): shadows should ideally be tested too — they were
+EXTREMELY unoptimized — but need simple flat terrain added to the forest scene
+first; separate arc, deferred by user, NOT dropped. Forest-only focus continues
+for now ("continue in the order that seems most logical to you").
+
+NEXT: Q3 live r-pin now largely mooted by direct live captures (p95 16.9 @ defaults);
+remaining: eye p95≫med spikes (task #14), Q5/Q6 bimodality, pool D leftovers (RP-4
+respass, RP-3c bloom fold, RP-5 early-discard; RP-7/RP-2 need user sign-off),
+aerial 17.5-18 vs 16.7 gap, iso-oblique stress pose ~25 vs 16.7 (non-live).
