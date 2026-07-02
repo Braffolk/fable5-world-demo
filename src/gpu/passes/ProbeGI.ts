@@ -96,6 +96,9 @@ export class ProbeGI {
   private rot = uniform(0);
   /** frames of boosted blend after a ToD jump */
   private boost = 0;
+  /** P6 gi-sleep (shadow arc 2026-07-03): ticks since the last invalidate() */
+  private cleanFrames = 0;
+  private sleepOn = new URLSearchParams(window.location.search).get('gisleep') !== '0';
 
   constructor(
     private hf: Heightfield,
@@ -328,6 +331,15 @@ export class ProbeGI {
   /** one time slice per frame (sync submit, no readback) */
   tick(renderer: Renderer): void {
     if (!this.gatherK || !this.publishK) return;
+    // P6 gi-sleep-when-converged (shadow arc 2026-07-03): with a static sun the
+    // field is fully converged after two complete refresh cycles past any boost;
+    // every later gather re-estimates the SAME integral with a rotated jitter
+    // (EMA 0.22 ⇒ sub-noise wobble). Sleep until invalidate() (ToD edit) wakes it.
+    // ?gisleep=0 restores the legacy always-churn.
+    if (this.sleepOn && this.cleanFrames > 2 * Math.ceil(TOTAL / PROBES_PER_FRAME) + 4) {
+      return;
+    }
+    this.cleanFrames++;
     renderer.compute(this.gatherK);
     renderer.compute(this.publishK);
     this.frameBase.value = (this.frameBase.value + PROBES_PER_FRAME) % TOTAL;
@@ -342,6 +354,7 @@ export class ProbeGI {
   invalidate(): void {
     this.blend.value = 0.6;
     this.boost = Math.ceil(TOTAL / PROBES_PER_FRAME) + 2;
+    this.cleanFrames = 0; // P6: wake the sleeping field
   }
 
   /**

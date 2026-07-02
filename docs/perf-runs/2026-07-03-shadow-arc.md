@@ -147,6 +147,35 @@ teleport force-flush, the flicker fly-over gate.
 
 **P6 — GI sleep-when-converged (lever 6, S)** + `?voxalpha` deletion rides any cleanup.
 
+## Shipped (commits 9fc9990, 363d9be, ed72c9b + P6)
+
+| step | what | measured |
+|---|---|---|
+| P1 cz-snap | snap the sun-axis depth like scx/scy (the cache-killer bug) | levels/frame 5.98→5.46 only — cadence can't cache at speed; superseded by P5 |
+| P2 CSM sever | no legacy CSM in nanite world: no empty 2048² renders, no keep sample, no 2nd wp reconstruction; cloud gate → resolve direct (NaN-guarded); `?shadowclip=0`/`?oldgeo` keep the rig | static isolated now BEST of all sessions (20.7/15.8/13.7) despite hottest run |
+| P5 toroidal clipmap | global sun-axis depth (z_g world property) + strip-only re-raster (outer + hollow-reveal), toroidal wrap addressing; `?shtoro=0` legacy | **live avg 31.6→19.2 (shadow bill +17.6→+5.2, −70%), p50 33.3→16.8, >33ms 128→12**; strip-gate: teleport-vs-glide same-pose terrain diff 0.495 mean, 0 px >32 |
+| P3 vox splat | class-7 bricks depth-splat per level (1 wg/item, lane/brick, sun-face depth, atomicMin) — **the 60-280 m band + fartiles CAST now**; `?shvox=0` | live 19.61 vs 19.18 (+0.4 ms); wp3 shots: mid-field crown ground-shadows, no acne |
+| P4 FarShadow | baked 1024² heightfield sun-vis map (13-step march, soft boundary), re-bake on ToD; resolve ×1 tap at all distances — **massive hills DO shade valleys**; `?ablate=farshadow` | runtime ≈ 1 tap (bake boot/ToD-only); wp4 high/vista natural mountain shading, 115/77 fps |
+| P6 gi-sleep | ProbeGI sleeps after 2 full converged cycles, invalidate() wakes; `?gisleep=0` | ~0.1-0.5 ms steady-state (constant-by-construction dispatch removed) |
+
+Bug fixed en route: strip sides/origin were mirrored in x — three's lookAt makes the
+ortho x-axis **−right** (xAxis = up×(−fwd)); verified empirically (ndc probe). Content
+shift in window texels = (+dx, −dy).
+
+User design questions answered in-build: (0) mid-field casts — SHIPPED ~0.4 ms;
+(1) massive far hill casts — SHIPPED via FarShadow (heightfield term, not more
+clipmap levels; canopy long-shadows booked as follow-up); (2) terrain-LOD shadow
+flicker — strips localize LOD changes to thin seams instead of whole-level swaps
+(the strip gate's 137-step glide across LOD boundaries matched full re-raster to
+0.495 mean); user-verify on their own flight.
+
+Booked follow-ups: canopy-slab occluder in FarShadow (forest silhouette long
+shadows); receiver-height correction for tall crowns in far-shadow penumbra;
+per-level fixed overhead (clear/copy full-window dispatches per strip level ≈ the
+remaining ~5 ms moving bill — candidates: strip-sized indirect dispatch for kCopy,
+submit coalescing of the 4·(filter+clear+depth1+hw+splat+copy) chains); wind-sway
+in persisted L0 texels frozen (consistent with the old static-cache behavior).
+
 ## Harness
 
 - `tools/probe-fresh-stutter.ts` now takes `SCENE=world` (poses ground-relative via
