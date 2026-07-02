@@ -180,6 +180,14 @@ DEFAULT ON — committed by the USER themselves (cc73e88) while watching the ses
 gap to locked-60 ≈ −11..13, all of it to come from QUALITY-NEUTRAL waste.**
 Next: ultracode deep review (docs/deep-review/) → ranked quality-neutral path.
 
+### Post-voxbocc LIVE milestone (fresh-voxbocc-milestone.json, 600 ticks, 06:5x warm)
+- **live p50 = 16.7ms (= 60fps vsync quantum!), avg 17.96, p90/p95 = 25.0/25.1, max 26.0**
+- 210/600 frames >16.7 (all sitting at the NEXT 120Hz quantum, 25.0); 0 >33ms; 0 longtasks; heap flat.
+- vs pre-voxbocc rested milestone p50 25.0 / p95 33.4 — a full vsync quantum won across the board.
+- Isolated same-run: eye 21.0/27.2, oblique 36.3/44.2, aerial 14.9/19.6 (consistent w/ 18.9/37.2/16.5).
+- REMAINING MISSION, exactly: move the 35% of live frames at 25.0 down one quantum ⇒ oblique-ish
+  isolated 36.3 → ~24-26, quality-neutral only. That is what docs/deep-review/00-MASTER-PLAN.md must close.
+
 ## 6. Notes / hazards
 
 - **NEVER edit src/ while a probe is in flight** — vite full-reloads the connected page
