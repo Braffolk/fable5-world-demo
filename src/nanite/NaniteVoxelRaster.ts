@@ -310,6 +310,16 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // Eligibility MUST mirror the Phase-B gate exactly (non-straddler AND area STRICTLY >
   // voxCellMinArea); a mismatch is a perf miss only (unbuilt mask keeps the solid 0xffff seed).
   const voxMaskRay = new URLSearchParams(window.location.search).get('voxmaskray') !== '0';
+  // ?voxsgb=0|1|2 (spec-vox-kernel-microcuts B; default 0 until gated): Phase-B VIRTUAL
+  // 32-lane-group distribution — outer brick loop strides gid∈[0,4) instead of running on
+  // all 128 lanes (per-brick setup was issued once per 32-wide SIMD group = 4× today), inner
+  // pixel loop strides the group's 32 lanes. =2 adds lane-0 live-brick compaction so empty
+  // records (bocc-culled bricks — the eye majority) aren't even visited, plus both levels
+  // gate Phase B on wgVisible (a block-culled cluster stored nothing). Election candidate
+  // set unchanged ⇒ bit-identical for depth-distinct winners; same-key TIES can flip which
+  // sibling brick shades an edge pixel (shot gate is LOAD-BEARING, see spec).
+  const voxSgbRaw = parseInt(new URLSearchParams(window.location.search).get('voxsgb') ?? '0', 10);
+  const voxSgb = Number.isFinite(voxSgbRaw) ? Math.max(0, Math.min(2, voxSgbRaw)) : 0;
   const WRITE_CTR = 0;
   const atomicWords = 1;
   const atomicBufAttr = new StorageBufferAttribute(new Uint32Array(atomicWords), 1);
@@ -557,6 +567,9 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
     const wgCellLo = voxCell ? workgroupArray('uint', WG_RASTER) : null;
     const wgCellHi = voxCell ? workgroupArray('uint', WG_RASTER) : null;
     const wgCellOk = voxCell ? workgroupArray('uint', WG_RASTER) : null;
+    // ?voxsgb=2 live-brick compaction list (+516 B workgroup memory; ~6.2 KB of 32 KB used)
+    const wgLive = voxSgb >= 2 ? workgroupArray('uint', WG_RASTER) : null;
+    const wgLiveN = voxSgb >= 2 ? workgroupArray('uint', 1) : null;
     If(guard, () => {
       const item = qVoxRasterRO.element(itemIdx.add(uint(1)));
       const instId = item.x.toVar();
@@ -1092,6 +1105,27 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
       // (O(area/WG) per lane, BRICK_MAX_EXT caps any one brick at ≤128×128) is preserved;
       // tiny/empty bricks (area 0) contribute a zero-trip inner loop.
       const nBricks = minU(brickCount, uint(WG_RASTER)).toVar();
+      // ?voxsgb: virtual 32-lane groups from localId arithmetic only (no subgroups feature).
+      const sgbOn = voxSgb >= 1;
+      const sgbGid = sgbOn ? brickLocal.shiftRight(uint(5)).toVar() : null;
+      const sgbLane = sgbOn ? brickLocal.bitAnd(uint(31)).toVar() : null;
+      if (voxSgb >= 2 && wgLive && wgLiveN) {
+        // live-brick compaction: lane 0 builds the list serially post-barrier (≤128 wg-reads
+        // + branches) — trivially cheaper than the nBricks×4-group dead setup it deletes.
+        // This barrier is a SIBLING of the Phase-A barrier above (same uniform scope; a
+        // divergent placement is a tint/naga COMPILE error, not a silent wrong).
+        If(brickLocal.equal(uint(0)), () => {
+          const n = uint(0).toVar();
+          loopU(uint(0), nBricks, (i) => {
+            If((wgBbW.element(i) as unknown as NU).notEqual(uint(0)), () => {
+              wgSet(wgLive, n, i);
+              n.assign(n.add(uint(1)));
+            });
+          });
+          wgSet(wgLiveN, uint(0), n);
+        });
+        workgroupBarrier();
+      }
       // ?voxcell per-CLUSTER ray/clip bases (uniform across the workgroup — A/B/yawSc are
       // per-cluster). Two linearizations make the per-pixel ray path cheap:
       //  (1) RAY DIRECTION IS LINEAR IN NDC. invVp·(x,y,1,1) has a CONSTANT w across x,y
@@ -1154,12 +1188,17 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
       }
       // ?voxrdbg=2 STOP point: skip the ENTIRE Phase-B election (no per-pixel atomicMax / visBV
       // store). Build-time gate ⇒ when OFF (production) this whole block is emitted byte-identical.
-      if (voxRdbg < 2)
-      loopU(uint(0), nBricks, (b) => {
-        // recover this brick's footprint RECORD (set up in Phase A).
+      const phaseB = (): void =>
+      loopU(sgbOn && sgbGid ? sgbGid : uint(0), voxSgb >= 2 && wgLiveN ? ((wgLiveN.element(uint(0)) as unknown as NU).toVar() as NU) : nBricks, (slot) => {
+        // ?voxsgb=2: slot walks the compacted LIVE list; b stays the TRUE brick index
+        // (voxIdB bits 21-27 must decode the real brick's normal/albedo in the resolve).
+        const b = voxSgb >= 2 && wgLive ? (wgLive.element(slot) as unknown as NU).toVar() : slot;
+        // recover this brick's footprint RECORD (set up in Phase A). bbW first: under ?voxsgb
+        // it gates the whole per-brick setup (empty record ⇒ skip; legacy pays 4× setup here).
+        const bbW = (wgBbW.element(b) as unknown as NU).toVar();
+        const brickBody = (): void => {
         const bbX0 = (wgBbX0.element(b) as unknown as NU).toVar();
         const bbY0 = (wgBbY0.element(b) as unknown as NU).toVar();
-        const bbW = (wgBbW.element(b) as unknown as NU).toVar();
         const bbH = (wgBbH.element(b) as unknown as NU).toVar();
         const cand = (wgCand.element(b) as unknown as NU).toVar();
         // ?voxbn: this brick's id for the election store — voxId with the brick index in
@@ -1198,7 +1237,8 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
           ? cOccLo!.equal(uint(0xffffffff)).and(cOccHi!.equal(uint(0xffffffff))).toVar()
           : null;
         // each lane strides this brick's footprint: localPx = brickLocal, brickLocal+128, …
-        loopU(brickLocal, area, (localPx) => {
+        // (?voxsgb: the brick's OWN 32-lane group strides it — localPx = lane, lane+32, …)
+        loopU(sgbOn && sgbLane ? sgbLane : brickLocal, area, (localPx) => {
           // ly/lx: integer div+mod by default; per-brick float reciprocal under ?voxrecip
           // (loss-exact, see flag note) — Apple has no HW int-divide so the default path pays
           // a microcoded sequence on every fragment.
@@ -1427,8 +1467,17 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
           } else {
             flatPath();
           }
-        }, WG_RASTER);
-      });
+        }, sgbOn ? 32 : WG_RASTER);
+        }; // end brickBody
+        if (sgbOn) If(bbW.notEqual(uint(0)), brickBody);
+        else brickBody();
+      }, sgbOn ? WG_RASTER / 32 : undefined);
+      // build-time gates: ?voxrdbg>=2 skips the whole election; ?voxsgb gates Phase B on
+      // wgVisible (a block-culled cluster stored only empty seeds — skipping is a no-op).
+      if (voxRdbg < 2) {
+        if (sgbOn) If((wgVisible.element(uint(0)) as unknown as NU).equal(uint(1)), phaseB);
+        else phaseB();
+      }
     });
     // ONE WORKGROUP per voxel cluster work-item (split2D indirect args over the fanned count,
     // unchanged), WG_RASTER (=MAX_BRICKS_PER_CLUSTER) threads each. Phase A = 1 lane/brick;
