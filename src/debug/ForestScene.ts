@@ -48,6 +48,8 @@ import {
   computeVoxlodAnchorL0,
   prepareVoxelCrown,
   setVoxlodConfig,
+  setVoxOccThreshold,
+  voxOccThreshold,
   voxlodLevels,
 } from '../nanite/VoxelizeCrown';
 import { Vector2 } from 'three';
@@ -149,6 +151,9 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
       sparseK: spRaw !== null ? Number(spRaw) : undefined,
       shell: shRaw !== null ? Number(shRaw) : undefined,
     });
+    // ?voxocc= — occupancy coverage threshold (crown slimming; see VoxelizeCrown).
+    const occRaw = q.get('voxocc');
+    if (occRaw !== null) setVoxOccThreshold(Number(occRaw));
   }
   // ?fartiles=1 (wave 3, EXPERIMENTAL): cross-instance far-field aggregation — beyond
   // ?aggdist (default 140 m) whole 64 m tiles of trees render as ONE merged voxel head
@@ -212,6 +217,7 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
       // RESOLVED ftcell, not the raw query param: a raw-null knob made a code-default
       // change (0.75→0.6, 2026-07-02) silently HIT the stale cache entry.
       ftCell: Number(q.get('ftcell') ?? '0.6') || 0.6,
+      voxOcc: voxOccThreshold(), // resolved (post-setVoxOccThreshold) for the same reason
       anchorH: engine.renderer.getDrawingBufferSize(new Vector2()).y,
       fov: engine.camera.fov,
       knobs: ['voxlodk', 'voxlodlevels', 'voxlodsparse', 'voxlodshell', 'leaflodk', 'clustertris', 'clusterfill'].map(

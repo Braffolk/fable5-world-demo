@@ -37,7 +37,9 @@ import {
   atomicStore,
   countOneBits,
   float,
+  fract,
   instanceIndex,
+  sin,
   storageBarrier,
   uint,
   vec3,
@@ -48,7 +50,7 @@ import {
 import type { NB, NF, NU, NV3, NV4 } from '../gpu/TSLTypes';
 import { CLUSTER_WORDS } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
-import { BRICK_DIM, BRICK_HALF, BRICK_OCC_HI, BRICK_OCC_LO, BRICK_POS_X, BRICK_WORDS, MAX_BRICKS_PER_CLUSTER } from './VoxelBrick';
+import { BRICK_ALBEDO, BRICK_DIM, BRICK_HALF, BRICK_OCC_HI, BRICK_OCC_LO, BRICK_POS_X, BRICK_WORDS, MAX_BRICKS_PER_CLUSTER, brickWord } from './VoxelBrick';
 import { DISPATCH_ROW, QVOX_CAP } from './NaniteCommon';
 import type { NaniteCam } from './NaniteCommon';
 import { instTransformPoint, instYaw, instSphereRadius } from './NaniteCommon';
@@ -299,6 +301,26 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // warp-inflated bricks do, and those are exactly the area>64 set the ray path keeps.
   const voxCellMinAreaRaw = Number(new URLSearchParams(window.location.search).get('voxcellmin') ?? '64');
   const voxCellMinArea = Number.isFinite(voxCellMinAreaRaw) && voxCellMinAreaRaw >= 0 ? voxCellMinAreaRaw : 64;
+  // ?voxalpha (2026-07-02 beautification PROTOTYPE, default OFF): density-driven stochastic
+  // opacity for LOW-density bricks (UE5-style). Binary-opaque bricks are why voxel crowns
+  // read fat + cubic: a wispy edge cell paints as solid as a dense interior one (occupancy-
+  // threshold slimming measured no-op — the interior saturates at coverage 1.0 while edges
+  // sit at ~0.33, histogram 2026-07-02). Here: a brick with density < VOX_ALPHA_MAXD keeps
+  // only a hash-stable fraction of its footprint pixels (alpha ramps 0.25→1 with density);
+  // dropped pixels reveal the brick behind ⇒ soft translucent crown edges, TAA smooths the
+  // stipple. Dense bricks (≥ MAXD — the whole interior) take the UNCHANGED solid path, so
+  // the added per-pixel cost rides only the sparse edge-brick footprints. Alpha-active
+  // bricks also skip the ?voxcell ray path (front-slab depth is fine for a stippled edge).
+  // DEFAULT OFF — USER-REJECTED 2026-07-02 ("random noise"): the stipple reads as noise
+  // in stills; TAA does not integrate it away convincingly enough at retina. Kept ONLY as
+  // an experiment flag; remove entirely if it stays unused.
+  const voxAlpha = new URLSearchParams(window.location.search).get('voxalpha') === '1';
+  // ?voxalphad — density cutoff: bricks BELOW it stipple, above are solid. Brick density
+  // is the brick's occupancy FRACTION (mean cell coverage over 64 cells), so interior
+  // partially-filled bricks sit ~0.3-0.8 and crown-rim wisps ~0.05-0.2. 0.55 stippled the
+  // whole canopy (first prototype shot — ghost forest); default targets the rim only.
+  const voxAlphaDRaw = Number(new URLSearchParams(window.location.search).get('voxalphad') ?? '0.18');
+  const VOX_ALPHA_MAXD = Number.isFinite(voxAlphaDRaw) && voxAlphaDRaw > 0 && voxAlphaDRaw <= 1 ? voxAlphaDRaw : 0.18;
   // ?voxmaskray (spec-vox-kernel-microcuts A) — DEFAULT ON (2026-07-02, gate PASSED):
   // skip the ≤512-projection occ-mask BUILD for RAY-ELIGIBLE bricks. cellElig is per-brick-
   // uniform, an eligible brick's pixels ALL take the ray path, and the ray path provably never
@@ -1183,6 +1205,16 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
         // bits 21-27 (see the flag note at voxBrickShade). Built at per-brick scope so the
         // per-pixel election below stores the WINNING brick, not just the block.
         const voxIdB = voxBrickShade ? voxId.bitOr(b.shiftLeft(uint(21))).toVar() : voxId;
+        // ?voxalpha per-brick density (BRICK_ALBEDO alpha byte) — one load per brick,
+        // amortized over its footprint; aActive is UNIFORM across the brick's pixels.
+        const aDens = voxAlpha
+          ? toF(elemU(gpu.voxelBricks, brickWord(brickBase.add(b), uint(BRICK_ALBEDO))).shiftRight(uint(24)))
+              .div(255)
+              .toVar()
+          : null;
+        const aActive = aDens ? aDens.lessThan(float(VOX_ALPHA_MAXD)).toVar() : null;
+        // alpha ramp 0.4→1 over density [0, MAXD): even the wispiest brick keeps 40%.
+        const aAlpha = aDens ? aDens.div(VOX_ALPHA_MAXD).mul(0.6).add(0.4).toVar() : null;
         // OCCUPANCY-GATE mask (?voxlod=1): which OCC_MASK_DIM×OCC_MASK_DIM bbox buckets a
         // projected occupied sub-cell touched (Phase A). 0xffff (all) for an unarmed brick.
         const occMask = voxOccGate && wgOccMask ? (wgOccMask.element(b) as unknown as NU).toVar() : null;
@@ -1203,6 +1235,9 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
           ? (wgCellOk!.element(b) as unknown as NU)
               .equal(uint(1))
               .and(area.greaterThan(uint(voxCellMinArea)))
+              // ?voxalpha: alpha-active (edge) bricks take the flat path — the stochastic
+              // stipple needs dispatchElect, and front-slab depth is fine for a soft edge.
+              .and(voxAlpha && aActive ? (aActive.not() as unknown as NB) : (uint(1).equal(uint(1)) as unknown as NB))
               .toVar()
           : null;
         const brCx = cellOn ? (wgBrCx!.element(b) as unknown as NF).toVar() : null;
@@ -1253,7 +1288,19 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
           // 0xffff (all buckets) for any unarmed/full/degenerate brick ⇒ that pixel always paints
           // ⇒ no behaviour change there. The +1 dilation (Phase A) makes this provably hole-free.
           // voxlod=0: occMask is null and this whole branch is build-time absent (byte-identical).
-          const dispatchElect = electHere;
+          // ?voxalpha: low-density bricks keep only a hash-stable alpha fraction of their
+          // pixels (see flag note). Screen-anchored 2D hash — stable per pixel, no shimmer.
+          const dispatchElect =
+            voxAlpha && aActive && aAlpha
+              ? (): void => {
+                  If(aActive.not(), electHere).Else(() => {
+                    const h = fract(
+                      sin(toF(x).mul(12.9898).add(toF(y).mul(78.233))).mul(43758.5453),
+                    ) as unknown as NF;
+                    If(h.lessThan(aAlpha), electHere);
+                  });
+                }
+              : electHere;
           // legacy flat path (front-slab key, solid footprint, optional bucket gate) —
           // wrapped so ?voxcell can route only its eligible bricks to the ray path.
           const flatPath = (): void => {

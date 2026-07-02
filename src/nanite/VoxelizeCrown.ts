@@ -197,8 +197,23 @@ const COVERAGE_SUPERSAMPLE = 3;
 
 /** a cell counts as OCCUPIED (occupancy bit set) once its fractional coverage clears
  *  this — low so a thin-needle smear still sets the bit (no bald spots). Occupancy is
- *  build/raster-only in the coarse path (§4.4); density carries the real weight. */
-const OCC_COVERAGE_THRESHOLD = 0.02;
+ *  build/raster-only in the coarse path (§4.4); density carries the real weight.
+ *  2026-07-02 beautification: TUNABLE (?voxocc, setVoxOccThreshold) — but the DEFAULT
+ *  STAYS 0.02. The slimming idea FAILED both ways: sweeps 0.12-0.5 were visually a no-op
+ *  (coverage histogram: interior cells saturate at 1.0, single-leaf cells sit at exactly
+ *  ~0.33 — thresholds between bite nothing that shows), and 0.12 COST ~+3.5 ms (thinner
+ *  occupancy masks push bricks off the free full-mask solid path onto the per-pixel
+ *  gate/DDA). The voxel-vs-mesh crown fatness is a representation property (planes →
+ *  solid cells), not an occupancy-threshold problem. */
+let OCC_COVERAGE_THRESHOLD = 0.02;
+
+/** ?voxocc= — override the occupancy coverage threshold (build-time; call BEFORE
+ *  prepareVoxelCrown). Clamped to [0.005, 0.6]; NaN/out-of-range ignored. */
+export function setVoxOccThreshold(t: number): void {
+  if (Number.isFinite(t) && t >= 0.005 && t <= 0.95) OCC_COVERAGE_THRESHOLD = t;
+}
+export function voxOccThreshold(): number { return OCC_COVERAGE_THRESHOLD; }
+let occHistoLogged = false;
 
 /** voxlod: one resolved BLOCK of a pyramid level — a contiguous (<=MAX_BRICKS_PER_CLUSTER)
  *  run of that level's occupied bricks that becomes ONE voxel cluster. Carries the DAG cut
@@ -530,6 +545,25 @@ export function voxelizeCrown(
   }
 
   // ---- aggregate cells → bricks (the COARSE one-sample-per-brick step) ----
+  // one-shot coverage histogram (?voxocc calibration — 2026-07-02): the threshold sweep
+  // 0.02→0.5 changed NOTHING visually; log the real distribution once per session so the
+  // slimming threshold can be picked from data instead of a coverage model.
+  if (!occHistoLogged) {
+    occHistoLogged = true;
+    const nz: number[] = [];
+    for (let i = 0; i < acc.cov.length; i++) {
+      const c = acc.cov[i] as number;
+      if (c > 0) nz.push(Math.min(1, c));
+    }
+    nz.sort((a, b) => a - b);
+    const pct = (p: number): string =>
+      nz.length ? (nz[Math.min(nz.length - 1, Math.floor(p * nz.length))] as number).toFixed(3) : 'n/a';
+    // eslint-disable-next-line no-console
+    console.log(
+      `[voxocc] first-crown cell coverage: n=${nz.length} p10=${pct(0.1)} p25=${pct(0.25)} ` +
+        `p50=${pct(0.5)} p75=${pct(0.75)} p90=${pct(0.9)} thresh=${OCC_COVERAGE_THRESHOLD}`,
+    );
+  }
   const bricks: BrickCPU[] = [];
   const occupied: number[] = [];
   let densitySum = 0;

@@ -89,8 +89,17 @@ export class PostStack {
     // AO distance fade (m): beyond aoFadeFar the 1.6 m-radius AO is subpixel and
     // forced to 1, so both the march (Gtao maxDist) and the bilateral upsample
     // skip the far field there (the bulk of an elevated vista).
-    const aoFadeNear = 700;
-    const aoFadeFar = 1800;
+    // 90/240 (2026-07-02 beautification, was 700/1800): the horizon-based march reads
+    // every voxel-brick step (0.15-2.4 m boxes from 60 m out) as a crevice and outlines
+    // the cubes — the user-reported "AO emphasises the square shape". The mesh band
+    // (<60 m) keeps full AO; the voxel band fades out by ~240 m. Cheaper too (faded
+    // pixels skip the march). ?aofade=near,far overrides for A/B (e.g. 700,1800 legacy).
+    const aoFadeRaw = (q.get('aofade') ?? '').split(',').map(Number);
+    const aoFadeNear = Number.isFinite(aoFadeRaw[0]) && (aoFadeRaw[0] as number) > 0 ? (aoFadeRaw[0] as number) : 90;
+    const aoFadeFar =
+      Number.isFinite(aoFadeRaw[1]) && (aoFadeRaw[1] as number) > (aoFadeNear as number)
+        ? (aoFadeRaw[1] as number)
+        : Math.max(240, aoFadeNear * 1.5);
     // debug probes need raw values — tone mapping would garble them
     const skyveldbg = q.get('skyveldbg') !== null && q.get('skyveldbg') !== '';
     renderer.toneMapping = cloudview || skyveldbg ? NoToneMapping : AgXToneMapping;

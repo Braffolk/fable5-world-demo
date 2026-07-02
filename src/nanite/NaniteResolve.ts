@@ -285,6 +285,16 @@ export function buildNaniteResolve(
   // See the MESH_FLAG_FARTILE block in the voxel shade path below.
   const ftNrmRaw = Number(q.get('ftnrm') ?? '0.65');
   const ftNrmK = Number.isFinite(ftNrmRaw) ? Math.max(0, Math.min(1, ftNrmRaw)) : 0.65;
+  // ?voxgrad=k — crown-scale vertical light gradient on voxel albedo. DEFAULT 0 (OFF,
+  // 2026-07-02): measured with voxjit2 at eye +4.9 / obl +4.6 ms COMBINED (per-voxel-pixel
+  // instance fetch + hash in the resolve) — fails the user's looks-per-ms bar for a subtle
+  // albedo effect. Knob kept for the next beauty pass (batch the fetch first).
+  const voxGradRaw = Number(q.get('voxgrad') ?? '0');
+  const voxGradK = Number.isFinite(voxGradRaw) ? Math.max(0, Math.min(1, voxGradRaw)) : 0;
+  // ?voxjit2=k — CLUMP-scale (~3 m) albedo variation (grain larger than far bricks groups
+  // them into organic patches). DEFAULT 0 (OFF) — same measured-cost story as voxgrad.
+  const voxJit2Raw = Number(q.get('voxjit2') ?? '0');
+  const voxJit2K = Number.isFinite(voxJit2Raw) ? Math.max(0, Math.min(1, voxJit2Raw)) : 0;
   // ?leafcheap=all — ATTRIBUTION LEVER: route EVERY mesh-leaf pixel through the ?resfar
   // cheap far-leaf path (species tint × quad normal, no makeCtx/gust/3-vert interp). The
   // measured delta vs default = the exact ceiling of any "make leaf decode cheaper" work
@@ -927,6 +937,27 @@ export function buildNaniteResolve(
             sin(dot(cellQ, vec3(12.9898, 78.233, 37.719) as unknown as NV3)).mul(43758.5453),
           ) as unknown as NF;
           voxCol.assign(voxCol.mul(h.mul(2 * voxJitK).add(1 - voxJitK)) as unknown as NV3);
+        }
+        if (voxJit2K > 0) {
+          // ?voxjit2: clump-scale (~3 m) variation — see the knob comment above.
+          const clumpQ = floor(wp.mul(0.34)) as unknown as NV3;
+          const h2 = fract(
+            sin(dot(clumpQ, vec3(41.017, 17.933, 91.381) as unknown as NV3)).mul(28461.7331),
+          ) as unknown as NF;
+          voxCol.assign(voxCol.mul(h2.mul(2 * voxJit2K).add(1 - voxJit2K)) as unknown as NV3);
+        }
+        if (voxGradK > 0) {
+          // ?voxgrad (2026-07-02 beautification, default 0.35): CROWN-SCALE vertical light
+          // gradient — tops brighten, undersides darken (fake sky-occlusion). Per-cube N·L
+          // variance can't make box stacks read as foliage (user-confirmed); lighting
+          // variance at CROWN scale is what sells the fluffy-blob look. World-anchored
+          // (instance origin), TAA-stable, ~3 ALU. Height ramp saturates ~12.5 m up.
+          const vInstIdG = item.x;
+          const vAg = gpu.instances.element(vInstIdG.mul(uint(2))).toVar() as unknown as NV4;
+          const hgt = wp.y.sub(vAg.y).mul(0.08).clamp(0, 1) as unknown as NF;
+          voxCol.assign(
+            voxCol.mul(hgt.mul(voxGradK).add(1 - voxGradK * 0.5)) as unknown as NV3,
+          );
         }
       });
     }

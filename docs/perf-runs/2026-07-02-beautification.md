@@ -68,6 +68,42 @@ holds the remaining ~+5.5/+6.0. Aerial is essentially free (+0.8). User accepted
 ⚠️ probe EXTRA is COMMA-separated ('a=1,b=2') — '&' gets URL-encoded and silently corrupts
 the config (first attr run invalid, caught via the printed URL).
 
+## ROUND 2 (user feedback on the shipped arc, 2026-07-02 evening)
+
+User reports: (a) mesh→voxel transition jarring — "voxels overcompensate, larger than the
+crown itself" (forcevox same-tree A/B CONFIRMED: solid blob 2-3x the mesh crown's visual
+mass); (b) AO+lighting emphasise the cube shape — "fluffy/blobby not built-from-cubes";
+normals alone can't fix it (user-confirmed after voxbead already ON at 0.6).
+
+**SHIPPED (round 2):**
+- **GTAO distance fade 700/1800 → 90/240 (?aofade)**: the horizon march read every brick
+  step as a crevice and OUTLINED the cubes. Mesh band (<60 m) keeps full AO; voxel band
+  fades out by 240 m. Visually kills the crevice-emphasis AND measured ~−2.6 ms oblique.
+
+**BUILT, MEASURED, KILLED (defaults off — booked so nobody retries blind):**
+- **?voxocc occupancy-threshold slimming**: sweeps 0.12/0.2/0.35/0.5 visually NO-OP
+  (histogram: interior cells saturate 1.0, single-leaf cells exactly ~0.33) and 0.12 COST
+  +3.5 ms (thin masks push bricks off the free full-mask path). Default back to 0.02.
+  Fatness is representational (leaf planes → solid cells), not a threshold problem.
+- **?voxalpha density-driven stochastic opacity** (UE5-style dissolve, prototype):
+  mechanically works (trunk visible through crown, rims dissolve) but USER-REJECTED —
+  the stipple reads as noise in stills; also violates their perf philosophy (perf budget
+  buys DETAIL, not screen-door tricks). Default off; DELETE in next cleanup if unused.
+- **?voxgrad crown-gradient + ?voxjit2 clump albedo**: subtle wins, measured **+4.9 eye /
+  +4.6 obl COMBINED** (per-voxel-pixel instance fetch + hash in resolve) — fails the
+  looks-per-ms bar. Defaults 0; revisit only with a batched/cheap formulation.
+
+**FINAL SHIP (fresh-beauty-occ002.json, cd5): eye 25.2 / oblique 26.5 / aerial 9.9** —
+better than the round-1 booking (25.6/29.1/10.1) thanks to the AO fade savings.
+⚠️ HARNESS: probe EXTRA is comma-separated → aofade's OWN comma arg can't ride EXTRA
+(aofade=700-1800 silently no-ops → falls to default). Two probes must NEVER overlap
+(the interrupted-probe rerun overlapped its zombie → 55-79 ms garbage numbers).
+
+**OPEN (structural, next beauty arc):** the voxel crown's solid-mass look vs the mesh's
+airy fronds is inherent to opaque-cell voxelization. Real candidates: finer cells near
+the handoff (voxgrid ↑ costs boot+mem), UE5-style temporal dissolve BETWEEN
+representations at the 60 m seam, or per-cell (not per-brick) albedo/normal payloads.
+
 ## WATCH (open, low prio)
 - One transient white glow blob (b-vn45g256-band; bloomed bright pixel, gone on same-build
   re-shoot — TAA/warm-up transient). If seen live: suspect a single-frame NaN in lighting.
