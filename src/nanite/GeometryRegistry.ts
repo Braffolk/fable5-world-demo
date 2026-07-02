@@ -947,6 +947,17 @@ export class GeometryRegistry {
   get meshCount(): number {
     return this.entries.length;
   }
+  /** RP-1 (deep-review 16 tri-class specialization): matClass IDS with ≥1 registered
+   *  mesh. The resolve strips ABSENT classes' shading subgraphs at build (register/
+   *  occupancy pressure — the vox-pass 37.5ms-cliff mechanism). Reflects registration
+   *  state WHEN CALLED: a mesh class registered AFTER the resolve builds would fall to
+   *  the gray-slab default if its class was stripped (the resolve warns what it strips;
+   *  ?resclasses=0 disables stripping). */
+  get presentClasses(): ReadonlySet<number> {
+    const s = new Set<number>();
+    for (const e of this.entries) s.add(MATERIAL_CLASS[e.matClass]);
+    return s;
+  }
   get clusterCount(): number {
     return this.clusterCursor;
   }

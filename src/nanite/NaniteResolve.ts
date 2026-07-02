@@ -94,6 +94,13 @@ export interface NaniteResolveHandles {
 
 export interface ResolveWorld {
   hf: Heightfield;
+  /** RP-1 (deep-review 16 tri-class specialization): matClass ids with ≥1 registered
+   *  mesh (GeometryRegistry.presentClasses). When set, the tri resolve SKIPS BUILDING
+   *  the shading subgraphs of absent classes — output-identical (their If() guards can
+   *  never fire) but strips samples/ALU from the shader ⇒ register pressure/occupancy
+   *  (the vox-pass 37.5ms-cliff mechanism, comment at the terrain block). undefined or
+   *  ?resclasses=0 ⇒ build everything (legacy). */
+  presentClasses?: ReadonlySet<number>;
   gi: ProbeGI | null;
   canopyTex: StorageTexture | null;
   /** sun CSM cascades (D-N17 shadow receive) — sampled at the reconstructed
@@ -221,6 +228,17 @@ export function buildNaniteResolve(
   // never touches this. ?nanwind=0 A/Bs the trunk wind — MUST match the raster's
   // makeFetch (both read this flag) so their windy positions stay bit-identical.
   const windOn = q.get('nanwind') !== '0';
+  // RP-1: presence-gated class subgraphs (?resclasses=0 = build all, legacy).
+  const present = q.get('resclasses') !== '0' ? (world.presentClasses ?? null) : null;
+  const hasClass = (id: number): boolean => present === null || present.has(id);
+  if (present !== null) {
+    const stripped = [0, 1, 2, 3, 4].filter((id) => !present.has(id));
+    if (stripped.length > 0)
+      // eslint-disable-next-line no-console
+      console.log(
+        `[nanite] resolve tri-class strip (RP-1): matClass ${stripped.join(',')} absent from the registry — shading subgraphs not built (?resclasses=0 to disable)`,
+      );
+  }
   // bindHfVerts=false: the resolve reconstructs terrain world pos from DEPTH and only
   // calls fetchWorldVert for rock/bark (the explicit-mesh else branch), so it must NOT
   // bind the stride-1 terrain buffer — one fewer storage buffer in the fragment stage (2e).
@@ -443,7 +461,7 @@ export function buildNaniteResolve(
     // latency chain can't be hidden. Measured as the dominant driver of the close-up voxel r.scene
     // cliff (37.5ms inside a crown). Voxel pixels are never matClass 0 (isT always false in 'vox'),
     // so guarding by `pass === 'tri'` is output-identical and strips the graph from the vox shader.
-    if (pass === 'tri') If(isT, () => {
+    if (pass === 'tri' && hasClass(0)) If(isT, () => {
       const shading = buildTerrainShading({
         normalTex: hf.normalTex,
         biomeTex: hf.biomeTex as StorageTexture,
@@ -479,7 +497,7 @@ export function buildNaniteResolve(
     const rockCol = vec3(0.3).toVar() as unknown as NV3;
     const rockNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
     const rockAo = float(1).toVar() as unknown as NF;
-    if (pass === 'tri') If(isR, () => {
+    if (pass === 'tri' && hasClass(1)) If(isR, () => {
       const instId = item.x;
       const localTri = pRaw.bitAnd(uint(CLUSTER_TRI_MASK));
       const ctx = fetch.makeCtx(instId, ci);
@@ -520,7 +538,7 @@ export function buildNaniteResolve(
     const barkCol = vec3(0.3).toVar() as unknown as NV3;
     const barkNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
     const barkAo = float(1).toVar() as unknown as NF;
-    if (pass === 'tri' && world.barkTexA && world.barkTexB) {
+    if (pass === 'tri' && world.barkTexA && world.barkTexB && (hasClass(2) || hasClass(3))) {
       const barkTexA = world.barkTexA;
       const barkTexB = world.barkTexB;
       If(isBD, () => {
@@ -689,7 +707,7 @@ export function buildNaniteResolve(
     const isL = matClass.equal(uint(4)).toVar();
     const leafCol = vec3(0.1, 0.2, 0.08).toVar() as unknown as NV3;
     const leafNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
-    if (pass === 'tri') If(isL, () => {
+    if (pass === 'tri' && hasClass(4)) If(isL, () => {
       const instId = item.x;
       const localTri = pRaw.bitAnd(uint(CLUSTER_TRI_MASK));
       // per-species tint from matParam (mesh word 7): linear RGB + hueVar (4×u8) —

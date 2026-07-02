@@ -283,6 +283,8 @@ export function buildNaniteFrame(
   const resolveCull = voxActive ? { qRasterRO: cull.qRasterRO, qVoxRasterRO: cull.qVoxRasterRO } : cull;
   const resolve = buildNaniteResolve(registry.gpu, hf.heightTex, cam, resolveCull, vis, {
     hf,
+    // RP-1: registered matClass ids — the resolve strips absent classes' subgraphs
+    presentClasses: registry.presentClasses,
     gi: world.gi,
     canopyTex: world.canopyTex,
     csm: world.csm,
