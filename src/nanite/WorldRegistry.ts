@@ -34,7 +34,17 @@ import type { VegLib, PoolPart } from '../vegetation/VegLibrary';
 import type { Heightfield } from '../world/Heightfield';
 import { WORLD_SIZE } from '../world/WorldConst';
 import { type DagBuild, type DagCluster, buildDag } from './BuildDag';
-import { buildAggregateDag } from './BuildAggregateDag';
+import { buildAggregateDag, setAggLodErrorK } from './BuildAggregateDag';
+import {
+  BootCache,
+  type PackedFarTile,
+  packFarTiles,
+  packPreparedCrown,
+  type PackedPreparedCrown,
+  unpackFarTiles,
+  unpackPreparedCrown,
+} from './BootCache';
+import { appendFarTiles, buildFarTilesAsync, FT_TILE_SIZE, type FarTileSpecies } from './FarTiles';
 import { setClusterFill } from './Clusterize';
 import { DagBuildWorker, DagWorkerPool, type DagBuilder, type HeightDagResult } from './DagWorkerClient';
 import { TerrainStreamer, buildTerrainTile, type TileBuildDeps, type TileBuildStats } from './TerrainStreamer';
@@ -58,9 +68,11 @@ import {
   computeVoxlodAnchorL0,
   prepareVoxelCrown,
   setVoxlodConfig,
+  setVoxOccThreshold,
+  voxOccThreshold,
   voxlodLevels,
 } from './VoxelizeCrown';
-import { BRICK_WORDS } from './VoxelBrick';
+import { BRICK_WORDS, type BrickCPU } from './VoxelBrick';
 
 /** Forests ring radii (Forests.ts) — discrete LOD switch distances until N8 */
 const R0_FAR = 26;
@@ -75,11 +87,12 @@ const TREE_GEO_FAR = 496;
  *  is maximal, so it rides the trunk's envelope — match the tree swayPad (3.8). */
 const LEAF_SWAY_PAD = 3.8;
 /** voxel-foliage (spec §3.2 / Stage 3a): the DEFAULT mesh→voxel handoff distance (m).
- *  NEARER than UE (~40 m for beech, inside the instMinPx envelope) so the voxelizable
- *  band is the high-overdraw mid/far zone — the Stage-1-calibrated default; ?voxnear=
- *  tunes it (Stage 5 sweep). The leaf head culls beyond it, the voxel head seeds beyond
- *  it → a clean hard switch (cross-fade BAND is Stage 3b; here popping at the line is OK). */
-export const DEFAULT_TRANSITION_DIST = 35;
+ *  The leaf head culls beyond it, the voxel head seeds beyond it → a clean hard switch.
+ *  60 (2026-07-03, was 35 — the 2026-07-02 beautification pick, now SHARED forest+world):
+ *  mesh only where it is genuinely near-LOD0; pushing the mesh band past ~60 m exposes
+ *  the DAG simplifier's crown pathology ("massive leaves / spikes"), while fine voxels
+ *  (grid 256, voxtaucap 4) read closer to real geometry from 60 m out. ?voxnear= tunes. */
+export const DEFAULT_TRANSITION_DIST = 60;
 /** terrain window size: 7 quads → 98 tris, divides 4095 exactly (4096² field) */
 const TERRAIN_WIN_QUADS = 7;
 
@@ -267,11 +280,12 @@ export async function buildWorldRegistry(input: {
    *  to seal inter-level T-junction cracks that would otherwise show sky. Default
    *  true; `?nanitedskirt=0` turns them off for a same-pose A/B. */
   dagTerrainSkirt?: boolean;
-  /** N9-C0 (`?naniteleaf=1`): also register each tree pool's REAL mesh-leaf crown
-   *  as a MATERIAL_CLASS.leaf head, bound to the SAME instances as the bark trunk
-   *  (a co-located mesh, not a LOD), with the 'leaf' flutter channel. Hero-ring
-   *  only (≤R0_FAR=26 m) until N9-C2 extends it via the aggregate DAG. Opt-in;
-   *  default off (bit-identical boot). Tree pools only. */
+  /** N9-C0/C2: also register each tree pool's REAL mesh-leaf crown as a
+   *  MATERIAL_CLASS.leaf head, bound to the SAME instances as the bark trunk
+   *  (a co-located mesh, not a LOD), with the 'leaf' flutter channel; the
+   *  aggregate DAG extends it across the band and the voxel sibling owns
+   *  beyond the handoff. DEFAULT ON from TerrainScene since 2026-07-03
+   *  (`?naniteleaf=0` opts out). Tree pools only. */
   leaf?: boolean;
   /** N8-D1d: numeric world seed (WorldSeed.seed) → the terrain-DAG cache key.
    *  The heights are deterministic in the seed, so a cached DAG loads instantly
@@ -379,15 +393,44 @@ export async function buildWorldRegistry(input: {
   const forceVoxAll = forceVoxRaw === '1' || forceVoxRaw === 'all';
   const forceVoxId = forceVoxRaw !== null && !forceVoxAll ? Number(forceVoxRaw) : null;
   const forceVoxOn = forceVoxRaw !== null;
-  // ?voxreg=1 enables the automatic mesh→voxel transition in the WORLD scene (opt-in here
-  // to keep the world boot budget untouched by default; the canonical ?scene=forest perf
-  // path wires it on its OWN path — ForestScene). ?forcevox implies it.
-  const voxReg = qVox.get('voxreg') === '1' || forceVoxOn;
+  // ?voxreg=0 disables the automatic mesh→voxel transition in the WORLD scene. DEFAULT ON
+  // since 2026-07-03 (the world-hookup arc): the world rides the SAME voxelised-foliage
+  // stack the forest ships (voxel crowns beyond the handoff + far tiles), boot-cached.
+  // Was opt-in (?voxreg=1) while the forest was the only calibrated path. ?forcevox implies.
+  const voxReg = qVox.get('voxreg') !== '0' || forceVoxOn;
   const voxGridDim = Number(qVox.get('voxgrid') ?? DEFAULT_VOXEL_GRID_DIM) || DEFAULT_VOXEL_GRID_DIM;
   // ?voxnear= — the mesh→voxel handoff distance (m), TUNEABLE (spec §3.2.bis). Default
-  // DEFAULT_TRANSITION_DIST (~35 m). The leaf head culls beyond it; the voxel head seeds
-  // beyond it. ?forcevox overrides to 0 (voxel everywhere) per the debug semantics.
+  // DEFAULT_TRANSITION_DIST (60 m — the shared beautification pick). The leaf head culls
+  // beyond it; the voxel head seeds beyond it. ?forcevox overrides to 0 (voxel everywhere).
   const transitionDist = Number(qVox.get('voxnear') ?? DEFAULT_TRANSITION_DIST) || DEFAULT_TRANSITION_DIST;
+  // ?fartiles=0 disables the cross-instance far-field tile aggregation (FarTiles.ts —
+  // DEFAULT ON, 2026-07-03: same machinery as the forest; terrain-aware per-tile baseY).
+  // ?aggdist= tile handoff distance; ?ftcell= tile cell size (m).
+  const farTilesOn = qVox.get('fartiles') !== '0';
+  // ⚠️ aggDist 280 here, NOT the forest's DEFAULT_AGG_DIST 140 (measured 2026-07-03,
+  // wagg280 gallery): on real terrain an oblique view puts whole HILLSIDES in the
+  // 94-280 m band — at 140 the fartile takeover painted them as a washed-out wall of
+  // 2.9 m plates (user report). 280 keeps per-tree grid-256 voxels on everything you
+  // actually look at; tiles own the background. Perf: oblique 47→58 fps (per-tree is
+  // CHEAPER than the tile overlap there), high-aerial 109→107 (far collapse intact).
+  // The forest keeps 140: flat ground only ever shows tile canopy TOPS, and its
+  // F-vs-G sweep picked cell-size fidelity over takeover distance.
+  const aggDist = Number(qVox.get('aggdist') ?? 280) || 280;
+  // ⚠️ ftCell 0.75 here, NOT the forest's DEFAULT_FT_CELL 0.6 — the ONE knob the world
+  // cannot share (measured 2026-07-03): the 4 km world splats ~3510 tiles vs the forest's
+  // ~841, and 0.6 m cells produced ~12-13M far bricks ≈ 450 MB — over the 256 MB storage-
+  // buffer cliff (and the BrickCPU JS heap OOM-crashed the tab at ~8M). 0.75 lands ~6-7M
+  // (the forest-proven scale). Revisit if the brick payload slims (typed-array bricks /
+  // buffer split); ?ftcell=0.6 works for A/B on machines with headroom.
+  const ftCell = Number(qVox.get('ftcell') ?? 0.75) || 0.75;
+  // ?leaflodk= — aggregate LEAF ladder error scale (BuildAggregateDag AGG_LOD_CFG,
+  // shared default 0.4); ?voxocc= — occupancy coverage threshold (VoxelizeCrown).
+  {
+    const lk = qVox.get('leaflodk');
+    if (lk !== null) setAggLodErrorK(Number(lk));
+    const occRaw = qVox.get('voxocc');
+    if (occRaw !== null) setVoxOccThreshold(Number(occRaw));
+  }
   // ?voxlod (G1, DEFAULT ON): build the voxel MIP PYRAMID + a REAL multi-level DAG so the SAME
   // crown coarsens with distance through a BAND-ANCHORED octave ladder (far => bigger/fewer
   // voxels, near => finer), selected by the cull's screen-error cut (like UE5 Nanite Voxels).
@@ -397,13 +440,10 @@ export async function buildWorldRegistry(input: {
   // FINEST level's cut lands at the handoff and each octave of distance descends one level (spans
   // [35,2000] m). projK mirrors the cull (cot(fovY/2)*renderHeight*0.5); no camera here, so the
   // app FOV (Engine.ts PerspectiveCamera = 55°) is used — the ladder SHAPE is projK-robust anyway.
+  const APP_FOV_DEG = 55; // Engine.ts camera FOV
+  const anchorH = input.renderer.getDrawingBufferSize(new Vector2()).y;
   {
-    const APP_FOV_DEG = 55; // Engine.ts camera FOV
-    const anchorL0 = computeVoxlodAnchorL0(
-      transitionDist,
-      input.renderer.getDrawingBufferSize(new Vector2()).y,
-      APP_FOV_DEG,
-    );
+    const anchorL0 = computeVoxlodAnchorL0(transitionDist, anchorH, APP_FOV_DEG);
     // ?voxlodk= (anchor multiplier) / ?voxlodlevels= / ?voxlodsparse= / ?voxlodshell= sweep the
     // ladder for A/B; unset = the band-anchored defaults (7 levels, K=1, sparse off, shell off).
     const kRaw = qVox.get('voxlodk');
@@ -418,6 +458,41 @@ export async function buildWorldRegistry(input: {
       shell: shRaw !== null ? Number(shRaw) : undefined,
     });
   }
+  // ── boot cache (DDC — same store the forest path uses): crown voxelizations, LOD DAG
+  // builds and the fartiles splat are deterministic in (sources × these params); key =
+  // builder-source hash + RESOLVED values (a raw-null knob must never mask a code-default
+  // change — the 2026-07-02 ftcell hazard). The scene marker keeps world/forest disjoint.
+  const bootCache = new BootCache({
+    params: {
+      scene: 'world',
+      seed: seed ?? 0,
+      counts: [...idCounts.entries()].sort((x, y) => x[0] - y[0]),
+      classes: classes ? [...classes].sort() : null,
+      dagClasses: dag ? [...dag].sort() : null,
+      leafOn: leafOn === true,
+      voxReg,
+      voxGridDim,
+      voxLod,
+      transitionDist,
+      farTilesOn,
+      aggDist,
+      ftCell,
+      voxOcc: voxOccThreshold(),
+      anchorH,
+      fov: APP_FOV_DEG,
+      stress: qVox.get('stress'),
+      leafDensity: qVox.get('naniteleafdensity'),
+      knobs: ['voxlodk', 'voxlodlevels', 'voxlodsparse', 'voxlodshell', 'leaflodk', 'clustertris', 'clusterfill'].map(
+        (k) => qVox.get(k),
+      ),
+    },
+  });
+  // crown voxelizations (idF-keyed — the pool walk below consumes them in place of
+  // prepareVoxelCrown). Only fetched when the voxel path is live.
+  const cachedCrownList =
+    voxReg && leafOn ? await bootCache.get<{ idF: number; pack: PackedPreparedCrown }[]>('crowns') : null;
+  const cachedCrowns = cachedCrownList ? new Map(cachedCrownList.map((c) => [c.idF, c.pack])) : null;
+  const crownPacks: { idF: number; pack: PackedPreparedCrown }[] = [];
   /** idF → leaf head, for the ?forcevox leaf-suppression pass (filled in the loop). */
   const leafHeadForVox = new Map<number, MeshHandle>();
   const toVoxel: {
@@ -515,7 +590,11 @@ export async function buildWorldRegistry(input: {
       // not tris — that authoring is Stage 2; here we only reserve+upload the bricks).
       if (voxReg && (!forceVoxOn || forceVoxAll || forceVoxId === idF)) {
         const matParam = packLeafTint(pool.leaf.color);
-        const prep = prepareVoxelCrown(leafSource, pool.leaf.color, voxGridDim, voxLod);
+        const cached = cachedCrowns?.get(idF);
+        const prep = cached
+          ? unpackPreparedCrown(cached)
+          : prepareVoxelCrown(leafSource, pool.leaf.color, voxGridDim, voxLod);
+        if (!cached) crownPacks.push({ idF, pack: packPreparedCrown(prep) });
         // a degenerate empty crown (0 bricks) would crash registerVoxelHead — skip it so
         // the leaf head keeps its full mesh envelope (set below to TREE_GEO_FAR, no handoff).
         if (prep.brickCount > 0) {
@@ -525,6 +604,8 @@ export async function buildWorldRegistry(input: {
       }
     }
   }
+
+  if (!cachedCrowns && crownPacks.length > 0) void bootCache.put('crowns', crownPacks);
 
   // Stage-3a: the mesh→voxel handoff, MESH side. For every voxelized crown, lower the LEAF
   // head's max draw distance to transitionDist so it renders ONLY nearer than the handoff;
@@ -818,17 +899,26 @@ export async function buildWorldRegistry(input: {
   const tDag0 = performance.now();
   const dagBuilds: { handle: MeshHandle; dag: DagBuild }[] = [];
   let dagTris = 0;
+  // boot cache: DagBuild[] in [toDag..., toAggregate...] order (handles re-derive from
+  // THIS boot's registration, which always runs — only the expensive builds are skipped).
+  // Usable only when the stored count matches BOTH job lists (a failed build desyncs the
+  // order ⇒ length mismatch ⇒ clean rebuild).
+  const cachedDags = await bootCache.getMany<DagBuild>('dags');
+  const usableDags = cachedDags && cachedDags.length === toDag.length + toAggregate.length ? cachedDags : null;
   if (toDag.length > 0) {
     let lateV = 0;
     let lateT = 0;
     let lateC = 0;
-    for (const item of toDag) {
+    for (let di = 0; di < toDag.length; di++) {
+      const item = toDag[di] as { handle: MeshHandle; source: ExplicitSource; label: string };
       let built: DagBuild;
       try {
-        built = buildDag(explicitToDagVerts(item.source), DAG_VERT_STRIDE, item.source.indices, {
-          normalOffset: 3,
-          maxTris: MAX_CLUSTER_TRIS,
-        });
+        built = usableDags
+          ? (usableDags[di] as DagBuild)
+          : buildDag(explicitToDagVerts(item.source), DAG_VERT_STRIDE, item.source.indices, {
+              normalOffset: 3,
+              maxTris: MAX_CLUSTER_TRIS,
+            });
       } catch (e) {
         deferred.push(`DAG ${item.label}: build failed (${e instanceof Error ? e.message : String(e)})`);
         continue;
@@ -850,13 +940,16 @@ export async function buildWorldRegistry(input: {
     let aggV = 0;
     let aggT = 0;
     let aggC = 0;
-    for (const item of toAggregate) {
+    for (let ai = 0; ai < toAggregate.length; ai++) {
+      const item = toAggregate[ai] as { handle: MeshHandle; source: ExplicitSource; label: string };
       let built: DagBuild;
       try {
-        built = buildAggregateDag(explicitToDagVerts(item.source), DAG_VERT_STRIDE, item.source.indices, {
-          seed: seed ?? 0,
-          maxTris: MAX_CLUSTER_TRIS,
-        });
+        built = usableDags
+          ? (usableDags[toDag.length + ai] as DagBuild)
+          : buildAggregateDag(explicitToDagVerts(item.source), DAG_VERT_STRIDE, item.source.indices, {
+              seed: seed ?? 0,
+              maxTris: MAX_CLUSTER_TRIS,
+            });
       } catch (e) {
         deferred.push(`AGG ${item.label}: build failed (${e instanceof Error ? e.message : String(e)})`);
         continue;
@@ -871,7 +964,13 @@ export async function buildWorldRegistry(input: {
   }
   const aggBuildMs = performance.now() - tAgg0;
   if (toAggregate.length > 0) {
-    console.log(`[worldreg] leaf aggregate DAG: ${toAggregate.length} crowns in ${aggBuildMs.toFixed(0)} ms`);
+    console.log(
+      `[worldreg] leaf aggregate DAG: ${toAggregate.length} crowns in ${aggBuildMs.toFixed(0)} ms` +
+        (usableDags ? ' (bootcache)' : ''),
+    );
+  }
+  if (!usableDags && dagBuilds.length === toDag.length + toAggregate.length && dagBuilds.length > 0) {
+    void bootCache.putMany('dags', dagBuilds.map((b) => b.dag));
   }
   // voxel-foliage (§5.3 HARD precondition): reserve the brick budget BEFORE build()
   // freezes the caps. Total = Σ occupied bricks across the voxelized crowns. Also
@@ -908,6 +1007,68 @@ export async function buildWorldRegistry(input: {
         `+${lateVoxInst} voxel instances, +${lateVoxHeads} voxel:7 heads`,
     );
   }
+  // far-tile aggregation (FarTiles.ts — the forest path's move, world-wired 2026-07-03):
+  // beyond aggDist whole 64 m tiles of trees render as ONE merged voxel head. Terrain-
+  // aware: each tile grid floors at its members' min ground y (per-tile baseY); trunk
+  // columns rise from each tree's own ground. Built pre-build for the exact reservation,
+  // appended post-build. Splat rides the FarTiles worker pool; boot-cached.
+  // PACKED end to end (2026-07-03): each tile is compacted to the bootcache form AS IT
+  // EMITS and unpacked one-at-a-time at append — the whole-map BrickCPU object graph
+  // (~250 B/brick × millions) OOM-crashed the tab twice before this.
+  let ftPacked: PackedFarTile[] = [];
+  if (farTilesOn && toVoxel.length > 0) {
+    const tFt0 = performance.now();
+    const ftPools: { a: Float32Array; b: Float32Array; species: FarTileSpecies }[] = [];
+    for (const v of toVoxel) {
+      const s = perId.get(v.idF);
+      const levels = v.prep.vox.levels;
+      if (!s || !levels || levels.length === 0) continue;
+      // pick the crown pyramid level whose brick size best matches the tile cell size
+      let pick = 0;
+      let bestD = Infinity;
+      for (let L = 0; L < levels.length; L++) {
+        const bw = (levels[L] as { cellSize: number }).cellSize * 4;
+        const d = Math.abs(bw - ftCell);
+        if (d < bestD) {
+          bestD = d;
+          pick = L;
+        }
+      }
+      const lvl = levels[pick] as { bricks: BrickCPU[]; occupied: number[] };
+      const bricks = lvl.occupied.map((i) => lvl.bricks[i] as BrickCPU);
+      let crownMinY = 2;
+      for (const b of bricks) crownMinY = Math.min(crownMinY, b.center[1] - b.half);
+      ftPools.push({
+        a: s.a,
+        b: s.b,
+        species: { bricks, crownMinY: Math.max(0.5, crownMinY), bark: { r: 0.42, g: 0.33, b: 0.24 } },
+      });
+    }
+    const cachedFt = await bootCache.get<PackedFarTile[]>('fartiles');
+    if (cachedFt) {
+      // filter(Boolean): a 2026-07-03 bug stored nulls (the fire-and-forget put's
+      // structured clone ran AFTER the append loop released slots in place) — heal
+      // any poisoned entry; the append no longer mutates the stored array.
+      ftPacked = cachedFt.filter(Boolean);
+    } else {
+      ftPacked = await buildFarTilesAsync(
+        { tileSize: FT_TILE_SIZE, cellSize: ftCell, pools: ftPools },
+        (b) => packFarTiles([b])[0] as PackedFarTile,
+      );
+      void bootCache.put('fartiles', ftPacked);
+    }
+    let ftBricks = 0;
+    let ftClusters = 0;
+    for (const t of ftPacked) {
+      ftBricks += t.prep.brickCount;
+      ftClusters += t.prep.clusterCount;
+    }
+    reg.addLate({ bricks: ftBricks, meshes: ftPacked.length, instances: ftPacked.length, clusters: ftClusters });
+    console.log(
+      `[worldreg] fartiles: ${ftPacked.length} tiles, ${ftBricks} bricks (${((ftBricks * BRICK_WORDS * 4) / 1048576).toFixed(1)} MB), ` +
+        `${ftClusters} clusters, aggDist ${aggDist} m, built in ${(performance.now() - tFt0).toFixed(0)} ms`,
+    );
+  }
 
   const tBuild0 = performance.now();
   const dagBuildMs = tBuild0 - tDag0;
@@ -925,7 +1086,9 @@ export async function buildWorldRegistry(input: {
       const r = appendVoxelCrown(reg, v.prep, v.source, {
         matParam: v.matParam,
         swayPad: LEAF_SWAY_PAD,
-        maxDist: TREE_GEO_FAR,
+        // fartiles: the per-tree voxel crown ENDS at aggDist — the merged tile head owns
+        // the far field beyond (ranges overlap by the tile radius, see FarTiles.ts).
+        maxDist: ftPacked.length > 0 ? aggDist : TREE_GEO_FAR,
         // Stage-3a: the voxel head seeds only beyond transitionDist (the mesh→voxel
         // handoff); ?forcevox forces nearDist=0 (voxel everywhere, leaf suppressed below).
         nearDist: forceVoxOn && (forceVoxAll || forceVoxId === v.idF) ? 0 : transitionDist,
@@ -935,6 +1098,27 @@ export async function buildWorldRegistry(input: {
       // bind the voxel head to the SAME instances as its leaf sibling
       const s = perId.get(v.idF);
       if (s) reg.bindInstances(r.head, { a: s.a, b: s.b });
+      // fartiles: the per-tree BARK trunk ends at aggDist too — the tile splat carries
+      // its own trunk columns beyond.
+      if (ftPacked.length > 0) {
+        const bark = heads.get(v.idF);
+        if (bark !== undefined) reg.setMaxDistance(bark, aggDist);
+      }
+    }
+    if (ftPacked.length > 0) {
+      const ftTint = toVoxel[0]?.matParam ?? 0;
+      const nTiles = ftPacked.length;
+      let ftBricks = 0;
+      // unpack + append ONE tile at a time (the whole-map object graph is heap-fatal;
+      // peak = the packed array + one live tile). Do NOT release slots in place — the
+      // fire-and-forget bootCache.put still references THIS array and its structured
+      // clone runs after we get here (nulling slots stored a poisoned cache entry).
+      for (let i = 0; i < nTiles; i++) {
+        const tile = unpackFarTiles([ftPacked[i] as PackedFarTile]);
+        ftBricks += appendFarTiles(reg, tile, { nearDist: Math.max(10, aggDist - 46), matParam: ftTint });
+      }
+      console.log(`[worldreg] fartiles: appended ${ftBricks} bricks across ${nTiles} tile heads`);
+      ftPacked = []; // release
     }
     console.log(
       `[worldreg] voxel-foliage: appended ${appended} bricks (${reg.brickCount}/${reg.brickCapacity}) ` +

@@ -187,9 +187,11 @@ export function setVoxlodConfig(cfg: { levels?: number; errorK?: number; sparseK
 }
 
 /** default per-crown voxel DETAIL knob (§3.2.bis): effective CELL edge count over the
- *  whole crown. ~180 ⇒ a leaf spans ≥2-3 cells at the near transition (§3.2). A
- *  build-time uniform (?voxgrid=), ratcheted COARSER in Stage 5 until KG-0b breaks. */
-export const DEFAULT_VOXEL_GRID_DIM = 180;
+ *  whole crown. A build-time uniform (?voxgrid=). 256 (2026-07-03, was 180 — the
+ *  2026-07-02 beautification pick, now SHARED forest+world): L0 bricks ~0.156 m ≈
+ *  4.4 px at the 60 m handoff — near-mid voxels read close to real geometry (user
+ *  pivot: fine voxels beat more mesh distance; crown prep 36→48 s cold, boot-cached). */
+export const DEFAULT_VOXEL_GRID_DIM = 256;
 
 /** supersamples per cell per axis for fractional coverage (§5.4.3). S=3 ⇒ 27 sub-
  *  samples/cell — enough to resolve a sub-cell needle as partial density. Offline. */
@@ -765,6 +767,15 @@ function downsampleBrickGrid(
         let densSum = 0, n = 0;
         let nx = 0, ny = 0, nz = 0;
         let ar = 0, ag = 0, ab = 0, aw = 0;
+        // REPRESENTATIVE-child albedo (2026-07-03, user report "far tree ≈ one color"):
+        // the density-weighted MEAN albedo re-averages every level, so within-crown color
+        // variance dies exponentially up the pyramid and a distant crown flattens to a
+        // single tone. Track the DOMINANT child (max density = what you'd actually see in
+        // this cell) and inherit ITS albedo — real leaf-clump shades compose up the whole
+        // ladder (retained DETAIL, not injected noise). Normals keep the weighted mean
+        // (they vary systematically across the crown surface, so N·L survives averaging).
+        let repW = -1;
+        let repA: [number, number, number] | null = null;
         // TIGHT FOOTPRINT bound: union of the occupied finer bricks' actual [center +/- half]
         // boxes (NOT the full grid cube). Stays empty (±Inf) until a child contributes.
         let fMinX = Infinity, fMinY = Infinity, fMinZ = Infinity;
@@ -788,6 +799,7 @@ function downsampleBrickGrid(
               densSum += fb.density; n++;
               nx += fb.normal[0] * w; ny += fb.normal[1] * w; nz += fb.normal[2] * w;
               ar += fb.albedo[0] * w; ag += fb.albedo[1] * w; ab += fb.albedo[2] * w; aw += w;
+              if (w > repW) { repW = w; repA = fb.albedo; }
               // grow the tight footprint by this child's actual (already-tight) box
               const bx0 = fb.center[0] - fb.half, bx1 = fb.center[0] + fb.half;
               const by0 = fb.center[1] - fb.half, by1 = fb.center[1] + fb.half;
@@ -868,7 +880,12 @@ function downsampleBrickGrid(
                 if (cell < 32) occLo |= (1 << cell); else occHi |= (1 << (cell - 32));
               }
         }
-        bricks.push({ occLo, occHi, normal, spread, albedo: [ar / aw, ag / aw, ab / aw], density, center, half });
+        // albedo: DOMINANT child, not the weighted mean — mean-of-means decays within-crown
+        // color variance by ~½ per level (a distant crown flattens to ONE tone, user report);
+        // dominant-child is mode/nearest downsampling for categorical data (leaf-clump shades)
+        // and retains the full real palette at every level. Composes up the ladder unchanged.
+        const albedo: [number, number, number] = repA ? [repA[0], repA[1], repA[2]] : [ar / aw, ag / aw, ab / aw];
+        bricks.push({ occLo, occHi, normal, spread, albedo, density, center, half });
       }
     }
   }

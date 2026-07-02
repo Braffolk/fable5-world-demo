@@ -899,10 +899,16 @@ export function buildNaniteResolve(
             // into repeating dark bands (voxao=0 A/B proved the bands are 100% normal-
             // driven); a real canopy from >140 m reads near-lambertian-flat anyway.
             // Per-tree crowns (45-140 m) keep their full baked normals.
+            // SLOPE-AWARE (2026-07-03, world hookup): the blend is weighted by how
+            // up-facing the baked normal already is (clamp(n.y,0,1)) — flat-forest
+            // canopy TOPS keep the full banding fix, but hillside tile WALLS (world
+            // terrain; bricks seen side-on) keep their directional normals instead of
+            // washing out into uniformly-lit pale plates (user report, w6-oblique).
             const mFlags = fetch.meshWord(meshId, 6).shiftRight(uint(16)).bitAnd(uint(0xff));
             If(mFlags.bitAnd(uint(MESH_FLAG_FARTILE)).notEqual(uint(0)), () => {
+              const upK = float(ftNrmK).mul(voxNrm.y.clamp(0, 1));
               voxNrm.assign(
-                normalize(mix(voxNrm, vec3(0, 1, 0) as unknown as NV3, ftNrmK)) as unknown as NV3,
+                normalize(mix(voxNrm, vec3(0, 1, 0) as unknown as NV3, upK)) as unknown as NV3,
               );
             });
           }

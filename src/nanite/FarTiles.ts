@@ -48,6 +48,18 @@ import {
   type TileSplatOut,
 } from './FarTilesSplat';
 
+/** SHARED far-tile defaults (2026-07-03 — the 2026-07-02 beautification picks, consumed
+ *  by ForestScene AND the world path so both scenes ride the same far field):
+ *  - tile size 64 m (one merged voxel head per tile);
+ *  - cell 0.6 m (L0 bricks 2.4 m — far field reads uniformly finer than 0.75's 3 m slabs
+ *    and the 140 m voxel→fartile handoff stops being a harsh jump; 0.5 REJECTED: ~3.4×
+ *    splat ⇒ 8+ min cold boot);
+ *  - aggregation distance 140 m (per-tree heads end here, the tile head owns beyond;
+ *    ranges overlap by the tile radius so a tree is never dropped before its tile is on). */
+export const FT_TILE_SIZE = 64;
+export const DEFAULT_FT_CELL = 0.6;
+export const DEFAULT_AGG_DIST = 140;
+
 export interface FarTileSpecies {
   /** occupied bricks of the chosen coarse crown pyramid level (crown-LOCAL space). */
   bricks: BrickCPU[];
@@ -77,7 +89,8 @@ export interface FarTileOpts {
   tileSize: number; // world meters (default 64)
   cellSize: number; // world meters (default 0.5)
   /** per-pool instance streams (the SAME arrays bound to the tree heads):
-   *  a = [x, 0, z, scale]×n, b = [yaw, …]×n. */
+   *  a = [x, groundY, z, scale]×n, b = [yaw, …]×n. groundY is honoured since
+   *  2026-07-03 (terrain-aware tiles); the forest plants at y=0. */
   pools: { a: Float32Array; b: Float32Array; species: FarTileSpecies }[];
 }
 
@@ -120,7 +133,6 @@ function planFarTiles(opts: FarTileOpts): FarTilePlan | null {
   // == tileSize (0.75 → 64/88 ≈ 0.727) — watertight, overlap-free.
   const cellsXZ = Math.ceil(tileSize / cellSize / BRICK_DIM) * BRICK_DIM;
   cellSize = tileSize / cellsXZ;
-  const cellsY = Math.ceil(48 / cellSize / BRICK_DIM) * BRICK_DIM;
 
   // flatten species brick sets to the worker-transportable stream (splat uses ONLY
   // center/half/albedo/normal/density of the source bricks)
@@ -172,11 +184,18 @@ function planFarTiles(opts: FarTileOpts): FarTilePlan | null {
     return maxR * maxS * 1.45;
   });
   const tileOf = new Map<number, number[]>();
+  // per-tile member ground-height range (terrain-aware, 2026-07-03): the tile grid's
+  // world floor = min member y (baseY), and the shared cellsY must cover the WORST
+  // per-tile relief + the tallest tree. Flat ground (forest, all y=0) ⇒ baseY=0 and
+  // cellsY = the legacy 48 m — bit-identical tiles.
+  const tileMinY = new Map<number, number>();
+  const tileMaxY = new Map<number, number>();
   for (let pi = 0; pi < pools.length; pi++) {
     const a = (pools[pi] as { a: Float32Array }).a;
     const reach = reachOf[pi] as number;
     for (let ii = 0; ii * 4 < a.length; ii++) {
       const x = a[ii * 4] as number;
+      const y = a[ii * 4 + 1] as number;
       const z = a[ii * 4 + 2] as number;
       const tx0 = Math.min(tilesX - 1, Math.max(0, Math.floor((x - reach - mnX) / tileSize)));
       const tx1 = Math.min(tilesX - 1, Math.max(0, Math.floor((x + reach - mnX) / tileSize)));
@@ -191,15 +210,35 @@ function planFarTiles(opts: FarTileOpts): FarTilePlan | null {
             tileOf.set(key, list);
           }
           list.push(pi, ii);
+          if (y < (tileMinY.get(key) ?? Infinity)) tileMinY.set(key, y);
+          if (y > (tileMaxY.get(key) ?? -Infinity)) tileMaxY.set(key, y);
         }
       }
     }
   }
+  // PER-TILE grid height: THIS tile's relief (maxY − baseY) + 48 m of tree, snapped to
+  // a brick multiple. baseY snaps DOWN to a cell multiple so flat-ground tiles get
+  // exactly baseY=0 and the legacy 48 m extent (forest parity). Per-tile (not a global
+  // worst-case) — one alpine tile must not size every tile's dense grid (world OOM).
+  let worstRelief = 0;
+  let maxCellsY = 0;
   const jobs: TileSplatJob[] = [];
-  for (const [key, members] of tileOf) jobs.push({ key, members: Uint32Array.from(members) });
+  for (const [key, members] of tileOf) {
+    const baseY = Math.floor((tileMinY.get(key) ?? 0) / cellSize) * cellSize;
+    const relief = (tileMaxY.get(key) ?? 0) - baseY;
+    if (relief > worstRelief) worstRelief = relief;
+    const cellsY = Math.ceil((48 + relief) / cellSize / BRICK_DIM) * BRICK_DIM;
+    if (cellsY > maxCellsY) maxCellsY = cellsY;
+    jobs.push({ key, baseY, cellsY, members: Uint32Array.from(members) });
+  }
+  // eslint-disable-next-line no-console
+  console.log(
+    `[fartiles] plan: ${jobs.length} tiles (${tilesX}×${tilesZ} grid), cell ${cellSize.toFixed(3)} m, ` +
+      `cellsXZ ${cellsXZ}, cellsY ≤ ${maxCellsY} (worst relief ${worstRelief.toFixed(1)} m)`,
+  );
 
   return {
-    grid: { tileSize, cellSize, cellsXZ, cellsY, tilesX, mnX, mnZ },
+    grid: { tileSize, cellSize, cellsXZ, tilesX, mnX, mnZ },
     jobs,
     poolsFlat,
   };
@@ -207,7 +246,8 @@ function planFarTiles(opts: FarTileOpts): FarTilePlan | null {
 
 /** dense-emit + pyramid + prep for ONE splatted tile (main thread — VoxelizeCrown). */
 function emitTile(grid: SplatGridSpec, res: TileSplatOut): FarTileBuild | null {
-  const { tileSize, cellSize, cellsXZ, cellsY, tilesX, mnX, mnZ } = grid;
+  const { tileSize, cellSize, cellsXZ, tilesX, mnX, mnZ } = grid;
+  const cellsY = res.cellsY;
   const bricksX = cellsXZ / BRICK_DIM;
   const bricksY = cellsY / BRICK_DIM;
   const nBricks = bricksX * bricksY * bricksX;
@@ -250,6 +290,8 @@ function emitTile(grid: SplatGridSpec, res: TileSplatOut): FarTileBuild | null {
     };
   }
   if (occupied === 0) return null;
+  // terrain-aware (2026-07-03): brick Y is tile-LOCAL (measured from the tile's world
+  // floor); the identity instance at center y = baseY translates it back to world.
 
   const levels: VoxelLevel[] = buildVoxelPyramid(
     dense,
@@ -264,7 +306,7 @@ function emitTile(grid: SplatGridSpec, res: TileSplatOut): FarTileBuild | null {
     clusterCount += lvl.blocks.length;
   }
   return {
-    center: [centerX, 0, centerZ],
+    center: [centerX, res.baseY, centerZ],
     prep: {
       vox: {
         bricks: [],
@@ -291,30 +333,47 @@ function emitTile(grid: SplatGridSpec, res: TileSplatOut): FarTileBuild | null {
 }
 
 /** Splat all instances into tile grids and build one voxel pyramid per tile (SYNC —
- *  the single-thread reference + worker-failure fallback). */
-export function buildFarTiles(opts: FarTileOpts): FarTileBuild[] {
+ *  the single-thread reference + worker-failure fallback). STREAMS one tile at a time
+ *  (splat → pyramid → release the dense arrays) so peak memory is one tile's working
+ *  set, not the whole map's (the world-scene OOM, 2026-07-03). `map` (optional)
+ *  transforms each build AS IT EMITS — pass a packer to keep only the compact form
+ *  in memory (the accumulated BrickCPU objects for a whole map are heap-fatal). */
+export function buildFarTiles<T = FarTileBuild>(
+  opts: FarTileOpts,
+  map?: (b: FarTileBuild, jobIndex: number) => T,
+): T[] {
   const plan = planFarTiles(opts);
   if (!plan) return [];
-  const results = splatTiles(plan.grid, plan.poolsFlat, plan.jobs);
-  const out: FarTileBuild[] = [];
-  for (const r of results) {
+  const out: T[] = [];
+  for (let j = 0; j < plan.jobs.length; j++) {
+    const results = splatTiles(plan.grid, plan.poolsFlat, [plan.jobs[j] as TileSplatJob]);
+    const r = results[0];
+    if (!r) continue;
     const t = emitTile(plan.grid, r);
-    if (t) out.push(t);
+    if (t) out.push(map ? map(t, j) : (t as unknown as T));
   }
   return out;
 }
 
-/** Worker-pool splat (wave 4): fans the per-tile splat across module Workers, then
- *  runs the dense-emit + pyramid on the main thread. Deterministic: tiles emit in the
- *  SAME order as the sync path regardless of worker completion order. Falls back to
- *  buildFarTiles on any worker error. */
-export async function buildFarTilesAsync(opts: FarTileOpts): Promise<FarTileBuild[]> {
+/** Worker-pool splat (wave 4): fans the per-tile splat across module Workers; the
+ *  dense-emit + pyramid runs on the main thread AS EACH TILE ARRIVES (one message per
+ *  tile since 2026-07-03 — the dense accumulator arrays are released tile-by-tile, so
+ *  peak memory is the in-flight tiles, not the whole map; the old all-at-the-end
+ *  transfer OOM'd the world scene). Deterministic: builds land in job order regardless
+ *  of worker completion order. Falls back to buildFarTiles on any worker error. */
+export async function buildFarTilesAsync<T = FarTileBuild>(
+  opts: FarTileOpts,
+  map?: (b: FarTileBuild, jobIndex: number) => T,
+): Promise<T[]> {
   const plan = planFarTiles(opts);
   if (!plan) return [];
   const t0 = performance.now();
   const hw = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 4 : 4;
   const workerCount = Math.max(1, Math.min(8, hw - 2, plan.jobs.length));
-  const slots = new Array<TileSplatOut | null>(plan.jobs.length).fill(null);
+  const builds = new Array<T | null>(plan.jobs.length).fill(null);
+  let emitMs = 0;
+  let emitted = 0;
+  let runningBricks = 0;
   // chunk jobs round-robin-contiguous: worker w takes jobs [w·per, (w+1)·per)
   const per = Math.ceil(plan.jobs.length / workerCount);
   try {
@@ -329,13 +388,33 @@ export async function buildFarTilesAsync(opts: FarTileOpts): Promise<FarTileBuil
           });
           worker.onmessage = (e: MessageEvent<import('./FarTiles.worker').FtRes>): void => {
             const res = e.data;
-            worker.terminate();
             if (!res.ok) {
+              worker.terminate();
               reject(new Error(res.error));
               return;
             }
-            for (let i = 0; i < res.tiles.length; i++) slots[w * per + i] = res.tiles[i] as TileSplatOut;
-            resolve();
+            if (res.done) {
+              worker.terminate();
+              resolve();
+              return;
+            }
+            // one tile — pyramid it now, release the dense arrays with this message;
+            // `map` (e.g. the bootcache packer) immediately compacts the build so the
+            // per-brick JS objects never accumulate across the whole map (heap-fatal).
+            const tE0 = performance.now();
+            const jobIndex = w * per + res.i;
+            const built = emitTile(plan.grid, res.tile);
+            builds[jobIndex] = built ? (map ? map(built, jobIndex) : (built as unknown as T)) : null;
+            emitMs += performance.now() - tE0;
+            emitted++;
+            if (built) runningBricks += built.prep.brickCount;
+            if (emitted % 256 === 0) {
+              // eslint-disable-next-line no-console
+              console.log(
+                `[fartiles] progress ${emitted}/${plan.jobs.length} tiles, ${runningBricks} bricks, ` +
+                  `${((performance.now() - t0) / 1000).toFixed(0)} s (emit ${(emitMs / 1000).toFixed(1)} s)`,
+              );
+            }
           };
           worker.onerror = (e: ErrorEvent): void => {
             worker.terminate();
@@ -348,19 +427,16 @@ export async function buildFarTilesAsync(opts: FarTileOpts): Promise<FarTileBuil
   } catch (err) {
     // eslint-disable-next-line no-console
     console.warn('[fartiles] worker splat failed — falling back to sync build:', err);
-    return buildFarTiles(opts);
+    return buildFarTiles(opts, map);
   }
-  const tSplat = performance.now();
-  const out: FarTileBuild[] = [];
-  for (const r of slots) {
-    if (!r) continue;
-    const t = emitTile(plan.grid, r);
-    if (t) out.push(t);
+  const out: T[] = [];
+  for (const b of builds) {
+    if (b) out.push(b);
   }
   // eslint-disable-next-line no-console
   console.log(
-    `[fartiles] worker splat ${(tSplat - t0).toFixed(0)} ms (${workerCount} workers, ${plan.jobs.length} tiles) + ` +
-      `emit/pyramid ${(performance.now() - tSplat).toFixed(0)} ms`,
+    `[fartiles] worker splat ${(performance.now() - t0).toFixed(0)} ms (${workerCount} workers, ` +
+      `${plan.jobs.length} tiles, interleaved emit/pyramid ${emitMs.toFixed(0)} ms)`,
   );
   return out;
 }

@@ -35,33 +35,46 @@ export interface SplatSpeciesFlat {
 }
 
 export interface SplatPoolFlat {
-  /** [x, 0, z, scale]×n — the SAME instance stream bound to the tree heads. */
+  /** [x, y, z, scale]×n — the SAME instance stream bound to the tree heads. y is the
+   *  tree's GROUND height (terrain-aware since 2026-07-03; the forest plants at y=0). */
   a: Float32Array;
   /** [yaw, …]×n. */
   b: Float32Array;
   species: SplatSpeciesFlat;
 }
 
-/** grid constants derived once in FarTiles.buildGrid (main thread). */
+/** grid constants derived once in FarTiles.buildGrid (main thread). cellsY is PER-TILE
+ *  (TileSplatJob) since 2026-07-03 — a single global Y extent sized to the worst alpine
+ *  tile made every tile pay for it (the world-scene OOM). */
 export interface SplatGridSpec {
   tileSize: number;
   cellSize: number;
   cellsXZ: number;
-  cellsY: number;
   tilesX: number;
   mnX: number;
   mnZ: number;
 }
 
-/** one tile's work order: its key (tz·tilesX+tx) + packed (pi,ii) member pairs. */
+/** one tile's work order: its key (tz·tilesX+tx) + packed (pi,ii) member pairs.
+ *  baseY = the tile grid's WORLD floor (min member ground y, snapped down to a cell
+ *  multiple) — instances splat at (y − baseY) so a sloped tile's content stays in-grid;
+ *  the tile head's identity instance then sits at y = baseY. 0 on flat ground (forest).
+ *  cellsY = THIS tile's grid height in cells (its members' relief + the tallest tree,
+ *  brick-multiple) — flat ground yields the legacy 48 m extent. */
 export interface TileSplatJob {
   key: number;
+  baseY: number;
+  cellsY: number;
   members: Uint32Array;
 }
 
 /** one tile's splat result — per-BRICK accumulators + post-passed occupancy. */
 export interface TileSplatOut {
   key: number;
+  /** echoed from the job — emitTile places the tile head at this world height. */
+  baseY: number;
+  /** echoed from the job — emitTile derives this tile's brick-grid Y from it. */
+  cellsY: number;
   occLo: Uint32Array;
   occHi: Uint32Array;
   accW: Float32Array;
@@ -75,23 +88,27 @@ export interface TileSplatOut {
 
 const BRICK_DIM = 4; // VoxelBrick.BRICK_DIM — inlined so this module stays import-free
 
-/** splat the given tiles; allocates fresh result arrays per tile (transferable). */
+/** splat the given tiles; allocates fresh result arrays per tile (transferable).
+ *  Per-tile Y extents (job.cellsY) ⇒ per-tile allocations; the cell-coverage working
+ *  buffer grows to the largest tile seen and is reused. */
 export function splatTiles(
   grid: SplatGridSpec,
   pools: SplatPoolFlat[],
   jobs: TileSplatJob[],
 ): TileSplatOut[] {
-  const { tileSize, cellSize, cellsXZ, cellsY, tilesX, mnX, mnZ } = grid;
+  const { tileSize, cellSize, cellsXZ, tilesX, mnX, mnZ } = grid;
   const bricksX = cellsXZ / BRICK_DIM;
-  const bricksY = cellsY / BRICK_DIM;
-  const nBricks = bricksX * bricksY * bricksX;
-  const nCells = cellsXZ * cellsY * cellsXZ;
   // per-CELL coverage accumulator — working memory reused across this call's tiles
-  const cellW = new Float32Array(nCells);
+  let cellW = new Float32Array(0);
 
   const out: TileSplatOut[] = [];
   for (const job of jobs) {
     const key = job.key;
+    const baseY = job.baseY;
+    const cellsY = job.cellsY;
+    const bricksY = cellsY / BRICK_DIM;
+    const nBricks = bricksX * bricksY * bricksX;
+    const nCells = cellsXZ * cellsY * cellsXZ;
     const tx = key % tilesX;
     const tz = (key / tilesX) | 0;
     const originX = mnX + tx * tileSize;
@@ -106,7 +123,8 @@ export function splatTiles(
     const accNX = new Float32Array(nBricks);
     const accNY = new Float32Array(nBricks);
     const accNZ = new Float32Array(nBricks);
-    cellW.fill(0);
+    if (cellW.length < nCells) cellW = new Float32Array(nCells);
+    else cellW.fill(0, 0, nCells);
 
     // splatCell — exact port (bounds check, brick index, coverage + 7 accumulators)
     const splatCell = (
@@ -145,6 +163,9 @@ export function splatTiles(
       const ii = m[k + 1] as number;
       const pool = pools[pi] as SplatPoolFlat;
       const x = pool.a[ii * 4] as number;
+      // tile-LOCAL ground height of this tree (terrain-aware): its crown/trunk splat
+      // shifted up by ly0; 0 everywhere on flat ground (forest — bit-identical path).
+      const ly0 = (pool.a[ii * 4 + 1] as number) - baseY;
       const z = pool.a[ii * 4 + 2] as number;
       const s = pool.a[ii * 4 + 3] as number;
       const yaw = pool.b[ii * 4] as number;
@@ -158,7 +179,7 @@ export function splatTiles(
       // per-cell overlap fractions (exact port of splatBox)
       for (let bo = 0; bo < br.length; bo += SPECIES_BRICK_STRIDE) {
         const px = (br[bo] as number) * s;
-        const py = (br[bo + 1] as number) * s;
+        const py = (br[bo + 1] as number) * s + ly0;
         const pz = (br[bo + 2] as number) * s;
         const half = (br[bo + 3] as number) * s;
         const ar = br[bo + 4] as number;
@@ -193,12 +214,13 @@ export function splatTiles(
           }
         }
       }
-      // trunk column: ground → crown base, radial horizontal normals, full coverage
+      // trunk column: the tree's OWN ground (ly0) → crown base, radial horizontal
+      // normals, full coverage. ly0=0 on flat ground — the legacy loop exactly.
       const topY = Math.max(cellSize, sp.crownMinY * s);
       const tcx = Math.floor(lx0 / cellSize);
       const tcz = Math.floor(lz0 / cellSize);
       for (let y = cellSize * 0.5; y < topY; y += cellSize) {
-        splatCell(tcx, Math.floor(y / cellSize), tcz, sp.barkR, sp.barkG, sp.barkB, cy, 0.15, -sy, 1, 1);
+        splatCell(tcx, Math.floor((y + ly0) / cellSize), tcz, sp.barkR, sp.barkG, sp.barkB, cy, 0.15, -sy, 1, 1);
       }
     }
 
@@ -218,7 +240,7 @@ export function splatTiles(
       }
     }
 
-    out.push({ key, occLo, occHi, accW, accR, accG, accB, accNX, accNY, accNZ });
+    out.push({ key, baseY, cellsY, occLo, occHi, accW, accR, accG, accB, accNX, accNY, accNZ });
   }
   return out;
 }

@@ -269,10 +269,12 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       const dagTerrainClip = terrainDefault || qNan.get('nanitedclip') === '1';
       // N8-D2 Stage 2d: ?nanitedskirt=0 disables the inter-level seam skirts (A/B). Default ON.
       const dagTerrainSkirt = qNan.get('nanitedskirt') !== '0';
-      // N9-C0: ?naniteleaf=1 also registers each tree pool's REAL mesh-leaf crown as
-      // a MATERIAL_CLASS.leaf head (hero ring ≤26 m) with the 'leaf' flutter channel.
-      // Opt-in until N9-C2's aggregate DAG extends leaves past 26 m; default OFF.
-      const naniteLeaf = qNan.get('naniteleaf') === '1';
+      // N9-C0/C2: register each tree pool's REAL mesh-leaf crown as a MATERIAL_CLASS.leaf
+      // head with the 'leaf' flutter channel (aggregate DAG extends it across the band).
+      // DEFAULT ON since 2026-07-03 (world-hookup arc): without it the nanite-only world
+      // renders LEAFLESS trees — the crown + its voxel sibling + far tiles are the same
+      // stack the forest ships. ?naniteleaf=0 is the A/B opt-out.
+      const naniteLeaf = qNan.get('naniteleaf') !== '0';
       const wr = await buildWorldRegistry({
         renderer: engine.renderer,
         hf,

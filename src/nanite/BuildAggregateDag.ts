@@ -72,9 +72,10 @@ type FullOpts = Required<AggregateDagOpts>;
  *  12.4M eye-pose visTris. errorK<1 SHRINKS the reported error, pulling each level's
  *  engagement K× nearer (L1 at ~57·K m — e.g. K=0.25 → ~14 m), engaging real coarsening
  *  INSIDE the band; K>1 pushes detail farther (more tris). Baked at DAG build; set BEFORE
- *  buildAggregateDag (ForestScene wires ?leaflodk=). Default 1 = the legacy ladder (no
- *  behavior change without the flag). */
-const AGG_LOD_CFG = { errorK: 1 };
+ *  buildAggregateDag (the scenes wire ?leaflodk=). DEFAULT 0.4 (2026-07-03, was 1 — the
+ *  2026-07-02c forest pick, now SHARED forest+world): hides the user-reported spiky
+ *  coarse crowns at the band end at neutral perf (deeper 0.25 traded oblique +7 ms). */
+const AGG_LOD_CFG = { errorK: 0.4 };
 export function setAggLodErrorK(k: number): void {
   if (Number.isFinite(k) && k > 0) AGG_LOD_CFG.errorK = k;
 }
