@@ -26,11 +26,27 @@
  * nearDist = aggDist − tileRadius (ranges OVERLAP by the tile radius — a tree is
  * never dropped before its tile is guaranteed on; the overlap band double-draws,
  * which is cheap at 140 m and hole-free by construction).
+ *
+ * SPLAT CORE (2026-07-02 wave 4): the per-tile splat + occupancy post-pass live in
+ * FarTilesSplat.ts (pure, three-free) so buildFarTilesAsync can fan tiles across a
+ * module-Worker pool (FarTiles.worker.ts) — the splat is ~1.5B cell accumulations at
+ * 200k trees (36-42 s single-threaded). The dense-emit + buildVoxelPyramid + prep
+ * stay HERE on the main thread (VoxelizeCrown drags the three-import chain workers
+ * must avoid). buildFarTiles (sync) runs the SAME core on the caller thread — the
+ * worker-failure fallback and the behavior-exactness reference.
  */
 
 import type { GeometryRegistry } from './GeometryRegistry';
 import { appendVoxelCrown, buildVoxelPyramid, type PreparedVoxelCrown, type VoxelLevel } from './VoxelizeCrown';
 import { BRICK_DIM, type BrickCPU } from './VoxelBrick';
+import {
+  splatTiles,
+  SPECIES_BRICK_STRIDE,
+  type SplatGridSpec,
+  type SplatPoolFlat,
+  type TileSplatJob,
+  type TileSplatOut,
+} from './FarTilesSplat';
 
 export interface FarTileSpecies {
   /** occupied bricks of the chosen coarse crown pyramid level (crown-LOCAL space). */
@@ -57,14 +73,22 @@ const EMPTY_BRICK: BrickCPU = {
   half: 0,
 };
 
-/** Splat all instances into tile grids and build one voxel pyramid per tile. */
-export function buildFarTiles(opts: {
+export interface FarTileOpts {
   tileSize: number; // world meters (default 64)
   cellSize: number; // world meters (default 0.5)
   /** per-pool instance streams (the SAME arrays bound to the tree heads):
    *  a = [x, 0, z, scale]×n, b = [yaw, …]×n. */
   pools: { a: Float32Array; b: Float32Array; species: FarTileSpecies }[];
-}): FarTileBuild[] {
+}
+
+/** derived grid + per-tile jobs + flattened pools — shared by the sync and async paths. */
+interface FarTilePlan {
+  grid: SplatGridSpec;
+  jobs: TileSplatJob[];
+  poolsFlat: SplatPoolFlat[];
+}
+
+function planFarTiles(opts: FarTileOpts): FarTilePlan | null {
   const { tileSize, cellSize, pools } = opts;
   // world extent of the plantation
   let mnX = Infinity;
@@ -81,7 +105,7 @@ export function buildFarTiles(opts: {
       if (z > mxZ) mxZ = z;
     }
   }
-  if (!Number.isFinite(mnX)) return [];
+  if (!Number.isFinite(mnX)) return null;
   const tilesX = Math.max(1, Math.ceil((mxX - mnX + 1) / tileSize));
   const tilesZ = Math.max(1, Math.ceil((mxZ - mnZ + 1) / tileSize));
 
@@ -89,41 +113,57 @@ export function buildFarTiles(opts: {
   // ≤ ~40 m world; cap the cell grid to a brick multiple).
   const cellsXZ = Math.ceil(tileSize / cellSize / BRICK_DIM) * BRICK_DIM;
   const cellsY = Math.ceil(48 / cellSize / BRICK_DIM) * BRICK_DIM;
-  const bricksX = cellsXZ / BRICK_DIM;
-  const bricksY = cellsY / BRICK_DIM;
-  const nBricks = bricksX * bricksY * bricksX;
-  const nCellsPerBrickRow = BRICK_DIM;
 
-  // flat accumulators, reused across tiles (typed arrays — no per-cell objects)
-  const occLo = new Uint32Array(nBricks);
-  const occHi = new Uint32Array(nBricks);
-  const accW = new Float32Array(nBricks);
-  const accR = new Float32Array(nBricks);
-  const accG = new Float32Array(nBricks);
-  const accB = new Float32Array(nBricks);
-  const accNX = new Float32Array(nBricks);
-  const accNY = new Float32Array(nBricks);
-  const accNZ = new Float32Array(nBricks);
-  // per-CELL coverage accumulator: occupancy bits are set in a POST-pass only where
-  // accumulated coverage crosses OCC_COVER — inter-crown GAPS then survive L0 and
-  // propagate up the pyramid, so coarse-level masks keep tree structure and the raster's
-  // cell carve breaks far silhouettes up instead of painting solid cubes (the user-
-  // reported "large squares that stop looking like trees").
-  const nCells = cellsXZ * cellsY * cellsXZ;
-  const cellW = new Float32Array(nCells);
-  const OCC_COVER = 0.22;
+  // flatten species brick sets to the worker-transportable stream (splat uses ONLY
+  // center/half/albedo/normal/density of the source bricks)
+  const poolsFlat: SplatPoolFlat[] = pools.map((p) => {
+    const src = p.species.bricks;
+    const flat = new Float32Array(src.length * SPECIES_BRICK_STRIDE);
+    for (let i = 0; i < src.length; i++) {
+      const b = src[i] as BrickCPU;
+      const o = i * SPECIES_BRICK_STRIDE;
+      flat[o] = b.center[0];
+      flat[o + 1] = b.center[1];
+      flat[o + 2] = b.center[2];
+      flat[o + 3] = b.half;
+      flat[o + 4] = b.albedo[0];
+      flat[o + 5] = b.albedo[1];
+      flat[o + 6] = b.albedo[2];
+      flat[o + 7] = b.normal[0];
+      flat[o + 8] = b.normal[1];
+      flat[o + 9] = b.normal[2];
+      flat[o + 10] = b.density;
+    }
+    return {
+      a: p.a,
+      b: p.b,
+      species: {
+        bricks: flat,
+        crownMinY: p.species.crownMinY,
+        barkR: p.species.bark.r,
+        barkG: p.species.bark.g,
+        barkB: p.species.bark.b,
+      },
+    };
+  });
 
   // bucket instances into EVERY tile their crown can reach (boundary-crossing crowns
   // were silently clipped when bucketed by trunk position only — the user-visible HOLES
   // and white slabs at tile borders). reach = per-species max XZ brick extent × max scale.
   const reachOf = pools.map((p) => {
-    let r = 1;
+    let maxR = 0;
     for (const b of p.species.bricks) {
-      r = Math.max(r, Math.abs(b.center[0]) + b.half, Math.abs(b.center[2]) + b.half);
+      const r = Math.max(Math.abs(b.center[0]), Math.abs(b.center[2])) + b.half;
+      if (r > maxR) maxR = r;
     }
-    return r * 1.45; // max instance scale ≈ 1.4
+    let maxS = 0;
+    for (let i = 3; i < p.a.length; i += 4) {
+      const s = p.a[i] as number;
+      if (s > maxS) maxS = s;
+    }
+    return maxR * maxS * 1.45;
   });
-  const tileOf = new Map<number, [number, number][]>();
+  const tileOf = new Map<number, number[]>();
   for (let pi = 0; pi < pools.length; pi++) {
     const a = (pools[pi] as { a: Float32Array }).a;
     const reach = reachOf[pi] as number;
@@ -142,207 +182,178 @@ export function buildFarTiles(opts: {
             list = [];
             tileOf.set(key, list);
           }
-          list.push([pi, ii]);
+          list.push(pi, ii);
         }
       }
     }
   }
+  const jobs: TileSplatJob[] = [];
+  for (const [key, members] of tileOf) jobs.push({ key, members: Uint32Array.from(members) });
 
-  const splatCell = (
-    cx: number,
-    cy: number,
-    cz: number,
-    alb: [number, number, number],
-    nrm: [number, number, number],
-    w: number,
-    cover: number,
-  ): void => {
-    if (cx < 0 || cy < 0 || cz < 0 || cx >= cellsXZ || cy >= cellsY || cz >= cellsXZ) return;
-    const bx = (cx / nCellsPerBrickRow) | 0;
-    const by = (cy / nCellsPerBrickRow) | 0;
-    const bz = (cz / nCellsPerBrickRow) | 0;
-    const bi = bx + by * bricksX + bz * bricksX * bricksY;
-    cellW[cx + cy * cellsXZ + cz * cellsXZ * cellsY] =
-      (cellW[cx + cy * cellsXZ + cz * cellsXZ * cellsY] as number) + cover;
-    accW[bi] = (accW[bi] as number) + w;
-    accR[bi] = (accR[bi] as number) + alb[0] * w;
-    accG[bi] = (accG[bi] as number) + alb[1] * w;
-    accB[bi] = (accB[bi] as number) + alb[2] * w;
-    accNX[bi] = (accNX[bi] as number) + nrm[0] * w;
-    accNY[bi] = (accNY[bi] as number) + nrm[1] * w;
-    accNZ[bi] = (accNZ[bi] as number) + nrm[2] * w;
+  return {
+    grid: { tileSize, cellSize, cellsXZ, cellsY, tilesX, mnX, mnZ },
+    jobs,
+    poolsFlat,
   };
-  // VOLUME splat with per-cell COVERAGE: cover every cell the source brick's AABB
-  // overlaps (point-splatting produced the "wireframe" sampling beat), weighting each
-  // cell by the overlap fraction so a grazing corner touch doesn't fill a whole cell.
-  const splatBox = (
-    lx: number,
-    ly: number,
-    lz: number,
-    half: number,
-    alb: [number, number, number],
-    nrm: [number, number, number],
-    w: number,
-  ): void => {
-    const x0 = Math.floor((lx - half) / cellSize);
-    const x1 = Math.floor((lx + half) / cellSize);
-    const y0 = Math.floor((ly - half) / cellSize);
-    const y1 = Math.floor((ly + half) / cellSize);
-    const z0 = Math.floor((lz - half) / cellSize);
-    const z1 = Math.floor((lz + half) / cellSize);
-    const inv = 1 / cellSize;
-    for (let cz = z0; cz <= z1; cz++) {
-      const fz = Math.max(0, Math.min((cz + 1) * cellSize, lz + half) - Math.max(cz * cellSize, lz - half)) * inv;
-      for (let cy = y0; cy <= y1; cy++) {
-        const fy = Math.max(0, Math.min((cy + 1) * cellSize, ly + half) - Math.max(cy * cellSize, ly - half)) * inv;
-        for (let cx = x0; cx <= x1; cx++) {
-          const fx = Math.max(0, Math.min((cx + 1) * cellSize, lx + half) - Math.max(cx * cellSize, lx - half)) * inv;
-          splatCell(cx, cy, cz, alb, nrm, w, fx * fy * fz);
-        }
-      }
+}
+
+/** dense-emit + pyramid + prep for ONE splatted tile (main thread — VoxelizeCrown). */
+function emitTile(grid: SplatGridSpec, res: TileSplatOut): FarTileBuild | null {
+  const { tileSize, cellSize, cellsXZ, cellsY, tilesX, mnX, mnZ } = grid;
+  const bricksX = cellsXZ / BRICK_DIM;
+  const bricksY = cellsY / BRICK_DIM;
+  const nBricks = bricksX * bricksY * bricksX;
+  const tx = res.key % tilesX;
+  const tz = (res.key / tilesX) | 0;
+  const centerX = mnX + tx * tileSize + tileSize * 0.5;
+  const centerZ = mnZ + tz * tileSize + tileSize * 0.5;
+
+  const { occLo, occHi, accW, accR, accG, accB, accNX, accNY, accNZ } = res;
+  // emit the dense BrickCPU grid for this tile (transient; pyramid copies what it needs)
+  const dense: BrickCPU[] = new Array(nBricks);
+  const brickWorld = cellSize * BRICK_DIM;
+  let occupied = 0;
+  for (let bi = 0; bi < nBricks; bi++) {
+    const w = accW[bi] as number;
+    // prune featherweight bricks AND bricks whose every cell fell below the coverage
+    // threshold (no occupancy bits ⇒ nothing for the raster to paint or carve)
+    if (w <= 0.15 || ((occLo[bi] as number) === 0 && (occHi[bi] as number) === 0)) {
+      dense[bi] = EMPTY_BRICK;
+      continue;
     }
-  };
+    occupied++;
+    const bx = bi % bricksX;
+    const by = ((bi / bricksX) | 0) % bricksY;
+    const bz = (bi / (bricksX * bricksY)) | 0;
+    const nl = Math.hypot(accNX[bi] as number, accNY[bi] as number, accNZ[bi] as number) || 1;
+    dense[bi] = {
+      occLo: occLo[bi] as number,
+      occHi: occHi[bi] as number,
+      normal: [(accNX[bi] as number) / nl, (accNY[bi] as number) / nl, (accNZ[bi] as number) / nl],
+      spread: 0.6,
+      albedo: [(accR[bi] as number) / w, (accG[bi] as number) / w, (accB[bi] as number) / w],
+      density: Math.min(1, w / 8),
+      center: [
+        bx * brickWorld + brickWorld * 0.5 - tileSize * 0.5,
+        by * brickWorld + brickWorld * 0.5,
+        bz * brickWorld + brickWorld * 0.5 - tileSize * 0.5,
+      ],
+      half: brickWorld * 0.5,
+    };
+  }
+  if (occupied === 0) return null;
 
-  const out: FarTileBuild[] = [];
-  for (const [key, members] of tileOf) {
-    const tx = key % tilesX;
-    const tz = (key / tilesX) | 0;
-    // tile-local origin = min corner; the identity instance sits at the tile CENTER,
-    // so bricks are authored in tile-local coords with the center subtracted.
-    const originX = mnX + tx * tileSize;
-    const originZ = mnZ + tz * tileSize;
-    const centerX = originX + tileSize * 0.5;
-    const centerZ = originZ + tileSize * 0.5;
-
-    occLo.fill(0);
-    occHi.fill(0);
-    cellW.fill(0);
-    accW.fill(0);
-    accR.fill(0);
-    accG.fill(0);
-    accB.fill(0);
-    accNX.fill(0);
-    accNY.fill(0);
-    accNZ.fill(0);
-
-    for (const [pi, ii] of members) {
-      const pool = pools[pi] as { a: Float32Array; b: Float32Array; species: FarTileSpecies };
-      const x = pool.a[ii * 4] as number;
-      const z = pool.a[ii * 4 + 2] as number;
-      const s = pool.a[ii * 4 + 3] as number;
-      const yaw = pool.b[ii * 4] as number;
-      const cy = Math.cos(yaw);
-      const sy = Math.sin(yaw);
-      const lx0 = x - originX;
-      const lz0 = z - originZ;
-      const sp = pool.species;
-      // crown bricks (instance transform: scale, yaw, translate — zero lean in forest)
-      for (const b of sp.bricks) {
-        const px = (b.center[0] as number) * s;
-        const py = (b.center[1] as number) * s;
-        const pz = (b.center[2] as number) * s;
-        const wx = px * cy + pz * sy + lx0;
-        const wz = pz * cy - px * sy + lz0;
-        // rotate the baked normal by yaw
-        const nx = (b.normal[0] as number) * cy + (b.normal[2] as number) * sy;
-        const nz = (b.normal[2] as number) * cy - (b.normal[0] as number) * sy;
-        splatBox(wx, py, wz, b.half * s, b.albedo as [number, number, number], [nx, b.normal[1] as number, nz], Math.max(0.05, b.density));
-      }
-      // trunk column: ground → crown base, radial horizontal normals, full coverage
-      const topY = Math.max(cellSize, sp.crownMinY * s);
-      for (let y = cellSize * 0.5; y < topY; y += cellSize) {
-        splatCell(Math.floor(lx0 / cellSize), Math.floor(y / cellSize), Math.floor(lz0 / cellSize), [sp.bark.r, sp.bark.g, sp.bark.b], [cy, 0.15, -sy], 1, 1);
-      }
-    }
-
-    // POST-pass: occupancy bits from per-cell coverage (gap-preserving threshold)
-    for (let cz = 0; cz < cellsXZ; cz++) {
-      for (let cy2 = 0; cy2 < cellsY; cy2++) {
-        for (let cx = 0; cx < cellsXZ; cx++) {
-          if ((cellW[cx + cy2 * cellsXZ + cz * cellsXZ * cellsY] as number) < OCC_COVER) continue;
-          const bi =
-            ((cx / nCellsPerBrickRow) | 0) +
-            ((cy2 / nCellsPerBrickRow) | 0) * bricksX +
-            ((cz / nCellsPerBrickRow) | 0) * bricksX * bricksY;
-          const cellBit = (cx & 3) + (cy2 & 3) * 4 + (cz & 3) * 16;
-          if (cellBit < 32) occLo[bi] = ((occLo[bi] as number) | (1 << cellBit)) >>> 0;
-          else occHi[bi] = ((occHi[bi] as number) | (1 << (cellBit - 32))) >>> 0;
-        }
-      }
-    }
-
-    // emit the dense BrickCPU grid for this tile (transient; pyramid copies what it needs)
-    const dense: BrickCPU[] = new Array(nBricks);
-    const brickWorld = cellSize * BRICK_DIM;
-    let occupied = 0;
-    for (let bi = 0; bi < nBricks; bi++) {
-      const w = accW[bi] as number;
-      // prune featherweight bricks AND bricks whose every cell fell below the coverage
-      // threshold (no occupancy bits ⇒ nothing for the raster to paint or carve)
-      if (w <= 0.15 || ((occLo[bi] as number) === 0 && (occHi[bi] as number) === 0)) {
-        dense[bi] = EMPTY_BRICK;
-        continue;
-      }
-      occupied++;
-      const bx = bi % bricksX;
-      const by = ((bi / bricksX) | 0) % bricksY;
-      const bz = (bi / (bricksX * bricksY)) | 0;
-      const nl = Math.hypot(accNX[bi] as number, accNY[bi] as number, accNZ[bi] as number) || 1;
-      dense[bi] = {
-        occLo: occLo[bi] as number,
-        occHi: occHi[bi] as number,
-        normal: [(accNX[bi] as number) / nl, (accNY[bi] as number) / nl, (accNZ[bi] as number) / nl],
-        spread: 0.6,
-        albedo: [(accR[bi] as number) / w, (accG[bi] as number) / w, (accB[bi] as number) / w],
-        density: Math.min(1, w / 8),
-        center: [
-          bx * brickWorld + brickWorld * 0.5 - tileSize * 0.5,
-          by * brickWorld + brickWorld * 0.5,
-          bz * brickWorld + brickWorld * 0.5 - tileSize * 0.5,
-        ],
-        half: brickWorld * 0.5,
-      };
-    }
-    if (occupied === 0) continue;
-
-    const levels: VoxelLevel[] = buildVoxelPyramid(
-      dense,
-      { x: bricksX, y: bricksY, z: bricksX },
-      cellSize,
-      [-tileSize * 0.5, 0, -tileSize * 0.5],
-    );
-    let brickCount = 0;
-    let clusterCount = 0;
-    for (const lvl of levels) {
-      brickCount += lvl.occupied.length;
-      clusterCount += lvl.blocks.length;
-    }
-    out.push({
-      center: [centerX, 0, centerZ],
-      prep: {
-        vox: {
-          bricks: [],
-          occupied: [],
-          brickGrid: { x: bricksX, y: bricksY, z: bricksX },
-          cellGrid: { x: cellsXZ, y: cellsY, z: cellsXZ },
-          origin: [-tileSize * 0.5, 0, -tileSize * 0.5],
-          cellSize,
-          levels,
-          stats: {
-            triangles: 0,
-            cellsTouched: 0,
-            occupiedBricks: occupied,
-            totalBricks: nBricks,
-            meanDensity: 0,
-            voxelizeMs: 0,
-          },
+  const levels: VoxelLevel[] = buildVoxelPyramid(
+    dense,
+    { x: bricksX, y: bricksY, z: bricksX },
+    cellSize,
+    [-tileSize * 0.5, 0, -tileSize * 0.5],
+  );
+  let brickCount = 0;
+  let clusterCount = 0;
+  for (const lvl of levels) {
+    brickCount += lvl.occupied.length;
+    clusterCount += lvl.blocks.length;
+  }
+  return {
+    center: [centerX, 0, centerZ],
+    prep: {
+      vox: {
+        bricks: [],
+        occupied: [],
+        brickGrid: { x: bricksX, y: bricksY, z: bricksX },
+        cellGrid: { x: cellsXZ, y: cellsY, z: cellsXZ },
+        origin: [-tileSize * 0.5, 0, -tileSize * 0.5],
+        cellSize,
+        levels,
+        stats: {
+          triangles: 0,
+          cellsTouched: 0,
+          occupiedBricks: occupied,
+          totalBricks: nBricks,
+          meanDensity: 0,
+          voxelizeMs: 0,
         },
-        brickCount,
-        clusterCount,
-        dagLinkCount: clusterCount,
       },
-    });
+      brickCount,
+      clusterCount,
+      dagLinkCount: clusterCount,
+    },
+  };
+}
+
+/** Splat all instances into tile grids and build one voxel pyramid per tile (SYNC —
+ *  the single-thread reference + worker-failure fallback). */
+export function buildFarTiles(opts: FarTileOpts): FarTileBuild[] {
+  const plan = planFarTiles(opts);
+  if (!plan) return [];
+  const results = splatTiles(plan.grid, plan.poolsFlat, plan.jobs);
+  const out: FarTileBuild[] = [];
+  for (const r of results) {
+    const t = emitTile(plan.grid, r);
+    if (t) out.push(t);
   }
+  return out;
+}
+
+/** Worker-pool splat (wave 4): fans the per-tile splat across module Workers, then
+ *  runs the dense-emit + pyramid on the main thread. Deterministic: tiles emit in the
+ *  SAME order as the sync path regardless of worker completion order. Falls back to
+ *  buildFarTiles on any worker error. */
+export async function buildFarTilesAsync(opts: FarTileOpts): Promise<FarTileBuild[]> {
+  const plan = planFarTiles(opts);
+  if (!plan) return [];
+  const t0 = performance.now();
+  const hw = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 4 : 4;
+  const workerCount = Math.max(1, Math.min(8, hw - 2, plan.jobs.length));
+  const slots = new Array<TileSplatOut | null>(plan.jobs.length).fill(null);
+  // chunk jobs round-robin-contiguous: worker w takes jobs [w·per, (w+1)·per)
+  const per = Math.ceil(plan.jobs.length / workerCount);
+  try {
+    await Promise.all(
+      Array.from({ length: workerCount }, (_, w) => {
+        const jobs = plan.jobs.slice(w * per, (w + 1) * per);
+        if (jobs.length === 0) return Promise.resolve();
+        return new Promise<void>((resolve, reject) => {
+          const worker = new Worker(new URL('./FarTiles.worker.ts', import.meta.url), {
+            type: 'module',
+            name: `fartiles-${w}`,
+          });
+          worker.onmessage = (e: MessageEvent<import('./FarTiles.worker').FtRes>): void => {
+            const res = e.data;
+            worker.terminate();
+            if (!res.ok) {
+              reject(new Error(res.error));
+              return;
+            }
+            for (let i = 0; i < res.tiles.length; i++) slots[w * per + i] = res.tiles[i] as TileSplatOut;
+            resolve();
+          };
+          worker.onerror = (e: ErrorEvent): void => {
+            worker.terminate();
+            reject(new Error(`FarTiles worker crashed: ${e.message}`));
+          };
+          worker.postMessage({ id: w, grid: plan.grid, pools: plan.poolsFlat, jobs });
+        });
+      }),
+    );
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[fartiles] worker splat failed — falling back to sync build:', err);
+    return buildFarTiles(opts);
+  }
+  const tSplat = performance.now();
+  const out: FarTileBuild[] = [];
+  for (const r of slots) {
+    if (!r) continue;
+    const t = emitTile(plan.grid, r);
+    if (t) out.push(t);
+  }
+  // eslint-disable-next-line no-console
+  console.log(
+    `[fartiles] worker splat ${(tSplat - t0).toFixed(0)} ms (${workerCount} workers, ${plan.jobs.length} tiles) + ` +
+      `emit/pyramid ${(performance.now() - tSplat).toFixed(0)} ms`,
+  );
   return out;
 }
 

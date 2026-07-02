@@ -29,7 +29,7 @@ import {
 } from '../nanite/GeometryRegistry';
 import { type DagBuild, buildDag } from '../nanite/BuildDag';
 import { buildAggregateDag, setAggLodErrorK } from '../nanite/BuildAggregateDag';
-import { appendFarTiles, buildFarTiles, type FarTileSpecies } from '../nanite/FarTiles';
+import { appendFarTiles, buildFarTilesAsync, type FarTileSpecies } from '../nanite/FarTiles';
 import type { BrickCPU } from '../nanite/VoxelBrick';
 import { setClusterFill } from '../nanite/Clusterize';
 import { geometryToSource } from '../nanite/WorldRegistry';
@@ -341,7 +341,9 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
         species: { bricks, crownMinY: Math.max(0.5, crownMinY), bark: { r: 0.42, g: 0.33, b: 0.24 } },
       });
     }
-    farTiles = buildFarTiles({ tileSize: 64, cellSize: TILE_CELL, pools: ftPools });
+    // wave 4: worker-pool splat (36-42 s single-threaded → ~core-count× less wall);
+    // falls back to the sync build internally on any worker failure.
+    farTiles = await buildFarTilesAsync({ tileSize: 64, cellSize: TILE_CELL, pools: ftPools });
     let ftBricks = 0;
     let ftClusters = 0;
     for (const t of farTiles) {
