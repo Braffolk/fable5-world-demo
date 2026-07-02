@@ -16,7 +16,17 @@
 import { NodeMaterial, StorageBufferAttribute } from 'three/webgpu';
 import type { Renderer, StorageBufferNode } from 'three/webgpu';
 import { BufferGeometry, Float32BufferAttribute, Mesh, Scene, Sphere, Vector3 } from 'three';
-import { Fn, If, float, instanceIndex, positionGeometry, screenCoordinate, uint, vec4 } from 'three/tsl';
+import {
+  Fn,
+  If,
+  float,
+  instanceIndex,
+  positionGeometry,
+  screenCoordinate,
+  storageBarrier,
+  uint,
+  vec4,
+} from 'three/tsl';
 import type { NB, NF, NV3 } from '../gpu/TSLTypes';
 import type { NaniteCam } from './NaniteCommon';
 import type { SphereOccludedFn } from './NaniteCull';
@@ -100,8 +110,20 @@ export function buildNaniteHzb(
   const hzbF = sF32Views(hzbAttr, totalTexels);
 
   // ---- per-level reduction kernels -----------------------------------------------
+  // W4 (?pyrfuse=1, spec-orchestration-submit-folds §Stage-3): the bottom ~7 levels are
+  // ≤1024 texels each — 7 near-empty dispatch+UAV-barrier boundaries per frame. Fuse them
+  // into ONE single-workgroup kernel that loops the remaining levels with storageBarrier()
+  // between them (ONE workgroup ⇒ the barrier synchronizes ALL participating lanes — the
+  // same happens-before the per-dispatch UAV sync gave). fuseFrom is clamped ≥ 1: k=0
+  // reads the full-res SOURCE with a different decode and must stay a per-level dispatch.
+  // Bit-identical reduction (same 2×2 clamped windows, same offsets). DEFAULT OFF.
+  const pyrfuse = new URLSearchParams(window.location.search).get('pyrfuse') === '1';
+  const FUSE_MAX_TEXELS = 1024;
+  const rawFrom = levels.findIndex((l) => l.w * l.h <= FUSE_MAX_TEXELS);
+  const fuseFrom = pyrfuse && rawFrom !== -1 ? Math.max(1, rawFrom) : -1;
+  const perLevelCount = fuseFrom === -1 ? levelCount : fuseFrom;
   const kernels: unknown[] = [];
-  for (let k = 0; k < levelCount; k++) {
+  for (let k = 0; k < perLevelCount; k++) {
     const info = levels[k] as { offset: number; w: number; h: number };
     const kn = Fn(() => {
       const lw = uint(info.w);
@@ -150,6 +172,45 @@ export function buildNaniteHzb(
     })().compute(info.w * info.h, [64]);
     (kn as unknown as ComputeKernel).setName(`nanHzbL${k}`);
     kernels.push(kn);
+  }
+  if (fuseFrom !== -1) {
+    const kFusedTail = Fn(() => {
+      // 256 lanes, ONE workgroup — instanceIndex == the local lane id here
+      const tid = instanceIndex;
+      for (let k = fuseFrom; k < levelCount; k++) {
+        // STATIC unroll (JS loop) — uniform control flow; barrier at Fn top level
+        const info = levels[k] as { offset: number; w: number; h: number };
+        const src = levels[k - 1] as { offset: number; w: number; h: number };
+        const n = info.w * info.h;
+        for (let base = 0; base < n; base += 256) {
+          const i = uint(base).add(tid);
+          If(i.lessThan(uint(n)), () => {
+            const lw = uint(info.w);
+            const x = i.mod(lw);
+            const y = i.div(lw);
+            const sx = x.mul(uint(2));
+            const sy = y.mul(uint(2));
+            const srcW = uint(src.w);
+            const swMax = uint(src.w - 1);
+            const shMax = uint(src.h - 1);
+            const depthMax = float(0).toVar();
+            for (let dy = 0; dy < 2; dy++) {
+              for (let dx = 0; dx < 2; dx++) {
+                const tx = minU(sx.add(uint(dx)), swMax);
+                const ty = minU(sy.add(uint(dy)), shMax);
+                depthMax.assign(
+                  depthMax.max(hzbF.rw.element(uint(src.offset).add(ty.mul(srcW)).add(tx))),
+                );
+              }
+            }
+            hzbF.rw.element(uint(info.offset).add(y.mul(lw)).add(x)).assign(depthMax);
+          });
+        }
+        storageBarrier();
+      }
+    })().compute(256, [256]);
+    (kFusedTail as unknown as ComputeKernel).setName('nanHzbFusedTail');
+    kernels.push(kFusedTail);
   }
 
   const build = (renderer: Renderer): void => {

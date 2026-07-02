@@ -210,6 +210,13 @@ async function main(): Promise<void> {
     )) as { gpu: number; cpu: number; cap: number; c: Record<string, number> }[];
     const good = frames.filter((f) => f.cap === 0);
     const use = good.length >= frames.length / 2 ? good : frames;
+    // measure-infra 4c: capSuspect is now the event-loop-lag guard (rare) — if the
+    // >half fallback still fires, something is systematically stalling the loop.
+    if (use === frames && good.length < frames.length)
+      console.warn(
+        `  [${pose.name}] WARNING: ${frames.length - good.length}/${frames.length} frames ` +
+          `capSuspect — outlier filter bypassed (event-loop stalls during drain)`,
+      );
     posesOut[pose.name] = {
       gpu: use.map((f) => f.gpu),
       cpuSubmit: use.map((f) => f.cpu),
@@ -218,7 +225,8 @@ async function main(): Promise<void> {
     };
     console.log(
       `  [${pose.name}] gpuWall med=${pct(posesOut[pose.name]!.gpu, 0.5).toFixed(2)} ` +
-        `p95=${pct(posesOut[pose.name]!.gpu, 0.95).toFixed(2)} cpuSubmit med=${pct(posesOut[pose.name]!.cpuSubmit, 0.5).toFixed(2)}`,
+        `p95=${pct(posesOut[pose.name]!.gpu, 0.95).toFixed(2)} cpuSubmit med=${pct(posesOut[pose.name]!.cpuSubmit, 0.5).toFixed(2)} ` +
+        `capRejects=${frames.length - good.length}/${frames.length}`,
     );
     await page.screenshot({ path: `${OUT_DIR}/shots/${LABEL}-${pose.name}.png` });
   }

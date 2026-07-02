@@ -49,8 +49,15 @@ export interface MeasuredFrame {
   cpuSubmitMs: number;
   /** per-frame counters snapshot (e.g. nanite.visClusters) */
   counters: Record<string, number>;
-  /** true if this frame's isolation looked suspect (rejected from honest stats) */
+  /** true if this frame's isolation looked suspect (rejected from honest stats).
+   *  measure-infra 4c: now = event-loop lag > 8 ms during the drain await (a GC/
+   *  longtask pause materially inflates the wall sample) — the old per-pass-ghost
+   *  criterion fired on ~every frame (per-pass spans are known cross-frame ghosts)
+   *  and made outlier rejection dead. */
   capSuspect: boolean;
+  /** informational only (the OLD criterion): per-pass span > wall span — a pipelining
+   *  ghost in the per-pass timestamps, NOT a reason to reject the wall sample. */
+  passGhost?: boolean;
 }
 
 export interface MeasureOptions {
@@ -129,6 +136,11 @@ export class MeasureHarness {
 
     // freeze the rAF loop so nothing else touches the GPU between our isolated frames
     engine.renderer.setAnimationLoop(null);
+    // measure-infra 4a (W5): silence the frame's every-15th-frame async counter
+    // readbacks — they are submits+mapAsyncs that otherwise land INSIDE the timed
+    // window (~2 of every 32 samples contaminated). We read counters ourselves
+    // below, on the drained queue between samples.
+    engine.meterQuiet = true;
     try {
       // warmup: advance + fully drain so streaming/exposure/TRAA history converge
       for (let i = 0; i < warmup; i++) {
@@ -146,8 +158,25 @@ export class MeasureHarness {
         const t0 = performance.now();
         engine.renderStep(dt);
         const tSubmit = performance.now();
+        // measure-infra 4c: event-loop-lag ticker during the drain await. gpuWallMs is
+        // tSubmit → drain-promise-RESOLUTION, so a GC pause/longtask during the await
+        // inflates the sample as fake "GPU" time (the 70-91 ms spike class). A 5 ms
+        // ticker whose observed gap blows past its period catches exactly that.
+        let maxGapMs = 0;
+        let tickLast = performance.now();
+        let tickerOn = true;
+        const tick = (): void => {
+          if (!tickerOn) return;
+          const now = performance.now();
+          const gap = now - tickLast;
+          if (gap > maxGapMs) maxGapMs = gap;
+          tickLast = now;
+          setTimeout(tick, 5);
+        };
+        setTimeout(tick, 5);
         // 2. fully complete THIS frame's GPU work in isolation
         await drain(device);
+        tickerOn = false;
         const tDone = performance.now();
         // 3. resolve the isolated frame's timestamp queries
         await Promise.all([
@@ -158,27 +187,41 @@ export class MeasureHarness {
         profiler.collect(passes);
 
         const gpuWallMs = tDone - tSubmit;
-        // INTEGRITY GUARD: a per-pass span larger than the whole isolated
-        // GPU wall span is physically impossible for active time ⇒ it is a
-        // pipelining ghost. Flag the frame as suspect (rejected downstream).
+        // per-pass span > wall span = a pipelining ghost in the TIMESTAMPS — flag it
+        // informationally (passGhost) but do NOT reject the wall sample on it: the old
+        // rejection fired on ~30/32 frames (per-pass spans are cross-frame ghosts by
+        // construction) so outlier filtering was dead. measure-infra 4c.
         let maxPass = 0;
         for (const [k, v] of Object.entries(passes)) {
           if ((k === 'render' || k === 'compute') && v > maxPass) maxPass = v;
         }
-        // small slack for resolve/clock granularity
-        const capSuspect = maxPass > gpuWallMs * 1.5 + 1.0;
+        const passGhost = maxPass > gpuWallMs * 1.5 + 1.0;
+        // the honest rejection signal: the event loop stalled during the drain await
+        // (> 8 ms beyond the 5 ms ticker period ⇒ a GC/longtask inflated gpuWallMs)
+        const capSuspect = maxGapMs > 8;
+
+        // measure-infra 4b: per-frame counters read OUTSIDE the timed window — the
+        // readback submits+maps run on the drained queue between samples (zero
+        // perturbation) and every MeasuredFrame carries fresh nanite.* counters
+        // (the bimodality probe B1 discriminator + engagement counters).
+        const post = engine.post as {
+          meterRead?: (r: unknown) => Promise<Record<string, number>>;
+        } | null;
+        const fresh = post?.meterRead ? await post.meterRead(engine.renderer) : null;
 
         out.push({
           passes,
           gpuWallMs,
           cpuSubmitMs: tSubmit - t0,
-          counters: { ...engine.stats.counters },
+          counters: { ...engine.stats.counters, ...(fresh ?? {}) },
           capSuspect,
+          passGhost,
         });
       }
       return out;
     } finally {
-      // restore the live loop
+      // restore the live loop (+ re-enable the live meter readback cadence)
+      engine.meterQuiet = false;
       engine.start();
     }
   }

@@ -38,6 +38,7 @@ import {
   countOneBits,
   float,
   instanceIndex,
+  storageBarrier,
   uint,
   vec3,
   vec4,
@@ -455,8 +456,18 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // full-res visPayloadV.ro; level k reduces level k−1 THROUGH THE SAME rw view (a 2nd ro
   // view of one buffer in one dispatch is a same-scope usage violation — same as NaniteHzb).
   const voxPyrKernels: unknown[] = [];
+  // W4 (?pyrfuse=1, spec-orchestration-submit-folds §Stage-3): fuse the ≤1024-texel tail
+  // levels into ONE single-workgroup kernel (storageBarrier() between virtual levels —
+  // one workgroup ⇒ the barrier covers all participating lanes). Mirror of the NaniteHzb
+  // fused tail with minU instead of max. fuseFrom clamped ≥ 1 (level 0 decodes the
+  // full-res visPayload source). Bit-identical pyramid contents. DEFAULT OFF.
+  const pyrfuse = new URLSearchParams(window.location.search).get('pyrfuse') === '1';
+  const PYR_FUSE_MAX_TEXELS = 1024;
+  const pyrRawFrom = pyrLevels.findIndex((l) => l.w * l.h <= PYR_FUSE_MAX_TEXELS);
+  const pyrFuseFrom = pyrfuse && pyrRawFrom !== -1 ? Math.max(1, pyrRawFrom) : -1;
+  const pyrPerLevelCount = pyrFuseFrom === -1 ? pyrLevelCount : pyrFuseFrom;
   if (voxOccl) {
-    for (let k = 0; k < pyrLevelCount; k++) {
+    for (let k = 0; k < pyrPerLevelCount; k++) {
       const info = pyrLevels[k] as { offset: number; w: number; h: number };
       const kn = Fn(() => {
         const lw = uint(info.w);
@@ -498,6 +509,44 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
       })().compute(info.w * info.h, [64]);
       (kn as { setName(n: string): unknown }).setName(`nanVoxOccPyrL${k}`);
       voxPyrKernels.push(kn);
+    }
+    if (pyrFuseFrom !== -1) {
+      const kFusedTail = Fn(() => {
+        // 256 lanes, ONE workgroup — instanceIndex == the local lane id here
+        const tid = instanceIndex;
+        for (let k = pyrFuseFrom; k < pyrLevelCount; k++) {
+          // STATIC unroll (JS loop) — uniform control flow; barrier at Fn top level
+          const info = pyrLevels[k] as { offset: number; w: number; h: number };
+          const srcL = pyrLevels[k - 1] as { offset: number; w: number; h: number };
+          const n = info.w * info.h;
+          for (let base = 0; base < n; base += 256) {
+            const i = uint(base).add(tid);
+            If(i.lessThan(uint(n)), () => {
+              const lw = uint(info.w);
+              const x = i.mod(lw);
+              const y = i.div(lw);
+              const sx = x.mul(uint(2));
+              const sy = y.mul(uint(2));
+              const srcW = uint(srcL.w);
+              const swMax = uint(srcL.w - 1);
+              const shMax = uint(srcL.h - 1);
+              const m = uint(0xffffffff).toVar();
+              for (let dy = 0; dy < 2; dy++) {
+                for (let dx = 0; dx < 2; dx++) {
+                  const tx = minU(sx.add(uint(dx)), swMax);
+                  const ty = minU(sy.add(uint(dy)), shMax);
+                  const e = elemU(voxOccPyr.rw, uint(srcL.offset).add(ty.mul(srcW)).add(tx)).toVar();
+                  m.assign(minU(m, e));
+                }
+              }
+              (voxOccPyr.rw.element(uint(info.offset).add(y.mul(lw)).add(x)) as unknown as { assign(v: NU): void }).assign(m);
+            });
+          }
+          storageBarrier();
+        }
+      })().compute(256, [256]);
+      (kFusedTail as { setName(n: string): unknown }).setName('nanVoxOccPyrFusedTail');
+      voxPyrKernels.push(kFusedTail);
     }
   }
   // ── COOPERATIVE-RASTER WORKGROUP MEMORY (the close-up overdraw-imbalance fix) ──────

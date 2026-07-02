@@ -30,8 +30,20 @@ export class Engine {
   /** wall-clock elapsed (sec) since start */
   elapsed = 0;
 
-  /** when set, the frame loop renders through this instead of renderer.render */
-  post: { render(): void; meter(renderer: WebGPURenderer): void } | null = null;
+  /** when set, the frame loop renders through this instead of renderer.render.
+   *  meterRead (optional, measure-infra W5): the frame's counter READBACKS factored
+   *  out of meter() so MeasureHarness can run them OUTSIDE the timed window. */
+  post: {
+    render(): void;
+    meter(renderer: WebGPURenderer): void;
+    meterRead?(renderer: WebGPURenderer): Promise<Record<string, number>>;
+  } | null = null;
+
+  /** measure-infra W5: MeasureHarness sets this while measuring — meter() then skips
+   *  its every-15th-frame async readbacks (4-5 buffer→staging submits + mapAsync) so
+   *  they never land inside an isolated timed frame. Auto-exposure (frame content)
+   *  still runs. Live loop unaffected. */
+  meterQuiet = false;
 
   private updateFns: UpdateFn[] = [];
   private lastT: number | null = null;

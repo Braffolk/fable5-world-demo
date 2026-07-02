@@ -46,6 +46,9 @@ import { bcU2F, dispatch, dispatchBatchMixed, elemU, readBuffer, returnIf, texLo
 export interface NaniteFrameHandles {
   render(): void;
   meter(renderer: WebGPURenderer): void;
+  /** measure-infra W5: the meter's counter readbacks, runnable OUTSIDE a timed window
+   *  (MeasureHarness calls this on a drained queue between samples). */
+  meterRead(renderer: WebGPURenderer): Promise<Record<string, number>>;
 }
 
 /** halton(index, base) — TRAANode.js's exact sequence (verbatim formula) */
@@ -539,11 +542,26 @@ export function buildNaniteFrame(
     // R1: which cascades re-rastered this frame (bitmask). Static settled camera
     // → 0 (all served from cache); moving → bit0 (c0) every frame + far on cadence.
     if (shadow) engine.stats.counters['nanite.shRaster'] = shadow.rasteredMask();
-    // frame 0: no dispatch has created the GPU buffers yet — readback throws
-    if (frame === 0 || frame % 15 !== 0 || reading) return;
+    // frame 0: no dispatch has created the GPU buffers yet — readback throws.
+    // measure-infra W5: engine.meterQuiet ⇒ MeasureHarness is timing isolated frames —
+    // skip the async readbacks entirely (it reads them itself OUTSIDE the timed window).
+    if (engine.meterQuiet || frame === 0 || frame % 15 !== 0 || reading) return;
     reading = true;
+    void meterRead(r)
+      .then((m) => Object.assign(engine.stats.counters, m))
+      .finally(() => {
+        reading = false;
+      });
+  };
+
+  // measure-infra W5 (spec-orchestration-submit-folds §4b): the counter READBACKS
+  // factored out of meter() — returns the would-be assignments instead of writing them,
+  // so MeasureHarness can run them on a drained queue BETWEEN samples (per-frame
+  // counters in every MeasuredFrame, zero perturbation of gpuWallMs).
+  const meterRead = (r: WebGPURenderer): Promise<Record<string, number>> => {
     const scarOn = params.get('scar') === '1';
-    void Promise.all([
+    const out: Record<string, number> = {};
+    return Promise.all([
       cull.readCounts(r),
       raster.readHwCount(r),
       shadow ? shadow.readCounts(r) : Promise.resolve(null),
@@ -555,12 +573,12 @@ export function buildNaniteFrame(
         // voxel-foliage (§A1): the fanned voxel-cluster count → HUD (the Verify agent
         // reads window.__laas.stats.counters). > 0 ⇒ the cull is emitting voxel clusters
         // into qVoxRaster and the Stage-2 bin/raster has work to consume.
-        if (voxCount !== null) engine.stats.counters['nanite.voxClusters'] = voxCount;
+        if (voxCount !== null) out['nanite.voxClusters'] = voxCount;
         // Stage-2 §A2: the per-pixel BRICK-WRITE count (occlusion-skip overlay number) —
         // the elections the scatter raster actually committed (FAR below the overlapping
         // triangle fragments if the occlusion cull works). > 0 ⇒ the voxel raster produced winners.
         if (voxWrites !== null && voxWrites !== undefined)
-          engine.stats.counters['nanite.voxBrickWrites'] = voxWrites;
+          out['nanite.voxBrickWrites'] = voxWrites;
         if (scar) {
           // 0a SCAR readouts → HUD / window.__laas.stats.counters (the Verify agent
           // reads these). overdraw = band fragments / band covered pixels; bandShare =
@@ -570,40 +588,38 @@ export function buildNaniteFrame(
           const ovX100 = bandPx > 0 ? Math.round((scar.bandFrags / bandPx) * 100) : 0;
           const shareX1000 =
             scar.totalFrags > 0 ? Math.round((scar.bandFrags / scar.totalFrags) * 1000) : 0;
-          engine.stats.counters['nanite.scarBandFrags'] = scar.bandFrags;
-          engine.stats.counters['nanite.scarBandPx'] = bandPx;
-          engine.stats.counters['nanite.scarTotalFrags'] = scar.totalFrags;
-          engine.stats.counters['nanite.scarBandClusters'] = scar.bandClusters;
-          engine.stats.counters['nanite.scarOverdrawX100'] = ovX100;
-          engine.stats.counters['nanite.scarBandShareX1000'] = shareX1000;
+          out['nanite.scarBandFrags'] = scar.bandFrags;
+          out['nanite.scarBandPx'] = bandPx;
+          out['nanite.scarTotalFrags'] = scar.totalFrags;
+          out['nanite.scarBandClusters'] = scar.bandClusters;
+          out['nanite.scarOverdrawX100'] = ovX100;
+          out['nanite.scarBandShareX1000'] = shareX1000;
         }
         if (sh) {
           let shTotal = 0;
           for (let i = 0; i < sh.length; i++) {
-            engine.stats.counters[`nanite.shC${i}`] = sh[i] ?? 0;
+            out[`nanite.shC${i}`] = sh[i] ?? 0;
             shTotal += sh[i] ?? 0;
           }
-          engine.stats.counters['nanite.shTotal'] = shTotal;
+          out['nanite.shTotal'] = shTotal;
         }
-        engine.stats.counters['nanite.visClusters'] = c.visClusters;
-        engine.stats.counters['nanite.dagClusters'] = c.dagClusters;
-        engine.stats.counters['nanite.visTris'] = c.visTris;
-        engine.stats.counters['nanite.dagTris'] = c.dagTris;
-        engine.stats.counters['nanite.chunks'] = c.chunks;
-        engine.stats.counters['nanite.rejInst'] = c.rejInst;
-        engine.stats.counters['nanite.rejClust'] = c.rejClust;
-        engine.stats.counters['nanite.p2'] = c.p2Appends;
-        engine.stats.counters['nanite.hwTris'] = hw;
+        out['nanite.visClusters'] = c.visClusters;
+        out['nanite.dagClusters'] = c.dagClusters;
+        out['nanite.visTris'] = c.visTris;
+        out['nanite.dagTris'] = c.dagTris;
+        out['nanite.chunks'] = c.chunks;
+        out['nanite.rejInst'] = c.rejInst;
+        out['nanite.rejClust'] = c.rejClust;
+        out['nanite.p2'] = c.p2Appends;
+        out['nanite.hwTris'] = hw;
         if (c.overflow && warned !== c.overflow) {
           warned = c.overflow;
           // eslint-disable-next-line no-console
           console.warn(`[nanite] QUEUE OVERFLOW (geometry dropped): ${c.overflow}`);
         }
-      })
-      .finally(() => {
-        reading = false;
+        return out;
       });
   };
 
-  return { render, meter };
+  return { render, meter, meterRead };
 }
