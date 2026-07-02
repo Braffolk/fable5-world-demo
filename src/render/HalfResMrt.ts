@@ -15,7 +15,7 @@
  *   referencing one in a graph keeps this node's updateBefore in the frame.
  */
 
-import { HalfFloatType, RedFormat, UnsignedByteType, Vector2 } from 'three';
+import { HalfFloatType, RGFormat, RedFormat, UnsignedByteType, Vector2 } from 'three';
 import type { NodeBuilder, NodeFrame, Renderer, TextureNode } from 'three/webgpu';
 import {
   NodeMaterial,
@@ -34,6 +34,10 @@ export interface HalfResEntry {
   node: unknown; // TSL node producing this attachment (vec4-compatible)
   /** r8unorm attachment (e.g. AO) instead of rgba16f */
   red?: boolean;
+  /** rg16f attachment (2-channel payloads, e.g. AO+viewZ — RP-3b, deep-review 08-L2b):
+   *  halves the write + 4-tap-read bandwidth vs rgba16f. The producing node may still
+   *  return vec4 (WebGPU discards the extra output components). */
+  rg?: boolean;
 }
 
 type RendererState = unknown;
@@ -70,6 +74,8 @@ export class HalfResMrtNode extends TempNode {
       if (e.red === true) {
         tex.format = RedFormat;
         tex.type = UnsignedByteType;
+      } else if (e.rg === true) {
+        tex.format = RGFormat; // stays HalfFloatType ⇒ rg16float (renderable)
       }
     });
     this.material.name = 'HalfResMRT';

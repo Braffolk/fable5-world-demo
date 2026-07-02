@@ -15,6 +15,7 @@ import type { Renderer, StorageBufferNode } from 'three/webgpu';
 import { RenderPipeline } from 'three/webgpu';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { traa } from 'three/addons/tsl/display/TRAANode.js';
+import { traaPingPong } from './TRAAPingPong';
 import {
   Fn,
   If,
@@ -194,6 +195,10 @@ export class PostStack {
       halfAo = runiform(new Vector2(2, 2));
       halfEntries.push({
         name: 'ao',
+        // RP-3b (deep-review 08-L2b): AO carries 2 channels (ao, viewZ) — rg16f halves
+        // the attachment write + the bilateral's 4-tap read bandwidth vs rgba16f.
+        // ?aorg=0 = legacy rgba16f (A/B).
+        rg: q.get('aorg') !== '0',
         node: gtaoLayer(
           depthTex as unknown as Parameters<typeof gtaoLayer>[0],
           camera,
@@ -534,9 +539,12 @@ export class PostStack {
     const velLoad = (texel: NV2): NV4 =>
       vec4(velReproject(texel), 0, 1) as unknown as NV4;
     const reprojectedVelocity = { load: velLoad } as unknown as typeof depthTex;
+    // RP-3a (deep-review 08-L2a): ping-pong-history TRAA fork (kills the stock node's
+    // 2 full-res copyTextureToTexture per frame). ?traapp=0 = stock three node (A/B).
+    const traaFn = q.get('traapp') === '0' ? traa : (traaPingPong as unknown as typeof traa);
     const taaed = ablate.has('taa')
       ? (withBounce as unknown as ReturnType<typeof traa>)
-      : traa(withBounce, depthTex, reprojectedVelocity, camera);
+      : traaFn(withBounce, depthTex, reprojectedVelocity, camera);
     // nanite jitter mirror (D-N18): the compute raster must project with the
     // SAME per-frame TRAA view offset the scene pass renders with; the node's
     // _jitterIndex is read before the pipeline render (it increments after)
