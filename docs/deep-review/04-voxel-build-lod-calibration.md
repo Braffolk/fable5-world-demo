@@ -1,3 +1,5 @@
+> Reconciled into 14-lod-dag-cut.md §Reconciliation (2026-07-02); this doc kept for detail. ⚠️ Its FarTiles band map (§1/§2.4: 0.5 m cells / 2 m bricks / T(L1)=236 m) is WRONG — ForestScene.ts:317 passes ftcell=0.75 ⇒ 3 m bricks, tile L0 owns 94–354 m, 45 px at 94 m; see the canon.
+
 # 04 — Voxel build + LOD ladder + calibration (VoxelizeCrown / BuildAggregateDag / VoxelBrick)
 
 Reader 04 slice. All ms from the 2026-07-02 measured table or scratchpad `fresh-*.json`

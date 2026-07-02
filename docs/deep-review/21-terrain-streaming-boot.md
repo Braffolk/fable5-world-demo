@@ -1,3 +1,5 @@
+> Reconciled into 20-live-loop-and-cpu.md §Reconciliation (2026-07-02); this doc kept for detail.
+
 # terrain, streaming & boot deep review (2026-07-02)
 
 Scope: the terrain stack (`src/nanite/TerrainClipmap.ts`, `TerrainStreamer.ts`,

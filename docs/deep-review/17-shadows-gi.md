@@ -387,3 +387,40 @@ was recomputed from the scratchpad JSONs.
 - "Nested texel grids align ⇒ level-5 crossing re-rasters ALL SIX levels" (this doc §Work-model)
   — round-snap flip boundaries interleave exactly; storm period 0.75 m survives via
   always-ticking fine levels + maxHalf cut sizing, not grid alignment.
+
+### Second adversarial pass (2026-07-02, independent re-verification of THIS section)
+
+The section above was written by the pass that later died; a fresh agent re-verified it from
+scratch (code + JSONs re-read, no trust carried over). Result: **every claim above survives.**
+Independently re-confirmed beyond re-reading cites:
+
+- The round-snap interleaving math (Corrections §1): level k flips at odd multiples of
+  texel_k/2 = (2n+1)·texel_{k−1}; level k−1 flips at (2m+1)·texel_{k−1}/2 — equality needs
+  2(2n+1)=2m+1 (even=odd), impossible. Flip boundaries of adjacent levels NEVER coincide. QED.
+- The work-model probabilities recompute exactly: E[levels/frame] = 2.69 walking / 5.07 fly
+  (formula 1−(1−min(1,d/texel_k))², per-level values match the listed {1,.78,.47,.25,.13,.066}
+  and {1,1,1,.99,.69,.39}).
+- Lever 5's "no HZB dep": `NaniteClipCull.ts:133` passes `sphereOccluded = null` into
+  `buildNaniteCull` — verified in code, not just the NaniteFrame comment. IDENTICAL class holds.
+- E_k ladder: `half = cfg.base * 2 ** k` (NaniteShadowClip.ts:179) — {12,24,48,96,192,384} exact.
+- shadowsOn=false kills BOTH branches (the naniteShadow PCSS block :922-955 AND the csm-only
+  `else if (shadowsOn && world.csm)` :956-959) — doc 07's W1/W2 forest pool = exactly 0 stands.
+- Blockquote reconciliation markers verified present at the top of docs 07 and 90.
+
+Two micro-corrections found by this pass:
+
+1. **voxnear default is 35, not 45** (§Work-model "the MESH leaf-crown band (voxnear=45)"):
+   `DEFAULT_TRANSITION_DIST = 35`, WorldRegistry.ts:82. Consequence unchanged — the mesh
+   leaf-crown band (≤35 m) still lies entirely inside shadow levels 0-2 (≤48 m); if anything
+   the sun-view canopy load concentrates one level finer than modeled.
+2. **Median convention pinned**: the quoted medians (32.6/37.0/15.6 vs 31.2/38.8/14.6) are the
+   UPPER median (s[16] of the sorted 32-frame array — the fact pack's convention) and reproduce
+   bit-exactly under it; the interpolated median gives 31.8/37.0/15.4 vs 31.1/38.7/14.5. Same
+   verdict either way (deltas ±1.7 ms straddle zero = session noise), but future recomputations
+   should use s[16] or they will flag a false mismatch. Run-lengths (4,3,1,1,5,4,3,3,3,4,1 on
+   the median split) and autocorr (−0.54@lag3, +0.41/+0.40@lag6/7) reproduce exactly.
+
+No lever class changed; the lever table above is final for this area. Headline unchanged:
+**shadows-gi holds 0.0 ms of the oblique gap in the canonical scene because the systems are
+absent (gi:null/csm:null), and the master plan must budget ~2-6 ms (moving) + ~0.5-1.5 ms
+sampling + ~0.3-1 ms GI/CSM for the world scene** (Open question 1 needs a user ruling).

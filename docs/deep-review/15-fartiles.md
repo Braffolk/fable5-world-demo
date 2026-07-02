@@ -240,3 +240,118 @@ leaves OFF by default: VoxelizeCrown.ts:1014, worth a probe on tile pyramids spe
    Interior L1/L2 tile bricks add depth-only overdraw at the horizon; shelling is
    silhouette-identical by construction (VoxelizeCrown.ts:844-887). Expect small oblique win;
    verify no pyramid-tree pathologies (the empty-vote fallback path, VoxelizeCrown.ts:1057+).
+
+## Reconciliation & verification (2026-07-02, post-limit continuation)
+
+Adversarial verify pass (CPU-only: code + scratchpad JSONs; the original verify fleet died on a
+session limit). Every load-bearing file:line below was re-read against HEAD; measured numbers were
+re-derived from `fresh-voxbocc.json` / `fresh-aggdist60.json` / `fresh-bead-v2-base.json` /
+`fresh-voxlodk07.json` / `fresh-voxlodk085.json` / `fresh-noleaves.json`.
+
+### Verified load-bearing facts (canon, re-checked at code)
+
+- **Prev-frame HZB contains vox+tile depth.** `world1()` ends with `voxRaster.dispatchVoxel`
+  (NaniteRaster.ts:1418-1423); `hzb.build` runs after (NaniteFrame.ts:481); the traverse's
+  emit-time `sphereOccluded` (NaniteCull.ts:919-925) reads it. Premise-audit #1 stands verbatim.
+- **voxOccPyr is mesh-only at scatter time.** Built inside `dispatchVoxel` from visPayloadV
+  BEFORE any vox election (NaniteVoxelRaster.ts:1454-1461); per-block test :588-673, per-brick
+  ?voxbocc :838-884 (default ON, :282; straddler exemption :844; keep-on-tie `|0xff` :846).
+- **Tile ladder band math exact.** errorK default **1** (VoxelizeCrown.ts:87 — revised 3→2→1 on
+  2026-07-02b; the memory-file's "errorK=3" is stale), ownError(L)=curCell·4·0.5·K (:988),
+  K_FLOOR=3 (:1006-1007) ⇒ tiles = 4 levels err 0/3/6/12 m; with voxTauCap **12** (NaniteCull.ts:
+  317-318 — the ":843 DEFAULT 8 px" comment is doc-rot) and projK 1414.8: L0 owns 94-354 m,
+  L1 354-707, L2 707-1415, L3 ~never. As written in §Runtime.
+- **Boot totals verbatim** from fresh-voxbocc.json console: 812 tiles / 4 033 553 bricks /
+  138.5 MB / 57 435 clusters; worker splat 6 331 ms + emit/pyramid 3 558 ms. 36 B/brick =
+  BRICK_WORDS 9 (GeometryRegistry.ts:91).
+- **Cluster shares:** oblique 9 185, eye 5 935, aerial **661** (not 659 — run noise) vox clusters;
+  aggdist60 oblique 4 429 ✓; aggdist60 aerial 16.6 ≈ default (aerial ring no-op ✓).
+- **voxbocc pose split** re-derived: eye 36.1→18.9 = −17.2, oblique 43.2→37.2 = −6.0 ✓.
+- **noleaves bias** (premise #3) ✓: fartiles gated `!noLeaves` (ForestScene.ts:312), bark keeps
+  2000 m; oblique visTris 2 105 075 vs default 1 270 591 ✓. CAUTION added: the prompt-anchor
+  noleaves row (16.8/15.4/11.1) disagrees with fresh-noleaves.json medians (14.2/12.5/10.2) —
+  noleaves-based subtractions carry ±2 ms era noise.
+- **crownMinY=2 is a CAP** ✓ (ForestScene.ts:336-341: `min(2, brickMin)` floored at 0.5;
+  column top = `max(cellSize, crownMinY·s)`, FarTilesSplat.ts:197) — tile trunk columns are
+  ≤ ~2.8 m stubs.
+
+### Corrections (9)
+
+1. **"Trunk load tiny (44.5 k visTris)" at aerial (premise #2) — MISREAD, corrected.** For voxel
+   clusters `triCount` = **brickCount** (packed w7&0xff, GeometryRegistry.ts:1169, read :602), and
+   the traverse adds it to visTris (NaniteCull.ts:931/933). Aerial visClusters 661 == voxClusters
+   661 ⇒ ZERO mesh clusters; the 44 693 "visTris" ≈ 661×~68 = tile BRICK count. Trunk load at
+   aerial is zero, and visTris is brick-polluted wherever vox runs (doc 12's claim CONFIRMED;
+   byproduct: oblique mesh-only emit ≈ 1.27 M − ~0.62 M bricks ≈ 0.65 M ✓ doc 12).
+2. **Doc 06's trunk-antenna mechanism KILLED.** Columns top out at ≤ ~2.8 m (fact above); they
+   cannot crest a 10-40 m canopy, pyramid union or not. The §Artifact-check bark-mesh hypothesis
+   (100-140 m trees' coarse BARK, bark lives ≤140 m) stands; probe 3 discriminates. Doc 06 L4
+   fix (ii) (trunk-column clamp) dies with it; its L4 fix (i) (connected-component floater prune)
+   survives and merges into L4 here.
+3. **Doc 06 §3.3 "neither test can cull tiles behind the canopy" — INCOMPLETE, resolved.**
+   True at block/brick granularity (mesh-only voxOccPyr ✓), but the emit-time prev-frame HZB DOES
+   contain vox depth (verified above). The gap is granularity+staleness, as premise #1 states.
+   Canon = this doc's framing.
+4. **L2's `reachMargin ≥ max species reach ≈ 16 m` is UNSAFE as stated.** The per-tree head's
+   liveness gate is on the trunk GROUND anchor (instDist, NaniteCull.ts:778), but cluster content
+   sits up to sqrt(reach² + 48²) ≈ **51 m** (3D) from that anchor (grid cellsY covers 48 m,
+   FarTiles.ts:115). For an elevated camera, dist(cam, content)+margin16 can pass while the
+   contributing tree's instDist > aggDist ⇒ per-tree rep dead ⇒ HOLE. Fix: gate exactly on the
+   ground-anchor bound — drop when `sqrt((dXZ(cam,c)+radius+reach)² + camY²) < aggDist` — which
+   stays strong at low cameras and self-disables when high. Expected value reduced to ~eye 0.3 /
+   oblique 0.4. Lever survives, corrected.
+5. **Probe 6's "shelling is silhouette-identical by construction" — OVERSTATED, reclassified.**
+   shellCoarseBricks' proof (VoxelizeCrown.ts:844-856) assumes OPAQUE neighbour bricks; production
+   tile bricks ≥64 px² are CELL-CARVED (voxcell DDA), and near-band tile bricks run 30-45 px wide
+   ⇒ carved. A sparse occupancy cell in a surface brick can see through to a removed interior
+   brick ⇒ pixels can change. Tile-shelling probe stays worth running but is class **RISK**
+   (shotdiff gate), not identical.
+6. **L3's "TAA refuted" — UNVERIFIED, downgraded.** No ablate=taa artifact exists in the
+   scratchpad, and sibling doc 11 claims the OPPOSITE (aerial bimodality gone under ablate=taa).
+   The fresh-voxbocc aerial per-frame trace is a clean period-3 cycle (~12→22→17 ms repeating) —
+   atypical for both stories. Probe 2 must run BOTH `?occl=0` and `ablate=taa` per-frame arrays
+   before any damping is built.
+7. **Doc 06 §3.1's internal (c) split (far-trunk −1.3 ms) — WEAKENED.** It scales visTris deltas
+   (0.897→0.730 M) that are brick-polluted (correction 1), and the 8 ms/Mtri scale divides by a
+   polluted denominator. The TOTAL (c) ≈ −4.0 ms stands (pure gpuWall deltas); the 1.3/2.7
+   sub-split is unreliable. The headline decomposition (−6.8 brick-size quality-DEAD / −4.0
+   dedup+trunk) survives.
+8. **Doc 06 table rows vs JSONs:** default 36.0/43.1 → actual medians 36.1/43.2; aggdist60
+   oblique 32.3 → 32.5; voxlodk07 36.3 → 36.4. Within rounding/method; upheld.
+9. **L1 rebuild-cost estimate reconciled** to doc 06's ~0.5-1 ms (this doc's 0.3-0.5 was
+   unsourced); expected-ms reconciled to the union: eye ~0.5 / oblique **2-5** / aerial ~0
+   (this doc's aerial 0.7 was optimistic — tiles are the only vox at aerial and stacking is
+   minimal, so the rebuild likely eats the win).
+
+### Surviving lever table (reconciled canon)
+
+| # | Lever | Mechanism (1-liner) | eye / obl / aerial (ms) | Quality | Probe / gate | Effort | Conf |
+|---|---|---|---|---|---|---|---|
+| 0 | ftskip re-pin (do FIRST) | attribution: skip tile clusters (scatter-guard variant measures scatter share; boot-skip variant measures cull+scatter total — run boot-skip) | info only (model says obl 4-6, eye 1-2, aerial 5-6) | n/a (diagnostic) | probe 1 / P-B; also P-A (`aggdist=60` post-voxbocc) | S | — |
+| 1 | tile-wave-occlusion | per-tree vox wave → ONE voxOccPyr rebuild → tile wave; per-brick bocc then sees the 45-140 m vox canopy | 0.5 / **2-5** / ~0 | IDENTICAL (conservative min-pool, keep-on-tie, straddler-exempt) | probe 4: A/B + shotdiff maxDiff=0 + tile-reject counter >0 | M | med-high (ceiling unpinned until #0) |
+| 2 | overlap-near-gate (corrected) | drop tile clusters provably covered by live per-tree reps via the ground-anchor bound sqrt((dXZ+r+reach)²+camY²)<aggDist | 0.3 / 0.4 / 0 | IMPROVING (finer rep shows; kills coarse-bleed) | probe 5 + ring-hole shotdiff eye/obl + one boundary-crossing pose | S | high |
+| 3 | skyline-floater-prune (merged L4 + doc06-L4i) | bake-time connected-component + coverage prune of low-w fringe cells/bricks | ~0 / ~0 / ~0 | IMPROVING | skyline crop A/B + user sign-off | S | high |
+| 4 | boot-cache | IndexedDB tile grids keyed (seed,trees,ftcell,aggdist,splat-hash); ~10 s/boot | 0 (boot) | IDENTICAL | hash-invalidation test | M | high |
+| 5 | crownMinY-cap fix | replace the 2 m initializer-cap with the true species crown base (floating-crown gap) | ~0 | IMPROVING | crops + user sign-off | S | high |
+| 6 | hzb-feedback-damp | IF feedback confirmed: 2-frame HZB union at emit (strictly more conservative) | 0 / ~2 / ~2 (p95-mode, not med) | IDENTICAL | probe 2 (BOTH `occl=0` AND `ablate=taa` per-frame) MUST discriminate first | M | LOW |
+| 7 | tile-pyramid shell (probe-only) | shell interior L1/L2 tile bricks (config `voxlodshell=1`) | ? / small / ? | **RISK** (correction 5) | probe 6 + shotdiff | S (config) | low |
+| 8 | streamed tiered ring tiles (doc 06 L3) | 16 m ring tiles at per-tree-matched cells, runtime-streamed | 0 / 2-5 beyond L1 / 0 | RISK (resample + normal-field shift + stream pop) | ONLY if P-A/P-B residual ≥5 ms post-L1; shotdiff + explicit user sign-off | L | conditional |
+| 9 | K=2 waves × voxbocc (doc 06 L5) | F2B K=2 band split with per-brick bocc (never measured together) | ? / 1-4 / ? | IDENTICAL | P-E: `voxf2b=1,voxwaves=2`; drop if net ≥ −1 | M | low |
+
+REJECTED-BY-POLICY list unchanged (ftcell≥1.0, aggdist<140, tile tau/errorK raises, dropping
+tile L0) — all quality-trading; diagnostics only.
+
+### Killed claims (one-liners)
+
+- Doc 06 §3.6 trunk-antenna mechanism (tall column bricks above canopy) — columns are ≤2.8 m
+  ground stubs (FarTilesSplat.ts:197, ForestScene.ts:336-341); antennas are almost certainly
+  ≤140 m coarse bark mesh (probe 3 confirms).
+- Doc 06 L4 fix (ii) trunk-column clamp — targets the non-existent tall columns.
+- This doc's "trunk load tiny (44.5 k visTris)" aerial read — visTris there is ~100 % tile
+  brick counts; mesh emit at aerial is zero clusters.
+- This doc's L2 reachMargin=16 m sufficiency — vertical anchor offset breaks it at elevated
+  poses; corrected gate required.
+- This doc's probe-6 "shell is silhouette-identical" — false under cell carving; RISK class.
+- This doc's L3 "TAA refuted" premise — unverified, contradicts doc 11; discriminating probe
+  required before build.
+- (Weakened, not killed) doc 06's far-trunk −1.3 ms sub-estimate — brick-polluted visTris basis.

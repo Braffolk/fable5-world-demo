@@ -1,3 +1,5 @@
+> Reconciled into 19-ue5-and-prior-art.md §Reconciliation (2026-07-02); this doc kept for detail. NOTE: §2.1's "UE5 fallback = depth-only InterlockedMax + separate payload store (OUR architecture)" was KILLED by the reconciliation — shipping UE5 has `#error UNKNOWN_ATOMIC_PLATFORM` (NaniteWritePixel.ush:33); only the experimental Voxel/ScatterBricks.usf uses our idiom.
+
 # 02 — UE5 Nanite materials/shading/decode vs our resolve (reference playbook)
 
 Reader 02 of the whole-pipeline deep review. Slice: UE5's vis-buffer → material pipeline

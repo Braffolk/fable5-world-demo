@@ -297,3 +297,151 @@ ruling asks these to be costed and funded by wins elsewhere).
 6. Open: per-species cellSize/maxExt spread (telemetry lever); post-voxbocc band-resolved
    oblique split (ring vs tiles) — rerun `EXTRA=aggdist=60` once, post-voxbocc, to re-pin
    the ring share before spending against it.
+
+## Reconciliation & verification (2026-07-02, post-limit continuation)
+
+Scope: this doc (canon) + sibling `04-voxel-build-lod-calibration.md` (fleet B). Every
+load-bearing file:line below was re-read against HEAD of nanite-raster; every measurement
+was re-derived from the scratchpad `fresh-*.json`. Verdicts: CONFIRMED = code/JSON-verified;
+PLAUSIBLE = model-based magnitude on a confirmed mechanism.
+
+### Corrections made
+
+1. **voxClusters (this doc, §Work model)**: fresh-voxbocc.json counters are eye **5935** /
+   oblique **9185** / aerial **661** (I wrote 5893/9188/659 — frame-sample drift, model
+   check unaffected). Boot log confirms 124,417 per-species bricks / 20 crowns and
+   fartiles = **812 tiles, 4.03M bricks (138.5 MB), 57,435 clusters**.
+2. **Doc 04's entire FarTiles band map is wrong** (its §1/§2.4): it read the FarTiles.ts
+   doc-comment default `cellSize 0.5 m` instead of the value actually passed —
+   `ForestScene.ts:317` sets `ftcell` **0.75 m** → L0 bricks **3 m** (not 2 m),
+   ownError(L)=1.5·2^L, **T_tile(L)=176.9·2^L** (not 236·2^L), tile L0 owns **94–354 m**
+   (not 94–236), and a tile-L0 brick at 94 m projects **45 px** (cells ~11.3 px), not
+   30 px / 7.5 px. This doc's numbers stand. Consequence: the 94–177 m shelf artifact is
+   WORSE than doc 04 modelled, which only strengthens its own §4.1/§4.2 motivation.
+3. **Doc 04 tile pyramid depth**: tiles build L0..**L3** (22×16×22 → 11×8×11 → 6×4×6 →
+   3×2×3, the K_FLOOR stop) — there is no tile L4. "L3/L4 dead weight" → "L3 built,
+   in-scene unreachable (T_tile(3)≈1415 m)".
+4. **Doc 04 crown grid ladder**: 180 cells / 4 = **45** bricks/axis: 45→23→12→6→3
+   (it wrote 46→…). Trivial; T(L) math unaffected.
+5. **Representative-crown band map is assumption-bound in BOTH docs**: this doc (maxExt≈10,
+   A.w=1.1) gets L1/L2/L3 in the 45–140 band; doc 04 (maxExt=8, A.w=1) gets exactly L2/L3.
+   Same verified formula T(L)=projK·A.w·2c·2^L/12, different assumed inputs; the truth is
+   **2–3 levels, species/A.w-dependent**, and "L0 never renders / L4+ never engages for
+   typical crowns" holds in both parameterizations. The cut-telemetry lever resolves it —
+   do not cite either band map as ground truth until it lands.
+6. **Code doc-rot found while verifying**: `NaniteCull.ts:843` comment says voxtaucap
+   "DEFAULT 8 px" — code default is **12** (`NaniteCull.ts:317-318`). Add to the stale-doc
+   cleanup list alongside the ~8 dead-anchor headers in VoxelizeCrown.ts.
+7. **partitionLevelBlocks vs partitionClusters is NOT a contradiction**: this doc cites
+   `VoxelizeCrown.ts:904` (partitionLevelBlocks), doc 04 cites `DagCommon.ts:39`
+   (partitionClusters); the former wraps the latter (`VoxelizeCrown.ts:915`).
+8. **Doc 04 §4.3 quality class raised Q → RISK** (see quality audit below).
+
+### Verified load-bearing mechanism claims (all CONFIRMED against code)
+
+- **anchorL0 ladder = dead config**: `voxlodAnchorL0()` (`VoxelizeCrown.ts:115`) has zero
+  consumers in `buildVoxelPyramid`; shipped ownError = `L===0 ? 0 : curCell·BRICK_DIM·0.5·ERR_K`
+  (`VoxelizeCrown.ts:988`, BRICK_DIM=4 per `VoxelBrick.ts:61`), errorK **1**
+  (`VoxelizeCrown.ts:87`). The ForestScene/WorldRegistry anchor blocks (:110-129 / :402-414)
+  compute-and-set into a field nothing reads.
+- **voxTauCap=12 governs the whole vox band**: lodWarp τ_eff = 3·(1+((d−4)/6)^0.6)
+  (defaults `NaniteFrame.ts:157-158, 172-177`) crosses 12 at d≈41.4 m < voxnear 45
+  (`ForestScene.ts:102`); clamp applied per voxel-matclass cluster (`NaniteCull.ts:317-318,
+  852-859`). Bricks therefore sawtooth **12–24 px** (pOwn projects the HALF-extent,
+  `NaniteCull.ts:834-835`, emit iff ≤ τ_eff at `:861`, band [T, 2T)).
+- **K_FLOOR=3 stop** (`VoxelizeCrown.ts:1006-1007`) and the symmetric-grid-center +
+  tight-half + occupancy RE-BIN downsample (`VoxelizeCrown.ts:770-837`) are as described.
+- **Doc 04 W2 (coarse-mask box dilation) CONFIRMED**: the re-bin stamps each occupied
+  child's WHOLE brick box (`childBoxes` `VoxelizeCrown.ts:744, 758-764`, stamped
+  `:822-835`) — a 1-cell child dilates to ≥2×2×2 = 8/64 parent cells and compounds per
+  level; `OCC_MASK_FULL=48` (`NaniteVoxelRaster.ts:227`, gate `:948-951`) then skips the
+  mask on near-full coarse bricks. Mechanism real; the 2–5 ms oblique magnitude is
+  PLAUSIBLE (slope-model, unprobed — P5 counters first).
+- **Doc 04 W4 (occ==0 crown bricks painted) CONFIRMED**: voxelizeCrown emits a brick as
+  occupied whenever `bcov > 0` even if every cell < 2% coverage (occ bits only set at
+  ≥ OCC_COVERAGE_THRESHOLD, `VoxelizeCrown.ts:560`, emit `:586-608`); FarTiles prunes
+  exactly this (`FarTiles.ts:220`), the crown path doesn't.
+- **Instance seed gates**: per-mesh nearDist word 8 tested at INSTANCE granularity
+  (`NaniteCull.ts:786-787`), tile nearDist = max(10, aggdist−46) = 94 (`ForestScene.ts:390`),
+  per-tree maxDist = aggDist = 140 (`ForestScene.ts:376`) → the 94–140(+reach) double-draw
+  ring is real and instance-granular, block-granular cull is the complement.
+- **Cut is jitter-independent**: the TRAA mirror jitters the projection via
+  `setViewOffset` on a scratch camera (`NaniteFrame.ts:383-418`); camPos/A.w/ownError
+  (the pOwn inputs) untouched.
+- **Leaf ladder**: AGG_LOD_CFG.errorK set to 0.4 (`ForestScene.ts:150`,
+  `BuildAggregateDag.ts:77-80`), groupErr = growError·errorK monotone-floored
+  (`BuildAggregateDag.ts:504`); τ_eff(20→45 m) = 8.4→12.5 px checks out.
+- **Measured anchors re-derived from JSONs**: pre-voxbocc base 36.1/43.2/16.8
+  (fresh-bead-v2-base); voxbocc 18.9/37.2/16.5; aggdist=60 26.1/32.5 → ring share
+  43.2−32.5 = **10.7 ms oblique** ✓; voxlodk 0.7 → 36.4 obl (−6.8) ✓, 0.85 → 41.1 (−2.1) ✓;
+  errorK 1↔2 rested A/B 38.5↔55.9 obl (fresh-rested-vlk1 / fresh-rested-def) ✓ — the
+  +17.4 ms "global errorK=2" warning and the ×1.7/octave cost model stand.
+
+### Quality audit (user law: IDENTICAL / IMPROVING / RISK; no smuggled detail loss)
+
+- tile-ring-block-nearcull — **IMPROVING** (removed pixels are coarse-rep-outbids-fine
+  defects), but NOT bit-equal ⇒ keep the 135–145 m seam shotdiff gate. (= doc 04 §4.4,
+  same lever, merged.)
+- pertree-ring-octave (?voxlodkring=2) — **IMPROVING** (strictly finer; deliberate spend).
+- tiered-mid-tiles — **IMPROVING** (attacks the only band no knob reaches).
+- cut-telemetry — **IDENTICAL** (instrumentation only).
+- doc 04 §4.2 occupancy re-bin — **IMPROVING** toward mesh ground truth (masks stay a
+  conservative cover of real child cells), gated on far-crown crops + P5 popcount
+  histogram + user sign-off on the added see-through.
+- doc 04 §4.3 voxnear 60 + leaflodk 0.4 — **reclassified Q → RISK**: the 45–60 m band
+  swaps voxel bricks for the aggregate leaf ladder's coarse levels, the exact look that
+  got 60/0.25 rejected ("spiky crowns"). Direction is the user demand (voxels engage
+  farther) and 60/0.4 is genuinely unmeasured (`ForestScene.ts:98-101` confirms the
+  history), but it ships only through the band-end eyeball gate + P2.
+- doc 04 §4.1 mid-ring merged tiles (70–140, replaces per-tree) — **RISK** (per-tree
+  sway/yaw/scale variation lost; bead crownDir becomes per-TILE radial — verified
+  `NaniteResolve.ts:810-826`: crownDir derives from the instance origin, identity for
+  tiles). Gate: side-by-side crops + sway A/B video + user sign-off. Keep BEHIND the
+  cheaper levers; its baseline motivation survives reconciliation (correction 2 made the
+  shelf worse, not better).
+- doc 04 §4.5 voxtaucap 12→8 — **IMPROVING** (strictly finer everywhere); pure spend,
+  post-voxbocc cost UNKNOWN (pre-era extrapolation +8..14 obl) ⇒ P1 before any funding
+  decision. Cap-vs-errorK equivalence is approximate (block partition granularity) — P3
+  discriminates.
+- doc 04 §4.6 occ==0 crown-brick prune — **IMPROVING** (removes phantom fill absent from
+  the mesh ground truth); counter first, close if <1%.
+- REJECTED-BY-POLICY list unchanged and re-affirmed (voxlodk<1, aggdist<140, voxtaucap>12,
+  leaflodk<0.4, ftcell>0.75, instminpx, dpr — attribution instruments only).
+
+### Surviving lever table (merged, ranked; +ms = saved, −ms = deliberate quality spend)
+
+| lever | mechanism | eye | obl | aer | quality | probe | effort | confidence |
+|---|---|---|---|---|---|---|---|---|
+| tile-ring-block-nearcull (=04§4.4) | block-granular near cull for fartile heads: drop cluster when distC+r < aggdist−maxCrownReach | +0.3 | +2 (1–3) | +0.7 | IMPROVING (seam shotdiff gate) | `?ftnear=140` diagnostic bounds it (§Open 1 / 04-P4) | S–M | mech CONFIRMED, ms PLAUSIBLE |
+| coarse-occupancy cell-accurate re-bin (04§4.2) | stamp child OCCUPIED CELLS not whole child boxes → masks ~8× tighter/level → carve gate engages, phantom fill dies | +0.5–1 | +2–5 | +0.5–2 | IMPROVING (crop gate + sign-off) | P5 popcount/carve-rate counters first | M | mech CONFIRMED, ms PLAUSIBLE |
+| occ==0 crown-brick prune (04§4.6) | FarTiles-style prune in voxelizeCrown emit (occ-bits-empty only, NOT the w≤0.15 density prune) | 0 | 0–1.5 | 0 | IMPROVING (phantom-only) | P5 counter; close if <1% | S | mech CONFIRMED |
+| cut-telemetry | boot print maxExt/cellSize/per-level occ+blocks/T(L) + `?nanitedbg=lod` shots | 0 | 0 | 0 | IDENTICAL | rides any probe | S | CONFIRMED |
+| voxnear 60 + leaflodk 0.4 (04§4.3) | push handoff out 15 m; kill the biggest-px vox bricks; mesh ring measured cheap | +1–2 | +2–4 | ~0 | **RISK** (band-end crown eyeball; the 60/0.25 precedent) | 04-P2 A/B + 55–60 m crops | S | PLAUSIBLE |
+| pertree-ring-octave (`?voxlodkring=2`) | scoped errorK=2 for crown pyramids only (tiles untouched); band L0/L1/L2, bricks 6–12 px, resident dead L0 = no rebuild | −1 | −6 (±2) | −0.5 | IMPROVING (spend) | §Open 2; gate on cost + tile-counter invariance | S | PLAUSIBLE (slope risk >1.71) |
+| tiered-mid-tiles (140–300 m ring) | second tile tier 32 m/0.375–0.5 m cells → 1.5–2 m ring bricks, kills the 24–45 px shelf | −0.5 | −3 | −1 | IMPROVING (spend) | §Open 5 ftcell=0.5@100k look/cost | L | PLAUSIBLE |
+| voxtaucap 12→8 (04§4.5) | runtime τ cap ⇒ every transition ×1.5 farther | −2–4 | −8–14 (post-voxbocc UNKNOWN) | ? | IMPROVING (spend) | 04-P1 A/B + crops; P3 cap≡errorK check | S | mech CONFIRMED, cost UNKNOWN |
+| mid-ring merged tiles 70–140 (04§4.1) | replace per-tree ring with τ-matched 32 m/0.25 m tiles; collapses ring clusters | +0.5–2 | +4–8 | ~0 | **RISK** (sway/variation loss, per-tile bead field) | after ftnear bound + post-voxbocc aggdist=60 re-pin (§Open 6) | L | PLAUSIBLE |
+
+### Killed claims
+
+- **doc 04 §1/§2.4 FarTiles numbers** (0.5 m cells / 2 m L0 bricks / T(L1)=236 m / L0 band
+  94–236 m / 30 px bricks + 7.5 px cells at 94 m) — wrong config read; code passes
+  ftcell=0.75 (`ForestScene.ts:317`) ⇒ 3 m bricks, T_tile(1)=354 m, 45 px / ~11.3 px at 94 m.
+- **doc 04 "tile levels L3/L4 … dead build weight"** — no tile L4 exists; L3 (3×2×3) is
+  the K_FLOOR stop, built but in-scene unreachable.
+- **doc 04 "Grid ladder 46→23→12→6→3"** — 45 bricks/axis at L0.
+- **doc 04 §2.4 "exactly TWO levels render in-band" as a general fact** — holds only for
+  its assumed maxExt=8/A.w=1; 2–3 levels in general (see correction 5).
+- **memory/`nanite-voxel-vs-ue5-structural-gap` "errorK=3 shipped"** — code ships errorK=1
+  (`VoxelizeCrown.ts:87`; the :80-86 comment documents the 3→2→1 walk + the rested A/B).
+  Doc 04 §5.6 already flagged this; now code-confirmed.
+- **`NaniteCull.ts:843` "?voxtaucap DEFAULT 8 px"** (code comment, not a doc) — stale;
+  default is 12.
+
+### Note for the master plan
+
+The brief's doc-10/11/12/13 claims (gi/csm null, HZB order, off-screen sphereOccluded gate,
+noleaves overstatement, scatter COUNT-bound) are OUTSIDE this area's verify scope and remain
+unverified here; nothing in this section depends on them. The one shared dependency — that
+the oblique gap is vox-COUNT-shaped — is independently supported by this area's verified
+cluster counters (9185 obl vs 661 aerial) and the errorK/voxlodk slope data.

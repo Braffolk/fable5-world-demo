@@ -416,3 +416,136 @@ baselines before candidates, same session, shots archived.
 - [The Future of Nanite Foliage — Unreal Fest Stockholm 2025](https://www.youtube.com/watch?v=aZr-mWAzoTg)
 - In-repo UE 5.8 shader study copy: `docs/perf-runs/Nanite-UE5-shaders/` (README = file origins)
 - Prior-art briefs + synthesis: `docs/perf-runs/prior-art/*.md` (14 briefs; IDEAS.md portfolio — re-ranked by this doc's premise audit)
+
+---
+
+## Reconciliation & verification (2026-07-02, post-limit continuation)
+
+Adversarial verify pass over this doc + siblings `01-ue5-nanite-culling-raster.md` and
+`02-ue5-materials-shading.md` (the duplicate-fleet coverage of this area). Every load-bearing
+file:line below was re-read against the actual sources; every ≥1 ms number re-derived from the
+scratchpad JSONs (`fresh-*.json`, medians recomputed from the raw `gpu` arrays). Sibling docs
+carry a pointer blockquote; this section is the merged truth for the area.
+
+### Measured anchors re-verified (recomputed from raw JSONs)
+
+| Claim | Recomputed | Verdict |
+|---|---|---|
+| voxf2b=1 control +5/+6/+16 | `fresh-voxf2b-ctl` 41.0/49.4/32.8 vs `fresh-bead-v2-base` 36.1/43.2/16.8 = **+4.9/+6.2/+16.0** | CONFIRMED |
+| voxwaves=4 vs f2b ~0/−0.6/−4.7 | `fresh-voxwaves4` 41.1/48.8/28.1 vs f2b-ctl = **+0.1/−0.6/−4.7** | CONFIRMED |
+| voxbocc −17.2 eye / −6.0 obl | `fresh-voxbocc` 18.9/37.2/16.5 vs bead-v2-base 36.1/43.2/16.8 | CONFIRMED |
+| leaf decode ≈ free (leafcheap=all ceiling <1 ms) | `fresh-leafcheap` 35.2/42.4/16.3 vs same-session bead-v2-base = −0.9/−0.8/−0.5 | CONFIRMED |
+| lighting/shadows ≈ free at canonical poses | `fresh-attr-flat` 29.9/39.3/17.6 and `fresh-attr-noshadow` 32.6/37.0/15.6 vs SAME-SESSION `fresh-final-rested` 31.2/38.8/14.6 — all deltas within the ±2 ms floor. (Compared against the wrong-session bead-v2-base they'd look like 4-6 ms; session pairing matters.) | CONFIRMED |
+
+### Corrections
+
+1. **The "UE5 32-bit fallback" story — doc 02 §2.1 KILLED, doc 01 §2.6 confirmed, this doc's
+   table row 1 rephrased.** NaniteWritePixel.ush verified: `DEPTH_ONLY` → 32-bit
+   `InterlockedMax(OutDepthBuffer…)` (line 28); `COMPILER_SUPPORTS_UINT64_IMAGE_ATOMICS` →
+   `ImageInterlockedMaxUInt64` (line 31); **otherwise `#error UNKNOWN_ATOMIC_PLATFORM` (line
+   33)**. There is NO shipping 32-bit visibility-buffer fallback and NO "separate payload
+   store" anywhere in the file — doc 02's "the fallback is depth-only InterlockedMax +
+   separate payload store, i.e. OUR architecture" is false. The depth-only path is the
+   shadow/VSM *target mode*, not a vis-buffer fallback. The correct validation of our
+   `depthKey24<<8|id8` idiom is the **experimental** Voxel/ScatterBricks.usf:10-23 (verified:
+   `(DepthInt & 0xffffff00) | (TriIndex & 0xff)` into a 32-bit `InterlockedMax`). Net verdict
+   unchanged — election re-architecture stays closed — but for the corrected reason: Epic
+   *refused* to solve 32-bit for meshes and only reached for our exact scheme in the voxel
+   experiment.
+2. **L1's open risk is CLEARED — effort confirmed S.** kVoxPrefix writes
+   `qVoxRaster[0]=(total,0)` (NaniteCull.ts:661, verified) AND still publishes the whole-list
+   indirect args (`split2D(voxRasterDispatch, total)`, NaniteCull.ts:663, verified); the
+   whole-list `kVoxScatter` guards on `qVoxRaster[0].x` (NaniteVoxelRaster.ts:1426, verified).
+   So `?voxf2bone` really is "fanout on + one whole-list dispatch", no new kernels. Bucket
+   overflow clamps identically in both paths (QVOX_CAP at NaniteCull.ts:652-655, drop-guard
+   :704) — loss parity holds.
+3. **L2's quality class reclassified: improving → RISK.** The change is only reachable through
+   removing 6-step-exhaustion false fills (verified NaniteVoxelRaster.ts:1375-1381) — far
+   sparse-brick pixels flip fill→miss, i.e. far crowns thin slightly. Arguably more correct,
+   but it is a visible far-band change in exactly the artifact family the user calibrated
+   errorK on. Under the user law that is RISK: gate = `?voxoshr=0` revert flag + far-band
+   oblique crops + explicit user sign-off + shotdiff report. No strictly-identical variant
+   exists (entry-point-dependent exhaustion), as the lever text already admitted.
+4. **Two levers from sibling 01 were missing from this doc's table — added** (see updated
+   table below): **L9** = 4×4-texel occlusion windows one-two mips FINER (UE5
+   `MipLevelForRect`/`GetMinDepthFromHZB(bSample4x4)`, NaniteHZBCull.ush:40-43/101/135-172,
+   consumed with footprint=4 at NaniteCullingCommon.ush:599-602 — all verified) vs our 2×2 at
+   diameter-fits-one-texel (NaniteHzb.ts:175-176/187-198; same idiom NaniteVoxelRaster.ts:
+   636-659 block + 846-879 voxbocc brick — all verified). **L10** = zero-coverage cluster cull
+   at emit (`bOverlapsPixelCenter`, NaniteHZBCull.ush:91, consumed NaniteCullingCommon.ush:604
+   — verified; "~5% fewer clusters" per Epic's comment). Both Class IDENTICAL with shotdiff-0
+   gates. Note L9's oblique estimate in doc 01 (−1.5..−4) double-counts with L1/L3's
+   buried-vox pool — this doc's work model says the oblique vox residual is vox-behind-vox,
+   which a finer WINDOW alone cannot see (the pyramid is mesh-only at scatter time); banded
+   down to 0.5-2 obl and gated on the brick-skip counter.
+5. **Doc 01 L5 (adaptive rect walk for ≤4 px tris) demoted, resolving the sibling
+   contradiction in this doc's favor.** Mechanism real (RasterizeTri_Adaptive verified,
+   NaniteRasterizer.ush:292-299) but its own estimate (0.3-1 ms eye) is under the 2 ms
+   apparatus floor and 12-base-raster measured the inner-loop family dead. Not in the
+   surviving table; revisit only if a future change makes the base per-row term dominant.
+6. **`?reskeep` (sibling 02's one perf lever) verified still LIVE** — the default is still
+   keep-ON (`keepOn = q.get('reskeep') !== '0'`, NaniteResolve.ts:286-291; runtime gate
+   keepFullU at :951). The memory-note "reskeep shipped" refers to the flag/instrument, not a
+   default flip. Doc 02's P-A within-boot A/B stands, owned by 16-resolve-and-post; expected
+   0-1.5 ms, Class IDENTICAL (keep≡1 empty-map invariant) + shotdiff-0.
+7. **"Main HZB is full-content (built after dispatchVoxel)" — mechanism verified with the
+   missing link.** NaniteFrame.ts:481 alone doesn't show it; dispatchVoxel is nested INSIDE
+   `raster.world1` (NaniteRaster.ts:1423, verified), which runs at NaniteFrame.ts:475, before
+   `hzb.build` at :481. Claim stands.
+8. **L6 quality nuance tightened.** Only the pad-nearestZ-by-one-texel variant is Class
+   IDENTICAL (padding only ever keeps more). The "evaluate with the unjittered VP" variant is
+   NOT strictly conservative on its own (cull VP ≠ raster VP by a sub-pixel offset) — ship it
+   only WITH the padding. Jitter-free UE5 cull confirmed by grep: `Jitter` appears only in
+   velocity-export comments (NaniteDepthExport.usf:130, NaniteExportGBuffer.usf:99).
+9. **Cite audit:** all other load-bearing cites in this doc re-verified true, including
+   BlockBounds (Voxel/Voxel.ush:10-31), RayCastBrick_L2 + `MaxTests = 3*16+3*4`
+   (Voxel/Voxel.ush:500-588, :521-522), conservative-depth HW path
+   (RasterizeBricks.usf:12-24 `SV_DepthLessEqual`, :149 `ENABLE_RE_Z`), 12-bit occupied-bounds
+   pack (RasterizeBricks.usf:62-90; TileBricks.usf:57-83), per-tile insertion sort
+   (TileBricks.usf:160-174), depth-bucket-major bin allocation (NaniteRasterBinning.usf:241,
+   :354-390, :461-472), two-pass enum + occluded-instance recording + bitmask re-enqueue
+   (NaniteCulling.ush:10-11; NaniteInstanceCulling.usf:169/400/361;
+   NaniteClusterCulling.usf:563-600; NaniteCullingCommon.ush:620-662), DepthToBucket
+   (NaniteClusterCulling.usf:314/854), SGGX voxel shading (NaniteVertexFactory.ush:902/917),
+   our K-barrier dispatch shape (NaniteVoxelRaster.ts:1482-1486), pre-write guards
+   (:1266-1267, :1398-1402; NaniteRaster.ts:963-975), full-cube Phase A/B footprints
+   (:717-772, :1288-1298), BRICK_MAX_EXT=64 (:113), HW 3-corner fetch
+   (NaniteRaster.ts:1123-1128), shadow vox-skip (:541-549), emit-time single-phase occlusion
+   (NaniteCull.ts:917-925), phase-2 scaffolding (REJ_CLUST_CAP NaniteCull.ts:99, kRasterArgs2
+   :482-488), `gi:null`/`csm:null` (ForestScene.ts:457/459), MAX_BRICKS_PER_CLUSTER=128 +
+   BRICK_DIM=4 (VoxelBrick.ts:81/:61).
+
+### Surviving lever table (merged, post-verification)
+
+| # | Lever (mechanism 1-liner) | eye/obl/aerial ms | Quality | Probe (discriminator) | Effort | Conf |
+|---|---|---|---|---|---|---|
+| L1 | Barrier-free F2B: f2b fanout + ONE whole-list dispatch (`?voxf2bone`) | 0-0.5 / 1-3 / 0-0.5 | IDENTICAL | P-B; engagement: `nanite.voxBrickWrites` −≥25% + bucket-range dump | S | med |
+| L3 | Vox two-pass deferral (MAIN/POST on the vox stack, defer-not-drop) | 1 / 3 / 1 | IDENTICAL | P-A (`voxf2b=1,voxf2bk=2[,voxwaves=2]`) first, then `?voxtwopass` A/B | M | med |
+| L9 | 4×4 occlusion windows 1-2 mips finer (HZB + voxOccPyr block/brick) | 0.5 / 0.5-2 / 0.3 | IDENTICAL | `?occwin=4`; brick-skip counter +≥20% AND −≥2 ms obl | S-M | med |
+| L2 | Occupied-bounds shrink (BlockBounds port), ray path only | 0.3 / 1.5 / 0.3 | **RISK** (far crowns thin; crops + user sign-off + `?voxoshr=0`) | P-E | M | med |
+| L4 | Raster-bin the vox monolith (flat/ray kernel split) | 0.5 / 2.5 / 0.3 | IDENTICAL | P-C (`voxcell=0` slope diagnostic) BEFORE building | L | low-med |
+| L6 | Jitter-invariant cull: pad nearestZ one HZB texel (± unjittered VP) | 0 / 0 / ~1 med, aerial p95 −2..4 | IDENTICAL (padding variant ONLY) | P-D (`ablate=taa`) then `?occleps` A/B | S-M | med |
+| L7 | Mesh two-pass occlusion (record rejects, re-test vs fresh HZB) | ~0 iso; live p95 lever | IMPROVING (fixes disocclusion; static shotdiff-0) | doc-01 P-L1a counter-only build, then live slot histogram | L | med |
+| L5 | HW vertex 1-fetch parity | 0.7 / 0.1 / 0 | IDENTICAL | `?hw1fetch` A/B at eye | S | med |
+| L10 | Zero-coverage cluster cull at emit (pixel-center rect) | 0.3-1 / 0.3-0.8 / ~0 | IDENTICAL (outward-rounded only) | new flag A/B + shotdiff-0 | M | low |
+| L8 | Within-cluster brick sort by front-slab key | 0.2 / 0.8 / 0.2 | IDENTICAL | only if L1 shows ordering pays | M | low |
+| — | `?reskeep=0` default flip (owned by 16-doc) | 0-1.5 / 0-1.5 / ~0 | IDENTICAL (keep≡1) | doc-02 P-A within-boot `setKeepFull` A/B | S | med |
+| — | SGGX stochastic voxel normal from SPREAD (owned by resolve/quality) | ~0 perf | IMPROVING (crops + user sign-off; jitter-stable noise) | doc-02 P-B crops | M | med |
+
+Double-counting warning unchanged: L1/L3/L8/voxbocc share the buried-vox pool (~2-6 ms obl);
+L2/L4 share the per-brick constants; **L9 also overlaps the buried-vox pool** at oblique.
+Realistic combined in-family ceiling stays ≈ 4-8 ms at oblique.
+
+### Killed claims
+
+- **Doc 02 §2.1:** "UE5's 64-bit fallback is depth-only InterlockedMax + separate payload
+  store, i.e. OUR architecture" — no such path exists; `#error UNKNOWN_ATOMIC_PLATFORM`
+  (NaniteWritePixel.ush:33). The payload-store idiom exists only in experimental
+  Voxel/ScatterBricks.usf.
+- **This doc, table row 1 phrasing:** "depth-only 32-bit InterlockedMax otherwise" as a
+  vis-buffer fallback — depth-only is a target MODE (shadows/VSM), not a fallback tier.
+- **Doc 01 L5 as a standalone lever:** adaptive rect walk — real mechanism, sub-floor
+  expected ms, family already measured dead (12-doc). Demoted to drawer.
+- **Doc 01 L2's oblique upper band (−4 ms):** over-counts — the finer window cannot see
+  vox-behind-vox (pyramid is mesh-only at scatter); banded to 0.5-2 obl pending the
+  brick-skip-counter probe.

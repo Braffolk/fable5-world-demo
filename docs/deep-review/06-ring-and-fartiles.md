@@ -1,3 +1,4 @@
+> Reconciled into 15-fartiles.md §Reconciliation & verification (2026-07-02); this doc kept for detail.
 # 06 — The 60–140 m ring + FarTiles aggregation
 
 Reader 06. Scope: `src/nanite/FarTiles.ts`, `FarTilesSplat.ts`, `FarTiles.worker.ts`, the

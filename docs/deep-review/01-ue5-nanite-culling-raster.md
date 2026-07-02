@@ -1,3 +1,5 @@
+> Reconciled into 19-ue5-and-prior-art.md §Reconciliation (2026-07-02); this doc kept for detail.
+
 # 01 — UE5 Nanite reference: culling + rasterization, mapped onto ours
 
 Reader: deep-review 01. Sources: the 54 real UE5 shaders in `docs/perf-runs/Nanite-UE5-shaders/`

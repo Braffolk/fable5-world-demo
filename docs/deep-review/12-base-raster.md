@@ -378,3 +378,27 @@ an overstated f2b. The oblique −11..13 ms gap is NOT in this area (unchanged c
 - **[canon frame-order] "shadows (cached at static poses) → shadowHalf"** — those passes do not exist in the forest scene (correction #1).
 - **[carried from earlier memory, re-killed] "base is TRIANGLE-EMIT-bound / 46M tris / 97% sub-pixel"** — bark 1-root collapse re-confirmed in boot logs (`[forest] c0: bark lod0 263→root 1 (550cl/9lvl)`, fresh-voxbocc consoleLines); tri-swing disproof re-verified.
 - **[both] `fresh-base-vc*.json` 5.4-5.7 ms runs** — vcompact empty-scene artifact re-confirmed (hwTris=0 in both files); not data.
+
+### Verify stamp (post-limit continuation, independent second pass)
+
+Every load-bearing file:line cite and every JSON-derived number in this section was
+independently re-verified against HEAD `cd14cc2` (code unchanged since `4ca9cd9` — the
+delta is docs-only): `ForestScene.ts:70/:312/:388/:457-459`;
+`NaniteFrame.ts:85/:205/:244/:260/:507` (cullOverlap kill confirmed: `:260` requires
+`shadow?.cullPrepass`, forest `csm:null` ⇒ `shadow=null`);
+`NaniteCull.ts:307/:317-318/:843/:852-859/:917-925/:741-744/:1044-1046`;
+`NaniteHzb.ts` 12-level chain (1134×737 halving → 1×1 = 12) + perspective
+`sphereOccluded` confirmed WITHOUT the `|ndc|<1` gate (returns `dist>2r ∧ nearClip.w>0 ∧
+centerClip.w>0 ∧ nearestZ>maxZ`, edge-texel clamp only) while ortho HAS `onScreen`
+(`:246-247`); `NaniteRaster.ts:343/:391/:550-555/:697-703/:963-989/:1015/:1046-1057/`
+`:1123-1128/:1177-1183`; `NaniteFetch.ts:124/:130/:451` (corner is a build-time literal;
+`fetchWorldVertByIndex` exists; HF window-grid has no index buffer);
+`GeometryRegistry.ts:123-133`; `WorldRegistry.ts:306`; `NaniteVertexCache.ts:56-64`;
+`VoxelBrick.ts:79-80` (word-7 low byte = brickCount). Counters re-extracted from the
+JSONs and all match: voxbocc eye 22,897 cl / 5,935 vox / 4.428M tris / 1.099M hw;
+oblique 11,614 / 9,185 (79.1%) / 1.271M / 82.9k; aerial 661 all-vox / 44,693 / hw 0
+(44,693/661 = 67.6 bricks/cluster); noleaves 2.093M/11,375/234k · 2.105M/11,935/175k ·
+0.558M/3,180/38.5k; vc/vc2 hwTris=0 (artifact confirmed); bark `lod0 263→root 1` boot
+lines present. Derived arithmetic checked: oblique vox pseudo-tris 9,185×67.6 ≈ 0.62M ⇒
+real mesh tris ≈ 0.65M; eye default−noleaves = +2.33M visTris / +0.865M hwTris.
+**Zero corrections needed on the second pass; the section stands as written.**

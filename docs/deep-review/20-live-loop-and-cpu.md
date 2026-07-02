@@ -295,3 +295,107 @@ stutter counter at >50 ms.
    60 Hz, all slot math (and "p50 25.0 = 3 quanta") re-derives; the probe should record the
    measured refresh (MeasureHarness.measureRefresh exists, MeasureHarness.ts:188-202 — surface
    it in the JSON).
+
+---
+
+## Reconciliation & verification (2026-07-02, post-limit continuation)
+
+Adversarial re-verification of this doc + sibling `21-terrain-streaming-boot.md` (the verify
+fleet died mid-run; this section is the completed pass for the live-loop+terrain area).
+Method: every load-bearing `file:line` re-read from code; every numeric claim recomputed from
+the session JSONs (`node -e`, no GPU). Verdict: **both docs survive essentially intact** — all
+mechanism claims confirmed; 6 corrections, no killed levers.
+
+### Corrections made
+
+1. **PA5 (capRejects "30–32 on every pose") — range corrected to 23–32.** Recomputed:
+   milestone eye/oblique/aerial = 31/32/29; final-rested = 32/32/**23**. Conclusion UNCHANGED:
+   even at 23 rejects, `good.length` (9) < half of 32, so probe-fresh-stutter.ts:211-212 falls
+   back to ALL frames — the filter is dead in every checked run.
+2. **§Work model (final-rested 4-slot runs "158 singletons + 11 pairs")** — actual run-length
+   histogram is {1: 158, 2: 11, **3: 1**}. "No periodic banding" conclusion unchanged.
+3. **PA4 sharpened (verified to the float).** rAF deltas in this Chrome are 0.1 ms-quantized;
+   the 4-slot slot value lands at 33.3–33.4 ms. fresh-final-rested has **183** 4-slot frames,
+   **77** at ≥33.4, and the 51 "spikes" are the subset whose raw delta cleared `> 33.4` (24 of
+   them by float epsilon: raw 33.40000000000873). All 51 span 33.4–34.3 ms, 0 frames >50 ms —
+   confirmed ordinary 4-slot frames, and the counter samples an arbitrary ~40% of them because
+   the threshold sits exactly ON the slot edge. Probe edit (iii) stands.
+4. **PA6 heap quote** — 5275.1 MB is fresh-final-rested; the milestone run's floor is
+   5520.6 MB. The "5.3–5.5 GB" band already covers both; cite the run when quoting.
+5. **Cite nit**: the "~100 timed contexts/frame" comment is Engine.ts:216-218 (the resolve
+   block is 219-239).
+6. **Sibling doc 21 "≤64 resident tile meshes"** — 64 is `clipmapMaxTiles` (the DESIRED-set
+   bound); the reserved pool is `maxTiles + ceil(maxTiles/2)` = **96 slots**
+   (WorldRegistry.ts:983-988), and lazy-evicted stragglers may legitimately occupy up to 96
+   during motion. The ~0.5–2 ms terrain-scene EST is unchanged (probe 3 still pins it). Also:
+   the noleaves boot floor band is 29.3–30.2 s (fresh-base-vc = 29.3).
+
+### Contradictions resolved (canon vs sibling vs other-fleet docs)
+
+- **doc 10's `gi:null`/`csm:null` claim — CONFIRMED in code and now canon.**
+  ForestScene.ts:457-459 passes `gi: null, csm: null` → NaniteFrame.ts:244 (`shadowOn =
+  … && world.csm !== null`) is false → the nanite-shadow producer, ShadowHalf (NaniteFrame.ts:267)
+  and GI never exist in ANY canonical measurement. Consequence for the attribution ledger:
+  **"resolve lighting+shadows ≈ FREE" must be read as "the shadow/GI systems are ABSENT at the
+  canonical config", not as measured-free headroom.** A world-scene shadow profile is unpriced.
+- **doc 20 PA3 ↔ doc 21 PA1 agree** (independently verified): the forest scene has no terrain
+  clusters, no TerrainStreamer, no DagWorker; `Heightfield.generate` exists only to validate
+  resolve bindings (ForestScene.ts:437-446). Terrain = 0.00 ms in every canonical number, and
+  noleaves OVERSTATES the trunk share (bark maxDist stays 2000 because the fartiles clamp at
+  ForestScene.ts:388 is inside the `!noLeaves` fartiles block at :312).
+- **live≈0.6–0.7× lore ↔ PA2 slot model**: consistent; the slot mixture {1:28, 2:451, 3:121},
+  mean vsync residual 0.181 ms, cpu.update 0.019 / cpu.submit 1.118 (p95 1.5, max 2.2),
+  0 longtasks, visTris live p50 4.377M vs isolated eye 4.442M — ALL recomputed exact.
+  ACF claims verified to 2 dp (voxbocc aerial lag-3/6 = +0.28/+0.35; final-rested oblique
+  lag-1/3/6/7 = +0.36/−0.54/+0.41/+0.40; milestone |ACF| ≤ 0.2). ablate-post3 aerial
+  first frames 6.5/11.5/9.5 confirmed.
+- **Boot eras (doc 21 PA2) verified across all 56 JSONs**: pre-worker-splat 98.8–106.4 s
+  (fartiles "built in 35–43 s" single-threaded, e.g. final-rested 41 672 ms); post-splat
+  61.0–74.4 s (worker splat 6.1–6.6 s + main-thread emit/pyramid 3.5–4.1 s); noleaves floor
+  29.3–30.2 s; tree-count-flat confirmed (61.3 s @ 4k vs 62.9 s @ 200k, same era).
+
+### Quality-lens audit (user law: IDENTICAL / IMPROVING / RISK)
+
+All doc-20 levers touch no pixel path → IDENTICAL stands. Doc 21: B1 IDENTICAL **with its
+named gate** (byte-identical first-frame shot, probe 2); **B2/B3 must carry the same
+byte-identical-shot gate** (worker fan-out preserves emit order by construction — FarTiles
+slot idiom — but the gate makes it proof, not intent); B4/B6/S1 IDENTICAL; **B5 stays RISK**
+(user-visible far-field pop-in at boot; gate = explicit user sign-off + a controlled reveal).
+One functional (not visual) risk re-verified: release-staging-arrays must land AFTER the last
+`flush()` consumer — `appendBricks`/`attachHeightDagTile` write into the CPU staging arrays
+(GeometryRegistry.ts:1012-1021, :1895-2017), so the audit in the lever is mandatory.
+B6 corrected: the −2–4 s overlap is event-loop-bound (the CPU chunk is synchronous main-thread
+work; an in-flight `Heightfield.generate` only progresses between sync stages) → book −1–4 s,
+fully realized only alongside B2/B3.
+
+### Surviving lever table (this area)
+
+| lever | mechanism | ms eye/obl/aerial | boot/other | quality | probe | effort | conf |
+|---|---|---|---|---|---|---|---|
+| pose-complete-live-milestone | POSE_PATH live segments at oblique/aerial → pins r at worst pose | 0 (re-aims ledger, worth ~5 ms of target) | — | IDENTICAL | probe 1 | S | high |
+| dvfs-duty-discriminator | cooldownMs sweep 0/10/50/200 → separates governor from renderer | 0 (may delete a phantom 4–9 ms target) | — | IDENTICAL | probe 2 | S | high |
+| gate-timestamps-off-live | `?prof` gate on trackTimestamp + per-frame resolves | 0–0.5 / 0–0.5 / 0–0.5 | — | IDENTICAL | probe 3 | S | med |
+| meter-readback-gate | counters only when consumed | ≤0.05 (dust) | — | IDENTICAL | bundle w/ probe 3 | S | high |
+| release-staging-arrays | null CPU staging post-flush | 0 | −4–5 GB heap | IDENTICAL (audit req.) | heap counter | M | med |
+| B1 artifact-cache | IndexedDB DDC for DAGs/crowns/fartiles | 0 | boot 73.6→~17–19 s warm | IDENTICAL (shot gate) | doc-21 probe 2 | M | high |
+| B2 workerize-crown-voxelize | three-free voxelize core on 8-worker pool | 0 | −27 s cold | IDENTICAL (shot gate) | doc-21 probe 1→2 | M | high |
+| B3 workerize-tree-dags | 'dag' kind in DagWorker; fan 40 builds | 0 | −10–14 s cold | IDENTICAL (shot gate) | doc-21 probe 1→2 | S-M | high |
+| B4 veglib-trees-only | skip non-canopy pools/atlases in forest | 0 | −3–6 s | IDENTICAL | boot stamps | S | high |
+| B5 progressive-far-field | interactive before fartiles append | 0 | −10 s to interactive | **RISK** (transient; user sign-off + reveal) | shotdiff + sign-off | M | med |
+| B6 overlap-gpu-cpu | heightfield GPU concurrent w/ CPU stages | 0 | −1–4 s (needs B2/B3 for full) | IDENTICAL | boot stamps | S | med |
+| S1 brick-slot-pool + 3-free emit | tile-pool idiom for bricks; off-thread tile emit | 0 (enabler for doc-06 L3) | hitch-free streaming | IDENTICAL | doc-21 probe 5 | M | high |
+
+Cross-lever rulings re-affirmed: **coalesce-submits is live-NEUTRAL** (queue never starves
+between submits; isolated-hygiene only); doc-15 L5 ⊂ B1; the doc-06/15 "256 MB brick cliff"
+remains UNVERIFIED on this device (adapter advertises 4 GB max binding) — doc-21 probe 4 gates
+any design that assumes it.
+
+### Killed claims
+
+- "capRejects = 30–32 on every pose of every run" (this doc, PA5) — 23 on final-rested aerial;
+  verdict (dead filter) survives.
+- "≤64 resident tile meshes" (doc 21) — pool is 96 slots; 64 is the desired-set bound.
+- "lighting+shadows ≈ FREE (bankable headroom)" (session attribution, cited via doc 10) — the
+  systems are ABSENT at the canonical config (`gi:null`/`csm:null`, code-confirmed); nothing
+  was measured "free". Re-price on the world scene before any shadow/GI planning.
+- No other claim in either doc failed verification.

@@ -442,3 +442,20 @@ with both docs and the premise audit.
   lever unchanged.
 - Oblique foliage pool "21.8 ms" (13 premise 1) — reproduces as 22.0 (noleaves-now
   oblique med = 15.2, not 15.4); immaterial to any verdict.
+
+### Verification status (post-limit adversarial re-run, completed)
+
+The verify pass that died mid-run was independently re-executed end-to-end on this
+section itself: every file:line cite above re-read in code (NaniteVoxelRaster.ts,
+VoxelBrick.ts, NaniteCull.ts, NaniteCommon.ts, NaniteRaster.ts, NaniteFrame.ts, Tsl.ts,
+vendored NaniteHZBCull.ush/NaniteWritePixel.ush/NaniteCulling.ush), every median and
+cluster delta recomputed from the scratchpad JSONs (bead-v2-base 35.95/43.05/16.8;
+voxbocc 18.8/37.2/16.4; aggdist60 obl 32.35 @ 4429; voxlodk07 36.3 @ 4905; voxlodk085
+41.1 @ 6955; f2b-ctl 40.95/49.25/32.8; waves4 41.1/48.8/28.05 with NO voxbocc in extra;
+noleaves-now 16.8/15.2/11.05), pyramid level count re-derived (12 at 2268×1473), and the
+L1 dead-mask proof re-traced (ray-eligible = cellOk∧area>64 never reaches flatPath
+:1408; masks armed at area≥16 with no upper bound :938). ALL corrections, kills, and the
+V1–V9 table SURVIVE with zero new kills. One precision caveat: voxClusters is ±3-stable
+at OBLIQUE (9185–9188) and AERIAL (659–661) but ±21 at EYE across runs (5893/5912/5935,
+~0.7%) — immaterial to the slope fit (eye Δ = −3586) but do not quote eye counts as
+run-stable.
