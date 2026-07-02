@@ -610,6 +610,33 @@ Hazards/notes (surfaced):
 - First gate run used ablate=taa stills for cross-boot identity — WRONG recipe (~5-6%
   ambient floor, §5m); cross-boot identity gates must use TAA-ON stills (D0 family floor).
 
+## 5q. CODE CLEANUP (commit fa38f68) — proven-worse levers removed, pre-beautification (2026-07-02)
+
+User-directed cleanup pass before the beautification arc. REMOVED (all recoverable via git;
+each lost its A/B): **?f2b** per-pixel early-out (null, §5o) + **?noguard** naive-FreePipe
+(atomic-contention refuted) in NaniteRaster; **?voxdither** see-through stipple + coverHash +
+COVER_* (red-list quality knob; +18.7ms election explosion) + **?voxsgb=1|2** virtual-group
+Phase-B + live-brick compaction (+2..4 eye for −1 obl, d66d53c) in NaniteVoxelRaster. Net
+−152 lines. Tombstone comments left at each decl site.
+
+KEPT deliberately (checked, not overlooked):
+- voxf2b/voxwaves bucket machinery — the SUBSTRATE of shipped ?voxprev (deps.voxPrevEnabled
+  implies voxF2bEnabled) and its exact A/B controls. NOT dead despite the K16 postmortem.
+- voxlod ladder knobs (voxlodk/levels/sparse/shell + VOXLOD_CFG) — live config; doc-14's
+  "dead" verdict was about the superseded formula only; these are the beautification levers.
+- All shipped-default reverts (respass, voxprev/voxprevlvl, voxbocc, voxocc/voxoccl, occg,
+  voxmaskray, voxcell, voxrecip, voxbead/voxjit, coalesce, dvclear, hwrt, wgcache, vcompact,
+  resclasses, simband/lodpow), all instruments (ablate, nandbg, noleaves, scar, audit, rdbg,
+  voxrdbg, leafcheap, aggdist/voxtaucap/leaflodk/ftcell red-list diagnostics, occl, cullfreeze),
+  all world/shadow-arc paths (reskeep, culloverlap, NaniteShadow*, stress) and ?hw1fetch
+  (fetchWorldVertDyn — terrain-scene potential, §5o).
+
+GATE PASS: same-recipe stills at 4 poses in the D0 ambient family (0.57/0.22/0.39/0.48 —
+the f2b-identity profile); aerial counters bit-identical; eye/obl visTris inside the known
+cross-boot jitter wobble (ctl1 4452141 / ctl2 4450151 / cleanup 4452369); iso 12.9/16.7/9.3
+canonical. One hazard note: an accidental mid-probe src edit (comment-only) forced one gate
+re-run — the no-src-edits-during-probes rule held.
+
 §5m addendum — flip-verify + live attempt (same day, later session):
 - Flip-verify iso at plain defaults (merged active): eye 13.1 / obl 16.7 / aerial 9.4 —
   matches the §5l full-clock canonical. Same-session iso pair on-vs-off (adverse slot
