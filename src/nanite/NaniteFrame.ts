@@ -79,6 +79,9 @@ export function buildNaniteFrame(
     /** P2: world-space cloud sun-transmittance gate (rode the CSM filterNode before
      *  the sever; the resolve now multiplies it into the sun term directly). */
     cloudShadow?: ((wxz: import('../gpu/TSLTypes').NV2) => NF) | null;
+    /** P4: baked heightfield sun-visibility (FarShadow) — the beyond-clipmap term
+     *  (mountains shade valleys at any distance). Multiplied like cloudShadow. */
+    farShadow?: ((wxz: import('../gpu/TSLTypes').NV2) => NF) | null;
     barkTexA: import('three').Texture | null;
     barkTexB: import('three').Texture | null;
   },
@@ -311,6 +314,7 @@ export function buildNaniteFrame(
     csm: world.csm,
     sunShadows: world.sunShadows,
     cloudShadow: world.cloudShadow,
+    farShadow: world.farShadow,
     barkTexA: world.barkTexA,
     barkTexB: world.barkTexB,
     naniteShadow: shadow,

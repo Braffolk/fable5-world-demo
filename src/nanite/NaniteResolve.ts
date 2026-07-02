@@ -119,6 +119,9 @@ export interface ResolveWorld {
    *  filterNode (pcssFilter × clouds.shadowAt) and reached us through `keep`; now
    *  multiplied into the sun term directly (full-res, NaN-guarded). */
   cloudShadow?: ((wxz: NV2) => NF) | null;
+  /** P4: baked heightfield sun-visibility (FarShadow, 1 bilinear tap) — the
+   *  beyond-clipmap far-field term (mountains shade valleys at any distance). */
+  farShadow?: ((wxz: NV2) => NF) | null;
   /** bark/deadwood texture-array (texA albedo+cavity, texB normal+rough+height);
    *  sampled at the per-mesh layer slice (mesh word 7). null = bark unported. */
   barkTexA: Texture | null;
@@ -1071,6 +1074,13 @@ export function buildNaniteResolve(
         const c = world.cloudShadow(wp.xz as unknown as NV2);
         const safe = c.equal(c).select(c.clamp(0, 1), float(1)) as unknown as NF;
         sf.assign((sf as unknown as { mul(o: NF): NF }).mul(safe));
+      }
+      if (world.farShadow) {
+        // P4: beyond-clipmap terrain shadowing (baked heightfield sun-visibility) —
+        // one bilinear tap, applied at ALL distances (a mountain shades the valley
+        // even when the caster is outside every clipmap ring).
+        const fv = world.farShadow(wp.xz as unknown as NV2).clamp(0, 1) as unknown as NF;
+        sf.assign((sf as unknown as { mul(o: NF): NF }).mul(fv));
       }
       direct = nDotL.mul(sf) as unknown as NF;
     } else if (shadowsOn && world.csm) {

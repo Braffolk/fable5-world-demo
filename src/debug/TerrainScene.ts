@@ -357,6 +357,14 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   const shadowRig = severCsm
     ? { csm: null as unknown as import('three/addons/csm/CSMShadowNode.js').CSMShadowNode }
     : setupSunShadows(sunSky.sun, engine.camera, (wxz) => clouds.shadowAt(wxz));
+  // P4 (shadow arc): baked heightfield sun-visibility — mountains shade valleys at
+  // ANY distance (the clipmap reaches 384 m; this is the far-field term). Re-baked
+  // on ToD edits below. ?ablate=farshadow drops it.
+  const farSh =
+    severCsm && !ablate.has('shadows') && !ablate.has('farshadow')
+      ? new (await import('../gpu/passes/FarShadow')).FarShadow(hf, sunSky.atmosphere)
+      : null;
+  if (farSh) await farSh.init(engine.renderer);
   // cascade cameras drive the per-cascade caster cull in Forests
   forestsRef?.setCSM(shadowRig.csm ?? null);
   (window as unknown as { __laasDbg?: Record<string, unknown> }).__laasDbg = {
@@ -427,6 +435,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
         severCsm && !ablate.has('cloudshadow')
           ? (wxz: import('../gpu/TSLTypes').NV2) => clouds.shadowAt(wxz)
           : null,
+      farShadow: farSh ? (wxz: import('../gpu/TSLTypes').NV2) => farSh.visAt(wxz) : null,
       barkTexA: naniteBark?.texA ?? null,
       barkTexB: naniteBark?.texB ?? null,
     });
@@ -446,6 +455,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     void (async () => {
       await sunSky.setTimeOfDay(t);
       await clouds.refreshShadow(engine.renderer);
+      farSh?.bake(engine.renderer); // P4: sun moved — re-march the far-shadow map
       gi.invalidate();
       post.setTimeOfDay(t);
     })();
@@ -453,6 +463,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   window.addEventListener('keydown', (e) => {
     if (e.code === 'BracketLeft' || e.code === 'BracketRight') {
       void clouds.refreshShadow(engine.renderer);
+      farSh?.bake(engine.renderer);
       post.setTimeOfDay(sunSky.timeOfDay);
     }
   });
