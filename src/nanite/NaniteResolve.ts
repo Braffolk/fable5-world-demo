@@ -36,6 +36,8 @@ import {
   cross,
   dot,
   float,
+  floor,
+  fract,
   getViewPosition,
   int,
   max,
@@ -45,6 +47,7 @@ import {
   positionGeometry,
   screenCoordinate,
   screenUV,
+  sin,
   smoothstep,
   texture,
   uint,
@@ -66,11 +69,11 @@ import type { ProbeGI } from '../gpu/passes/ProbeGI';
 import type { Heightfield } from '../world/Heightfield';
 import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK, CLUSTER_WORDS, MESH_WORDS, readVertex } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
-import { brickNormalTsl, brickWord, BRICK_ALBEDO, BRICK_NORMAL } from './VoxelBrick';
+import { brickNormalTsl, brickWord, BRICK_ALBEDO, BRICK_NORMAL, BRICK_POS_X } from './VoxelBrick';
 import { makeFetch, slotHash } from './NaniteFetch';
-import { hashColor, instRotateDir, instYaw, type NaniteCam } from './NaniteCommon';
+import { hashColor, instRotateDir, instTransformPoint, instYaw, type NaniteCam } from './NaniteCommon';
 import type { NaniteVisBuffers } from './NaniteRaster';
-import { elemU, toF, uniformF } from './Tsl';
+import { bcU2F, elemU, toF, uniformF } from './Tsl';
 import type { BufOf, UV2, UniformF } from './Tsl';
 
 export interface NaniteResolveHandles {
@@ -247,6 +250,24 @@ export function buildNaniteResolve(
   // instead of brick[0]-of-the-block. Fixes the per-block flat shading that fused adjacent
   // bricks into giant single-color plates / near-black crowns (2026-07-01 review).
   const voxBrickShade = q.get('voxbn') !== '0';
+  // ?voxbead=k — per-pixel "round normal" for voxel foliage (user: far crowns read as flat
+  // blocky quads — one normal+albedo per brick = piecewise-constant shading). Bends the
+  // shading normal toward the BEAD direction normalize(wp − brickCenterWorld), so every
+  // brick gets ball-like within-brick gradients through the existing wrap+ambient lighting
+  // (the classic SpeedTree crown-normal trick, applied per brick). k = blend weight 0..1.
+  // Costs 3 f32 brick-center loads + ~20 ALU on vox-pass pixels only. 0 = off (exact old).
+  const voxBeadRaw = Number(q.get('voxbead') ?? '0.6');
+  const voxBeadK = Number.isFinite(voxBeadRaw) ? Math.max(0, Math.min(1, voxBeadRaw)) : 0.6;
+  // ?voxjit=a — world-anchored per-cell VALUE jitter on voxel albedo (breaks the few-greens
+  // camouflage tiling of the far field). Hash of floor(wp·1.4) ⇒ ~0.7 m cells, stable under
+  // camera motion (no payload bits needed). a = ± value amplitude. 0 = off (exact old).
+  const voxJitRaw = Number(q.get('voxjit') ?? '0.12');
+  const voxJitK = Number.isFinite(voxJitRaw) ? Math.max(0, Math.min(1, voxJitRaw)) : 0.12;
+  // ?leafcheap=all — ATTRIBUTION LEVER: route EVERY mesh-leaf pixel through the ?resfar
+  // cheap far-leaf path (species tint × quad normal, no makeCtx/gust/3-vert interp). The
+  // measured delta vs default = the exact ceiling of any "make leaf decode cheaper" work
+  // (shade-binning et al) with a real candidate look, not an ugly const color.
+  const leafCheapAll = q.get('leafcheap') === 'all';
   // ?resfar=N — bark micro-detail distance gate (m); beyond it moss fbm + normal-map are
   // skipped (sub-texel there). 0 disables (legacy full-detail everywhere). Default 60.
   const resFarRaw = Number(q.get('resfar') ?? '60');
@@ -713,14 +734,14 @@ export function buildNaniteResolve(
         const toCam = normalize(camPos.sub(wp)) as unknown as NV3;
         leafNrm.assign(dot(gnrm, toCam).lessThan(0).select(gnrm.negate(), gnrm) as unknown as NV3);
       };
-      if (resFarDist > 0) {
+      if (resFarDist > 0 || leafCheapAll) {
         // ?resfar cheap FAR-leaf path (beyond resfar·0.6 ≈ 36 m by default; the voxel band
         // takes over at 45 m with flat brick shading anyway): species tint × mid crown-AO +
         // the leaf QUAD's single-vertex normal (leaves are flat quads — va.nrm ≈ the face),
         // no makeCtx (its gust samples + instance decode were paid PER PIXEL), no wind, no
         // 3-vertex interp. Matches the voxel handoff look; per-leaf hue jitter is ≤2 px there.
         const distL = wp.sub(vec3(camPos) as unknown as NV3).length();
-        If(distL.greaterThan(float(resFarDist * 0.6)), () => {
+        If(distL.greaterThan(float(leafCheapAll ? -1 : resFarDist * 0.6)), () => {
           const triStart = elemU(gpu.clusters, ci.mul(uint(CLUSTER_WORDS)).add(uint(6)));
           const vi = elemU(gpu.indices, triStart.add(localTri).mul(uint(3)));
           const va = readVertex(gpu.verts, vi);
@@ -779,7 +800,25 @@ export function buildNaniteResolve(
           const localN = brickNormalTsl(nrmWord) as unknown as NV3;
           const gn = normalize(instRotateDir(yawSc, localN)) as unknown as NV3;
           const toCamV = normalize(camPos.sub(wp)) as unknown as NV3;
-          voxNrm.assign(dot(gn, toCamV).lessThan(0).select(gn.negate(), gn) as unknown as NV3);
+          if (voxBeadK > 0) {
+            // ?voxbead: bend toward the per-pixel BEAD direction wp−brickCenterWorld so the
+            // brick shades like a ball instead of a flat quad (see the flag comment above).
+            // Far-tile bricks ride identity instances, so the transform is a pass-through.
+            const vA = gpu.instances.element(vInstId.mul(uint(2))).toVar() as unknown as NV4;
+            const bCtr = vec3(
+              bcU2F(elemU(gpu.voxelBricks, brickWord(bi, uint(BRICK_POS_X)))),
+              bcU2F(elemU(gpu.voxelBricks, brickWord(bi, uint(BRICK_POS_X + 1)))),
+              bcU2F(elemU(gpu.voxelBricks, brickWord(bi, uint(BRICK_POS_X + 2)))),
+            ) as unknown as NV3;
+            const ctrW = instTransformPoint(vA, vB, yawSc, bCtr);
+            const bead = normalize(wp.sub(ctrW)) as unknown as NV3;
+            const blend = normalize(
+              gn.mul(1 - voxBeadK).add(bead.mul(voxBeadK)),
+            ) as unknown as NV3;
+            voxNrm.assign(dot(blend, toCamV).lessThan(0).select(blend.negate(), blend) as unknown as NV3);
+          } else {
+            voxNrm.assign(dot(gn, toCamV).lessThan(0).select(gn.negate(), gn) as unknown as NV3);
+          }
           // (the earlier 30% sunward normal wrap was REPLACED by proper WRAP LIGHTING on
           // the sun term below — bending the normal also skewed the ambient hemisphere
           // and still let fully-away crowns crash; see the nDotL wrap.)
@@ -805,6 +844,15 @@ export function buildNaniteResolve(
             toF(mp.shiftRight(uint(16)).bitAnd(uint(0xff))),
           ).div(255) as unknown as NV3;
           voxCol.assign(base.mul(0.8) as unknown as NV3);
+        }
+        if (voxJitK > 0) {
+          // ?voxjit: world-anchored per-cell value jitter (flag comment above) — breaks the
+          // few-greens tiling without payload bits; ~0.7 m cells, camera-motion stable.
+          const cellQ = floor(wp.mul(1.4)) as unknown as NV3;
+          const h = fract(
+            sin(dot(cellQ, vec3(12.9898, 78.233, 37.719) as unknown as NV3)).mul(43758.5453),
+          ) as unknown as NF;
+          voxCol.assign(voxCol.mul(h.mul(2 * voxJitK).add(1 - voxJitK)) as unknown as NV3);
         }
       });
     }
