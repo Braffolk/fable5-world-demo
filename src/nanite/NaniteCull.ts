@@ -45,6 +45,7 @@ import type { NB, NF, NU, NV3, NV4 } from '../gpu/TSLTypes';
 import {
   CLUSTER_WORDS,
   LOD_NONE,
+  MESH_FLAG_FARTILE,
   MESH_FLAG_HEIGHTFIELD,
   MESH_WORDS,
   readCluster,
@@ -353,8 +354,11 @@ export function buildNaniteCull(
   // union), so ?voxcell paints them as solid tree-sized cubes (the user-reported "cube
   // landscape"). 12 px caps the emitted brick size so far tiles stay at 3-6 m bricks whose
   // carved cells read as foliage. ?voxcell still handles the silhouette; 0 disables.
-  const voxTauCapRaw = Number(voxParams.get('voxtaucap') ?? '12');
-  const voxTauCap = Number.isFinite(voxTauCapRaw) && voxTauCapRaw >= 0 ? voxTauCapRaw : 12;
+  // 12→4 (2026-07-02 beautification): 12 px let the warp emit ~15-24 px bricks from ~40 m
+  // out — the user-reported mid-field "giant voxels". 4 px forces ~1-2 finer pyramid
+  // levels (bricks ~5-6 px on retina); perf cost user-accepted for the beauty arc.
+  const voxTauCapRaw = Number(voxParams.get('voxtaucap') ?? '4');
+  const voxTauCap = Number.isFinite(voxTauCapRaw) && voxTauCapRaw >= 0 ? voxTauCapRaw : 4;
   // K is a BUILD-TIME constant: it bakes K bucket counters + K indirect attrs and
   // (in the voxel raster) K kernel instances. ?voxf2bk default 16 (iter-2 NET-BEST: the
   // canopy write-drop SATURATES at K16 over the tight linear-view-depth [dMin,dMax]
@@ -863,7 +867,11 @@ export function buildNaniteCull(
         .mul(s.radius)
         .mul(2)
         .div(cam.camPos.sub(s.center).length().max(float(1e-3))) as unknown as NF;
-      returnIf(instMinPx.greaterThan(0).and(sizePx.lessThan(instMinPx)));
+      // MESH_FLAG_FARTILE exemption (2026-07-02 beautification): a far TILE is the far-field
+      // representation itself — size-culling it deletes whole 64 m chunks once its ~100 m
+      // sphere projects under instMinPx (~1.2 km at retina), the user-visible aerial holes.
+      const isFartile = head.flags.bitAnd(uint(MESH_FLAG_FARTILE)).notEqual(uint(0));
+      returnIf(instMinPx.greaterThan(0).and(sizePx.lessThan(instMinPx)).and(isFartile.not() as unknown as NB));
       const rootBase = head.rootBase.toVar();
       const slotBase = (atomicAdd(frontierCount.element(FA), rootCount) as unknown as NU).toVar();
       loopU(uint(0), rootCount, (k) => {

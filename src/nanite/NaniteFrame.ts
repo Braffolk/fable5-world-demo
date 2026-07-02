@@ -172,9 +172,12 @@ export function buildNaniteFrame(
   // too. Defaults are the validated preset (NaniteView at lodnear=4/simband=6/lodpow=0.6/
   // instminpx=256): full detail to lodNear m, τ doubles every simBandD m past it, lodPow
   // <1 = detail drops fast near / slow far. ?simband/?lodnear/?lodpow override.
-  const simbandParam = Number(params.get('simband') ?? '6');
+  // lodnear 4→20 / simband 6→25 (2026-07-02 beautification): the old curve doubled τ every
+  // 6 m past 4 m — visible crown mush from ~20 m out. The softened curve keeps real leaf
+  // shapes through the whole (now 90 m) mesh band; perf cost user-accepted.
+  const simbandParam = Number(params.get('simband') ?? '25');
   const simBandD = uniformF(Number.isFinite(simbandParam) && simbandParam > 0 ? simbandParam : 0);
-  const lodnearParam = Number(params.get('lodnear') ?? '4');
+  const lodnearParam = Number(params.get('lodnear') ?? '20');
   const lodNear = uniformF(Number.isFinite(lodnearParam) && lodnearParam > 0 ? lodnearParam : 0);
   const lodpowParam = Number(params.get('lodpow') ?? '0.6');
   const lodPow = uniformF(Number.isFinite(lodpowParam) && lodpowParam > 0 ? Math.max(0.05, lodpowParam) : 1);

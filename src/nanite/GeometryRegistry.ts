@@ -175,6 +175,12 @@ export const MESH_FLAG_HASDAG = 8;
  *  in place instead of culling it (NaniteRaster.orientForRaster), so the geometry
  *  carries each triangle ONCE (no reversed-winding duplicate). Leaf crowns only. */
 export const MESH_FLAG_TWO_SIDED = 16;
+/** 2026-07-02 beautification: this voxel head is a cross-instance FAR TILE (FarTiles.ts,
+ *  label 'fartile'). Consumers: the cull EXEMPTS it from the per-instance min-screen-size
+ *  cull (a tile is the far representation — size-culling it deletes whole 64 m chunks past
+ *  ~1.2 km, the user-visible aerial holes), and the resolve blends its brick normals toward
+ *  up (?ftnrm) to kill the tile-pitch dark banding from splat-averaged mean normals. */
+export const MESH_FLAG_FARTILE = 32;
 /** cluster-record flag bits (byte 1 of word 7) */
 export const CLUSTER_FLAG_HEIGHTFIELD = 1;
 /** N8-D1: this cluster carries a DAG record at the same global index in gpu.dag */
@@ -1127,6 +1133,7 @@ export class GeometryRegistry {
     entry.rootBase = linkBase;
     entry.rootCount = rootCount;
     entry.flags |= MESH_FLAG_HASDAG; // hier mesh: kSeedRoots seeds it; resolve/dbg consistent
+    if ((opts.label ?? '') === 'fartile') entry.flags |= MESH_FLAG_FARTILE;
     entry.lodNext = LOD_NONE;
     entry.lodDist = opts.maxDist ?? 0;
 

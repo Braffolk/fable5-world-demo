@@ -67,7 +67,7 @@ import { BARK_RES } from '../gpu/passes/BarkSynth';
 import { fbm3, valueNoise3 } from '../gpu/noise/NoiseTSL';
 import type { ProbeGI } from '../gpu/passes/ProbeGI';
 import type { Heightfield } from '../world/Heightfield';
-import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK, CLUSTER_WORDS, MESH_WORDS, readVertex } from './GeometryRegistry';
+import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK, CLUSTER_WORDS, MESH_FLAG_FARTILE, MESH_WORDS, readVertex } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
 import { brickNormalTsl, brickWord, BRICK_ALBEDO, BRICK_NORMAL, BRICK_POS_X } from './VoxelBrick';
 import { makeFetch, slotHash } from './NaniteFetch';
@@ -281,6 +281,10 @@ export function buildNaniteResolve(
   // camera motion (no payload bits needed). a = ± value amplitude. 0 = off (exact old).
   const voxJitRaw = Number(q.get('voxjit') ?? '0.12');
   const voxJitK = Number.isFinite(voxJitRaw) ? Math.max(0, Math.min(1, voxJitRaw)) : 0.12;
+  // ?ftnrm=k — far-TILE normal up-blend strength (0 = off/legacy, 1 = fully flat-lit).
+  // See the MESH_FLAG_FARTILE block in the voxel shade path below.
+  const ftNrmRaw = Number(q.get('ftnrm') ?? '0.65');
+  const ftNrmK = Number.isFinite(ftNrmRaw) ? Math.max(0, Math.min(1, ftNrmRaw)) : 0.65;
   // ?leafcheap=all — ATTRIBUTION LEVER: route EVERY mesh-leaf pixel through the ?resfar
   // cheap far-leaf path (species tint × quad normal, no makeCtx/gust/3-vert interp). The
   // measured delta vs default = the exact ceiling of any "make leaf decode cheaper" work
@@ -878,6 +882,20 @@ export function buildNaniteResolve(
           // (the earlier 30% sunward normal wrap was REPLACED by proper WRAP LIGHTING on
           // the sun term below — bending the normal also skewed the ambient hemisphere
           // and still let fully-away crowns crash; see the nDotL wrap.)
+          if (ftNrmK > 0) {
+            // ?ftnrm (2026-07-02 beautification, default 0.65): FAR-TILE pixels only
+            // (MESH_FLAG_FARTILE, word6 bits 16-23) — blend the brick mean normal toward
+            // up. The splat-averaged tile normals carry a tile-pitch bias that N·L turns
+            // into repeating dark bands (voxao=0 A/B proved the bands are 100% normal-
+            // driven); a real canopy from >140 m reads near-lambertian-flat anyway.
+            // Per-tree crowns (45-140 m) keep their full baked normals.
+            const mFlags = fetch.meshWord(meshId, 6).shiftRight(uint(16)).bitAnd(uint(0xff));
+            If(mFlags.bitAnd(uint(MESH_FLAG_FARTILE)).notEqual(uint(0)), () => {
+              voxNrm.assign(
+                normalize(mix(voxNrm, vec3(0, 1, 0) as unknown as NV3, ftNrmK)) as unknown as NV3,
+              );
+            });
+          }
         }
         if (voxBrickShade) {
           // per-brick baked ALBEDO (BRICK_ALBEDO rgb of the winning brick) — breaks the

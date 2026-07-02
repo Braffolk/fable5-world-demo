@@ -89,7 +89,8 @@ interface FarTilePlan {
 }
 
 function planFarTiles(opts: FarTileOpts): FarTilePlan | null {
-  const { tileSize, cellSize, pools } = opts;
+  const { tileSize, pools } = opts;
+  let { cellSize } = opts;
   // world extent of the plantation
   let mnX = Infinity;
   let mnZ = Infinity;
@@ -111,7 +112,14 @@ function planFarTiles(opts: FarTileOpts): FarTilePlan | null {
 
   // cubic-ish tile grid: XZ = tileSize, Y sized to cover the tallest content (trees are
   // ≤ ~40 m world; cap the cell grid to a brick multiple).
+  // EXACT XZ TILING (2026-07-02 beautification): the grid must span EXACTLY tileSize —
+  // the old ceil-rounded grid spanned cellsXZ·cellSize > tileSize (e.g. 88·0.75 = 66 m
+  // per 64 m pitch), so every tile's +X/+Z 2 m band re-splatted the neighbor's trees:
+  // coincident duplicate bricks = the user-visible Z-FIGHT stripes + the repeating
+  // one-side-darker seam at every tile border. Snap cellSize DOWN so cellsXZ·cellSize
+  // == tileSize (0.75 → 64/88 ≈ 0.727) — watertight, overlap-free.
   const cellsXZ = Math.ceil(tileSize / cellSize / BRICK_DIM) * BRICK_DIM;
+  cellSize = tileSize / cellsXZ;
   const cellsY = Math.ceil(48 / cellSize / BRICK_DIM) * BRICK_DIM;
 
   // flatten species brick sets to the worker-transportable stream (splat uses ONLY

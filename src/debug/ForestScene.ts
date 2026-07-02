@@ -44,7 +44,6 @@ import { setClusterFill } from '../nanite/Clusterize';
 import { geometryToSource } from '../nanite/WorldRegistry';
 import {
   appendVoxelCrown,
-  DEFAULT_VOXEL_GRID_DIM,
   type PreparedVoxelCrown,
   computeVoxlodAnchorL0,
   prepareVoxelCrown,
@@ -104,7 +103,10 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
   // triangle leaf head nor its voxel sibling). For isolating how much of the forest frame the
   // foliage (voxel crowns) actually costs vs the woody-skeleton triangles + the cull.
   const noLeaves = q.get('noleaves') !== null;
-  const voxGridDim = Number(q.get('voxgrid') ?? DEFAULT_VOXEL_GRID_DIM) || DEFAULT_VOXEL_GRID_DIM;
+  // 256 (2026-07-02 beautification, forest-scoped — world scene keeps DEFAULT_VOXEL_GRID_DIM):
+  // finest crown cells 180→256/crown ⇒ L0 bricks ~0.156 m ≈ 4.4 px at the 60 m handoff —
+  // near-mid voxels read close to real geometry (user pivot; crown prep 36→48 s, cached).
+  const voxGridDim = Number(q.get('voxgrid') ?? 256) || 256;
   // forest default 60 m (2026-07-02, was DEFAULT_TRANSITION_DIST=35): with the leaf ladder
   // coarsening in-band (?leaflodk), the 35-60 m coarse-MESH ring is much cheaper than the L0
   // voxel shell it replaces — measured eye 45.9→36.9 / oblique 52.3→40.0 ms at 200k — AND it
@@ -114,7 +116,13 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
   // as SPIKY crowns near the band end, while small voxel cells read fine; a shorter mesh
   // band (45 m) + milder ladder (leaflodk 0.4) hides the spikes and was measured perf-
   // NEUTRAL vs 60/0.25 (eye 33.2 vs 33.0 ms at 200k).
-  const transitionDist = Number(q.get('voxnear') ?? 45) || 45;
+  // 60 (2026-07-02 beautification, was 45, briefly 90): pushing the mesh band to 90 m
+  // exposed the DAG simplifier's tree-crown pathology (user: "MASSIVE leaves and super
+  // long spiky pieces") AND was the big perf cost. User pivot: mesh only where it is
+  // genuinely near-LOD0 (60 m), and the near-mid band is owned by MUCH finer voxels
+  // instead (voxgrid 256, voxtaucap 4, UE5-style) — at 60+ m fine voxels read closer
+  // to real geometry than a τ-coarsened simplified mesh does (A/B/C sweep 2026-07-02).
+  const transitionDist = Number(q.get('voxnear') ?? 60) || 60;
   // ?voxlod (G1, DEFAULT ON): voxel MIP pyramid + a REAL multi-level DAG (UE5-style: far coarsens
   // the SAME crown through a band-anchored octave ladder, near refines, picked by the screen-error
   // cut). ?voxlod=0 forces the old single-level degenerate always-cut DAG (the A/B baseline).
@@ -201,9 +209,12 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
       transitionDist,
       farTilesOn,
       aggDist,
+      // RESOLVED ftcell, not the raw query param: a raw-null knob made a code-default
+      // change (0.75→0.6, 2026-07-02) silently HIT the stale cache entry.
+      ftCell: Number(q.get('ftcell') ?? '0.6') || 0.6,
       anchorH: engine.renderer.getDrawingBufferSize(new Vector2()).y,
       fov: engine.camera.fov,
-      knobs: ['voxlodk', 'voxlodlevels', 'voxlodsparse', 'voxlodshell', 'leaflodk', 'clustertris', 'clusterfill', 'ftcell'].map(
+      knobs: ['voxlodk', 'voxlodlevels', 'voxlodsparse', 'voxlodshell', 'leaflodk', 'clustertris', 'clusterfill'].map(
         (k) => q.get(k),
       ),
     },
@@ -371,7 +382,12 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
     // 0.75 m cells (not 0.5): 200k extrapolates to ~10.7M bricks at 0.5 (386 MB — over the
     // 256 MB buffer cliff); 0.75 lands ~4-5M (~170 MB). ?voxcell renders CELLS, so visible
     // granularity at the 140 m handoff is ~0.75 m ≈ 8 px — close to the per-tree side.
-    const TILE_CELL = Number(q.get('ftcell') ?? '0.75') || 0.75;
+    // 0.6 (2026-07-02 beautification, was 0.75): fartile L0 bricks 3→2.4 m — the whole far
+    // field reads uniformly finer and the 140 m voxel→fartile handoff stops being a harsh
+    // jump (user report; F-vs-G sweep: beats aggdist push on looks). Cost: 4.2M→7.4M far
+    // bricks (+110 MB), splat +8 s cold (cached). 0.5 was REJECTED: ~3.4× splat ⇒ 8+ min
+    // cold boot (E run timed out) — not a shippable product default.
+    const TILE_CELL = Number(q.get('ftcell') ?? '0.6') || 0.6;
     const ftPools: { a: Float32Array; b: Float32Array; species: FarTileSpecies }[] = [];
     for (const v of toVoxel) {
       const s = poolStreams[v.poolIdx];
