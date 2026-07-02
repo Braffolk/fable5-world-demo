@@ -273,7 +273,7 @@ export function buildNaniteFrame(
   const useClip = params.get('shadowclip') !== '0';
   const shadow: NaniteShadow | null = shadowOn
     ? useClip
-      ? buildNaniteShadowClip(registry.gpu, registry.instanceCount, hf.heightTex, disp, windOpt, measuredHierDepth)
+      ? buildNaniteShadowClip(registry.gpu, registry.instanceCount, hf.heightTex, disp, windOpt, measuredHierDepth, voxActive)
       : buildNaniteShadow(registry.gpu, registry.instanceCount, hf.heightTex, disp, windOpt, measuredHierDepth)
     : null;
   // CAMERA||SHADOW CULL OVERLAP (item 4): fold the (CLIP-path) shadow shared-cut cull into

@@ -51,6 +51,7 @@ import { StorageTexture, type Renderer } from 'three/webgpu';
 import {
   Fn,
   If,
+  atomicMin,
   dot,
   float,
   instanceIndex,
@@ -66,9 +67,18 @@ import {
   vec4,
 } from 'three/tsl';
 import { vogelDiskSample } from 'three/tsl';
-import type { NB, NF, NV2, NV3 } from '../gpu/TSLTypes';
+import type { NB, NF, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
+import { CLUSTER_WORDS, MESH_WORDS, readCluster } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
-import { makeNaniteCam, type NaniteCam } from './NaniteCommon';
+import {
+  DISPATCH_ROW,
+  QRASTER_CAP,
+  instSphereRadius,
+  instTransformPoint,
+  instYaw,
+  makeNaniteCam,
+  type NaniteCam,
+} from './NaniteCommon';
 import { buildClipCull, type ClipCull } from './NaniteClipCull';
 import type { TerrainDisp, TrunkWindOpt } from './NaniteFetch';
 import {
@@ -77,7 +87,23 @@ import {
   type NaniteRasterHandles,
   type NaniteVisBuffers,
 } from './NaniteRaster';
-import { bcU2F, dispatch, elemU, minU, toF, uniformArrV4, uniformF, uniformMat4 } from './Tsl';
+import { BRICK_HALF, BRICK_POS_X, BRICK_WORDS } from './VoxelBrick';
+import {
+  bcF2U,
+  bcU2F,
+  dispatch,
+  dispatchIndirect,
+  elemU,
+  localX,
+  loopU,
+  minU,
+  returnIf,
+  toF,
+  uniformArrV4,
+  uniformF,
+  uniformMat4,
+  wgLinear,
+} from './Tsl';
 import type { UniformArrV4, UniformF, UniformMat4 } from './Tsl';
 import { sunU } from '../render/VegMaterials';
 import type { NaniteShadow } from './NaniteShadow';
@@ -174,6 +200,11 @@ export function buildNaniteShadowClip(
    *  BFS pass count for the SHARED cut (paid once/frame when a level re-rasters). Omitted ⇒
    *  the cull's legacy default. ?hierdepth still overrides. */
   hierDepth?: number,
+  /** P3 vox-shadow-splat (shadow arc 2026-07-03, ARC GOAL): when the registry holds
+   *  voxel bricks, splat class-7 clusters' bricks into the shadow depth so the
+   *  60-280 m voxel band + fartiles CAST shadows (they cast NOTHING before — the
+   *  tri depth raster discards class-7 per-thread). ?shvox=0 disables. */
+  voxSplat?: boolean,
 ): NaniteShadow {
   const cfg = readClipParams();
   const LEVELS = cfg.levels;
@@ -324,6 +355,91 @@ export function buildNaniteShadowClip(
   for (let k = 0; k < LEVELS; k++) {
     const lv = levels[k]!;
     lv.raster = buildNaniteRaster(gpu, heightTex, lv.cam, clipCull.queue, vis, 'flat', false, disp, wind);
+  }
+
+  // ---- P3 vox-shadow-splat (ARC GOAL: the mid-field casts) -----------------------
+  // The shared cut emits class-7 (voxel/fartile) clusters into the level queues; the
+  // tri depth raster discards them per-thread (NaniteRaster returnIf mcVox==7), so
+  // the 60-280 m voxel band + all fartiles cast NOTHING. Per level: one workgroup
+  // per queue item (the SAME indirect args the tri raster consumes), one lane per
+  // brick — project the brick centre through the level ortho (w≡1, no near-plane
+  // blowup class), take the SUN-FACING face depth (centre − worldHalf along z), and
+  // atomicMin the few-texel footprint into the shared vis depth. kCopy then
+  // publishes strip texels exactly like tri depth. Footprint is naturally ~1-3
+  // texels (brick size and texel size both scale with distance); extent is capped
+  // defensively. ?shvox=0 disables.
+  const shVox =
+    voxSplat === true && new URLSearchParams(window.location.search).get('shvox') !== '0';
+  const voxSplatKernels: unknown[] = [];
+  if (shVox) {
+    for (let k = 0; k < LEVELS; k++) {
+      const lv = levels[k]!;
+      const texelWorld = (2 * lv.half) / SHADOW_MAP;
+      const kSplat = Fn(() => {
+        const itemIdx = wgLinear(DISPATCH_ROW).toVar();
+        const qCount = minU(
+          (clipCull.queue.qRasterRO.element(0) as unknown as { x: NU }).x,
+          uint(QRASTER_CAP),
+        );
+        returnIf(itemIdx.greaterThanEqual(qCount));
+        const item = clipCull.queue.qRasterRO.element(itemIdx.add(uint(1)));
+        const instId = (item as unknown as { x: NU }).x.toVar();
+        const ci = (item as unknown as { y: NU }).y.toVar();
+        const c = readCluster(gpu.clusters, ci);
+        const mcVox = elemU(gpu.meshes, c.meshId.mul(uint(MESH_WORDS)).add(uint(6)))
+          .bitAnd(uint(0xff))
+          .toVar();
+        returnIf(mcVox.notEqual(uint(7)));
+        const cBase = ci.mul(uint(CLUSTER_WORDS));
+        const brickBase = elemU(gpu.clusters, cBase.add(uint(6))).toVar();
+        const brickCount = elemU(gpu.clusters, cBase.add(uint(7))).bitAnd(uint(0xff)).toVar();
+        const brickLocal = localX().toVar();
+        returnIf(brickLocal.greaterThanEqual(brickCount));
+        const A = gpu.instances.element(instId.mul(uint(2))).toVar() as unknown as NV4;
+        const B = gpu.instances.element(instId.mul(uint(2)).add(uint(1))).toVar() as unknown as NV4;
+        const yawSc = instYaw(B);
+        const bw = brickBase.add(brickLocal).mul(uint(BRICK_WORDS));
+        const brLocal = vec3(
+          bcU2F(elemU(gpu.voxelBricks, bw.add(uint(BRICK_POS_X)))),
+          bcU2F(elemU(gpu.voxelBricks, bw.add(uint(BRICK_POS_X + 1)))),
+          bcU2F(elemU(gpu.voxelBricks, bw.add(uint(BRICK_POS_X + 2)))),
+        ) as unknown as NV3;
+        const brHalfL = bcU2F(elemU(gpu.voxelBricks, bw.add(uint(BRICK_HALF)))).toVar();
+        const wc = instTransformPoint(A, B, yawSc, brLocal);
+        const wHalf = (instSphereRadius(A, B, brHalfL as unknown as NF, float(0)) as unknown as NF).toVar();
+        const clip = (lv.cam.vp.mul(vec4(wc, 1)) as unknown as NV4).toVar();
+        // sun-facing face depth (clip z is metres/(2·dHalf) along the sun) — the
+        // receiver-side DEPTH_BIAS_M covers residual brick-scale acne.
+        const org = levelOrigin.element(int(k));
+        const zNear = clip.z
+          .sub(wHalf.div((org as unknown as { z: NF }).z.mul(D_RANGE)))
+          .clamp(0, 1)
+          .toVar();
+        const bits = bcF2U(zNear as unknown as NF).toVar();
+        // texel footprint around the projected centre, capped defensively
+        const cx = (clip.x.mul(0.5).add(0.5) as unknown as NF).mul(SHADOW_MAP).toVar();
+        const cy = (clip.y.mul(0.5).add(0.5) as unknown as NF).mul(SHADOW_MAP).toVar();
+        const rpx = wHalf.div(texelWorld).clamp(0, 8).toVar();
+        // off-window guard (filter passes whole clusters; edge bricks may poke out)
+        returnIf(
+          cx.add(rpx).lessThan(0).or(cx.sub(rpx).greaterThanEqual(SHADOW_MAP))
+            .or(cy.add(rpx).lessThan(0))
+            .or(cy.sub(rpx).greaterThanEqual(SHADOW_MAP)) as unknown as NB,
+        );
+        const x0 = uint(cx.sub(rpx).max(0)).toVar();
+        const y0 = uint(cy.sub(rpx).max(0)).toVar();
+        const x1 = minU(uint(cx.add(rpx).max(0)), uint(SHADOW_MAP - 1)).toVar();
+        const y1 = minU(uint(cy.add(rpx).max(0)), uint(SHADOW_MAP - 1)).toVar();
+        loopU(y0, y1.add(uint(1)), (ty) => {
+          loopU(x0, x1.add(uint(1)), (tx) => {
+            const px = ty.mul(uint(SHADOW_MAP)).add(tx);
+            atomicMin(vis.depthV.atomic.element(px), bits);
+          });
+        });
+      })().compute(DISPATCH_ROW * 128, [128]);
+      (kSplat as unknown as NamedKernel).setName(`nanClipVoxSplat${k}`);
+      voxSplatKernels.push(kSplat);
+    }
   }
 
   // ---- per-frame clipmap fit + raster -----------------------------------------
@@ -551,10 +667,13 @@ export function buildNaniteShadowClip(
     for (let k = 0; k < LEVELS; k++) {
       if (!reRaster[k]) continue;
       const lv = levels[k]!;
-      clipCull.runLevelFilter(renderer, k); // cut → level-k frustum+hollow → queue
+      clipCull.runLevelFilter(renderer, k); // cut → level-k frustum+hollow+strips → queue
       lv.raster.clearVis(renderer);
       lv.raster.depth1(renderer);
       lv.raster.hwDepth(renderer, mainCamera);
+      // P3: brick depth splat for the class-7 clusters the queue carries (same
+      // one-wg-per-item indirect args the tri raster consumes)
+      if (shVox) dispatchIndirect(renderer, voxSplatKernels[k] as never, clipCull.queue.rasterDispatchAttr);
       dispatch(renderer, lv.kCopy);
     }
   };
