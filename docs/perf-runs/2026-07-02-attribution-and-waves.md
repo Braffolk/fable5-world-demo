@@ -30,6 +30,22 @@ unless that kills perf". User also asked to RE-CHECK the backlog logic (late-con
 | `nandbg=flat` (no lighting/GI/backlight) | 29.9 | 39.3 | 17.6 | **lighting ≈ FREE** |
 | `nanshadow=0` (NO shadow system at all) | 32.6 | 37.0 | 15.6 | **shadows ≈ FREE (0-2ms)** |
 | noleaves (historic, cooler) | 14-17 | 12-14 | 10-13 | foliage = eye +15, obl +25 |
+| `ablate=clouds+ao+bounce+bloom+taa` (2026-07-02 04:4x, vs bead-v1 35.5/44.1/17.4) | 29.3 | 38.1 | 17.1 | **post ≈ 6ms eye+oblique, 0 aerial** (mostly TAA+AO; AO self-describes as a near-flat 0.8 cue → tuning lever) |
+
+| `leafcheap=all` (vs bead-v2-base 36.1/43.2/16.8) | 35.2 | 42.4 | 16.3 | **leaf DECODE ≈ FREE (<1ms)** — decode ceiling measured with a real candidate look |
+
+**ATTRIBUTION COMPLETE (2026-07-02): lighting FREE + shadows FREE + leaf decode FREE +
+post ≈ 6ms ⇒ the ONLY remaining foliage cost is RASTER COVERAGE (SW-raster walk/election
+work). Eye 36.1 ≈ base ~15 + coverage ~15 + post ~6. Shade-binning is fully dead. The
+levers are occlusion/emission (voxwaves, voxbocc, HZB quality), not shading.**
+
+### Post-ablate side-findings (per-frame arrays, fresh-ablate-post3.json)
+- **Bimodality ≠ TRAA jitter (REFUTED)**: with TAA off the oblique still alternates
+  ~33-38 vs ~42-47 in runs of ~4 (+ 70/91ms spikes). Post stack exonerated entirely —
+  remaining suspects: GI probe cycle, voxOccPyr/HZB interactions, GPU pipelining sawtooth.
+- **Aerial pose-arrival ramp**: first 2-3 isolated frames 6.5-11.5ms then settle ~17 —
+  stale-HZB over-cull right after teleport; the milestone's aerial "floor cluster
+  8.7-11.9" is likely these transient frames, not a reachable steady state.
 
 **CONCLUSION (recheck of the backlog's §4.6a):** the "shade-binning resolve" premise was
 HALF WRONG — the lighting/shadow/GI per-pixel chain costs ~nothing. The frame =
@@ -97,6 +113,72 @@ FILL that reads as blocks. ⇒ the user's "round normals" instinct is correct an
    net-loss was measured at a 4k single-tree pose = pathological occupancy).
 5. `EXTRA=voxf2b=1,voxwaves=4` — the vox-behind-vox occlusion gain (oblique is the money
    number). Then voxwaves=2 / voxbocc=1 permutations.
+
+## 5b. Big-rock measurements (2026-07-02 04:50-05:3x, vs bead-v2-base 36.1/43.2/16.8)
+
+| run | eye | oblique | aerial | verdict |
+|---|---|---|---|---|
+| `voxf2b=1` (control) | 41.0 | 49.4 | 32.8 | K=16 bucket chain alone: +5/+6/+16 — brutal, aerial DOUBLES |
+| `voxf2b=1,voxwaves=4` | 41.1 | 48.8 | 28.1 | occlusion gain vs control: 0 eye, −0.6 oblique, −4.7 aerial |
+
+**VERDICT: vox-behind-vox occlusion is ≈ DEAD at oblique** (the money pose) — even at
+aerial (maximal stacking) the full 4-wave mechanism nets only −4.7, buried by F2B's +16
+base cost. Not worth a cheap 2-wave build on this evidence. voxbocc (brick-granular,
+no-F2B) still untested — cheap single run, low expectation.
+
+**Premise-audit (go-up-a-level) after the waves null**: errorK already recalibrated
+3→2→1 pre-compaction (VoxelizeCrown VOXLOD_CFG comment "2026-07-02b") — the far vox
+ladder is at its calibrated coarsest; voxnear/leaflodk band already swept (45/0.4 ≈
+60/0.25 neutral). With foliage decode/lighting/shadows all FREE and occlusion dead,
+oblique 43.2 decomposes as base(?) + post 6 + foliage-coverage ~23. Even zero foliage
+leaves base+post ≈ 20-22 vs the 25 target ⇒ **base (trunk SW raster) must shrink too**
+— the unbuilt trunk far-field DAG coarsening (2026-06-26 handoff: 97% sub-pixel emit)
+is back as the mandatory big rock. Fresh noleaves re-baseline queued to pin today's
+base share before committing to that build.
+
+## 5c. THE RING (2026-07-02 05:3x-06:1x): per-tree vox 60-140m is the oblique+eye whale
+
+Fresh noleaves re-baseline (same era): base+post = eye 16.8 / oblique 15.4 / aerial 11.1
+⇒ foliage coverage = 19.3 / 27.8 / 5.7. Counters: default-oblique visTris 1.27M < noleaves
+2.1M (canopy HZB-kills trunks ⇒ mesh tris CHEAP at oblique) — the whale is vox election
+work (9188 vox clusters at oblique).
+
+Band split by ?aggdist=60 (tiles take the 60-140 ring): eye 26.1 (−10.0) / oblique 32.5
+(−10.7) / aerial 16.6 (=). **The ring costs ~10ms at BOTH eye and oblique.** But the look
+is UNSHIPPABLE (user: "dogshit, massive voxels" — merged plates + floating edge bricks
+at 60m). aggdist=60 was a diagnostic, not a candidate.
+
+Capture-without-the-chunk curve (?voxlodk=K, sub-calibration per-tree coarsening,
+crowns stay per-tree; K also coarsens the fartile cut):
+| K | eye | oblique | look |
+|---|---|---|---|
+| 1.0 (baseline) | 36.1 | 43.2 | calibrated (one brick ≈ τ px) |
+| 0.85 | ? | ? | pending |
+| 0.7 | 32.7 | 36.4 | crowns intact, bricks ~1.43× — DETECTABLE side-by-side, borderline |
+| tiles@60 | 26.1 | 32.5 | REJECTED by user |
+
+Remaining design if K-curve unsatisfying: TIERED TILES — 32m/fine-cell tiles for the
+60-140 ring (worker splat has boot headroom), keeps aggregation's cluster-count win at
+ring-appropriate brick size; floater risk (low-w edge bricks) needs a per-ring OCC_COVER.
+
+## 5d. DIRECTION RESET (user, 06:1x) + the voxbocc bomb
+
+USER RULING: **the quality bar is ABSOLUTE** — no optimization that loses visual quality
+ships, ever. voxlodk 0.85/0.7 and aggdist=60 looks ALL REJECTED ("everything except 1.0
+looks bad"; "we will not be making optimisations that lose in quality"). K stays 1.0.
+Quality-trading knobs are attribution INSTRUMENTS only. Further: LOD levels should if
+anything engage FARTHER than now (mid-band already too coarse for the bar) — perf wins
+should FUND finer mid/far detail, not the reverse. Also: work autonomously, no questions.
+
+**?voxbocc=1 (quality-IDENTICAL conservative cull): eye 36.1→18.9 (−17.2!!),
+oblique 43.2→37.2 (−6.0), aerial 16.5 (=).** The eye whale was the vox field behind the
+near mesh canopy at BRICK granularity (block-level cull + waves both missed it — wrong
+mechanism at oblique: it was brick-vs-MESH, not block-vs-vox). Shots pixel-equivalent.
+DEFAULT ON — committed by the USER themselves (cc73e88) while watching the session.
+
+**NEW BASELINE: eye 18.9 / oblique 37.2 / aerial 16.5. Worst pose = oblique 37.2,
+gap to locked-60 ≈ −11..13, all of it to come from QUALITY-NEUTRAL waste.**
+Next: ultracode deep review (docs/deep-review/) → ranked quality-neutral path.
 
 ## 6. Notes / hazards
 
