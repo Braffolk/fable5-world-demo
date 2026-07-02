@@ -281,15 +281,8 @@ export function buildNaniteRaster(
   // makeCtx); `?wgcache=0` opts out. Applies to the camera raster AND every shadow-
   // clipmap level + the HW vertex stage (all share buildNaniteRaster).
   const wgcache = new URLSearchParams(window.location.search).get('wgcache') !== '0';
-  // ?noguard=1 — DROP the relaxed-load election guard (always atomicMax) = NAIVE FreePipe
-  // scatter. Measurement only: quantifies how much of the sort-middle win world1 already
-  // captures (the paper's 16–107× is vs naive FreePipe, not our guarded scatter).
-  const noguard = new URLSearchParams(window.location.search).get('noguard') === '1';
-  // ?f2b=1 — FRONT-TO-BACK per-pixel early-out in the world1 SCATTER raster (B3, no storage
-  // tax — the tile study proved storage-tiling is bandwidth-bound at our tri count). Reads the
-  // pixel's current winner BEFORE the z-interp; if the tri's nearest-possible key can't beat it
-  // the fragment would lose → skip the dominant depth work. cand ≤ nearKey ⇒ loss-exact.
-  const f2b = new URLSearchParams(window.location.search).get('f2b') === '1';
+  // (removed 2026-07-02 cleanup: ?noguard naive-FreePipe diagnostic — atomic-contention
+  // hypothesis refuted long ago; ?f2b per-pixel early-out — measured null §5o)
   // HW vertex-pull pass: by DEFAULT drop the redundant per-frame full-res color CLEAR. The HW
   // fragment stage has colorWrite=false (it writes ONLY the vis storage buffers, never
   // the color target — capture confirms the full-res rgba8 is a dead clear/store, never
@@ -712,16 +705,6 @@ export function buildNaniteRaster(
             const s0 = ndc0.xy.add(1).mul(0.5).mul(vec2(W, H)).toVar();
             const s1 = ndc1.xy.add(1).mul(0.5).mul(vec2(W, H)).toVar();
             const s2 = ndc2.xy.add(1).mul(0.5).mul(vec2(W, H)).toVar();
-            // f2b: the tri's NEAREST-possible election key (cand ≤ nearKey at every pixel), used
-            // by the per-pixel early-out in the scanline to skip would-lose fragments' z-interp.
-            const nearKey =
-              mode === 'world1' && f2b
-                ? depthKey24(ndc0.z.min(ndc1.z).min(ndc2.z) as unknown as NF)
-                    .shiftLeft(uint(8))
-                    .bitOr(uint(0xff))
-                    .toVar()
-                : null;
-
             // FIXED-POINT snap (N3a): 1/256-px integer grid — 8 subpixel bits,
             // the D3D HW convention. All coverage below is exact i32 math:
             // watertight at shared edges and bit-identical between the depth
@@ -973,13 +956,6 @@ export function buildNaniteRaster(
                               .shiftLeft(uint(8))
                               .bitOr(payload.bitAnd(uint(0xff)))
                               .toVar();
-                            if (noguard) {
-                              // NAIVE FreePipe: unconditional atomicMax per fragment.
-                              const wonE = atomicMax(visPayloadV.atomic.element(px), cand) as unknown as NU;
-                              If(cand.greaterThan(wonE), () => {
-                                atomicStore(visBV.atomic.element(px), payload);
-                              });
-                            } else {
                             const prevE = aLoadU(visPayloadV.atomic.element(px));
                             If(cand.greaterThan(prevE), () => {
                               const wonE = atomicMax(visPayloadV.atomic.element(px), cand) as unknown as NU;
@@ -992,21 +968,10 @@ export function buildNaniteRaster(
                                 atomicStore(visBV.atomic.element(px), payload);
                               });
                             });
-                            }
                           }
                         });
                         };
-                        // f2b (world1 only): read the pixel's current winner BEFORE the z-interp;
-                        // if the tri's nearest-possible key can't beat it, the fragment would lose
-                        // → skip emitFrag's z-interp + election. cand ≤ nearKey ⇒ loss-exact (zero
-                        // quality loss). With near→far order, occluded overdraw skips the depth work.
-                        if (mode === 'world1' && f2b && nearKey) {
-                          const pxg = uint(y).mul(uint(cam.uW)).add(uint(x)).toVar();
-                          const prevEg = aLoadU(visPayloadV.atomic.element(pxg)).toVar();
-                          If(nearKey.greaterThan(prevEg), emitFrag);
-                        } else {
-                          emitFrag();
-                        }
+                        emitFrag();
                       },
                     );
                     cw0.addAssign(sx0);

@@ -48,7 +48,7 @@ import {
 import type { NB, NF, NU, NV3, NV4 } from '../gpu/TSLTypes';
 import { CLUSTER_WORDS } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
-import { BRICK_ALBEDO, BRICK_DIM, BRICK_HALF, BRICK_OCC_HI, BRICK_OCC_LO, BRICK_POS_X, BRICK_WORDS, MAX_BRICKS_PER_CLUSTER } from './VoxelBrick';
+import { BRICK_DIM, BRICK_HALF, BRICK_OCC_HI, BRICK_OCC_LO, BRICK_POS_X, BRICK_WORDS, MAX_BRICKS_PER_CLUSTER } from './VoxelBrick';
 import { DISPATCH_ROW, QVOX_CAP } from './NaniteCommon';
 import type { NaniteCam } from './NaniteCommon';
 import { instTransformPoint, instYaw, instSphereRadius } from './NaniteCommon';
@@ -85,17 +85,6 @@ const NEAR_EPS = 1e-4;
 // voxel namespace bit (§4.5): the only bit free at BOTH the 128- and 256-tri caps.
 const VOX_BIT = 0x80000000;
 // DENSITY-MODULATED COVERAGE (§3 Risk #1 / §4.3 word4.A) — the bloat-to-blob fix.
-// A coarse low-density block (conifer crown density ~0.16-0.26) must paint only a
-// ~density FRACTION of its projected footprint so (1-density) sees THROUGH to the
-// bricks/background behind ⇒ the band reads as sparse FOLIAGE, not a solid slab.
-// Each kept pixel stays OPAQUE + depth-correct (the election is unchanged); we just
-// DROP (1-density) of the footprint pixels via a STABLE per-(pixel,block) dither.
-//   COVER_FLOOR — a block never vanishes (keeps a minimum see-through-but-present
-//                 coverage even for the sparsest brick), so silhouettes survive.
-//   COVER_CEIL  — even a dense block stays a touch see-through (real leaves are never
-//                 a perfect wall), which also bounds the added overdraw from the win.
-const COVER_FLOOR = 0.1;
-const COVER_CEIL = 0.92;
 
 // PER-THREAD FOOTPRINT CAP (the close-up pathology fix, RC2 / missed-cause-6).
 // One-thread-per-brick still makes each lane O(footprint-area). A single brick
@@ -185,22 +174,9 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   const { gpu, cam, qVoxRasterRO, voxRasterDispatchAttr, depthKey24, visPayloadV, visBV, width, height } = deps;
   const { voxBucketRangeRO, voxBucketDispatchAttr, voxF2bK, voxF2bEnabled } = deps;
 
-  // ?voxdither=0|1 — the PERF-QUALITY TENSION knob (Stage-3b-perf, spec §3/§6.0/§6.4).
-  //   0 = OPAQUE bricks (DEFAULT): every covered pixel that survives the occlusion skip is
-  //       elected OPAQUE — NO coverHash, NO per-block density buffer read (both are pure
-  //       overhead here). This is the CHEAP-AND-CORRECT path: a sub-pixel (≤1-2 px) opaque
-  //       brick is not visibly blocky, and because it OCCLUDES, the front-to-back early-skip
-  //       eliminates everything behind it ⇒ the occlusion-collapse that makes voxels net-win.
-  //       The lever to make it look correct is SMALL bricks (finer ?voxgrid= / farther
-  //       ?voxnear=), NOT see-through dither.
-  //   1 = the Stage-3b density-modulated DITHER: a stable per-(pixel,block) coverHash drops
-  //       (1-density) of the footprint so the band reads as SPARSE see-through foliage. Looks
-  //       correct when bricks are COARSE/near, but see-through ⇒ no occlusion ⇒ the election
-  //       explodes (the +18.7 ms regression the task is resolving). Kept as the A/B control.
-  // The coverHash + density read are emitted ONLY in dither mode (build-time gate); and in
-  // dither mode the hash now runs AFTER the occlusion skip (cheap reorder — occluded pixels
-  // never pay the hash). DEFAULT OPAQUE so the sweep measures the cheap path first.
-  const voxDither = new URLSearchParams(window.location.search).get('voxdither') === '1';
+  // (removed 2026-07-02 cleanup: ?voxdither see-through stipple — quality-rejected red-list
+  // knob; see-through ⇒ no occlusion ⇒ +18.7 ms election explosion. Opaque bricks are the
+  // shipped path; the correct-look lever is smaller bricks, not dither. Recover via git.)
 
   // ?voxlod (G1, DEFAULT ON). When ON, the per-brick OCCUPANCY GATE (Rank-2) is compiled into
   // Phase A/B: a COARSE brick (whose tight [center+-half] cube still has empty interior between its
@@ -316,8 +292,7 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // the election key is the EXACT per-pixel depth of the hit (replaces the brick-constant
   // front-slab key ⇒ correct intra-brick occlusion + better HZB). Small/straddler bricks and
   // the ?voxdither=1 stipple mode keep the legacy flat path unchanged.
-  const voxCell =
-    new URLSearchParams(window.location.search).get('voxcell') !== '0' && !voxDither;
+  const voxCell = new URLSearchParams(window.location.search).get('voxcell') !== '0';
   // 64 (not 12): at 200k the far field is THOUSANDS of small (≤8px) sparse coarse bricks;
   // running the ray+DDA on them measured +6/+17/+19 ms (eye/oblique/aerial) because carved
   // pixels pay the full DDA miss. A ≤8px brick never reads as a square — only the BIG
@@ -334,16 +309,9 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // Eligibility MUST mirror the Phase-B gate exactly (non-straddler AND area STRICTLY >
   // voxCellMinArea); a mismatch is a perf miss only (unbuilt mask keeps the solid 0xffff seed).
   const voxMaskRay = new URLSearchParams(window.location.search).get('voxmaskray') !== '0';
-  // ?voxsgb=0|1|2 (spec-vox-kernel-microcuts B; default 0 until gated): Phase-B VIRTUAL
-  // 32-lane-group distribution — outer brick loop strides gid∈[0,4) instead of running on
-  // all 128 lanes (per-brick setup was issued once per 32-wide SIMD group = 4× today), inner
-  // pixel loop strides the group's 32 lanes. =2 adds lane-0 live-brick compaction so empty
-  // records (bocc-culled bricks — the eye majority) aren't even visited, plus both levels
-  // gate Phase B on wgVisible (a block-culled cluster stored nothing). Election candidate
-  // set unchanged ⇒ bit-identical for depth-distinct winners; same-key TIES can flip which
-  // sibling brick shades an edge pixel (shot gate is LOAD-BEARING, see spec).
-  const voxSgbRaw = parseInt(new URLSearchParams(window.location.search).get('voxsgb') ?? '0', 10);
-  const voxSgb = Number.isFinite(voxSgbRaw) ? Math.max(0, Math.min(2, voxSgbRaw)) : 0;
+  // (removed 2026-07-02 cleanup: ?voxsgb=1|2 virtual-32-lane Phase-B distribution +
+  // live-brick compaction — measured WORSE at eye (+2..4) for −1 oblique, default-off
+  // since d66d53c; superseded by the full-clock findings. Recover via git.)
   const WRITE_CTR = 0;
   const atomicWords = 1;
   const atomicBufAttr = new StorageBufferAttribute(new Uint32Array(atomicWords), 1);
@@ -365,26 +333,6 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // float variant for the ?voxcell per-brick local-AABB records.
   const wgSetF = (arr: ReturnType<typeof workgroupArray>, i: NU, v: NF): void => {
     (arr.element(i) as unknown as { assign(x: NF): void }).assign(v);
-  };
-
-  // STABLE per-(pixel,block) dither in [0,1) for the density-coverage gate (above).
-  // PCG-style integer hash (mirror of NaniteCommon.hashColor's mixer) keyed on the
-  // pixel position AND the block payload, so a given footprint pixel of a given block
-  // always lands the SAME side of the density threshold → ZERO temporal shimmer under a
-  // moving camera (the dither pattern is locked to screen-space, intentionally — TAA
-  // sees a steady stipple, not crawling noise; a temporal jitter is a deliberate
-  // future option, NOT added here so the default is rock-stable, §Risk #1).
-  const coverHash = (px: NU, py: NU, salt: NU): NF => {
-    const a = px
-      .mul(uint(0x9e3779b9))
-      .add(py.mul(uint(0x85ebca77)))
-      .add(salt.mul(uint(0xc2b2ae3d)))
-      .add(uint(0x27d4eb2f))
-      .toVar();
-    const b = a.shiftRight(uint(15)).bitXor(a).mul(uint(0x2c1b3c6d)).toVar();
-    const c = b.shiftRight(uint(12)).bitXor(b).mul(uint(0x297a2d39)).toVar();
-    const h = c.shiftRight(uint(15)).bitXor(c).toVar();
-    return toF(h.bitAnd(uint(0xffffff))).div(16777216) as unknown as NF;
   };
 
   // ---- kVoxScatter (the voxel raster — the SCAR fix) ----------------------------------
@@ -620,8 +568,6 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
     const wgBbW = workgroupArray('uint', WG_RASTER);
     const wgBbH = workgroupArray('uint', WG_RASTER);
     const wgCand = workgroupArray('uint', WG_RASTER); // depthKey24<<8 | id8 (loss-exact key)
-    const wgBrickAbs = voxDither ? workgroupArray('uint', WG_RASTER) : null; // dither salt
-    const wgDensBits = voxDither ? workgroupArray('uint', WG_RASTER) : null; // dither raw density byte (0..255)
     // OCCUPANCY GATE (?voxlod=1): per-brick 16-bit (OCC_MASK_DIM x OCC_MASK_DIM) SCREEN mask of
     // which footprint-bbox buckets contain a projected occupied 4x4x4 sub-cell. Phase A builds it
     // by projecting each occupied cell centre into the brick's clamped bbox + DILATING by +-1
@@ -639,9 +585,6 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
     const wgCellLo = voxCell ? workgroupArray('uint', WG_RASTER) : null;
     const wgCellHi = voxCell ? workgroupArray('uint', WG_RASTER) : null;
     const wgCellOk = voxCell ? workgroupArray('uint', WG_RASTER) : null;
-    // ?voxsgb=2 live-brick compaction list (+516 B workgroup memory; ~6.2 KB of 32 KB used)
-    const wgLive = voxSgb >= 2 ? workgroupArray('uint', WG_RASTER) : null;
-    const wgLiveN = voxSgb >= 2 ? workgroupArray('uint', 1) : null;
     If(guard, () => {
       const item = qVoxRasterRO.element(itemIdx.add(uint(1)));
       const instId = item.x.toVar();
@@ -795,19 +738,6 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
         const brHalf = bcU2F(elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_HALF)))).toVar();
         const brWCenter = instTransformPoint(A, B, yawSc, brLocal);
         const brWR = instSphereRadius(A, B, brHalf as unknown as NF, float(0)).toVar();
-
-        // DENSITY-MODULATED COVERAGE (?voxdither=1 only): stash THIS brick's salt + its RAW
-        // density byte (word4.A, the high byte of BRICK_ALBEDO — already a uint, no float
-        // cast needed) for Phase B, which rebuilds the clamped float. Skip both entirely in
-        // the OPAQUE default (no coverage gate ⇒ no per-brick density read).
-        if (voxDither && wgBrickAbs && wgDensBits) {
-          const densByte = elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_ALBEDO)))
-            .shiftRight(uint(24))
-            .bitAnd(uint(0xff))
-            .toVar();
-          wgSet(wgBrickAbs, brickLocal, bAbs);
-          wgSet(wgDensBits, brickLocal, densByte);
-        }
 
         // project the 8 corners of THIS brick's world AABB cube [brWCenter ± brWR] → screen bbox
         // + near z. A near-plane-straddling brick's surviving corners can fling the bbox to
@@ -1177,27 +1107,6 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
       // (O(area/WG) per lane, BRICK_MAX_EXT caps any one brick at ≤128×128) is preserved;
       // tiny/empty bricks (area 0) contribute a zero-trip inner loop.
       const nBricks = minU(brickCount, uint(WG_RASTER)).toVar();
-      // ?voxsgb: virtual 32-lane groups from localId arithmetic only (no subgroups feature).
-      const sgbOn = voxSgb >= 1;
-      const sgbGid = sgbOn ? brickLocal.shiftRight(uint(5)).toVar() : null;
-      const sgbLane = sgbOn ? brickLocal.bitAnd(uint(31)).toVar() : null;
-      if (voxSgb >= 2 && wgLive && wgLiveN) {
-        // live-brick compaction: lane 0 builds the list serially post-barrier (≤128 wg-reads
-        // + branches) — trivially cheaper than the nBricks×4-group dead setup it deletes.
-        // This barrier is a SIBLING of the Phase-A barrier above (same uniform scope; a
-        // divergent placement is a tint/naga COMPILE error, not a silent wrong).
-        If(brickLocal.equal(uint(0)), () => {
-          const n = uint(0).toVar();
-          loopU(uint(0), nBricks, (i) => {
-            If((wgBbW.element(i) as unknown as NU).notEqual(uint(0)), () => {
-              wgSet(wgLive, n, i);
-              n.assign(n.add(uint(1)));
-            });
-          });
-          wgSet(wgLiveN, uint(0), n);
-        });
-        workgroupBarrier();
-      }
       // ?voxcell per-CLUSTER ray/clip bases (uniform across the workgroup — A/B/yawSc are
       // per-cluster). Two linearizations make the per-pixel ray path cheap:
       //  (1) RAY DIRECTION IS LINEAR IN NDC. invVp·(x,y,1,1) has a CONSTANT w across x,y
@@ -1261,12 +1170,9 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
       // ?voxrdbg=2 STOP point: skip the ENTIRE Phase-B election (no per-pixel atomicMax / visBV
       // store). Build-time gate ⇒ when OFF (production) this whole block is emitted byte-identical.
       const phaseB = (): void =>
-      loopU(sgbOn && sgbGid ? sgbGid : uint(0), voxSgb >= 2 && wgLiveN ? ((wgLiveN.element(uint(0)) as unknown as NU).toVar() as NU) : nBricks, (slot) => {
-        // ?voxsgb=2: slot walks the compacted LIVE list; b stays the TRUE brick index
-        // (voxIdB bits 21-27 must decode the real brick's normal/albedo in the resolve).
-        const b = voxSgb >= 2 && wgLive ? (wgLive.element(slot) as unknown as NU).toVar() : slot;
-        // recover this brick's footprint RECORD (set up in Phase A). bbW first: under ?voxsgb
-        // it gates the whole per-brick setup (empty record ⇒ skip; legacy pays 4× setup here).
+      loopU(uint(0), nBricks, (slot) => {
+        const b = slot;
+        // recover this brick's footprint RECORD (set up in Phase A).
         const bbW = (wgBbW.element(b) as unknown as NU).toVar();
         const brickBody = (): void => {
         const bbX0 = (wgBbX0.element(b) as unknown as NU).toVar();
@@ -1309,8 +1215,7 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
           ? cOccLo!.equal(uint(0xffffffff)).and(cOccHi!.equal(uint(0xffffffff))).toVar()
           : null;
         // each lane strides this brick's footprint: localPx = brickLocal, brickLocal+128, …
-        // (?voxsgb: the brick's OWN 32-lane group strides it — localPx = lane, lane+32, …)
-        loopU(sgbOn && sgbLane ? sgbLane : brickLocal, area, (localPx) => {
+        loopU(brickLocal, area, (localPx) => {
           // ly/lx: integer div+mod by default; per-brick float reciprocal under ?voxrecip
           // (loss-exact, see flag note) — Apple has no HW int-divide so the default path pays
           // a microcoded sequence on every fragment.
@@ -1348,22 +1253,7 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
           // 0xffff (all buckets) for any unarmed/full/degenerate brick ⇒ that pixel always paints
           // ⇒ no behaviour change there. The +1 dilation (Phase A) makes this provably hole-free.
           // voxlod=0: occMask is null and this whole branch is build-time absent (byte-identical).
-          const dispatchElect = (): void => {
-            if (voxDither && wgBrickAbs && wgDensBits) {
-              // density-modulated see-through dither (?voxdither=1): stable per-(pixel,brick)
-              // stipple drops (1-density) of the footprint. The raw density byte (0..255) was
-              // stashed in Phase A; rebuild the clamped [FLOOR,CEIL] float exactly as before.
-              // Salt with the absolute brick index so neighbouring bricks have independent stipples.
-              const dens = toF(wgDensBits.element(b) as unknown as NU)
-                .div(255)
-                .clamp(COVER_FLOOR, COVER_CEIL)
-                .toVar();
-              const keep = coverHash(x, y, wgBrickAbs.element(b) as unknown as NU).lessThan(dens).toVar();
-              If(keep, electHere);
-            } else {
-              electHere();
-            }
-          };
+          const dispatchElect = electHere;
           // legacy flat path (front-slab key, solid footprint, optional bucket gate) —
           // wrapped so ?voxcell can route only its eligible bricks to the ray path.
           const flatPath = (): void => {
@@ -1539,16 +1429,13 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
           } else {
             flatPath();
           }
-        }, sgbOn ? 32 : WG_RASTER);
+        }, WG_RASTER);
         }; // end brickBody
-        if (sgbOn) If(bbW.notEqual(uint(0)), brickBody);
-        else brickBody();
-      }, sgbOn ? WG_RASTER / 32 : undefined);
-      // build-time gates: ?voxrdbg>=2 skips the whole election; ?voxsgb gates Phase B on
-      // wgVisible (a block-culled cluster stored only empty seeds — skipping is a no-op).
+        brickBody();
+      });
+      // build-time gate: ?voxrdbg>=2 skips the whole election.
       if (voxRdbg < 2) {
-        if (sgbOn) If((wgVisible.element(uint(0)) as unknown as NU).equal(uint(1)), phaseB);
-        else phaseB();
+        phaseB();
       }
     });
     // ONE WORKGROUP per voxel cluster work-item (split2D indirect args over the fanned count,
