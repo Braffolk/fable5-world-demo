@@ -39,14 +39,40 @@ sweeps `s1..s3`, verify `v1-*`, discriminators `t1..t3`, near-field pivot `a/b/c
    (FarTiles.planFarTiles): **cellSize snapped DOWN to tileSize/cellsXZ** (0.75→0.727) — grid
    spans exactly 64 m, watertight, no duplicates. VERIFIED: hard seam lines gone (v1 high).
 
-## Remaining (this arc)
-- **140 m voxel→fartile harsh jump** (user report #2): per-tree ~0.5 m bricks → fartile 3 m
-  bricks in one step. Sweep E: ftcell 0.5 + aggdist 160 (finer tiles, farther seam) — pending.
-- leaflodk 0.25 (softer crown simplification ≤60 m) — sweep D pending.
-- Final defaults pick + cold verify + **perf snapshot** (canonical MF_COOLDOWN=5 probe) vs
-  cleanup-gate 12.9/16.7/9.3 — REQUIRED booking (perf cost quantified, user-accepted).
-- WATCH: one transient white glow blob (b-vn45g256-band, bloomed bright pixel, gone on
-  same-build re-shoot — TAA/warm-up transient, low prio).
+## Final picks (SHIPPED, commit 0751267)
+- voxnear **60**, voxgrid **256** (forest-scoped), voxtaucap **4**, lodnear **20**,
+  simband **25**, ftcell **0.6**, ftnrm **0.65** + MESH_FLAG_FARTILE fixes + exact tiling.
+- 140 m jump: **F (ftcell 0.6) beat G (aggdist 200)** on looks — whole far field uniformly
+  finer (2.4 m bricks) vs merely delaying 3 m slabs. ftcell **0.5 REJECTED**: ~3.4× splat,
+  cold boot >8 min (run E timed out) — not shippable. aggdist stays 140.
+- leaflodk 0.25 (run D): visually indistinguishable from 0.4 at the band pose → keep 0.4
+  (user's perf-first tiebreaker).
+- SHIP verify gallery: scratchpad shots/SHIP-* (8 poses) — no banding, no seams, no holes,
+  no harsh band transition. Boot (cold, grid256+ftcell0.6): ~103 s; warm (cache) ~16 s.
+- BOOTCACHE FIX (in commit): cache key now stores RESOLVED ftCell — a raw-null knob let a
+  code-default change silently HIT the stale entry (first SHIP run rendered 0.75 fartiles).
+  ⚠️ ForestScene.ts is NOT in SRC_HASH: default changes there must be key-visible (resolved
+  values in params), or they will not invalidate the cache.
+
+## Perf booking (canonical MF_COOLDOWN=5 iso, full clock)
+| config | eye | oblique | aerial |
+|---|---|---|---|
+| pre-beauty (cleanup gate) | 12.9 | 16.7 | 9.3 |
+| **SHIP** (fresh-beauty-ship.json) | **25.6** | **29.1** | **10.1** |
+| SHIP + OLD lodWarp curve (attr) | 18.4 | 22.7 | 9.8 |
+
+Attribution: the softened lodWarp holds **eye −7.2 / obl −6.4 ms** of the regression (mesh
+band tris at fine τ near); the voxel-fidelity trio (voxgrid 256 + voxtaucap 4 + ftcell 0.6)
+holds the remaining ~+5.5/+6.0. Aerial is essentially free (+0.8). User accepted the cost
+("stress test, we'll look at perf again after"); the future perf arc starts from this table.
+⚠️ probe EXTRA is COMMA-separated ('a=1,b=2') — '&' gets URL-encoded and silently corrupts
+the config (first attr run invalid, caught via the printed URL).
+
+## WATCH (open, low prio)
+- One transient white glow blob (b-vn45g256-band; bloomed bright pixel, gone on same-build
+  re-shoot — TAA/warm-up transient). If seen live: suspect a single-frame NaN in lighting.
+- One unreproduced 420 m whole-tile hole at voxtaucap=12 (s1-vn90-high); 0 recurrences in
+  ~10 high-pose samples at cap4 + instMinPx exemption. Coarse-cut related if it returns.
 
 ## Hazards / notes
 - Boot cache: SRC_HASH covers FarTiles/VoxelizeCrown etc → every src edit = full cold rebuild
