@@ -28,6 +28,15 @@ import {
   setClusterTriCap,
 } from '../nanite/GeometryRegistry';
 import { type DagBuild, buildDag } from '../nanite/BuildDag';
+import {
+  BootCache,
+  type PackedPreparedCrown,
+  type PackedFarTile,
+  packPreparedCrown,
+  unpackPreparedCrown,
+  packFarTiles,
+  unpackFarTiles,
+} from '../nanite/BootCache';
 import { buildAggregateDag, setAggLodErrorK } from '../nanite/BuildAggregateDag';
 import { appendFarTiles, buildFarTilesAsync, type FarTileSpecies } from '../nanite/FarTiles';
 import type { BrickCPU } from '../nanite/VoxelBrick';
@@ -59,6 +68,16 @@ function packLeafTint(c: { r: number; g: number; b: number; hueVar: number }): n
 export async function buildForestScene(ctx: WorldContext): Promise<void> {
   const { engine, seed } = ctx;
   const q = new URLSearchParams(window.location.search);
+  // boot stage map ([forest][boot] lines) — feeds the boot-cache design (which stages
+  // are worth caching) and any future boot-regression triage.
+  const tBoot0 = performance.now();
+  let tBootPrev = tBoot0;
+  const bootStage = (label: string): void => {
+    const now = performance.now();
+    // eslint-disable-next-line no-console
+    console.log(`[forest][boot] ${label} +${(now - tBootPrev).toFixed(0)}ms (cum ${((now - tBoot0) / 1000).toFixed(1)}s)`);
+    tBootPrev = now;
+  };
   const nTrees = Math.max(1, Math.floor(Number(q.get('trees') ?? '200000')));
   const spacing = Number(q.get('spacing') ?? '4');
   const leafDensity = Math.max(1, Math.floor(Number(q.get('leafdensity') ?? '4000')));
@@ -165,7 +184,36 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
   if (pools.length === 0) throw new Error('forest: no canopy tree pools with leaf crowns');
 
   // ── register bark + leaf per species ──────────────────────────────────────
+  bootStage('veg library (trees gen + bark textures)');
   ctx.progress(0.5, 'forest: registering tree meshes');
+  // ── boot cache (DDC): crown voxelizations / DAG builds / fartiles splat ────
+  // key = builder-source hash + every param feeding those builds (BootCache.ts).
+  // anchorL0 folds in viewport height + fov (voxlod ladder anchor); seed covers
+  // the veg geometry; leaflodk/caps cover the DAG shapes.
+  const bootCache = new BootCache({
+    params: {
+      seed: seed.seed,
+      nTrees,
+      spacing,
+      leafDensity,
+      wantDag,
+      noLeaves,
+      voxOn,
+      forceVox,
+      voxGridDim,
+      voxLod,
+      transitionDist,
+      farTilesOn,
+      aggDist,
+      anchorH: engine.renderer.getDrawingBufferSize(new Vector2()).y,
+      fov: engine.camera.fov,
+      knobs: ['voxlodk', 'voxlodlevels', 'voxlodsparse', 'voxlodshell', 'leaflodk', 'clustertris', 'clusterfill', 'ftcell'].map(
+        (k) => q.get(k),
+      ),
+    },
+  });
+  const cachedCrowns = voxOn && !noLeaves ? await bootCache.get<(PackedPreparedCrown | null)[]>('crowns') : null;
+  const crownPacks: (PackedPreparedCrown | null)[] = [];
   const reg = new GeometryRegistry();
   const dagJobs: { handle: number; build: () => DagBuild }[] = [];
   // voxel-foliage (§5.2/§5.3): per-species voxelization collected here so the brick budget
@@ -199,7 +247,9 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
     // (its voxel sibling owns mid/far); pure-triangle (voxreg=0) keeps the full envelope.
     reg.setMaxDistance(leaf, noLeaves ? 0.001 : voxOn ? transitionDist : 2000);
     if (voxOn && !noLeaves) {
-      const prep = prepareVoxelCrown(leafSrc, pool.leaf!.color, voxGridDim, voxLod);
+      const cached = cachedCrowns?.[poolIdx];
+      const prep = cached ? unpackPreparedCrown(cached) : prepareVoxelCrown(leafSrc, pool.leaf!.color, voxGridDim, voxLod);
+      if (!cached) crownPacks[poolIdx] = packPreparedCrown(prep);
       // a real leaf crown always voxelizes to >0 bricks; guard a degenerate empty crown
       // (registerVoxelHead throws on 0 blocks) so the leaf keeps its full mesh envelope.
       if (prep.brickCount > 0) {
@@ -231,6 +281,10 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
 
   // ── plant a jittered grid, species spatially mixed; per-mesh streams must be
   //    contiguous, so collect per-pool instance lists then bind each once ─────
+  bootStage('mesh registration + crown voxelization prep');
+  if (!cachedCrowns && voxOn && !noLeaves && crownPacks.length > 0) {
+    void bootCache.put('crowns', pools.map((_, i) => crownPacks[i] ?? null));
+  }
   ctx.progress(0.6, `forest: planting ${nTrees} trees`);
   const side = Math.ceil(Math.sqrt(nTrees));
   const half = (side * spacing) / 2;
@@ -268,20 +322,27 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
   }
 
   // ── DAG build (sync; ~0.8 s/crown @ 4000) → addLate → build → attach ──────
+  bootStage('planting + instance streams');
   const builds: { handle: number; dag: DagBuild }[] = [];
   if (dagJobs.length > 0) {
     ctx.progress(0.75, `forest: building ${dagJobs.length} LOD DAGs`);
+    // boot cache: DagBuild[] in dagJobs order (handles are re-derived from THIS boot's
+    // registration, which always runs — only the expensive build() is skipped on hit).
+    const cachedDags = await bootCache.getMany<DagBuild>('dags');
+    const usable = cachedDags && cachedDags.length === dagJobs.length ? cachedDags : null;
     let lateV = 0;
     let lateT = 0;
     let lateC = 0;
-    for (const job of dagJobs) {
-      const dag = job.build();
+    for (let ji = 0; ji < dagJobs.length; ji++) {
+      const job = dagJobs[ji]!;
+      const dag = usable ? usable[ji]! : job.build();
       lateV += dag.verts.length / DAG_VERT_STRIDE;
       lateT += dag.indices.length / 3;
       lateC += dag.clusters.length;
       builds.push({ handle: job.handle, dag });
     }
     reg.addLate({ verts: lateV, tris: lateT, clusters: lateC });
+    if (!usable) void bootCache.putMany('dags', builds.map((b) => b.dag));
   }
   // voxel-foliage (§5.3 HARD precondition): reserve the brick budget + voxel sibling heads
   // (1 mesh + 1 instance stream + ceil(bricks/128) clusters each) BEFORE build() freezes the
@@ -343,7 +404,13 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
     }
     // wave 4: worker-pool splat (36-42 s single-threaded → ~core-count× less wall);
     // falls back to the sync build internally on any worker failure.
-    farTiles = await buildFarTilesAsync({ tileSize: 64, cellSize: TILE_CELL, pools: ftPools });
+    const cachedFt = await bootCache.get<PackedFarTile[]>('fartiles');
+    if (cachedFt) {
+      farTiles = unpackFarTiles(cachedFt);
+    } else {
+      farTiles = await buildFarTilesAsync({ tileSize: 64, cellSize: TILE_CELL, pools: ftPools });
+      void bootCache.put('fartiles', packFarTiles(farTiles));
+    }
     let ftBricks = 0;
     let ftClusters = 0;
     for (const t of farTiles) {
@@ -357,8 +424,10 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
         `${ftClusters} clusters, aggDist ${aggDist} m, built in ${(performance.now() - tFt0).toFixed(0)} ms`,
     );
   }
+  bootStage('LOD DAG builds + fartiles splat');
   ctx.progress(0.9, 'forest: building registry');
   const report = reg.build(engine.renderer, engine.stats.counters);
+  bootStage('registry build + GPU upload');
   for (const b of builds) reg.attachDag(b.handle, b.dag);
   // voxel-foliage (§5.2 / Stage 3a): append each crown's bricks + register a voxel:7 sibling
   // head over the SAME instances now that build() froze the caps, then hand off the leaf head
@@ -444,6 +513,7 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
     const hf = await Heightfield.generate(engine.renderer, ctx.params, seed, (p, m) =>
       ctx.progress(0.93 + p * 0.05, m),
     );
+    bootStage('vox append + heightfield');
     const bootTod = ctx.params.timeOfDay;
     const sunSky = new SunSky(engine, bootTod);
     await sunSky.init(engine.renderer);
@@ -470,6 +540,7 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
       barkTexA: lib.barkArray?.texA ?? null,
       barkTexB: lib.barkArray?.texB ?? null,
     });
+    bootStage('sky + post + NaniteFrame build');
     engine.post = frame as unknown as typeof engine.post;
     // meter() is driven once/frame by Engine.renderStep (this.post.meter) — same as
     // the world scene. Do NOT also wire it via onUpdate or it dispatches autoExposure
