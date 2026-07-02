@@ -249,3 +249,49 @@ distribution), submit folds 1a/1b, prev-frame occlusion (pool A), resolve/post p
   bubble is the cost to beat; K=16 stays ONE histogram (bucket build is unchanged).
 - Aerial/oblique BIMODALITY (§1) is worth its own hunt after the wave experiments — it's
   ~4-9 ms of periodic cost on the two worst poses.
+
+## 5g. Submit folds (spec-orchestration-submit-folds) — build + gates (17:0x)
+
+Stages 1-4 BUILT (all flags default-OFF): ?coalesce=1 (7 submits folded — cull side ONE
+submit via fullArgsBatch()/voxFanoutBatch(); raster side voxPyr+kVoxScatter+HZB chain ONE
+submit via dispatchVoxel tail + hzb.batch()); ?dvclear=0 (dead 3.3M-px visDepthV clear
+skipped, auto-kept under nanprobe/audit/rdbg); ?pyrfuse=1 (≤1024-texel pyramid tails fused
+into ONE single-workgroup storageBarrier kernel, both chains); measure-infra 4a-4c
+(meterQuiet + meterRead outside the timed window + event-loop-lag capSuspect; probe prints
+capRejects). Stage 1+2 committed f490f02. Plus ?wind=N forest knob (strength override).
+
+KEY MEASUREMENT LESSON: the first shot-diff gate "FAILED" 28.7%-changed at eye — it was
+GUST PHASE (sway rides three's wall-clock time node; runs can never phase-match). wind=0
+still-scene reruns: D0 ctl-vs-ctl = 0.40/0.18/0.37% (eye/obl/aerial); stage1 0.59/0.21/0.37;
+stage2 0.62/0.20/0.43; stage3 0.61/0.19/0.42 — ALL at the D0 band ⇒ pixel-equivalent.
+
+capSuspect fix VERIFIED: capRejects 0/32 every pose (was 15-32/32 — outlier filter dead).
+
+OPEN at this checkpoint: live 1L pair came back confounded — ctl-live (run 2 of 3, cooler)
+p50 16.5 p95 17.1 0×>33ms (best live EVER — suspicious); coal-live (run 3, hottest, heap
+anomaly 5.5GB vs 3.5) p50 16.6 p90/p95 24.8/25.1 (= the historical warm milestone band) +
+one 26-frame 40-59ms burst @ticks 534-564 (same class as milestone2's tick-220 external
+burst). Reversed-order re-measure in flight (coal FIRST). w0-pyr isolated oblique read
++3.8 vs stage-2 (N≈3.4, expected ≤0.3 — likely thermal; shot gate passed).
+
+### 5g VERDICTS (17:3x) — submit-fold arc CLOSED, commits f490f02 / 5461a89 / 5a7d0c0
+
+- **SHIPPED DEFAULT-ON: ?coalesce (12-14 → ~7-8 submits/frame) + dvclear skip** (flip
+  commit 5a7d0c0, flip-verified 0.52/0.14/0.52% = D0 band). Perf-neutral-to-small-win
+  within session noise (per doc-10 upper bounds this was always a ≤1ms floor-sweep);
+  value = cleaner frame graph + strictly less dead work + the folded-submit structure
+  pool-A prev-frame occlusion will build on.
+- **PARKED default-OFF: ?pyrfuse=1** (pixel-equivalent, perf ambiguous: one +3.8 oblique
+  read then neutral on re-measure; upside ≤0.3ms). Surface: available as a lever if
+  submit/barrier count matters later.
+- **MEASUREMENT APPARATUS FIXED (unconditional)**: capRejects 0/32 everywhere (outlier
+  filter ALIVE — was dead at 15-32/32); per-frame nanite.* counters now in every
+  MeasuredFrame (B1 bimodality + engagement counters unblocked); meter readbacks out of
+  the timed window; ?wind=0 still-scene knob (shot gates now possible at all — the
+  28.7% "quality FAIL" was gust phase).
+- **LIVE-BURST CLASS ATTRIBUTED**: the 26-49-frame 33-125ms bursts follow RUN POSITION
+  in back-to-back probe sequences (reversed-order pair proved it), NOT build content —
+  same class as milestone2's tick-220. Treat any single-run burst as session artifact;
+  never gate on it without an order-reversed pair.
+- NEXT per 00-MASTER-PLAN: pool D resolve/post restructures (doc 16), then pool A
+  prev-frame occlusion (engagement counters now READY via 4b meterRead).
