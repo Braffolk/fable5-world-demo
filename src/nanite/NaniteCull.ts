@@ -187,6 +187,9 @@ export interface NaniteCullChain {
    *  whole far blocks; ?voxf2b=0 disables for the A/B). When false the cull runs today's
    *  single unordered append + the raster issues ONE dispatch over voxRasterDispatchAttr. */
   voxF2bEnabled: boolean;
+  /** ?voxprev two-pass visibility partition active (implies voxF2bEnabled, K=2;
+   *  spec-prev-frame-occlusion §2.4). Gates the voxB0/voxB1 meter counters. */
+  voxPrevEnabled: boolean;
   /** phase 1: clear → instance cull → cluster cull → raster args */
   runPhase1(renderer: Renderer): void;
   /** CAMERA||SHADOW OVERLAP (item 4): the EXACT ordered kernel list runPhase1 would
@@ -212,6 +215,9 @@ export interface NaniteCullChain {
   runVoxFanout(renderer: Renderer): void;
   /** voxel-foliage: readback of the fanned voxel-cluster count (HUD/overflow). */
   readVoxCount(renderer: Renderer): Promise<number>;
+  /** F2B/voxprev: per-bucket cluster counts (voxBucketRange[b].count, length = voxF2bK).
+   *  Under ?voxprev: [0] = probably-visible (pass A), [1] = probably-occluded (pass B). */
+  readVoxBuckets(renderer: Renderer): Promise<number[]>;
   readCounts(renderer: Renderer): Promise<NaniteCullCounts>;
 }
 
@@ -248,6 +254,12 @@ export function buildNaniteCull(
      *  holes). Callers pass registry.maxDagDepth (+ a small margin). ?hierdepth overrides.
      *  Omitted ⇒ the legacy constant. Each pass is paid TWICE/frame (camera + shadow cut). */
     hierDepth?: number;
+    /** ?voxprev two-pass partition (spec-prev-frame-occlusion §2.4): the LIBERAL
+     *  prev-frame visibility classifier (NaniteHzb.sphereProbablyOccluded). MUST NOT be
+     *  the conservative emit-test closure — every qRaster entry already passed that exact
+     *  test this frame, so partitioning by it yields a provably-empty bucket 1. Verdicts
+     *  only ROUTE work (never drop); null (?occl=0 / shadow culls) ⇒ voxprev inert. */
+    voxPrevTest?: SphereOccludedFn | null;
   },
 ): NaniteCullChain {
   // N8-HIC: the cull is HIERARCHICAL — seed each mesh's roots + BFS-descend the DAG.
@@ -313,7 +325,22 @@ export function buildNaniteCull(
   // the depth-bucketed BIN path was REFUTED + REMOVED for (file header §6.0). LOSS-EXACT: atomicMax
   // is order-independent, so the unordered path is image-identical (verified). ?voxf2b=1 restores
   // the old K-bucket path (the A/B control / opt-in for any future large-batch retune).
-  const voxf2b = (voxParams.get('voxf2b') ?? '0') !== '0';
+  // ?voxprev=1 — TWO-PASS vox scatter (spec-prev-frame-occlusion §2.4): partition
+  // qVoxRaster by the LIBERAL prev-frame visibility classifier (bucket 0 = probably-
+  // visible last frame, bucket 1 = probably-occluded), scattered as 2 waves with a
+  // voxOccPyr rebuild between (the raster forces ?voxwaves=2), so pass B's per-block +
+  // per-brick culls fire against REAL same-frame vox occluders (pass A's elections).
+  // Rides the F2B plumbing at K=2 (bucket = visibility bit instead of depth slab).
+  // Gated on opts.voxPrevTest, NOT the emit-test sphereOccluded — the emit test already
+  // filtered qRaster with that exact closure, so partitioning by it would yield an
+  // exactly-empty bucket 1. Under ?occl=0 voxPrevTest is null ⇒ fully INERT. Precedence:
+  // voxprev=1 forces voxf2b on + K=2 (+ waves=2 in the raster); explicit ?voxf2b/
+  // ?voxf2bk/?voxwaves values are ignored while it is set. NOTHING is ever dropped by
+  // the prev-frame verdict — it only picks the pass; both passes end at the same
+  // exact-conservative same-frame culls (quality-law argument: spec §3).
+  const voxPrevTest = opts?.voxPrevTest ?? null;
+  const voxPrev = voxParams.get('voxprev') === '1' && voxPrevTest !== null;
+  const voxf2b = voxPrev || (voxParams.get('voxf2b') ?? '0') !== '0';
   // ?voxtaucap — voxel-cluster τ_eff clamp (px); see the traverse cut note. DEFAULT 12
   // (2026-07-02c): pre-?fartiles this cap was ruinous — it fought the lodWarp across
   // THOUSANDS of per-tree crowns (~8× bricks per forced level; aerial 36→81 ms at 8px).
@@ -334,7 +361,9 @@ export function buildNaniteCull(
   // occluders are published in an earlier bucket ⇒ more whole-block skips. Try 8/12/24
   // via ?voxf2bk). Clamped [1,32]. buildNaniteVoxelRaster reads the SAME K.
   const voxF2bKraw = parseInt(voxParams.get('voxf2bk') ?? '16', 10);
-  const VOX_F2B_K = Math.min(32, Math.max(1, Number.isFinite(voxF2bKraw) ? voxF2bKraw : 16));
+  const VOX_F2B_K = voxPrev
+    ? 2 // visibility partition: bucket 0 = probably-visible, bucket 1 = probably-occluded
+    : Math.min(32, Math.max(1, Number.isFinite(voxF2bKraw) ? voxF2bKraw : 16));
   const coneCull = opts?.coneCull !== false;
   // S3 SHADOW CLIPMAP hollow (D-N29): a clipmap level rasters only the RING
   // outside the next-finer level — a cluster whose light-space clip bbox lies
@@ -591,6 +620,27 @@ export function buildNaniteCull(
     return minU(bIdx, uint(K - 1));
   };
 
+  // ?voxprev TWO-PASS partition bit: 1 ⇔ the cluster's world sphere classifies
+  // PROBABLY-OCCLUDED against the PREV-frame full-content HZB via the LIBERAL centre
+  // test (prevVp/prevCamPos — the same uniform pair the emit test uses; the classifier
+  // is deliberately NOT the emit closure, see the flag comment). Sphere math mirrors
+  // the emit site exactly (instWorldSphere + swayPad) so the partition classifies the
+  // same bound the raster will paint. Self-contained: fetches the A/B instance words
+  // itself (mirroring voxClusterDepth) — it is only ever called INSIDE the
+  // If(matClass==7) branch, so every node it builds stays in the conditional subtree
+  // (TSL hoist discipline; hoisting A/B above the If would pay 2 dead instance loads
+  // per non-voxel entry).
+  const voxPrevBucket = (instId: NU, ci: NU): NU => {
+    const A = gpu.instances.element(instId.mul(uint(2))).toVar() as unknown as NV4;
+    const B = gpu.instances.element(instId.mul(uint(2)).add(uint(1))).toVar() as unknown as NV4;
+    const c = readCluster(gpu.clusters, ci);
+    const isHF = c.flags.bitAnd(uint(1)).notEqual(uint(0));
+    const swayPad = bcU2F(elemU(gpu.meshes, c.meshId.mul(uint(MESH_WORDS)).add(uint(11))));
+    const s = instWorldSphere(A, B, isHF as unknown as NB, c.sphere, swayPad);
+    const occ = voxPrevTest!(s.center, s.radius, cam.prevVp, cam.prevCamPos);
+    return (occ as unknown as { select(a: NU, b: NU): NU }).select(uint(1), uint(0));
+  };
+
   // kVoxRangeArgs: clear voxRange (min=+inf, max=0) + the K bucket counters → 0, and
   // size the one-thread-per-entry dispatch over the live qRaster count (shared
   // voxFanoutDispatch — kVoxRange/kVoxCount/kVoxScatterFan all run this same grid).
@@ -641,7 +691,11 @@ export function buildNaniteCull(
       .shiftRight(uint(8))
       .bitAnd(uint(0xff));
     If(matClass.equal(uint(VOXEL_MATCLASS)), () => {
-      const bIdx = voxDepthBucket(voxClusterDepth(instId, ci));
+      // build-time ternary: visibility bit (?voxprev) or depth slab (?voxf2b legacy) —
+      // the unused branch (and its bindings: hzb pyramid vs voxRange) is compiled out.
+      const bIdx = voxPrev
+        ? voxPrevBucket(instId, ci)
+        : voxDepthBucket(voxClusterDepth(instId, ci));
       atomicAdd(voxBucketCount.element(bIdx), uint(1));
     });
   })().compute(QRASTER_CAP, [64]);
@@ -704,7 +758,12 @@ export function buildNaniteCull(
       .shiftRight(uint(8))
       .bitAnd(uint(0xff));
     If(matClass.equal(uint(VOXEL_MATCLASS)), () => {
-      const bIdx = voxDepthBucket(voxClusterDepth(instId, ci)).toVar();
+      // MUST match kVoxCount's bucket exactly (count==scatter invariant; Q1 in the spec —
+      // identical expression trees against identical pyramid bytes, the shipped F2B idiom).
+      const bIdx = (voxPrev
+        ? voxPrevBucket(instId, ci)
+        : voxDepthBucket(voxClusterDepth(instId, ci))
+      ).toVar();
       const range = voxBucketRangeV.ro.element(bIdx);
       const base = range.x.toVar();
       const cnt = range.y.toVar();
@@ -1042,8 +1101,11 @@ export function buildNaniteCull(
   // range(min/max) → count(reads range) → prefix(reads counts, writes bases/ranges/
   // qVoxRaster[0]/cursor + per-bucket dispatch args) → scatter(reads bases/ranges).
   const voxF2bBatch: unknown[] = [
-    kVoxRangeArgs,
-    kVoxRange,
+    kVoxRangeArgs, // still needed under voxprev: clears bucket counters + sizes the grid
+    // voxprev partitions by VISIBILITY, not depth — the depth-range pass only feeds
+    // voxDepthBucket (compiled out), so drop it (its voxRange clears in kVoxRangeArgs
+    // become dead writes — harmless, 2 words).
+    ...(voxPrev ? [] : [kVoxRange]),
     kVoxCount,
     kVoxPrefix,
     ...kVoxBucketArgs, // K tiny 1-thread args kernels (per-bucket indirect dispatch sizes)
@@ -1064,6 +1126,16 @@ export function buildNaniteCull(
   const readVoxCount = async (renderer: Renderer): Promise<number> => {
     const buf = await readBuffer(renderer, voxCountAttr, 0, 4);
     return new Uint32Array(buf)[0] ?? 0;
+  };
+
+  // ?voxprev gate instrumentation (spec §6 R9, MANDATORY): per-bucket cluster counts from
+  // voxBucketRange[b] = (base, count). B1 ≈ 0 at oblique ⇒ the classifier is degenerate and
+  // NO perf number may be interpreted (a perf null with B1≈0 is a classifier failure, not
+  // evidence about occlusion). CPU-only readback; called from meterRead (drained queue).
+  const readVoxBuckets = async (renderer: Renderer): Promise<number[]> => {
+    const buf = await readBuffer(renderer, voxBucketRangeAttr, 0, 8 * K);
+    const u = new Uint32Array(buf);
+    return Array.from({ length: K }, (_, b) => u[2 * b + 1] ?? 0);
   };
 
   const readCounts = async (renderer: Renderer): Promise<NaniteCullCounts> => {
@@ -1116,6 +1188,7 @@ export function buildNaniteCull(
     voxBucketDispatchAttr,
     voxF2bK: K,
     voxF2bEnabled: voxf2b,
+    voxPrevEnabled: voxPrev,
     runPhase1,
     phase1Batch: () => phase1BatchList,
     syncFullArgs,
@@ -1124,6 +1197,7 @@ export function buildNaniteCull(
       voxf2b ? voxF2bBatch : [kVoxFanoutArgs, kVoxFanout, kVoxRasterArgs],
     runVoxFanout,
     readVoxCount,
+    readVoxBuckets,
     readCounts,
   };
 }

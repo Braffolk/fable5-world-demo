@@ -276,7 +276,17 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // with a voxOccPyr rebuild between waves, so later waves' per-block occlusion cull sees
   // earlier waves' voxel elections (vox-behind-vox). See dispatchVoxel. 0/1 = off (old path).
   const voxWavesRaw = parseInt(new URLSearchParams(window.location.search).get('voxwaves') ?? '0', 10);
-  const voxWaves = Number.isFinite(voxWavesRaw) ? Math.min(16, Math.max(0, voxWavesRaw)) : 0;
+  // ?voxprev=1 (spec-prev-frame-occlusion §2.4.2) forces the 2-wave dispatch: pass A
+  // (probably-visible) scatters first, voxOccPyr REBUILDS (now vox-inclusive), pass B
+  // (probably-occluded) then culls against real same-frame vox occluders. Overrides an
+  // explicit ?voxwaves while set. INERT under ?occl=0: the cull's voxPrev gate fails ⇒
+  // voxF2bEnabled arrives false ⇒ the waves path below is never taken.
+  const voxPrevR = new URLSearchParams(window.location.search).get('voxprev') === '1';
+  const voxWaves = voxPrevR
+    ? 2
+    : Number.isFinite(voxWavesRaw)
+      ? Math.min(16, Math.max(0, voxWavesRaw))
+      : 0;
   // ?voxbocc=1 — PER-BRICK occlusion test in Phase A (block-level cull granularity refined
   // to each brick's own bbox + front-slab key vs the same min-pooled voxOccPyr; identical
   // conservative polarity/window idiom). A brick in a PARTIALLY-visible block that is itself

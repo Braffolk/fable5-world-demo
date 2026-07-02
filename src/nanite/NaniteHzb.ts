@@ -64,6 +64,12 @@ export interface NaniteHzb {
    * last frame's depth; phase 2 passes the CURRENT pair vs the fresh build.
    */
   sphereOccluded(center: NV3, radius: NF, vp: UniformMat4, camPos: UniformV3): NB;
+  /** LIBERAL prev-frame visibility classifier for the ?voxprev two-pass vox partition
+   *  (spec-prev-frame-occlusion §2.4.0). Deliberately NON-conservative: its verdict only
+   *  ROUTES work between two passes that both end at the same exact-conservative
+   *  same-frame culls, so false positives AND false negatives are perf-only. Never use
+   *  it to DROP anything. */
+  sphereProbablyOccluded(center: NV3, radius: NF, vp: UniformMat4, camPos: UniformV3): NB;
   /** S2-OCCL: ORTHO occlusion test for directional-light shadow cascades (sunDir
    *  toward the sun, span = cascade ortho width in m). Returns a SphereOccludedFn
    *  for buildNaniteCull (camPos arg ignored — ortho has no finite eye). */
@@ -96,6 +102,10 @@ export function buildNaniteHzb(
   }
   const totalTexels = offset;
   const levelCount = levels.length;
+
+  // ?occg=0 reverts the perspective test's footprint-fully-inside guard to the shipped
+  // centre-on-screen guard (see sphereOccluded below). Default ON.
+  const occGuard = new URLSearchParams(window.location.search).get('occg') !== '0';
 
   const table = uniformArrV4(
     Array.from({ length: MAX_LEVELS }, (_, k) => {
@@ -268,11 +278,81 @@ export function buildNaniteHzb(
     // over-cull ramp). Mirrors the ortho variant's guard below; the frustum cull owns
     // off-screen spheres. Quality-IMPROVING fix (deep-review doc 11 / spec-prev-frame-occlusion).
     const onScreen = ndc.x.abs().lessThan(1).and(ndc.y.abs().lessThan(1));
+    // ?occg (default ON) — FOOTPRINT-fully-inside guard, strictly stronger than the centre
+    // guard above (spec-prev-frame-occlusion §2.3): a sphere whose prev-frame footprint
+    // STRADDLES the screen edge samples clamped edge texels that carry no information about
+    // the off-screen sliver ⇒ never occlusion-cull it. The level pick guarantees footprint
+    // radius ≤ 0.5 texel at the chosen level, so footprint ⊆ [px±0.5]×[py±0.5] and
+    // fully-inside ⇔ the 2×2 window below is unclamped. Caveat: when levelF CLAMPS at
+    // levelCount−1 (giant spheres; top level is 1×1) the ≤0.5-texel guarantee lapses —
+    // there lw=lh=1 makes inPrev ~always fail ⇒ KEEP, the conservative direction, and those
+    // near-screen-sized spheres were effectively uncullable anyway. ?occg=0 = centre guard.
+    const inPrev = px
+      .greaterThanEqual(0.5)
+      .and(px.lessThanEqual(toF(lw).sub(0.5)))
+      .and(py.greaterThanEqual(0.5))
+      .and(py.lessThanEqual(toF(lh).sub(0.5)));
     return dist
       .greaterThan(radius.mul(2)) // never occlusion-cull right at the camera
       .and(nearClip.w.greaterThan(0))
       .and(centerClip.w.greaterThan(0))
-      .and(onScreen)
+      .and(occGuard ? inPrev : onScreen)
+      .and(nearestZ.greaterThan(maxZ)) as unknown as NB;
+  };
+
+  // ---- LIBERAL prev-frame visibility classifier (?voxprev partition, §2.4.0) --------
+  // Identical math to sphereOccluded EXCEPT the 2×2 window is read `prevFiner` mips
+  // FINER than the diameter-fits-one-texel pick — it asks "is the CENTRAL ~2^(1-Δ)·
+  // diameter of the footprint behind prev content?", not "is the whole footprint
+  // conservatively occluded?". Δ=0 is degenerate BY CONSTRUCTION: every queued voxel
+  // cluster already passed the conservative whole-footprint emit test (NaniteCull
+  // kTraverse) against these same pyramid bytes, so the Δ=0 verdict is false for all of
+  // them. Off-screen/behind-camera prev projections return FALSE (route to pass A, the
+  // behaves-like-today default) via the CENTRE on-screen guard — routing needs no
+  // conservatism. ?voxprevlvl=Δ (default 2, clamp [1,8]) is the liberality knob.
+  const prevLvlRaw = Number(new URLSearchParams(window.location.search).get('voxprevlvl') ?? '2');
+  const prevFiner = Number.isFinite(prevLvlRaw) ? Math.max(1, Math.min(8, prevLvlRaw)) : 2;
+  const sphereProbablyOccluded = (
+    center: NV3,
+    radius: NF,
+    vp: UniformMat4,
+    camPos: UniformV3,
+  ): NB => {
+    const toCamera = camPos.sub(center).toVar();
+    const dist = toCamera.length().toVar();
+    const nearPoint = center.add(toCamera.div(dist).mul(radius));
+    const nearClip = vp.mul(vec4(nearPoint, 1)).toVar();
+    const centerClip = vp.mul(vec4(center, 1)).toVar();
+    const nearestZ = nearClip.z.div(nearClip.w);
+    const ndc = centerClip.xy.div(centerClip.w);
+    const radiusTexels = radius.mul(cam.cotHalfFov).mul(cam.uH).div(4).div(dist);
+    const levelF = radiusTexels
+      .mul(2)
+      .max(1)
+      .log2()
+      .ceil()
+      .sub(float(prevFiner)) // ← the ONLY math change vs sphereOccluded's level pick
+      .clamp(0, levelCountU.sub(1));
+    const info = table.element(uint(levelF));
+    const lw = uint(info.y).toVar();
+    const lh = uint(info.z).toVar();
+    const lo = uint(info.x).toVar();
+    // NO Y flip — same bottom-up visDepth buffer law as sphereOccluded
+    const px = ndc.x.mul(0.5).add(0.5).mul(toF(lw));
+    const py = ndc.y.mul(0.5).add(0.5).mul(toF(lh));
+    const x0 = uint(px.sub(0.5).clamp(0, toF(lw.sub(uint(1))))).toVar();
+    const y0 = uint(py.sub(0.5).clamp(0, toF(lh.sub(uint(1))))).toVar();
+    const x1 = minU(x0.add(uint(1)), lw.sub(uint(1)));
+    const y1 = minU(y0.add(uint(1)), lh.sub(uint(1)));
+    const z00 = hzbF.ro.element(lo.add(y0.mul(lw)).add(x0));
+    const z01 = hzbF.ro.element(lo.add(y0.mul(lw)).add(x1));
+    const z10 = hzbF.ro.element(lo.add(y1.mul(lw)).add(x0));
+    const z11 = hzbF.ro.element(lo.add(y1.mul(lw)).add(x1));
+    const maxZ = z00.max(z01).max(z10.max(z11));
+    const onScreen = ndc.x.abs().lessThan(1).and(ndc.y.abs().lessThan(1));
+    return onScreen
+      .and(nearClip.w.greaterThan(0))
+      .and(centerClip.w.greaterThan(0))
       .and(nearestZ.greaterThan(maxZ)) as unknown as NB;
   };
 
@@ -356,5 +436,13 @@ export function buildNaniteHzb(
     return scene;
   };
 
-  return { build, batch: () => kernels, sphereOccluded, makeOrthoOccluded, makeViewer, levelCount };
+  return {
+    build,
+    batch: () => kernels,
+    sphereOccluded,
+    sphereProbablyOccluded,
+    makeOrthoOccluded,
+    makeViewer,
+    levelCount,
+  };
 }

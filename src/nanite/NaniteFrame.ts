@@ -214,7 +214,18 @@ export function buildNaniteFrame(
     // PERF-VB3: HIERARCHICAL DAG-BFS cull is the SOLE world cull (every mesh is
     // DAG'd — terrain via TERRAIN-RW, veg via the always-on nanitedag). Single-phase
     // BFS, NON-packed two-pass raster (depthV ⇒ HZB + exact-depth world resolve unchanged).
-    { tau, minPx, simBandD, lodNear, lodPow, instMinPx, hierDepth: measuredHierDepth },
+    {
+      tau,
+      minPx,
+      simBandD,
+      lodNear,
+      lodPow,
+      instMinPx,
+      hierDepth: measuredHierDepth,
+      // ?voxprev two-pass partition classifier — the LIBERAL centre test, NOT the
+      // conservative emit test (spec-prev-frame-occlusion §2.1). null at ?occl=0 ⇒ inert.
+      voxPrevTest: occl ? hzb.sphereProbablyOccluded : null,
+    },
   );
   if (!hf.biomeTex || !hf.fieldsTex || !hf.noiseA || !hf.noiseB) {
     throw new Error('NaniteFrame: heightfield derived maps missing (boot order)');
@@ -572,8 +583,11 @@ export function buildNaniteFrame(
       scarOn ? raster.readScar(r) : Promise.resolve(null),
       voxActive ? cull.readVoxCount(r) : Promise.resolve(null),
       voxActive ? raster.readVoxWrites(r) : Promise.resolve(null),
+      // ?voxprev gate counters (spec §6 R9): per-bucket cluster counts. B1 ≈ 0 ⇒ the
+      // partition classifier is degenerate — no perf verdict may be read while so.
+      voxActive && cull.voxPrevEnabled ? cull.readVoxBuckets(r) : Promise.resolve(null),
     ])
-      .then(([c, hw, sh, scar, voxCount, voxWrites]) => {
+      .then(([c, hw, sh, scar, voxCount, voxWrites, voxBuckets]) => {
         // voxel-foliage (§A1): the fanned voxel-cluster count → HUD (the Verify agent
         // reads window.__laas.stats.counters). > 0 ⇒ the cull is emitting voxel clusters
         // into qVoxRaster and the Stage-2 bin/raster has work to consume.
@@ -583,6 +597,10 @@ export function buildNaniteFrame(
         // triangle fragments if the occlusion cull works). > 0 ⇒ the voxel raster produced winners.
         if (voxWrites !== null && voxWrites !== undefined)
           out['nanite.voxBrickWrites'] = voxWrites;
+        if (voxBuckets) {
+          out['nanite.voxB0'] = voxBuckets[0] ?? 0; // pass A: probably-visible
+          out['nanite.voxB1'] = voxBuckets[1] ?? 0; // pass B: probably-occluded
+        }
         if (scar) {
           // 0a SCAR readouts → HUD / window.__laas.stats.counters (the Verify agent
           // reads these). overdraw = band fragments / band covered pixels; bandShare =

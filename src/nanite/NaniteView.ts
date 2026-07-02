@@ -74,7 +74,8 @@ export function buildNaniteView(
     registry.instanceCount,
     cam,
     occl ? hzb.sphereOccluded : null,
-    { instMinPx, tau, simBandD, lodNear, lodPow },
+    // voxPrevTest: keep the isolated harness in ?voxprev parity with NaniteFrame
+    { instMinPx, tau, simBandD, lodNear, lodPow, voxPrevTest: occl ? hzb.sphereProbablyOccluded : null },
   );
   const raster = buildNaniteRaster(
     registry.gpu,
