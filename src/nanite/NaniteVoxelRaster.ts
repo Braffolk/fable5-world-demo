@@ -300,6 +300,16 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // warp-inflated bricks do, and those are exactly the area>64 set the ray path keeps.
   const voxCellMinAreaRaw = Number(new URLSearchParams(window.location.search).get('voxcellmin') ?? '64');
   const voxCellMinArea = Number.isFinite(voxCellMinAreaRaw) && voxCellMinAreaRaw >= 0 ? voxCellMinAreaRaw : 64;
+  // ?voxmaskray (spec-vox-kernel-microcuts A) — DEFAULT ON (2026-07-02, gate PASSED):
+  // skip the ≤512-projection occ-mask BUILD for RAY-ELIGIBLE bricks. cellElig is per-brick-
+  // uniform, an eligible brick's pixels ALL take the ray path, and the ray path provably never
+  // reads wgOccMask (consumer set: flat path only) — the build was a dead value on every
+  // ray-eligible brick in the far field. Gate (200k, same-session A/B vs control at HEAD):
+  // oblique 43.9→31.9 (−12.0), eye 28.3→22.2 (−6.1), aerial =; counters +30-240 clusters
+  // (the HZB edge guard, separate fix), shots pixel-equivalent. ?voxmaskray=0 restores legacy.
+  // Eligibility MUST mirror the Phase-B gate exactly (non-straddler AND area STRICTLY >
+  // voxCellMinArea); a mismatch is a perf miss only (unbuilt mask keeps the solid 0xffff seed).
+  const voxMaskRay = new URLSearchParams(window.location.search).get('voxmaskray') !== '0';
   const WRITE_CTR = 0;
   const atomicWords = 1;
   const atomicBufAttr = new StorageBufferAttribute(new Uint32Array(atomicWords), 1);
@@ -935,7 +945,15 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
               const gateArea = bbW.mul(bbH).toVar();
               // ARM only on a COARSE brick (dagLevel>0) whose footprint is big enough for empty
               // interior to matter. A fine/near (L0) brick keeps the 0xffff seed ⇒ paints solid.
-              If(gateArea.greaterThanEqual(uint(OCC_GATE_MIN_AREA)).and(dagLevel.greaterThan(uint(0))), () => {
+              let armCond = gateArea.greaterThanEqual(uint(OCC_GATE_MIN_AREA)).and(dagLevel.greaterThan(uint(0)));
+              if (voxMaskRay && voxCell) {
+                // ?voxmaskray: RAY-ELIGIBLE ⇒ wgOccMask is provably unread (dead value) — skip the
+                // build. Mirrors the Phase-B eligibility EXACTLY (wgCellOk = 1−straddles above;
+                // area STRICTLY > voxCellMinArea at the cellElig site) — keep the three in sync.
+                const rayEligible = straddles.equal(uint(0)).and(gateArea.greaterThan(uint(voxCellMinArea)));
+                armCond = armCond.and(rayEligible.not());
+              }
+              If(armCond, () => {
                 const occLo = elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_OCC_LO))).toVar();
                 const occHi = elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_OCC_HI))).toVar();
                 // SPARSITY GUARD: build the mask only when the brick is sparse enough that the
@@ -1462,6 +1480,10 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
     // zero the debug WRITE_CTR (one small dispatch), then the scatter elects each voxel
     // block's footprint into the global vis buffer (the per-block occlusion cull reads the
     // near-field triangle winners already in visPayloadV from world1/hwRender).
+    // W3 (spec-orchestration-submit-folds): kClearBins zeroes ONE u32 whose only producer
+    // (the ?voxwrites atomicAdd) is build-time disabled by default — the word is constant 0
+    // either way, so the whole dispatch is dead unless voxWrites is on. Byte-identical skip.
+    const clearBinsK = voxWrites ? [kClearBins] : [];
     if (voxF2bEnabled) {
       if (voxWaves > 1) {
         // ?voxwaves=N (needs ?voxf2b=1): the fix for the F2B postmortem's "per-block-cull
@@ -1473,7 +1495,7 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
         // behind it are skipped WHOLE (vox-behind-vox occlusion, invisible to the mesh-only
         // pyramid). Cost per extra wave = one pyramid chain + inter-dispatch barriers.
         const per = Math.ceil(kVoxScatterB.length / voxWaves);
-        dispatchBatchMixed(renderer, [kClearBins, ...kVoxScatterB.slice(0, per)]);
+        dispatchBatchMixed(renderer, [...clearBinsK, ...kVoxScatterB.slice(0, per)]);
         for (let w = per; w < kVoxScatterB.length; w += per) {
           if (voxOccl && voxPyrKernels.length > 0) dispatchBatch(renderer, voxPyrKernels);
           dispatchBatchMixed(renderer, kVoxScatterB.slice(w, w + per));
@@ -1482,16 +1504,20 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
         // K near→far dispatches in ONE submit: kClearBins then dispatchBatchMixed over the K
         // bucket kernels (each tagged with its tight per-bucket indirect args). The in-pass
         // barriers serialize the buckets near→far so the early-Z gate fires across slabs.
-        dispatchBatchMixed(renderer, [kClearBins, ...kVoxScatterB]);
+        dispatchBatchMixed(renderer, [...clearBinsK, ...kVoxScatterB]);
       }
     } else {
-      // ?voxf2b=0 — EXACTLY today: kClearBins + ONE dispatchIndirect over the whole list.
-      dispatch(renderer, kClearBins);
+      // ?voxf2b=0 — EXACTLY today: (kClearBins if its producer exists) + ONE dispatchIndirect.
+      if (voxWrites) dispatch(renderer, kClearBins);
       dispatchIndirect(renderer, kVoxScatter as never, voxRasterDispatchAttr);
     }
   };
 
   const readWriteCount = async (renderer: Renderer): Promise<number> => {
+    // ?voxwrites off ⇒ the producer atomicAdd is not compiled AND kClearBins never runs (W3),
+    // so the GPU buffer is never created — and the count could only ever be 0. Skip the
+    // readback (also removes one meter readback from the measured frame window).
+    if (!voxWrites) return 0;
     const buf = await readBuffer(renderer, atomicBufAttr, WRITE_CTR * 4, 4);
     return new Uint32Array(buf)[0] ?? 0;
   };

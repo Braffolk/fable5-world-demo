@@ -197,10 +197,16 @@ export function buildNaniteHzb(
     const z11 = hzbF.ro.element(lo.add(y1.mul(lw)).add(x1));
     const maxZ = z00.max(z01).max(z10.max(z11));
 
+    // only occlude on-screen centers — an off-screen ndc clamps into an EDGE texel whose
+    // depth is unrelated to the sphere ⇒ wrong over-cull (pan-edge pop-in + the pose-arrival
+    // over-cull ramp). Mirrors the ortho variant's guard below; the frustum cull owns
+    // off-screen spheres. Quality-IMPROVING fix (deep-review doc 11 / spec-prev-frame-occlusion).
+    const onScreen = ndc.x.abs().lessThan(1).and(ndc.y.abs().lessThan(1));
     return dist
       .greaterThan(radius.mul(2)) // never occlusion-cull right at the camera
       .and(nearClip.w.greaterThan(0))
       .and(centerClip.w.greaterThan(0))
+      .and(onScreen)
       .and(nearestZ.greaterThan(maxZ)) as unknown as NB;
   };
 
