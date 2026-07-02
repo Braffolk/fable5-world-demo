@@ -93,6 +93,22 @@ async function main(): Promise<void> {
     if (window.__laas.settle) await window.__laas.settle(120);
   });
 
+  // Force a major GC before any capture: ~2GB of dead boot intermediates otherwise
+  // sit uncollected for the whole run (live loop allocates too little to trigger V8's
+  // major GC), making heapMB bimodal across sessions (5.5GB dirty vs 3.5GB clean —
+  // verified by forced-GC forensics 2026-07-02: 5513→3516MB, zero live workers).
+  {
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('HeapProfiler.enable');
+    await cdp.send('HeapProfiler.collectGarbage');
+    await cdp.send('HeapProfiler.collectGarbage');
+    await cdp.detach();
+    const heapNow = await page.evaluate(
+      () => Math.round((performance as unknown as { memory: { usedJSHeapSize: number } }).memory.usedJSHeapSize / 1e6),
+    );
+    console.log(`[probe] post-boot forced GC — heap ${heapNow}MB`);
+  }
+
   mkdirSync(`${OUT_DIR}/shots`, { recursive: true });
   // static eye shot (visual reference for the voxel-band-too-close bug)
   await page.evaluate(async () => {

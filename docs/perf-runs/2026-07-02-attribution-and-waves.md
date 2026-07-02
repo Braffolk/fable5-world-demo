@@ -531,6 +531,33 @@ Pool D is now CLOSED: RP-1 (shipped), RP-3/rg16f (shipped), RP-4 (shipped §5m),
 ALL need user sign-off (RP-7 bead polish = IMPROVING-class, RP-2 half-res contact = RISK
 class) or the user's beautification list.
 
+## 5n. The 5.5GB-heap signature ROOT-CAUSED (uncollected boot garbage) + RP-4 live-cleared (2026-07-02)
+
+THE 5.5GB HEAP "SESSION ARTIFACT" IS SOLVED — it is ~2GB of DEAD BOOT INTERMEDIATES
+(DAG builds + fartiles emit/pyramid scratch) that V8 never collects because the live loop
+allocates too little to ever trigger a major GC. Forced-GC forensics (scratchpad
+heap-forensics.mjs): heap 5513MB → **3516MB** after HeapProfiler.collectGarbage; live
+workers after boot = 0 (all 8 fartiles workers terminate correctly); the two cross-session
+attractor values (5502-5513 dirty / 3514-3530 clean) are exactly the two GC states. The
+"bimodality" was V8's lazy major-GC coin-flip, NOT a leak, NOT a renderer difference.
+- NOT an app bug (transient garbage, browser collects on its own schedule); severity low.
+- HARNESS FIX SHIPPED: probe-fresh-stutter.ts now forces a CDP GC after boot-settle and
+  logs `post-boot forced GC — heap NNNN MB`. Every capture now starts in the clean
+  ~3.5GB state deterministically.
+
+RP-4 LIVE-CLEARED (the §5m leftover): same-session clean-heap live A/B at defaults —
+merged (default): p50 16.1 / p95 17.4 / 74 miss / 0>33; two-pass (?respass=0): p50 15.8 /
+p95 17.2 / 69 miss / 0>33. Parity (Δ inside same-recipe noise); iso both arms at
+full-clock canonical (13.1/16.8/9.6 vs 13.0/16.6/9.3). No live regression from RP-4.
+
+p50 QUANTUM FLIP ATTRIBUTED TO MACHINE STATE: with clean heap AND two-pass revert the
+p50 still reads ~16 (vs §5k's 9.2 on the overnight-rested machine). Live eye-glide GPU
+busy sits ON the 8.33ms ProMotion quantum edge — sub-ms clock-state shifts flip the
+majority quantum. Heap ruled out (this section), RP-4 ruled out (A/B above).
+⇒ The §5k live canonical (p50 9.2 / p95 16.9 / 45 miss, rested) STANDS as the reference;
+re-pin OPPORTUNISTICALLY on the next naturally-rested boot — no work is gated on it.
+Today's warm-session live envelope: p95 17.2-17.4, zero >33, misses 69-80/600.
+
 §5m addendum — flip-verify + live attempt (same day, later session):
 - Flip-verify iso at plain defaults (merged active): eye 13.1 / obl 16.7 / aerial 9.4 —
   matches the §5l full-clock canonical. Same-session iso pair on-vs-off (adverse slot
