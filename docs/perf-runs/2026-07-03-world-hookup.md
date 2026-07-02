@@ -79,8 +79,21 @@ applied globally.
   ⇒ "a far tree is almost a single color" (user report). Mode/nearest downsampling for
   categorical data (leaf-clump shades) retains the full real palette at every level —
   retained DETAIL, not injected noise; zero runtime cost; fps unchanged (61/59).
-  Remaining wash: the fartile L0 SPLAT still averages per cell (>aggDist band) —
-  possible follow-up: dominant-source tracking in the splat accumulators.
+- **BAKED crown look (round 2, commit da2ed8d)** — user follow-up: still mush (less AO
+  darkness + NO sun/shade side gradient far out). Root causes: **L0 brick albedo was
+  the FLAT species tint** (zero variation existed for dominant-child to preserve!);
+  the mesh leaf path gets per-leaf hueVar jitter + crown-depth AO (vdata.w·0.8+0.2)
+  AT RUNTIME — the voxel band never had those channels; coarse mean-normals converge
+  to one direction per crown; GTAO fades by 240 m. Bake-time package (free at runtime):
+  `bakeCrownBrickLook` L0 post-pass = clump-lattice (~0.75 m) hue jitter × species
+  hueVar with the mesh resolve's EXACT warm/cool palette + radial×vertical crown-depth
+  AO; ellipsoid normal blend at coarse pyramid levels (crowns only, k=0.28·L cap 0.7)
+  restores the sun-side/shade-side form. This is the voxgrad LOOK that was killed for
+  its +4.9 ms runtime cost — baked, it costs nothing. Verified wbake-* gallery.
+  Remaining wash: the >aggDist fartile band reads paler (splat per-cell mean + ftnrm
+  up-normal bias + fog) — visible brightness step at the 280 m handoff; follow-up
+  candidates: dominant-source tracking in FarTilesSplat accumulators, ftnrm strength
+  re-tune now that tile sources carry baked AO.
 
 ## Verified (wvar gallery = the shipped default config)
 
