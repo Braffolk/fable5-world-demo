@@ -100,6 +100,18 @@ FILL that reads as blocks. ⇒ the user's "round normals" instinct is correct an
 
 ## 6. Notes / hazards
 
+- **NEVER edit src/ while a probe is in flight** — vite full-reloads the connected page
+  and the probe dies with "Execution context was destroyed" (killed ablate run #3,
+  2026-07-02 04:20). Edits and probes strictly serialized.
+- Probe EXTRA can't carry commas; PostStack ?ablate now splits on [,\s+]+ because
+  laasUrl %2B-encodes '+' (two wasted runs before the parser fix).
+- **bead-v1 → v2 (user: "sharp cones, not blobs")**: v1's per-brick radial field
+  (wp−brickCenter) made every brick a bright-tip/dark-flank facet — high-frequency
+  contrast, serrated-cone look, AO crevices amplifying. v2 = LOW-frequency crown field:
+  horizontal radial from tree origin (A.xyz) + 0.55 up-tilt, 25% residual within-brick
+  term. GTAO is exonerated as the CAUSE (it derives normals FROM DEPTH — Gtao.ts, so
+  the bent shading normal never feeds AO), it only outlines brick cubes.
+
 - Anthropic classifier outage stalled Bash mid-session; probes were queued behind
   read-only prep. All edits above landed with tsc clean.
 - voxwaves adds pyramid-chain dispatches (14 levels, serialized) per extra wave — the

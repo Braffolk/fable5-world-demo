@@ -801,9 +801,14 @@ export function buildNaniteResolve(
           const gn = normalize(instRotateDir(yawSc, localN)) as unknown as NV3;
           const toCamV = normalize(camPos.sub(wp)) as unknown as NV3;
           if (voxBeadK > 0) {
-            // ?voxbead: bend toward the per-pixel BEAD direction wp−brickCenterWorld so the
-            // brick shades like a ball instead of a flat quad (see the flag comment above).
-            // Far-tile bricks ride identity instances, so the transform is a pass-through.
+            // ?voxbead v2: LOW-FREQUENCY crown field. v1 bent toward wp−brickCenter — a
+            // per-brick radial field that made every brick a bright-tip/dark-flank facet;
+            // rows of them read as SHARP CONES (user report). The SpeedTree trick works at
+            // TREE scale: one smooth outward field per crown, so neighboring bricks shade
+            // alike and the whole crown reads as a soft blob. Crown dir = horizontal
+            // radial from the tree origin (A.xyz) + fixed up-tilt; a faint 25% within-
+            // brick term keeps near-band rounding. Far-tile bricks ride identity
+            // instances (origin 0) → world-anchored dir, ~constant per 64m tile.
             const vA = gpu.instances.element(vInstId.mul(uint(2))).toVar() as unknown as NV4;
             const bCtr = vec3(
               bcU2F(elemU(gpu.voxelBricks, brickWord(bi, uint(BRICK_POS_X)))),
@@ -811,7 +816,14 @@ export function buildNaniteResolve(
               bcU2F(elemU(gpu.voxelBricks, brickWord(bi, uint(BRICK_POS_X + 2)))),
             ) as unknown as NV3;
             const ctrW = instTransformPoint(vA, vB, yawSc, bCtr);
-            const bead = normalize(wp.sub(ctrW)) as unknown as NV3;
+            const d0 = ctrW.sub(vA.xyz) as unknown as NV3;
+            const horiz = vec3(d0.x, 0, d0.z) as unknown as NV3;
+            // max(len, 0.05) guards crown-axis bricks (d0.xz≈0 → normalize NaN)
+            const crownDir = normalize(
+              horiz.div(max(horiz.length(), float(0.05))).add(vec3(0, 0.55, 0)),
+            ) as unknown as NV3;
+            const beadPix = normalize(wp.sub(ctrW)) as unknown as NV3;
+            const bead = normalize(crownDir.mul(0.75).add(beadPix.mul(0.25))) as unknown as NV3;
             const blend = normalize(
               gn.mul(1 - voxBeadK).add(bead.mul(voxBeadK)),
             ) as unknown as NV3;
