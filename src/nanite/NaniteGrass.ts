@@ -50,6 +50,7 @@ import {
   atomicAdd,
   atomicMax,
   atomicStore,
+  countOneBits,
   float,
   instanceIndex,
   mix,
@@ -84,12 +85,16 @@ import {
   loopUN,
   maxI,
   minI,
+  packHalfU,
   readBuffer,
   returnIf,
   sU32Views,
+  sUvec2,
+  sUvec4RO,
   toF,
   toI,
   uniformF,
+  unpackHalfU,
 } from './Tsl';
 
 // ---- constants (GroundRing parity — the tuned reference) ---------------------------
@@ -122,21 +127,75 @@ const MAX_SW_PX = ((): number => {
  *  funnel = cull chain only (no clump derive/raster); corners = full derive +
  *  corner math + projection, no scanline/election. Production pristine when unset. */
 const GRASS_DBG = new URLSearchParams(window.location.search).get('grassdbg');
-/** lane select: ?grass=ray → per-pixel analytic raycast (zero memory/emission,
- *  best-measured 15.1 ms @ dpr1 eye — NOT yet at the ≤2 ms mandate);
- *  ?grass=1|geo → the emission+HW-queue lane (+13 ms eye @ dpr1.5).
+/** lane select (?grass=):
+ *  hybrid → HW-raster the near band (blades ≥ ~5 px: one election emit per COVERED
+ *           pixel — raster is information-theoretically right there) + guide-driven
+ *           raycast beyond (blades sub-pixel: per-pixel analytic sampling is right);
+ *           the lanes share ONE derivation, so the seam is the dropped bend-dip
+ *           term only (≤4% of height = sub-pixel at the seam distance);
+ *  ray    → raycast ALL bands (near band measured 12× over the ≤2 ms mandate:
+ *           big blades re-derived by every covered pixel);
+ *  1|geo  → emission+HW-queue ALL bands (+13 ms eye @ dpr1.5: far-band sub-pixel
+ *           tris saturate the queue + quad occupancy).
  *  DEFAULT OFF until a lane meets the mandate (user law: ≤2 ms worst case). */
-const GEO_LANE = new URLSearchParams(window.location.search).get('grass') !== 'ray';
-/** raycast bands: fine-stride march to RAY_L0_END, coarse-stride (16 fine sub-cells
- *  per step) to RAY_END; terrain splat beyond. Step caps bound the grazing worst case
- *  (a capped miss falls through to the splat — the correct infinite-distance limit). */
-const RAY_L0_END = 25;
+const GRASS_MODE = ((): 'geo' | 'ray' | 'hybrid' => {
+  const v = new URLSearchParams(window.location.search).get('grass');
+  return v === 'ray' ? 'ray' : v === 'hybrid' ? 'hybrid' : 'geo';
+})();
+/** geo machinery (emission kernels + HW queue) built for geo AND hybrid */
+const GEO_LANE = GRASS_MODE !== 'ray';
+/** ray machinery (guide field + march kernel) built for ray AND hybrid */
+const RAY_LANE = GRASS_MODE !== 'geo';
+/** hybrid seam (?grassnear=N, 3D distance): geo raster owns closer, raycast owns
+ *  beyond. 3D (not horizontal) so aerial poses ray-march straight down instead of
+ *  flooding the SW scanline with sub-pixel tris. */
+const NEAR_END = ((): number => {
+  const v = Number(new URLSearchParams(window.location.search).get('grassnear') ?? '15');
+  return Number.isFinite(v) && v >= 5 && v <= 155 ? v : 15;
+})();
+/** statistical far band (?grassstat=D, 0 = off): beyond D the march stops testing
+ *  individual cards (≤6 px there — exactness is sub-pixel) and intersects each
+ *  guide texel ONCE statistically: crossing rate λ from the mask popcount × the
+ *  card-width law × the ray's in-sward fraction; deterministic hash test; depth =
+ *  stratified point on the in-texel segment. Deletes the fine DDA + clump
+ *  batteries where the oblique fire lived (80-155 m ≈ 8 ms of frame). */
+const STAT_D = ((): number => {
+  const v = Number(new URLSearchParams(window.location.search).get('grassstat') ?? '70');
+  return Number.isFinite(v) && v >= 0 && v <= 300 ? v : 70;
+})();
+/** λ scale (?grassstatk): crossings per horizontal meter = K·fill·widen·hFrac.
+ *  K folds clumps/m² (≈91·fill), 3 cards, mean projected width (≈0.093·widen m),
+ *  mean |sin Δazimuth| (2/π): 91·3·0.093·0.64 ≈ 16. */
+const STAT_K = ((): number => {
+  const v = Number(new URLSearchParams(window.location.search).get('grassstatk') ?? '16');
+  return Number.isFinite(v) && v > 0 && v <= 200 ? v : 16;
+})();
 /** ?grassrayend=N — band-end knob for cost attribution (default 155) */
 const RAY_END = ((): number => {
   const v = Number(new URLSearchParams(window.location.search).get('grassrayend') ?? '155');
   return Number.isFinite(v) && v >= 20 && v <= 300 ? v : 155;
 })();
 const RAY_SHELL_H = 1.5; // max blade reach above ground (incl. mid-card 2× + wind)
+// ---- GUIDE FIELD (ray lane) — the precomputed-intersection lever ---------------------
+// A camera-centered world-space context field REBAKED EVERY FRAME by a tiny compute
+// pass (O(area), blade-count-independent), so the per-pixel march FETCHES its world
+// instead of deriving it in-register (the kernel is occupancy-bound: 47.6→15.1 ms came
+// from shrinking live state, not ALU). Per 0.84 m texel (= 8×8 fine cells):
+//   ctx  (uvec4): ground+disp f32 | ground gradient half2 | (swardTop, gustAmp) half2
+//   mask (uvec2): 64-bit fine-cell occupancy — the DENSITY LAW baked to bits
+//     (bit = cellHash(cell) < dens·thin·edge, the exact kernel accept)
+// March: 1 ctx load per texel step (replaces 4-tap heightAt + widen/top math), empty
+// texels (dirt gaps / banks / canopy scruff) skip on mask==0 without hashing — the
+// measured near-band fire was exactly these miss-path pixels burning clump batteries.
+// Blades root on PLANE-RECONSTRUCTED ground (center + gradient·Δ) — exact on slopes,
+// which fixes the user-reported sunken blades (burst-level ground was up to ~0.5 m
+// low). Wind stays fully animated: amp is rebaked per frame. Storage buffers, not
+// textures (uint StorageTexture is mistyped 'float' by the node builder; float-texture
+// roundtrips could canonicalize mask NaN bit patterns).
+const GUIDE_SUB = 8; // fine cells per texel edge
+const GUIDE_PITCH = CELL * GUIDE_SUB; // 0.84 m
+const GUIDE_RES = Math.max(384, Math.ceil(((RAY_END + 4) * 2) / GUIDE_PITCH)); // ≥ ray reach
+const GUIDE_N = GUIDE_RES * GUIDE_RES; // 384² = 147k texels ≈ 3.5 MB total
 const NEAR_EPS = 1e-4;
 /** grass HW queue capacity (per-TRI entries, stride 10 u32: body + 3 packed f32
  *  corners). With the 4-px SW bound nearly ALL visible blade tris ride this queue —
@@ -836,7 +895,9 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
     const jit = cellHash2(wc, SALT);
     const wpos = wc.add(jit).mul(CELL) as unknown as NV2;
     const dist = wpos.sub(vec2(cam.camPos.x, cam.camPos.z)).length() as unknown as NF;
-    returnIf(dist.greaterThan(R) as unknown as NB);
+    // hybrid: the geo lane owns only the NEAR band (3D-dist seam; XZ is a cheap
+    // conservative pre-kill for 99.9% of the grid before any tap)
+    returnIf(dist.greaterThan(GRASS_MODE === 'hybrid' ? NEAR_END + 0.6 : R) as unknown as NB);
     // cheap pre-exit before ANY texture tap: accept needs hash < dens·edge·thin
     // with dens ≤ ~1.5 — kills most far slots for a few ALU.
     const thin = grassThin(dist);
@@ -844,6 +905,14 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
     const hash = cellHash(wc, SALT ^ 0x77a1);
     returnIf(hash.greaterThanEqual(edge.mul(thin).mul(1.5)) as unknown as NB);
     const h = heightAt(wpos);
+    if (GRASS_MODE === 'hybrid') {
+      // 3D seam: aerial cells are horizontal-near but 3D-far — those belong to the
+      // raycast (near-vertical rays, ~1 battery/px) not the SW scanline
+      const dy = (cam.camPos.y as unknown as NF).sub(h) as unknown as NF;
+      returnIf(
+        dist.mul(dist).add(dy.mul(dy)).greaterThan((NEAR_END + 0.6) ** 2) as unknown as NB,
+      );
+    }
     returnIf(inFrustum(vec3(wpos.x, h.add(0.5), wpos.y) as unknown as NV3, 1.4).not());
     const dens = densityAt(wpos, h, dist, true);
     returnIf(hash.greaterThanEqual(dens.mul(edge).mul(thin)) as unknown as NB);
@@ -1093,17 +1162,126 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
     return { clumps: u[0] ?? 0, hwTris: u[1] ?? 0 };
   };
 
-  // ================= RAY LANE (default) =================================================
-  // Per-pixel analytic raycast of the SAME procedural clump field — zero memory,
-  // zero emission, zero overdraw (≤1 election write per pixel). Bounded everywhere:
-  //  - above the sward: Lipschitz height-jumps (slope bound), geometric for rising rays;
+  // ================= RAY LANE =====================================================
+  // Per-pixel analytic raycast of the SAME procedural clump field — zero geometry
+  // memory, zero emission, zero overdraw (≤1 election write per pixel). The march is
+  // FETCH-DRIVEN off the per-frame guide field (see GUIDE FIELD consts): 1 uvec4 load
+  // per texel step, occupancy-mask bit tests per fine cell, full derive+quadratics
+  // only for real clumps the ray can vertically reach. Bounded everywhere:
+  //  - above the sward: Lipschitz height-jumps vs the conservative shell;
+  //  - empty ground (dirt/bank/canopy scruff): mask==0 texels skip without hashing;
   //  - inside dense sward: hits arrive within 1-3 cells (density = speed, not cost);
-  //  - inside sparse sward: probabilistic coarse-cell skip + hard step caps, and a
-  //    capped miss falls through to the terrain splat — the correct far-field limit.
+  //  - hard step caps: a capped miss falls through to the terrain splat — the correct
+  //    far-field limit.
   // A hit emits the SAME self-describing blade id + depth into the election, so the
   // resolve/shadows/GTAO/TRAA pipeline is untouched.
+
+  // ---- guide buffers + per-frame bake (ray lane only; 4-word ctx + 2-word mask) ------
+  const gWords = RAY_LANE ? GUIDE_N * 4 : 4;
+  const guideCtxAttr = new StorageBufferAttribute(new Uint32Array(gWords), 1);
+  const guideCtxW = sU32Views(guideCtxAttr, gWords);
+  const guideCtx4 = sUvec4RO(guideCtxAttr, RAY_LANE ? GUIDE_N : 1);
+  const mWords = RAY_LANE ? GUIDE_N * 2 : 2;
+  const guideMaskAttr = new StorageBufferAttribute(new Uint32Array(mWords), 1);
+  const guideMaskW = sU32Views(guideMaskAttr, mWords);
+  const guideMask2 = sUvec2(guideMaskAttr, RAY_LANE ? GUIDE_N : 1);
+  /** guide origin = fine-cell index of texel (0,0)'s first cell, snapped to the
+   *  8-cell texel grid — mask bits stay congruent with WORLD cells (the field is
+   *  world-anchored, only the window moves). Integer-valued floats, exact ≤ 2^23. */
+  const uGFx = uniformF(0);
+  const uGFz = uniformF(0);
+
+  const kGuideBake = ((): unknown => {
+    if (!RAY_LANE) return null;
+    const k = Fn(() => {
+      returnIf((uOn as unknown as NF).lessThan(0.5) as unknown as NB);
+      const i = instanceIndex;
+      returnIf(i.greaterThanEqual(uint(GUIDE_N)));
+      const tx = toF(i.mod(uint(GUIDE_RES)));
+      const tz = toF(i.div(uint(GUIDE_RES)));
+      // fine-cell base + world-space center of this texel
+      const fb = vec2(uGFx as unknown as NF, uGFz as unknown as NF)
+        .add(vec2(tx, tz).mul(GUIDE_SUB))
+        .toVar() as unknown as NV2;
+      const wpos = fb.add(GUIDE_SUB / 2).mul(CELL).toVar() as unknown as NV2;
+      const dist = wpos.sub(vec2(cam.camPos.x, cam.camPos.z)).length().toVar() as unknown as NF;
+      // ground (heightfield + micro-displacement) and its gradient (central diff at
+      // ±half pitch). Blades plane-reconstruct off these: ≤ cm error at 0.84 m pitch
+      // over the ~1 m-bilinear heightfield; meadow disp amplitude is ~0.04 m
+      // (veg-gated) — this is what fixes the lite-path sunken blades on slopes.
+      const g = groundAt(wpos).toVar() as unknown as NF;
+      const hp = GUIDE_PITCH / 2;
+      const dgdx = groundAt(wpos.add(vec2(hp, 0)) as unknown as NV2)
+        .sub(groundAt(wpos.sub(vec2(hp, 0)) as unknown as NV2))
+        .div(GUIDE_PITCH) as unknown as NF;
+      const dgdz = groundAt(wpos.add(vec2(0, hp)) as unknown as NV2)
+        .sub(groundAt(wpos.sub(vec2(0, hp)) as unknown as NV2))
+        .div(GUIDE_PITCH) as unknown as NF;
+      // per-cell accept probability (the exact kernel density law; the fields vary
+      // ≥1.5 m so texel-center sampling is faithful at 0.84 m)
+      const h = heightAt(wpos);
+      const thin = grassThin(dist);
+      const edge = float(1).sub(smoothstep(R * 0.9, R, dist)) as unknown as NF;
+      const pT = densityAt(wpos, h, dist, true).mul(thin).mul(edge).toVar() as unknown as NF;
+      // 64-bit occupancy: bit v·8+u = fine cell (fb.x+u, fb.y+v) holds a clump.
+      // SAME accept hash as the geo kFine (0x77a1) — the hybrid seam needs BOTH
+      // lanes to place the identical clump set or clumps reshuffle at the boundary.
+      const m0 = uint(0).toVar() as unknown as NU;
+      const m1 = uint(0).toVar() as unknown as NU;
+      If(pT.greaterThan(0), () => {
+        loopUN('gbv', uint(0), uint(GUIDE_SUB), (v) => {
+          loopUN('gbu', uint(0), uint(GUIDE_SUB), (u) => {
+            const wcF = fb.add(vec2(toF(u), toF(v))) as unknown as NV2;
+            If(cellHash(wcF, SALT ^ 0x77a1).lessThan(pT), () => {
+              const bit = (v as unknown as NU).mul(uint(GUIDE_SUB)).add(u) as unknown as NU;
+              If(bit.lessThan(uint(32)), () => {
+                (m0 as unknown as { assign(v: unknown): void }).assign(
+                  m0.bitOr(uint(1).shiftLeft(bit)),
+                );
+              }).Else(() => {
+                (m1 as unknown as { assign(v: unknown): void }).assign(
+                  m1.bitOr(uint(1).shiftLeft(bit.bitAnd(uint(31)))),
+                );
+              });
+            });
+          });
+        });
+      });
+      // conservative sward-top offset (the kernel's tight topB law) — 0 when empty,
+      // which doubles as the march's "nothing here" flag
+      const widenT = float(1)
+        .div(thin.sqrt())
+        .clamp(1, 4)
+        .sub(1)
+        .mul(0.3)
+        .add(1) as unknown as NF;
+      const topOff = dist
+        .greaterThan(60)
+        .select(float(1.0).mul(widenT), float(0.62).mul(widenT))
+        .min(RAY_SHELL_H)
+        .add(0.25) as unknown as NF;
+      const occ = m0.bitOr(m1).notEqual(uint(0));
+      const topOut = occ.select(topOff, float(0)) as unknown as NF;
+      // gust amplitude at the texel — rebaked EVERY frame, so wind stays live
+      const amp = (windContext()
+        ? (windU.strength as unknown as NF)
+            .mul(gustAt(wpos).mul(0.9).add(0.3))
+            .mul(windExposure(wpos))
+        : (float(0) as unknown as NF)) as unknown as NF;
+      const base = i.mul(uint(4));
+      guideCtxW.rw.element(base).assign(bcF2U(g));
+      guideCtxW.rw.element(base.add(uint(1))).assign(packHalfU(vec2(dgdx, dgdz) as unknown as NV2));
+      guideCtxW.rw.element(base.add(uint(2))).assign(packHalfU(vec2(topOut, amp) as unknown as NV2));
+      guideCtxW.rw.element(base.add(uint(3))).assign(uint(0));
+      const mb = i.mul(uint(2));
+      guideMaskW.rw.element(mb).assign(m0);
+      guideMaskW.rw.element(mb.add(uint(1))).assign(m1);
+    })().compute(GUIDE_N, [256]);
+    (k as unknown as { setName(n: string): void }).setName('grassGuide');
+    return k;
+  })();
   const kRay = ((): unknown => {
-    if (GEO_LANE) return null;
+    if (!RAY_LANE) return null;
     const W = cam.width;
     const H = cam.height;
     // (8×8 pixel tiling was measured NEUTRAL-to-worse here — rows are already
@@ -1131,7 +1309,11 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
       });
       const dirL = rd.xz.length().max(1e-4).toVar() as unknown as NF;
       const tEnd = tMax.min(float(RAY_END).div(dirL)).toVar() as unknown as NF;
-      const tCur = float(0.05).toVar() as unknown as NF;
+      // hybrid: the geo raster owns 3D dist < NEAR_END; t IS 3D distance (rd is
+      // normalized), so the march simply starts at the seam (1.5 m overlap margin)
+      const tCur = float(
+        GRASS_MODE === 'hybrid' ? Math.max(0.05, NEAR_END - 1.5) : 0.05,
+      ).toVar() as unknown as NF;
       const tBest = float(1e9).toVar() as unknown as NF;
       const bodyBest = uint(0).toVar() as unknown as NU;
       if (GRASS_DBG === 'raysetup') {
@@ -1142,35 +1324,15 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
         returnIf(tBest.greaterThan(0) as unknown as NB);
       }
 
-      /** test the prims of the clump in FINE cell (fx,fz) against the ray.
-       *  unroll=true (near band): JS-unrolled prims with CONSTANT blade params (no
-       *  select chains) — the near per-clump battery is the kernel's dominant cost.
-       *  Every prim gets a ~15-ALU ray-to-root 2D capsule pre-reject (a ray hits ≤2
-       *  of 5 blades). Ground: near = per-clump heightAt (4 taps) + burst disp;
-       *  lite (≥25 m) = burst ground, zero taps. */
-      const testCell = (
-        fx: NF,
-        fz: NF,
-        thr: NF,
-        lite: NB,
-        groundB: NF,
-        dispB: NF,
-        ampB: NF,
-        widenTB: NF,
-        midKB: NF,
-      ): void => {
+      /** derive + intersect the clump of an OCCUPIED fine cell (fx,fz). Existence is
+       *  already decided (guide mask bit) — no density hashing here. `ground` is the
+       *  plane-reconstructed root height AT THE CLUMP (exact-on-slope rooting — the
+       *  fix for the user-reported sunken blades); `ampB` the texel gust amplitude. */
+      const testClump = (fx: NF, fz: NF, ground: NF, ampB: NF, widenTB: NF, midKB: NF): void => {
         const wcF = vec2(fx, fz) as unknown as NV2;
-        if (GRASS_DBG === 'raymarch') {
-          // attribution stop: full march/DDA, hash accept only — no clump testing.
-          // Pin the hash + a fake "hit" so nothing is DCE'd (never true in practice).
-          If(cellHash(wcF, SALT ^ 0x77a1).lessThan(thr.mul(1e-9)), () => {
-            (tBest as unknown as { assign(v: unknown): void }).assign(float(1e8));
-          });
-          return;
-        }
         // PRE-DERIVE clump-top reject (~30 ALU vs the ~400-ALU derive+ladder): in the
-        // skim band — ray above the MEDIAN blade top but under the burst max — this
-        // is where the kernel's time went (bisect 2026-07-03: march 2.4 ms, full 47).
+        // skim band — ray above THIS clump's top but under the texel max — this is
+        // where the kernel's time went (bisect 2026-07-03: march 2.4 ms, full 47).
         const h2x = cellHash2(wcF, SALT ^ 0x9191).x as unknown as NF;
         const clumpTop = h2x
           .pow(1.3)
@@ -1179,30 +1341,30 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
           .mul(widenTB)
           .mul(midKB)
           .add(0.3) as unknown as NF;
-        const wposQ = wcF.add(0.5).mul(CELL) as unknown as NV2;
-        const tQ = wposQ.sub(ro.xz as unknown as NV2).length().div(dirL) as unknown as NF;
-        const rayYq = ro.y.add(rd.y.mul(tQ)).sub(groundB) as unknown as NF;
-        If(
-          rayYq
-            .lessThan(clumpTop)
-            .and(cellHash(wcF, SALT ^ 0x77a1).lessThan(thr)),
-          () => {
-          const wposC = wcF.add(cellHash2(wcF, SALT)).mul(CELL) as unknown as NV2;
-          const ground = groundB.toVar() as unknown as NF;
-          If((lite as unknown as { not(): NB }).not(), () => {
-            // near: per-clump root height (4 taps) — a whole warp is near or not,
-            // so lite warps skip the taps entirely
-            (ground as unknown as { assign(v: unknown): void }).assign(
-              heightAt(wposC).add(dispB),
-            );
-          });
+        const wposC = wcF.add(cellHash2(wcF, SALT)).mul(CELL) as unknown as NV2;
+        const tClump = wposC.sub(ro.xz as unknown as NV2).length().div(dirL) as unknown as NF;
+        const rayYc = ro.y.add(rd.y.mul(tClump)).sub(ground).toVar() as unknown as NF;
+        If(rayYc.lessThan(clumpTop), () => {
           const C = deriveClump(wcF, false, ground, ampB);
           const lad = ladder(C);
-          const tClump = wposC.sub(ro.xz as unknown as NV2).length().div(dirL) as unknown as NF;
-          const rayYc = ro.y.add(rd.y.mul(tClump)).sub(ground).toVar() as unknown as NF;
+          if (GRASS_DBG === 'funnel') {
+            // attribution stop: march + derive + ladder, NO prim quadratics. Pin the
+            // derived state behind a never-true test so nothing is DCE'd.
+            If(C.bladeH.add(lad.segNF).lessThan(-1), () => {
+              (tBest as unknown as { assign(v: unknown): void }).assign(float(1e8));
+            });
+            return;
+          }
           const sxs = fx.sub(fx.div(GRID).floor().mul(GRID));
           const sys = fz.sub(fz.div(GRID).floor().mul(GRID));
           const slot = uint(sys.mul(GRID).add(sxs)).toVar() as unknown as NU;
+
+          // clump-level hoists (were per-prim: 2 divisions + 2 selects × 5 prims)
+          const card = lad.cardMode;
+          const xScale = C.widen.mul(card.select(float(1.5), float(1.15))).toVar() as unknown as NF;
+          const yScale = C.bladeH.mul(card.select(float(2), float(1))).toVar() as unknown as NF;
+          const alpha = ro.y.sub(ground).div(yScale).toVar() as unknown as NF;
+          const beta = rd.y.div(yScale).toVar() as unknown as NF;
 
           // ANALYTIC blade intersection (closed form — replaces 10 corner evals +
           // 8 Möller–Trumbore per blade; ~120 ALU, ~15 live registers — the kernel
@@ -1212,16 +1374,24 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
           // A: root; B: yScale/lean/tilt/flutter (linear); C: curve+wind bend
           // (quadratic; the −0.4·bend·tN dip is dropped — ≤4% of height); E·W(by):
           // tapered width. Ray substitution ⇒ ONE quadratic in s.
-          const testPrim = (prim: NU, PV: PrimVars, hkC: NF): void => {
-            const card = lad.cardMode;
+          // STAGED: one select chain (hk) decides the vertical reach reject; the
+          // other 7 chains + the quadratic run only for prims the ray can reach.
+          const testPrim = (prim: NU): void => {
+            const hkC = sel(prim, BLADES.map((b) => b.hk)).toVar() as unknown as NF;
             const byMax = card.select(float(1), hkC.mul(0.94)) as unknown as NF;
-            const primTop = C.bladeH
-              .mul(card.select(float(2), float(1)))
-              .mul(byMax)
-              .add(0.25) as unknown as NF;
+            const primTop = yScale.mul(byMax).add(0.25) as unknown as NF;
             If(rayYc.lessThan(primTop), () => {
-              const xScale = C.widen.mul(card.select(float(1.5), float(1.15))) as unknown as NF;
-              const yScale = C.bladeH.mul(card.select(float(2), float(1))) as unknown as NF;
+              // stage 2: remaining per-prim params (5-way chains, hoisted to vars;
+              // NOT primVars() — its bhk chain would duplicate stage 1's)
+              const PV = {
+                bc: sel(prim, BLADES.map((b) => b.c)).toVar() as unknown as NF,
+                bs: sel(prim, BLADES.map((b) => b.s)).toVar() as unknown as NF,
+                box: sel(prim, BLADES.map((b) => b.ox)).toVar() as unknown as NF,
+                boz: sel(prim, BLADES.map((b) => b.oz)).toVar() as unknown as NF,
+                blean: sel(prim, BLADES.map((b) => b.lean)).toVar() as unknown as NF,
+                kc: sel(prim, CARDS.map((k) => k.c)).toVar() as unknown as NF,
+                ks: sel(prim, CARDS.map((k) => k.s)).toVar() as unknown as NF,
+              };
               // width dir (bc,0,−bs) and bend dir (bs,0,bc), x pre-scaled, clump-yawed
               const bcx = card.select(PV.kc, PV.bc) as unknown as NF;
               const bsx = card.select(PV.ks, PV.bs) as unknown as NF;
@@ -1256,10 +1426,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
               ) as unknown as NF;
               const Cx = Gx.mul(k2).add(C.dirX.mul(C.bendAmp)) as unknown as NF;
               const Cz = Gz.mul(k2).add(C.dirY.mul(C.bendAmp)) as unknown as NF;
-              // by(s) = alpha + beta·s  (vertical solve; yScale > 0 always)
-              const alpha = ro.y.sub(ground).div(yScale) as unknown as NF;
-              const beta = rd.y.div(yScale) as unknown as NF;
-              // project x/z onto F ⊥ E
+              // by(s) = alpha + beta·s (clump-level, hoisted); project x/z onto F ⊥ E
               const Fx = Ez.negate() as unknown as NF;
               const Fz = Ex as unknown as NF;
               const f0 = Fx.mul(ro.x.sub(Ax)).add(Fz.mul(ro.z.sub(Az))) as unknown as NF;
@@ -1337,134 +1504,179 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
           // (JS-unrolled prims measured SLOWER — register bloat beat the saved
           // selects; one compact runtime loop keeps occupancy up)
           loopUN('gp2', uint(0), lad.prims, (prim) => {
-            const PV = primVars(prim);
-            testPrim(prim, PV, PV.bhk);
+            testPrim(prim);
           });
         });
       };
 
-      loopUN('gro', uint(0), uint(56), () => {
+      // ---- GUIDE-DRIVEN MARCH: texel DDA → 1 uvec4 fetch → descend on occupancy ------
+      // Everything the old march DERIVED per step/burst (4-tap ground, density taps,
+      // gust taps, disp, sward-top math) is a FETCH from the per-frame guide bake —
+      // the kernel is occupancy-bound, and this collapses its live-register state.
+      const gfx = uGFx as unknown as NF;
+      const gfz = uGFz as unknown as NF;
+      const MAXTOP = RAY_SHELL_H + 0.25; // conservative shell for Lipschitz jumps
+      const sdx = rd.x
+        .greaterThanEqual(0)
+        .select(rd.x.max(1e-6), rd.x.min(-1e-6))
+        .toVar() as unknown as NF;
+      const sdz = rd.z
+        .greaterThanEqual(0)
+        .select(rd.z.max(1e-6), rd.z.min(-1e-6))
+        .toVar() as unknown as NF;
+      const stX = rd.x.greaterThanEqual(0).select(float(1), float(-1)).toVar() as unknown as NF;
+      const stZ = rd.z.greaterThanEqual(0).select(float(1), float(-1)).toVar() as unknown as NF;
+      loopUN('gro', uint(0), uint(256), () => {
         If(tCur.greaterThanEqual(tEnd).or(tCur.greaterThan(tBest.add(0.3))), () => {
           Break();
         });
         const pos = ro.add(rd.mul(tCur)).toVar() as unknown as NV3;
-        const hC = heightAt(pos.xz as unknown as NV2).toVar() as unknown as NF;
-        // TIGHT analytic sward top at this distance (the blade-height law is closed
-        // form — no bake needed): blades = bladeHmax·hkMax·widenTerm; mid cards ×2;
-        // + tilt/wind margin. Replaces the loose 1.5 m shell — skimming rays exit the
-        // candidate band 2-3× sooner, which is where the march cost lives.
-        const distH0 = tCur.mul(dirL) as unknown as NF;
-        const widenT = float(1)
-          .div(grassThin(distH0).sqrt())
-          .clamp(1, 4)
-          .sub(1)
-          .mul(0.3)
-          .add(1) as unknown as NF;
-        const topB = distH0
-          .greaterThan(60)
-          .select(float(1.0).mul(widenT), float(0.62).mul(widenT))
-          .min(RAY_SHELL_H)
-          .add(0.25)
+        // guide texel under pos (fine-cell space → texel index; in-range by
+        // construction — tEnd caps horizontal travel inside the guide window)
+        const txf = pos.x
+          .div(CELL)
+          .sub(gfx)
+          .div(GUIDE_SUB)
+          .floor()
+          .clamp(0, GUIDE_RES - 1)
           .toVar() as unknown as NF;
-        const head = pos.y.sub(hC).sub(topB).toVar() as unknown as NF;
-        If(head.greaterThan(0.2), () => {
-          // Lipschitz skip over open air (terrain slope bound 1.4) — geometric for
-          // ascending rays, linear for grazing; always terrain-safe.
-          tCur.addAssign(head.div(1.4).max(0.3));
+        const tzf = pos.z
+          .div(CELL)
+          .sub(gfz)
+          .div(GUIDE_SUB)
+          .floor()
+          .clamp(0, GUIDE_RES - 1)
+          .toVar() as unknown as NF;
+        const ti = uint(tzf.mul(GUIDE_RES).add(txf)).toVar() as unknown as NU;
+        const cv = guideCtx4.element(ti);
+        const ground = bcU2F(cv.x).toVar() as unknown as NF;
+        const grad = (unpackHalfU(cv.y) as unknown as { toVar(): NV2 }).toVar() as unknown as NV2;
+        const ta = (unpackHalfU(cv.z) as unknown as { toVar(): NV2 }).toVar() as unknown as NV2;
+        // texel exit t (0.84 m world grid anchored at the guide origin)
+        const bx = gfx
+          .add(txf.add(rd.x.greaterThanEqual(0).select(float(1), float(0))).mul(GUIDE_SUB))
+          .mul(CELL) as unknown as NF;
+        const bz = gfz
+          .add(tzf.add(rd.z.greaterThanEqual(0).select(float(1), float(0))).mul(GUIDE_SUB))
+          .mul(CELL) as unknown as NF;
+        const tEx = bx
+          .sub(ro.x)
+          .div(sdx)
+          .min(bz.sub(ro.z).div(sdz))
+          .max(tCur.add(1e-3))
+          .toVar() as unknown as NF; // always progress
+        const tExC = tEx.min(tEnd).toVar() as unknown as NF;
+        // texel-level vertical reject: min ray Y across [tCur, tExC] (linear in t —
+        // min is at an endpoint) vs the texel's baked sward top. topOff==0 ⇔ empty.
+        const top = ground.add(ta.x) as unknown as NF;
+        const rayYmin = ro.y.add(rd.y.mul(rd.y.lessThan(0).select(tExC, tCur))) as unknown as NF;
+        If(ta.x.lessThanEqual(0).or(rayYmin.greaterThan(top)), () => {
+          // skip the texel; when well above, add a terrain-Lipschitz jump vs the
+          // CONSERVATIVE shell (the local top can jump 0→1.75 at mask boundaries,
+          // so the tight local top must NOT drive the jump; ground slope bound 1.4)
+          const head = pos.y.sub(ground).sub(MAXTOP) as unknown as NF;
+          tCur.assign(tEx.add(1e-3).max(tCur.add(head.max(0).div(1.4))));
         }).Else(() => {
-          // in-shell DDA burst at the distance-appropriate stride (a 2×CELL near
-          // stride with 2×2 sub-cells was measured WORSE — reverted to per-cell)
-          const distH = distH0;
-          const nearL0 = distH.lessThan(RAY_L0_END);
-          const P = nearL0.select(float(CELL), float(CELL * 4)).toVar() as unknown as NF;
-          const burstN = nearL0.select(uint(8), uint(4)) as unknown as NU;
-          // burst context, hoisted (fields vary ≥1.5 m; a burst spans ≤1.7 m):
-          // density (3 taps + water), gust amplitude (3 taps), ground (already hC).
-          const thin = grassThin(distH);
-          const edge = float(1).sub(smoothstep(R * 0.9, R, distH)) as unknown as NF;
-          const pFine = densityAt(pos.xz as unknown as NV2, hC, distH, true)
-            .mul(thin)
-            .mul(edge)
+          const mv = guideMask2.ro.element(ti);
+          const m0 = mv.x.toVar() as unknown as NU;
+          const m1 = mv.y.toVar() as unknown as NU;
+          // per-texel ladder context (dist-based; was per-burst before — same grain)
+          const distT = tCur.mul(dirL) as unknown as NF;
+          const widenT = float(1)
+            .div(grassThin(distT).sqrt())
+            .clamp(1, 4)
+            .sub(1)
+            .mul(0.3)
+            .add(1)
             .toVar() as unknown as NF;
-          const ampB = (windContext()
-            ? (windU.strength as unknown as NF)
-                .mul(gustAt(pos.xz as unknown as NV2).mul(0.9).add(0.3))
-                .mul(windExposure(pos.xz as unknown as NV2))
-            : float(0)
-          ).toVar() as unknown as NF;
-          // burst displacement (terrainDispAt self-gates beyond its 85 m fade) —
-          // near clumps pay only their own 4-tap heightAt on top of this
-          const dispB = (opts.disp
-            ? terrainDispAt(opts.disp, pos.xz as unknown as NV2)
-            : (float(0) as unknown as NF)
-          ).toVar() as unknown as NF;
-          const groundB = hC.add(dispB).toVar() as unknown as NF;
-          const midKB = distH.greaterThan(60).select(float(2), float(1.12)).toVar() as unknown as NF;
-          // DDA state (t values ABSOLUTE along the ray)
-          const cellX = pos.x.div(P).floor().toVar() as unknown as NF;
-          const cellZ = pos.z.div(P).floor().toVar() as unknown as NF;
-          const sdx = rd.x
-            .greaterThanEqual(0)
-            .select(rd.x.max(1e-6), rd.x.min(-1e-6))
-            .toVar() as unknown as NF;
-          const sdz = rd.z
-            .greaterThanEqual(0)
-            .select(rd.z.max(1e-6), rd.z.min(-1e-6))
-            .toVar() as unknown as NF;
-          const stX = rd.x.greaterThanEqual(0).select(float(1), float(-1)).toVar() as unknown as NF;
-          const stZ = rd.z.greaterThanEqual(0).select(float(1), float(-1)).toVar() as unknown as NF;
+          // ---- STATISTICAL far band: one coverage test per texel, no cell work ----
+          const statTexel = (): void => {
+            const fill = toF(
+              (countOneBits(m0 as unknown as never) as unknown as NU).add(
+                countOneBits(m1 as unknown as never) as unknown as NU,
+              ),
+            ).mul(1 / 64) as unknown as NF;
+            const L = tExC.sub(tCur) as unknown as NF;
+            // in-sward fraction: ray height at segment mid vs the baked top law
+            const ymid = ro.y
+              .add(rd.y.mul(tCur.add(tExC).mul(0.5)))
+              .sub(ground) as unknown as NF;
+            const hFrac = float(1).sub(ymid.div(ta.x.max(0.05))).clamp(0, 1) as unknown as NF;
+            const lam = fill.mul(widenT).mul(hFrac).mul(STAT_K) as unknown as NF;
+            const tau = lam.mul(L.mul(dirL)).min(0.97) as unknown as NF;
+            const u = cellHash(
+              vec2(toF(px.mod(uint(4096))), toF(ti.mod(uint(4096)))) as unknown as NV2,
+              SALT ^ 0x51a7,
+            ) as unknown as NF;
+            If(u.lessThan(tau), () => {
+              // stratified hit point; body = the cell under it (id bits beyond the
+              // slot are cosmetic here — the resolve's ≥40 m path is t=0.55 + up)
+              const tH = tCur.add(u.div(tau.max(1e-4)).mul(L)) as unknown as NF;
+              If(tH.lessThan(tBest).and(tH.lessThan(tMax)), () => {
+                const hx = ro.x.add(rd.x.mul(tH)).div(CELL).floor() as unknown as NF;
+                const hz = ro.z.add(rd.z.mul(tH)).div(CELL).floor() as unknown as NF;
+                const sxs = hx.sub(hx.div(GRID).floor().mul(GRID));
+                const sys = hz.sub(hz.div(GRID).floor().mul(GRID));
+                (tBest as unknown as { assign(v: unknown): void }).assign(tH);
+                (bodyBest as unknown as { assign(v: unknown): void }).assign(
+                  uint(sys.mul(GRID).add(sxs)).shiftLeft(uint(6)),
+                );
+              });
+            });
+            tCur.assign(tEx.add(1e-3));
+          };
+          // ---- EXACT per-cell testing (near/mid band; the whole path when stat off)
+          const exactTexel = (): void => {
+          const midKB = distT.greaterThan(60).select(float(2), float(1.12)).toVar() as unknown as NF;
+          const texCx = gfx.add(txf.mul(GUIDE_SUB)).add(GUIDE_SUB / 2).mul(CELL).toVar() as unknown as NF;
+          const texCz = gfz.add(tzf.mul(GUIDE_SUB)).add(GUIDE_SUB / 2).mul(CELL).toVar() as unknown as NF;
+          // fine DDA across this texel (t values ABSOLUTE along the ray)
+          const cellX = pos.x.div(CELL).floor().toVar() as unknown as NF;
+          const cellZ = pos.z.div(CELL).floor().toVar() as unknown as NF;
           const tNx = cellX
             .add(stX.mul(0.5).add(0.5))
-            .mul(P)
+            .mul(CELL)
             .sub(ro.x)
             .div(sdx)
             .toVar() as unknown as NF;
           const tNz = cellZ
             .add(stZ.mul(0.5).add(0.5))
-            .mul(P)
+            .mul(CELL)
             .sub(ro.z)
             .div(sdz)
             .toVar() as unknown as NF;
-          const tDx = P.div(sdx.abs()).toVar() as unknown as NF;
-          const tDz = P.div(sdz.abs()).toVar() as unknown as NF;
-          loopUN('gri', uint(0), burstN as unknown as NU, () => {
-            // per-cell height rejection BEFORE any hashing (~5 ALU): the min ray
-            // height across this cell vs the burst's tight sward top. This is what
-            // collapses the sward-top-skim pathology — cells the ray clears are
-            // pure DDA advances.
-            const tCellExit = tNx.min(tNz).min(tEnd);
-            const rayYmin = ro.y
-              .add(rd.y.mul(rd.y.lessThan(0).select(tCellExit, tCur)))
-              .sub(groundB) as unknown as NF;
-            // ONE testCell inline site for both strides (kernel size = occupancy);
-            // probabilistic whole-cell gate keeps sparse marches cheap at both levels
-            // (joint accept per fine cell = gate·thr = pFine — statistics preserved).
-            const subs = nearL0.select(float(1), float(4)) as unknown as NF;
-            const pAgg = pFine.mul(subs).mul(subs).min(1) as unknown as NF;
-            const gate = cellHash(vec2(cellX, cellZ) as unknown as NV2, SALT ^ 0x9e37);
-            If(rayYmin.lessThanEqual(topB).and(gate.lessThan(pAgg)), () => {
-              const thr = pFine.div(pAgg.max(1e-4)).min(1) as unknown as NF;
-              const subN = nearL0.select(uint(1), uint(4)) as unknown as NU;
-              const lite = nearL0.not() as unknown as NB;
-              loopUN('gu', uint(0), subN, (u) => {
-                loopUN('gv', uint(0), subN, (v) => {
-                  const fx = cellX.mul(subs).add(toF(u)) as unknown as NF;
-                  const fz = cellZ.mul(subs).add(toF(v)) as unknown as NF;
-                  testCell(
-                    fx,
-                    fz,
-                    thr as unknown as NF,
-                    lite,
-                    groundB,
-                    dispB,
-                    ampB,
-                    widenT,
-                    midKB,
-                  );
-                });
-              });
+          const tDx = float(CELL).div(sdx.abs()).toVar() as unknown as NF;
+          const tDz = float(CELL).div(sdz.abs()).toVar() as unknown as NF;
+          loopUN('gri', uint(0), uint(16), () => {
+            // occupancy bit for this fine cell (~6 ALU — replaces the density hash)
+            const lx = cellX.sub(gfx).sub(txf.mul(GUIDE_SUB)).clamp(0, GUIDE_SUB - 1) as unknown as NF;
+            const lz = cellZ.sub(gfz).sub(tzf.mul(GUIDE_SUB)).clamp(0, GUIDE_SUB - 1) as unknown as NF;
+            const bit = uint(lz.mul(GUIDE_SUB).add(lx)) as unknown as NU;
+            const word = bit.lessThan(uint(32)).select(m0, m1) as unknown as NU;
+            If(word.shiftRight(bit.bitAnd(uint(31))).bitAnd(uint(1)).equal(uint(1)), () => {
+              if (GRASS_DBG === 'raymarch') {
+                // attribution stop: march + fetch + bit tests, no clump work. Pin a
+                // fake "hit" so nothing is DCE'd (never true in practice).
+                If(
+                  cellHash(vec2(cellX, cellZ) as unknown as NV2, SALT ^ 0x77a1).lessThan(
+                    float(1e-9) as unknown as NF,
+                  ),
+                  () => {
+                    (tBest as unknown as { assign(v: unknown): void }).assign(float(1e8));
+                  },
+                );
+              } else {
+                // plane-reconstructed root at the CLUMP position (exact-on-slope)
+                const wcF = vec2(cellX, cellZ) as unknown as NV2;
+                const wposC = wcF.add(cellHash2(wcF, SALT)).mul(CELL) as unknown as NV2;
+                const rootY = ground
+                  .add(grad.x.mul(wposC.x.sub(texCx)))
+                  .add(grad.y.mul(wposC.y.sub(texCz)))
+                  .toVar() as unknown as NF;
+                testClump(cellX, cellZ, rootY, ta.y as unknown as NF, widenT, midKB);
+              }
             });
-            // advance to the next cell; stop past the burst window
+            // advance to the next cell; stop past the texel/window
             If(tNx.lessThan(tNz), () => {
               (cellX as unknown as { addAssign(v: unknown): void }).addAssign(stX);
               tCur.assign(tNx);
@@ -1474,10 +1686,17 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
               tCur.assign(tNz);
               tNz.addAssign(tDz);
             });
-            If(tCur.greaterThanEqual(tEnd).or(tCur.greaterThan(tBest.add(0.3))), () => {
+            If(tCur.greaterThanEqual(tExC).or(tCur.greaterThan(tBest.add(0.3))), () => {
               Break();
             });
           });
+          tCur.assign(tCur.max(tEx.add(1e-3)));
+          };
+          if (STAT_D > 0) {
+            If(distT.greaterThan(STAT_D), statTexel).Else(exactTexel);
+          } else {
+            exactTexel();
+          }
         });
       });
 
@@ -1497,14 +1716,30 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
   const runGrass = (renderer: Renderer, camera: PerspectiveCamera): void => {
     if (!onCpu) return;
     if (kRay) {
+      // snap the guide window to the texel grid in FINE-CELL units: mask bits stay
+      // congruent with world cells (the field is world-anchored; only the window
+      // moves), and the bake + march + resolve all share this frame's origin.
+      const half = (GUIDE_RES / 2) * GUIDE_SUB;
+      uGFx.value = Math.round(camera.position.x / GUIDE_PITCH) * GUIDE_SUB - half;
+      uGFz.value = Math.round(camera.position.z / GUIDE_PITCH) * GUIDE_SUB - half;
+      // separate dispatches (own submits) — keeps c.grassGuide / c.grassRay pass
+      // timers clean (batched compute overlaps the render passes and smears their
+      // timestamps; the whole-frame A/B is the ground truth either way)
+      dispatch(renderer, kGuideBake);
       dispatch(renderer, kRay);
-      return;
+      if (GRASS_MODE !== 'hybrid') return;
     }
     renderHw(renderer, camera);
   };
 
   return {
-    batch: GEO_LANE ? [kClear, kFine, kFar, kHwArgs] : [],
+    // hybrid: no far super-tufts (the raycast owns 15-155 m; splat beyond — the
+    // ray-lane look the user approved)
+    batch: GEO_LANE
+      ? GRASS_MODE === 'hybrid'
+        ? [kClear, kFine, kHwArgs]
+        : [kClear, kFine, kFar, kHwArgs]
+      : [],
     renderHw: runGrass,
     resolveDerive,
     setEnabled(v: boolean): void {

@@ -25,6 +25,7 @@ import {
   storage,
   texture,
   uint,
+  packHalf2x16,
   uniform,
   uniformArray,
   unpackHalf2x16,
@@ -175,6 +176,11 @@ export function bcU2F(u: NU): NF {
 /** WGSL unpack2x16float (typings return a bare PackFloatNode) */
 export function unpackHalfU(u: NU): NV2 {
   return unpackHalf2x16(u) as unknown as NV2;
+}
+
+/** WGSL pack2x16float */
+export function packHalfU(v: NV2): NU {
+  return packHalf2x16(v as unknown as Parameters<typeof packHalf2x16>[0]) as unknown as NU;
 }
 
 /** WGSL unpack2x16snorm */

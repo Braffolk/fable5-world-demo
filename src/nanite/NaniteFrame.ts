@@ -267,14 +267,15 @@ export function buildNaniteFrame(
   const windOn = params.get('nanwind') !== '0';
   const windOpt = windOn ? { camPos: cam.camPos } : undefined;
   // PROCEDURAL GRASS (grass rethink 2026-07-03, NaniteGrass.ts): zero-storage blade
-  // field re-derived from pcg(worldCell) each frame. TWO lanes: ?grass=1|geo =
-  // emission+HW queue (+13 ms eye — reference look), ?grass=ray = per-pixel analytic
-  // raycast (zero memory, 15.1 ms @ dpr1 best so far). DEFAULT OFF — the user's
-  // grass budget is ≤2 ms WORST CASE and no lane meets it yet (ledger:
+  // field re-derived from pcg(worldCell) each frame. THREE lanes: ?grass=hybrid =
+  // near-band HW raster + guide-driven raycast beyond (the perf lane), ?grass=1|geo =
+  // emission+HW queue ALL bands (+13 ms eye — reference look), ?grass=ray = raycast
+  // ALL bands. DEFAULT OFF — the user's grass budget is ≤2 ms WORST CASE (ledger:
   // docs/perf-runs/2026-07-03-grass-arc.md §RAY LANE). __laasNanite.setGrass(0|1)
   // toggles within a boot; the stored patch-DAG lane is ?grasspatch=1.
   const grassMode = params.get('grass');
-  const grassOn = grassMode === '1' || grassMode === 'geo' || grassMode === 'ray';
+  const grassOn =
+    grassMode === '1' || grassMode === 'geo' || grassMode === 'ray' || grassMode === 'hybrid';
   const grass = grassOn
     ? buildGrassField({ cam, vis, hf, canopyTex: world.canopyTex, disp })
     : null;
