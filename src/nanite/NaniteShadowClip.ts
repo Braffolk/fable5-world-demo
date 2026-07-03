@@ -51,6 +51,7 @@ import { IndirectStorageBufferAttribute, StorageBufferAttribute, StorageTexture,
 import {
   Fn,
   If,
+  atomicAdd,
   atomicMin,
   atomicStore,
   dot,
@@ -92,6 +93,7 @@ import { BRICK_HALF, BRICK_POS_X, BRICK_WORDS } from './VoxelBrick';
 import {
   bcF2U,
   bcU2F,
+  dispatch,
   dispatchBatchMixed,
   elemU,
   elemUW,
@@ -99,6 +101,7 @@ import {
   loopU,
   maxU,
   minU,
+  readBuffer,
   returnIf,
   sU32Views,
   setIndirectDispatch,
@@ -437,6 +440,9 @@ export function buildNaniteShadowClip(
     // P5: the per-level strip rects — the filter drops clusters missing every rect
     strips,
     levelHalves: levels.map((lv) => lv.half),
+    // P10: ring-snapped LOD — caster LOD constant per ring, flips exactly when the
+    // reveal/outer strips rewrite the region ⇒ no toroidal LOD-age (?shlodsnap=0)
+    lodRingSnap: qs.get('shlodsnap') !== '0' ? cfg.base : undefined,
   });
   for (let k = 0; k < LEVELS; k++) {
     const lv = levels[k]!;
@@ -454,20 +460,49 @@ export function buildNaniteShadowClip(
   // publishes strip texels exactly like tri depth. Footprint is naturally ~1-3
   // texels (brick size and texel size both scale with distance); extent is capped
   // defensively. ?shvox=0 disables.
+  // ⚠️ OPT-IN (?shvox=1): the splat kernel executes only on the first frame and
+  // never re-dispatches (three-internals anomaly — counter-ladder evidence in the
+  // 2026-07-03 shadow-arc ledger §session-3); mid-field casters today are the mesh
+  // leaf DAG. Re-enable after the re-dispatch bug is found.
   const shVox =
-    voxSplat === true && new URLSearchParams(window.location.search).get('shvox') !== '0';
+    voxSplat === true && new URLSearchParams(window.location.search).get('shvox') === '1';
+  // ?shvoxdbg=1 — splat writes depth 0 (nearest): black shadow blobs anywhere the
+  // splat actually lands = a liveness probe for the whole splat chain.
+  const shVoxDbg = new URLSearchParams(window.location.search).get('shvoxdbg') === '1';
   const voxSplatKernels: unknown[] = [];
+  // shvoxdbg counter ladder: [0] lanes entered, [1] past qCount, [2] class-7 lanes,
+  // [3] wrote texels. window.__readSplatDbg(renderer) reads it.
+  const splatDbgAttr = new StorageBufferAttribute(new Uint32Array(4), 1);
+  const splatDbgV = sU32Views(splatDbgAttr, 4);
+  if (shVoxDbg) {
+    (window as unknown as { __readSplatDbg?: unknown }).__readSplatDbg = async (r: Renderer) =>
+      Array.from(new Uint32Array(await readBuffer(r, splatDbgAttr, 0, 16)));
+  }
   if (shVox) {
     for (let k = 0; k < LEVELS; k++) {
       const lv = levels[k]!;
       const texelWorld = (2 * lv.half) / SHADOW_MAP;
       const kSplat = Fn(() => {
         const itemIdx = wgLinear(DISPATCH_ROW).toVar();
+        if (shVoxDbg) {
+          // liveness floor: every wg lane-0 paints one texel spread across the
+          // window regardless of ANY guard/value — isolates dispatch+atomicMin+copy
+          If(localX().equal(uint(0)), () => {
+            atomicAdd(splatDbgV.atomic.element(0), uint(1));
+            const px = itemIdx.mul(uint(97)).mod(uint(SHADOW_PIX));
+            atomicMin(vis.depthV.atomic.element(px), uint(0));
+          });
+        }
         const qCount = minU(
           (clipCull.queue.qRasterRO.element(0) as unknown as { x: NU }).x,
           uint(QRASTER_CAP),
         );
         returnIf(itemIdx.greaterThanEqual(qCount));
+        if (shVoxDbg) {
+          If(localX().equal(uint(0)), () => {
+            atomicAdd(splatDbgV.atomic.element(1), uint(1));
+          });
+        }
         const item = clipCull.queue.qRasterRO.element(itemIdx.add(uint(1)));
         const instId = (item as unknown as { x: NU }).x.toVar();
         const ci = (item as unknown as { y: NU }).y.toVar();
@@ -475,7 +510,9 @@ export function buildNaniteShadowClip(
         const mcVox = elemU(gpu.meshes, c.meshId.mul(uint(MESH_WORDS)).add(uint(6)))
           .bitAnd(uint(0xff))
           .toVar();
-        returnIf(mcVox.notEqual(uint(7)));
+        // shvoxdbg: ALSO bypass the class filter — any executing lane paints, even
+        // garbage-positioned (execution liveness is the signal)
+        if (!shVoxDbg) returnIf(mcVox.notEqual(uint(7)));
         const cBase = ci.mul(uint(CLUSTER_WORDS));
         const brickBase = elemU(gpu.clusters, cBase.add(uint(6))).toVar();
         const brickCount = elemU(gpu.clusters, cBase.add(uint(7))).bitAnd(uint(0xff)).toVar();
@@ -501,7 +538,7 @@ export function buildNaniteShadowClip(
           .sub(wHalf.div((org as unknown as { z: NF }).z.mul(D_RANGE)))
           .clamp(0, 1)
           .toVar();
-        const bits = bcF2U(zNear as unknown as NF).toVar();
+        const bits = (shVoxDbg ? uint(0) : bcF2U(zNear as unknown as NF)).toVar();
         // texel footprint around the projected centre, capped defensively
         const cx = (clip.x.mul(0.5).add(0.5) as unknown as NF).mul(SHADOW_MAP).toVar();
         const cy = (clip.y.mul(0.5).add(0.5) as unknown as NF).mul(SHADOW_MAP).toVar();
@@ -516,6 +553,7 @@ export function buildNaniteShadowClip(
         const y0 = uint(cy.sub(rpx).max(0)).toVar();
         const x1 = minU(uint(cx.add(rpx).max(0)), uint(SHADOW_MAP - 1)).toVar();
         const y1 = minU(uint(cy.add(rpx).max(0)), uint(SHADOW_MAP - 1)).toVar();
+        if (shVoxDbg) atomicAdd(splatDbgV.atomic.element(3), uint(1));
         loopU(y0, y1.add(uint(1)), (ty) => {
           loopU(x0, x1.add(uint(1)), (tx) => {
             const px = ty.mul(uint(SHADOW_MAP)).add(tx);
@@ -524,6 +562,10 @@ export function buildNaniteShadowClip(
         });
       })().compute(DISPATCH_ROW * 128, [128]);
       (kSplat as unknown as NamedKernel).setName(`nanClipVoxSplat${k}`);
+      // tag at BUILD time — a tag applied after the compute node's pipeline exists
+      // is ignored by the batch path (this silently killed the splat when P9 moved
+      // it from an explicit dispatchIndirect into the batched submit).
+      setIndirectDispatch(kSplat, clipCull.queue.rasterDispatchAttr);
       voxSplatKernels.push(kSplat);
     }
   }
@@ -852,14 +894,9 @@ export function buildNaniteShadowClip(
         ...lv.raster.depth1Batch(),
       ]);
       lv.raster.hwDepth(renderer, mainCamera);
-      dispatchBatchMixed(renderer, [
-        // P3: brick depth splat for the class-7 clusters the queue carries (same
-        // one-wg-per-item indirect args the tri raster consumes)
-        ...(shVox
-          ? [setIndirectDispatch(voxSplatKernels[k], clipCull.queue.rasterDispatchAttr)]
-          : []),
-        lv.kCopy,
-      ]);
+      // P3: brick depth splat — BISECT: DIRECT static-grid dispatch (qCount-guarded)
+      if (shVox) dispatch(renderer, voxSplatKernels[k] as never);
+      dispatchBatchMixed(renderer, [lv.kCopy]);
     }
   };
 

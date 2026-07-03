@@ -144,6 +144,8 @@ export function buildClipCull(
     /** per-level ortho half-extents E_k (static) — bakes radius→uv scale into the
      *  strip test as a compile-time constant. Required when strips is set. */
     levelHalves?: number[];
+    /** P10: ring-snapped LOD distance for the shared cut (see NaniteCull) */
+    lodRingSnap?: number;
   },
 ): ClipCull {
   const LEVELS = levelCams.length;
@@ -156,6 +158,7 @@ export function buildClipCull(
     minPx: opts.minPx,
     frontierCap: opts.frontierCap,
     hierDepth: opts.hierDepth, // item 6: BFS passes = measured max DAG depth (no holes, sheds tail)
+    lodRingSnap: opts.lodRingSnap, // P10: ring-snapped shadow LOD (no strip LOD-age)
   });
   const cutRO = shared.qRasterRO;
 

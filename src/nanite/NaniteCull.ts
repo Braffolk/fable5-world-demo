@@ -34,13 +34,19 @@ import {
   atomicMax,
   atomicMin,
   atomicStore,
+  ceil,
+  cross,
   dot,
+  exp2,
   float,
   instanceIndex,
+  log2,
+  normalize,
   uint,
   vec3,
   vec4,
 } from 'three/tsl';
+import { sunU } from '../render/VegMaterials';
 import type { NB, NF, NU, NV3, NV4 } from '../gpu/TSLTypes';
 import {
   CLUSTER_WORDS,
@@ -261,6 +267,17 @@ export function buildNaniteCull(
      *  test this frame, so partitioning by it yields a provably-empty bucket 1. Verdicts
      *  only ROUTE work (never drop); null (?occl=0 / shadow culls) ⇒ voxprev inert. */
     voxPrevTest?: SphereOccludedFn | null;
+    /** P10 (shadow arc): RING-SNAPPED LOD distance for the SHADOW cut. The camera
+     *  path's continuous camera-distance LOD makes toroidal strip content age (a
+     *  region's stored casters keep the LOD from when it was written; the target
+     *  drifts with every camera step ⇒ shadows visibly appear/att fade with motion
+     *  direction). With this set (= the clipmap base E_0 in metres), the LOD
+     *  distance becomes the CHEBYSHEV light-plane distance snapped UP to the ring
+     *  ladder {E_0·2^k} — constant within a ring, changing EXACTLY when a region's
+     *  owning level changes, i.e. when the hollow-reveal/outer strips rewrite it
+     *  anyway. LOD age is impossible by construction, and caster detail matches
+     *  the owning level's texel density. */
+    lodRingSnap?: number;
   },
 ): NaniteCullChain {
   // N8-HIC: the cull is HIERARCHICAL — seed each mesh's roots + BFS-descend the DAG.
@@ -910,11 +927,29 @@ export function buildNaniteCull(
         const ownC = instTransformPoint(A, B, yawSc, rec.ownSphere.xyz as unknown as NV3);
         const ownR = instSphereRadius(A, B, rec.ownSphere.w as unknown as NF, float(0));
         const dvo = cam.camPos.sub(ownC) as unknown as NV3;
-        const denO = dot(dvo, dvo).sub(ownR.mul(ownR)).max(float(1e-6)).sqrt() as unknown as NF;
+        let denO = dot(dvo, dvo).sub(ownR.mul(ownR)).max(float(1e-6)).sqrt() as unknown as NF;
+        let warpDist = cam.camPos.sub(ownC).length() as unknown as NF;
+        if (opts?.lodRingSnap) {
+          // P10: Chebyshev light-plane distance, snapped UP to the ring ladder —
+          // basis derived in-shader from the SAME sun formulas fitLevels uses.
+          const base = opts.lodRingSnap;
+          const fwdN = (normalize(vec3(sunU.dir)) as unknown as { mul(o: number): NV3 }).mul(-1);
+          const wUp = (abs((fwdN as unknown as { y: NF }).y).greaterThan(0.99) as unknown as {
+            select(a: unknown, b: unknown): NV3;
+          }).select(vec3(0, 0, 1), vec3(0, 1, 0));
+          const rgt = normalize(cross(wUp, fwdN as unknown as NV3)) as unknown as NV3;
+          const upA = cross(fwdN as unknown as NV3, rgt) as unknown as NV3;
+          const dr = (abs(dot(dvo, rgt)) as unknown as NF);
+          const du = (abs(dot(dvo, upA)) as unknown as NF);
+          const cheb = dr.max(du).max(float(base));
+          const snapped = float(base).mul(exp2(ceil(log2(cheb.div(base))))) as unknown as NF;
+          denO = snapped;
+          warpDist = snapped;
+        }
         const pOwn = projK.mul(A.w).mul(rec.ownError).div(denO);
         const tauEff = lodWarp(
           tau,
-          cam.camPos.sub(ownC).length() as unknown as NF,
+          warpDist,
           simBandD,
           lodNear,
           lodPow,
