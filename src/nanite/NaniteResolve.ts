@@ -142,6 +142,11 @@ export interface ResolveWorld {
    *  (zero storage buffers — the binding budget is untouched). */
   grassProc?: {
     derive(body: NU, wp: NV3): { t: NF; nrm: NV3 };
+    /** G-D lean lighting: one filtered tap of the per-frame guide light field →
+     *  vec4(sunVis, irradianceRGB). Non-null ⇒ grass pixels SKIP the bilateral
+     *  shadow upsample + GI probe chain (the measured ~7 ms pixel-proportional
+     *  wall) and use this instead. ?grasslean=0 → null → old path. */
+    lean?: ((wpXZ: NV2) => NV4) | null;
   } | null;
 }
 
@@ -1170,9 +1175,33 @@ export function buildNaniteResolve(
     // ~1.6 m patch dryness × canopy shade; blade normal pulled to the terrain normal
     // hardening with distance). Zero storage buffers — texture taps + ALU only.
     const gpTip = float(0.5).toVar() as unknown as NF;
+    // G-D lean lighting (vec4 sunVis+irradiance from the per-frame guide light
+    // field, ONE filtered tap) — fetched here inside the isGP branch, consumed by
+    // the sun + GI blocks below, which then SKIP the bilateral shadow upsample +
+    // probe chain for grass pixels (the ~7 ms pixel-proportional wall).
+    const gpLean = (isGP && world.grassProc?.lean) || null;
+    const gpSun = float(1).toVar() as unknown as NF;
+    const gpIrr = vec3(0).toVar() as unknown as NV3;
+    // ?grassdbg=flatres — attribution stop: grass pixels keep their election/depth
+    // but the resolve stubs derive+material+per-pixel work to constants. Splits
+    // "grass pixels EXIST downstream" from "grass resolve work" in the frame A/B.
+    const gpFlat =
+      new URLSearchParams(window.location.search).get('grassdbg') === 'flatres';
     if (isGP && world.grassProc) {
       const gp = world.grassProc;
       If(isGP, () => {
+        if (gpFlat) {
+          albedo.assign(vec3(0.05, 0.12, 0.03) as unknown as NV3);
+          wNormal.assign(vec3(0, 1, 0) as unknown as NV3);
+          ao.assign(float(1));
+          gpTip.assign(float(0.5));
+          return;
+        }
+        if (gpLean) {
+          const L = gpLean(wp.xz as unknown as NV2) as unknown as NV4;
+          gpSun.assign(L.x as unknown as NF);
+          gpIrr.assign((L as unknown as { yzw: NV3 }).yzw);
+        }
         const body = pRaw.bitAnd(uint(0x3fffffff));
         const g = gp.derive(body as unknown as NU, wp);
         const distG = wp.sub(vec3(camPos) as unknown as NV3).length();
@@ -1253,46 +1282,58 @@ export function buildNaniteResolve(
       // folds out (and a cheap blocker-search-only sample). ?oldgeo → csm path.
       // S0: half-res PCSS + bilateral upsample when wired (default), else the
       // full-res per-pixel sample (?shalfres=0). camDist drives the bilateral.
-      const camDist = (wp as unknown as { sub(o: NV3): { length(): NF } })
-        .sub(camPos)
-        .length();
-      const myRaw = world.shadowHalf
-        ? world.shadowHalf.upsample(wp as unknown as NV3, camDist)
-        : world.naniteShadow.shadowFactor(wp as unknown as NV3, wNormal as unknown as NV3);
-      const my = (myRaw as unknown as { clamp(a: number, b: number): NF }).clamp(0, 1);
-      const sf = (my as unknown as { toVar(): NF }).toVar();
-      // keep ≡ three's CSM factor — ≈1 here (empty black-slate maps). keepFullU (default =
-      // !reskeep) gates whether the FULL-SCREEN per-pixel CSM cascade-select + PCSS sample runs:
-      //   1 → sampled on every covered pixel (old path, value = sf·keep).
-      //   0 → sampled ONLY the [0,0] corner pixel, so three's CSM node stays BUILT (its per-frame
-      //       cascade FIT — consumed by NaniteShadow.run, NaniteFrame:484 — keeps running) while
-      //       every real pixel skips the wasted ≈1 sample. That sample is FULL-res, NOT quartered
-      //       by the half-res shadow, so it is pure waste when our nanite shadow is active.
-      // Bit-identical for real pixels (keep≡1); the corner pixel only keeps the node alive.
-      if (world.csm) {
-        const keep = (nodeObject(world.csm) as unknown as NV4).x.clamp(0, 1) as unknown as NF;
-        const isCorner = (screenCoordinate.x as unknown as NF)
-          .lessThan(float(1))
-          .and((screenCoordinate.y as unknown as NF).lessThan(float(1)));
-        If(isCorner.or((keepFullU as unknown as NF).greaterThan(float(0.5))), () => {
-          sf.assign((sf as unknown as { mul(o: NF): NF }).mul(keep));
-        });
-      }
-      if (world.cloudShadow) {
-        // P2: the cloud sun-transmittance gate, applied directly (it used to reach
-        // this pixel through the CSM filterNode via `keep`). Clamp + self-equality
-        // guard mirror ShadowSetup: one NaN from the cloud sample would otherwise
-        // poison the multiply and erase ALL cast shadows.
-        const c = world.cloudShadow(wp.xz as unknown as NV2);
-        const safe = c.equal(c).select(c.clamp(0, 1), float(1)) as unknown as NF;
-        sf.assign((sf as unknown as { mul(o: NF): NF }).mul(safe));
-      }
-      if (world.farShadow) {
-        // P4: beyond-clipmap terrain shadowing (baked heightfield sun-visibility) —
-        // one bilinear tap, applied at ALL distances (a mountain shades the valley
-        // even when the caster is outside every clipmap ring).
-        const fv = world.farShadow(wp.xz as unknown as NV2).clamp(0, 1) as unknown as NF;
-        sf.assign((sf as unknown as { mul(o: NF): NF }).mul(fv));
+      const sf = float(1).toVar() as unknown as NF;
+      const fullShadow = (): void => {
+        const camDist = (wp as unknown as { sub(o: NV3): { length(): NF } })
+          .sub(camPos)
+          .length();
+        const myRaw = world.shadowHalf
+          ? world.shadowHalf.upsample(wp as unknown as NV3, camDist)
+          : world.naniteShadow!.shadowFactor(wp as unknown as NV3, wNormal as unknown as NV3);
+        sf.assign((myRaw as unknown as { clamp(a: number, b: number): NF }).clamp(0, 1));
+        // keep ≡ three's CSM factor — ≈1 here (empty black-slate maps). keepFullU (default =
+        // !reskeep) gates whether the FULL-SCREEN per-pixel CSM cascade-select + PCSS sample runs:
+        //   1 → sampled on every covered pixel (old path, value = sf·keep).
+        //   0 → sampled ONLY the [0,0] corner pixel, so three's CSM node stays BUILT (its per-frame
+        //       cascade FIT — consumed by NaniteShadow.run, NaniteFrame:484 — keeps running) while
+        //       every real pixel skips the wasted ≈1 sample. That sample is FULL-res, NOT quartered
+        //       by the half-res shadow, so it is pure waste when our nanite shadow is active.
+        // Bit-identical for real pixels (keep≡1); the corner pixel only keeps the node alive.
+        if (world.csm) {
+          const keep = (nodeObject(world.csm) as unknown as NV4).x.clamp(0, 1) as unknown as NF;
+          const isCorner = (screenCoordinate.x as unknown as NF)
+            .lessThan(float(1))
+            .and((screenCoordinate.y as unknown as NF).lessThan(float(1)));
+          If(isCorner.or((keepFullU as unknown as NF).greaterThan(float(0.5))), () => {
+            sf.assign((sf as unknown as { mul(o: NF): NF }).mul(keep));
+          });
+        }
+        if (world.cloudShadow) {
+          // P2: the cloud sun-transmittance gate, applied directly (it used to reach
+          // this pixel through the CSM filterNode via `keep`). Clamp + self-equality
+          // guard mirror ShadowSetup: one NaN from the cloud sample would otherwise
+          // poison the multiply and erase ALL cast shadows.
+          const c = world.cloudShadow(wp.xz as unknown as NV2);
+          const safe = c.equal(c).select(c.clamp(0, 1), float(1)) as unknown as NF;
+          sf.assign((sf as unknown as { mul(o: NF): NF }).mul(safe));
+        }
+        if (world.farShadow) {
+          // P4: beyond-clipmap terrain shadowing (baked heightfield sun-visibility) —
+          // one bilinear tap, applied at ALL distances (a mountain shades the valley
+          // even when the caster is outside every clipmap ring).
+          const fv = world.farShadow(wp.xz as unknown as NV2).clamp(0, 1) as unknown as NF;
+          sf.assign((sf as unknown as { mul(o: NF): NF }).mul(fv));
+        }
+      };
+      // G-D lean: grass pixels take the pre-composed texel sunVis (PCSS×cloud×far
+      // baked in kGuideLight) — the whole upsample/keep/cloud/far chain above is
+      // skipped for them. Non-grass pixels run the identical old path.
+      if (gpLean) {
+        If(isGP as NB, () => {
+          sf.assign(gpSun);
+        }).Else(fullShadow);
+      } else {
+        fullShadow();
       }
       direct = nDotL.mul(sf) as unknown as NF;
     } else if (shadowsOn && world.csm) {
@@ -1313,16 +1354,29 @@ export function buildNaniteResolve(
     // Accumulate radiance, divide once by π.
     let radiance: NV3 = sunCol.mul(direct) as unknown as NV3;
     if (world.gi) {
-      // F9: read ground height from heightTex (TEXTURE — plentiful) so the
-      // resolve does not bind the height STORAGE buffer (10-buffer/stage cap)
-      const groundY = (
-        texture(hf.heightTex, hf.uvFromWorld(wp.xz)) as unknown as NV4
-      ).x as unknown as NF;
-      let irr = world.gi.irradiance(wp, wNormal, 2.0, groundY) as unknown as NV3;
-      if (world.canopyTex) {
-        irr = irr.mul(canopyAt(world.canopyTex, wp.xz).mul(0.18).oneMinus()) as unknown as NV3;
+      const irrV = vec3(0).toVar() as unknown as NV3;
+      const fullGi = (): void => {
+        // F9: read ground height from heightTex (TEXTURE — plentiful) so the
+        // resolve does not bind the height STORAGE buffer (10-buffer/stage cap)
+        const groundY = (
+          texture(hf.heightTex, hf.uvFromWorld(wp.xz)) as unknown as NV4
+        ).x as unknown as NF;
+        let irr = world.gi!.irradiance(wp, wNormal, 2.0, groundY) as unknown as NV3;
+        if (world.canopyTex) {
+          irr = irr.mul(canopyAt(world.canopyTex, wp.xz).mul(0.18).oneMinus()) as unknown as NV3;
+        }
+        irrV.assign(irr);
+      };
+      // G-D lean: grass pixels take the texel-baked probe irradiance (canopy
+      // damping already applied in kGuideLight); the probe chain is skipped.
+      if (gpLean) {
+        If(isGP as NB, () => {
+          irrV.assign(gpIrr);
+        }).Else(fullGi);
+      } else {
+        fullGi();
       }
-      radiance = radiance.add(irr.mul(ao)) as unknown as NV3;
+      radiance = radiance.add(irrV.mul(ao)) as unknown as NV3;
     }
     // AMBIENT FLOOR (fixes black back-faces; bdb24c7 dropped the hemisphere ambient to
     // de-bright TERRAIN, but foliage/bark have back-faces where the probe SH-L1 self-clamps

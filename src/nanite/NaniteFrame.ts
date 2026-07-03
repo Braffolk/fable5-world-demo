@@ -51,10 +51,12 @@ export interface NaniteFrameHandles {
    *  (MeasureHarness calls this on a drained queue between samples). */
   meterRead(renderer: WebGPURenderer): Promise<Record<string, number>>;
   /** W2 (water arc): composed sun visibility (clipmap PCSS × cloud × far-shadow) for
-   *  non-resolve materials; undefined when the scene has no nanite sun shadows. */
+   *  non-resolve materials; undefined when the scene has no nanite sun shadows.
+   *  pix = explicit IGN-noise coord — REQUIRED from compute (no fragCoord there). */
   sunVis?: (
     wp: import('../gpu/TSLTypes').NV3,
     n: import('../gpu/TSLTypes').NV3,
+    pix?: import('../gpu/TSLTypes').NV2,
   ) => NF;
 }
 
@@ -325,6 +327,47 @@ export function buildNaniteFrame(
   const shadowHalf: ShadowHalf | null =
     shadow && halfResShadow ? buildShadowHalf(vis, cam, shadow) : null;
 
+  // W2 (water arc): the composed per-pixel sun-visibility factor — clipmap PCSS ×
+  // cloud transmittance × baked far-shadow — for NON-resolve materials (water foam/
+  // glint) and the grass texel light bake. Mirrors the resolve's own composition
+  // (NaniteResolve.ts sun block) incl. the cloud NaN guard. shadowHalf is
+  // deliberately NOT offered: its half-res eval sits at the OPAQUE depth (the
+  // lakebed), wrong for a surface above it. (Defined here — before the resolve —
+  // since the grass lean-light bake consumes it at build time.)
+  const sunVis = shadow
+    ? (
+        wp: import('../gpu/TSLTypes').NV3,
+        n: import('../gpu/TSLTypes').NV3,
+        pix?: import('../gpu/TSLTypes').NV2,
+      ): NF => {
+        // pure expression chain — this runs at MATERIAL BUILD time, outside any
+        // Fn() stack, so toVar()/assign() are illegal here (TSL "no stack" spam)
+        let sf = (shadow.shadowFactor(wp, n, pix) as unknown as { clamp(a: number, b: number): NF })
+          .clamp(0, 1) as NF;
+        if (world.cloudShadow) {
+          const c = world.cloudShadow(wp.xz as unknown as import('../gpu/TSLTypes').NV2);
+          const safe = c.equal(c).select(c.clamp(0, 1), float(1)) as unknown as NF;
+          sf = sf.mul(safe) as unknown as NF;
+        }
+        if (world.farShadow) {
+          const fv = world
+            .farShadow(wp.xz as unknown as import('../gpu/TSLTypes').NV2)
+            .clamp(0, 1) as unknown as NF;
+          sf = sf.mul(fv) as unknown as NF;
+        }
+        return sf;
+      }
+    : undefined;
+
+  // G-D lean grass lighting: bake sunVis + probe irradiance per guide texel each
+  // frame (kGuideLight, dispatched inside runGrass) so grass-won resolve pixels
+  // take ONE filtered tap instead of the bilateral shadow upsample + GI chain —
+  // the measured ~7 ms pixel-proportional grass wall. Needs the nanite shadow
+  // (without it the full path's csm-only branch has no lean equivalent — lean
+  // stays off and the resolve keeps the old path). ?grasslean=0 reverts.
+  if (grass && sunVis) grass.attachLightBake({ sunVis, gi: world.gi });
+  const grassLean = grass && sunVis ? grass.resolveLean : null;
+
   // voxel-foliage (Stage 2 §7): give the resolve the voxel work-queue ONLY when active, so
   // a pure-triangle world's resolve never binds qVoxRaster/voxelBricks (stays at 8 buffers).
   const resolveCull = voxActive ? { qRasterRO: cull.qRasterRO, qVoxRasterRO: cull.qVoxRasterRO } : cull;
@@ -342,7 +385,7 @@ export function buildNaniteFrame(
     barkTexB: world.barkTexB,
     naniteShadow: shadow,
     shadowHalf,
-    grassProc: grass ? { derive: grass.resolveDerive } : null,
+    grassProc: grass ? { derive: grass.resolveDerive, lean: grassLean } : null,
   });
   // ?nores=1 — MEASUREMENT ablation (default OFF): skip BOTH fullscreen resolve passes
   // (the tri `mesh` + vox `voxMesh`). Decomposes the frame: (baseline − nores) gpuWall =
@@ -693,32 +736,6 @@ export function buildNaniteFrame(
         return out;
       });
   };
-
-  // W2 (water arc): the composed per-pixel sun-visibility factor — clipmap PCSS ×
-  // cloud transmittance × baked far-shadow — for NON-resolve materials (water foam/
-  // glint). Mirrors the resolve's own composition (NaniteResolve.ts sun block) incl.
-  // the cloud NaN guard. shadowHalf is deliberately NOT offered: its half-res eval
-  // sits at the OPAQUE depth (the lakebed), wrong for a surface above it.
-  const sunVis = shadow
-    ? (wp: import('../gpu/TSLTypes').NV3, n: import('../gpu/TSLTypes').NV3): NF => {
-        // pure expression chain — this runs at MATERIAL BUILD time, outside any
-        // Fn() stack, so toVar()/assign() are illegal here (TSL "no stack" spam)
-        let sf = (shadow.shadowFactor(wp, n) as unknown as { clamp(a: number, b: number): NF })
-          .clamp(0, 1) as NF;
-        if (world.cloudShadow) {
-          const c = world.cloudShadow(wp.xz as unknown as import('../gpu/TSLTypes').NV2);
-          const safe = c.equal(c).select(c.clamp(0, 1), float(1)) as unknown as NF;
-          sf = sf.mul(safe) as unknown as NF;
-        }
-        if (world.farShadow) {
-          const fv = world
-            .farShadow(wp.xz as unknown as import('../gpu/TSLTypes').NV2)
-            .clamp(0, 1) as unknown as NF;
-          sf = sf.mul(fv) as unknown as NF;
-        }
-        return sf;
-      }
-    : undefined;
 
   return { render, meter, meterRead, sunVis };
 }

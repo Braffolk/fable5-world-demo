@@ -33,14 +33,15 @@
  */
 
 import { DoubleSide, Mesh, Scene, Sphere, Vector3 } from 'three';
-import { BufferGeometry, Float32BufferAttribute, RenderTarget } from 'three';
+import { BufferGeometry, DepthTexture, Float32BufferAttribute, RenderTarget } from 'three';
+import { HalfFloatType, LinearFilter, NearestFilter, RGBAFormat } from 'three';
 import type { PerspectiveCamera } from 'three';
 import {
   IndirectStorageBufferAttribute,
   NodeMaterial,
   StorageBufferAttribute,
+  StorageTexture,
   type Renderer,
-  type StorageTexture,
 } from 'three/webgpu';
 import { tagGpu } from '../core/GpuProfiler';
 import {
@@ -59,8 +60,10 @@ import {
   screenCoordinate,
   smoothstep,
   texture,
+  textureStore,
   time,
   uint,
+  uvec2,
   varyingProperty,
   vec2,
   vec3,
@@ -175,6 +178,22 @@ const RAY_END = ((): number => {
   const v = Number(new URLSearchParams(window.location.search).get('grassrayend') ?? '155');
   return Number.isFinite(v) && v >= 20 && v <= 300 ? v : 155;
 })();
+/** G-D LEAN resolve lighting (?grasslean=1, MEASURED NO-WIN 2026-07-04 → opt-in):
+ *  bake sunVis (PCSS×cloud×far) + probe irradiance PER GUIDE TEXEL, resolve takes
+ *  ONE filtered tap instead of the shadow-upsample + GI chain. Built on the
+ *  "resolve wall" hypothesis — REFUTED by direct A/B: lean on/off identical at
+ *  eye (p50 24.9/25.0 @dpr1.5), even under ?shalfres=0 full-res PCSS. The ~7 ms
+ *  hwnoemit delta is the EMIT PATH (election atomics × blade overdraw), not the
+ *  resolve shading. Kept opt-in: correct, verified, may win on tap-bound GPUs. */
+const GRASS_LEAN = new URLSearchParams(window.location.search).get('grasslean') === '1';
+/** G-D2 HW-COLOR election (?grasshwc=0 reverts): THE measured near-band wall —
+ *  every blade fragment ran a guarded atomicMax election (emitPx), pixel-
+ *  proportional × overdraw (hwnoemit −6.9 ms at eye; the lean-resolve A/B proved
+ *  the downstream shading is NOT the cost). Now the blade draw writes body+1 as
+ *  rgba8 COLOR with real depth-write — the HARDWARE ROP does the election, the
+ *  fragment has zero side effects (true early-z) — and one composite kernel
+ *  folds (id, hw depth) into the election buffers with plain stores. */
+const GRASS_HWC = new URLSearchParams(window.location.search).get('grasshwc') !== '0';
 const RAY_SHELL_H = 1.5; // max blade reach above ground (incl. mid-card 2× + wind)
 // ---- GUIDE FIELD (ray lane) — the precomputed-intersection lever ---------------------
 // A camera-centered world-space context field REBAKED EVERY FRAME by a tiny compute
@@ -305,6 +324,17 @@ interface ClumpCtx {
   jit: NF;
 }
 
+/** lighting providers for the per-texel light bake (built AFTER the grass field —
+ *  the shadow system doesn't exist yet when buildGrassField runs) */
+export interface GrassLightOpts {
+  /** composed sun visibility: clipmap PCSS × cloud transmittance × far-shadow
+   *  (the water-arc sunVis closure — NaniteFrame builds it from NaniteShadow).
+   *  pix = explicit IGN-noise coord (compute has no fragCoord — MUST be passed) */
+  sunVis: (wp: NV3, n: NV3, pix?: NV2) => NF;
+  /** probe-GI irradiance (world.gi); null → ambient floor only */
+  gi: { irradiance(wp: NV3, n: NV3, lift?: number, groundY?: NF): NV3 } | null;
+}
+
 export interface GrassField {
   /** compute kernels for world1's batched submit (after kVisClear, before kHwArgs) */
   batch: readonly unknown[];
@@ -315,6 +345,13 @@ export interface GrassField {
   renderHw(renderer: Renderer, camera: PerspectiveCamera): void;
   /** resolve-side shading reconstruction (call INSIDE the resolve fragment Fn) */
   resolveDerive(body: NU, wp: NV3): { t: NF; nrm: NV3 };
+  /** G-D lean lighting: one filtered tap of the per-frame texel light field →
+   *  vec4(sunVis, irradianceRGB). null when the lean path is off (?grasslean=0,
+   *  geo lane, or attachLightBake never called). Call INSIDE the resolve Fn. */
+  resolveLean: ((wpXZ: NV2) => NV4) | null;
+  /** attach the per-texel light bake kernel (call once the shadow system + GI
+   *  exist — NaniteFrame, after buildNaniteShadow*). No-op on non-lean lanes. */
+  attachLightBake(l: GrassLightOpts): void;
   setEnabled(v: boolean): void;
   enabled(): boolean;
   readCounts(renderer: Renderer): Promise<{ clumps: number; hwTris: number }>;
@@ -1001,13 +1038,25 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
   hwMat.fragmentNode = Fn(() => {
     if (GRASS_DBG === 'hwnoemit') {
       // attribution stop: full vertex + raster + depth + quad-occupancy cost,
-      // NO election atomics — splits the raster half into [raster] vs [emit]
+      // NO election emission — splits the raster half into [raster] vs [emit]
       return vec4(0, 0, 0, 0);
     }
-    const z = vZ.div(vW).toVar();
     const body = uint(vBodyLo.round())
       .bitOr(uint(vBodyHi.round()).shiftLeft(uint(16)))
       .toVar();
+    if (GRASS_HWC) {
+      // HW-COLOR election: emit body+1 as rgba8 bytes (0 = "no blade" — body 0
+      // is a legal id) and let depth-test+ROP arbitrate. NO side effects → the
+      // GPU keeps real early-z; the composite kernel folds winners afterwards.
+      const enc = body.add(uint(1)).toVar();
+      return vec4(
+        toF(enc.bitAnd(uint(255))).div(255),
+        toF(enc.shiftRight(uint(8)).bitAnd(uint(255))).div(255),
+        toF(enc.shiftRight(uint(16)).bitAnd(uint(255))).div(255),
+        toF(enc.shiftRight(uint(24))).div(255),
+      );
+    }
+    const z = vZ.div(vW).toVar();
     const fy = float(cam.uH).sub(screenCoordinate.y);
     const px = uint(fy).mul(uint(cam.uW)).add(uint(screenCoordinate.x));
     If(z.greaterThanEqual(0).and(z.lessThanEqual(1)), () => {
@@ -1023,7 +1072,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
   // overdraw self-limits as the queue drains).
   hwMat.depthTest = true;
   hwMat.depthWrite = true;
-  hwMat.colorWrite = false;
+  hwMat.colorWrite = GRASS_HWC; // hwc: the color IS the election
   hwMat.fog = false;
   hwMat.lights = false;
   hwMat.side = DoubleSide; // grass is two-sided
@@ -1061,7 +1110,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
   })() as unknown as typeof primeMat.depthNode;
   primeMat.depthTest = false;
   primeMat.depthWrite = true;
-  primeMat.colorWrite = false;
+  primeMat.colorWrite = GRASS_HWC; // hwc: the prime's vec4(0) clears the id plane
   primeMat.fog = false;
   primeMat.lights = false;
   const primeMesh = new Mesh(primeGeometry, primeMat);
@@ -1074,20 +1123,72 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
   primeScene.add(primeMesh);
   const bladeScene = new Scene();
   bladeScene.add(hwMesh);
-  const hwRT = new RenderTarget(cam.width, cam.height, { depthBuffer: true });
+  const hwDepthTex = GRASS_HWC ? new DepthTexture(cam.width, cam.height) : undefined;
+  const hwRT = new RenderTarget(cam.width, cam.height, {
+    depthBuffer: true,
+    ...(hwDepthTex ? { depthTexture: hwDepthTex } : {}),
+  });
+  hwRT.texture.magFilter = NearestFilter;
+  hwRT.texture.minFilter = NearestFilter;
+  hwRT.texture.generateMipmaps = false;
   tagGpu(hwRT, 'grass.hw');
+  // hwc composite: fold the HW-elected (id, depth) planes into the election
+  // buffers. Plain stores — the blade pass depth-tested against the PRIME-seeded
+  // election depth, so any surviving id is strictly nearer than the buffer's
+  // current winner (nothing else writes elections between prime and here).
+  const kHwComposite = ((): unknown => {
+    if (!GRASS_HWC || !GEO_LANE) return null;
+    const W = cam.width;
+    const H = cam.height;
+    const k = Fn(() => {
+      returnIf((uOn as unknown as NF).lessThan(0.5) as unknown as NB);
+      const px = instanceIndex;
+      returnIf(px.greaterThanEqual(uint(W * H)));
+      const x = px.mod(uint(W));
+      const fy = px.div(uint(W)); // election rows are BOTTOM-UP; the RT samples
+      // top-down (verified: v=fy/H composited the sward upside down) → flip v
+      const uv = vec2(
+        toF(x).add(0.5).div(W),
+        float(1).sub(toF(fy).add(0.5).div(H)),
+      ) as unknown as NV2;
+      const c = texture(hwRT.texture, uv, 0) as unknown as NV4;
+      const enc = uint(c.x.mul(255).round())
+        .bitOr(uint(c.y.mul(255).round()).shiftLeft(uint(8)))
+        .bitOr(uint(c.z.mul(255).round()).shiftLeft(uint(16)))
+        .bitOr(uint(c.w.mul(255).round()).shiftLeft(uint(24)))
+        .toVar();
+      returnIf(enc.equal(uint(0)) as unknown as NB);
+      const body = enc.sub(uint(1)).toVar();
+      const d = (texture(hwDepthTex as unknown as Parameters<typeof texture>[0], uv, 0) as unknown as NV4)
+        .x as unknown as NF;
+      const key = depthKey24(d)
+        .shiftLeft(uint(8))
+        .bitOr(body.bitAnd(uint(0xff))) as unknown as NU;
+      if (GRASS_DBG === 'nofold') {
+        // attribution stop: full blade raster + id/depth planes + composite
+        // reads/decode, but the election stores are SKIPPED — isolates
+        // "grass pixels exist downstream" from everything upstream of it
+        return;
+      }
+      vis.payloadV.rw.element(px).assign(key);
+      vis.visBV.rw.element(px).assign(uint(GRASS_FLAGS).bitOr(body));
+    })().compute(W * H, [256]);
+    (k as unknown as { setName(n: string): void }).setName('grassHwFold');
+    return k;
+  })();
   const renderHw = (renderer: Renderer, camera: PerspectiveCamera): void => {
     if (!onCpu) return;
     const prevRT = renderer.getRenderTarget();
     const prevAutoClear = renderer.autoClear;
     renderer.setRenderTarget(hwRT);
     // no clear anywhere: the prime rewrites every depth texel (uncovered → far
-    // plane); the blade pass LOADS that depth; color is never written or read.
+    // plane) and, in hwc, every color texel (id 0); the blade pass LOADS both.
     renderer.autoClear = false;
     renderer.render(primeScene, camera);
     renderer.render(bladeScene, camera);
     renderer.autoClear = prevAutoClear;
     renderer.setRenderTarget(prevRT);
+    if (kHwComposite) dispatch(renderer, kHwComposite);
   };
 
   // ---- resolve-side shading reconstruction (ANALYTIC — no corner re-derivation) -------
@@ -1285,6 +1386,84 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
     (k as unknown as { setName(n: string): void }).setName('grassGuide');
     return k;
   })();
+
+  // ---- G-D per-texel LIGHT bake (lean resolve): sunVis + probe irradiance ----------
+  // rgba16float StorageTexture — filterable (the resolve gets HW bilinear in ONE
+  // tap) and a texture, not a buffer (the resolve fragment rides the 10-storage-
+  // buffer ceiling; float lighting has none of the uint-mistype/NaN-bit hazards
+  // that forced the ctx/mask to buffers). The kernel is attached LATER
+  // (attachLightBake) because the shadow system is built after the grass field.
+  // It reads THIS frame's guide ctx (own dispatch, after kGuideBake) and lights
+  // the texel at sward mid-height with the terrain normal; shadow maps are the
+  // last-updated ones (toroidal clipmap ≈ static — 1-frame lag is invisible).
+  const guideLightTex = ((): StorageTexture | null => {
+    if (!RAY_LANE || !GRASS_LEAN) return null;
+    const t = new StorageTexture(GUIDE_RES, GUIDE_RES);
+    t.type = HalfFloatType;
+    t.format = RGBAFormat;
+    t.magFilter = LinearFilter;
+    t.minFilter = LinearFilter;
+    t.generateMipmaps = false;
+    t.name = 'grassGuideLight';
+    return t;
+  })();
+  let kGuideLight: unknown = null;
+  const attachLightBake = (l: GrassLightOpts): void => {
+    if (!guideLightTex || kGuideLight) return;
+    const k = Fn(() => {
+      returnIf((uOn as unknown as NF).lessThan(0.5) as unknown as NB);
+      const i = instanceIndex;
+      returnIf(i.greaterThanEqual(uint(GUIDE_N)));
+      const tx = i.mod(uint(GUIDE_RES));
+      const tz = i.div(uint(GUIDE_RES));
+      const fb = vec2(uGFx as unknown as NF, uGFz as unknown as NF).add(
+        vec2(toF(tx), toF(tz)).mul(GUIDE_SUB),
+      ) as unknown as NV2;
+      const wpos = fb.add(GUIDE_SUB / 2).mul(CELL).toVar() as unknown as NV2;
+      const dist = wpos.sub(vec2(cam.camPos.x, cam.camPos.z)).length() as unknown as NF;
+      // circle gate — the square guide's corners are beyond grass reach (−21%)
+      returnIf(dist.greaterThan(R + 1) as unknown as NB);
+      const cv = guideCtx4.element(i);
+      const ground = bcU2F(cv.x as unknown as NU).toVar() as unknown as NF;
+      const grad = unpackHalfU(cv.y as unknown as NU).toVar() as unknown as NV2;
+      const ta = unpackHalfU(cv.z as unknown as NU).toVar() as unknown as NV2;
+      const tn = normalize(
+        vec3(grad.x.negate(), 1, grad.y.negate()) as unknown as NV3,
+      ) as unknown as NV3;
+      const wp3 = vec3(
+        wpos.x,
+        ground.add(ta.x.mul(0.5)).add(0.05),
+        wpos.y,
+      ) as unknown as NV3;
+      // IGN noise coord = the texel index (compute has no fragCoord — the
+      // ShadowHalf idiom); per-texel phase keeps the PCSS dither decorrelated
+      const sun = l.sunVis(wp3, tn, vec2(toF(tx), toF(tz)) as unknown as NV2).clamp(0, 1) as unknown as NF;
+      let irr = (
+        l.gi ? l.gi.irradiance(wp3, tn, 2.0, heightAt(wpos)) : (vec3(0) as unknown as NV3)
+      ) as unknown as NV3;
+      if (l.gi && canopyTex) {
+        // same canopy damping the resolve's full GI path applies
+        irr = irr.mul(canopyAt(canopyTex, wpos).mul(0.18).oneMinus()) as unknown as NV3;
+      }
+      textureStore(guideLightTex, uvec2(tx, tz), vec4(sun, irr)).toWriteOnly();
+    })().compute(GUIDE_N, [256]);
+    (k as unknown as { setName(n: string): void }).setName('grassLight');
+    kGuideLight = k;
+  };
+  /** lean resolve tap: world XZ → guide uv → ONE filtered sample. Texel i's data
+   *  sits at uv (i+0.5)/RES; a point at a texel center has (wp/CELL − gf)/8 =
+   *  i+0.5 — the mapping is exactly center-aligned, HW bilinear does the rest. */
+  const resolveLean = guideLightTex
+    ? (wpXZ: NV2): NV4 => {
+        const uv = wpXZ
+          .div(CELL)
+          .sub(vec2(uGFx as unknown as NF, uGFz as unknown as NF))
+          .div(GUIDE_SUB * GUIDE_RES)
+          .clamp(0, 1) as unknown as NV2;
+        return texture(guideLightTex, uv, 0) as unknown as NV4;
+      }
+    : null;
+
   const kRay = ((): unknown => {
     if (!RAY_LANE) return null;
     const W = cam.width;
@@ -1731,6 +1910,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
       // timers clean (batched compute overlaps the render passes and smears their
       // timestamps; the whole-frame A/B is the ground truth either way)
       dispatch(renderer, kGuideBake);
+      if (kGuideLight) dispatch(renderer, kGuideLight); // reads this frame's ctx
       dispatch(renderer, kRay);
       if (GRASS_MODE !== 'hybrid') return;
     }
@@ -1747,6 +1927,8 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
       : [],
     renderHw: runGrass,
     resolveDerive,
+    resolveLean,
+    attachLightBake,
     setEnabled(v: boolean): void {
       onCpu = v;
       uOn.value = v ? 1 : 0;
