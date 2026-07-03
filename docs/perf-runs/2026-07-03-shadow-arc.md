@@ -178,12 +178,29 @@ casting, far terrain shading — none of which baseline had). Isolated eye/obl/a
 shadows-off's own session** (P2 sever + gi-sleep beat the old static bill).
 GI-sleep look verified on the final pose shots (converged field, no ambient change).
 
-Booked follow-ups: canopy-slab occluder in FarShadow (forest silhouette long
-shadows); receiver-height correction for tall crowns in far-shadow penumbra;
-per-level fixed overhead (clear/copy full-window dispatches per strip level ≈ the
-remaining ~5 ms moving bill — candidates: strip-sized indirect dispatch for kCopy,
-submit coalescing of the 4·(filter+clear+depth1+hw+splat+copy) chains); wind-sway
-in persisted L0 texels frozen (consistent with the old static-cache behavior).
+**P7 coarse-strip budget (commit 764d973, ?shbudget=0)** — user follow-up "fps
+still drops to ~50 sometimes": tail decomposition showed frames where BOTH coarse
+levels (L4+L5) updated strips at med 23.6 ms vs 16.8, and 74/110 frames >25 ms had
+a coarse update (each walks its 192/384 m disc in the shared cut). At most ONE
+coarse level updates per frame (staleness-picked, starvation-free; deferred level
+fully frozen, shift accumulates — sub-texel). Result: >33 ms frames 13→6, 6-level
+frames 16→0, >25 ms 110→95, medians/isolated unchanged. NOTE the honest floor:
+shadows-OFF this glide is p50 16.5 / p90 17.4 — the base world sits at the 60 fps
+edge; ~50 fps dips are now roughly half base-world, half shadow-strip tail.
+
+Booked follow-ups (the remaining ~3-5 ms moving strip bill, in expected-value
+order): (1) strip-sized indirect dispatch for kCopy + a strip-scoped clear (today
+BOTH scan the full 1024² window per updating level ≈ 8M mostly-idle threads/frame);
+(2) submit coalescing of the per-level chains (filter×3 + clear + depth1 + HW
+render pass + splat + copy ≈ 8 GPU ops × 4.2 levels/frame — per-level vis/queue
+buffers would let all compute batch into ~2 submits); (3) cut box fitted to the
+active strip rects instead of maxHalf's full disc (the L5-frame BFS walks 384 m of
+world for a few-texel strip); (4) shadowHalf eval improvements (836k threads PCSS
+every frame ≈ 0.7-1.5 ms static — hierarchical early-out or temporal reuse; RISK
+class, needs gates); (5) canopy-slab occluder in FarShadow (forest silhouette long
+shadows — LOOK, not perf); receiver-height correction for tall crowns in far-shadow
+penumbra; wind-sway in persisted texels frozen (consistent with the old
+static-cache behavior).
 
 ## Harness
 
