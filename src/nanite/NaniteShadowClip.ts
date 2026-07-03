@@ -166,6 +166,8 @@ interface Level {
    *  ((originX)%RES, (originY)%RES); advanced by the snap delta each shift. */
   originX: number;
   originY: number;
+  /** P7: fitLevels frame of this level's last strip update (staleness pick) */
+  lastStrip: number;
 }
 
 export interface ShadowClipParams {
@@ -335,6 +337,7 @@ export function buildNaniteShadowClip(
       prevSy: 0,
       originX: 0,
       originY: 0,
+      lastStrip: 0,
     });
   }
 
@@ -468,6 +471,16 @@ export function buildNaniteShadowClip(
   // P5: sun-direction change detection — the ONLY remaining full invalidation
   // (stored z_g is a world property; camera translation never invalidates texels).
   const lastSunFwd = new Vector3(0, 0, 0);
+  // P7 coarse-strip budget (?shbudget=0 disables): frames where BOTH coarse levels
+  // (k ≥ LEVELS−2) update strips carry the tail (measured med 23.6 ms vs 16.8 —
+  // each coarse update sizes the shared cut to its 192/384 m disc). Allow at most
+  // ONE coarse level per frame, picked by staleness (no starvation); a deferred
+  // level stays FULLY frozen (VP/origin/prevS untouched) and its shift accumulates
+  // into next frame's strips — deferral error is sub-texel at any speed that
+  // didn't already force a full update. Sun-change full invalidates are exempt.
+  const budgetOn = new URLSearchParams(window.location.search).get('shbudget') !== '0';
+  const COARSE_K = Math.max(2, LEVELS - 2);
+  let fitFrame = 0;
 
   // PASS A (CPU, no GPU) — fit every level → strip rects + reRaster[] + mask.
   // TOROIDAL (default): a level re-rasters ONLY its newly-exposed window strips
@@ -492,6 +505,28 @@ export function buildNaniteShadowClip(
     // sun moved ⇒ the light basis (and every stored z_g) is stale ⇒ full re-raster
     const sunMoved = forward.distanceToSquared(lastSunFwd) > 1e-12;
     if (sunMoved) lastSunFwd.copy(forward);
+
+    // P7 pre-pass: pick the ONE coarse level allowed to update strips this frame —
+    // the stalest of those with a pending shift (round-robins under load, so
+    // neither coarse level starves; a starved level's shift just accumulates).
+    fitFrame++;
+    let coarsePick = -1;
+    if (toro && budgetOn && !sunMoved) {
+      let bestAge = -1;
+      for (let k = COARSE_K; k < LEVELS; k++) {
+        const lv = levels[k]!;
+        if (!lv.ran) continue; // full path is exempt from the budget
+        const texelK = (2 * lv.half) / SHADOW_MAP;
+        const dx = Math.round(cp.dot(right) / texelK) - lv.prevSx;
+        const dy = Math.round(cp.dot(up) / texelK) - lv.prevSy;
+        if (dx === 0 && dy === 0) continue;
+        const age = fitFrame - lv.lastStrip;
+        if (age > bestAge) {
+          bestAge = age;
+          coarsePick = k;
+        }
+      }
+    }
 
     let mask = 0;
     for (let k = 0; k < LEVELS; k++) {
@@ -541,7 +576,19 @@ export function buildNaniteShadowClip(
       } else {
         const dx = sx - lv.prevSx;
         const dy = sy - lv.prevSy;
+        // P7 coarse budget: a deferred coarse level stays FULLY frozen this frame —
+        // no prevS/origin/VP/uniform mutation, so its stored window keeps sampling
+        // correctly and the pending shift accumulates into next frame's strips.
+        if (
+          budgetOn &&
+          k >= COARSE_K &&
+          (dx !== 0 || dy !== 0) &&
+          k !== coarsePick
+        ) {
+          continue;
+        }
         if (dx !== 0 || dy !== 0) {
+          if (k >= COARSE_K) lv.lastStrip = fitFrame;
           if (Math.abs(dx) >= R || Math.abs(dy) >= R) {
             full = true; // teleport — nothing survives
           } else {
