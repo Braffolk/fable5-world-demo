@@ -830,6 +830,91 @@ export function buildNaniteResolve(
       }
     });
 
+    // ---- GRASS shading (S0, 31-grass-plan §5): matClass 5 — the GroundRing blade
+    // material ported to the resolve. ALU + explicit-LOD taps only (the vox-cliff
+    // rule: no implicit-derivative samples, no new storage buffers). Blade rounded
+    // normal pulled toward the TERRAIN normal, harder with distance, so swards
+    // light like their hillside (the GoT move; per-blade card normals sparkle).
+    // Albedo = fresh/dry tip ramps × world-anchored ~1.6 m patch dryness ×
+    // canopy shade-darkening (dry straw is a full-sun phenomenon).
+    const isG = matClass.equal(uint(5)).toVar();
+    const grassCol = vec3(0.04, 0.09, 0.02).toVar() as unknown as NV3;
+    const grassNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
+    const grassTip = float(0.5).toVar() as unknown as NF;
+    if (pass !== 'vox' && hasClass(5)) If(isG, () => {
+      const instId = item.x;
+      const localTri = pRaw.bitAnd(uint(CLUSTER_TRI_MASK));
+      const distG = wp.sub(vec3(camPos) as unknown as NV3).length();
+      const t = float(0.5).toVar() as unknown as NF;
+      const nG = vec3(0, 1, 0).toVar() as unknown as NV3;
+      // tip param (uv.y) + normal: 3-vert bary interp near (the rounded
+      // cross-section reads as a half-cylinder), single-vertex beyond 30 m
+      // (the ?resfar cheap-path law — sub-pixel-width blades shade the same).
+      If(distG.lessThan(float(30)), () => {
+        const ctx = fetch.makeCtx(instId, ci);
+        const w0 = fetch.fetchWorldVert(ctx, localTri, 0);
+        const w1 = fetch.fetchWorldVert(ctx, localTri, 1);
+        const w2 = fetch.fetchWorldVert(ctx, localTri, 2);
+        const bw = baryWeights(wp, w0, w1, w2);
+        const tb = ctx.triStart.add(localTri).mul(uint(3));
+        const va = readVertex(gpu.verts, elemU(gpu.indices, tb));
+        const vb = readVertex(gpu.verts, elemU(gpu.indices, tb.add(uint(1))));
+        const vc = readVertex(gpu.verts, elemU(gpu.indices, tb.add(uint(2))));
+        t.assign(
+          (va.uv.y as unknown as NF)
+            .mul(bw.x)
+            .add((vb.uv.y as unknown as NF).mul(bw.y))
+            .add((vc.uv.y as unknown as NF).mul(bw.z)) as unknown as NF,
+        );
+        nG.assign(
+          normalize(
+            instRotateDir(ctx.yawSc, va.nrm)
+              .mul(bw.x)
+              .add(instRotateDir(ctx.yawSc, vb.nrm).mul(bw.y))
+              .add(instRotateDir(ctx.yawSc, vc.nrm).mul(bw.z)),
+          ) as unknown as NV3,
+        );
+      }).Else(() => {
+        const triStart = elemU(gpu.clusters, ci.mul(uint(CLUSTER_WORDS)).add(uint(6)));
+        const va = readVertex(gpu.verts, elemU(gpu.indices, triStart.add(localTri).mul(uint(3))));
+        const B = gpu.instances.element(instId.mul(uint(2)).add(uint(1))) as unknown as NV4;
+        t.assign(va.uv.y as unknown as NF);
+        nG.assign(normalize(instRotateDir(instYaw(B), va.nrm)) as unknown as NV3);
+      });
+      // two-sided: flip camera-ward, then pull toward the terrain normal
+      const toCamG = normalize(camPos.sub(wp)) as unknown as NV3;
+      const nF = dot(nG, toCamG).lessThan(0).select(nG.negate(), nG) as unknown as NV3;
+      const tNrm = (
+        texture(hf.normalTex, hf.uvFromWorld(wp.xz as unknown as NV2), 0) as unknown as NV4
+      ).xyz.normalize() as unknown as NV3;
+      const upK = smoothstep(8, 70, distG).mul(0.35).add(0.5) as unknown as NF;
+      grassNrm.assign(normalize(mix(nF, tNrm, upK)) as unknown as NV3);
+      const fresh = mix(
+        vec3(0.02, 0.062, 0.011),
+        vec3(0.065, 0.148, 0.028),
+        t.mul(t),
+      ) as unknown as NV3;
+      const dryC = mix(vec3(0.085, 0.07, 0.024), vec3(0.21, 0.17, 0.075), t) as unknown as NV3;
+      // world-anchored ~1.6 m patch hashes (stable under camera motion, TAA-safe —
+      // the voxjit idiom): x = dryness drift, y = brightness drift
+      const pQ = floor(wp.xz.mul(1 / 1.6)) as unknown as NV2;
+      const patchX = fract(
+        sin(dot(pQ as unknown as NV3, vec2(127.1, 311.7) as unknown as NV3)).mul(43758.5453),
+      ) as unknown as NF;
+      const patchY = fract(
+        sin(dot(pQ as unknown as NV3, vec2(269.5, 183.3) as unknown as NV3)).mul(28461.7331),
+      ) as unknown as NF;
+      const cov = (world.canopyTex
+        ? canopyAt(world.canopyTex, wp.xz as unknown as NV2)
+        : float(0)) as unknown as NF;
+      const dryK = smoothstep(0.7, 0.95, patchX).mul(float(1).sub(cov.mul(0.85))) as unknown as NF;
+      let alb = mix(fresh, dryC, dryK) as unknown as NV3;
+      alb = alb.mul(patchY.sub(0.5).mul(0.3).add(1)) as unknown as NV3;
+      alb = mix(alb, vec3(0.018, 0.052, 0.014) as unknown as NV3, cov.mul(0.55)) as unknown as NV3;
+      grassCol.assign(alb);
+      grassTip.assign(t);
+    });
+
     // ---- VOXEL shading (Stage 2 §7.2): matClass=voxel(7). The SECOND resolve pass shades
     // ONLY voxel-winner pixels (the 'tri' pass Discarded them). Reuses the SAME reconstructed
     // wp (no new depth math), decodes the BRICK-MEAN normal from gpu.voxelBricks (the coarse
@@ -993,16 +1078,29 @@ export function buildNaniteResolve(
     const voxAlbDefault = isVoxDefault.select(voxCol, palette) as unknown as NV3;
     const voxNrmDefault = isVoxDefault.select(voxNrm, vec3(0, 1, 0)) as unknown as NV3;
     const albedo = isT
-      .select(terrainCol, isR.select(rockCol, isBD.select(barkCol, isL.select(leafCol, voxAlbDefault))))
+      .select(
+        terrainCol,
+        isR.select(
+          rockCol,
+          isBD.select(barkCol, isL.select(leafCol, isG.select(grassCol, voxAlbDefault))),
+        ),
+      )
       .toVar() as unknown as NV3;
     const wNormal = isT
       .select(
         terrainNrm,
-        isR.select(rockNrm, isBD.select(barkNrm, isL.select(leafNrm, voxNrmDefault))),
+        isR.select(
+          rockNrm,
+          isBD.select(barkNrm, isL.select(leafNrm, isG.select(grassNrm, voxNrmDefault))),
+        ),
       )
       .toVar() as unknown as NV3;
-    // aoNode (rock + bark cavity): applied to indirect only — 1 elsewhere
-    const ao = isR.select(rockAo, isBD.select(barkAo, float(1))) as unknown as NF;
+    // aoNode (rock/bark cavity + grass tip-AO fake base self-shadow): indirect only
+    const grassAo = smoothstep(0.0, 0.55, grassTip).mul(0.55).add(0.45) as unknown as NF;
+    const ao = isR.select(
+      rockAo,
+      isBD.select(barkAo, isG.select(grassAo, float(1))),
+    ) as unknown as NF;
 
     // ---- MANUAL lighting (D-N17): sun lambert × CSM shadow + sky ambient +
     // probe GI. The CSM node (proven on the old path) is referenced as a
@@ -1142,21 +1240,33 @@ export function buildNaniteResolve(
       // glowed toward the sun while voxel crowns did not.
       // 'both': voxel pixels glow with voxCol, leaf pixels with leafCol — the per-pixel
       // union of what the two split passes each applied to their own tier.
+      // GRASS (S0): tip-weighted forward scatter — grassTranslucency's k=0.09·tipT
+      // vs the leaf constant 0.032 (VegMaterials.grassTranslucency port).
+      const grassOn = pass !== 'vox' && hasClass(5);
       const blSrc =
         pass === 'tri'
-          ? leafCol
+          ? grassOn
+            ? (isG.select(grassCol, leafCol) as unknown as NV3)
+            : leafCol
           : pass === 'vox'
             ? voxCol
-            : (isV.equal(uint(1)).select(voxCol, leafCol) as unknown as NV3);
+            : (isV
+                .equal(uint(1))
+                .select(voxCol, grassOn ? isG.select(grassCol, leafCol) : leafCol) as unknown as NV3);
       const blGate =
         pass === 'tri'
-          ? isL
+          ? grassOn
+            ? (isL.or(isG) as unknown as typeof isL)
+            : isL
           : pass === 'vox'
             ? (isV.equal(uint(1)) as unknown as typeof isL)
-            : (isV.equal(uint(1)).or(isL) as unknown as typeof isL);
+            : (isV.equal(uint(1)).or(grassOn ? isL.or(isG) : isL) as unknown as typeof isL);
+      const kBl = grassOn
+        ? (isG.select(grassTip.mul(0.09), float(0.032)) as unknown as NF)
+        : (float(0.032) as unknown as NF);
       const backlight = blSrc
         .mul(sunU.color as unknown as NV3)
-        .mul(glow)
+        .mul(glow.div(0.032).mul(kBl))
         .mul(vec3(0.9, 1.05, 0.55)) as unknown as NV3;
       lit = lit.add(blGate.select(backlight, vec3(0))) as unknown as NV3;
     }

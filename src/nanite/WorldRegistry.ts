@@ -972,6 +972,64 @@ export async function buildWorldRegistry(input: {
   if (!usableDags && dagBuilds.length === toDag.length + toAggregate.length && dagBuilds.length > 0) {
     void bootCache.putMany('dags', dagBuilds.map((b) => b.dag));
   }
+  // ---- GRASS S0 (31-grass-plan): ?grassreg=1 — a debug field of blade-clump
+  // instances around the origin, matClass 5 through the standard election + the
+  // resolve grass branch. The hier cull only seeds meshes WITH DAG roots
+  // (kSeedRoots: rootCount 0 = skipped), so even this debug patch needs its
+  // aggregate DAG — built INLINE (35 tris, instant) and pushed to dagBuilds
+  // AFTER the cache put above, so the shared 'dags' bootcache entry is never
+  // invalidated by the flag. NOT the shipping lane (S2 patch library + S3
+  // toroidal residency replace this).
+  if (new URLSearchParams(window.location.search).get('grassreg') === '1') {
+    const { bladeClump } = await import('../vegetation/GroundRing');
+    const src = geometryToSource(bladeClump(5, 4));
+    const hGrass = reg.registerMesh(src, 'grass', {
+      transformChannel: 'rigid', // S1 flips to 'grass' (wind)
+      castShadows: false,
+      twoSided: true,
+      aggregate: true,
+      label: 'grass/debug',
+    });
+    reg.setMaxDistance(hGrass, 120);
+    const N = 6000;
+    const R = 28;
+    let sd = 987654321;
+    const rnd = (): number => {
+      sd = (sd * 1664525 + 1013904223) >>> 0;
+      return sd / 4294967296;
+    };
+    const ga = new Float32Array(N * 4);
+    const gb = new Float32Array(N * 4);
+    for (let i = 0; i < N; i++) {
+      const r = Math.sqrt(rnd()) * R;
+      const th = rnd() * Math.PI * 2;
+      const x = Math.cos(th) * r;
+      const z = Math.sin(th) * r;
+      ga[i * 4] = x;
+      ga[i * 4 + 1] = hf.heightAtCpu(x, z);
+      ga[i * 4 + 2] = z;
+      ga[i * 4 + 3] = 0.3 + rnd() * 0.4; // clump scale (unit blade → 0.3-0.7 m)
+      gb[i * 4] = rnd() * Math.PI * 2;
+      gb[i * 4 + 3] = i;
+    }
+    reg.bindInstances(hGrass, { a: ga, b: gb });
+    try {
+      const built = buildAggregateDag(explicitToDagVerts(src), DAG_VERT_STRIDE, src.indices, {
+        seed: seed ?? 0,
+        maxTris: MAX_CLUSTER_TRIS,
+      });
+      reg.addLate({
+        verts: built.verts.length / DAG_VERT_STRIDE,
+        tris: built.indices.length / 3,
+        clusters: built.clusters.length,
+      });
+      dagBuilds.push({ handle: hGrass, dag: built });
+      // eslint-disable-next-line no-console
+      console.log(`[worldreg] grass S0 debug field: ${N} clumps × 35 tris, DAG ${built.clusters.length} clusters (?grassreg)`);
+    } catch (e) {
+      deferred.push(`grass S0 DAG build failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
   // voxel-foliage (§5.3 HARD precondition): reserve the brick budget BEFORE build()
   // freezes the caps. Total = Σ occupied bricks across the voxelized crowns. Also
   // reserve the voxel sibling heads (1 mesh each) + their instance streams (each

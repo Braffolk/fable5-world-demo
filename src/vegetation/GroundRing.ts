@@ -210,7 +210,7 @@ function litterQuad(): BufferGeometry {
  * walking distance no matter the density. Deterministic mini-rng; per-cell
  * variety still comes from the instance transform/hash.
  */
-function bladeClump(blades: number, segs: number): BufferGeometry {
+export function bladeClump(blades: number, segs: number): BufferGeometry {
   let s = 1234567 + blades * 77 + segs * 13;
   const rnd = (): number => {
     s = (s * 1664525 + 1013904223) >>> 0;
