@@ -1391,22 +1391,41 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
       const dgdz = groundAt(wpos.add(vec2(0, hp)) as unknown as NV2)
         .sub(groundAt(wpos.sub(vec2(0, hp)) as unknown as NV2))
         .div(GUIDE_PITCH) as unknown as NF;
-      // per-cell accept probability (the exact kernel density law; the fields vary
-      // ≥1.5 m so texel-center sampling is faithful at 0.84 m)
-      const h = heightAt(wpos);
-      const thin = grassThin(dist);
-      const edge = float(1).sub(smoothstep(R * 0.9, R, dist)) as unknown as NF;
-      const pT = densityAt(wpos, h, dist, true).mul(thin).mul(edge).toVar() as unknown as NF;
+      // per-cell accept probability: the density law sampled at the FOUR texel
+      // CORNERS and bilinearly blended PER CELL. A single texel-center sample
+      // (the old law) made pT a 0.84 m STAIRCASE — in sparse/gradient meadows
+      // adjacent texels got visibly different fill, the user's persistent grid
+      // quilt (2026-07-04 pics; every other per-tile field had already been
+      // smoothed). Corners are shared between neighbors ⇒ the per-cell field is
+      // CONTINUOUS across the world (and closer to kFine's exact per-cell law —
+      // tighter hybrid seam).
+      const pCorner = (dx: number, dz: number): NF => {
+        const cw = wpos.add(vec2(dx * (GUIDE_PITCH / 2), dz * (GUIDE_PITCH / 2))) as unknown as NV2;
+        const dC = cw.sub(vec2(cam.camPos.x, cam.camPos.z)).length() as unknown as NF;
+        const eC = float(1).sub(smoothstep(R * 0.9, R, dC)) as unknown as NF;
+        return densityAt(cw, heightAt(cw), dC, true)
+          .mul(grassThin(dC))
+          .mul(eC)
+          .toVar() as unknown as NF;
+      };
+      const p00 = pCorner(-1, -1);
+      const p10 = pCorner(1, -1);
+      const p01 = pCorner(-1, 1);
+      const p11 = pCorner(1, 1);
+      const pMax = p00.max(p10).max(p01).max(p11) as unknown as NF;
       // 64-bit occupancy: bit v·8+u = fine cell (fb.x+u, fb.y+v) holds a clump.
       // SAME accept hash as the geo kFine (0x77a1) — the hybrid seam needs BOTH
       // lanes to place the identical clump set or clumps reshuffle at the boundary.
       const m0 = uint(0).toVar() as unknown as NU;
       const m1 = uint(0).toVar() as unknown as NU;
-      If(pT.greaterThan(0), () => {
+      If(pMax.greaterThan(0), () => {
         loopUN('gbv', uint(0), uint(GUIDE_SUB), (v) => {
           loopUN('gbu', uint(0), uint(GUIDE_SUB), (u) => {
             const wcF = fb.add(vec2(toF(u), toF(v))) as unknown as NV2;
-            If(cellHash(wcF, SALT ^ 0x77a1).lessThan(pT), () => {
+            const fu = toF(u).add(0.5).mul(1 / GUIDE_SUB) as unknown as NF;
+            const fv = toF(v).add(0.5).mul(1 / GUIDE_SUB) as unknown as NF;
+            const pC = mix(mix(p00, p10, fu), mix(p01, p11, fu), fv) as unknown as NF;
+            If(cellHash(wcF, SALT ^ 0x77a1).lessThan(pC), () => {
               const bit = (v as unknown as NU).mul(uint(GUIDE_SUB)).add(u) as unknown as NU;
               If(bit.lessThan(uint(32)), () => {
                 (m0 as unknown as { assign(v: unknown): void }).assign(
@@ -1423,6 +1442,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
       });
       // conservative sward-top offset (the kernel's tight topB law) — 0 when empty,
       // which doubles as the march's "nothing here" flag
+      const thin = grassThin(dist);
       const widenT = float(1)
         .div(thin.sqrt())
         .clamp(1, 4)
@@ -2288,6 +2308,30 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
               }
               return out;
             };
+            /** bilinear-smooth ground across texels (statTexel's gAt idiom) — the
+             *  per-texel FACETED gRoot plane gave every tile's blades a coherent
+             *  tip-param offset → a brightness step in the albedo ramp (part of
+             *  the altitude grid). Accept-path only: the height TEST keeps the
+             *  cheap facet (cm tolerance), only the SHADING t uses this. */
+            const smoothGroundAt = (wx: NF, wz: NF): NF => {
+              const qx = wx.div(CELL).sub(gfx).div(GUIDE_SUB).sub(0.5) as unknown as NF;
+              const qz = wz.div(CELL).sub(gfz).div(GUIDE_SUB).sub(0.5) as unknown as NF;
+              const ix = qx.floor().clamp(0, GUIDE_RES - 2).toVar() as unknown as NF;
+              const iz = qz.floor().clamp(0, GUIDE_RES - 2).toVar() as unknown as NF;
+              const fxg = qx.sub(ix).clamp(0, 1) as unknown as NF;
+              const fzg = qz.sub(iz).clamp(0, 1) as unknown as NF;
+              const gAt = (dx: number, dz: number): NF =>
+                bcU2F(
+                  guideCtx4.element(
+                    uint(iz.add(dz).mul(GUIDE_RES).add(ix.add(dx))) as unknown as NU,
+                  ).x as unknown as NU,
+                ) as unknown as NF;
+              return mix(
+                mix(gAt(0, 0), gAt(1, 0), fxg),
+                mix(gAt(0, 1), gAt(1, 1), fxg),
+                fzg,
+              ) as unknown as NF;
+            };
             // THE FETCH (O(1)): R = 1/(1+d) in tile widths, GBA = normal. Linear
             // filter interpolates x, z AND angle (repeat-wrapped) — his encoding.
             const smp = fetchBand(qbx, qbz, az);
@@ -2415,8 +2459,17 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                   );
                   // baked normal (azimuth in G, y in B — A carries the root id) →
                   // world: inverse bomb on xz. (Shear inverse-transpose skipped —
-                  // n is a shading mean.)
-                  const azn = (smp.y as unknown as NF).mul(6.2831853) as unknown as NF;
+                  // n is a shading mean.) A WORLD-CELL azimuth twist decorrelates
+                  // each tile's mean-normal from its bomb rotation — the flatres
+                  // stop proved the residual altitude grid was per-tile normal
+                  // STATISTICS rotating with the bombing, not coverage.
+                  const azn = (smp.y as unknown as NF)
+                    .mul(6.2831853)
+                    .add(
+                      cellHash(vec2(wcx, wcz) as unknown as NV2, SALT ^ 0x6a6a)
+                        .sub(0.5)
+                        .mul(1.6),
+                    ) as unknown as NF;
                   const nyT = (smp.z as unknown as NF).mul(2).sub(1) as unknown as NF;
                   const sxz = float(1).sub(nyT.mul(nyT)).max(0).sqrt() as unknown as NF;
                   const nW = bombI(
@@ -2426,8 +2479,12 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                   (nrmV as unknown as { assign(v: unknown): void }).assign(
                     vec3(nW.x, nyT, nW.y),
                   );
+                  const gS = smoothGroundAt(
+                    wcx.add(0.5).mul(CELL) as unknown as NF,
+                    wcz.add(0.5).mul(CELL) as unknown as NF,
+                  );
                   (tParV as unknown as { assign(v: unknown): void }).assign(
-                    (tPar as unknown as { clamp(a: number, b: number): NF }).clamp(0, 1),
+                    yH.sub(gS).div(topEff.max(0.05)).clamp(0, 1),
                   );
                   tCur.assign(tEnd); // done — break the outer walk
                 },
@@ -2603,7 +2660,14 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                           uint(sys2.mul(GRID).add(sxs2)).shiftLeft(uint(6)),
                         );
                         // normal decode (azimuth/y) + inverse golden rotation on xz
-                        const az2n = (smp2.y as unknown as NF).mul(6.2831853) as unknown as NF;
+                        // (+ the same world-cell twist — see the L1 accept)
+                        const az2n = (smp2.y as unknown as NF)
+                          .mul(6.2831853)
+                          .add(
+                            cellHash(vec2(wc2x, wc2z) as unknown as NV2, SALT ^ 0x6a6a)
+                              .sub(0.5)
+                              .mul(1.6),
+                          ) as unknown as NF;
                         const ny2 = (smp2.z as unknown as NF).mul(2).sub(1) as unknown as NF;
                         const sxz2 = float(1).sub(ny2.mul(ny2)).max(0).sqrt() as unknown as NF;
                         const nx2t = az2n.cos().mul(sxz2) as unknown as NF;
@@ -2613,8 +2677,12 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                         (nrmV as unknown as { assign(v: unknown): void }).assign(
                           vec3(n2x, ny2, n2z),
                         );
+                        const gS2 = smoothGroundAt(
+                          wc2x.add(0.5).mul(CELL) as unknown as NF,
+                          wc2z.add(0.5).mul(CELL) as unknown as NF,
+                        );
                         (tParV as unknown as { assign(v: unknown): void }).assign(
-                          (tP2 as unknown as { clamp(a: number, b: number): NF }).clamp(0, 1),
+                          yH2.sub(gS2).div(top2.max(0.05)).clamp(0, 1),
                         );
                         tCur.assign(tEnd);
                       },
