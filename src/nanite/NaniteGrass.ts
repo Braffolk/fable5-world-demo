@@ -2083,54 +2083,21 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
           // past the fiber and refetches (expected ≤2-3 per pixel at meadow fill).
           const bakedTexel = (): void => {
             if (!rayBake || !nrmV || !tParV) return;
-            // texture bombing (his "most visually important change"): hash the
-            // WORLD tile index → one of 4 rotations × mirror applied to tile-space
-            // positions AND directions. 90°-multiples keep the 8×8 cell grid and
-            // the periodic wrap exact, so the world mask/height mapping survives.
             const txI = gfx.div(GUIDE_SUB).add(txf) as unknown as NF;
             const tzI = gfz.div(GUIDE_SUB).add(tzf) as unknown as NF;
-            const bh = RAY_BOMB
-              ? cellHash(vec2(txI, tzI) as unknown as NV2, SALT ^ 0x0b0b)
-              : (float(0) as unknown as NF);
-            const kRot = bh.mul(3.999).floor().toVar() as unknown as NF;
-            const ca = kRot
-              .equal(0)
-              .select(float(1), kRot.equal(2).select(float(-1), float(0)))
-              .toVar() as unknown as NF;
-            const sa = kRot
-              .equal(1)
-              .select(float(1), kRot.equal(3).select(float(-1), float(0)))
-              .toVar() as unknown as NF;
-            const mir = (RAY_BOMB
-              ? cellHash(vec2(txI, tzI) as unknown as NV2, SALT ^ 0x0d0d)
-                  .greaterThan(0.5)
-                  .select(float(-1), float(1))
-              : (float(1) as unknown as NF)
-            ).toVar() as unknown as NF;
-            /** tile-space forward transform (mirror x, then rotate k·90°) */
-            const bombF = (vx: NF, vz: NF): NV2 => {
-              const mx = vx.mul(mir) as unknown as NF;
-              return vec2(
-                mx.mul(ca).sub(vz.mul(sa)),
-                mx.mul(sa).add(vz.mul(ca)),
-              ) as unknown as NV2;
-            };
-            /** inverse (rotate −k·90°, then mirror x) */
-            const bombI = (vx: NF, vz: NF): NV2 =>
-              vec2(
-                vx.mul(ca).add(vz.mul(sa)).mul(mir),
-                vz.mul(ca).sub(vx.mul(sa)),
-              ) as unknown as NV2;
-            /** SMOOTH per-field value noise over the tile grid (~3-texel period).
-             *  Per-texel CONSTANT hashes made every 0.84 m square sway/lean as a
-             *  coherent unit — from altitude each square averaged to its own tone
-             *  = the user's residual grid (pic 2026-07-04). The basis must stay
-             *  constant within a step, but can vary SMOOTHLY across tiles: sway
-             *  becomes traveling waves, arcs become swirl fields, borders vanish
-             *  (sub-cm mapping jumps at tile edges are sub-blade-width). */
+            /** SMOOTH value noise sampled at the RAY'S CONTINUOUS WORLD POSITION
+             *  (~2.5-texel feature period). ⚠️ HISTORY (the user's persistent
+             *  grid, four rounds): every "smooth" field was previously sampled at
+             *  the TEXEL INDEX — neighbor-correlated values but still piecewise
+             *  CONSTANT per tile → 1-3-texel plateaus with square axis-aligned
+             *  edges = the grid, surviving every statistical fix. Controls proved
+             *  it (hybrid clean; bomb OFF still gridded — identical tile content
+             *  everywhere, so only per-texel-constant FIELDS remained). The basis
+             *  must be constant within one STEP; sampling at `pos` makes it
+             *  continuous across space, which is what actually matters. */
             const smNoise = (salt: number): NV2 => {
-              const qx = txI.add(0.5).mul(1 / 3) as unknown as NF;
-              const qz = tzI.add(0.5).mul(1 / 3) as unknown as NF;
+              const qx = pos.x.mul(1 / (GUIDE_PITCH * 2.5)) as unknown as NF;
+              const qz = pos.z.mul(1 / (GUIDE_PITCH * 2.5)) as unknown as NF;
               const ix = qx.floor().toVar() as unknown as NF;
               const iz = qz.floor().toVar() as unknown as NF;
               const fx = smoothstep(0, 1, qx.sub(ix)) as unknown as NF;
@@ -2146,6 +2113,29 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                 fz,
               ) as unknown as NV2;
             };
+            // anti-tiling: a CONTINUOUS SWIRL rotation of tile space (θ from the
+            // position-sampled noise) replaces the discrete 90° bomb — a per-tile
+            // discrete transform is the same quilt class as a per-tile field. The
+            // root-id + point-inverse machinery is exact under ANY rotation (the
+            // golden layer proved it). ?grassbomb=0 → θ=0 (raw tiling, A/B).
+            const th = (RAY_BOMB
+              ? ((smNoise(0x0b0b).x as unknown as NF).mul(6.2831853) as unknown as NF)
+              : (float(0) as unknown as NF)
+            ).toVar() as unknown as NF;
+            const ca = th.cos().toVar() as unknown as NF;
+            const sa = th.sin().toVar() as unknown as NF;
+            /** tile-space forward rotation */
+            const bombF = (vx: NF, vz: NF): NV2 =>
+              vec2(
+                vx.mul(ca).sub(vz.mul(sa)),
+                vx.mul(sa).add(vz.mul(ca)),
+              ) as unknown as NV2;
+            /** inverse rotation */
+            const bombI = (vx: NF, vz: NF): NV2 =>
+              vec2(
+                vx.mul(ca).add(vz.mul(sa)),
+                vz.mul(ca).sub(vx.mul(sa)),
+              ) as unknown as NV2;
             // THE WIND — the article's march-space shear: an oblique TRUE-derivative
             // TBN basis (thetenthplanet.de/archives/1180; deliberately NON-orthonormal)
             // tilts the march space by the per-texel gust deflection while the baked
@@ -2590,6 +2580,10 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                 // WORLD position to its cell directly (the hit IS the fiber ±cm).
                 const GC = -0.737369; // cos(φ·π)
                 const GS = 0.67549; // sin(φ·π)
+                // compose with the swirl: L2's frame = θ + φ·π (angle addition —
+                // a fixed golden offset would be per-tile-coherent again)
+                const ca2 = ca.mul(GC).sub(sa.mul(GS)).toVar() as unknown as NF;
+                const sa2 = sa.mul(GC).add(ca.mul(GS)).toVar() as unknown as NF;
                 const a2 = RAY_TILT
                   ? staticArc(0x7373)
                   : { x: float(0) as unknown as NF, z: float(0) as unknown as NF };
@@ -2599,15 +2593,15 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                 const of2z = Slz.add(Q2z.mul(hgt)).mul(hgt) as unknown as NF;
                 const l2x = pos.x.sub(of2x).sub(texOx).div(GUIDE_PITCH).sub(0.5).toVar() as unknown as NF;
                 const l2z = pos.z.sub(of2z).sub(texOz).div(GUIDE_PITCH).sub(0.5).toVar() as unknown as NF;
-                const q2x = l2x.mul(GC).sub(l2z.mul(GS)).add(0.5) as unknown as NF;
-                const q2z = l2x.mul(GS).add(l2z.mul(GC)).add(0.5) as unknown as NF;
+                const q2x = l2x.mul(ca2).sub(l2z.mul(sa2)).add(0.5) as unknown as NF;
+                const q2z = l2x.mul(sa2).add(l2z.mul(ca2)).add(0.5) as unknown as NF;
                 const t2x = Slx.add(Q2x.mul(hgt).mul(2)) as unknown as NF;
                 const t2z = Slz.add(Q2z.mul(hgt).mul(2)) as unknown as NF;
                 const e2x = rd.x.sub(t2x.mul(rd.y)).toVar() as unknown as NF;
                 const e2z = rd.z.sub(t2z.mul(rd.y)).toVar() as unknown as NF;
                 const e2L = vec2(e2x, e2z).length().max(1e-5).toVar() as unknown as NF;
-                const r2x = e2x.mul(GC).sub(e2z.mul(GS)) as unknown as NF;
-                const r2z = e2x.mul(GS).add(e2z.mul(GC)) as unknown as NF;
+                const r2x = e2x.mul(ca2).sub(e2z.mul(sa2)) as unknown as NF;
+                const r2z = e2x.mul(sa2).add(e2z.mul(ca2)) as unknown as NF;
                 const az2 = (atan(r2z, r2x) as unknown as NF)
                   .mul(1 / (Math.PI * 2))
                   .fract() as unknown as NF;
@@ -2651,15 +2645,15 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                     const rrx = rc2x.add(co2x) as unknown as NF;
                     const rrz = rc2z.add(co2z) as unknown as NF;
                     const lu2 = rrx
-                      .mul(GC)
-                      .add(rrz.mul(GS))
+                      .mul(ca2)
+                      .add(rrz.mul(sa2))
                       .add(0.5)
                       .mul(GUIDE_SUB)
                       .floor()
                       .toVar() as unknown as NF; // UNclamped — may be the neighbor's
                     const lv2 = rrz
-                      .mul(GC)
-                      .sub(rrx.mul(GS))
+                      .mul(ca2)
+                      .sub(rrx.mul(sa2))
                       .add(0.5)
                       .mul(GUIDE_SUB)
                       .floor()
@@ -2712,8 +2706,8 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                         const sxz2 = float(1).sub(ny2.mul(ny2)).max(0).sqrt() as unknown as NF;
                         const nx2t = az2n.cos().mul(sxz2) as unknown as NF;
                         const nz2t = az2n.sin().mul(sxz2) as unknown as NF;
-                        const n2x = nx2t.mul(GC).add(nz2t.mul(GS)) as unknown as NF;
-                        const n2z = nz2t.mul(GC).sub(nx2t.mul(GS)) as unknown as NF;
+                        const n2x = nx2t.mul(ca2).add(nz2t.mul(sa2)) as unknown as NF;
+                        const n2z = nz2t.mul(ca2).sub(nx2t.mul(sa2)) as unknown as NF;
                         (nrmV as unknown as { assign(v: unknown): void }).assign(
                           vec3(n2x, ny2, n2z),
                         );
