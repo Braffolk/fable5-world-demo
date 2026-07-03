@@ -999,6 +999,11 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
     return clip;
   })() as unknown as typeof hwMat.vertexNode;
   hwMat.fragmentNode = Fn(() => {
+    if (GRASS_DBG === 'hwnoemit') {
+      // attribution stop: full vertex + raster + depth + quad-occupancy cost,
+      // NO election atomics — splits the raster half into [raster] vs [emit]
+      return vec4(0, 0, 0, 0);
+    }
     const z = vZ.div(vW).toVar();
     const body = uint(vBodyLo.round())
       .bitOr(uint(vBodyHi.round()).shiftLeft(uint(16)))
