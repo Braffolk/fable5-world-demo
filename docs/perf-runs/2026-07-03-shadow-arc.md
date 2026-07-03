@@ -237,3 +237,43 @@ overlap; the levers pay in the tail + structural headroom.
 class, ~1-1.5 ms static); canopy long-shadows in FarShadow (look); the base world
 itself rides the 60 fps edge moving (shadows-off p50 16.5) — further moving-fps
 work belongs to the planned base-world perf pass, not shadows.
+
+## Session 3 (user: shadows appear flying forward / near half vanishes moving back)
+
+Investigation chain (gates in scratchpad, rev*/rz*/bm*/spl* galleries):
+- Reversal gate built (teleport-full vs out-and-back to the SAME pose, one boot).
+  120 m out-and-back reproduced coherent corruption intermittently; a drift-free
+  (freeze=1) 2×2 matrix showed budget-on/off BOTH at the per-run floor — strips
+  exonerated. Cloud drift confounds any gate whose legs are minutes apart:
+  freeze=1 + ablate=cloudshadow is now the mandatory gate recipe.
+- Missing mid-field shadows: a frozen-cloud discriminator matrix (default /
+  nb-off / P8-off / budget+cut-off) came out IDENTICAL (≤0.12%) — the stills'
+  shadow-poor mid-field is NOT bias/budget/cut. **?shvox A/B: ZERO delta at every
+  pose — THE VOX SPLAT NEVER WORKED, from birth.** Counter-ladder instrumentation
+  (shvoxdbg): the kernel executes exactly ONCE (first frame, 6 levels' worth of
+  workgroups, 30M texel writes) and NEVER re-dispatches despite being submitted
+  every strip frame (renderer.compute wrapper shows 20 submissions/level) — no
+  GPU/WGSL/pipeline errors; direct, indirect, and batched dispatch forms all
+  identical. A three-internals re-dispatch anomaly unique to this kernel; booked
+  OPEN, ?shvox now OPT-IN. ⚠️ P3's "verified" was a gallery eyeball with no A/B —
+  the memory `verify-user-observable` failure mode exactly. Mid-field crown
+  shadows today = the MESH leaf aggregate DAG casting at all distances (which
+  also means the deep-review's "most of the world casts nothing" was overstated —
+  the mesh DAG covered it, coarsely).
+- **The user's motion symptom = TOROIDAL LOD-AGE** (the design-time "bounded by
+  ring granularity" risk, real after all): strip content persists at write-time
+  caster LOD while the cut's LOD target drifts continuously with camera distance;
+  approach/retreat flips a region between fresh-fine and stale-coarse content.
+  **P10 fix (commit d0619bd-ish, ?shlodsnap=0 reverts): the shadow cut's LOD
+  distance = CHEBYSHEV light-plane distance snapped UP to the ring ladder
+  {E_0·2^k}** — LOD constant per ring, changes exactly when the reveal/outer
+  strips rewrite the region. LOD age impossible by construction; caster detail
+  matches the owning level's texels. Gates: far still Δ0.69 vs pre; out-and-back
+  now diffs BELOW the sun-nudge floor. PERF: live avg 19.65→18.93, p95 33.2→26.0,
+  >33 ms 9→7 (coarser ring-matched far casters).
+
+Remaining OPEN (mid-field shadow QUALITY, not correctness): mesh-DAG casters are
+coarse at 100 m+ (sparse shadows) — the intended fix was the splat; either revive
+it (find the re-dispatch anomaly) or raster the voxel bricks via a working path
+(e.g. a per-level NaniteVoxelRaster depth mode). Cloud shadows legitimately gate
+large areas (user's "usually don't see them" is partly clouds — by design).
