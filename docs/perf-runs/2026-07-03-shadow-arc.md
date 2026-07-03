@@ -208,3 +208,32 @@ static-cache behavior).
   heightAtCpu; live glide already ground-follows via groundProbe) and records
   `nanite.shRaster` per tick → levels-per-frame histogram in the summary.
 - World boots cold in the probe (~105 s; probes stay cold by policy).
+
+## Session 2 (user follow-ups: "most impactful ones" + terrain self-shadowing)
+
+**P8 acne fix (91d1d14, ?shnb/?shdb):** the user's "terrain self-shadowing from mid
+distances, worse further out, gone where shadows end" = classic bias-vs-texel acne:
+fixed 0.35 m depth / 0.12 m normal biases vs coarse-level texels up to 0.75 m — one
+texel of a steep grazing slope spans metres of depth. Attribution: nanshadow=0 shows
+clean rock at the same pose. Fix: BOTH biases scale with the sampled level's texel
+(slope-aware normal-offset applied per level BEFORE level-select + per-level depth
+bias in pcss; defaults 1.5/1.0 per texel). acnefix-* gallery: blocky cliff patches
+GONE, casts intact, eye contact dapple unchanged (L0 delta +3.5 cm). BONUS: the
+open-cliff pose went 55→103 fps — acne texels forced the full 9-tap PCF branch on
+every covered pixel.
+
+**P9 levers (d3d2cba):** strip-sized clear/copy dispatch (GPU args kernel from the
+strip uniforms; kills ~8M idle threads/frame) + per-level submit coalescing (7→3
+submit units/level) + strip-fitted cut box (?shcut=0). ROOT-CAUSED en route: the
+full kVisClear's hidden tail reset the HW-raster queue counter; the scoped clear
+skipped it → hwDepth rendered an ever-growing stale triangle list (+8 ms moving,
+found by two-step bisect: shcut=0 no change → unbatched no change → kVisClear diff).
+Extracted kHwQueueClear (1 thread) into the pre-HW batch. Final: live avg 19.65 /
+p50 16.7 (= pre-lever), tail cleaner (max 41.7→34.2, >33 ms 13→9), isolated
+unchanged, strip-gate 0.347 mean. Honest read: the mean was already hidden by GPU
+overlap; the levers pay in the tail + structural headroom.
+
+**Remaining (nothing big left in shadows):** shadowHalf temporal/early-out (RISK
+class, ~1-1.5 ms static); canopy long-shadows in FarShadow (look); the base world
+itself rides the 60 fps edge moving (shadows-off p50 16.5) — further moving-fps
+work belongs to the planned base-world perf pass, not shadows.
