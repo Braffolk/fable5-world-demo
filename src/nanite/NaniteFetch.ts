@@ -256,6 +256,31 @@ export function makeFetch(
         const flutAtten = float(1).sub(dist.sub(40).div(80).clamp(0, 1));
         flutBase.assign(s.mul(g.mul(0.7).add(0.3)).mul(eks).mul(0.07).mul(flutAtten));
       });
+      // GRASS channel (S1, 31-grass-plan §6): the GroundRing wind model on the
+      // SAME gust field — cantilever bend ∝ tip² (applied per vertex) + a fine
+      // shimmer whose sine is fully per-instance (GroundRing keys it on the
+      // instance world pos, so it hoists here). Field slots reused (NO new
+      // TrunkWindFields members — the shF broadcast stays untouched):
+      //   leanBase ← bend amplitude = amp·(s·0.55+0.6)·(bladeH·0.42), lean² rule
+      //   flutBase ← shimmer amplitude = amp·0.05 × the leaf-style ~120 m fade
+      //              (the shipped ring only zeroes shimmer in far mode — the fade
+      //              is the new lane's TRAA-stability upgrade, §2 item 6)
+      //   swayXPhase ← the hoisted shimmer sine
+      If(channel.equal(uint(TRANSFORM_CHANNEL.grass)), () => {
+        const origin = A.xyz as unknown as NV3;
+        const s = windU.strength as unknown as NF;
+        const dist = origin.sub(vec3(wind.camPos)).length();
+        const e = windExposure(origin.xz as unknown as NV2);
+        const g = gustAt(origin.xz as unknown as NV2);
+        const amp = s.mul(g.mul(0.9).add(0.3)).mul(e).toVar();
+        leanBase.assign(amp.mul(s.mul(0.55).add(0.6)).mul((A.w as unknown as NF).mul(0.42)));
+        const instPhase = slotHash(posKey, 211).toVar();
+        ph.assign(instPhase.mul(6.2832));
+        const flutAtten = float(1).sub(dist.sub(40).div(80).clamp(0, 1));
+        flutBase.assign(amp.mul(0.05).mul(flutAtten));
+        // shimmer sine: time·5.2 + per-instance phase + world-pos decorrelation
+        natW.assign(float(5.2)); // reuse: swayXPhase below = sin(time·natW·1.31 + ph·1.7)
+      });
       // HOIST the per-vertex sines here: their args (natW, ph per-instance; time
       // per-frame) are cluster-invariant, so compute the 2 sines ONCE per cluster
       // instead of 384×/cluster in fetchWorldVert. Cached via wgcache like the rest.
@@ -446,6 +471,25 @@ export function makeFetch(
               w.dirX.mul(along).sub(w.dirY.mul(swayX)),
               dy,
               w.dirY.mul(along).add(w.dirX.mul(swayX)),
+            ),
+          ),
+        );
+      });
+      // GRASS (S1): the GroundRing response verbatim — cantilever bend ∝ tip²
+      // (tips dip as they deflect, dy = bend·t·−0.4), shimmer perpendicular to
+      // the wind (per-instance hoisted sine × tip). t = clump-local y (blades
+      // are unit height; the clump's tallest blade reaches ~1.27 — clamp).
+      If(ctx.channel.equal(uint(TRANSFORM_CHANNEL.grass)), () => {
+        const w = ctx.wind as TrunkWindFields;
+        const tN = (p as unknown as NV3).y.clamp(0, 1);
+        const bend = w.leanBase.mul(tN).mul(tN);
+        const flut = w.swayXPhase.mul(tN).mul(w.flutBase);
+        out.assign(
+          out.add(
+            vec3(
+              w.dirX.mul(bend).sub(w.dirY.mul(flut)),
+              bend.mul(tN).mul(-0.4),
+              w.dirY.mul(bend).add(w.dirX.mul(flut)),
             ),
           ),
         );

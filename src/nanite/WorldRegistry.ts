@@ -984,10 +984,11 @@ export async function buildWorldRegistry(input: {
     const { bladeClump } = await import('../vegetation/GroundRing');
     const src = geometryToSource(bladeClump(5, 4));
     const hGrass = reg.registerMesh(src, 'grass', {
-      transformChannel: 'rigid', // S1 flips to 'grass' (wind)
+      transformChannel: 'grass', // S1: GroundRing wind (tip² cantilever + shimmer)
       castShadows: false,
       twoSided: true,
       aggregate: true,
+      swayPad: 0.6, // max tip deflection (bend ≤ amp·1.15·0.42·scale) — cull bound pad
       label: 'grass/debug',
     });
     reg.setMaxDistance(hGrass, 120);
