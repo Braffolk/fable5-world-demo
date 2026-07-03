@@ -58,9 +58,8 @@ import {
   vec2,
   vec3,
   vec4,
-  viewportDepthTexture,
-  viewportSharedTexture,
 } from 'three/tsl';
+import type { DepthTexture, Texture } from 'three';
 import type { StorageTexture } from 'three/webgpu';
 import { PERIOD_FBM } from '../gpu/passes/NoiseBake';
 import { bilerpVec2Buffer } from '../gpu/BufferSample';
@@ -95,10 +94,16 @@ export function waterMaterial(
   canopyTex: StorageTexture | null,
   gi: ProbeGI | null,
   lvl: WaterLevelHandles,
+  // once-per-frame scene snapshots owned by WaterSurface (NOT three's
+  // viewportSharedTexture/viewportDepthTexture — those dedupe per node
+  // INSTANCE and fired 12 color + 18 depth copies/frame across the 6 levels)
+  snap: { color: Texture; depth: DepthTexture },
 ): MeshStandardNodeMaterial {
   const flow = hf.flow;
   const noiseA = hf.noiseA;
   if (!flow || !noiseA) throw new Error('waterMaterial needs hydrology + baked noise');
+  const sceneDepthAt = (uv: NV2): NF => (texture(snap.depth, uv) as unknown as NV4).x;
+  const sceneColorAt = (uv: NV2): NV3 => (texture(snap.color, uv) as unknown as NV4).rgb;
 
   const mat = new MeshStandardNodeMaterial();
   mat.transparent = true;
@@ -160,20 +165,12 @@ export function waterMaterial(
   // refraction uv: ripple-driven, shrinking with distance, depth-validated
   const refrK = clamp(float(9).div(dist.max(1)), 0.04, 1).mul(0.055);
   const ruv = screenUV.add(n.xz.mul(refrK));
-  const zR = perspectiveDepthToViewZ(
-    (viewportDepthTexture(ruv) as unknown as NV4).x,
-    cameraNear,
-    cameraFar,
-  );
+  const zR = perspectiveDepthToViewZ(sceneDepthAt(ruv), cameraNear, cameraFar);
   const leaked = zR.greaterThan(fragZ.add(0.02)); // refr sample in FRONT of water
   const uvF = mix(ruv, screenUV, leaked.select(float(1), float(0)));
   const zScene = mix(
     zR,
-    perspectiveDepthToViewZ(
-      (viewportDepthTexture(screenUV) as unknown as NV4).x,
-      cameraNear,
-      cameraFar,
-    ),
+    perspectiveDepthToViewZ(sceneDepthAt(screenUV as unknown as NV2), cameraNear, cameraFar),
     leaked.select(float(1), float(0)),
   );
   const thick = fragZ.sub(zScene).max(0); // meters of water along the ray
@@ -181,7 +178,7 @@ export function waterMaterial(
   const vDepth = thick.mul(viewDir.y.abs().max(0.06));
 
   // ---- transmitted light --------------------------------------------------------
-  const sceneCol = (viewportSharedTexture(uvF) as unknown as NV4).rgb;
+  const sceneCol = sceneColorAt(uvF as unknown as NV2);
   const absorb = thick.mul(1.25);
   const T = vec3(
     exp(absorb.mul(-SIGMA.r)),
@@ -217,11 +214,7 @@ export function waterMaterial(
           Break();
         },
       );
-      const zS = perspectiveDepthToViewZ(
-        (viewportDepthTexture(uvS) as unknown as NV4).x,
-        cameraNear,
-        cameraFar,
-      );
+      const zS = perspectiveDepthToViewZ(sceneDepthAt(uvS), cameraNear, cameraFar);
       // hit: scene surface just in front of the ray point (viewZ is negative)
       If(
         zS.greaterThan(pV.z.add(0.06)).and(zS.lessThan(pV.z.add(stepLen.mul(2.6).add(0.7)))),
@@ -264,7 +257,7 @@ export function waterMaterial(
     // fade SSR toward the screen border so hits don't pop at the edge
     const e = hitUv.sub(0.5).abs().mul(2);
     const edgeFade = smoothstep(1.0, 0.82, e.x.max(e.y));
-    const scene = (viewportSharedTexture(hitUv) as unknown as NV4).rgb;
+    const scene = sceneColorAt(hitUv as unknown as NV2);
     return mix(fallback, scene, hit.mul(edgeFade));
   })();
   const skyRefl = reflection as unknown as NV3;
@@ -340,7 +333,7 @@ export function waterMaterial(
   // lands even where the surface is z-rejected)
   const dbg = Number(new URLSearchParams(window.location.search).get('waterdbg') ?? '0');
   if (dbg > 0) {
-    const storedD = (viewportDepthTexture(screenUV) as unknown as NV4).x;
+    const storedD = sceneDepthAt(screenUV as unknown as NV2);
     const ownD = viewZToPerspectiveDepth(fragZ, cameraNear, cameraFar);
     const paint =
       dbg === 1

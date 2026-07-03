@@ -14,8 +14,18 @@
  * texels, feathered by the material's depth-based opacity.
  */
 
-import { BufferAttribute, BufferGeometry, Group, Mesh, Vector2, Vector4 } from 'three';
-import type { PerspectiveCamera } from 'three';
+import {
+  BufferAttribute,
+  BufferGeometry,
+  DepthTexture,
+  FramebufferTexture,
+  Group,
+  LinearFilter,
+  Mesh,
+  Vector2,
+  Vector4,
+} from 'three';
+import type { PerspectiveCamera, WebGPURenderer } from 'three/webgpu';
 import type { StorageTexture } from 'three/webgpu';
 import type { ProbeGI } from '../gpu/passes/ProbeGI';
 import type { NV2, NV4 } from '../gpu/TSLTypes';
@@ -69,26 +79,74 @@ export class WaterSurface {
   readonly group = new Group();
   private readonly lvls: Level[] = [];
 
+  // ONE scene-color + ONE scene-depth snapshot per frame, shared by all six level
+  // materials. three's viewportSharedTexture/viewportDepthTexture nodes share the
+  // TEXTURE but dedupe updateBefore per NODE INSTANCE (NodeFrame.updateBeforeMap is
+  // keyed on updateReference() === the node), so the shipped material's 2 color + 3
+  // depth instances × 6 levels fired 12 color + 18 depth full-screen copies per
+  // frame (~2.8-6 ms measured, 2026-07-03 water arc). The sheets never overlap
+  // (inner-rect cutouts), so every level legally reads the SAME pre-water opaque
+  // frame: copy once in the first-drawn sheet's onBeforeRender, sample plain
+  // textures everywhere.
+  private readonly snapColor = new FramebufferTexture(1, 1);
+  private readonly snapDepth = new DepthTexture(1, 1);
+  private lastCopyFrame = -1;
+  private readonly snapSize = new Vector2();
+
+  private readonly copySnapshot = (renderer: WebGPURenderer): void => {
+    const f = renderer.info.frame;
+    if (f === this.lastCopyFrame) return;
+    this.lastCopyFrame = f;
+    const size = renderer.getDrawingBufferSize(this.snapSize);
+    if (this.snapColor.image.width !== size.width || this.snapColor.image.height !== size.height) {
+      this.snapColor.image.width = size.width;
+      this.snapColor.image.height = size.height;
+      this.snapColor.needsUpdate = true;
+      const d = this.snapDepth.image as { width: number; height: number };
+      d.width = size.width;
+      d.height = size.height;
+      this.snapDepth.needsUpdate = true;
+    }
+    renderer.copyFramebufferToTexture(this.snapColor);
+    // runtime accepts DepthTexture (three's own viewportDepthTexture machinery
+    // passes one); the signature is typed for FramebufferTexture only
+    renderer.copyFramebufferToTexture(this.snapDepth as unknown as FramebufferTexture);
+  };
+
   constructor(
     hf: Heightfield,
     atm: Atmosphere,
     canopyTex: StorageTexture | null,
     gi: ProbeGI | null,
   ) {
+    this.snapColor.minFilter = LinearFilter;
+    this.snapColor.magFilter = LinearFilter;
     const geo = gridGeometry();
     for (const cell of LEVEL_CELL) {
       const origin = runiform(new Vector2());
       const innerRect = runiform(new Vector4(1e9, 1e9, -1e9, -1e9));
-      const mat = waterMaterial(hf, atm, canopyTex, gi, {
-        origin: origin as unknown as NV2,
-        innerRect: innerRect as unknown as NV4,
-        cell,
-        far: cell >= 12, // ≥ ±384 m: min-reduced field
-      });
+      const mat = waterMaterial(
+        hf,
+        atm,
+        canopyTex,
+        gi,
+        {
+          origin: origin as unknown as NV2,
+          innerRect: innerRect as unknown as NV4,
+          cell,
+          far: cell >= 12, // ≥ ±384 m: min-reduced field
+        },
+        { color: this.snapColor, depth: this.snapDepth },
+      );
       const mesh = new Mesh(geo, mat);
       mesh.frustumCulled = false; // positions are shader-driven
       mesh.castShadow = false;
       mesh.receiveShadow = true;
+      // any sheet drawing first snapshots the opaque frame for all of them
+      // (frame-id guard makes the copy once-per-frame regardless of order)
+      mesh.onBeforeRender = ((renderer: WebGPURenderer) => {
+        this.copySnapshot(renderer);
+      }) as unknown as Mesh['onBeforeRender'];
       this.group.add(mesh);
       this.lvls.push({
         origin: origin as unknown as Level['origin'],

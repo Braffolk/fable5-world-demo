@@ -44,11 +44,15 @@ const COOLDOWN_S = Number(process.env.COOLDOWN_S ?? '45');
 const LABEL = process.env.LABEL ?? (process.env.CONFIG ?? 'default');
 
 type Pose = { name: string; p: [number, number, number]; yaw: number; pitch: number };
-const POSES: Pose[] = [
-  { name: 'eye', p: [0, 2, 0], yaw: 0.6, pitch: -0.02 },
-  { name: 'oblique', p: [0, 40, 40], yaw: 0, pitch: -0.35 },
-  { name: 'aerial', p: [0, 150, 0], yaw: 0, pitch: -1.45 },
-];
+// POSES env (JSON array) overrides the canonical trio — water/grass arcs measure
+// at wet/meadow poses the canonical set never visits.
+const POSES: Pose[] = process.env.POSES
+  ? (JSON.parse(process.env.POSES) as Pose[])
+  : [
+      { name: 'eye', p: [0, 2, 0], yaw: 0.6, pitch: -0.02 },
+      { name: 'oblique', p: [0, 40, 40], yaw: 0, pitch: -0.35 },
+      { name: 'aerial', p: [0, 150, 0], yaw: 0, pitch: -1.45 },
+    ];
 
 const pct = (a: number[], q: number): number => {
   const s = a.filter(Number.isFinite).sort((x, y) => x - y);
@@ -234,10 +238,12 @@ async function main(): Promise<void> {
   for (const pose of POSES) {
     const frames = (await page.evaluate(
       async ({ pose, FRAMES, WARMUP, MF_COOLDOWN }) => {
-        const hf = (window as unknown as { __laasDbg?: { engine?: { heightfield?: { heightAtCpu?(x: number, z: number): number } } } })
+        const hf = (window as unknown as { __laasDbg?: { engine?: { heightfield?: { heightAtCpu?(x: number, z: number): number; waterYAtCpu?(x: number, z: number): number } } } })
           .__laasDbg?.engine?.heightfield;
         const g = hf?.heightAtCpu ? hf.heightAtCpu(pose.p[0], pose.p[2]) : 0;
-        window.__laas.setPose!({ p: [pose.p[0], g + pose.p[1], pose.p[2]], yaw: pose.yaw, pitch: pose.pitch });
+        // water-arc poses: shoreline cameras sit above the SURFACE, not the lakebed
+        const wy = hf?.waterYAtCpu ? hf.waterYAtCpu(pose.p[0], pose.p[2]) : -1e9;
+        window.__laas.setPose!({ p: [pose.p[0], Math.max(g, wy) + pose.p[1], pose.p[2]], yaw: pose.yaw, pitch: pose.pitch });
         if (window.__laas.settle) await window.__laas.settle(20);
         const fs = await window.__laas.measureFrames!({
           frames: FRAMES,

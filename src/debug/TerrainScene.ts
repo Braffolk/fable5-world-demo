@@ -176,8 +176,13 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     });
   }
 
-  // Phase 6: stream/lake water clipmap (?ablate=water to A/B)
-  if (view !== 'split' && !ablate.has('water') && !DISABLE_OLD_GEOMETRY) {
+  // Phase 6: stream/lake water clipmap (?ablate=water to A/B). Lives in BOTH
+  // slates (30-water-plan W1): in the nanite frame it draws in the same scene
+  // pass after the resolve meshes (transparent, depthWrite), reading resolve
+  // depth via viewportDepthTexture and the lit opaque frame via
+  // viewportSharedTexture — the SLW-over-resolve seam.
+  let waterRef: WaterSurface | null = null;
+  if (view !== 'split' && !ablate.has('water')) {
     const water = new WaterSurface(
       hf,
       sunSky.atmosphere,
@@ -186,6 +191,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     );
     engine.scene.add(water.group);
     engine.onUpdate(() => water.update(engine.camera));
+    waterRef = water; // __laasDbg.water — runtime visible-toggle for within-session A/B
   }
 
   // Phase 5: variant pools + GPU cull → compacted indirect draws
@@ -371,6 +377,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     engine,
     sunSky,
     shadowRig,
+    water: waterRef,
   };
 
   // GPU particles: snow/pollen/leaves riding the wind (?ablate=particles)
