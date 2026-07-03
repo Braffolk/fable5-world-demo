@@ -385,7 +385,9 @@ export function buildNaniteFrame(
     barkTexB: world.barkTexB,
     naniteShadow: shadow,
     shadowHalf,
-    grassProc: grass ? { derive: grass.resolveDerive, lean: grassLean } : null,
+    grassProc: grass
+      ? { derive: grass.resolveDerive, lean: grassLean, ray: grass.resolveRay }
+      : null,
   });
   // ?nores=1 — MEASUREMENT ablation (default OFF): skip BOTH fullscreen resolve passes
   // (the tri `mesh` + vox `voxMesh`). Decomposes the frame: (baseline − nores) gpuWall =

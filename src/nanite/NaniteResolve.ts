@@ -147,6 +147,11 @@ export interface ResolveWorld {
      *  shadow upsample + GI probe chain (the measured ~7 ms pixel-proportional
      *  wall) and use this instead. ?grasslean=0 → null → old path. */
     lean?: ((wpXZ: NV2) => NV4) | null;
+    /** G-E article lane (?grass=ray): per-pixel vec4(worldNrm, tipParam) from the
+     *  raycast lane's screen texture (the algorithm's own depth+normal output).
+     *  Non-null ⇒ grass pixels use it INSTEAD of derive() (whose per-blade id
+     *  reconstruction the baked-fetch lane doesn't carry). */
+    ray?: ((px: NU) => NV4) | null;
   } | null;
 }
 
@@ -1203,7 +1208,17 @@ export function buildNaniteResolve(
           gpIrr.assign((L as unknown as { yzw: NV3 }).yzw);
         }
         const body = pRaw.bitAnd(uint(0x3fffffff));
-        const g = gp.derive(body as unknown as NU, wp);
+        // G-E article lane: normal + tip come straight from the raycast lane's
+        // screen texture (ONE tap) — the analytic id re-derivation is bypassed.
+        const g = gp.ray
+          ? ((): { t: NF; nrm: NV3 } => {
+              const rv = gp.ray!(pixelIndex as unknown as NU) as unknown as NV4;
+              return {
+                t: rv.w as unknown as NF,
+                nrm: normalize(rv.xyz as unknown as NV3) as unknown as NV3,
+              };
+            })()
+          : gp.derive(body as unknown as NU, wp);
         const distG = wp.sub(vec3(camPos) as unknown as NV3).length();
         const toCamG = normalize(camPos.sub(wp)) as unknown as NV3;
         const nF = dot(g.nrm, toCamG).lessThan(0).select(g.nrm.negate(), g.nrm) as unknown as NV3;
