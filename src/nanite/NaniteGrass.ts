@@ -2332,6 +2332,43 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                 fzg,
               ) as unknown as NF;
             };
+            /** occupancy bit of an ARBITRARY world cell — cross-border hits root
+             *  in the NEIGHBOR texel (the periodic copy's cells), so the owning
+             *  texel's mask word is fetched when it differs (minority path).
+             *  Validating copies against THIS texel's cells shifted the density
+             *  field by ±1 tile at borders — the user's "sparsing happens at the
+             *  wrong end of the square" pic. */
+            const maskBitAt = (wcxA: NF, wczA: NF): NB => {
+              const txN = wcxA
+                .sub(gfx)
+                .div(GUIDE_SUB)
+                .floor()
+                .clamp(0, GUIDE_RES - 1)
+                .toVar() as unknown as NF;
+              const tzN = wczA
+                .sub(gfz)
+                .div(GUIDE_SUB)
+                .floor()
+                .clamp(0, GUIDE_RES - 1)
+                .toVar() as unknown as NF;
+              const luN = wcxA.sub(gfx).sub(txN.mul(GUIDE_SUB)).clamp(0, GUIDE_SUB - 1) as unknown as NF;
+              const lvN = wczA.sub(gfz).sub(tzN.mul(GUIDE_SUB)).clamp(0, GUIDE_SUB - 1) as unknown as NF;
+              const bitN = uint(lvN.mul(GUIDE_SUB).add(luN)).toVar() as unknown as NU;
+              const wm0 = m0.toVar() as unknown as NU;
+              const wm1 = m1.toVar() as unknown as NU;
+              If(txN.notEqual(txf).or(tzN.notEqual(tzf)), () => {
+                const mvN = guideMask2.ro.element(
+                  uint(tzN.mul(GUIDE_RES).add(txN)) as unknown as NU,
+                );
+                (wm0 as unknown as { assign(v: unknown): void }).assign(mvN.x);
+                (wm1 as unknown as { assign(v: unknown): void }).assign(mvN.y);
+              });
+              const w = bitN.lessThan(uint(32)).select(wm0, wm1) as unknown as NU;
+              return w
+                .shiftRight(bitN.bitAnd(uint(31)))
+                .bitAnd(uint(1))
+                .equal(uint(1)) as unknown as NB;
+            };
             // THE FETCH (O(1)): R = 1/(1+d) in tile widths, GBA = normal. Linear
             // filter interpolates x, z AND angle (repeat-wrapped) — his encoding.
             const smp = fetchBand(qbx, qbz, az);
@@ -2367,9 +2404,13 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
               }
             }).Else(() => {
               const yH = ro.y.add(rd.y.mul(tHit)).toVar() as unknown as NF;
-              // hit position in tile space (cell-exit advance + column jitter)
-              const qhx = qbx.add(ebx.div(eLen).mul(dTile)).fract().toVar() as unknown as NF;
-              const qhz = qbz.add(ebz.div(eLen).mul(dTile)).fract().toVar() as unknown as NF;
+              // hit position in tile space: RAW for the copy index (a hit past
+              // the border lives in the next periodic COPY — its root cells are
+              // the neighbor texel's), wrapped for cell-exit + column jitter
+              const qrx = qbx.add(ebx.div(eLen).mul(dTile)).toVar() as unknown as NF;
+              const qrz = qbz.add(ebz.div(eLen).mul(dTile)).toVar() as unknown as NF;
+              const qhx = qrx.fract().toVar() as unknown as NF;
+              const qhz = qrz.fract().toVar() as unknown as NF;
               // the fiber's ROOT cell comes from the BAKED id (A channel), mapped
               // through the inverse bomb. The density law applies to ROOTS — an
               // arcing blade legally overhangs empty neighbor cells (the ring's
@@ -2391,29 +2432,27 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                 .add(0.5)
                 .div(GUIDE_SUB)
                 .sub(0.5) as unknown as NF;
+              // root cell center + the hit's COPY offset, both through the
+              // inverse bomb (rotations keep the integer lattice exact)
               const lw = bombI(tcx, tcz) as unknown as NV2;
+              const co = bombI(qrx.floor() as unknown as NF, qrz.floor() as unknown as NF) as unknown as NV2;
               const lu = lw.x
+                .add(co.x)
                 .add(0.5)
                 .mul(GUIDE_SUB)
                 .floor()
-                .clamp(0, GUIDE_SUB - 1)
-                .toVar() as unknown as NF;
+                .toVar() as unknown as NF; // UNclamped — may be the neighbor's
               const lv = lw.y
+                .add(co.y)
                 .add(0.5)
                 .mul(GUIDE_SUB)
                 .floor()
-                .clamp(0, GUIDE_SUB - 1)
                 .toVar() as unknown as NF;
-              const bit = uint(lv.mul(GUIDE_SUB).add(lu)) as unknown as NU;
-              const word = bit.lessThan(uint(32)).select(m0, m1) as unknown as NU;
-              const occB = word
-                .shiftRight(bit.bitAnd(uint(31)))
-                .bitAnd(uint(1))
-                .equal(uint(1)) as unknown as NB;
               // world cell + its blade-height law: the bake is 2D (fibers are
               // infinite-height, article-style) — the runtime prunes by height
               const wcx = gfx.add(txf.mul(GUIDE_SUB)).add(lu).toVar() as unknown as NF;
               const wcz = gfz.add(tzf.mul(GUIDE_SUB)).add(lv).toVar() as unknown as NF;
+              const occB = maskBitAt(wcx, wcz);
               const h2x = cellHash2(vec2(wcx, wcz) as unknown as NV2, SALT ^ 0x9191)
                 .x as unknown as NF;
               // smooth stand-in for the geo ladder's blade→card height doubling
@@ -2605,28 +2644,29 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                       .add(0.5)
                       .div(GUIDE_SUB)
                       .sub(0.5) as unknown as NF;
-                    const lu2 = rc2x
+                    // root + the hit's COPY offset in the L2 frame, inverse-rotated
+                    // together (same off-by-one-tile hazard as L1)
+                    const co2x = q2x.add(r2x.div(e2L).mul(dT2)).floor() as unknown as NF;
+                    const co2z = q2z.add(r2z.div(e2L).mul(dT2)).floor() as unknown as NF;
+                    const rrx = rc2x.add(co2x) as unknown as NF;
+                    const rrz = rc2z.add(co2z) as unknown as NF;
+                    const lu2 = rrx
                       .mul(GC)
-                      .add(rc2z.mul(GS))
+                      .add(rrz.mul(GS))
                       .add(0.5)
                       .mul(GUIDE_SUB)
                       .floor()
-                      .clamp(0, GUIDE_SUB - 1) as unknown as NF;
-                    const lv2 = rc2z
+                      .toVar() as unknown as NF; // UNclamped — may be the neighbor's
+                    const lv2 = rrz
                       .mul(GC)
-                      .sub(rc2x.mul(GS))
+                      .sub(rrx.mul(GS))
                       .add(0.5)
                       .mul(GUIDE_SUB)
                       .floor()
-                      .clamp(0, GUIDE_SUB - 1) as unknown as NF;
+                      .toVar() as unknown as NF;
                     const wc2x = gfx.add(txf.mul(GUIDE_SUB)).add(lu2).toVar() as unknown as NF;
                     const wc2z = gfz.add(tzf.mul(GUIDE_SUB)).add(lv2).toVar() as unknown as NF;
-                    const bit2 = uint(lv2.mul(GUIDE_SUB).add(lu2)) as unknown as NU;
-                    const w2 = bit2.lessThan(uint(32)).select(m0, m1) as unknown as NU;
-                    const occ2 = w2
-                      .shiftRight(bit2.bitAnd(uint(31)))
-                      .bitAnd(uint(1))
-                      .equal(uint(1)) as unknown as NB;
+                    const occ2 = maskBitAt(wc2x, wc2z);
                     const h2b = cellHash2(vec2(wc2x, wc2z) as unknown as NV2, SALT ^ 0x9191)
                       .x as unknown as NF;
                     const yK2 = mix(float(1.12), float(2), smoothstep(55, 85, distT)) as unknown as NF;
