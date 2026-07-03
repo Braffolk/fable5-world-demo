@@ -2083,30 +2083,48 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
             // tile stays static. S = horizontal tip deflection per meter of height
             // (deriveClump's bendAmp law normalized by blade height); ta.y is rebaked
             // every frame, so the field animates.
-            let Sx: NF = float(0) as unknown as NF;
-            let Sz: NF = float(0) as unknown as NF;
+            // the basis has a LINEAR part (whole-blade tilt, Sl) and a QUADRATIC
+            // part (ARC — deflection Sq·h², the ring's bendAmp·tN² law). The march
+            // uses the LOCAL tangent (∂off/∂y = Sl + 2·Sq·h), re-linearized at
+            // every fetch, so blade silhouettes render genuinely CURVED (user call
+            // 2026-07-04: "bends in the grass blades is a must") — zero extra
+            // fetches, the cheapest bend variant.
+            let Slx: NF = float(0) as unknown as NF;
+            let Slz: NF = float(0) as unknown as NF;
+            let Sqx: NF = float(0) as unknown as NF;
+            let Sqz: NF = float(0) as unknown as NF;
             if (RAY_SHEAR && windContext()) {
+              // wind is a BEND, not a tilt: quadratic, scaled so the deflection at
+              // the texel's sward top matches the old linear-shear tip deflection
               const st = windU.strength as unknown as NF;
-              const shear = (ta.y as unknown as NF)
+              const K = (ta.y as unknown as NF)
                 .mul(st.mul(0.55).add(0.6))
                 .mul(0.45)
+                .div((ta.x as unknown as NF).max(0.35))
                 .toVar() as unknown as NF;
               const wd = vec2(windU.dir as unknown as NV2);
-              Sx = wd.x.mul(shear) as unknown as NF;
-              Sz = wd.y.mul(shear) as unknown as NF;
+              Sqx = wd.x.mul(K) as unknown as NF;
+              Sqz = wd.y.mul(K) as unknown as NF;
             }
             if (RAY_TILT) {
-              // static swirl lean (user-called: pure verticals read as straight
-              // lines): a hash-varied per-tile incline rides the SAME oblique
-              // basis — the article's variable-incline-fibers case, zero fetches.
+              // static per-tile character: a small whole-blade lean + an ARC with
+              // its own hashed direction/strength (per-blade yaw variety is baked)
               const la = cellHash(vec2(txI, tzI) as unknown as NV2, SALT ^ 0x3131)
                 .mul(6.2831853)
                 .toVar() as unknown as NF;
               const lm = cellHash(vec2(txI, tzI) as unknown as NV2, SALT ^ 0x3232)
-                .mul(0.18)
-                .add(0.08) as unknown as NF;
-              Sx = Sx.add(la.cos().mul(lm)) as unknown as NF;
-              Sz = Sz.add(la.sin().mul(lm)) as unknown as NF;
+                .mul(0.09)
+                .add(0.04) as unknown as NF;
+              Slx = Slx.add(la.cos().mul(lm)) as unknown as NF;
+              Slz = Slz.add(la.sin().mul(lm)) as unknown as NF;
+              const ba = cellHash(vec2(txI, tzI) as unknown as NV2, SALT ^ 0x3333)
+                .mul(6.2831853)
+                .toVar() as unknown as NF;
+              const bm = cellHash(vec2(txI, tzI) as unknown as NV2, SALT ^ 0x3434)
+                .mul(0.6)
+                .add(0.35) as unknown as NF;
+              Sqx = Sqx.add(ba.cos().mul(bm)) as unknown as NF;
+              Sqz = Sqz.add(ba.sin().mul(bm)) as unknown as NF;
             }
             const texOx = gfx.add(txf.mul(GUIDE_SUB)).mul(CELL).toVar() as unknown as NF;
             const texOz = gfz.add(tzf.mul(GUIDE_SUB)).mul(CELL).toVar() as unknown as NF;
@@ -2117,15 +2135,22 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
             const gP = ground
               .add(grad.x.mul(pos.x.sub(texCx)))
               .add(grad.y.mul(pos.z.sub(texCz))) as unknown as NF;
-            const hgt = pos.y.sub(gP).max(0) as unknown as NF;
-            const lxT = pos.x.sub(Sx.mul(hgt)).sub(texOx).div(GUIDE_PITCH) as unknown as NF;
-            const lzT = pos.z.sub(Sz.mul(hgt)).sub(texOz).div(GUIDE_PITCH) as unknown as NF;
+            // shear height clamped: past ~0.6 m the arc would wrap tile space by
+            // whole tiles (far-field tall swards) — sub-pixel there anyway
+            const hgt = pos.y.sub(gP).max(0).min(0.6).toVar() as unknown as NF;
+            const offX = Slx.add(Sqx.mul(hgt)).mul(hgt) as unknown as NF; // Sl·h + Sq·h²
+            const offZ = Slz.add(Sqz.mul(hgt)).mul(hgt) as unknown as NF;
+            const lxT = pos.x.sub(offX).sub(texOx).div(GUIDE_PITCH) as unknown as NF;
+            const lzT = pos.z.sub(offZ).sub(texOz).div(GUIDE_PITCH) as unknown as NF;
             const qb0 = bombF(lxT.sub(0.5), lzT.sub(0.5)) as unknown as NV2;
             const qbx = qb0.x.add(0.5).toVar() as unknown as NF;
             const qbz = qb0.y.add(0.5).toVar() as unknown as NF;
-            // sheared march direction → tile-space azimuth = the fetch's 3rd axis
-            const ex = rd.x.sub(Sx.mul(rd.y)).toVar() as unknown as NF;
-            const ez = rd.z.sub(Sz.mul(rd.y)).toVar() as unknown as NF;
+            // sheared march direction (LOCAL tangent of the quadratic basis) →
+            // tile-space azimuth = the fetch's 3rd axis
+            const tanX = Slx.add(Sqx.mul(hgt).mul(2)).toVar() as unknown as NF;
+            const tanZ = Slz.add(Sqz.mul(hgt).mul(2)).toVar() as unknown as NF;
+            const ex = rd.x.sub(tanX.mul(rd.y)).toVar() as unknown as NF;
+            const ez = rd.z.sub(tanZ.mul(rd.y)).toVar() as unknown as NF;
             const eLen = vec2(ex, ez).length().max(1e-5).toVar() as unknown as NF;
             const ebT = bombF(ex as unknown as NF, ez as unknown as NF) as unknown as NV2;
             const ebx = ebT.x.toVar() as unknown as NF;
