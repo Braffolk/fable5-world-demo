@@ -169,6 +169,15 @@ flicker — strips localize LOD changes to thin seams instead of whole-level swa
 (the strip gate's 137-step glide across LOD boundaries matched full re-raster to
 0.495 mean); user-verify on their own flight.
 
+**FINAL (rested run, full arc config P1-P6, wsh-final):** live moving avg 19.6 /
+p50 16.9 / p95 33.2, >33 ms 13/600 (baseline was 31.6/33.3/41.7 with 128;
+shadows-OFF floor is 14.0/16.5/24.0) — the total moving shadow bill is now
+**+5.6 ms for strictly MORE shadow coverage than baseline** (mid-field + fartiles
+casting, far terrain shading — none of which baseline had). Isolated eye/obl/aerial
+**20.4/15.7/13.5 = the best numbers of every session this arc, better than
+shadows-off's own session** (P2 sever + gi-sleep beat the old static bill).
+GI-sleep look verified on the final pose shots (converged field, no ambient change).
+
 Booked follow-ups: canopy-slab occluder in FarShadow (forest silhouette long
 shadows); receiver-height correction for tall crowns in far-shadow penumbra;
 per-level fixed overhead (clear/copy full-window dispatches per strip level ≈ the
