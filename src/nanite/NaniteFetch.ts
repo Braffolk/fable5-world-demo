@@ -91,6 +91,57 @@ export interface TerrainDisp {
   camPos: UniformV3;
 }
 
+/**
+ * TerrainTiles micro-displacement at a world xz, verbatim (world-space fields;
+ * amplitude gated by slope/rockExposure/snow, faded 45→85 m). Factored out of
+ * hfWorld so NON-terrain surface followers (procedural grass roots — the ground
+ * a blade stands on is the DISPLACED surface, not raw heightTex) evaluate the
+ * EXACT same expression tree as the terrain vertices. Call inside an Fn stack.
+ */
+export function terrainDispAt(disp: TerrainDisp, wpos: NV2): NF {
+  const camD = wpos.sub(vec3(disp.camPos).xz).length();
+  const dOut = float(0).toVar();
+  If(camD.lessThan(float(DISP.fade1)), () => {
+    const uvV = wpos.div(WORLD_SIZE).add(0.5) as unknown as NV2;
+    const nsV = texture(disp.normalTex, uvV, 0) as unknown as NV4;
+    const bioV = texture(disp.biomeTex, uvV, 0) as unknown as NV4;
+    const fldV = texture(disp.fieldsTex, uvV, 0) as unknown as NV4;
+    const rockK = smoothstep(DISP.slopeKnee0, DISP.slopeKnee1, nsV.w).max(
+      bioV.a.mul(0.85),
+    );
+    const gravelK = smoothstep(0.32, 0.7, fldV.y)
+      .max(smoothstep(0.02, 0.2, fldV.z))
+      .mul(float(DISP.gravel));
+    const dispAmp = (mix(float(DISP.base), float(DISP.rock), rockK) as unknown as NF)
+      .max(gravelK)
+      .mul(bioV.g.mul(0.75).oneMinus())
+      .mul(clamp(float(DISP.fade1).sub(camD).div(DISP.fade1 - DISP.fade0), 0, 1));
+    const f1 = (texture(disp.noiseA, wpos.div(DISP.sF1 * PERIOD_FBM), 0) as unknown as NV4).y
+      .mul(2)
+      .sub(1);
+    const f2 = (
+      texture(
+        disp.noiseA,
+        wpos.div(DISP.sF2 * PERIOD_VAL).add(vec2(0.31, 0.77)),
+        0,
+      ) as unknown as NV4
+    ).x
+      .mul(2)
+      .sub(1);
+    const r1 = (texture(disp.noiseB, wpos.div(DISP.sRid * PERIOD_RID), 0) as unknown as NV4).z
+      .mul(2)
+      .sub(1);
+    dOut.assign(
+      f1
+        .mul(DISP.wF1)
+        .add(f2.mul(DISP.wF2))
+        .add(r1.mul(rockK.mul(1 - DISP.ridBase).add(DISP.ridBase)).mul(DISP.wRid))
+        .mul(dispAmp),
+    );
+  });
+  return dOut as unknown as NF;
+}
+
 /** per-(instance, cluster) decode shared by the 3 corner fetches */
 export interface VertCtx {
   isHF: NB;
@@ -335,49 +386,7 @@ export function makeFetch(
     const wx = toF(sx).mul(ctx.cell).add(ctx.oX);
     const wz = toF(sz).mul(ctx.cell).add(ctx.oZ);
     if (disp) {
-      // TerrainTiles micro-displacement, verbatim (world-space fields;
-      // amplitude gated by slope/rockExposure/snow, faded 45→85 m)
-      const wpos = vec2(wx, wz);
-      const camD = wpos.sub(vec3(disp.camPos).xz).length();
-      const dOut = float(0).toVar();
-      If(camD.lessThan(float(DISP.fade1)), () => {
-        const uvV = wpos.div(WORLD_SIZE).add(0.5) as unknown as NV2;
-        const nsV = texture(disp.normalTex, uvV, 0) as unknown as NV4;
-        const bioV = texture(disp.biomeTex, uvV, 0) as unknown as NV4;
-        const fldV = texture(disp.fieldsTex, uvV, 0) as unknown as NV4;
-        const rockK = smoothstep(DISP.slopeKnee0, DISP.slopeKnee1, nsV.w).max(
-          bioV.a.mul(0.85),
-        );
-        const gravelK = smoothstep(0.32, 0.7, fldV.y)
-          .max(smoothstep(0.02, 0.2, fldV.z))
-          .mul(float(DISP.gravel));
-        const dispAmp = (mix(float(DISP.base), float(DISP.rock), rockK) as unknown as NF)
-          .max(gravelK)
-          .mul(bioV.g.mul(0.75).oneMinus())
-          .mul(clamp(float(DISP.fade1).sub(camD).div(DISP.fade1 - DISP.fade0), 0, 1));
-        const f1 = (texture(disp.noiseA, wpos.div(DISP.sF1 * PERIOD_FBM), 0) as unknown as NV4).y
-          .mul(2)
-          .sub(1);
-        const f2 = (
-          texture(
-            disp.noiseA,
-            wpos.div(DISP.sF2 * PERIOD_VAL).add(vec2(0.31, 0.77)),
-            0,
-          ) as unknown as NV4
-        ).x
-          .mul(2)
-          .sub(1);
-        const r1 = (texture(disp.noiseB, wpos.div(DISP.sRid * PERIOD_RID), 0) as unknown as NV4).z
-          .mul(2)
-          .sub(1);
-        dOut.assign(
-          f1
-            .mul(DISP.wF1)
-            .add(f2.mul(DISP.wF2))
-            .add(r1.mul(rockK.mul(1 - DISP.ridBase).add(DISP.ridBase)).mul(DISP.wRid))
-            .mul(dispAmp),
-        );
-      });
+      const dOut = terrainDispAt(disp, vec2(wx, wz) as unknown as NV2);
       out.assign(vec3(wx, h.add(dOut).sub(skirtDrop), wz));
     } else {
       out.assign(vec3(wx, h.sub(skirtDrop), wz));

@@ -55,7 +55,7 @@ import {
   vec3,
   vec4,
 } from 'three/tsl';
-import type { NF, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
+import type { NB, NF, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
 import type { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js';
 import type { NaniteShadow } from './NaniteShadow';
 import type { ShadowHalf } from './NaniteShadowHalf';
@@ -71,6 +71,7 @@ import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK, CLUSTER_WORDS, MESH_FLAG_FARTILE, M
 import type { RegistryGpu } from './GeometryRegistry';
 import { brickNormalTsl, brickWord, BRICK_ALBEDO, BRICK_NORMAL, BRICK_POS_X } from './VoxelBrick';
 import { makeFetch, slotHash } from './NaniteFetch';
+import { GRASS_FAR_BASE } from './NaniteGrass';
 import { hashColor, instRotateDir, instTransformPoint, instYaw, type NaniteCam } from './NaniteCommon';
 import type { NaniteVisBuffers } from './NaniteRaster';
 import { bcU2F, elemU, toF, uniformF } from './Tsl';
@@ -135,6 +136,13 @@ export interface ResolveWorld {
    *  eval + depth-aware bilateral upsample (NaniteShadowHalf) instead of the per-
    *  pixel shadowFactor — ~4× fewer PCSS taps. null = full-res (?shalfres=0). */
   shadowHalf: ShadowHalf | null;
+  /** procedural grass (NaniteGrass, grass rethink 2026-07-03): grass pixels carry
+   *  the bit31|bit30 id namespace and shade in the vox-side pass ('vox'/'both').
+   *  derive() re-builds the pixel's blade triangle from its self-describing id
+   *  (zero storage buffers — the binding budget is untouched). */
+  grassProc?: {
+    derive(body: NU, wp: NV3): { t: NF; nrm: NV3 };
+  } | null;
 }
 
 /** TextureNode sample-config chain (depth = array slice, grad = explicit deriv) */
@@ -423,6 +431,12 @@ export function buildNaniteResolve(
     // tier each pass skips never pays the view-pos math (pure reorder — the discard needs
     // only pRaw; the reconstruction is side-effect-free).
     const isV = pRaw.shiftRight(uint(31)).bitAnd(uint(1)).toVar();
+    // procedural grass marker: bits 31|30 (voxel ids never set bit30; mesh ids never
+    // set bit31) — grass pixels ride the vox-side pass via the isV partition above.
+    const grassProcOn = !!world.grassProc && pass !== 'tri';
+    const isGP: NB | null = grassProcOn
+      ? (pRaw.shiftRight(uint(30)).equal(uint(3)).toVar() as unknown as NB)
+      : null;
     if (pass === 'tri') {
       // MAIN pass: skip voxel-winner pixels (the 'vox' pass shades them). On a pure-triangle
       // world (no voxel queue) bit31 is never set, so this never fires.
@@ -458,13 +472,23 @@ export function buildNaniteResolve(
       ci = triItem.y.toVar();
     } else if (pass === 'vox') {
       const qVox = cull.qVoxRasterRO;
-      if (!qVox) throw new Error('NaniteResolve: vox pass built without qVoxRasterRO');
-      // item index = bits 0-20 (QVOX_CAP = 2^21). Bits 21-27 carry the winning BRICK index
-      // under ?voxbn (default on; zero when off — masking is safe in both modes).
-      const voxIdx = pRaw.bitAnd(uint(0x1fffff)).toVar();
-      const voxItem = qVox.element(voxIdx.add(uint(1)));
-      instId = voxItem.x.toVar();
-      ci = voxItem.y.toVar();
+      if (!qVox) {
+        // grass-only vox pass (no voxel queue in this config): every surviving pixel
+        // is a procedural-grass winner; there is no (instId, ci) to decode. The
+        // constants keep the shared decode chain shaped (matClass is forced 255 for
+        // grass pixels below, so no mesh subgraph ever fires on them).
+        if (!world.grassProc)
+          throw new Error('NaniteResolve: vox pass built without qVoxRasterRO');
+        instId = uint(0).toVar();
+        ci = uint(0).toVar();
+      } else {
+        // item index = bits 0-20 (QVOX_CAP = 2^21). Bits 21-27 carry the winning BRICK index
+        // under ?voxbn (default on; zero when off — masking is safe in both modes).
+        const voxIdx = pRaw.bitAnd(uint(0x1fffff)).toVar();
+        const voxItem = qVox.element(voxIdx.add(uint(1)));
+        instId = voxItem.x.toVar();
+        ci = voxItem.y.toVar();
+      }
     } else {
       const qVox = cull.qVoxRasterRO;
       if (!qVox) throw new Error('NaniteResolve: both pass built without qVoxRasterRO');
@@ -492,6 +516,15 @@ export function buildNaniteResolve(
       .shiftRight(uint(8))
       .bitAnd(uint(0xff))
       .toVar();
+    // procedural-grass pixels: the id is a blade, not a work item — the (instId, ci)
+    // above decoded garbage (in-bounds, harmless). Force a sentinel matClass so NO
+    // mesh-class subgraph (terrain/rock/bark/leaf/voxel) can fire on them; the grass
+    // block below owns their albedo/normal/ao outright.
+    if (isGP) {
+      If(isGP, () => {
+        matClass.assign(uint(255));
+      });
+    }
     const item = { x: instId, y: ci } as unknown as { x: NU; y: NU };
     const isT = matClass.equal(uint(0));
 
@@ -935,7 +968,7 @@ export function buildNaniteResolve(
     const isVox = matClass.equal(uint(7)).toVar();
     const voxCol = vec3(0.1, 0.2, 0.08).toVar() as unknown as NV3;
     const voxNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
-    if (pass !== 'tri') {
+    if (pass !== 'tri' && cull.qVoxRasterRO) {
       If(isVox, () => {
         // ?voxao= (default ON): the per-brick DIRECTIONAL self-shading. Decode the BAKED brick-mean
         // normal, rotate by instance yaw, flip camera-ward — it then drives the sun N·L + ambient
@@ -1097,10 +1130,62 @@ export function buildNaniteResolve(
       .toVar() as unknown as NV3;
     // aoNode (rock/bark cavity + grass tip-AO fake base self-shadow): indirect only
     const grassAo = smoothstep(0.0, 0.55, grassTip).mul(0.55).add(0.45) as unknown as NF;
-    const ao = isR.select(
+    const ao = (isR.select(
       rockAo,
       isBD.select(barkAo, isG.select(grassAo, float(1))),
-    ) as unknown as NF;
+    ) as unknown as NF).toVar() as unknown as NF;
+
+    // ---- PROCEDURAL GRASS shading (grass rethink 2026-07-03, NaniteGrass) — the
+    // bit31|bit30 pixels. Re-derive the blade triangle from the self-describing id
+    // (bit-identical to the raster's corners), bary-interpolate tip/normal at the
+    // reconstructed wp, then the S0 GroundRing material port (fresh/dry tip ramps ×
+    // ~1.6 m patch dryness × canopy shade; blade normal pulled to the terrain normal
+    // hardening with distance). Zero storage buffers — texture taps + ALU only.
+    const gpTip = float(0.5).toVar() as unknown as NF;
+    if (isGP && world.grassProc) {
+      const gp = world.grassProc;
+      If(isGP, () => {
+        const body = pRaw.bitAnd(uint(0x3fffffff));
+        const g = gp.derive(body as unknown as NU, wp);
+        const distG = wp.sub(vec3(camPos) as unknown as NV3).length();
+        const toCamG = normalize(camPos.sub(wp)) as unknown as NV3;
+        const nF = dot(g.nrm, toCamG).lessThan(0).select(g.nrm.negate(), g.nrm) as unknown as NV3;
+        const tNrm = (
+          texture(hf.normalTex, hf.uvFromWorld(wp.xz as unknown as NV2), 0) as unknown as NV4
+        ).xyz.normalize() as unknown as NV3;
+        // far super-tufts (body ≥ GRASS_FAR_BASE): full terrain-normal pull (ring far mode)
+        const isFarG = body.greaterThanEqual(uint(GRASS_FAR_BASE));
+        const upK = isFarG.select(
+          float(1),
+          smoothstep(8, 70, distG).mul(0.35).add(0.5),
+        ) as unknown as NF;
+        const t = g.t;
+        const fresh = mix(
+          vec3(0.02, 0.062, 0.011),
+          vec3(0.065, 0.148, 0.028),
+          t.mul(t),
+        ) as unknown as NV3;
+        const dryC = mix(vec3(0.085, 0.07, 0.024), vec3(0.21, 0.17, 0.075), t) as unknown as NV3;
+        const pQ = floor(wp.xz.mul(1 / 1.6)) as unknown as NV2;
+        const patchX = fract(
+          sin(dot(pQ as unknown as NV3, vec2(127.1, 311.7) as unknown as NV3)).mul(43758.5453),
+        ) as unknown as NF;
+        const patchY = fract(
+          sin(dot(pQ as unknown as NV3, vec2(269.5, 183.3) as unknown as NV3)).mul(28461.7331),
+        ) as unknown as NF;
+        const cov = (world.canopyTex
+          ? canopyAt(world.canopyTex, wp.xz as unknown as NV2)
+          : float(0)) as unknown as NF;
+        const dryK = smoothstep(0.7, 0.95, patchX).mul(float(1).sub(cov.mul(0.85))) as unknown as NF;
+        let alb = mix(fresh, dryC, dryK) as unknown as NV3;
+        alb = alb.mul(patchY.sub(0.5).mul(0.3).add(1)) as unknown as NV3;
+        alb = mix(alb, vec3(0.018, 0.052, 0.014) as unknown as NV3, cov.mul(0.55)) as unknown as NV3;
+        albedo.assign(alb);
+        wNormal.assign(normalize(mix(nF, tNrm, upK)) as unknown as NV3);
+        ao.assign(smoothstep(0.0, 0.55, t).mul(0.55).add(0.45));
+        gpTip.assign(t);
+      });
+    }
 
     // ---- MANUAL lighting (D-N17): sun lambert × CSM shadow + sky ambient +
     // probe GI. The CSM node (proven on the old path) is referenced as a
@@ -1127,7 +1212,12 @@ export function buildNaniteResolve(
         .clamp(0, 1)
         .max(0.25)
         .mul(0.9) as unknown as NF;
-      nDotL = (isV.equal(uint(1)).select(wrapped, nDotL) as unknown as NF).toVar() as unknown as NF;
+      // procedural-grass pixels are bit31 too but shade like the S0 mesh grass —
+      // standard N·L on the terrain-pulled normal, NOT the voxel crown wrap.
+      const wrapGate = isGP
+        ? (isV.equal(uint(1)).and((isGP as unknown as { not(): NB }).not()) as unknown as NB)
+        : (isV.equal(uint(1)) as unknown as NB);
+      nDotL = ((wrapGate as unknown as { select(a: NF, b: NF): NF }).select(wrapped, nDotL) as unknown as NF).toVar() as unknown as NF;
     }
     const sunCol = (sunU.color as unknown as NV3).mul(float(sunU.intensity)) as unknown as NV3;
     let direct: NF = nDotL;
@@ -1223,7 +1313,12 @@ export function buildNaniteResolve(
     // dark tree even with the wrapped sun floor (user round 3: "still some, half less").
     // A canopy always sees sky; floor its ambient mix at 0.6.
     if (pass !== 'tri') {
-      ambUp = (isV.equal(uint(1)).select(ambUp.max(0.6), ambUp) as unknown as NF).toVar() as unknown as NF;
+      // (grass pixels keep the plain hemisphere — their normal is terrain-pulled,
+      // and the 0.6 sky floor was tuned for canopy chunks, not ground cover)
+      const ambGate = isGP
+        ? (isV.equal(uint(1)).and((isGP as unknown as { not(): NB }).not()) as unknown as NB)
+        : (isV.equal(uint(1)) as unknown as NB);
+      ambUp = ((ambGate as unknown as { select(a: NF, b: NF): NF }).select(ambUp.max(0.6), ambUp) as unknown as NF).toVar() as unknown as NF;
     }
     const ambFloor = mix(vec3(0.18, 0.16, 0.12), vec3(0.4, 0.5, 0.62), ambUp).mul(0.5 * Math.PI) as unknown as NV3;
     radiance = max(radiance, ambFloor) as unknown as NV3;
@@ -1253,7 +1348,7 @@ export function buildNaniteResolve(
             : (isV
                 .equal(uint(1))
                 .select(voxCol, grassOn ? isG.select(grassCol, leafCol) : leafCol) as unknown as NV3);
-      const blGate =
+      let blGate =
         pass === 'tri'
           ? grassOn
             ? (isL.or(isG) as unknown as typeof isL)
@@ -1261,6 +1356,13 @@ export function buildNaniteResolve(
           : pass === 'vox'
             ? (isV.equal(uint(1)) as unknown as typeof isL)
             : (isV.equal(uint(1)).or(grassOn ? isL.or(isG) : isL) as unknown as typeof isL);
+      // procedural-grass pixels: excluded from the voxel-tier backlight (their voxCol
+      // is a garbage decode) — they get their own tip-weighted term below.
+      if (isGP) {
+        blGate = blGate.and(
+          (isGP as unknown as { not(): NB }).not() as unknown as typeof isL,
+        ) as unknown as typeof isL;
+      }
       const kBl = grassOn
         ? (isG.select(grassTip.mul(0.09), float(0.032)) as unknown as NF)
         : (float(0.032) as unknown as NF);
@@ -1269,6 +1371,17 @@ export function buildNaniteResolve(
         .mul(glow.div(0.032).mul(kBl))
         .mul(vec3(0.9, 1.05, 0.55)) as unknown as NV3;
       lit = lit.add(blGate.select(backlight, vec3(0))) as unknown as NV3;
+      if (isGP) {
+        // grassTranslucency port for the procedural lane: albedo already holds the
+        // grass color on these pixels; k = 0.09 × tip weight (S0 parity).
+        const gBl = albedo
+          .mul(sunU.color as unknown as NV3)
+          .mul(glow.div(0.032).mul(gpTip.mul(0.09)))
+          .mul(vec3(0.9, 1.05, 0.55)) as unknown as NV3;
+        lit = lit.add(
+          (isGP as unknown as { select(a: NV3, b: NV3): NV3 }).select(gBl, vec3(0) as unknown as NV3),
+        ) as unknown as NV3;
+      }
     }
 
     // ---- debug overrides ------------------------------------------------------
@@ -1372,7 +1485,9 @@ export function buildNaniteResolve(
   // pixels) with no read-modify-write conflict; renderOrder −999 runs it right after the main
   // resolve, still well before the sky/scene remainder.
   let voxMesh: Mesh | undefined;
-  if (cull.qVoxRasterRO && !singlePass) {
+  // built when the voxel queue is wired OR procedural grass is on (grass pixels are
+  // bit31|bit30 — they shade in this pass; without it they would discard to sky).
+  if ((cull.qVoxRasterRO || world.grassProc) && !singlePass) {
     voxMesh = new Mesh(geometry, buildMat('vox'));
     voxMesh.name = 'naniteResolveVox';
     voxMesh.frustumCulled = false;

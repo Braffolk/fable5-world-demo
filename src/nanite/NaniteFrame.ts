@@ -35,6 +35,7 @@ import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK } from './GeometryRegistry';
 import { makeNaniteCam } from './NaniteCommon';
 import { buildNaniteCull } from './NaniteCull';
 import { buildNaniteHzb } from './NaniteHzb';
+import { buildGrassField } from './NaniteGrass';
 import { makeFetch } from './NaniteFetch';
 import { buildNaniteRaster, makeVisBuffers } from './NaniteRaster';
 import { buildNaniteResolve } from './NaniteResolve';
@@ -265,7 +266,20 @@ export function buildNaniteFrame(
   // rastered geometry and the resolve's barycentric corners stay bit-identical)
   const windOn = params.get('nanwind') !== '0';
   const windOpt = windOn ? { camPos: cam.camPos } : undefined;
-  const raster = buildNaniteRaster(registry.gpu, hf.heightTex, cam, cull, vis, 'flat', true, disp, windOpt, false, true, voxActive);
+  // PROCEDURAL GRASS (grass rethink 2026-07-03, NaniteGrass.ts): zero-storage blade
+  // field re-derived from pcg(worldCell) each frame — kernels ride world1's submit,
+  // near blades the shared HW pass, pixels the vox-side resolve. DEFAULT ON;
+  // ?grass=0 disables at build, __laasNanite.setGrass(0|1) toggles within a boot
+  // (the within-session perf A/B instrument). The stored patch-DAG lane is the
+  // ?grasspatch=1 reference (WorldRegistry).
+  const grassOn = params.get('grass') !== '0';
+  const grass = grassOn
+    ? buildGrassField({ cam, vis, hf, canopyTex: world.canopyTex, disp })
+    : null;
+  const raster = buildNaniteRaster(
+    registry.gpu, hf.heightTex, cam, cull, vis, 'flat', true, disp, windOpt, false, true, voxActive,
+    grass ? { batch: grass.batch, renderHw: grass.renderHw, enabled: grass.enabled } : undefined,
+  );
 
   // Nanite shadows (N5, D-N28): depth-only SW raster into own r32 cascade textures,
   // sampled by the resolve's own PCSS. R1 caches per cascade (re-raster only on a
@@ -325,6 +339,7 @@ export function buildNaniteFrame(
     barkTexB: world.barkTexB,
     naniteShadow: shadow,
     shadowHalf,
+    grassProc: grass ? { derive: grass.resolveDerive } : null,
   });
   // ?nores=1 — MEASUREMENT ablation (default OFF): skip BOTH fullscreen resolve passes
   // (the tri `mesh` + vox `voxMesh`). Decomposes the frame: (baseline − nores) gpuWall =
@@ -420,6 +435,12 @@ export function buildNaniteFrame(
       simBandD.value = v;
     },
     simBand: () => simBandD.value,
+    /** procedural grass within-boot A/B (the water-visible-toggle idiom): flips the
+     *  kernel enable uniform + the HW mesh — thermal-invariant perf attribution. */
+    setGrass: (v: number) => {
+      grass?.setEnabled(v !== 0);
+    },
+    grassOn: () => (grass ? grass.enabled() : false),
   };
 
   // jitter-mirrored projection: scratch camera = engine camera + TRAA's
@@ -602,6 +623,7 @@ export function buildNaniteFrame(
       cull.readCounts(r),
       raster.readHwCount(r),
       shadow ? shadow.readCounts(r) : Promise.resolve(null),
+      grass ? grass.readCounts(r) : Promise.resolve(null),
       scarOn ? raster.readScar(r) : Promise.resolve(null),
       voxActive ? cull.readVoxCount(r) : Promise.resolve(null),
       voxActive ? raster.readVoxWrites(r) : Promise.resolve(null),
@@ -609,7 +631,11 @@ export function buildNaniteFrame(
       // partition classifier is degenerate — no perf verdict may be read while so.
       voxActive && cull.voxPrevEnabled ? cull.readVoxBuckets(r) : Promise.resolve(null),
     ])
-      .then(([c, hw, sh, scar, voxCount, voxWrites, voxBuckets]) => {
+      .then(([c, hw, sh, grassCounts, scar, voxCount, voxWrites, voxBuckets]) => {
+        if (grassCounts) {
+          out['nanite.grassClumps'] = grassCounts.clumps;
+          out['nanite.grassHwTris'] = grassCounts.hwTris;
+        }
         // voxel-foliage (§A1): the fanned voxel-cluster count → HUD (the Verify agent
         // reads window.__laas.stats.counters). > 0 ⇒ the cull is emitting voxel clusters
         // into qVoxRaster and the Stage-2 bin/raster has work to consume.

@@ -253,6 +253,16 @@ export function buildNaniteRaster(
    *  raster. Requires cull.qVoxRasterRO + cull.voxRasterDispatchAttr. OFF by
    *  default so a pure-triangle world never binds the voxel permutation. */
   voxActive = false,
+  /** procedural grass (NaniteGrass, grass rethink 2026-07-03): its cull+raster
+   *  kernels ride world1's batched submit (after kVisClear so the elections land
+   *  on cleared buffers, before kHwArgs — the queues are disjoint); its blade HW
+   *  pass (own depth target, hardware early-z) runs right after hwRender so the
+   *  depth prime sees the mesh SW+HW election. */
+  grass?: {
+    batch: readonly unknown[];
+    renderHw(renderer: Renderer, camera: PerspectiveCamera): void;
+    enabled(): boolean;
+  },
 ): NaniteRasterHandles {
   const { width, height } = cam;
   // single-pass clears the id buffers like `packed` (election anchor → 0, side id →
@@ -1434,8 +1444,16 @@ export function buildNaniteRaster(
     camera: PerspectiveCamera,
     hzbTail: readonly unknown[] = [],
   ): void => {
-    dispatchBatchMixed(renderer, [kVisClear, kRasterWorld1, kHwArgs]);
+    // procedural grass rides this submit: after kVisClear (elections need the
+    // cleared sentinels), before kHwArgs is irrelevant to it (disjoint queues) —
+    // but BEFORE hwRender so its near-blade HW queue is filled when the shared
+    // HW pass draws it. Its fragments then pre-seed the voxel raster's election
+    // exactly like the mesh winners do.
+    dispatchBatchMixed(renderer, [kVisClear, kRasterWorld1, ...(grass?.batch ?? []), kHwArgs]);
     hwRender(renderer, camera, hwWorld1Mat);
+    // grass blade HW pass (own depth target, early-z primed from the election —
+    // which now holds the mesh SW+HW winners + the grass SW slivers).
+    if (grass?.enabled()) grass.renderHw(renderer, camera);
     // scatter voxel-brick raster (§6.6 insertion point: right after hwRender so the
     // SW+HW near-field triangle election is already in global visPayloadV to pre-seed).
     // SUBMIT-COALESCE §1c: the HZB chain rides as the TAIL of the voxel submit (it must

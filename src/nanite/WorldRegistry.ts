@@ -972,20 +972,14 @@ export async function buildWorldRegistry(input: {
   if (!usableDags && dagBuilds.length === toDag.length + toAggregate.length && dagBuilds.length > 0) {
     void bootCache.putMany('dags', dagBuilds.map((b) => b.dag));
   }
-  // ---- GRASS (31-grass-plan): WORLD-WIDE patch field, DEFAULT ON (?grass=0
-  // escape). Patches are ~4×4 m merged blade meshes at the ring's near-band
-  // density (~90 clumps/m², LUSHNESS LAW — no thinning), each with an
-  // aggregate DAG (remove-whole-blades + widen-survivors = the ring's
-  // thin×widen conservation, derived per level). Placement = one static
-  // registration over the WHOLE world exactly like the trees — the hier cull
-  // (frustum + lodDist envelope + HZB) owns the per-frame set; there is NO
-  // streaming/toroidal machinery to maintain. Gates at placement (CPU boot
-  // scan): standing water, steep slope; the finer density law (canopy
-  // thinning, bank margins, biome) refines later. The hier cull only seeds
-  // meshes WITH DAG roots (kSeedRoots: rootCount 0 = skipped) — every grass
-  // mesh MUST carry a DAG. Patch DAGs ride their OWN bootcache key so the
-  // shared 'dags' entry is never invalidated.
-  if (new URLSearchParams(window.location.search).get('grass') !== '0') {
+  // ---- GRASS patch-DAG lane — DEMOTED TO REFERENCE (?grasspatch=1 opt-in;
+  // 2026-07-03 rethink verdict, docs/perf-runs/2026-07-03-grass-arc.md):
+  // world-wide stored patches + aggregate DAGs FAILED the perf mandate (+4.66M
+  // near tris through the full election, 508k instances re-scanned per frame,
+  // 4-variant cut checkerboard). The SHIPPING lane is the procedural
+  // zero-storage field (NaniteGrass.ts — default on, ?grass=0 escape). This
+  // block is kept as the stored-instance A/B control only.
+  if (new URLSearchParams(window.location.search).get('grasspatch') === '1') {
     const { grassPatchGeometry, GRASS_PATCH_SIZE, GRASS_PATCH_VARIANTS } = await import(
       '../vegetation/GrassPatch'
     );

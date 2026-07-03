@@ -129,6 +129,14 @@ export function loopU(start: NU, end: NU, body: (i: NU) => void, step?: number):
   });
 }
 
+/** named ranged uint loop, EXCLUSIVE end — for nesting (unnamed loops both emit `i`,
+ *  so an inner body's reference to the outer counter silently reads the inner one). */
+export function loopUN(name: string, start: NU, end: NU, body: (i: NU) => void): void {
+  Loop({ name, type: 'uint', start, end, condition: '<' } as never, (lp: unknown) => {
+    body((lp as Record<string, NU>)[name] as NU);
+  });
+}
+
 /**
  * named ranged int loop (inclusive end) — names keep nested WGSL loop vars
  * distinct (unnamed nested loops both emit `i`).
