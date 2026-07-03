@@ -972,64 +972,97 @@ export async function buildWorldRegistry(input: {
   if (!usableDags && dagBuilds.length === toDag.length + toAggregate.length && dagBuilds.length > 0) {
     void bootCache.putMany('dags', dagBuilds.map((b) => b.dag));
   }
-  // ---- GRASS S0 (31-grass-plan): ?grassreg=1 — a debug field of blade-clump
-  // instances around the origin, matClass 5 through the standard election + the
-  // resolve grass branch. The hier cull only seeds meshes WITH DAG roots
-  // (kSeedRoots: rootCount 0 = skipped), so even this debug patch needs its
-  // aggregate DAG — built INLINE (35 tris, instant) and pushed to dagBuilds
-  // AFTER the cache put above, so the shared 'dags' bootcache entry is never
-  // invalidated by the flag. NOT the shipping lane (S2 patch library + S3
-  // toroidal residency replace this).
+  // ---- GRASS S2 (31-grass-plan): ?grassreg=1 — a FULL-DENSITY patch field
+  // around the origin. Patches are ~4×4 m merged blade meshes at the ring's
+  // near-band density (~90 clumps/m², LUSHNESS LAW — no thinning), each with
+  // an aggregate DAG (remove-whole-blades + grow-survivors = the ring's
+  // thin×widen conservation, derived per level). The hier cull only seeds
+  // meshes WITH DAG roots (kSeedRoots: rootCount 0 = skipped) — every grass
+  // mesh MUST carry a DAG. Patch DAGs ride their OWN bootcache key
+  // ('grassdags') so the shared 'dags' entry is never invalidated. Shipping
+  // residency/density-law (biome/water/canopy gates) is S3.
   if (new URLSearchParams(window.location.search).get('grassreg') === '1') {
-    const { bladeClump } = await import('../vegetation/GroundRing');
-    const src = geometryToSource(bladeClump(5, 4));
-    const hGrass = reg.registerMesh(src, 'grass', {
-      transformChannel: 'grass', // S1: GroundRing wind (tip² cantilever + shimmer)
-      castShadows: false,
-      twoSided: true,
-      aggregate: true,
-      swayPad: 0.6, // max tip deflection (bend ≤ amp·1.15·0.42·scale) — cull bound pad
-      label: 'grass/debug',
-    });
-    reg.setMaxDistance(hGrass, 120);
-    const N = 6000;
-    const R = 28;
-    let sd = 987654321;
+    const { grassPatchGeometry, GRASS_PATCH_SIZE, GRASS_PATCH_VARIANTS } = await import(
+      '../vegetation/GrassPatch'
+    );
+    const tG0 = performance.now();
+    const cachedGrass = await bootCache.getMany<DagBuild>('grassdags');
+    const usableGrass = cachedGrass && cachedGrass.length === GRASS_PATCH_VARIANTS ? cachedGrass : null;
+    const variantHandles: MeshHandle[] = [];
+    const grassPacks: DagBuild[] = [];
+    let grassTris = 0;
+    for (let v = 0; v < GRASS_PATCH_VARIANTS; v++) {
+      const src = geometryToSource(grassPatchGeometry(v));
+      const h = reg.registerMesh(src, 'grass', {
+        transformChannel: 'grass', // S1: GroundRing wind (tip² cantilever + shimmer)
+        castShadows: false,
+        twoSided: true,
+        aggregate: true,
+        swayPad: 0.6, // max tip deflection — cull bound pad
+        label: `grass/p${v}`,
+      });
+      reg.setMaxDistance(h, 265); // R3 far edge; the splat owns beyond (S4)
+      variantHandles.push(h);
+      try {
+        const built = usableGrass
+          ? (usableGrass[v] as DagBuild)
+          : buildAggregateDag(explicitToDagVerts(src), DAG_VERT_STRIDE, src.indices, {
+              seed: (seed ?? 0) + v,
+              maxTris: MAX_CLUSTER_TRIS,
+            });
+        reg.addLate({
+          verts: built.verts.length / DAG_VERT_STRIDE,
+          tris: built.indices.length / 3,
+          clusters: built.clusters.length,
+        });
+        dagBuilds.push({ handle: h, dag: built });
+        grassPacks.push(built);
+        grassTris += built.stats.totalTris;
+      } catch (e) {
+        deferred.push(`grass S2 DAG p${v} build failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    if (!usableGrass && grassPacks.length === GRASS_PATCH_VARIANTS) {
+      void bootCache.putMany('grassdags', grassPacks);
+    }
+    // debug field: contiguous patch grid ±48 m (24×24 = 576 patches; the S3
+    // residency replaces this with the toroidal biome-gated field)
+    const HALF_PATCHES = 12;
+    const NP = (HALF_PATCHES * 2) ** 2;
+    let sd = 24680;
     const rnd = (): number => {
       sd = (sd * 1664525 + 1013904223) >>> 0;
       return sd / 4294967296;
     };
-    const ga = new Float32Array(N * 4);
-    const gb = new Float32Array(N * 4);
-    for (let i = 0; i < N; i++) {
-      const r = Math.sqrt(rnd()) * R;
-      const th = rnd() * Math.PI * 2;
-      const x = Math.cos(th) * r;
-      const z = Math.sin(th) * r;
-      ga[i * 4] = x;
-      ga[i * 4 + 1] = hf.heightAtCpu(x, z);
-      ga[i * 4 + 2] = z;
-      ga[i * 4 + 3] = 0.3 + rnd() * 0.4; // clump scale (unit blade → 0.3-0.7 m)
-      gb[i * 4] = rnd() * Math.PI * 2;
-      gb[i * 4 + 3] = i;
+    const streams = new Map<number, { a: number[]; b: number[] }>();
+    for (let pz = -HALF_PATCHES; pz < HALF_PATCHES; pz++) {
+      for (let px = -HALF_PATCHES; px < HALF_PATCHES; px++) {
+        const x = px * GRASS_PATCH_SIZE;
+        const z = pz * GRASS_PATCH_SIZE;
+        const cx = x + GRASS_PATCH_SIZE / 2;
+        const cz = z + GRASS_PATCH_SIZE / 2;
+        const v = Math.floor(rnd() * GRASS_PATCH_VARIANTS) % GRASS_PATCH_VARIANTS;
+        let st = streams.get(v);
+        if (!st) {
+          st = { a: [], b: [] };
+          streams.set(v, st);
+        }
+        // patch-center terrain snap (S3 refines to per-vertex conform on slopes)
+        st.a.push(x, hf.heightAtCpu(cx, cz), z, 1);
+        st.b.push(0, 0, 0, st.a.length / 4);
+      }
     }
-    reg.bindInstances(hGrass, { a: ga, b: gb });
-    try {
-      const built = buildAggregateDag(explicitToDagVerts(src), DAG_VERT_STRIDE, src.indices, {
-        seed: seed ?? 0,
-        maxTris: MAX_CLUSTER_TRIS,
-      });
-      reg.addLate({
-        verts: built.verts.length / DAG_VERT_STRIDE,
-        tris: built.indices.length / 3,
-        clusters: built.clusters.length,
-      });
-      dagBuilds.push({ handle: hGrass, dag: built });
-      // eslint-disable-next-line no-console
-      console.log(`[worldreg] grass S0 debug field: ${N} clumps × 35 tris, DAG ${built.clusters.length} clusters (?grassreg)`);
-    } catch (e) {
-      deferred.push(`grass S0 DAG build failed: ${e instanceof Error ? e.message : String(e)}`);
+    for (const [v, st] of streams) {
+      const h = variantHandles[v];
+      if (h !== undefined)
+        reg.bindInstances(h, { a: new Float32Array(st.a), b: new Float32Array(st.b) });
     }
+    // eslint-disable-next-line no-console
+    console.log(
+      `[worldreg] grass S2 field: ${NP} patches (${GRASS_PATCH_VARIANTS} variants @ ~${Math.round(
+        grassTris / Math.max(1, GRASS_PATCH_VARIANTS) / 1000,
+      )}k DAG tris), ${(performance.now() - tG0).toFixed(0)} ms${usableGrass ? ' (bootcache)' : ''}`,
+    );
   }
   // voxel-foliage (§5.3 HARD precondition): reserve the brick budget BEFORE build()
   // freezes the caps. Total = Σ occupied bricks across the voxelized crowns. Also
