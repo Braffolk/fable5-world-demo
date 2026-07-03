@@ -277,7 +277,11 @@ export function buildNaniteFrame(
   // toggles within a boot; the stored patch-DAG lane is ?grasspatch=1.
   const grassMode = params.get('grass');
   const grassOn =
-    grassMode === '1' || grassMode === 'geo' || grassMode === 'ray' || grassMode === 'hybrid';
+    grassMode === '1' ||
+    grassMode === 'geo' ||
+    grassMode === 'ray' ||
+    grassMode === 'rayold' ||
+    grassMode === 'hybrid';
   const grass = grassOn
     ? buildGrassField({ cam, vis, hf, canopyTex: world.canopyTex, disp })
     : null;
