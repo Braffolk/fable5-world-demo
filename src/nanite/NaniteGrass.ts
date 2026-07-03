@@ -44,6 +44,7 @@ import {
 } from 'three/webgpu';
 import { tagGpu } from '../core/GpuProfiler';
 import {
+  Break,
   Fn,
   If,
   atomicAdd,
@@ -77,6 +78,7 @@ import {
   aLoadU,
   bcF2U,
   bcU2F,
+  dispatch,
   elemU,
   loopI,
   loopUN,
@@ -120,6 +122,21 @@ const MAX_SW_PX = ((): number => {
  *  funnel = cull chain only (no clump derive/raster); corners = full derive +
  *  corner math + projection, no scanline/election. Production pristine when unset. */
 const GRASS_DBG = new URLSearchParams(window.location.search).get('grassdbg');
+/** lane select: ?grass=ray → per-pixel analytic raycast (zero memory/emission,
+ *  best-measured 15.1 ms @ dpr1 eye — NOT yet at the ≤2 ms mandate);
+ *  ?grass=1|geo → the emission+HW-queue lane (+13 ms eye @ dpr1.5).
+ *  DEFAULT OFF until a lane meets the mandate (user law: ≤2 ms worst case). */
+const GEO_LANE = new URLSearchParams(window.location.search).get('grass') !== 'ray';
+/** raycast bands: fine-stride march to RAY_L0_END, coarse-stride (16 fine sub-cells
+ *  per step) to RAY_END; terrain splat beyond. Step caps bound the grazing worst case
+ *  (a capped miss falls through to the splat — the correct infinite-distance limit). */
+const RAY_L0_END = 25;
+/** ?grassrayend=N — band-end knob for cost attribution (default 155) */
+const RAY_END = ((): number => {
+  const v = Number(new URLSearchParams(window.location.search).get('grassrayend') ?? '155');
+  return Number.isFinite(v) && v >= 20 && v <= 300 ? v : 155;
+})();
+const RAY_SHELL_H = 1.5; // max blade reach above ground (incl. mid-card 2× + wind)
 const NEAR_EPS = 1e-4;
 /** grass HW queue capacity (per-TRI entries, stride 10 u32: body + 3 packed f32
  *  corners). With the 4-px SW bound nearly ALL visible blade tris ride this queue —
@@ -295,8 +312,11 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
   };
 
   /** clump state from its world cell. `ground` (pre-sampled root height) is passed
-   *  in where the caller already paid the taps. */
-  const deriveClump = (wc: NV2, far: boolean, ground: NF): ClumpCtx => {
+   *  in where the caller already paid the taps. `liteAmp`: when given, use it as the
+   *  wind gust amplitude instead of sampling gustAt/windExposure (the ray lane hoists
+   *  those 3 taps to burst level — the gust field varies at 17-85 m, a burst spans
+   *  ≤1.7 m); flutter is dropped on the lite path (sub-pixel at those distances). */
+  const deriveClump = (wc: NV2, far: boolean, ground: NF, liteAmp?: NF): ClumpCtx => {
     const salt = far ? SALT ^ 0x6f21 : SALT;
     const jit = cellHash2(wc, salt);
     const wpos = wc.add(jit).mul(far ? FAR_CELL : CELL) as unknown as NV2;
@@ -319,11 +339,13 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
     if (windContext()) {
       const wd = vec2(windU.dir as unknown as NV2);
       const st = windU.strength as unknown as NF;
-      const amp = st.mul(gustAt(wpos).mul(0.9).add(0.3)).mul(windExposure(wpos)) as unknown as NF;
+      const amp = (liteAmp ??
+        st.mul(gustAt(wpos).mul(0.9).add(0.3)).mul(windExposure(wpos))) as unknown as NF;
       // lean² rule (ring verbatim): deflection = bendAmp·tN² per corner
       bendAmp = amp.mul(st.mul(0.55).add(0.6)).mul(bladeH.mul(0.42)) as unknown as NF;
       // shimmer: ring formula + the leaf-style ~120 m fade; the SINE is per-clump —
-      // corners scale it by tN (hoisted out of the corner path).
+      // corners scale it by tN. Tap-free (hash phase + whichever amp), so the lite
+      // path keeps it too — near shimmer is part of the reference look.
       const flutAtten = float(1).sub(dist.sub(40).div(80).clamp(0, 1));
       const flutA = (far ? float(0) : amp.mul(0.05).mul(flutAtten)) as unknown as NF;
       const flutPh = h2.x.mul(6.2832).add(wpos.x.add(wpos.y).mul(0.9)) as unknown as NF;
@@ -455,8 +477,11 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
   // ---- counters + HW queue ------------------------------------------------------------
   const countAttr = new StorageBufferAttribute(new Uint32Array(4), 1);
   const countV = sU32Views(countAttr, 4);
-  const hwAttr = new StorageBufferAttribute(new Uint32Array(1 + HW_CAP * HW_STRIDE), 1);
-  const hwV = sU32Views(hwAttr, 1 + HW_CAP * HW_STRIDE);
+  // the 60 MB blade queue exists ONLY in the geometry reference lane (?grassgeo=1);
+  // the ray lane's whole point is zero grass memory.
+  const hwWords = GEO_LANE ? 1 + HW_CAP * HW_STRIDE : 4;
+  const hwAttr = new StorageBufferAttribute(new Uint32Array(hwWords), 1);
+  const hwV = sU32Views(hwAttr, hwWords);
   const hwDrawAttr = new IndirectStorageBufferAttribute(new Uint32Array(4), 4);
   const hwDrawBuf = sU32Views(hwDrawAttr as unknown as StorageBufferAttribute, 4).rw;
 
@@ -1060,14 +1085,427 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
   const readCounts = async (
     renderer: Renderer,
   ): Promise<{ clumps: number; hwTris: number }> => {
+    // ray lane emits per-pixel — no counters exist (and countAttr never gets a GPU
+    // buffer, so a readback would throw)
+    if (!GEO_LANE) return { clumps: 0, hwTris: 0 };
     const buf = await readBuffer(renderer, countAttr, 0, 8);
     const u = new Uint32Array(buf);
     return { clumps: u[0] ?? 0, hwTris: u[1] ?? 0 };
   };
 
+  // ================= RAY LANE (default) =================================================
+  // Per-pixel analytic raycast of the SAME procedural clump field — zero memory,
+  // zero emission, zero overdraw (≤1 election write per pixel). Bounded everywhere:
+  //  - above the sward: Lipschitz height-jumps (slope bound), geometric for rising rays;
+  //  - inside dense sward: hits arrive within 1-3 cells (density = speed, not cost);
+  //  - inside sparse sward: probabilistic coarse-cell skip + hard step caps, and a
+  //    capped miss falls through to the terrain splat — the correct far-field limit.
+  // A hit emits the SAME self-describing blade id + depth into the election, so the
+  // resolve/shadows/GTAO/TRAA pipeline is untouched.
+  const kRay = ((): unknown => {
+    if (GEO_LANE) return null;
+    const W = cam.width;
+    const H = cam.height;
+    // (8×8 pixel tiling was measured NEUTRAL-to-worse here — rows are already
+    // coherent; linear indexing kept)
+    const k = Fn(() => {
+      returnIf((uOn as unknown as NF).lessThan(0.5) as unknown as NB);
+      const px = instanceIndex;
+      returnIf(px.greaterThanEqual(uint(W * H)));
+      const xI = px.mod(uint(W));
+      const yI = px.div(uint(W)); // bottom-up rows (raster convention)
+      const ndcX = toF(xI).add(0.5).div(W).mul(2).sub(1);
+      const ndcY = toF(yI).add(0.5).div(H).mul(2).sub(1);
+      const hf4 = cam.invVp.mul(vec4(ndcX, ndcY, 1, 1));
+      const ro = vec3(cam.camPos).toVar() as unknown as NV3;
+      const rd = (hf4.xyz.div(hf4.w).sub(ro).normalize().toVar()) as unknown as NV3;
+      // scene early-out: current election depth bounds the march
+      const elect = aLoadU(vis.payloadV.atomic.element(px));
+      const tMax = float(1e9).toVar() as unknown as NF;
+      If(elect.notEqual(uint(0)), () => {
+        const czS = float(1).sub(toF(elect.shiftRight(uint(8))).div(16777215));
+        const hs = cam.invVp.mul(vec4(ndcX, ndcY, czS, 1));
+        (tMax as unknown as { assign(v: unknown): void }).assign(
+          hs.xyz.div(hs.w).sub(ro).length().add(0.3),
+        );
+      });
+      const dirL = rd.xz.length().max(1e-4).toVar() as unknown as NF;
+      const tEnd = tMax.min(float(RAY_END).div(dirL)).toVar() as unknown as NF;
+      const tCur = float(0.05).toVar() as unknown as NF;
+      const tBest = float(1e9).toVar() as unknown as NF;
+      const bodyBest = uint(0).toVar() as unknown as NU;
+      if (GRASS_DBG === 'raysetup') {
+        // attribution stop: ray gen + scene-depth reconstruct only
+        If(tEnd.lessThan(-1), () => {
+          emitPx(px as unknown as NU, tCur as unknown as NF, bodyBest);
+        });
+        returnIf(tBest.greaterThan(0) as unknown as NB);
+      }
+
+      /** test the prims of the clump in FINE cell (fx,fz) against the ray.
+       *  unroll=true (near band): JS-unrolled prims with CONSTANT blade params (no
+       *  select chains) — the near per-clump battery is the kernel's dominant cost.
+       *  Every prim gets a ~15-ALU ray-to-root 2D capsule pre-reject (a ray hits ≤2
+       *  of 5 blades). Ground: near = per-clump heightAt (4 taps) + burst disp;
+       *  lite (≥25 m) = burst ground, zero taps. */
+      const testCell = (
+        fx: NF,
+        fz: NF,
+        thr: NF,
+        lite: NB,
+        groundB: NF,
+        dispB: NF,
+        ampB: NF,
+        widenTB: NF,
+        midKB: NF,
+      ): void => {
+        const wcF = vec2(fx, fz) as unknown as NV2;
+        if (GRASS_DBG === 'raymarch') {
+          // attribution stop: full march/DDA, hash accept only — no clump testing.
+          // Pin the hash + a fake "hit" so nothing is DCE'd (never true in practice).
+          If(cellHash(wcF, SALT ^ 0x77a1).lessThan(thr.mul(1e-9)), () => {
+            (tBest as unknown as { assign(v: unknown): void }).assign(float(1e8));
+          });
+          return;
+        }
+        // PRE-DERIVE clump-top reject (~30 ALU vs the ~400-ALU derive+ladder): in the
+        // skim band — ray above the MEDIAN blade top but under the burst max — this
+        // is where the kernel's time went (bisect 2026-07-03: march 2.4 ms, full 47).
+        const h2x = cellHash2(wcF, SALT ^ 0x9191).x as unknown as NF;
+        const clumpTop = h2x
+          .pow(1.3)
+          .mul(0.3)
+          .add(0.2)
+          .mul(widenTB)
+          .mul(midKB)
+          .add(0.3) as unknown as NF;
+        const wposQ = wcF.add(0.5).mul(CELL) as unknown as NV2;
+        const tQ = wposQ.sub(ro.xz as unknown as NV2).length().div(dirL) as unknown as NF;
+        const rayYq = ro.y.add(rd.y.mul(tQ)).sub(groundB) as unknown as NF;
+        If(
+          rayYq
+            .lessThan(clumpTop)
+            .and(cellHash(wcF, SALT ^ 0x77a1).lessThan(thr)),
+          () => {
+          const wposC = wcF.add(cellHash2(wcF, SALT)).mul(CELL) as unknown as NV2;
+          const ground = groundB.toVar() as unknown as NF;
+          If((lite as unknown as { not(): NB }).not(), () => {
+            // near: per-clump root height (4 taps) — a whole warp is near or not,
+            // so lite warps skip the taps entirely
+            (ground as unknown as { assign(v: unknown): void }).assign(
+              heightAt(wposC).add(dispB),
+            );
+          });
+          const C = deriveClump(wcF, false, ground, ampB);
+          const lad = ladder(C);
+          const tClump = wposC.sub(ro.xz as unknown as NV2).length().div(dirL) as unknown as NF;
+          const rayYc = ro.y.add(rd.y.mul(tClump)).sub(ground).toVar() as unknown as NF;
+          const sxs = fx.sub(fx.div(GRID).floor().mul(GRID));
+          const sys = fz.sub(fz.div(GRID).floor().mul(GRID));
+          const slot = uint(sys.mul(GRID).add(sxs)).toVar() as unknown as NU;
+
+          // ANALYTIC blade intersection (closed form — replaces 10 corner evals +
+          // 8 Möller–Trumbore per blade; ~120 ALU, ~15 live registers — the kernel
+          // was occupancy-bound on the old graph, not ALU-bound):
+          //   P(by,u) = A + B·by + C·by² + E·u·W(by)
+          // by = pre-scale blade height param (tN), u ∈ [−1,1] width coordinate.
+          // A: root; B: yScale/lean/tilt/flutter (linear); C: curve+wind bend
+          // (quadratic; the −0.4·bend·tN dip is dropped — ≤4% of height); E·W(by):
+          // tapered width. Ray substitution ⇒ ONE quadratic in s.
+          const testPrim = (prim: NU, PV: PrimVars, hkC: NF): void => {
+            const card = lad.cardMode;
+            const byMax = card.select(float(1), hkC.mul(0.94)) as unknown as NF;
+            const primTop = C.bladeH
+              .mul(card.select(float(2), float(1)))
+              .mul(byMax)
+              .add(0.25) as unknown as NF;
+            If(rayYc.lessThan(primTop), () => {
+              const xScale = C.widen.mul(card.select(float(1.5), float(1.15))) as unknown as NF;
+              const yScale = C.bladeH.mul(card.select(float(2), float(1))) as unknown as NF;
+              // width dir (bc,0,−bs) and bend dir (bs,0,bc), x pre-scaled, clump-yawed
+              const bcx = card.select(PV.kc, PV.bc) as unknown as NF;
+              const bsx = card.select(PV.ks, PV.bs) as unknown as NF;
+              const Ex = bcx.mul(xScale).mul(C.cc).add(bsx.negate().mul(C.cs)) as unknown as NF;
+              const Ez = bsx.negate().mul(C.cc).sub(bcx.mul(xScale).mul(C.cs)) as unknown as NF;
+              const Gx = bsx.mul(xScale).mul(C.cc).add(bcx.mul(C.cs)) as unknown as NF;
+              const Gz = bcx.mul(C.cc).sub(bsx.mul(xScale).mul(C.cs)) as unknown as NF;
+              // root (cards sit at the clump center)
+              const ox = card.select(float(0), PV.box) as unknown as NF;
+              const oz = card.select(float(0), PV.boz) as unknown as NF;
+              const Ax = ox.mul(xScale).mul(C.cc).add(oz.mul(C.cs)).add(C.wpos.x) as unknown as NF;
+              const Az = oz.mul(C.cc).sub(ox.mul(xScale).mul(C.cs)).add(C.wpos.y) as unknown as NF;
+              // linear coeff: lean (blades) + tilt shear + flutter; y = yScale
+              const lean = card.select(float(0), PV.blean) as unknown as NF;
+              const Bx = lean
+                .mul(bcx)
+                .mul(xScale)
+                .mul(C.cc)
+                .add(lean.mul(bsx).mul(C.cs))
+                .add(C.tiltX.mul(yScale))
+                .sub(C.dirY.mul(C.flutS)) as unknown as NF;
+              const Bz = lean
+                .mul(bsx)
+                .mul(C.cc)
+                .sub(lean.mul(bcx).mul(xScale).mul(C.cs))
+                .add(C.tiltY.mul(yScale))
+                .add(C.dirX.mul(C.flutS)) as unknown as NF;
+              // quadratic coeff: built-in arc 0.28·t² (t≈by/hk) + wind bend·by²
+              const k2 = card.select(
+                float(0),
+                float(0.28).div(hkC.mul(hkC).max(0.05)),
+              ) as unknown as NF;
+              const Cx = Gx.mul(k2).add(C.dirX.mul(C.bendAmp)) as unknown as NF;
+              const Cz = Gz.mul(k2).add(C.dirY.mul(C.bendAmp)) as unknown as NF;
+              // by(s) = alpha + beta·s  (vertical solve; yScale > 0 always)
+              const alpha = ro.y.sub(ground).div(yScale) as unknown as NF;
+              const beta = rd.y.div(yScale) as unknown as NF;
+              // project x/z onto F ⊥ E
+              const Fx = Ez.negate() as unknown as NF;
+              const Fz = Ex as unknown as NF;
+              const f0 = Fx.mul(ro.x.sub(Ax)).add(Fz.mul(ro.z.sub(Az))) as unknown as NF;
+              const f1 = Fx.mul(rd.x).add(Fz.mul(rd.z)) as unknown as NF;
+              const b1 = Fx.mul(Bx).add(Fz.mul(Bz)) as unknown as NF;
+              const c1 = Fx.mul(Cx).add(Fz.mul(Cz)) as unknown as NF;
+              // c1(α+βs)² + b1(α+βs) − f0 − f1 s = 0
+              const qa = c1.mul(beta).mul(beta) as unknown as NF;
+              const qb = c1.mul(2).mul(alpha).mul(beta).add(b1.mul(beta)).sub(f1) as unknown as NF;
+              const qc = c1.mul(alpha).mul(alpha).add(b1.mul(alpha)).sub(f0) as unknown as NF;
+              const disc = qb.mul(qb).sub(qa.mul(qc).mul(4)) as unknown as NF;
+              If(disc.greaterThanEqual(0), () => {
+                const sq = disc.sqrt();
+                const isLin = qa.abs().lessThan(1e-7);
+                const inv2a = float(0.5).div(
+                  qa.abs().max(1e-7).mul(qa.greaterThanEqual(0).select(float(1), float(-1))),
+                ) as unknown as NF;
+                const sLin = qc.negate().div(
+                  qb.abs().max(1e-7).mul(qb.greaterThanEqual(0).select(float(1), float(-1))),
+                ) as unknown as NF;
+                const r1 = isLin.select(sLin, qb.negate().sub(sq).mul(inv2a)) as unknown as NF;
+                const r2 = isLin.select(float(1e9), qb.negate().add(sq).mul(inv2a)) as unknown as NF;
+                const sNear = r1.min(r2).toVar() as unknown as NF;
+                const sFar = r1.max(r2).toVar() as unknown as NF;
+                // try near root, else far root (root order vs travel direction)
+                const tryRoot = (s: NF): void => {
+                  const by = alpha.add(beta.mul(s)) as unknown as NF;
+                  const okBy = by.greaterThanEqual(0).and(by.lessThanEqual(byMax));
+                  If(
+                    s.greaterThan(0.02)
+                      .and(s.lessThan(tBest))
+                      .and(s.lessThan(tMax))
+                      .and(okBy),
+                    () => {
+                      // width coordinate: residual along E over tapered width
+                      const hx = ro.x
+                        .add(rd.x.mul(s))
+                        .sub(Ax)
+                        .sub(Bx.mul(by))
+                        .sub(Cx.mul(by).mul(by)) as unknown as NF;
+                      const hz = ro.z
+                        .add(rd.z.mul(s))
+                        .sub(Az)
+                        .sub(Bz.mul(by))
+                        .sub(Cz.mul(by).mul(by)) as unknown as NF;
+                      const e2 = Ex.mul(Ex).add(Ez.mul(Ez)).max(1e-8) as unknown as NF;
+                      const uw = hx.mul(Ex).add(hz.mul(Ez)).div(e2) as unknown as NF;
+                      const tb = by.div(byMax) as unknown as NF;
+                      const wAt = card.select(
+                        float(0.04).mul(float(1).sub(tb.mul(0.45))),
+                        float(0.0175).mul(float(1).sub(tb.mul(0.85))),
+                      ) as unknown as NF;
+                      If(uw.abs().lessThanEqual(wAt), () => {
+                        (tBest as unknown as { assign(v: unknown): void }).assign(s);
+                        const seg = uint(
+                          tb.mul(lad.segNF).min(lad.segNF.sub(0.01)),
+                        ) as unknown as NU;
+                        (bodyBest as unknown as { assign(v: unknown): void }).assign(
+                          slot
+                            .shiftLeft(uint(6))
+                            .bitOr(prim.shiftLeft(uint(3)))
+                            .bitOr(seg.shiftLeft(uint(1)))
+                            .bitOr(uw.greaterThan(0).select(uint(1), uint(0))),
+                        );
+                      });
+                    },
+                  );
+                };
+                tryRoot(sNear as unknown as NF);
+                tryRoot(sFar as unknown as NF);
+              });
+            });
+          };
+
+          // (JS-unrolled prims measured SLOWER — register bloat beat the saved
+          // selects; one compact runtime loop keeps occupancy up)
+          loopUN('gp2', uint(0), lad.prims, (prim) => {
+            const PV = primVars(prim);
+            testPrim(prim, PV, PV.bhk);
+          });
+        });
+      };
+
+      loopUN('gro', uint(0), uint(56), () => {
+        If(tCur.greaterThanEqual(tEnd).or(tCur.greaterThan(tBest.add(0.3))), () => {
+          Break();
+        });
+        const pos = ro.add(rd.mul(tCur)).toVar() as unknown as NV3;
+        const hC = heightAt(pos.xz as unknown as NV2).toVar() as unknown as NF;
+        // TIGHT analytic sward top at this distance (the blade-height law is closed
+        // form — no bake needed): blades = bladeHmax·hkMax·widenTerm; mid cards ×2;
+        // + tilt/wind margin. Replaces the loose 1.5 m shell — skimming rays exit the
+        // candidate band 2-3× sooner, which is where the march cost lives.
+        const distH0 = tCur.mul(dirL) as unknown as NF;
+        const widenT = float(1)
+          .div(grassThin(distH0).sqrt())
+          .clamp(1, 4)
+          .sub(1)
+          .mul(0.3)
+          .add(1) as unknown as NF;
+        const topB = distH0
+          .greaterThan(60)
+          .select(float(1.0).mul(widenT), float(0.62).mul(widenT))
+          .min(RAY_SHELL_H)
+          .add(0.25)
+          .toVar() as unknown as NF;
+        const head = pos.y.sub(hC).sub(topB).toVar() as unknown as NF;
+        If(head.greaterThan(0.2), () => {
+          // Lipschitz skip over open air (terrain slope bound 1.4) — geometric for
+          // ascending rays, linear for grazing; always terrain-safe.
+          tCur.addAssign(head.div(1.4).max(0.3));
+        }).Else(() => {
+          // in-shell DDA burst at the distance-appropriate stride (a 2×CELL near
+          // stride with 2×2 sub-cells was measured WORSE — reverted to per-cell)
+          const distH = distH0;
+          const nearL0 = distH.lessThan(RAY_L0_END);
+          const P = nearL0.select(float(CELL), float(CELL * 4)).toVar() as unknown as NF;
+          const burstN = nearL0.select(uint(8), uint(4)) as unknown as NU;
+          // burst context, hoisted (fields vary ≥1.5 m; a burst spans ≤1.7 m):
+          // density (3 taps + water), gust amplitude (3 taps), ground (already hC).
+          const thin = grassThin(distH);
+          const edge = float(1).sub(smoothstep(R * 0.9, R, distH)) as unknown as NF;
+          const pFine = densityAt(pos.xz as unknown as NV2, hC, distH, true)
+            .mul(thin)
+            .mul(edge)
+            .toVar() as unknown as NF;
+          const ampB = (windContext()
+            ? (windU.strength as unknown as NF)
+                .mul(gustAt(pos.xz as unknown as NV2).mul(0.9).add(0.3))
+                .mul(windExposure(pos.xz as unknown as NV2))
+            : float(0)
+          ).toVar() as unknown as NF;
+          // burst displacement (terrainDispAt self-gates beyond its 85 m fade) —
+          // near clumps pay only their own 4-tap heightAt on top of this
+          const dispB = (opts.disp
+            ? terrainDispAt(opts.disp, pos.xz as unknown as NV2)
+            : (float(0) as unknown as NF)
+          ).toVar() as unknown as NF;
+          const groundB = hC.add(dispB).toVar() as unknown as NF;
+          const midKB = distH.greaterThan(60).select(float(2), float(1.12)).toVar() as unknown as NF;
+          // DDA state (t values ABSOLUTE along the ray)
+          const cellX = pos.x.div(P).floor().toVar() as unknown as NF;
+          const cellZ = pos.z.div(P).floor().toVar() as unknown as NF;
+          const sdx = rd.x
+            .greaterThanEqual(0)
+            .select(rd.x.max(1e-6), rd.x.min(-1e-6))
+            .toVar() as unknown as NF;
+          const sdz = rd.z
+            .greaterThanEqual(0)
+            .select(rd.z.max(1e-6), rd.z.min(-1e-6))
+            .toVar() as unknown as NF;
+          const stX = rd.x.greaterThanEqual(0).select(float(1), float(-1)).toVar() as unknown as NF;
+          const stZ = rd.z.greaterThanEqual(0).select(float(1), float(-1)).toVar() as unknown as NF;
+          const tNx = cellX
+            .add(stX.mul(0.5).add(0.5))
+            .mul(P)
+            .sub(ro.x)
+            .div(sdx)
+            .toVar() as unknown as NF;
+          const tNz = cellZ
+            .add(stZ.mul(0.5).add(0.5))
+            .mul(P)
+            .sub(ro.z)
+            .div(sdz)
+            .toVar() as unknown as NF;
+          const tDx = P.div(sdx.abs()).toVar() as unknown as NF;
+          const tDz = P.div(sdz.abs()).toVar() as unknown as NF;
+          loopUN('gri', uint(0), burstN as unknown as NU, () => {
+            // per-cell height rejection BEFORE any hashing (~5 ALU): the min ray
+            // height across this cell vs the burst's tight sward top. This is what
+            // collapses the sward-top-skim pathology — cells the ray clears are
+            // pure DDA advances.
+            const tCellExit = tNx.min(tNz).min(tEnd);
+            const rayYmin = ro.y
+              .add(rd.y.mul(rd.y.lessThan(0).select(tCellExit, tCur)))
+              .sub(groundB) as unknown as NF;
+            // ONE testCell inline site for both strides (kernel size = occupancy);
+            // probabilistic whole-cell gate keeps sparse marches cheap at both levels
+            // (joint accept per fine cell = gate·thr = pFine — statistics preserved).
+            const subs = nearL0.select(float(1), float(4)) as unknown as NF;
+            const pAgg = pFine.mul(subs).mul(subs).min(1) as unknown as NF;
+            const gate = cellHash(vec2(cellX, cellZ) as unknown as NV2, SALT ^ 0x9e37);
+            If(rayYmin.lessThanEqual(topB).and(gate.lessThan(pAgg)), () => {
+              const thr = pFine.div(pAgg.max(1e-4)).min(1) as unknown as NF;
+              const subN = nearL0.select(uint(1), uint(4)) as unknown as NU;
+              const lite = nearL0.not() as unknown as NB;
+              loopUN('gu', uint(0), subN, (u) => {
+                loopUN('gv', uint(0), subN, (v) => {
+                  const fx = cellX.mul(subs).add(toF(u)) as unknown as NF;
+                  const fz = cellZ.mul(subs).add(toF(v)) as unknown as NF;
+                  testCell(
+                    fx,
+                    fz,
+                    thr as unknown as NF,
+                    lite,
+                    groundB,
+                    dispB,
+                    ampB,
+                    widenT,
+                    midKB,
+                  );
+                });
+              });
+            });
+            // advance to the next cell; stop past the burst window
+            If(tNx.lessThan(tNz), () => {
+              (cellX as unknown as { addAssign(v: unknown): void }).addAssign(stX);
+              tCur.assign(tNx);
+              tNx.addAssign(tDx);
+            }).Else(() => {
+              (cellZ as unknown as { addAssign(v: unknown): void }).addAssign(stZ);
+              tCur.assign(tNz);
+              tNz.addAssign(tDz);
+            });
+            If(tCur.greaterThanEqual(tEnd).or(tCur.greaterThan(tBest.add(0.3))), () => {
+              Break();
+            });
+          });
+        });
+      });
+
+      If(tBest.lessThan(1e8), () => {
+        const hit = ro.add(rd.mul(tBest));
+        const clip = cam.vp.mul(vec4(hit, 1));
+        const cz = clip.z.div(clip.w.max(NEAR_EPS));
+        If(cz.greaterThanEqual(0).and(cz.lessThanEqual(1)), () => {
+          emitPx(px as unknown as NU, cz as unknown as NF, bodyBest);
+        });
+      });
+    })().compute(W * H, [256]);
+    (k as unknown as { setName(n: string): void }).setName('grassRay');
+    return k;
+  })();
+
+  const runGrass = (renderer: Renderer, camera: PerspectiveCamera): void => {
+    if (!onCpu) return;
+    if (kRay) {
+      dispatch(renderer, kRay);
+      return;
+    }
+    renderHw(renderer, camera);
+  };
+
   return {
-    batch: [kClear, kFine, kFar, kHwArgs],
-    renderHw,
+    batch: GEO_LANE ? [kClear, kFine, kFar, kHwArgs] : [],
+    renderHw: runGrass,
     resolveDerive,
     setEnabled(v: boolean): void {
       onCpu = v;
