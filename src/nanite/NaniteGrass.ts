@@ -2101,6 +2101,31 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                 vx.mul(ca).add(vz.mul(sa)).mul(mir),
                 vz.mul(ca).sub(vx.mul(sa)),
               ) as unknown as NV2;
+            /** SMOOTH per-field value noise over the tile grid (~3-texel period).
+             *  Per-texel CONSTANT hashes made every 0.84 m square sway/lean as a
+             *  coherent unit — from altitude each square averaged to its own tone
+             *  = the user's residual grid (pic 2026-07-04). The basis must stay
+             *  constant within a step, but can vary SMOOTHLY across tiles: sway
+             *  becomes traveling waves, arcs become swirl fields, borders vanish
+             *  (sub-cm mapping jumps at tile edges are sub-blade-width). */
+            const smNoise = (salt: number): NV2 => {
+              const qx = txI.add(0.5).mul(1 / 3) as unknown as NF;
+              const qz = tzI.add(0.5).mul(1 / 3) as unknown as NF;
+              const ix = qx.floor().toVar() as unknown as NF;
+              const iz = qz.floor().toVar() as unknown as NF;
+              const fx = smoothstep(0, 1, qx.sub(ix)) as unknown as NF;
+              const fz = smoothstep(0, 1, qz.sub(iz)) as unknown as NF;
+              const c = (dx: number, dz: number): NV2 =>
+                cellHash2(
+                  vec2(ix.add(dx), iz.add(dz)) as unknown as NV2,
+                  SALT ^ salt,
+                ) as unknown as NV2;
+              return mix(
+                mix(c(0, 0), c(1, 0), fx),
+                mix(c(0, 1), c(1, 1), fx),
+                fz,
+              ) as unknown as NV2;
+            };
             // THE WIND — the article's march-space shear: an oblique TRUE-derivative
             // TBN basis (thetenthplanet.de/archives/1180; deliberately NON-orthonormal)
             // tilts the march space by the per-texel gust deflection while the baked
@@ -2136,9 +2161,8 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
               // (the codrops bézier-wind shape, folded into the article's march
               // shear). Shelter keeps a 25% floor so forest grass still moves;
               // distance falloff keeps the far field stable.
-              const ph = cellHash(vec2(txI, tzI) as unknown as NV2, SALT ^ 0x5151)
-                .mul(6.2831853)
-                .toVar() as unknown as NF;
+              const swn = smNoise(0x5151);
+              const ph = (swn.x as unknown as NF).mul(6.2831853).toVar() as unknown as NF;
               // user-called 2026-07-04: 1.3/6.5 rad/s read much faster than the
               // world's other small plants — grass breathes at ~0.1-0.4 Hz
               const gustE = time.mul(0.22).add(ph).sin().mul(0.35).add(0.65) as unknown as NF;
@@ -2155,47 +2179,36 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                 .mul(ffall)
                 .mul(RAY_SWAY)
                 .toVar() as unknown as NF;
-              // sway direction: wind dir + a hashed perpendicular wobble
-              const wob = cellHash(vec2(txI, tzI) as unknown as NV2, SALT ^ 0x5252)
-                .sub(0.5)
-                .mul(0.8) as unknown as NF;
+              // sway direction: wind dir + a smoothly-varying perpendicular wobble
+              const wob = (swn.y as unknown as NF).sub(0.5).mul(0.8) as unknown as NF;
               const swx = wd.x.sub(wd.y.mul(wob)) as unknown as NF;
               const swz = wd.y.add(wd.x.mul(wob)) as unknown as NF;
               Swx = wd.x.mul(K).add(swx.mul(swayA)) as unknown as NF;
               Swz = wd.y.mul(K).add(swz.mul(swayA)) as unknown as NF;
             }
-            /** hash-directed static ARC (per tile, per layer). Arcs also carry
-             *  the TOP-DOWN coverage — a bent blade sweeps a stripe ~arc-length ×
-             *  width (the ring's tip offsets are 15-25 cm); spread placement +
-             *  per-fiber yaws keep this from combing flat. */
-            const staticArc = (sA: number, sB: number): { x: NF; z: NF } => {
-              const ba = cellHash(vec2(txI, tzI) as unknown as NV2, SALT ^ sA)
-                .mul(6.2831853)
-                .toVar() as unknown as NF;
-              // SUBTLE since the banded bake (user grid call): per-fiber radial
-              // arcs are baked now — a strong per-TILE arc combed each tile one
-              // way and the bombing quilt read as straight-out rectangles
-              const bm = cellHash(vec2(txI, tzI) as unknown as NV2, SALT ^ sB)
-                .mul(0.25)
-                .add(0.12) as unknown as NF;
+            /** SMOOTH static ARC field (subtle — per-fiber radial arcs live in the
+             *  bake; this only swirls the field). Arcs also carry TOP-DOWN
+             *  coverage: a bent blade sweeps a stripe ~arc-length × width. */
+            const staticArc = (salt: number): { x: NF; z: NF; n: NV2 } => {
+              const n = smNoise(salt);
+              const ba = (n.x as unknown as NF).mul(6.2831853).toVar() as unknown as NF;
+              const bm = (n.y as unknown as NF).mul(0.25).add(0.12) as unknown as NF;
               return {
                 x: ba.cos().mul(bm) as unknown as NF,
                 z: ba.sin().mul(bm) as unknown as NF,
+                n,
               };
             };
             let Sqx: NF = Swx;
             let Sqz: NF = Swz;
             if (RAY_TILT) {
-              // static per-tile character: a small whole-blade lean + the arc
-              const la = cellHash(vec2(txI, tzI) as unknown as NV2, SALT ^ 0x3131)
-                .mul(6.2831853)
-                .toVar() as unknown as NF;
-              const lm = cellHash(vec2(txI, tzI) as unknown as NV2, SALT ^ 0x3232)
-                .mul(0.05)
-                .add(0.02) as unknown as NF;
+              // smooth swirl: a small whole-blade lean + the arc, both riding the
+              // SAME noise (lean offset ~120° from the arc so they don't align)
+              const a1 = staticArc(0x3333);
+              const la = (a1.n.x as unknown as NF).mul(6.2831853).add(2.1) as unknown as NF;
+              const lm = (a1.n.y as unknown as NF).mul(0.05).add(0.02) as unknown as NF;
               Slx = Slx.add(la.cos().mul(lm)) as unknown as NF;
               Slz = Slz.add(la.sin().mul(lm)) as unknown as NF;
-              const a1 = staticArc(0x3333, 0x3434);
               Sqx = Sqx.add(a1.x) as unknown as NF;
               Sqz = Sqz.add(a1.z) as unknown as NF;
             }
@@ -2284,9 +2297,15 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
               .toVar() as unknown as NF;
             const tHit = tCur.add(dTile.mul(GUIDE_PITCH).div(eLen)).toVar() as unknown as NF;
             const isMiss = dTile.greaterThan(rayBake.dMaxTile * 0.94) as unknown as NB;
+            // accept hits up to a quarter-tile BEYOND the texel exit: the hard
+            // border clamp dropped every blade whose hit crossed the line — a
+            // blade-width seam along the whole 0.84 m grid (the user's residual
+            // squares). The baked root id keeps cross-border hits consistent
+            // (the fiber provably belongs to THIS tile instance).
+            const tAcc = tExC.add(float(GUIDE_PITCH * 0.25).div(eLen)) as unknown as NF;
             // march position BEFORE the layer-1 advance — layer 2 refetches from here
             const tCur0 = RAY_LAYER2 ? (tCur.add(0).toVar() as unknown as NF) : null;
-            If(isMiss.or(tHit.greaterThanEqual(tExC)), () => {
+            If(isMiss.or(tHit.greaterThanEqual(tAcc)), () => {
               if (RAY_BANDS > 1) {
                 // no fiber in THIS band — next texel, or for a descending ray the
                 // nearer event: drop into the (denser) band below and refetch
@@ -2476,7 +2495,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                 const GC = -0.737369; // cos(φ·π)
                 const GS = 0.67549; // sin(φ·π)
                 const a2 = RAY_TILT
-                  ? staticArc(0x7373, 0x7474)
+                  ? staticArc(0x7373)
                   : { x: float(0) as unknown as NF, z: float(0) as unknown as NF };
                 const Q2x = Swx.add(a2.x) as unknown as NF;
                 const Q2z = Swz.add(a2.z) as unknown as NF;
@@ -2505,7 +2524,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                 If(
                   dT2
                     .lessThan((rayBake as { dMaxTile: number }).dMaxTile * 0.94)
-                    .and(tHit2.lessThan(tExC))
+                    .and(tHit2.lessThan(tAcc))
                     .and(tHit2.lessThan(tMax)),
                   () => {
                     const yH2 = ro.y.add(rd.y.mul(tHit2)).toVar() as unknown as NF;
