@@ -1178,6 +1178,22 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
   })();
   const renderHw = (renderer: Renderer, camera: PerspectiveCamera): void => {
     if (!onCpu) return;
+    // G-F aerial skip: kFine's 3D gate rejects every cell when the camera sits
+    // provably higher than terrain+blades inside the near radius (9-point CPU
+    // height probe, conservative +4 m margin) — the queue is EMPTY, so the
+    // fullscreen prime + blade draw + composite are pure waste. ~aerial only.
+    const hfCpu = (hf as unknown as { heightAtCpu(x: number, z: number): number });
+    let hMax = -Infinity;
+    for (let i = 0; i < 9; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const r = i === 8 ? 0 : NEAR_END;
+      const h = hfCpu.heightAtCpu(
+        camera.position.x + Math.cos(a) * r,
+        camera.position.z + Math.sin(a) * r,
+      );
+      if (h > hMax) hMax = h;
+    }
+    if (camera.position.y - hMax > NEAR_END + 4) return;
     const prevRT = renderer.getRenderTarget();
     const prevAutoClear = renderer.autoClear;
     renderer.setRenderTarget(hwRT);
