@@ -11,6 +11,10 @@ import type { LaasParams } from '../core/Params';
 
 export type HudProvider = () => string[];
 
+const MS_N = 240;
+const MS_H = 64;
+const MS_MAX = 50;
+
 export class Hud {
   private el: HTMLDivElement;
   private fpsEl: HTMLDivElement;
@@ -19,6 +23,13 @@ export class Hud {
   private engine: Engine;
   private params: LaasParams;
   private acc = 0;
+  private msCanvas: HTMLCanvasElement;
+  private msCtx: CanvasRenderingContext2D | null = null;
+  private msBuf = new Float32Array(MS_N);
+  private msIdx = 0;
+  private msOn = false;
+  private msP50 = 0;
+  private msP95 = 0;
 
   constructor(engine: Engine, params: LaasParams) {
     this.engine = engine;
@@ -46,15 +57,40 @@ export class Hud {
     document.body.appendChild(this.fpsEl);
     this.applyVisibility();
 
+    // frametime ms-chart (?mschart=1, F4 toggles): last 240 raw rAF deltas as
+    // 1px bars on a 0..50 ms scale with 16.7/33.3 vsync-quantum gridlines —
+    // microstutters and quantum flapping read as spikes/banding that the
+    // averaged fps number hides. Fed from stats.frameMs (raw, unclamped).
+    this.msOn = params.mschart;
+    this.msCanvas = document.createElement('canvas');
+    this.msCanvas.width = MS_N;
+    this.msCanvas.height = MS_H;
+    this.msCanvas.style.cssText = [
+      'position:fixed', 'top:34px', 'left:10px', 'z-index:1000',
+      'background:rgba(8,12,10,0.62)', 'pointer-events:none', 'border-radius:4px',
+      `width:${MS_N}px`, `height:${MS_H}px`,
+    ].join(';');
+    this.msCanvas.style.display = this.msOn ? 'block' : 'none';
+    document.body.appendChild(this.msCanvas);
+    this.msCtx = this.msCanvas.getContext('2d');
+
     window.addEventListener('keydown', (e) => {
       if (e.code === 'F3') {
         e.preventDefault();
         this.visible = !this.visible;
         this.applyVisibility();
       }
+      if (e.code === 'F4') {
+        e.preventDefault();
+        this.msOn = !this.msOn;
+        this.msCanvas.style.display = this.msOn ? 'block' : 'none';
+      }
     });
 
     engine.onUpdate((dt) => {
+      this.msBuf[this.msIdx % MS_N] = this.engine.stats.frameMs;
+      this.msIdx += 1;
+      if (this.msOn) this.drawMsChart();
       this.acc += dt;
       if (this.acc >= 0.25) {
         this.acc = 0;
@@ -62,6 +98,35 @@ export class Hud {
         else this.fpsEl.textContent = `${this.engine.stats.fps.toFixed(0)} fps`;
       }
     });
+  }
+
+  private drawMsChart(): void {
+    const g = this.msCtx;
+    if (!g) return;
+    g.clearRect(0, 0, MS_N, MS_H);
+    const y = (ms: number): number => MS_H - (Math.min(ms, MS_MAX) / MS_MAX) * MS_H;
+    // vsync-quantum gridlines
+    g.fillStyle = 'rgba(217,232,224,0.28)';
+    g.fillRect(0, y(16.7), MS_N, 1);
+    g.fillRect(0, y(33.3), MS_N, 1);
+    // bars, oldest → newest left → right (ring unrolled)
+    const n = Math.min(this.msIdx, MS_N);
+    const start = this.msIdx - n;
+    for (let i = 0; i < n; i++) {
+      const ms = this.msBuf[(start + i) % MS_N] ?? 0;
+      g.fillStyle = ms <= 17.5 ? '#4caf6e' : ms <= 34 ? '#e0b23e' : '#e05252';
+      const top = y(ms);
+      g.fillRect(MS_N - n + i, top, 1, MS_H - top);
+    }
+    // rolling p50/p95 over the visible window
+    if (n >= 30 && this.msIdx % 15 === 0) {
+      const s = [...this.msBuf.slice(0, n)].sort((a, b) => a - b);
+      this.msP50 = s[Math.floor((n - 1) * 0.5)] ?? 0;
+      this.msP95 = s[Math.floor((n - 1) * 0.95)] ?? 0;
+    }
+    g.fillStyle = '#d9e8e0';
+    g.font = '9px ui-monospace,Menlo,monospace';
+    g.fillText(`p50 ${this.msP50.toFixed(1)}  p95 ${this.msP95.toFixed(1)}`, 4, 9);
   }
 
   private applyVisibility(): void {

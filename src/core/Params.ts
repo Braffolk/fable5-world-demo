@@ -19,6 +19,8 @@ export interface LaasParams {
   shot: number | null;
   /** freeze world time/motion (deterministic screenshots) */
   freeze: boolean;
+  /** frametime ms-chart overlay — DEFAULT ON (?mschart=0 hides, F4 toggles) */
+  mschart: boolean;
   /** device pixel ratio cap override */
   dpr: number | null;
 }
@@ -45,6 +47,10 @@ export function parseParams(search: string = window.location.search): LaasParams
     cam: q.get('cam'),
     shot: shotN >= 1 && shotN <= 9 ? Math.floor(shotN) : null,
     freeze: q.get('freeze') === '1',
+    // default ON (user 2026-07-04): every screenshot then carries stutter
+    // evidence for free; STRICT still-identity shotdiff gates must pass
+    // &mschart=0 (the bars animate — a guaranteed-diff region otherwise)
+    mschart: q.get('mschart') !== '0',
     dpr: q.get('dpr') !== null ? num(q.get('dpr'), 1) : null,
   };
 }
