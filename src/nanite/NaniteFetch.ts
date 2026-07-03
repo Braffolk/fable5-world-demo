@@ -493,6 +493,14 @@ export function makeFetch(
             ),
           ),
         );
+        // S2 TERRAIN CONFORM: a 4 m patch is one rigid instance — center-snap
+        // buried/floated whole patches on any bump (rectangular bald bands,
+        // gl-15m 2026-07-03). Re-base each vertex on the heightfield at its own
+        // world xz: y = h(xz) + bladeLocalY·scale (+ the wind dip above). One
+        // filtered tap per UNIQUE vertex (VCACHE); same tex the resolve samples.
+        const uvH = out.xz.div(WORLD_SIZE).add(0.5);
+        const hG = (texture(heightTex, uvH as unknown as NV2, 0) as unknown as NV4).x;
+        out.y.assign(out.y.sub(ctx.A.y as unknown as NF).add(hG));
       });
     }
     return out as unknown as NV3;

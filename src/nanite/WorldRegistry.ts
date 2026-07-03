@@ -998,7 +998,9 @@ export async function buildWorldRegistry(input: {
         castShadows: false,
         twoSided: true,
         aggregate: true,
-        swayPad: 0.6, // max tip deflection — cull bound pad
+        // cull bound pad: wind tip deflection (≤0.6) + per-vertex terrain
+        // conform delta within a 4 m patch (center-snap vs local bumps, ±~2 m)
+        swayPad: 2.5,
         label: `grass/p${v}`,
       });
       reg.setMaxDistance(h, 265); // R3 far edge; the splat owns beyond (S4)
@@ -1026,7 +1028,12 @@ export async function buildWorldRegistry(input: {
       void bootCache.putMany('grassdags', grassPacks);
     }
     // debug field: contiguous patch grid ±48 m (24×24 = 576 patches; the S3
-    // residency replaces this with the toroidal biome-gated field)
+    // residency replaces this with the toroidal biome-gated field).
+    // ?grassat=x,z relocates it (ladder shots need FLAT ground — the origin
+    // field straddles the ravine, where patch-center snap buries blades).
+    const atRaw = (new URLSearchParams(window.location.search).get('grassat') ?? '0,0').split(',');
+    const atX = Math.round((Number(atRaw[0]) || 0) / GRASS_PATCH_SIZE) * GRASS_PATCH_SIZE;
+    const atZ = Math.round((Number(atRaw[1]) || 0) / GRASS_PATCH_SIZE) * GRASS_PATCH_SIZE;
     const HALF_PATCHES = 12;
     const NP = (HALF_PATCHES * 2) ** 2;
     let sd = 24680;
@@ -1037,8 +1044,8 @@ export async function buildWorldRegistry(input: {
     const streams = new Map<number, { a: number[]; b: number[] }>();
     for (let pz = -HALF_PATCHES; pz < HALF_PATCHES; pz++) {
       for (let px = -HALF_PATCHES; px < HALF_PATCHES; px++) {
-        const x = px * GRASS_PATCH_SIZE;
-        const z = pz * GRASS_PATCH_SIZE;
+        const x = atX + px * GRASS_PATCH_SIZE;
+        const z = atZ + pz * GRASS_PATCH_SIZE;
         const cx = x + GRASS_PATCH_SIZE / 2;
         const cz = z + GRASS_PATCH_SIZE / 2;
         const v = Math.floor(rnd() * GRASS_PATCH_VARIANTS) % GRASS_PATCH_VARIANTS;
