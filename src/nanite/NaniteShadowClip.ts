@@ -47,11 +47,12 @@ import {
   WebGPUCoordinateSystem,
 } from 'three';
 import type { PerspectiveCamera, Texture } from 'three';
-import { StorageTexture, type Renderer } from 'three/webgpu';
+import { IndirectStorageBufferAttribute, StorageBufferAttribute, StorageTexture, type Renderer } from 'three/webgpu';
 import {
   Fn,
   If,
   atomicMin,
+  atomicStore,
   dot,
   float,
   instanceIndex,
@@ -91,14 +92,16 @@ import { BRICK_HALF, BRICK_POS_X, BRICK_WORDS } from './VoxelBrick';
 import {
   bcF2U,
   bcU2F,
-  dispatch,
-  dispatchIndirect,
+  dispatchBatchMixed,
   elemU,
+  elemUW,
   localX,
   loopU,
+  maxU,
   minU,
   returnIf,
-  toF,
+  sU32Views,
+  setIndirectDispatch,
   uniformArrV4,
   uniformF,
   uniformMat4,
@@ -149,6 +152,11 @@ interface Level {
   raster: NaniteRasterHandles;
   depthTex: StorageTexture;
   kCopy: unknown;
+  /** P9: 1-thread args kernel sizing the strip clear/copy indirect grid */
+  kStripArgs: unknown;
+  /** P9: strip-scoped vis-depth sentinel clear (indirect, shares kCopy's grid) */
+  kClearStrip: unknown;
+  stripArgsAttr: IndirectStorageBufferAttribute;
   /** ortho half-extent E_k (light-XY), world metres */
   half: number;
   /** three OrthographicCamera that produces this level's VP each frame */
@@ -168,6 +176,11 @@ interface Level {
   originY: number;
   /** P7: fitLevels frame of this level's last strip update (staleness pick) */
   lastStrip: number;
+  /** P9 (strip-fitted cut): snapped centre in absolute light-plane coords */
+  scx: number;
+  scy: number;
+  /** P9: the rects the level rasters THIS frame (window uv; null = cached) */
+  activeRects: [number, number, number, number][] | null;
 }
 
 export interface ShadowClipParams {
@@ -225,6 +238,10 @@ export function buildNaniteShadowClip(
   // surface) + depth bias. ?shnb / ?shdb tune the per-texel factors.
   const nbTexelK = Number(qs.get('shnb') ?? 1.5) || 0;
   const dbTexelK = Number(qs.get('shdb') ?? 1.0) || 0;
+  // P9 lever 3: fit the shared-cut ortho to the UNION of the active strip rects
+  // instead of the largest updating level's full disc (an L5-only frame walked
+  // 384 m of world for a few-texel strip). ?shcut=0 = legacy disc.
+  const cutFit = qs.get('shcut') !== '0';
 
   // ONE shared vis buffer: raster level k → copy to depthTex_k → reuse for k+1.
   const vis: NaniteVisBuffers = makeVisBuffers(SHADOW_PIX);
@@ -285,45 +302,94 @@ export function buildNaniteShadowClip(
     depthTex.generateMipmaps = false;
     depthTex.name = `nanClipDepth${k}`;
 
-    // P5 strip-scoped publish: window texel → (in an active rect?) → remap the level
-    // z to GLOBAL z_g → store at the toroidally-wrapped texture address. Empty vis
-    // texels inside a rect store 1 (far) — a strip with no caster must still
-    // overwrite the stale world content that scrolled out.
-    const kCopy = Fn(() => {
-      const px = instanceIndex;
-      If(px.lessThan(uint(SHADOW_PIX)), () => {
-        const x = px.mod(uint(SHADOW_MAP));
-        const y = px.div(uint(SHADOW_MAP));
-        const ux = toF(x).add(0.5).div(SHADOW_MAP);
-        const uy = toF(y).add(0.5).div(SHADOW_MAP);
-        const rectsU = strips[k]!;
-        const hit = float(0).toVar();
-        for (let r = 0; r < 4; r++) {
-          const rect = rectsU.element(int(r));
-          If(
-            ux
-              .greaterThanEqual(rect.x)
-              .and(ux.lessThan(rect.z))
-              .and(uy.greaterThanEqual(rect.y))
-              .and(uy.lessThan(rect.w)),
-            () => {
-              hit.assign(1);
-            },
-          );
-        }
-        If(hit.greaterThan(0.5), () => {
-          const raw = elemU(vis.depthV.ro, px).toVar();
-          const org = levelOrigin.element(int(k));
-          const zg = raw
-            .equal(uint(0xffffffff))
-            .select(float(1), bcU2F(raw).mul(org.z).add(org.w));
-          const tx = x.add(uint(org.x)).mod(uint(SHADOW_MAP));
-          const ty = y.add(uint(org.y)).mod(uint(SHADOW_MAP));
-          textureStore(depthTex, uvec2(tx, ty), vec4(zg, 0, 0, 1)).toWriteOnly();
+    // P9 STRIP-SIZED dispatch (perf lever 1): the old kCopy/clear scanned the full
+    // 1024² window per updating level (~8M mostly-idle threads/frame at 4.2
+    // levels). Now: a 1-thread args kernel sums the active rects' texel areas from
+    // the strip uniforms and sizes ONE indirect grid shared by the strip CLEAR and
+    // the strip COPY — each thread maps linearly into the rect list (overlapping
+    // rects double-process a texel; both kernels are idempotent).
+    const stripArgsAttr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
+    const stripArgsV = sU32Views(stripArgsAttr as unknown as StorageBufferAttribute, 3).rw;
+    const rectDims = (
+      r: number,
+    ): { rx: NU; ry: NU; rw: NU; rh: NU } => {
+      const rect = strips[k]!.element(int(r));
+      const rx = uint((rect as unknown as { x: NF }).x.mul(SHADOW_MAP).add(0.5));
+      const ry = uint((rect as unknown as { y: NF }).y.mul(SHADOW_MAP).add(0.5));
+      const rx1 = uint((rect as unknown as { z: NF }).z.mul(SHADOW_MAP).add(0.5));
+      const ry1 = uint((rect as unknown as { w: NF }).w.mul(SHADOW_MAP).add(0.5));
+      const rw = minU(rx1.sub(rx), uint(SHADOW_MAP));
+      const rh = minU(ry1.sub(ry), uint(SHADOW_MAP));
+      // empty rect (x1<=x0) yields rw=0 via the unsigned max-with-0 clamp path:
+      // guard explicitly — unsigned wrap would explode.
+      const empty = rx1.lessThanEqual(rx).or(ry1.lessThanEqual(ry));
+      return {
+        rx,
+        ry,
+        rw: empty.select(uint(0), rw) as unknown as NU,
+        rh: empty.select(uint(0), rh) as unknown as NU,
+      };
+    };
+    const kStripArgs = Fn(() => {
+      returnIf(instanceIndex.notEqual(uint(0)));
+      const total = uint(0).toVar();
+      for (let r = 0; r < 4; r++) {
+        const d = rectDims(r);
+        total.addAssign(d.rw.mul(d.rh));
+      }
+      elemUW(stripArgsV, 0).assign(total.add(uint(255)).div(uint(256)));
+      elemUW(stripArgsV, 1).assign(uint(1));
+      elemUW(stripArgsV, 2).assign(uint(1));
+    })().compute(1, [1]);
+    (kStripArgs as unknown as NamedKernel).setName(`nanClipStripArgs${k}`);
+
+    // thread → strip texel (window coords) via the rect list; body(wx, wy, px)
+    const stripThread = (body: (wx: NU, wy: NU, px: NU) => void): void => {
+      const local = instanceIndex.toVar();
+      const done = uint(0).toVar();
+      for (let r = 0; r < 4; r++) {
+        const d = rectDims(r);
+        const area = d.rw.mul(d.rh).toVar();
+        If(done.equal(uint(0)).and(local.lessThan(area)), () => {
+          const rwSafe = maxU(d.rw, uint(1));
+          const wy = d.ry.add(local.div(rwSafe));
+          const wx = d.rx.add(local.mod(rwSafe));
+          const px = wy.mul(uint(SHADOW_MAP)).add(wx);
+          body(wx, wy, px);
+          done.assign(uint(1));
         });
+        local.assign(local.sub(minU(local, area)));
+      }
+    };
+
+    // strip CLEAR: sentinel into the shared vis depth at strip texels only (the
+    // raster may splash outside the strips — those texels are never read).
+    const kClearStrip = Fn(() => {
+      stripThread((_wx, _wy, px) => {
+        atomicStore(vis.depthV.atomic.element(px), uint(0xffffffff));
       });
-    })().compute(SHADOW_PIX, [256]);
+    })().compute(DISPATCH_ROW * 256, [256]);
+    (kClearStrip as unknown as NamedKernel).setName(`nanClipStripClear${k}`);
+
+    // P5 strip-scoped publish: remap the level z to GLOBAL z_g → store at the
+    // toroidally-wrapped texture address. Empty vis texels inside a rect store 1
+    // (far) — a strip with no caster must still overwrite the stale world content
+    // that scrolled out.
+    const kCopy = Fn(() => {
+      stripThread((x, y, px) => {
+        const raw = elemU(vis.depthV.ro, px).toVar();
+        const org = levelOrigin.element(int(k));
+        const zg = raw
+          .equal(uint(0xffffffff))
+          .select(float(1), bcU2F(raw).mul(org.z).add(org.w));
+        const tx = x.add(uint(org.x)).mod(uint(SHADOW_MAP));
+        const ty = y.add(uint(org.y)).mod(uint(SHADOW_MAP));
+        textureStore(depthTex, uvec2(tx, ty), vec4(zg, 0, 0, 1)).toWriteOnly();
+      });
+    })().compute(DISPATCH_ROW * 256, [256]);
     (kCopy as unknown as NamedKernel).setName(`nanClipCopy${k}`);
+    setIndirectDispatch(kClearStrip, stripArgsAttr);
+    setIndirectDispatch(kCopy, stripArgsAttr);
 
     const ortho = new OrthographicCamera(-half, half, half, -half, 0, 1);
     // CRITICAL: a standalone three camera defaults to WebGLCoordinateSystem
@@ -339,6 +405,9 @@ export function buildNaniteShadowClip(
       raster: null as unknown as NaniteRasterHandles,
       depthTex,
       kCopy,
+      kStripArgs,
+      kClearStrip,
+      stripArgsAttr,
       half,
       ortho,
       lastVP: new Matrix4(),
@@ -349,6 +418,9 @@ export function buildNaniteShadowClip(
       originX: 0,
       originY: 0,
       lastStrip: 0,
+      scx: 0,
+      scy: 0,
+      activeRects: null,
     });
   }
 
@@ -642,11 +714,14 @@ export function buildNaniteShadowClip(
       }
       lv.prevSx = sx;
       lv.prevSy = sy;
+      lv.scx = scx;
+      lv.scy = scy;
       if (full) {
         lv.originX = 0;
         lv.originY = 0;
         rects = [[0, 0, 1, 1]];
       }
+      lv.activeRects = rects;
       // sampling must track the CURRENT window every frame (uv mapping follows the
       // snap even on cached frames; stored z_g is window-independent).
       levelVP[k]!.value.copy(vp);
@@ -681,26 +756,62 @@ export function buildNaniteShadowClip(
   };
 
   // PASS B fit (CPU, no GPU) — set cutCam to span the re-rastering levels. Must be called
-  // with mask != 0. Mirrors the cut-ortho fit from the original run().
+  // with mask != 0. P9 lever 3 (?shcut=0 legacy): the ortho box is fitted to the
+  // UNION of the active strip rects (absolute light-plane coords) instead of the
+  // largest updating level's full disc — an L5-only frame used to walk 384 m of
+  // world for a few-texel strip. The box only changes CULLING coverage: projK (the
+  // LOD constant) comes from cotHalfFov, untouched by the extents; frustumVisible
+  // tests sphere-vs-planes with radius slack, so strip-overlapping clusters whose
+  // centres sit outside the box still pass. uv.x runs along −right, uv.y along +up
+  // (the P5 empirical basis).
   const fitCut = (mainCamera: PerspectiveCamera, sinElev: number): void => {
     const cp = mainCamera.position;
     const cz = cp.dot(forward);
-    // size the cut to the LARGEST re-rastering level so slow drift (only near levels tick)
-    // traverses a small region, not the whole 384 m disc.
     let maxHalf = 0;
-    for (let k = 0; k < LEVELS; k++) if (reRaster[k]) maxHalf = Math.max(maxHalf, levels[k]!.half);
+    let rLo = Number.POSITIVE_INFINITY;
+    let rHi = Number.NEGATIVE_INFINITY;
+    let uLo = Number.POSITIVE_INFINITY;
+    let uHi = Number.NEGATIVE_INFINITY;
+    for (let k = 0; k < LEVELS; k++) {
+      if (!reRaster[k]) continue;
+      const lv = levels[k]!;
+      maxHalf = Math.max(maxHalf, lv.half);
+      if (!cutFit) continue;
+      const texel = (2 * lv.half) / SHADOW_MAP;
+      for (const rect of lv.activeRects ?? []) {
+        const r0 = lv.scx + lv.half * (1 - 2 * rect[2]) - texel;
+        const r1 = lv.scx + lv.half * (1 - 2 * rect[0]) + texel;
+        const u0 = lv.scy + lv.half * (2 * rect[1] - 1) - texel;
+        const u1 = lv.scy + lv.half * (2 * rect[3] - 1) + texel;
+        if (r0 < rLo) rLo = r0;
+        if (r1 > rHi) rHi = r1;
+        if (u0 < uLo) uLo = u0;
+        if (u1 > uHi) uHi = u1;
+      }
+    }
+    if (!cutFit || !Number.isFinite(rLo)) {
+      // legacy disc: camera-centred, symmetric maxHalf (+ a texel of slack)
+      const cutHalf = maxHalf + 2 * ((2 * maxHalf) / SHADOW_MAP);
+      rLo = cp.dot(right) - cutHalf;
+      rHi = cp.dot(right) + cutHalf;
+      uLo = cp.dot(up) - cutHalf;
+      uHi = cp.dot(up) + cutHalf;
+    }
     const cutDHalf = maxHalf / sinElev + 100;
-    const cutHalf = maxHalf + 2 * ((2 * maxHalf) / SHADOW_MAP);
+    const halfR = (rHi - rLo) / 2;
+    const halfU = (uHi - uLo) / 2;
     center
       .copy(right)
-      .multiplyScalar(cp.dot(right))
-      .addScaledVector(up, cp.dot(up))
+      .multiplyScalar((rLo + rHi) / 2)
+      .addScaledVector(up, (uLo + uHi) / 2)
       .addScaledVector(forward, cz);
     eye.copy(center).addScaledVector(forward, -cutDHalf);
-    cutOrtho.left = -cutHalf;
-    cutOrtho.right = cutHalf;
-    cutOrtho.top = cutHalf;
-    cutOrtho.bottom = -cutHalf;
+    // extents are SYMMETRIC around the box centre, so the ortho x-axis sign flip
+    // (lookAt xAxis = −right) cannot mis-place the box.
+    cutOrtho.left = -halfR;
+    cutOrtho.right = halfR;
+    cutOrtho.top = halfU;
+    cutOrtho.bottom = -halfU;
     cutOrtho.far = 2 * cutDHalf;
     cutOrtho.position.copy(eye);
     cutOrtho.up.copy(up);
@@ -725,14 +836,30 @@ export function buildNaniteShadowClip(
     for (let k = 0; k < LEVELS; k++) {
       if (!reRaster[k]) continue;
       const lv = levels[k]!;
-      clipCull.runLevelFilter(renderer, k); // cut → level-k frustum+hollow+strips → queue
-      lv.raster.clearVis(renderer);
-      lv.raster.depth1(renderer);
+      // P9 submit coalescing: the level's compute chain used to be ~7 separate
+      // submits (filter×3, full-window clear, depth1, splat, full-window copy)
+      // around the HW render pass. Now: ONE pre-HW batch (filter chain → strip
+      // args → hw-queue counter reset → strip clear → SW depth) + the HW pass +
+      // ONE post-HW batch (vox splat → strip copy). The hw-queue reset is
+      // load-bearing: it was the hidden tail of the old full kVisClear — without
+      // it the HW depth pass renders an ever-growing stale triangle list (the
+      // first P9 measurement's +8ms moving regression).
+      dispatchBatchMixed(renderer, [
+        ...clipCull.levelFilterBatch(k), // cut → level-k frustum+hollow+strips → queue
+        lv.kStripArgs,
+        ...lv.raster.hwQueueClearBatch(),
+        lv.kClearStrip,
+        ...lv.raster.depth1Batch(),
+      ]);
       lv.raster.hwDepth(renderer, mainCamera);
-      // P3: brick depth splat for the class-7 clusters the queue carries (same
-      // one-wg-per-item indirect args the tri raster consumes)
-      if (shVox) dispatchIndirect(renderer, voxSplatKernels[k] as never, clipCull.queue.rasterDispatchAttr);
-      dispatch(renderer, lv.kCopy);
+      dispatchBatchMixed(renderer, [
+        // P3: brick depth splat for the class-7 clusters the queue carries (same
+        // one-wg-per-item indirect args the tri raster consumes)
+        ...(shVox
+          ? [setIndirectDispatch(voxSplatKernels[k], clipCull.queue.rasterDispatchAttr)]
+          : []),
+        lv.kCopy,
+      ]);
     }
   };
 

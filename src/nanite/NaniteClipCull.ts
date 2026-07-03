@@ -75,6 +75,7 @@ import {
   readBuffer,
   returnIf,
   sU32Views,
+  setIndirectDispatch,
   sUvec2,
   uv2,
   wgLinear,
@@ -111,6 +112,11 @@ export interface ClipCull {
   sharedCutBatch(): readonly unknown[];
   /** clear queue → filter the cut by level k's frustum+hollow → raster args */
   runLevelFilter(renderer: Renderer, level: number): void;
+  /** P9 (submit coalescing): the SAME three kernels runLevelFilter dispatches, as
+   *  an ordered batch list (the filter pre-tagged with its indirect args) so the
+   *  caller can fold them into ONE dispatchBatchMixed submit with the rest of the
+   *  level's compute chain. */
+  levelFilterBatch(level: number): readonly unknown[];
   /** cut size + per-level survivor counts (HUD) */
   readCounts(renderer: Renderer): Promise<{ cut: number; perLevel: number[] }>;
 }
@@ -336,6 +342,15 @@ export function buildClipCull(
     dispatch(renderer, rasterArgsKernels[level] as never);
   };
 
+  // P9: pre-tag each level filter with its indirect args once (idempotent) and
+  // hand back the ordered [clear, filter, rasterArgs] list for batched submits.
+  for (const f of filters) setIndirectDispatch(f, filterDispatchAttr);
+  const levelFilterBatch = (level: number): readonly unknown[] => [
+    clears[level],
+    filters[level],
+    rasterArgsKernels[level],
+  ];
+
   const readCounts = async (
     renderer: Renderer,
   ): Promise<{ cut: number; perLevel: number[] }> => {
@@ -354,6 +369,7 @@ export function buildClipCull(
     runSharedCut,
     sharedCutBatch,
     runLevelFilter,
+    levelFilterBatch,
     readCounts,
   };
 }

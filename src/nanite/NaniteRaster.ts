@@ -136,6 +136,12 @@ export interface NaniteRasterHandles {
   clearVis(renderer: Renderer): void;
   /** SW depth-only pass (shadow cascades/clipmap; atomicMin Z) */
   depth1(renderer: Renderer): void;
+  /** P9 (shadow submit coalescing): the depth-only kernel pre-tagged with its
+   *  indirect args, as a batch element for dispatchBatchMixed. */
+  depth1Batch(): readonly unknown[];
+  /** P9: the hw-queue/audit counter reset as a batch element — REQUIRED before
+   *  every depth raster when the full kVisClear is replaced by a scoped clear. */
+  hwQueueClearBatch(): readonly unknown[];
   /** HW big/near-tri depth render (re-runs hwArgs; full-queue redraw is
    *  idempotent atomicMin) */
   hwDepth(renderer: Renderer, camera: PerspectiveCamera): void;
@@ -399,6 +405,19 @@ export function buildNaniteRaster(
     dvParams.get('nanprobe') !== '1' && // probe reads vis.depthV.ro
     dvParams.get('audit') !== '1' && // kAudit reads visDepthV.ro
     rdbg === 0; // rdbg sinks atomicMin depthV
+  // P9 (shadow strip clear): the tiny tail of kVisClear — ONLY the hw-queue +
+  // audit counters. The strip-scoped shadow clear covers the depth texels itself
+  // but MUST still reset this counter or the HW depth pass renders an
+  // ever-growing stale triangle list (the P9 regression: +8ms moving).
+  const kHwQueueClear = Fn(() => {
+    If(instanceIndex.equal(uint(0)), () => {
+      atomicStore(hwQueueV.atomic.element(0), uint(0));
+      atomicStore(auditV.atomic.element(0), uint(0));
+      atomicStore(auditV.atomic.element(1), uint(0));
+    });
+  })().compute(1, [1]);
+  (kHwQueueClear as unknown as ComputeKernel).setName('nanHwQueueClear');
+
   const kVisClear = Fn(() => {
     If(instanceIndex.lessThan(uint(pixelCount)), () => {
       if (!skipDepthClear) atomicStore(visDepthV.atomic.element(instanceIndex), uint(0xffffffff));
@@ -1334,6 +1353,10 @@ export function buildNaniteRaster(
   const depth1 = (renderer: Renderer): void => {
     dispatchIndirect(renderer, kRasterDepth, cull.rasterDispatchAttr);
   };
+  const depth1Batch = (): readonly unknown[] => [
+    setIndirectDispatch(kRasterDepth, cull.rasterDispatchAttr),
+  ];
+  const hwQueueClearBatch = (): readonly unknown[] => [kHwQueueClear];
   const hwRender = (renderer: Renderer, camera: PerspectiveCamera, mat: NodeMaterial): void => {
     const prevRT = renderer.getRenderTarget();
     renderer.setRenderTarget(hwRT);
@@ -1461,6 +1484,8 @@ export function buildNaniteRaster(
     resolveScene,
     clearVis,
     depth1,
+    depth1Batch,
+    hwQueueClearBatch,
     hwDepth,
     combined,
     world1,
