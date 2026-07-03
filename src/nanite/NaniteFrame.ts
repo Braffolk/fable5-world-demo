@@ -49,6 +49,12 @@ export interface NaniteFrameHandles {
   /** measure-infra W5: the meter's counter readbacks, runnable OUTSIDE a timed window
    *  (MeasureHarness calls this on a drained queue between samples). */
   meterRead(renderer: WebGPURenderer): Promise<Record<string, number>>;
+  /** W2 (water arc): composed sun visibility (clipmap PCSS × cloud × far-shadow) for
+   *  non-resolve materials; undefined when the scene has no nanite sun shadows. */
+  sunVis?: (
+    wp: import('../gpu/TSLTypes').NV3,
+    n: import('../gpu/TSLTypes').NV3,
+  ) => NF;
 }
 
 /** halton(index, base) — TRAANode.js's exact sequence (verbatim formula) */
@@ -659,5 +665,31 @@ export function buildNaniteFrame(
       });
   };
 
-  return { render, meter, meterRead };
+  // W2 (water arc): the composed per-pixel sun-visibility factor — clipmap PCSS ×
+  // cloud transmittance × baked far-shadow — for NON-resolve materials (water foam/
+  // glint). Mirrors the resolve's own composition (NaniteResolve.ts sun block) incl.
+  // the cloud NaN guard. shadowHalf is deliberately NOT offered: its half-res eval
+  // sits at the OPAQUE depth (the lakebed), wrong for a surface above it.
+  const sunVis = shadow
+    ? (wp: import('../gpu/TSLTypes').NV3, n: import('../gpu/TSLTypes').NV3): NF => {
+        // pure expression chain — this runs at MATERIAL BUILD time, outside any
+        // Fn() stack, so toVar()/assign() are illegal here (TSL "no stack" spam)
+        let sf = (shadow.shadowFactor(wp, n) as unknown as { clamp(a: number, b: number): NF })
+          .clamp(0, 1) as NF;
+        if (world.cloudShadow) {
+          const c = world.cloudShadow(wp.xz as unknown as import('../gpu/TSLTypes').NV2);
+          const safe = c.equal(c).select(c.clamp(0, 1), float(1)) as unknown as NF;
+          sf = sf.mul(safe) as unknown as NF;
+        }
+        if (world.farShadow) {
+          const fv = world
+            .farShadow(wp.xz as unknown as import('../gpu/TSLTypes').NV2)
+            .clamp(0, 1) as unknown as NF;
+          sf = sf.mul(fv) as unknown as NF;
+        }
+        return sf;
+      }
+    : undefined;
+
+  return { render, meter, meterRead, sunVis };
 }

@@ -37,9 +37,11 @@ import {
   cameraProjectionMatrix,
   cameraViewMatrix,
   clamp,
+  dot,
   exp,
   float,
   fract,
+  normalize,
   getScreenPosition,
   interleavedGradientNoise,
   mix,
@@ -63,6 +65,7 @@ import type { DepthTexture, Texture } from 'three';
 import type { StorageTexture } from 'three/webgpu';
 import { PERIOD_FBM } from '../gpu/passes/NoiseBake';
 import { bilerpVec2Buffer } from '../gpu/BufferSample';
+import { sunU } from './VegMaterials';
 import { canopyAt } from '../gpu/passes/Scatter';
 import type { ProbeGI } from '../gpu/passes/ProbeGI';
 import type { NF, NI, NV2, NV3, NV4 } from '../gpu/TSLTypes';
@@ -75,6 +78,9 @@ const SIGMA = { r: 0.42, g: 0.135, b: 0.095 };
 
 /** flowmap cycles/s — shared by ripples, foam and the caustic advection */
 export const FLOW_CYC = 0.45;
+
+/** W2: composed sun visibility (clipmap PCSS × cloud × far-shadow) at a world pos */
+export type WaterSunVis = (wp: NV3, n: NV3) => NF;
 
 export interface WaterLevelHandles {
   /** snapped world origin of this clipmap level (uniform, updated per frame) */
@@ -96,8 +102,10 @@ export function waterMaterial(
   lvl: WaterLevelHandles,
   // once-per-frame scene snapshots owned by WaterSurface (NOT three's
   // viewportSharedTexture/viewportDepthTexture — those dedupe per node
-  // INSTANCE and fired 12 color + 18 depth copies/frame across the 6 levels)
-  snap: { color: Texture; depth: DepthTexture },
+  // INSTANCE and fired 12 color + 18 depth copies/frame across the 6 levels).
+  // sunVis (W2): present in the severed-CSM nanite slate — switches foam/glint
+  // to manual shadowed lighting (lights = false).
+  snap: { color: Texture; depth: DepthTexture; sunVis?: WaterSunVis },
 ): MeshStandardNodeMaterial {
   const flow = hf.flow;
   const noiseA = hf.noiseA;
@@ -302,9 +310,54 @@ export function waterMaterial(
   const foam = clamp(shoreFoam.add(rapidFoam), 0, 1).mul(foamPat).clamp(0, 0.68) as NF;
 
   // ---- compose --------------------------------------------------------------------
-  mat.colorNode = vec3(0.74, 0.76, 0.74).mul(foam);
-  mat.emissiveNode = mix(refr, skyRefl, fres).mul(foam.oneMinus());
-  mat.roughnessNode = mix(float(0.05), float(0.55), foam);
+  const foamAlb = vec3(0.74, 0.76, 0.74);
+  const rough = mix(float(0.05), float(0.55), foam);
+  if (snap.sunVis) {
+    // W2 (severed-CSM slate): three's directional light carries no shadow here, so
+    // foam diffuse + the sun glint go MANUAL, gated by the composed nanite sun
+    // visibility (clipmap PCSS × cloud × far-shadow) at the water's own wp — same
+    // energy convention as the resolve (irradiance = NdotL·sunColor, ÷π once).
+    mat.lights = false;
+    mat.colorNode = vec3(0);
+    mat.emissiveNode = Fn(() => {
+      const sunDir = normalize(vec3(sunU.dir)) as unknown as NV3;
+      const sunCol = (sunU.color as unknown as NV3).mul(float(sunU.intensity)) as unknown as NV3;
+      const ndl = clamp(dot(n, sunDir), 0, 1);
+      const amb = gi
+        ? (gi.irradiance(positionWorld, vec3(0, 1, 0)) as unknown as NV3)
+        : (atm.skyColor(vec3(0, 1, 0)).mul(0.35) as unknown as NV3);
+      // sun glint: GGX D × Schlick F × Kelemen V on the full ripple normal — the
+      // manual replacement for the MeshStandard directional specular (lights=false).
+      // Roughness rides the same foam mix, so foam kills the glint exactly as before.
+      const hv = normalize(sunDir.add(viewDir));
+      const ndh = clamp(dot(n, hv), 0, 1);
+      const ldh = clamp(dot(sunDir as unknown as NV3, hv), 0, 1);
+      const aG = rough.mul(rough);
+      const a2 = aG.mul(aG);
+      const dDen = ndh.mul(ndh).mul(a2.sub(1)).add(1);
+      const ggxD = a2.div(dDen.mul(dDen).mul(Math.PI));
+      const glintF = float(0.02).add(float(0.98).mul(ldh.oneMinus().pow(5)));
+      const kelemenV = float(0.25).div(ldh.mul(ldh).max(1e-3));
+      const specRaw = ggxD.mul(glintF).mul(kelemenV).mul(ndl);
+      // PCSS is the expensive term (6 blocker + 9 PCF taps) and sunVis only
+      // feeds foam + glint — skip it where both are invisible (most of any
+      // open lake). Real branch, not select(): measured +0.7-2 ms at full-lake
+      // coverage when evaluated unconditionally (2026-07-03).
+      const sv = float(1).toVar();
+      If(foam.greaterThan(0.004).or(specRaw.greaterThan(0.002)), () => {
+        sv.assign(snap.sunVis!(positionWorld as unknown as NV3, nFres as unknown as NV3));
+      });
+      const foamLit = foamAlb.mul(sunCol.mul(ndl.mul(sv)).add(amb)).mul(1 / Math.PI);
+      return mix(refr, skyRefl, fres)
+        .mul(foam.oneMinus())
+        .add(foamLit.mul(foam))
+        .add(sunCol.mul(specRaw).mul(sv));
+    })() as unknown as typeof mat.emissiveNode;
+  } else {
+    mat.colorNode = foamAlb.mul(foam);
+    mat.emissiveNode = mix(refr, skyRefl, fres).mul(foam.oneMinus());
+  }
+  mat.roughnessNode = rough;
   // shoreline feather: mm-deep water fades out over the bed. ALSO fade
   // steep surface RAMPS: the field dives ~2 m to the dry sentinel past
   // every shoreline — across a FLAT far beach seen edge-on that dive

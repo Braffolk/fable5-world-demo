@@ -118,6 +118,9 @@ export class WaterSurface {
     atm: Atmosphere,
     canopyTex: StorageTexture | null,
     gi: ProbeGI | null,
+    // W2: composed nanite sun visibility (clipmap PCSS × cloud × far-shadow) —
+    // set in the severed-CSM slate; undefined keeps the legacy three-lit foam.
+    opts?: { sunVis?: import('../render/WaterMaterial').WaterSunVis },
   ) {
     this.snapColor.minFilter = LinearFilter;
     this.snapColor.magFilter = LinearFilter;
@@ -136,7 +139,7 @@ export class WaterSurface {
           cell,
           far: cell >= 12, // ≥ ±384 m: min-reduced field
         },
-        { color: this.snapColor, depth: this.snapDepth },
+        { color: this.snapColor, depth: this.snapDepth, sunVis: opts?.sunVis },
       );
       const mesh = new Mesh(geo, mat);
       mesh.frustumCulled = false; // positions are shader-driven

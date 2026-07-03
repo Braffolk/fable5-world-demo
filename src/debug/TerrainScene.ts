@@ -177,22 +177,10 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   }
 
   // Phase 6: stream/lake water clipmap (?ablate=water to A/B). Lives in BOTH
-  // slates (30-water-plan W1): in the nanite frame it draws in the same scene
-  // pass after the resolve meshes (transparent, depthWrite), reading resolve
-  // depth via viewportDepthTexture and the lit opaque frame via
-  // viewportSharedTexture — the SLW-over-resolve seam.
-  let waterRef: WaterSurface | null = null;
-  if (view !== 'split' && !ablate.has('water')) {
-    const water = new WaterSurface(
-      hf,
-      sunSky.atmosphere,
-      canopyTex,
-      ablate.has('gi') ? null : gi,
-    );
-    engine.scene.add(water.group);
-    engine.onUpdate(() => water.update(engine.camera));
-    waterRef = water; // __laasDbg.water — runtime visible-toggle for within-session A/B
-  }
+  // slates (30-water-plan W1) and is CONSTRUCTED AFTER the nanite frame below —
+  // W2 threads the frame's composed sun-visibility (clipmap PCSS × cloud × far
+  // shadow) into the foam/glint lighting (the severed-CSM slate would otherwise
+  // sun-light foam in cliff shade).
 
   // Phase 5: variant pools + GPU cull → compacted indirect draws
   let forestsRef: Forests | null = null;
@@ -377,7 +365,6 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     engine,
     sunSky,
     shadowRig,
-    water: waterRef,
   };
 
   // GPU particles: snow/pollen/leaves riding the wind (?ablate=particles)
@@ -409,6 +396,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // checkpoint (meshlet colors on the real world); `hwref` = the N3 parity
   // reference (same content, hardware instanced draws).
   const nanitedbg = new URLSearchParams(window.location.search).get('nanitedbg');
+  let naniteSunVis: import('../nanite/NaniteFrame').NaniteFrameHandles['sunVis'];
   if (
     nanitedbg === 'flat' ||
     nanitedbg === 'cluster' ||
@@ -431,7 +419,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     // on the old path until N5 — ShadowProxy + per-cascade caster siblings)
     const { buildNaniteFrame } = await import('../nanite/NaniteFrame');
     const { migratedMatClass } = await import('../nanite/WorldRegistry');
-    engine.post = buildNaniteFrame(engine, naniteRegistry, hf, post, {
+    const nanFrame = buildNaniteFrame(engine, naniteRegistry, hf, post, {
       gi: ablate.has('gi') ? null : gi,
       canopyTex,
       csm: shadowRig.csm ?? null,
@@ -446,6 +434,8 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       barkTexA: naniteBark?.texA ?? null,
       barkTexB: naniteBark?.texB ?? null,
     });
+    engine.post = nanFrame;
+    naniteSunVis = nanFrame.sunVis;
     if (naniteClasses.has('terrain') && tilesRef) {
       tilesRef.mesh.visible = false;
       tilesRef.farShell.visible = false;
@@ -456,6 +446,24 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       `[laas] nanite full-frame: classes [${[...naniteClasses].join(',')}]; suppressed ` +
         `${hidden} pool draws${naniteClasses.has('terrain') ? ' + terrain tiles/far shell' : ''}`,
     );
+  }
+
+  // Phase 6 water (moved after the nanite frame — W2 needs its sunVis): the
+  // clipmap draws in the scene pass after the resolve meshes (transparent,
+  // depthWrite) — the SLW-over-resolve seam. In the severed-CSM slate the
+  // foam/glint lighting is manual, gated by nanite sun visibility.
+  if (view !== 'split' && !ablate.has('water')) {
+    const water = new WaterSurface(
+      hf,
+      sunSky.atmosphere,
+      canopyTex,
+      ablate.has('gi') ? null : gi,
+      { sunVis: naniteSunVis },
+    );
+    engine.scene.add(water.group);
+    engine.onUpdate(() => water.update(engine.camera));
+    // runtime visible-toggle for within-session perf A/B
+    (window as unknown as { __laasDbg: Record<string, unknown> }).__laasDbg.water = water;
   }
 
   ctx.hooks.setTimeOfDay = (t: number) => {
