@@ -162,9 +162,15 @@ const NEAR_END = ((): number => {
  *  card-width law × the ray's in-sward fraction; deterministic hash test; depth =
  *  stratified point on the in-texel segment. Deletes the fine DDA + clump
  *  batteries where the oblique fire lived (80-155 m ≈ 8 ms of frame). */
+/** DEFAULT 16 (2026-07-04, was 70): starting the statistical band at the raster
+ *  seam fixed BOTH user signals at once — the mid-band lushness gap (the exact
+ *  march undercounts arc-overhanging blades; the coverage law counts them) and
+ *  the worst-case cost (hill +10.8 → +5.2, eye +5.7 → +3.55 gpuWall). Sward
+ *  tops ride a bilinear-smoothed surface (see statTexel). ?grassstat=70
+ *  restores the exact 16-70 m band for A/B. */
 const STAT_D = ((): number => {
-  const v = Number(new URLSearchParams(window.location.search).get('grassstat') ?? '70');
-  return Number.isFinite(v) && v >= 0 && v <= 300 ? v : 70;
+  const v = Number(new URLSearchParams(window.location.search).get('grassstat') ?? '16');
+  return Number.isFinite(v) && v >= 0 && v <= 300 ? v : 16;
 })();
 /** λ scale (?grassstatk): crossings per horizontal meter = K·fill·widen·hFrac.
  *  K folds clumps/m² (≈91·fill), 3 cards, mean projected width (≈0.093·widen m),
@@ -1797,11 +1803,39 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
               ),
             ).mul(1 / 64) as unknown as NF;
             const L = tExC.sub(tCur) as unknown as NF;
-            // in-sward fraction: ray height at segment mid vs the baked top law
-            const ymid = ro.y
-              .add(rd.y.mul(tCur.add(tExC).mul(0.5)))
-              .sub(ground) as unknown as NF;
-            const hFrac = float(1).sub(ymid.div(ta.x.max(0.05))).clamp(0, 1) as unknown as NF;
+            // in-sward fraction vs a SMOOTH sward surface: bilinear ground+top
+            // over the 4 nearest texels at the segment midpoint. Per-texel
+            // constants stepped 0.84 m BOXES into mid-sward silhouettes
+            // (stat=16 hill shot); interpolation fades acceptance against a
+            // continuous surface — and empty neighbors (top==ground) pull it
+            // down, which also softens density edges at paths.
+            const tMid = tCur.add(tExC).mul(0.5) as unknown as NF;
+            const ymidW = ro.y.add(rd.y.mul(tMid)) as unknown as NF;
+            const qx = ro.x.add(rd.x.mul(tMid)).div(CELL).sub(gfx).div(GUIDE_SUB).sub(0.5) as unknown as NF;
+            const qz = ro.z.add(rd.z.mul(tMid)).div(CELL).sub(gfz).div(GUIDE_SUB).sub(0.5) as unknown as NF;
+            const ix = qx.floor().clamp(0, GUIDE_RES - 2).toVar() as unknown as NF;
+            const iz = qz.floor().clamp(0, GUIDE_RES - 2).toVar() as unknown as NF;
+            const fxb = qx.sub(ix).clamp(0, 1) as unknown as NF;
+            const fzb = qz.sub(iz).clamp(0, 1) as unknown as NF;
+            const gAt = (dx: number, dz: number): { g: NF; t: NF } => {
+              const c2 = guideCtx4.element(
+                uint(iz.add(dz).mul(GUIDE_RES).add(ix.add(dx))) as unknown as NU,
+              );
+              const g2 = bcU2F(c2.x as unknown as NU) as unknown as NF;
+              return {
+                g: g2,
+                t: g2.add((unpackHalfU(c2.z as unknown as NU) as unknown as NV2).x) as unknown as NF,
+              };
+            };
+            const s00 = gAt(0, 0);
+            const s10 = gAt(1, 0);
+            const s01 = gAt(0, 1);
+            const s11 = gAt(1, 1);
+            const gS = mix(mix(s00.g, s10.g, fxb), mix(s01.g, s11.g, fxb), fzb) as unknown as NF;
+            const tS = mix(mix(s00.t, s10.t, fxb), mix(s01.t, s11.t, fxb), fzb) as unknown as NF;
+            const hFrac = float(1)
+              .sub(ymidW.sub(gS).div(tS.sub(gS).max(0.05)))
+              .clamp(0, 1) as unknown as NF;
             const lam = fill.mul(widenT).mul(hFrac).mul(STAT_K) as unknown as NF;
             const tau = lam.mul(L.mul(dirL)).min(0.97) as unknown as NF;
             const u = cellHash(
