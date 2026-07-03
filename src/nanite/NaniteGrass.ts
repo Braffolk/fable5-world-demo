@@ -1538,7 +1538,12 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
   // clump geometry with the article's shift+thicken heuristics. LINEAR filter +
   // REPEAT wrap on all three axes (his interpolation, incl. across angle slices).
   // The tile = one guide texel footprint (0.84 m, 8×8 fine cells).
-  const rayBake = ((): { tex: Data3DTexture; dMaxTile: number } | null => {
+  /** height-banded volumes (?grassbands=2|3): real per-band taper/arc parallax,
+   *  but band-hop refetches cost ~2.5× on look-down poses — default 1 (the
+   *  per-fiber arcs live in the bake at mid-height; root-id validation carries
+   *  the overhang) */
+  const RAY_BANDS = Math.round(qNum('grassbands', 1, 1, 3));
+  const rayBake = ((): { texs: Data3DTexture[]; dMaxTile: number } | null => {
     if (!RAY_LANE || !RAY_ARTICLE) return null;
     const b = bakeGrassRayTile({
       res: BAKE_RES,
@@ -1555,18 +1560,25 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
       // 8 spread fibers per cell (was 5 clumped — the dot-tufts-with-holes call);
       // bake-side density is FREE at runtime (shorter fetch distances)
       fibers: Math.round(qNum('grassbakn', 8, 2, 16)),
+      // height-banded volumes (user grid+batch calls): per-fiber radial arcs +
+      // real tip taper live in the bake; runtime picks a band by ray height
+      bands: RAY_BANDS,
+      arcK: qNum('grassarck', 1, 0, 3),
     });
-    const t = new Data3DTexture(b.data, b.res, b.res, b.angles);
-    t.format = RGBAFormat;
-    t.minFilter = LinearFilter;
-    t.magFilter = LinearFilter;
-    t.wrapS = RepeatWrapping;
-    t.wrapT = RepeatWrapping;
-    t.wrapR = RepeatWrapping; // angle axis wraps (θ is periodic)
-    t.generateMipmaps = false;
-    t.needsUpdate = true;
-    t.name = 'grassRayTile';
-    return { tex: t, dMaxTile: b.dMaxTile };
+    const texs = b.data.map((d, i) => {
+      const t = new Data3DTexture(d, b.res, b.res, b.angles);
+      t.format = RGBAFormat;
+      t.minFilter = LinearFilter;
+      t.magFilter = LinearFilter;
+      t.wrapS = RepeatWrapping;
+      t.wrapT = RepeatWrapping;
+      t.wrapR = RepeatWrapping; // angle axis wraps (θ is periodic)
+      t.generateMipmaps = false;
+      t.needsUpdate = true;
+      t.name = `grassRayTile${i}`;
+      return t;
+    });
+    return { texs, dMaxTile: b.dMaxTile };
   })();
   // the article's OUTPUT is depth+normal — the hit normal/tip can't ride the 30-bit
   // election id, so kRay writes them per pixel into a screen StorageTexture (a
@@ -2127,15 +2139,17 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
               const ph = cellHash(vec2(txI, tzI) as unknown as NV2, SALT ^ 0x5151)
                 .mul(6.2831853)
                 .toVar() as unknown as NF;
-              const gustE = time.mul(0.35).add(ph).sin().mul(0.35).add(0.65) as unknown as NF;
-              const lowS = time.mul(1.3).add(ph).sin() as unknown as NF;
-              const highS = time.mul(6.5).add(ph.mul(1.7)).sin() as unknown as NF;
+              // user-called 2026-07-04: 1.3/6.5 rad/s read much faster than the
+              // world's other small plants — grass breathes at ~0.1-0.4 Hz
+              const gustE = time.mul(0.22).add(ph).sin().mul(0.35).add(0.65) as unknown as NF;
+              const lowS = time.mul(0.55).add(ph).sin() as unknown as NF;
+              const highS = time.mul(2.4).add(ph.mul(1.7)).sin() as unknown as NF;
               const shelter = (ta.y as unknown as NF).mul(1.5).add(0.25).min(1) as unknown as NF;
               const ffall = float(1).sub(smoothstep(50, 110, distT)) as unknown as NF;
               const swayA = lowS
                 .mul(gustE)
                 .mul(0.45)
-                .add(highS.mul(0.14))
+                .add(highS.mul(0.1))
                 .mul(st.mul(0.7).add(0.15))
                 .mul(shelter)
                 .mul(ffall)
@@ -2158,9 +2172,12 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
               const ba = cellHash(vec2(txI, tzI) as unknown as NV2, SALT ^ sA)
                 .mul(6.2831853)
                 .toVar() as unknown as NF;
+              // SUBTLE since the banded bake (user grid call): per-fiber radial
+              // arcs are baked now — a strong per-TILE arc combed each tile one
+              // way and the bombing quilt read as straight-out rectangles
               const bm = cellHash(vec2(txI, tzI) as unknown as NV2, SALT ^ sB)
-                .mul(0.8)
-                .add(0.6) as unknown as NF;
+                .mul(0.25)
+                .add(0.12) as unknown as NF;
               return {
                 x: ba.cos().mul(bm) as unknown as NF,
                 z: ba.sin().mul(bm) as unknown as NF,
@@ -2174,8 +2191,8 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                 .mul(6.2831853)
                 .toVar() as unknown as NF;
               const lm = cellHash(vec2(txI, tzI) as unknown as NV2, SALT ^ 0x3232)
-                .mul(0.09)
-                .add(0.04) as unknown as NF;
+                .mul(0.05)
+                .add(0.02) as unknown as NF;
               Slx = Slx.add(la.cos().mul(lm)) as unknown as NF;
               Slz = Slz.add(la.sin().mul(lm)) as unknown as NF;
               const a1 = staticArc(0x3333, 0x3434);
@@ -2214,13 +2231,53 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
             const az = (atan(ebz, ebx) as unknown as NF)
               .mul(1 / (Math.PI * 2))
               .fract() as unknown as NF;
+            // HEIGHT BAND pick: per-fiber radial arcs + tip taper live in the
+            // per-band bakes (a single height-free bake can't hold them — the
+            // per-tile arc workaround combed tiles into the user's grid quilt)
+            const HB = (ta.x as unknown as NF).mul(0.8).max(0.15).toVar() as unknown as NF;
+            const hBandF = pos.y
+              .sub(gP)
+              .div(HB)
+              .clamp(0, 0.999)
+              .mul(RAY_BANDS)
+              .floor()
+              .toVar() as unknown as NF;
+            const fetchBand = (u: NF, v: NF, w: NF): NV4 => {
+              const smpAt = (i: number): NV4 =>
+                texture3D(
+                  (rayBake as { texs: Data3DTexture[] }).texs[i] as unknown as Parameters<
+                    typeof texture3D
+                  >[0],
+                  vec3(u, v, w) as unknown as NV3,
+                  0,
+                ) as unknown as NV4;
+              if (RAY_BANDS === 1) return (smpAt(0) as unknown as { toVar(): NV4 }).toVar();
+              const out = vec4(0, 0, 0, 0).toVar() as unknown as NV4;
+              const asg = (i: number): void => {
+                (out as unknown as { assign(v: unknown): void }).assign(smpAt(i));
+              };
+              if (RAY_BANDS === 2) {
+                If(hBandF.lessThan(1), () => {
+                  asg(0);
+                }).Else(() => {
+                  asg(1);
+                });
+              } else {
+                If(hBandF.lessThan(1), () => {
+                  asg(0);
+                })
+                  .ElseIf(hBandF.lessThan(2), () => {
+                    asg(1);
+                  })
+                  .Else(() => {
+                    asg(2);
+                  });
+              }
+              return out;
+            };
             // THE FETCH (O(1)): R = 1/(1+d) in tile widths, GBA = normal. Linear
             // filter interpolates x, z AND angle (repeat-wrapped) — his encoding.
-            const smp = (texture3D(
-              rayBake.tex as unknown as Parameters<typeof texture3D>[0],
-              vec3(qbx, qbz, az) as unknown as NV3,
-              0,
-            ) as unknown as NV4).toVar() as unknown as NV4;
+            const smp = fetchBand(qbx, qbz, az);
             const dTile = float(1)
               .div((smp.x as unknown as NF).max(1 / 255))
               .sub(1)
@@ -2230,17 +2287,47 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
             // march position BEFORE the layer-1 advance — layer 2 refetches from here
             const tCur0 = RAY_LAYER2 ? (tCur.add(0).toVar() as unknown as NF) : null;
             If(isMiss.or(tHit.greaterThanEqual(tExC)), () => {
-              // no fiber inside THIS tile instance — next texel (fresh bomb/mask)
-              tCur.assign(tEx.add(1e-3));
+              if (RAY_BANDS > 1) {
+                // no fiber in THIS band — next texel, or for a descending ray the
+                // nearer event: drop into the (denser) band below and refetch
+                const bandBot = gP.add(hBandF.mul(HB).mul(1 / RAY_BANDS)) as unknown as NF;
+                const tDropB = rd.y
+                  .lessThan(-1e-4)
+                  .select(
+                    bandBot.sub(pos.y).div(rd.y).max(1e-3),
+                    float(1e9),
+                  ) as unknown as NF;
+                tCur.assign(tEx.add(1e-3).min(tCur.add(tDropB).add(1e-4)));
+              } else {
+                // no fiber inside THIS tile instance — next texel (fresh bomb/mask)
+                tCur.assign(tEx.add(1e-3));
+              }
             }).Else(() => {
               const yH = ro.y.add(rd.y.mul(tHit)).toVar() as unknown as NF;
-              // hit fiber's cell: advance in bombed tile space, map the CELL back
-              // through the inverse bomb → world cell (mask + heights stay exactly
-              // world-anchored under the bombing)
+              // hit position in tile space (cell-exit advance + column jitter)
               const qhx = qbx.add(ebx.div(eLen).mul(dTile)).fract().toVar() as unknown as NF;
               const qhz = qbz.add(ebz.div(eLen).mul(dTile)).fract().toVar() as unknown as NF;
-              const tcx = qhx.mul(GUIDE_SUB).floor().add(0.5).div(GUIDE_SUB).sub(0.5) as unknown as NF;
-              const tcz = qhz.mul(GUIDE_SUB).floor().add(0.5).div(GUIDE_SUB).sub(0.5) as unknown as NF;
+              // the fiber's ROOT cell comes from the BAKED id (A channel), mapped
+              // through the inverse bomb. The density law applies to ROOTS — an
+              // arcing blade legally overhangs empty neighbor cells (the ring's
+              // behavior). Validating the cell UNDER the hit culled every
+              // overhanging blade → the user's dot-batch look.
+              const idT = (smp.w as unknown as NF)
+                .mul(GUIDE_SUB * GUIDE_SUB)
+                .floor()
+                .clamp(0, GUIDE_SUB * GUIDE_SUB - 1)
+                .toVar() as unknown as NF;
+              const tcx = idT
+                .mod(GUIDE_SUB)
+                .add(0.5)
+                .div(GUIDE_SUB)
+                .sub(0.5) as unknown as NF;
+              const tcz = idT
+                .div(GUIDE_SUB)
+                .floor()
+                .add(0.5)
+                .div(GUIDE_SUB)
+                .sub(0.5) as unknown as NF;
               const lw = bombI(tcx, tcz) as unknown as NV2;
               const lu = lw.x
                 .add(0.5)
@@ -2307,12 +2394,18 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                   (bodyBest as unknown as { assign(v: unknown): void }).assign(
                     uint(sys.mul(GRID).add(sxs)).shiftLeft(uint(6)),
                   );
-                  // baked normal (tile space) → world: inverse bomb on xz. (The
-                  // shear's inverse-transpose is skipped — n is a shading mean.)
-                  const nT = (smp.yzw as unknown as NV3).mul(2).sub(1) as unknown as NV3;
-                  const nW = bombI(nT.x as unknown as NF, nT.z as unknown as NF) as unknown as NV2;
+                  // baked normal (azimuth in G, y in B — A carries the root id) →
+                  // world: inverse bomb on xz. (Shear inverse-transpose skipped —
+                  // n is a shading mean.)
+                  const azn = (smp.y as unknown as NF).mul(6.2831853) as unknown as NF;
+                  const nyT = (smp.z as unknown as NF).mul(2).sub(1) as unknown as NF;
+                  const sxz = float(1).sub(nyT.mul(nyT)).max(0).sqrt() as unknown as NF;
+                  const nW = bombI(
+                    azn.cos().mul(sxz) as unknown as NF,
+                    azn.sin().mul(sxz) as unknown as NF,
+                  ) as unknown as NV2;
                   (nrmV as unknown as { assign(v: unknown): void }).assign(
-                    vec3(nW.x, nT.y, nW.y),
+                    vec3(nW.x, nyT, nW.y),
                   );
                   (tParV as unknown as { assign(v: unknown): void }).assign(
                     (tPar as unknown as { clamp(a: number, b: number): NF }).clamp(0, 1),
@@ -2403,11 +2496,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                 const az2 = (atan(r2z, r2x) as unknown as NF)
                   .mul(1 / (Math.PI * 2))
                   .fract() as unknown as NF;
-                const smp2 = (texture3D(
-                  (rayBake as { tex: Data3DTexture }).tex as unknown as Parameters<typeof texture3D>[0],
-                  vec3(q2x, q2z, az2) as unknown as NV3,
-                  0,
-                ) as unknown as NV4).toVar() as unknown as NV4;
+                const smp2 = fetchBand(q2x, q2z, az2);
                 const dT2 = float(1)
                   .div((smp2.x as unknown as NF).max(1 / 255))
                   .sub(1)
@@ -2422,16 +2511,40 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                     const yH2 = ro.y.add(rd.y.mul(tHit2)).toVar() as unknown as NF;
                     const hx2 = ro.x.add(rd.x.mul(tHit2)).toVar() as unknown as NF;
                     const hz2 = ro.z.add(rd.z.mul(tHit2)).toVar() as unknown as NF;
-                    const wc2x = hx2.div(CELL).floor().toVar() as unknown as NF;
-                    const wc2z = hz2.div(CELL).floor().toVar() as unknown as NF;
-                    const lu2 = wc2x
-                      .sub(gfx)
-                      .sub(txf.mul(GUIDE_SUB))
+                    // ROOT cell from the baked id, inverse-golden-rotated (a point
+                    // maps exactly even though the rotation isn't grid-preserving)
+                    const idT2 = (smp2.w as unknown as NF)
+                      .mul(GUIDE_SUB * GUIDE_SUB)
+                      .floor()
+                      .clamp(0, GUIDE_SUB * GUIDE_SUB - 1)
+                      .toVar() as unknown as NF;
+                    const rc2x = idT2
+                      .mod(GUIDE_SUB)
+                      .add(0.5)
+                      .div(GUIDE_SUB)
+                      .sub(0.5) as unknown as NF;
+                    const rc2z = idT2
+                      .div(GUIDE_SUB)
+                      .floor()
+                      .add(0.5)
+                      .div(GUIDE_SUB)
+                      .sub(0.5) as unknown as NF;
+                    const lu2 = rc2x
+                      .mul(GC)
+                      .add(rc2z.mul(GS))
+                      .add(0.5)
+                      .mul(GUIDE_SUB)
+                      .floor()
                       .clamp(0, GUIDE_SUB - 1) as unknown as NF;
-                    const lv2 = wc2z
-                      .sub(gfz)
-                      .sub(tzf.mul(GUIDE_SUB))
+                    const lv2 = rc2z
+                      .mul(GC)
+                      .sub(rc2x.mul(GS))
+                      .add(0.5)
+                      .mul(GUIDE_SUB)
+                      .floor()
                       .clamp(0, GUIDE_SUB - 1) as unknown as NF;
+                    const wc2x = gfx.add(txf.mul(GUIDE_SUB)).add(lu2).toVar() as unknown as NF;
+                    const wc2z = gfz.add(tzf.mul(GUIDE_SUB)).add(lv2).toVar() as unknown as NF;
                     const bit2 = uint(lv2.mul(GUIDE_SUB).add(lu2)) as unknown as NU;
                     const w2 = bit2.lessThan(uint(32)).select(m0, m1) as unknown as NU;
                     const occ2 = w2
@@ -2470,12 +2583,16 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                         (bodyBest as unknown as { assign(v: unknown): void }).assign(
                           uint(sys2.mul(GRID).add(sxs2)).shiftLeft(uint(6)),
                         );
-                        const n2 = (smp2.yzw as unknown as NV3).mul(2).sub(1) as unknown as NV3;
-                        // inverse golden rotation on the tile-space normal's xz
-                        const n2x = (n2.x as unknown as NF).mul(GC).add((n2.z as unknown as NF).mul(GS)) as unknown as NF;
-                        const n2z = (n2.z as unknown as NF).mul(GC).sub((n2.x as unknown as NF).mul(GS)) as unknown as NF;
+                        // normal decode (azimuth/y) + inverse golden rotation on xz
+                        const az2n = (smp2.y as unknown as NF).mul(6.2831853) as unknown as NF;
+                        const ny2 = (smp2.z as unknown as NF).mul(2).sub(1) as unknown as NF;
+                        const sxz2 = float(1).sub(ny2.mul(ny2)).max(0).sqrt() as unknown as NF;
+                        const nx2t = az2n.cos().mul(sxz2) as unknown as NF;
+                        const nz2t = az2n.sin().mul(sxz2) as unknown as NF;
+                        const n2x = nx2t.mul(GC).add(nz2t.mul(GS)) as unknown as NF;
+                        const n2z = nz2t.mul(GC).sub(nx2t.mul(GS)) as unknown as NF;
                         (nrmV as unknown as { assign(v: unknown): void }).assign(
-                          vec3(n2x, n2.y, n2z),
+                          vec3(n2x, ny2, n2z),
                         );
                         (tParV as unknown as { assign(v: unknown): void }).assign(
                           (tP2 as unknown as { clamp(a: number, b: number): NF }).clamp(0, 1),

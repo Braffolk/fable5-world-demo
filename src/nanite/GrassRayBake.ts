@@ -58,11 +58,20 @@ export interface GrassRayBakeOpts {
   /** fibers per cell (bake-side density — FREE at runtime; more fibers means
    *  shorter fetch distances, i.e. cheaper marches) */
   fibers: number;
+  /** HEIGHT BANDS (user grid+batch calls 2026-07-04): one texture per vertical
+   *  band of the blade, each baked with every fiber displaced along its OWN arc
+   *  direction by arc·t² and tapered. Per-fiber radial arcs can't live in a
+   *  single 2D bake (it's height-free) — banding restores them: clumps spread
+   *  outward with height (no tight batches) and the tile content is isotropic
+   *  (no per-tile combing → the bombing grid stops reading). */
+  bands: number;
+  /** per-fiber arc magnitude scale (tip displacement ≈ 0.35..1.3 cells × this) */
+  arcK: number;
 }
 
 export interface GrassRayBake {
-  /** RGBA8, index ((angle·res + z)·res + x)·4 — Data3DTexture layout */
-  data: Uint8Array;
+  /** one RGBA8 volume per HEIGHT BAND, index ((angle·res + z)·res + x)·4 */
+  data: Uint8Array[];
   res: number;
   angles: number;
   /** max traced distance in TILE units — runtime treats d ≥ ~0.97·this as miss */
@@ -85,13 +94,16 @@ export function bakeGrassRayTile(o: GrassRayBakeOpts): GrassRayBake {
   const XSCALE = 1.15;
   interface Fiber {
     cx: number;
-    cz: number; // center, cells
+    cz: number; // center at the ROOT, cells
+    ru: number;
+    rv: number; // ROOT CELL (validation anchor — density law applies to roots)
     wx: number;
     wz: number; // width axis (unit)
     tx: number;
     tz: number; // thickness axis (unit)
     fx: number;
-    fz: number; // bend/shift direction (unit)
+    fz: number; // bend/shift + radial-arc direction (unit)
+    arcM: number; // per-fiber tip arc displacement, cells
     nx: number;
     ny: number;
     nz: number; // shading normal (tile space)
@@ -124,8 +136,8 @@ export function bakeGrassRayTile(o: GrassRayBakeOpts): GrassRayBake {
         const wl = Math.hypot(wx, wz) || 1;
         wx /= wl;
         wz /= wl;
-        // bend direction (blade local (0,1) yaw-rotated) — shift heuristic axis;
-        // sign-flavored by the table lean so arcs aren't all forward
+        // bend direction (blade local (0,1) yaw-rotated) — shift heuristic axis
+        // AND the fiber's own radial-arc direction; sign-flavored by table lean
         const fsgn = b.lean >= 0 ? 1 : -1;
         let fx = cs * XSCALE * fsgn;
         let fz = cc * fsgn;
@@ -136,12 +148,15 @@ export function bakeGrassRayTile(o: GrassRayBakeOpts): GrassRayBake {
         fibers.push({
           cx,
           cz,
+          ru: cu,
+          rv: cv,
           wx,
           wz,
           tx: -wz,
           tz: wx,
           fx,
           fz,
+          arcM: (0.5 + rnd() * 1.1) * o.arcK, // tip displacement, cells
           nx: (-CSn / nl) * cs,
           ny: 0.25 / nl,
           nz: (-CSn / nl) * cc,
@@ -153,86 +168,109 @@ export function bakeGrassRayTile(o: GrassRayBakeOpts): GrassRayBake {
   // (ray reach dMaxC + fiber extent < 2·sub in every direction)
   const OFFS: number[] = [-2 * sub, -sub, 0, sub, 2 * sub];
 
-  const data = new Uint8Array(res * res * angles * 4);
   const missR = Math.round(255 / (1 + dMaxC / sub));
-  for (let ai = 0; ai < angles; ai++) {
-    const th = ((ai + 0.5) / angles) * Math.PI * 2;
-    const ux = Math.cos(th);
-    const uz = Math.sin(th);
-    for (let zi = 0; zi < res; zi++) {
-      const oz_ = ((zi + 0.5) / res) * sub;
-      for (let xi = 0; xi < res; xi++) {
-        const ox_ = ((xi + 0.5) / res) * sub;
-        let best = dMaxC;
-        let bi = -1;
-        for (const f of fibers) {
-          // B = u − fwd·shiftK (the fiber recedes/advances as the ray marches);
-          // growth g = h0·thickK per cell of distance
-          const bx = ux - f.fx * o.shiftK;
-          const bz = uz - f.fz * o.shiftK;
-          for (const oxT of OFFS) {
-            for (const ozT of OFFS) {
-              const dcx = f.cx + oxT - ox_;
-              const dcz = f.cz + ozT - oz_;
-              // cheap rejects: behind / beyond reach / too far off-axis
-              const along = dcx * ux + dcz * uz;
-              if (along < -2 || along > best + 2) continue;
-              const perp = dcx * uz - dcz * ux;
-              if (perp > 2.5 || perp < -2.5) continue;
-              // interval test: |(A + B·d)·axis| ≤ h0·(1 + thickK·d), axis ∈ {ŵ, t̂}
-              const ax = -dcx; // A = o − c0
-              const az = -dcz;
-              let lo = 0;
-              let hi = best;
-              let ok = true;
-              const slab = (aA: number, aB: number, h0: number): void => {
-                const g = h0 * o.thickK;
-                // (aB − g)·d ≤ h0 − aA   and   (−aB − g)·d ≤ h0 + aA
-                const k1 = aB - g;
-                const m1 = h0 - aA;
-                if (k1 > 1e-9) hi = Math.min(hi, m1 / k1);
-                else if (k1 < -1e-9) lo = Math.max(lo, m1 / k1);
-                else if (m1 < 0) ok = false;
-                const k2 = -aB - g;
-                const m2 = h0 + aA;
-                if (k2 > 1e-9) hi = Math.min(hi, m2 / k2);
-                else if (k2 < -1e-9) lo = Math.max(lo, m2 / k2);
-                else if (m2 < 0) ok = false;
-              };
-              slab(ax * f.wx + az * f.wz, bx * f.wx + bz * f.wz, hw0);
-              if (!ok) continue;
-              slab(ax * f.tx + az * f.tz, bx * f.tx + bz * f.tz, ht0);
-              if (!ok || lo > hi) continue;
-              if (lo < best) {
-                best = lo;
-                bi = fibers.indexOf(f);
+  const volumes: Uint8Array[] = [];
+  for (let bandI = 0; bandI < o.bands; bandI++) {
+    // band cross-section: every fiber displaced along its OWN arc direction by
+    // arcM·t² (per-fiber radial arcs — impossible in one height-free bake) and
+    // tapered toward the tip (real needle profile, not just the ray heuristic)
+    const tb = (bandI + 0.5) / o.bands;
+    const bandFibers = fibers.map((f) => ({
+      ...f,
+      cx: f.cx + f.fx * f.arcM * tb * tb,
+      cz: f.cz + f.fz * f.arcM * tb * tb,
+    }));
+    // single-volume mode (default): no bake taper — the runtime column jitter
+    // carries the tip raggedness; banded mode tapers for real needle profiles
+    const hwB = o.bands > 1 ? hw0 * (1 - 0.72 * tb) : hw0;
+    const htB = o.bands > 1 ? ht0 * (1 - 0.4 * tb) : ht0;
+    const data = new Uint8Array(res * res * angles * 4);
+    for (let ai = 0; ai < angles; ai++) {
+      const th = ((ai + 0.5) / angles) * Math.PI * 2;
+      const ux = Math.cos(th);
+      const uz = Math.sin(th);
+      for (let zi = 0; zi < res; zi++) {
+        const oz_ = ((zi + 0.5) / res) * sub;
+        for (let xi = 0; xi < res; xi++) {
+          const ox_ = ((xi + 0.5) / res) * sub;
+          let best = dMaxC;
+          let bi = -1;
+          for (let fi = 0; fi < bandFibers.length; fi++) {
+            const f = bandFibers[fi] as Fiber;
+            // B = u − fwd·shiftK (the fiber recedes/advances as the ray marches);
+            // growth g = h0·thickK per cell of distance
+            const bx = ux - f.fx * o.shiftK;
+            const bz = uz - f.fz * o.shiftK;
+            for (const oxT of OFFS) {
+              for (const ozT of OFFS) {
+                const dcx = f.cx + oxT - ox_;
+                const dcz = f.cz + ozT - oz_;
+                // cheap rejects: behind / beyond reach / too far off-axis
+                const along = dcx * ux + dcz * uz;
+                if (along < -2 || along > best + 2) continue;
+                const perp = dcx * uz - dcz * ux;
+                if (perp > 2.5 || perp < -2.5) continue;
+                // interval test: |(A + B·d)·axis| ≤ h0·(1 + thickK·d), axis ∈ {ŵ, t̂}
+                const ax = -dcx; // A = o − c0
+                const az = -dcz;
+                let lo = 0;
+                let hi = best;
+                let ok = true;
+                const slab = (aA: number, aB: number, h0: number): void => {
+                  const g = h0 * o.thickK;
+                  // (aB − g)·d ≤ h0 − aA   and   (−aB − g)·d ≤ h0 + aA
+                  const k1 = aB - g;
+                  const m1 = h0 - aA;
+                  if (k1 > 1e-9) hi = Math.min(hi, m1 / k1);
+                  else if (k1 < -1e-9) lo = Math.max(lo, m1 / k1);
+                  else if (m1 < 0) ok = false;
+                  const k2 = -aB - g;
+                  const m2 = h0 + aA;
+                  if (k2 > 1e-9) hi = Math.min(hi, m2 / k2);
+                  else if (k2 < -1e-9) lo = Math.max(lo, m2 / k2);
+                  else if (m2 < 0) ok = false;
+                };
+                slab(ax * f.wx + az * f.wz, bx * f.wx + bz * f.wz, hwB);
+                if (!ok) continue;
+                slab(ax * f.tx + az * f.tz, bx * f.tx + bz * f.tz, htB);
+                if (!ok || lo > hi) continue;
+                if (lo < best) {
+                  best = lo;
+                  bi = fi;
+                }
               }
             }
           }
-        }
-        const base = ((ai * res + zi) * res + xi) * 4;
-        if (bi < 0) {
-          data[base] = missR;
-          data[base + 1] = 128;
-          data[base + 2] = 255;
-          data[base + 3] = 128; // up normal
-        } else {
-          const f = fibers[bi] as Fiber;
-          // depth in TILE units, article encoding 1/(1+d)
-          data[base] = Math.max(missR + 1, Math.round(255 / (1 + best / sub)));
-          // two-sided: face the ray (horizontal flip only — keep the up term)
-          const flip = f.nx * ux + f.nz * uz > 0 ? -1 : 1;
-          const nl = Math.hypot(f.nx, f.ny, f.nz) || 1;
-          data[base + 1] = Math.round(((f.nx * flip) / nl) * 127.5 + 127.5);
-          data[base + 2] = Math.round((f.ny / nl) * 127.5 + 127.5);
-          data[base + 3] = Math.round(((f.nz * flip) / nl) * 127.5 + 127.5);
+          const base = ((ai * res + zi) * res + xi) * 4;
+          if (bi < 0) {
+            data[base] = missR;
+            data[base + 1] = 0;
+            data[base + 2] = 166; // up-ish normal (ny ≈ 0.3)
+            data[base + 3] = 255;
+          } else {
+            const f = bandFibers[bi] as Fiber;
+            // depth in TILE units, article encoding 1/(1+d)
+            data[base] = Math.max(missR + 1, Math.round(255 / (1 + best / sub)));
+            // normal as (azimuth, y) — two-sided: face the ray (horizontal flip);
+            // the freed A channel carries the fiber's ROOT CELL id, the runtime's
+            // validation anchor (density law applies to ROOTS — arcs legally
+            // overhang empty cells, exactly like the reference ring)
+            const flip = f.nx * ux + f.nz * uz > 0 ? -1 : 1;
+            let azN = Math.atan2(f.nz * flip, f.nx * flip) / (Math.PI * 2);
+            if (azN < 0) azN += 1;
+            const nrmL = Math.hypot(f.nx, f.ny, f.nz) || 1;
+            data[base + 1] = Math.round(azN * 255);
+            data[base + 2] = Math.round((f.ny / nrmL) * 127.5 + 127.5);
+            data[base + 3] = Math.round(((f.rv * sub + f.ru + 0.5) / (sub * sub)) * 255);
+          }
         }
       }
     }
+    volumes.push(data);
   }
   console.info(
-    `[grass] ray tile baked: ${res}×${res}×${angles}, ${fibers.length} fibers, ` +
-      `${Math.round(performance.now() - t0)} ms`,
+    `[grass] ray tile baked: ${res}×${res}×${angles} ×${o.bands} bands, ` +
+      `${fibers.length} fibers, ${Math.round(performance.now() - t0)} ms`,
   );
-  return { data, res, angles, dMaxTile: dMaxC / sub };
+  return { data: volumes, res, angles, dMaxTile: dMaxC / sub };
 }
