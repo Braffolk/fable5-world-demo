@@ -61,6 +61,15 @@ export interface AggregateDagOpts {
    *  collapses to a couple of islands can't blow a survivor up unboundedly,
    *  default 2.5 */
   growMax?: number;
+  /** survivor growth shape (grass arc S2):
+   *  'uniform' (default) — scale the island uniformly about its centroid (leaf
+   *    crowns: quads legitimately get bigger in every axis).
+   *  'widen' — scale ONLY x/z about the centroid, y untouched (grass blades:
+   *    the ring's thin×widen law widens survivors to conserve COVERAGE; uniform
+   *    growth stacked ~×2^L into multi-metre blade monsters at coarse levels —
+   *    the ravine-wall columns, user 2026-07-03). Area conservation then rides
+   *    the width factor alone (= g², clamped at growMax²). */
+  growMode?: 'uniform' | 'widen';
 }
 
 type FullOpts = Required<AggregateDagOpts>;
@@ -307,13 +316,18 @@ function aggregateLevel(
   }
   const growError = keptCount > 0 ? (radiusSum / keptCount) * g : 0;
 
+  // 'widen' (grass): y untouched; the full area compensation rides x/z (factor
+  // g² = area ratio, clamped at growMax²) — the ring's thin×widen conservation.
+  const widen = o.growMode === 'widen';
+  const gxz = widen ? Math.min(g * g, o.growMax * o.growMax) : g;
+  const gy = widen ? 1 : g;
   for (let v = 0; v < nLocal; v++) {
     const isl = islandOfVert[v] as number;
     if (keepIsland[isl] !== 1) continue; // dropped island — verts never emitted
     const b = v * stride;
-    gverts[b] = (cenX[isl] as number) + ((gverts[b] as number) - (cenX[isl] as number)) * g;
-    gverts[b + 1] = (cenY[isl] as number) + ((gverts[b + 1] as number) - (cenY[isl] as number)) * g;
-    gverts[b + 2] = (cenZ[isl] as number) + ((gverts[b + 2] as number) - (cenZ[isl] as number)) * g;
+    gverts[b] = (cenX[isl] as number) + ((gverts[b] as number) - (cenX[isl] as number)) * gxz;
+    gverts[b + 1] = (cenY[isl] as number) + ((gverts[b + 1] as number) - (cenY[isl] as number)) * gy;
+    gverts[b + 2] = (cenZ[isl] as number) + ((gverts[b + 2] as number) - (cenZ[isl] as number)) * gxz;
   }
 
   // per-tri keep flag (folds in the island decision once, for the group loop)
@@ -344,6 +358,7 @@ export function buildAggregateDag(
     weldEps: opts.weldEps ?? 1e-5,
     seed: opts.seed ?? 0,
     growMax: opts.growMax ?? 2.5,
+    growMode: opts.growMode ?? 'uniform',
   };
 
   const built = clusterize(verts, vertStride, indices, o.maxTris);

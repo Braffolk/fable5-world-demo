@@ -54,6 +54,7 @@ import {
   MESH_FLAG_FARTILE,
   MESH_FLAG_HEIGHTFIELD,
   MESH_WORDS,
+  TRANSFORM_CHANNEL,
   readCluster,
   readDag,
   readMesh,
@@ -888,7 +889,19 @@ export function buildNaniteCull(
       // representation itself — size-culling it deletes whole 64 m chunks once its ~100 m
       // sphere projects under instMinPx (~1.2 km at retina), the user-visible aerial holes.
       const isFartile = head.flags.bitAnd(uint(MESH_FLAG_FARTILE)).notEqual(uint(0));
-      returnIf(instMinPx.greaterThan(0).and(sizePx.lessThan(instMinPx)).and(isFartile.not() as unknown as NB));
+      // GRASS exemption (S2, 2026-07-03): the ~110 px default instMinPx deleted
+      // whole 4 m grass patches beyond ~140 m (measured: ZERO grass clusters at
+      // 150 m) — the sward's far band is the patch DAG's own coarse levels, so
+      // size-culling the instance removes the far-field representation itself
+      // (the FARTILE argument exactly). Channel byte is already loaded — free.
+      const isGrassCh = head.channel.equal(uint(TRANSFORM_CHANNEL.grass));
+      returnIf(
+        instMinPx
+          .greaterThan(0)
+          .and(sizePx.lessThan(instMinPx))
+          .and(isFartile.not() as unknown as NB)
+          .and(isGrassCh.not() as unknown as NB),
+      );
       const rootBase = head.rootBase.toVar();
       const slotBase = (atomicAdd(frontierCount.element(FA), rootCount) as unknown as NU).toVar();
       loopU(uint(0), rootCount, (k) => {

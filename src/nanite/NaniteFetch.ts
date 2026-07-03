@@ -28,6 +28,7 @@ import {
 } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
 import { instTransformPoint, instYaw, type InstYaw } from './NaniteCommon';
+import { GRASS_PATCH_SIZE } from '../vegetation/GrassPatch';
 import type { UniformV3 } from './Tsl';
 import { bcU2F, elemU, maxU, minU, texLoadR, toF } from './Tsl';
 
@@ -481,9 +482,14 @@ export function makeFetch(
       // are unit height; the clump's tallest blade reaches ~1.27 — clamp).
       If(ctx.channel.equal(uint(TRANSFORM_CHANNEL.grass)), () => {
         const w = ctx.wind as TrunkWindFields;
+        const vd = elemU(gpu.verts, vb.add(uint(5)));
         const tN = (p as unknown as NV3).y.clamp(0, 1);
         const bend = w.leanBase.mul(tN).mul(tN);
-        const flut = w.swayXPhase.mul(tN).mul(w.flutBase);
+        // per-BLADE shimmer phase (vdata.z): one hoisted sine per patch made
+        // 1440 clumps wave in lockstep (user: "repetitive illogical movement").
+        // 1 sin/vertex; the argument's per-instance part rides w.ph.
+        const phB = toF(vd.shiftRight(uint(16)).bitAnd(uint(0xff))).div(255).mul(6.2832);
+        const flut = time.mul(5.2).add(w.ph).add(phB).sin().mul(tN).mul(w.flutBase);
         out.assign(
           out.add(
             vec3(
@@ -493,12 +499,19 @@ export function makeFetch(
             ),
           ),
         );
-        // S2 TERRAIN CONFORM: a 4 m patch is one rigid instance — center-snap
-        // buried/floated whole patches on any bump (rectangular bald bands,
-        // gl-15m 2026-07-03). Re-base each vertex on the heightfield at its own
-        // world xz: y = h(xz) + bladeLocalY·scale (+ the wind dip above). One
-        // filtered tap per UNIQUE vertex (VCACHE); same tex the resolve samples.
-        const uvH = out.xz.div(WORLD_SIZE).add(0.5);
+        // S2 TERRAIN CONFORM, ROOT-ANCHORED (v2): sample the heightfield at the
+        // blade's ROOT xz (vdata.xy, patch-local — baked at build), NOT at the
+        // displaced vertex xz — v1 sheared blades along slopes (tip re-based to
+        // the ground under the TIP) and fed wind motion back into height (the
+        // ravine-wall "fat glitching blades", user 2026-07-03). The whole blade
+        // moves rigidly with its root; one filtered tap per unique vertex.
+        const rl = vec3(
+          toF(vd.bitAnd(uint(0xff))).div(255).mul(GRASS_PATCH_SIZE) as unknown as NF,
+          float(0) as unknown as NF,
+          toF(vd.shiftRight(uint(8)).bitAnd(uint(0xff))).div(255).mul(GRASS_PATCH_SIZE) as unknown as NF,
+        );
+        const rootW = instTransformPoint(ctx.A, ctx.B, ctx.yawSc, rl as unknown as NV3);
+        const uvH = rootW.xz.div(WORLD_SIZE).add(0.5);
         const hG = (texture(heightTex, uvH as unknown as NV2, 0) as unknown as NV4).x;
         out.y.assign(out.y.sub(ctx.A.y as unknown as NF).add(hG));
       });

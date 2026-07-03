@@ -972,21 +972,26 @@ export async function buildWorldRegistry(input: {
   if (!usableDags && dagBuilds.length === toDag.length + toAggregate.length && dagBuilds.length > 0) {
     void bootCache.putMany('dags', dagBuilds.map((b) => b.dag));
   }
-  // ---- GRASS S2 (31-grass-plan): ?grassreg=1 — a FULL-DENSITY patch field
-  // around the origin. Patches are ~4×4 m merged blade meshes at the ring's
-  // near-band density (~90 clumps/m², LUSHNESS LAW — no thinning), each with
-  // an aggregate DAG (remove-whole-blades + grow-survivors = the ring's
-  // thin×widen conservation, derived per level). The hier cull only seeds
+  // ---- GRASS (31-grass-plan): WORLD-WIDE patch field, DEFAULT ON (?grass=0
+  // escape). Patches are ~4×4 m merged blade meshes at the ring's near-band
+  // density (~90 clumps/m², LUSHNESS LAW — no thinning), each with an
+  // aggregate DAG (remove-whole-blades + widen-survivors = the ring's
+  // thin×widen conservation, derived per level). Placement = one static
+  // registration over the WHOLE world exactly like the trees — the hier cull
+  // (frustum + lodDist envelope + HZB) owns the per-frame set; there is NO
+  // streaming/toroidal machinery to maintain. Gates at placement (CPU boot
+  // scan): standing water, steep slope; the finer density law (canopy
+  // thinning, bank margins, biome) refines later. The hier cull only seeds
   // meshes WITH DAG roots (kSeedRoots: rootCount 0 = skipped) — every grass
-  // mesh MUST carry a DAG. Patch DAGs ride their OWN bootcache key
-  // ('grassdags') so the shared 'dags' entry is never invalidated. Shipping
-  // residency/density-law (biome/water/canopy gates) is S3.
-  if (new URLSearchParams(window.location.search).get('grassreg') === '1') {
+  // mesh MUST carry a DAG. Patch DAGs ride their OWN bootcache key so the
+  // shared 'dags' entry is never invalidated.
+  if (new URLSearchParams(window.location.search).get('grass') !== '0') {
     const { grassPatchGeometry, GRASS_PATCH_SIZE, GRASS_PATCH_VARIANTS } = await import(
       '../vegetation/GrassPatch'
     );
     const tG0 = performance.now();
-    const cachedGrass = await bootCache.getMany<DagBuild>('grassdags');
+    // v3 key: vdata + widen grow + maxLevels 5 changed the payload
+    const cachedGrass = await bootCache.getMany<DagBuild>('grassdags3');
     const usableGrass = cachedGrass && cachedGrass.length === GRASS_PATCH_VARIANTS ? cachedGrass : null;
     const variantHandles: MeshHandle[] = [];
     const grassPacks: DagBuild[] = [];
@@ -1011,6 +1016,16 @@ export async function buildWorldRegistry(input: {
           : buildAggregateDag(explicitToDagVerts(src), DAG_VERT_STRIDE, src.indices, {
               seed: (seed ?? 0) + v,
               maxTris: MAX_CLUSTER_TRIS,
+              // grass blades WIDEN to conserve coverage (ring thin×widen law) —
+              // uniform growth stacked into multi-metre blade columns at coarse
+              // levels (the ravine-wall monsters)
+              growMode: 'widen',
+              // STOP at L4: 8+ halvings degenerate a 50k-tri patch into a
+              // 128-tri root of ×256-widened blade sheets (coverage broken,
+              // measured near-invisible at 60 m). L4 root ≈ 3k tris of ≤×4
+              // widened blades = the ring's far-band widen clamp — the root IS
+              // the legitimate far representation, held to maxDistance (265 m).
+              maxLevels: 5,
             });
         reg.addLate({
           verts: built.verts.length / DAG_VERT_STRIDE,
@@ -1025,38 +1040,44 @@ export async function buildWorldRegistry(input: {
       }
     }
     if (!usableGrass && grassPacks.length === GRASS_PATCH_VARIANTS) {
-      void bootCache.putMany('grassdags', grassPacks);
+      void bootCache.putMany('grassdags3', grassPacks);
     }
-    // debug field: contiguous patch grid ±48 m (24×24 = 576 patches; the S3
-    // residency replaces this with the toroidal biome-gated field).
-    // ?grassat=x,z relocates it (ladder shots need FLAT ground — the origin
-    // field straddles the ravine, where patch-center snap buries blades).
-    const atRaw = (new URLSearchParams(window.location.search).get('grassat') ?? '0,0').split(',');
-    const atX = Math.round((Number(atRaw[0]) || 0) / GRASS_PATCH_SIZE) * GRASS_PATCH_SIZE;
-    const atZ = Math.round((Number(atRaw[1]) || 0) / GRASS_PATCH_SIZE) * GRASS_PATCH_SIZE;
-    const HALF_PATCHES = 12;
-    const NP = (HALF_PATCHES * 2) ** 2;
-    let sd = 24680;
-    const rnd = (): number => {
-      sd = (sd * 1664525 + 1013904223) >>> 0;
-      return sd / 4294967296;
-    };
+    // WORLD-WIDE placement: every 4 m cell that passes the hard gates gets a
+    // patch instance — the same static-registration model as the 200k trees;
+    // the cull's lodDist envelope (265 m) + frustum + HZB own the frame set.
+    const HALF_CELLS = Math.floor((WORLD_SIZE / 2 - 8) / GRASS_PATCH_SIZE);
+    const hp = GRASS_PATCH_SIZE / 2;
     const streams = new Map<number, { a: number[]; b: number[] }>();
-    for (let pz = -HALF_PATCHES; pz < HALF_PATCHES; pz++) {
-      for (let px = -HALF_PATCHES; px < HALF_PATCHES; px++) {
-        const x = atX + px * GRASS_PATCH_SIZE;
-        const z = atZ + pz * GRASS_PATCH_SIZE;
-        const cx = x + GRASS_PATCH_SIZE / 2;
-        const cz = z + GRASS_PATCH_SIZE / 2;
-        const v = Math.floor(rnd() * GRASS_PATCH_VARIANTS) % GRASS_PATCH_VARIANTS;
+    let placed = 0;
+    for (let pz = -HALF_CELLS; pz < HALF_CELLS; pz++) {
+      for (let px = -HALF_CELLS; px < HALF_CELLS; px++) {
+        const x = px * GRASS_PATCH_SIZE;
+        const z = pz * GRASS_PATCH_SIZE;
+        const cx = x + hp;
+        const cz = z + hp;
+        // hard gates (the ring's law): no standing water, no steep ground
+        // (cliff carpets were both the worst artifact site and wasted emit)
+        const hC = hf.heightAtCpu(cx, cz);
+        if (hf.waterYAtCpu(cx, cz) > hC - 0.05) continue;
+        let steep = false;
+        for (const [dx, dz] of [[-hp, 0], [hp, 0], [0, -hp], [0, hp]] as const) {
+          if (Math.abs(hf.heightAtCpu(cx + dx, cz + dz) - hC) / hp > 0.6) {
+            steep = true;
+            break;
+          }
+        }
+        if (steep) continue;
+        // variant by world-cell hash (deterministic, no rng state)
+        const hsh = ((px * 73856093) ^ (pz * 19349663)) >>> 0;
+        const v = hsh % GRASS_PATCH_VARIANTS;
         let st = streams.get(v);
         if (!st) {
           st = { a: [], b: [] };
           streams.set(v, st);
         }
-        // patch-center terrain snap (S3 refines to per-vertex conform on slopes)
-        st.a.push(x, hf.heightAtCpu(cx, cz), z, 1);
+        st.a.push(x, hC, z, 1);
         st.b.push(0, 0, 0, st.a.length / 4);
+        placed++;
       }
     }
     for (const [v, st] of streams) {
@@ -1066,7 +1087,7 @@ export async function buildWorldRegistry(input: {
     }
     // eslint-disable-next-line no-console
     console.log(
-      `[worldreg] grass S2 field: ${NP} patches (${GRASS_PATCH_VARIANTS} variants @ ~${Math.round(
+      `[worldreg] grass: ${placed} patches WORLD-WIDE (${GRASS_PATCH_VARIANTS} variants @ ~${Math.round(
         grassTris / Math.max(1, GRASS_PATCH_VARIANTS) / 1000,
       )}k DAG tris), ${(performance.now() - tG0).toFixed(0)} ms${usableGrass ? ' (bootcache)' : ''}`,
     );

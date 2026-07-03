@@ -45,6 +45,14 @@ export function grassPatchGeometry(variantSeed: number, size = GRASS_PATCH_SIZE)
   const pos = new Float32Array(totalV * 3);
   const nrm = new Float32Array(totalV * 3);
   const uvA = new Float32Array(totalV * 2);
+  // vdata (4×u8 through geometryToSource, survives the DAG in slots 8-11):
+  // x/y = the blade's ROOT xz within the patch (0..1 over size) — the grass
+  // channel conforms the WHOLE blade to the terrain height under its root
+  // (per-vertex sampling at displaced xz sheared blades along slopes and fed
+  // wind motion back into height — the ravine-wall glitch, 2026-07-03);
+  // z = per-blade wind phase (the whole patch waving on one hoisted sine read
+  // as marching-band repetition); w spare (flex, later).
+  const vdat = new Float32Array(totalV * 4);
   const idx = new Uint32Array(clumps * BLADES * tPerBlade);
   let vw = 0;
   let iw = 0;
@@ -65,6 +73,9 @@ export function grassPatchGeometry(variantSeed: number, size = GRASS_PATCH_SIZE)
       const oz = cz + (rnd() - 0.5) * 0.16;
       const hk = ch * (0.55 + rnd() * 0.7) * 0.42;
       const lean = (rnd() - 0.5) * 0.42;
+      const rootX = Math.max(0, Math.min(1, ox / size));
+      const rootZ = Math.max(0, Math.min(1, oz / size));
+      const phase = rnd();
       const v0 = vw;
       for (let i = 0; i < vPerBlade; i++) {
         const x = bp.getX(i) * 1.25;
@@ -78,6 +89,10 @@ export function grassPatchGeometry(variantSeed: number, size = GRASS_PATCH_SIZE)
         nrm[vw * 3 + 2] = bn.getZ(i) * c - bn.getX(i) * sn;
         uvA[vw * 2] = bu.getX(i);
         uvA[vw * 2 + 1] = bu.getY(i);
+        vdat[vw * 4] = rootX;
+        vdat[vw * 4 + 1] = rootZ;
+        vdat[vw * 4 + 2] = phase;
+        vdat[vw * 4 + 3] = 0.85;
         vw++;
       }
       for (let i = 0; i < tPerBlade; i++) idx[iw++] = v0 + bi.getX(i);
@@ -87,6 +102,7 @@ export function grassPatchGeometry(variantSeed: number, size = GRASS_PATCH_SIZE)
   geo.setAttribute('position', new BufferAttribute(pos, 3));
   geo.setAttribute('normal', new BufferAttribute(nrm, 3));
   geo.setAttribute('uv', new BufferAttribute(uvA, 2));
+  geo.setAttribute('vdata', new BufferAttribute(vdat, 4));
   geo.setIndex(new BufferAttribute(idx, 1));
   return geo;
 }
