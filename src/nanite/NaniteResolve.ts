@@ -870,6 +870,38 @@ export function buildNaniteResolve(
     // light like their hillside (the GoT move; per-blade card normals sparkle).
     // Albedo = fresh/dry tip ramps × world-anchored ~1.6 m patch dryness ×
     // canopy shade-darkening (dry straw is a full-sun phenomenon).
+    // Smooth ~1.6 m patch field (user: yellow dryness in PERFECT SQUARES ruins
+    // immersion — the old floor() cell hash cut hard 1.6 m boundaries). Value
+    // noise: 4 corner hashes + smoothstep-fade bilinear, domain rotated ~40° so
+    // the lattice never reads axis-aligned. Coverage recalibrated (Monte-Carlo):
+    // dryK = smoothstep(0.64, 0.82, x) ≈ the old smoothstep(0.7, 0.95, hash)
+    // mean/rms; brightness drift scale 0.3 → 0.4 keeps the old std (smooth
+    // interpolation compresses the extremes). x = dryness, y = brightness.
+    const patchField = (xz: NV2): NV2 => {
+      const p = vec2(
+        (xz.x as unknown as NF).mul(0.766).sub((xz.y as unknown as NF).mul(0.643)),
+        (xz.x as unknown as NF).mul(0.643).add((xz.y as unknown as NF).mul(0.766)),
+      ).mul(1 / 1.6) as unknown as NV2;
+      const ip = floor(p) as unknown as NV2;
+      const fp = fract(p) as unknown as NV2;
+      const u = fp.mul(fp).mul(fp.mul(-2).add(3)) as unknown as NV2;
+      const h = (c: NV2): NV2 =>
+        fract(
+          sin(
+            vec2(
+              dot(c as unknown as NV3, vec2(127.1, 311.7) as unknown as NV3),
+              dot(c as unknown as NV3, vec2(269.5, 183.3) as unknown as NV3),
+            ),
+          ).mul(vec2(43758.5453, 28461.7331) as unknown as NV2),
+        ) as unknown as NV2;
+      const hx = mix(h(ip), h(ip.add(vec2(1, 0)) as unknown as NV2), u.x) as unknown as NV2;
+      const hy = mix(
+        h(ip.add(vec2(0, 1)) as unknown as NV2),
+        h(ip.add(vec2(1, 1)) as unknown as NV2),
+        u.x,
+      ) as unknown as NV2;
+      return mix(hx, hy, u.y) as unknown as NV2;
+    };
     const isG = matClass.equal(uint(5)).toVar();
     const grassCol = vec3(0.04, 0.09, 0.02).toVar() as unknown as NV3;
     const grassNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
@@ -928,21 +960,17 @@ export function buildNaniteResolve(
         t.mul(t),
       ) as unknown as NV3;
       const dryC = mix(vec3(0.085, 0.07, 0.024), vec3(0.21, 0.17, 0.075), t) as unknown as NV3;
-      // world-anchored ~1.6 m patch hashes (stable under camera motion, TAA-safe —
-      // the voxjit idiom): x = dryness drift, y = brightness drift
-      const pQ = floor(wp.xz.mul(1 / 1.6)) as unknown as NV2;
-      const patchX = fract(
-        sin(dot(pQ as unknown as NV3, vec2(127.1, 311.7) as unknown as NV3)).mul(43758.5453),
-      ) as unknown as NF;
-      const patchY = fract(
-        sin(dot(pQ as unknown as NV3, vec2(269.5, 183.3) as unknown as NV3)).mul(28461.7331),
-      ) as unknown as NF;
+      // world-anchored smooth ~1.6 m patch field (stable under camera motion,
+      // TAA-safe): x = dryness drift, y = brightness drift
+      const patch = patchField(wp.xz as unknown as NV2).toVar() as unknown as NV2;
+      const patchX = patch.x as unknown as NF;
+      const patchY = patch.y as unknown as NF;
       const cov = (world.canopyTex
         ? canopyAt(world.canopyTex, wp.xz as unknown as NV2)
         : float(0)) as unknown as NF;
-      const dryK = smoothstep(0.7, 0.95, patchX).mul(float(1).sub(cov.mul(0.85))) as unknown as NF;
+      const dryK = smoothstep(0.64, 0.82, patchX).mul(float(1).sub(cov.mul(0.85))) as unknown as NF;
       let alb = mix(fresh, dryC, dryK) as unknown as NV3;
-      alb = alb.mul(patchY.sub(0.5).mul(0.3).add(1)) as unknown as NV3;
+      alb = alb.mul(patchY.sub(0.5).mul(0.4).add(1)) as unknown as NV3;
       alb = mix(alb, vec3(0.018, 0.052, 0.014) as unknown as NV3, cov.mul(0.55)) as unknown as NV3;
       grassCol.assign(alb);
       grassTip.assign(t);
@@ -1166,19 +1194,15 @@ export function buildNaniteResolve(
           t.mul(t),
         ) as unknown as NV3;
         const dryC = mix(vec3(0.085, 0.07, 0.024), vec3(0.21, 0.17, 0.075), t) as unknown as NV3;
-        const pQ = floor(wp.xz.mul(1 / 1.6)) as unknown as NV2;
-        const patchX = fract(
-          sin(dot(pQ as unknown as NV3, vec2(127.1, 311.7) as unknown as NV3)).mul(43758.5453),
-        ) as unknown as NF;
-        const patchY = fract(
-          sin(dot(pQ as unknown as NV3, vec2(269.5, 183.3) as unknown as NV3)).mul(28461.7331),
-        ) as unknown as NF;
+        const patch = patchField(wp.xz as unknown as NV2).toVar() as unknown as NV2;
+        const patchX = patch.x as unknown as NF;
+        const patchY = patch.y as unknown as NF;
         const cov = (world.canopyTex
           ? canopyAt(world.canopyTex, wp.xz as unknown as NV2)
           : float(0)) as unknown as NF;
-        const dryK = smoothstep(0.7, 0.95, patchX).mul(float(1).sub(cov.mul(0.85))) as unknown as NF;
+        const dryK = smoothstep(0.64, 0.82, patchX).mul(float(1).sub(cov.mul(0.85))) as unknown as NF;
         let alb = mix(fresh, dryC, dryK) as unknown as NV3;
-        alb = alb.mul(patchY.sub(0.5).mul(0.3).add(1)) as unknown as NV3;
+        alb = alb.mul(patchY.sub(0.5).mul(0.4).add(1)) as unknown as NV3;
         alb = mix(alb, vec3(0.018, 0.052, 0.014) as unknown as NV3, cov.mul(0.55)) as unknown as NV3;
         albedo.assign(alb);
         wNormal.assign(normalize(mix(nF, tNrm, upK)) as unknown as NV3);
