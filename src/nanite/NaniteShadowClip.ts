@@ -213,7 +213,18 @@ export function buildNaniteShadowClip(
   const SHADOW_MAP = cfg.res;
   const SHADOW_PIX = SHADOW_MAP * SHADOW_MAP;
   // P5: ?shtoro=0 — legacy full-level re-raster on VP change (A/B escape)
-  const toro = new URLSearchParams(window.location.search).get('shtoro') !== '0';
+  const qs = new URLSearchParams(window.location.search);
+  const toro = qs.get('shtoro') !== '0';
+  // P8 acne fix (user report: terrain self-shadowing from mid distances, worse
+  // further out, gone where shadows end): the fixed world-space biases (0.35 m
+  // depth / 0.12 m normal) are correct for L0's 0.023 m texels but FAR too small
+  // for the coarse levels (texel_5 = 0.75 m) — one texel of a steep grazing slope
+  // spans metres of depth ⇒ blocky self-shadow acne exactly in the 50-380 m band
+  // (attribution: nanshadow=0 shows clean rock). Scale BOTH biases per level by
+  // the texel size: normal-offset (slope-aware, moves the receiver off the
+  // surface) + depth bias. ?shnb / ?shdb tune the per-texel factors.
+  const nbTexelK = Number(qs.get('shnb') ?? 1.5) || 0;
+  const dbTexelK = Number(qs.get('shdb') ?? 1.0) || 0;
 
   // ONE shared vis buffer: raster level k → copy to depthTex_k → reuse for k+1.
   const vis: NaniteVisBuffers = makeVisBuffers(SHADOW_PIX);
@@ -781,7 +792,10 @@ export function buildNaniteShadowClip(
       const texel = (param as unknown as { z: NF }).z;
       const radius = (param as unknown as { w: NF }).w.max(1);
       const phi = interleavedGradientNoise(pix).mul(TAU);
-      const dBias = float(DEPTH_BIAS_M).div(depthRange);
+      // P8: depth bias scales with THIS level's world texel (coarse texels span
+      // metres of slope depth — the fixed 0.35 m was L0-only thinking)
+      const texelWorldK = (2 * levels[k]!.half) / SHADOW_MAP;
+      const dBias = float(DEPTH_BIAS_M + texelWorldK * dbTexelK).div(depthRange);
 
       const searchR = texel.mul(6).mul(radius);
       const blockerSum = float(0).toVar();
@@ -837,25 +851,32 @@ export function buildNaniteShadowClip(
   const shadowFactor = (worldPos: NV3, normal: NV3, pix?: NV2): NF =>
     Fn(() => {
       const pc = (pix ?? (screenCoordinate.xy as unknown as NV2)) as NV2;
-      const wp = (worldPos as unknown as { add(o: unknown): NV3 }).add(
-        (normal as unknown as { mul(o: number): NV3 }).mul(NORMAL_BIAS_M),
-      ).toVar();
       // P5: the receiver depth is GLOBAL z_g = (dot(p, fwd) + D_OFF)/D_RANGE —
-      // computed once from the sun uniform (fwd = −sunDir), compared against the
+      // computed from the sun uniform (fwd = −sunDir), compared against the
       // stored global texel values. levelCoord's z stays the per-window slab
       // coordinate and is used only for the inside test.
       const fwdN = (normalize(vec3(sunU.dir)) as unknown as { mul(o: number): NV3 }).mul(-1);
-      const zg = (dot(wp as unknown as NV3, fwdN as unknown as NV3) as unknown as NF)
-        .add(D_OFF)
-        .div(D_RANGE)
-        .toVar();
       const sf = float(1).toVar();
       const found = float(0).toVar();
       for (let k = 0; k < LEVELS; k++) {
+        // P8: normal-offset scaled by THIS level's texel — slope-aware acne fix
+        // (moving the receiver off the surface by ~a texel is the standard cure;
+        // depth-only bias can't cover a steep slope's span within one coarse texel).
+        const texelWorldK = (2 * levels[k]!.half) / SHADOW_MAP;
         If(found.equal(0), () => {
-          const { uv, inside } = levelCoord(k, wp as unknown as NV3);
+          const wpK = (worldPos as unknown as { add(o: unknown): NV3 })
+            .add(
+              (normal as unknown as { mul(o: number): NV3 }).mul(
+                NORMAL_BIAS_M + texelWorldK * nbTexelK,
+              ),
+            )
+            .toVar();
+          const { uv, inside } = levelCoord(k, wpK as unknown as NV3);
           If(inside, () => {
             found.assign(1);
+            const zg = (dot(wpK as unknown as NV3, fwdN as unknown as NV3) as unknown as NF)
+              .add(D_OFF)
+              .div(D_RANGE);
             sf.assign(pcss(k, uv, zg as unknown as NF, pc));
           });
         });
