@@ -178,6 +178,13 @@ const RAY_SHEAR = new URLSearchParams(window.location.search).get('grassshear') 
  *  the wind (the article's variable-incline-fibers case) — whole 0.84 m patches
  *  lean in hash-varied directions, breaking the straight-vertical-prism look. */
 const RAY_TILT = new URLSearchParams(window.location.search).get('grasstilt') !== '0';
+/** sway amplitude scale (?grasssway=K, 0 = steady gust-bend only) */
+const RAY_SWAY = qNum('grasssway', 1, 0, 5);
+/** golden-angle overlay layer (?grasslayers=1 disables): the article's layered
+ *  anti-tiling — tile space rotated by φ·π with an independent arc direction.
+ *  Fetched ONLY where layer 1 landed no blade: fills the top-down holes with
+ *  criss-cross sweeps for ~zero cost in dense sward (user placement call). */
+const RAY_LAYER2 = Math.round(qNum('grasslayers', 2, 1, 2)) === 2;
 /** geo machinery (emission kernels + HW queue) built for geo AND hybrid */
 const GEO_LANE = GRASS_MODE !== 'ray';
 /** ray machinery (guide field + march kernel) built for ray AND hybrid */
@@ -1543,8 +1550,11 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
       thickK: BAKE_THICKK,
       // user-called 2026-07-04: 0.011/0.0045 read as FAT uniform columns — the
       // original blades' visually dominant upper half is ≤15 mm and edge-on ~4 mm
-      halfW: qNum('grassbakw', 0.0065, 0.001, 0.05),
+      halfW: qNum('grassbakw', 0.0055, 0.001, 0.05),
       halfT: qNum('grassbakt', 0.003, 0.001, 0.02),
+      // 8 spread fibers per cell (was 5 clumped — the dot-tufts-with-holes call);
+      // bake-side density is FREE at runtime (shorter fetch distances)
+      fibers: Math.round(qNum('grassbakn', 8, 2, 16)),
     });
     const t = new Data3DTexture(b.data, b.res, b.res, b.angles);
     t.format = RGBAFormat;
@@ -1625,6 +1635,8 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
       // is depth+normal — see rayNrmTex above)
       const nrmV = rayBake ? (vec3(0, 1, 0).toVar() as unknown as NV3) : null;
       const tParV = rayBake ? (float(0.5).toVar() as unknown as NF) : null;
+      /** per-PIXEL golden-layer budget — L2 is a hole-filler, not a second march */
+      const l2n = rayBake && RAY_LAYER2 ? (uint(0).toVar() as unknown as NU) : null;
       if (GRASS_DBG === 'raysetup') {
         // attribution stop: ray gen + scene-depth reconstruct only
         If(tEnd.lessThan(-1), () => {
@@ -2091,24 +2103,73 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
             // fetches, the cheapest bend variant.
             let Slx: NF = float(0) as unknown as NF;
             let Slz: NF = float(0) as unknown as NF;
-            let Sqx: NF = float(0) as unknown as NF;
-            let Sqz: NF = float(0) as unknown as NF;
+            /** wind quad-term (steady gust bend + sway) — shared by both layers */
+            let Swx: NF = float(0) as unknown as NF;
+            let Swz: NF = float(0) as unknown as NF;
             if (RAY_SHEAR && windContext()) {
               // wind is a BEND, not a tilt: quadratic, scaled so the deflection at
               // the texel's sward top matches the old linear-shear tip deflection
-              const st = windU.strength as unknown as NF;
+              const st = (windU.strength as unknown as NF).toVar() as unknown as NF;
               const K = (ta.y as unknown as NF)
                 .mul(st.mul(0.55).add(0.6))
                 .mul(0.45)
                 .div((ta.x as unknown as NF).max(0.35))
                 .toVar() as unknown as NF;
               const wd = vec2(windU.dir as unknown as NV2);
-              Sqx = wd.x.mul(K) as unknown as NF;
-              Sqz = wd.y.mul(K) as unknown as NF;
+              // DUAL-FREQUENCY SWAY (user call 2026-07-04: the gust-field bend
+              // alone is ~static and exposure-killed under canopy — wind never
+              // READ): a slow gust envelope breathes a low-freq body sway, a
+              // high-freq flutter shimmers on top, per-texel phase decorrelates,
+              // and the quadratic basis itself makes it root-stable/tip-strong
+              // (the codrops bézier-wind shape, folded into the article's march
+              // shear). Shelter keeps a 25% floor so forest grass still moves;
+              // distance falloff keeps the far field stable.
+              const ph = cellHash(vec2(txI, tzI) as unknown as NV2, SALT ^ 0x5151)
+                .mul(6.2831853)
+                .toVar() as unknown as NF;
+              const gustE = time.mul(0.35).add(ph).sin().mul(0.35).add(0.65) as unknown as NF;
+              const lowS = time.mul(1.3).add(ph).sin() as unknown as NF;
+              const highS = time.mul(6.5).add(ph.mul(1.7)).sin() as unknown as NF;
+              const shelter = (ta.y as unknown as NF).mul(1.5).add(0.25).min(1) as unknown as NF;
+              const ffall = float(1).sub(smoothstep(50, 110, distT)) as unknown as NF;
+              const swayA = lowS
+                .mul(gustE)
+                .mul(0.45)
+                .add(highS.mul(0.14))
+                .mul(st.mul(0.7).add(0.15))
+                .mul(shelter)
+                .mul(ffall)
+                .mul(RAY_SWAY)
+                .toVar() as unknown as NF;
+              // sway direction: wind dir + a hashed perpendicular wobble
+              const wob = cellHash(vec2(txI, tzI) as unknown as NV2, SALT ^ 0x5252)
+                .sub(0.5)
+                .mul(0.8) as unknown as NF;
+              const swx = wd.x.sub(wd.y.mul(wob)) as unknown as NF;
+              const swz = wd.y.add(wd.x.mul(wob)) as unknown as NF;
+              Swx = wd.x.mul(K).add(swx.mul(swayA)) as unknown as NF;
+              Swz = wd.y.mul(K).add(swz.mul(swayA)) as unknown as NF;
             }
+            /** hash-directed static ARC (per tile, per layer). Arcs also carry
+             *  the TOP-DOWN coverage — a bent blade sweeps a stripe ~arc-length ×
+             *  width (the ring's tip offsets are 15-25 cm); spread placement +
+             *  per-fiber yaws keep this from combing flat. */
+            const staticArc = (sA: number, sB: number): { x: NF; z: NF } => {
+              const ba = cellHash(vec2(txI, tzI) as unknown as NV2, SALT ^ sA)
+                .mul(6.2831853)
+                .toVar() as unknown as NF;
+              const bm = cellHash(vec2(txI, tzI) as unknown as NV2, SALT ^ sB)
+                .mul(0.8)
+                .add(0.6) as unknown as NF;
+              return {
+                x: ba.cos().mul(bm) as unknown as NF,
+                z: ba.sin().mul(bm) as unknown as NF,
+              };
+            };
+            let Sqx: NF = Swx;
+            let Sqz: NF = Swz;
             if (RAY_TILT) {
-              // static per-tile character: a small whole-blade lean + an ARC with
-              // its own hashed direction/strength (per-blade yaw variety is baked)
+              // static per-tile character: a small whole-blade lean + the arc
               const la = cellHash(vec2(txI, tzI) as unknown as NV2, SALT ^ 0x3131)
                 .mul(6.2831853)
                 .toVar() as unknown as NF;
@@ -2117,14 +2178,9 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                 .add(0.04) as unknown as NF;
               Slx = Slx.add(la.cos().mul(lm)) as unknown as NF;
               Slz = Slz.add(la.sin().mul(lm)) as unknown as NF;
-              const ba = cellHash(vec2(txI, tzI) as unknown as NV2, SALT ^ 0x3333)
-                .mul(6.2831853)
-                .toVar() as unknown as NF;
-              const bm = cellHash(vec2(txI, tzI) as unknown as NV2, SALT ^ 0x3434)
-                .mul(0.6)
-                .add(0.35) as unknown as NF;
-              Sqx = Sqx.add(ba.cos().mul(bm)) as unknown as NF;
-              Sqz = Sqz.add(ba.sin().mul(bm)) as unknown as NF;
+              const a1 = staticArc(0x3333, 0x3434);
+              Sqx = Sqx.add(a1.x) as unknown as NF;
+              Sqz = Sqz.add(a1.z) as unknown as NF;
             }
             const texOx = gfx.add(txf.mul(GUIDE_SUB)).mul(CELL).toVar() as unknown as NF;
             const texOz = gfz.add(tzf.mul(GUIDE_SUB)).mul(CELL).toVar() as unknown as NF;
@@ -2171,6 +2227,8 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
               .toVar() as unknown as NF;
             const tHit = tCur.add(dTile.mul(GUIDE_PITCH).div(eLen)).toVar() as unknown as NF;
             const isMiss = dTile.greaterThan(rayBake.dMaxTile * 0.94) as unknown as NB;
+            // march position BEFORE the layer-1 advance — layer 2 refetches from here
+            const tCur0 = RAY_LAYER2 ? (tCur.add(0).toVar() as unknown as NF) : null;
             If(isMiss.or(tHit.greaterThanEqual(tExC)), () => {
               // no fiber inside THIS tile instance — next texel (fresh bomb/mask)
               tCur.assign(tEx.add(1e-3));
@@ -2291,9 +2349,146 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                   .div(gux)
                   .min(ez2.sub(qhz).div(guz))
                   .max(0.002) as unknown as NF;
-                tCur.assign(tHit.add(dExit.mul(GUIDE_PITCH).div(eLen)).add(1e-4));
+                const tCell = dExit.mul(GUIDE_PITCH).div(eLen) as unknown as NF;
+                // STEEP rays (look-down): tCell divides by the tiny horizontal
+                // speed and overshoots the whole sward → bare-dirt holes from
+                // above (user call). The right next event for a descending ray is
+                // "drop to the rejected cell's blade-top and refetch there".
+                const tDrop = rd.y
+                  .lessThan(-1e-4)
+                  .select(
+                    gRoot.add(topEff).sub(yH).div(rd.y).max(0.002),
+                    float(1e9),
+                  ) as unknown as NF;
+                tCur.assign(tHit.add(tCell.min(tDrop)).add(1e-4));
               });
             });
+            if (RAY_LAYER2 && tCur0 && l2n) {
+              // GATES (measured +11.4 eye ungated — L2 fired on every non-accepting
+              // step): downward rays only (the holes it exists for only READ from
+              // above) AND a 3-per-pixel budget — a hole-filler, not a second march.
+              If(
+                tBest
+                  .greaterThan(1e8)
+                  .and(rd.y.lessThan(-0.3))
+                  .and(l2n.lessThan(uint(3))),
+                () => {
+                  l2n.addAssign(uint(1));
+                // LAYER 2 — the article's golden-angle overlay (tile space rotated
+                // by φ·π, independent arc direction): fetched ONLY when layer 1
+                // landed nothing at this step, so dense sward pays ~nothing while
+                // the top-down holes gain a second, criss-crossing population.
+                // The rotation isn't grid-preserving, so validation maps the hit's
+                // WORLD position to its cell directly (the hit IS the fiber ±cm).
+                const GC = -0.737369; // cos(φ·π)
+                const GS = 0.67549; // sin(φ·π)
+                const a2 = RAY_TILT
+                  ? staticArc(0x7373, 0x7474)
+                  : { x: float(0) as unknown as NF, z: float(0) as unknown as NF };
+                const Q2x = Swx.add(a2.x) as unknown as NF;
+                const Q2z = Swz.add(a2.z) as unknown as NF;
+                const of2x = Slx.add(Q2x.mul(hgt)).mul(hgt) as unknown as NF;
+                const of2z = Slz.add(Q2z.mul(hgt)).mul(hgt) as unknown as NF;
+                const l2x = pos.x.sub(of2x).sub(texOx).div(GUIDE_PITCH).sub(0.5).toVar() as unknown as NF;
+                const l2z = pos.z.sub(of2z).sub(texOz).div(GUIDE_PITCH).sub(0.5).toVar() as unknown as NF;
+                const q2x = l2x.mul(GC).sub(l2z.mul(GS)).add(0.5) as unknown as NF;
+                const q2z = l2x.mul(GS).add(l2z.mul(GC)).add(0.5) as unknown as NF;
+                const t2x = Slx.add(Q2x.mul(hgt).mul(2)) as unknown as NF;
+                const t2z = Slz.add(Q2z.mul(hgt).mul(2)) as unknown as NF;
+                const e2x = rd.x.sub(t2x.mul(rd.y)).toVar() as unknown as NF;
+                const e2z = rd.z.sub(t2z.mul(rd.y)).toVar() as unknown as NF;
+                const e2L = vec2(e2x, e2z).length().max(1e-5).toVar() as unknown as NF;
+                const r2x = e2x.mul(GC).sub(e2z.mul(GS)) as unknown as NF;
+                const r2z = e2x.mul(GS).add(e2z.mul(GC)) as unknown as NF;
+                const az2 = (atan(r2z, r2x) as unknown as NF)
+                  .mul(1 / (Math.PI * 2))
+                  .fract() as unknown as NF;
+                const smp2 = (texture3D(
+                  (rayBake as { tex: Data3DTexture }).tex as unknown as Parameters<typeof texture3D>[0],
+                  vec3(q2x, q2z, az2) as unknown as NV3,
+                  0,
+                ) as unknown as NV4).toVar() as unknown as NV4;
+                const dT2 = float(1)
+                  .div((smp2.x as unknown as NF).max(1 / 255))
+                  .sub(1)
+                  .toVar() as unknown as NF;
+                const tHit2 = tCur0.add(dT2.mul(GUIDE_PITCH).div(e2L)).toVar() as unknown as NF;
+                If(
+                  dT2
+                    .lessThan((rayBake as { dMaxTile: number }).dMaxTile * 0.94)
+                    .and(tHit2.lessThan(tExC))
+                    .and(tHit2.lessThan(tMax)),
+                  () => {
+                    const yH2 = ro.y.add(rd.y.mul(tHit2)).toVar() as unknown as NF;
+                    const hx2 = ro.x.add(rd.x.mul(tHit2)).toVar() as unknown as NF;
+                    const hz2 = ro.z.add(rd.z.mul(tHit2)).toVar() as unknown as NF;
+                    const wc2x = hx2.div(CELL).floor().toVar() as unknown as NF;
+                    const wc2z = hz2.div(CELL).floor().toVar() as unknown as NF;
+                    const lu2 = wc2x
+                      .sub(gfx)
+                      .sub(txf.mul(GUIDE_SUB))
+                      .clamp(0, GUIDE_SUB - 1) as unknown as NF;
+                    const lv2 = wc2z
+                      .sub(gfz)
+                      .sub(tzf.mul(GUIDE_SUB))
+                      .clamp(0, GUIDE_SUB - 1) as unknown as NF;
+                    const bit2 = uint(lv2.mul(GUIDE_SUB).add(lu2)) as unknown as NU;
+                    const w2 = bit2.lessThan(uint(32)).select(m0, m1) as unknown as NU;
+                    const occ2 = w2
+                      .shiftRight(bit2.bitAnd(uint(31)))
+                      .bitAnd(uint(1))
+                      .equal(uint(1)) as unknown as NB;
+                    const h2b = cellHash2(vec2(wc2x, wc2z) as unknown as NV2, SALT ^ 0x9191)
+                      .x as unknown as NF;
+                    const yK2 = mix(float(1.12), float(2), smoothstep(55, 85, distT)) as unknown as NF;
+                    const col2 = cellHash(
+                      vec2(
+                        hx2.mul(64 / GUIDE_PITCH).floor(),
+                        hz2.mul(64 / GUIDE_PITCH).floor(),
+                      ) as unknown as NV2,
+                      SALT ^ 0x7c02,
+                    ) as unknown as NF;
+                    const top2 = h2b
+                      .pow(1.3)
+                      .mul(0.3)
+                      .add(0.2)
+                      .mul(widenT)
+                      .mul(yK2)
+                      .mul(col2.mul(0.5).add(0.55))
+                      .toVar() as unknown as NF;
+                    const gR2 = ground
+                      .add(grad.x.mul(wc2x.add(0.5).mul(CELL).sub(texCx)))
+                      .add(grad.y.mul(wc2z.add(0.5).mul(CELL).sub(texCz)))
+                      .toVar() as unknown as NF;
+                    const tP2 = yH2.sub(gR2).div(top2.max(0.05)) as unknown as NF;
+                    If(
+                      occ2.and(tP2.lessThanEqual(1)).and(yH2.greaterThan(gR2.sub(0.05))),
+                      () => {
+                        const sxs2 = wc2x.sub(wc2x.div(GRID).floor().mul(GRID));
+                        const sys2 = wc2z.sub(wc2z.div(GRID).floor().mul(GRID));
+                        (tBest as unknown as { assign(v: unknown): void }).assign(tHit2);
+                        (bodyBest as unknown as { assign(v: unknown): void }).assign(
+                          uint(sys2.mul(GRID).add(sxs2)).shiftLeft(uint(6)),
+                        );
+                        const n2 = (smp2.yzw as unknown as NV3).mul(2).sub(1) as unknown as NV3;
+                        // inverse golden rotation on the tile-space normal's xz
+                        const n2x = (n2.x as unknown as NF).mul(GC).add((n2.z as unknown as NF).mul(GS)) as unknown as NF;
+                        const n2z = (n2.z as unknown as NF).mul(GC).sub((n2.x as unknown as NF).mul(GS)) as unknown as NF;
+                        (nrmV as unknown as { assign(v: unknown): void }).assign(
+                          vec3(n2x, n2.y, n2z),
+                        );
+                        (tParV as unknown as { assign(v: unknown): void }).assign(
+                          (tP2 as unknown as { clamp(a: number, b: number): NF }).clamp(0, 1),
+                        );
+                        tCur.assign(tEnd);
+                      },
+                    );
+                    // L2 reject: no own advance — layer 1's advance already moved
+                    // the march; L2 simply re-tries at the next step.
+                  },
+                );
+              });
+            }
           };
           if (RAY_ARTICLE && rayBake) {
             bakedTexel();

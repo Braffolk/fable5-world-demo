@@ -55,6 +55,9 @@ export interface GrassRayBakeOpts {
   halfW: number;
   /** fiber half-thickness at d=0, meters */
   halfT: number;
+  /** fibers per cell (bake-side density — FREE at runtime; more fibers means
+   *  shorter fetch distances, i.e. cheaper marches) */
+  fibers: number;
 }
 
 export interface GrassRayBake {
@@ -76,11 +79,9 @@ export function bakeGrassRayTile(o: GrassRayBakeOpts): GrassRayBake {
   const hw0 = o.halfW * invCell;
   const ht0 = o.halfT * invCell;
 
-  // ---- fiber list: sub² cells × blades, canonical per-cell params (LCG) --------------
-  // Geometry mirrors NaniteGrass corner() at a canonical height t̄ = 0.35 (the 2D
-  // cross-section the article extrudes): root = clump + rotYaw(offset + curve/lean
-  // displacement), width axis = the blade's side direction, thickness ⊥.
-  const TBAR = 0.35;
+  // ---- fiber list: sub² cells × spread fibers, canonical per-cell params (LCG) -------
+  // Each fiber is the article's extruded 2D cross-section: an oriented rectangle
+  // (width axis = the blade's side direction at its yaw, thickness ⊥).
   const XSCALE = 1.15;
   interface Fiber {
     cx: number;
@@ -96,6 +97,8 @@ export function bakeGrassRayTile(o: GrassRayBakeOpts): GrassRayBake {
     nz: number; // shading normal (tile space)
   }
   const fibers: Fiber[] = [];
+  const CSn = 0.788;
+  const nl = Math.hypot(0.25, CSn);
   for (let cv = 0; cv < sub; cv++) {
     for (let cu = 0; cu < sub; cu++) {
       let s = ((cu * 127 + cv * 311 + 17) * 1664525 + 1013904223) >>> 0;
@@ -103,38 +106,46 @@ export function bakeGrassRayTile(o: GrassRayBakeOpts): GrassRayBake {
         s = (s * 1664525 + 1013904223) >>> 0;
         return s / 4294967296;
       };
-      const jx = rnd();
-      const jz = rnd();
-      const yaw = rnd() * Math.PI * 2;
-      const cc = Math.cos(yaw);
-      const cs = Math.sin(yaw);
-      // clump transform (corner() verbatim): rx = x·cc + z·cs, rz = z·cc − x·cs
-      const rotX = (x: number, z: number): number => x * cc + z * cs;
-      const rotZ = (x: number, z: number): number => z * cc - x * cs;
-      for (const b of o.blades) {
-        const bby = TBAR * (1 - TBAR * TBAR * 0.06) * b.hk;
-        const bbz = TBAR * TBAR * 0.28;
-        // local offset at t̄ (meters, before clump scale/rot)
-        const lx = (bbz * b.s + b.ox + b.lean * bby * b.c) * XSCALE;
-        const lz = bbz * b.c + b.oz + b.lean * bby * b.s;
-        const cx = cu + jx + rotX(lx, lz) * invCell;
-        const cz = cv + jz + rotZ(lx, lz) * invCell;
-        // width axis: ∂corner/∂side direction (bc, −bs) x-scaled, clump-rotated
-        let wx = rotX(b.c * XSCALE, -b.s);
-        let wz = rotZ(b.c * XSCALE, -b.s);
+      for (let k = 0; k < o.fibers; k++) {
+        // SPREAD placement (user call 2026-07-04: the tight 5-blade clump per
+        // cell read as dot-tufts with bare holes from above): fibers distribute
+        // across the WHOLE cell footprint with overlap into neighbors, each with
+        // its own yaw — coverage instead of batches. Blade-table lean still
+        // flavors the per-fiber bend axis via the shift heuristic.
+        const b = o.blades[k % o.blades.length] as BakeBlade;
+        const cx = cu + rnd() * 1.3 - 0.15;
+        const cz = cv + rnd() * 1.3 - 0.15;
+        const yaw = rnd() * Math.PI * 2;
+        const cc = Math.cos(yaw);
+        const cs = Math.sin(yaw);
+        // width axis (blade local (1,0) x-scaled, yaw-rotated), thickness ⊥
+        let wx = cc * XSCALE;
+        let wz = -cs;
         const wl = Math.hypot(wx, wz) || 1;
         wx /= wl;
         wz /= wl;
-        // bend/curve direction (bs, bc) — the shift heuristic's travel axis
-        let fx = rotX(b.s * XSCALE, b.c);
-        let fz = rotZ(b.s * XSCALE, b.c);
+        // bend direction (blade local (0,1) yaw-rotated) — shift heuristic axis;
+        // sign-flavored by the table lean so arcs aren't all forward
+        const fsgn = b.lean >= 0 ? 1 : -1;
+        let fx = cs * XSCALE * fsgn;
+        let fz = cc * fsgn;
         const fl = Math.hypot(fx, fz) || 1;
         fx /= fl;
         fz /= fl;
-        // shading normal = the table's mean rounded normal, clump-rotated
-        const nx = rotX(b.nm[0], b.nm[2]);
-        const nz = rotZ(b.nm[0], b.nm[2]);
-        fibers.push({ cx, cz, wx, wz, tx: -wz, tz: wx, fx, fz, nx, ny: b.nm[1], nz });
+        // canonical mean rounded normal (0, .25, −CS), yaw-rotated
+        fibers.push({
+          cx,
+          cz,
+          wx,
+          wz,
+          tx: -wz,
+          tz: wx,
+          fx,
+          fz,
+          nx: (-CSn / nl) * cs,
+          ny: 0.25 / nl,
+          nz: (-CSn / nl) * cc,
+        });
       }
     }
   }
