@@ -114,3 +114,23 @@ extremely slow + Chrome frozen-tab dialogs.
   — INSIDE the 11-12.5ms mandate band at a still pose.
 - ⚠️ HARNESS LAW: default legs now auto-scale — every canonical native-res
   baseline from here on needs ?rscale=1 explicitly.
+
+## QUALITY PRESETS SHIPPED (commit 2239870)
+
+Pre-boot picker (persisted+preselected, 5s auto-continue; webdriver/?quality/
+?scene probes skip → MEDIUM instantly — harness-proof: sw-min unchanged eye
+11.5/12.2, rscale=1 23.8). Injection = replaceState before knob reads;
+explicit URL params win. Walking p50 (vs old shipped 23.3):
+- LOW 20.1: shadowcliplevels=5 shadowclipres=768 voxnear=40 grassrayend=90
+  grasslayers=1
+- MED 21.4: shadowclipres=896 (−1.4..−1.9ms moving, invisible at 4 poses;
+  ⚠️ shadow trims gate on MOVING legs — clip re-raster ≈0 at stills)
+- HIGH 22.4: voxnear=90 (blobs→leaves 45-90m band, the one dramatic visible
+  win; shot cmp-qvn90-obl.png) + 1024 shadows
+Dropped by the visible-improvement law: voxgrid=384 (~2× frame, no visible
+gain), voxcellmin≤16 (invisible under auto-rscale).
+#69 input: voxcellmin volumetric path now ~FREE under auto-rscale (was
++6/17/19 native) but does NOT fix the fartile axis rectangles (verified at
+repro pose) — remaining lever = per-pixel depth in coarse fartile bricks.
+USER-REVIEW flags: picker shows every boot (flip = 3 lines); LOW could bite
+harder via an rscale preset value.
