@@ -771,29 +771,66 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
   const kRay = ((): unknown => {
     const W = cam.width;
     const H = cam.height;
+    /** march-res decouple (?grassquad=1|2): the march cost is ∝ rays × steps —
+     *  at retina dpr2 the full-res dispatch alone doubled grass cost vs dpr1.5.
+     *  Q=2 marches ONE ray per 2×2 pixel quad (quad-center) and fans the hit out
+     *  to the quad's pixels. True-geometry edges stay pixel-crisp — the election
+     *  atomicMax is still per PIXEL, so nearer scene depth wins individually;
+     *  only grass-over-background silhouettes quantize to the quad (≈ dpr1
+     *  grass edges, TRAA-softened). Auto-on at dpr ≥ 1.75, off below. */
+    const Q = Math.round(
+      qNum('grassquad', W / Math.max(1, window.innerWidth) >= 1.75 ? 2 : 1, 1, 2),
+    );
+    const Wq = Math.ceil(W / Q);
+    const Hq = Math.ceil(H / Q);
     // (8×8 pixel tiling was measured NEUTRAL-to-worse here — rows are already
     // coherent; linear indexing kept)
     const k = Fn(() => {
       returnIf((uOn as unknown as NF).lessThan(0.5) as unknown as NB);
-      const px = instanceIndex;
-      returnIf(px.greaterThanEqual(uint(W * H)));
-      const xI = px.mod(uint(W));
-      const yI = px.div(uint(W)); // bottom-up rows (raster convention)
-      const ndcX = toF(xI).add(0.5).div(W).mul(2).sub(1);
-      const ndcY = toF(yI).add(0.5).div(H).mul(2).sub(1);
+      const qi = instanceIndex;
+      returnIf(qi.greaterThanEqual(uint(Wq * Hq)));
+      const xI = qi.mod(uint(Wq)).mul(uint(Q)).toVar() as unknown as NU; // base pixel
+      const yI = qi.div(uint(Wq)).mul(uint(Q)).toVar() as unknown as NU; // bottom-up rows
+      const px = yI.mul(uint(W)).add(xI).toVar() as unknown as NU;
+      const ndcX = toF(xI).add(Q * 0.5).div(W).mul(2).sub(1);
+      const ndcY = toF(yI).add(Q * 0.5).div(H).mul(2).sub(1);
       const hf4 = cam.invVp.mul(vec4(ndcX, ndcY, 1, 1));
       const ro = vec3(cam.camPos).toVar() as unknown as NV3;
       const rd = (hf4.xyz.div(hf4.w).sub(ro).normalize().toVar()) as unknown as NV3;
-      // scene early-out: current election depth bounds the march
-      const elect = aLoadU(vis.payloadV.atomic.element(px));
+      // scene early-out: current election depth bounds the march. Q>1: the
+      // FARTHEST bound across the quad's pixels (conservative — a nearer
+      // neighbor must not clip a farther pixel's grass), unbounded if any
+      // pixel is electionless.
       const tMax = float(1e9).toVar() as unknown as NF;
-      If(elect.notEqual(uint(0)), () => {
-        const czS = float(1).sub(toF(elect.shiftRight(uint(8))).div(16777215));
-        const hs = cam.invVp.mul(vec4(ndcX, ndcY, czS, 1));
-        (tMax as unknown as { assign(v: unknown): void }).assign(
-          hs.xyz.div(hs.w).sub(ro).length().add(0.3),
-        );
-      });
+      if (Q === 1) {
+        const elect = aLoadU(vis.payloadV.atomic.element(px));
+        If(elect.notEqual(uint(0)), () => {
+          const czS = float(1).sub(toF(elect.shiftRight(uint(8))).div(16777215));
+          const hs = cam.invVp.mul(vec4(ndcX, ndcY, czS, 1));
+          (tMax as unknown as { assign(v: unknown): void }).assign(
+            hs.xyz.div(hs.w).sub(ro).length().add(0.3),
+          );
+        });
+      } else {
+        const bound = float(0).toVar() as unknown as NF;
+        for (let dy = 0; dy < Q; dy++) {
+          for (let dx = 0; dx < Q; dx++) {
+            const x2 = uint(toF(xI.add(uint(dx))).min(W - 1)) as unknown as NU;
+            const y2 = uint(toF(yI.add(uint(dy))).min(H - 1)) as unknown as NU;
+            const e2 = aLoadU(vis.payloadV.atomic.element(y2.mul(uint(W)).add(x2)));
+            If(e2.equal(uint(0)), () => {
+              (bound as unknown as { assign(v: unknown): void }).assign(1e9);
+            }).Else(() => {
+              const czS = float(1).sub(toF(e2.shiftRight(uint(8))).div(16777215));
+              const hs = cam.invVp.mul(vec4(ndcX, ndcY, czS, 1));
+              (bound as unknown as { assign(v: unknown): void }).assign(
+                bound.max(hs.xyz.div(hs.w).sub(ro).length().add(0.3)),
+              );
+            });
+          }
+        }
+        (tMax as unknown as { assign(v: unknown): void }).assign(bound.min(1e9));
+      }
       const dirL = rd.xz.length().max(1e-4).toVar() as unknown as NF;
       const tEnd = tMax.min(float(RAY_END).div(dirL)).toVar() as unknown as NF;
       const tCur = float(0.05).toVar() as unknown as NF;
@@ -1470,16 +1507,36 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
         const clip = cam.vp.mul(vec4(hit, 1));
         const cz = clip.z.div(clip.w.max(NEAR_EPS));
         If(cz.greaterThanEqual(0).and(cz.lessThanEqual(1)), () => {
-          emitPx(px as unknown as NU, cz as unknown as NF, bodyBest);
-          if (rayNrmTex && nrmV && tParV) {
-            // the article's depth+normal output: normal + tip param ride a screen
-            // texture to the resolve (the 30-bit election id can't carry them).
-            // Same bottom-up row indexing as the election — resolveRay matches.
-            textureStore(rayNrmTex, uvec2(xI, yI), vec4(nrmV, tParV)).toWriteOnly();
+          // Q>1: fan the hit out to every pixel of the quad — the emit atomics
+          // stay per-pixel, so nearer TRUE geometry still wins individually
+          for (let dy = 0; dy < Q; dy++) {
+            for (let dx = 0; dx < Q; dx++) {
+              const x2 = (dx === 0 && dy === 0 ? xI : xI.add(uint(dx))) as unknown as NU;
+              const y2 = (dx === 0 && dy === 0 ? yI : yI.add(uint(dy))) as unknown as NU;
+              const doEmit = (): void => {
+                emitPx(
+                  y2.mul(uint(W)).add(x2) as unknown as NU,
+                  cz as unknown as NF,
+                  bodyBest,
+                );
+                if (rayNrmTex && nrmV && tParV) {
+                  // the article's depth+normal output: normal + tip param ride a
+                  // screen texture to the resolve (the 30-bit election id can't
+                  // carry them). Same bottom-up row indexing — resolveRay matches.
+                  textureStore(rayNrmTex, uvec2(x2, y2), vec4(nrmV, tParV)).toWriteOnly();
+                }
+              };
+              if (dx === 0 && dy === 0) doEmit();
+              else
+                If(
+                  x2.lessThan(uint(W)).and(y2.lessThan(uint(H))),
+                  doEmit,
+                );
+            }
           }
         });
       });
-    })().compute(W * H, [256]);
+    })().compute(Wq * Hq, [256]);
     (k as unknown as { setName(n: string): void }).setName('grassRay');
     return k;
   })();
