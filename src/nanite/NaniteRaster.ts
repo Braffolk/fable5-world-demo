@@ -78,6 +78,7 @@ import {
   localX,
   loopI,
   maxI,
+  maxU,
   minI,
   minU,
   readBuffer,
@@ -167,6 +168,9 @@ export interface NaniteRasterHandles {
   /** Stage-2 voxel BRICK-WRITE count (the occlusion-skip overlay number, §A2) — total
    *  per-pixel wgElect wins across all tiles this frame. null when no voxel raster. */
   readVoxWrites(renderer: Renderer): Promise<number | null>;
+  /** W2 ?trihzb: the pyramid→hwQueue-tail mirror kernel, to append to the HZB
+   *  build batch (null when the flag is off). */
+  triHzbCopyKernel: unknown | null;
 }
 
 /** Option C vis buffers — created OUTSIDE the raster so the HZB (which the
@@ -263,8 +267,38 @@ export function buildNaniteRaster(
     renderHw(renderer: Renderer, camera: PerspectiveCamera): void;
     enabled(): boolean;
   },
+  /** 90fps-arc W2 EXPERIMENT (?trihzb=1): per-TRIANGLE occlusion reject in the
+   *  world1 SW path — the tri's nearest ndc.z vs the PREV-frame HZB farthest over
+   *  its pixel bbox (2×2 window at a fixed 32-px-pitch level). Kills the whole
+   *  scanline walk of triangles hidden behind the canopy wall that the CLUSTER
+   *  cull can't reject (cluster bboxes poke through gaps). Same staleness class
+   *  as the cluster occlusion cull (1-frame disocclusion holes possible — gate
+   *  with stills before any default flip). +1 storage binding, world1-only,
+   *  build-time gated. */
+  triHzb?: { ro: import('./Tsl').BufOf<NF>; levels: { offset: number; w: number; h: number }[] },
 ): NaniteRasterHandles {
   const { width, height } = cam;
+  // Mirror pyramid levels 0..TRI_HZB_MAX into the hwQueue tail (level k texel
+  // pitch = 2^(k+1) full-res px); the per-tri test picks the FINEST level whose
+  // 2×2 window covers the tri's bbox — fine levels carry ~all the rejection
+  // power in porous foliage (a coarse window almost always contains a gap).
+  const TRI_HZB_MAX = 4;
+  const triLvls =
+    new URLSearchParams(window.location.search).get('trihzb') === '1' &&
+    triHzb != null &&
+    triHzb.levels.length > TRI_HZB_MAX
+      ? triHzb.levels.slice(0, TRI_HZB_MAX + 1)
+      : null;
+  // dest offsets within the tail (source offsets differ — pyramid layout)
+  const triDst: number[] = [];
+  {
+    let acc = 0;
+    for (const l of triLvls ?? []) {
+      triDst.push(acc);
+      acc += l.w * l.h;
+    }
+  }
+  const triHzbRO = triHzb?.ro;
   // single-pass clears the id buffers like `packed` (election anchor → 0, side id →
   // 0) but keeps the exact-depth sentinel (depthV → 0xffffffff, atomicMin).
   const packedClear = packed || singlePass;
@@ -354,8 +388,19 @@ export function buildNaniteRaster(
   // CARVED INTO THE TAIL of this already-bound hwQueue buffer at [SCAR_BASE..+4) — they
   // never overlap the queue's [0 .. 1+HW_CAP*2) range, so no new binding, stays at 10.
   const SCAR_BASE = 1 + HW_CAP * 2;
-  const hwQueueAttr = new StorageBufferAttribute(new Uint32Array(SCAR_BASE + 4), 1);
-  const hwQueueV = sU32Views(hwQueueAttr, SCAR_BASE + 4);
+  // W2 ?trihzb TAIL FOLD (same binding-budget law as scar above): the per-tri
+  // occlusion test needs the prev-frame HZB, but binding the pyramid buffer in
+  // world1 is an 11th storage buffer (measured: validation error, dead pipeline).
+  // So a tiny copy kernel (own 2-buffer pipeline, runs right after the pyramid
+  // build) mirrors ONE fixed level into this buffer's tail at [TRIHZB_BASE..).
+  // Tail is pre-filled with 1.0f bits (far) so frame-0 rejects nothing; clears
+  // never touch it ([0] + scar slots only).
+  const TRIHZB_BASE = SCAR_BASE + 4;
+  const triTailN = (triLvls ?? []).reduce((a, l) => a + l.w * l.h, 0);
+  const hwQueueInit = new Uint32Array(TRIHZB_BASE + triTailN);
+  if (triTailN > 0) hwQueueInit.fill(0x3f800000, TRIHZB_BASE); // 1.0f = far
+  const hwQueueAttr = new StorageBufferAttribute(hwQueueInit, 1);
+  const hwQueueV = sU32Views(hwQueueAttr, TRIHZB_BASE + triTailN);
   const hwDrawAttr = new IndirectStorageBufferAttribute(new Uint32Array(4), 4);
   const hwDrawBuf = sU32Views(hwDrawAttr as unknown as StorageBufferAttribute, 4).rw;
 
@@ -791,7 +836,56 @@ export function buildNaniteRaster(
               const coversSample = firstCx
                 .lessThanEqual(toF(xiMax as unknown as NI))
                 .and(firstCy.lessThanEqual(toF(yiMax as unknown as NI)));
-              If(area2.greaterThan(toI(0)).and(coversSample), () => {
+              // W2 ?trihzb: conservative per-tri occlusion — nearest tri z vs the
+              // prev-frame HZB farthest over the bbox (2×2 window, 32-px texels
+              // cover the ≤17-px bbox), read from the hwQueue TAIL MIRROR (binding
+              // budget — see TRIHZB_BASE). Positive-f32 bits compare monotonically
+              // as u32, so no bitcast needed. Tail 1.0f-filled ⇒ frame-0 and
+              // sky-backed tris never reject. world1 only (depth/shadow untouched).
+              let triVis: NB | null = null;
+              if (mode === 'world1' && triLvls) {
+                const nearBits = bcF2U(
+                  ndc0.z.min(ndc1.z).min(ndc2.z).clamp(0, 1) as unknown as NF,
+                ).toVar();
+                // finest mirrored level whose 2×2 window covers the bbox:
+                // pitch(k) = 2^(k+1) px; need extent < 2·pitch ⇒ k = max(0,
+                // ceil(log2(e+1)) − 2), clamped to TRI_HZB_MAX.
+                const ext = maxI(endX.sub(startX), endY.sub(startY)).toVar();
+                const lvl = uint(
+                  toF(ext as unknown as NI)
+                    .add(1)
+                    .max(1)
+                    .log2()
+                    .ceil()
+                    .sub(2)
+                    .clamp(0, TRI_HZB_MAX),
+                ).toVar();
+                // per-level (dstOff, width) via select chains (5 static levels)
+                let offSel: NU = uint(TRIHZB_BASE + (triDst[0] ?? 0)) as unknown as NU;
+                let wSel: NU = uint(triLvls[0]?.w ?? 1) as unknown as NU;
+                for (let k = 1; k <= TRI_HZB_MAX; k++) {
+                  const isK = lvl.equal(uint(k));
+                  offSel = isK.select(uint(TRIHZB_BASE + (triDst[k] ?? 0)), offSel) as unknown as NU;
+                  wSel = isK.select(uint(triLvls[k]?.w ?? 1), wSel) as unknown as NU;
+                }
+                const shift = lvl.add(uint(1));
+                const lo = offSel;
+                const lw = wSel;
+                const tx0 = uint(startX).shiftRight(shift).toVar();
+                const ty0 = uint(startY).shiftRight(shift).toVar();
+                const tx1 = uint(endX).shiftRight(shift).toVar();
+                const ty1 = uint(endY).shiftRight(shift).toVar();
+                const z00 = aLoadU(hwQueueV.atomic.element(lo.add(ty0.mul(lw)).add(tx0)));
+                const z01 = aLoadU(hwQueueV.atomic.element(lo.add(ty0.mul(lw)).add(tx1)));
+                const z10 = aLoadU(hwQueueV.atomic.element(lo.add(ty1.mul(lw)).add(tx0)));
+                const z11 = aLoadU(hwQueueV.atomic.element(lo.add(ty1.mul(lw)).add(tx1)));
+                const farBits = maxU(maxU(z00, z01), maxU(z10, z11));
+                triVis = nearBits.lessThanEqual(farBits) as unknown as NB;
+              }
+              const rasterGate = triVis
+                ? area2.greaterThan(toI(0)).and(coversSample).and(triVis)
+                : area2.greaterThan(toI(0)).and(coversSample);
+              If(rasterGate, () => {
                 // edge i is opposite vertex i; ex/ey = dE per +1 UNIT (1/256 px)
                 const ex0 = yi1.sub(yi2).toVar();
                 const ey0 = xi2.sub(xi1).toVar();
@@ -1053,6 +1147,36 @@ export function buildNaniteRaster(
     hwDrawBuf.element(3).assign(uint(0));
   })().compute(1, [1]);
   (kHwArgs as unknown as ComputeKernel).setName('nanHwArgs');
+
+  // ---- kTriHzbCopy (W2 ?trihzb) — mirror one pyramid level into the hwQueue tail.
+  // Own 2-buffer pipeline (pyramid ro + hwQueue) dispatched right after the HZB
+  // build; world1 then reads the mirror through its EXISTING hwQueue binding.
+  const kTriHzbCopy =
+    triLvls && triHzbRO
+      ? (() => {
+          const kn = Fn(() => {
+            If(instanceIndex.lessThan(uint(triTailN)), () => {
+              // map flat tail index → (level, src pyramid index) via static ranges
+              const idx = instanceIndex;
+              const src = uint(0).toVar();
+              for (let k = 0; k <= TRI_HZB_MAX; k++) {
+                const l = triLvls[k];
+                const d0 = triDst[k] ?? 0;
+                if (!l) continue;
+                const inK = idx.greaterThanEqual(uint(d0)).and(idx.lessThan(uint(d0 + l.w * l.h)));
+                src.assign(inK.select(uint(l.offset).add(idx.sub(uint(d0))), src));
+              }
+              const v = triHzbRO.element(src);
+              atomicStore(
+                hwQueueV.atomic.element(uint(TRIHZB_BASE).add(idx)),
+                bcF2U(v as unknown as NF),
+              );
+            });
+          })().compute(triTailN, [64]);
+          (kn as unknown as ComputeKernel).setName('nanTriHzbCopy');
+          return kn;
+        })()
+      : null;
 
   // ---- kAudit (?audit=1) — run AFTER the payload passes: a covered pixel
   // whose payload is still the clear sentinel means no pass-2 writer ever
@@ -1513,5 +1637,6 @@ export function buildNaniteRaster(
     scar: scarRun,
     readScar,
     readVoxWrites,
+    triHzbCopyKernel: kTriHzbCopy,
   };
 }

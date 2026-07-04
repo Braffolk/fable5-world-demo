@@ -620,6 +620,17 @@ export function buildNaniteShadowClip(
   // didn't already force a full update. Sun-change full invalidates are exempt.
   const budgetOn = new URLSearchParams(window.location.search).get('shbudget') !== '0';
   const COARSE_K = Math.max(2, LEVELS - 2);
+  // 90fps-arc W1 (?shmaxlv=N, 0 = off): GENERALIZED strip budget — at most N levels
+  // (any k, not just coarse) update strips per frame, stalest-first (ties → finer
+  // level). Walking at 8 m/s every fine level crosses texels EVERY frame, so the
+  // whole filter+raster chain fired for all levels each frame (~8 ms p50 moving vs
+  // 0.8 still). A deferred level uses the SAME freeze mechanism as P7 (continue
+  // before any prevS/origin/VP mutation): its window stays self-consistent, the
+  // pending shift accumulates, out-of-window samples fall through to level k+1 —
+  // deferral error = a leading-edge band sampled one level coarser for a frame.
+  // Sun-change and first-frame (full) paths are exempt. Replaces the P7 coarse
+  // rule while active.
+  const maxLv = Math.max(0, Number(qs.get('shmaxlv') ?? 0) || 0);
   let fitFrame = 0;
 
   // PASS A (CPU, no GPU) — fit every level → strip rects + reRaster[] + mask.
@@ -651,7 +662,7 @@ export function buildNaniteShadowClip(
     // neither coarse level starves; a starved level's shift just accumulates).
     fitFrame++;
     let coarsePick = -1;
-    if (toro && budgetOn && !sunMoved) {
+    if (toro && budgetOn && !sunMoved && maxLv === 0) {
       let bestAge = -1;
       for (let k = COARSE_K; k < LEVELS; k++) {
         const lv = levels[k]!;
@@ -666,6 +677,23 @@ export function buildNaniteShadowClip(
           coarsePick = k;
         }
       }
+    }
+    // ?shmaxlv generalized budget: allow-mask of the N stalest pending levels.
+    let allowMask = -1; // -1 = budget inactive (legacy coarse rule decides)
+    if (toro && !sunMoved && maxLv > 0) {
+      const pend: { k: number; age: number }[] = [];
+      for (let k = 0; k < LEVELS; k++) {
+        const lv = levels[k]!;
+        if (!lv.ran) continue; // full path exempt
+        const texelK = (2 * lv.half) / SHADOW_MAP;
+        const dx = Math.round(cp.dot(right) / texelK) - lv.prevSx;
+        const dy = Math.round(cp.dot(up) / texelK) - lv.prevSy;
+        if (dx === 0 && dy === 0) continue;
+        pend.push({ k, age: fitFrame - lv.lastStrip });
+      }
+      pend.sort((a, b) => b.age - a.age || a.k - b.k);
+      allowMask = 0;
+      for (let i = 0; i < Math.min(maxLv, pend.length); i++) allowMask |= 1 << pend[i]!.k;
     }
 
     let mask = 0;
@@ -716,19 +744,19 @@ export function buildNaniteShadowClip(
       } else {
         const dx = sx - lv.prevSx;
         const dy = sy - lv.prevSy;
-        // P7 coarse budget: a deferred coarse level stays FULLY frozen this frame —
-        // no prevS/origin/VP/uniform mutation, so its stored window keeps sampling
-        // correctly and the pending shift accumulates into next frame's strips.
-        if (
-          budgetOn &&
-          k >= COARSE_K &&
-          (dx !== 0 || dy !== 0) &&
-          k !== coarsePick
-        ) {
-          continue;
+        // P7 coarse budget / ?shmaxlv generalized budget: a deferred level stays
+        // FULLY frozen this frame — no prevS/origin/VP/uniform mutation, so its
+        // stored window keeps sampling correctly and the pending shift accumulates
+        // into next frame's strips.
+        if (dx !== 0 || dy !== 0) {
+          const deferred =
+            allowMask >= 0
+              ? (allowMask & (1 << k)) === 0
+              : budgetOn && k >= COARSE_K && k !== coarsePick;
+          if (deferred) continue;
         }
         if (dx !== 0 || dy !== 0) {
-          if (k >= COARSE_K) lv.lastStrip = fitFrame;
+          lv.lastStrip = fitFrame;
           if (Math.abs(dx) >= R || Math.abs(dy) >= R) {
             full = true; // teleport — nothing survives
           } else {

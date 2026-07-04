@@ -77,6 +77,9 @@ export interface NaniteHzb {
   /** fullscreen grayscale view of one pyramid level (?nanitedbg=hzb) */
   makeViewer(level: number): Scene;
   levelCount: number;
+  /** 90fps-arc W2 (?trihzb): raw pyramid access for the raster's per-TRIANGLE
+   *  occlusion reject — read-only view + the static level layout. */
+  raw: { ro: import('./Tsl').BufOf<NF>; levels: { offset: number; w: number; h: number }[] };
 }
 
 export function buildNaniteHzb(
@@ -447,5 +450,6 @@ export function buildNaniteHzb(
     makeOrthoOccluded,
     makeViewer,
     levelCount,
+    raw: { ro: hzbF.ro, levels },
   };
 }

@@ -281,6 +281,7 @@ export function buildNaniteFrame(
   const raster = buildNaniteRaster(
     registry.gpu, hf.heightTex, cam, cull, vis, 'flat', true, disp, windOpt, false, true, voxActive,
     grass ? { batch: grass.batch, renderHw: grass.renderHw, enabled: grass.enabled } : undefined,
+    hzb.raw, // W2 ?trihzb per-tri occlusion reject (build-time gated inside)
   );
 
   // Nanite shadows (N5, D-N28): depth-only SW raster into own r32 cascade textures,
@@ -612,13 +613,23 @@ export function buildNaniteFrame(
     // audited disjoint (scar reads visPayload/visB + writes scar counters; HZB reads
     // visPayload + writes hzbF — zero shared writes ⇒ swap cannot change any value).
     const foldHzb = coalesce && !frozen && !probeOn;
-    raster.world1(renderer, engine.camera, foldHzb ? hzb.batch() : []);
+    // W2 ?trihzb: append the pyramid→hwQueue-tail mirror to the HZB chain (reads the
+    // fresh pyramid, writes only the tail slots — next frame's world1 reads them).
+    const hzbChain = foldHzb
+      ? raster.triHzbCopyKernel
+        ? [...hzb.batch(), raster.triHzbCopyKernel]
+        : hzb.batch()
+      : [];
+    raster.world1(renderer, engine.camera, hzbChain);
     // 0a SCAR (?scar=1): the per-pixel covered-pixel denominator post-pass over the
     // FINAL world1 winners. No-op unless ?scar=1. The per-fragment band/total counters
     // are already accumulated inside world1 itself.
     raster.scar(renderer);
     if (probeRun && params.get('nanprobeat') === 'payload') probeRun(renderer);
-    if (!frozen && !foldHzb) hzb.build(renderer); // this frame's depth → next frame's occluder
+    if (!frozen && !foldHzb) {
+      hzb.build(renderer); // this frame's depth → next frame's occluder
+      if (raster.triHzbCopyKernel) dispatchBatchMixed(renderer, [raster.triHzbCopyKernel]);
+    }
     if (probeRun && params.get('nanprobeat') === 'hzb') probeRun(renderer);
     // Nanite shadows (R0+R1): per-cascade light-frustum cull → depth-only SW
     // raster into our own r32 cascade textures (R1 skips a cascade when its VP is
