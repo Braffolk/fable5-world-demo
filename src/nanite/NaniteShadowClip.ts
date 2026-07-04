@@ -85,6 +85,8 @@ import {
 } from './NaniteCommon';
 import { buildClipCull, type ClipCull } from './NaniteClipCull';
 import type { TerrainDisp, TrunkWindOpt } from './NaniteFetch';
+import { voxWindScalars, voxWindOffset } from './NaniteVoxWind';
+import { windContext } from '../render/Wind';
 import {
   buildNaniteRaster,
   makeVisBuffers,
@@ -636,6 +638,17 @@ export function buildNaniteShadowClip(
   // sinks the core caster: the solid path is kSplat's proven-compiling body + the two
   // fixes above. Independent build (JS const), NOT a runtime branch.
   const shVox2Solid = new URLSearchParams(window.location.search).get('shvox2solid') === '1';
+  // ?voxwind (shared with the camera crown): the shadow caster adds the SAME rigid wind
+  // WORLD offset as the visible crown ⇒ the ground shadow tracks the swaying crown, in
+  // phase (windCamPosS = the camera's veg-view pos, so gustAt/farAtten agree). Gated on
+  // the scene having wind + a live wind context (gustAt throws on a null ctx).
+  const shVox2Wind =
+    shVox2 &&
+    wind != null &&
+    windContext() != null &&
+    new URLSearchParams(window.location.search).get('voxwind') !== '0';
+  const windCamPosS = shVox2Wind && wind ? vec3(wind.camPos as unknown as NV3) : null;
+  const WIND_FADE_END_SH_M = 480; // past this the sway is 0 ⇒ skip gustAt (only-when-necessary)
   const voxCasterKernels: unknown[] = [];
   if (shVox2) {
     const OCC_DIM = 4; // OCC_DIM×OCC_DIM screen buckets over the footprint bbox (16-bit mask)
@@ -676,7 +689,27 @@ export function buildNaniteShadowClip(
           bcU2F(elemU(gpu.voxelBricks, bw.add(uint(BRICK_POS_X + 2)))),
         ) as unknown as NV3;
         const brHalfL = bcU2F(elemU(gpu.voxelBricks, bw.add(uint(BRICK_HALF)))).toVar();
-        const wc = instTransformPoint(A, B, yawSc, brLocal);
+        // ?voxwind: rigid crown sway — ONE world offset per brick. shvox2 has no
+        // ray-march, so it applies straight to the footprint centre AND every occ-carve
+        // cell below (same brick localY for all cells ⇒ rigid brick, so the dapple stays
+        // aligned with the swayed footprint). gustAt is SKIPPED past the fade; the If is
+        // uniform across the workgroup (all lanes share A), so there is no divergence.
+        const windOff = shVox2Wind && windCamPosS ? vec3(0, 0, 0).toVar() : null;
+        if (windOff && windCamPosS) {
+          If(
+            (A.xyz as unknown as NV3).sub(windCamPosS).length().lessThan(float(WIND_FADE_END_SH_M)),
+            () => {
+              windOff.assign(
+                voxWindOffset(voxWindScalars(A, windCamPosS), (brLocal as unknown as { y: NF }).y),
+              );
+            },
+          );
+        }
+        const wc = (
+          windOff
+            ? instTransformPoint(A, B, yawSc, brLocal).add(windOff)
+            : instTransformPoint(A, B, yawSc, brLocal)
+        ) as unknown as NV3;
         const wHalf = (instSphereRadius(A, B, brHalfL as unknown as NF, float(0)) as unknown as NF).toVar();
         const clip = (lv.cam.vp.mul(vec4(wc, 1)) as unknown as NV4).toVar();
         // sun-facing FACE depth (front slab toward the light) — the SW tri raster +
@@ -748,7 +781,11 @@ export function buildNaniteShadowClip(
                     const clx = brLocal.x.add(toF(cxc).add(0.5).sub(halfDim).mul(cellLocalSize)).toVar();
                     const cly = brLocal.y.add(toF(cyc).add(0.5).sub(halfDim).mul(cellLocalSize)).toVar();
                     const clz = brLocal.z.add(toF(czc).add(0.5).sub(halfDim).mul(cellLocalSize)).toVar();
-                    const cwld = instTransformPoint(A, B, yawSc, vec3(clx, cly, clz) as unknown as NV3);
+                    const cwld = (
+                      windOff
+                        ? instTransformPoint(A, B, yawSc, vec3(clx, cly, clz) as unknown as NV3).add(windOff)
+                        : instTransformPoint(A, B, yawSc, vec3(clx, cly, clz) as unknown as NV3)
+                    ) as unknown as NV3;
                     const cc = (lv.cam.vp.mul(vec4(cwld, 1)) as unknown as NV4).toVar();
                     const sx = (cc.x.mul(0.5).add(0.5) as unknown as NF).mul(SHADOW_MAP).toVar();
                     const sy = (cc.y.mul(0.5).add(0.5) as unknown as NF).mul(SHADOW_MAP).toVar();
