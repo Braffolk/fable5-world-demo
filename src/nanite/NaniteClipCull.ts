@@ -41,6 +41,7 @@ import {
   Loop,
   abs,
   atomicAdd,
+  atomicMax,
   atomicStore,
   dot,
   float,
@@ -56,10 +57,11 @@ import type { RegistryGpu } from './GeometryRegistry';
 import { buildNaniteCull, type NaniteCullChain } from './NaniteCull';
 import {
   DISPATCH_ROW,
-  QRASTER_CAP,
   instSphereRadius,
   instTransformPoint,
   instYaw,
+  queueCapParam,
+  registerQueueHw,
   type NaniteCam,
 } from './NaniteCommon';
 import {
@@ -90,6 +92,9 @@ interface ComputeKernel {
 
 /** the shared raster queue every clipmap level's raster consumes (sequential reuse) */
 export interface ClipLevelQueue {
+  /** the queue's item capacity (?qshcap) — consumers clamp counts against THIS,
+   *  not the camera's QRASTER_CAP (which may now be smaller than the shadow cap) */
+  cap: number;
   qRasterRO: BufOf<UV2>;
   rasterDispatchAttr: IndirectStorageBufferAttribute;
   rasterDispatch2Attr: IndirectStorageBufferAttribute;
@@ -159,6 +164,18 @@ export function buildClipCull(
 ): ClipCull {
   const LEVELS = levelCams.length;
 
+  // SHADOW queue cap (?qshcap; memory sizing 2026-07-04): the shared cut is
+  // ring-bounded (the outer clipmap box / active strip union), far below the
+  // camera chain's far-field demand — sizing its qRaster AND the per-level qLevel
+  // twin at the old 8M QRASTER_CAP wasted 2×67 MB GPU (+ the permanent CPU
+  // mirrors). MEASURED demand (2026-07-04 world @dpr2): cut HW 89 k on a 12 s
+  // 8 m/s walk (strip re-rasters), 54 k on the boot FULL all-level re-raster,
+  // 0 when still (strips cached); qLevel HW 33 k. Default 2^18 = 262,144 (~2.9×
+  // the worst case) for BOTH queues (the filter only ever selects a subset of
+  // the cut, and a full-invalidate level filter can approach the whole cut).
+  // Overflow = clusters dropped this frame (missing casters) + readCounts flag.
+  const shCap = queueCapParam('qshcap', 262_144, 4_096, 8_388_608);
+
   // The shared cut: a normal hier cull over cutCam, NO hollow (innerReject default
   // 0), shared minPx. Its qRaster IS the cut list (instId, ci) at the LOD cut within
   // the outer box. runPhase1 also writes qRaster[0] = (count, 0) — the filter's size.
@@ -172,12 +189,17 @@ export function buildClipCull(
     lodNear: opts.lodNear,
     lodPow: opts.lodPow,
     simBandD: opts.simBandD,
+    qRasterCap: shCap, // the cut queue rides the shadow cap, not the camera's
+    // this chain NEVER runs the vox fan-out (only the camera cull calls
+    // runVoxFanout) — minimum-size its qVoxRaster instead of 16.8 MB dead weight
+    qVoxCap: 64,
+    label: 'shadowCut',
   });
   const cutRO = shared.qRasterRO;
 
   // shared raster queue (one, refilled per level — levels raster sequentially)
-  const qLevelAttr = new StorageBufferAttribute(new Uint32Array((QRASTER_CAP + 1) * 2), 2);
-  const qLevel = sUvec2(qLevelAttr, QRASTER_CAP + 1);
+  const qLevelAttr = new StorageBufferAttribute(new Uint32Array((shCap + 1) * 2), 2);
+  const qLevel = sUvec2(qLevelAttr, shCap + 1);
   // append counter (slot 0) — cleared before each level filter
   const countAttr = new StorageBufferAttribute(new Uint32Array(1), 1);
   const countV = sU32Views(countAttr, 1);
@@ -236,9 +258,31 @@ export function buildClipCull(
     return { center: centerW as unknown as NV3, radius: radiusW as unknown as NF };
   };
 
+  // ---- queue high-water diag (memory sizing): raw qLevel append maxima -------------
+  // [0] = max RAW per-level survivor count (pre-clamp) across levels since reset.
+  const hwAttr = new StorageBufferAttribute(new Uint32Array(1), 1);
+  const hwV = sU32Views(hwAttr, 1).atomic;
+  const kHwReset = Fn(() => {
+    If(instanceIndex.equal(uint(0)), () => {
+      atomicStore(hwV.element(0), uint(0));
+    });
+  })().compute(1, [1]);
+  (kHwReset as unknown as ComputeKernel).setName('nanClipQHwReset');
+  registerQueueHw({
+    label: 'shadowQLevel',
+    caps: { qLevel: shCap },
+    read: async (renderer: unknown): Promise<Record<string, number>> => {
+      const u = new Uint32Array(await readBuffer(renderer as Renderer, hwAttr, 0, 4));
+      return { qLevel: u[0] ?? 0 };
+    },
+    reset: (renderer: unknown): void => {
+      dispatch(renderer as Renderer, kHwReset);
+    },
+  });
+
   // ---- filterArgs: size the (shared) filter dispatch from the cut count -------------
   const kFilterArgs = Fn(() => {
-    const n = minU(cutRO.element(0).x, uint(QRASTER_CAP));
+    const n = minU(cutRO.element(0).x, uint(shCap));
     split2D(filterDispatch, n.add(uint(63)).div(uint(64)));
   })().compute(1, [1]);
   (kFilterArgs as unknown as ComputeKernel).setName('nanClipFilterArgs');
@@ -261,7 +305,7 @@ export function buildClipCull(
 
     const kFilter = Fn(() => {
       const tid = wgLinear(DISPATCH_ROW).mul(uint(64)).add(localX()).toVar();
-      returnIf(tid.greaterThanEqual(minU(cutRO.element(0).x, uint(QRASTER_CAP))));
+      returnIf(tid.greaterThanEqual(minU(cutRO.element(0).x, uint(shCap))));
       const item = cutRO.element(tid.add(uint(1)));
       const instId = item.x.toVar();
       const ci = item.y.toVar();
@@ -318,16 +362,18 @@ export function buildClipCull(
       }
       If(visible.greaterThan(0.5), () => {
         const slot = atomicAdd(countV.atomic.element(0), uint(1)) as unknown as NU;
-        If(slot.lessThan(uint(QRASTER_CAP)), () => {
+        If(slot.lessThan(uint(shCap)), () => {
           qLevel.rw.element(slot.add(uint(1))).assign(uv2(instId, ci));
         });
       });
-    })().compute(QRASTER_CAP, [64]);
+    })().compute(shCap, [64]);
     (kFilter as unknown as ComputeKernel).setName(`nanClipFilter${k}`);
     filters.push(kFilter);
 
     const kRasterArgs = Fn(() => {
-      const n = minU(aLoadU(countV.atomic.element(0)), uint(QRASTER_CAP));
+      // queue high-water diag: RAW survivor count before the cap clamp
+      atomicMax(hwV.element(0), aLoadU(countV.atomic.element(0)));
+      const n = minU(aLoadU(countV.atomic.element(0)), uint(shCap));
       qLevel.rw.element(0).assign(uv2(n, 0));
       elemUW(perLevelV.rw, uint(k)).assign(n);
       split2D(rasterDispatch, n);
@@ -381,7 +427,7 @@ export function buildClipCull(
 
   return {
     shared,
-    queue: { qRasterRO: qLevel.ro, rasterDispatchAttr, rasterDispatch2Attr, rasterDispatchFullAttr },
+    queue: { cap: shCap, qRasterRO: qLevel.ro, rasterDispatchAttr, rasterDispatch2Attr, rasterDispatchFullAttr },
     runSharedCut,
     sharedCutBatch,
     runLevelFilter,

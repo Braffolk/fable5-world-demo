@@ -27,25 +27,94 @@ import {
 export const CHUNK_CLUSTERS = 64;
 /** chunk queue capacity (items; ~8 MB at uvec2) — F14: clamp + HUD flag */
 export const QCHUNK_CAP = 1_048_576;
+
+/** queue-cap URL override (?qrcap/?qvcap/?qfrontier/…): clamped [lo,hi] item count.
+ *  Safe outside the browser main thread (workers/tools have no location → default).
+ *  Every emit into these queues is atomicAdd + slot<cap bounds-check, so an
+ *  undersized cap degrades to missing geometry for the frame, never OOB writes. */
+export function queueCapParam(name: string, def: number, lo: number, hi: number): number {
+  try {
+    const search = (globalThis as { location?: { search?: string } }).location?.search ?? '';
+    const raw = new URLSearchParams(search).get(name);
+    if (raw != null) {
+      const v = Math.round(Number(raw));
+      if (Number.isFinite(v) && v > 0) return Math.min(hi, Math.max(lo, v));
+    }
+  } catch {
+    /* no location (worker/node) — use the default */
+  }
+  return def;
+}
+
+/** the tight measured queue defaults apply to the WORLD scene only: probe scenes
+ *  (probe-forest 200k trees etc.) historically flooded a 2M queue and other perf
+ *  harnesses depend on the legacy headroom — shrinking them silently would clamp
+ *  THEIR cuts. World demand was measured 2026-07-04 (@dpr2, eye/hill/oblique/
+ *  aerial + 12 s moving leg + boot full shadow re-raster) via window.__qHW. */
+const WORLD_SCENE = (() => {
+  try {
+    const search = (globalThis as { location?: { search?: string } }).location?.search ?? '';
+    return new URLSearchParams(search).get('scene') === 'world';
+  } catch {
+    return false;
+  }
+})();
+
 /** raster work queue capacity (one item per visible cluster; doubles as the
  *  visible-cluster list the resolve payload indexes — F3/F16: payload itemIdx
- *  has 25 bits of headroom). Raised 2M→8M (2^23) for dense far-field views that
- *  flooded the old 2M cap (trees flickering as clusters were dropped). Bit budget:
- *  itemIdx<<CLUSTER_TRI_BITS|localTri ⇒ 23+7 = 30 of 32 bits (2 spare) at the default
- *  128-tri cap, 23+8 = 31 (1 spare) at ?clustertris=256. Memory ceiling: the
- *  buffers it sizes (qRaster (CAP+1)×2×u32 = 64 MB; two BFS frontiers ×2×u32 = 64
- *  MB each = 192 MB total) must each stay under WebGPU's default 128 MB
- *  per-storage-buffer binding limit — 8M is the largest clean power of 2 that does.
- *  Raising further needs a smaller stride or split buffers. The real fix for the
- *  flood is the cluster floor (impostor/merge far-field), not a bigger queue. */
-export const QRASTER_CAP = 8_388_608;
+ *  has 25 bits of headroom). HISTORY: raised 2M→8M (2^23) for dense far-field
+ *  views that flooded the old 2M cap PRE-fartiles/instMinPx; with the far-field
+ *  cluster floor shipped, the MEASURED world worst case (2026-07-04, all poses +
+ *  moving) is ~60 k items — the 8M sizing paid 67 MB GPU + a 67 MB permanent CPU
+ *  mirror (three keeps the Uint32Array) per chain for a ~140× safety factor.
+ *  WORLD default now 2^17 = 131,072 (~2.2× measured HW); non-world scenes keep
+ *  8M. ?qrcap=N overrides either way (≤ the 8M ceiling: bit budget
+ *  itemIdx<<CLUSTER_TRI_BITS|localTri ⇒ 23+7 = 30 of 32 bits at the default
+ *  128-tri cap, and (CAP+1)×8 B must stay under the 128 MB per-binding limit).
+ *  Every emit is slot<cap guarded; overflow = dropped clusters this frame,
+ *  flagged via readCounts().overflow — never OOB writes. */
+export const QRASTER_CAP = queueCapParam('qrcap', WORLD_SCENE ? 131_072 : 8_388_608, 4_096, 8_388_608);
 /** voxel-foliage (spec §6.2): the VOXEL raster work queue capacity (one item per
  *  visible voxel BRICK-cluster fanned out of qRaster by matClass=voxel(7)). Far
  *  smaller than QRASTER_CAP — the coarse voxel band has far fewer cluster work-items
- *  than the 388k-cluster triangle cut (§6.0). Bit-budget (spec §6.2 verbatim assert):
- *  the voxel-raster payload (a brick work-item index into qVoxRaster) must stay < 1<<28
- *  (BUCKET_SHIFT) — 2^21 = 2M is trivially below that. Sized at uvec2 = 16 MB. */
-export const QVOX_CAP = 2_097_152;
+ *  than the triangle cut (§6.0). Measured world HW 2026-07-04: ~35 k (oblique) ⇒
+ *  WORLD default 2^17 = 131,072 (~3.8×); non-world scenes keep 2M. Bit-budget
+ *  (spec §6.2 verbatim assert): the voxel-raster payload (a brick work-item index
+ *  into qVoxRaster) must stay < 1<<28 (BUCKET_SHIFT); the resolve additionally
+ *  unpacks the item index from bits 0-20 (mask 0x1fffff) — so ?qvcap may never
+ *  exceed 2^21 = 2M (the hard hi clamp). */
+export const QVOX_CAP = queueCapParam('qvcap', WORLD_SCENE ? 131_072 : 2_097_152, 1_024, 2_097_152);
+
+/** per-chain queue high-water diagnostics (cull-queue memory sizing): each cull
+ *  chain registers a reader over a small GPU max-counter buffer (atomicMax'd by
+ *  the chain's tiny args kernels from the RAW pre-clamp cursors, so the value is
+ *  the true demand even when a cap clamps the queue). Probe access:
+ *  for (c of window.__qHW.chains) await c.read(window.__qHW.renderer). */
+export interface QueueHwChain {
+  label: string;
+  /** the caps the chain was built with (items) */
+  caps: Record<string, number>;
+  /** read the high-water counters (items, raw pre-clamp) */
+  read(renderer: unknown): Promise<Record<string, number>>;
+  /** zero the high-water counters (dispatches a tiny kernel) */
+  reset(renderer: unknown): void;
+}
+interface QueueHwGlobal {
+  chains: QueueHwChain[];
+  renderer: unknown;
+}
+function queueHwGlobal(): QueueHwGlobal {
+  const g = globalThis as { __qHW?: QueueHwGlobal };
+  g.__qHW ??= { chains: [], renderer: null };
+  return g.__qHW;
+}
+export function registerQueueHw(chain: QueueHwChain): void {
+  queueHwGlobal().chains.push(chain);
+}
+/** stash the live renderer for the probe (called from per-frame cull entry points) */
+export function noteQueueHwRenderer(renderer: unknown): void {
+  queueHwGlobal().renderer = renderer;
+}
 /** indirect-dispatch row size (maxComputeWorkgroupsPerDimension) */
 export const DISPATCH_ROW = 65_535;
 /** cone-test slack (radians, conservative on cos: sin(θ+Δ) ≤ sinθ + Δ) —

@@ -70,6 +70,9 @@ import {
   instSphereRadius,
   instTransformPoint,
   instYaw,
+  noteQueueHwRenderer,
+  queueCapParam,
+  registerQueueHw,
   type NaniteCam,
 } from './NaniteCommon';
 import {
@@ -105,6 +108,9 @@ import type { BufOf, UV2 } from './Tsl';
  *  measured at ?stress=5 bm3: 3.8M inst rejects, flag fired, image intact. */
 const REJ_INST_CAP = 1_048_576;
 const REJ_CLUST_CAP = 1_048_576;
+
+/** queue high-water diag: default label sequence for unlabeled chains */
+let chainSeq = 0;
 
 /** D-N43 Stage 0.5 SIM — distance-banded τ. The cross-instance-AGGREGATION win is
  *  *simulated* (before its builder exists) by coarsening the LOD cut with camera
@@ -254,10 +260,22 @@ export function buildNaniteCull(
      *  instance is too small for geometry — dropped at kInstCull so the imposter
      *  far-field owns it (UE5 model). 0 = off. */
     instMinPx?: UniformF;
-    /** frontier-buffer capacity (items). Default QRASTER_CAP (the camera's dense
-     *  far-forest flood). SHADOW culls run many chains with small cuts and pass a far
+    /** frontier-buffer capacity (items). Default = ?qfrontier (falls back to
+     *  QRASTER_CAP). SHADOW culls run many chains with small cuts and pass a far
      *  smaller cap so N×2 frontier buffers don't waste GBs. */
     frontierCap?: number;
+    /** qRaster capacity (items) for THIS chain. Default = the global QRASTER_CAP
+     *  (?qrcap). The shadow shared-cut chain passes its own smaller cap — its cut
+     *  is ring-bounded, far below the camera's far-field demand. Every append is
+     *  slot<cap guarded; overflow = dropped clusters this frame + readCounts flag. */
+    qRasterCap?: number;
+    /** qVoxRaster capacity (items) for THIS chain. Default = the global QVOX_CAP
+     *  (?qvcap). Chains that never run the vox fan-out (the shadow cuts — only the
+     *  camera chain calls runVoxFanout/voxFanoutBatch) pass a tiny cap so the
+     *  buffer isn't 16.8 MB of dead weight. */
+    qVoxCap?: number;
+    /** queue high-water diag label (window.__qHW); default cull<seq> */
+    label?: string;
     /** item 6: the BFS pass count (≥ the deepest DAG anchor-chain or leaves never emit =
      *  holes). Callers pass registry.maxDagDepth (+ a small margin). ?hierdepth overrides.
      *  Omitted ⇒ the legacy constant. Each pass is paid TWICE/frame (camera + shadow cut). */
@@ -284,7 +302,18 @@ export function buildNaniteCull(
   // N8-HIC: the cull is HIERARCHICAL — seed each mesh's roots + BFS-descend the DAG.
   // (The legacy brute-force two-phase path was deleted once the world + shadow culls
   // all moved to hier — PERF-VB3 / SHADOW-HIER.)
-  const frontierCap = Math.min(QRASTER_CAP, Math.max(1, Math.round(opts?.frontierCap ?? QRASTER_CAP)));
+  // Per-chain queue caps (memory sizing 2026-07-04): qCap sizes THIS chain's qRaster
+  // (+ every clamp/guard over it); vCap its vox fan-out queue. Defaults are the global
+  // URL-overridable caps; the shadow shared-cut passes its own (NaniteClipCull). The
+  // ceilings are the STRUCTURAL limits (payload bit budget / resolve mask / 128 MB
+  // binding), NOT the global defaults — an explicit opts cap may exceed the world
+  // default (e.g. the shadow cut's 262k vs the camera's 131k).
+  const qCap = Math.min(8_388_608, Math.max(1_024, Math.round(opts?.qRasterCap ?? QRASTER_CAP)));
+  const vCap = Math.min(2_097_152, Math.max(64, Math.round(opts?.qVoxCap ?? QVOX_CAP)));
+  const frontierCap = Math.min(
+    8_388_608,
+    Math.max(1, Math.round(opts?.frontierCap ?? queueCapParam('qfrontier', QRASTER_CAP, 4_096, 8_388_608))),
+  );
   // hier BFS pass count — a CPU-fixed loop (the GPU frontier count isn't visible to
   // the CPU mid-frame). Must be ≥ the deepest DAG anchor-chain or the tail clusters
   // never emit (holes). PRIORITY: ?hierdepth=N override > opts.hierDepth (the MEASURED
@@ -429,8 +458,8 @@ export function buildNaniteCull(
   const countersAttr = new StorageBufferAttribute(new Uint32Array(8), 1);
   const counters = sU32Views(countersAttr, 8).atomic;
 
-  const qRasterAttr = new StorageBufferAttribute(new Uint32Array((QRASTER_CAP + 1) * 2), 2);
-  const qRasterV = sUvec2(qRasterAttr, QRASTER_CAP + 1);
+  const qRasterAttr = new StorageBufferAttribute(new Uint32Array((qCap + 1) * 2), 2);
+  const qRasterV = sUvec2(qRasterAttr, qCap + 1);
 
   // voxel-foliage (spec §4.6 / §6.2): the VOXEL raster work queue. The cut emits voxel
   // clusters into the SAME qRaster as triangles (kTraverse is pinned ≤10 buffers — no
@@ -438,8 +467,8 @@ export function buildNaniteCull(
   // below) then re-scans the emitted qRaster, tests each cluster's mesh matClass, and
   // fans the voxel(7) entries here. qVoxRaster[0] = (count, 0); items at 1.. are the
   // SAME (instId, ci) uvec2 as qRaster (the voxel raster reads bricks via ci's word6/7).
-  const qVoxRasterAttr = new StorageBufferAttribute(new Uint32Array((QVOX_CAP + 1) * 2), 2);
-  const qVoxRasterV = sUvec2(qVoxRasterAttr, QVOX_CAP + 1);
+  const qVoxRasterAttr = new StorageBufferAttribute(new Uint32Array((vCap + 1) * 2), 2);
+  const qVoxRasterV = sUvec2(qVoxRasterAttr, vCap + 1);
   // voxel fan-out cursor (its OWN atomic counter so it doesn't contend the BFS counters).
   const voxCountAttr = new StorageBufferAttribute(new Uint32Array(1), 1);
   const voxCount = sU32Views(voxCountAttr, 1).atomic;
@@ -531,9 +560,25 @@ export function buildNaniteCull(
     return { center: centerW as unknown as NV3, radius: radiusW as unknown as NF };
   };
 
+  // ---- queue high-water diag (memory sizing 2026-07-04) ---------------------------
+  // Persistent (never frame-cleared) atomicMax'd RAW cursor maxima: [0] qRaster
+  // emits, [1] BFS frontier in-count (max over passes), [2] vox fan-out count.
+  // Raw = pre-clamp, so the value is the true demand even when a cap clamps.
+  // Read/reset via window.__qHW (registerQueueHw below); cost = one atomicMax in
+  // the tiny 1-thread args kernels, nothing in the hot traverse/emit kernels.
+  const hwAttr = new StorageBufferAttribute(new Uint32Array(4), 1);
+  const hwV = sU32Views(hwAttr, 4).atomic;
+  const kHwReset = Fn(() => {
+    If(instanceIndex.lessThan(uint(4)), () => {
+      atomicStore(hwV.element(instanceIndex), uint(0));
+    });
+  })().compute(4, [4]);
+  (kHwReset as unknown as ComputeKernel).setName('nanQHwReset');
+
   // ---- kRasterArgs (phase 1) -------------------------------------------------------
   const kRasterArgs = Fn(() => {
-    const n = minU(aLoadU(counters.element(1)), uint(QRASTER_CAP));
+    atomicMax(hwV.element(0), aLoadU(counters.element(1)));
+    const n = minU(aLoadU(counters.element(1)), uint(qCap));
     qRasterV.rw.element(0).assign(uv2(n, 0));
     split2D(rasterDispatch, n);
   })().compute(1, [1]);
@@ -543,7 +588,7 @@ export function buildNaniteCull(
   // The base read goes through the SAME rw view that writes slot 0 — mixing
   // the ro view into this dispatch is a same-scope usage violation (N0 law).
   const kRasterArgs2 = Fn(() => {
-    const nT = minU(aLoadU(counters.element(1)), uint(QRASTER_CAP)).toVar();
+    const nT = minU(aLoadU(counters.element(1)), uint(qCap)).toVar();
     const base = qRasterV.rw.element(0).y.toVar();
     qRasterV.rw.element(0).assign(uv2(nT, base));
     split2D(rasterDispatch2, nT.sub(base));
@@ -566,7 +611,7 @@ export function buildNaniteCull(
   // over the live qRaster count. Runs BEFORE kVoxFanout (its cursor + dispatch args).
   const kVoxFanoutArgs = Fn(() => {
     atomicStore(voxCount.element(0), uint(0));
-    const n = minU(aLoadU(counters.element(1)), uint(QRASTER_CAP));
+    const n = minU(aLoadU(counters.element(1)), uint(qCap));
     // one workgroup (64 threads) per 64 qRaster entries
     split2D(voxFanoutDispatch, n.add(uint(63)).div(uint(64)));
   })().compute(1, [1]);
@@ -575,7 +620,7 @@ export function buildNaniteCull(
   // kVoxFanout: one thread per qRaster entry → matClass==voxel ⇒ append to qVoxRaster.
   const kVoxFanout = Fn(() => {
     const tid = wgLinear(DISPATCH_ROW).mul(uint(64)).add(localX()).toVar();
-    const itemCount = minU(aLoadU(counters.element(1)), uint(QRASTER_CAP));
+    const itemCount = minU(aLoadU(counters.element(1)), uint(qCap));
     returnIf(tid.greaterThanEqual(itemCount));
     const item = qRasterV.ro.element(tid.add(uint(1)));
     const instId = item.x.toVar();
@@ -588,18 +633,19 @@ export function buildNaniteCull(
       .bitAnd(uint(0xff));
     If(matClass.equal(uint(VOXEL_MATCLASS)), () => {
       const slot = atomicAdd(voxCount.element(0), uint(1)) as unknown as NU;
-      If(slot.lessThan(uint(QVOX_CAP)), () => {
+      If(slot.lessThan(uint(vCap)), () => {
         qVoxRasterV.rw.element(slot.add(uint(1))).assign(uv2(instId, ci));
       });
     });
-  })().compute(QRASTER_CAP, [64]);
+  })().compute(qCap, [64]);
   (kVoxFanout as unknown as ComputeKernel).setName('nanVoxFanout');
 
   // kVoxRasterArgs: publish qVoxRaster[0] = (count, 0) + the Stage-2 voxel-raster
   // 2D-split dispatch args (over the fanned voxel-cluster count). The count read goes
   // through the SAME rw view that writes slot 0 (N0 same-scope law, like kRasterArgs).
   const kVoxRasterArgs = Fn(() => {
-    const n = minU(aLoadU(voxCount.element(0)), uint(QVOX_CAP)).toVar();
+    atomicMax(hwV.element(2), aLoadU(voxCount.element(0)));
+    const n = minU(aLoadU(voxCount.element(0)), uint(vCap)).toVar();
     qVoxRasterV.rw.element(0).assign(uv2(n, 0));
     split2D(voxRasterDispatch, n);
   })().compute(1, [1]);
@@ -675,7 +721,7 @@ export function buildNaniteCull(
     for (let b = 0; b < K; b++) {
       atomicStore(voxBucketCount.element(uint(b)), uint(0));
     }
-    const n = minU(aLoadU(counters.element(1)), uint(QRASTER_CAP));
+    const n = minU(aLoadU(counters.element(1)), uint(qCap));
     split2D(voxFanoutDispatch, n.add(uint(63)).div(uint(64)));
   })().compute(1, [1]);
   (kVoxRangeArgs as unknown as ComputeKernel).setName('nanVoxRangeArgs');
@@ -685,7 +731,7 @@ export function buildNaniteCull(
   // (anti-NDC: linear, so a 60 m and a 90 m crown land in DIFFERENT buckets).
   const kVoxRange = Fn(() => {
     const tid = wgLinear(DISPATCH_ROW).mul(uint(64)).add(localX()).toVar();
-    const itemCount = minU(aLoadU(counters.element(1)), uint(QRASTER_CAP));
+    const itemCount = minU(aLoadU(counters.element(1)), uint(qCap));
     returnIf(tid.greaterThanEqual(itemCount));
     const item = qRasterV.ro.element(tid.add(uint(1)));
     const instId = item.x.toVar();
@@ -699,14 +745,14 @@ export function buildNaniteCull(
       atomicMin(voxRange.element(0), dBits);
       atomicMax(voxRange.element(1), dBits);
     });
-  })().compute(QRASTER_CAP, [64]);
+  })().compute(qCap, [64]);
   (kVoxRange as unknown as ComputeKernel).setName('nanVoxRange');
 
   // kVoxCount: one thread per qRaster entry → voxel ⇒ atomicAdd the cluster's bucket
   // counter (the histogram). Range is final (kVoxRange ran first in the batch).
   const kVoxCount = Fn(() => {
     const tid = wgLinear(DISPATCH_ROW).mul(uint(64)).add(localX()).toVar();
-    const itemCount = minU(aLoadU(counters.element(1)), uint(QRASTER_CAP));
+    const itemCount = minU(aLoadU(counters.element(1)), uint(qCap));
     returnIf(tid.greaterThanEqual(itemCount));
     const item = qRasterV.ro.element(tid.add(uint(1)));
     const instId = item.x.toVar();
@@ -723,7 +769,7 @@ export function buildNaniteCull(
         : voxDepthBucket(voxClusterDepth(instId, ci));
       atomicAdd(voxBucketCount.element(bIdx), uint(1));
     });
-  })().compute(QRASTER_CAP, [64]);
+  })().compute(qCap, [64]);
   (kVoxCount as unknown as ComputeKernel).setName('nanVoxCount');
 
   // kVoxPrefix (1 thread): exclusive prefix-sum the K bucket counts → per-bucket base;
@@ -736,16 +782,20 @@ export function buildNaniteCull(
   // each kernel at ≤2 buffers; the K args kernels are 1-thread direct dispatches.
   const kVoxPrefix = Fn(() => {
     const acc = uint(0).toVar();
+    const accRaw = uint(0).toVar(); // pre-clamp demand (queue high-water diag)
     for (let b = 0; b < K; b++) {
-      const cnt = minU(aLoadU(voxBucketCount.element(uint(b))), uint(QVOX_CAP)).toVar();
-      const base = minU(acc, uint(QVOX_CAP)).toVar();
-      const room = uint(QVOX_CAP).sub(base).toVar();
+      const cntRaw = aLoadU(voxBucketCount.element(uint(b))).toVar();
+      accRaw.assign(accRaw.add(cntRaw));
+      const cnt = minU(cntRaw, uint(vCap)).toVar();
+      const base = minU(acc, uint(vCap)).toVar();
+      const room = uint(vCap).sub(base).toVar();
       const cClamp = minU(cnt, room).toVar();
       voxBucketRangeV.rw.element(uint(b)).assign(uv2(base, cClamp));
       atomicStore(voxCursor.element(uint(b)), uint(0));
       acc.assign(acc.add(cClamp));
     }
-    const total = minU(acc, uint(QVOX_CAP)).toVar();
+    atomicMax(hwV.element(2), accRaw);
+    const total = minU(acc, uint(vCap)).toVar();
     qVoxRasterV.rw.element(0).assign(uv2(total, 0));
     atomicStore(voxCount.element(0), total); // keep readVoxCount (HUD/overflow) correct in F2B
     split2D(voxRasterDispatch, total); // legacy full-range args still published (HUD/A-B)
@@ -773,7 +823,7 @@ export function buildNaniteCull(
   // The bucket's contiguous slice [base_b, base_b+count_b) is filled here.
   const kVoxScatterFan = Fn(() => {
     const tid = wgLinear(DISPATCH_ROW).mul(uint(64)).add(localX()).toVar();
-    const itemCount = minU(aLoadU(counters.element(1)), uint(QRASTER_CAP));
+    const itemCount = minU(aLoadU(counters.element(1)), uint(qCap));
     returnIf(tid.greaterThanEqual(itemCount));
     const item = qRasterV.ro.element(tid.add(uint(1)));
     const instId = item.x.toVar();
@@ -799,7 +849,7 @@ export function buildNaniteCull(
         qVoxRasterV.rw.element(slot.add(uint(1))).assign(uv2(instId, ci));
       });
     });
-  })().compute(QRASTER_CAP, [64]);
+  })().compute(qCap, [64]);
   (kVoxScatterFan as unknown as ComputeKernel).setName('nanVoxScatterFan');
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -1052,7 +1102,7 @@ export function buildNaniteCull(
           }
           If(visible.greaterThan(0.5), () => {
             const slot = atomicAdd(counters.element(1), uint(1)) as unknown as NU;
-            If(slot.lessThan(uint(QRASTER_CAP)), () => {
+            If(slot.lessThan(uint(qCap)), () => {
               qRasterV.rw.element(slot.add(uint(1))).assign(uv2(instId, ci));
             });
             atomicAdd(counters.element(6), c.triCount);
@@ -1072,7 +1122,7 @@ export function buildNaniteCull(
             });
           });
         });
-      })().compute(QRASTER_CAP, [64]);
+      })().compute(fcap, [64]);
       return kn;
     };
     const kTraverseAB = makeTraverse(qFrontierA, qFrontierB, FA, FB);
@@ -1091,6 +1141,9 @@ export function buildNaniteCull(
     const makeArgs = (inIdx: number, outIdx: number): unknown => {
       const kn = Fn(() => {
         atomicStore(frontierCount.element(outIdx), uint(0));
+        // queue high-water diag: RAW input frontier count (covers every BFS pass
+        // including the seed output; pre-clamp so overflow demand is visible)
+        atomicMax(hwV.element(1), aLoadU(frontierCount.element(inIdx)));
         // one workgroup (64 threads) per 64 frontier items
         const n = minU(aLoadU(frontierCount.element(inIdx)), uint(fcap));
         split2D(traverseDispatch, n.add(uint(63)).div(uint(64)));
@@ -1134,9 +1187,24 @@ export function buildNaniteCull(
     bfsBatch.push(kRasterArgs);
     phase1BatchList = bfsBatch;
     runPhase1 = (renderer: Renderer): void => {
+      noteQueueHwRenderer(renderer); // queue high-water diag: stash for window.__qHW
       dispatchBatchMixed(renderer, bfsBatch);
     };
   }
+
+  // queue high-water diag registration (window.__qHW): raw per-boot maxima for
+  // THIS chain's qRaster / BFS frontier / vox fan-out cursors + the built caps.
+  registerQueueHw({
+    label: opts?.label ?? `cull${chainSeq++}`,
+    caps: { qRaster: qCap, frontier: frontierCap, qVox: vCap },
+    read: async (renderer: unknown): Promise<Record<string, number>> => {
+      const u = new Uint32Array(await readBuffer(renderer as Renderer, hwAttr, 0, 16));
+      return { qRaster: u[0] ?? 0, frontier: u[1] ?? 0, qVox: u[2] ?? 0 };
+    },
+    reset: (renderer: unknown): void => {
+      dispatch(renderer as Renderer, kHwReset);
+    },
+  });
 
   const syncFullArgs = (renderer: Renderer): void => {
     dispatch(renderer, kRasterArgs2);
@@ -1198,6 +1266,7 @@ export function buildNaniteCull(
   };
 
   const readCounts = async (renderer: Renderer): Promise<NaniteCullCounts> => {
+    noteQueueHwRenderer(renderer); // queue high-water diag: stash for window.__qHW
     const [buf, head] = await Promise.all([
       readBuffer(renderer, countersAttr, 0, 32),
       readBuffer(renderer, qRasterAttr, 0, 8),
@@ -1218,7 +1287,7 @@ export function buildNaniteCull(
       if (n > cap) overflow = `${overflow ? `${overflow}; ` : ''}${label} ${n} > ${cap}`;
     };
     over('qChunks', chunks, QCHUNK_CAP);
-    over('qRaster', visClusters, QRASTER_CAP);
+    over('qRaster', visClusters, qCap);
     over('rejInst', rejInst, REJ_INST_CAP);
     over('rejClust', rejClust, REJ_CLUST_CAP);
     return {

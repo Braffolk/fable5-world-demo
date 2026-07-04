@@ -74,11 +74,12 @@ import { CLUSTER_WORDS, MESH_WORDS, readCluster } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
 import {
   DISPATCH_ROW,
-  QRASTER_CAP,
   instSphereRadius,
   instTransformPoint,
   instYaw,
   makeNaniteCam,
+  noteQueueHwRenderer,
+  queueCapParam,
   type NaniteCam,
 } from './NaniteCommon';
 import { buildClipCull, type ClipCull } from './NaniteClipCull';
@@ -141,8 +142,11 @@ const TAU = 6.28318530718;
 
 /** hier BFS frontier capacity per shadow cull chain (SHADOW-HIER): shadow cuts are
  *  bounded (clipmap ring / cascade box), far below the camera's QRASTER_CAP flood, so
- *  the N×2 frontier buffers can be small. 2M entries = 16 MB/buffer (vs 64 MB at 8M). */
-const SHADOW_FRONTIER_CAP = 1 << 21; // 2,097,152
+ *  the N×2 frontier buffers can be small. MEASURED HW (2026-07-04 world): 30 k
+ *  (moving worst case; 14 k boot full re-raster) ⇒ default 2^16 = 65,536 (~2.2×),
+ *  was 2M = 2×16 MB. ?qshfrontier overrides (≤ the 8M ceiling). Frontier overflow
+ *  drops BFS items (missing casters) — guarded per-slot, flagged by cull counts. */
+const SHADOW_FRONTIER_CAP = queueCapParam('qshfrontier', 65_536, 4_096, 8_388_608);
 
 interface NamedKernel {
   setName(n: string): unknown;
@@ -510,7 +514,9 @@ export function buildNaniteShadowClip(
         }
         const qCount = minU(
           (clipCull.queue.qRasterRO.element(0) as unknown as { x: NU }).x,
-          uint(QRASTER_CAP),
+          // clamp against the CLIP queue's own cap (?qshcap) — the global
+          // QRASTER_CAP may now be smaller than the shadow cap (world sizing)
+          uint(clipCull.queue.cap),
         );
         returnIf(itemIdx.greaterThanEqual(qCount));
         if (shVoxDbg) {
@@ -959,6 +965,7 @@ export function buildNaniteShadowClip(
   };
 
   const run = (renderer: Renderer, _csm: object | null, mainCamera: PerspectiveCamera): void => {
+    noteQueueHwRenderer(renderer); // queue high-water diag: stash for window.__qHW
     // OVERLAP PATH: cullPrepass() already fit + dispatched the shared cut (folded into the
     // camera-cull submit). Consume that mask, skip the re-fit + runSharedCut, raster levels.
     if (prepassMask >= 0) {
