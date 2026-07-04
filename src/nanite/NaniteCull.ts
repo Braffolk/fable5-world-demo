@@ -251,6 +251,10 @@ export function buildNaniteCull(
      *  or VOXEL, never a simplified aggregate level. Camera path only — shadow /
      *  secondary culls omit it so caster leaf LOD stays coarse. */
     crownLod0?: boolean;
+    /** shadow-only voxel-τ COARSEN multiplier (>1 ⇒ voxel clusters cut at a coarser
+     *  DAG level = fewer/bigger bricks; the "less detailed crown in the shadow"). Voxel
+     *  matClass only — trunks keep their τ. When set it REPLACES voxTauCap's fine cap. */
+    voxCoarsen?: number;
     tau?: UniformF;
     minPx?: UniformF;
     innerReject?: UniformF;
@@ -424,6 +428,10 @@ export function buildNaniteCull(
     : Math.min(32, Math.max(1, Number.isFinite(voxF2bKraw) ? voxF2bKraw : 16));
   const coneCull = opts?.coneCull !== false;
   const crownLod0 = opts?.crownLod0 === true; // ?crownlod0 — leaf LOD0-or-descend (camera only)
+  // shadow-only voxel COARSEN (>1): emit voxel clusters at a coarser DAG level for the
+  // shvox2 caster (the "less detailed crown in the shadow"). ≤1 ⇒ inactive.
+  const voxCoarsenRaw = opts?.voxCoarsen ?? 0;
+  const voxCoarsen = Number.isFinite(voxCoarsenRaw) && voxCoarsenRaw > 1 ? voxCoarsenRaw : 0;
   // S3 SHADOW CLIPMAP hollow (D-N29): a clipmap level rasters only the RING
   // outside the next-finer level — a cluster whose light-space clip bbox lies
   // ENTIRELY within [±0.5] (the finer level's box, since extents double) is
@@ -1033,12 +1041,19 @@ export function buildNaniteCull(
         // only in the warped band (60-300 m); painted-pixel area is invariant to brick size,
         // so the added cost is per-brick setup, not fill.
         const forceDescend = float(0).toVar();
-        if (voxTauCap > 0 || crownLod0) {
+        if (voxTauCap > 0 || crownLod0 || voxCoarsen > 0) {
           const mid7 = elemU(gpu.clusters, ci.mul(uint(CLUSTER_WORDS)).add(uint(7))).shiftRight(uint(16));
           const mc = elemU(gpu.meshes, mid7.mul(uint(MESH_WORDS)).add(uint(6)))
             .shiftRight(uint(8))
             .bitAnd(uint(0xff));
-          if (voxTauCap > 0) {
+          if (voxCoarsen > 0) {
+            // shadow "less detailed" crown: COARSEN voxel τ_eff (bigger τ ⇒ pOwn ≤ τ is met
+            // at a coarser DAG level ⇒ fewer/bigger bricks). Replaces the camera fine cap;
+            // trunk/mesh clusters are untouched, so trunk shadows keep their silhouette.
+            If(mc.equal(uint(VOXEL_MATCLASS)), () => {
+              tauEff.assign(tauEff.mul(float(voxCoarsen)));
+            });
+          } else if (voxTauCap > 0) {
             If(mc.equal(uint(VOXEL_MATCLASS)), () => {
               tauEff.assign(tauEff.min(float(voxTauCap)));
             });

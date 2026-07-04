@@ -160,6 +160,10 @@ export function buildClipCull(
     lodNear?: UniformF;
     lodPow?: UniformF;
     simBandD?: UniformF;
+    /** shadow-only voxel-τ coarsen (>1) → the shvox2 caster reads fewer/bigger bricks
+     *  (the "less detailed crown in the shadow"). Threaded to the shared cut; voxel
+     *  matClass only, so trunk casters are unaffected. */
+    voxCoarsen?: number;
   },
 ): ClipCull {
   const LEVELS = levelCams.length;
@@ -189,6 +193,7 @@ export function buildClipCull(
     lodNear: opts.lodNear,
     lodPow: opts.lodPow,
     simBandD: opts.simBandD,
+    voxCoarsen: opts.voxCoarsen, // shadow "less detailed" crown — coarsen voxel clusters
     qRasterCap: shCap, // the cut queue rides the shadow cap, not the camera's
     // this chain NEVER runs the vox fan-out (only the camera cull calls
     // runVoxFanout) — minimum-size its qVoxRaster instead of 16.8 MB dead weight

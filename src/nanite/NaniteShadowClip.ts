@@ -479,6 +479,10 @@ export function buildNaniteShadowClip(
     lodNear: uniformF(Math.max(0, Number(qs.get('shtaunear') ?? 5))),
     lodPow: uniformF(Math.max(0.25, Number(qs.get('shtaupow') ?? 1))),
     simBandD: uniformF(Number(qs.get('shtauband') ?? 15)),
+    // shadow "less detailed" crown (?shvoxk, default 3×): coarsen the voxel clusters in
+    // the shared cut so the shvox2 caster reads FEWER/BIGGER bricks (cheaper + soft under
+    // PCSS). Voxel matClass only — trunk casters keep their silhouette. 1/0 ⇒ off (A/B).
+    voxCoarsen: Math.max(0, Number(qs.get('shvoxk') ?? 3)),
   });
   for (let k = 0; k < LEVELS; k++) {
     const lv = levels[k]!;
@@ -631,8 +635,11 @@ export function buildNaniteShadowClip(
   // combined tri+vox depth exactly as before. ≤10-BUFFER BUDGET: qRaster, clusters,
   // meshes, instances, voxelBricks, vis.depthV = 6. shVox2 is a BUILD-TIME const, so
   // ?shvox2 absent/0 builds NOTHING below (byte-identical to today's shadow path).
+  // DEFAULT ON (2026-07-05): voxel crown shadows for the 60–496 m band, which cast
+  // NOTHING before (the voxel crown was discarded there). Wind-synced (?voxwind) + the
+  // "less detailed" coarse cut (?shvoxk). ?shvox2=0 reverts to no far-crown shadows.
   const shVox2 =
-    voxSplat === true && new URLSearchParams(window.location.search).get('shvox2') === '1';
+    voxSplat === true && new URLSearchParams(window.location.search).get('shvox2') !== '0';
   // ?shvox2solid=1 — force the SOLID per-brick footprint (build the occupancy carve
   // OUT entirely) so the carve can be A/B-isolated AND so a carve codegen fault never
   // sinks the core caster: the solid path is kSplat's proven-compiling body + the two
