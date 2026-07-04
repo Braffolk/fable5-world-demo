@@ -164,6 +164,9 @@ export function buildClipCull(
      *  (the "less detailed crown in the shadow"). Threaded to the shared cut; voxel
      *  matClass only, so trunk casters are unaffected. */
     voxCoarsen?: number;
+    /** shadow-only: seed voxel roots at ALL distances so the voxel crown casts shadows
+     *  in the near band (<60 m) too — the leaf mesh is castShadows:false. */
+    seedVoxAllDist?: boolean;
   },
 ): ClipCull {
   const LEVELS = levelCams.length;
@@ -194,6 +197,7 @@ export function buildClipCull(
     lodPow: opts.lodPow,
     simBandD: opts.simBandD,
     voxCoarsen: opts.voxCoarsen, // shadow "less detailed" crown — coarsen voxel clusters
+    seedVoxAllDist: opts.seedVoxAllDist, // voxel casts the crown shadow in the near band too
     qRasterCap: shCap, // the cut queue rides the shadow cap, not the camera's
     // this chain NEVER runs the vox fan-out (only the camera cull calls
     // runVoxFanout) — minimum-size its qVoxRaster instead of 16.8 MB dead weight

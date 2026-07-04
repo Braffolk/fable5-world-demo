@@ -255,6 +255,11 @@ export function buildNaniteCull(
      *  DAG level = fewer/bigger bricks; the "less detailed crown in the shadow"). Voxel
      *  matClass only — trunks keep their τ. When set it REPLACES voxTauCap's fine cap. */
     voxCoarsen?: number;
+    /** shadow-only: seed voxel-sibling roots at ALL distances (skip the word-8 nearDist
+     *  handoff drop) so the voxel crown casts shadows in the NEAR band too — the leaf
+     *  crown mesh is castShadows:false, so <60 m crowns cast NO crown shadow otherwise.
+     *  Camera culls leave it false → the 60 m mesh↔voxel RENDER handoff is unchanged. */
+    seedVoxAllDist?: boolean;
     tau?: UniformF;
     minPx?: UniformF;
     innerReject?: UniformF;
@@ -432,6 +437,7 @@ export function buildNaniteCull(
   // shvox2 caster (the "less detailed crown in the shadow"). ≤1 ⇒ inactive.
   const voxCoarsenRaw = opts?.voxCoarsen ?? 0;
   const voxCoarsen = Number.isFinite(voxCoarsenRaw) && voxCoarsenRaw > 1 ? voxCoarsenRaw : 0;
+  const seedVoxAllDist = opts?.seedVoxAllDist === true; // shadow: voxel casts in the near band too
   // S3 SHADOW CLIPMAP hollow (D-N29): a clipmap level rasters only the RING
   // outside the next-finer level — a cluster whose light-space clip bbox lies
   // ENTIRELY within [±0.5] (the finer level's box, since extents double) is
@@ -941,7 +947,13 @@ export function buildNaniteCull(
       // either mesh OR voxel at a distance, no double-render, no gap). 0 = unlimited near
       // (every non-voxel mesh). The cull picks tier by distance — NOT a per-cluster math path.
       const nearDist = bcU2F(elemU(gpu.meshes, headBase.add(uint(8))));
-      returnIf(nearDist.greaterThan(0).and(instDist.lessThan(nearDist)));
+      // seedVoxAllDist (shadow cull): KEEP the voxel sibling in the near band so it casts
+      // the crown shadow <60 m — the leaf crown mesh is castShadows:false, so otherwise
+      // near crowns cast NOTHING. Camera culls drop it here as before (render handoff
+      // stays a clean 60 m line; only the SHADOW gains near voxel casters).
+      if (!seedVoxAllDist) {
+        returnIf(nearDist.greaterThan(0).and(instDist.lessThan(nearDist)));
+      }
       const isHF = head.flags.bitAnd(uint(MESH_FLAG_HEIGHTFIELD)).notEqual(uint(0));
       const s = instWorldSphere(A, B, isHF as unknown as NB, head.sphere, head.swayPad);
       returnIf(frustumVisible(s.center, s.radius).lessThan(0.5));

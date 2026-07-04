@@ -479,10 +479,18 @@ export function buildNaniteShadowClip(
     lodNear: uniformF(Math.max(0, Number(qs.get('shtaunear') ?? 5))),
     lodPow: uniformF(Math.max(0.25, Number(qs.get('shtaupow') ?? 1))),
     simBandD: uniformF(Number(qs.get('shtauband') ?? 15)),
-    // shadow "less detailed" crown (?shvoxk, default 3×): coarsen the voxel clusters in
+    // shadow "less detailed" crown (?shvoxk, default 8×): coarsen the voxel clusters in
     // the shared cut so the shvox2 caster reads FEWER/BIGGER bricks (cheaper + soft under
-    // PCSS). Voxel matClass only — trunk casters keep their silhouette. 1/0 ⇒ off (A/B).
-    voxCoarsen: Math.max(0, Number(qs.get('shvoxk') ?? 3)),
+    // PCSS). 8× (was 3) keeps the NEAR band cheap — near crowns are close, so pOwn is
+    // large and a small multiplier still descends to many fine bricks (+8 ms measured);
+    // 8× holds them coarse (~0 ms, near == far-only baseline). Voxel matClass only —
+    // trunk casters keep their silhouette. 1/0 ⇒ off (A/B).
+    voxCoarsen: Math.max(0, Number(qs.get('shvoxk') ?? 8)),
+    // NEAR-BAND crown shadows (?shvoxnear, default on): seed the voxel crown at ALL
+    // distances so it casts shadows <60 m too — the leaf crown mesh is castShadows:false,
+    // so near crowns cast only their TRUNK otherwise (user-reported gap). ?shvoxnear=0
+    // reverts to far-only (60-496 m).
+    seedVoxAllDist: qs.get('shvoxnear') !== '0',
   });
   for (let k = 0; k < LEVELS; k++) {
     const lv = levels[k]!;
