@@ -268,20 +268,13 @@ export function buildNaniteFrame(
   // rastered geometry and the resolve's barycentric corners stay bit-identical)
   const windOn = params.get('nanwind') !== '0';
   const windOpt = windOn ? { camPos: cam.camPos } : undefined;
-  // PROCEDURAL GRASS (grass rethink 2026-07-03, NaniteGrass.ts): zero-storage blade
-  // field re-derived from pcg(worldCell) each frame. THREE lanes: ?grass=hybrid =
-  // near-band HW raster + guide-driven raycast beyond (the perf lane), ?grass=1|geo =
-  // emission+HW queue ALL bands (+13 ms eye — reference look), ?grass=ray = raycast
-  // ALL bands. DEFAULT OFF — the user's grass budget is ≤2 ms WORST CASE (ledger:
-  // docs/perf-runs/2026-07-03-grass-arc.md §RAY LANE). __laasNanite.setGrass(0|1)
-  // toggles within a boot; the stored patch-DAG lane is ?grasspatch=1.
+  // PROCEDURAL GRASS (NaniteGrass.ts; ledger docs/perf-runs/2026-07-03-grass-arc.md).
+  // __laasNanite.setGrass(0|1) toggles within a boot.
+  // DEFAULT ON (user call 2026-07-04, look accepted): the single ray lane
+  // (Sannikov baked-raycast, NaniteGrass.ts). ?grass=0|off disables. The old
+  // geo/hybrid/rayold lanes were deleted the same day — git history has them.
   const grassMode = params.get('grass');
-  const grassOn =
-    grassMode === '1' ||
-    grassMode === 'geo' ||
-    grassMode === 'ray' ||
-    grassMode === 'rayold' ||
-    grassMode === 'hybrid';
+  const grassOn = grassMode !== '0' && grassMode !== 'off';
   const grass = grassOn
     ? buildGrassField({ cam, vis, hf, canopyTex: world.canopyTex, disp })
     : null;
