@@ -73,7 +73,12 @@ const WORLD_SCENE = (() => {
  *  128-tri cap, and (CAP+1)×8 B must stay under the 128 MB per-binding limit).
  *  Every emit is slot<cap guarded; overflow = dropped clusters this frame,
  *  flagged via readCounts().overflow — never OOB writes. */
-export const QRASTER_CAP = queueCapParam('qrcap', WORLD_SCENE ? 131_072 : 8_388_608, 4_096, 8_388_608);
+// World default raised 131k→1M for ?crownlod0 (default on): forcing leaf crowns to
+// LOD0 in the mesh band floods the camera cut — measured qRaster 197k / frontier 213k
+// at a dense static pose (vs 38k/27k without crownlod0), so the old 131k cap OVERFLOWED
+// → dropped clusters = foliage holes. 1M = ~5× the observed worst for moving headroom;
+// costs ~+42MB vs 131k but still ~340MB under the original 8M. ?qrcap overrides.
+export const QRASTER_CAP = queueCapParam('qrcap', WORLD_SCENE ? 1_048_576 : 8_388_608, 4_096, 8_388_608);
 /** voxel-foliage (spec §6.2): the VOXEL raster work queue capacity (one item per
  *  visible voxel BRICK-cluster fanned out of qRaster by matClass=voxel(7)). Far
  *  smaller than QRASTER_CAP — the coarse voxel band has far fewer cluster work-items
