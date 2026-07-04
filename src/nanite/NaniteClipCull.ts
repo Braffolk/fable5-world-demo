@@ -146,6 +146,15 @@ export function buildClipCull(
     levelHalves?: number[];
     /** P10: ring-snapped LOD distance for the shared cut (see NaniteCull) */
     lodRingSnap?: number;
+    /** P11 caster-LOD warp (fly-through spike fix 2026-07-04): τ + the lodWarp
+     *  params for the SHARED cut. One distance-based warp is legal here — the
+     *  cut stays IDENTICAL across levels (unlike a per-level τ, which would
+     *  break the shared traverse). Casters coarsen with camera distance the
+     *  same way the main view does (which never reached the shadow path). */
+    tau?: UniformF;
+    lodNear?: UniformF;
+    lodPow?: UniformF;
+    simBandD?: UniformF;
   },
 ): ClipCull {
   const LEVELS = levelCams.length;
@@ -159,6 +168,10 @@ export function buildClipCull(
     frontierCap: opts.frontierCap,
     hierDepth: opts.hierDepth, // item 6: BFS passes = measured max DAG depth (no holes, sheds tail)
     lodRingSnap: opts.lodRingSnap, // P10: ring-snapped shadow LOD (no strip LOD-age)
+    tau: opts.tau, // P11: caster-LOD τ + distance warp (shared-cut-legal)
+    lodNear: opts.lodNear,
+    lodPow: opts.lodPow,
+    simBandD: opts.simBandD,
   });
   const cutRO = shared.qRasterRO;
 

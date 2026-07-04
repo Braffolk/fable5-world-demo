@@ -443,6 +443,17 @@ export function buildNaniteShadowClip(
     // P10: ring-snapped LOD — caster LOD constant per ring, flips exactly when the
     // reveal/outer strips rewrite the region ⇒ no toroidal LOD-age (?shlodsnap=0)
     lodRingSnap: qs.get('shlodsnap') !== '0' ? cfg.base : undefined,
+    // P11 caster-LOD warp (fly-through spike fix 2026-07-04): the shadow cut ran
+    // at flat τ=1 with NONE of the camera path's distance coarsening — in dense
+    // forest the strips re-rastered 30-50k caster clusters per snap (= the +8 ms
+    // location-keyed fly spikes; freeze/two-lap/ablate-shadows attributed).
+    // τ_eff = shtau·(1+((d−shtaunear)/shtauband)^shtaupow): contact shadows
+    // (≤ shtaunear m) keep the exact cut; mid/far casters coarsen like the main
+    // view does. PCSS blurs far shadows anyway. Escape ?shtauband=0 (warp off).
+    tau: uniformF(Math.max(0.25, Number(qs.get('shtau') ?? 1))),
+    lodNear: uniformF(Math.max(0, Number(qs.get('shtaunear') ?? 40))),
+    lodPow: uniformF(Math.max(0.25, Number(qs.get('shtaupow') ?? 1))),
+    simBandD: uniformF(Number(qs.get('shtauband') ?? 120)),
   });
   for (let k = 0; k < LEVELS; k++) {
     const lv = levels[k]!;
