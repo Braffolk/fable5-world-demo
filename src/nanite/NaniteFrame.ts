@@ -247,6 +247,10 @@ export function buildNaniteFrame(
       // ?voxprev two-pass partition classifier — the LIBERAL centre test, NOT the
       // conservative emit test (spec-prev-frame-occlusion §2.1). null at ?occl=0 ⇒ inert.
       voxPrevTest: occl ? hzb.sphereProbablyOccluded : null,
+      // ?crownlod0 (DEFAULT ON, user mandate 2026-07-04): leaf crowns are LOD0 (full
+      // detail) or voxel — never a simplified aggregate level. =0 reverts to the
+      // aggregate-ladder cut. Camera path only (shadow culls omit it).
+      crownLod0: params.get('crownlod0') !== '0',
     },
   );
   if (!hf.biomeTex || !hf.fieldsTex || !hf.noiseA || !hf.noiseB) {

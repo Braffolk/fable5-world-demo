@@ -247,6 +247,10 @@ export function buildNaniteCull(
    *  holes. Default true (camera path). */
   opts?: {
     coneCull?: boolean;
+    /** ?crownlod0 (user mandate 2026-07-04): leaf crowns are FULL DETAIL (LOD0)
+     *  or VOXEL, never a simplified aggregate level. Camera path only — shadow /
+     *  secondary culls omit it so caster leaf LOD stays coarse. */
+    crownLod0?: boolean;
     tau?: UniformF;
     minPx?: UniformF;
     innerReject?: UniformF;
@@ -419,6 +423,7 @@ export function buildNaniteCull(
     ? 2 // visibility partition: bucket 0 = probably-visible, bucket 1 = probably-occluded
     : Math.min(32, Math.max(1, Number.isFinite(voxF2bKraw) ? voxF2bKraw : 16));
   const coneCull = opts?.coneCull !== false;
+  const crownLod0 = opts?.crownLod0 === true; // ?crownlod0 — leaf LOD0-or-descend (camera only)
   // S3 SHADOW CLIPMAP hollow (D-N29): a clipmap level rasters only the RING
   // outside the next-finer level — a cluster whose light-space clip bbox lies
   // ENTIRELY within [±0.5] (the finer level's box, since extents double) is
@@ -606,6 +611,7 @@ export function buildNaniteCull(
   // Cost = one re-scan of up to qRaster-count entries (a Stage-0a/3 perf line item).
   // ──────────────────────────────────────────────────────────────────────────
   const VOXEL_MATCLASS = 7; // MATERIAL_CLASS.voxel (spec §4.1)
+  const LEAF_MATCLASS = 4; // MATERIAL_CLASS.leaf — crown clusters (?crownlod0)
 
   // kVoxFanoutArgs: clear the voxel cursor + size the one-thread-per-entry dispatch
   // over the live qRaster count. Runs BEFORE kVoxFanout (its cursor + dispatch args).
@@ -1026,16 +1032,31 @@ export function buildNaniteCull(
         // ~cap px — a far crown then always descends to a multi-brick level. Costs bricks
         // only in the warped band (60-300 m); painted-pixel area is invariant to brick size,
         // so the added cost is per-brick setup, not fill.
-        if (voxTauCap > 0) {
+        const forceDescend = float(0).toVar();
+        if (voxTauCap > 0 || crownLod0) {
           const mid7 = elemU(gpu.clusters, ci.mul(uint(CLUSTER_WORDS)).add(uint(7))).shiftRight(uint(16));
           const mc = elemU(gpu.meshes, mid7.mul(uint(MESH_WORDS)).add(uint(6)))
             .shiftRight(uint(8))
             .bitAnd(uint(0xff));
-          If(mc.equal(uint(VOXEL_MATCLASS)), () => {
-            tauEff.assign(tauEff.min(float(voxTauCap)));
-          });
+          if (voxTauCap > 0) {
+            If(mc.equal(uint(VOXEL_MATCLASS)), () => {
+              tauEff.assign(tauEff.min(float(voxTauCap)));
+            });
+          }
+          if (crownLod0) {
+            // ?crownlod0 (DEFAULT ON — user mandate): leaf crowns render at LOD0 (full
+            // detail) or VOXEL, never a simplified aggregate level. The leaf head's draw
+            // envelope = voxnear, so every leaf cluster reaching this CAMERA traverse is
+            // inside the mesh band. Force any leaf cluster that still has DAG children to
+            // DESCEND regardless of screen-error; only true LOD0 leaves (childCount==0 ⇒
+            // ownError 0 ⇒ pOwn 0 ≤ τ) emit — watertight, no hole. Shadow culls never pass
+            // crownLod0 (caster leaf LOD stays coarse — LOD0 casters would blow the raster).
+            If(mc.equal(uint(LEAF_MATCLASS)).and(rec.childCount.greaterThan(uint(0))), () => {
+              forceDescend.assign(1);
+            });
+          }
         }
-        If(pOwn.lessThanEqual(tauEff), () => {
+        If(pOwn.lessThanEqual(tauEff).and(forceDescend.equal(0)), () => {
           // ── CUT: this cluster is the right LOD here → emit (with culls) ──────
           const c = readCluster(gpu.clusters, ci);
           const isHF = c.flags.bitAnd(uint(1)).notEqual(uint(0)).toVar();
