@@ -299,6 +299,13 @@ function emitTile(grid: SplatGridSpec, res: TileSplatOut): FarTileBuild | null {
     { x: bricksX, y: bricksY, z: bricksX },
     cellSize,
     [-tileSize * 0.5, 0, -tileSize * 0.5],
+    // full-pitch coarse halves (2026-07-04 axis-stripe fix): on this GLOBAL grid the
+    // tight-half gaps align in depth along world axes → coherent vertical see-through
+    // stripes ("mis-angled billboards", worst dead-on-axis, gone oblique). Edge-to-edge
+    // tiling closes them; the re-binned occupancy still carves see-through. Crowns
+    // (VoxelizeCrown's own pyramid call) keep the tight bound — their shrink is the
+    // oversized-square fix for isolated blobs.
+    { fullPitchHalves: true },
   );
   let brickCount = 0;
   let clusterCount = 0;

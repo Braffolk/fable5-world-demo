@@ -801,6 +801,15 @@ function downsampleBrickGrid(
    *  sun-side/shade-side gradient a distant blob-like crown must have (the plain
    *  mean converges to ~one direction per crown ⇒ flat, directionless far shading). */
   blob?: { cx: number; cy: number; cz: number; k: number },
+  /** FARTILES ONLY (2026-07-04 axis-stripe fix): keep `half = coarseHalf` (full grid
+   *  pitch) instead of the tight occupied-children bound. On the GLOBAL fartile grid
+   *  every brick in a depth column shares the same screen column when viewed along a
+   *  world axis, so tight-half gaps ALIGN in depth and read as coherent vertical
+   *  see-through stripes (invisible at oblique yaws — bboxes stagger and overlap).
+   *  Full-pitch halves tile adjacent bricks edge-to-edge; the occupancy re-bin below
+   *  still carves see-through where children are absent. Crowns keep the tight bound
+   *  (isolated blobs — the shrink IS their oversized-square fix). */
+  fullPitchHalf?: boolean,
 ): { bricks: BrickCPU[]; grid: { x: number; y: number; z: number } } {
   const gx = Math.max(1, Math.ceil(fineGrid.x / 2));
   const gy = Math.max(1, Math.ceil(fineGrid.y / 2));
@@ -913,14 +922,18 @@ function downsampleBrickGrid(
         // [tMin,tMax] which is within [gridCenter ± half]) while staying centered. ≤ coarseHalf since
         // tMin/tMax are already clamped into the full grid cube, so it never exceeds the full cube.
         const center: [number, number, number] = gridCenter;
-        const half = Math.min(
-          coarseHalf,
-          Math.max(
-            Math.max(gridCenter[0] - tMinX, tMaxX - gridCenter[0]),
-            Math.max(gridCenter[1] - tMinY, tMaxY - gridCenter[1]),
-            Math.max(gridCenter[2] - tMinZ, tMaxZ - gridCenter[2]),
-          ),
-        );
+        // fartiles: full-pitch half (see param doc) — adjacent bricks tile edge-to-edge,
+        // no aligned axis gaps; occupancy (re-binned into the same full cube) still carves.
+        const half = fullPitchHalf
+          ? coarseHalf
+          : Math.min(
+              coarseHalf,
+              Math.max(
+                Math.max(gridCenter[0] - tMinX, tMaxX - gridCenter[0]),
+                Math.max(gridCenter[1] - tMinY, tMaxY - gridCenter[1]),
+                Math.max(gridCenter[2] - tMinZ, tMaxZ - gridCenter[2]),
+              ),
+            );
         // RE-BIN occupancy into THIS coarse brick's TIGHT [center ± half] cube (the far-cheaper
         // fix). The 4×4×4 occLo/occHi bitmask must describe the SAME cube the raster projects so
         // the raster's per-pixel occupancy gate skips the EMPTY interior between sparse children.
@@ -1134,6 +1147,10 @@ export function buildVoxelPyramid(
      *  side — the mean-of-children normal converges to one direction and kills that).
      *  CROWNS ONLY — a 64 m far-TILE is many trees, not one blob (leave unset there). */
     blobNormals?: boolean;
+    /** FARTILES ONLY: coarse bricks keep the full grid-pitch half-extent instead of the
+     *  tight occupied-children bound — kills the axis-aligned see-through stripe gaps on
+     *  the global tile grid (see downsampleBrickGrid.fullPitchHalf). */
+    fullPitchHalves?: boolean;
   },
 ): VoxelLevel[] {
   const levels: VoxelLevel[] = [];
@@ -1208,6 +1225,7 @@ export function buildVoxelPyramid(
       curCell * 2,
       gridOrigin,
       blobC ? { ...blobC, k: Math.min(0.7, 0.28 * (L + 1)) } : undefined,
+      opts?.fullPitchHalves === true,
     );
     // voxlod FAR-CHEAPER (iteration-6): SHELL the coarse grid we just produced — drop bricks fully
     // enclosed by occupied neighbours (invisible interior) so this coarser level renders a ~2-deep
