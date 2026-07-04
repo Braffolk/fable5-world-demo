@@ -245,6 +245,14 @@ export function buildNaniteShadowClip(
   // surface) + depth bias. ?shnb / ?shdb tune the per-texel factors.
   const nbTexelK = Number(qs.get('shnb') ?? 1.5) || 0;
   const dbTexelK = Number(qs.get('shdb') ?? 1.0) || 0;
+  // ?shslope (default on): scale the depth-bias TEXEL term by the receiver's grazing
+  // angle vs the sun. The PCSS blocker search reaches ~6·texels (searchR); on a slope
+  // that spans ~6·texelWorld of sun-depth, a 1-texel bias can't cover it → the coarse
+  // FAR levels self-shadow. Growing the texel bias with tan(angle-to-sun) — capped —
+  // covers the search footprint on slopes, while flat/sun-facing ground keeps ~today's
+  // bias (the fixed 0.35 m base dominates at the fine near levels). ?shslopek = strength.
+  const shSlope = qs.get('shslope') !== '0';
+  const shSlopeK = Number(qs.get('shslopek') ?? 1.7) || 0;
   // P9 lever 3: fit the shared-cut ortho to the UNION of the active strip rects
   // instead of the largest updating level's full disc (an L5-only frame walked
   // 384 m of world for a few-texel strip). ?shcut=0 = legacy disc.
@@ -998,7 +1006,7 @@ export function buildNaniteShadowClip(
     return (textureLoad(levels[k]!.depthTex, uvec2(tx, ty)) as unknown as { x: NF }).x;
   };
 
-  const pcss = (k: number, uv: NV2, receiver: NF, pix: NV2): NF =>
+  const pcss = (k: number, uv: NV2, receiver: NF, pix: NV2, slopeMul: NF): NF =>
     Fn(() => {
       const param = levelParam.element(int(k));
       const span = (param as unknown as { x: NF }).x.max(1);
@@ -1009,7 +1017,10 @@ export function buildNaniteShadowClip(
       // P8: depth bias scales with THIS level's world texel (coarse texels span
       // metres of slope depth — the fixed 0.35 m was L0-only thinking)
       const texelWorldK = (2 * levels[k]!.half) / SHADOW_MAP;
-      const dBias = float(DEPTH_BIAS_M + texelWorldK * dbTexelK).div(depthRange);
+      // ?shslope: the TEXEL term (not the fixed base) grows with the receiver's grazing
+      // angle so the blocker search's ~6-texel footprint can't self-shadow on far-level
+      // slopes. slopeMul == 1 on flat/sun-facing ground ⇒ revert-identical there.
+      const dBias = float(DEPTH_BIAS_M).add(float(texelWorldK * dbTexelK).mul(slopeMul)).div(depthRange);
 
       const searchR = texel.mul(6).mul(radius);
       const blockerSum = float(0).toVar();
@@ -1070,6 +1081,15 @@ export function buildNaniteShadowClip(
       // stored global texel values. levelCoord's z stays the per-window slab
       // coordinate and is used only for the inside test.
       const fwdN = (normalize(vec3(sunU.dir)) as unknown as { mul(o: number): NV3 }).mul(-1);
+      // ?shslope slope-scaled depth-bias multiplier: 1× when the receiver faces the sun,
+      // up to ~1+4·shSlopeK at grazing. Computed once per receiver (level-independent).
+      const nDotL = (dot(normalize(normal) as unknown as NV3, fwdN as unknown as NV3) as unknown as NF)
+        .abs()
+        .clamp(0.15, 1);
+      const slopeTan = float(1).sub(nDotL.mul(nDotL)).max(0).sqrt().div(nDotL);
+      const slopeMul = (
+        shSlope ? float(1).add(slopeTan.clamp(0, 4).mul(shSlopeK)) : float(1)
+      ).toVar();
       const sf = float(1).toVar();
       const found = float(0).toVar();
       for (let k = 0; k < LEVELS; k++) {
@@ -1091,7 +1111,7 @@ export function buildNaniteShadowClip(
             const zg = (dot(wpK as unknown as NV3, fwdN as unknown as NV3) as unknown as NF)
               .add(D_OFF)
               .div(D_RANGE);
-            sf.assign(pcss(k, uv, zg as unknown as NF, pc));
+            sf.assign(pcss(k, uv, zg as unknown as NF, pc, slopeMul as unknown as NF));
           });
         });
       }
