@@ -81,3 +81,25 @@ extremely slow + Chrome frozen-tab dialogs.
 - Machine-contention hazard all session: 3+ agents benching/booting
   concurrently — perf A/Bs need quiet-machine re-verification before any
   number is treated as canonical.
+
+## RASTER CLOSED (commit 62d607e) — relect + swmax results
+
+- ?relect ablation (min-of-160-frames harness, contention-robust): election
+  TOTAL ~0 eye / 3.5ms oblique, split ~evenly guard-load (1.9) vs RMW+store
+  (1.6) — neither half a lever. ?wgcache=0 occupancy NULL (0.3). Loop total
+  re-anchored clean: 9.6ms eye. Premise "loop is the cost" re-validated in
+  the LIVE pipeline (ablations don't lean on the rdbg lower-bound).
+- ?swmax SW/HW split sweep (quiet machine, canonical clocks, min-capture):
+  eye 22.8 / 23.5 / 23.1 (16/8/4), oblique 33.5 / 33.3 / 32.8 — HW eats
+  mid-size tris NO cheaper. SW loop is at throughput PARITY with HW raster
+  for 5-16px tris.
+- VERDICT: the pixel loop is intrinsic per-covered-pixel walk+interp,
+  pixel-count-scaled (the dpr law's B term). Not a broken rasterizer. The
+  Nanite ~10%-of-budget comparison is at ~half internal res + TSR — i.e.
+  ?rscale (shipped 7a4c207) IS the fix; at 0.5 the raster share lands in the
+  same regime. Loop-internal lane CLOSED (divergence, row-solve, election,
+  occupancy, trihzb, swmax ALL measured dead, all bit-identity-gated).
+- Diagnostics kept: ?swcoop (default 0 = shipped loop), ?relect (default 1),
+  ?swmax (default 16), window.__qHW, sw-min.mjs (scratchpad).
+- ⚠️ ?rdbg=2 is a broken anchor now: re-adds visDepthV → 11 storage buffers
+  → invalid pipeline (pre-existing, needs the scar fold pattern if revived).
