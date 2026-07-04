@@ -99,6 +99,12 @@ let clusterFillFrac = 0.75;
 export function setClusterFill(f: number): void {
   clusterFillFrac = Math.max(0.1, Math.min(1, f));
 }
+/** current fill threshold — forwarded to the DagWorker so its module instance
+ *  clusterizes with the SAME knob as the main thread (worker builds must be
+ *  bit-identical to sync builds). */
+export function clusterFill(): number {
+  return clusterFillFrac;
+}
 
 /**
  * Morton (Z-order) triangle ordering by centroid. The greedy grower follows shared-edge

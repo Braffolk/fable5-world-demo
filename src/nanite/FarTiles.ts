@@ -37,7 +37,8 @@
  */
 
 import type { GeometryRegistry } from './GeometryRegistry';
-import { appendVoxelCrown, buildVoxelPyramid, type PreparedVoxelCrown, type VoxelLevel } from './VoxelizeCrown';
+import type { PackedFarTile } from './BootCache';
+import { appendPackedCrown, appendVoxelCrown, buildVoxelPyramid, type PreparedVoxelCrown, type VoxelLevel } from './VoxelizeCrown';
 import { BRICK_DIM, type BrickCPU } from './VoxelBrick';
 import {
   splatTiles,
@@ -450,6 +451,33 @@ export function appendFarTiles(
   let bricks = 0;
   for (const t of tiles) {
     const r = appendVoxelCrown(reg, t.prep, undefined as never, {
+      matParam: opts.matParam,
+      swayPad: 0,
+      maxDist: 100000,
+      nearDist: opts.nearDist,
+      label: 'fartile',
+    });
+    bricks += r.brickCount;
+    const a = new Float32Array([t.center[0], t.center[1], t.center[2], 1]);
+    const b = new Float32Array([0, 0, 0, 0]);
+    reg.bindInstances(r.head, { a, b });
+  }
+  return bricks;
+}
+
+/** Append PACKED tiles post-reg.build() — the world path. Reads straight from each tile's
+ *  9×u32 words (appendPackedCrown), no BrickCPU materialization; `tick` yields between tiles
+ *  (thousands of tiles = a long slab otherwise). Identical GPU output to appendFarTiles. */
+export async function appendPackedFarTiles(
+  reg: GeometryRegistry,
+  tiles: PackedFarTile[],
+  opts: { nearDist: number; matParam: number },
+  tick?: () => Promise<void>,
+): Promise<number> {
+  let bricks = 0;
+  for (const t of tiles) {
+    if (tick) await tick();
+    const r = appendPackedCrown(reg, t.prep, {
       matParam: opts.matParam,
       swayPad: 0,
       maxDist: 100000,

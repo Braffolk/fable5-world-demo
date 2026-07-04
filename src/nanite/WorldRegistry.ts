@@ -31,22 +31,21 @@ import { Vector2 } from 'three';
 import { internalSize } from '../render/RenderScale';
 import type { ScatterLayer, ScatterResult } from '../gpu/passes/Scatter';
 import { VegClass } from '../gpu/passes/Scatter';
-import type { VegLib, PoolPart } from '../vegetation/VegLibrary';
+import type { VegLib, VegPool, PoolPart } from '../vegetation/VegLibrary';
 import type { Heightfield } from '../world/Heightfield';
 import { WORLD_SIZE } from '../world/WorldConst';
 import { type DagBuild, type DagCluster, buildDag } from './BuildDag';
-import { buildAggregateDag, setAggLodErrorK } from './BuildAggregateDag';
+import { aggLodErrorK, buildAggregateDag, setAggLodErrorK } from './BuildAggregateDag';
+import { BootTrace, yieldIfDue } from '../debug/BootTrace';
 import {
   BootCache,
   type PackedFarTile,
   packFarTiles,
   packPreparedCrown,
   type PackedPreparedCrown,
-  unpackFarTiles,
-  unpackPreparedCrown,
 } from './BootCache';
-import { appendFarTiles, buildFarTilesAsync, FT_TILE_SIZE, type FarTileSpecies } from './FarTiles';
-import { setClusterFill } from './Clusterize';
+import { appendPackedFarTiles, buildFarTilesAsync, FT_TILE_SIZE, type FarTileSpecies } from './FarTiles';
+import { clusterFill, setClusterFill } from './Clusterize';
 import { DagBuildWorker, DagWorkerPool, type DagBuilder, type HeightDagResult } from './DagWorkerClient';
 import { TerrainStreamer, buildTerrainTile, type TileBuildDeps, type TileBuildStats } from './TerrainStreamer';
 import {
@@ -63,17 +62,21 @@ import {
 } from './GeometryRegistry';
 import { readBuffer } from './Tsl';
 import {
-  appendVoxelCrown,
+  appendPackedCrown,
   DEFAULT_VOXEL_GRID_DIM,
-  type PreparedVoxelCrown,
   computeVoxlodAnchorL0,
+  releaseVoxelizerScratch,
   prepareVoxelCrown,
   setVoxlodConfig,
   setVoxOccThreshold,
   voxOccThreshold,
+  voxlodAnchorL0,
+  voxlodErrorK,
   voxlodLevels,
+  voxlodShell,
+  voxlodSparseK,
 } from './VoxelizeCrown';
-import { BRICK_WORDS, type BrickCPU } from './VoxelBrick';
+import { BRICK_WORDS, type BrickCPU, readBrick } from './VoxelBrick';
 
 /** Forests ring radii (Forests.ts) — discrete LOD switch distances until N8 */
 const R0_FAR = 26;
@@ -245,6 +248,429 @@ async function readLayer(
   return { a: new Float32Array(ab), b: new Float32Array(bb), count: n };
 }
 
+/** cull projK FOV reference: no camera exists at build time, so the app FOV
+ *  (Engine.ts PerspectiveCamera = 55°) anchors the voxlod ladder — the ladder
+ *  SHAPE is projK-robust anyway. */
+const APP_FOV_DEG = 55;
+
+/** every URL-resolved knob feeding the crown/DAG/fartile builds — resolved ONCE
+ *  (idempotent) by prepareWorldVeg AND buildWorldRegistry so the early-overlap
+ *  path and the inline path apply identical module state. */
+interface VegKnobs {
+  forceVoxRaw: string | null;
+  forceVoxAll: boolean;
+  forceVoxId: number | null;
+  forceVoxOn: boolean;
+  voxReg: boolean;
+  voxGridDim: number;
+  voxLod: boolean;
+  transitionDist: number;
+  farTilesOn: boolean;
+  aggDist: number;
+  ftCell: number;
+  anchorH: number;
+  /** raw ?stress / ?naniteleafdensity / ladder-knob params — cache-key fragments */
+  stressRaw: string | null;
+  leafDensityRaw: string | null;
+  keyKnobs: (string | null)[];
+}
+
+/**
+ * Parse + APPLY the world-scene build knobs (moved out of buildWorldRegistry for
+ * the 2026-07-04 cold-boot overlap; the WHY of each default lives on the knob):
+ *
+ *  - ?clustertris=256 (default): cluster triangle cap BEFORE any registerMesh /
+ *    buildDag clusterizes — 256 halves the cluster COUNT (fewer per-cluster raster
+ *    workgroups, the dominant SW cost) at the cost of coarser per-cluster culling.
+ *  - ?clusterfill (default 0.95): how full a cluster must be before the clusterizer
+ *    FINALIZES on a dead adjacency frontier — chunky leaf-sprays pack fuller at the
+ *    cost of looser per-cluster bounding spheres.
+ *  - ?forcevox=<idF>|1|all — DEBUG override (spec §A1): voxel path regardless of
+ *    distance, leaf mesh suppressed. Implies ?voxreg.
+ *  - ?voxreg=0 disables the mesh→voxel transition (DEFAULT ON since 2026-07-03).
+ *  - ?voxgrid — per-crown voxel grid dim (shared default 256).
+ *  - ?voxnear — the mesh→voxel handoff distance (m), default 60 (beautification pick).
+ *  - ?fartiles=0 — disable far-tile aggregation. ?aggdist default 280 (⚠️ world-only,
+ *    NOT the forest's 140 — hillside-wall fix, measured 2026-07-03). ?ftcell default
+ *    0.75 (⚠️ world-only, NOT the forest's 0.6 — 4 km world ⇒ ~3510 tiles; 0.6 blew
+ *    the 256 MB storage-buffer cliff + BrickCPU heap).
+ *  - ?leaflodk — aggregate LEAF ladder error scale (shared default 0.4).
+ *  - ?voxocc — occupancy coverage threshold.
+ *  - ?voxlod (default ON) + ?voxlodk/?voxlodlevels/?voxlodsparse/?voxlodshell — the
+ *    BAND-ANCHORED voxel MIP ladder; anchorL0 = transitionDist·τ/projK so the finest
+ *    level's cut lands at the handoff and each distance octave descends one level.
+ */
+function resolveVegKnobs(renderer: Renderer): VegKnobs {
+  const qVox = new URLSearchParams(window.location.search);
+  setClusterTriCap(Number(qVox.get('clustertris')) || 256);
+  setClusterFill(Number(qVox.get('clusterfill')) || 0.95);
+  const forceVoxRaw = qVox.get('forcevox');
+  const forceVoxAll = forceVoxRaw === '1' || forceVoxRaw === 'all';
+  const forceVoxId = forceVoxRaw !== null && !forceVoxAll ? Number(forceVoxRaw) : null;
+  const forceVoxOn = forceVoxRaw !== null;
+  const voxReg = qVox.get('voxreg') !== '0' || forceVoxOn;
+  const voxGridDim = Number(qVox.get('voxgrid') ?? DEFAULT_VOXEL_GRID_DIM) || DEFAULT_VOXEL_GRID_DIM;
+  const transitionDist = Number(qVox.get('voxnear') ?? DEFAULT_TRANSITION_DIST) || DEFAULT_TRANSITION_DIST;
+  const farTilesOn = qVox.get('fartiles') !== '0';
+  const aggDist = Number(qVox.get('aggdist') ?? 280) || 280;
+  const ftCell = Number(qVox.get('ftcell') ?? 0.75) || 0.75;
+  {
+    const lk = qVox.get('leaflodk');
+    if (lk !== null) setAggLodErrorK(Number(lk));
+    const occRaw = qVox.get('voxocc');
+    if (occRaw !== null) setVoxOccThreshold(Number(occRaw));
+  }
+  const voxLod = qVox.get('voxlod') !== '0';
+  const anchorH = internalSize(renderer, new Vector2()).y; // ?rscale: τ anchor follows the render res
+  {
+    const anchorL0 = computeVoxlodAnchorL0(transitionDist, anchorH, APP_FOV_DEG);
+    const kRaw = qVox.get('voxlodk');
+    const lRaw = qVox.get('voxlodlevels');
+    const spRaw = qVox.get('voxlodsparse');
+    const shRaw = qVox.get('voxlodshell');
+    setVoxlodConfig({
+      anchorL0,
+      errorK: kRaw !== null ? Number(kRaw) : undefined,
+      levels: lRaw !== null ? Number(lRaw) : undefined,
+      sparseK: spRaw !== null ? Number(spRaw) : undefined,
+      shell: shRaw !== null ? Number(shRaw) : undefined,
+    });
+  }
+  return {
+    forceVoxRaw,
+    forceVoxAll,
+    forceVoxId,
+    forceVoxOn,
+    voxReg,
+    voxGridDim,
+    voxLod,
+    transitionDist,
+    farTilesOn,
+    aggDist,
+    ftCell,
+    anchorH,
+    stressRaw: qVox.get('stress'),
+    leafDensityRaw: qVox.get('naniteleafdensity'),
+    keyKnobs: ['voxlodk', 'voxlodlevels', 'voxlodsparse', 'voxlodshell', 'leaflodk', 'clustertris', 'clusterfill'].map(
+      (k) => qVox.get(k),
+    ),
+  };
+}
+
+/** a pool's discrete LOD ring chain — ONE definition shared by the registry pool
+ *  walk and planVegJobs (their enumeration MUST never drift: prep results are
+ *  consumed positionally / by idF). */
+function poolRings(
+  pool: VegPool,
+  policy: NonNullable<ReturnType<typeof classPolicy>>,
+): { part: PoolPart; switchAt: number }[] {
+  const isTree = pool.cls <= TREE_MAX_CLS;
+  const rings: { part: PoolPart; switchAt: number }[] = [];
+  if (isTree && pool.r0?.[0]) rings.push({ part: pool.r0[0], switchAt: R0_FAR });
+  if (pool.r1?.[0]) rings.push({ part: pool.r1[0], switchAt: isTree ? R1_FAR : policy.lodDist });
+  // branch r2 is a geometry clone (indirect-slot bookkeeping) — skip it
+  if (pool.r2?.[0] && pool.cls !== VegClass.Branch) {
+    rings.push({ part: pool.r2[0], switchAt: 0 });
+  }
+  return rings;
+}
+
+interface VegDagJob {
+  label: string;
+  /** LAZY (memoized per pool geometry): a full cache hit must not pay ~90
+   *  geometryToSource materializations on every warm boot. */
+  source: () => ExplicitSource;
+}
+interface VegCrownJob extends VegDagJob {
+  idF: number;
+  color: { r: number; g: number; b: number; hueVar: number };
+}
+interface VegJobPlan {
+  /** QEM LOD DAGs for bark/rock/deadwood heads — mirrors the walk's `toDag` order */
+  dagJobs: VegDagJob[];
+  /** aggregate DAGs for leaf crowns — mirrors the walk's `toAggregate` order */
+  aggJobs: VegDagJob[];
+  /** crown voxelizations — keyed by idF (order-independent) */
+  crownJobs: VegCrownJob[];
+}
+
+/** enumerate the expensive per-pool build jobs with EXACTLY the pool walk's
+ *  predicates (classPolicy / inSet / ring presence / leaf / voxReg / forcevox). */
+function planVegJobs(
+  lib: VegLib,
+  opts: {
+    inSet: (c: MaterialClassId) => boolean;
+    dagSet?: ReadonlySet<MaterialClassId> | undefined;
+    leafOn: boolean;
+    knobs: VegKnobs;
+  },
+): VegJobPlan {
+  const { inSet, dagSet, leafOn, knobs } = opts;
+  const plan: VegJobPlan = { dagJobs: [], aggJobs: [], crownJobs: [] };
+  for (const pool of lib.pools) {
+    const policy = classPolicy(pool.cls);
+    if (!policy || !inSet(policy.matClass)) continue;
+    const idF = pool.cls * 8 + pool.variant;
+    const label = `c${pool.cls}v${pool.variant}`;
+    const rings = poolRings(pool, policy);
+    if (rings.length === 0) continue;
+    if (dagSet?.has(policy.matClass)) {
+      const headGeo = (rings[0] as { part: PoolPart }).part.geo;
+      let headSrc: ExplicitSource | null = null;
+      plan.dagJobs.push({ label, source: () => (headSrc ??= geometryToSource(headGeo)) });
+    }
+    if (leafOn && pool.leaf) {
+      const leafGeo = pool.leaf.geo;
+      let leafSrc: ExplicitSource | null = null;
+      const leafSource = (): ExplicitSource => (leafSrc ??= geometryToSource(leafGeo));
+      plan.aggJobs.push({ label: `${label}/leaf`, source: leafSource });
+      if (knobs.voxReg && (!knobs.forceVoxOn || knobs.forceVoxAll || knobs.forceVoxId === idF)) {
+        plan.crownJobs.push({ idF, label: `${label}/voxel`, source: leafSource, color: pool.leaf.color });
+      }
+    }
+  }
+  return plan;
+}
+
+/** prepareWorldVeg output: crown voxelizations (idF-keyed, BootCache packed form)
+ *  + vegetation LOD DAGs in [dagJobs..., aggJobs...] order (null = that build
+ *  failed in both the worker and the sync fallback — never fatal). */
+export interface WorldVegPrep {
+  crowns: Map<number, PackedPreparedCrown>;
+  dags: (DagBuild | null)[];
+  crownsFromCache: boolean;
+  dagsFromCache: boolean;
+}
+
+/**
+ * Cold-boot workerization + overlap (2026-07-04): produce every expensive
+ * PLACEMENT-INDEPENDENT vegetation artifact — per-species crown voxelizations
+ * (was a ~36-48 s sync main-thread slab) and the vegetation LOD DAGs (QEM +
+ * aggregate, ~15-18 s sync) — via the BootCache, or a min(8, cores−2)
+ * DagWorkerPool fan-out on a miss (per-job sync fallback preserves behavior).
+ *
+ * Call it as soon as the VegLibrary exists (TerrainScene does, while the GPU
+ * boot phases run) and hand the promise to buildWorldRegistry as `pre` — the
+ * jobs overlap heightfield/scatter/GI instead of serializing after them.
+ *
+ * Determinism: workers apply the SAME module knobs per request (forwarded
+ * explicitly), inputs are per-species (no shared mutable state), results are
+ * keyed by idF / job index (completion order can't reorder them), and crowns
+ * cross threads in the BootCache packed form whose pack→unpack round trip is
+ * the bit-exactness-gated warm-boot path.
+ *
+ * Cache: its OWN 'world-veg' BootCache key — every resolved input param, but NO
+ * instance counts (crowns/DAGs don't depend on placement; 'fartiles' does and
+ * keeps the counts-keyed store in buildWorldRegistry).
+ */
+export async function prepareWorldVeg(input: {
+  renderer: Renderer;
+  lib: VegLib;
+  seed?: number;
+  classes?: ReadonlySet<MaterialClassId>;
+  dag?: ReadonlySet<MaterialClassId>;
+  leaf?: boolean;
+}): Promise<WorldVegPrep> {
+  const { renderer, lib, seed, classes, dag, leaf } = input;
+  const knobs = resolveVegKnobs(renderer);
+  const leafOn = leaf === true;
+  const inSet = (c: MaterialClassId): boolean => !classes || classes.has(c);
+  const plan = planVegJobs(lib, { inSet, dagSet: dag, leafOn, knobs });
+  const nDagJobs = plan.dagJobs.length + plan.aggJobs.length;
+  const cache = new BootCache({
+    params: {
+      scene: 'world-veg',
+      seed: seed ?? 0,
+      classes: classes ? [...classes].sort() : null,
+      dagClasses: dag ? [...dag].sort() : null,
+      leafOn,
+      voxReg: knobs.voxReg,
+      forceVox: knobs.forceVoxRaw,
+      voxGridDim: knobs.voxGridDim,
+      voxLod: knobs.voxLod,
+      transitionDist: knobs.transitionDist,
+      voxOcc: voxOccThreshold(),
+      anchorH: knobs.anchorH,
+      fov: APP_FOV_DEG,
+      leafDensity: knobs.leafDensityRaw,
+      knobs: knobs.keyKnobs,
+    },
+  });
+  const wantCrowns = knobs.voxReg && leafOn && plan.crownJobs.length > 0;
+  let crowns = new Map<number, PackedPreparedCrown>();
+  let crownsFromCache = false;
+  if (wantCrowns) {
+    const cached = await cache.get<{ idF: number; pack: PackedPreparedCrown }[]>('crowns');
+    if (cached) {
+      crowns = new Map(cached.map((c) => [c.idF, c.pack]));
+      crownsFromCache = true;
+    }
+  }
+  let dags: (DagBuild | null)[] = [];
+  let dagsFromCache = false;
+  if (nDagJobs > 0) {
+    const cachedDags = await cache.getMany<DagBuild>('dags');
+    if (cachedDags && cachedDags.length === nDagJobs) {
+      dags = cachedDags;
+      dagsFromCache = true;
+    }
+  }
+  const needCrowns = wantCrowns && !crownsFromCache;
+  const needDags = nDagJobs > 0 && !dagsFromCache;
+  if (needCrowns || needDags) {
+    const tP0 = performance.now();
+    const endSpan = BootTrace.span(
+      `veg prep workers: ${needCrowns ? plan.crownJobs.length : 0} crowns + ${needDags ? nDagJobs : 0} DAGs`,
+    );
+    const cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
+    let pool: DagWorkerPool | null = null;
+    try {
+      pool = new DagWorkerPool(Math.max(1, Math.min(8, cores - 2)));
+    } catch {
+      pool = null; // no Worker (headless node) — synchronous fallbacks below
+    }
+    const poolSize = pool?.size ?? 0;
+    const fill = clusterFill();
+    const maxTris = MAX_CLUSTER_TRIS;
+    // PULL QUEUE, crowns first: pushing every job at once would split them
+    // across workers by COUNT (a worker can queue three heavy crowns while
+    // another drains cheap QEM meshes). Keeping ≤poolSize jobs in flight makes
+    // the least-loaded dispatch always land on an idle thread — dynamic load
+    // balancing, wall ≈ Σcost/threads bounded by the single largest crown.
+    const thunks: (() => Promise<void>)[] = [];
+    const crownOut: ({ idF: number; pack: PackedPreparedCrown } | null)[] = plan.crownJobs.map(() => null);
+    if (needCrowns) {
+      const cfg = {
+        levels: voxlodLevels(),
+        errorK: voxlodErrorK(),
+        sparseK: voxlodSparseK(),
+        shell: voxlodShell() ? 1 : 0,
+        anchorL0: voxlodAnchorL0(),
+      };
+      const occ = voxOccThreshold();
+      for (let i = 0; i < plan.crownJobs.length; i++) {
+        const j = plan.crownJobs[i] as VegCrownJob;
+        const slot = i;
+        thunks.push(async (): Promise<void> => {
+            let pack: PackedPreparedCrown | null = null;
+            const src = j.source();
+            if (pool) {
+              try {
+                pack = await pool.buildCrown({
+                  positions: src.positions,
+                  normals: src.normals,
+                  uvs: src.uvs,
+                  vdata: src.vdata,
+                  indices: src.indices,
+                  color: j.color,
+                  gridDim: knobs.voxGridDim,
+                  voxlod: knobs.voxLod,
+                  occThreshold: occ,
+                  cfg,
+                });
+              } catch (e) {
+                console.warn(`[worldveg] crown worker ${j.label} failed — sync fallback:`, e);
+              }
+            }
+            if (!pack) {
+              await yieldIfDue();
+              pack = packPreparedCrown(prepareVoxelCrown(src, j.color, knobs.voxGridDim, knobs.voxLod));
+            }
+          crownOut[slot] = { idF: j.idF, pack };
+        });
+      }
+    }
+    const dagOut: (DagBuild | null)[] = new Array<DagBuild | null>(nDagJobs).fill(null);
+    if (needDags) {
+      const runDag = (idx: number, job: VegDagJob, agg: boolean): Promise<void> =>
+        (async (): Promise<void> => {
+          let built: DagBuild | null = null;
+          const src = job.source();
+          if (pool) {
+            try {
+              built = agg
+                ? await pool.buildAggregate({
+                    verts: explicitToDagVerts(src),
+                    vertStride: DAG_VERT_STRIDE,
+                    indices: src.indices,
+                    opts: { seed: seed ?? 0, maxTris },
+                    clusterFill: fill,
+                    aggErrorK: aggLodErrorK(),
+                  })
+                : await pool.buildMesh({
+                    verts: explicitToDagVerts(src),
+                    vertStride: DAG_VERT_STRIDE,
+                    indices: src.indices,
+                    opts: { normalOffset: 3, maxTris },
+                    clusterFill: fill,
+                  });
+            } catch (e) {
+              console.warn(`[worldveg] ${agg ? 'AGG' : 'DAG'} worker ${job.label} failed — sync fallback:`, e);
+            }
+          }
+          if (!built) {
+            try {
+              await yieldIfDue();
+              built = agg
+                ? buildAggregateDag(explicitToDagVerts(src), DAG_VERT_STRIDE, src.indices, {
+                    seed: seed ?? 0,
+                    maxTris,
+                  })
+                : buildDag(explicitToDagVerts(src), DAG_VERT_STRIDE, src.indices, {
+                    normalOffset: 3,
+                    maxTris,
+                  });
+            } catch (e) {
+              // a null slot makes the registry re-attempt inline → same deferred
+              // note as the pre-worker behavior; never fatal
+              console.warn(`[worldveg] ${agg ? 'AGG' : 'DAG'} ${job.label} build failed:`, e);
+              built = null;
+            }
+          }
+          dagOut[idx] = built;
+        })();
+      // aggregates (leaf crowns, the heavier DAGs) ahead of QEM meshes
+      for (let i = 0; i < plan.aggJobs.length; i++) {
+        const idx = plan.dagJobs.length + i;
+        const job = plan.aggJobs[i] as VegDagJob;
+        thunks.push(() => runDag(idx, job, true));
+      }
+      for (let i = 0; i < plan.dagJobs.length; i++) {
+        const idx = i;
+        const job = plan.dagJobs[i] as VegDagJob;
+        thunks.push(() => runDag(idx, job, false));
+      }
+    }
+    const runners = Array.from({ length: Math.max(1, poolSize) }, async (): Promise<void> => {
+      for (let t = thunks.shift(); t; t = thunks.shift()) await t();
+    });
+    await Promise.all(runners);
+    pool?.dispose();
+    endSpan();
+    if (needCrowns) {
+      const done = crownOut.filter((c): c is { idF: number; pack: PackedPreparedCrown } => c !== null);
+      crowns = new Map(done.map((c) => [c.idF, c.pack]));
+      // store AFTER first frame: put()'s structured-clone serialization is
+      // main-thread work (the 'dags' store alone measured ~36 s of chunked
+      // writes) — during boot it competes with the boot itself
+      if (done.length === plan.crownJobs.length) {
+        void BootTrace.whenFinished().then(() => cache.put('crowns', done));
+      }
+    }
+    if (needDags) {
+      dags = dagOut;
+      if (!dagOut.includes(null)) {
+        void BootTrace.whenFinished().then(() => cache.putMany('dags', dagOut));
+      }
+    }
+    console.log(
+      `[worldveg] prep: ${plan.crownJobs.length} crowns + ${nDagJobs} DAGs in ` +
+        `${(performance.now() - tP0).toFixed(0)} ms (${poolSize > 0 ? `${poolSize}-worker pool` : 'sync'})`,
+    );
+  }
+  return { crowns, dags, crownsFromCache, dagsFromCache };
+}
+
 export async function buildWorldRegistry(input: {
   renderer: Renderer;
   hf: Heightfield;
@@ -292,6 +718,11 @@ export async function buildWorldRegistry(input: {
    *  The heights are deterministic in the seed, so a cached DAG loads instantly
    *  (boot renders the DAG, no fallback). Omit to disable caching (always build). */
   seed?: number;
+  /** cold-boot overlap (2026-07-04): a prepareWorldVeg promise kicked EARLY by the
+   *  scene (as soon as the VegLibrary exists — the crown/DAG worker jobs then run
+   *  concurrently with the GPU boot phases). Omitted ⇒ built here (same results,
+   *  no overlap). MUST come from the same lib/classes/dag/leaf args as this call. */
+  pre?: Promise<WorldVegPrep>;
 }): Promise<WorldRegistryResult> {
   const {
     renderer,
@@ -313,19 +744,32 @@ export async function buildWorldRegistry(input: {
   const t0 = performance.now();
   const deferred: string[] = [];
 
-  // A/B (?clustertris=256): set the cluster triangle cap BEFORE any registerMesh /
-  // buildDag clusterizes — 256 halves the cluster COUNT (fewer per-cluster raster
-  // workgroups, the dominant SW cost) at the cost of coarser per-cluster culling. The
-  // raster/resolve shaders (built after this) read the same live cap. Default 128.
-  const clusterParams = new URLSearchParams(window.location.search);
-  setClusterTriCap(Number(clusterParams.get('clustertris')) || 256);
-  // ?clusterfill: how full a cluster must be (fraction of the cap) before the clusterizer
-  // FINALIZES on a dead adjacency frontier instead of joining the next (disconnected) leaf.
-  // Default 0.75 (tight spheres); raise toward ~0.95 so chunky leaf-sprays pack fuller
-  // (fewer clusters) — at the cost of looser per-cluster bounding spheres (watch visTris).
-  setClusterFill(Number(clusterParams.get('clusterfill')) || 0.95);
+  // resolve + APPLY every build knob (cluster caps, voxlod ladder, thresholds) —
+  // idempotent; the early prepareWorldVeg call (TerrainScene overlap) already ran
+  // it, but a direct buildWorldRegistry caller must get identical module state.
+  const knobs = resolveVegKnobs(renderer);
+  const {
+    forceVoxRaw,
+    forceVoxAll,
+    forceVoxId,
+    forceVoxOn,
+    voxReg,
+    voxGridDim,
+    voxLod,
+    transitionDist,
+    farTilesOn,
+    aggDist,
+    ftCell,
+    anchorH,
+  } = knobs;
+
+  // crown voxelizations + vegetation LOD DAGs: cache-or-worker-built, possibly
+  // kicked EARLY by TerrainScene (overlapped with the GPU boot phases). Awaited
+  // after the scatter readback below — the jobs are already running either way.
+  const prepPromise = input.pre ?? prepareWorldVeg({ renderer, lib, seed, classes, dag, leaf: leafOn });
 
   // ---- scatter readback (placements are boot-static) ------------------------
+  BootTrace.phase('registry: scatter readback + partition');
   const layers = await Promise.all([
     readLayer(renderer, scatter.trees),
     readLayer(renderer, scatter.understory),
@@ -347,6 +791,7 @@ export async function buildWorldRegistry(input: {
     perId.set(id, { a: new Float32Array(n * 4), b: new Float32Array(n * 4), fill: 0 });
   }
   for (const layer of layers) {
+    await yieldIfDue();
     for (let i = 0; i < layer.count; i++) {
       const id = Math.round(layer.b[i * 4 + 3] as number);
       const s = perId.get(id);
@@ -379,90 +824,14 @@ export async function buildWorldRegistry(input: {
   // QEM degenerates on disconnected leaves) instead of QEM. Same DagBuild contract,
   // so it rides the identical attachDag + cut; extends the crown to TREE_GEO_FAR.
   const toAggregate: { handle: MeshHandle; source: ExplicitSource; label: string }[] = [];
-  // voxel-foliage (spec §5.2/§5.3): ?voxreg=1 voxelizes each leaf crown OFFLINE and
-  // collects the prepared bricks so the brick budget can be reserved BEFORE build()
-  // (addLate freezes caps) and a voxel:7 sibling head appended AFTER. OFF by default —
-  // the registry/raster wiring lands in Stage 2; this proves the reserve→append path.
-  const qVox = new URLSearchParams(window.location.search);
-  // ?forcevox=<idF> (or =1 / =all for every voxelized crown) — DEBUG override (spec §A1).
-  // Forces the VOXEL path for the chosen crown(s) REGARDLESS of distance by voxelizing
-  // them AND suppressing their LEAF mesh (leaf maxDist → ~0), with the voxel head's
-  // nearDist=0 so it renders at ALL distances — the raster/resolve voxel path in isolation
-  // WITHOUT the distance transition. Implies ?voxreg. Stage-3a makes the transition the
-  // DEFAULT route (no flag): voxelize + register voxel heads + the mesh→voxel handoff.
-  const forceVoxRaw = qVox.get('forcevox');
-  const forceVoxAll = forceVoxRaw === '1' || forceVoxRaw === 'all';
-  const forceVoxId = forceVoxRaw !== null && !forceVoxAll ? Number(forceVoxRaw) : null;
-  const forceVoxOn = forceVoxRaw !== null;
-  // ?voxreg=0 disables the automatic mesh→voxel transition in the WORLD scene. DEFAULT ON
-  // since 2026-07-03 (the world-hookup arc): the world rides the SAME voxelised-foliage
-  // stack the forest ships (voxel crowns beyond the handoff + far tiles), boot-cached.
-  // Was opt-in (?voxreg=1) while the forest was the only calibrated path. ?forcevox implies.
-  const voxReg = qVox.get('voxreg') !== '0' || forceVoxOn;
-  const voxGridDim = Number(qVox.get('voxgrid') ?? DEFAULT_VOXEL_GRID_DIM) || DEFAULT_VOXEL_GRID_DIM;
-  // ?voxnear= — the mesh→voxel handoff distance (m), TUNEABLE (spec §3.2.bis). Default
-  // DEFAULT_TRANSITION_DIST (60 m — the shared beautification pick). The leaf head culls
-  // beyond it; the voxel head seeds beyond it. ?forcevox overrides to 0 (voxel everywhere).
-  const transitionDist = Number(qVox.get('voxnear') ?? DEFAULT_TRANSITION_DIST) || DEFAULT_TRANSITION_DIST;
-  // ?fartiles=0 disables the cross-instance far-field tile aggregation (FarTiles.ts —
-  // DEFAULT ON, 2026-07-03: same machinery as the forest; terrain-aware per-tile baseY).
-  // ?aggdist= tile handoff distance; ?ftcell= tile cell size (m).
-  const farTilesOn = qVox.get('fartiles') !== '0';
-  // ⚠️ aggDist 280 here, NOT the forest's DEFAULT_AGG_DIST 140 (measured 2026-07-03,
-  // wagg280 gallery): on real terrain an oblique view puts whole HILLSIDES in the
-  // 94-280 m band — at 140 the fartile takeover painted them as a washed-out wall of
-  // 2.9 m plates (user report). 280 keeps per-tree grid-256 voxels on everything you
-  // actually look at; tiles own the background. Perf: oblique 47→58 fps (per-tree is
-  // CHEAPER than the tile overlap there), high-aerial 109→107 (far collapse intact).
-  // The forest keeps 140: flat ground only ever shows tile canopy TOPS, and its
-  // F-vs-G sweep picked cell-size fidelity over takeover distance.
-  const aggDist = Number(qVox.get('aggdist') ?? 280) || 280;
-  // ⚠️ ftCell 0.75 here, NOT the forest's DEFAULT_FT_CELL 0.6 — the ONE knob the world
-  // cannot share (measured 2026-07-03): the 4 km world splats ~3510 tiles vs the forest's
-  // ~841, and 0.6 m cells produced ~12-13M far bricks ≈ 450 MB — over the 256 MB storage-
-  // buffer cliff (and the BrickCPU JS heap OOM-crashed the tab at ~8M). 0.75 lands ~6-7M
-  // (the forest-proven scale). Revisit if the brick payload slims (typed-array bricks /
-  // buffer split); ?ftcell=0.6 works for A/B on machines with headroom.
-  const ftCell = Number(qVox.get('ftcell') ?? 0.75) || 0.75;
-  // ?leaflodk= — aggregate LEAF ladder error scale (BuildAggregateDag AGG_LOD_CFG,
-  // shared default 0.4); ?voxocc= — occupancy coverage threshold (VoxelizeCrown).
-  {
-    const lk = qVox.get('leaflodk');
-    if (lk !== null) setAggLodErrorK(Number(lk));
-    const occRaw = qVox.get('voxocc');
-    if (occRaw !== null) setVoxOccThreshold(Number(occRaw));
-  }
-  // ?voxlod (G1, DEFAULT ON): build the voxel MIP PYRAMID + a REAL multi-level DAG so the SAME
-  // crown coarsens with distance through a BAND-ANCHORED octave ladder (far => bigger/fewer
-  // voxels, near => finer), selected by the cull's screen-error cut (like UE5 Nanite Voxels).
-  // ?voxlod=0 forces today's single-level degenerate always-cut DAG (the A/B baseline).
-  const voxLod = qVox.get('voxlod') !== '0';
-  // ANCHOR the ladder to the band (correction 1): ownError(L0) = transitionDist*tau/projK so the
-  // FINEST level's cut lands at the handoff and each octave of distance descends one level (spans
-  // [35,2000] m). projK mirrors the cull (cot(fovY/2)*renderHeight*0.5); no camera here, so the
-  // app FOV (Engine.ts PerspectiveCamera = 55°) is used — the ladder SHAPE is projK-robust anyway.
-  const APP_FOV_DEG = 55; // Engine.ts camera FOV
-  const anchorH = internalSize(input.renderer, new Vector2()).y; // ?rscale: τ anchor follows the render res
-  {
-    const anchorL0 = computeVoxlodAnchorL0(transitionDist, anchorH, APP_FOV_DEG);
-    // ?voxlodk= (anchor multiplier) / ?voxlodlevels= / ?voxlodsparse= / ?voxlodshell= sweep the
-    // ladder for A/B; unset = the band-anchored defaults (7 levels, K=1, sparse off, shell off).
-    const kRaw = qVox.get('voxlodk');
-    const lRaw = qVox.get('voxlodlevels');
-    const spRaw = qVox.get('voxlodsparse');
-    const shRaw = qVox.get('voxlodshell');
-    setVoxlodConfig({
-      anchorL0,
-      errorK: kRaw !== null ? Number(kRaw) : undefined,
-      levels: lRaw !== null ? Number(lRaw) : undefined,
-      sparseK: spRaw !== null ? Number(spRaw) : undefined,
-      shell: shRaw !== null ? Number(shRaw) : undefined,
-    });
-  }
-  // ── boot cache (DDC — same store the forest path uses): crown voxelizations, LOD DAG
-  // builds and the fartiles splat are deterministic in (sources × these params); key =
-  // builder-source hash + RESOLVED values (a raw-null knob must never mask a code-default
-  // change — the 2026-07-02 ftcell hazard). The scene marker keeps world/forest disjoint.
+  // (voxel-foliage / far-tile knob RESOLUTION moved to resolveVegKnobs — shared with
+  // the early prepareWorldVeg overlap path; destructured into locals above.)
+  // ── boot cache (DDC — same store the forest path uses): the FARTILES splat is
+  // deterministic in (sources × these params, INCLUDING instance placement — hence
+  // `counts`); key = builder-source hash + RESOLVED values (a raw-null knob must never
+  // mask a code-default change — the 2026-07-02 ftcell hazard). The scene marker keeps
+  // world/forest disjoint. Crown voxelizations + veg DAGs moved to prepareWorldVeg's
+  // placement-independent 'world-veg' key (they are pure functions of lib geometry).
   const bootCache = new BootCache({
     params: {
       scene: 'world',
@@ -481,25 +850,20 @@ export async function buildWorldRegistry(input: {
       voxOcc: voxOccThreshold(),
       anchorH,
       fov: APP_FOV_DEG,
-      stress: qVox.get('stress'),
-      leafDensity: qVox.get('naniteleafdensity'),
-      knobs: ['voxlodk', 'voxlodlevels', 'voxlodsparse', 'voxlodshell', 'leaflodk', 'clustertris', 'clusterfill'].map(
-        (k) => qVox.get(k),
-      ),
+      stress: knobs.stressRaw,
+      leafDensity: knobs.leafDensityRaw,
+      knobs: knobs.keyKnobs,
     },
   });
-  // crown voxelizations (idF-keyed — the pool walk below consumes them in place of
-  // prepareVoxelCrown). Only fetched when the voxel path is live.
-  const cachedCrownList =
-    voxReg && leafOn ? await bootCache.get<{ idF: number; pack: PackedPreparedCrown }[]>('crowns') : null;
-  const cachedCrowns = cachedCrownList ? new Map(cachedCrownList.map((c) => [c.idF, c.pack])) : null;
-  const crownPacks: { idF: number; pack: PackedPreparedCrown }[] = [];
+  // crown voxelizations + vegetation DAGs (cache-or-worker-built, possibly early-kicked
+  // by TerrainScene — the pool walk below consumes crowns in place of prepareVoxelCrown).
+  BootTrace.phase('registry: await veg prep (crowns+DAGs)');
+  const prep = await prepPromise;
   /** idF → leaf head, for the ?forcevox leaf-suppression pass (filled in the loop). */
   const leafHeadForVox = new Map<number, MeshHandle>();
   const toVoxel: {
     idF: number;
-    prep: PreparedVoxelCrown;
-    source: ExplicitSource;
+    packed: PackedPreparedCrown;
     matParam: number;
     label: string;
   }[] = [];
@@ -512,7 +876,11 @@ export async function buildWorldRegistry(input: {
     if (parts.length > from) deferred.push(`${label}: ${parts.length - from} card/leaf part(s)`);
   };
 
+  BootTrace.phase('registry: pool walk (register + unpack crowns)');
   for (const pool of lib.pools) {
+    // cooperative yield (~every 250 ms of work): crown unpack is seconds of
+    // BrickCPU object construction — never let the walk freeze the tab
+    await yieldIfDue();
     const policy = classPolicy(pool.cls);
     const idF = pool.cls * 8 + pool.variant;
     const label = `c${pool.cls}v${pool.variant}`;
@@ -527,13 +895,7 @@ export async function buildWorldRegistry(input: {
     // opaque part = parts[0] by construction (bark/rock/deadwood); the rest
     // are foliage cards / mesh leaves (deferred N9)
     const isTree = pool.cls <= TREE_MAX_CLS;
-    const rings: { part: PoolPart; switchAt: number }[] = [];
-    if (isTree && pool.r0?.[0]) rings.push({ part: pool.r0[0], switchAt: R0_FAR });
-    if (pool.r1?.[0]) rings.push({ part: pool.r1[0], switchAt: isTree ? R1_FAR : policy.lodDist });
-    // branch r2 is a geometry clone (indirect-slot bookkeeping) — skip it
-    if (pool.r2?.[0] && pool.cls !== VegClass.Branch) {
-      rings.push({ part: pool.r2[0], switchAt: 0 });
-    }
+    const rings = poolRings(pool, policy);
     notePart(`${label}/r0`, pool.r0, 1);
     notePart(`${label}/r1`, pool.r1, 1);
     notePart(`${label}/r2`, pool.r2, 1);
@@ -591,22 +953,24 @@ export async function buildWorldRegistry(input: {
       // not tris — that authoring is Stage 2; here we only reserve+upload the bricks).
       if (voxReg && (!forceVoxOn || forceVoxAll || forceVoxId === idF)) {
         const matParam = packLeafTint(pool.leaf.color);
-        const cached = cachedCrowns?.get(idF);
-        const prep = cached
-          ? unpackPreparedCrown(cached)
-          : prepareVoxelCrown(leafSource, pool.leaf.color, voxGridDim, voxLod);
-        if (!cached) crownPacks.push({ idF, pack: packPreparedCrown(prep) });
-        // a degenerate empty crown (0 bricks) would crash registerVoxelHead — skip it so
-        // the leaf head keeps its full mesh envelope (set below to TREE_GEO_FAR, no handoff).
-        if (prep.brickCount > 0) {
-          toVoxel.push({ idF, prep, source: leafSource, matParam, label: `${label}/voxel` });
+        // prep.crowns carries EVERY planned crown (cache hit or worker build — prepareWorldVeg
+        // already stored the packed form). The world path appends STRAIGHT from the packed
+        // 9×u32 words (appendPackedCrown) — no per-brick BrickCPU objects, no unpack slab (the
+        // CPU-heap arc, 2026-07-04). The inline build is a last-resort safety net only.
+        let packed = prep.crowns.get(idF);
+        if (!packed) {
+          console.warn(`[worldreg] crown ${label} missing from veg prep — building inline`);
+          packed = packPreparedCrown(prepareVoxelCrown(leafSource, pool.leaf.color, voxGridDim, voxLod));
+        }
+        // a degenerate empty crown (0 bricks) would crash registerVoxelHead — skip it so the
+        // leaf head keeps its full mesh envelope (set below to TREE_GEO_FAR, no handoff).
+        if (packed.brickCount > 0) {
+          toVoxel.push({ idF, packed, matParam, label: `${label}/voxel` });
           leafHeadForVox.set(idF, leafHead);
         }
       }
     }
   }
-
-  if (!cachedCrowns && crownPacks.length > 0) void bootCache.put('crowns', crownPacks);
 
   // Stage-3a: the mesh→voxel handoff, MESH side. For every voxelized crown, lower the LEAF
   // head's max draw distance to transitionDist so it renders ONLY nearer than the handoff;
@@ -680,6 +1044,7 @@ export async function buildWorldRegistry(input: {
   }
 
   // ---- terrain: the REAL field as ONE heightfield source ---------------------
+  BootTrace.phase('registry: terrain DAG');
   const tTerr0 = performance.now();
   const dagTerrainTileAttaches: {
     handle: MeshHandle;
@@ -897,29 +1262,37 @@ export async function buildWorldRegistry(input: {
   // this to a background Worker per D-N30). Reserve the append budget before
   // build() freezes caps; a per-mesh build failure is logged + skipped (the
   // mesh keeps its discrete chain), never fatal.
+  BootTrace.phase('registry: attach veg DAGs');
   const tDag0 = performance.now();
   const dagBuilds: { handle: MeshHandle; dag: DagBuild }[] = [];
   let dagTris = 0;
-  // boot cache: DagBuild[] in [toDag..., toAggregate...] order (handles re-derive from
-  // THIS boot's registration, which always runs — only the expensive builds are skipped).
-  // Usable only when the stored count matches BOTH job lists (a failed build desyncs the
-  // order ⇒ length mismatch ⇒ clean rebuild).
-  const cachedDags = await bootCache.getMany<DagBuild>('dags');
-  const usableDags = cachedDags && cachedDags.length === toDag.length + toAggregate.length ? cachedDags : null;
+  // veg DAGs come from prepareWorldVeg (cache or worker-built) in [toDag...,
+  // toAggregate...] order — handles re-derive from THIS boot's registration, which
+  // always runs. Usable only when the count matches BOTH job lists (a plan/walk
+  // drift or an all-failed build ⇒ length mismatch ⇒ sync rebuild, never fatal).
+  // A null slot = that ONE build failed in prep (worker AND sync) — the inline
+  // rebuild below reproduces the original failure note.
+  const usableDags = prep.dags.length === toDag.length + toAggregate.length ? prep.dags : null;
+  if (prep.dags.length > 0 && !usableDags) {
+    console.warn(
+      `[worldreg] veg prep DAG count ${prep.dags.length} != jobs ${toDag.length + toAggregate.length} — sync rebuild`,
+    );
+  }
   if (toDag.length > 0) {
     let lateV = 0;
     let lateT = 0;
     let lateC = 0;
     for (let di = 0; di < toDag.length; di++) {
+      await yieldIfDue();
       const item = toDag[di] as { handle: MeshHandle; source: ExplicitSource; label: string };
       let built: DagBuild;
       try {
-        built = usableDags
-          ? (usableDags[di] as DagBuild)
-          : buildDag(explicitToDagVerts(item.source), DAG_VERT_STRIDE, item.source.indices, {
-              normalOffset: 3,
-              maxTris: MAX_CLUSTER_TRIS,
-            });
+        built =
+          usableDags?.[di] ??
+          buildDag(explicitToDagVerts(item.source), DAG_VERT_STRIDE, item.source.indices, {
+            normalOffset: 3,
+            maxTris: MAX_CLUSTER_TRIS,
+          });
       } catch (e) {
         deferred.push(`DAG ${item.label}: build failed (${e instanceof Error ? e.message : String(e)})`);
         continue;
@@ -942,15 +1315,16 @@ export async function buildWorldRegistry(input: {
     let aggT = 0;
     let aggC = 0;
     for (let ai = 0; ai < toAggregate.length; ai++) {
+      await yieldIfDue();
       const item = toAggregate[ai] as { handle: MeshHandle; source: ExplicitSource; label: string };
       let built: DagBuild;
       try {
-        built = usableDags
-          ? (usableDags[toDag.length + ai] as DagBuild)
-          : buildAggregateDag(explicitToDagVerts(item.source), DAG_VERT_STRIDE, item.source.indices, {
-              seed: seed ?? 0,
-              maxTris: MAX_CLUSTER_TRIS,
-            });
+        built =
+          usableDags?.[toDag.length + ai] ??
+          buildAggregateDag(explicitToDagVerts(item.source), DAG_VERT_STRIDE, item.source.indices, {
+            seed: seed ?? 0,
+            maxTris: MAX_CLUSTER_TRIS,
+          });
       } catch (e) {
         deferred.push(`AGG ${item.label}: build failed (${e instanceof Error ? e.message : String(e)})`);
         continue;
@@ -967,11 +1341,8 @@ export async function buildWorldRegistry(input: {
   if (toAggregate.length > 0) {
     console.log(
       `[worldreg] leaf aggregate DAG: ${toAggregate.length} crowns in ${aggBuildMs.toFixed(0)} ms` +
-        (usableDags ? ' (bootcache)' : ''),
+        (usableDags ? (prep.dagsFromCache ? ' (bootcache)' : ' (veg prep workers)') : ''),
     );
-  }
-  if (!usableDags && dagBuilds.length === toDag.length + toAggregate.length && dagBuilds.length > 0) {
-    void bootCache.putMany('dags', dagBuilds.map((b) => b.dag));
   }
   // ---- GRASS patch-DAG lane — DEMOTED TO REFERENCE (?grasspatch=1 opt-in;
   // 2026-07-03 rethink verdict, docs/perf-runs/2026-07-03-grass-arc.md):
@@ -1099,11 +1470,11 @@ export async function buildWorldRegistry(input: {
       // voxlod=0: occupied bricks of the single grid. voxlod=1 (G4): Σ over all pyramid
       // levels (~1.0–1.36× the L0 count — the coarse tail is small). prep.brickCount carries
       // whichever it is, so the reservation auto-grows for the pyramid (no overflow/clipping).
-      lateBricks += v.prep.brickCount;
+      lateBricks += v.packed.brickCount;
       // each voxel head authors prep.clusterCount CLUSTERS, 0 verts / 0 tris — the bricks ARE
       // the payload. voxlod=0: ceil(occupied/128). voxlod=1: Σ over levels of ceil(occ_L/128).
       // dagLinks (roots+children) ride the auto-sized caps.clusters*2 headroom (no reservation).
-      lateVoxClusters += v.prep.clusterCount;
+      lateVoxClusters += v.packed.clusterCount;
       const s = perId.get(v.idF);
       // the voxel head re-binds ONE copy of the leaf stream (no ?stress fan-out)
       if (s) lateVoxInst += s.fill;
@@ -1132,25 +1503,31 @@ export async function buildWorldRegistry(input: {
   // (~250 B/brick × millions) OOM-crashed the tab twice before this.
   let ftPacked: PackedFarTile[] = [];
   if (farTilesOn && toVoxel.length > 0) {
+    BootTrace.phase('registry: fartiles (splat workers)');
     const tFt0 = performance.now();
     const ftPools: { a: Float32Array; b: Float32Array; species: FarTileSpecies }[] = [];
     for (const v of toVoxel) {
+      await yieldIfDue();
       const s = perId.get(v.idF);
-      const levels = v.prep.vox.levels;
+      const levels = v.packed.vox.levels;
       if (!s || !levels || levels.length === 0) continue;
       // pick the crown pyramid level whose brick size best matches the tile cell size
       let pick = 0;
       let bestD = Infinity;
       for (let L = 0; L < levels.length; L++) {
-        const bw = (levels[L] as { cellSize: number }).cellSize * 4;
+        const bw = (levels[L]?.cellSize ?? 0) * 4;
         const d = Math.abs(bw - ftCell);
         if (d < bestD) {
           bestD = d;
           pick = L;
         }
       }
-      const lvl = levels[pick] as { bricks: BrickCPU[]; occupied: number[] };
-      const bricks = lvl.occupied.map((i) => lvl.bricks[i] as BrickCPU);
+      // decode ONLY the picked (coarse) level's occupied bricks from the packed words —
+      // a small transient (no whole-crown BrickCPU graph). Word-precision (oct-normal /
+      // rgba8-albedo) splat INPUT — a cold-only, >280 m far-field effect (see BootCache).
+      const lvl = levels[pick] as { words: Uint32Array; occupied: Uint32Array };
+      const bricks: BrickCPU[] = new Array(lvl.occupied.length);
+      for (let i = 0; i < bricks.length; i++) bricks[i] = readBrick(lvl.words, i);
       let crownMinY = 2;
       for (const b of bricks) crownMinY = Math.min(crownMinY, b.center[1] - b.half);
       ftPools.push({
@@ -1189,8 +1566,19 @@ export async function buildWorldRegistry(input: {
   const dagBuildMs = tBuild0 - tDag0;
 
   // ---- build ------------------------------------------------------------------
+  // (YIELDS ONLY here per the cold-boot task scope — a separate memory workstream
+  // may restructure this block; do not reorder it.)
+  // C (memory arc): crown workers are disposed; free any main-thread inline-fallback
+  // cell-accumulator scratch before the big build slab (defensive — normally never allocated).
+  releaseVoxelizerScratch();
+  BootTrace.phase('registry: build + upload');
+  await yieldIfDue(0); // enter the big sync slab on a fresh task
   const report = reg.build(renderer, counters);
-  for (const b of dagBuilds) reg.attachDag(b.handle, b.dag);
+  BootTrace.phase('registry: attach DAGs + append voxel/fartiles');
+  for (const b of dagBuilds) {
+    await yieldIfDue();
+    reg.attachDag(b.handle, b.dag);
+  }
   // voxel-foliage (§5.2): append the prepared crown bricks + register voxel:7 sibling
   // heads now that build() has frozen the caps. Bound to the SAME instances as the
   // leaf head (the per-mesh distance handoff is Stage 3 — here both heads draw full).
@@ -1198,7 +1586,8 @@ export async function buildWorldRegistry(input: {
     const tVox0 = performance.now();
     let appended = 0;
     for (const v of toVoxel) {
-      const r = appendVoxelCrown(reg, v.prep, v.source, {
+      await yieldIfDue();
+      const r = appendPackedCrown(reg, v.packed, {
         matParam: v.matParam,
         swayPad: LEAF_SWAY_PAD,
         // fartiles: the per-tree voxel crown ENDS at aggDist — the merged tile head owns
@@ -1223,15 +1612,16 @@ export async function buildWorldRegistry(input: {
     if (ftPacked.length > 0) {
       const ftTint = toVoxel[0]?.matParam ?? 0;
       const nTiles = ftPacked.length;
-      let ftBricks = 0;
-      // unpack + append ONE tile at a time (the whole-map object graph is heap-fatal;
-      // peak = the packed array + one live tile). Do NOT release slots in place — the
-      // fire-and-forget bootCache.put still references THIS array and its structured
-      // clone runs after we get here (nulling slots stored a poisoned cache entry).
-      for (let i = 0; i < nTiles; i++) {
-        const tile = unpackFarTiles([ftPacked[i] as PackedFarTile]);
-        ftBricks += appendFarTiles(reg, tile, { nearDist: Math.max(10, aggDist - 46), matParam: ftTint });
-      }
+      // append STRAIGHT from the packed words, one tile at a time (appendPackedFarTiles
+      // yields between tiles). No BrickCPU materialization at all — the whole-map object
+      // graph was heap-fatal. Do NOT release slots in place — the fire-and-forget
+      // bootCache.put still references THIS array (nulling slots stored a poisoned entry).
+      const ftBricks = await appendPackedFarTiles(
+        reg,
+        ftPacked,
+        { nearDist: Math.max(10, aggDist - 46), matParam: ftTint },
+        yieldIfDue,
+      );
       console.log(`[worldreg] fartiles: appended ${ftBricks} bricks across ${nTiles} tile heads`);
       ftPacked = []; // release
     }
@@ -1246,11 +1636,15 @@ export async function buildWorldRegistry(input: {
     // this the late heads never reach the GPU (build() only uploads pre-build entries).
     reg.flush(renderer, counters);
   }
-  for (const t of dagTerrainTileAttaches) reg.attachHeightDag(t.handle, t);
+  for (const t of dagTerrainTileAttaches) {
+    await yieldIfDue();
+    reg.attachHeightDag(t.handle, t);
+  }
   // N8-D2 Stage 2b-1: load the collected terrain tiles into pool slots (one per
   // tile here — all resident, render-parity with the per-tile path; the per-frame
   // clipmap streamer (2b-3) makes residency a camera-centered subset).
   for (const t of terrainPoolTiles) {
+    await yieldIfDue();
     const slot = reg.allocTileSlot();
     if (slot < 0) {
       deferred.push('terrain pool: out of slots (raise pool size)');
@@ -1261,6 +1655,25 @@ export async function buildWorldRegistry(input: {
   // N8-D2 Stage 2b-3: attach the clipmap streamer's boot ring set into pool slots
   // (frame-1 terrain). The streamer then re-centers on the live camera per frame.
   if (terrainStreamer) terrainStreamer.attachBootSet();
+  // D (memory arc): once the app's render loop has bound + uploaded the immutable mega-
+  // buffers (verts + bricks), free their CPU mirrors. Wait a generous margin of rAFs so the
+  // first frames have definitely created the GPUBuffers (three uploads lazily on first bind).
+  // ?noreleasemirrors=1 keeps the mirrors (A/B lever + escape hatch if a late re-upload ever
+  // needs them — e.g. adding a post-boot hero mesh into the verts/brick buffers).
+  const releaseMirrors = new URLSearchParams(window.location.search).get('noreleasemirrors') !== '1';
+  if (releaseMirrors && typeof requestAnimationFrame !== 'undefined') {
+    let f = 0;
+    const tick = (): void => {
+      if (++f < 20) { requestAnimationFrame(tick); return; }
+      const freed = reg.releaseImmutableMirrors();
+      // eslint-disable-next-line no-console
+      console.log(
+        `[worldreg] released immutable CPU mirrors: verts ${(freed.vertsBytes / 1048576).toFixed(1)} MB + ` +
+          `bricks ${(freed.brickBytes / 1048576).toFixed(1)} MB`,
+      );
+    };
+    requestAnimationFrame(tick);
+  }
   const t1 = performance.now();
   return {
     registry: reg,

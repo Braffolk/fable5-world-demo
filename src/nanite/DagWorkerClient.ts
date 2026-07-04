@@ -1,13 +1,23 @@
 /**
- * Main-thread client for the off-thread DAG builder (N8-D1d, D-N30). Wraps the
+ * Main-thread client for the off-thread DAG builder (N8-D1d, D-N30; extended
+ * 2026-07-04 with mesh/aggregate/crown jobs for the cold-boot arc). Wraps the
  * Worker in a promise-per-request queue so callers `await` a build that runs on
- * another thread. One worker handles a sequence of builds (terrain + later the
- * explicit pools); kept alive for background (Increment 2) attaches. Inputs are
+ * another thread. One worker handles a sequence of builds (terrain + the
+ * vegetation pools); kept alive for background (Increment 2) attaches. Inputs are
  * COPIED (structured-cloned), not transferred, so a worker failure can fall back
  * to a synchronous build on the caller side without a detached input buffer.
  */
-import type { DagReq, DagRes, HeightDagOk } from './DagWorkerTypes';
+import type {
+  AggDagReq,
+  CrownReq,
+  DagReq,
+  DagRes,
+  HeightDagOk,
+  MeshDagReq,
+} from './DagWorkerTypes';
 import type { HeightDagOpts } from './BuildHeightGrid';
+import type { DagBuild } from './BuildDag';
+import type { PackedPreparedCrown } from './BootCache';
 
 export interface HeightDagResult {
   gridVerts: HeightDagOk['gridVerts'];
@@ -25,10 +35,20 @@ export interface HeightDagArgs {
   opts?: HeightDagOpts;
 }
 
-/** an off-thread height-DAG builder — one Worker (DagBuildWorker) or a pool of them
+/** buildDag job (workerized vegetation-head QEM DAG) — see MeshDagReq. */
+export type MeshDagArgs = Omit<MeshDagReq, 'id' | 'kind'>;
+/** buildAggregateDag job (workerized leaf-crown aggregate DAG) — see AggDagReq. */
+export type AggDagArgs = Omit<AggDagReq, 'id' | 'kind'>;
+/** prepareVoxelCrown job (workerized crown voxelization) — see CrownReq. */
+export type CrownArgs = Omit<CrownReq, 'id' | 'kind'>;
+
+/** an off-thread DAG builder — one Worker (DagBuildWorker) or a pool of them
  *  (DagWorkerPool). TileBuildDeps.worker is typed to this so either drops in. */
 export interface DagBuilder {
   buildHeight(args: HeightDagArgs): Promise<HeightDagResult>;
+  buildMesh(args: MeshDagArgs): Promise<DagBuild>;
+  buildAggregate(args: AggDagArgs): Promise<DagBuild>;
+  buildCrown(args: CrownArgs): Promise<PackedPreparedCrown>;
   dispose(): void;
 }
 
@@ -57,11 +77,19 @@ export class DagBuildWorker implements DagBuilder {
     };
   }
 
-  buildHeight(args: HeightDagArgs): Promise<HeightDagResult> {
+  /** post one request; resolve with its (ok or error) response. NOTE: no
+   *  transfer list — inputs are copied so a sync fallback keeps them. */
+  private request(req: DagReq): Promise<DagRes> {
     if (this.dead) return Promise.reject(new Error('DagWorker is dead'));
-    const id = this.nextId++;
+    return new Promise<DagRes>((resolve, reject) => {
+      this.pending.set(req.id, { resolve, reject });
+      this.worker.postMessage(req);
+    });
+  }
+
+  buildHeight(args: HeightDagArgs): Promise<HeightDagResult> {
     const req: DagReq = {
-      id,
+      id: this.nextId++,
       kind: 'height',
       heights: args.heights,
       gridN: args.gridN,
@@ -70,19 +98,34 @@ export class DagBuildWorker implements DagBuilder {
       originZ: args.originZ,
       opts: args.opts ?? {},
     };
-    return new Promise<HeightDagResult>((resolve, reject) => {
-      this.pending.set(id, {
-        resolve: (r: DagRes) => {
-          if (!r.ok) {
-            reject(new Error(r.error));
-            return;
-          }
-          resolve({ gridVerts: r.gridVerts, indices: r.indices, clusters: r.clusters, stats: r.stats });
-        },
-        reject,
-      });
-      // NOTE: no transfer list — copy the input so a sync fallback keeps it.
-      this.worker.postMessage(req);
+    return this.request(req).then((r) => {
+      if (!r.ok) throw new Error(r.error);
+      if (r.kind !== 'height') throw new Error(`DagWorker: expected height, got ${r.kind}`);
+      return { gridVerts: r.gridVerts, indices: r.indices, clusters: r.clusters, stats: r.stats };
+    });
+  }
+
+  buildMesh(args: MeshDagArgs): Promise<DagBuild> {
+    return this.request({ id: this.nextId++, kind: 'mesh', ...args }).then((r) => {
+      if (!r.ok) throw new Error(r.error);
+      if (r.kind !== 'mesh') throw new Error(`DagWorker: expected mesh, got ${r.kind}`);
+      return r.dag;
+    });
+  }
+
+  buildAggregate(args: AggDagArgs): Promise<DagBuild> {
+    return this.request({ id: this.nextId++, kind: 'aggregate', ...args }).then((r) => {
+      if (!r.ok) throw new Error(r.error);
+      if (r.kind !== 'aggregate') throw new Error(`DagWorker: expected aggregate, got ${r.kind}`);
+      return r.dag;
+    });
+  }
+
+  buildCrown(args: CrownArgs): Promise<PackedPreparedCrown> {
+    return this.request({ id: this.nextId++, kind: 'crown', ...args }).then((r) => {
+      if (!r.ok) throw new Error(r.error);
+      if (r.kind !== 'crown') throw new Error(`DagWorker: expected crown, got ${r.kind}`);
+      return r.pack;
     });
   }
 
@@ -94,14 +137,13 @@ export class DagBuildWorker implements DagBuilder {
 }
 
 /**
- * A small pool of DagBuildWorkers for CONCURRENT tile bakes (N8-D2 #32). A single
- * persistent Worker bakes serially on its one thread (~170 ms/tile cache-miss), so a
- * camera move needing K fresh tiles stalls ~K×170 ms of coarse→fine pop. The pool
- * dispatches each buildHeight() to the LEAST-LOADED worker, so up to `size` tiles
- * bake in parallel on separate threads — shrinking the window ~size×. Same
- * buildHeight/dispose shape as DagBuildWorker (both are DagBuilders), so it drops
- * into TileBuildDeps.worker unchanged; the streamer fires several builds at once and
- * they land on distinct threads. Throws if NO worker can be constructed (headless
+ * A small pool of DagBuildWorkers for CONCURRENT builds (N8-D2 #32; cold-boot
+ * fan-out 2026-07-04). A single persistent Worker builds serially on its one
+ * thread, so a batch of K jobs stalls ~K× the per-job time. The pool dispatches
+ * each job to the LEAST-LOADED worker, so up to `size` jobs run in parallel on
+ * separate threads. Same DagBuilder shape as DagBuildWorker, so it drops into
+ * TileBuildDeps.worker unchanged; callers fire several builds at once and they
+ * land on distinct threads. Throws if NO worker can be constructed (headless
  * node has no Worker) so the caller can fall back to synchronous builds.
  */
 export class DagWorkerPool implements DagBuilder {
@@ -127,9 +169,9 @@ export class DagWorkerPool implements DagBuilder {
     return this.workers.length;
   }
 
-  buildHeight(args: HeightDagArgs): Promise<HeightDagResult> {
-    // least-loaded dispatch: a fresh request goes to the most-idle thread rather
-    // than queueing behind a slow bake on a round-robin victim.
+  /** least-loaded dispatch: a fresh request goes to the most-idle thread rather
+   *  than queueing behind a slow build on a round-robin victim. */
+  private run<T>(f: (w: DagBuildWorker) => Promise<T>): Promise<T> {
     let pick = 0;
     for (let i = 1; i < this.inflight.length; i++) {
       if ((this.inflight[i] as number) < (this.inflight[pick] as number)) pick = i;
@@ -138,7 +180,7 @@ export class DagWorkerPool implements DagBuilder {
     const dec = (): void => {
       this.inflight[pick] = (this.inflight[pick] as number) - 1;
     };
-    return (this.workers[pick] as DagBuildWorker).buildHeight(args).then(
+    return f(this.workers[pick] as DagBuildWorker).then(
       (r) => {
         dec();
         return r;
@@ -148,6 +190,22 @@ export class DagWorkerPool implements DagBuilder {
         throw e instanceof Error ? e : new Error(String(e));
       },
     );
+  }
+
+  buildHeight(args: HeightDagArgs): Promise<HeightDagResult> {
+    return this.run((w) => w.buildHeight(args));
+  }
+
+  buildMesh(args: MeshDagArgs): Promise<DagBuild> {
+    return this.run((w) => w.buildMesh(args));
+  }
+
+  buildAggregate(args: AggDagArgs): Promise<DagBuild> {
+    return this.run((w) => w.buildAggregate(args));
+  }
+
+  buildCrown(args: CrownArgs): Promise<PackedPreparedCrown> {
+    return this.run((w) => w.buildCrown(args));
   }
 
   dispose(): void {

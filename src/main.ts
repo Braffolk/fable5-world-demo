@@ -13,6 +13,7 @@ import { FlyCamera } from './core/FlyCamera';
 import { initHooks } from './core/Hooks';
 import { parseCamString, parseParams } from './core/Params';
 import { WorldSeed } from './core/Seed';
+import { BootTrace } from './debug/BootTrace';
 import { Hud } from './debug/HUD';
 import { buildForestScene } from './debug/ForestScene';
 import { buildGalleryScene } from './debug/GalleryScene';
@@ -175,6 +176,9 @@ async function boot(): Promise<void> {
   engine.start();
   await engine.settle(6);
   bootUI.hide();
+  // boot-phase summary (console.table + window.__bootTrace) — no-op for scenes
+  // that never marked a phase
+  BootTrace.finish();
   hooks.ready = true;
   // eslint-disable-next-line no-console
   console.log('[laas] ready');

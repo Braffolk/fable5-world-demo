@@ -21,6 +21,7 @@
 import type { CrownVoxelization, PreparedVoxelCrown, VoxelLevel, VoxelBlock } from './VoxelizeCrown';
 import type { DagBuild } from './BuildDag';
 import type { FarTileBuild } from './FarTiles';
+import { BRICK_WORDS, readBrick, writeBrick } from './VoxelBrickCore';
 // builder sources — hashed into the cache key (auto-invalidation on edit)
 import srcVoxelize from './VoxelizeCrown.ts?raw';
 import srcBuildDag from './BuildDag.ts?raw';
@@ -28,11 +29,13 @@ import srcBuildAgg from './BuildAggregateDag.ts?raw';
 import srcFarTiles from './FarTiles.ts?raw';
 import srcFarTilesSplat from './FarTilesSplat.ts?raw';
 import srcVoxelBrick from './VoxelBrick.ts?raw';
+import srcVoxelBrickCore from './VoxelBrickCore.ts?raw';
 import srcClusterize from './Clusterize.ts?raw';
 
 /** bump on changes to builder TRANSITIVE deps not covered by the ?raw hash list
- *  (DagCommon, VegLibrary geometry gen, registry append semantics). */
-const CACHE_REV = 1;
+ *  (DagCommon, VegLibrary geometry gen, registry append semantics).
+ *  rev 2 (2026-07-04): brick pack format f64-lanes → 9×u32 GPU words (heap cut). */
+const CACHE_REV = 2;
 
 const DB_NAME = 'laas-bootcache';
 const STORE = 'artifacts';
@@ -45,7 +48,7 @@ function fnv1a(s: string, h = 0x811c9dc5): number {
   return h >>> 0;
 }
 
-const SRC_HASH = [srcVoxelize, srcBuildDag, srcBuildAgg, srcFarTiles, srcFarTilesSplat, srcVoxelBrick, srcClusterize]
+const SRC_HASH = [srcVoxelize, srcBuildDag, srcBuildAgg, srcFarTiles, srcFarTilesSplat, srcVoxelBrick, srcVoxelBrickCore, srcClusterize]
   .reduce((h, s) => fnv1a(s, h), 0x811c9dc5)
   .toString(16);
 
@@ -193,18 +196,22 @@ export class BootCache {
 }
 
 // ── CrownVoxelization compact pack ────────────────────────────────────────────
-// BrickCPU → 2×u32 (occLo/occHi) + 12×f64 (normal3, spread, albedo3, density,
-// center3, half). Only OCCUPIED bricks are stored; unpack leaves empty grid slots
-// as holes (append paths never read them). f64 lanes ⇒ reconstruction is bit-exact.
+// BrickCPU → BRICK_WORDS (9) × u32 GPU words per occupied brick (the SAME record the
+// append path copies straight into gpu.voxelBricks — writeBrick codec). Only OCCUPIED
+// bricks are stored; unpack leaves empty grid slots as holes (append paths never read
+// them). 36 B/brick vs the old 108 B (2×u32 + 12×f64) — cuts the fartile pack from
+// ~866 MB to ~288 MB and lets appendPackedCrown skip per-brick BrickCPU objects.
+// "Lossless enough": the words ARE what the GPU renders (byte-identical to a fresh
+// build's writeBrick output); only build-time intermediates (fartile splat INPUT)
+// see oct-normal / rgba8-albedo quantization — a cold-only, >280 m far-field effect.
 
-interface PackedGrid {
+export interface PackedGrid {
   occupied: Uint32Array;
-  u: Uint32Array; // 2 per brick
-  f: Float64Array; // 12 per brick
+  words: Uint32Array; // BRICK_WORDS per brick — gpu.voxelBricks record, occupied[] order
   totalBricks: number;
 }
 
-interface PackedLevel extends PackedGrid {
+export interface PackedLevel extends PackedGrid {
   level: number;
   brickGrid: { x: number; y: number; z: number };
   cellSize: number;
@@ -239,47 +246,26 @@ type BrickList = CrownVoxelization['bricks'];
 function packGrid(bricks: BrickList, occupied: number[]): PackedGrid {
   const n = occupied.length;
   const occ = new Uint32Array(occupied);
-  const u = new Uint32Array(n * 2);
-  const f = new Float64Array(n * 12);
+  const words = new Uint32Array(n * BRICK_WORDS);
   for (let i = 0; i < n; i++) {
     const b = bricks[occ[i] as number];
     if (!b) throw new Error('bootcache: occupied index out of range');
-    u[i * 2] = b.occLo >>> 0;
-    u[i * 2 + 1] = b.occHi >>> 0;
-    const o = i * 12;
-    f[o] = b.normal[0];
-    f[o + 1] = b.normal[1];
-    f[o + 2] = b.normal[2];
-    f[o + 3] = b.spread;
-    f[o + 4] = b.albedo[0];
-    f[o + 5] = b.albedo[1];
-    f[o + 6] = b.albedo[2];
-    f[o + 7] = b.density;
-    f[o + 8] = b.center[0];
-    f[o + 9] = b.center[1];
-    f[o + 10] = b.center[2];
-    f[o + 11] = b.half;
+    writeBrick(words, i, b);
   }
-  return { occupied: occ, u, f, totalBricks: bricks.length };
+  return { occupied: occ, words, totalBricks: bricks.length };
 }
 
+/** reconstruct a SPARSE BrickCPU grid from the packed words (holes for empty slots).
+ *  Compat path — the world append reads `words` directly (appendPackedCrown); this is
+ *  for ForestScene's BrickCPU appendVoxelCrown + probes. Values are word-precision
+ *  (oct-normal / rgba8-albedo) = exactly what a fresh build's writeBrick emits. */
 function unpackGrid(p: PackedGrid): { bricks: BrickList; occupied: number[] } {
   const bricks: BrickList = new Array(p.totalBricks);
   const occupied: number[] = new Array(p.occupied.length);
   for (let i = 0; i < p.occupied.length; i++) {
     const bi = p.occupied[i] as number;
     occupied[i] = bi;
-    const o = i * 12;
-    bricks[bi] = {
-      occLo: p.u[i * 2] as number,
-      occHi: p.u[i * 2 + 1] as number,
-      normal: [p.f[o] as number, p.f[o + 1] as number, p.f[o + 2] as number],
-      spread: p.f[o + 3] as number,
-      albedo: [p.f[o + 4] as number, p.f[o + 5] as number, p.f[o + 6] as number],
-      density: p.f[o + 7] as number,
-      center: [p.f[o + 8] as number, p.f[o + 9] as number, p.f[o + 10] as number],
-      half: p.f[o + 11] as number,
-    };
+    bricks[bi] = readBrick(p.words, i);
   }
   return { bricks, occupied };
 }
@@ -342,6 +328,53 @@ export function packPreparedCrown(prep: PreparedVoxelCrown): PackedPreparedCrown
 export function unpackPreparedCrown(p: PackedPreparedCrown): PreparedVoxelCrown {
   return {
     vox: unpackVox(p.vox),
+    brickCount: p.brickCount,
+    clusterCount: p.clusterCount,
+    dagLinkCount: p.dagLinkCount,
+  };
+}
+
+/**
+ * unpackPreparedCrown with a cooperative `tick` between pyramid levels — a big
+ * crown's unpack (millions of BrickCPU objects) is otherwise a single 1-2 s
+ * main-thread slab (cold-boot yields, 2026-07-04). Identical output to
+ * unpackPreparedCrown; `tick` is the caller's yieldIfDue.
+ */
+export async function unpackPreparedCrownAsync(
+  p: PackedPreparedCrown,
+  tick: () => Promise<void>,
+): Promise<PreparedVoxelCrown> {
+  const g = unpackGrid(p.vox.grid);
+  await tick();
+  let levels: VoxelLevel[] | undefined;
+  if (p.vox.levels) {
+    levels = [];
+    for (const l of p.vox.levels) {
+      const lg = unpackGrid(l);
+      levels.push({
+        level: l.level,
+        bricks: lg.bricks,
+        occupied: lg.occupied,
+        brickGrid: l.brickGrid,
+        cellSize: l.cellSize,
+        geomError: l.geomError,
+        blocks: l.blocks,
+      });
+      await tick();
+    }
+  }
+  const vox: CrownVoxelization = {
+    bricks: g.bricks,
+    occupied: g.occupied,
+    brickGrid: p.vox.brickGrid,
+    cellGrid: p.vox.cellGrid,
+    origin: p.vox.origin,
+    cellSize: p.vox.cellSize,
+    stats: p.vox.stats,
+  };
+  if (levels) vox.levels = levels;
+  return {
+    vox,
     brickCount: p.brickCount,
     clusterCount: p.clusterCount,
     dagLinkCount: p.dagLinkCount,

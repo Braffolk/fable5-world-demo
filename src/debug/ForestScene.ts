@@ -55,6 +55,7 @@ import {
   type PreparedVoxelCrown,
   computeVoxlodAnchorL0,
   prepareVoxelCrown,
+  releaseVoxelizerScratch,
   setVoxlodConfig,
   setVoxOccThreshold,
   voxOccThreshold,
@@ -433,6 +434,9 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
     );
   }
   bootStage('LOD DAG builds + fartiles splat');
+  // C (memory arc): the inline (main-thread) crown voxelizations are done — drop the
+  // persistent ~490 MB cell-accumulator scratch before it sits resident all session.
+  releaseVoxelizerScratch();
   ctx.progress(0.9, 'forest: building registry');
   const report = reg.build(engine.renderer, engine.stats.counters);
   bootStage('registry build + GPU upload');

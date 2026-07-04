@@ -8,6 +8,7 @@
  */
 
 import { BOOKMARKS, installBookmarks } from './Bookmarks';
+import { BootTrace } from './BootTrace';
 import { Froxels } from '../gpu/passes/Froxels';
 import { PARTICLE_COUNT, Particles } from '../gpu/passes/Particles';
 import { ProbeGI } from '../gpu/passes/ProbeGI';
@@ -63,6 +64,88 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // default still shows bare nanite; this is a gate harness, not a fallback.
   const DISABLE_OLD_GEOMETRY = qNan.get('oldgeo') !== '1';
 
+  // ── COLD-BOOT OVERLAP (2026-07-04): the VegLibrary build and the nanite
+  // crown/DAG worker prep depend only on (renderer, seed, lib) — kick them NOW
+  // so their CPU work (yield-sliced; crowns/DAGs on a Worker pool) interleaves
+  // with the GPU-await boot phases below (heightfield/erosion/sky/scatter/GI)
+  // instead of serializing after them. Determinism: veg geometry is seeded per
+  // label (seed.rng is stateless), the atlas/impostor captures use bespoke
+  // materials (no wind/caustic context reads), and prep results are keyed by
+  // idF / job index — completion order cannot reorder them.
+  const ablate = new Set(
+    (new URLSearchParams(window.location.search).get('ablate') ?? '').split(','),
+  );
+  const view = new URLSearchParams(window.location.search).get('view');
+  const vegEnabled = view !== 'scatter' && !ablate.has('veg');
+  const naniteOn = qNan.get('nanite') === '1';
+  // D-N19 migration set: explicit ?naniteclasses=csv|all wins; full-frame mode
+  // defaults to the ported set; dbg/build-only modes take everything. Resolved
+  // in ONE place — the early prep and the registry build must never drift.
+  type MatCls = 'terrain' | 'rock' | 'bark' | 'deadwood';
+  const NAN_ALL: readonly MatCls[] = ['terrain', 'rock', 'bark', 'deadwood'];
+  const resolveNaniteSetup = (
+    ported: readonly MatCls[],
+  ): { classes: Set<MatCls> | undefined; dagClasses: Set<MatCls>; naniteLeaf: boolean } => {
+    const clsParam = qNan.get('naniteclasses');
+    let classes: Set<MatCls> | undefined;
+    if (clsParam && clsParam !== 'all') {
+      classes = new Set(
+        clsParam.split(',').filter((c): c is MatCls => (NAN_ALL as readonly string[]).includes(c)),
+      );
+    } else if (!clsParam && naniteFrameMode) {
+      classes = new Set(ported);
+    }
+    return {
+      classes,
+      // N8-D1 / PERF-VB3: continuous-LOD DAG for EVERY veg class — ALWAYS ON (the
+      // old `?nanitedag` selector is retired; terrain rides its own DAG path).
+      dagClasses: new Set(['rock', 'bark', 'deadwood'] as MatCls[]),
+      // N9-C0/C2: real mesh-leaf crowns DEFAULT ON since 2026-07-03 (world-hookup
+      // arc) — without them the nanite-only world renders LEAFLESS. ?naniteleaf=0
+      // is the A/B opt-out.
+      naniteLeaf: qNan.get('naniteleaf') !== '0',
+    };
+  };
+  const leafDensityQ = Number(qNan.get('naniteleafdensity'));
+  const worldRegistryModule = naniteOn ? import('../nanite/WorldRegistry') : null;
+  let vegLibPromise: ReturnType<typeof buildVegLibrary> | null = null;
+  let vegPrepPromise: Promise<import('../nanite/WorldRegistry').WorldVegPrep> | null = null;
+  if (vegEnabled) {
+    const endVegSpan = BootTrace.span('veg library (overlapped with GPU phases)');
+    // no progress callback: the bar is owned by the serial phases; interleaved
+    // updates would jump backwards
+    vegLibPromise = buildVegLibrary(
+      engine.renderer,
+      seed,
+      () => {},
+      // N9-C0: ?naniteleafdensity=N caps the nanite leaf head's per-crown anchor
+      // budget (real-leaf fullness vs memory/cluster cost). Default 2500.
+      Number.isFinite(leafDensityQ) && leafDensityQ > 0 ? { leafAnchorTarget: leafDensityQ } : undefined,
+    );
+    vegLibPromise.then(
+      () => endVegSpan(),
+      () => endVegSpan(),
+    );
+    if (worldRegistryModule) {
+      vegPrepPromise = (async () => {
+        const [wr, lib] = await Promise.all([worldRegistryModule, vegLibPromise as NonNullable<typeof vegLibPromise>]);
+        const setup = resolveNaniteSetup(wr.PORTED_CLASSES as readonly MatCls[]);
+        return wr.prepareWorldVeg({
+          renderer: engine.renderer,
+          lib,
+          seed: seed.seed,
+          ...(setup.classes ? { classes: setup.classes } : {}),
+          dag: setup.dagClasses,
+          leaf: setup.naniteLeaf,
+        });
+      })();
+      // boot failures elsewhere must not surface as an unhandled rejection here;
+      // the real await (buildWorldRegistry) still sees the error
+      void vegPrepPromise.catch(() => undefined);
+    }
+  }
+
+  BootTrace.phase('heightfield (GPU gen + erosion)');
   const hf = await Heightfield.generate(
     engine.renderer,
     params,
@@ -84,6 +167,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // ?shot=N boots straight into a composed bookmark — use ITS time of day
   const bootBm = params.shot !== null ? BOOKMARKS[params.shot - 1] : undefined;
   const bootTod = bootBm?.tod ?? params.timeOfDay;
+  BootTrace.phase('sky: atmosphere LUTs');
   ctx.progress(0.93, 'sky: baking atmosphere LUTs');
   const sunSky = new SunSky(engine, bootTod);
   await sunSky.init(engine.renderer);
@@ -95,6 +179,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // canopy coverage map — BEFORE the probe field (probes ray-march the bare
   // heightfield; the canopy map is their only knowledge of the forest) and
   // before tiles (under-crown ambient)
+  BootTrace.phase('scatter + canopy map');
   ctx.progress(0.94, 'vegetation: scattering instances');
   const scatter = await runScatter(engine.renderer, hf, seed);
   const canopyTex = await buildCanopyMap(engine.renderer, scatter.trees);
@@ -103,12 +188,11 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   engine.stats.counters['veg.extras'] = scatter.extras.count;
   engine.stats.counters['veg.stones'] = scatter.stones.count;
 
-  const ablate = new Set(
-    (new URLSearchParams(window.location.search).get('ablate') ?? '').split(','),
-  );
+  // (ablate hoisted to the top of the function — the overlap kick needs it)
 
   // irradiance probe field (Phase 3 GI; canopy-aware since Phase 5 —
   // ?ablate=canopygi rebuilds the bare-heightfield field for A/B)
+  BootTrace.phase('probe GI');
   ctx.progress(0.95, 'gi: gathering irradiance probes');
   const gi = new ProbeGI(
     hf,
@@ -143,9 +227,9 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     }
   }
 
+  BootTrace.phase('terrain tiles');
   ctx.progress(0.958, 'terrain: building tiles');
   let tilesRef: TerrainTiles | null = null;
-  const view = new URLSearchParams(window.location.search).get('view');
   if (view === 'scatter') addScatterDebug(engine.scene, scatter);
   if (view === 'split' && hf.preErosion) {
     // erosion before/after: pre-erosion clay on the left, eroded on the right
@@ -184,16 +268,12 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
 
   // Phase 5: variant pools + GPU cull → compacted indirect draws
   let forestsRef: Forests | null = null;
-  if (view !== 'scatter' && !ablate.has('veg')) {
-    // N9-C0: ?naniteleafdensity=N caps the nanite leaf head's per-crown anchor budget
-    // (real-leaf fullness vs memory/cluster cost). Default 2500; higher = fuller + heavier.
-    const leafDensity = Number(qNan.get('naniteleafdensity'));
-    const lib = await buildVegLibrary(
-      engine.renderer,
-      seed,
-      (p, m) => ctx.progress(0.963 + p * 0.006, m),
-      Number.isFinite(leafDensity) && leafDensity > 0 ? { leafAnchorTarget: leafDensity } : undefined,
-    );
+  if (vegEnabled && vegLibPromise) {
+    // kicked at the top of the function (cold-boot overlap) — by now most/all of
+    // it ran interleaved with the GPU phases above; this await is just the tail
+    BootTrace.phase('veg library (await tail)');
+    ctx.progress(0.963, 'vegetation: variant pools');
+    const lib = await vegLibPromise;
     // sun uniforms feed the nanite terrain shading too — keep them current
     // even when the old veg render is disabled
     updateSunUniforms(sunSky.sun);
@@ -218,29 +298,15 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     // ?nanite=1 — N1-C4: build the GeometryRegistry from all opaque pools
     // (cluster tables + packed mega-buffers only; rendering unchanged until
     // N2/N3). ?nanite=0/absent: this block never runs.
-    if (new URLSearchParams(window.location.search).get('nanite') === '1') {
+    if (naniteOn && worldRegistryModule) {
+      BootTrace.phase('nanite: world registry');
       ctx.progress(0.985, 'nanite: clusterizing opaque pools');
-      const { buildWorldRegistry, PORTED_CLASSES } = await import('../nanite/WorldRegistry');
-      // D-N19 migration set: explicit ?naniteclasses=csv|all wins; full-frame
-      // mode defaults to the ported set; dbg/build-only modes take everything
-      type MatCls = 'terrain' | 'rock' | 'bark' | 'deadwood';
-      const ALL: readonly MatCls[] = ['terrain', 'rock', 'bark', 'deadwood'];
-      const clsParam = qNan.get('naniteclasses');
-      let classes: Set<MatCls> | undefined;
-      if (clsParam && clsParam !== 'all') {
-        classes = new Set(
-          clsParam.split(',').filter((c): c is MatCls => (ALL as readonly string[]).includes(c)),
-        );
-      } else if (!clsParam && naniteFrameMode) {
-        classes = new Set(PORTED_CLASSES as readonly MatCls[]);
-      }
-      naniteClasses = classes ?? new Set(ALL);
-      // N8-D1 / PERF-VB3: continuous-LOD DAG for EVERY veg class (rock+bark+deadwood) —
-      // ALWAYS ON. With terrain (TERRAIN-RW) also DAG'd, the whole world rides the
-      // hierarchical cut: no discrete-LOD meshes remain ⇒ pure hier renders everything
-      // and the brute path is gone. (The old `?nanitedag=rock|bark|all|none` selector is
-      // retired — there is one mode now.)
-      const dagClasses: Set<MatCls> = new Set(['rock', 'bark', 'deadwood'] as MatCls[]);
+      const { buildWorldRegistry, PORTED_CLASSES } = await worldRegistryModule;
+      // class/DAG/leaf resolution shared with the early prep kick (top of function)
+      const setup = resolveNaniteSetup(PORTED_CLASSES as readonly MatCls[]);
+      const classes = setup.classes;
+      naniteClasses = classes ?? new Set(NAN_ALL);
+      const dagClasses = setup.dagClasses;
       // N8-D2 Stage 2e (D-N39) — the "boot only to dag" FLIP: terrain is the full-res
       // clip-STREAMED DAG by default, no window-grid fallback. `?nanitedterrain` absent ⇒
       // production default (gridN 128, clip on). `?nanitedterrain=0` is the explicit opt-out
@@ -263,12 +329,8 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       const dagTerrainClip = terrainDefault || qNan.get('nanitedclip') === '1';
       // N8-D2 Stage 2d: ?nanitedskirt=0 disables the inter-level seam skirts (A/B). Default ON.
       const dagTerrainSkirt = qNan.get('nanitedskirt') !== '0';
-      // N9-C0/C2: register each tree pool's REAL mesh-leaf crown as a MATERIAL_CLASS.leaf
-      // head with the 'leaf' flutter channel (aggregate DAG extends it across the band).
-      // DEFAULT ON since 2026-07-03 (world-hookup arc): without it the nanite-only world
-      // renders LEAFLESS trees — the crown + its voxel sibling + far tiles are the same
-      // stack the forest ships. ?naniteleaf=0 is the A/B opt-out.
-      const naniteLeaf = qNan.get('naniteleaf') !== '0';
+      // N9-C0/C2: leaf heads — resolved in resolveNaniteSetup (see above)
+      const naniteLeaf = setup.naniteLeaf;
       const wr = await buildWorldRegistry({
         renderer: engine.renderer,
         hf,
@@ -284,6 +346,8 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
         ...(dagTerrainClip ? { dagTerrainClip: true } : {}),
         ...(dagTerrainSkirt ? {} : { dagTerrainSkirt: false }),
         ...(naniteLeaf ? { leaf: true } : {}),
+        // cold-boot overlap: crowns+DAGs already building since the top of boot
+        ...(vegPrepPromise ? { pre: vegPrepPromise } : {}),
       });
       (engine as unknown as { naniteRegistry?: unknown }).naniteRegistry = wr.registry;
       naniteRegistry = wr.registry;
@@ -327,6 +391,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   }
 
   // volumetric clouds (noise bake + sun-shadow map)
+  BootTrace.phase('clouds + shadows + post');
   ctx.progress(0.97, 'sky: baking cloud noise');
   const clouds = new Clouds(sunSky.atmosphere);
   await clouds.init(engine.renderer);
@@ -417,6 +482,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     // N4 full-frame mode (D-N18/D-N19): nanite compute + in-scene resolve own
     // the migrated classes; their old camera draws hide (shadow casting stays
     // on the old path until N5 — ShadowProxy + per-cascade caster siblings)
+    BootTrace.phase('nanite: frame build (raster/resolve/grass)');
     const { buildNaniteFrame } = await import('../nanite/NaniteFrame');
     const { migratedMatClass } = await import('../nanite/WorldRegistry');
     const nanFrame = buildNaniteFrame(engine, naniteRegistry, hf, post, {
@@ -521,6 +587,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // composed bookmarks (keys 1-9, ?shot=N) + 92 s flythrough (?fly=1 / F)
   installBookmarks(engine, hf, ctx.hooks, params);
 
+  BootTrace.phase('first frames (compile + settle)');
   ctx.progress(1, 'terrain ready');
 }
 

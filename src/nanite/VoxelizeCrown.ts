@@ -36,13 +36,18 @@ import type { DagBuild } from './BuildDag';
 import { type Sphere, mergeSpheres, partitionClusters } from './DagCommon';
 import { type DagHierarchy, validateDagHierarchy } from './DagHierarchy';
 import type { ExplicitSource, GeometryRegistry, MeshHandle } from './GeometryRegistry';
+// VoxelBrickCore (NOT VoxelBrick): keeps this module's import chain THREE-FREE
+// so prepareVoxelCrown can run inside the DagWorker module Worker (2026-07-04).
 import {
   type BrickCPU,
   BRICK_DIM,
+  BRICK_WORDS,
   brickCellIndex,
+  brickCenterHalf,
   MAX_BRICKS_PER_CLUSTER,
   writeBrick,
-} from './VoxelBrick';
+} from './VoxelBrickCore';
+import type { PackedLevel, PackedPreparedCrown } from './BootCache';
 
 /** voxlod: number of MIP-pyramid levels (L0 finest … coarsest), each level 2x coarser (bricks 2x
  *  wider, the brick grid halved per axis). DEFAULT 7 = ceil(log2(maxDist/transitionDist))+1, the
@@ -400,6 +405,42 @@ interface CellAccum {
   cb: Float32Array;
 }
 
+// C (2026-07-04 memory arc): PERSISTENT per-worker cell accumulator, reused across crown
+// jobs. Was 7×Float32Array(cellTotal) freshly allocated per crown (~490 MB at grid 256) —
+// with up to 8 workers voxelizing concurrently that churned several GB of transient worker
+// heap. One set per module (⇒ per worker; JS is single-threaded so a job fully owns it),
+// grown to the largest cellTotal seen and zeroed [0,cellTotal) each call.
+let accScratchCells = 0;
+let accScratch: CellAccum | null = null;
+function getCellAccum(cellTotal: number): CellAccum {
+  if (!accScratch || accScratchCells < cellTotal) {
+    accScratchCells = cellTotal;
+    accScratch = {
+      cov: new Float32Array(cellTotal),
+      nx: new Float32Array(cellTotal),
+      ny: new Float32Array(cellTotal),
+      nz: new Float32Array(cellTotal),
+      cr: new Float32Array(cellTotal),
+      cg: new Float32Array(cellTotal),
+      cb: new Float32Array(cellTotal),
+    };
+  } else {
+    const a = accScratch;
+    a.cov.fill(0, 0, cellTotal); a.nx.fill(0, 0, cellTotal); a.ny.fill(0, 0, cellTotal);
+    a.nz.fill(0, 0, cellTotal); a.cr.fill(0, 0, cellTotal); a.cg.fill(0, 0, cellTotal);
+    a.cb.fill(0, 0, cellTotal);
+  }
+  return accScratch;
+}
+
+/** free the persistent cell-accumulator scratch. Crown workers free it implicitly on
+ *  terminate; the MAIN-thread inline builders (ForestScene cold, world's rare inline
+ *  fallback) call this after their crown loop so the ~490 MB set isn't resident all session. */
+export function releaseVoxelizerScratch(): void {
+  accScratch = null;
+  accScratchCells = 0;
+}
+
 /**
  * Voxelize one crown foliage mesh (LOCAL space) into coarse bricks.
  *
@@ -459,15 +500,7 @@ export function voxelizeCrown(
   const cgZ = brickGridZ * BRICK_DIM;
   const cellTotal = cgX * cgY * cgZ;
 
-  const acc: CellAccum = {
-    cov: new Float32Array(cellTotal),
-    nx: new Float32Array(cellTotal),
-    ny: new Float32Array(cellTotal),
-    nz: new Float32Array(cellTotal),
-    cr: new Float32Array(cellTotal),
-    cg: new Float32Array(cellTotal),
-    cb: new Float32Array(cellTotal),
-  };
+  const acc = getCellAccum(cellTotal);
   const cellLin = (cx: number, cy: number, cz: number): number =>
     cx + cy * cgX + cz * cgX * cgY;
 
@@ -553,7 +586,7 @@ export function voxelizeCrown(
   if (!occHistoLogged) {
     occHistoLogged = true;
     const nz: number[] = [];
-    for (let i = 0; i < acc.cov.length; i++) {
+    for (let i = 0; i < cellTotal; i++) {
       const c = acc.cov[i] as number;
       if (c > 0) nz.push(Math.min(1, c));
     }
@@ -1522,128 +1555,127 @@ export interface VoxelHeadBlock {
   };
 }
 
-/** local-space AABB of an occupied-brick run [start, start+count) at a given level. */
-function levelBlockAabb(
-  bricks: BrickCPU[],
-  occupied: number[],
+/** shared append opts + result across the BrickCPU and packed-words entry points. */
+type VoxAppendOpts = { matParam: number; swayPad?: number; maxDist: number; nearDist?: number; label?: string };
+type VoxAppendResult = { head: MeshHandle; brickBase: number; brickCount: number; clusters: number };
+
+/**
+ * A LevelBricks abstracts "N occupied bricks of one grid level": copy their gpu records
+ * into the brick buffer + report each brick's LOCAL center+half for the block AABBs. Two
+ * adapters feed the ONE append core so both paths stay byte-identical on the GPU:
+ *  - cpuLevel   — ForestScene's fresh builds (writeBrick per BrickCPU).
+ *  - wordsLevel — world / bootcache path: a straight typed-array copy of the packed 9×u32
+ *    records, NO per-brick BrickCPU objects (the toVoxel/fartile object-graph was the CPU
+ *    heap slab this arc removes, 2026-07-04).
+ */
+interface LevelBricks {
+  count: number;
+  cellSize: number;
+  fill: (dst: Uint32Array, base: number) => void;
+  centerHalf: (i: number) => readonly [number, number, number, number];
+  blocks?: VoxelBlock[];
+}
+
+function cpuLevel(bricks: BrickCPU[], occupied: number[], cellSize: number, blocks?: VoxelBlock[]): LevelBricks {
+  return {
+    count: occupied.length,
+    cellSize,
+    fill: (dst, base) => {
+      for (let i = 0; i < occupied.length; i++) {
+        const b = bricks[occupied[i] as number];
+        if (b) writeBrick(dst, base + i, b);
+      }
+    },
+    // b.center/b.half are EXACTLY brickCenterLocal(vox,bi) ± (BRICK_DIM·cellSize·0.5) —
+    // both computed from origin + (bx+0.5)·brickWorld — so the AABBs are unchanged.
+    centerHalf: (i) => {
+      const b = bricks[occupied[i] as number] as BrickCPU;
+      return [b.center[0], b.center[1], b.center[2], b.half];
+    },
+    ...(blocks ? { blocks } : {}),
+  };
+}
+
+function wordsLevel(words: Uint32Array, count: number, cellSize: number, blocks?: VoxelBlock[]): LevelBricks {
+  return {
+    count,
+    cellSize,
+    // `words` is exactly count·BRICK_WORDS u32 in occupied order == the append order.
+    fill: (dst, base) => { dst.set(words, base * BRICK_WORDS); },
+    centerHalf: (i) => brickCenterHalf(words, i),
+    ...(blocks ? { blocks } : {}),
+  };
+}
+
+function aabbOverBricks(
+  lb: LevelBricks,
   start: number,
   count: number,
 ): { min: [number, number, number]; max: [number, number, number] } {
   let mnX = Infinity, mnY = Infinity, mnZ = Infinity;
   let mxX = -Infinity, mxY = -Infinity, mxZ = -Infinity;
   for (let i = 0; i < count; i++) {
-    const b = bricks[occupied[start + i] as number] as BrickCPU;
-    mnX = Math.min(mnX, b.center[0] - b.half); mxX = Math.max(mxX, b.center[0] + b.half);
-    mnY = Math.min(mnY, b.center[1] - b.half); mxY = Math.max(mxY, b.center[1] + b.half);
-    mnZ = Math.min(mnZ, b.center[2] - b.half); mxZ = Math.max(mxZ, b.center[2] + b.half);
+    const [cx, cy, cz, h] = lb.centerHalf(start + i);
+    mnX = Math.min(mnX, cx - h); mxX = Math.max(mxX, cx + h);
+    mnY = Math.min(mnY, cy - h); mxY = Math.max(mxY, cy + h);
+    mnZ = Math.min(mnZ, cz - h); mxZ = Math.max(mxZ, cz + h);
   }
   return { min: [mnX, mnY, mnZ], max: [mxX, mxY, mxZ] };
 }
 
-export function appendVoxelCrown(
-  reg: GeometryRegistry,
-  prep: PreparedVoxelCrown,
-  _leafSource: ExplicitSource,
-  opts: { matParam: number; swayPad?: number; maxDist: number; nearDist?: number; label?: string },
-): { head: MeshHandle; brickBase: number; brickCount: number; clusters: number } {
-  const { vox } = prep;
-  // -- voxlod (G1 voxlod=1): the MIP pyramid + multi-level DAG ----------------
-  if (vox.levels && vox.levels.length > 0) {
-    return appendVoxelCrownPyramid(reg, vox.levels, opts);
-  }
-
-  // -- voxlod=0 (DEFAULT): today's single-resolution degenerate DAG, UNCHANGED -
-  const brickCount = vox.occupied.length;
-  // append the occupied bricks into gpu.voxelBricks (uploads via pushRange), in grid
-  // (occupied[]) order so the cluster BLOCKS below address contiguous brick sub-ranges.
-  const brickBase = reg.appendBricks(brickCount, (bricks, base) => {
-    for (let i = 0; i < brickCount; i++) {
-      const bi = vox.occupied[i] as number;
-      const brick = vox.bricks[bi];
-      if (brick) writeBrick(bricks, base + i, brick);
-    }
-  });
-  // split into ≤MAX_BRICKS_PER_CLUSTER blocks (§5.3) + per-block AABB (over the occupied
-  // bricks' local-space centers; brick half-extent = BRICK_DIM·cellSize·0.5).
-  const halfBrick = BRICK_DIM * vox.cellSize * 0.5;
+// -- voxlod=0: single-resolution degenerate DAG. Split into ≤128-brick blocks + per-block AABB.
+function appendCrownSingle(reg: GeometryRegistry, lb: LevelBricks, opts: VoxAppendOpts): VoxAppendResult {
+  const brickBase = reg.appendBricks(lb.count, lb.fill);
   const blocks: VoxelHeadBlock[] = [];
-  for (let start = 0; start < brickCount; start += MAX_BRICKS_PER_CLUSTER) {
-    const count = Math.min(MAX_BRICKS_PER_CLUSTER, brickCount - start);
-    let mnX = Infinity, mnY = Infinity, mnZ = Infinity;
-    let mxX = -Infinity, mxY = -Infinity, mxZ = -Infinity;
-    for (let i = 0; i < count; i++) {
-      const c = brickCenterLocal(vox, vox.occupied[start + i] as number);
-      mnX = Math.min(mnX, c[0] - halfBrick); mxX = Math.max(mxX, c[0] + halfBrick);
-      mnY = Math.min(mnY, c[1] - halfBrick); mxY = Math.max(mxY, c[1] + halfBrick);
-      mnZ = Math.min(mnZ, c[2] - halfBrick); mxZ = Math.max(mxZ, c[2] + halfBrick);
-    }
-    blocks.push({
-      brickBase: brickBase + start,
-      brickCount: count,
-      aabb: { min: [mnX, mnY, mnZ], max: [mxX, mxY, mxZ] },
-    });
+  for (let start = 0; start < lb.count; start += MAX_BRICKS_PER_CLUSTER) {
+    const count = Math.min(MAX_BRICKS_PER_CLUSTER, lb.count - start);
+    blocks.push({ brickBase: brickBase + start, brickCount: count, aabb: aabbOverBricks(lb, start, count) });
   }
   const head = reg.registerVoxelHead(opts.matParam, blocks, {
     swayPad: opts.swayPad ?? 3.8,
     maxDist: opts.maxDist,
     label: opts.label ?? 'voxel',
   });
-  // voxel-foliage (spec §3 / Stage 3a): the NEAR side of the mesh→voxel handoff — the
-  // voxel head seeds ONLY beyond nearDist (= transitionDist) so it renders the mid/far
-  // band; the leaf sibling's maxDist=transitionDist owns nearer. 0/undefined = voxel
-  // everywhere (the ?forcevox debug route, with the leaf head suppressed).
+  // voxel-foliage (spec §3 / Stage 3a): the NEAR side of the mesh→voxel handoff — the voxel
+  // head seeds ONLY beyond nearDist. 0/undefined = voxel everywhere (?forcevox debug route).
   if (opts.nearDist && opts.nearDist > 0) reg.setNearDistance(head, opts.nearDist);
-  return { head, brickBase, brickCount, clusters: blocks.length };
+  return { head, brickBase, brickCount: lb.count, clusters: blocks.length };
 }
 
 /**
- * voxlod (G1 voxlod=1): append ALL pyramid levels' occupied bricks + author a REAL multi-
- * level DAG over them. Blocks are flattened across levels into ONE cluster list; their DAG
- * cut metadata (per-level ownError + own/parent spheres + the spatial-tree child links) is
- * resolved to GLOBAL block indices and handed to registerVoxelHead. The cull's makeTraverse
- * then auto-cuts: far => coarse level emits (fewer/bigger bricks), near => descend to finer.
+ * voxlod=1 (DEFAULT world): append ALL pyramid levels' occupied bricks + author a REAL multi-
+ * level DAG over them. Blocks are flattened across levels into ONE cluster list; their DAG cut
+ * metadata (per-level ownError + own/parent spheres + spatial-tree child links) is resolved to
+ * GLOBAL block indices. The cull's makeTraverse then auto-cuts: far => coarse level emits.
  */
-function appendVoxelCrownPyramid(
-  reg: GeometryRegistry,
-  levels: VoxelLevel[],
-  opts: { matParam: number; swayPad?: number; maxDist: number; nearDist?: number; label?: string },
-): { head: MeshHandle; brickBase: number; brickCount: number; clusters: number } {
-  // total bricks across all levels (= prep.brickCount); append them level by level so each
-  // block addresses a CONTIGUOUS brick sub-range. Record each level's appended brick base.
+function appendCrownPyramid(reg: GeometryRegistry, levels: LevelBricks[], opts: VoxAppendOpts): VoxAppendResult {
+  // append level by level so each block addresses a CONTIGUOUS brick sub-range.
   let total = 0;
-  for (const lvl of levels) total += lvl.occupied.length;
+  for (const l of levels) total += l.count;
   const levelBrickBase: number[] = [];
   const brickBase = reg.appendBricks(total, (bricks, base) => {
     let cursor = base;
-    for (const lvl of levels) {
-      levelBrickBase.push(cursor);
-      for (let i = 0; i < lvl.occupied.length; i++) {
-        const brick = lvl.bricks[lvl.occupied[i] as number];
-        if (brick) writeBrick(bricks, cursor + i, brick);
-      }
-      cursor += lvl.occupied.length;
-    }
+    for (const l of levels) { levelBrickBase.push(cursor); l.fill(bricks, cursor); cursor += l.count; }
   });
   const firstBase = brickBase;
 
-  // flatten blocks across levels into ONE cluster list; map (level, level-local block idx)
-  // → GLOBAL block index so the spatial-tree child links resolve to global cluster ids.
+  // flatten blocks across levels; map (level, level-local block idx) → GLOBAL block index.
   const globalOf: number[][] = levels.map(() => []);
   let g = 0;
   for (let L = 0; L < levels.length; L++) {
-    const lvl = levels[L] as VoxelLevel;
-    for (let bi = 0; bi < lvl.blocks.length; bi++) globalOf[L]![bi] = g++;
+    const bl = (levels[L] as LevelBricks).blocks as VoxelBlock[];
+    for (let bi = 0; bi < bl.length; bi++) globalOf[L]![bi] = g++;
   }
   const coarsest = levels.length - 1;
   const blocks: VoxelHeadBlock[] = [];
   for (let L = 0; L < levels.length; L++) {
-    const lvl = levels[L] as VoxelLevel;
+    const lb = levels[L] as LevelBricks;
+    const bl = lb.blocks as VoxelBlock[];
     const lvlBase = levelBrickBase[L] as number;
-    for (let bi = 0; bi < lvl.blocks.length; bi++) {
-      const blk = lvl.blocks[bi] as VoxelBlock;
-      const aabb = levelBlockAabb(lvl.bricks, lvl.occupied, blk.start, blk.count);
-      // child block indices (level-local, this block lives at level L => its children are at
-      // level L-1) resolve to GLOBAL cluster ids in the finer level.
+    for (let bi = 0; bi < bl.length; bi++) {
+      const blk = bl[bi] as VoxelBlock;
+      const aabb = aabbOverBricks(lb, blk.start, blk.count);
+      // this block lives at level L => its children are level L-1 → GLOBAL cluster ids.
       const childClusterIdx = blk.childBlocks.map((cbi) => globalOf[L - 1]![cbi] as number);
       blocks.push({
         brickBase: lvlBase + blk.start,
@@ -1657,8 +1689,7 @@ function appendVoxelCrownPyramid(
             : {}),
           childClusterIdx,
           isRoot: L === coarsest,
-          // PYRAMID level L directly (L0 finest = 0, coarser = higher) — the ?nanitedbg=lod
-          // tint (word7 bits 10-15). The raster stays UNCHANGED (G3): no density gate.
+          // PYRAMID level L directly (L0 finest = 0) — the ?nanitedbg=lod tint (word7 bits 10-15).
           dagLevel: L,
         },
       });
@@ -1671,4 +1702,38 @@ function appendVoxelCrownPyramid(
   });
   if (opts.nearDist && opts.nearDist > 0) reg.setNearDistance(head, opts.nearDist);
   return { head, brickBase: firstBase, brickCount: total, clusters: blocks.length };
+}
+
+/** append a fresh (BrickCPU) crown — ForestScene inline builds + the fartile BrickCPU path. */
+export function appendVoxelCrown(
+  reg: GeometryRegistry,
+  prep: PreparedVoxelCrown,
+  _leafSource: ExplicitSource,
+  opts: VoxAppendOpts,
+): VoxAppendResult {
+  const { vox } = prep;
+  if (vox.levels && vox.levels.length > 0) {
+    return appendCrownPyramid(reg, vox.levels.map((l) => cpuLevel(l.bricks, l.occupied, l.cellSize, l.blocks)), opts);
+  }
+  return appendCrownSingle(reg, cpuLevel(vox.bricks, vox.occupied, vox.cellSize), opts);
+}
+
+/** append a PACKED crown straight from its 9×u32 words — the world / bootcache path. No
+ *  per-brick BrickCPU objects are materialized (the memory-arc win). GPU output is identical
+ *  to appendVoxelCrown on the same crown (words ARE the writeBrick records); block AABBs use
+ *  the f32 packed centers (sub-µm vs the fresh double centers — invisible cull bounds). */
+export function appendPackedCrown(
+  reg: GeometryRegistry,
+  packed: PackedPreparedCrown,
+  opts: VoxAppendOpts,
+): VoxAppendResult {
+  const { vox } = packed;
+  if (vox.levels && vox.levels.length > 0) {
+    return appendCrownPyramid(
+      reg,
+      vox.levels.map((l: PackedLevel) => wordsLevel(l.words, l.occupied.length, l.cellSize, l.blocks)),
+      opts,
+    );
+  }
+  return appendCrownSingle(reg, wordsLevel(vox.grid.words, vox.grid.occupied.length, vox.cellSize), opts);
 }

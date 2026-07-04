@@ -12,6 +12,7 @@
  */
 
 import type { BufferGeometry, DataTexture } from "three";
+import { yieldIfDue } from "../debug/BootTrace";
 import type { MeshStandardNodeMaterial, Renderer } from "three/webgpu";
 import type { WorldSeed } from "../core/Seed";
 import {
@@ -253,6 +254,10 @@ export async function buildVegLibrary(
   for (let ci = 0; ci < TREE_SPECIES.length; ci++) {
     const sp = TREE_SPECIES[ci] as SpeciesParams;
     for (let v = 0; v < TREE_VARIANTS; v++) {
+      // cold-boot: hero buildTree calls are 100k-tri slabs — yield ~every 250 ms
+      // so this loop interleaves with the GPU boot phases (overlap kick) and
+      // never freezes the tab
+      await yieldIfDue();
       const label = `veg/${sp.id}/${v}`;
       const inst = variantInstance(seed, sp.id, v);
       // hero ring: full tube hierarchy + thinned cards + REAL mesh leaves.
@@ -339,6 +344,7 @@ export async function buildVegLibrary(
   const impostors = new Map<number, ImpostorAtlas>();
   if (!skipImpostors)
     for (let ci = 0; ci < TREE_SPECIES.length; ci++) {
+      await yieldIfDue();
       const sp = TREE_SPECIES[ci] as SpeciesParams;
       const t = buildTree(sp, seed.rng(`veg/${sp.id}/0`), {
         lod: 1,
@@ -377,6 +383,7 @@ export async function buildVegLibrary(
   ];
   for (const { cls, sp } of underSpecies) {
     for (let v = 0; v < 4; v++) {
+      await yieldIfDue();
       const rng = seed.rng(`veg/${sp.id}/${v}`);
       const shrub = buildShrub(sp, rng);
       const atlas = atlases.get(sp.id);
@@ -415,6 +422,7 @@ export async function buildVegLibrary(
   // ferns
   const fernAtlas = atlases.get("fern");
   for (let v = 0; v < 4; v++) {
+    await yieldIfDue();
     const geo = buildFern(seed.rng(`veg/fern/${v}`));
     const tris = geo.index ? geo.index.count / 3 : 0;
     const b = bounds([geo]);
@@ -451,6 +459,7 @@ export async function buildVegLibrary(
   ];
   for (const { cls, kind } of flowerKinds) {
     for (let v = 0; v < 4; v++) {
+      await yieldIfDue();
       const geo = buildFlower(kind, seed.rng(`veg/flower/${kind}/${v}`));
       const tris = geo.index ? geo.index.count / 3 : 0;
       const b = bounds([geo]);
@@ -484,6 +493,7 @@ export async function buildVegLibrary(
   const logDim = { r: 0.6, g: 0.52, b: 0.44 };
   const decayOf: DecayState[] = ["fresh", "mossy", "rotten", "mossy"];
   for (let v = 0; v < 4; v++) {
+    await yieldIfDue();
     const log = buildLog(seed.rng(`veg/log/${v}`), decayOf[v] as DecayState);
     const b = bounds([log.geometry]);
     trackCls(VegClass.Log, b.height, b.radius);
@@ -508,6 +518,7 @@ export async function buildVegLibrary(
   }
   clsMaxDist[VegClass.Log] = 220;
   for (let v = 0; v < 4; v++) {
+    await yieldIfDue();
     const stump = buildStump(seed.rng(`veg/stump/${v}`));
     const b = bounds([stump.geometry]);
     trackCls(VegClass.Stump, b.height, b.radius);
@@ -542,6 +553,7 @@ export async function buildVegLibrary(
   const paleRock = { r: 0.34, g: 0.33, b: 0.3 };
   for (const { cls, preset, moss } of rockPools) {
     for (let v = 0; v < 4; v++) {
+      await yieldIfDue();
       const tone = v < 2 ? paleRock : undefined;
       const vMoss = v < 2 ? 0.08 : moss;
       const hi = buildRock(preset, seed.rng(`veg/${preset}/${v}`), 4);
@@ -613,6 +625,7 @@ export async function buildVegLibrary(
   ];
   for (const sc of stoneClasses) {
     for (let v = 0; v < 4; v++) {
+      await yieldIfDue();
       // StoneL variants are context-keyed by the scatter kernel: 0/1 spawn
       // on dry scree (pale faceted talus matching the cliff that shed it),
       // 2/3 in streambeds (dark water-rounded, mossy) — scree stops reading
@@ -667,6 +680,7 @@ export async function buildVegLibrary(
   // snag-bark albedo is pale gray and read as glowing white sticks at noon.
   const branchDim = { r: 0.5, g: 0.42, b: 0.34 };
   for (let v = 0; v < 4; v++) {
+    await yieldIfDue();
     const geo = twigGeometry(seed.rng(`veg/branch/${v}`));
     geo.scale(6.5, 5, 6.5);
     const tris = geo.index ? geo.index.count / 3 : 0;

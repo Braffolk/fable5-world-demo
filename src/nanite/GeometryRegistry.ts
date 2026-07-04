@@ -44,6 +44,7 @@ import { StorageBufferAttribute } from 'three/webgpu';
 import type { NF, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
 import type { DagBuild, DagCluster } from './BuildDag';
 import { buildDagHierarchy, buildHeightGridHierarchy, maxChainDepth } from './DagHierarchy';
+import { BRICK_WORDS, octDecode, octEncode } from './VoxelBrickCore';
 import { type BuiltClusters, type ClusterStats, clusterize } from './Clusterize';
 import {
   type BufOf,
@@ -86,9 +87,10 @@ export const DAG_WORDS = 12;
  *  brick local half-extent (f32 bits, = BRICK_DIM·cellSize·0.5) = 9 u32 (36 B). The
  *  cluster's block sphere (word0-3) is now used ONLY as the instance-cull / per-block
  *  occlusion bound; the raster iterates the block's bricks and projects each brick AABB.
- *  The authoritative read/write codec is VoxelBrick.ts; this stride is shared so the
- *  registry can size the buffer without importing the codec. */
-export const BRICK_WORDS = 9;
+ *  The authoritative read/write codec is VoxelBrick.ts; the stride now LIVES in the
+ *  three-free VoxelBrickCore.ts (worker-safe voxelizer, 2026-07-04) and is re-exported
+ *  here unchanged so the registry's importers keep working. */
+export { BRICK_WORDS, octEncode, octDecode } from './VoxelBrickCore';
 /** N8-D1: vertex layout fed to buildDag for a registry mesh — pos@0..2,
  *  nrm@3..5, uv@6..7, vdata@8..11 (UNPACKED to 0..1 floats so QEM can
  *  interpolate them). attachDag re-packs this back into VERT_WORDS. */
@@ -358,43 +360,8 @@ export function f16ToF32(h: number): number {
   return sign * (1 + man / 1024) * 2 ** (exp - 15);
 }
 
-function snorm16(v: number): number {
-  const c = Math.max(-1, Math.min(1, v));
-  const r = Math.round(c * 32767);
-  return (r < 0 ? r + 65536 : r) & 0xffff;
-}
-
-/** octahedral-encode a (not necessarily unit) normal into snorm2x16 */
-export function octEncode(nx: number, ny: number, nz: number): number {
-  const a = Math.abs(nx) + Math.abs(ny) + Math.abs(nz);
-  let ox = 0;
-  let oy = 0;
-  if (a > 1e-20) {
-    ox = nx / a;
-    oy = ny / a;
-    if (nz < 0) {
-      const tx = (1 - Math.abs(oy)) * (ox >= 0 ? 1 : -1);
-      const ty = (1 - Math.abs(ox)) * (oy >= 0 ? 1 : -1);
-      ox = tx;
-      oy = ty;
-    }
-  }
-  return (snorm16(ox) | (snorm16(oy) << 16)) >>> 0;
-}
-
-/** mirror of the GPU decode: unpack2x16snorm + oct → unit vector */
-export function octDecode(packed: number): [number, number, number] {
-  const sx = ((packed & 0xffff) << 16) >> 16;
-  const sy = ((packed >>> 16) << 16) >> 16;
-  let fx = Math.max(sx / 32767, -1);
-  let fy = Math.max(sy / 32767, -1);
-  const nz = 1 - Math.abs(fx) - Math.abs(fy);
-  const t = Math.max(-nz, 0);
-  fx += fx >= 0 ? -t : t;
-  fy += fy >= 0 ? -t : t;
-  const l = Math.hypot(fx, fy, nz) || 1;
-  return [fx / l, fy / l, nz / l];
-}
+// snorm16/octEncode/octDecode moved to VoxelBrickCore.ts (three-free worker
+// import chain, 2026-07-04) — imported below and re-exported above unchanged.
 
 export interface VertexCPU {
   pos: [number, number, number];
@@ -924,6 +891,8 @@ export class GeometryRegistry {
   private vcompactAttr!: StorageBufferAttribute;
   private dagLinksAttr!: StorageBufferAttribute;
   private voxelBricksAttr!: StorageBufferAttribute;
+  /** D (memory arc): set once releaseImmutableMirrors() has dropped verts + brick mirrors. */
+  private mirrorsReleased = false;
 
   private caps!: { verts: number; tris: number; clusters: number; meshes: number; instances: number };
   /** N8-D2 Stage 2e: capacity (in verts = words) of the stride-1 terrain-DAG buffer. */
@@ -1509,6 +1478,31 @@ export class GeometryRegistry {
     }
     this.runGpuCopies(renderer);
     if (counters) this.updateCounters(counters);
+  }
+
+  /**
+   * D (memory arc, 2026-07-04): after boot + the first rendered frame has created and
+   * uploaded the mega-buffers, drop the CPU backing arrays of the two IMMUTABLE ones —
+   * the explicit-vert buffer (VERT_WORDS; hero/trunk/leaf geometry, static after boot) and
+   * the voxel-brick buffer (appended once at boot, never mutated). three r184 re-reads
+   * `attr.array` ONLY on a version bump (needsUpdate); neither ever bumps again, so the
+   * created GPUBuffer stands and the hundreds of MB of mirrors free on the next GC.
+   *
+   * NOT released (they mutate post-boot): idx / clusters / dag / dagLinks / hfVerts (the
+   * terrain tile-pool region streams into them) and inst / instMesh (instance streams).
+   * PRECONDITION: ≥1 frame must have rendered so the buffers exist GPU-side — else three's
+   * lazy createStorageAttribute would later read the nulled array. Idempotent. */
+  releaseImmutableMirrors(): { vertsBytes: number; brickBytes: number } {
+    if (!this.built || this.mirrorsReleased) return { vertsBytes: 0, brickBytes: 0 };
+    this.mirrorsReleased = true;
+    const vertsBytes = this.vertsArr ? this.vertsArr.byteLength : 0;
+    const brickBytes = this.voxelBricksArr ? this.voxelBricksArr.byteLength : 0;
+    // drop BOTH references (this.*Arr and attr.array) to the same buffer so GC can reclaim it.
+    (this.vertsAttr as unknown as { array: Uint32Array | null }).array = null;
+    (this.voxelBricksAttr as unknown as { array: Uint32Array | null }).array = null;
+    this.vertsArr = null as unknown as Uint32Array;
+    this.voxelBricksArr = null as unknown as Uint32Array;
+    return { vertsBytes, brickBytes };
   }
 
   /**
