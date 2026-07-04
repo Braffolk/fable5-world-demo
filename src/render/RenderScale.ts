@@ -17,9 +17,32 @@
 
 import { Vector2 } from 'three';
 
-const rawScale = Number(new URLSearchParams(window.location.search).get('rscale') ?? '1');
-export const RSCALE: number =
-  Number.isFinite(rawScale) && rawScale > 0 ? Math.min(1, Math.max(0.25, rawScale)) : 1;
+/**
+ * AUTO mode (user rule 2026-07-04): when ?rscale is NOT in the URL, cap the
+ * internal render AREA at the 1920×1080 pixel budget (2.07 Mpx) — if the
+ * native drawing buffer has more pixels, S = sqrt(1920·1080 / (W·H)), so every
+ * aspect ratio keeps its own shape and gets the same pixel count as 1080p
+ * (an ultrawide must not be letterbox-fit by its width). Explicit ?rscale
+ * (including =1) always wins. Mirrors Engine's boot sizing exactly
+ * (innerWidth/innerHeight × (?dpr ?? min(devicePixelRatio, 1.5))); boot-fixed
+ * like the param — a post-boot window resize does not re-derive it (anchorH
+ * sits in the bootcache key).
+ */
+function resolveScale(): number {
+  const q = new URLSearchParams(window.location.search);
+  const raw = q.get('rscale');
+  if (raw !== null) {
+    const v = Number(raw);
+    return Number.isFinite(v) && v > 0 ? Math.min(1, Math.max(0.25, v)) : 1;
+  }
+  const dprQ = q.get('dpr');
+  const dpr =
+    dprQ !== null && Number(dprQ) > 0 ? Number(dprQ) : Math.min(window.devicePixelRatio, 1.5);
+  const px = window.innerWidth * dpr * (window.innerHeight * dpr);
+  if (px <= 1920 * 1080) return 1;
+  return Math.min(1, Math.max(0.25, Math.sqrt((1920 * 1080) / px)));
+}
+export const RSCALE: number = resolveScale();
 
 interface SizedRenderer {
   getSize(target: Vector2): Vector2;
