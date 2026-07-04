@@ -1936,6 +1936,8 @@ export function buildNaniteRaster(
           visBV,
           width,
           height,
+          // ?voxwind rigid crown sway — presence gates it + supplies the mesh-matched camPos
+          wind,
         })
       : null;
 

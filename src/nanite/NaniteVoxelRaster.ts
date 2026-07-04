@@ -54,6 +54,9 @@ import { BRICK_ALBEDO, BRICK_DIM, BRICK_HALF, BRICK_OCC_HI, BRICK_OCC_LO, BRICK_
 import { DISPATCH_ROW, QVOX_CAP } from './NaniteCommon';
 import type { NaniteCam } from './NaniteCommon';
 import { instTransformPoint, instYaw, instSphereRadius } from './NaniteCommon';
+import { voxWindScalars, voxWindLocalOffset, VOX_CROWN_SWAY_PAD_M, type VoxWindScalars } from './NaniteVoxWind';
+import type { TrunkWindOpt } from './NaniteFetch';
+import { windContext } from '../render/Wind';
 import {
   aLoadU,
   bcU2F,
@@ -158,6 +161,10 @@ export interface VoxelRasterDeps {
   visBV: { atomic: AtomicBuf };
   width: number;
   height: number;
+  /** trunk/leaf wind opt (frame mode). Presence = the scene has wind ⇒ the ?voxwind
+   *  rigid crown sway is eligible; camPos matches the mesh so the voxel crown sways in
+   *  phase with the LOD0 mesh crown at the voxnear seam. */
+  wind?: TrunkWindOpt;
 }
 
 export interface VoxelRasterHandles {
@@ -295,6 +302,20 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // front-slab key ⇒ correct intra-brick occlusion + better HZB). Small/straddler bricks and
   // the ?voxdither=1 stipple mode keep the legacy flat path unchanged.
   const voxCell = new URLSearchParams(window.location.search).get('voxcell') !== '0';
+  // ?voxwind (DEFAULT ON when the scene has wind): rigid per-crown sway of the voxel
+  // foliage — one height-profiled WORLD offset per brick, phase-locked to the mesh
+  // crown (NaniteVoxWind). Gated on deps.wind (a wind-less scene builds byte-identical)
+  // AND windContext() (gustAt/windExposure throw on a null ctx). The per-brick offset is
+  // applied in LOCAL space at brLocal's definition = ONE source for the footprint, the
+  // voxCell ray AABB and the occ-mask cells (no footprint/ray desync).
+  const voxWind =
+    deps.wind != null &&
+    windContext() != null &&
+    new URLSearchParams(window.location.search).get('voxwind') !== '0';
+  const windCamPos = voxWind && deps.wind ? vec3(deps.wind.camPos as unknown as NV3) : null;
+  // wind fades to 0 by this distance (mirrors NaniteFetch farAtten 380→480), so beyond
+  // it lane 0 SKIPS gustAt entirely — the "only call it when necessary" cut.
+  const WIND_FADE_END_M = 480;
   // 64 (not 12): at 200k the far field is THOUSANDS of small (≤8px) sparse coarse bricks;
   // running the ray+DDA on them measured +6/+17/+19 ms (eye/oblique/aerial) because carved
   // pixels pay the full DDA miss. A ≤8px brick never reads as a square — only the BIG
@@ -638,7 +659,16 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
       ) as unknown as NV3;
       const blkRLocal = bcU2F(elemU(gpu.clusters, cBase.add(uint(3)))).toVar();
       const blkWCenter = instTransformPoint(A, B, yawSc, blkLocal);
-      const blkWR = instSphereRadius(A, B, blkRLocal as unknown as NF, float(0)).toVar();
+      // ?voxwind: pad the block sphere by the max crown sway so the per-block occlusion
+      // cull covers the swept volume — a swayed brick never escapes the cull footprint
+      // (no transient hole). Conservative: a larger footprint only pools MORE occluder
+      // texels ⇒ trends to KEEP. Centre stays at rest (occlusion needs no wind scalars).
+      const blkWR = instSphereRadius(
+        A,
+        B,
+        blkRLocal as unknown as NF,
+        voxWind ? float(VOX_CROWN_SWAY_PAD_M) : float(0),
+      ).toVar();
       const W = float(cam.uW);
       const H = float(cam.uH);
 
@@ -671,6 +701,32 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
       // texture-style Y-flip would over-cull). ?voxoccl=0 disables it for the A/B; with NO param
       // the upgraded footprint cull is the DEFAULT production path.
       const wgVisible = workgroupArray('uint', 1);
+      // ?voxwind: crown wind scalars computed ONCE per workgroup (lane 0) — gustAt +
+      // windExposure sample TEXTURES, so a per-lane call is 128× the taps; hoist to one
+      // call and broadcast via wgWind (synced by the same barrier as wgVisible below).
+      // Lane 0 SKIPS gustAt entirely when the cluster is past the wind-fade distance
+      // (farAtten → 0 ⇒ zero sway ⇒ the taps would be wasted) — the seed-0 stands.
+      const wgWind = voxWind ? workgroupArray('float', 6) : null;
+      if (voxWind && windCamPos && wgWind) {
+        If(brickLocal.equal(uint(0)), () => {
+          wgSetF(wgWind, uint(0), float(0));
+          wgSetF(wgWind, uint(1), float(0));
+          wgSetF(wgWind, uint(2), float(0));
+          wgSetF(wgWind, uint(3), float(0));
+          wgSetF(wgWind, uint(4), float(0));
+          wgSetF(wgWind, uint(5), float(0));
+          const wdist = (A.xyz as unknown as NV3).sub(windCamPos).length();
+          If(wdist.lessThan(float(WIND_FADE_END_M)), () => {
+            const w = voxWindScalars(A, windCamPos);
+            wgSetF(wgWind, uint(0), w.dirX);
+            wgSetF(wgWind, uint(1), w.dirY);
+            wgSetF(wgWind, uint(2), w.leanBase);
+            wgSetF(wgWind, uint(3), w.swayABase);
+            wgSetF(wgWind, uint(4), w.swayS);
+            wgSetF(wgWind, uint(5), w.swayXS);
+          });
+        });
+      }
       if (voxOccl) {
         If(brickLocal.equal(uint(0)), () => {
           wgSet(wgVisible, uint(0), uint(1));
@@ -752,11 +808,32 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
         const bAbs = brickBase.add(brickLocal).toVar();      // absolute brick index
         const bWordBase = bAbs.mul(uint(BRICK_WORDS)).toVar();
         // per-brick LOCAL center (words 5..7) + half-extent (word8) — the real grid cell.
-        const brLocal = vec3(
+        const brLocalRest = vec3(
           bcU2F(elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_POS_X)))),
           bcU2F(elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_POS_X + 1)))),
           bcU2F(elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_POS_X + 2)))),
         ) as unknown as NV3;
+        // ?voxwind: rigid crown sway — offset the brick's LOCAL centre ONCE, from the
+        // per-workgroup wind scalars broadcast in wgWind (all lanes read the 6 floats).
+        // The footprint (brWCenter), the voxCell ray AABB (wgBrCx/y/z) and the occ-mask
+        // cells all derive from brLocal, so they shift together; the ray→local transform
+        // uses A (not brLocal), so it still lands on the swayed brick. .toVar() = 1 eval.
+        const wscShared: VoxWindScalars | null =
+          voxWind && wgWind
+            ? {
+                dirX: (wgWind.element(uint(0)) as unknown as NF).toVar(),
+                dirY: (wgWind.element(uint(1)) as unknown as NF).toVar(),
+                leanBase: (wgWind.element(uint(2)) as unknown as NF).toVar(),
+                swayABase: (wgWind.element(uint(3)) as unknown as NF).toVar(),
+                swayS: (wgWind.element(uint(4)) as unknown as NF).toVar(),
+                swayXS: (wgWind.element(uint(5)) as unknown as NF).toVar(),
+              }
+            : null;
+        const brLocal = (
+          voxWind && wscShared
+            ? brLocalRest.add(voxWindLocalOffset(wscShared, brLocalRest.y, yawSc, A.w as unknown as NF))
+            : brLocalRest
+        ).toVar() as unknown as NV3;
         const brHalf = bcU2F(elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_HALF)))).toVar();
         const brWCenter = instTransformPoint(A, B, yawSc, brLocal);
         const brWR = instSphereRadius(A, B, brHalf as unknown as NF, float(0)).toVar();
