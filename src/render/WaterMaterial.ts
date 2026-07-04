@@ -134,7 +134,19 @@ export function waterMaterial(
     .and(p.x.lessThan(r.z))
     .and(p.y.lessThan(r.w));
   const inWorld = p.x.abs().lessThan(WORLD_HALF - 4).and(p.y.abs().lessThan(WORLD_HALF - 4));
-  mat.maskNode = insideInner.not().and(inWorld);
+  // WORLD-SPACE wetness guard (?watermask, default on). Dry cells encode the sheet
+  // at neighbourhood-min bed − 2 m (buildWaterY); it normally loses the hardware
+  // depth test / thick-based opacity to the terrain 2 m above. At long range the
+  // 0.3→30000 m depth buffer cannot resolve that 2 m (NDC-z compression), so the
+  // dive stops hiding the sheet and water speckles onto dry hills. Test the real
+  // signal: keep the fragment only where the surface sits above the terrain bed.
+  // Strict no-op near camera (where depth already hid dry land); −0.75 m margin
+  // absorbs neighbourhood-min vs local-bed at the ~2 m sim texel; shoreline crosses
+  // 0 exactly at the wet→dry bilinear edge so the opacity feather still finishes it.
+  const wetGuard = new URLSearchParams(window.location.search).get('watermask') !== '0';
+  const bedH = lvl.far ? hf.sampleHeightNearest(p) : hf.sampleHeight(p);
+  const wet = positionWorld.y.greaterThan(bedH.sub(0.75));
+  mat.maskNode = wetGuard ? insideInner.not().and(inWorld).and(wet) : insideInner.not().and(inWorld);
 
   // ---- flow field --------------------------------------------------------------
   const simRes = hf.simRes;
