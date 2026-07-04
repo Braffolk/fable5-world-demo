@@ -75,6 +75,24 @@ with NONE of the camera path's distance-LOD coarsening (the beautification
 lodWarp never reached casters) — a strip crossing a tree wall carries 30-50k
 leaf-level caster clusters.
 
+### P11 RESULTS (a1fc715) — mechanism works, aggressive params = USER CALL
+- 40/120 (SHIPPED default): fly p90 47.3 vs 47.6 off — near no-op BUT look-
+  safe by construction (warp only > 40 m; PCSS penumbra ≫ texel error there).
+  First params were a self-inflicted premise bug: the spiking mass is levels
+  1-2 (24-48 m) and near=40 EXEMPTED exactly that band.
+- 10/30: p50 40.2→37.5-38.1, p90 47.6→43.3-44.6, spike shTotal +49k→+29k.
+- 5/15:  p50 →36-36.5, p90 →40.5-43.1, max →44.7, shTotal +49k→+11-13k.
+- ⚠️ LOOK (cloud-ablated hill stills — ALWAYS ablate=cloudshadow for shadow
+  A/Bs, first uncontrolled triplet was garbage): 10/30 and 5/15 merge the
+  mound's dappled canopy shadows into a smooth dark mass (aggregate ladder
+  GROWS geometry as it coarsens → fatter crowns → blobby shadows). Violates
+  the quality-bar law as a default → shipped OFF-ish (40/120), the aggressive
+  params surfaced to the user. Shots: scratchpad shots/shots/shc-{off,1030,
+  0515}-hill.png.
+- REAL fix (booked): caster coarsening WITHOUT the width growth — either a
+  shadow-only leaf-DAG lane or voxel casters (?shvox is built but broken:
+  splat kernel runs once, never re-dispatches — shadow-arc OPEN item).
+
 ### P11 fix (this session): caster-LOD warp for the shared cut
 NaniteClipCull/NaniteShadowClip: wire tau/lodNear/lodPow/simBandD into the
 shared cut's buildNaniteCull. A DISTANCE warp is shared-cut-legal (identical
@@ -83,3 +101,9 @@ across levels; only per-level τ would break the shared traverse). Knobs:
 τ doubles 160 m out) ?shtaupow (1); escape ?shtauband=0. Composes with P10
 ring-snap (warpDist is the snapped distance ⇒ no LOD-age). Gate: fly A/B +
 shadow-look stills (deliberate shadow change — user eyeball pending).
+
+## Water walking-spikes (arc item 3) — first attempt NULL
+8 m/s legs on the forest path: default p50 36.7/p90 40.2 vs ablate=water
+36.9/39.7 — water no-op (no water in view there); walking tails mild (+3.5
+over median vs +8 flying). Needs a WATER-ADJACENT path + within-session
+water.group.visible A-B-A (cross-boot pairs unusable — water-arc law).
