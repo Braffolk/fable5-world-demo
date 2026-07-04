@@ -34,8 +34,10 @@ import srcClusterize from './Clusterize.ts?raw';
 
 /** bump on changes to builder TRANSITIVE deps not covered by the ?raw hash list
  *  (DagCommon, VegLibrary geometry gen, registry append semantics).
- *  rev 2 (2026-07-04): brick pack format f64-lanes → 9×u32 GPU words (heap cut). */
-const CACHE_REV = 2;
+ *  rev 2 (2026-07-04): brick pack format f64-lanes → 9×u32 GPU words (heap cut).
+ *  rev 3 (2026-07-05): crown aggregate DAG → LOD0-only (maxLevels 1) — the coarse
+ *  aggregate mid-levels are dead post-crownlod0/castShadows:false; drop build+mem. */
+const CACHE_REV = 3;
 
 const DB_NAME = 'laas-bootcache';
 const STORE = 'artifacts';

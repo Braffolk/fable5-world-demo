@@ -593,7 +593,10 @@ export async function prepareWorldVeg(input: {
                     verts: explicitToDagVerts(src),
                     vertStride: DAG_VERT_STRIDE,
                     indices: src.indices,
-                    opts: { seed: seed ?? 0, maxTris },
+                    // P4 (user mandate): crown aggregate = LOD0-ONLY. crownlod0 makes the
+                    // camera use LOD0-or-voxel, and the leaf mesh is castShadows:false, so
+                    // the coarse aggregate mid-levels render NOWHERE — pure build+mem waste.
+                    opts: { seed: seed ?? 0, maxTris, maxLevels: 1 },
                     clusterFill: fill,
                     aggErrorK: aggLodErrorK(),
                   })
@@ -615,6 +618,7 @@ export async function prepareWorldVeg(input: {
                 ? buildAggregateDag(explicitToDagVerts(src), DAG_VERT_STRIDE, src.indices, {
                     seed: seed ?? 0,
                     maxTris,
+                    maxLevels: 1, // P4: crown aggregate LOD0-only (dead post-crownlod0)
                   })
                 : buildDag(explicitToDagVerts(src), DAG_VERT_STRIDE, src.indices, {
                     normalOffset: 3,
@@ -1324,6 +1328,7 @@ export async function buildWorldRegistry(input: {
           buildAggregateDag(explicitToDagVerts(item.source), DAG_VERT_STRIDE, item.source.indices, {
             seed: seed ?? 0,
             maxTris: MAX_CLUSTER_TRIS,
+            maxLevels: 1, // P4: crown aggregate LOD0-only (dead post-crownlod0)
           });
       } catch (e) {
         deferred.push(`AGG ${item.label}: build failed (${e instanceof Error ? e.message : String(e)})`);
