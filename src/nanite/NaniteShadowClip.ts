@@ -450,10 +450,14 @@ export function buildNaniteShadowClip(
     // τ_eff = shtau·(1+((d−shtaunear)/shtauband)^shtaupow): contact shadows
     // (≤ shtaunear m) keep the exact cut; mid/far casters coarsen like the main
     // view does. PCSS blurs far shadows anyway. Escape ?shtauband=0 (warp off).
+    // DEFAULT 5/15 (USER-ACCEPTED 2026-07-04 after live A/B: the dappled→
+    // blobbier canopy-shadow trade is "perfectly acceptable"; fly p50 40.2→36,
+    // p90 47.6→40.5-43, spike caster mass −75%). 40/120 was the look-safe
+    // fallback (far-field-only, ~−1 ms).
     tau: uniformF(Math.max(0.25, Number(qs.get('shtau') ?? 1))),
-    lodNear: uniformF(Math.max(0, Number(qs.get('shtaunear') ?? 40))),
+    lodNear: uniformF(Math.max(0, Number(qs.get('shtaunear') ?? 5))),
     lodPow: uniformF(Math.max(0.25, Number(qs.get('shtaupow') ?? 1))),
-    simBandD: uniformF(Number(qs.get('shtauband') ?? 120)),
+    simBandD: uniformF(Number(qs.get('shtauband') ?? 15)),
   });
   for (let k = 0; k < LEVELS; k++) {
     const lv = levels[k]!;
