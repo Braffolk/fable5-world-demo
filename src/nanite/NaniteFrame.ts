@@ -29,6 +29,7 @@ import { Fn, float, instanceIndex, storage, uint, vec2, vec4 } from 'three/tsl';
 import type { NF } from '../gpu/TSLTypes';
 import type { Engine } from '../core/Engine';
 import type { PostStack } from '../render/PostStack';
+import { internalSize } from '../render/RenderScale';
 import type { Heightfield } from '../world/Heightfield';
 import type { GeometryRegistry } from './GeometryRegistry';
 import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK } from './GeometryRegistry';
@@ -96,7 +97,7 @@ export function buildNaniteFrame(
   },
 ): NaniteFrameHandles {
   const renderer = engine.renderer;
-  const size = renderer.getDrawingBufferSize(new Vector2());
+  const size = internalSize(renderer, new Vector2()); // ?rscale: match the scene pass
   const params = new URLSearchParams(window.location.search);
   // voxel-foliage (spec §A1 / Stage 3a): the voxel subsystem is active iff the registry
   // actually holds bricks — i.e. crowns were voxelized + voxel:7 heads registered (the
@@ -536,12 +537,12 @@ export function buildNaniteFrame(
   let frozen = false;
 
   const render = (): void => {
-    const cur = renderer.getDrawingBufferSize(new Vector2());
+    const cur = internalSize(renderer, new Vector2());
     if ((cur.x !== cam.width || cur.y !== cam.height) && warned !== 'size') {
       warned = 'size';
       // eslint-disable-next-line no-console
       console.warn(
-        `[nanite] drawing buffer ${cur.x}×${cur.y} != frame ${cam.width}×${cam.height} — reload to rebuild`,
+        `[nanite] internal size ${cur.x}×${cur.y} != frame ${cam.width}×${cam.height} — reload to rebuild`,
       );
     }
     const freezeNow = frozenParam && frame > 0;

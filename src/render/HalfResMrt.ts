@@ -28,6 +28,7 @@ import {
 import { mrt, passTexture } from 'three/tsl';
 import { tagGpu } from '../core/GpuProfiler';
 import { runiform } from '../gpu/RenderUniform';
+import { internalSize } from './RenderScale';
 
 export interface HalfResEntry {
   name: string;
@@ -105,7 +106,8 @@ export class HalfResMrtNode extends TempNode {
 
   override updateBefore(frame: NodeFrame): boolean | undefined {
     const renderer = (frame as unknown as { renderer: Renderer }).renderer;
-    const size = renderer.getDrawingBufferSize(_size);
+    // half of the INTERNAL res (?rscale) — must track the scene pass, not the canvas
+    const size = internalSize(renderer, _size);
     this.setSize(size.width, size.height);
 
     this.rendererState = RendererUtils.resetRendererState(

@@ -34,6 +34,7 @@ import { buildSpikeContent, TERRAIN_QUADS } from '../nanite/SpikeContent';
 import { buildSpikeRaster } from '../nanite/SpikeRaster';
 import { readBuffer } from '../nanite/Tsl';
 import { buildRock } from '../vegetation/RockBuilder';
+import { internalSize } from '../render/RenderScale';
 import type { WorldContext } from './Scenes';
 
 /**
@@ -172,7 +173,7 @@ export async function buildRasterSpikeScene(ctx: WorldContext): Promise<void> {
   if (sw) {
     ctx.progress(0.5, 'spike: SW raster pipeline');
     const size = new Vector2();
-    engine.renderer.getDrawingBufferSize(size);
+    internalSize(engine.renderer, size); // ?rscale: match the scene pass
     const raster = buildSpikeRaster(content, size.x, size.y, packing, clusterTint);
     engine.scene.add(raster.resolveMesh);
     let frame = 0;

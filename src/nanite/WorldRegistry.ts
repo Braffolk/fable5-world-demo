@@ -28,6 +28,7 @@
 import type { Renderer, StorageBufferAttribute, StorageBufferNode } from 'three/webgpu';
 import type { BufferGeometry } from 'three';
 import { Vector2 } from 'three';
+import { internalSize } from '../render/RenderScale';
 import type { ScatterLayer, ScatterResult } from '../gpu/passes/Scatter';
 import { VegClass } from '../gpu/passes/Scatter';
 import type { VegLib, PoolPart } from '../vegetation/VegLibrary';
@@ -441,7 +442,7 @@ export async function buildWorldRegistry(input: {
   // [35,2000] m). projK mirrors the cull (cot(fovY/2)*renderHeight*0.5); no camera here, so the
   // app FOV (Engine.ts PerspectiveCamera = 55°) is used — the ladder SHAPE is projK-robust anyway.
   const APP_FOV_DEG = 55; // Engine.ts camera FOV
-  const anchorH = input.renderer.getDrawingBufferSize(new Vector2()).y;
+  const anchorH = internalSize(input.renderer, new Vector2()).y; // ?rscale: τ anchor follows the render res
   {
     const anchorL0 = computeVoxlodAnchorL0(transitionDist, anchorH, APP_FOV_DEG);
     // ?voxlodk= (anchor multiplier) / ?voxlodlevels= / ?voxlodsparse= / ?voxlodshell= sweep the

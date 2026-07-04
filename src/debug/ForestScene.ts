@@ -61,6 +61,7 @@ import {
   voxlodLevels,
 } from '../nanite/VoxelizeCrown';
 import { Vector2 } from 'three';
+import { internalSize } from '../render/RenderScale';
 import { buildNaniteView } from '../nanite/NaniteView';
 import { Heightfield } from '../world/Heightfield';
 import { SunSky } from '../sky/SunSky';
@@ -130,7 +131,7 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
   {
     const anchorL0 = computeVoxlodAnchorL0(
       transitionDist,
-      engine.renderer.getDrawingBufferSize(new Vector2()).y,
+      internalSize(engine.renderer, new Vector2()).y, // ?rscale: τ anchor follows render res
       engine.camera.fov,
     );
     // ?voxlodk= (anchor multiplier) / ?voxlodlevels= / ?voxlodsparse= / ?voxlodshell= sweep the
@@ -210,7 +211,7 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
       // change (0.75→0.6, 2026-07-02) silently HIT the stale cache entry.
       ftCell: Number(q.get('ftcell') ?? DEFAULT_FT_CELL) || DEFAULT_FT_CELL,
       voxOcc: voxOccThreshold(), // resolved (post-setVoxOccThreshold) for the same reason
-      anchorH: engine.renderer.getDrawingBufferSize(new Vector2()).y,
+      anchorH: internalSize(engine.renderer, new Vector2()).y,
       fov: engine.camera.fov,
       knobs: ['voxlodk', 'voxlodlevels', 'voxlodsparse', 'voxlodshell', 'leaflodk', 'clustertris', 'clusterfill'].map(
         (k) => q.get(k),

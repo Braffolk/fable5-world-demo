@@ -55,6 +55,7 @@ import { GradeUniforms, gradeParamsAt } from './ColorScript';
 import { runiform } from '../gpu/RenderUniform';
 import { gtaoLayer } from './Gtao';
 import { HalfResMrtNode, type HalfResEntry } from './HalfResMrt';
+import { RSCALE, internalSize } from './RenderScale';
 
 export class PostStack {
   readonly post: RenderPipeline;
@@ -118,6 +119,11 @@ export class PostStack {
     // previous-frame view/projection — sky-pixel velocity for TRAA (see below)
     const uPrevView = runiform(new Matrix4());
     const uPrevProj = runiform(new Matrix4());
+    // the INTERNAL render size (= scene-pass/depth texture dims). velReproject
+    // gets texels in internal units but executes inside the TRAA resolve pass,
+    // whose framebuffer is NATIVE under ?rscale<1 — screenSize is wrong there.
+    // At rscale=1 this equals screenSize everywhere it's read (inert).
+    const uInternalSize = runiform(new Vector2(1, 1));
     // Synced at RENDER time, not in onUpdate: updateFns run in registration
     // order and the camera movers (FlyCamera, flythrough) mutate the camera
     // AFTER scene-built subsystems registered — an onUpdate copy here read a
@@ -128,6 +134,8 @@ export class PostStack {
     let firstSync = true;
     this.syncCamera = (): void => {
       frameU.value = (frameU.value + 1) % 1024;
+      internalSize(renderer, uInternalSize.value);
+      this.syncInternalRes();
       camera.updateMatrixWorld(); // compose pending pose mutations NOW
       uPrevView.value.copy(firstSync ? camera.matrixWorldInverse : uView.value);
       uPrevProj.value.copy(firstSync ? camera.projectionMatrix : uProj.value);
@@ -141,6 +149,11 @@ export class PostStack {
     const camPosW = vec3(uCamPos);
 
     const scenePass = pass(scene, camera);
+    // ?rscale<1 (90fps W5): scene MRT + depth render at the internal res; the
+    // TRAA fork upscales temporally to native (TSR). Everything sampling the
+    // scene textures is uv-space; everything indexing them by texel sizes off
+    // internalSize() (nanite vis buffers, half-res MRT, water snapshot).
+    if (RSCALE < 1) scenePass.setResolutionScale(RSCALE);
     // per-pass GPU profiler label (texture stays 'output' — getTextureNode
     // looks textures up by name)
     tagGpu(scenePass.renderTarget as object, 'scene');
@@ -532,10 +545,11 @@ export class PostStack {
     // is vertically MIRRORED (caught by ?skyveldbg: magenta zero-error
     // stripe on the mirror axis).
     const velReproject = (texel: NV2): NV2 => {
-      // texel = uv*size, already carrying the +0.5 center. screenSize == the
-      // full-res MRT/resolve dims in every pass that calls this
-      // (velocityTex.size() on the MRT attachment returned 0 — NaN uvs).
-      const uvv = texel.div(screenSize);
+      // texel = uv*size in INTERNAL units, already carrying the +0.5 center.
+      // uInternalSize == the scene MRT dims (== screenSize pre-rscale; under
+      // ?rscale<1 the TRAA resolve framebuffer is NATIVE, so screenSize here
+      // would be wrong — velocityTex.size() on the MRT attachment returned 0).
+      const uvv = texel.div(vec2(uInternalSize));
       const d = (depthTex.load(texel as unknown as Parameters<typeof depthTex.load>[0]) as unknown as NV4).x;
       const posV = getViewPosition(uvv, d, uProjInv);
       const posW = uCamWorld.mul(vec4(posV, 1)).xyz;
@@ -558,6 +572,21 @@ export class PostStack {
     // SAME per-frame TRAA view offset the scene pass renders with; the node's
     // _jitterIndex is read before the pipeline render (it increments after)
     if (!ablate.has('taa')) this.traaNode = taaed as unknown as object;
+    // ?rscale<1: pin the TRAA input RTT (convertToTexture of the pre-TRAA
+    // composite) to the internal res — its autoResize would size it to the
+    // NATIVE drawing buffer, silently running aerial/AO/bounce at native cost
+    if (RSCALE < 1 && !ablate.has('taa')) {
+      const rttHost = taaed as unknown as {
+        beautyNode?: { width: number | null; height: number | null; setSize(w: number, h: number): void };
+      };
+      const iSz = new Vector2();
+      this.syncInternalRes = (): void => {
+        const rtt = rttHost.beautyNode;
+        if (!rtt) return;
+        internalSize(renderer, iSz);
+        if (rtt.width !== iSz.x || rtt.height !== iSz.y) rtt.setSize(iSz.x, iSz.y);
+      };
+    }
 
     // --- bloom -----------------------------------------------------------------------
     const taaedRgb = (taaed as unknown as NV4).rgb;
@@ -652,7 +681,8 @@ export class PostStack {
     const skyVelDbgView =
       skyveldbg && velocityTex
         ? Fn((): NV3 => {
-            const texel = screenUV.mul(screenSize);
+            // internal texel units — depthTex/velocityTex are internal-res
+            const texel = screenUV.mul(vec2(uInternalSize));
             const raw = (velocityTex.load(texel as unknown as Parameters<typeof velocityTex.load>[0]) as unknown as NV4).xy;
             const d = (depthTex.load(texel as unknown as Parameters<typeof depthTex.load>[0]) as unknown as NV4).x;
             const isSky = d.lessThanEqual(1e-7).or(d.greaterThanEqual(0.9999999));
@@ -681,6 +711,8 @@ export class PostStack {
 
   private uniformsRefresh: () => void = () => undefined;
   private syncCamera: () => void = () => undefined;
+  /** ?rscale<1: per-frame pin of the TRAA input RTT to the internal res */
+  private syncInternalRes: () => void = () => undefined;
   // ?lockexp=1 — freeze auto-exposure at its boot value: motion probes diff
   // frames across runs and the meter's adaptation transient otherwise
   // dominates the signal (probe-cloudlag pitch runs)

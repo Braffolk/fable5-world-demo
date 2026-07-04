@@ -30,6 +30,7 @@ import type { StorageTexture } from 'three/webgpu';
 import type { ProbeGI } from '../gpu/passes/ProbeGI';
 import type { NV2, NV4 } from '../gpu/TSLTypes';
 import { waterMaterial } from '../render/WaterMaterial';
+import { internalSize } from '../render/RenderScale';
 import type { Atmosphere } from '../sky/Atmosphere';
 import type { Heightfield } from './Heightfield';
 import { runiform } from '../gpu/RenderUniform';
@@ -97,7 +98,9 @@ export class WaterSurface {
     const f = renderer.info.frame;
     if (f === this.lastCopyFrame) return;
     this.lastCopyFrame = f;
-    const size = renderer.getDrawingBufferSize(this.snapSize);
+    // INTERNAL res (?rscale): the copy source is the scene-pass framebuffer,
+    // which renders at internalSize, not the native drawing buffer
+    const size = internalSize(renderer, this.snapSize);
     if (this.snapColor.image.width !== size.width || this.snapColor.image.height !== size.height) {
       this.snapColor.image.width = size.width;
       this.snapColor.image.height = size.height;

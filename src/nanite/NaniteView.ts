@@ -28,6 +28,7 @@ import { buildNaniteHwRef } from './NaniteHwRef';
 import { buildNaniteHzb } from './NaniteHzb';
 import { buildNaniteRaster, makeVisBuffers } from './NaniteRaster';
 import { uniformF } from './Tsl';
+import { internalSize } from '../render/RenderScale';
 
 export interface NaniteViewHandles {
   render(): void;
@@ -42,7 +43,7 @@ export function buildNaniteView(
 ): NaniteViewHandles {
   if (mode === 'hwref') return buildNaniteHwRef(engine, registry, hf);
   const renderer = engine.renderer;
-  const size = renderer.getDrawingBufferSize(new Vector2());
+  const size = internalSize(renderer, new Vector2()); // ?rscale: match the scene pass
   const params = new URLSearchParams(window.location.search);
   const occl = params.get('occl') !== '0';
   const frozenParam = params.get('cullfreeze') === '1';
@@ -112,12 +113,12 @@ export function buildNaniteView(
   let frozen = false;
 
   const render = (): void => {
-    const cur = renderer.getDrawingBufferSize(new Vector2());
+    const cur = internalSize(renderer, new Vector2());
     if ((cur.x !== cam.width || cur.y !== cam.height) && warned !== 'size') {
       warned = 'size';
       // eslint-disable-next-line no-console
       console.warn(
-        `[nanite] drawing buffer ${cur.x}×${cur.y} != view ${cam.width}×${cam.height} — debug view renders stretched (reload to rebuild)`,
+        `[nanite] internal size ${cur.x}×${cur.y} != view ${cam.width}×${cam.height} — debug view renders stretched (reload to rebuild)`,
       );
     }
     // freeze after the first full frame so the frozen state is a real one

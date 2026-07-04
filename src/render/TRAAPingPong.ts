@@ -10,6 +10,7 @@
 // Re-diff against upstream on any three upgrade. ?traapp=0 in PostStack = stock node.
 import { HalfFloatType, Vector2, RenderTarget, RendererUtils, QuadMesh, NodeMaterial, TempNode, NodeUpdateType, Matrix4, DepthTexture, FloatType } from 'three/webgpu';
 import { add, float, If, Fn, max, texture, uniform, uv, vec2, vec4, luminance, convertToTexture, passTexture, velocity, getViewPosition, viewZToPerspectiveDepth, struct, ivec2, mix, logarithmicDepthToViewZ, viewZToOrthographicDepth } from 'three/tsl';
+import { RSCALE, internalSize } from './RenderScale';
 
 const _quadMesh = /*@__PURE__*/ new QuadMesh();
 const _size = /*@__PURE__*/ new Vector2();
@@ -275,6 +276,43 @@ class TRAANode extends TempNode {
 		this._needsPostProcessingSync = false;
 
 		/**
+		 * TSR (fork, ?rscale<1): the beauty/depth inputs render at the INTERNAL
+		 * resolution while history + resolve accumulate at the NATIVE drawing
+		 * buffer — the jittered internal samples reconstruct native detail over
+		 * frames. At rscale=1 every TSR branch below is inert (stock fork path).
+		 *
+		 * @private
+		 * @type {boolean}
+		 */
+		this._upscale = RSCALE < 1;
+
+		/**
+		 * TSR: 0 for the frame after a resize/boot (history is uninitialized and
+		 * can't be copy-seeded across sizes — the weight-1 resolve IS the seed).
+		 *
+		 * @private
+		 * @type {UniformNode<float>}
+		 */
+		this._historyValid = uniform( 1 );
+
+		/**
+		 * TSR: home for the previous-frame depth copy. The stock home is the
+		 * history RT's depth texture, but under TSR that RT is native-sized while
+		 * the scene depth is internal — the copy needs a same-size destination.
+		 *
+		 * @private
+		 * @type {?RenderTarget}
+		 */
+		this._prevDepthRT = null;
+
+		if ( this._upscale ) {
+
+			this._historyRenderTarget.depthTexture = null; // dead native-size alloc otherwise
+			this._prevDepthRT = new RenderTarget( 1, 1, { depthBuffer: false, depthTexture: new DepthTexture() } );
+
+		}
+
+		/**
 		 * The node used to render the scene's velocity.
 		 *
 		 * @private
@@ -397,6 +435,20 @@ class TRAANode extends TempNode {
 		const width = beautyRenderTarget.texture.width;
 		const height = beautyRenderTarget.texture.height;
 
+		// TSR (fork): history/resolve accumulate on the NATIVE grid; the jitter
+		// offset stays in INTERNAL pixel units (that's the grid being rasterized)
+
+		let outWidth = width;
+		let outHeight = height;
+
+		if ( this._upscale ) {
+
+			const nativeSize = renderer.getDrawingBufferSize( _size );
+			outWidth = nativeSize.width;
+			outHeight = nativeSize.height;
+
+		}
+
 		//
 
 		if ( this._needsPostProcessingSync === true ) {
@@ -411,8 +463,8 @@ class TRAANode extends TempNode {
 
 		//
 
-		const needsRestart = this._historyRenderTarget.width !== width || this._historyRenderTarget.height !== height;
-		this.setSize( width, height );
+		const needsRestart = this._historyRenderTarget.width !== outWidth || this._historyRenderTarget.height !== outHeight;
+		this.setSize( outWidth, outHeight );
 
 		// every time when the dimensions change we need fresh history data
 
@@ -423,10 +475,21 @@ class TRAANode extends TempNode {
 			renderer.initRenderTarget( this._historyRenderTarget );
 			renderer.initRenderTarget( this._resolveRenderTarget );
 
-			// make sure to reset the history with the contents of the beauty buffer otherwise subsequent frames after the
-			// resize will fade from a darker color to the correct one because the history was cleared with black.
+			if ( this._upscale ) {
 
-			renderer.copyTextureToTexture( beautyRenderTarget.texture, this._readRT.texture ); // PING-PONG (fork): seed the READ role
+				// TSR: beauty (internal) can't copy-seed the native history — force a
+				// weight-1 resolve this frame; the resolve IS the seed (see _historyValid)
+
+				this._historyValid.value = 0;
+
+			} else {
+
+				// make sure to reset the history with the contents of the beauty buffer otherwise subsequent frames after the
+				// resize will fade from a darker color to the correct one because the history was cleared with black.
+
+				renderer.copyTextureToTexture( beautyRenderTarget.texture, this._readRT.texture ); // PING-PONG (fork): seed the READ role
+
+			}
 
 		}
 
@@ -449,20 +512,48 @@ class TRAANode extends TempNode {
 		this._writeRT = swap;
 		this._historyNode.value = this._readRT.texture;
 
+		// resolve landed: history is valid from here on (TSR seed gate)
+
+		this._historyValid.value = 1;
+
 		// Copy current depth to previous depth buffer
 
-		const size = renderer.getDrawingBufferSize( _size );
+		if ( this._upscale ) {
 
-		// only allow the depth copy if the dimensions of the history render target match with the drawing
-		// render buffer and thus the depth texture of the scene. For some reasons, there are timing issues
-		// with WebGPU resulting in different size of the drawing buffer and the beauty render target when
-		// resizing the browser window. This does not happen with the WebGL backend
+			// TSR: prev-depth home follows the INTERNAL (beauty) size, in its own RT
 
-		if ( this._historyRenderTarget.height === size.height && this._historyRenderTarget.width === size.width ) {
+			if ( this._prevDepthRT.width !== width || this._prevDepthRT.height !== height ) {
+
+				this._prevDepthRT.setSize( width, height );
+				renderer.initRenderTarget( this._prevDepthRT );
+
+			}
 
 			const currentDepth = this.depthNode.value;
-			renderer.copyTextureToTexture( currentDepth, this._historyRenderTarget.depthTexture );
-			this._previousDepthNode.value = this._historyRenderTarget.depthTexture;
+
+			if ( currentDepth.image.width === width && currentDepth.image.height === height ) {
+
+				renderer.copyTextureToTexture( currentDepth, this._prevDepthRT.depthTexture );
+				this._previousDepthNode.value = this._prevDepthRT.depthTexture;
+
+			}
+
+		} else {
+
+			const size = renderer.getDrawingBufferSize( _size );
+
+			// only allow the depth copy if the dimensions of the history render target match with the drawing
+			// render buffer and thus the depth texture of the scene. For some reasons, there are timing issues
+			// with WebGPU resulting in different size of the drawing buffer and the beauty render target when
+			// resizing the browser window. This does not happen with the WebGL backend
+
+			if ( this._historyRenderTarget.height === size.height && this._historyRenderTarget.width === size.width ) {
+
+				const currentDepth = this.depthNode.value;
+				renderer.copyTextureToTexture( currentDepth, this._historyRenderTarget.depthTexture );
+				this._previousDepthNode.value = this._historyRenderTarget.depthTexture;
+
+			}
 
 		}
 
@@ -488,7 +579,8 @@ class TRAANode extends TempNode {
 
 			renderPipeline.context.onBeforeRenderPipeline = () => {
 
-				const size = builder.renderer.getDrawingBufferSize( _size );
+				// TSR (fork): jitter in INTERNAL pixel units — the grid being rasterized
+				const size = this._upscale ? internalSize( builder.renderer, _size ) : builder.renderer.getDrawingBufferSize( _size );
 				this.setViewOffset( size.width, size.height );
 
 			};
@@ -503,7 +595,9 @@ class TRAANode extends TempNode {
 
 		if ( builder.renderer.reversedDepthBuffer === true ) {
 
-			this._historyRenderTarget.depthTexture.type = FloatType;
+			// TSR (fork): the prev-depth home moved to its own internal-size RT
+			const prevDepthHome = this._upscale ? this._prevDepthRT : this._historyRenderTarget;
+			prevDepthHome.depthTexture.type = FloatType;
 
 		}
 
@@ -732,6 +826,15 @@ class TRAANode extends TempNode {
 
 			currentWeight.assign( hasValidHistory.select( currentWeight.add( motionFactor ).saturate(), 1 ) );
 
+			if ( this._upscale ) {
+
+				// TSR seed gate: the frame after a boot/resize has no native history —
+				// weight 1 passes the (bilinearly upscaled) current frame through as seed
+
+				currentWeight.assign( mix( float( 1 ), currentWeight, this._historyValid ) );
+
+			}
+
 			// Perform neighborhood clipping/clamping. We use variance clipping here.
 
 			const varianceGamma = mix( 0.5, 1, motionFactor.oneMinus().pow2() ); // Reasonable gamma range is [0.75, 2]
@@ -761,6 +864,7 @@ class TRAANode extends TempNode {
 
 		this._historyRenderTarget.dispose();
 		this._resolveRenderTarget.dispose();
+		if ( this._prevDepthRT !== null ) this._prevDepthRT.dispose();
 
 		this._resolveMaterial.dispose();
 
