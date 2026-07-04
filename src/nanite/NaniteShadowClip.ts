@@ -54,6 +54,7 @@ import {
   atomicAdd,
   atomicMin,
   atomicStore,
+  countOneBits,
   dot,
   float,
   instanceIndex,
@@ -90,22 +91,28 @@ import {
   type NaniteRasterHandles,
   type NaniteVisBuffers,
 } from './NaniteRaster';
-import { BRICK_HALF, BRICK_POS_X, BRICK_WORDS } from './VoxelBrick';
+import { BRICK_DIM, BRICK_HALF, BRICK_OCC_HI, BRICK_OCC_LO, BRICK_POS_X, BRICK_WORDS } from './VoxelBrick';
 import {
   bcF2U,
   bcU2F,
   dispatch,
   dispatchBatchMixed,
+  dispatchIndirect,
   elemU,
   elemUW,
   localX,
+  loopI,
   loopU,
+  maxI,
   maxU,
+  minI,
   minU,
   readBuffer,
   returnIf,
   sU32Views,
   setIndirectDispatch,
+  toF,
+  toI,
   uniformArrV4,
   uniformF,
   uniformMat4,
@@ -599,6 +606,216 @@ export function buildNaniteShadowClip(
     }
   }
 
+  // ---- P3b VOX CROWN SHADOW CASTERS (?shvox2, DEFAULT OFF — additive opt-in) -----
+  // The PROVEN replacement for the cursed kSplat (?shvox, runs-once anomaly). SAME
+  // goal — matClass-7 voxel bricks atomicMin their sun-facing depth into the shared
+  // vis buffer so the 60-496 m crown band (voxel foliage + fartiles) casts DAPPLED
+  // shadows it casts NOTHING for today — but three deliberate departures from kSplat:
+  //   1. DISPATCH via the EXACT machinery the camera's kVoxScatter re-dispatches with
+  //      EVERY frame: setIndirectDispatch(kernel, attr) + dispatchIndirect(renderer,
+  //      kernel, attr) WITH EXPLICIT ARGS (NaniteVoxelRaster.ts:1505/1583). kSplat
+  //      relied on the tag-only plain dispatch() (NaniteShadowClip runs it via a bare
+  //      renderer.compute(kernel)) — that is the path the counter-ladder proved runs
+  //      once and never re-dispatches. We never touch kSplat; this is a fresh kernel.
+  //   2. CORRECT matClass byte: (meshes[word6] >> 8) & 0xff (byte 1 = matClass, the
+  //      SAME extraction the tri raster's class-7 discard uses, NaniteRaster.ts:741).
+  //      kSplat masked byte 0 (channel) — it filtered the WRONG field.
+  //   3. PER-BRICK footprint (one lane = one brick, its own small screen box), so the
+  //      crown is brick-granular dappled (a missing brick = a light gap), never a
+  //      block-AABB blob (the oversized-square disease the camera raster fixed). A
+  //      per-brick OCCUPANCY-MASK carve (kVoxScatter's silhouette idea, adapted) holes
+  //      the bigger near-band footprints further; ?shvox2solid=1 disarms it (A/B).
+  // vis.depthV stores bcF2U(clipZ), atomicMin = nearest-to-light; kCopy publishes the
+  // combined tri+vox depth exactly as before. ≤10-BUFFER BUDGET: qRaster, clusters,
+  // meshes, instances, voxelBricks, vis.depthV = 6. shVox2 is a BUILD-TIME const, so
+  // ?shvox2 absent/0 builds NOTHING below (byte-identical to today's shadow path).
+  const shVox2 =
+    voxSplat === true && new URLSearchParams(window.location.search).get('shvox2') === '1';
+  // ?shvox2solid=1 — force the SOLID per-brick footprint (build the occupancy carve
+  // OUT entirely) so the carve can be A/B-isolated AND so a carve codegen fault never
+  // sinks the core caster: the solid path is kSplat's proven-compiling body + the two
+  // fixes above. Independent build (JS const), NOT a runtime branch.
+  const shVox2Solid = new URLSearchParams(window.location.search).get('shvox2solid') === '1';
+  const voxCasterKernels: unknown[] = [];
+  if (shVox2) {
+    const OCC_DIM = 4; // OCC_DIM×OCC_DIM screen buckets over the footprint bbox (16-bit mask)
+    const CARVE_ARM_AREA = 20; // footprint px² above which the occupancy carve arms
+    const OCC_FULL = 52; // occCount above this ⇒ dense clump ⇒ paint solid (no carve)
+    for (let k = 0; k < LEVELS; k++) {
+      const lv = levels[k]!;
+      const texelWorld = (2 * lv.half) / SHADOW_MAP;
+      const kCaster = Fn(() => {
+        const itemIdx = wgLinear(DISPATCH_ROW).toVar();
+        const qCount = minU(
+          (clipCull.queue.qRasterRO.element(0) as unknown as { x: NU }).x,
+          uint(clipCull.queue.cap),
+        );
+        returnIf(itemIdx.greaterThanEqual(qCount));
+        const item = clipCull.queue.qRasterRO.element(itemIdx.add(uint(1)));
+        const instId = (item as unknown as { x: NU }).x.toVar();
+        const ci = (item as unknown as { y: NU }).y.toVar();
+        const c = readCluster(gpu.clusters, ci);
+        // matClass = byte 1 of mesh word 6 (CORRECT byte; kSplat read byte 0 = channel)
+        const matClass = elemU(gpu.meshes, c.meshId.mul(uint(MESH_WORDS)).add(uint(6)))
+          .shiftRight(uint(8))
+          .bitAnd(uint(0xff))
+          .toVar();
+        returnIf(matClass.notEqual(uint(7)));
+        const cBase = ci.mul(uint(CLUSTER_WORDS));
+        const brickBase = elemU(gpu.clusters, cBase.add(uint(6))).toVar();
+        const brickCount = elemU(gpu.clusters, cBase.add(uint(7))).bitAnd(uint(0xff)).toVar();
+        const brickLocal = localX().toVar();
+        returnIf(brickLocal.greaterThanEqual(brickCount));
+        const A = gpu.instances.element(instId.mul(uint(2))).toVar() as unknown as NV4;
+        const B = gpu.instances.element(instId.mul(uint(2)).add(uint(1))).toVar() as unknown as NV4;
+        const yawSc = instYaw(B);
+        const bw = brickBase.add(brickLocal).mul(uint(BRICK_WORDS));
+        const brLocal = vec3(
+          bcU2F(elemU(gpu.voxelBricks, bw.add(uint(BRICK_POS_X)))),
+          bcU2F(elemU(gpu.voxelBricks, bw.add(uint(BRICK_POS_X + 1)))),
+          bcU2F(elemU(gpu.voxelBricks, bw.add(uint(BRICK_POS_X + 2)))),
+        ) as unknown as NV3;
+        const brHalfL = bcU2F(elemU(gpu.voxelBricks, bw.add(uint(BRICK_HALF)))).toVar();
+        const wc = instTransformPoint(A, B, yawSc, brLocal);
+        const wHalf = (instSphereRadius(A, B, brHalfL as unknown as NF, float(0)) as unknown as NF).toVar();
+        const clip = (lv.cam.vp.mul(vec4(wc, 1)) as unknown as NV4).toVar();
+        // sun-facing FACE depth (front slab toward the light) — the SW tri raster +
+        // kSplat encode the same way; the receiver-side DEPTH_BIAS_M covers residual acne
+        const org = levelOrigin.element(int(k));
+        const zNear = clip.z
+          .sub(wHalf.div((org as unknown as { z: NF }).z.mul(D_RANGE)))
+          .clamp(0, 1)
+          .toVar();
+        const bits = bcF2U(zNear as unknown as NF).toVar();
+        // screen centre + per-brick footprint radius (brick half in texels), capped
+        const cx = (clip.x.mul(0.5).add(0.5) as unknown as NF).mul(SHADOW_MAP).toVar();
+        const cy = (clip.y.mul(0.5).add(0.5) as unknown as NF).mul(SHADOW_MAP).toVar();
+        const rpx = wHalf.div(texelWorld).clamp(0, 8).toVar();
+        // off-window guard (the filter passes whole clusters; edge bricks may poke out)
+        returnIf(
+          cx.add(rpx).lessThan(0).or(cx.sub(rpx).greaterThanEqual(SHADOW_MAP))
+            .or(cy.add(rpx).lessThan(0))
+            .or(cy.sub(rpx).greaterThanEqual(SHADOW_MAP)) as unknown as NB,
+        );
+        const x0 = uint(cx.sub(rpx).max(0)).toVar();
+        const y0 = uint(cy.sub(rpx).max(0)).toVar();
+        const x1 = minU(uint(cx.add(rpx).max(0)), uint(SHADOW_MAP - 1)).toVar();
+        const y1 = minU(uint(cy.add(rpx).max(0)), uint(SHADOW_MAP - 1)).toVar();
+        const bbW = x1.sub(x0).add(uint(1)).toVar();
+        const bbH = y1.sub(y0).add(uint(1)).toVar();
+        // ── OCCUPANCY-MASK CARVE (dappling). For a BIG-footprint (area ≥ CARVE_ARM_AREA)
+        // SPARSE (occCount ≤ OCC_FULL) brick, project each OCCUPIED 4³ cell CENTRE into
+        // the footprint bbox and mark its OCC_DIM×OCC_DIM bucket + a cell-sized halo
+        // (CONSERVATIVE superset ⇒ never a hole). Phase B then paints a texel only if its
+        // bucket bit is set ⇒ the empty interior between sparse leaf cells lets light
+        // through. Small (far) or dense (interior-clump) bricks keep the 0xffff seed and
+        // paint the full solid footprint (near-band dense crown intact, brick-granular
+        // dapple at the far end). Ortho VP ⇒ clip.w ≡ 1, so no near-plane straddle class.
+        const occMask = uint(0xffff).toVar();
+        if (!shVox2Solid) {
+          const occLo = elemU(gpu.voxelBricks, bw.add(uint(BRICK_OCC_LO))).toVar();
+          const occHi = elemU(gpu.voxelBricks, bw.add(uint(BRICK_OCC_HI))).toVar();
+          const occCount = (countOneBits(occLo) as unknown as NU)
+            .add(countOneBits(occHi) as unknown as NU)
+            .toVar();
+          const area = bbW.mul(bbH).toVar();
+          const arm = area
+            .greaterThanEqual(uint(CARVE_ARM_AREA))
+            .and(occCount.lessThanEqual(uint(OCC_FULL)))
+            .and(occCount.greaterThan(uint(0)));
+          If(arm, () => {
+            occMask.assign(uint(0));
+            const cellLocalSize = brHalfL.mul(2).div(float(BRICK_DIM)).toVar(); // local cell edge
+            const halfDim = float(BRICK_DIM).mul(0.5).toVar();
+            // cell screen half-extent (texels) + 1.5× halo so a rotated cell's AABB stays
+            // covered (over-mark = more solid = safe; the carve still holes the empty side).
+            const hpx = wHalf.div(float(BRICK_DIM)).div(texelWorld).mul(1.5).toVar();
+            const fbbW = toF(bbW).toVar();
+            const fbbH = toF(bbH).toVar();
+            loopI('shcz', toI(0), toI(BRICK_DIM), (czc) => {
+              loopI('shcy', toI(0), toI(BRICK_DIM), (cyc) => {
+                loopI('shcx', toI(0), toI(BRICK_DIM), (cxc) => {
+                  const cellIdx = (cxc as unknown as { toUint(): NU })
+                    .toUint()
+                    .add((cyc as unknown as { toUint(): NU }).toUint().mul(uint(BRICK_DIM)))
+                    .add((czc as unknown as { toUint(): NU }).toUint().mul(uint(BRICK_DIM * BRICK_DIM)))
+                    .toVar();
+                  const cellLow = cellIdx.bitAnd(uint(31)).toVar();
+                  const loBit = occLo.shiftRight(cellLow).bitAnd(uint(1)).toVar();
+                  const hiBit = occHi.shiftRight(cellLow).bitAnd(uint(1)).toVar();
+                  const occBit = cellIdx.lessThan(uint(32)).select(loBit, hiBit).toVar();
+                  If(occBit.equal(uint(1)), () => {
+                    const clx = brLocal.x.add(toF(cxc).add(0.5).sub(halfDim).mul(cellLocalSize)).toVar();
+                    const cly = brLocal.y.add(toF(cyc).add(0.5).sub(halfDim).mul(cellLocalSize)).toVar();
+                    const clz = brLocal.z.add(toF(czc).add(0.5).sub(halfDim).mul(cellLocalSize)).toVar();
+                    const cwld = instTransformPoint(A, B, yawSc, vec3(clx, cly, clz) as unknown as NV3);
+                    const cc = (lv.cam.vp.mul(vec4(cwld, 1)) as unknown as NV4).toVar();
+                    const sx = (cc.x.mul(0.5).add(0.5) as unknown as NF).mul(SHADOW_MAP).toVar();
+                    const sy = (cc.y.mul(0.5).add(0.5) as unknown as NF).mul(SHADOW_MAP).toVar();
+                    // bucket range covering [sx±hpx]×[sy±hpx] within the footprint bbox
+                    const fu0 = sx.sub(hpx).sub(toF(x0)).div(fbbW).mul(float(OCC_DIM)).toVar();
+                    const fu1 = sx.add(hpx).sub(toF(x0)).div(fbbW).mul(float(OCC_DIM)).toVar();
+                    const fv0 = sy.sub(hpx).sub(toF(y0)).div(fbbH).mul(float(OCC_DIM)).toVar();
+                    const fv1 = sy.add(hpx).sub(toF(y0)).div(fbbH).mul(float(OCC_DIM)).toVar();
+                    const u0 = maxI(toI(0), minI(toI(OCC_DIM - 1), toI(fu0.floor()))).toVar();
+                    const u1 = maxI(toI(0), minI(toI(OCC_DIM - 1), toI(fu1.floor()))).toVar();
+                    const v0 = maxI(toI(0), minI(toI(OCC_DIM - 1), toI(fv0.floor()))).toVar();
+                    const v1 = maxI(toI(0), minI(toI(OCC_DIM - 1), toI(fv1.floor()))).toVar();
+                    // FIXED 0..OCC_DIM loops with an in-[u0,u1]×[v0,v1] guard (constant loop
+                    // bounds = the codegen-safe pattern the camera occ-mask build uses).
+                    loopI('shmv', toI(0), toI(OCC_DIM), (vv) => {
+                      loopI('shmu', toI(0), toI(OCC_DIM), (uu) => {
+                        const inR = vv
+                          .greaterThanEqual(v0)
+                          .and(vv.lessThanEqual(v1))
+                          .and(uu.greaterThanEqual(u0))
+                          .and(uu.lessThanEqual(u1));
+                        If(inR, () => {
+                          const bit = (vv as unknown as { toUint(): NU })
+                            .toUint()
+                            .mul(uint(OCC_DIM))
+                            .add((uu as unknown as { toUint(): NU }).toUint())
+                            .toVar();
+                          occMask.assign(occMask.bitOr(uint(1).shiftLeft(bit)));
+                        });
+                      });
+                    });
+                  });
+                });
+              });
+            });
+            // degenerate all-off projection ⇒ paint solid (never a hole).
+            const safeMask = occMask.equal(uint(0)).select(uint(0xffff), occMask).toVar();
+            occMask.assign(safeMask);
+          });
+        }
+        const gateActive = occMask.notEqual(uint(0xffff)).toVar();
+        // PHASE B — per-brick footprint splat (kSplat's proven loop) with the bucket gate.
+        loopU(y0, y1.add(uint(1)), (ty) => {
+          loopU(x0, x1.add(uint(1)), (tx) => {
+            const paint = uint(1).toVar();
+            If(gateActive, () => {
+              const su = minU(tx.sub(x0).mul(uint(OCC_DIM)).div(bbW), uint(OCC_DIM - 1)).toVar();
+              const sv = minU(ty.sub(y0).mul(uint(OCC_DIM)).div(bbH), uint(OCC_DIM - 1)).toVar();
+              const bit = sv.mul(uint(OCC_DIM)).add(su).toVar();
+              If(occMask.shiftRight(bit).bitAnd(uint(1)).equal(uint(0)), () => {
+                paint.assign(uint(0));
+              });
+            });
+            If(paint.equal(uint(1)), () => {
+              const px = ty.mul(uint(SHADOW_MAP)).add(tx).toVar();
+              atomicMin(vis.depthV.atomic.element(px), bits);
+            });
+          });
+        });
+      })().compute(DISPATCH_ROW * 128, [128]);
+      (kCaster as unknown as NamedKernel).setName(`nanClipVoxCaster${k}`);
+      // TAG + EXPLICIT-ARGS dispatch = kVoxScatter's proven every-frame pattern.
+      setIndirectDispatch(kCaster, clipCull.queue.rasterDispatchAttr);
+      voxCasterKernels.push(kCaster);
+    }
+  }
+
   // ---- per-frame clipmap fit + raster -----------------------------------------
   const forward = new Vector3();
   const right = new Vector3();
@@ -953,6 +1170,19 @@ export function buildNaniteShadowClip(
       lv.raster.hwDepth(renderer, mainCamera);
       // P3: brick depth splat — BISECT: DIRECT static-grid dispatch (qCount-guarded)
       if (shVox) dispatch(renderer, voxSplatKernels[k] as never);
+      // P3b (?shvox2, DEFAULT OFF): the PROVEN vox crown caster — atomicMin the
+      // matClass-7 bricks' sun-facing depth into the shared vis buffer AFTER the tri
+      // depth (SW+HW) and BEFORE kCopy publishes it. dispatchIndirect WITH EXPLICIT
+      // ARGS = kVoxScatter's every-frame re-dispatch pattern (NOT kSplat's tag-only
+      // plain dispatch that runs once). Separate submit ⇒ serialized after hwDepth,
+      // before the kCopy submit — atomicMin is order-free vs the tri depth either way.
+      if (shVox2) {
+        dispatchIndirect(
+          renderer,
+          voxCasterKernels[k] as never,
+          clipCull.queue.rasterDispatchAttr,
+        );
+      }
       dispatchBatchMixed(renderer, [lv.kCopy]);
     }
   };
