@@ -103,3 +103,14 @@ extremely slow + Chrome frozen-tab dialogs.
   ?swmax (default 16), window.__qHW, sw-min.mjs (scratchpad).
 - ⚠️ ?rdbg=2 is a broken anchor now: re-adds visDepthV → 11 storage buffers
   → invalid pipeline (pre-existing, needs the scar fold pattern if revived).
+
+## AUTO-RSCALE SHIPPED (commit 074eda5, user rule)
+
+- No ?rscale in URL → internal render AREA capped at the 1920×1080 pixel
+  budget: S = sqrt(1920·1080/(W·H)) — area cap, aspect-preserving (first cut
+  used min(1920/W,1080/H) letterbox-fit; user caught it: punishes ultrawide
+  by width). Explicit ?rscale (incl. =1) always wins.
+- Measured: dpr2 world eye grass-off auto S=0.59 → p50 12.1ms (native 23.6)
+  — INSIDE the 11-12.5ms mandate band at a still pose.
+- ⚠️ HARNESS LAW: default legs now auto-scale — every canonical native-res
+  baseline from here on needs ?rscale=1 explicitly.
