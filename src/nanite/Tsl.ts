@@ -173,6 +173,11 @@ export function bcU2F(u: NU): NF {
   return bitcast(u, 'float') as unknown as NF;
 }
 
+/** uint bits → i32 (bit-preserving; i32(u32) VALUE conversion would clamp ≥ 2^31) */
+export function bcU2I(u: NU): NI {
+  return bitcast(u, 'int') as unknown as NI;
+}
+
 /** WGSL unpack2x16float (typings return a bare PackFloatNode) */
 export function unpackHalfU(u: NU): NV2 {
   return unpackHalf2x16(u) as unknown as NV2;
