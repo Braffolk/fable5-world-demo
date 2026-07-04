@@ -399,6 +399,28 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
   const uGFx = uniformF(0);
   const uGFz = uniformF(0);
 
+  /** per-texel FIELD bake (perf): the march re-derived every smooth field PER
+   *  STEP (3× value noise = 12 hashes + swirl/wind trig) — measured ~12 ms of
+   *  kRay's 23 @dpr2 eye. The SAME 2.5-texel-period fields are now evaluated
+   *  once per texel per frame (the guide rebakes every frame for wind anyway)
+   *  and HW-bilinear-sampled at the ray's world pos: piecewise-BILINEAR is
+   *  continuous across space — the grid class was piecewise-CONSTANT.
+   *  T1 = (Slx, Slz, Swx, Swz) lean + wind quad-term (time folded at bake);
+   *  T2 = (ca, sa, a1x, a1z) swirl rotation + static arc. L1's quad = Sw + a1,
+   *  L2's = Sw − a1 (negated arc — still criss-crossing, no third texture). */
+  const mkFieldTex = (name: string): StorageTexture => {
+    const t = new StorageTexture(GUIDE_RES, GUIDE_RES);
+    t.type = HalfFloatType;
+    t.format = RGBAFormat;
+    t.magFilter = LinearFilter;
+    t.minFilter = LinearFilter;
+    t.generateMipmaps = false;
+    t.name = name;
+    return t;
+  };
+  const guideFieldT1 = mkFieldTex('grassGuideField1');
+  const guideFieldT2 = mkFieldTex('grassGuideField2');
+
   const kGuideBake = ((): unknown => {
     const k = Fn(() => {
       returnIf((uOn as unknown as NF).lessThan(0.5) as unknown as NB);
@@ -503,6 +525,93 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
       const mb = i.mul(uint(2));
       guideMaskW.rw.element(mb).assign(m0);
       guideMaskW.rw.element(mb.add(uint(1))).assign(m1);
+      // ---- per-texel FIELD bake (guideFieldT1/T2 — see decl): the kRay per-step
+      // smNoise+trig monster, folded to texel rate. Same fields, same salts.
+      const smN = (salt: number): NV2 => {
+        const qx = wpos.x.mul(1 / (GUIDE_PITCH * 2.5)) as unknown as NF;
+        const qz = wpos.y.mul(1 / (GUIDE_PITCH * 2.5)) as unknown as NF;
+        const ix = qx.floor().toVar() as unknown as NF;
+        const iz = qz.floor().toVar() as unknown as NF;
+        const fx = smoothstep(0, 1, qx.sub(ix)) as unknown as NF;
+        const fz = smoothstep(0, 1, qz.sub(iz)) as unknown as NF;
+        const c = (dx: number, dz: number): NV2 =>
+          cellHash2(
+            vec2(ix.add(dx), iz.add(dz)) as unknown as NV2,
+            SALT ^ salt,
+          ) as unknown as NV2;
+        return mix(
+          mix(c(0, 0), c(1, 0), fx),
+          mix(c(0, 1), c(1, 1), fx),
+          fz,
+        ) as unknown as NV2;
+      };
+      let caB: NF = float(1) as unknown as NF;
+      let saB: NF = float(0) as unknown as NF;
+      if (RAY_BOMB) {
+        const th = (smN(0x0b0b).x as unknown as NF).mul(6.2831853).toVar() as unknown as NF;
+        caB = th.cos() as unknown as NF;
+        saB = th.sin() as unknown as NF;
+      }
+      let SwxB: NF = float(0) as unknown as NF;
+      let SwzB: NF = float(0) as unknown as NF;
+      if (RAY_SHEAR && windContext()) {
+        const st = (windU.strength as unknown as NF).toVar() as unknown as NF;
+        const K = amp
+          .mul(st.mul(0.55).add(0.6))
+          .mul(0.45)
+          .div(topOut.max(0.35))
+          .toVar() as unknown as NF;
+        const wd = vec2(windU.dir as unknown as NV2);
+        const swn = smN(0x5151);
+        const ph = (swn.x as unknown as NF).mul(6.2831853).toVar() as unknown as NF;
+        const gustE = time.mul(0.22).add(ph).sin().mul(0.35).add(0.65) as unknown as NF;
+        const lowS = time.mul(0.55).add(ph).sin() as unknown as NF;
+        const highS = time.mul(2.4).add(ph.mul(1.7)).sin() as unknown as NF;
+        const shelter = amp.mul(1.5).add(0.25).min(1) as unknown as NF;
+        const ffall = float(1).sub(smoothstep(50, 110, dist)) as unknown as NF;
+        const swayA = lowS
+          .mul(gustE)
+          .mul(0.45)
+          .add(highS.mul(0.1))
+          .mul(st.mul(0.7).add(0.15))
+          .mul(shelter)
+          .mul(ffall)
+          .mul(RAY_SWAY)
+          .toVar() as unknown as NF;
+        const wob = (swn.y as unknown as NF).sub(0.5).mul(0.8) as unknown as NF;
+        const swx = wd.x.sub(wd.y.mul(wob)) as unknown as NF;
+        const swz = wd.y.add(wd.x.mul(wob)) as unknown as NF;
+        SwxB = wd.x.mul(K).add(swx.mul(swayA)) as unknown as NF;
+        SwzB = wd.y.mul(K).add(swz.mul(swayA)) as unknown as NF;
+      }
+      let SlxB: NF = float(0) as unknown as NF;
+      let SlzB: NF = float(0) as unknown as NF;
+      let a1xB: NF = float(0) as unknown as NF;
+      let a1zB: NF = float(0) as unknown as NF;
+      if (RAY_TILT) {
+        // staticArc(0x3333) + the ~120°-offset lean, riding the same noise
+        const n = smN(0x3333);
+        const ba = (n.x as unknown as NF).mul(6.2831853).toVar() as unknown as NF;
+        const bm = (n.y as unknown as NF).mul(0.25).add(0.12) as unknown as NF;
+        a1xB = ba.cos().mul(bm) as unknown as NF;
+        a1zB = ba.sin().mul(bm) as unknown as NF;
+        const la = (n.x as unknown as NF).mul(6.2831853).add(2.1) as unknown as NF;
+        const lm = (n.y as unknown as NF).mul(0.05).add(0.02) as unknown as NF;
+        SlxB = la.cos().mul(lm) as unknown as NF;
+        SlzB = la.sin().mul(lm) as unknown as NF;
+      }
+      const txu = i.mod(uint(GUIDE_RES));
+      const tzu = i.div(uint(GUIDE_RES));
+      textureStore(
+        guideFieldT1,
+        uvec2(txu, tzu),
+        vec4(SlxB, SlzB, SwxB, SwzB),
+      ).toWriteOnly();
+      textureStore(
+        guideFieldT2,
+        uvec2(txu, tzu),
+        vec4(caB, saB, a1xB, a1zB),
+      ).toWriteOnly();
     })().compute(GUIDE_N, [256]);
     (k as unknown as { setName(n: string): void }).setName('grassGuide');
     return k;
@@ -796,45 +905,25 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
             if (!rayBake || !nrmV || !tParV) return;
             const txI = gfx.div(GUIDE_SUB).add(txf) as unknown as NF;
             const tzI = gfz.div(GUIDE_SUB).add(tzf) as unknown as NF;
-            /** SMOOTH value noise sampled at the RAY'S CONTINUOUS WORLD POSITION
-             *  (~2.5-texel feature period). ⚠️ HISTORY (the user's persistent
-             *  grid, four rounds): every "smooth" field was previously sampled at
-             *  the TEXEL INDEX — neighbor-correlated values but still piecewise
-             *  CONSTANT per tile → 1-3-texel plateaus with square axis-aligned
-             *  edges = the grid, surviving every statistical fix. Controls proved
-             *  it (hybrid clean; bomb OFF still gridded — identical tile content
-             *  everywhere, so only per-texel-constant FIELDS remained). The basis
-             *  must be constant within one STEP; sampling at `pos` makes it
-             *  continuous across space, which is what actually matters. */
-            const smNoise = (salt: number): NV2 => {
-              const qx = pos.x.mul(1 / (GUIDE_PITCH * 2.5)) as unknown as NF;
-              const qz = pos.z.mul(1 / (GUIDE_PITCH * 2.5)) as unknown as NF;
-              const ix = qx.floor().toVar() as unknown as NF;
-              const iz = qz.floor().toVar() as unknown as NF;
-              const fx = smoothstep(0, 1, qx.sub(ix)) as unknown as NF;
-              const fz = smoothstep(0, 1, qz.sub(iz)) as unknown as NF;
-              const c = (dx: number, dz: number): NV2 =>
-                cellHash2(
-                  vec2(ix.add(dx), iz.add(dz)) as unknown as NV2,
-                  SALT ^ salt,
-                ) as unknown as NV2;
-              return mix(
-                mix(c(0, 0), c(1, 0), fx),
-                mix(c(0, 1), c(1, 1), fx),
-                fz,
-              ) as unknown as NV2;
-            };
-            // anti-tiling: a CONTINUOUS SWIRL rotation of tile space (θ from the
-            // position-sampled noise) replaces the discrete 90° bomb — a per-tile
-            // discrete transform is the same quilt class as a per-tile field. The
-            // root-id + point-inverse machinery is exact under ANY rotation (the
-            // golden layer proved it). ?grassbomb=0 → θ=0 (raw tiling, A/B).
-            const th = (RAY_BOMB
-              ? ((smNoise(0x0b0b).x as unknown as NF).mul(6.2831853) as unknown as NF)
-              : (float(0) as unknown as NF)
-            ).toVar() as unknown as NF;
-            const ca = th.cos().toVar() as unknown as NF;
-            const sa = th.sin().toVar() as unknown as NF;
+            // ---- FIELD FETCH (perf rewrite 2026-07-04): every smooth per-step
+            // field (swirl θ as cos/sin, wind quad-term, static arc, lean) comes
+            // from the per-frame per-texel bake in kGuideBake, HW-bilinear at the
+            // ray's CONTINUOUS world pos (resolveLean's center-aligned uv idiom).
+            // ⚠️ GRID HISTORY: fields must be continuous ACROSS SPACE — piecewise-
+            // BILINEAR of texel-center samples qualifies; the user's 0.84m quilt
+            // was piecewise-CONSTANT fields. This replaces 3× value noise (12
+            // hashes) + trig per march step — measured ~12 ms of kRay's 23 @dpr2.
+            const guv = vec2(
+              pos.x.div(CELL).sub(gfx).div(GUIDE_SUB * GUIDE_RES),
+              pos.z.div(CELL).sub(gfz).div(GUIDE_SUB * GUIDE_RES),
+            ).clamp(0, 1) as unknown as NV2;
+            const f1 = (texture(guideFieldT1, guv, 0) as unknown as { toVar(): NV4 }).toVar();
+            const f2 = (texture(guideFieldT2, guv, 0) as unknown as { toVar(): NV4 }).toVar();
+            // swirl rotation: bilinear of (cos,sin) renormalized — bombI must be
+            // the EXACT inverse of bombF (root-id lattice mapping needs ca²+sa²=1)
+            const cl = vec2(f2.x, f2.y).length().max(1e-4).toVar() as unknown as NF;
+            const ca = (f2.x as unknown as NF).div(cl).toVar() as unknown as NF;
+            const sa = (f2.y as unknown as NF).div(cl).toVar() as unknown as NF;
             /** tile-space forward rotation */
             const bombF = (vx: NF, vz: NF): NV2 =>
               vec2(
@@ -859,80 +948,14 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
             // every fetch, so blade silhouettes render genuinely CURVED (user call
             // 2026-07-04: "bends in the grass blades is a must") — zero extra
             // fetches, the cheapest bend variant.
-            let Slx: NF = float(0) as unknown as NF;
-            let Slz: NF = float(0) as unknown as NF;
-            /** wind quad-term (steady gust bend + sway) — shared by both layers */
-            let Swx: NF = float(0) as unknown as NF;
-            let Swz: NF = float(0) as unknown as NF;
-            if (RAY_SHEAR && windContext()) {
-              // wind is a BEND, not a tilt: quadratic, scaled so the deflection at
-              // the texel's sward top matches the old linear-shear tip deflection
-              const st = (windU.strength as unknown as NF).toVar() as unknown as NF;
-              const K = (ta.y as unknown as NF)
-                .mul(st.mul(0.55).add(0.6))
-                .mul(0.45)
-                .div((ta.x as unknown as NF).max(0.35))
-                .toVar() as unknown as NF;
-              const wd = vec2(windU.dir as unknown as NV2);
-              // DUAL-FREQUENCY SWAY (user call 2026-07-04: the gust-field bend
-              // alone is ~static and exposure-killed under canopy — wind never
-              // READ): a slow gust envelope breathes a low-freq body sway, a
-              // high-freq flutter shimmers on top, per-texel phase decorrelates,
-              // and the quadratic basis itself makes it root-stable/tip-strong
-              // (the codrops bézier-wind shape, folded into the article's march
-              // shear). Shelter keeps a 25% floor so forest grass still moves;
-              // distance falloff keeps the far field stable.
-              const swn = smNoise(0x5151);
-              const ph = (swn.x as unknown as NF).mul(6.2831853).toVar() as unknown as NF;
-              // user-called 2026-07-04: 1.3/6.5 rad/s read much faster than the
-              // world's other small plants — grass breathes at ~0.1-0.4 Hz
-              const gustE = time.mul(0.22).add(ph).sin().mul(0.35).add(0.65) as unknown as NF;
-              const lowS = time.mul(0.55).add(ph).sin() as unknown as NF;
-              const highS = time.mul(2.4).add(ph.mul(1.7)).sin() as unknown as NF;
-              const shelter = (ta.y as unknown as NF).mul(1.5).add(0.25).min(1) as unknown as NF;
-              const ffall = float(1).sub(smoothstep(50, 110, distT)) as unknown as NF;
-              const swayA = lowS
-                .mul(gustE)
-                .mul(0.45)
-                .add(highS.mul(0.1))
-                .mul(st.mul(0.7).add(0.15))
-                .mul(shelter)
-                .mul(ffall)
-                .mul(RAY_SWAY)
-                .toVar() as unknown as NF;
-              // sway direction: wind dir + a smoothly-varying perpendicular wobble
-              const wob = (swn.y as unknown as NF).sub(0.5).mul(0.8) as unknown as NF;
-              const swx = wd.x.sub(wd.y.mul(wob)) as unknown as NF;
-              const swz = wd.y.add(wd.x.mul(wob)) as unknown as NF;
-              Swx = wd.x.mul(K).add(swx.mul(swayA)) as unknown as NF;
-              Swz = wd.y.mul(K).add(swz.mul(swayA)) as unknown as NF;
-            }
-            /** SMOOTH static ARC field (subtle — per-fiber radial arcs live in the
-             *  bake; this only swirls the field). Arcs also carry TOP-DOWN
-             *  coverage: a bent blade sweeps a stripe ~arc-length × width. */
-            const staticArc = (salt: number): { x: NF; z: NF; n: NV2 } => {
-              const n = smNoise(salt);
-              const ba = (n.x as unknown as NF).mul(6.2831853).toVar() as unknown as NF;
-              const bm = (n.y as unknown as NF).mul(0.25).add(0.12) as unknown as NF;
-              return {
-                x: ba.cos().mul(bm) as unknown as NF,
-                z: ba.sin().mul(bm) as unknown as NF,
-                n,
-              };
-            };
-            let Sqx: NF = Swx;
-            let Sqz: NF = Swz;
-            if (RAY_TILT) {
-              // smooth swirl: a small whole-blade lean + the arc, both riding the
-              // SAME noise (lean offset ~120° from the arc so they don't align)
-              const a1 = staticArc(0x3333);
-              const la = (a1.n.x as unknown as NF).mul(6.2831853).add(2.1) as unknown as NF;
-              const lm = (a1.n.y as unknown as NF).mul(0.05).add(0.02) as unknown as NF;
-              Slx = Slx.add(la.cos().mul(lm)) as unknown as NF;
-              Slz = Slz.add(la.sin().mul(lm)) as unknown as NF;
-              Sqx = Sqx.add(a1.x) as unknown as NF;
-              Sqz = Sqz.add(a1.z) as unknown as NF;
-            }
+            /** lean (linear term) + wind quad-term — baked in kGuideBake */
+            const Slx = (f1.x as unknown as NF).toVar() as unknown as NF;
+            const Slz = (f1.y as unknown as NF).toVar() as unknown as NF;
+            const Swx = (f1.z as unknown as NF).toVar() as unknown as NF;
+            const Swz = (f1.w as unknown as NF).toVar() as unknown as NF;
+            /** quad basis = wind + static arc (f2.zw; 0 when ?grasstilt=0) */
+            const Sqx = Swx.add(f2.z).toVar() as unknown as NF;
+            const Sqz = Swz.add(f2.w).toVar() as unknown as NF;
             const texOx = gfx.add(txf.mul(GUIDE_SUB)).mul(CELL).toVar() as unknown as NF;
             const texOz = gfz.add(tzf.mul(GUIDE_SUB)).mul(CELL).toVar() as unknown as NF;
             const texCx = texOx.add(GUIDE_PITCH / 2).toVar() as unknown as NF;
@@ -1295,11 +1318,10 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                 // a fixed golden offset would be per-tile-coherent again)
                 const ca2 = ca.mul(GC).sub(sa.mul(GS)).toVar() as unknown as NF;
                 const sa2 = sa.mul(GC).add(ca.mul(GS)).toVar() as unknown as NF;
-                const a2 = RAY_TILT
-                  ? staticArc(0x7373)
-                  : { x: float(0) as unknown as NF, z: float(0) as unknown as NF };
-                const Q2x = Swx.add(a2.x) as unknown as NF;
-                const Q2z = Swz.add(a2.z) as unknown as NF;
+                // L2 arc = NEGATED L1 arc (f2.zw) — an independent direction
+                // without a third baked field; 0 when ?grasstilt=0, same as L1
+                const Q2x = Swx.sub(f2.z) as unknown as NF;
+                const Q2z = Swz.sub(f2.w) as unknown as NF;
                 const of2x = Slx.add(Q2x.mul(hgt)).mul(hgt) as unknown as NF;
                 const of2z = Slz.add(Q2z.mul(hgt)).mul(hgt) as unknown as NF;
                 const l2x = pos.x.sub(of2x).sub(texOx).div(GUIDE_PITCH).sub(0.5).toVar() as unknown as NF;
