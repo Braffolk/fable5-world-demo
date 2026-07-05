@@ -450,102 +450,149 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     engine.onUpdate(() => fx.update(engine.renderer, engine.camera));
   }
 
-  // HDR post stack: aerial perspective, clouds, GTAO, TRAA, bloom, exposure, grade
-  ctx.progress(0.98, 'post: building pipeline');
-  const post = new PostStack(engine, sunSky.atmosphere, bootTod, clouds, froxels);
-  engine.post = post;
+  // The render graph below (PostStack + nanite frame + water) captures the renderer
+  // at BUILD time — PostStack's post-processing pipeline and buildNaniteFrame's
+  // `renderer` local both bind whatever engine.renderer is now. ?profile=1 defers
+  // this whole block so core/ProfileBoot can build it ONCE, natively, on the
+  // swapped-in 'laas-render' device (no rebuild). Normal mode runs it inline below.
+  const buildRenderGraph = async (): Promise<void> => {
+    // HDR post stack: aerial perspective, clouds, GTAO, TRAA, bloom, exposure, grade
+    ctx.progress(0.98, 'post: building pipeline');
+    const post = new PostStack(engine, sunSky.atmosphere, bootTod, clouds, froxels);
+    engine.post = post;
 
-  // ?nanitedbg=flat|cluster (needs ?nanite=1) — N2 debug view: cull → raster
-  // → flat resolve replaces the frame render via the post slot; the old
-  // pipeline keeps booting/updating untouched. `cluster` = the deferred N1
-  // checkpoint (meshlet colors on the real world).
-  const nanitedbg = new URLSearchParams(window.location.search).get('nanitedbg');
-  let naniteSunVis: import('../nanite/NaniteFrame').NaniteFrameHandles['sunVis'];
-  if (
-    nanitedbg === 'flat' ||
-    nanitedbg === 'cluster' ||
-    nanitedbg === 'lod' ||
-    nanitedbg === 'hzb'
-  ) {
-    if (naniteRegistry) {
-      const { buildNaniteView } = await import('../nanite/NaniteView');
-      engine.post = buildNaniteView(engine, naniteRegistry, hf, nanitedbg);
+    // ?nanitedbg=flat|cluster (needs ?nanite=1) — N2 debug view: cull → raster
+    // → flat resolve replaces the frame render via the post slot; the old
+    // pipeline keeps booting/updating untouched. `cluster` = the deferred N1
+    // checkpoint (meshlet colors on the real world).
+    const nanitedbg = new URLSearchParams(window.location.search).get('nanitedbg');
+    let naniteSunVis: import('../nanite/NaniteFrame').NaniteFrameHandles['sunVis'];
+    if (
+      nanitedbg === 'flat' ||
+      nanitedbg === 'cluster' ||
+      nanitedbg === 'lod' ||
+      nanitedbg === 'hzb'
+    ) {
+      if (naniteRegistry) {
+        const { buildNaniteView } = await import('../nanite/NaniteView');
+        engine.post = buildNaniteView(engine, naniteRegistry, hf, nanitedbg);
+        // eslint-disable-next-line no-console
+        console.log(`[laas] nanitedbg=${nanitedbg}: N2 debug view replacing the frame render`);
+      } else {
+        // eslint-disable-next-line no-console
+        console.warn('[laas] ?nanitedbg needs ?nanite=1 with vegetation enabled — ignored');
+      }
+    } else if (naniteRegistry && naniteClasses && naniteFrameMode) {
+      // N4 full-frame mode (D-N18/D-N19): nanite compute + in-scene resolve own
+      // the migrated classes; their old camera draws hide (shadow casting stays
+      // on the old path until N5 — ShadowProxy + per-cascade caster siblings)
+      BootTrace.phase('nanite: frame build (raster/resolve/grass)');
+      const { buildNaniteFrame } = await import('../nanite/NaniteFrame');
+      const { migratedMatClass } = await import('../nanite/WorldRegistry');
+      const nanFrame = buildNaniteFrame(engine, naniteRegistry, hf, post, {
+        gi: ablate.has('gi') ? null : gi,
+        canopyTex,
+        csm: shadowRig.csm ?? null,
+        // P2: with the CSM severed, sunShadows carries the "scene has sun shadows"
+        // signal (was csm !== null) and the cloud gate is applied by the resolve.
+        sunShadows: severCsm && !ablate.has('shadows'),
+        cloudShadow:
+          severCsm && !ablate.has('cloudshadow')
+            ? (wxz: import('../gpu/TSLTypes').NV2) => clouds.shadowAt(wxz)
+            : null,
+        farShadow: farSh ? (wxz: import('../gpu/TSLTypes').NV2) => farSh.visAt(wxz) : null,
+        barkTexA: naniteBark?.texA ?? null,
+        barkTexB: naniteBark?.texB ?? null,
+      });
+      engine.post = nanFrame;
+      naniteSunVis = nanFrame.sunVis;
+      if (naniteClasses.has('terrain') && tilesRef) {
+        tilesRef.mesh.visible = false;
+        tilesRef.farShell.visible = false;
+      }
+      const hidden = forestsRef?.suppressMigrated(migratedMatClass, naniteClasses) ?? 0;
       // eslint-disable-next-line no-console
-      console.log(`[laas] nanitedbg=${nanitedbg}: N2 debug view replacing the frame render`);
-    } else {
-      // eslint-disable-next-line no-console
-      console.warn('[laas] ?nanitedbg needs ?nanite=1 with vegetation enabled — ignored');
+      console.log(
+        `[laas] nanite full-frame: classes [${[...naniteClasses].join(',')}]; suppressed ` +
+          `${hidden} pool draws${naniteClasses.has('terrain') ? ' + terrain tiles/far shell' : ''}`,
+      );
     }
-  } else if (naniteRegistry && naniteClasses && naniteFrameMode) {
-    // N4 full-frame mode (D-N18/D-N19): nanite compute + in-scene resolve own
-    // the migrated classes; their old camera draws hide (shadow casting stays
-    // on the old path until N5 — ShadowProxy + per-cascade caster siblings)
-    BootTrace.phase('nanite: frame build (raster/resolve/grass)');
-    const { buildNaniteFrame } = await import('../nanite/NaniteFrame');
-    const { migratedMatClass } = await import('../nanite/WorldRegistry');
-    const nanFrame = buildNaniteFrame(engine, naniteRegistry, hf, post, {
-      gi: ablate.has('gi') ? null : gi,
-      canopyTex,
-      csm: shadowRig.csm ?? null,
-      // P2: with the CSM severed, sunShadows carries the "scene has sun shadows"
-      // signal (was csm !== null) and the cloud gate is applied by the resolve.
-      sunShadows: severCsm && !ablate.has('shadows'),
-      cloudShadow:
-        severCsm && !ablate.has('cloudshadow')
-          ? (wxz: import('../gpu/TSLTypes').NV2) => clouds.shadowAt(wxz)
-          : null,
-      farShadow: farSh ? (wxz: import('../gpu/TSLTypes').NV2) => farSh.visAt(wxz) : null,
-      barkTexA: naniteBark?.texA ?? null,
-      barkTexB: naniteBark?.texB ?? null,
+
+    // Phase 6 water (moved after the nanite frame — W2 needs its sunVis): the
+    // clipmap draws in the scene pass after the resolve meshes (transparent,
+    // depthWrite) — the SLW-over-resolve seam. In the severed-CSM slate the
+    // foam/glint lighting is manual, gated by nanite sun visibility.
+    if (view !== 'split' && !ablate.has('water')) {
+      const water = new WaterSurface(
+        hf,
+        sunSky.atmosphere,
+        canopyTex,
+        ablate.has('gi') ? null : gi,
+        { sunVis: naniteSunVis },
+      );
+      engine.scene.add(water.group);
+      engine.onUpdate(() => water.update(engine.camera));
+      // runtime visible-toggle for within-session perf A/B
+      (window as unknown as { __laasDbg: Record<string, unknown> }).__laasDbg.water = water;
+    }
+
+    ctx.hooks.setTimeOfDay = (t: number) => {
+      void (async () => {
+        await sunSky.setTimeOfDay(t);
+        await clouds.refreshShadow(engine.renderer);
+        farSh?.bake(engine.renderer); // P4: sun moved — re-march the far-shadow map
+        gi.invalidate();
+        post.setTimeOfDay(t);
+      })();
+    };
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'BracketLeft' || e.code === 'BracketRight') {
+        void clouds.refreshShadow(engine.renderer);
+        farSh?.bake(engine.renderer);
+        post.setTimeOfDay(sunSky.timeOfDay);
+      }
     });
-    engine.post = nanFrame;
-    naniteSunVis = nanFrame.sunVis;
-    if (naniteClasses.has('terrain') && tilesRef) {
-      tilesRef.mesh.visible = false;
-      tilesRef.farShell.visible = false;
-    }
-    const hidden = forestsRef?.suppressMigrated(migratedMatClass, naniteClasses) ?? 0;
+  }; // end buildRenderGraph
+
+  // ?profile=1: defer the render graph to after the device swap (ProfileBoot builds
+  // it on 'laas-render'); otherwise build it now, preserving the normal path exactly.
+  const profileMode = new URLSearchParams(window.location.search).get('profile') === '1';
+  if (!profileMode) {
+    await buildRenderGraph();
+  } else {
+    const bark = naniteBark;
+    (
+      window as unknown as { __laasProfile?: import('../core/ProfileBoot').ProfileHandoff }
+    ).__laasProfile = {
+      // GPU-only StorageTextures the game samples but that cannot auto-remigrate to
+      // a fresh device (no CPU image data) — ProfileBoot reads these back before the
+      // swap and writes them onto the render device afterward.
+      textures: (
+        [
+          hf.heightTex && { tex: hf.heightTex },
+          hf.normalTex && { tex: hf.normalTex },
+          hf.biomeTex && { tex: hf.biomeTex },
+          hf.fieldsTex && { tex: hf.fieldsTex },
+          hf.noiseA && { tex: hf.noiseA },
+          hf.noiseB && { tex: hf.noiseB },
+          bark && { tex: bark.texA, mips: true },
+          bark && { tex: bark.texB, mips: true },
+          canopyTex && { tex: canopyTex },
+        ] as ({ tex: import('three').Texture; mips?: boolean } | null | false | undefined)[]
+      ).filter(Boolean) as { tex: import('three').Texture; mips?: boolean }[],
+      // subsystems that own build-time GPU state or a captured renderer and expose a
+      // clean re-init on a new renderer (atmosphere LUTs + IBL; GI field).
+      reheal: async (r2) => {
+        await sunSky.init(r2); // atmosphere LUTs + IBL cube
+        await gi.init(r2); // GI probe field
+        await clouds.init(r2); // bake-once 3D cloud noise (empty on the fresh device)
+      },
+      buildRenderGraph,
+      timeOfDay: bootTod,
+    };
     // eslint-disable-next-line no-console
-    console.log(
-      `[laas] nanite full-frame: classes [${[...naniteClasses].join(',')}]; suppressed ` +
-        `${hidden} pool draws${naniteClasses.has('terrain') ? ' + terrain tiles/far shell' : ''}`,
-    );
+    console.log('[profile] render graph deferred — ProfileBoot builds it on laas-render');
   }
-
-  // Phase 6 water (moved after the nanite frame — W2 needs its sunVis): the
-  // clipmap draws in the scene pass after the resolve meshes (transparent,
-  // depthWrite) — the SLW-over-resolve seam. In the severed-CSM slate the
-  // foam/glint lighting is manual, gated by nanite sun visibility.
-  if (view !== 'split' && !ablate.has('water')) {
-    const water = new WaterSurface(
-      hf,
-      sunSky.atmosphere,
-      canopyTex,
-      ablate.has('gi') ? null : gi,
-      { sunVis: naniteSunVis },
-    );
-    engine.scene.add(water.group);
-    engine.onUpdate(() => water.update(engine.camera));
-    // runtime visible-toggle for within-session perf A/B
-    (window as unknown as { __laasDbg: Record<string, unknown> }).__laasDbg.water = water;
-  }
-
-  ctx.hooks.setTimeOfDay = (t: number) => {
-    void (async () => {
-      await sunSky.setTimeOfDay(t);
-      await clouds.refreshShadow(engine.renderer);
-      farSh?.bake(engine.renderer); // P4: sun moved — re-march the far-shadow map
-      gi.invalidate();
-      post.setTimeOfDay(t);
-    })();
-  };
-  window.addEventListener('keydown', (e) => {
-    if (e.code === 'BracketLeft' || e.code === 'BracketRight') {
-      void clouds.refreshShadow(engine.renderer);
-      farSh?.bake(engine.renderer);
-      post.setTimeOfDay(sunSky.timeOfDay);
-    }
-  });
 
   // terrain/water probe for the camera rig: walk-mode ground physics + the
   // fly-mode soft collision / underwater guard both live in FlyCamera now

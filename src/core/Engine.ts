@@ -18,7 +18,9 @@ export type UpdateFn = (dt: number, worldTime: number) => void;
 const P95_WINDOW = 120;
 
 export class Engine {
-  readonly renderer: WebGPURenderer;
+  // NOT readonly: ?profile=1 swaps the renderer (+ its device) after loading so a
+  // DAWN_TRACE_DEVICE_FILTER=laas-render capture is game-only (see swapRenderer).
+  renderer: WebGPURenderer;
   readonly scene: Scene;
   readonly camera: PerspectiveCamera;
   readonly params: LaasParams;
@@ -45,6 +47,8 @@ export class Engine {
    *  still runs. Live loop unaffected. */
   meterQuiet = false;
 
+  /** DPR cap resolved at create() — reused when ?profile swaps the renderer. */
+  private dprCap = 1;
   private updateFns: UpdateFn[] = [];
   private lastT: number | null = null;
   private frameMsRing: number[] = [];
@@ -80,32 +84,12 @@ export class Engine {
     hooks.stats = this.stats;
   }
 
-  static async create(params: LaasParams, hooks: LaasHooks): Promise<Engine> {
-    const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
-    if (!adapter) throw new Error('No GPU adapter found');
-
-    const device = await adapter.requestDevice({
-      label: 'laas-render',
-      requiredFeatures: [...adapter.features as Set<GPUFeatureName>, 'timestamp-query' as GPUFeatureName],
-      requiredLimits: hooks.diag ? buildRequiredLimits(hooks.diag) : {},
-    });
-    const renderer = new WebGPURenderer({
-      antialias: false,
-      trackTimestamp: true,
-      device: device,
-
-    });
-    await renderer.init();
-    // fail-loud: surface WebGPU validation errors (otherwise: silent black frames)
-    if (device) {
-      let reported = 0;
-      device.onuncapturederror = (e: GPUUncapturedErrorEvent): void => {
-        if (reported++ < 8) {
-          // eslint-disable-next-line no-console
-          console.error('[laas] WebGPU uncaptured error:', e.error.message);
-        }
-      };
-    }
+  static async create(
+    params: LaasParams,
+    hooks: LaasHooks,
+    deviceLabel = 'laas-render',
+  ): Promise<Engine> {
+    const { renderer } = await Engine.createDeviceRenderer(deviceLabel, hooks.diag ?? null);
     const dprCap = params.dpr ?? Math.min(window.devicePixelRatio, 1.5);
     renderer.setPixelRatio(dprCap);
     renderer.setSize(window.innerWidth, window.innerHeight);
@@ -119,6 +103,7 @@ export class Engine {
     container.appendChild(renderer.domElement);
 
     const engine = new Engine(renderer, params, hooks);
+    engine.dprCap = dprCap;
     engine.timestampsSupported = (hooks.diag?.features ?? []).includes('timestamp-query');
     if (engine.timestampsSupported) engine.profiler = new GpuProfiler(renderer);
     // depth-prepass correctness (see VegPrepass): position math must land
@@ -134,9 +119,75 @@ export class Engine {
     window.addEventListener('resize', () => {
       engine.camera.aspect = window.innerWidth / window.innerHeight;
       engine.camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth, window.innerHeight);
+      // engine.renderer (not the create-time local) so resize follows a ?profile swap
+      engine.renderer.setSize(window.innerWidth, window.innerHeight);
     });
     return engine;
+  }
+
+  /**
+   * Create a {device, renderer} pair with the given device label, using the same
+   * feature/limit/renderer recipe as create(). Shared by create() and the
+   * ?profile=1 two-device swap (ProfileBoot) — the label is what
+   * DAWN_TRACE_DEVICE_FILTER keys on, so the loading pass uses 'laas-loading'
+   * and the traced game pass uses 'laas-render'.
+   */
+  static async createDeviceRenderer(
+    label: string,
+    diag: Parameters<typeof buildRequiredLimits>[0] | null,
+  ): Promise<{ device: GPUDevice; renderer: WebGPURenderer }> {
+    const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+    if (!adapter) throw new Error('No GPU adapter found');
+    const device = await adapter.requestDevice({
+      label,
+      requiredFeatures: [
+        ...(adapter.features as Set<GPUFeatureName>),
+        'timestamp-query' as GPUFeatureName,
+      ],
+      requiredLimits: diag ? buildRequiredLimits(diag) : {},
+    });
+    const renderer = new WebGPURenderer({ antialias: false, trackTimestamp: true, device });
+    await renderer.init();
+    // fail-loud: surface WebGPU validation errors (otherwise: silent black frames)
+    let reported = 0;
+    device.onuncapturederror = (e: GPUUncapturedErrorEvent): void => {
+      if (reported++ < 8) {
+        // eslint-disable-next-line no-console
+        console.error('[laas] WebGPU uncaptured error:', e.error.message);
+      }
+    };
+    return { device, renderer };
+  }
+
+  /**
+   * ?profile=1 two-device split: replace the live renderer (and its device)
+   * AFTER loading, so a DAWN_TRACE_DEVICE_FILTER=laas-render capture contains
+   * only game frames, not the ~11 GB of boot GPU compute. The new renderer's
+   * backend has an empty per-object resource cache, so it re-uploads every
+   * CPU-backed scene resource (geometry/nanite StorageBufferAttributes, data
+   * textures) lazily on the first render. GPU-only resources with no CPU copy
+   * (the terrain/bark/canopy StorageTextures) are transferred separately by
+   * ProfileBoot; subsystems that STORE a renderer ref (sky/atmosphere/half-res)
+   * are re-pointed by ProfileBoot, not here.
+   */
+  swapRenderer(newRenderer: WebGPURenderer): void {
+    const old = this.renderer;
+    newRenderer.setPixelRatio(this.dprCap);
+    newRenderer.setSize(window.innerWidth, window.innerHeight);
+    newRenderer.toneMapping = ACESFilmicToneMapping;
+    newRenderer.toneMappingExposure = 1.0;
+    newRenderer.shadowMap.enabled = true;
+    const parent = old.domElement.parentElement;
+    if (parent) {
+      parent.removeChild(old.domElement);
+      parent.appendChild(newRenderer.domElement);
+    }
+    this.renderer = newRenderer;
+    // re-apply the create()-time renderer installs onto the new backend
+    installPositionInvariance(newRenderer);
+    installMaterialKeyMemo(newRenderer);
+    installFragmentStorageWrites(newRenderer);
+    if (this.timestampsSupported) this.profiler = new GpuProfiler(newRenderer);
   }
 
   onUpdate(fn: UpdateFn): void {

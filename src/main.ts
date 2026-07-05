@@ -65,14 +65,36 @@ function expandPureAblation(): void {
   }
 }
 
+/**
+ * ?profile=1 — two-device GPU-trace split (see core/ProfileBoot). Loading runs
+ * on a throwaway 'laas-loading' device; after buildScene we swap to a fresh
+ * 'laas-render' device and run the game loop there, so a
+ * DAWN_TRACE_DEVICE_FILTER=laas-render capture excludes the ~11 GB of boot GPU
+ * compute. Implied here (set before any subsystem reads the URL): keep the
+ * immutable nanite CPU mirrors so the render device can re-upload verts/bricks
+ * after the swap — WorldRegistry.releaseImmutableMirrors would otherwise null them.
+ */
+function expandProfileMode(): void {
+  const q = new URLSearchParams(window.location.search);
+  if (q.get('profile') !== '1') return;
+  if (!q.has('noreleasemirrors')) {
+    q.set('noreleasemirrors', '1');
+    history.replaceState(null, '', `${window.location.pathname}?${q.toString()}`);
+  }
+}
+
 async function boot(): Promise<void> {
   expandPureAblation();
+  expandProfileMode();
   const hooks = initHooks();
   installGlobalErrorHooks();
   // environment gate BEFORE any loading: mobile / non-Chromium / missing
   // WebGPU each get a clear notice instead of a broken boot (?nogate=1 skips)
   if (!browserGate()) return;
   const params = parseParams();
+  // ?profile=1: load on a throwaway device, then swap to 'laas-render' for the
+  // game loop so a device-filtered GPU trace is game-only (see core/ProfileBoot).
+  const profiling = new URLSearchParams(window.location.search).get('profile') === '1';
   const bootUI = new BootUI(hooks);
 
   bootUI.set(0.02, 'probing WebGPU');
@@ -93,7 +115,7 @@ async function boot(): Promise<void> {
   console.log('[laas] webgpu ok\n' + describeDiagnostics(diag).join('\n'));
 
   bootUI.set(0.08, 'creating renderer');
-  const engine = await Engine.create(params, hooks);
+  const engine = await Engine.create(params, hooks, profiling ? 'laas-loading' : 'laas-render');
 
   // FlyCamera's update MUST register before any scene system: updateFns run
   // in registration order, and subsystems copy camera state in their own
@@ -171,6 +193,15 @@ async function boot(): Promise<void> {
         inFlight = null;
       }
     };
+  }
+
+  // ?profile=1: swap the loading device → a fresh 'laas-render' device BEFORE the
+  // game loop starts, so a DAWN_TRACE_DEVICE_FILTER=laas-render capture contains
+  // only game frames (see core/ProfileBoot for the transfer + re-heal).
+  if (profiling) {
+    bootUI.set(0.97, 'profile: swapping to render device');
+    const { runProfileSwap } = await import('./core/ProfileBoot');
+    await runProfileSwap(engine);
   }
 
   engine.start();
