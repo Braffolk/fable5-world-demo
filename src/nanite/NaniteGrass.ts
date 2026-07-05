@@ -521,7 +521,9 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
       guideCtxW.rw.element(base).assign(bcF2U(g));
       guideCtxW.rw.element(base.add(uint(1))).assign(packHalfU(vec2(dgdx, dgdz) as unknown as NV2));
       guideCtxW.rw.element(base.add(uint(2))).assign(packHalfU(vec2(topOut, amp) as unknown as NV2));
-      guideCtxW.rw.element(base.add(uint(3))).assign(uint(0));
+      // word 3: widenT (kRay ladder widen) — baked here so the march skips the
+      // per-step 1/sqrt(grassThin) re-derive; exact f32 bitcast (was dead uint(0))
+      guideCtxW.rw.element(base.add(uint(3))).assign(bcF2U(widenT));
       const mb = i.mul(uint(2));
       guideMaskW.rw.element(mb).assign(m0);
       guideMaskW.rw.element(mb.add(uint(1))).assign(m1);
@@ -923,13 +925,10 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
           const m1 = mv.y.toVar() as unknown as NU;
           // per-texel ladder context (dist-based; was per-burst before — same grain)
           const distT = tCur.mul(dirL) as unknown as NF;
-          const widenT = float(1)
-            .div(grassThin(distT).sqrt())
-            .clamp(1, 4)
-            .sub(1)
-            .mul(0.3)
-            .add(1)
-            .toVar() as unknown as NF;
+          // widenT baked per-texel in kGuideBake (ctx word 3, exact f32 bitcast) —
+          // was a per-step 1/sqrt(grassThin) chain (2×pow+sqrt+div); texel-center
+          // dist vs step-exact is negligible (guide grain 0.84 m, widenT slowly-varying)
+          const widenT = bcU2F(cv.w).toVar() as unknown as NF;
           // ---- G-E ARTICLE STEP (?grass=ray): ONE FETCH of the baked raycast tile
           // answers this march step — the article's O(1) core. Adaptations (the
           // "minor modifications"): hits are clamped to the CURRENT tile instance
