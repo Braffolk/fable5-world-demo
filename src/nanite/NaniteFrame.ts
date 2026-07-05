@@ -415,6 +415,7 @@ export function buildNaniteFrame(
   if (probeOn) {
     const fetchDbg = makeFetch(registry.gpu, hf.heightTex);
     const probeAttr = new StorageBufferAttribute(new Float32Array(32), 1);
+    probeAttr.name = 'nanProbeReadback';
     const outBuf = storage(probeAttr, 'float', 32);
     const pixU = uniformArrV4(Array.from({ length: 8 }, () => new Vector4()));
     const kProbe = Fn(() => {

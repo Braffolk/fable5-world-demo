@@ -138,46 +138,69 @@ export function buildSpikeRaster(
 
   // ---- storage buffers --------------------------------------------------------
   const c = content;
-  const posBuf = storage(new StorageBufferAttribute(c.positions, 4), 'vec4', c.positions.length / 4).toReadOnly();
-  const idxBuf = storage(new StorageBufferAttribute(c.indices, 1), 'uint', c.indices.length).toReadOnly();
-  const sphereBuf = storage(new StorageBufferAttribute(c.clusterSphere, 4), 'vec4', c.clusterCount).toReadOnly();
-  const metaBuf = sUvec4RO(new StorageBufferAttribute(c.clusterMeta, 4), c.clusterCount);
-  const meshTableBuf = sUvec2(new StorageBufferAttribute(c.meshTable, 2), c.meshTable.length / 2).ro;
-  const instABuf = storage(new StorageBufferAttribute(c.instA, 4), 'vec4', c.instanceCount).toReadOnly();
-  const instBBuf = storage(new StorageBufferAttribute(c.instB, 4), 'vec4', c.instanceCount).toReadOnly();
-  const heightsBuf = storage(new StorageBufferAttribute(c.heights, 1), 'float', c.heights.length).toReadOnly();
+  const posAttr = new StorageBufferAttribute(c.positions, 4);
+  posAttr.name = 'spikePositions';
+  const posBuf = storage(posAttr, 'vec4', c.positions.length / 4).toReadOnly();
+  const idxAttr = new StorageBufferAttribute(c.indices, 1);
+  idxAttr.name = 'spikeIndices';
+  const idxBuf = storage(idxAttr, 'uint', c.indices.length).toReadOnly();
+  const sphereAttr = new StorageBufferAttribute(c.clusterSphere, 4);
+  sphereAttr.name = 'spikeClusterSphere';
+  const sphereBuf = storage(sphereAttr, 'vec4', c.clusterCount).toReadOnly();
+  const metaAttr = new StorageBufferAttribute(c.clusterMeta, 4);
+  metaAttr.name = 'spikeClusterMeta';
+  const metaBuf = sUvec4RO(metaAttr, c.clusterCount);
+  const meshTableAttr = new StorageBufferAttribute(c.meshTable, 2);
+  meshTableAttr.name = 'spikeMeshTable';
+  const meshTableBuf = sUvec2(meshTableAttr, c.meshTable.length / 2).ro;
+  const instAAttr = new StorageBufferAttribute(c.instA, 4);
+  instAAttr.name = 'spikeInstA';
+  const instABuf = storage(instAAttr, 'vec4', c.instanceCount).toReadOnly();
+  const instBAttr = new StorageBufferAttribute(c.instB, 4);
+  instBAttr.name = 'spikeInstB';
+  const instBBuf = storage(instBAttr, 'vec4', c.instanceCount).toReadOnly();
+  const heightsAttr = new StorageBufferAttribute(c.heights, 1);
+  heightsAttr.name = 'spikeHeights';
+  const heightsBuf = storage(heightsAttr, 'float', c.heights.length).toReadOnly();
 
   // entry 0 is reserved: x = clamped item count (written by kArgs); items
   // live at [1..count] — the guard costs no extra binding this way (F9)
   const workQueueAttr = new StorageBufferAttribute(new Uint32Array((WORK_CAP + 1) * 2), 2);
+  workQueueAttr.name = 'spikeWorkQueue';
   const workQueueViews = sUvec2(workQueueAttr, WORK_CAP + 1);
   const workQueue = workQueueViews.rw;
   const workQueueRO = workQueueViews.ro;
 
   const countersAttr = new StorageBufferAttribute(new Uint32Array(4), 1);
+  countersAttr.name = 'spikeCounters';
   const counters = sU32Views(countersAttr, 4).atomic;
 
   const dispatchAttr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
+  dispatchAttr.name = 'spikeDispatch';
   const dispatchBuf = storage(dispatchAttr, 'uint', 3);
 
   // hwQueue: [0] = atomic count, then (payload, instId) pairs
   const hwQueueAttr = new StorageBufferAttribute(new Uint32Array(1 + HW_CAP * 2), 1);
+  hwQueueAttr.name = 'spikeHwQueue';
   const hwQueueV = sU32Views(hwQueueAttr, 1 + HW_CAP * 2);
   const hwQueue = hwQueueV.atomic;
   const hwQueueRO = hwQueueV.ro;
 
   const hwDrawAttr = new IndirectStorageBufferAttribute(new Uint32Array(4), 4);
+  hwDrawAttr.name = 'spikeHwDraw';
   const hwDrawBuf = storage(hwDrawAttr, 'uint', 4);
 
   // vis buffers: depth (atomic u32) + payload (plain u32; atomic in A-mode);
   // the HW big-tri path writes both from FRAGMENT stage — needs the opt-in
   // three patch (ThreePatches.installFragmentStorageWrites)
   const visDepthAttr = new StorageBufferAttribute(new Uint32Array(pixelCount), 1);
+  visDepthAttr.name = 'spikeVisDepth';
   markFragmentWritable(visDepthAttr);
   const visDepthV = sU32Views(visDepthAttr, pixelCount);
   const visDepthAtomic = visDepthV.atomic;
   const visDepthRO = visDepthV.ro;
   const visPayloadAttr = new StorageBufferAttribute(new Uint32Array(pixelCount), 1);
+  visPayloadAttr.name = 'spikeVisPayload';
   markFragmentWritable(visPayloadAttr);
   const visPayloadV = sU32Views(visPayloadAttr, pixelCount);
   const visPayload = visPayloadV.rw;
@@ -533,6 +556,7 @@ export function buildSpikeRaster(
 
   const buildHwMaterial = (pass: 'depth' | 'payload' | 'optionA'): NodeMaterial => {
     const mat = new NodeMaterial();
+    mat.name = `spikeHw_${pass}`;
     // exact split-payload varyings (interp of equal per-vertex values + round
     // in the fragment = exact integer transport without uint varyings)
     const vPayLo = varyingProperty('float', `hwPayLo_${pass}`) as unknown as NF;
@@ -629,6 +653,7 @@ export function buildSpikeRaster(
   resolveGeometry.boundingSphere = new Sphere(new Vector3(), Number.POSITIVE_INFINITY);
 
   const resolveMat = new NodeMaterial();
+  resolveMat.name = 'spikeResolveMat';
   resolveMat.vertexNode = vec4(positionGeometry.xy, 0, 1) as unknown as typeof resolveMat.vertexNode;
 
   const fy = float(uH as unknown as NF).sub(screenCoordinate.y);

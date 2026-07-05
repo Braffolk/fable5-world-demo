@@ -72,6 +72,7 @@ export function grassBladeGeometry(SEG = 4): BufferGeometry {
 
 export function grassMaterial(): MeshStandardNodeMaterial {
   const mat = new MeshStandardNodeMaterial();
+  mat.name = 'grassBlade';
   const id = attribute('idata', 'vec4') as unknown as NV4;
   const t = uv().y as unknown as NF;
   const fresh = mix(
@@ -264,6 +265,7 @@ export function barkChipGeometry(rng: Rng): BufferGeometry {
 
 export function debrisMaterial(kind: 'twig' | 'chip'): MeshStandardNodeMaterial {
   const mat = new MeshStandardNodeMaterial();
+  mat.name = `vegDebris_${kind}`;
   const d = attribute('vdata', 'vec4') as unknown as NV4;
   const base = kind === 'twig' ? vec3(0.1, 0.075, 0.05) : vec3(0.085, 0.06, 0.04);
   mat.colorNode = base.mul(d.x.mul(0.2).add(1)).mul(d.w);
@@ -277,6 +279,7 @@ export function debrisMaterial(kind: 'twig' | 'chip'): MeshStandardNodeMaterial 
 /** dry leaf-litter card material: reuses a foliage atlas, browned */
 export function litterMaterial(atlas: Texture): MeshStandardNodeMaterial {
   const mat = new MeshStandardNodeMaterial();
+  mat.name = 'vegLitter';
   const t = texture(atlas, uv() as never) as unknown as NV4;
   const albedo = t.rgb.mul(t.rgb);
   // shift green leaf clusters toward dry browns

@@ -48,6 +48,7 @@ export function buildTerrainShadowProxy(hf: Heightfield): Mesh {
   geo.setIndex(new BufferAttribute(idx, 1));
 
   const mat = new MeshStandardNodeMaterial();
+  mat.name = 'terrainShadowProxy';
   const lifted = vec3(
     positionLocal.x,
     hf.sampleHeight(vec2(positionLocal.x, positionLocal.z)),

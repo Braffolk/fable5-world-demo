@@ -355,16 +355,12 @@ export class GroundRing {
     const heights = instancedArray(off, 'float');
     this.counters = instancedArray(this.caps.length, 'uint').toAtomic();
     const counters = this.counters;
-    const capBuf = storage(
-      new StorageBufferAttribute(new Uint32Array(this.caps), 1),
-      'uint',
-      this.caps.length,
-    );
-    const offBuf = storage(
-      new StorageBufferAttribute(new Uint32Array(offsets), 1),
-      'uint',
-      this.caps.length,
-    );
+    const capAttr = new StorageBufferAttribute(new Uint32Array(this.caps), 1);
+    capAttr.name = 'groundRingCaps';
+    const capBuf = storage(capAttr, 'uint', this.caps.length);
+    const offAttr = new StorageBufferAttribute(new Uint32Array(offsets), 1);
+    offAttr.name = 'groundRingOffsets';
+    const offBuf = storage(offAttr, 'uint', this.caps.length);
 
     const clearK = Fn(() => {
       const i = instanceIndex;
@@ -729,6 +725,7 @@ export class GroundRing {
     const indirectData = new Uint32Array(D * 5);
     const drawGroups = new Uint32Array(D);
     const indirectAttr = new IndirectStorageBufferAttribute(indirectData, 5);
+    indirectAttr.name = 'groundRingIndirect';
     for (let d = 0; d < D; d++) {
       const spec = draws[d];
       if (!spec) continue;
@@ -757,7 +754,9 @@ export class GroundRing {
       }
     }
     const indirectStore = storage(indirectAttr, 'uint', D * 5);
-    const drawGroupBuf = storage(new StorageBufferAttribute(drawGroups, 1), 'uint', D);
+    const drawGroupAttr = new StorageBufferAttribute(drawGroups, 1);
+    drawGroupAttr.name = 'groundRingDrawGroups';
+    const drawGroupBuf = storage(drawGroupAttr, 'uint', D);
 
     const indirectK = Fn(() => {
       const i = instanceIndex;
@@ -782,6 +781,7 @@ export class GroundRing {
     far = false,
   ): MeshStandardNodeMaterial {
     const mat = new MeshStandardNodeMaterial();
+    mat.name = far ? 'groundRingFar' : 'groundRingNear';
     const { wc, y, wpos } = fetchRing(bind);
     const h2 = cellHash2(wc, bind.salt ^ 0x9191);
     // patch-level (≈1.6 m) dryness/hue so meadows read as drifts, not noise

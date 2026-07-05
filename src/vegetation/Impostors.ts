@@ -75,6 +75,7 @@ type PassKind = 'albedo' | 'normal' | 'depth';
 
 function passMaterial(part: ImpostorPart, pass: PassKind, camDist: number, radius: number): MeshStandardNodeMaterial {
   const mat = new MeshStandardNodeMaterial();
+  mat.name = `impostorPass_${pass}`;
   mat.colorNode = vec3(0);
   mat.side = DoubleSide;
   mat.roughness = 1;
@@ -203,6 +204,7 @@ export async function captureImpostor(
   const center = new Vector3(0, bounds.centerY, 0);
   const camDist = bounds.radius * 2.2;
   const rt = new RenderTarget(tile, tile);
+  rt.texture.name = 'impostorBakeRT';
   rt.texture.colorSpace = NoColorSpace;
   const cam = new OrthographicCamera(
     -bounds.radius * 1.04, bounds.radius * 1.04,
@@ -279,6 +281,7 @@ export async function captureImpostor(
 
   const mk = (px: Uint8Array): DataTexture => {
     const t = new DataTexture(px, atlasRes, atlasRes);
+    t.name = 'impostorAtlas';
     t.colorSpace = NoColorSpace;
     t.generateMipmaps = true;
     t.minFilter = LinearMipmapLinearFilter;
@@ -304,6 +307,7 @@ export function impostorPreviewMaterial(
   view: { gx: number; gy: number },
 ): MeshStandardNodeMaterial {
   const mat = new MeshStandardNodeMaterial();
+  mat.name = 'impostorPreview';
   const grid = IMPOSTOR_GRID;
   const u = uv() as unknown as NV2;
   const tileUv = u.div(grid).add(vec2(view.gx / grid, view.gy / grid));

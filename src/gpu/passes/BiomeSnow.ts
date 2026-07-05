@@ -48,6 +48,7 @@ export async function runBiomeSnow(
 ): Promise<StorageTexture> {
   const { res, mp } = opts;
   const out = new StorageTexture(res, res);
+  out.name = 'biomeSnowTex';
   out.magFilter = NearestFilter;
   out.minFilter = NearestFilter;
   out.generateMipmaps = false;

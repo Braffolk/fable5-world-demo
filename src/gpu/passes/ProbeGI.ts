@@ -105,15 +105,16 @@ export class ProbeGI {
     private atmosphere: Atmosphere,
     private canopyTex: StorageTexture | null = null,
   ) {
-    const mk = (): Storage3DTexture => {
+    const mk = (name: string): Storage3DTexture => {
       const t = new Storage3DTexture(PROBE_XZ, PROBE_XZ, PROBE_LAYERS);
       t.type = HalfFloatType;
       t.generateMipmaps = false;
+      t.name = name;
       return t;
     };
-    this.texR = mk();
-    this.texG = mk();
-    this.texB = mk();
+    this.texR = mk('probeFieldR');
+    this.texG = mk('probeFieldG');
+    this.texB = mk('probeFieldB');
     this.shR = instancedArray(TOTAL, 'vec4');
     this.shG = instancedArray(TOTAL, 'vec4');
     this.shB = instancedArray(TOTAL, 'vec4');
@@ -318,7 +319,11 @@ export class ProbeGI {
     const batches = Math.ceil(TOTAL / PROBES_PER_FRAME);
     for (let n = 0; n < batches; n++) {
       const wait = n % 16 === 15 || n === batches - 1;
-      if (wait) await renderer.computeAsync([this.gatherK, this.publishK]);
+      if (wait) {
+        const warmGroup = [this.gatherK, this.publishK];
+        (warmGroup as { id?: string }).id = 'probeWarm';
+        await renderer.computeAsync(warmGroup);
+      }
       else {
         renderer.compute(this.gatherK);
         renderer.compute(this.publishK);

@@ -265,7 +265,9 @@ class TRAANode extends TempNode {
 		 * @private
 		 * @type {TextureNode}
 		 */
-		this._previousDepthNode = texture( new DepthTexture( 1, 1 ) );
+		const prevDepthTex = new DepthTexture( 1, 1 );
+		prevDepthTex.name = 'traaPrevDepth';
+		this._previousDepthNode = texture( prevDepthTex );
 
 		/**
 		 * Sync the post processing stack with the TRAA node.
@@ -309,6 +311,7 @@ class TRAANode extends TempNode {
 
 			this._historyRenderTarget.depthTexture = null; // dead native-size alloc otherwise
 			this._prevDepthRT = new RenderTarget( 1, 1, { depthBuffer: false, depthTexture: new DepthTexture() } );
+			this._prevDepthRT.texture.name = 'traaPrevDepthRT';
 
 		}
 

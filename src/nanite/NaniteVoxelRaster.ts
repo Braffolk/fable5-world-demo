@@ -358,6 +358,7 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   const WRITE_CTR = 0;
   const atomicWords = 1;
   const atomicBufAttr = new StorageBufferAttribute(new Uint32Array(atomicWords), 1);
+  atomicBufAttr.name = 'nanVoxWriteCtr';
   const atomicBuf = sU32Views(atomicBufAttr, atomicWords);
 
   // ---- kClearWrite: zero the per-pixel brick-write counter before kVoxScatter ----------
@@ -457,6 +458,7 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   const pyrLevelCountU = uniformF(pyrLevelCount);
   // ALL-SEE-THROUGH (key 0) initial fill ⇒ before the first build nothing occludes ⇒ KEEP.
   const voxOccPyrAttr = new StorageBufferAttribute(new Uint32Array(Math.max(1, pyrTotal)), 1);
+  voxOccPyrAttr.name = 'nanVoxOccPyr';
   const voxOccPyr = sU32Views(voxOccPyrAttr, Math.max(1, pyrTotal));
   // per-level 2×2-MIN reduction kernels (built only when the cull is on). Level 0 reduces
   // full-res visPayloadV.ro; level k reduces level k−1 THROUGH THE SAME rw view (a 2nd ro

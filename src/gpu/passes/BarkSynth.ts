@@ -236,8 +236,9 @@ export async function bakeBarkTextures(
   seedK: number,
 ): Promise<BarkTextures> {
   const p = BARK_TABLE[layer] as BarkParams;
-  const mk = (): StorageTexture => {
+  const mk = (nm: string): StorageTexture => {
     const t = new StorageTexture(BARK_RES, BARK_RES);
+    t.name = nm;
     t.wrapS = RepeatWrapping;
     t.wrapT = RepeatWrapping;
     t.generateMipmaps = true;
@@ -245,8 +246,8 @@ export async function bakeBarkTextures(
     t.anisotropy = 4;
     return t;
   };
-  const texA = mk();
-  const texB = mk();
+  const texA = mk(`barkAlbedoAO_L${layer}`);
+  const texB = mk(`barkNormalRough_L${layer}`);
   void FloatType;
 
   const kernel = Fn(() => {
@@ -258,6 +259,7 @@ export async function bakeBarkTextures(
     textureStore(texA, ivec2(int(xi), int(yi)), px.a);
     textureStore(texB, ivec2(int(xi), int(yi)), px.b);
   })().compute(BARK_RES * BARK_RES);
+  kernel.setName(`barkSynth_L${layer}`);
 
   await renderer.computeAsync(kernel);
   return { texA, texB };
@@ -284,8 +286,9 @@ export async function bakeBarkArray(
   seedKByLayer: readonly number[],
 ): Promise<BarkArrayTextures> {
   const depth = BARK_TABLE.length;
-  const mk = (): StorageArrayTexture => {
+  const mk = (nm: string): StorageArrayTexture => {
     const t = new StorageArrayTexture(BARK_RES, BARK_RES, depth);
+    t.name = nm;
     t.wrapS = RepeatWrapping;
     t.wrapT = RepeatWrapping;
     t.generateMipmaps = true;
@@ -293,8 +296,8 @@ export async function bakeBarkArray(
     t.anisotropy = 4;
     return t;
   };
-  const texA = mk();
-  const texB = mk();
+  const texA = mk('barkArrayAlbedoAO');
+  const texB = mk('barkArrayNormalRough');
   // one dispatch per layer (BarkParams are a compile-time table — cannot be
   // indexed by a runtime node); each writes its array slice via .depthNode.
   for (let layer = 0; layer < depth; layer++) {
@@ -313,6 +316,7 @@ export async function bakeBarkArray(
       const sB = textureStore(texB, ivec2(int(xi), int(yi)), px.b);
       (sB as unknown as { depthNode: unknown }).depthNode = int(layer);
     })().compute(BARK_RES * BARK_RES);
+    kernel.setName(`barkArraySynth_L${layer}`);
     await renderer.computeAsync(kernel);
   }
   // Regenerate the mip chain from the now-filled level 0. three's auto-mip ran

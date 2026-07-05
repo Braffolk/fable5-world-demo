@@ -46,8 +46,9 @@ export interface NoiseTextures {
   texB: StorageTexture;
 }
 
-function makeTex(): StorageTexture {
+function makeTex(nm: string): StorageTexture {
   const t = new StorageTexture(NOISE_TEX_RES, NOISE_TEX_RES);
+  t.name = nm;
   t.type = HalfFloatType;
   t.wrapS = MirroredRepeatWrapping;
   t.wrapT = MirroredRepeatWrapping;
@@ -74,8 +75,8 @@ function worleyF1(p: NV2): NF {
 }
 
 export async function bakeNoiseTextures(renderer: Renderer): Promise<NoiseTextures> {
-  const texA = makeTex();
-  const texB = makeTex();
+  const texA = makeTex('noiseBakeA');
+  const texB = makeTex('noiseBakeB');
   const R = NOISE_TEX_RES;
   // gradient step: half a texel in noise units, per channel period
   const eFbm = (PERIOD_FBM / R) * 0.5;

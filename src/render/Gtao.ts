@@ -326,6 +326,7 @@ function generateMagicSquareNoise(size = 5): DataTexture {
   }
 
   const noiseTexture = new DataTexture(data, noiseSize, noiseSize);
+  noiseTexture.name = 'gtaoNoiseTex';
   noiseTexture.wrapS = RepeatWrapping;
   noiseTexture.wrapT = RepeatWrapping;
   noiseTexture.needsUpdate = true;

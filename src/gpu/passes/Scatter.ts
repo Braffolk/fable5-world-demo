@@ -324,6 +324,7 @@ export async function buildCanopyMap(
   await renderer.computeAsync(splatK);
 
   const tex = new StorageTexture(CANOPY_RES, CANOPY_RES);
+  tex.name = 'scatterCanopyTex';
   tex.generateMipmaps = false;
   const packK = Fn(() => {
     const i = instanceIndex;

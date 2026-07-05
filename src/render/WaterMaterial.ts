@@ -114,6 +114,7 @@ export function waterMaterial(
   const sceneColorAt = (uv: NV2): NV3 => (texture(snap.color, uv) as unknown as NV4).rgb;
 
   const mat = new MeshStandardNodeMaterial();
+  mat.name = 'waterSurface';
   mat.transparent = true;
   mat.depthWrite = true;
   mat.metalness = 0;

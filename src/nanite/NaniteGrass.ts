@@ -387,10 +387,12 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
   // ---- guide buffers + per-frame bake (ray lane only; 4-word ctx + 2-word mask) ------
   const gWords = GUIDE_N * 4;
   const guideCtxAttr = new StorageBufferAttribute(new Uint32Array(gWords), 1);
+  guideCtxAttr.name = 'grassGuideCtx';
   const guideCtxW = sU32Views(guideCtxAttr, gWords);
   const guideCtx4 = sUvec4RO(guideCtxAttr, GUIDE_N);
   const mWords = GUIDE_N * 2;
   const guideMaskAttr = new StorageBufferAttribute(new Uint32Array(mWords), 1);
+  guideMaskAttr.name = 'grassGuideMask';
   const guideMaskW = sU32Views(guideMaskAttr, mWords);
   const guideMask2 = sUvec2(guideMaskAttr, GUIDE_N);
   /** guide origin = fine-cell index of texel (0,0)'s first cell, snapped to the

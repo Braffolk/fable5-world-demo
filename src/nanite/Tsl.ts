@@ -249,6 +249,23 @@ export function dispatch(renderer: Renderer, kernel: unknown): void {
 }
 
 /**
+ * GPU-PASS LABEL for a batched dispatch. three r184 names the compute pass
+ * `computeGroup_<group.id>` (WebGPUBackend.beginCompute) — but when the group is
+ * an ARRAY of kernels (our batched path) the array has no `.id`, so a capture
+ * shows every batched pass as `computeGroup_undefined`. Tag the array with its
+ * lead kernel's name so the pass reads e.g. `computeGroup_nanHzbBuild`.
+ * Pure metadata: `.id` is only consumed by the pass label + the timestampUID
+ * string, whose uniqueness three already carries via its own `c:<frameCalls>`
+ * prefix — so a stable descriptive id changes nothing observable.
+ */
+function labelComputeGroup(kernels: readonly unknown[]): void {
+  const grp = kernels as { id?: string };
+  if (grp.id !== undefined) return;
+  const lead = kernels.length > 0 ? (kernels[0] as { name?: string }).name : undefined;
+  grp.id = lead && lead.length > 0 ? lead : 'naniteBatch';
+}
+
+/**
  * renderer.compute over an ARRAY of kernels → ONE command encoder, ONE compute
  * pass, ONE queue.submit (three's `finishCompute`), instead of one submit per
  * kernel. Safe for DEPENDENT chains (e.g. HZB mip levels, where level k reads
@@ -258,6 +275,7 @@ export function dispatch(renderer: Renderer, kernel: unknown): void {
  * carry its own baked-in `.compute(count,[wg])` (the array shares no dispatchSize).
  */
 export function dispatchBatch(renderer: Renderer, kernels: readonly unknown[]): void {
+  labelComputeGroup(kernels);
   renderer.compute(kernels as Parameters<Renderer['compute']>[0]);
 }
 
@@ -321,6 +339,7 @@ export type BatchKernel = unknown;
  * order). Tag indirect kernels with setIndirectDispatch BEFORE adding them here.
  */
 export function dispatchBatchMixed(renderer: Renderer, kernels: readonly BatchKernel[]): void {
+  labelComputeGroup(kernels);
   renderer.compute(kernels as Parameters<Renderer['compute']>[0]);
 }
 

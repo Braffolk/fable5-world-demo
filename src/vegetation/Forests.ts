@@ -355,12 +355,12 @@ export class Forests {
     }
     this.compact = instancedArray(off, 'uint');
     this.counters = instancedArray(GROUPS, 'uint').toAtomic();
-    const offBuf = storage(new StorageBufferAttribute(offsets, 1), 'uint', GROUPS);
-    const capBuf = storage(
-      new StorageBufferAttribute(this.groupCaps.slice(), 1),
-      'uint',
-      GROUPS,
-    );
+    const offAttr = new StorageBufferAttribute(offsets, 1);
+    offAttr.name = 'forestGroupOffsets';
+    const offBuf = storage(offAttr, 'uint', GROUPS);
+    const capAttr = new StorageBufferAttribute(this.groupCaps.slice(), 1);
+    capAttr.name = 'forestGroupCaps';
+    const capBuf = storage(capAttr, 'uint', GROUPS);
 
     // per-class cull info: (height, radius, maxDist, hasR2)
     const clsInfo = new Float32Array(24 * 4);
@@ -371,7 +371,9 @@ export class Forests {
       const hasR2 = c < 6 || c === 18 || c === 19 || c === 20 || c === 21 || c === 23;
       clsInfo[c * 4 + 3] = hasR2 ? 1 : 0;
     }
-    const clsBuf = storage(new StorageBufferAttribute(clsInfo, 4), 'vec4', 24);
+    const clsAttr = new StorageBufferAttribute(clsInfo, 4);
+    clsAttr.name = 'forestClsInfo';
+    const clsBuf = storage(clsAttr, 'vec4', 24);
 
     // ---- draws ---------------------------------------------------------------
     interface DrawSpec {
@@ -468,6 +470,7 @@ export class Forests {
       impostorBand: boolean,
     ): MeshStandardNodeMaterial => {
       const pmat = new MeshStandardNodeMaterial();
+      pmat.name = 'forestPlanted';
       const handles = instanceVeg(pmat, bind);
       const e = positionLocal
         .sub(vec3(0, dims.cy, 0))
@@ -691,11 +694,14 @@ export class Forests {
       drawGroups[d] = spec.group;
     }
     this.indirectAttr = new IndirectStorageBufferAttribute(indirectData, 5);
+    this.indirectAttr.name = 'forestIndirect';
     for (let d = 0; d < D; d++) {
       (meshes[d] as Mesh).geometry.setIndirect(this.indirectAttr, d * 20);
     }
     const indirectStore = storage(this.indirectAttr, 'uint', D * 5);
-    const drawGroupBuf = storage(new StorageBufferAttribute(drawGroups, 1), 'uint', D);
+    const drawGroupAttr = new StorageBufferAttribute(drawGroups, 1);
+    drawGroupAttr.name = 'forestDrawGroups';
+    const drawGroupBuf = storage(drawGroupAttr, 'uint', D);
 
     // ---- kernels ---------------------------------------------------------------
     const counters = this.counters;

@@ -208,24 +208,31 @@ export function buildClipCull(
 
   // shared raster queue (one, refilled per level — levels raster sequentially)
   const qLevelAttr = new StorageBufferAttribute(new Uint32Array((shCap + 1) * 2), 2);
+  qLevelAttr.name = 'nanShadowQLevel';
   const qLevel = sUvec2(qLevelAttr, shCap + 1);
   // append counter (slot 0) — cleared before each level filter
   const countAttr = new StorageBufferAttribute(new Uint32Array(1), 1);
+  countAttr.name = 'nanShadowClipCount';
   const countV = sU32Views(countAttr, 1);
   // per-level survivor counts for the HUD (persist across the frame, indexed by level)
   const perLevelAttr = new StorageBufferAttribute(new Uint32Array(LEVELS), 1);
+  perLevelAttr.name = 'nanShadowPerLevel';
   const perLevelV = sU32Views(perLevelAttr, LEVELS);
 
   const rasterDispatchAttr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
+  rasterDispatchAttr.name = 'nanShadowRasterDispatch';
   const rasterDispatch = sU32Views(rasterDispatchAttr as unknown as StorageBufferAttribute, 3).rw;
   const rasterDispatch2Attr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
+  rasterDispatch2Attr.name = 'nanShadowRasterDispatch2';
   const rasterDispatch2 = sU32Views(rasterDispatch2Attr as unknown as StorageBufferAttribute, 3).rw;
   const rasterDispatchFullAttr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
+  rasterDispatchFullAttr.name = 'nanShadowRasterDispatchFull';
   const rasterDispatchFull = sU32Views(
     rasterDispatchFullAttr as unknown as StorageBufferAttribute,
     3,
   ).rw;
   const filterDispatchAttr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
+  filterDispatchAttr.name = 'nanShadowFilterDispatch';
   const filterDispatch = sU32Views(filterDispatchAttr as unknown as StorageBufferAttribute, 3).rw;
 
   const split2D = (args: ReturnType<typeof sU32Views>['rw'], n: NU): void => {
@@ -270,6 +277,7 @@ export function buildClipCull(
   // ---- queue high-water diag (memory sizing): raw qLevel append maxima -------------
   // [0] = max RAW per-level survivor count (pre-clamp) across levels since reset.
   const hwAttr = new StorageBufferAttribute(new Uint32Array(1), 1);
+  hwAttr.name = 'nanShadowClipHwm';
   const hwV = sU32Views(hwAttr, 1).atomic;
   const kHwReset = Fn(() => {
     If(instanceIndex.equal(uint(0)), () => {

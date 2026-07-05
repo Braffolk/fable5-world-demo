@@ -487,9 +487,11 @@ export function buildNaniteCull(
   // counters: [1] raster pushes (emitted clusters), [5] DAG clusters, [6] visTris,
   // [7] DAG tris (HUD/SIM). The hier BFS reuses [0]/[4] as the two frontier counts.
   const countersAttr = new StorageBufferAttribute(new Uint32Array(8), 1);
+  countersAttr.name = 'nanCounters';
   const counters = sU32Views(countersAttr, 8).atomic;
 
   const qRasterAttr = new StorageBufferAttribute(new Uint32Array((qCap + 1) * 2), 2);
+  qRasterAttr.name = 'nanQRaster';
   const qRasterV = sUvec2(qRasterAttr, qCap + 1);
 
   // voxel-foliage (spec §4.6 / §6.2): the VOXEL raster work queue. The cut emits voxel
@@ -499,15 +501,19 @@ export function buildNaniteCull(
   // fans the voxel(7) entries here. qVoxRaster[0] = (count, 0); items at 1.. are the
   // SAME (instId, ci) uvec2 as qRaster (the voxel raster reads bricks via ci's word6/7).
   const qVoxRasterAttr = new StorageBufferAttribute(new Uint32Array((vCap + 1) * 2), 2);
+  qVoxRasterAttr.name = 'nanQVoxRaster';
   const qVoxRasterV = sUvec2(qVoxRasterAttr, vCap + 1);
   // voxel fan-out cursor (its OWN atomic counter so it doesn't contend the BFS counters).
   const voxCountAttr = new StorageBufferAttribute(new Uint32Array(1), 1);
+  voxCountAttr.name = 'nanVoxCount';
   const voxCount = sU32Views(voxCountAttr, 1).atomic;
   // 2D-split dispatch args for the voxel BIN/raster (over qVoxRaster count, Stage 2).
   const voxRasterDispatchAttr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
+  voxRasterDispatchAttr.name = 'nanVoxRasterDispatch';
   const voxRasterDispatch = sU32Views(voxRasterDispatchAttr as unknown as StorageBufferAttribute, 3).rw;
   // ONE-THREAD-PER-qRaster-ENTRY fan-out dispatch args (ceil(qRaster/64) workgroups).
   const voxFanoutDispatchAttr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
+  voxFanoutDispatchAttr.name = 'nanVoxFanoutDispatch';
   const voxFanoutDispatch = sU32Views(voxFanoutDispatchAttr as unknown as StorageBufferAttribute, 3).rw;
 
   // ── DEPTH-BUCKET F2B build-time buffers (?voxf2b) ────────────────────────────
@@ -517,31 +523,39 @@ export function buildNaniteCull(
   // collapse to the last value written), and a per-bucket scatter cursor.
   const K = VOX_F2B_K;
   const voxBucketCountAttr = new StorageBufferAttribute(new Uint32Array(K), 1);
+  voxBucketCountAttr.name = 'nanVoxBucketCount';
   const voxBucketCount = sU32Views(voxBucketCountAttr, K).atomic;
   const voxBucketRangeAttr = new StorageBufferAttribute(new Uint32Array(2 * K), 2);
+  voxBucketRangeAttr.name = 'nanVoxBucketRange';
   const voxBucketRangeV = sUvec2(voxBucketRangeAttr, K); // [b] = (base_b, count_b)
   const voxCursorAttr = new StorageBufferAttribute(new Uint32Array(K), 1);
+  voxCursorAttr.name = 'nanVoxCursor';
   const voxCursor = sU32Views(voxCursorAttr, K).atomic;
   // 2-word atomic depth RANGE (kVoxRange): [0]=min(d) bits, [1]=max(d) bits. View
   // depth d>0 ⇒ raw IEEE-754 bits are monotone as uint, so bcF2U feeds atomicMin/Max
   // directly. Seeded +inf/0 so the first cluster sets a real range; self-tightening,
   // exactly brackets the live voxel depths (the anti-NDC fix the prior attempt lacked).
   const voxRangeAttr = new StorageBufferAttribute(new Uint32Array(2), 1);
+  voxRangeAttr.name = 'nanVoxRange';
   const voxRange = sU32Views(voxRangeAttr, 2).atomic;
   // K per-bucket 2D-split INDIRECT dispatch args (one bucket = one near→far dispatch).
   const voxBucketDispatchAttr: IndirectStorageBufferAttribute[] = [];
   const voxBucketDispatch: ReturnType<typeof sU32Views>['rw'][] = [];
   for (let b = 0; b < K; b++) {
     const a = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
+    a.name = `nanVoxBucketDispatch${b}`;
     voxBucketDispatchAttr.push(a);
     voxBucketDispatch.push(sU32Views(a as unknown as StorageBufferAttribute, 3).rw);
   }
 
   const rasterDispatchAttr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
+  rasterDispatchAttr.name = 'nanRasterDispatch';
   const rasterDispatch = sU32Views(rasterDispatchAttr as unknown as StorageBufferAttribute, 3).rw;
   const rasterDispatch2Attr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
+  rasterDispatch2Attr.name = 'nanRasterDispatch2';
   const rasterDispatch2 = sU32Views(rasterDispatch2Attr as unknown as StorageBufferAttribute, 3).rw;
   const rasterDispatchFullAttr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
+  rasterDispatchFullAttr.name = 'nanRasterDispatchFull';
   const rasterDispatchFull = sU32Views(
     rasterDispatchFullAttr as unknown as StorageBufferAttribute,
     3,
@@ -560,18 +574,22 @@ export function buildNaniteCull(
     Number(new URLSearchParams(window.location.search).get('clhwmax') ?? '16') || 16,
   );
   const qHwRasterAttr = clhw ? new StorageBufferAttribute(new Uint32Array(qCap), 1) : null;
+  if (qHwRasterAttr) qHwRasterAttr.name = 'nanQHwRaster';
   const qHwRasterV = qHwRasterAttr ? sU32Views(qHwRasterAttr, qCap) : null;
   const hwPartCountAttr = clhw ? new StorageBufferAttribute(new Uint32Array(1), 1) : null;
+  if (hwPartCountAttr) hwPartCountAttr.name = 'nanHwPartCount';
   const hwPartCount = hwPartCountAttr ? sU32Views(hwPartCountAttr, 1).atomic : null;
   const hwPartDispatchAttr = clhw
     ? new IndirectStorageBufferAttribute(new Uint32Array(3), 3)
     : null;
+  if (hwPartDispatchAttr) hwPartDispatchAttr.name = 'nanHwPartDispatch';
   const hwPartDispatch = hwPartDispatchAttr
     ? sU32Views(hwPartDispatchAttr as unknown as StorageBufferAttribute, 3).rw
     : null;
   const hwClusterDrawAttr = clhw
     ? new IndirectStorageBufferAttribute(new Uint32Array(4), 4)
     : null;
+  if (hwClusterDrawAttr) hwClusterDrawAttr.name = 'nanHwClusterDraw';
   const hwClusterDraw = hwClusterDrawAttr
     ? sU32Views(hwClusterDrawAttr as unknown as StorageBufferAttribute, 4).rw
     : null;
@@ -627,6 +645,7 @@ export function buildNaniteCull(
   // Read/reset via window.__qHW (registerQueueHw below); cost = one atomicMax in
   // the tiny 1-thread args kernels, nothing in the hot traverse/emit kernels.
   const hwAttr = new StorageBufferAttribute(new Uint32Array(4), 1);
+  hwAttr.name = 'nanHwCounters';
   const hwV = sU32Views(hwAttr, 4).atomic;
   const kHwReset = Fn(() => {
     If(instanceIndex.lessThan(uint(4)), () => {
@@ -990,8 +1009,10 @@ export function buildNaniteCull(
     // frontierCap. Overflow drops frontier items (⇒ missing casters), so keep margin.
     const fcap = frontierCap;
     const qFrontierAAttr = new StorageBufferAttribute(new Uint32Array(fcap * 2), 2);
+    qFrontierAAttr.name = 'nanQFrontierA';
     const qFrontierA = sUvec2(qFrontierAAttr, fcap);
     const qFrontierBAttr = new StorageBufferAttribute(new Uint32Array(fcap * 2), 2);
+    qFrontierBAttr.name = 'nanQFrontierB';
     const qFrontierB = sUvec2(qFrontierBAttr, fcap);
     // frontier counts A/B reuse counters slots 2/3 (rejInst/rejClust — unused in
     // hier mode) so kTraverse stays ≤10 storage buffers WITH the HZB occlusion read
@@ -1003,6 +1024,7 @@ export function buildNaniteCull(
     const FA = 0;
     const FB = 4;
     const traverseDispatchAttr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
+    traverseDispatchAttr.name = 'nanTraverseDispatch';
     const traverseDispatch = sU32Views(traverseDispatchAttr as unknown as StorageBufferAttribute, 3).rw;
 
     // kClearHier: counters + both frontier counts → 0

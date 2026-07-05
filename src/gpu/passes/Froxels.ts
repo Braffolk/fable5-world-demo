@@ -83,13 +83,14 @@ export class Froxels {
     canopyTex: StorageTexture | null,
     clouds: Clouds | null,
   ) {
-    const mk = (): Storage3DTexture => {
+    const mk = (name: string): Storage3DTexture => {
       const t = new Storage3DTexture(FX, FY, FZ);
       t.type = HalfFloatType;
+      t.name = name;
       return t;
     };
-    this.scatterTex = mk();
-    this.integTex = mk();
+    this.scatterTex = mk('froxelScatter');
+    this.integTex = mk('froxelInteg');
 
     const noiseA = hf.noiseA;
     const fieldsTex = hf.fieldsTex;

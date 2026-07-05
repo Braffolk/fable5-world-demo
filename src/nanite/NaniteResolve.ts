@@ -385,6 +385,7 @@ export function buildNaniteResolve(
   // the voxel queue is present (cull.qVoxRasterRO) — a pure-triangle world has ONE pass.
   const buildMat = (pass: 'tri' | 'vox' | 'both'): NodeMaterial => {
   const mat = new NodeMaterial();
+  mat.name = `naniteResolve_${pass}`;
   mat.vertexNode = vec4(positionGeometry.xy, 0, 1) as unknown as typeof mat.vertexNode;
 
   // D-N17 shadow receive: the CSM cascade-select + sampling read

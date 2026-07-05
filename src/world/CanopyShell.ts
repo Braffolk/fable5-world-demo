@@ -74,6 +74,7 @@ export function buildCanopyShell(
   // physical for specularIntensity — the far-forest aggregate silvered at
   // glancing sun exactly like the cards (user feedback batch 2 item 11)
   const mat = new MeshPhysicalNodeMaterial();
+  mat.name = 'canopyShell';
   mat.specularIntensity = 0.2;
 
   /** canopy-top height field: terrain + coverage lift + crown bumps */

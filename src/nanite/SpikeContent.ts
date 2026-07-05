@@ -238,6 +238,7 @@ export function buildSpikeContent(rng: Rng): SpikeContent {
   }
 
   const heightTex = new DataTexture(heights, n, n, RedFormat, FloatType);
+  heightTex.name = 'spikeHeightTex';
   heightTex.needsUpdate = true;
 
   // ---- instances ------------------------------------------------------------

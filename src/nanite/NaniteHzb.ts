@@ -120,6 +120,7 @@ export function buildNaniteHzb(
 
   // far plane everywhere — occludes nothing until the first build
   const hzbAttr = new StorageBufferAttribute(new Float32Array(totalTexels).fill(1), 1);
+  hzbAttr.name = 'nanHzb';
   const hzbF = sF32Views(hzbAttr, totalTexels);
 
   // ---- per-level reduction kernels -----------------------------------------------
@@ -419,6 +420,7 @@ export function buildNaniteHzb(
     );
     geo.boundingSphere = new Sphere(new Vector3(), Number.POSITIVE_INFINITY);
     const mat = new NodeMaterial();
+    mat.name = 'nanHzbBlit';
     mat.vertexNode = vec4(positionGeometry.xy, 0, 1) as unknown as typeof mat.vertexNode;
     mat.fragmentNode = Fn(() => {
       // screenCoordinate is top-down; pyramid rows are bottom-up (buffer law)

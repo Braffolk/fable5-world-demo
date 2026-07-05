@@ -89,8 +89,12 @@ export class WaterSurface {
   // (inner-rect cutouts), so every level legally reads the SAME pre-water opaque
   // frame: copy once in the first-drawn sheet's onBeforeRender, sample plain
   // textures everywhere.
-  private readonly snapColor = new FramebufferTexture(1, 1);
-  private readonly snapDepth = new DepthTexture(1, 1);
+  private readonly snapColor = Object.assign(new FramebufferTexture(1, 1), {
+    name: 'waterSnapColor',
+  });
+  private readonly snapDepth = Object.assign(new DepthTexture(1, 1), {
+    name: 'waterSnapDepth',
+  });
   private lastCopyFrame = -1;
   private readonly snapSize = new Vector2();
 

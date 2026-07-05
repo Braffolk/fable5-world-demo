@@ -174,6 +174,7 @@ export class Particles {
     // ---------------- render: camera-facing lit quads -----------------------------
     const geo = new PlaneGeometry(1, 1);
     const mat = new MeshStandardNodeMaterial();
+    mat.name = 'particleQuad';
     mat.transparent = true;
     mat.depthWrite = false;
     mat.side = DoubleSide;

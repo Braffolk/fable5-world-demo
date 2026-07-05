@@ -37,6 +37,7 @@ import { runBiomeSnow } from '../gpu/passes/BiomeSnow';
 import { runErosion } from '../gpu/passes/Erosion';
 import { runFlowRivers, type FlowResult } from '../gpu/passes/FlowRivers';
 import {
+  labelGroup,
   runHeightSynthesis,
   type FloatBuffer,
   type SynthesisResult,
@@ -118,6 +119,7 @@ export class Heightfield {
     const synth = await runHeightSynthesis(renderer, cfg.heightRes, mp);
 
     const heightTex = new StorageTexture(cfg.heightRes, cfg.heightRes);
+    heightTex.name = 'hfHeightTex';
     heightTex.type = FloatType;
     heightTex.format = RedFormat;
     heightTex.magFilter = NearestFilter;
@@ -125,6 +127,7 @@ export class Heightfield {
     heightTex.generateMipmaps = false;
 
     const normalTex = new StorageTexture(cfg.heightRes, cfg.heightRes);
+    normalTex.name = 'hfNormalTex';
     normalTex.type = HalfFloatType;
     normalTex.generateMipmaps = false;
 
@@ -307,7 +310,9 @@ export class Heightfield {
       return k;
     };
     for (let it = 0; it < 2; it++) {
-      await renderer.computeAsync([mkSmooth(out, tmp), mkSmooth(tmp, out)]);
+      await renderer.computeAsync(
+        labelGroup([mkSmooth(out, tmp), mkSmooth(tmp, out)], 'hfWaterYSmooth'),
+      );
     }
 
     // WET-TO-WET cliff cut: adjacent ponds can legitimately fill at levels
@@ -350,7 +355,7 @@ export class Heightfield {
       out.element(i).assign(tmp.element(i));
     })().compute(res * res);
     copyK.setName('waterYCopy');
-    await renderer.computeAsync([cliffK, copyK]);
+    await renderer.computeAsync(labelGroup([cliffK, copyK], 'hfWaterYCliff'));
     return out;
   }
 
@@ -426,6 +431,7 @@ export class Heightfield {
     if (!flow) return;
     const res = this.simRes;
     const tex = new StorageTexture(res, res);
+    tex.name = 'hfFieldsTex';
     tex.type = HalfFloatType;
     tex.generateMipmaps = false;
     const kernel = Fn(() => {

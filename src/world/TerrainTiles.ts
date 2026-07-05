@@ -109,6 +109,7 @@ export class TerrainTiles {
     // glancing sun desaturates whole hillsides to silver (user feedback —
     // 'terrain gets too silvery'); rock keeps a modest glint
     const mat = new MeshPhysicalNodeMaterial();
+    mat.name = 'terrainTile';
     mat.specularIntensity = 0.35;
     const tile = this.tileBuf.element(instanceIndex);
     const tileOrigin = tile.xy; // world xz of tile center
@@ -331,6 +332,7 @@ export class TerrainTiles {
     const ring = new RingGeometry(WORLD_HALF * 0.952, FAR_RADIUS, 160, 42);
     ring.rotateX(-Math.PI / 2);
     const farMat = new MeshPhysicalNodeMaterial();
+    farMat.name = 'terrainTileFar';
     farMat.specularIntensity = 0.35;
     const fxz = positionLocal.xz;
     const farMacro = macroTerrain(fxz, hf.mp, 'far');

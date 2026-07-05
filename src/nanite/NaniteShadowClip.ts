@@ -333,6 +333,7 @@ export function buildNaniteShadowClip(
     // the strip COPY — each thread maps linearly into the rect list (overlapping
     // rects double-process a texel; both kernels are idempotent).
     const stripArgsAttr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
+    stripArgsAttr.name = 'nanShadowStripArgs';
     const stripArgsV = sU32Views(stripArgsAttr as unknown as StorageBufferAttribute, 3).rw;
     const rectDims = (
       r: number,
@@ -521,6 +522,7 @@ export function buildNaniteShadowClip(
   // shvoxdbg counter ladder: [0] lanes entered, [1] past qCount, [2] class-7 lanes,
   // [3] wrote texels. window.__readSplatDbg(renderer) reads it.
   const splatDbgAttr = new StorageBufferAttribute(new Uint32Array(4), 1);
+  splatDbgAttr.name = 'nanShadowSplatDbg';
   const splatDbgV = sU32Views(splatDbgAttr, 4);
   if (shVoxDbg) {
     (window as unknown as { __readSplatDbg?: unknown }).__readSplatDbg = async (r: Renderer) =>

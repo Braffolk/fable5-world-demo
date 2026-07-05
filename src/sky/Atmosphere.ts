@@ -139,13 +139,14 @@ export class Atmosphere {
   private skyCompute: ComputeNode | null = null;
 
   constructor() {
-    this.transmittanceLUT = this.makeLUT(T_W, T_H);
-    this.multiScatterLUT = this.makeLUT(MS_RES, MS_RES);
-    this.skyViewLUT = this.makeLUT(SV_W, SV_H);
+    this.transmittanceLUT = this.makeLUT(T_W, T_H, 'atmoTransmittanceLut');
+    this.multiScatterLUT = this.makeLUT(MS_RES, MS_RES, 'atmoMultiScatterLut');
+    this.skyViewLUT = this.makeLUT(SV_W, SV_H, 'atmoSkyViewLut');
   }
 
-  private makeLUT(w: number, h: number): StorageTexture {
+  private makeLUT(w: number, h: number, name: string): StorageTexture {
     const t = new StorageTexture(w, h);
+    t.name = name;
     t.type = HalfFloatType;
     t.generateMipmaps = false;
     return t;

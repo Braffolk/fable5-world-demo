@@ -115,6 +115,7 @@ function buildTwigTile(
 /** capture material: sqrt-encoded albedo as emissive, no lights involved */
 function captureMaterial(sp: SpeciesParams): MeshStandardNodeMaterial {
   const mat = new MeshStandardNodeMaterial();
+  mat.name = 'foliageCardCapture';
   const d = attribute('vdata', 'vec4') as unknown as NV4;
   const u = uv() as unknown as NV2;
   const c = sp.foliageColor;
@@ -221,6 +222,7 @@ export async function captureFoliageAtlas(
   cam.lookAt(0, 0, 0);
 
   const rt = new RenderTarget(ATLAS_RES, ATLAS_RES);
+  rt.texture.name = 'foliageCardBakeRT';
   rt.texture.colorSpace = NoColorSpace;
 
   const prevTarget = renderer.getRenderTarget();
@@ -241,6 +243,7 @@ export async function captureFoliageAtlas(
   rt.dispose();
 
   const tex = new DataTexture(px, ATLAS_RES, ATLAS_RES);
+  tex.name = 'foliageCardAtlas';
   tex.colorSpace = NoColorSpace;
   tex.generateMipmaps = true;
   tex.minFilter = LinearMipmapLinearFilter;

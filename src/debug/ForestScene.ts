@@ -562,6 +562,7 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
   } else {
     // lean cull→raster→flat-resolve debug view (dummy 1×1 heightTex — never sampled).
     const heightTex = new StorageTexture(1, 1);
+    heightTex.name = 'forestSceneHeight';
     heightTex.type = FloatType;
     const hf = { heightTex } as unknown as Heightfield;
     const view = buildNaniteView(engine, reg, hf, mode);

@@ -78,6 +78,7 @@ interface NodeMatShape {
  */
 export function depthPrepassTwin(mesh: Mesh, nodes: PrepassNodes): Mesh {
   const m = new NodeMaterial();
+  m.name = 'vegDepthPrepass';
   const ms = m as unknown as NodeMatShape;
   ms.positionNode = nodes.positionNode;
   if (nodes.maskNode !== undefined) ms.maskNode = nodes.maskNode;

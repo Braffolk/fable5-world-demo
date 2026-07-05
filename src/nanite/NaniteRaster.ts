@@ -241,13 +241,16 @@ export interface NaniteVisBuffers {
 
 export function makeVisBuffers(pixelCount: number): NaniteVisBuffers {
   const depthAttr = new StorageBufferAttribute(new Uint32Array(pixelCount), 1);
+  depthAttr.name = 'nanVisDepth';
   markFragmentWritable(depthAttr);
   const payloadAttr = new StorageBufferAttribute(
     new Uint32Array(pixelCount),
     1,
   );
+  payloadAttr.name = 'nanVisPayload';
   markFragmentWritable(payloadAttr);
   const visBAttr = new StorageBufferAttribute(new Uint32Array(pixelCount), 1);
+  visBAttr.name = 'nanVisB';
   markFragmentWritable(visBAttr);
   return {
     depthAttr,
@@ -534,8 +537,10 @@ export function buildNaniteRaster(
   const hwQueueInit = new Uint32Array(TRIHZB_BASE + triTailN);
   if (triTailN > 0) hwQueueInit.fill(0x3f800000, TRIHZB_BASE); // 1.0f = far
   const hwQueueAttr = new StorageBufferAttribute(hwQueueInit, 1);
+  hwQueueAttr.name = 'nanHwQueue';
   const hwQueueV = sU32Views(hwQueueAttr, TRIHZB_BASE + triTailN);
   const hwDrawAttr = new IndirectStorageBufferAttribute(new Uint32Array(4), 4);
+  hwDrawAttr.name = 'nanHwDraw';
   const hwDrawBuf = sU32Views(
     hwDrawAttr as unknown as StorageBufferAttribute,
     4,
@@ -545,6 +550,7 @@ export function buildNaniteRaster(
   // never matched it — ANY pass disagreement, SW or HW, shows up here),
   // [1] = covered pixels
   const auditAttr = new StorageBufferAttribute(new Uint32Array(4), 1);
+  auditAttr.name = 'nanRasterAudit';
   const auditV = sU32Views(auditAttr, 4);
 
   // 0a SCAR band counters (?scar=1). [0] = band fragments (the OVERDRAW numerator —
@@ -2098,6 +2104,7 @@ export function buildNaniteRaster(
   ): NodeMaterial => {
     const sfx = instanced ? `${pass}_cl` : pass;
     const mat = new NodeMaterial();
+    mat.name = `nanRaster_${sfx}`;
     const vPayLo = varyingProperty('float', `nanPayLo_${sfx}`) as unknown as NF;
     const vPayHi = varyingProperty('float', `nanPayHi_${sfx}`) as unknown as NF;
     const vZ = varyingProperty('float', `nanZ_${sfx}`) as unknown as NF;
@@ -2307,6 +2314,7 @@ export function buildNaniteRaster(
   );
 
   const resolveMat = new NodeMaterial();
+  resolveMat.name = 'nanHwResolveMat';
   resolveMat.vertexNode = vec4(
     positionGeometry.xy,
     0,

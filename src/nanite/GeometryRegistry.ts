@@ -1384,16 +1384,27 @@ export class GeometryRegistry {
     this.voxelBricksArr = new Uint32Array(voxelBricksLen);
 
     this.vertsAttr = new StorageBufferAttribute(this.vertsArr, 1);
+    this.vertsAttr.name = 'nanGeoVerts';
     this.hfVertsAttr = new StorageBufferAttribute(this.hfVertsArr, 1);
+    this.hfVertsAttr.name = 'nanGeoHfVerts';
     this.idxAttr = new StorageBufferAttribute(this.idxArr, 1);
+    this.idxAttr.name = 'nanGeoIndices';
     this.clusterAttr = new StorageBufferAttribute(this.clusterArr, 1);
+    this.clusterAttr.name = 'nanGeoClusters';
     this.meshAttr = new StorageBufferAttribute(this.meshArr, 1);
+    this.meshAttr.name = 'nanGeoMeshes';
     this.instAttr = new StorageBufferAttribute(this.instArr, 4);
+    this.instAttr.name = 'nanGeoInstances';
     this.instMeshAttr = new StorageBufferAttribute(this.instMeshArr, 1);
+    this.instMeshAttr.name = 'nanGeoInstMesh';
     this.dagAttr = new StorageBufferAttribute(this.dagArr, 1);
+    this.dagAttr.name = 'nanGeoDag';
     this.vcompactAttr = new StorageBufferAttribute(this.vcompactArr, 1);
+    this.vcompactAttr.name = 'nanGeoVcompact';
     this.dagLinksAttr = new StorageBufferAttribute(this.dagLinksArr, 1);
+    this.dagLinksAttr.name = 'nanGeoDagLinks';
     this.voxelBricksAttr = new StorageBufferAttribute(this.voxelBricksArr, 1);
+    this.voxelBricksAttr.name = 'nanGeoVoxelBricks';
 
     const verts = sU32Views(this.vertsAttr, Math.max(1, this.caps.verts * VERT_WORDS));
     const hfVerts = sU32Views(this.hfVertsAttr, Math.max(1, this.hfCap));
@@ -2454,6 +2465,7 @@ export class GeometryRegistry {
         instRW.element(dst.mul(uint(2)).add(uint(1))).assign((bufB as unknown as BufOf<NV4>).element(src));
         elemUW(instMeshRW, dst).assign(uint(meshId));
       })().compute(count, [64]);
+      (kernel as { setName(n: string): unknown }).setName('nanGeoInstCopy');
       dispatch(renderer, kernel);
       s.copied = true;
     }
@@ -2548,6 +2560,7 @@ export class GeometryRegistry {
     const STRIDE = 24;
     const outArr = new Float32Array(Math.max(1, k * STRIDE));
     const outAttr = new StorageBufferAttribute(outArr, 1);
+    outAttr.name = 'nanGeoProbeReadback';
     const out = storage(outAttr, 'float', outArr.length);
     const vertBase = probeMesh?.vertBase ?? 0;
     const gpu = this.gpu;
@@ -2584,6 +2597,7 @@ export class GeometryRegistry {
         out.element(at(23)).assign(toF(c.meshId));
       });
     })().compute(k, [64]);
+    (kernel as { setName(n: string): unknown }).setName('nanGeoValidate');
     dispatch(renderer, kernel);
     const ab = await readBuffer(renderer, outAttr, 0, outArr.length * 4);
     const got = new Float32Array(ab);

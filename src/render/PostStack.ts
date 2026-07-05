@@ -600,6 +600,7 @@ export class PostStack {
       this.exposureBuf.element(0).assign(1);
       this.exposureBuf.element(1).assign(1);
     })().compute(1);
+    expInit.setName('autoExposureInit');
     void renderer.computeAsync(expInit);
 
     const beautyForMeter = scenePass.getTextureNode('output');

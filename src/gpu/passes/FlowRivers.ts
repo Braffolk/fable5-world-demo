@@ -40,6 +40,7 @@ import { bilerpFloatBuffer } from '../BufferSample';
 import { hash12 } from '../noise/NoiseTSL';
 import type { NB, NF, NI, NU } from '../TSLTypes';
 import type { FloatBuffer } from './HeightSynthesis';
+import { labelGroup } from './HeightSynthesis';
 
 export type Vec2Buffer = StorageBufferNode<'vec2'>;
 
@@ -170,7 +171,7 @@ export async function runFlowRivers(
     height.element(i).assign(min(height.element(i), enforced));
   })().compute(N);
   enforceK.setName('channelEnforce');
-  await renderer.computeAsync([initMisc, enforceK]);
+  await renderer.computeAsync(labelGroup([initMisc, enforceK], 'flowInitEnforce'));
 
   interface FillLevel {
     res: number;
@@ -306,7 +307,7 @@ export async function runFlowRivers(
       for (let k = 0; k < Math.min(BATCH, lvl.iters - it); k++) {
         nodes.push((it + k) % 2 === 0 ? stepAB : stepBA);
       }
-      await renderer.computeAsync(nodes);
+      await renderer.computeAsync(labelGroup(nodes, `flowFillStep_${lvl.res}`));
       opts.onProgress?.(
         `hydrology: filling depressions (${lvl.res}²)`,
         (li + it / lvl.iters) / levels.length,
@@ -318,6 +319,7 @@ export async function runFlowRivers(
         const { i } = H.xy();
         lvl.wA.element(i).assign(lvl.wB.element(i));
       })().compute(lvl.res * lvl.res);
+      copyK.setName(`fillDownCopy_${lvl.res}`);
       await renderer.computeAsync(copyK);
     }
   }
@@ -441,13 +443,18 @@ export async function runFlowRivers(
   // --- 3b. widen: blur the strength field (channels get real width — the
   //         raw particle lines are one cell wide and carve grid scars) --------
   opts.onProgress?.('hydrology: widening channels', 0.68);
-  await renderer.computeAsync([
-    strengthK,
-    makeBlur(flowStrength, moistB, 1, 0, 2),
-    makeBlur(moistB, flowStrength, 0, 1, 2),
-    makeBlur(waterStrength, moistB, 1, 0, 2),
-    makeBlur(moistB, waterStrength, 0, 1, 2),
-  ]);
+  await renderer.computeAsync(
+    labelGroup(
+      [
+        strengthK,
+        makeBlur(flowStrength, moistB, 1, 0, 2),
+        makeBlur(moistB, flowStrength, 0, 1, 2),
+        makeBlur(waterStrength, moistB, 1, 0, 2),
+        makeBlur(moistB, waterStrength, 0, 1, 2),
+      ],
+      'flowWiden',
+    ),
+  );
 
   // lake-depth field, blurred: post-erosion hummocks leave 2–6 m potholes
   // everywhere in the wetland — per-cell W−H painted them as dotted ponds.
@@ -458,11 +465,16 @@ export async function runFlowRivers(
     lakeDepthB.element(i).assign(W.element(i).sub(height.element(i)));
   })().compute(N);
   lakeDepthK.setName('lakeDepth');
-  await renderer.computeAsync([
-    lakeDepthK,
-    makeBlur(lakeDepthB, moistB, 1, 0, 3),
-    makeBlur(moistB, lakeDepthB, 0, 1, 3),
-  ]);
+  await renderer.computeAsync(
+    labelGroup(
+      [
+        lakeDepthK,
+        makeBlur(lakeDepthB, moistB, 1, 0, 3),
+        makeBlur(moistB, lakeDepthB, 0, 1, 3),
+      ],
+      'flowLakeDepth',
+    ),
+  );
 
   // --- 3c. carve from the blurred field, fade out inside lakes ----------------
   const carveK = guard(() => {
@@ -556,17 +568,22 @@ export async function runFlowRivers(
   const relaxBA = mkRelax(hT, height);
   opts.onProgress?.('hydrology: talus relax', 0.78);
   for (let it = 0; it < 13; it++) {
-    await renderer.computeAsync([relaxAB, relaxBA]);
+    await renderer.computeAsync(labelGroup([relaxAB, relaxBA], 'flowTalusRelax'));
   }
 
   // --- 4. moisture: separable blur --------------------------------------------
   opts.onProgress?.('hydrology: moisture field', 0.85);
-  await renderer.computeAsync([
-    makeBlur(moistA, moistB, 1, 0, 10),
-    makeBlur(moistB, moistA, 0, 1, 10),
-    makeBlur(moistA, moistB, 1, 0, 10),
-    makeBlur(moistB, moistA, 0, 1, 10),
-  ]);
+  await renderer.computeAsync(
+    labelGroup(
+      [
+        makeBlur(moistA, moistB, 1, 0, 10),
+        makeBlur(moistB, moistA, 0, 1, 10),
+        makeBlur(moistA, moistB, 1, 0, 10),
+        makeBlur(moistB, moistA, 0, 1, 10),
+      ],
+      'flowMoisture',
+    ),
+  );
 
   return {
     waterSurface: W,

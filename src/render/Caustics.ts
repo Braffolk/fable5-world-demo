@@ -113,6 +113,7 @@ export class CausticsBake {
 
   constructor() {
     const t = new StorageTexture(RES, RES);
+    t.name = 'causticsTex';
     t.type = HalfFloatType;
     t.wrapS = RepeatWrapping;
     t.wrapT = RepeatWrapping;

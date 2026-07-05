@@ -89,15 +89,19 @@ export class Clouds {
     if (Number.isFinite(densQ)) this.density.value = densQ;
     this.flatDebug = q.get('cloudflat') === '1';
     this.baseNoise = new Storage3DTexture(BASE_RES, BASE_RES, BASE_RES);
+    this.baseNoise.name = 'cloudBaseNoise3D';
     this.baseNoise.type = HalfFloatType;
     this.baseNoise.format = RedFormat;
     this.detailNoise = new Storage3DTexture(DETAIL_RES, DETAIL_RES, DETAIL_RES);
+    this.detailNoise.name = 'cloudDetailNoise3D';
     this.detailNoise.type = HalfFloatType;
     this.detailNoise.format = RedFormat;
     this.shadowMap = new StorageTexture(SHADOW_RES, SHADOW_RES);
+    this.shadowMap.name = 'cloudShadowMap';
     this.shadowMap.type = HalfFloatType;
     this.shadowMap.generateMipmaps = false;
     this.weatherMap = new StorageTexture(WEATHER_RES, WEATHER_RES);
+    this.weatherMap.name = 'cloudWeatherMap';
     this.weatherMap.type = HalfFloatType;
     this.weatherMap.generateMipmaps = false;
   }

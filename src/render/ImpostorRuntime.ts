@@ -46,6 +46,7 @@ export function impostorRuntimeMaterial(
   // physical for specularIntensity — distant crowns went silver at
   // glancing sun just like the near cards (same flat-normal sheen)
   const mat = new MeshPhysicalNodeMaterial();
+  mat.name = 'impostorRuntime';
   mat.specularIntensity = 0.25;
   const { A, B, slot } = fetchInstance(bind);
   const s = A.w;

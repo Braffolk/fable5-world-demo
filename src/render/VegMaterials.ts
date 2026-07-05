@@ -87,6 +87,7 @@ export interface BarkMatParams {
 
 export function barkMaterial(p: BarkMatParams): MeshStandardNodeMaterial {
   const mat = new MeshPhysicalNodeMaterial();
+  mat.name = 'vegBark';
   mat.specularIntensity = 0.45;
   const d = vdata();
   const base = vec3(p.color.r, p.color.g, p.color.b);
@@ -105,6 +106,7 @@ export function barkTexturedMaterial(tex: {
   texB: Texture;
 }): MeshStandardNodeMaterial {
   const mat = new MeshPhysicalNodeMaterial();
+  mat.name = 'vegBarkTextured';
   mat.specularIntensity = 0.45;
   const d = vdata();
   const a = texture(tex.texA, uv() as never) as unknown as NV4;
@@ -133,6 +135,7 @@ export function rockMaterial(opts?: {
   tone?: { r: number; g: number; b: number };
 }): MeshStandardNodeMaterial {
   const mat = new MeshPhysicalNodeMaterial();
+  mat.name = 'vegRock';
   mat.specularIntensity = 0.4;
   const d = vdata();
   const wp = positionWorld;
@@ -193,6 +196,7 @@ export function deadwoodMaterial(
   dim?: { r: number; g: number; b: number },
 ): MeshStandardNodeMaterial {
   const mat = new MeshPhysicalNodeMaterial();
+  mat.name = 'vegDeadwood';
   mat.specularIntensity = 0.45;
   const d = vdata();
   const a = texture(tex.texA, uv() as never) as unknown as NV4;
@@ -226,6 +230,7 @@ export function flowerMaterial(petal: {
   b: number;
 }): MeshStandardNodeMaterial {
   const mat = new MeshStandardNodeMaterial();
+  mat.name = 'vegFlower';
   const d = vdata();
   const stem = vec3(0.045, 0.1, 0.03);
   const center = vec3(0.5, 0.32, 0.045);
@@ -244,6 +249,7 @@ export function flowerMaterial(petal: {
 /** mushroom shading by vdata.x part id: 0 stem, 0.5 gills, 1 cap */
 export function mushroomMaterial(): MeshStandardNodeMaterial {
   const mat = new MeshStandardNodeMaterial();
+  mat.name = 'vegMushroom';
   const d = vdata();
   const stem = vec3(0.32, 0.29, 0.24);
   const gills = vec3(0.42, 0.37, 0.28);
@@ -267,6 +273,7 @@ export function foliageMaterial(p: FoliageMatParams): MeshStandardNodeMaterial {
   // glancing sun desaturates sunlit leaves to SILVER (user) — real leaves
   // read color-first; translucency + diffuse carry the lit look
   const mat = new MeshPhysicalNodeMaterial();
+  mat.name = 'vegFoliage';
   mat.specularIntensity = 0.3;
   const d = vdata();
   const base = vec3(p.color.r, p.color.g, p.color.b);
@@ -292,6 +299,7 @@ export function foliageCardMaterial(
   // see foliageMaterial: cards are worse — ONE flat normal per card means
   // the sheen paints whole cards silver coherently. Near-diffuse.
   const mat = new MeshPhysicalNodeMaterial();
+  mat.name = 'vegFoliageCard';
   mat.specularIntensity = 0.18;
   const d = vdata();
   const t = texture(atlas, uv() as never) as unknown as NV4;

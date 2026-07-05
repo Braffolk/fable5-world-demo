@@ -35,6 +35,7 @@ import {
 } from 'three/tsl';
 import type { NB, NF, NI } from '../TSLTypes';
 import type { FloatBuffer } from './HeightSynthesis';
+import { labelGroup } from './HeightSynthesis';
 
 export interface ErosionResult {
   /** eroded height (res²) — alias of an internal buffer, do not write */
@@ -287,7 +288,7 @@ export async function runErosion(
   const hydraEven = makeHydra({ wSrc: wA, sSrc: sA, wDst: wB, sDst: sB });
   const hydraOdd = makeHydra({ wSrc: wB, sSrc: sB, wDst: wA, sDst: sA });
 
-  await renderer.computeAsync([initK1, initK2]);
+  await renderer.computeAsync(labelGroup([initK1, initK2], 'erosionInit'));
 
   const BATCH = 8;
   let done = 0;
@@ -297,7 +298,7 @@ export async function runErosion(
     for (let k = 0; k < n; k++) {
       nodes.push(...((done + k) % 2 === 0 ? hydraEven : hydraOdd), thermalK);
     }
-    await renderer.computeAsync(nodes);
+    await renderer.computeAsync(labelGroup(nodes, 'erosionHydraulic'));
     done += n;
     opts.onProgress?.(done, iters);
   }

@@ -12,6 +12,19 @@ import { WORLD_SIZE } from '../../world/WorldConst';
 
 export type FloatBuffer = StorageBufferNode<'float'>;
 
+/**
+ * GPU-PASS LABEL for a batched `renderer.compute([...])`. three r184 labels the
+ * compute pass `computeGroup_<group.id>` (WebGPUBackend.beginCompute); a bare
+ * array has no `.id`, so a capture shows the pass as `computeGroup_undefined`.
+ * Tag the array so the pass reads `computeGroup_<name>`. Pure metadata — `.id`
+ * only feeds the pass label + timestampUID string (three keeps timestamp
+ * uniqueness via its own `c:<frameCalls>` prefix). Returns the array for chaining.
+ */
+export function labelGroup<T extends readonly unknown[]>(nodes: T, name: string): T {
+  (nodes as { id?: string }).id = name;
+  return nodes;
+}
+
 export interface SynthesisResult {
   /** height meters, res×res row-major */
   height: FloatBuffer;
