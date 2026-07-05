@@ -73,6 +73,7 @@ import { brickNormalTsl, brickWord, BRICK_ALBEDO, BRICK_NORMAL, BRICK_POS_X } fr
 import { makeFetch, slotHash } from './NaniteFetch';
 import { GRASS_FAR_BASE } from './NaniteGrass';
 import { hashColor, instRotateDir, instTransformPoint, instYaw, type NaniteCam } from './NaniteCommon';
+import { clusterHwClass } from './NaniteHwClass';
 import type { NaniteVisBuffers } from './NaniteRaster';
 import { bcU2F, elemU, toF, uniformF } from './Tsl';
 import type { BufOf, UV2, UniformF } from './Tsl';
@@ -275,6 +276,8 @@ export function buildNaniteResolve(
   const fetch = makeFetch(gpu, heightTex, undefined, windOn ? { camPos: cam.camPos } : undefined, false);
   const nandepth = q.get('nandepth');
   const nandbg = q.get('nandbg');
+  // ?clhwmax — SW/HW crossover px for the ?nandbg=clhw split tint (matches the raster's default).
+  const clhwMax = Math.max(2, Number(q.get('clhwmax') ?? '16') || 16);
   // ?nanbark= bisect: const (flat brown) | lN (force mip N) | grad (anisotropic
   // ray-plane derivatives — known NaN on near trunks, default is analytic LOD)
   const nanbark = q.get('nanbark');
@@ -1501,9 +1504,55 @@ export function buildNaniteResolve(
       return vec4(s, s, s, 1) as unknown as NV4;
     }
     if (nandbg === 'cov') return vec4(1, 0, 0, 1); // every covered pixel red
+    // ?nandbg=ftonly — ISOLATE the far-tile aggregated field: fartile pixels keep
+    // their real lit colour, EVERY other pixel (near voxels, mesh, terrain, grass)
+    // is painted flat MAGENTA. The fartile bricks then read against magenta so the
+    // griddy rectangles + the coverage GAPS (magenta showing between bricks) pop.
+    // ?nandbg=ftlevel — colour each fartile pixel by its DAG pyramid level (word7
+    // bits 10-15) via hashColor, non-fartile black: adjacent tiles at DIFFERENT
+    // levels (LOD-crack) show as different colours with seams at the boundary; a
+    // uniform colour band = single level (coverage, not crack). Both DEBUG-only.
+    if (nandbg === 'ftonly' || nandbg === 'ftlevel') {
+      const mF = fetch.meshWord(meshId, 6).shiftRight(uint(16)).bitAnd(uint(0xff));
+      // gate on matClass==7 (voxel) so grass/terrain pixels with a garbage meshId
+      // can never false-positive into "fartile"; near voxels lack the flag ⇒ magenta.
+      const isFt = matClass
+        .equal(uint(7))
+        .and(mF.bitAnd(uint(MESH_FLAG_FARTILE)).notEqual(uint(0)));
+      if (nandbg === 'ftlevel') {
+        const lvl = elemU(gpu.clusters, ci.mul(uint(CLUSTER_WORDS)).add(uint(7)))
+          .shiftRight(uint(10))
+          .bitAnd(uint(0x3f));
+        return vec4(isFt.select(hashColor(lvl), vec3(0) as unknown as NV3), 1) as unknown as NV4;
+      }
+      return vec4(isFt.select(lit, vec3(1, 0, 1) as unknown as NV3), 1) as unknown as NV4;
+    }
     // per-cluster hash tint (matches the ?nanitedbg=cluster view, but for the
     // full-frame migrated set) — visualises meshlet boundaries on the resolve
     if (nandbg === 'cluster') return vec4(hashColor(ci), 1) as unknown as NV4;
+    // ?nandbg=clhw — visualise the per-cluster SW/HW split (?clhw): RED = cluster the split
+    // routes to the HW instanced draw, GREEN = kept on the SW compute raster. Recomputes the
+    // SHARED clusterHwClass (bit-identical to the cull partition + SW-skip), so the tint IS the
+    // routing decision. Sweep ?clhwmax to watch clusters cross the boundary; works even with
+    // ?clhw off (it just shows how the split WOULD classify each cluster).
+    if (nandbg === 'clhw') {
+      const projK = cam.cotHalfFov.mul(cam.uH).mul(0.5) as unknown as NF;
+      const isHw = clusterHwClass(
+        gpu,
+        vec3(cam.camPos) as unknown as NV3,
+        projK,
+        instId,
+        ci,
+        clhwMax,
+      );
+      return vec4(
+        isHw.select(
+          vec3(1, 0.12, 0.08) as unknown as NV3,
+          vec3(0.1, 0.7, 0.2) as unknown as NV3,
+        ),
+        1,
+      ) as unknown as NV4;
+    }
     if (nandbg === 'cls')
       // matClass tint: terrain green / rock red / bark blue / deadwood cyan /
       // leaf bright-green / other (grass/debris) magenta

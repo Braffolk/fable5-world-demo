@@ -77,10 +77,8 @@ interface TrunkWindFields {
  * Terrain micro-displacement inputs ('terrain' transform channel, N4-C1):
  * the EXACT TerrainTiles vertex formula (world-space fields, distance-faded
  * 45→85 m) applied to heightfield vertices at fetch time, so the raster, the
- * HW passes and the resolve all see the displaced surface. The nanitedbg
- * views omit this (hwref's CPU build has no GPU noise textures — parity
- * stays an undisplaced-vs-undisplaced compare; the full-frame C1 gate vs
- * ?nanite=0 is what verifies displacement).
+ * HW passes and the resolve all see the displaced surface. (The full-frame
+ * C1 gate vs ?nanite=0 is what verifies displacement.)
  */
 export interface TerrainDisp {
   normalTex: StorageTexture;

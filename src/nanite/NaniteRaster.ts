@@ -20,13 +20,19 @@
  */
 
 import { DoubleSide, Mesh, Scene, Vector3 } from 'three';
-import { BufferGeometry, Float32BufferAttribute, RenderTarget, Sphere } from 'three';
+import {
+  BufferGeometry,
+  Float32BufferAttribute,
+  RenderTarget,
+  Sphere,
+} from 'three';
 import type { PerspectiveCamera, Texture } from 'three';
 import {
   IndirectStorageBufferAttribute,
   NodeMaterial,
   StorageBufferAttribute,
   type Renderer,
+  type StorageBufferNode,
 } from 'three/webgpu';
 import {
   Discard,
@@ -63,10 +69,24 @@ import {
   MESH_WORDS,
 } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
-import { DISPATCH_ROW, QRASTER_CAP, hashColor, instYaw, type NaniteCam } from './NaniteCommon';
-import { makeFetch, type TerrainDisp, type TrunkWindOpt, type VertCtx } from './NaniteFetch';
+import {
+  DISPATCH_ROW,
+  QRASTER_CAP,
+  hashColor,
+  type NaniteCam,
+} from './NaniteCommon';
+import {
+  makeFetch,
+  type TerrainDisp,
+  type TrunkWindOpt,
+  type VertCtx,
+} from './NaniteFetch';
+import { clusterHwClass } from './NaniteHwClass';
 import { makeVertexCache } from './NaniteVertexCache';
-import { buildNaniteVoxelRaster, type VoxelRasterHandles } from './NaniteVoxelRaster';
+import {
+  buildNaniteVoxelRaster,
+  type VoxelRasterHandles,
+} from './NaniteVoxelRaster';
 import {
   aLoadU,
   bcF2U,
@@ -108,8 +128,10 @@ const HW_CAP = 2_097_152;
 // per-covered-pixel walk+interp, so the last untested lever is letting the HW
 // rasterizer eat the mid-size (5-16px) tris. Default 16 = shipped behavior.
 const MAX_RASTER_SIZE = (() => {
-  const v = Number(new URLSearchParams(window.location.search).get('swmax') ?? '16');
-  return Number.isFinite(v) && v >= 2 && v <= 16 ? Math.floor(v) : 16;
+  const v = Number(
+    new URLSearchParams(window.location.search).get('swmax') ?? '16',
+  );
+  return Number.isFinite(v) && v >= 2 ? Math.floor(v) : 16;
 })();
 // SWCOOP small-bin threshold: clamped bbox EXTENT ≤4 px both axes (≤5×5=25 candidate
 // pixels) stays lane-private; larger (up to MAX_RASTER_SIZE) goes cooperative.
@@ -131,12 +153,20 @@ const NEAR_EPS = 1e-4;
  * unchanged. Returns the accept gate — a degenerate area==0 still falls out at the
  * downstream integer `area2 > 0` test.
  */
-export function orientForRaster(ndc1: NV3, ndc2: NV3, areaNdc: NF, twoSided: NB): NB {
+export function orientForRaster(
+  ndc1: NV3,
+  ndc2: NV3,
+  areaNdc: NF,
+  twoSided: NB,
+): NB {
   const flip = twoSided.and(areaNdc.lessThan(0)).toVar();
   const keep1 = vec3(ndc1).toVar(); // snapshot v1 before the in-place swap
   ndc1.assign(flip.select(ndc2, ndc1));
   ndc2.assign(flip.select(keep1, ndc2));
-  return twoSided.select(areaNdc.notEqual(0), areaNdc.greaterThan(0)) as unknown as NB;
+  return twoSided.select(
+    areaNdc.notEqual(0),
+    areaNdc.greaterThan(0),
+  ) as unknown as NB;
 }
 
 interface ComputeKernel {
@@ -164,7 +194,11 @@ export interface NaniteRasterHandles {
   /** PERF-VB4 WORLD single pass: 24-bit Z election + full-id side buffer (visBV).
    *  hzbTail (SUBMIT-COALESCE ?coalesce=1): the HZB kernel chain to fold into the
    *  voxel raster's submit (or its own single submit when no voxRaster). */
-  world1(renderer: Renderer, camera: PerspectiveCamera, hzbTail?: readonly unknown[]): void;
+  world1(
+    renderer: Renderer,
+    camera: PerspectiveCamera,
+    hzbTail?: readonly unknown[],
+  ): void;
   readHwCount(renderer: Renderer): Promise<number>;
   /** count covered/orphan pixels (NaniteView ?audit=1) */
   audit(renderer: Renderer): void;
@@ -177,7 +211,12 @@ export interface NaniteRasterHandles {
    *  pixels (denominator), total frame fragments, band cluster-emit count. */
   readScar(
     renderer: Renderer,
-  ): Promise<{ bandFrags: number; bandPx: number; totalFrags: number; bandClusters: number }>;
+  ): Promise<{
+    bandFrags: number;
+    bandPx: number;
+    totalFrags: number;
+    bandClusters: number;
+  }>;
   /** Stage-2 voxel BRICK-WRITE count (the occlusion-skip overlay number, §A2) — total
    *  per-pixel wgElect wins across all tiles this frame. null when no voxel raster. */
   readVoxWrites(renderer: Renderer): Promise<number | null>;
@@ -203,7 +242,10 @@ export interface NaniteVisBuffers {
 export function makeVisBuffers(pixelCount: number): NaniteVisBuffers {
   const depthAttr = new StorageBufferAttribute(new Uint32Array(pixelCount), 1);
   markFragmentWritable(depthAttr);
-  const payloadAttr = new StorageBufferAttribute(new Uint32Array(pixelCount), 1);
+  const payloadAttr = new StorageBufferAttribute(
+    new Uint32Array(pixelCount),
+    1,
+  );
   markFragmentWritable(payloadAttr);
   const visBAttr = new StorageBufferAttribute(new Uint32Array(pixelCount), 1);
   markFragmentWritable(visBAttr);
@@ -239,6 +281,13 @@ export function buildNaniteRaster(
     voxF2bK?: number;
     voxF2bEnabled?: boolean;
     voxPrevEnabled?: boolean;
+    /** ?clhw per-cluster SW/HW split (NaniteCull). qHwRasterRO = HW-cluster qRaster
+     *  indices; hwClusterDrawAttr = the instanced draw args. Present (non-null) only
+     *  when ?clhw is on; the SW world1 kernel skips these clusters + the instanced HW
+     *  draw paints them properly. */
+    clhwEnabled?: boolean;
+    qHwRasterRO?: StorageBufferNode<'uint'> | null;
+    hwClusterDrawAttr?: IndirectStorageBufferAttribute | null;
   },
   vis: NaniteVisBuffers,
   tint: 'flat' | 'cluster' | 'lod',
@@ -288,7 +337,10 @@ export function buildNaniteRaster(
    *  as the cluster occlusion cull (1-frame disocclusion holes possible — gate
    *  with stills before any default flip). +1 storage binding, world1-only,
    *  build-time gated. */
-  triHzb?: { ro: import('./Tsl').BufOf<NF>; levels: { offset: number; w: number; h: number }[] },
+  triHzb?: {
+    ro: import('./Tsl').BufOf<NF>;
+    levels: { offset: number; w: number; h: number }[];
+  },
 ): NaniteRasterHandles {
   const { width, height } = cam;
   // Mirror pyramid levels 0..TRI_HZB_MAX into the hwQueue tail (level k texel
@@ -335,7 +387,9 @@ export function buildNaniteRaster(
   //    variants run at the 120 fps rAF cap, where the c.nanRasterWorld1 GPU timestamp
   //    reads a BOGUS constant ~15.2 ms (cross-frame pipelining span, not active GPU
   //    time) — only GPU-BOUND (frameMs ≫ 8.3) readings of these variants are valid.
-  const rdbg = Number(new URLSearchParams(window.location.search).get('rdbg') ?? '0');
+  const rdbg = Number(
+    new URLSearchParams(window.location.search).get('rdbg') ?? '0',
+  );
   // PERF-3 (LOG az/ba): one workgroup == one cluster (128 threads share instId/ci),
   // but makeCtx ran PER THREAD (128×/cluster, incl. the trunk gust texture samples) =
   // 0.46 ms / 16% of nanRasterDepth, 100% redundant. Compute it ONCE (thread 0) and
@@ -343,7 +397,8 @@ export function buildNaniteRaster(
   // f32 round-trip is exact, so the raster still agrees with the resolve's own
   // makeCtx); `?wgcache=0` opts out. Applies to the camera raster AND every shadow-
   // clipmap level + the HW vertex stage (all share buildNaniteRaster).
-  const wgcache = new URLSearchParams(window.location.search).get('wgcache') !== '0';
+  const wgcache =
+    new URLSearchParams(window.location.search).get('wgcache') !== '0';
   // SWCOOP (90fps arc, pixel-loop structural rewrite; WORLD1 kernel only) — MODES:
   //   0 = old scanline loop VERBATIM (the revert path).
   //   1 = two-bin with a COOPERATIVE large bin: small tris (bbox extent ≤4 px both
@@ -369,7 +424,9 @@ export function buildNaniteRaster(
   // bit-equal across modes at a deterministic pose (6871171 oblique), shot diffs at
   // the cross-boot floor. Forced 0 under ?rdbg: its mid-kernel returnIf stops would
   // precede mode 1's barrier (non-uniform barrier ⇒ naga validation failure).
-  const swcoopQ = Number(new URLSearchParams(window.location.search).get('swcoop') ?? '0');
+  const swcoopQ = Number(
+    new URLSearchParams(window.location.search).get('swcoop') ?? '0',
+  );
   const swcoop = rdbg !== 0 ? 0 : swcoopQ === 1 || swcoopQ === 2 ? swcoopQ : 0;
   // ?relect — WORLD1 ELECTION ABLATION (90fps-arc pixel-loop split, 2026-07-04).
   // BUILD-TIME gate. The world1 per-covered-pixel ELECTION is: relaxed atomicLoad
@@ -391,7 +448,23 @@ export function buildNaniteRaster(
   // wrote it is gone) is one atomic/thread at a hashed px — the same low-contention idiom the
   // rdbg=1/2 sinks use (NOT one-per-fragment ⇒ no artificial atomic-contention mirage). Frame
   // renders wrong/black in the nanite region under relect 0/2 — DIAGNOSTIC ONLY.
-  const relect = Number(new URLSearchParams(window.location.search).get('relect') ?? '1');
+  const relect = Number(
+    new URLSearchParams(window.location.search).get('relect') ?? '1',
+  );
+  // ?clhw per-cluster SW/HW split (see docs/mobile-gpu-perf/SW-HW-CLUSTER-AUDIT.md). The SW
+  // world1 kernel skips clusters the cull classified HW (clusterHwClass, bit-identical to
+  // kHwPartition ⇒ no holes/double), and an instanced HW draw paints those clusters properly.
+  // Requires cull.qHwRasterRO + cull.hwClusterDrawAttr (present only when the cull saw ?clhw).
+  const clhw =
+    new URLSearchParams(window.location.search).get('clhw') === '1' &&
+    !!cull.qHwRasterRO &&
+    !!cull.hwClusterDrawAttr;
+  const clhwMax = Math.max(
+    2,
+    Number(new URLSearchParams(window.location.search).get('clhwmax') ?? '16') || 16,
+  );
+  // projK = px per world-unit at unit depth (matches NaniteCull's cut projection exactly).
+  const projK = cam.cotHalfFov.mul(cam.uH).mul(0.5) as unknown as NF;
   // (removed 2026-07-02 cleanup: ?noguard naive-FreePipe diagnostic — atomic-contention
   // hypothesis refuted long ago; ?f2b per-pixel early-out — measured null §5o)
   // HW vertex-pull pass: by DEFAULT drop the redundant per-frame full-res color CLEAR. The HW
@@ -463,7 +536,10 @@ export function buildNaniteRaster(
   const hwQueueAttr = new StorageBufferAttribute(hwQueueInit, 1);
   const hwQueueV = sU32Views(hwQueueAttr, TRIHZB_BASE + triTailN);
   const hwDrawAttr = new IndirectStorageBufferAttribute(new Uint32Array(4), 4);
-  const hwDrawBuf = sU32Views(hwDrawAttr as unknown as StorageBufferAttribute, 4).rw;
+  const hwDrawBuf = sU32Views(
+    hwDrawAttr as unknown as StorageBufferAttribute,
+    4,
+  ).rw;
 
   // consistency audit (?audit=1): [0] = orphans (depth written but payload
   // never matched it — ANY pass disagreement, SW or HW, shows up here),
@@ -494,13 +570,17 @@ export function buildNaniteRaster(
   const { makeCtx, fetchWorldVert, fetchWorldVertDyn } = nfetch;
   // M2l hw1fetch: HW vertex stage reconstructs ONE corner (runtime-selected) instead
   // of fetching all 3 and selecting — same selected vertex by construction.
-  const hw1fetch = new URLSearchParams(window.location.search).get('hw1fetch') === '1';
+  const hw1fetch =
+    new URLSearchParams(window.location.search).get('hw1fetch') === '1';
   // PERF-3 win #2 — the cooperative vertex-transform cache lives in its own module
   // (default OFF, ?vcompact=1; measured marginal/conditional — see NaniteVertexCache).
   const vcache = makeVertexCache(gpu, nfetch);
 
   const edgeFn = (a: NV2, b: NV2, p: NV2): NF =>
-    p.y.sub(a.y).mul(b.x.sub(a.x)).sub(p.x.sub(a.x).mul(b.y.sub(a.y))) as unknown as NF;
+    p.y
+      .sub(a.y)
+      .mul(b.x.sub(a.x))
+      .sub(p.x.sub(a.x).mul(b.y.sub(a.y))) as unknown as NF;
 
   // ?wgcache bool→uint for packing isHF/isDAG into the shared-memory uint array
   const b2u = (b: NB): NU =>
@@ -508,7 +588,11 @@ export function buildNaniteRaster(
 
   // SWCOOP workgroup-shared element write (the NaniteVoxelRaster wgSet idiom —
   // .element() is typed as a bare Node in @types; ONE cast here, call sites clean).
-  const wgW = (arr: ReturnType<typeof workgroupArray>, i: NU, v: unknown): void => {
+  const wgW = (
+    arr: ReturnType<typeof workgroupArray>,
+    i: NU,
+    v: unknown,
+  ): void => {
     (arr.element(i) as unknown as { assign(x: unknown): unknown }).assign(v);
   };
 
@@ -527,6 +611,10 @@ export function buildNaniteRaster(
     dvParams.get('nanprobe') !== '1' && // probe reads vis.depthV.ro
     dvParams.get('audit') !== '1' && // kAudit reads visDepthV.ro
     rdbg === 0; // rdbg sinks atomicMin depthV
+  // ?visclear=0 DEBUG (measurement only): A/B whether the ~11ms c.nanVisClear timestamp is
+  // real store cost or a render‖compute WAR-stall artifact — skips the 2 hot full-screen
+  // vis clears (payloadV + visBV). OFF (default / flag absent) = byte-identical to today.
+  const skipVisClear = dvParams.get('visclear') === '0';
   // P9 (shadow strip clear): the tiny tail of kVisClear — ONLY the hw-queue +
   // audit counters. The strip-scoped shadow clear covers the depth texels itself
   // but MUST still reset this counter or the HW depth pass renders an
@@ -542,11 +630,19 @@ export function buildNaniteRaster(
 
   const kVisClear = Fn(() => {
     If(instanceIndex.lessThan(uint(pixelCount)), () => {
-      if (!skipDepthClear) atomicStore(visDepthV.atomic.element(instanceIndex), uint(0xffffffff));
+      if (!skipDepthClear)
+        atomicStore(visDepthV.atomic.element(instanceIndex), uint(0xffffffff));
       // packed/single-pass: payload(+visB) are atomicMax/side targets ⇒ clear to 0 (the
       // smallest, "no fragment"). legacy: payload keeps the 0xffffffff orphan sentinel.
-      atomicStore(visPayloadV.atomic.element(instanceIndex), uint(packedClear ? 0 : 0xffffffff));
-      if (packedClear) atomicStore(visBV.atomic.element(instanceIndex), uint(0));
+      // ?visclear=0 DEBUG (measurement only): skip the 2 hot vis clears to A/B the WAR-stall hypothesis; produces a dirty render.
+      if (!skipVisClear) {
+        atomicStore(
+          visPayloadV.atomic.element(instanceIndex),
+          uint(packedClear ? 0 : 0xffffffff),
+        );
+        if (packedClear)
+          atomicStore(visBV.atomic.element(instanceIndex), uint(0));
+      }
     });
     If(instanceIndex.equal(uint(0)), () => {
       atomicStore(hwQueueV.atomic.element(0), uint(0));
@@ -582,10 +678,25 @@ export function buildNaniteRaster(
       const item = qRasterRO.element(itemIdx.add(uint(1)));
       const instId = item.x.toVar();
       const ci = item.y.toVar();
+      // ?clhw: skip clusters the cull routed to the HW instanced draw. The decision is
+      // clusterHwClass — BIT-IDENTICAL to kHwPartition's — so the SW-skip and the HW-append
+      // can never disagree (no holes, no double-raster) without touching qRaster. UNIFORM
+      // across the workgroup (instId/ci are per-cluster) and BEFORE any barrier ⇒ every live
+      // thread returns together, no barrier deadlock. Built only under ?clhw&&world1.
+      // ?clhw SW-skip: HW clusters are painted by the instanced HW draw, so the SW kernel
+      // returns them here. With wgcache ON (default) the classify is computed ONCE on thread 0
+      // and broadcast (slot 10, below) — NOT 128×/cluster on the SW hot path. The ?wgcache=0
+      // fallback classifies per-thread (the result is uniform ⇒ all threads return together).
+      if (clhw && mode === 'world1' && !wgcache) {
+        returnIf(
+          clusterHwClass(gpu, cam.camPos as unknown as NV3, projK, instId, ci, clhwMax),
+        );
+      }
       // ?relect (build-time, world1 only): per-thread election-key accumulator + the
       // election emitter shared by BOTH world1 sites (emitW1 small bin + inline scanline).
       // null / verbatim election when relect===1 (default) ⇒ world1 kernel stays pristine.
-      const elecSink = mode === 'world1' && relect !== 1 ? uint(0).toVar() : null;
+      const elecSink =
+        mode === 'world1' && relect !== 1 ? uint(0).toVar() : null;
       const doElection = (px: NU, cand: NU, idStore: NU): void => {
         if (mode === 'world1' && relect === 0) {
           // NO election: fold the key into the per-thread register (one sink at loop end).
@@ -600,7 +711,10 @@ export function buildNaniteRaster(
           // relect===1 (default) — the SHIPPED election, verbatim.
           const prevE = aLoadU(visPayloadV.atomic.element(px));
           If(cand.greaterThan(prevE), () => {
-            const wonE = atomicMax(visPayloadV.atomic.element(px), cand) as unknown as NU;
+            const wonE = atomicMax(
+              visPayloadV.atomic.element(px),
+              cand,
+            ) as unknown as NU;
             If(cand.greaterThan(wonE), () => {
               atomicStore(visBV.atomic.element(px), idStore);
             });
@@ -615,27 +729,43 @@ export function buildNaniteRaster(
         // (it dispatches a flat ~visTris grid instead of one near-empty wg/cluster).
         // Thread-0-only sink (1 atomic/wg) consumes item so the work-item read stays.
         If(localTri.equal(uint(0)), () => {
-          atomicMin(visDepthV.atomic.element(instId.add(ci).mod(uint(pixelCount))), instId);
+          atomicMin(
+            visDepthV.atomic.element(instId.add(ci).mod(uint(pixelCount))),
+            instId,
+          );
         });
         returnIf(itemCount.greaterThanEqual(uint(0)));
       }
       let ctx: VertCtx;
+      // matClass (F): broadcast from the wgcache thread-0 decode; null when wgcache
+      // is off, so the voxel-skip below falls back to its per-thread mesh reload.
+      // Bit-identical — the broadcast is the SAME mesh word6 extract, computed once.
+      let matClassBroadcast: NU | null = null;
       if (wgcache) {
         // Compute makeCtx ONCE (thread 0), broadcast through workgroup shared
-        // memory: 9 uint + ≤20 float fields. yawSc is recomputed from the cached B
-        // (cheap, deterministic). The f32 round-trip is exact, so the cached ctx is
-        // bit-identical to a per-thread makeCtx ⇒ the raster still agrees with the
-        // resolve. The only prior early-out (itemIdx ≥ itemCount) is UNIFORM across
-        // the workgroup, so every live thread reaches the barrier (no deadlock).
+        // memory, so the per-thread hot path never re-decodes the cluster. The f32
+        // round-trip is exact, so the cached ctx is bit-identical to a per-thread
+        // makeCtx ⇒ the raster still agrees with the resolve. The only prior
+        // early-out (itemIdx ≥ itemCount) is UNIFORM across the workgroup, so every
+        // live thread reaches the barrier (no deadlock).
+        //   shU: 0..9 = ctx (isHF,isDAG,triStart,triCount,meshId,channel,gx,gz,qxw,
+        //     twoSided); 10 = matClass (voxel-skip, was a per-thread mesh reload);
+        //     11 = ?clhw SW/HW classify (clhw+world1 only).
+        //   shF: 0..10 = A.xyzw,B.xyzw,oX,oZ,cell; 11..20 = wind (when on); 21,22 =
+        //     yawSc.cy/.sy (cos/sin, was recomputed on all 128 threads per cluster).
         // NOTE: TrunkWindFields is serialized field-by-field here — adding a wind
         // field (e.g. swayXPhase, slot 20) MUST extend shF + both halves below.
-        const shU = workgroupArray('uint', 10);
-        const shF = workgroupArray('float', 21);
+        const shU = workgroupArray('uint', clhw && mode === 'world1' ? 12 : 11);
+        const shF = workgroupArray('float', 23);
         // .element() is typed as a bare Node here — cast to the fluent TSL types
         const setU = (i: number, v: NU): void =>
-          void (shU.element(uint(i)) as unknown as { assign(x: NU): unknown }).assign(v);
+          void (
+            shU.element(uint(i)) as unknown as { assign(x: NU): unknown }
+          ).assign(v);
         const setF = (i: number, v: NF): void =>
-          void (shF.element(uint(i)) as unknown as { assign(x: NF): unknown }).assign(v);
+          void (
+            shF.element(uint(i)) as unknown as { assign(x: NF): unknown }
+          ).assign(v);
         const getU = (i: number): NU => shU.element(uint(i)) as unknown as NU;
         const getF = (i: number): NF => shF.element(uint(i)) as unknown as NF;
         If(localTri.equal(uint(0)), () => {
@@ -650,6 +780,25 @@ export function buildNaniteRaster(
           setU(7, c.gz);
           setU(8, c.qxw);
           setU(9, b2u(c.twoSided)); // N9-C2 two-sided flag (slot 9)
+          // matClass (slot 10, F) — broadcast the mesh word6 extract so the voxel-skip
+          // reads ONE value instead of reloading gpu.meshes on all 128 threads. Same
+          // expression as the per-thread read below ⇒ bit-identical.
+          setU(
+            10,
+            elemU(gpu.meshes, c.meshId.mul(uint(MESH_WORDS)).add(uint(6)))
+              .shiftRight(uint(8))
+              .bitAnd(uint(0xff)),
+          );
+          if (clhw && mode === 'world1') {
+            // ?clhw: broadcast the SW/HW classify in slot 11 — computed ONCE here on thread 0,
+            // read after the barrier for a uniform early-out (vs 128×/cluster per-thread).
+            setU(
+              11,
+              b2u(
+                clusterHwClass(gpu, cam.camPos as unknown as NV3, projK, instId, ci, clhwMax),
+              ),
+            );
+          }
           setF(0, c.A.x as unknown as NF);
           setF(1, c.A.y as unknown as NF);
           setF(2, c.A.z as unknown as NF);
@@ -674,15 +823,36 @@ export function buildNaniteRaster(
             setF(19, w.flutBase); // N9-C0 leaf flutter
             setF(20, w.swayXPhase); // hoisted cross-sway sin
           }
+          // yawSc (E): broadcast the instance-yaw cos/sin makeCtx already computed,
+          // so the per-thread reconstruction stops recomputing sin+cos 128×/cluster.
+          setF(21, c.yawSc.cy);
+          setF(22, c.yawSc.sy);
         });
         workgroupBarrier();
-        const cB = vec4(getF(4).toVar(), getF(5).toVar(), getF(6).toVar(), getF(7).toVar()) as unknown as NV4;
+        // matClass (F): capture the broadcast for the voxel-skip below (always-on).
+        matClassBroadcast = getU(10).toVar() as unknown as NU;
+        // ?clhw: skip clusters the cull routed to the HW instanced draw (decision broadcast
+        // from thread 0 above). Uniform across the workgroup ⇒ all threads return together.
+        if (clhw && mode === 'world1') {
+          returnIf(getU(11).toVar().equal(uint(1)));
+        }
+        const cB = vec4(
+          getF(4).toVar(),
+          getF(5).toVar(),
+          getF(6).toVar(),
+          getF(7).toVar(),
+        ) as unknown as NV4;
         ctx = {
           isHF: getU(0).toVar().equal(uint(1)),
           isDAG: getU(1).toVar().equal(uint(1)),
-          A: vec4(getF(0).toVar(), getF(1).toVar(), getF(2).toVar(), getF(3).toVar()) as unknown as NV4,
+          A: vec4(
+            getF(0).toVar(),
+            getF(1).toVar(),
+            getF(2).toVar(),
+            getF(3).toVar(),
+          ) as unknown as NV4,
           B: cB,
-          yawSc: instYaw(cB),
+          yawSc: { cy: getF(21).toVar(), sy: getF(22).toVar() },
           triStart: getU(2).toVar(),
           triCount: getU(3).toVar(),
           meshId: getU(4).toVar(),
@@ -738,9 +908,12 @@ export function buildNaniteRaster(
       // voxel clusters do no triangle work either way; their Phase-B slots stay empty).
       let swVoxGuard: NB | null = null;
       {
-        const mcVox = elemU(gpu.meshes, ctx.meshId.mul(uint(MESH_WORDS)).add(uint(6)))
-          .shiftRight(uint(8))
-          .bitAnd(uint(0xff));
+        // matClass (F): reuse the wgcache broadcast when present; else per-thread reload.
+        const mcVox =
+          matClassBroadcast ??
+          elemU(gpu.meshes, ctx.meshId.mul(uint(MESH_WORDS)).add(uint(6)))
+            .shiftRight(uint(8))
+            .bitAnd(uint(0xff));
         if (coop) {
           swVoxGuard = mcVox.notEqual(uint(7)).toVar() as unknown as NB;
         } else {
@@ -756,7 +929,10 @@ export function buildNaniteRaster(
       // `bandFlag` is the per-fragment gate; null when scar is off (production pristine).
       let bandFlag: NB | null = null;
       if (scar && mode === 'world1') {
-        const mc = elemU(gpu.meshes, ctx.meshId.mul(uint(MESH_WORDS)).add(uint(6)))
+        const mc = elemU(
+          gpu.meshes,
+          ctx.meshId.mul(uint(MESH_WORDS)).add(uint(6)),
+        )
           .shiftRight(uint(8))
           .bitAnd(uint(0xff));
         const isLeaf = mc.equal(uint(4));
@@ -780,8 +956,14 @@ export function buildNaniteRaster(
           ? ctx.wind.leanBase.add(ctx.wind.swayPhase).add(ctx.wind.branchBase)
           : float(0);
         const sinkV = ctx.A.x.add(toF(ctx.triCount)).add(wSink).clamp(0, 1);
-        const sinkPx = itemIdx.mul(uint(2654435761)).add(localTri).mod(uint(pixelCount));
-        atomicMin(visDepthV.atomic.element(sinkPx), bcF2U(sinkV as unknown as NF));
+        const sinkPx = itemIdx
+          .mul(uint(2654435761))
+          .add(localTri)
+          .mod(uint(pixelCount));
+        atomicMin(
+          visDepthV.atomic.element(sinkPx),
+          bcF2U(sinkV as unknown as NF),
+        );
         returnIf(itemCount.greaterThanEqual(uint(0)));
       }
 
@@ -817,7 +999,10 @@ export function buildNaniteRaster(
             : float(0);
           const sinkV = ctx.A.x.add(toF(ctx.triCount)).add(wSink).clamp(0, 1);
           const sinkPx = itemIdx.mod(uint(pixelCount));
-          atomicMin(visDepthV.atomic.element(sinkPx), bcF2U(sinkV as unknown as NF));
+          atomicMin(
+            visDepthV.atomic.element(sinkPx),
+            bcF2U(sinkV as unknown as NF),
+          );
         });
         returnIf(itemCount.greaterThanEqual(uint(0)));
       }
@@ -866,37 +1051,50 @@ export function buildNaniteRaster(
       // small-bin lane-private walk (Phase A) and the cooperative Phase B, so the two
       // bins cannot drift apart. `cand` is built INSIDE the consuming subtree (the TSL
       // hoist-pathology rule, NaniteVoxelRaster.ts:1264).
-      const emitW1 = coop || split
-        ? (px: NU, uw0: NI, uw1: NI, uw2: NI, z0: NF, z1: NF, z2: NF, rcp: NF, pay: NU): void => {
-            const cz = toF(uw0)
-              .mul(z0)
-              .add(toF(uw1).mul(z1))
-              .add(toF(uw2).mul(z2))
-              .mul(rcp)
-              .toVar();
-            If(cz.greaterThanEqual(0).and(cz.lessThanEqual(1)), () => {
-              if (scar) {
-                atomicAdd(scarEl(2), uint(1));
-                if (bandFlag) {
-                  If(bandFlag, () => {
-                    atomicAdd(scarEl(0), uint(1));
-                  });
-                }
-              }
-              const cand = depthKey24(cz as unknown as NF)
-                .shiftLeft(uint(8))
-                .bitOr(pay.bitAnd(uint(0xff)))
+      const emitW1 =
+        coop || split
+          ? (
+              px: NU,
+              uw0: NI,
+              uw1: NI,
+              uw2: NI,
+              z0: NF,
+              z1: NF,
+              z2: NF,
+              rcp: NF,
+              pay: NU,
+            ): void => {
+              const cz = toF(uw0)
+                .mul(z0)
+                .add(toF(uw1).mul(z1))
+                .add(toF(uw2).mul(z2))
+                .mul(rcp)
                 .toVar();
-              doElection(px, cand, pay);
-            });
-          }
-        : null;
+              If(cz.greaterThanEqual(0).and(cz.lessThanEqual(1)), () => {
+                if (scar) {
+                  atomicAdd(scarEl(2), uint(1));
+                  if (bandFlag) {
+                    If(bandFlag, () => {
+                      atomicAdd(scarEl(0), uint(1));
+                    });
+                  }
+                }
+                const cand = depthKey24(cz as unknown as NF)
+                  .shiftLeft(uint(8))
+                  .bitOr(pay.bitAnd(uint(0xff)))
+                  .toVar();
+                doElection(px, cand, pay);
+              });
+            }
+          : null;
 
       // (vcache.prime moved ABOVE the voxel returnIf — its barrier must precede any
       // storage-derived return; see the note there.)
       const swTriLive =
         coop && swVoxGuard
-          ? (swVoxGuard as unknown as { and(o: NB): NB }).and(localTri.lessThan(ctx.triCount))
+          ? (swVoxGuard as unknown as { and(o: NB): NB }).and(
+              localTri.lessThan(ctx.triCount),
+            )
           : localTri.lessThan(ctx.triCount);
       If(swTriLive, () => {
         const w0 = corner(localTri, 0);
@@ -921,12 +1119,21 @@ export function buildNaniteRaster(
             .add(p2.z.div(p2.w.max(NEAR_EPS)))
             .mul(1 / 3)
             .clamp(0, 1);
-          const sinkPx = itemIdx.mul(uint(2654435761)).add(localTri).mod(uint(pixelCount));
-          atomicMin(visDepthV.atomic.element(sinkPx), bcF2U(sinkV as unknown as NF));
+          const sinkPx = itemIdx
+            .mul(uint(2654435761))
+            .add(localTri)
+            .mod(uint(pixelCount));
+          atomicMin(
+            visDepthV.atomic.element(sinkPx),
+            bcF2U(sinkV as unknown as NF),
+          );
           returnIf(itemCount.greaterThanEqual(uint(0)));
         }
 
-        const payload = itemIdx.shiftLeft(uint(CLUSTER_TRI_BITS)).bitOr(localTri).toVar();
+        const payload = itemIdx
+          .shiftLeft(uint(CLUSTER_TRI_BITS))
+          .bitOr(localTri)
+          .toVar();
 
         const nearOK = p0.w
           .greaterThan(NEAR_EPS)
@@ -935,7 +1142,10 @@ export function buildNaniteRaster(
 
         If(nearOK.not(), () => {
           // near-plane crossing → HW path clips it (never drop, F10c)
-          const slot = atomicAdd(hwQueueV.atomic.element(0), uint(1)) as unknown as NU;
+          const slot = atomicAdd(
+            hwQueueV.atomic.element(0),
+            uint(1),
+          ) as unknown as NU;
           If(slot.lessThan(uint(HW_CAP)), () => {
             const base = slot.mul(uint(2)).add(uint(1));
             atomicStore(hwQueueV.atomic.element(base), payload);
@@ -953,7 +1163,12 @@ export function buildNaniteRaster(
           );
           // N9-C2: front-faces pass; a two-sided (leaf) back-face is re-wound to CCW
           // in place so the positive-area core below rasters it once (orientForRaster).
-          const accept = orientForRaster(ndc1 as unknown as NV3, ndc2 as unknown as NV3, areaNdc as unknown as NF, ctx.twoSided);
+          const accept = orientForRaster(
+            ndc1 as unknown as NV3,
+            ndc2 as unknown as NV3,
+            areaNdc as unknown as NF,
+            ctx.twoSided,
+          );
           If(accept, () => {
             const W = float(cam.uW);
             const H = float(cam.uH);
@@ -992,408 +1207,603 @@ export function buildNaniteRaster(
             const endX = minI(toI(width - 1), bbMaxX).toVar();
             const startY = maxI(toI(0), bbMinY).toVar();
             const endY = minI(toI(height - 1), bbMaxY).toVar();
-            const validBB = startX.lessThanEqual(endX).and(startY.lessThanEqual(endY));
+            const validBB = startX
+              .lessThanEqual(endX)
+              .and(startY.lessThanEqual(endY));
 
-            If((smallEnough as unknown as { and: (o: unknown) => NB }).and(validBB), () => {
-              // integer twice-area; snapping can collapse/flip a sub-1/256-px
-              // sliver → skip (also guards the reciprocal — the float core
-              // divided blindly)
-              const area2 = yi2
-                .sub(yi0)
-                .mul(xi1.sub(xi0))
-                .sub(xi2.sub(xi0).mul(yi1.sub(yi0)))
-                .toVar();
-              // SAMPLE-MISS cull (CuRast): skip a small tri whose snapped extent contains NO pixel
-              // CENTRE (k·256+128 grid) on x OR y ⇒ it covers no sample ⇒ the scanline rasters
-              // nothing. Conservative + exact (the scanline samples at the same centres) ⇒ zero
-              // visible quality loss. Float ceil handles negative/off-screen xiMin. (Kept as
-              // leverage: ~neutral on world1's already-≤1px cut, a building block / helps the tiled.)
-              const xiMin = minI(xi0, minI(xi1, xi2));
-              const xiMax = maxI(xi0, maxI(xi1, xi2));
-              const yiMin = minI(yi0, minI(yi1, yi2));
-              const yiMax = maxI(yi0, maxI(yi1, yi2));
-              const firstCx = toF(xiMin.sub(toI(128)) as unknown as NI).div(256).ceil().mul(256).add(128);
-              const firstCy = toF(yiMin.sub(toI(128)) as unknown as NI).div(256).ceil().mul(256).add(128);
-              const coversSample = firstCx
-                .lessThanEqual(toF(xiMax as unknown as NI))
-                .and(firstCy.lessThanEqual(toF(yiMax as unknown as NI)));
-              // W2 ?trihzb: conservative per-tri occlusion — nearest tri z vs the
-              // prev-frame HZB farthest over the bbox (2×2 window, 32-px texels
-              // cover the ≤17-px bbox), read from the hwQueue TAIL MIRROR (binding
-              // budget — see TRIHZB_BASE). Positive-f32 bits compare monotonically
-              // as u32, so no bitcast needed. Tail 1.0f-filled ⇒ frame-0 and
-              // sky-backed tris never reject. world1 only (depth/shadow untouched).
-              let triVis: NB | null = null;
-              if (mode === 'world1' && triLvls) {
-                const nearBits = bcF2U(
-                  ndc0.z.min(ndc1.z).min(ndc2.z).clamp(0, 1) as unknown as NF,
-                ).toVar();
-                // finest mirrored level whose 2×2 window covers the bbox:
-                // pitch(k) = 2^(k+1) px; need extent < 2·pitch ⇒ k = max(0,
-                // ceil(log2(e+1)) − 2), clamped to TRI_HZB_MAX.
-                const ext = maxI(endX.sub(startX), endY.sub(startY)).toVar();
-                const lvl = uint(
-                  toF(ext as unknown as NI)
-                    .add(1)
-                    .max(1)
-                    .log2()
-                    .ceil()
-                    .sub(2)
-                    .clamp(0, TRI_HZB_MAX),
-                ).toVar();
-                // per-level (dstOff, width) via select chains (5 static levels)
-                let offSel: NU = uint(TRIHZB_BASE + (triDst[0] ?? 0)) as unknown as NU;
-                let wSel: NU = uint(triLvls[0]?.w ?? 1) as unknown as NU;
-                for (let k = 1; k <= TRI_HZB_MAX; k++) {
-                  const isK = lvl.equal(uint(k));
-                  offSel = isK.select(uint(TRIHZB_BASE + (triDst[k] ?? 0)), offSel) as unknown as NU;
-                  wSel = isK.select(uint(triLvls[k]?.w ?? 1), wSel) as unknown as NU;
-                }
-                const shift = lvl.add(uint(1));
-                const lo = offSel;
-                const lw = wSel;
-                const tx0 = uint(startX).shiftRight(shift).toVar();
-                const ty0 = uint(startY).shiftRight(shift).toVar();
-                const tx1 = uint(endX).shiftRight(shift).toVar();
-                const ty1 = uint(endY).shiftRight(shift).toVar();
-                const z00 = aLoadU(hwQueueV.atomic.element(lo.add(ty0.mul(lw)).add(tx0)));
-                const z01 = aLoadU(hwQueueV.atomic.element(lo.add(ty0.mul(lw)).add(tx1)));
-                const z10 = aLoadU(hwQueueV.atomic.element(lo.add(ty1.mul(lw)).add(tx0)));
-                const z11 = aLoadU(hwQueueV.atomic.element(lo.add(ty1.mul(lw)).add(tx1)));
-                const farBits = maxU(maxU(z00, z01), maxU(z10, z11));
-                triVis = nearBits.lessThanEqual(farBits) as unknown as NB;
-              }
-              const rasterGate = triVis
-                ? area2.greaterThan(toI(0)).and(coversSample).and(triVis)
-                : area2.greaterThan(toI(0)).and(coversSample);
-              If(rasterGate, () => {
-                // edge i is opposite vertex i; ex/ey = dE per +1 UNIT (1/256 px)
-                const ex0 = yi1.sub(yi2).toVar();
-                const ey0 = xi2.sub(xi1).toVar();
-                const ex1 = yi2.sub(yi0).toVar();
-                const ey1 = xi0.sub(xi2).toVar();
-                const ex2 = yi0.sub(yi1).toVar();
-                const ey2 = xi1.sub(xi0).toVar();
-
-                // top-left rule, same orientation convention as the float core:
-                // the boundary E == 0 is owned iff dE/dx < 0, or dE/dx == 0 and
-                // dE/dy > 0; the -1 bias turns ≥0 into >0 on unowned edges —
-                // exact and scale-free (the -1e-5 float bias competed with ulp
-                // at edge-term scale ~1e6)
-                const tlBias = (ex: NI, ey: NI): NI =>
-                  ex
-                    .lessThan(toI(0))
-                    .or(ex.equal(toI(0)).and(ey.greaterThan(toI(0))))
-                    .select(toI(0), toI(-1)) as unknown as NI;
-                const bias0 = tlBias(ex0 as unknown as NI, ey0 as unknown as NI);
-                const bias1 = tlBias(ex1 as unknown as NI, ey1 as unknown as NI);
-                const bias2 = tlBias(ex2 as unknown as NI, ey2 as unknown as NI);
-
-                // E at the center of (startX, startY), in units²
-                const pcx = startX.mul(toI(256)).add(toI(128)).toVar();
-                const pcy = startY.mul(toI(256)).add(toI(128)).toVar();
-                const rw0 = pcy
-                  .sub(yi1)
-                  .mul(xi2.sub(xi1))
-                  .sub(pcx.sub(xi1).mul(yi2.sub(yi1)))
-                  .add(bias0)
-                  .toVar();
-                const rw1 = pcy
-                  .sub(yi2)
-                  .mul(xi0.sub(xi2))
-                  .sub(pcx.sub(xi2).mul(yi0.sub(yi2)))
-                  .add(bias1)
-                  .toVar();
-                const rw2 = pcy
+            If(
+              (smallEnough as unknown as { and: (o: unknown) => NB }).and(
+                validBB,
+              ),
+              () => {
+                // integer twice-area; snapping can collapse/flip a sub-1/256-px
+                // sliver → skip (also guards the reciprocal — the float core
+                // divided blindly)
+                const area2 = yi2
                   .sub(yi0)
                   .mul(xi1.sub(xi0))
-                  .sub(pcx.sub(xi0).mul(yi1.sub(yi0)))
-                  .add(bias2)
+                  .sub(xi2.sub(xi0).mul(yi1.sub(yi0)))
                   .toVar();
-                // per-PIXEL steps = ex/ey × 256 units
-                const sx0 = ex0.mul(toI(256)).toVar();
-                const sx1 = ex1.mul(toI(256)).toVar();
-                const sx2 = ex2.mul(toI(256)).toVar();
-                const sy0 = ey0.mul(toI(256)).toVar();
-                const sy1 = ey1.mul(toI(256)).toVar();
-                const sy2 = ey2.mul(toI(256)).toVar();
-                const rcpArea = float(1).div(toF(area2 as unknown as NI)).toVar();
-
-                if ((mode === 'depth' || mode === 'world1') && rdbg === 2) {
-                  // ?rdbg=2 — stop right before the scanline loop. The sink folds
-                  // the edge-setup vars (rcpArea, rw0..2, the per-pixel steps) so
-                  // none are sunk past / DCE'd, forcing the full per-triangle
-                  // setup to be timed. (rdbg2 − rdbg1) = near/backface + ndc +
-                  // fixed-point snap + bbox + edge setup + the 3× fetchWorldVert
-                  // (world1's rdbg=1 stops BEFORE any corner fetch); (rdbg3 − rdbg2)
-                  // = the per-pixel loop (coverage + depth interp + the election
-                  // atomicMax/atomicStore). Shared by the depth + world1 kernels —
-                  // only the rdbg-gated CONFIG that's actually dispatched matters.
-                  const sinkV = rcpArea
-                    .add(toF(rw0 as unknown as NI))
-                    .add(toF(rw1 as unknown as NI))
-                    .add(toF(rw2 as unknown as NI))
-                    .add(toF(sx0 as unknown as NI))
-                    .add(toF(sy0 as unknown as NI))
-                    .clamp(0, 1);
-                  const sinkPx = uint(startY).mul(uint(cam.uW)).add(uint(startX));
-                  atomicMin(visDepthV.atomic.element(sinkPx), bcF2U(sinkV as unknown as NF));
-                  returnIf(itemCount.greaterThanEqual(uint(0)));
+                // SAMPLE-MISS cull (CuRast): skip a small tri whose snapped extent contains NO pixel
+                // CENTRE (k·256+128 grid) on x OR y ⇒ it covers no sample ⇒ the scanline rasters
+                // nothing. Conservative + exact (the scanline samples at the same centres) ⇒ zero
+                // visible quality loss. Float ceil handles negative/off-screen xiMin. (Kept as
+                // leverage: ~neutral on world1's already-≤1px cut, a building block / helps the tiled.)
+                const xiMin = minI(xi0, minI(xi1, xi2));
+                const xiMax = maxI(xi0, maxI(xi1, xi2));
+                const yiMin = minI(yi0, minI(yi1, yi2));
+                const yiMax = maxI(yi0, maxI(yi1, yi2));
+                const firstCx = toF(xiMin.sub(toI(128)) as unknown as NI)
+                  .div(256)
+                  .ceil()
+                  .mul(256)
+                  .add(128);
+                const firstCy = toF(yiMin.sub(toI(128)) as unknown as NI)
+                  .div(256)
+                  .ceil()
+                  .mul(256)
+                  .add(128);
+                const coversSample = firstCx
+                  .lessThanEqual(toF(xiMax as unknown as NI))
+                  .and(firstCy.lessThanEqual(toF(yiMax as unknown as NI)));
+                // W2 ?trihzb: conservative per-tri occlusion — nearest tri z vs the
+                // prev-frame HZB farthest over the bbox (2×2 window, 32-px texels
+                // cover the ≤17-px bbox), read from the hwQueue TAIL MIRROR (binding
+                // budget — see TRIHZB_BASE). Positive-f32 bits compare monotonically
+                // as u32, so no bitcast needed. Tail 1.0f-filled ⇒ frame-0 and
+                // sky-backed tris never reject. world1 only (depth/shadow untouched).
+                let triVis: NB | null = null;
+                if (mode === 'world1' && triLvls) {
+                  const nearBits = bcF2U(
+                    ndc0.z.min(ndc1.z).min(ndc2.z).clamp(0, 1) as unknown as NF,
+                  ).toVar();
+                  // finest mirrored level whose 2×2 window covers the bbox:
+                  // pitch(k) = 2^(k+1) px; need extent < 2·pitch ⇒ k = max(0,
+                  // ceil(log2(e+1)) − 2), clamped to TRI_HZB_MAX.
+                  const ext = maxI(endX.sub(startX), endY.sub(startY)).toVar();
+                  const lvl = uint(
+                    toF(ext as unknown as NI)
+                      .add(1)
+                      .max(1)
+                      .log2()
+                      .ceil()
+                      .sub(2)
+                      .clamp(0, TRI_HZB_MAX),
+                  ).toVar();
+                  // per-level (dstOff, width) via select chains (5 static levels)
+                  let offSel: NU = uint(
+                    TRIHZB_BASE + (triDst[0] ?? 0),
+                  ) as unknown as NU;
+                  let wSel: NU = uint(triLvls[0]?.w ?? 1) as unknown as NU;
+                  for (let k = 1; k <= TRI_HZB_MAX; k++) {
+                    const isK = lvl.equal(uint(k));
+                    offSel = isK.select(
+                      uint(TRIHZB_BASE + (triDst[k] ?? 0)),
+                      offSel,
+                    ) as unknown as NU;
+                    wSel = isK.select(
+                      uint(triLvls[k]?.w ?? 1),
+                      wSel,
+                    ) as unknown as NU;
+                  }
+                  const shift = lvl.add(uint(1));
+                  const lo = offSel;
+                  const lw = wSel;
+                  const tx0 = uint(startX).shiftRight(shift).toVar();
+                  const ty0 = uint(startY).shiftRight(shift).toVar();
+                  const tx1 = uint(endX).shiftRight(shift).toVar();
+                  const ty1 = uint(endY).shiftRight(shift).toVar();
+                  const z00 = aLoadU(
+                    hwQueueV.atomic.element(lo.add(ty0.mul(lw)).add(tx0)),
+                  );
+                  const z01 = aLoadU(
+                    hwQueueV.atomic.element(lo.add(ty0.mul(lw)).add(tx1)),
+                  );
+                  const z10 = aLoadU(
+                    hwQueueV.atomic.element(lo.add(ty1.mul(lw)).add(tx0)),
+                  );
+                  const z11 = aLoadU(
+                    hwQueueV.atomic.element(lo.add(ty1.mul(lw)).add(tx1)),
+                  );
+                  const farBits = maxU(maxU(z00, z01), maxU(z10, z11));
+                  triVis = nearBits.lessThanEqual(farBits) as unknown as NB;
                 }
+                const rasterGate = triVis
+                  ? area2.greaterThan(toI(0)).and(coversSample).and(triVis)
+                  : area2.greaterThan(toI(0)).and(coversSample);
+                If(rasterGate, () => {
+                  // edge i is opposite vertex i; ex/ey = dE per +1 UNIT (1/256 px)
+                  const ex0 = yi1.sub(yi2).toVar();
+                  const ey0 = xi2.sub(xi1).toVar();
+                  const ex1 = yi2.sub(yi0).toVar();
+                  const ey1 = xi0.sub(xi2).toVar();
+                  const ex2 = yi0.sub(yi1).toVar();
+                  const ey2 = xi1.sub(xi0).toVar();
 
-                // OLD scanline (verbatim) as an emit closure: swcoop=0 emits it alone;
-                // swcoop=2 emits it as the LARGE-bin branch. Same code, same point.
-                const oldScanline = (): void => {
-                loopI('sy', startY as unknown as NI, endY as unknown as NI, (y) => {
-                  const cw0 = rw0.toVar();
-                  const cw1 = rw1.toVar();
-                  const cw2 = rw2.toVar();
-                  // PERF (UE5-gap win 1) — SCANLINE x-span. The edge value at column x is
-                  // cw_i(x) = cw_i + (x−startX)·sx_i; the row is covered where all 3 are ≥0.
-                  // Solve each edge for the crossing x = startX − cw_i/sx_i (÷-by-0 guarded),
-                  // floor/ceil + ±1 pad so the span is a guaranteed SUPERSET (f32-safe). The
-                  // EXACT per-pixel cw≥0 test below still decides coverage — this only fast-
-                  // skips the ~half of the AABB that is provably outside the triangle. Bit-
-                  // identical (skipped pixels all fail the test).
-                  const den0 = sx0.equal(toI(0)).select(toI(1), sx0 as unknown as NI) as unknown as NI;
-                  const den1 = sx1.equal(toI(0)).select(toI(1), sx1 as unknown as NI) as unknown as NI;
-                  const den2 = sx2.equal(toI(0)).select(toI(1), sx2 as unknown as NI) as unknown as NI;
-                  const xc0 = toF(startX).sub(toF(cw0 as unknown as NI).div(toF(den0)));
-                  const xc1 = toF(startX).sub(toF(cw1 as unknown as NI).div(toF(den1)));
-                  const xc2 = toF(startX).sub(toF(cw2 as unknown as NI).div(toF(den2)));
-                  const lo0 = sx0.greaterThan(toI(0)).select(toI(xc0.floor().sub(float(1))), startX) as unknown as NI;
-                  const lo1 = sx1.greaterThan(toI(0)).select(toI(xc1.floor().sub(float(1))), startX) as unknown as NI;
-                  const lo2 = sx2.greaterThan(toI(0)).select(toI(xc2.floor().sub(float(1))), startX) as unknown as NI;
-                  const hi0 = sx0.lessThan(toI(0)).select(toI(xc0.ceil().add(float(1))), endX) as unknown as NI;
-                  const hi1 = sx1.lessThan(toI(0)).select(toI(xc1.ceil().add(float(1))), endX) as unknown as NI;
-                  const hi2 = sx2.lessThan(toI(0)).select(toI(xc2.ceil().add(float(1))), endX) as unknown as NI;
-                  // a zero-slope edge that is already negative ⇒ the whole row is empty
-                  const emptyRow = sx0
-                    .equal(toI(0))
-                    .and(cw0.lessThan(toI(0)))
-                    .or(sx1.equal(toI(0)).and(cw1.lessThan(toI(0))))
-                    .or(sx2.equal(toI(0)).and(cw2.lessThan(toI(0))));
-                  const xLo = maxI(maxI(maxI(startX, lo0), lo1), lo2).toVar();
-                  const xHi = minI(minI(minI(endX, hi0), hi1), hi2).toVar();
-                  xHi.assign(emptyRow.select(xLo.sub(toI(1)), xHi) as unknown as NI);
-                  // advance the incremental edge values from startX to xLo
-                  const dxL = xLo.sub(startX).toVar();
-                  cw0.addAssign(dxL.mul(sx0));
-                  cw1.addAssign(dxL.mul(sx1));
-                  cw2.addAssign(dxL.mul(sx2));
-                  loopI('sx', xLo as unknown as NI, xHi as unknown as NI, (x) => {
-                    If(
-                      cw0
-                        .greaterThanEqual(toI(0))
-                        .and(cw1.greaterThanEqual(toI(0)))
-                        .and(cw2.greaterThanEqual(toI(0))),
-                      () => {
-                        // depth from the UNBIASED integer weights: the top-left
-                        // −1 biases belong to COVERAGE only. Folding them into
-                        // the weights divides by area2 while the weights sum to
-                        // area2−(1..3) — a RELATIVE error of ~bias/area2 that is
-                        // ulp-level on big triangles but ~5e-4 on sub-pixel far
-                        // slivers (area2 ~10³ units²) ⇒ far depth biased NEARER
-                        // by hundreds of meters. Self-consistent across passes
-                        // (audit/parity blind) — found at N4-C0 when WATER
-                        // depth-tested against the buffer. Unbiased weights sum
-                        // to area2 exactly (integer identity): cz is exact, and
-                        // both passes still compute identical bits.
-                        const emitFrag = (): void => {
-                        const uw0 = cw0.sub(bias0).toVar();
-                        const uw1 = cw1.sub(bias1).toVar();
-                        const uw2 = cw2.sub(bias2).toVar();
-                        const cz = toF(uw0 as unknown as NI)
-                          .mul(ndc0.z)
-                          .add(toF(uw1 as unknown as NI).mul(ndc1.z))
-                          .add(toF(uw2 as unknown as NI).mul(ndc2.z))
-                          .mul(rcpArea)
-                          .toVar();
-                        If(cz.greaterThanEqual(0).and(cz.lessThanEqual(1)), () => {
-                          const px = uint(y).mul(uint(cam.uW)).add(uint(x));
-                          const bits = bcF2U(cz as unknown as NF);
-                          if (mode === 'depth') {
-                            const cur = aLoadU(visDepthV.atomic.element(px));
-                            If(bits.lessThan(cur), () => {
-                              atomicMin(visDepthV.atomic.element(px), bits);
-                            });
-                          } else if (mode === 'combined') {
-                            // RACE-FREE packed vis buffer, NO separate depthV (stays under
-                            // the storage-buffer ceiling): id packed as (depthKey16<<16 |
-                            // idPart) into visA(payload)+visB via atomicMax. Depth lives in
-                            // the high bits ⇒ the nearest fragment wins BOTH buffers ⇒
-                            // depth+id can NEVER desync (kills "branch through trunk" for
-                            // any separated depths; only truly equal-Z coplanar tris can
-                            // still hybridise — rare). The HZB reads visA's key (packed).
-                            const myDk = depthKey16(cz as unknown as NF).toVar();
-                            const stored = aLoadU(visPayloadV.atomic.element(px));
-                            If(myDk.greaterThan(stored.shiftRight(uint(16))), () => {
-                              const dk = myDk.shiftLeft(uint(16));
-                              atomicMax(visPayloadV.atomic.element(px), dk.bitOr(payload.bitAnd(uint(0xffff))));
-                              atomicMax(visBV.atomic.element(px), dk.bitOr(payload.shiftRight(uint(16)).bitAnd(uint(0xffff))));
-                            });
-                          } else if (mode === 'world1') {
-                            // 0a SCAR (?scar=1): count this covered fragment. [2] = ALL
-                            // covered fragments (the band's fragment-share denominator);
-                            // [0] = band leaf fragments (the OVERDRAW numerator, gated on
-                            // the runtime per-cluster `bandFlag`). Both are pure atomic adds
-                            // gated on `scar` — the election below is BYTE-IDENTICAL whether
-                            // or not scar is on. This is exactly the overdraw signal §6.0
-                            // needs disproven: band fragments / band covered-pixels (the
-                            // latter from kScarCovered) is the per-pixel triangle overdraw
-                            // the voxel bin must undercut.
-                            if (scar) {
-                              atomicAdd(scarEl(2), uint(1));
-                              if (bandFlag) {
-                                If(bandFlag, () => {
-                                  atomicAdd(scarEl(0), uint(1));
-                                });
-                              }
-                            }
-                            // PERF-VB4 single pass: EXACT f32 depth (atomicMin → HZB +
-                            // shadows + the resolve's wp reconstruction stay exact and
-                            // unchanged) AND a coherent id election. Depth16 in the high
-                            // bits of an atomicMax election (visPayloadV) ⇒ the nearest
-                            // fragment wins with no branch-through-trunk; the election
-                            // WINNER plain-stores the FULL 25-bit id into ONE side buffer
-                            // (visBV). A depth16 tie degrades to a valid-but-maybe-wrong
-                            // cluster (sparse wrong-material speckle), never a torn/garbage
-                            // id (the franksteining the idLo/idHi split would cause).
-                            const cand = depthKey24(cz as unknown as NF)
-                              .shiftLeft(uint(8))
-                              .bitOr(payload.bitAnd(uint(0xff)))
-                              .toVar();
-                            // election WINNER stores the FULL 25-bit id into the single side
-                            // buffer (no franksteining). NO depthV write: a 3rd atomic storage
-                            // buffer in this kernel is the 3× cliff (15-17 ms) AND breaks its
-                            // writes — so the resolve takes the 16-bit depth from the election
-                            // key (visPayloadV high bits) instead of an exact depthV. (?relect
-                            // routes this through doElection — pristine when relect===1.)
-                            doElection(px, cand, payload);
-                          }
-                        });
-                        };
-                        emitFrag();
-                      },
+                  // top-left rule, same orientation convention as the float core:
+                  // the boundary E == 0 is owned iff dE/dx < 0, or dE/dx == 0 and
+                  // dE/dy > 0; the -1 bias turns ≥0 into >0 on unowned edges —
+                  // exact and scale-free (the -1e-5 float bias competed with ulp
+                  // at edge-term scale ~1e6)
+                  const tlBias = (ex: NI, ey: NI): NI =>
+                    ex
+                      .lessThan(toI(0))
+                      .or(ex.equal(toI(0)).and(ey.greaterThan(toI(0))))
+                      .select(toI(0), toI(-1)) as unknown as NI;
+                  const bias0 = tlBias(
+                    ex0 as unknown as NI,
+                    ey0 as unknown as NI,
+                  );
+                  const bias1 = tlBias(
+                    ex1 as unknown as NI,
+                    ey1 as unknown as NI,
+                  );
+                  const bias2 = tlBias(
+                    ex2 as unknown as NI,
+                    ey2 as unknown as NI,
+                  );
+
+                  // E at the center of (startX, startY), in units²
+                  const pcx = startX.mul(toI(256)).add(toI(128)).toVar();
+                  const pcy = startY.mul(toI(256)).add(toI(128)).toVar();
+                  const rw0 = pcy
+                    .sub(yi1)
+                    .mul(xi2.sub(xi1))
+                    .sub(pcx.sub(xi1).mul(yi2.sub(yi1)))
+                    .add(bias0)
+                    .toVar();
+                  const rw1 = pcy
+                    .sub(yi2)
+                    .mul(xi0.sub(xi2))
+                    .sub(pcx.sub(xi2).mul(yi0.sub(yi2)))
+                    .add(bias1)
+                    .toVar();
+                  const rw2 = pcy
+                    .sub(yi0)
+                    .mul(xi1.sub(xi0))
+                    .sub(pcx.sub(xi0).mul(yi1.sub(yi0)))
+                    .add(bias2)
+                    .toVar();
+                  // per-PIXEL steps = ex/ey × 256 units
+                  const sx0 = ex0.mul(toI(256)).toVar();
+                  const sx1 = ex1.mul(toI(256)).toVar();
+                  const sx2 = ex2.mul(toI(256)).toVar();
+                  const sy0 = ey0.mul(toI(256)).toVar();
+                  const sy1 = ey1.mul(toI(256)).toVar();
+                  const sy2 = ey2.mul(toI(256)).toVar();
+                  const rcpArea = float(1)
+                    .div(toF(area2 as unknown as NI))
+                    .toVar();
+
+                  if ((mode === 'depth' || mode === 'world1') && rdbg === 2) {
+                    // ?rdbg=2 — stop right before the scanline loop. The sink folds
+                    // the edge-setup vars (rcpArea, rw0..2, the per-pixel steps) so
+                    // none are sunk past / DCE'd, forcing the full per-triangle
+                    // setup to be timed. (rdbg2 − rdbg1) = near/backface + ndc +
+                    // fixed-point snap + bbox + edge setup + the 3× fetchWorldVert
+                    // (world1's rdbg=1 stops BEFORE any corner fetch); (rdbg3 − rdbg2)
+                    // = the per-pixel loop (coverage + depth interp + the election
+                    // atomicMax/atomicStore). Shared by the depth + world1 kernels —
+                    // only the rdbg-gated CONFIG that's actually dispatched matters.
+                    const sinkV = rcpArea
+                      .add(toF(rw0 as unknown as NI))
+                      .add(toF(rw1 as unknown as NI))
+                      .add(toF(rw2 as unknown as NI))
+                      .add(toF(sx0 as unknown as NI))
+                      .add(toF(sy0 as unknown as NI))
+                      .clamp(0, 1);
+                    const sinkPx = uint(startY)
+                      .mul(uint(cam.uW))
+                      .add(uint(startX));
+                    atomicMin(
+                      visDepthV.atomic.element(sinkPx),
+                      bcF2U(sinkV as unknown as NF),
                     );
-                    cw0.addAssign(sx0);
-                    cw1.addAssign(sx1);
-                    cw2.addAssign(sx2);
-                  });
-                  rw0.addAssign(sy0);
-                  rw1.addAssign(sy1);
-                  rw2.addAssign(sy2);
-                });
-                };
-                if (coopMode === 0) {
-                  oldScanline();
-                } else {
-                  // ── SWCOOP two-bin split (replaces the unconditional row-span
-                  // scanline). Coverage/depth/election are decided by the SAME math
-                  // as the old loop (bit-identity law) — only work distribution
-                  // changes. Small bin is lane-private in BOTH modes; the large bin
-                  // is cooperative (mode 1) or the old scanline (mode 2).
-                  const extW = endX.sub(startX).toVar();
-                  const extH = endY.sub(startY).toVar();
-                  If(
-                    extW
-                      .lessThanEqual(toI(SW_SMALL_EXT))
-                      .and(extH.lessThanEqual(toI(SW_SMALL_EXT))),
-                    () => {
-                      // SMALL bin (≤5×5 candidates): lane-private full-bbox walk with
-                      // the incremental fixed-point edge tests. The old per-row x-span
-                      // solve (3 fp32 divides + ~50 ALU ≈ 10 walked pixels PER ROW) is
-                      // dropped — at this size it costs more than it skips; the exact
-                      // per-pixel cw≥0 test below is what decides emission either way.
-                      loopI('cy', startY as unknown as NI, endY as unknown as NI, (y) => {
+                    returnIf(itemCount.greaterThanEqual(uint(0)));
+                  }
+
+                  // OLD scanline (verbatim) as an emit closure: swcoop=0 emits it alone;
+                  // swcoop=2 emits it as the LARGE-bin branch. Same code, same point.
+                  const oldScanline = (): void => {
+                    loopI(
+                      'sy',
+                      startY as unknown as NI,
+                      endY as unknown as NI,
+                      (y) => {
                         const cw0 = rw0.toVar();
                         const cw1 = rw1.toVar();
                         const cw2 = rw2.toVar();
-                        loopI('cx', startX as unknown as NI, endX as unknown as NI, (x) => {
-                          If(
-                            cw0
-                              .greaterThanEqual(toI(0))
-                              .and(cw1.greaterThanEqual(toI(0)))
-                              .and(cw2.greaterThanEqual(toI(0))),
-                            () => {
-                              const uw0 = cw0.sub(bias0).toVar();
-                              const uw1 = cw1.sub(bias1).toVar();
-                              const uw2 = cw2.sub(bias2).toVar();
-                              const px = uint(y).mul(uint(cam.uW)).add(uint(x)).toVar();
-                              emitW1!(
-                                px,
-                                uw0,
-                                uw1,
-                                uw2,
-                                ndc0.z as unknown as NF,
-                                ndc1.z as unknown as NF,
-                                ndc2.z as unknown as NF,
-                                rcpArea,
-                                payload,
-                              );
-                            },
-                          );
-                          cw0.addAssign(sx0);
-                          cw1.addAssign(sx1);
-                          cw2.addAssign(sx2);
-                        });
+                        // PERF (UE5-gap win 1) — SCANLINE x-span. The edge value at column x is
+                        // cw_i(x) = cw_i + (x−startX)·sx_i; the row is covered where all 3 are ≥0.
+                        // Solve each edge for the crossing x = startX − cw_i/sx_i (÷-by-0 guarded),
+                        // floor/ceil + ±1 pad so the span is a guaranteed SUPERSET (f32-safe). The
+                        // EXACT per-pixel cw≥0 test below still decides coverage — this only fast-
+                        // skips the ~half of the AABB that is provably outside the triangle. Bit-
+                        // identical (skipped pixels all fail the test).
+                        const den0 = sx0
+                          .equal(toI(0))
+                          .select(
+                            toI(1),
+                            sx0 as unknown as NI,
+                          ) as unknown as NI;
+                        const den1 = sx1
+                          .equal(toI(0))
+                          .select(
+                            toI(1),
+                            sx1 as unknown as NI,
+                          ) as unknown as NI;
+                        const den2 = sx2
+                          .equal(toI(0))
+                          .select(
+                            toI(1),
+                            sx2 as unknown as NI,
+                          ) as unknown as NI;
+                        const xc0 = toF(startX).sub(
+                          toF(cw0 as unknown as NI).div(toF(den0)),
+                        );
+                        const xc1 = toF(startX).sub(
+                          toF(cw1 as unknown as NI).div(toF(den1)),
+                        );
+                        const xc2 = toF(startX).sub(
+                          toF(cw2 as unknown as NI).div(toF(den2)),
+                        );
+                        const lo0 = sx0
+                          .greaterThan(toI(0))
+                          .select(
+                            toI(xc0.floor().sub(float(1))),
+                            startX,
+                          ) as unknown as NI;
+                        const lo1 = sx1
+                          .greaterThan(toI(0))
+                          .select(
+                            toI(xc1.floor().sub(float(1))),
+                            startX,
+                          ) as unknown as NI;
+                        const lo2 = sx2
+                          .greaterThan(toI(0))
+                          .select(
+                            toI(xc2.floor().sub(float(1))),
+                            startX,
+                          ) as unknown as NI;
+                        const hi0 = sx0
+                          .lessThan(toI(0))
+                          .select(
+                            toI(xc0.ceil().add(float(1))),
+                            endX,
+                          ) as unknown as NI;
+                        const hi1 = sx1
+                          .lessThan(toI(0))
+                          .select(
+                            toI(xc1.ceil().add(float(1))),
+                            endX,
+                          ) as unknown as NI;
+                        const hi2 = sx2
+                          .lessThan(toI(0))
+                          .select(
+                            toI(xc2.ceil().add(float(1))),
+                            endX,
+                          ) as unknown as NI;
+                        // a zero-slope edge that is already negative ⇒ the whole row is empty
+                        const emptyRow = sx0
+                          .equal(toI(0))
+                          .and(cw0.lessThan(toI(0)))
+                          .or(sx1.equal(toI(0)).and(cw1.lessThan(toI(0))))
+                          .or(sx2.equal(toI(0)).and(cw2.lessThan(toI(0))));
+                        const xLo = maxI(
+                          maxI(maxI(startX, lo0), lo1),
+                          lo2,
+                        ).toVar();
+                        const xHi = minI(
+                          minI(minI(endX, hi0), hi1),
+                          hi2,
+                        ).toVar();
+                        xHi.assign(
+                          emptyRow.select(
+                            xLo.sub(toI(1)),
+                            xHi,
+                          ) as unknown as NI,
+                        );
+                        // advance the incremental edge values from startX to xLo
+                        const dxL = xLo.sub(startX).toVar();
+                        cw0.addAssign(dxL.mul(sx0));
+                        cw1.addAssign(dxL.mul(sx1));
+                        cw2.addAssign(dxL.mul(sx2));
+                        loopI(
+                          'sx',
+                          xLo as unknown as NI,
+                          xHi as unknown as NI,
+                          (x) => {
+                            If(
+                              cw0
+                                .greaterThanEqual(toI(0))
+                                .and(cw1.greaterThanEqual(toI(0)))
+                                .and(cw2.greaterThanEqual(toI(0))),
+                              () => {
+                                // depth from the UNBIASED integer weights: the top-left
+                                // −1 biases belong to COVERAGE only. Folding them into
+                                // the weights divides by area2 while the weights sum to
+                                // area2−(1..3) — a RELATIVE error of ~bias/area2 that is
+                                // ulp-level on big triangles but ~5e-4 on sub-pixel far
+                                // slivers (area2 ~10³ units²) ⇒ far depth biased NEARER
+                                // by hundreds of meters. Self-consistent across passes
+                                // (audit/parity blind) — found at N4-C0 when WATER
+                                // depth-tested against the buffer. Unbiased weights sum
+                                // to area2 exactly (integer identity): cz is exact, and
+                                // both passes still compute identical bits.
+                                const emitFrag = (): void => {
+                                  const uw0 = cw0.sub(bias0).toVar();
+                                  const uw1 = cw1.sub(bias1).toVar();
+                                  const uw2 = cw2.sub(bias2).toVar();
+                                  const cz = toF(uw0 as unknown as NI)
+                                    .mul(ndc0.z)
+                                    .add(toF(uw1 as unknown as NI).mul(ndc1.z))
+                                    .add(toF(uw2 as unknown as NI).mul(ndc2.z))
+                                    .mul(rcpArea)
+                                    .toVar();
+                                  If(
+                                    cz
+                                      .greaterThanEqual(0)
+                                      .and(cz.lessThanEqual(1)),
+                                    () => {
+                                      const px = uint(y)
+                                        .mul(uint(cam.uW))
+                                        .add(uint(x));
+                                      const bits = bcF2U(cz as unknown as NF);
+                                      if (mode === 'depth') {
+                                        const cur = aLoadU(
+                                          visDepthV.atomic.element(px),
+                                        );
+                                        If(bits.lessThan(cur), () => {
+                                          atomicMin(
+                                            visDepthV.atomic.element(px),
+                                            bits,
+                                          );
+                                        });
+                                      } else if (mode === 'combined') {
+                                        // RACE-FREE packed vis buffer, NO separate depthV (stays under
+                                        // the storage-buffer ceiling): id packed as (depthKey16<<16 |
+                                        // idPart) into visA(payload)+visB via atomicMax. Depth lives in
+                                        // the high bits ⇒ the nearest fragment wins BOTH buffers ⇒
+                                        // depth+id can NEVER desync (kills "branch through trunk" for
+                                        // any separated depths; only truly equal-Z coplanar tris can
+                                        // still hybridise — rare). The HZB reads visA's key (packed).
+                                        const myDk = depthKey16(
+                                          cz as unknown as NF,
+                                        ).toVar();
+                                        const stored = aLoadU(
+                                          visPayloadV.atomic.element(px),
+                                        );
+                                        If(
+                                          myDk.greaterThan(
+                                            stored.shiftRight(uint(16)),
+                                          ),
+                                          () => {
+                                            const dk = myDk.shiftLeft(uint(16));
+                                            atomicMax(
+                                              visPayloadV.atomic.element(px),
+                                              dk.bitOr(
+                                                payload.bitAnd(uint(0xffff)),
+                                              ),
+                                            );
+                                            atomicMax(
+                                              visBV.atomic.element(px),
+                                              dk.bitOr(
+                                                payload
+                                                  .shiftRight(uint(16))
+                                                  .bitAnd(uint(0xffff)),
+                                              ),
+                                            );
+                                          },
+                                        );
+                                      } else if (mode === 'world1') {
+                                        // 0a SCAR (?scar=1): count this covered fragment. [2] = ALL
+                                        // covered fragments (the band's fragment-share denominator);
+                                        // [0] = band leaf fragments (the OVERDRAW numerator, gated on
+                                        // the runtime per-cluster `bandFlag`). Both are pure atomic adds
+                                        // gated on `scar` — the election below is BYTE-IDENTICAL whether
+                                        // or not scar is on. This is exactly the overdraw signal §6.0
+                                        // needs disproven: band fragments / band covered-pixels (the
+                                        // latter from kScarCovered) is the per-pixel triangle overdraw
+                                        // the voxel bin must undercut.
+                                        if (scar) {
+                                          atomicAdd(scarEl(2), uint(1));
+                                          if (bandFlag) {
+                                            If(bandFlag, () => {
+                                              atomicAdd(scarEl(0), uint(1));
+                                            });
+                                          }
+                                        }
+                                        // PERF-VB4 single pass: EXACT f32 depth (atomicMin → HZB +
+                                        // shadows + the resolve's wp reconstruction stay exact and
+                                        // unchanged) AND a coherent id election. Depth16 in the high
+                                        // bits of an atomicMax election (visPayloadV) ⇒ the nearest
+                                        // fragment wins with no branch-through-trunk; the election
+                                        // WINNER plain-stores the FULL 25-bit id into ONE side buffer
+                                        // (visBV). A depth16 tie degrades to a valid-but-maybe-wrong
+                                        // cluster (sparse wrong-material speckle), never a torn/garbage
+                                        // id (the franksteining the idLo/idHi split would cause).
+                                        const cand = depthKey24(
+                                          cz as unknown as NF,
+                                        )
+                                          .shiftLeft(uint(8))
+                                          .bitOr(payload.bitAnd(uint(0xff)))
+                                          .toVar();
+                                        // election WINNER stores the FULL 25-bit id into the single side
+                                        // buffer (no franksteining). NO depthV write: a 3rd atomic storage
+                                        // buffer in this kernel is the 3× cliff (15-17 ms) AND breaks its
+                                        // writes — so the resolve takes the 16-bit depth from the election
+                                        // key (visPayloadV high bits) instead of an exact depthV. (?relect
+                                        // routes this through doElection — pristine when relect===1.)
+                                        doElection(px, cand, payload);
+                                      }
+                                    },
+                                  );
+                                };
+                                emitFrag();
+                              },
+                            );
+                            cw0.addAssign(sx0);
+                            cw1.addAssign(sx1);
+                            cw2.addAssign(sx2);
+                          },
+                        );
                         rw0.addAssign(sy0);
                         rw1.addAssign(sy1);
                         rw2.addAssign(sy2);
-                      });
-                    },
-                  ).Else(() => {
-                    if (split) {
-                      // mode 2: the LARGE bin keeps the OLD lane-private row-solve
-                      // scanline verbatim — no shared memory, no barriers.
-                      oldScanline();
-                      return;
-                    }
-                    // mode 1 LARGE bin (extent 5..16 px): append this tri's raster
-                    // record into shared slot [localTri]; Phase B (below, after the
-                    // barrier) strides its pixels across all 128 lanes.
-                    const s = swSh!;
-                    wgW(s.rw0, localTri, rw0);
-                    wgW(s.rw1, localTri, rw1);
-                    wgW(s.rw2, localTri, rw2);
-                    // per-UNIT steps packed as (ey<<16 | ex&0xffff) i16 pairs
-                    const packEdge = (ex: NI, ey: NI): NU =>
-                      uint(ex.bitAnd(toI(0xffff))).bitOr(
-                        uint(ey.bitAnd(toI(0xffff))).shiftLeft(uint(16)),
-                      );
-                    wgW(s.exy0, localTri, packEdge(ex0 as unknown as NI, ey0 as unknown as NI));
-                    wgW(s.exy1, localTri, packEdge(ex1 as unknown as NI, ey1 as unknown as NI));
-                    wgW(s.exy2, localTri, packEdge(ex2 as unknown as NI, ey2 as unknown as NI));
-                    wgW(s.xy, localTri, uint(startX).bitOr(uint(startY).shiftLeft(uint(16))));
-                    // bias bits (1 ⇔ old bias −1; Phase B unbiases via uw = e + bit)
-                    const bb0 = bias0.lessThan(toI(0)).select(uint(1), uint(0)) as unknown as NU;
-                    const bb1 = bias1.lessThan(toI(0)).select(uint(1), uint(0)) as unknown as NU;
-                    const bb2 = bias2.lessThan(toI(0)).select(uint(1), uint(0)) as unknown as NU;
-                    wgW(
-                      s.wh,
-                      localTri,
-                      uint(extW.add(toI(1)))
-                        .bitOr(uint(extH.add(toI(1))).shiftLeft(uint(8)))
-                        .bitOr(bb0.shiftLeft(uint(16)))
-                        .bitOr(bb1.shiftLeft(uint(17)))
-                        .bitOr(bb2.shiftLeft(uint(18))),
+                      },
                     );
-                    wgW(s.pay, localTri, payload);
-                    wgW(s.z0, localTri, ndc0.z);
-                    wgW(s.z1, localTri, ndc1.z);
-                    wgW(s.z2, localTri, ndc2.z);
-                    wgW(s.rcp, localTri, rcpArea);
-                  });
-                }
-              });
-            }).Else(() => {
+                  };
+                  if (coopMode === 0) {
+                    oldScanline();
+                  } else {
+                    // ── SWCOOP two-bin split (replaces the unconditional row-span
+                    // scanline). Coverage/depth/election are decided by the SAME math
+                    // as the old loop (bit-identity law) — only work distribution
+                    // changes. Small bin is lane-private in BOTH modes; the large bin
+                    // is cooperative (mode 1) or the old scanline (mode 2).
+                    const extW = endX.sub(startX).toVar();
+                    const extH = endY.sub(startY).toVar();
+                    If(
+                      extW
+                        .lessThanEqual(toI(SW_SMALL_EXT))
+                        .and(extH.lessThanEqual(toI(SW_SMALL_EXT))),
+                      () => {
+                        // SMALL bin (≤5×5 candidates): lane-private full-bbox walk with
+                        // the incremental fixed-point edge tests. The old per-row x-span
+                        // solve (3 fp32 divides + ~50 ALU ≈ 10 walked pixels PER ROW) is
+                        // dropped — at this size it costs more than it skips; the exact
+                        // per-pixel cw≥0 test below is what decides emission either way.
+                        loopI(
+                          'cy',
+                          startY as unknown as NI,
+                          endY as unknown as NI,
+                          (y) => {
+                            const cw0 = rw0.toVar();
+                            const cw1 = rw1.toVar();
+                            const cw2 = rw2.toVar();
+                            loopI(
+                              'cx',
+                              startX as unknown as NI,
+                              endX as unknown as NI,
+                              (x) => {
+                                If(
+                                  cw0
+                                    .greaterThanEqual(toI(0))
+                                    .and(cw1.greaterThanEqual(toI(0)))
+                                    .and(cw2.greaterThanEqual(toI(0))),
+                                  () => {
+                                    const uw0 = cw0.sub(bias0).toVar();
+                                    const uw1 = cw1.sub(bias1).toVar();
+                                    const uw2 = cw2.sub(bias2).toVar();
+                                    const px = uint(y)
+                                      .mul(uint(cam.uW))
+                                      .add(uint(x))
+                                      .toVar();
+                                    emitW1!(
+                                      px,
+                                      uw0,
+                                      uw1,
+                                      uw2,
+                                      ndc0.z as unknown as NF,
+                                      ndc1.z as unknown as NF,
+                                      ndc2.z as unknown as NF,
+                                      rcpArea,
+                                      payload,
+                                    );
+                                  },
+                                );
+                                cw0.addAssign(sx0);
+                                cw1.addAssign(sx1);
+                                cw2.addAssign(sx2);
+                              },
+                            );
+                            rw0.addAssign(sy0);
+                            rw1.addAssign(sy1);
+                            rw2.addAssign(sy2);
+                          },
+                        );
+                      },
+                    ).Else(() => {
+                      if (split) {
+                        // mode 2: the LARGE bin keeps the OLD lane-private row-solve
+                        // scanline verbatim — no shared memory, no barriers.
+                        oldScanline();
+                        return;
+                      }
+                      // mode 1 LARGE bin (extent 5..16 px): append this tri's raster
+                      // record into shared slot [localTri]; Phase B (below, after the
+                      // barrier) strides its pixels across all 128 lanes.
+                      const s = swSh!;
+                      wgW(s.rw0, localTri, rw0);
+                      wgW(s.rw1, localTri, rw1);
+                      wgW(s.rw2, localTri, rw2);
+                      // per-UNIT steps packed as (ey<<16 | ex&0xffff) i16 pairs
+                      const packEdge = (ex: NI, ey: NI): NU =>
+                        uint(ex.bitAnd(toI(0xffff))).bitOr(
+                          uint(ey.bitAnd(toI(0xffff))).shiftLeft(uint(16)),
+                        );
+                      wgW(
+                        s.exy0,
+                        localTri,
+                        packEdge(ex0 as unknown as NI, ey0 as unknown as NI),
+                      );
+                      wgW(
+                        s.exy1,
+                        localTri,
+                        packEdge(ex1 as unknown as NI, ey1 as unknown as NI),
+                      );
+                      wgW(
+                        s.exy2,
+                        localTri,
+                        packEdge(ex2 as unknown as NI, ey2 as unknown as NI),
+                      );
+                      wgW(
+                        s.xy,
+                        localTri,
+                        uint(startX).bitOr(uint(startY).shiftLeft(uint(16))),
+                      );
+                      // bias bits (1 ⇔ old bias −1; Phase B unbiases via uw = e + bit)
+                      const bb0 = bias0
+                        .lessThan(toI(0))
+                        .select(uint(1), uint(0)) as unknown as NU;
+                      const bb1 = bias1
+                        .lessThan(toI(0))
+                        .select(uint(1), uint(0)) as unknown as NU;
+                      const bb2 = bias2
+                        .lessThan(toI(0))
+                        .select(uint(1), uint(0)) as unknown as NU;
+                      wgW(
+                        s.wh,
+                        localTri,
+                        uint(extW.add(toI(1)))
+                          .bitOr(uint(extH.add(toI(1))).shiftLeft(uint(8)))
+                          .bitOr(bb0.shiftLeft(uint(16)))
+                          .bitOr(bb1.shiftLeft(uint(17)))
+                          .bitOr(bb2.shiftLeft(uint(18))),
+                      );
+                      wgW(s.pay, localTri, payload);
+                      wgW(s.z0, localTri, ndc0.z);
+                      wgW(s.z1, localTri, ndc1.z);
+                      wgW(s.z2, localTri, ndc2.z);
+                      wgW(s.rcp, localTri, rcpArea);
+                    });
+                  }
+                });
+              },
+            ).Else(() => {
               If(validBB, () => {
                 // big triangle → HW queue
-                const slot = atomicAdd(hwQueueV.atomic.element(0), uint(1)) as unknown as NU;
+                const slot = atomicAdd(
+                  hwQueueV.atomic.element(0),
+                  uint(1),
+                ) as unknown as NU;
                 If(slot.lessThan(uint(HW_CAP)), () => {
                   const base = slot.mul(uint(2)).add(uint(1));
                   atomicStore(hwQueueV.atomic.element(base), payload);
-                  atomicStore(hwQueueV.atomic.element(base.add(uint(1))), instId);
+                  atomicStore(
+                    hwQueueV.atomic.element(base.add(uint(1))),
+                    instId,
+                  );
                 });
               });
             });
@@ -1421,13 +1831,18 @@ export function buildNaniteRaster(
         // neighbours). Both barriers are at kernel top scope (uniform).
         If(localTri.equal(uint(0)), () => {
           const n = uint(0).toVar();
-          loopUN('swsc', uint(0), minU(ctx.triCount, uint(MAX_CLUSTER_TRIS)), (slot) => {
-            const wv = swSh.wh.element(slot) as unknown as NU;
-            If(wv.bitAnd(uint(0xff)).notEqual(uint(0)), () => {
-              wgW(swSh.list, n, slot);
-              n.addAssign(uint(1));
-            });
-          });
+          loopUN(
+            'swsc',
+            uint(0),
+            minU(ctx.triCount, uint(MAX_CLUSTER_TRIS)),
+            (slot) => {
+              const wv = swSh.wh.element(slot) as unknown as NU;
+              If(wv.bitAnd(uint(0xff)).notEqual(uint(0)), () => {
+                wgW(swSh.list, n, slot);
+                n.addAssign(uint(1));
+              });
+            },
+          );
           wgW(swSh.count, uint(0), n);
         });
         workgroupBarrier(); // compacted list visible to all lanes
@@ -1452,22 +1867,42 @@ export function buildNaniteRaster(
             const exyW1 = (swSh.exy1.element(slot) as unknown as NU).toVar();
             const exyW2 = (swSh.exy2.element(slot) as unknown as NU).toVar();
             const sExt = (w16: NU): NI =>
-              bcU2I(w16.shiftLeft(uint(16))).shiftRight(toI(16)) as unknown as NI;
-            const bSx0 = sExt(exyW0.bitAnd(uint(0xffff))).mul(toI(256)).toVar();
-            const bSx1 = sExt(exyW1.bitAnd(uint(0xffff))).mul(toI(256)).toVar();
-            const bSx2 = sExt(exyW2.bitAnd(uint(0xffff))).mul(toI(256)).toVar();
-            const bSy0 = sExt(exyW0.shiftRight(uint(16))).mul(toI(256)).toVar();
-            const bSy1 = sExt(exyW1.shiftRight(uint(16))).mul(toI(256)).toVar();
-            const bSy2 = sExt(exyW2.shiftRight(uint(16))).mul(toI(256)).toVar();
+              bcU2I(w16.shiftLeft(uint(16))).shiftRight(
+                toI(16),
+              ) as unknown as NI;
+            const bSx0 = sExt(exyW0.bitAnd(uint(0xffff)))
+              .mul(toI(256))
+              .toVar();
+            const bSx1 = sExt(exyW1.bitAnd(uint(0xffff)))
+              .mul(toI(256))
+              .toVar();
+            const bSx2 = sExt(exyW2.bitAnd(uint(0xffff)))
+              .mul(toI(256))
+              .toVar();
+            const bSy0 = sExt(exyW0.shiftRight(uint(16)))
+              .mul(toI(256))
+              .toVar();
+            const bSy1 = sExt(exyW1.shiftRight(uint(16)))
+              .mul(toI(256))
+              .toVar();
+            const bSy2 = sExt(exyW2.shiftRight(uint(16)))
+              .mul(toI(256))
+              .toVar();
             const bPay = (swSh.pay.element(slot) as unknown as NU).toVar();
             const bZ0 = (swSh.z0.element(slot) as unknown as NF).toVar();
             const bZ1 = (swSh.z1.element(slot) as unknown as NF).toVar();
             const bZ2 = (swSh.z2.element(slot) as unknown as NF).toVar();
             const bRcp = (swSh.rcp.element(slot) as unknown as NF).toVar();
             // bias bits (1 ⇔ old bias −1): uw = cw − bias = e + bit
-            const bB0 = toI(whW.shiftRight(uint(16)).bitAnd(uint(1)) as unknown as NF).toVar();
-            const bB1 = toI(whW.shiftRight(uint(17)).bitAnd(uint(1)) as unknown as NF).toVar();
-            const bB2 = toI(whW.shiftRight(uint(18)).bitAnd(uint(1)) as unknown as NF).toVar();
+            const bB0 = toI(
+              whW.shiftRight(uint(16)).bitAnd(uint(1)) as unknown as NF,
+            ).toVar();
+            const bB1 = toI(
+              whW.shiftRight(uint(17)).bitAnd(uint(1)) as unknown as NF,
+            ).toVar();
+            const bB2 = toI(
+              whW.shiftRight(uint(18)).bitAnd(uint(1)) as unknown as NF,
+            ).toVar();
             loopU(
               laneB,
               area,
@@ -1490,7 +1925,11 @@ export function buildNaniteRaster(
                     const uw0 = e0.add(bB0).toVar();
                     const uw1 = e1.add(bB1).toVar();
                     const uw2 = e2.add(bB2).toVar();
-                    const px = y0.add(ly).mul(uint(cam.uW)).add(x0.add(lx)).toVar();
+                    const px = y0
+                      .add(ly)
+                      .mul(uint(cam.uW))
+                      .add(x0.add(lx))
+                      .toVar();
                     emitW1(px, uw0, uw1, uw2, bZ0, bZ1, bZ2, bRcp, bPay);
                   },
                 );
@@ -1509,7 +1948,10 @@ export function buildNaniteRaster(
       // sinks pay, so the split reads clean against the rdbg2 floor.
       if (mode === 'world1' && relect !== 1 && elecSink) {
         If(localTri.lessThan(ctx.triCount), () => {
-          const sinkPx = itemIdx.mul(uint(2654435761)).add(localTri).mod(uint(pixelCount));
+          const sinkPx = itemIdx
+            .mul(uint(2654435761))
+            .add(localTri)
+            .mod(uint(pixelCount));
           atomicMax(visBV.atomic.element(sinkPx), elecSink);
         });
       }
@@ -1556,8 +1998,12 @@ export function buildNaniteRaster(
                 const l = triLvls[k];
                 const d0 = triDst[k] ?? 0;
                 if (!l) continue;
-                const inK = idx.greaterThanEqual(uint(d0)).and(idx.lessThan(uint(d0 + l.w * l.h)));
-                src.assign(inK.select(uint(l.offset).add(idx.sub(uint(d0))), src));
+                const inK = idx
+                  .greaterThanEqual(uint(d0))
+                  .and(idx.lessThan(uint(d0 + l.w * l.h)));
+                src.assign(
+                  inK.select(uint(l.offset).add(idx.sub(uint(d0))), src),
+                );
               }
               const v = triHzbRO.element(src);
               atomicStore(
@@ -1605,14 +2051,20 @@ export function buildNaniteRaster(
       const item = qRasterRO.element(itemIdx.add(uint(1)));
       const instId = item.x;
       const ci = item.y;
-      const meshId = elemU(gpu.clusters, ci.mul(uint(CLUSTER_WORDS)).add(uint(7))).shiftRight(
-        uint(16),
-      );
-      const matClass = elemU(gpu.meshes, meshId.mul(uint(MESH_WORDS)).add(uint(6)))
+      const meshId = elemU(
+        gpu.clusters,
+        ci.mul(uint(CLUSTER_WORDS)).add(uint(7)),
+      ).shiftRight(uint(16));
+      const matClass = elemU(
+        gpu.meshes,
+        meshId.mul(uint(MESH_WORDS)).add(uint(6)),
+      )
         .shiftRight(uint(8))
         .bitAnd(uint(0xff));
       const A = gpu.instances.element(instId.mul(uint(2))) as unknown as NV4;
-      const distC = vec3(cam.camPos).sub(A.xyz as unknown as NV3).length();
+      const distC = vec3(cam.camPos)
+        .sub(A.xyz as unknown as NV3)
+        .length();
       If(
         matClass
           .equal(uint(4))
@@ -1628,20 +2080,101 @@ export function buildNaniteRaster(
 
   // ---- HW big/near-triangle passes (vertex pulling; fragment writes vis bufs) --------
   const hwGeometry = new BufferGeometry();
-  hwGeometry.setAttribute('position', new Float32BufferAttribute(new Float32Array(3), 3));
+  hwGeometry.setAttribute(
+    'position',
+    new Float32BufferAttribute(new Float32Array(3), 3),
+  );
   hwGeometry.setIndirect(hwDrawAttr, 0);
-  hwGeometry.boundingSphere = new Sphere(new Vector3(), Number.POSITIVE_INFINITY);
+  hwGeometry.boundingSphere = new Sphere(
+    new Vector3(),
+    Number.POSITIVE_INFINITY,
+  );
 
-  const buildHwMaterial = (pass: 'depth' | 'combined' | 'world1'): NodeMaterial => {
+  const buildHwMaterial = (
+    pass: 'depth' | 'combined' | 'world1',
+    // ?clhw INSTANCED per-cluster draw: one instance per HW cluster, verts pulled from
+    // qHwRaster instead of the per-tri soup queue. Same FS election ⇒ resolve unchanged.
+    instanced = false,
+  ): NodeMaterial => {
+    const sfx = instanced ? `${pass}_cl` : pass;
     const mat = new NodeMaterial();
-    const vPayLo = varyingProperty('float', `nanPayLo_${pass}`) as unknown as NF;
-    const vPayHi = varyingProperty('float', `nanPayHi_${pass}`) as unknown as NF;
-    const vZ = varyingProperty('float', `nanZ_${pass}`) as unknown as NF;
-    const vW = varyingProperty('float', `nanW_${pass}`) as unknown as NF;
+    const vPayLo = varyingProperty('float', `nanPayLo_${sfx}`) as unknown as NF;
+    const vPayHi = varyingProperty('float', `nanPayHi_${sfx}`) as unknown as NF;
+    const vZ = varyingProperty('float', `nanZ_${sfx}`) as unknown as NF;
+    const vW = varyingProperty('float', `nanW_${sfx}`) as unknown as NF;
 
     mat.vertexNode = Fn(() => {
-      const triIndex = vertexIndex.div(3) as unknown as NU;
       const corner = vertexIndex.mod(3) as unknown as NU;
+      const setVaryings = (payload: NU, clip: NV4): void => {
+        (vPayLo as unknown as { assign: (v: unknown) => void }).assign(
+          toF(payload.bitAnd(uint(0xffff))),
+        );
+        (vPayHi as unknown as { assign: (v: unknown) => void }).assign(
+          toF(payload.shiftRight(uint(16))),
+        );
+        (vZ as unknown as { assign: (v: unknown) => void }).assign(clip.z);
+        (vW as unknown as { assign: (v: unknown) => void }).assign(clip.w);
+      };
+      const fetchWorld = (ctx: VertCtx, localTri: NU): NV3 => {
+        if (hw1fetch) return fetchWorldVertDyn(ctx, localTri, corner);
+        const w0 = fetchWorldVert(ctx, localTri, 0);
+        const w1 = fetchWorldVert(ctx, localTri, 1);
+        const w2 = fetchWorldVert(ctx, localTri, 2);
+        return corner
+          .equal(uint(1))
+          .select(w1, corner.equal(uint(2)).select(w2, w0)) as unknown as NV3;
+      };
+      if (instanced) {
+        // ?clhw INSTANCED cluster draw: one instance per HW cluster. qHwRaster[instanceIndex]
+        // = the cluster's qRaster INDEX (tid). localTri = vertexIndex/3 (partial-cluster tail
+        // clips out). payload = tid<<bits|localTri EXACTLY like the soup ⇒ resolve unchanged.
+        const localTri = (vertexIndex.div(3) as unknown as NU).toVar();
+        const tid = elemU(
+          cull.qHwRasterRO as StorageBufferNode<'uint'>,
+          instanceIndex,
+        ).toVar();
+        const item = qRasterRO.element(tid.add(uint(1)));
+        const instId = item.x.toVar();
+        const ci = item.y.toVar();
+        const payload = tid.shiftLeft(uint(CLUSTER_TRI_BITS)).bitOr(localTri).toVar();
+        const ctx = makeCtx(instId, ci);
+        const world = fetchWorld(ctx, localTri);
+        const clip = cam.vp.mul(vec4(world, 1)).toVar();
+        // D (?clhw seam): snap clip.xy onto the SAME 1/256-px screen grid the SW
+        // rasterizer quantizes to (s = (ndc+1)·0.5·(W,H) then ×256 round, ~:1175).
+        // A shared SW↔HW cluster edge then lands on identical subpixel positions, so
+        // no pixel near the seam is dropped by both paths. This is the exact inverse
+        // of the SW screen transform with the quantize in the middle; the Y-up↔Y-down
+        // framebuffer flip preserves the grid (H integer ⇒ H·256 integer). Per-component
+        // scalar rounds match the SW path exactly.
+        {
+          const W = float(cam.uW);
+          const H = float(cam.uH);
+          const sx = clip.x.div(clip.w).add(1).mul(0.5).mul(W).mul(256).round().div(256);
+          const sy = clip.y.div(clip.w).add(1).mul(0.5).mul(H).mul(256).round().div(256);
+          clip.assign(
+            vec4(
+              sx.div(W).mul(2).sub(1).mul(clip.w),
+              sy.div(H).mul(2).sub(1).mul(clip.w),
+              clip.z,
+              clip.w,
+            ) as unknown as NV4,
+          );
+        }
+        // partial-cluster tail: fixed MAX_CLUSTER_TRIS*3 verts over-cover a <128-tri cluster
+        // ⇒ collapse those verts to a clipped point (z/w=2).
+        clip.assign(
+          (
+            localTri.lessThan(ctx.triCount) as unknown as {
+              select(a: NV4, b: NV4): NV4;
+            }
+          ).select(clip as unknown as NV4, vec4(0, 0, 2, 1) as unknown as NV4),
+        );
+        setVaryings(payload as unknown as NU, clip as unknown as NV4);
+        return clip;
+      }
+      // SOUP (default, ?clhw off — byte-identical to the pre-clhw shader): per-tri from hwQueue.
+      const triIndex = vertexIndex.div(3) as unknown as NU;
       const base = triIndex.mul(uint(2)).add(uint(1));
       const payload = elemU(hwQueueV.ro, base).toVar();
       const instId = elemU(hwQueueV.ro, base.add(uint(1))).toVar();
@@ -1650,30 +2183,17 @@ export function buildNaniteRaster(
       const item = qRasterRO.element(itemIdx.add(uint(1)));
       const ci = item.y.toVar();
       const ctx = makeCtx(instId, ci);
-
-      let world: NV3;
-      if (hw1fetch) {
-        world = fetchWorldVertDyn(ctx, localTri, corner);
-      } else {
-        const w0 = fetchWorldVert(ctx, localTri, 0);
-        const w1 = fetchWorldVert(ctx, localTri, 1);
-        const w2 = fetchWorldVert(ctx, localTri, 2);
-        world = corner
-          .equal(uint(1))
-          .select(w1, corner.equal(uint(2)).select(w2, w0)) as unknown as NV3;
-      }
+      const world = fetchWorld(ctx, localTri as unknown as NU);
       const clip = cam.vp.mul(vec4(world, 1)).toVar();
-
-      (vPayLo as unknown as { assign: (v: unknown) => void }).assign(toF(payload.bitAnd(uint(0xffff))));
-      (vPayHi as unknown as { assign: (v: unknown) => void }).assign(toF(payload.shiftRight(uint(16))));
-      (vZ as unknown as { assign: (v: unknown) => void }).assign(clip.z);
-      (vW as unknown as { assign: (v: unknown) => void }).assign(clip.w);
+      setVaryings(payload as unknown as NU, clip as unknown as NV4);
       return clip;
     })() as unknown as typeof mat.vertexNode;
 
     mat.fragmentNode = Fn(() => {
       const z = vZ.div(vW).toVar();
-      const pay = uint(vPayLo.round()).bitOr(uint(vPayHi.round()).shiftLeft(uint(16))).toVar();
+      const pay = uint(vPayLo.round())
+        .bitOr(uint(vPayHi.round()).shiftLeft(uint(16)))
+        .toVar();
       const fy = float(cam.uH).sub(screenCoordinate.y);
       const px = uint(fy).mul(uint(cam.uW)).add(uint(screenCoordinate.x));
       If(z.greaterThanEqual(0).and(z.lessThanEqual(1)), () => {
@@ -1687,8 +2207,14 @@ export function buildNaniteRaster(
           const stored = aLoadU(visPayloadV.atomic.element(px));
           If(myDk.greaterThan(stored.shiftRight(uint(16))), () => {
             const dk = myDk.shiftLeft(uint(16));
-            atomicMax(visPayloadV.atomic.element(px), dk.bitOr(pay.bitAnd(uint(0xffff))));
-            atomicMax(visBV.atomic.element(px), dk.bitOr(pay.shiftRight(uint(16)).bitAnd(uint(0xffff))));
+            atomicMax(
+              visPayloadV.atomic.element(px),
+              dk.bitOr(pay.bitAnd(uint(0xffff))),
+            );
+            atomicMax(
+              visBV.atomic.element(px),
+              dk.bitOr(pay.shiftRight(uint(16)).bitAnd(uint(0xffff))),
+            );
           });
         } else if (pass === 'world1') {
           // 0a SCAR (?scar=1): count this HW fragment into the whole-frame total [2] so
@@ -1712,7 +2238,10 @@ export function buildNaniteRaster(
           // the RMW for fragments behind the current front — the bulk of HW overdraw.
           const prevE = aLoadU(visPayloadV.atomic.element(px));
           If(cand.greaterThan(prevE), () => {
-            const wonE = atomicMax(visPayloadV.atomic.element(px), cand) as unknown as NU;
+            const wonE = atomicMax(
+              visPayloadV.atomic.element(px),
+              cand,
+            ) as unknown as NU;
             If(cand.greaterThan(wonE), () => {
               atomicStore(visBV.atomic.element(px), pay);
             });
@@ -1741,6 +2270,21 @@ export function buildNaniteRaster(
   const hwMesh = new Mesh(hwGeometry, hwDepthMat);
   hwMesh.frustumCulled = false;
   hwScene.add(hwMesh);
+
+  // ?clhw: the INSTANCED per-cluster HW draw — one instance per big/near cluster, drawn
+  // MAX_CLUSTER_TRIS*3 verts each (partial-cluster tail clips out). Own geometry + scene;
+  // shares hwRT + the world1 election (buildHwMaterial('world1', instanced=true)). Rendered
+  // in world1() right after the soup hwRender. Built only when the cull supplied the queue.
+  const hwClusterScene = clhw ? new Scene() : null;
+  if (clhw && hwClusterScene && cull.hwClusterDrawAttr) {
+    const g = new BufferGeometry();
+    g.setAttribute('position', new Float32BufferAttribute(new Float32Array(3), 3));
+    g.setIndirect(cull.hwClusterDrawAttr, 0);
+    g.boundingSphere = new Sphere(new Vector3(), Number.POSITIVE_INFINITY);
+    const m = new Mesh(g, buildHwMaterial('world1', true));
+    m.frustumCulled = false;
+    hwClusterScene.add(m);
+  }
   // The HW pass renders into this dead full-res rgba8 (colorWrite=false -> never read).
   // It stays full-res unconditionally: r184 derives the render-pass viewport from
   // RenderTarget.viewport (= texture size), so shrinking it would clip HW coverage and
@@ -1752,12 +2296,22 @@ export function buildNaniteRaster(
   const resolveGeometry = new BufferGeometry();
   resolveGeometry.setAttribute(
     'position',
-    new Float32BufferAttribute(new Float32Array([-1, -1, 0, 3, -1, 0, -1, 3, 0]), 3),
+    new Float32BufferAttribute(
+      new Float32Array([-1, -1, 0, 3, -1, 0, -1, 3, 0]),
+      3,
+    ),
   );
-  resolveGeometry.boundingSphere = new Sphere(new Vector3(), Number.POSITIVE_INFINITY);
+  resolveGeometry.boundingSphere = new Sphere(
+    new Vector3(),
+    Number.POSITIVE_INFINITY,
+  );
 
   const resolveMat = new NodeMaterial();
-  resolveMat.vertexNode = vec4(positionGeometry.xy, 0, 1) as unknown as typeof resolveMat.vertexNode;
+  resolveMat.vertexNode = vec4(
+    positionGeometry.xy,
+    0,
+    1,
+  ) as unknown as typeof resolveMat.vertexNode;
   resolveMat.fragmentNode = Fn(() => {
     const fy = float(cam.uH).sub(screenCoordinate.y);
     const pixelIndex = uint(fy).mul(uint(cam.uW)).add(uint(screenCoordinate.x));
@@ -1772,7 +2326,10 @@ export function buildNaniteRaster(
       If(aRaw.equal(uint(0)), () => {
         Discard();
       });
-      const id = bRaw.bitAnd(uint(0xffff)).shiftLeft(uint(16)).bitOr(aRaw.bitAnd(uint(0xffff)));
+      const id = bRaw
+        .bitAnd(uint(0xffff))
+        .shiftLeft(uint(16))
+        .bitOr(aRaw.bitAnd(uint(0xffff)));
       itemIdx = id.shiftRight(uint(CLUSTER_TRI_BITS)) as unknown as NU;
       localTri = id.bitAnd(uint(CLUSTER_TRI_MASK)) as unknown as NU;
     } else {
@@ -1809,7 +2366,10 @@ export function buildNaniteRaster(
     }
 
     // matClass palette (flat) — terrain/rock/bark/deadwood/leaf/grass/debris
-    const matClass = elemU(gpu.meshes, ctx.meshId.mul(uint(MESH_WORDS)).add(uint(6)))
+    const matClass = elemU(
+      gpu.meshes,
+      ctx.meshId.mul(uint(MESH_WORDS)).add(uint(6)),
+    )
       .shiftRight(uint(8))
       .bitAnd(uint(0xff))
       .toVar();
@@ -1822,7 +2382,10 @@ export function buildNaniteRaster(
         vec3(0.3, 0.36, 0.22),
         isR.select(
           vec3(0.42, 0.41, 0.4),
-          isB.select(vec3(0.36, 0.27, 0.19), isD.select(vec3(0.33, 0.28, 0.22), vec3(0.35, 0.33, 0.3))),
+          isB.select(
+            vec3(0.36, 0.27, 0.19),
+            isD.select(vec3(0.33, 0.28, 0.22), vec3(0.35, 0.33, 0.3)),
+          ),
         ),
       )
       .toVar();
@@ -1859,7 +2422,9 @@ export function buildNaniteRaster(
       // resolve's binding set. (A future world-mode packed path can recompute exact
       // cz from the reconstructed triangle instead.)
       const dk = toF(elemU(visPayloadV.ro, pixelIndex).shiftRight(uint(16)));
-      return float(1).sub(dk.div(65535)) as unknown as typeof resolveMat.depthNode;
+      return float(1).sub(
+        dk.div(65535),
+      ) as unknown as typeof resolveMat.depthNode;
     }
     return bcU2F(elemU(visDepthV.ro, pixelIndex));
   })() as unknown as typeof resolveMat.depthNode;
@@ -1884,7 +2449,11 @@ export function buildNaniteRaster(
     setIndirectDispatch(kRasterDepth, cull.rasterDispatchAttr),
   ];
   const hwQueueClearBatch = (): readonly unknown[] => [kHwQueueClear];
-  const hwRender = (renderer: Renderer, camera: PerspectiveCamera, mat: NodeMaterial): void => {
+  const hwRender = (
+    renderer: Renderer,
+    camera: PerspectiveCamera,
+    mat: NodeMaterial,
+  ): void => {
     const prevRT = renderer.getRenderTarget();
     renderer.setRenderTarget(hwRT);
     hwMesh.material = mat;
@@ -1899,6 +2468,18 @@ export function buildNaniteRaster(
     if (!hwrt) renderer.autoClear = false;
     renderer.render(hwScene, camera);
     if (!hwrt) renderer.autoClear = prevAutoClear;
+    renderer.setRenderTarget(prevRT);
+  };
+  // ?clhw: the instanced per-cluster HW draw into the same hwRT/vis buffers (never clears —
+  // the election is atomicMax, order-independent; it just adds the big/near cluster winners).
+  const hwRenderCluster = (renderer: Renderer, camera: PerspectiveCamera): void => {
+    if (!hwClusterScene) return;
+    const prevRT = renderer.getRenderTarget();
+    renderer.setRenderTarget(hwRT);
+    const prevAutoClear = renderer.autoClear;
+    renderer.autoClear = false;
+    renderer.render(hwClusterScene, camera);
+    renderer.autoClear = prevAutoClear;
     renderer.setRenderTarget(prevRT);
   };
   const hwDepth = (renderer: Renderer, camera: PerspectiveCamera): void => {
@@ -1968,8 +2549,17 @@ export function buildNaniteRaster(
     // but BEFORE hwRender so its near-blade HW queue is filled when the shared
     // HW pass draws it. Its fragments then pre-seed the voxel raster's election
     // exactly like the mesh winners do.
-    dispatchBatchMixed(renderer, [kVisClear, kRasterWorld1, ...(grass?.batch ?? []), kHwArgs]);
+    dispatchBatchMixed(renderer, [
+      kVisClear,
+      kRasterWorld1,
+      ...(grass?.batch ?? []),
+      kHwArgs,
+    ]);
     hwRender(renderer, camera, hwWorld1Mat);
+    // ?clhw: paint the big/near CLUSTERS the SW pass skipped, as proper instanced HW draws
+    // (one instance/cluster, single transform). Same election ⇒ folds into the vis buffers
+    // alongside the SW + soup winners, before grass/voxel pre-seed from them.
+    if (clhw) hwRenderCluster(renderer, camera);
     // grass blade HW pass (own depth target, early-z primed from the election —
     // which now holds the mesh SW+HW winners + the grass SW slivers).
     if (grass?.enabled()) grass.renderHw(renderer, camera);
@@ -1989,7 +2579,9 @@ export function buildNaniteRaster(
   const audit = (renderer: Renderer): void => {
     dispatch(renderer, kAudit);
   };
-  const readAudit = async (renderer: Renderer): Promise<{ orphans: number; covered: number }> => {
+  const readAudit = async (
+    renderer: Renderer,
+  ): Promise<{ orphans: number; covered: number }> => {
     const buf = await readBuffer(renderer, auditAttr, 0, 8);
     const u = new Uint32Array(buf);
     return { orphans: u[0] ?? 0, covered: u[1] ?? 0 };
@@ -2002,7 +2594,12 @@ export function buildNaniteRaster(
   };
   const readScar = async (
     renderer: Renderer,
-  ): Promise<{ bandFrags: number; bandPx: number; totalFrags: number; bandClusters: number }> => {
+  ): Promise<{
+    bandFrags: number;
+    bandPx: number;
+    totalFrags: number;
+    bandClusters: number;
+  }> => {
     // scar counters live in the hwQueue tail at slot SCAR_BASE (byte offset SCAR_BASE*4).
     const buf = await readBuffer(renderer, scarAttr, SCAR_BASE * 4, 16);
     const u = new Uint32Array(buf);

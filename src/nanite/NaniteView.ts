@@ -24,7 +24,6 @@ import type { Heightfield } from '../world/Heightfield';
 import type { GeometryRegistry } from './GeometryRegistry';
 import { makeNaniteCam } from './NaniteCommon';
 import { buildNaniteCull } from './NaniteCull';
-import { buildNaniteHwRef } from './NaniteHwRef';
 import { buildNaniteHzb } from './NaniteHzb';
 import { buildNaniteRaster, makeVisBuffers } from './NaniteRaster';
 import { uniformF } from './Tsl';
@@ -39,9 +38,8 @@ export function buildNaniteView(
   engine: Engine,
   registry: GeometryRegistry,
   hf: Heightfield,
-  mode: 'flat' | 'cluster' | 'hzb' | 'hwref' | 'lod',
+  mode: 'flat' | 'cluster' | 'hzb' | 'lod',
 ): NaniteViewHandles {
-  if (mode === 'hwref') return buildNaniteHwRef(engine, registry, hf);
   const renderer = engine.renderer;
   const size = internalSize(renderer, new Vector2()); // ?rscale: match the scene pass
   const params = new URLSearchParams(window.location.search);
