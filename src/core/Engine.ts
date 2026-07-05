@@ -81,14 +81,22 @@ export class Engine {
   }
 
   static async create(params: LaasParams, hooks: LaasHooks): Promise<Engine> {
+    const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+    if (!adapter) throw new Error('No GPU adapter found');
+
+    const device = await adapter.requestDevice({
+      label: 'laas-render',
+      requiredFeatures: [...adapter.features as Set<GPUFeatureName>, 'timestamp-query' as GPUFeatureName],
+      requiredLimits: hooks.diag ? buildRequiredLimits(hooks.diag) : {},
+    });
     const renderer = new WebGPURenderer({
       antialias: false,
       trackTimestamp: true,
-      requiredLimits: hooks.diag ? buildRequiredLimits(hooks.diag) : {},
+      device: device,
+
     });
     await renderer.init();
     // fail-loud: surface WebGPU validation errors (otherwise: silent black frames)
-    const device = (renderer.backend as unknown as { device?: GPUDevice }).device;
     if (device) {
       let reported = 0;
       device.onuncapturederror = (e: GPUUncapturedErrorEvent): void => {
