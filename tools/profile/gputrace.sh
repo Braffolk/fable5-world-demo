@@ -18,9 +18,13 @@
 #   `laas-render` device on shutdown finalizes the `.gputrace`. Open it in Xcode.
 #
 # USAGE
-#   tools/gputrace.sh
-#   CAPTURE=12 OUT=/tmp/laas_trace tools/gputrace.sh
-#   URL='http://localhost:5173/?scene=world&nanite=1&dpr=2&profile=1&grass=0' tools/gputrace.sh
+#   tools/profile/gputrace.sh
+#   CAPTURE=12 OUT=/tmp/laas_trace tools/profile/gputrace.sh
+#   URL='http://localhost:5173/?scene=world&nanite=1&dpr=2&profile=1&grass=0' tools/profile/gputrace.sh
+#
+# Then analyze the result with the sibling tools (see tools/profile/README.md):
+#   tools/profile/trace_static.py  <trace.gputrace>          # structure + VRAM (raw)
+#   tools/profile/profile_report.py <exported.gputrace>      # counters/device (profiled export)
 #
 # REQUIRES the dev server on :5173 (npm run dev) and a Chrome whose Dawn backend
 # honours DAWN_TRACE (Google Chrome stable does on macOS).

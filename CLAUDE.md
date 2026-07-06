@@ -55,6 +55,24 @@ This exists because I repeatedly entered with a flawed premise one level up — 
 buckets, wrong params — then blamed the implementation as undoable (e.g. the front-to-back "refutation" that
 was really just NDC-z bucketing compressing the far field).
 
+## Serious optimization runs on FRESH profiling data — STANDING RULE
+
+Any serious GPU/perf optimization (foliage, shaders, frame time) is grounded in ACTUAL profiling
+data of the CURRENT code — not guesswork, not stale numbers. Re-profile after meaningful changes.
+The pipeline (full guide: `docs/METAL-PROFILING.md` + `tools/profile/README.md`):
+
+1. `tools/profile/gputrace.sh` → a raw `.gputrace` (headless).
+2. ⚠️ MANUAL, in Xcode — open it → let it replay/profile → **File ▸ Export with "Embed performance
+   data" ENABLED** → exported bundle. Only Xcode's GPU replay produces timing, so the tools CANNOT
+   do this step — **ASK the user to do it** (and to re-export after code changes).
+3. `tools/profile/run_all.sh <raw> <exported>` → one results folder: `summary/` rankings +
+   `runtime/<shader>.txt` (per-line time) + `runtime/msl/*.metal` (source) + `static/` (occupancy).
+   Optimize ONE shader at a time from its files.
+
+Re-profiling is SLOW (capture + manual Xcode export + ~10 min analyze), so do NOT re-run reflexively:
+one fresh run per serious optimization push (and after meaningful changes), reused within the session.
+Subagents do NOT inherit this file — put the profiling context + the results-folder paths in their prompt.
+
 ## Pointers
 - Reality-check pattern + grounding examples: memory `interrogate-constraints-lift-a-level`.
 - Never park / drop / reframe / redirect work without surfacing it for the user's call: memory

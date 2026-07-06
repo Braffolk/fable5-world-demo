@@ -22,13 +22,31 @@ Dawn's `DAWN_TRACE_*` records a WebGPU device from **creation to destruction** a
 
 The normal path (no `?profile`) is untouched and still single-device.
 
-## `tools/gputrace.sh` — one command
+## The full pipeline — 3 steps (one is MANUAL)
 
 ```
-tools/gputrace.sh
+1. CAPTURE  (headless)  gputrace.sh              → raw .gputrace   (structure + resources, NO timing)
+2. EXPORT   (⚠ MANUAL, Xcode — tools CANNOT do this step)
+            open raw .gputrace in Xcode → let it replay/profile → File ▸ Export
+            with "Embed performance data" ENABLED
+                                                 → exported .gputrace (adds *.gpuprofiler_raw + store0)
+3. ANALYZE  (headless)  run_all.sh <raw> <exported>  → one folder of per-shader perf + source
+```
+
+⚠️ **Step 2 is required and cannot be automated.** A raw Dawn `.gputrace` has **no timing** — the
+numbers come from *replaying* it on the GPU, which only Xcode's Metal debugger does. The analysis
+tools (`run_all.sh`, `runtime_perline.py`, `profile_report.py`, `gputrace_timing.sh`) all need the
+**exported** bundle; without "Embed performance data" you get an export with no counters and the
+tools have nothing to read. See "Step 2 — Xcode export" below. Analysis is documented in
+**`tools/profile/README.md`**; this doc covers steps 1–2.
+
+## `tools/profile/gputrace.sh` — one command
+
+```
+tools/profile/gputrace.sh
 # or tune:
-CAPTURE=12 tools/gputrace.sh
-URL='http://localhost:5173/?scene=world&nanite=1&dpr=2&profile=1&grass=0' tools/gputrace.sh
+CAPTURE=12 tools/profile/gputrace.sh
+URL='http://localhost:5173/?scene=world&nanite=1&dpr=2&profile=1&grass=0' tools/profile/gputrace.sh
 ```
 
 It launches Chrome with Dawn tracing armed, waits for the render-device swap
@@ -58,6 +76,28 @@ MTL_CAPTURE_ENABLED=1 \
 
 Then close Chrome to finalize the trace. The device filter (`laas-render`) is the only
 thing making it game-only — drop `?profile=1` and it captures boot too (the 11 GB path).
+
+## Step 2 — Xcode export **with performance data** (manual, required for analysis)
+
+The capture from step 1 is structure-only. To get timings / counters / per-line shader cost, a
+human must replay it in Xcode and export it **with performance data embedded**:
+
+1. **Open** the raw `.gputrace` (e.g. `/tmp/laas_trace-*.gputrace`) in **Xcode** (double-click, or
+   Xcode ▸ Open). It loads in the Metal debugger.
+2. **Let Xcode generate the profile** — it replays the frame on the GPU to gather counters/timings.
+   If it doesn't start automatically, use the GPU-frame **"Profile"** action (the per-encoder GPU
+   timeline / Shaders tab populating = the profile is ready). Give it a few seconds to finish.
+3. **File ▸ Export…**, and in the export dialog **enable "Embed performance data"**, then save.
+   This writes a *second* `.gputrace` bundle that contains a `*.gpuprofiler_raw` (the profiled
+   counters/timings) **and** `store0` (the shader `program_source`). That second bundle is the
+   `<exported.gputrace>` the analysis tools consume.
+
+Then, headless: `tools/profile/run_all.sh <raw.gputrace> <exported.gputrace>` → a results folder
+(summary + per-shader runtime/static breakdowns + full `.metal` source). See `tools/profile/README.md`.
+
+⚠️ If you export **without** "Embed performance data", the bundle has no `*.gpuprofiler_raw` and the
+runtime/timing/counter tools will report nothing to read. The raw-only tools (`trace_static.py`,
+structure/VRAM) still work on step-1's capture alone.
 
 ## Notes / caveats
 
