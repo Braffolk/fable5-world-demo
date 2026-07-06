@@ -402,6 +402,27 @@ export function buildNaniteRaster(
   // clipmap level + the HW vertex stage (all share buildNaniteRaster).
   const wgcache =
     new URLSearchParams(window.location.search).get('wgcache') !== '0';
+  // ?ctxsm — keep the wgcache broadcast ctx SHARED-MEMORY-resident instead of hoisting all
+  // ~30 fields into registers (.toVar()). world1 is register-bound (116 temp regs, spilling →
+  // occupancy floor → the election-atomic latency can't hide); the ctx already lives in shU/shF,
+  // so reading fields on-demand from on-chip threadgroup memory (cheap on Apple) trades the
+  // scarce resource (registers) for the spare one (shared reads) with NO new buffer/bandwidth/
+  // dispatch. Byte-identical (shared mem is read-only after the broadcast barrier). Default OFF
+  // (A/B via `?ctxsm=1`); if tint re-hoists or the peak is makeCtx not the per-tri fetch, no win.
+  const ctxsm =
+    new URLSearchParams(window.location.search).get('ctxsm') === '1';
+  // ?coopv — RADICAL restructure (de-risk build): split the world1 kernel into
+  //   PHASE 1 (cooperative per-corner vertex fetch+transform → clip, written to shared)
+  //   → barrier → PHASE 2 (per-triangle raster reads clip from shared).
+  // Goal: the AGX allocator reuses phase-1 transform registers for phase-2 raster, so the
+  // 116-reg peak (→ 27% occupancy) drops toward the raster-core size, lifting occupancy to
+  // fill the measured ALU headroom. THIS BUILD IS A HYPOTHESIS TEST: corner-indexed (no
+  // dedup, 384 clip slots = 6 KB shared) so it works for ALL cluster types with zero
+  // enumeration — its ONLY job is to read the compiled register count. If registers drop,
+  // the dedup + DAG-enumeration + shared-shrink follow-up is worth building. Byte-identical
+  // (same transform, same clip). Default OFF (?coopv=1).
+  const coopv =
+    new URLSearchParams(window.location.search).get('coopv') === '1';
   // SWCOOP (90fps arc, pixel-loop structural rewrite; WORLD1 kernel only) — MODES:
   //   0 = old scanline loop VERBATIM (the revert path).
   //   1 = two-bin with a COOPERATIVE large bin: small tris (bbox extent ≤4 px both
@@ -582,6 +603,17 @@ export function buildNaniteRaster(
   // (default OFF, ?vcompact=1; measured marginal/conditional — see NaniteVertexCache).
   const vcache = makeVertexCache(gpu, nfetch);
 
+  // ?ksplit (PERF task #76): build world1 as TWO class-specialized kernels —
+  // 'explicit' (leaf/trunk/rock) + 'terrain' (heightfield) — each compiling ONLY its
+  // own fetch arm (makeFetch variant), so it reserves ONLY its own registers (the leaf
+  // kernel sheds terrainDispAt; the terrain kernel sheds the transform+wind set = the
+  // branch-union that pinned world1's occupancy floor). MEASUREMENT stage: both dispatch
+  // over the WHOLE qRaster and route by a uniform isHF early-out — byte-identical output,
+  // ~1ms doubled launches — so Xcode can read each kernel's registers/occupancy BEFORE
+  // the cull-side queue partition (Stage 2) removes the doubled launches. world1 only.
+  const ksplit =
+    new URLSearchParams(window.location.search).get('ksplit') === '1';
+
   const edgeFn = (a: NV2, b: NV2, p: NV2): NF =>
     p.y
       .sub(a.y)
@@ -670,7 +702,21 @@ export function buildNaniteRaster(
   // the WORLD single pass (PERF-VB4): a 24-bit depth election (visPayloadV) whose winner
   // stores the full 25-bit id into the side buffer visBV; the resolve reconstructs depth
   // from the election key. No exact depthV (a 3rd hot-loop atomic buffer = a 3× cliff).
-  const rasterKernel = (mode: 'depth' | 'combined' | 'world1'): unknown => {
+  const rasterKernel = (
+    mode: 'depth' | 'combined' | 'world1',
+    // ?ksplit: 'explicit'|'terrain' builds a class-specialized world1 kernel whose fetch
+    // compiles ONLY that arm; undefined = the unified kernel (byte-identical default).
+    splitVariant?: 'explicit' | 'terrain',
+  ): unknown => {
+    // Variant-specific fetch + vertex cache: the specialized kernel decodes and
+    // transforms through the arm-selected makeFetch so it never reserves the other
+    // class's registers. splitVariant===undefined ⇒ the module nfetch/vcache (identical
+    // node graph to the pre-split kernel).
+    const kFetch = splitVariant
+      ? makeFetch(gpu, heightTex, disp, wind, true, splitVariant)
+      : nfetch;
+    const kMakeCtx = kFetch.makeCtx;
+    const kVcache = splitVariant ? makeVertexCache(gpu, kFetch) : vcache;
     // SWCOOP applies to the world single pass only; depth/combined keep the old
     // scanline loop byte-identical (build-time — the flag picks WHICH loop is emitted).
     const coopMode = mode === 'world1' ? swcoop : 0;
@@ -774,8 +820,14 @@ export function buildNaniteRaster(
           ).assign(v);
         const getU = (i: number): NU => shU.element(uint(i)) as unknown as NU;
         const getF = (i: number): NF => shF.element(uint(i)) as unknown as NF;
+        // ?ctxsm: shared-resident ctx — return the raw shared-mem read (re-read on each use)
+        // instead of pinning it into a register via .toVar(). Baseline (ctxsm off) is byte-identical.
+        const tU = (i: number): NU =>
+          ctxsm ? getU(i) : (getU(i).toVar() as unknown as NU);
+        const tF = (i: number): NF =>
+          ctxsm ? getF(i) : (getF(i).toVar() as unknown as NF);
         If(localTri.equal(uint(0)), () => {
-          const c = makeCtx(instId, ci);
+          const c = kMakeCtx(instId, ci);
           setU(0, b2u(c.isHF));
           setU(1, b2u(c.isDAG));
           setU(2, c.triStart);
@@ -816,7 +868,9 @@ export function buildNaniteRaster(
           setF(8, c.oX);
           setF(9, c.oZ);
           setF(10, c.cell);
-          if (wind) {
+          // 'terrain' variant has no wind (its makeCtx returns wind=null) — skip the
+          // broadcast so the terrain kernel neither writes nor reserves the wind slots.
+          if (wind && splitVariant !== 'terrain') {
             const w = c.wind as NonNullable<VertCtx['wind']>;
             setF(11, w.h0);
             setF(12, w.dirX);
@@ -842,51 +896,63 @@ export function buildNaniteRaster(
         if (clhw && mode === 'world1') {
           returnIf(getU(11).toVar().equal(uint(1)));
         }
-        const cB = vec4(
-          getF(4).toVar(),
-          getF(5).toVar(),
-          getF(6).toVar(),
-          getF(7).toVar(),
-        ) as unknown as NV4;
+        // ?ksplit routing: the explicit kernel skips heightfield clusters, the terrain
+        // kernel skips non-heightfield — class = the broadcast isHF slot (0). Uniform per
+        // cluster ⇒ every live thread returns together (post-barrier, before vcache's
+        // barrier) — no partial-workgroup barrier, same shape as the clhw skip above.
+        if (splitVariant) {
+          returnIf(
+            splitVariant === 'explicit'
+              ? getU(0).toVar().equal(uint(1))
+              : getU(0).toVar().notEqual(uint(1)),
+          );
+        }
+        const cB = vec4(tF(4), tF(5), tF(6), tF(7)) as unknown as NV4;
         ctx = {
-          isHF: getU(0).toVar().equal(uint(1)),
-          isDAG: getU(1).toVar().equal(uint(1)),
-          A: vec4(
-            getF(0).toVar(),
-            getF(1).toVar(),
-            getF(2).toVar(),
-            getF(3).toVar(),
-          ) as unknown as NV4,
+          isHF: tU(0).equal(uint(1)),
+          isDAG: tU(1).equal(uint(1)),
+          A: vec4(tF(0), tF(1), tF(2), tF(3)) as unknown as NV4,
           B: cB,
-          yawSc: { cy: getF(21).toVar(), sy: getF(22).toVar() },
-          triStart: getU(2).toVar(),
-          triCount: getU(3).toVar(),
-          meshId: getU(4).toVar(),
-          channel: getU(5).toVar(),
-          twoSided: getU(9).toVar().equal(uint(1)),
-          wind: wind
+          yawSc: { cy: tF(21), sy: tF(22) },
+          triStart: tU(2),
+          triCount: tU(3),
+          meshId: tU(4),
+          channel: tU(5),
+          twoSided: tU(9).equal(uint(1)),
+          wind:
+            wind && splitVariant !== 'terrain'
             ? {
-                h0: getF(11).toVar(),
-                dirX: getF(12).toVar(),
-                dirY: getF(13).toVar(),
-                leanBase: getF(14).toVar(),
-                swayABase: getF(15).toVar(),
-                swayPhase: getF(16).toVar(),
-                ph: getF(17).toVar(),
-                branchBase: getF(18).toVar(),
-                flutBase: getF(19).toVar(), // N9-C0 leaf flutter
-                swayXPhase: getF(20).toVar(),
+                h0: tF(11),
+                dirX: tF(12),
+                dirY: tF(13),
+                leanBase: tF(14),
+                swayABase: tF(15),
+                swayPhase: tF(16),
+                ph: tF(17),
+                branchBase: tF(18),
+                flutBase: tF(19), // N9-C0 leaf flutter
+                swayXPhase: tF(20),
               }
             : null,
-          gx: getU(6).toVar(),
-          gz: getU(7).toVar(),
-          qxw: getU(8).toVar(),
-          oX: getF(8).toVar(),
-          oZ: getF(9).toVar(),
-          cell: getF(10).toVar(),
+          gx: tU(6),
+          gz: tU(7),
+          qxw: tU(8),
+          oX: tF(8),
+          oZ: tF(9),
+          cell: tF(10),
         } as unknown as VertCtx;
       } else {
-        ctx = makeCtx(instId, ci);
+        ctx = kMakeCtx(instId, ci);
+        // ?ksplit routing (non-wgcache path): same class gate, per-thread isHF (uniform
+        // per cluster). REQUIRED for correctness — without it the explicit kernel would
+        // rasterize heightfield clusters through the explicit fetch (garbage), so ksplit
+        // is only sound with the early-out on whichever ctx path runs.
+        if (splitVariant) {
+          const isHFb = ctx.isHF as unknown as { not(): NB };
+          returnIf(
+            (splitVariant === 'explicit' ? ctx.isHF : isHFb.not()) as unknown as NB,
+          );
+        }
       }
 
       // PERF-3 win #2 — cooperative vertex-transform cache (own module; ?vcompact=1).
@@ -896,7 +962,7 @@ export function buildNaniteRaster(
       // "?vcompact renders an empty scene" bitrot, found 2026-07-02). Voxel clusters
       // have vcCount=0 (no compact range) so their populate no-ops — they pay only the
       // barrier before bailing.
-      const corner = vcache.prime(ctx, ci, localTri);
+      const corner = kVcache.prime(ctx, ci, localTri);
 
       // voxel-foliage (spec §4.1 / §A1): SKIP voxel(7) clusters in the TRIANGLE raster.
       // The cut emits voxel clusters into the SAME qRaster as triangles (§4.6); the
@@ -920,7 +986,10 @@ export function buildNaniteRaster(
           elemU(gpu.meshes, ctx.meshId.mul(uint(MESH_WORDS)).add(uint(6)))
             .shiftRight(uint(8))
             .bitAnd(uint(0xff));
-        if (coop) {
+        if (coop || coopv) {
+          // ?coopv also needs the guard form: its Phase-1 barrier is at kernel top scope,
+          // so voxel-cluster threads must reach it (a storage-derived return before a
+          // barrier is non-uniform to naga — the same ?vcompact bitrot).
           swVoxGuard = mcVox.notEqual(uint(7)).toVar() as unknown as NB;
         } else {
           returnIf(mcVox.equal(uint(7)));
@@ -1161,6 +1230,12 @@ export function buildNaniteRaster(
           const ndc0 = p0.xyz.div(p0.w).toVar();
           const ndc1 = p1.xyz.div(p1.w).toVar();
           const ndc2 = p2.xyz.div(p2.w).toVar();
+          // ?ctxsm: hoist the depth z out of ndc so ndc.xy (used only by edge setup) dies
+          // before the scanline — frees ~6 regs across the hot loop. Off = the raw swizzle
+          // (ndc kept live, baseline byte-identical). Used by every ndc.z consumer below.
+          const dz0 = ctxsm ? ndc0.z.toVar() : (ndc0.z as unknown as NF);
+          const dz1 = ctxsm ? ndc1.z.toVar() : (ndc1.z as unknown as NF);
+          const dz2 = ctxsm ? ndc2.z.toVar() : (ndc2.z as unknown as NF);
 
           const areaNdc = edgeFn(
             ndc0.xy as unknown as NV2,
@@ -1261,7 +1336,7 @@ export function buildNaniteRaster(
                 let triVis: NB | null = null;
                 if (mode === 'world1' && triLvls) {
                   const nearBits = bcF2U(
-                    ndc0.z.min(ndc1.z).min(ndc2.z).clamp(0, 1) as unknown as NF,
+                    dz0.min(dz1).min(dz2).clamp(0, 1) as unknown as NF,
                   ).toVar();
                   // finest mirrored level whose 2×2 window covers the bbox:
                   // pitch(k) = 2^(k+1) px; need extent < 2·pitch ⇒ k = max(0,
@@ -1541,9 +1616,9 @@ export function buildNaniteRaster(
                                   const uw1 = cw1.sub(bias1).toVar();
                                   const uw2 = cw2.sub(bias2).toVar();
                                   const cz = toF(uw0 as unknown as NI)
-                                    .mul(ndc0.z)
-                                    .add(toF(uw1 as unknown as NI).mul(ndc1.z))
-                                    .add(toF(uw2 as unknown as NI).mul(ndc2.z))
+                                    .mul(dz0)
+                                    .add(toF(uw1 as unknown as NI).mul(dz1))
+                                    .add(toF(uw2 as unknown as NI).mul(dz2))
                                     .mul(rcpArea)
                                     .toVar();
                                   If(
@@ -1710,9 +1785,9 @@ export function buildNaniteRaster(
                                       uw0,
                                       uw1,
                                       uw2,
-                                      ndc0.z as unknown as NF,
-                                      ndc1.z as unknown as NF,
-                                      ndc2.z as unknown as NF,
+                                      dz0,
+                                      dz1,
+                                      dz2,
                                       rcpArea,
                                       payload,
                                     );
@@ -1788,9 +1863,9 @@ export function buildNaniteRaster(
                           .bitOr(bb2.shiftLeft(uint(18))),
                       );
                       wgW(s.pay, localTri, payload);
-                      wgW(s.z0, localTri, ndc0.z);
-                      wgW(s.z1, localTri, ndc1.z);
-                      wgW(s.z2, localTri, ndc2.z);
+                      wgW(s.z0, localTri, dz0);
+                      wgW(s.z1, localTri, dz1);
+                      wgW(s.z2, localTri, dz2);
                       wgW(s.rcp, localTri, rcpArea);
                     });
                   }
@@ -1978,6 +2053,22 @@ export function buildNaniteRaster(
   // attr so the batched world1 below dispatches it at its tight rasterDispatchFull size
   // instead of the baked QRASTER_CAP×MAX_CLUSTER_TRIS (~1B-thread) grid.
   setIndirectDispatch(kRasterWorld1, cull.rasterDispatchFullAttr);
+  // ?ksplit (PERF task #76): the two class-specialized world1 kernels. Named per variant
+  // so a capture reads the split cleanly (nanRasterWorld1Explicit = the leaf/trunk whale
+  // shed of terrainDispAt; nanRasterWorld1Terrain = heightfield, no transform/wind). Both
+  // dispatch over the FULL queue (rasterDispatchFull) and route by the isHF early-out —
+  // the Stage-1 measurement form (byte-identical output; Stage 2 adds the cull-side
+  // partition that drops the doubled launches). Built only under ?ksplit (0 cost off).
+  const kRasterWorld1Explicit = ksplit ? rasterKernel('world1', 'explicit') : null;
+  const kRasterWorld1Terrain = ksplit ? rasterKernel('world1', 'terrain') : null;
+  if (kRasterWorld1Explicit) {
+    (kRasterWorld1Explicit as ComputeKernel).setName('nanRasterWorld1Explicit');
+    setIndirectDispatch(kRasterWorld1Explicit, cull.rasterDispatchFullAttr);
+  }
+  if (kRasterWorld1Terrain) {
+    (kRasterWorld1Terrain as ComputeKernel).setName('nanRasterWorld1Terrain');
+    setIndirectDispatch(kRasterWorld1Terrain, cull.rasterDispatchFullAttr);
+  }
 
   // ---- kHwArgs ----------------------------------------------------------------------
   const kHwArgs = Fn(() => {
@@ -2559,7 +2650,13 @@ export function buildNaniteRaster(
     // exactly like the mesh winners do.
     dispatchBatchMixed(renderer, [
       kVisClear,
-      kRasterWorld1,
+      // ?ksplit: the two class kernels REPLACE the unified world1 in the SAME compute
+      // pass — no barrier between them, so the order-independent atomic election merges
+      // both, and (because they share vis via atomics, not disjoint buffers) they are
+      // overlap-eligible on the GPU. Stage-3 measures whether the GPU actually overlaps.
+      ...(ksplit
+        ? [kRasterWorld1Explicit as unknown, kRasterWorld1Terrain as unknown]
+        : [kRasterWorld1]),
       ...(grass?.batch ?? []),
       kHwArgs,
     ]);

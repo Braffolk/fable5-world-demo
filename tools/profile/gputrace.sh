@@ -32,7 +32,7 @@ set -euo pipefail
 
 URL="${URL:-http://localhost:5173/?scene=world&nanite=1&dpr=2&profile=1}"
 OUT="${OUT:-/tmp/laas_trace}"                 # DAWN_TRACE_FILE_BASE (trace path prefix)
-CAPTURE="${CAPTURE:-10}"                       # seconds of game to record after the swap
+CAPTURE="${CAPTURE:-3}"                       # seconds of game to record after the swap
 READY_TIMEOUT="${READY_TIMEOUT:-300}"          # cold boot can be ~65-100 s
 CHROME="${CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
 PROFILE_DIR="${PROFILE_DIR:-/tmp/chrome-metal}"

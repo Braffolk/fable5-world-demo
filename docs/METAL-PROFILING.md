@@ -46,7 +46,8 @@ tools have nothing to read. See "Step 2 — Xcode export" below. Analysis is doc
 tools/profile/gputrace.sh
 # or tune:
 CAPTURE=12 tools/profile/gputrace.sh
-URL='http://localhost:5173/?scene=world&nanite=1&dpr=2&clhw=1&clhwmax=32&profile=1&grass=0&nanshadow=0' tools/profile/gputrace.sh
+
+URL='http://localhost:5173/?scene=world&nanite=1&dpr=2&nanodisp=1&clhw=1&clhwmax=32&profile=1&grass=0&nanshadow=0&ksplit=1&fp16w=1' CAPTURE=2 tools/profile/gputrace.sh
 ```
 
 It launches Chrome with Dawn tracing armed, waits for the render-device swap

@@ -12,7 +12,7 @@
 
 import type { Texture } from 'three';
 import type { StorageTexture } from 'three/webgpu';
-import { If, clamp, float, mix, smoothstep, texture, time, uint, vec2, vec3 } from 'three/tsl';
+import { If, clamp, float, mix, smoothstep, texture, time, uint, vec2, vec3, wgslFn } from 'three/tsl';
 import type { NB, NF, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
 import { DISP } from '../render/TerrainMaterial';
 import { PERIOD_FBM, PERIOD_RID, PERIOD_VAL } from '../gpu/passes/NoiseBake';
@@ -188,6 +188,39 @@ export interface NaniteFetch {
   meshWord(meshId: NU, word: number): NU;
 }
 
+/**
+ * ?fp16w (task #76): the per-vertex trunk/leaf wind offset in raw-WGSL f16. The offset is
+ * a SMALL delta (≲ metres) added to the f32 world position, so half-precision is safe, and
+ * the SAME wgslFn runs in the raster AND the resolve ⇒ they stay bit-consistent (no cracks).
+ * f16 packs 2 values/register ⇒ halves this math's register pressure + ALU. TSL has no f16
+ * node, so this is raw WGSL; the module-top `enable f16;` directive is plumbed by
+ * gpu/EnableF16.ts (WebGPUBackend patch, active under ?fp16w). Faithful port of the f32 TSL
+ * math below (yn/prof/swayA/sway/swayX/along/dy → the vec3 offset). Inputs are f32; the body
+ * converts, computes in f16, returns vec3<f32>.
+ */
+let nanWindF16Fn: ReturnType<typeof wgslFn> | null = null;
+/** lazily built (wgslFn parses its WGSL at construction) so a bad parse can only affect
+ *  ?fp16w runs, never the shipped default fetch path this file also feeds. */
+const nanWindF16 = (): ReturnType<typeof wgslFn> =>
+  (nanWindF16Fn ??= wgslFn(`
+  fn nanWindF16( h0: f32, dirX: f32, dirY: f32, leanBase: f32, swayABase: f32, swayPhase: f32, swayXPhase: f32, branchBase: f32, localY: f32, flex: f32 ) -> vec3<f32> {
+    let ly = f16(localY);
+    let fx = f16(flex);
+    let yn = ly / (ly + f16(h0));
+    let prof = min(yn * yn * 1.7h + fx * 0.3h, 1.6h);
+    let swayA = f16(swayABase) * prof;
+    let sway = f16(swayPhase) * swayA;
+    let swayX = f16(swayXPhase) * swayA * 0.45h;
+    let along = f16(leanBase) * prof + sway + f16(branchBase) * fx;
+    let dy = (abs(along) + abs(swayX)) * fx * -0.2h;
+    return vec3<f32>(
+      f32(f16(dirX) * along - f16(dirY) * swayX),
+      f32(dy),
+      f32(f16(dirY) * along + f16(dirX) * swayX)
+    );
+  }
+`));
+
 export function makeFetch(
   gpu: RegistryGpu,
   heightTex: Texture,
@@ -199,7 +232,31 @@ export function makeFetch(
    *  take the explicit-mesh else branch) — so the resolve passes false to keep one
    *  fewer storage buffer in its already buffer-heavy fragment stage. */
   bindHfVerts = true,
+  /** PERF task #76 kernel-split: which fetch path THIS instance compiles.
+   *  'both' (default) = the runtime If(isHF).Else UNION — byte-identical to the
+   *    pre-split code (a closure emits the same nodes as the old inline body).
+   *  'explicit' = leaf/trunk/rock ONLY — no heightfield arm ⇒ terrainDispAt (6 tex
+   *    + fbm) is never compiled ⇒ the leaf kernel sheds those registers.
+   *  'terrain' = heightfield ONLY — no explicit arm and NO wind precompute ⇒ the
+   *    terrain kernel reserves zero instance-transform / wind registers.
+   *  A specialized raster kernel picks one class so it never reserves the other's
+   *  register set (the branch-union that inflated world1's occupancy floor). */
+  variant: 'both' | 'explicit' | 'terrain' = 'both',
 ): NaniteFetch {
+  // ?grasspatch (task #76): the geometry grass patch-DAG lane is a DEMOTED REFERENCE —
+  // WorldRegistry registers the transformChannel:'grass' mesh ONLY under ?grasspatch=1, so
+  // by default (ray grass, and the grass=0 raster config) NO cluster ever carries
+  // channel==grass. The grass wind branches below (a gust sample in makeCtx + a heightTex
+  // sample & instTransformPoint in explicitWorldByIndex) then compile into the raster's
+  // register UNION yet are never reached = pure dead register weight. Gate them on the flag
+  // ⇒ byte-identical (the branch was unreachable without the mesh), registers freed.
+  const grassGeom =
+    new URLSearchParams(window.location.search).get('grasspatch') === '1';
+  // ?fp16w (task #76): route the per-vertex trunk/leaf wind offset through the f16 wgslFn
+  // (nanWindF16) instead of the f32 TSL math — halves that math's registers + ALU. Off =
+  // byte-identical f32 path.
+  const fp16Wind =
+    new URLSearchParams(window.location.search).get('fp16w') === '1';
   const makeCtx = (instId: NU, ci: NU): VertCtx => {
     const cBase = ci.mul(uint(8)).toVar();
     const triStart = elemU(gpu.clusters, cBase.add(uint(6))).toVar();
@@ -231,7 +288,9 @@ export function makeFetch(
     // samples) happen ONCE here, gated on the trunk channel so terrain/rock pay
     // nothing; fetchWorldVert applies only the per-vertex prof/flex scaling.
     let windFields: TrunkWindFields | null = null;
-    if (wind) {
+    // 'terrain' variant carries NO wind (the heightfield channel has none) — skip the
+    // whole precompute so the specialized terrain kernel reserves zero wind registers.
+    if (wind && variant !== 'terrain') {
       const matParam = elemU(gpu.meshes, mBase.add(uint(7))).toVar();
       const profile = matParam.shiftRight(uint(8)).bitAnd(uint(0xff)).toVar();
       const d = vec2(windU.dir as unknown as NV2);
@@ -316,6 +375,8 @@ export function makeFetch(
       //              (the shipped ring only zeroes shimmer in far mode — the fade
       //              is the new lane's TRAA-stability upgrade, §2 item 6)
       //   swayXPhase ← the hoisted shimmer sine
+      // grass geometry lane is ?grasspatch-only ⇒ skip compiling this branch by default.
+      if (grassGeom)
       If(channel.equal(uint(TRANSFORM_CHANNEL.grass)), () => {
         const origin = A.xyz as unknown as NV3;
         const s = windU.strength as unknown as NF;
@@ -415,6 +476,39 @@ export function makeFetch(
     return hfWorld(ctx, sx as unknown as NU, sz as unknown as NU, skirtDrop as unknown as NF);
   };
 
+  /** per-vertex trunk/leaf wind offset (IDENTICAL math for both channels — deduped here).
+   *  ?fp16w routes it through the f16 wgslFn (nanWindF16); off = the byte-identical f32 TSL
+   *  math (node graph unchanged from the prior inline blocks). The offset is a small delta
+   *  added to the f32 world pos ⇒ fp16 precision-safe; raster+resolve share this ⇒ bit-consistent. */
+  const windOffset = (w: TrunkWindFields, localY: NF, flex: NF): NV3 => {
+    if (fp16Wind) {
+      return nanWindF16()({
+        h0: w.h0,
+        dirX: w.dirX,
+        dirY: w.dirY,
+        leanBase: w.leanBase,
+        swayABase: w.swayABase,
+        swayPhase: w.swayPhase,
+        swayXPhase: w.swayXPhase,
+        branchBase: w.branchBase,
+        localY,
+        flex,
+      }) as unknown as NV3;
+    }
+    const yn = localY.div(localY.add(w.h0));
+    const prof = yn.mul(yn).mul(1.7).add(flex.mul(0.3)).min(1.6);
+    const swayA = w.swayABase.mul(prof);
+    const sway = w.swayPhase.mul(swayA);
+    const swayX = w.swayXPhase.mul(swayA).mul(0.45);
+    const along = w.leanBase.mul(prof).add(sway).add(w.branchBase.mul(flex));
+    const dy = along.abs().add(swayX.abs()).mul(flex).mul(-0.2);
+    return vec3(
+      w.dirX.mul(along).sub(w.dirY.mul(swayX)),
+      dy,
+      w.dirY.mul(along).add(w.dirX.mul(swayX)),
+    ) as unknown as NV3;
+  };
+
   /** explicit-mesh vertex BY INDEX: gpu.verts[vi·VERT_WORDS] → instance-transformed
    *  world pos (+ trunk wind). The SAME fetch runs in the raster (geometry) and the
    *  resolve (barycentric corners), so both reconstruct bit-identical windy positions. */
@@ -435,22 +529,7 @@ export function makeFetch(
         const localY = (p as unknown as NV3).y.mul(ctx.A.w as unknown as NF);
         const vd = elemU(gpu.verts, vb.add(uint(5)));
         const flex = toF(vd.shiftRight(uint(8)).bitAnd(uint(0xff))).div(255);
-        const yn = localY.div(localY.add(w.h0));
-        const prof = yn.mul(yn).mul(1.7).add(flex.mul(0.3)).min(1.6);
-        const swayA = w.swayABase.mul(prof);
-        const sway = w.swayPhase.mul(swayA);
-        const swayX = w.swayXPhase.mul(swayA).mul(0.45);
-        const along = w.leanBase.mul(prof).add(sway).add(w.branchBase.mul(flex));
-        const dy = along.abs().add(swayX.abs()).mul(flex).mul(-0.2);
-        out.assign(
-          out.add(
-            vec3(
-              w.dirX.mul(along).sub(w.dirY.mul(swayX)),
-              dy,
-              w.dirY.mul(along).add(w.dirX.mul(swayX)),
-            ),
-          ),
-        );
+        out.assign(out.add(windOffset(w, localY as unknown as NF, flex as unknown as NF)));
       });
       // N9-C0: leaf channel — the FULL Wind.vegWindOffset (terms 1–4) so the crown
       // SWAYS WITH the trunk (lean+sway+branch, mirroring the trunk block above)
@@ -458,35 +537,22 @@ export function makeFetch(
       // fbm shimmer the old foliage material uses, not a reinvention). vdata.y=flex,
       // vdata.z=phase: the same baked attributes the old path reads.
       If(ctx.channel.equal(uint(TRANSFORM_CHANNEL.leaf)), () => {
+        // N9-C0: leaf uses the SAME lean+sway+branch as the trunk (flutter removed — the
+        // per-vertex advected-fbm TEXTURE tap was ~96% of the transform cost). So the crown
+        // SWAYS WITH the trunk via the identical windOffset() helper.
         const w = ctx.wind as TrunkWindFields;
         const localY = (p as unknown as NV3).y.mul(ctx.A.w as unknown as NF);
         const vd = elemU(gpu.verts, vb.add(uint(5)));
         const flex = toF(vd.shiftRight(uint(8)).bitAnd(uint(0xff))).div(255);
-        const yn = localY.div(localY.add(w.h0));
-        const prof = yn.mul(yn).mul(1.7).add(flex.mul(0.3)).min(1.6);
-        const swayA = w.swayABase.mul(prof);
-        const sway = w.swayPhase.mul(swayA);
-        const swayX = w.swayXPhase.mul(swayA).mul(0.45);
-        // N9-C0 leaf flutter REMOVED (user: unnecessary — the crown's lean+sway is the
-        // motion that reads; the per-vertex advected-fbm TEXTURE tap was the dominant
-        // raster cost, ~96% of the per-vertex transform). The crown now uses the SAME
-        // lean+sway+branch as the trunk — zero per-vertex texture samples.
-        const along = w.leanBase.mul(prof).add(sway).add(w.branchBase.mul(flex));
-        const dy = along.abs().add(swayX.abs()).mul(flex).mul(-0.2);
-        out.assign(
-          out.add(
-            vec3(
-              w.dirX.mul(along).sub(w.dirY.mul(swayX)),
-              dy,
-              w.dirY.mul(along).add(w.dirX.mul(swayX)),
-            ),
-          ),
-        );
+        out.assign(out.add(windOffset(w, localY as unknown as NF, flex as unknown as NF)));
       });
       // GRASS (S1): the GroundRing response verbatim — cantilever bend ∝ tip²
       // (tips dip as they deflect, dy = bend·t·−0.4), shimmer perpendicular to
       // the wind (per-instance hoisted sine × tip). t = clump-local y (blades
       // are unit height; the clump's tallest blade reaches ~1.27 — clamp).
+      // grass geometry lane is ?grasspatch-only ⇒ skip compiling this branch (with its
+      // heightTex sample + instTransformPoint) by default — dead register weight otherwise.
+      if (grassGeom)
       If(ctx.channel.equal(uint(TRANSFORM_CHANNEL.grass)), () => {
         const w = ctx.wind as TrunkWindFields;
         const vd = elemU(gpu.verts, vb.add(uint(5)));
@@ -526,81 +592,116 @@ export function makeFetch(
     return out as unknown as NV3;
   };
 
+  // ── composable fetch ARMS (PERF task #76 — kernel-split by cluster class) ──────────
+  // Each arm is a self-contained block that writes a world pos into `out`; the three
+  // fetch entry points compose {explicit} | {heightfield} | BOTH by `variant`. A
+  // specialized kernel (makeFetch(..., 'explicit'|'terrain')) then compiles ONLY its
+  // own arm and never reserves the other class's registers. When variant==='both' the
+  // emitted node graph is IDENTICAL to the prior inline If(isHF).Else (calling a closure
+  // emits the same nodes as inline code) ⇒ byte-identical default.
+  type OutVar = { assign(v: NV3): unknown };
+
+  /** explicit-mesh global vertex index for (localTri, corner∈{0,1,2}) */
+  const explicitVi = (ctx: VertCtx, localTri: NU, corner: NU): NU =>
+    elemU(gpu.indices, ctx.triStart.add(localTri).mul(uint(3)).add(corner));
+
+  /** heightfield arm, COMPILE-TIME corner v — adaptive-DAG index else window grid */
+  const hfArmStatic = (ctx: VertCtx, localTri: NU, v: 0 | 1 | 2, out: OutVar): void => {
+    If(ctx.isDAG, () => {
+      out.assign(dagWorldByIndex(ctx, explicitVi(ctx, localTri, uint(v))));
+    }).Else(() => {
+      // window-procedural: implicit regular grid within the cluster's window —
+      // no index buffer (sx,sz derived from localTri).
+      const quad = localTri.shiftRight(uint(1));
+      const odd = localTri.bitAnd(uint(1)).equal(uint(1));
+      const col = quad.mod(ctx.qxw);
+      const row = quad.div(ctx.qxw);
+      let dx: NU;
+      let dz: NU;
+      if (v === 0) {
+        dx = uint(0) as unknown as NU;
+        dz = uint(0) as unknown as NU;
+      } else if (v === 1) {
+        dx = odd.select(uint(1), uint(0));
+        dz = uint(1) as unknown as NU;
+      } else {
+        dx = uint(1) as unknown as NU;
+        dz = odd.select(uint(0), uint(1));
+      }
+      const sx = ctx.gx.add(col).add(dx);
+      const sz = ctx.gz.add(row).add(dz);
+      out.assign(hfWorld(ctx, sx as unknown as NU, sz as unknown as NU, float(0) as unknown as NF));
+    });
+  };
+
+  /** heightfield arm, RUNTIME corner (0..2) — select arms EQUAL the static v values */
+  const hfArmDyn = (ctx: VertCtx, localTri: NU, corner: NU, out: OutVar): void => {
+    If(ctx.isDAG, () => {
+      out.assign(dagWorldByIndex(ctx, explicitVi(ctx, localTri, corner)));
+    }).Else(() => {
+      const quad = localTri.shiftRight(uint(1));
+      const odd = localTri.bitAnd(uint(1)).equal(uint(1));
+      const col = quad.mod(ctx.qxw);
+      const row = quad.div(ctx.qxw);
+      const dx = corner
+        .equal(uint(1))
+        .select(odd.select(uint(1), uint(0)), corner.equal(uint(2)).select(uint(1), uint(0))) as unknown as NU;
+      const dz = corner
+        .equal(uint(1))
+        .select(uint(1), corner.equal(uint(2)).select(odd.select(uint(0), uint(1)), uint(0))) as unknown as NU;
+      const sx = ctx.gx.add(col).add(dx);
+      const sz = ctx.gz.add(row).add(dz);
+      out.assign(hfWorld(ctx, sx as unknown as NU, sz as unknown as NU, float(0) as unknown as NF));
+    });
+  };
+
   const fetchWorldVert = (ctx: VertCtx, localTri: NU, v: 0 | 1 | 2): NV3 => {
     const out = vec3(0).toVar();
-    If(ctx.isHF, () => {
-      If(ctx.isDAG, () => {
-        const vi = elemU(gpu.indices, ctx.triStart.add(localTri).mul(uint(3)).add(uint(v)));
-        out.assign(dagWorldByIndex(ctx, vi));
+    if (variant === 'explicit') {
+      out.assign(explicitWorldByIndex(ctx, explicitVi(ctx, localTri, uint(v))));
+    } else if (variant === 'terrain') {
+      hfArmStatic(ctx, localTri, v, out);
+    } else {
+      If(ctx.isHF, () => {
+        hfArmStatic(ctx, localTri, v, out);
       }).Else(() => {
-        // window-procedural: implicit regular grid within the cluster's window —
-        // no index buffer (sx,sz derived from localTri), so it stays inline here.
-        const quad = localTri.shiftRight(uint(1));
-        const odd = localTri.bitAnd(uint(1)).equal(uint(1));
-        const col = quad.mod(ctx.qxw);
-        const row = quad.div(ctx.qxw);
-        let dx: NU;
-        let dz: NU;
-        if (v === 0) {
-          dx = uint(0) as unknown as NU;
-          dz = uint(0) as unknown as NU;
-        } else if (v === 1) {
-          dx = odd.select(uint(1), uint(0));
-          dz = uint(1) as unknown as NU;
-        } else {
-          dx = uint(1) as unknown as NU;
-          dz = odd.select(uint(0), uint(1));
-        }
-        const sx = ctx.gx.add(col).add(dx);
-        const sz = ctx.gz.add(row).add(dz);
-        out.assign(hfWorld(ctx, sx as unknown as NU, sz as unknown as NU, float(0) as unknown as NF));
+        out.assign(explicitWorldByIndex(ctx, explicitVi(ctx, localTri, uint(v))));
       });
-    }).Else(() => {
-      const vi = elemU(gpu.indices, ctx.triStart.add(localTri).mul(uint(3)).add(uint(v)));
-      out.assign(explicitWorldByIndex(ctx, vi));
-    });
+    }
     return out as unknown as NV3;
   };
 
   const fetchWorldVertDyn = (ctx: VertCtx, localTri: NU, corner: NU): NV3 => {
     const out = vec3(0).toVar();
-    If(ctx.isHF, () => {
-      If(ctx.isDAG, () => {
-        const vi = elemU(gpu.indices, ctx.triStart.add(localTri).mul(uint(3)).add(corner));
-        out.assign(dagWorldByIndex(ctx, vi));
+    if (variant === 'explicit') {
+      out.assign(explicitWorldByIndex(ctx, explicitVi(ctx, localTri, corner)));
+    } else if (variant === 'terrain') {
+      hfArmDyn(ctx, localTri, corner, out);
+    } else {
+      If(ctx.isHF, () => {
+        hfArmDyn(ctx, localTri, corner, out);
       }).Else(() => {
-        // window-procedural grid — per-corner (dx,dz) selected at runtime; the
-        // select arms are EXACTLY the static v=0/1/2 values in fetchWorldVert.
-        const quad = localTri.shiftRight(uint(1));
-        const odd = localTri.bitAnd(uint(1)).equal(uint(1));
-        const col = quad.mod(ctx.qxw);
-        const row = quad.div(ctx.qxw);
-        const dx = corner
-          .equal(uint(1))
-          .select(odd.select(uint(1), uint(0)), corner.equal(uint(2)).select(uint(1), uint(0))) as unknown as NU;
-        const dz = corner
-          .equal(uint(1))
-          .select(uint(1), corner.equal(uint(2)).select(odd.select(uint(0), uint(1)), uint(0))) as unknown as NU;
-        const sx = ctx.gx.add(col).add(dx);
-        const sz = ctx.gz.add(row).add(dz);
-        out.assign(hfWorld(ctx, sx as unknown as NU, sz as unknown as NU, float(0) as unknown as NF));
+        out.assign(explicitWorldByIndex(ctx, explicitVi(ctx, localTri, corner)));
       });
-    }).Else(() => {
-      const vi = elemU(gpu.indices, ctx.triStart.add(localTri).mul(uint(3)).add(corner));
-      out.assign(explicitWorldByIndex(ctx, vi));
-    });
+    }
     return out as unknown as NV3;
   };
 
   const fetchWorldVertByIndex = (ctx: VertCtx, vi: NU): NV3 => {
     const out = vec3(0).toVar();
-    If(ctx.isHF, () => {
+    if (variant === 'explicit') {
+      out.assign(explicitWorldByIndex(ctx, vi));
+    } else if (variant === 'terrain') {
       // only the adaptive-DAG convention has explicit vertex indices; window-grid
       // clusters have vcompact count=0, so the cooperative cache never calls this.
       out.assign(dagWorldByIndex(ctx, vi));
-    }).Else(() => {
-      out.assign(explicitWorldByIndex(ctx, vi));
-    });
+    } else {
+      If(ctx.isHF, () => {
+        out.assign(dagWorldByIndex(ctx, vi));
+      }).Else(() => {
+        out.assign(explicitWorldByIndex(ctx, vi));
+      });
+    }
     return out as unknown as NV3;
   };
 

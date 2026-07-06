@@ -6,6 +6,7 @@
 
 import { ACESFilmicToneMapping, PerspectiveCamera, Scene } from 'three';
 import { TimestampQuery, WebGPURenderer } from 'three/webgpu';
+import { enableShaderF16Directive } from '../gpu/EnableF16';
 import { buildRequiredLimits } from './Diagnostics';
 import { installFragmentStorageWrites, installMaterialKeyMemo } from '../render/ThreePatches';
 import { installPositionInvariance } from '../render/VegPrepass';
@@ -142,10 +143,16 @@ export class Engine {
       label,
       requiredFeatures: [
         ...(adapter.features as Set<GPUFeatureName>),
-        'timestamp-query' as GPUFeatureName,
+        'timestamp-query' as GPUFeatureName
       ],
       requiredLimits: diag ? buildRequiredLimits(diag) : {},
     });
+    // f16: three's directive path doesn't place `enable f16;` at the module top for material/
+    // resolve shaders, so prepend it to the final WGSL of any f16-using shader (EnableF16) —
+    // only when the device supports shader-f16 (the fp16 wind path is JS-branched on ?fp16w).
+    if (device.features.has('shader-f16' as GPUFeatureName)) {
+      enableShaderF16Directive(device);
+    }
     const renderer = new WebGPURenderer({ antialias: false, trackTimestamp: true, device });
     await renderer.init();
     // fail-loud: surface WebGPU validation errors (otherwise: silent black frames)
