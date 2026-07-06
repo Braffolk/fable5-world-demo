@@ -46,7 +46,7 @@ tools have nothing to read. See "Step 2 — Xcode export" below. Analysis is doc
 tools/profile/gputrace.sh
 # or tune:
 CAPTURE=12 tools/profile/gputrace.sh
-URL='http://localhost:5173/?scene=world&nanite=1&dpr=2&profile=1&grass=0' tools/profile/gputrace.sh
+URL='http://localhost:5173/?scene=world&nanite=1&dpr=2&clhw=1&clhwmax=32&profile=1&grass=0&nanshadow=0' tools/profile/gputrace.sh
 ```
 
 It launches Chrome with Dawn tracing armed, waits for the render-device swap
@@ -71,7 +71,7 @@ MTL_CAPTURE_ENABLED=1 \
   --disable-gpu-sandbox --user-data-dir=/tmp/chrome-metal \
   --disable-features=SkiaGraphite --no-first-run --no-default-browser-check \
   --enable-dawn-features=use_user_defined_labels_in_backend,disable_symbol_renaming \
-  'http://localhost:5173/?scene=world&nanite=1&dpr=2&profile=1'
+  'http://localhost:5173/?scene=world&nanite=1&dpr=2&clhw=1&profile=1'
 ```
 
 Then close Chrome to finalize the trace. The device filter (`laas-render`) is the only
