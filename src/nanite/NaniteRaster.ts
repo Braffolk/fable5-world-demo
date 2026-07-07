@@ -59,7 +59,7 @@ import {
   workgroupArray,
   workgroupBarrier,
 } from 'three/tsl';
-import type { NB, NF, NI, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
+import type { NB, NF, NI, NU, NV3, NV4 } from '../gpu/TSLTypes';
 import { markFragmentWritable } from '../render/ThreePatches';
 import {
   CLUSTER_TRI_BITS,
@@ -614,11 +614,31 @@ export function buildNaniteRaster(
   const ksplit =
     new URLSearchParams(window.location.search).get('ksplit') === '1';
 
-  const edgeFn = (a: NV2, b: NV2, p: NV2): NF =>
-    p.y
-      .sub(a.y)
-      .mul(b.x.sub(a.x))
-      .sub(p.x.sub(a.x).mul(b.y.sub(a.y))) as unknown as NF;
+  // ─── Task 1 (radical): per-cluster ctx PRE-PASS ──────────────────────────────────
+  // The wgcache thread-0 makeCtx broadcast is 1 ACTIVE LANE / 127 masked doing the
+  // metadata unpack + up-to-six gust/disp samples + wind setup + the clhw classify,
+  // behind a workgroupBarrier — a divergence + barrier stall the raster occupancy cannot
+  // hide, and the counter bills every masked lane. Move it OUT to a ONE-THREAD-PER-CLUSTER
+  // pre-pass (kClusterCtx, built below) that computes makeCtx once and writes the 35-word
+  // ctx (12 u32 + 23 f32-as-bits) to a global buffer; the raster then reads it with
+  // cache-coherent loads (itemIdx is UNIFORM per workgroup ⇒ one L1 line for all 128
+  // lanes) — no thread-0 block, no barrier. BONUS: makeCtx leaving the raster SHEDS
+  // gpu.clusters/instances/meshes from its bindings (the fetch only needs verts/indices/
+  // height) ⇒ 9 storage buffers, under the 10 ceiling. WORLD1 (singlePass) only — depth/
+  // combined/view keep the broadcast and never allocate the buffer. Buffer = QRASTER_CAP ×
+  // 35 u32 (world QRASTER_CAP = 1M ⇒ 140 MB); every visible cluster is rewritten each frame
+  // so the initial contents are irrelevant.
+  const ctxPrepass = singlePass;
+  const CTX_U = 12; // uint slots: isHF,isDAG,triStart,triCount,meshId,channel,gx,gz,qxw,twoSided,matClass,clhw
+  const CTX_F = 23; // float slots: A.xyzw,B.xyzw,oX,oZ,cell,wind[11..20],yawSc.cy,yawSc.sy
+  const CTX_STRIDE = CTX_U + CTX_F; // 35 u32 / cluster
+  const clusterCtxAttr = ctxPrepass
+    ? new StorageBufferAttribute(new Uint32Array(QRASTER_CAP * CTX_STRIDE), 1)
+    : null;
+  if (clusterCtxAttr) clusterCtxAttr.name = 'nanClusterCtx';
+  const clusterCtxV = clusterCtxAttr
+    ? sU32Views(clusterCtxAttr, QRASTER_CAP * CTX_STRIDE)
+    : null;
 
   // ?wgcache bool→uint for packing isHF/isDAG into the shared-memory uint array
   const b2u = (b: NB): NU =>
@@ -793,7 +813,65 @@ export function buildNaniteRaster(
       // is off, so the voxel-skip below falls back to its per-thread mesh reload.
       // Bit-identical — the broadcast is the SAME mesh word6 extract, computed once.
       let matClassBroadcast: NU | null = null;
-      if (wgcache) {
+      if (ctxPrepass && mode === 'world1' && clusterCtxV) {
+        // Task 1: read the per-cluster ctx the PRE-PASS (kClusterCtx) wrote to global
+        // memory — cache-coherent loads (itemIdx uniform per workgroup ⇒ one L1 line for
+        // all 128 lanes), NO thread-0 makeCtx, NO workgroup barrier. Same 35-word layout as
+        // the old broadcast; makeCtx no longer runs here so gpu.clusters/instances/meshes
+        // are not bound to this kernel.
+        const base = itemIdx.mul(uint(CTX_STRIDE)).toVar();
+        const rU = (i: number): NU =>
+          elemU(clusterCtxV.ro, base.add(uint(i))).toVar() as unknown as NU;
+        const rF = (i: number): NF =>
+          bcU2F(elemU(clusterCtxV.ro, base.add(uint(CTX_U + i)))).toVar() as unknown as NF;
+        const iHF = rU(0);
+        matClassBroadcast = rU(10);
+        // ?clhw skip (slot 11) — uniform per cluster ⇒ all lanes return together.
+        if (clhw && mode === 'world1') {
+          returnIf(rU(11).equal(uint(1)));
+        }
+        // ?ksplit class routing (slot 0 = isHF), uniform per cluster.
+        if (splitVariant) {
+          returnIf(
+            splitVariant === 'explicit'
+              ? iHF.equal(uint(1))
+              : iHF.notEqual(uint(1)),
+          );
+        }
+        ctx = {
+          isHF: iHF.equal(uint(1)),
+          isDAG: rU(1).equal(uint(1)),
+          A: vec4(rF(0), rF(1), rF(2), rF(3)) as unknown as NV4,
+          B: vec4(rF(4), rF(5), rF(6), rF(7)) as unknown as NV4,
+          yawSc: { cy: rF(21), sy: rF(22) },
+          triStart: rU(2),
+          triCount: rU(3),
+          meshId: rU(4),
+          channel: rU(5),
+          twoSided: rU(9).equal(uint(1)),
+          wind:
+            wind && splitVariant !== 'terrain'
+              ? {
+                  h0: rF(11),
+                  dirX: rF(12),
+                  dirY: rF(13),
+                  leanBase: rF(14),
+                  swayABase: rF(15),
+                  swayPhase: rF(16),
+                  ph: rF(17),
+                  branchBase: rF(18),
+                  flutBase: rF(19),
+                  swayXPhase: rF(20),
+                }
+              : null,
+          gx: rU(6),
+          gz: rU(7),
+          qxw: rU(8),
+          oX: rF(8),
+          oZ: rF(9),
+          cell: rF(10),
+        } as unknown as VertCtx;
+      } else if (wgcache) {
         // Compute makeCtx ONCE (thread 0), broadcast through workgroup shared
         // memory, so the per-thread hot path never re-decodes the cluster. The f32
         // round-trip is exact, so the cached ctx is bit-identical to a per-thread
@@ -1172,26 +1250,45 @@ export function buildNaniteRaster(
             )
           : localTri.lessThan(ctx.triCount);
       If(swTriLive, () => {
-        const w0 = corner(localTri, 0);
-        const w1 = corner(localTri, 1);
-        const w2 = corner(localTri, 2);
-
-        const p0 = cam.vp.mul(vec4(w0, 1)).toVar();
-        const p1 = cam.vp.mul(vec4(w1, 1)).toVar();
-        const p2 = cam.vp.mul(vec4(w2, 1)).toVar();
+        const payload = itemIdx
+          .shiftLeft(uint(CLUSTER_TRI_BITS))
+          .bitOr(localTri)
+          .toVar();
+        // ── streaming vertex assembly (task #76 register-crest cut, R2): each corner
+        // flows clip→ndc→snap and its p/ndc/screen intermediates DIE before the next is
+        // built, so the crest never holds three vertices in four representations at once.
+        // nearOK folds in incrementally (no held 3× clip vec4). A near-plane-crossing
+        // vertex snaps to a saturated/garbage i32 that is DISCARDED — nearOK routes the
+        // whole triangle HW before any fixed-point value is trusted (same as before, only
+        // the snap now runs eagerly; the garbage is never read on the HW path).
+        const xiA: NI[] = [];
+        const yiA: NI[] = [];
+        const dzA: NF[] = [];
+        const W = float(cam.uW);
+        const H = float(cam.uH);
+        let nearAcc: NB | null = null;
+        for (const v of [0, 1, 2] as const) {
+          const wv = corner(localTri, v);
+          const pv = cam.vp.mul(vec4(wv, 1)).toVar();
+          const okv = pv.w.greaterThan(NEAR_EPS) as unknown as NB;
+          nearAcc = nearAcc ? nearAcc.and(okv) : okv;
+          const ndcv = pv.xyz.div(pv.w).toVar();
+          dzA[v] = ndcv.z.toVar() as unknown as NF;
+          const sv = ndcv.xy.add(1).mul(0.5).mul(vec2(W, H)).toVar();
+          xiA[v] = toI(sv.x.mul(256).round()).toVar() as unknown as NI;
+          yiA[v] = toI(sv.y.mul(256).round()).toVar() as unknown as NI;
+        }
 
         if (mode === 'depth' && rdbg === 1) {
-          // ?rdbg=1 — stop right after the 3 vertex fetch+transforms. The sink
-          // atomicMin consumes ALL THREE clip positions BEFORE the early-out, so
-          // the compiler cannot sink the fetchWorldVert/transform work past the
-          // return (it would be a side-effecting use). returnIf's guard is a
-          // runtime-true compare (uint ≥ 0) ⇒ always returns here, yet the
-          // downstream stays REACHABLE (no unreachable-code error). Isolates:
-          // work-item fetch + ctx + 3× fetchWorldVert + 3× vp transform.
-          const sinkV = p0.z
-            .div(p0.w.max(NEAR_EPS))
-            .add(p1.z.div(p1.w.max(NEAR_EPS)))
-            .add(p2.z.div(p2.w.max(NEAR_EPS)))
+          // ?rdbg=1 — stop right after the streaming vertex assembly. The sink atomicMin
+          // consumes all three dz (= p.z/p.w for each corner) BEFORE the early-out, so the
+          // compiler cannot sink the fetch/transform/ndc/snap work past the return (it
+          // would be a side-effecting use). returnIf's guard is a runtime-true compare
+          // (uint ≥ 0) ⇒ always returns here, yet downstream stays REACHABLE. Isolates:
+          // work-item fetch + ctx + 3× fetchWorldVert + 3× vp transform + ndc (+ snap).
+          const sinkV = (dzA[0] as NF)
+            .add(dzA[1] as NF)
+            .add(dzA[2] as NF)
             .mul(1 / 3)
             .clamp(0, 1);
           const sinkPx = itemIdx
@@ -1205,15 +1302,7 @@ export function buildNaniteRaster(
           returnIf(itemCount.greaterThanEqual(uint(0)));
         }
 
-        const payload = itemIdx
-          .shiftLeft(uint(CLUSTER_TRI_BITS))
-          .bitOr(localTri)
-          .toVar();
-
-        const nearOK = p0.w
-          .greaterThan(NEAR_EPS)
-          .and(p1.w.greaterThan(NEAR_EPS))
-          .and(p2.w.greaterThan(NEAR_EPS));
+        const nearOK = (nearAcc as NB).toVar();
 
         If(nearOK.not(), () => {
           // near-plane crossing → HW path clips it (never drop, F10c)
@@ -1227,53 +1316,56 @@ export function buildNaniteRaster(
             atomicStore(hwQueueV.atomic.element(base.add(uint(1))), instId);
           });
         }).Else(() => {
-          const ndc0 = p0.xyz.div(p0.w).toVar();
-          const ndc1 = p1.xyz.div(p1.w).toVar();
-          const ndc2 = p2.xyz.div(p2.w).toVar();
-          // ?ctxsm: hoist the depth z out of ndc so ndc.xy (used only by edge setup) dies
-          // before the scanline — frees ~6 regs across the hot loop. Off = the raw swizzle
-          // (ndc kept live, baseline byte-identical). Used by every ndc.z consumer below.
-          const dz0 = ctxsm ? ndc0.z.toVar() : (ndc0.z as unknown as NF);
-          const dz1 = ctxsm ? ndc1.z.toVar() : (ndc1.z as unknown as NF);
-          const dz2 = ctxsm ? ndc2.z.toVar() : (ndc2.z as unknown as NF);
-
-          const areaNdc = edgeFn(
-            ndc0.xy as unknown as NV2,
-            ndc1.xy as unknown as NV2,
-            ndc2.xy as unknown as NV2,
-          );
-          // N9-C2: front-faces pass; a two-sided (leaf) back-face is re-wound to CCW
-          // in place so the positive-area core below rasters it once (orientForRaster).
-          const accept = orientForRaster(
-            ndc1 as unknown as NV3,
-            ndc2 as unknown as NV3,
-            areaNdc as unknown as NF,
-            ctx.twoSided,
+          // R1 — winding + two-sided re-wind decided on the INTEGER twice-area the
+          // scanline already trusts. Kills the redundant float areaNdc (and edgeFn) AND the
+          // reason the three ndc had to coexist — they were kept only for edgeFn + the
+          // ndc-space swap. Snapping then swapping vert1↔2 == swapping ndc then snapping
+          // (snap is per-vertex) ⇒ the swapped xi/yi/dz are bit-identical to the old
+          // post-orientForRaster corners. The accept/flip DECISION now reads sign(area2raw)
+          // instead of sign(areaNdc): identical for every triangle whose |area| clears ~1
+          // quantum, and self-consistent with the integer coverage below (the old float
+          // winding / integer coverage split was NOT). The only difference is a
+          // sub-1/256-px sliver where float and snapped winding disagree — it covers ≤1
+          // sample (rasterGate = area2>0 AND coversSample), i.e. invisible.
+          const area2raw = yiA[2]
+            .sub(yiA[0])
+            .mul(xiA[1].sub(xiA[0]))
+            .sub(xiA[2].sub(xiA[0]).mul(yiA[1].sub(yiA[0])))
+            .toVar();
+          const flip = ctx.twoSided.and(area2raw.lessThan(toI(0))).toVar();
+          const accept = ctx.twoSided.select(
+            area2raw.notEqual(toI(0)),
+            area2raw.greaterThan(toI(0)),
           );
           If(accept, () => {
-            const W = float(cam.uW);
-            const H = float(cam.uH);
-            const s0 = ndc0.xy.add(1).mul(0.5).mul(vec2(W, H)).toVar();
-            const s1 = ndc1.xy.add(1).mul(0.5).mul(vec2(W, H)).toVar();
-            const s2 = ndc2.xy.add(1).mul(0.5).mul(vec2(W, H)).toVar();
-            // FIXED-POINT snap (N3a): 1/256-px integer grid — 8 subpixel bits,
-            // the D3D HW convention. All coverage below is exact i32 math:
-            // watertight at shared edges and bit-identical between the depth
-            // and payload kernels by construction. WGSL f32→i32 SATURATES, so
-            // far off-screen verts read as a huge extent → HW route.
-            const xi0 = toI(s0.x.mul(256).round()).toVar();
-            const yi0 = toI(s0.y.mul(256).round()).toVar();
-            const xi1 = toI(s1.x.mul(256).round()).toVar();
-            const yi1 = toI(s1.y.mul(256).round()).toVar();
-            const xi2 = toI(s2.x.mul(256).round()).toVar();
-            const yi2 = toI(s2.y.mul(256).round()).toVar();
+            // camera-facing winding: swap vert1↔vert2 (+depth) so the positive-area core
+            // rasters exactly once; the re-wound twice-area is |area2raw|. These swapped
+            // xi/yi/dz equal the old post-orientForRaster snapped corners by construction
+            // (snap is per-vertex ⇒ swap∘snap == snap∘swap). Fixed-point verts were snapped
+            // in the streaming pass above (1/256-px grid, watertight i32; f32→i32 saturates
+            // ⇒ far verts read as a huge extent → HW route via smallEnough below).
+            const xi0 = xiA[0];
+            const yi0 = yiA[0];
+            const dz0 = dzA[0];
+            const xi1 = flip.select(xiA[2], xiA[1]).toVar();
+            const xi2 = flip.select(xiA[1], xiA[2]).toVar();
+            const yi1 = flip.select(yiA[2], yiA[1]).toVar();
+            const yi2 = flip.select(yiA[1], yiA[2]).toVar();
+            const dz1 = flip.select(dzA[2], dzA[1]).toVar();
+            const dz2 = flip.select(dzA[1], dzA[2]).toVar();
+            const area2 = flip.select(area2raw.mul(toI(-1)), area2raw).toVar();
 
-            // whole-pixel bbox (trunc-div ≠ floor only below 0, where start
-            // clamps to 0 / validBB rejects — harmless)
-            const bbMinX = minI(xi0, minI(xi1, xi2)).div(toI(256)).toVar();
-            const bbMaxX = maxI(xi0, maxI(xi1, xi2)).div(toI(256)).toVar();
-            const bbMinY = minI(yi0, minI(yi1, yi2)).div(toI(256)).toVar();
-            const bbMaxY = maxI(yi0, maxI(yi1, yi2)).div(toI(256)).toVar();
+            // whole-pixel bbox via arithmetic >>8 (Task 3): a SIGNED i32 >> is
+            // sign-extending = floor(x/256), ONE shift instead of the signed /256 the
+            // compiler emitted as tint_div_i32 (real integer cost, buffer-indexing math is
+            // everywhere in that 47%). The operand stays i32 (uint() is NOT wrapped around
+            // it — that would force a logical shift and break negative off-screen bbMin),
+            // so floor holds for negatives too; vs the old trunc it can shift the SW/HW
+            // split ≤1px at an off-screen bbox edge, but both paths draw identical pixels.
+            const bbMinX = minI(xi0, minI(xi1, xi2)).shiftRight(uint(8)).toVar();
+            const bbMaxX = maxI(xi0, maxI(xi1, xi2)).shiftRight(uint(8)).toVar();
+            const bbMinY = minI(yi0, minI(yi1, yi2)).shiftRight(uint(8)).toVar();
+            const bbMaxY = maxI(yi0, maxI(yi1, yi2)).shiftRight(uint(8)).toVar();
 
             // SW only when the UNCLAMPED extent is small (the float core sized
             // the clamped box — a screen-spanning tri with a 16-px on-screen
@@ -1297,14 +1389,11 @@ export function buildNaniteRaster(
                 validBB,
               ),
               () => {
-                // integer twice-area; snapping can collapse/flip a sub-1/256-px
-                // sliver → skip (also guards the reciprocal — the float core
-                // divided blindly)
-                const area2 = yi2
-                  .sub(yi0)
-                  .mul(xi1.sub(xi0))
-                  .sub(xi2.sub(xi0).mul(yi1.sub(yi0)))
-                  .toVar();
+                // area2 (twice-area, re-wound positive) was computed at winding time
+                // above — one integer area now drives orient AND the raster. A snapped
+                // sub-1/256-px sliver collapses to ≤0 and is dropped by the rasterGate
+                // (area2>0) below, which also guards the reciprocal (the float core
+                // divided blindly).
                 // SAMPLE-MISS cull (CuRast): skip a small tri whose snapped extent contains NO pixel
                 // CENTRE (k·256+128 grid) on x OR y ⇒ it covers no sample ⇒ the scanline rasters
                 // nothing. Conservative + exact (the scanline samples at the same centres) ⇒ zero
@@ -1394,12 +1483,16 @@ export function buildNaniteRaster(
                   : area2.greaterThan(toI(0)).and(coversSample);
                 If(rasterGate, () => {
                   // edge i is opposite vertex i; ex/ey = dE per +1 UNIT (1/256 px)
-                  const ex0 = yi1.sub(yi2).toVar();
-                  const ey0 = xi2.sub(xi1).toVar();
-                  const ex1 = yi2.sub(yi0).toVar();
-                  const ey1 = xi0.sub(xi2).toVar();
-                  const ex2 = yi0.sub(yi1).toVar();
-                  const ey2 = xi1.sub(xi0).toVar();
+                  // R3: edge deltas kept LAZY (no toVar) so they never pin 6 registers
+                  // across the edge-setup crest — the bias (sign-only) and sx/sy (×256)
+                  // consume them inline; the swcoop path (default-off) recomputes them for
+                  // packEdge. Identical i32 values either way.
+                  const ex0 = yi1.sub(yi2);
+                  const ey0 = xi2.sub(xi1);
+                  const ex1 = yi2.sub(yi0);
+                  const ey1 = xi0.sub(xi2);
+                  const ex2 = yi0.sub(yi1);
+                  const ey2 = xi1.sub(xi0);
 
                   // top-left rule, same orientation convention as the float core:
                   // the boundary E == 0 is owned iff dE/dx < 0, or dE/dx == 0 and
@@ -1494,105 +1587,23 @@ export function buildNaniteRaster(
                         const cw0 = rw0.toVar();
                         const cw1 = rw1.toVar();
                         const cw2 = rw2.toVar();
-                        // PERF (UE5-gap win 1) — SCANLINE x-span. The edge value at column x is
-                        // cw_i(x) = cw_i + (x−startX)·sx_i; the row is covered where all 3 are ≥0.
-                        // Solve each edge for the crossing x = startX − cw_i/sx_i (÷-by-0 guarded),
-                        // floor/ceil + ±1 pad so the span is a guaranteed SUPERSET (f32-safe). The
-                        // EXACT per-pixel cw≥0 test below still decides coverage — this only fast-
-                        // skips the ~half of the AABB that is provably outside the triangle. Bit-
-                        // identical (skipped pixels all fail the test).
-                        const den0 = sx0
-                          .equal(toI(0))
-                          .select(
-                            toI(1),
-                            sx0 as unknown as NI,
-                          ) as unknown as NI;
-                        const den1 = sx1
-                          .equal(toI(0))
-                          .select(
-                            toI(1),
-                            sx1 as unknown as NI,
-                          ) as unknown as NI;
-                        const den2 = sx2
-                          .equal(toI(0))
-                          .select(
-                            toI(1),
-                            sx2 as unknown as NI,
-                          ) as unknown as NI;
-                        const xc0 = toF(startX).sub(
-                          toF(cw0 as unknown as NI).div(toF(den0)),
-                        );
-                        const xc1 = toF(startX).sub(
-                          toF(cw1 as unknown as NI).div(toF(den1)),
-                        );
-                        const xc2 = toF(startX).sub(
-                          toF(cw2 as unknown as NI).div(toF(den2)),
-                        );
-                        const lo0 = sx0
-                          .greaterThan(toI(0))
-                          .select(
-                            toI(xc0.floor().sub(float(1))),
-                            startX,
-                          ) as unknown as NI;
-                        const lo1 = sx1
-                          .greaterThan(toI(0))
-                          .select(
-                            toI(xc1.floor().sub(float(1))),
-                            startX,
-                          ) as unknown as NI;
-                        const lo2 = sx2
-                          .greaterThan(toI(0))
-                          .select(
-                            toI(xc2.floor().sub(float(1))),
-                            startX,
-                          ) as unknown as NI;
-                        const hi0 = sx0
-                          .lessThan(toI(0))
-                          .select(
-                            toI(xc0.ceil().add(float(1))),
-                            endX,
-                          ) as unknown as NI;
-                        const hi1 = sx1
-                          .lessThan(toI(0))
-                          .select(
-                            toI(xc1.ceil().add(float(1))),
-                            endX,
-                          ) as unknown as NI;
-                        const hi2 = sx2
-                          .lessThan(toI(0))
-                          .select(
-                            toI(xc2.ceil().add(float(1))),
-                            endX,
-                          ) as unknown as NI;
-                        // a zero-slope edge that is already negative ⇒ the whole row is empty
-                        const emptyRow = sx0
-                          .equal(toI(0))
-                          .and(cw0.lessThan(toI(0)))
-                          .or(sx1.equal(toI(0)).and(cw1.lessThan(toI(0))))
-                          .or(sx2.equal(toI(0)).and(cw2.lessThan(toI(0))));
-                        const xLo = maxI(
-                          maxI(maxI(startX, lo0), lo1),
-                          lo2,
-                        ).toVar();
-                        const xHi = minI(
-                          minI(minI(endX, hi0), hi1),
-                          hi2,
-                        ).toVar();
-                        xHi.assign(
-                          emptyRow.select(
-                            xLo.sub(toI(1)),
-                            xHi,
-                          ) as unknown as NI,
-                        );
-                        // advance the incremental edge values from startX to xLo
-                        const dxL = xLo.sub(startX).toVar();
-                        cw0.addAssign(dxL.mul(sx0));
-                        cw1.addAssign(dxL.mul(sx1));
-                        cw2.addAssign(dxL.mul(sx2));
+                        // Metal edit A/B (rowBase hoist): cam.uW is a UniformF, so
+                        // uint(cam.uW) was a per-pixel f32→u32 and y·width a per-pixel
+                        // multiply; both are row-invariant ⇒ compute once per sy row.
+                        const rowBase = uint(y).mul(uint(cam.uW)).toVar();
+                        // Task 2: BRUTE full-bbox walk. The old per-scanline x-span
+                        // tightening (den/xc/lo/hi/emptyRow + the advance-to-xLo — ~18
+                        // registers + a wall of integer conditionals per row) only pays off
+                        // on large triangles, which already route to the bin / HW. In the
+                        // ≤16px SW path it costs more than it saves: walk every pixel in the
+                        // box, testing the 3 edge functions. The exact per-pixel cw≥0 test
+                        // still decides coverage ⇒ byte-identical (the columns the x-span
+                        // solve skipped all failed that test anyway). cw0..2 start at the
+                        // startX edge value (rw, no advance) and step by sx per pixel.
                         loopI(
                           'sx',
-                          xLo as unknown as NI,
-                          xHi as unknown as NI,
+                          startX as unknown as NI,
+                          endX as unknown as NI,
                           (x) => {
                             If(
                               cw0
@@ -1626,9 +1637,7 @@ export function buildNaniteRaster(
                                       .greaterThanEqual(0)
                                       .and(cz.lessThanEqual(1)),
                                     () => {
-                                      const px = uint(y)
-                                        .mul(uint(cam.uW))
-                                        .add(uint(x));
+                                      const px = rowBase.add(uint(x));
                                       const bits = bcF2U(cz as unknown as NF);
                                       if (mode === 'depth') {
                                         const cur = aLoadU(
@@ -1904,7 +1913,7 @@ export function buildNaniteRaster(
         // The barrier is at KERNEL TOP SCOPE: every returnIf above it is driven by
         // read-only-storage values (uniform to naga — the wgcache-barrier precedent);
         // the storage-derived voxel skip became a guard, not a return.
-        workgroupBarrier(); // Phase A records complete before the compaction scan
+        //workgroupBarrier(); // Phase A records complete before the compaction scan
         // thread-0 COMPACTION: serial scan of the sparse slots into a dense list +
         // count (no workgroup atomics in r184 TSL — WorkgroupInfoNode has no atomic
         // element type, so an atomicAdd append can't be expressed; a single-lane
@@ -1926,7 +1935,7 @@ export function buildNaniteRaster(
           );
           wgW(swSh.count, uint(0), n);
         });
-        workgroupBarrier(); // compacted list visible to all lanes
+        //workgroupBarrier(); // compacted list visible to all lanes
         const laneB = localX();
         const nLarge = (swSh.count.element(uint(0)) as unknown as NU).toVar();
         loopUN('swct', uint(0), nLarge, (li) => {
@@ -2053,6 +2062,91 @@ export function buildNaniteRaster(
   // attr so the batched world1 below dispatches it at its tight rasterDispatchFull size
   // instead of the baked QRASTER_CAP×MAX_CLUSTER_TRIS (~1B-thread) grid.
   setIndirectDispatch(kRasterWorld1, cull.rasterDispatchFullAttr);
+  // Task 1: the per-cluster ctx PRE-PASS kernel. ONE thread per visible cluster via a
+  // DIRECT fixed grid (instanceIndex) + early-out — no indirect-arg-in-batch hazard, and
+  // launch of the ~15625 idle-tail workgroups is < the makeCtx it replaces. Computes the
+  // UNIFIED makeCtx (variant 'both') and writes the 35-word ctx the world1 raster reads.
+  const kClusterCtx =
+    ctxPrepass && clusterCtxV
+      ? (() => {
+          const kn = Fn(() => {
+            const tid = instanceIndex;
+            const count = qRasterRO.element(0).x;
+            returnIf(tid.greaterThanEqual(count));
+            const item = qRasterRO.element(tid.add(uint(1)));
+            const instId = item.x.toVar();
+            const ci = item.y.toVar();
+            const c = makeCtx(instId, ci);
+            const base = tid.mul(uint(CTX_STRIDE)).toVar();
+            const wU = (i: number, v: NU): void =>
+              void (
+                clusterCtxV.rw.element(base.add(uint(i))) as unknown as {
+                  assign(x: NU): unknown;
+                }
+              ).assign(v);
+            const wF = (i: number, v: NF): void =>
+              void (
+                clusterCtxV.rw.element(
+                  base.add(uint(CTX_U + i)),
+                ) as unknown as { assign(x: NU): unknown }
+              ).assign(bcF2U(v as unknown as NF));
+            wU(0, b2u(c.isHF));
+            wU(1, b2u(c.isDAG));
+            wU(2, c.triStart);
+            wU(3, c.triCount);
+            wU(4, c.meshId);
+            wU(5, c.channel);
+            wU(6, c.gx);
+            wU(7, c.gz);
+            wU(8, c.qxw);
+            wU(9, b2u(c.twoSided));
+            wU(
+              10,
+              elemU(gpu.meshes, c.meshId.mul(uint(MESH_WORDS)).add(uint(6)))
+                .shiftRight(uint(8))
+                .bitAnd(uint(0xff)),
+            );
+            if (clhw) {
+              wU(
+                11,
+                b2u(
+                  clusterHwClass(gpu, cam.camPos as unknown as NV3, projK, instId, ci, clhwMax),
+                ),
+              );
+            } else {
+              wU(11, uint(0));
+            }
+            wF(0, c.A.x as unknown as NF);
+            wF(1, c.A.y as unknown as NF);
+            wF(2, c.A.z as unknown as NF);
+            wF(3, c.A.w as unknown as NF);
+            wF(4, c.B.x as unknown as NF);
+            wF(5, c.B.y as unknown as NF);
+            wF(6, c.B.z as unknown as NF);
+            wF(7, c.B.w as unknown as NF);
+            wF(8, c.oX);
+            wF(9, c.oZ);
+            wF(10, c.cell);
+            if (wind) {
+              const w = c.wind as NonNullable<VertCtx['wind']>;
+              wF(11, w.h0);
+              wF(12, w.dirX);
+              wF(13, w.dirY);
+              wF(14, w.leanBase);
+              wF(15, w.swayABase);
+              wF(16, w.swayPhase);
+              wF(17, w.ph);
+              wF(18, w.branchBase);
+              wF(19, w.flutBase);
+              wF(20, w.swayXPhase);
+            }
+            wF(21, c.yawSc.cy);
+            wF(22, c.yawSc.sy);
+          })().compute(QRASTER_CAP, [64]);
+          (kn as unknown as ComputeKernel).setName('nanClusterCtxPrepass');
+          return kn;
+        })()
+      : null;
   // ?ksplit (PERF task #76): the two class-specialized world1 kernels. Named per variant
   // so a capture reads the split cleanly (nanRasterWorld1Explicit = the leaf/trunk whale
   // shed of terrainDispAt; nanRasterWorld1Terrain = heightfield, no transform/wind). Both
@@ -2650,6 +2744,11 @@ export function buildNaniteRaster(
     // exactly like the mesh winners do.
     dispatchBatchMixed(renderer, [
       kVisClear,
+      // Task 1: the ctx PRE-PASS runs right after the clear, BEFORE the raster — its
+      // global ctx writes are visible to the raster's cache-coherent reads via the same
+      // in-pass storage sync that carries kVisClear→raster. Removes the raster's thread-0
+      // makeCtx divergence + barrier. Only present on the world1 (singlePass) instance.
+      ...(kClusterCtx ? [kClusterCtx as unknown] : []),
       // ?ksplit: the two class kernels REPLACE the unified world1 in the SAME compute
       // pass — no barrier between them, so the order-independent atomic election merges
       // both, and (because they share vis via atomics, not disjoint buffers) they are
