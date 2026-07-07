@@ -37,11 +37,17 @@ export const HW_CAP = 2_097_152;
 // ~167 MB respectively. If the RAW append count exceeds a cap the extra fragments are
 // DROPPED (overflow → holes) and WHICH subset lands is the non-deterministic atomic
 // order ⇒ the field blinks; midQueue goes 2-D dispatch to cover past the 1-D ceiling.
-export const SPLAT_CAP = 4_194_240;
-export const MID_CAP = 4_194_240;
-// Mid record = 10 u32 of the ALREADY-PROJECTED, ALREADY-WOUND corners (xi0,yi0,xi1,yi1,
-// xi2,yi2 i32 bits; dz0,dz1,dz2 f32 bits; payload). Consumer recomputes edge-setup.
-export const MID_STRIDE = 10;
+export const SPLAT_CAP = 4_194_240; // 1-D dispatch, sub-pixel is a couple % ⇒ fits.
+// MID goes 2-D dispatch + a 1-u32 record, so the cap can cover the dense-forest mid count
+// (~32-35M tris) cheaply — 40M × 4 B = ~168 MB (was 1.28 GB at the old 10-u32 record). Below
+// this the atomic-append order drops a non-deterministic subset ⇒ the mid field blinks.
+export const MID_CAP = 41_943_040;
+// Mid record = 1 u32: the tri id (payload = itemIdx<<CLUSTER_TRI_BITS | localTri). The
+// consumer (nanMidRaster) re-reads the tri's 3 already-projected corners from projVertBuf
+// (they were projected once by nanProjectVerts and never freed) and re-derives the winding
+// + edge-setup — so the fat 10-u32 corner record (xi0..yi2 + dz0..2 + payload) collapses to
+// the id alone: ~10× smaller midQueue at zero projection cost + bit-identical render.
+export const MID_STRIDE = 1;
 
 /** Tail-fold pyramid level descriptor for the ?trihzb mirror (sizes the hwQueue tail). */
 export interface TriHzbLevel {

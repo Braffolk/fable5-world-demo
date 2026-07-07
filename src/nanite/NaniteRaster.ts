@@ -82,7 +82,6 @@ import {
 import {
   aLoadU,
   bcF2U,
-  bcI2U,
   bcU2F,
   bcU2I,
   dispatch,
@@ -111,6 +110,7 @@ import type { BufOf, UV2 } from './Tsl';
 import { CTX_STRIDE, CTX_U, buildClusterCtx } from './raster/ClusterCtx';
 import { buildHw } from './raster/Hw';
 import { buildMid } from './raster/Mid';
+import { NEAR_SENTINEL, PROJ_CLUSTER_CAP, buildProject, canonVertSlot } from './raster/Project';
 import {
   HW_CAP,
   MID_CAP,
@@ -258,11 +258,11 @@ export function buildNaniteRaster(
     voxF2bK?: number;
     voxF2bEnabled?: boolean;
     voxPrevEnabled?: boolean;
-    /** ?clhw per-cluster SW/HW split (NaniteCull). qHwRasterRO = HW-cluster qRaster
-     *  indices; hwClusterDrawAttr = the instanced draw args. Present (non-null) only
-     *  when ?clhw is on; the SW world1 kernel skips these clusters + the instanced HW
-     *  draw paints them properly. */
-    clhwEnabled?: boolean;
+    /** per-cluster SW/HW split (NaniteCull). qHwRasterRO = HW-cluster qRaster indices;
+     *  hwClusterDrawAttr = the instanced draw args. Present on every buildNaniteCull cull
+     *  (the split is the permanent default); the SW world1 kernel skips these clusters +
+     *  the instanced HW draw paints them properly. ABSENT only on the shadow-clipmap queue
+     *  (ClipLevelQueue, depth-only) which never runs the HW-cluster instanced draw. */
     qHwRasterRO?: StorageBufferNode<'uint'> | null;
     hwClusterDrawAttr?: IndirectStorageBufferAttribute | null;
   },
@@ -449,14 +449,14 @@ export function buildNaniteRaster(
   const relect = Number(
     new URLSearchParams(window.location.search).get('relect') ?? '1',
   );
-  // ?clhw per-cluster SW/HW split (see docs/mobile-gpu-perf/SW-HW-CLUSTER-AUDIT.md). The SW
-  // world1 kernel skips clusters the cull classified HW (clusterHwClass, bit-identical to
+  // per-cluster SW/HW split (see docs/mobile-gpu-perf/SW-HW-CLUSTER-AUDIT.md). The SW world1
+  // kernel skips clusters the cull classified HW (clusterHwClass, bit-identical to
   // kHwPartition ⇒ no holes/double), and an instanced HW draw paints those clusters properly.
-  // Requires cull.qHwRasterRO + cull.hwClusterDrawAttr (present only when the cull saw ?clhw).
-  const clhw =
-    new URLSearchParams(window.location.search).get('clhw') === '1' &&
-    !!cull.qHwRasterRO &&
-    !!cull.hwClusterDrawAttr;
+  // The split is the PERMANENT DEFAULT — it runs whenever the cull carries the HW partition
+  // (every buildNaniteCull cull: camera/view/shadow). The ONLY cull without it is the
+  // shadow-clipmap queue (ClipLevelQueue, depth-only), which never runs the world1 path or
+  // the HW-cluster draw — so this presence check keeps that path untouched.
+  const clhw = !!cull.qHwRasterRO && !!cull.hwClusterDrawAttr;
   const clhwMax = Math.max(
     2,
     Number(new URLSearchParams(window.location.search).get('clhwmax') ?? '16') || 16,
@@ -522,7 +522,7 @@ export function buildNaniteRaster(
   // ── DIAGNOSTIC path isolation (task #76 de-über debug; TEMPORARY — remove once the blink
   // is pinned). Independently DROP each of world1's routed classes to see one in isolation:
   // ?nospl = ≤1px splat, ?nomid = 2..swmax mid, ?nohw = big/near HW (world1's per-tri append).
-  // e.g. ?clhw=0&nospl=1&nohw=1 = ONLY the mid-band SW tris render (isolates nanMidRaster).
+  // e.g. ?nospl=1&nohw=1 = ONLY the mid-band SW tris render (isolates nanMidRaster).
   const dbgQ = new URLSearchParams(window.location.search);
   const dbgNoSpl = dbgQ.get('nospl') === '1';
   const dbgNoMid = dbgQ.get('nomid') === '1';
@@ -623,10 +623,31 @@ export function buildNaniteRaster(
     qRasterRO,
     makeCtx,
     projK,
-    clhw,
     clhwMax,
     wind,
     b2u,
+  });
+
+  // ─── Step 2 (vis-buffer rewrite): the per-VERTEX projection PRE-PASS (./raster/Project).
+  // Runs the SAME transform + wind + clip → NDC → 1/256-px snap world1 did inline per tri-
+  // corner, ONCE per corner, into projVertBuf; the world1 raster below READS the 3 pre-
+  // projected corners by slot instead of projecting (its 64-reg projection floor deleted).
+  // Bit-identical: same 35-word ctx (from clusterCtxV), same nfetch.fetchWorldVert, VERBATIM
+  // projectVert(). WORLD1 (singlePass = ctxPrepass) only; null everywhere else. See the file
+  // header for the per-CORNER slotting rationale (terrain has no universal dedup key).
+  const {
+    projVertV,
+    kProjectVerts,
+    vertsPerCluster: projVertsPerCluster,
+  } = buildProject({
+    ctxPrepass,
+    cam,
+    qRasterRO,
+    clusterCtxV,
+    nfetch,
+    hasWind: !!wind,
+    rasterDispatchFullAttr: cull.rasterDispatchFullAttr,
+    indices: gpu.indices,
   });
 
   // SWCOOP workgroup-shared element write (the NaniteVoxelRaster wgSet idiom —
@@ -709,18 +730,27 @@ export function buildNaniteRaster(
       const localTri = localX().toVar();
       const itemCount = qRasterRO.element(0).x;
       returnIf(itemIdx.greaterThanEqual(itemCount));
+      // Step 2 (vis-buffer rewrite): the projVertBuf reserves PROJ_CLUSTER_CAP cluster slots
+      // (< QRASTER_CAP so the buffer stays bindable). A cluster past the cap has no pre-
+      // projected verts (nanProjectVerts guards the same bound) ⇒ skip it here too so its
+      // corner slots are never read — a uniform per-workgroup early-out (before any barrier).
+      // Parity requires the frame's visible-cluster count ≤ PROJ_CLUSTER_CAP (see Project.ts).
+      if (mode === 'world1' && ctxPrepass) {
+        returnIf(itemIdx.greaterThanEqual(uint(PROJ_CLUSTER_CAP)));
+      }
       const item = qRasterRO.element(itemIdx.add(uint(1)));
       const instId = item.x.toVar();
       const ci = item.y.toVar();
-      // ?clhw: skip clusters the cull routed to the HW instanced draw. The decision is
+      // SW/HW split: skip clusters the cull routed to the HW instanced draw. The decision is
       // clusterHwClass — BIT-IDENTICAL to kHwPartition's — so the SW-skip and the HW-append
       // can never disagree (no holes, no double-raster) without touching qRaster. UNIFORM
       // across the workgroup (instId/ci are per-cluster) and BEFORE any barrier ⇒ every live
-      // thread returns together, no barrier deadlock. Built only under ?clhw&&world1.
-      // ?clhw SW-skip: HW clusters are painted by the instanced HW draw, so the SW kernel
-      // returns them here. With wgcache ON (default) the classify is computed ONCE on thread 0
-      // and broadcast (slot 10, below) — NOT 128×/cluster on the SW hot path. The ?wgcache=0
-      // fallback classifies per-thread (the result is uniform ⇒ all threads return together).
+      // thread returns together, no barrier deadlock. `clhw` = the cull carries the partition
+      // (true on every world1 = camera raster; false only on the partition-less shadow-clipmap
+      // world1 kernel, which is never dispatched). HW clusters are painted by the instanced HW
+      // draw, so the SW kernel returns them here. With wgcache ON (default) the classify is
+      // computed ONCE on thread 0 and broadcast (slot 11, below) — NOT 128×/cluster on the SW
+      // hot path. The ?wgcache=0 fallback classifies per-thread (uniform ⇒ all threads return).
       if (clhw && mode === 'world1' && !wgcache) {
         returnIf(
           clusterHwClass(gpu, cam.camPos as unknown as NV3, projK, instId, ci, clhwMax),
@@ -1226,70 +1256,109 @@ export function buildNaniteRaster(
         const xiA: NI[] = [];
         const yiA: NI[] = [];
         const dzA: NF[] = [];
-        const W = float(cam.uW);
-        const H = float(cam.uH);
         let nearAcc: NB | null = null;
-        for (const v of [0, 1, 2] as const) {
-          const wv = corner(localTri, v);
-          const pv = cam.vp.mul(vec4(wv, 1)).toVar();
-          const okv = pv.w.greaterThan(NEAR_EPS) as unknown as NB;
-          nearAcc = nearAcc ? nearAcc.and(okv) : okv;
-          const ndcv = pv.xyz.div(pv.w).toVar();
-          dzA[v] = ndcv.z.toVar() as unknown as NF;
-          const sv = ndcv.xy.add(1).mul(0.5).mul(vec2(W, H)).toVar();
-          xiA[v] = toI(sv.x.mul(256).round()).toVar() as unknown as NI;
-          yiA[v] = toI(sv.y.mul(256).round()).toVar() as unknown as NI;
-        }
+        if (mode === 'world1' && ctxPrepass && projVertV) {
+          // ── Step 2 (vis-buffer rewrite): world1 no longer PROJECTS here — it READS the 3
+          // pre-projected corners nanProjectVerts wrote to projVertBuf THIS frame. That
+          // deletes the inline fetch + vp transform + ndc + snap = world1's 64-reg projection
+          // floor (the register win). Slot = canonVertSlot (DEDUPED: mesh reads gpu.indices for
+          // vi−vBase, terrain per-corner); record = xi(i32) | yi(i32) | dz(f32). Bit-identical:
+          // nanProjectVerts ran the VERBATIM projectVert() on the SAME fetchWorldVert(ctx,
+          // localTri,v) world (same 35-word ctx) into the SAME canonical slot, so these xi/yi/dz
+          // equal world1's old inline values exactly. A near-crossing corner carries NEAR_SENTINEL
+          // in its dz word ⇒ nearOK = AND(dz ≠ sentinel) reproduces the old w>NEAR_EPS gate EXACTLY
+          // (raw-u32 compare; the garbage dz is unread when nearOK is false — the tri routes HW).
+          // world1 re-binds gpu.indices ONLY (for the mesh dedup key) ⇒ 7 → 8 storage buffers.
+          const recCluster = itemIdx.mul(uint(projVertsPerCluster)).toVar();
+          for (const v of [0, 1, 2] as const) {
+            const rb = canonVertSlot(
+              recCluster,
+              ctx.triStart as unknown as NU,
+              ctx.isHF as unknown as NB,
+              localTri,
+              v,
+              gpu.indices,
+            ).toVar();
+            const zw = elemU(projVertV.ro, rb.add(uint(2))).toVar();
+            xiA[v] = bcU2I(
+              elemU(projVertV.ro, rb),
+            ).toVar() as unknown as NI;
+            yiA[v] = bcU2I(
+              elemU(projVertV.ro, rb.add(uint(1))),
+            ).toVar() as unknown as NI;
+            dzA[v] = bcU2F(zw).toVar() as unknown as NF;
+            const okv = zw.notEqual(uint(NEAR_SENTINEL)) as unknown as NB;
+            nearAcc = nearAcc ? nearAcc.and(okv) : okv;
+          }
+        } else {
+          // ── streaming vertex assembly (depth/combined — inline projection, VERBATIM): each
+          // corner flows clip→ndc→snap and its p/ndc/screen intermediates DIE before the next
+          // is built, so the crest never holds three vertices in four representations at once.
+          // nearOK folds in incrementally. A near-plane-crossing vertex snaps to a saturated/
+          // garbage i32 that is DISCARDED — nearOK routes the whole triangle HW before any
+          // fixed-point value is trusted (the garbage is never read on the HW path).
+          const W = float(cam.uW);
+          const H = float(cam.uH);
+          for (const v of [0, 1, 2] as const) {
+            const wv = corner(localTri, v);
+            const pv = cam.vp.mul(vec4(wv, 1)).toVar();
+            const okv = pv.w.greaterThan(NEAR_EPS) as unknown as NB;
+            nearAcc = nearAcc ? nearAcc.and(okv) : okv;
+            const ndcv = pv.xyz.div(pv.w).toVar();
+            dzA[v] = ndcv.z.toVar() as unknown as NF;
+            const sv = ndcv.xy.add(1).mul(0.5).mul(vec2(W, H)).toVar();
+            xiA[v] = toI(sv.x.mul(256).round()).toVar() as unknown as NI;
+            yiA[v] = toI(sv.y.mul(256).round()).toVar() as unknown as NI;
+          }
 
-        if (mode === 'world1' && rdbg === 5) {
-          // ?rdbg=5 (world1) — STOP right after the 3-corner projection (fetch + vp
-          // transform + ndc + snap), BEFORE winding/bbox/edge-setup. Bisects the
-          // rdbg2 (=76) setup peak: rdbg5 ≈ 76 ⇒ the PROJECTION is the register wall;
-          // rdbg5 ≪ 76 ⇒ winding/edge-setup adds it. Sinks all 9 fixed-point coords +
-          // 3 dz so fetch/transform/project/snap cannot be DCE'd past the return.
-          const sinkV = (dzA[0] as NF)
-            .add(dzA[1] as NF)
-            .add(dzA[2] as NF)
-            .add(toF(xiA[0] as unknown as NI))
-            .add(toF(yiA[0] as unknown as NI))
-            .add(toF(xiA[1] as unknown as NI))
-            .add(toF(yiA[1] as unknown as NI))
-            .add(toF(xiA[2] as unknown as NI))
-            .add(toF(yiA[2] as unknown as NI))
-            .mul(1 / 9)
-            .clamp(0, 1);
-          const sinkPx = itemIdx
-            .mul(uint(2654435761))
-            .add(localTri)
-            .mod(uint(pixelCount));
-          atomicMin(
-            visDepthV.atomic.element(sinkPx),
-            bcF2U(sinkV as unknown as NF),
-          );
-          returnIf(itemCount.greaterThanEqual(uint(0)));
-        }
+          if (mode === 'world1' && rdbg === 5) {
+            // ?rdbg=5 (world1) — STOP right after the 3-corner projection (fetch + vp
+            // transform + ndc + snap), BEFORE winding/bbox/edge-setup. (Only the non-
+            // ctxPrepass world1 build reaches here; the shipped world1 now reads projVertBuf.)
+            const sinkV = (dzA[0] as NF)
+              .add(dzA[1] as NF)
+              .add(dzA[2] as NF)
+              .add(toF(xiA[0] as unknown as NI))
+              .add(toF(yiA[0] as unknown as NI))
+              .add(toF(xiA[1] as unknown as NI))
+              .add(toF(yiA[1] as unknown as NI))
+              .add(toF(xiA[2] as unknown as NI))
+              .add(toF(yiA[2] as unknown as NI))
+              .mul(1 / 9)
+              .clamp(0, 1);
+            const sinkPx = itemIdx
+              .mul(uint(2654435761))
+              .add(localTri)
+              .mod(uint(pixelCount));
+            atomicMin(
+              visDepthV.atomic.element(sinkPx),
+              bcF2U(sinkV as unknown as NF),
+            );
+            returnIf(itemCount.greaterThanEqual(uint(0)));
+          }
 
-        if (mode === 'depth' && rdbg === 1) {
-          // ?rdbg=1 — stop right after the streaming vertex assembly. The sink atomicMin
-          // consumes all three dz (= p.z/p.w for each corner) BEFORE the early-out, so the
-          // compiler cannot sink the fetch/transform/ndc/snap work past the return (it
-          // would be a side-effecting use). returnIf's guard is a runtime-true compare
-          // (uint ≥ 0) ⇒ always returns here, yet downstream stays REACHABLE. Isolates:
-          // work-item fetch + ctx + 3× fetchWorldVert + 3× vp transform + ndc (+ snap).
-          const sinkV = (dzA[0] as NF)
-            .add(dzA[1] as NF)
-            .add(dzA[2] as NF)
-            .mul(1 / 3)
-            .clamp(0, 1);
-          const sinkPx = itemIdx
-            .mul(uint(2654435761))
-            .add(localTri)
-            .mod(uint(pixelCount));
-          atomicMin(
-            visDepthV.atomic.element(sinkPx),
-            bcF2U(sinkV as unknown as NF),
-          );
-          returnIf(itemCount.greaterThanEqual(uint(0)));
+          if (mode === 'depth' && rdbg === 1) {
+            // ?rdbg=1 — stop right after the streaming vertex assembly. The sink atomicMin
+            // consumes all three dz (= p.z/p.w for each corner) BEFORE the early-out, so the
+            // compiler cannot sink the fetch/transform/ndc/snap work past the return (it
+            // would be a side-effecting use). returnIf's guard is a runtime-true compare
+            // (uint ≥ 0) ⇒ always returns here, yet downstream stays REACHABLE. Isolates:
+            // work-item fetch + ctx + 3× fetchWorldVert + 3× vp transform + ndc (+ snap).
+            const sinkV = (dzA[0] as NF)
+              .add(dzA[1] as NF)
+              .add(dzA[2] as NF)
+              .mul(1 / 3)
+              .clamp(0, 1);
+            const sinkPx = itemIdx
+              .mul(uint(2654435761))
+              .add(localTri)
+              .mod(uint(pixelCount));
+            atomicMin(
+              visDepthV.atomic.element(sinkPx),
+              bcF2U(sinkV as unknown as NF),
+            );
+            returnIf(itemCount.greaterThanEqual(uint(0)));
+          }
         }
 
         const nearOK = (nearAcc as NB).toVar();
@@ -1717,9 +1786,13 @@ export function buildNaniteRaster(
                         },
                       ).Else(() => {
                         // mid band (2..MAX_RASTER_SIZE; big/near already went to HW above) →
-                        // append the pre-projected, pre-wound corners to midQueue. nanMidRaster
-                        // rasterizes them ONCE via the shared swScanline. world1 itself now runs
-                        // NO coverage loop — it only projects + routes.
+                        // append ONLY the 1-u32 tri id (payload). nanMidRaster re-reads the tri's
+                        // 3 corners from projVertBuf (via canonVertSlot, the SAME deduped slot the classifier
+                        // read), re-derives the identical winding + edge-setup, and rasterizes ONCE
+                        // via the shared swScanline. Storing just the id (was 10 u32 of already-
+                        // projected/wound corners) is the ~10× midQueue shrink — the projected
+                        // verts already live in projVertBuf, so re-reading them is free of any new
+                        // projection. world1 itself runs NO coverage loop — it only projects + routes.
                         if (midQueueV && !dbgNoMid) {
                           const slot = atomicAdd(
                             midQueueV.atomic.element(0),
@@ -1727,46 +1800,7 @@ export function buildNaniteRaster(
                           ) as unknown as NU;
                           If(slot.lessThan(uint(MID_CAP)), () => {
                             const mb = uint(1).add(slot.mul(uint(MID_STRIDE)));
-                            atomicStore(
-                              midQueueV.atomic.element(mb),
-                              bcI2U(xi0 as unknown as NI),
-                            );
-                            atomicStore(
-                              midQueueV.atomic.element(mb.add(uint(1))),
-                              bcI2U(yi0 as unknown as NI),
-                            );
-                            atomicStore(
-                              midQueueV.atomic.element(mb.add(uint(2))),
-                              bcI2U(xi1 as unknown as NI),
-                            );
-                            atomicStore(
-                              midQueueV.atomic.element(mb.add(uint(3))),
-                              bcI2U(yi1 as unknown as NI),
-                            );
-                            atomicStore(
-                              midQueueV.atomic.element(mb.add(uint(4))),
-                              bcI2U(xi2 as unknown as NI),
-                            );
-                            atomicStore(
-                              midQueueV.atomic.element(mb.add(uint(5))),
-                              bcI2U(yi2 as unknown as NI),
-                            );
-                            atomicStore(
-                              midQueueV.atomic.element(mb.add(uint(6))),
-                              bcF2U(dz0 as unknown as NF),
-                            );
-                            atomicStore(
-                              midQueueV.atomic.element(mb.add(uint(7))),
-                              bcF2U(dz1 as unknown as NF),
-                            );
-                            atomicStore(
-                              midQueueV.atomic.element(mb.add(uint(8))),
-                              bcF2U(dz2 as unknown as NF),
-                            );
-                            atomicStore(
-                              midQueueV.atomic.element(mb.add(uint(9))),
-                              payload,
-                            );
+                            atomicStore(midQueueV.atomic.element(mb), payload);
                           });
                         }
                       });
@@ -2120,6 +2154,10 @@ export function buildNaniteRaster(
   const kMidRaster = buildMid({
     midQueueV,
     midDrawAttr,
+    projVertV,
+    clusterCtxV,
+    indices: gpu.indices,
+    vertsPerCluster: projVertsPerCluster,
     swScanline,
     elect,
     width,
@@ -2222,9 +2260,10 @@ export function buildNaniteRaster(
   (kScarCovered as unknown as ComputeKernel).setName('nanScarCovered');
 
   // ---- HW big/near-triangle path (./raster/Hw): the vertex-pulling materials + scenes +
-  // render wrappers + kHwArgs. `clhw` preserved exactly (the instanced per-cluster draw is
-  // built only when the cull supplied qHwRaster/hwClusterDraw). The fragment stage writes
-  // the SAME vis buffers via the shared election ⇒ resolve unchanged.
+  // render wrappers + kHwArgs. The instanced per-cluster draw is built whenever the cull
+  // supplied qHwRaster/hwClusterDraw (every camera/view/shadow cull; absent only on the
+  // shadow-clipmap queue). The fragment stage writes the SAME vis buffers via the shared
+  // election ⇒ resolve unchanged.
   const hw = buildHw({
     cam,
     width,
@@ -2240,7 +2279,6 @@ export function buildNaniteRaster(
     scar,
     scarEl,
     hwrt,
-    clhw,
     qHwRasterRO: cull.qHwRasterRO ?? null,
     hwClusterDrawAttr: cull.hwClusterDrawAttr ?? null,
   });
@@ -2486,6 +2524,11 @@ export function buildNaniteRaster(
       // in-pass storage sync that carries kVisClear→raster. Removes the raster's thread-0
       // makeCtx divergence + barrier. Only present on the world1 (singlePass) instance.
       ...(kClusterCtx ? [kClusterCtx as unknown] : []),
+      // Step 2 (vis-buffer rewrite): the per-VERTEX projection PRE-PASS runs after the ctx
+      // pre-pass, BEFORE the raster/classifier — project → classify order. Its projVertBuf
+      // writes are visible to the raster's reads via the same in-pass storage sync the batch
+      // gives clear→ctx→raster. Only present on the world1 (singlePass) instance.
+      ...(kProjectVerts ? [kProjectVerts as unknown] : []),
       // ?ksplit: the two class kernels REPLACE the unified world1 in the SAME compute
       // pass — no barrier between them, so the order-independent atomic election merges
       // both, and (because they share vis via atomics, not disjoint buffers) they are
@@ -2508,10 +2551,11 @@ export function buildNaniteRaster(
       ...(kMidRaster ? [kMidRaster as unknown] : []),
     ]);
     hwRender(renderer, camera, hwWorld1Mat);
-    // ?clhw: paint the big/near CLUSTERS the SW pass skipped, as proper instanced HW draws
-    // (one instance/cluster, single transform). Same election ⇒ folds into the vis buffers
-    // alongside the SW + soup winners, before grass/voxel pre-seed from them.
-    if (clhw) hwRenderCluster(renderer, camera);
+    // paint the big/near CLUSTERS the SW pass skipped, as proper instanced HW draws (one
+    // instance/cluster, single transform). Same election ⇒ folds into the vis buffers
+    // alongside the SW + soup winners, before grass/voxel pre-seed from them. (world1 is
+    // the camera path ⇒ the cull always carries the partition; hwRenderCluster self-guards.)
+    hwRenderCluster(renderer, camera);
     // grass blade HW pass (own depth target, early-z primed from the election —
     // which now holds the mesh SW+HW winners + the grass SW slivers).
     if (grass?.enabled()) grass.renderHw(renderer, camera);

@@ -206,15 +206,13 @@ export interface NaniteCullChain {
   /** ?voxprev two-pass visibility partition active (implies voxF2bEnabled, K=2;
    *  spec-prev-frame-occlusion §2.4). Gates the voxB0/voxB1 meter counters. */
   voxPrevEnabled: boolean;
-  /** ?clhw per-cluster SW/HW split active (default off). */
-  clhwEnabled: boolean;
-  /** ?clhw: HW-cluster work queue — [i] = the qRaster index (tid) of the i-th big/near
-   *  triangle cluster; the instanced HW draw reads one per instanceIndex. null when off. */
-  qHwRasterRO: StorageBufferNode<'uint'> | null;
-  /** ?clhw: instanced draw args [vertexCount, instanceCount, 0, 0] for the HW-cluster draw. */
-  hwClusterDrawAttr: IndirectStorageBufferAttribute | null;
-  /** ?clhw: [kHwPartitionArgs, kHwPartition, kHwClusterArgs] to fold into the cull submit
-   *  AFTER voxFanoutBatch (reads the cut → qHwRaster). [] when off. */
+  /** per-cluster SW/HW split: HW-cluster work queue — [i] = the qRaster index (tid) of the
+   *  i-th big/near triangle cluster; the instanced HW draw reads one per instanceIndex. */
+  qHwRasterRO: StorageBufferNode<'uint'>;
+  /** instanced draw args [vertexCount, instanceCount, 0, 0] for the HW-cluster draw. */
+  hwClusterDrawAttr: IndirectStorageBufferAttribute;
+  /** [kHwPartitionArgs, kHwPartition, kHwClusterArgs] to fold into the cull submit
+   *  AFTER voxFanoutBatch (reads the cut → qHwRaster). */
   hwPartitionBatch(): readonly unknown[];
   /** phase 1: clear → instance cull → cluster cull → raster args */
   runPhase1(renderer: Renderer): void;
@@ -561,38 +559,35 @@ export function buildNaniteCull(
     3,
   ).rw;
 
-  // ── ?clhw per-CLUSTER SW/HW split (see docs/mobile-gpu-perf/SW-HW-CLUSTER-AUDIT.md) ──────
+  // ── per-CLUSTER SW/HW split (see docs/mobile-gpu-perf/SW-HW-CLUSTER-AUDIT.md) ────────────
   // kHwPartition re-scans the cut and appends the qRaster INDEX (tid) of every big/near
   // TRIANGLE cluster to qHwRaster. The SW world1 kernel skips those clusters (the SAME
   // clusterHwClass decision — no qRaster mutation, so resolve/soup/voxel readers are
   // untouched) and the HW instanced draw paints them PROPERLY: one instance per cluster,
   // vertices transformed once (vs the per-tri soup that double-transforms & shares nothing).
-  // Allocated ONLY under ?clhw (default off ⇒ 0 buffers, 0 kernels, byte-identical frame).
-  const clhw = new URLSearchParams(window.location.search).get('clhw') === '1';
+  // ALWAYS built (the split is the permanent default); ?clhwmax tunes the SW↔HW crossover.
   const clhwMax = Math.max(
     2,
     Number(new URLSearchParams(window.location.search).get('clhwmax') ?? '16') || 16,
   );
-  const qHwRasterAttr = clhw ? new StorageBufferAttribute(new Uint32Array(qCap), 1) : null;
-  if (qHwRasterAttr) qHwRasterAttr.name = 'nanQHwRaster';
-  const qHwRasterV = qHwRasterAttr ? sU32Views(qHwRasterAttr, qCap) : null;
-  const hwPartCountAttr = clhw ? new StorageBufferAttribute(new Uint32Array(1), 1) : null;
-  if (hwPartCountAttr) hwPartCountAttr.name = 'nanHwPartCount';
-  const hwPartCount = hwPartCountAttr ? sU32Views(hwPartCountAttr, 1).atomic : null;
-  const hwPartDispatchAttr = clhw
-    ? new IndirectStorageBufferAttribute(new Uint32Array(3), 3)
-    : null;
-  if (hwPartDispatchAttr) hwPartDispatchAttr.name = 'nanHwPartDispatch';
-  const hwPartDispatch = hwPartDispatchAttr
-    ? sU32Views(hwPartDispatchAttr as unknown as StorageBufferAttribute, 3).rw
-    : null;
-  const hwClusterDrawAttr = clhw
-    ? new IndirectStorageBufferAttribute(new Uint32Array(4), 4)
-    : null;
-  if (hwClusterDrawAttr) hwClusterDrawAttr.name = 'nanHwClusterDraw';
-  const hwClusterDraw = hwClusterDrawAttr
-    ? sU32Views(hwClusterDrawAttr as unknown as StorageBufferAttribute, 4).rw
-    : null;
+  const qHwRasterAttr = new StorageBufferAttribute(new Uint32Array(qCap), 1);
+  qHwRasterAttr.name = 'nanQHwRaster';
+  const qHwRasterV = sU32Views(qHwRasterAttr, qCap);
+  const hwPartCountAttr = new StorageBufferAttribute(new Uint32Array(1), 1);
+  hwPartCountAttr.name = 'nanHwPartCount';
+  const hwPartCount = sU32Views(hwPartCountAttr, 1).atomic;
+  const hwPartDispatchAttr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
+  hwPartDispatchAttr.name = 'nanHwPartDispatch';
+  const hwPartDispatch = sU32Views(
+    hwPartDispatchAttr as unknown as StorageBufferAttribute,
+    3,
+  ).rw;
+  const hwClusterDrawAttr = new IndirectStorageBufferAttribute(new Uint32Array(4), 4);
+  hwClusterDrawAttr.name = 'nanHwClusterDraw';
+  const hwClusterDraw = sU32Views(
+    hwClusterDrawAttr as unknown as StorageBufferAttribute,
+    4,
+  ).rw;
 
   const split2D = (
     args: ReturnType<typeof sU32Views>['rw'],
@@ -731,59 +726,57 @@ export function buildNaniteCull(
   })().compute(1, [1]);
   (kVoxRasterArgs as unknown as ComputeKernel).setName('nanVoxRasterArgs');
 
-  // ── ?clhw partition kernels (built only when the flag is on; buffers non-null there) ─────
+  // ── partition kernels (always built — the SW/HW cluster split is the permanent default) ──
   // kHwPartitionArgs: clear the count + size the one-thread-per-qRaster-entry dispatch.
   // kHwPartition: re-scan the cut → non-voxel + clusterHwClass ⇒ append the qRaster index.
   // kHwClusterArgs: publish the instanced draw args (MAX_CLUSTER_TRIS*3 verts × HW-count).
-  const hwPart = clhw
-    ? (() => {
-        const kHwPartitionArgs = Fn(() => {
-          atomicStore(hwPartCount!.element(0), uint(0));
-          const n = minU(aLoadU(counters.element(1)), uint(qCap));
-          split2D(hwPartDispatch!, n.add(uint(63)).div(uint(64)));
-        })().compute(1, [1]);
-        (kHwPartitionArgs as unknown as ComputeKernel).setName('nanHwPartitionArgs');
+  const hwPart = (() => {
+    const kHwPartitionArgs = Fn(() => {
+      atomicStore(hwPartCount.element(0), uint(0));
+      const n = minU(aLoadU(counters.element(1)), uint(qCap));
+      split2D(hwPartDispatch, n.add(uint(63)).div(uint(64)));
+    })().compute(1, [1]);
+    (kHwPartitionArgs as unknown as ComputeKernel).setName('nanHwPartitionArgs');
 
-        const kHwPartition = Fn(() => {
-          const tid = wgLinear(DISPATCH_ROW).mul(uint(64)).add(localX()).toVar();
-          const itemCount = minU(aLoadU(counters.element(1)), uint(qCap));
-          returnIf(tid.greaterThanEqual(itemCount));
-          const item = qRasterV.ro.element(tid.add(uint(1)));
-          const instId = item.x.toVar();
-          const ci = item.y.toVar();
-          // skip voxel(7) clusters — they render via the scatter voxel raster, not as tris
-          // (their word6/7 point at bricks; drawing them as tris would be garbage).
-          const meshId = readCluster(gpu.clusters, ci).meshId.toVar();
-          const matClass = elemU(gpu.meshes, meshId.mul(uint(MESH_WORDS)).add(uint(6)))
-            .shiftRight(uint(8))
-            .bitAnd(uint(0xff));
-          If(matClass.notEqual(uint(VOXEL_MATCLASS)), () => {
-            If(
-              clusterHwClass(gpu, cam.camPos as unknown as NV3, projK, instId, ci, clhwMax),
-              () => {
-                const slot = atomicAdd(hwPartCount!.element(0), uint(1)) as unknown as NU;
-                If(slot.lessThan(uint(qCap)), () => {
-                  elemUW(qHwRasterV!.rw, slot).assign(tid);
-                });
-              },
-            );
-          });
-        })().compute(qCap, [64]);
-        (kHwPartition as unknown as ComputeKernel).setName('nanHwPartition');
-        setIndirectDispatch(kHwPartition, hwPartDispatchAttr!);
+    const kHwPartition = Fn(() => {
+      const tid = wgLinear(DISPATCH_ROW).mul(uint(64)).add(localX()).toVar();
+      const itemCount = minU(aLoadU(counters.element(1)), uint(qCap));
+      returnIf(tid.greaterThanEqual(itemCount));
+      const item = qRasterV.ro.element(tid.add(uint(1)));
+      const instId = item.x.toVar();
+      const ci = item.y.toVar();
+      // skip voxel(7) clusters — they render via the scatter voxel raster, not as tris
+      // (their word6/7 point at bricks; drawing them as tris would be garbage).
+      const meshId = readCluster(gpu.clusters, ci).meshId.toVar();
+      const matClass = elemU(gpu.meshes, meshId.mul(uint(MESH_WORDS)).add(uint(6)))
+        .shiftRight(uint(8))
+        .bitAnd(uint(0xff));
+      If(matClass.notEqual(uint(VOXEL_MATCLASS)), () => {
+        If(
+          clusterHwClass(gpu, cam.camPos as unknown as NV3, projK, instId, ci, clhwMax),
+          () => {
+            const slot = atomicAdd(hwPartCount.element(0), uint(1)) as unknown as NU;
+            If(slot.lessThan(uint(qCap)), () => {
+              elemUW(qHwRasterV.rw, slot).assign(tid);
+            });
+          },
+        );
+      });
+    })().compute(qCap, [64]);
+    (kHwPartition as unknown as ComputeKernel).setName('nanHwPartition');
+    setIndirectDispatch(kHwPartition, hwPartDispatchAttr);
 
-        const kHwClusterArgs = Fn(() => {
-          const n = minU(aLoadU(hwPartCount!.element(0)), uint(qCap));
-          elemUW(hwClusterDraw!, 0).assign(uint(MAX_CLUSTER_TRIS * 3)); // vertexCount/instance
-          elemUW(hwClusterDraw!, 1).assign(n); // instanceCount = HW-cluster count
-          elemUW(hwClusterDraw!, 2).assign(uint(0));
-          elemUW(hwClusterDraw!, 3).assign(uint(0));
-        })().compute(1, [1]);
-        (kHwClusterArgs as unknown as ComputeKernel).setName('nanHwClusterArgs');
+    const kHwClusterArgs = Fn(() => {
+      const n = minU(aLoadU(hwPartCount.element(0)), uint(qCap));
+      elemUW(hwClusterDraw, 0).assign(uint(MAX_CLUSTER_TRIS * 3)); // vertexCount/instance
+      elemUW(hwClusterDraw, 1).assign(n); // instanceCount = HW-cluster count
+      elemUW(hwClusterDraw, 2).assign(uint(0));
+      elemUW(hwClusterDraw, 3).assign(uint(0));
+    })().compute(1, [1]);
+    (kHwClusterArgs as unknown as ComputeKernel).setName('nanHwClusterArgs');
 
-        return [kHwPartitionArgs, kHwPartition, kHwClusterArgs] as const;
-      })()
-    : null;
+    return [kHwPartitionArgs, kHwPartition, kHwClusterArgs] as const;
+  })();
 
   // ──────────────────────────────────────────────────────────────────────────
   // DEPTH-BUCKET FRONT-TO-BACK fan-out (?voxf2b). Replaces the single-atomicAdd
@@ -1482,11 +1475,10 @@ export function buildNaniteCull(
     voxF2bK: K,
     voxF2bEnabled: voxf2b,
     voxPrevEnabled: voxPrev,
-    // ?clhw per-cluster SW/HW split (null when off)
-    clhwEnabled: clhw,
-    qHwRasterRO: qHwRasterV ? qHwRasterV.ro : null,
+    // per-cluster SW/HW split (always built — the permanent default)
+    qHwRasterRO: qHwRasterV.ro,
     hwClusterDrawAttr,
-    hwPartitionBatch: (): readonly unknown[] => (hwPart ? [...hwPart] : []),
+    hwPartitionBatch: (): readonly unknown[] => [...hwPart],
     runPhase1,
     phase1Batch: () => phase1BatchList,
     syncFullArgs,

@@ -199,3 +199,78 @@ setup — is the vert buffer sized right? is Classify actually reading verts and
 projection genuinely gone from world1? — NOT to thrash. Measure the specific claim. We reached this plan
 by refuting a chain of "one level up" premises (loop=peak, projection=peak, pre-pass-can't-help,
 sub-pixel-is-97%); keep doing that.
+
+---
+
+## 12. STATUS LOG (2026-07-08) — rewrite essentially DONE
+
+**Built via subagents, on branch `nanite-raster`. `tsc` green throughout.**
+
+- **CP1 COMMITTED `31b46cc`** — `NaniteRaster.ts` 3283→2586 extracted into `src/nanite/raster/`
+  (VisBuffer/Queues/ClusterCtx/Scanline/Splat/Mid/Hw/index). Behaviour-preserving; user-verified parity.
+- **CP2 — Project + Classify (DONE):** `Project.ts` = per-vertex projection pass writing `projVertBuf`;
+  world1's `rasterKernel('world1')` rewritten to READ projected verts (stops projecting). **world1 80→56
+  regs (user Xcode capture)** — user: "good enough, proceed, no fallback"; 56→50 is a *later* polish.
+  Projection extracted verbatim ⇒ bit-identical corners.
+- **Queue shrink (DONE):** mid record 10-u32 → 1-u32 tri-id; `nanMidRaster` re-reads the 3 corners from
+  `projVertBuf` via `projRecBase`. (`Splat` already stored a point — untouched.)
+- **DEDUP (DONE, the hard part):** the blocker was the QEM leaf DAG — leaf clusters have ≤494 unique verts
+  *scattered* across a 1.46M-vert range ⇒ no dedup key, so a flat buffer was pinned at stride 765 (2.4 GB,
+  OOM). FIX = **`BuildDag.meshletizeDag`** (main-thread, idempotent, cache-safe, +0.5% verts): reorder each
+  leaf cluster's verts contiguous + rebase indices local, so `canonLocal = vi − vBase`
+  (`vBase = indices[triStart*3]`) — no vcompact/VCACHE bump. Terrain-DAG stays per-corner (≤384<512).
+  Only new binding = `gpu.indices` on Classify+Mid (world1 at **8** storage bufs — the "10 ceiling"
+  comment was stale). Stride **765→512**, `PROJ_CLUSTER_CAP=192K` (covers the real ~150K visible-cluster
+  peak — 128K was silently dropping ~22K/frame). **`projVertBuf = 1.13 GB`** (saved ~600 MB vs undeduped).
+- **BLINK FIXED:** `MID_CAP` 4.19M→40M (cheap now at 1-u32/record, ~160 MB). User-confirmed blink gone.
+- **Memory end state ≈ 1.4 GB** (projVertBuf 1.13 GB + midQueue 160 MB + splat/hw) — ~neutral vs today's
+  ~1.33 GB non-blinking, but viable (no OOM, no blink) + carries the register win. Compacted §6
+  (variable-stride) → ~700 MB is the deferred further win.
+
+**Corrections banked (were wrong):** visclusters max ~150K not 477K; sub-pixel is a couple % near-forest
+(not 97% — that's aerial) so MID is the bulk; single-buffer OOM ceiling ~1–2 GB on the user's box.
+
+**Register re-capture PENDING:** dedup added +1 binding + 2 index-reads/corner to Classify — confirm 56
+held before committing the rewrite.
+
+**IN PROGRESS:** clhw=1 as the permanent default + delete every `clhw=0` path (the user's "last task" —
+it's a CULL change: the cull only builds the HW-partition buffers under `?clhw=1`; keep `?clhwmax`).
+
+**AFTER:** frame-time A/B (a datapoint, NOT a go/no-go gate — user law: architecture is decided);
+56→50 register polish; compacted §6 memory; shadow/depth could get the same treatment if a cost.
+
+**Superseded:** `splat-election-register-cut.md` (splat = one consumer now) + the whole per-`?splat`/de-über
+saga — the rewrite absorbed all of it.
+
+---
+
+## 13. POST-BUILD AUDIT (2026-07-08) — done / deviated / missing / deferred
+
+**`tsc` exit 0. Rewrite + clhw committed. Frame profile: `nanProjectVerts` 30% (the whale, looks
+mem-bound), `nanMidRaster` 14.5%.**
+
+**DONE:** the pipeline (Project→Classify→Splat/Mid/Hw→Resolve); meshletize (`BuildDag.meshletizeDag`) +
+storage dedup (`vi−vBase`, stride 765→512, projVertBuf 1.13 GB @192K cap); mid record 10→1 u32; blink fix
+(MID_CAP 40M); **clhw=1 the permanent default + `?clhw` flag deleted** (cull always builds+dispatches the
+HW partition; `?clhwmax` kept); `?nospl/?nomid/?nohw` + `?rdbg` + `NOROBUST` preserved; batch order R7
+(`ProjectVerts` before Classify, splat/mid before the HZB tail); world1 **56 regs** (user capture).
+
+**DEVIATED (accepted):**
+- **`Classify.ts` never extracted** — the classifier stayed inside `NaniteRaster.ts`'s `rasterKernel`
+  (the subagent avoided parity risk on a kernel shared with depth/combined). §5's layout is otherwise met.
+  → either finish the extraction (cleanliness) or amend §5. OPEN.
+- **≤1px stayed EXACT** (reads corners, does rw/bias coverage) instead of the planned centroid — *better*
+  (parity-exact; centroid wasn't needed to reach 56). §10's "centroid intrinsic" is moot.
+- **clhw isn't literally a bare `true`** — one presence-check boolean survives in the raster
+  (`!!cull.qHwRasterRO && !!cull.hwClusterDrawAttr`) because the **shadow-clip raster** (`NaniteShadowClip`,
+  ortho, no camPos, different queue) legitimately has no HW partition. Byte-identical to `?clhw=1` for the
+  camera path; not a `?param` branch.
+
+**MISSING (small):** the §10 **high-water readback** was never wired — the vert peak was measured one-off
+(instrumentation reverted). The `minU(canonLocal, 511)` clamp is the only backstop if a frame's visclusters
+exceed the 192K `PROJ_CLUSTER_CAP` (→ dropped clusters). Wire a persistent readback OR raise the cap with
+margin. OPEN.
+
+**DEFERRED (→ 2026-07-08 folder, not lost):** per-unique-vert projection dispatch (halve the 30% whale —
+projection is still per-CORNER, dedup was storage-only); compacted §6 (don't project cull-doomed verts);
+frame A/B; append-contention; 56→50; per-kernel register captures (ProjectVerts/Mid/Splat).

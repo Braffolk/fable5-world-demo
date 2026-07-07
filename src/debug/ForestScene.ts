@@ -27,7 +27,7 @@ import {
   explicitToDagVerts,
   setClusterTriCap,
 } from '../nanite/GeometryRegistry';
-import { type DagBuild, buildDag } from '../nanite/BuildDag';
+import { type DagBuild, buildDag, meshletizeDag } from '../nanite/BuildDag';
 import {
   BootCache,
   type PackedPreparedCrown,
@@ -342,7 +342,10 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
     let lateC = 0;
     for (let ji = 0; ji < dagJobs.length; ji++) {
       const job = dagJobs[ji]!;
-      const dag = usable ? usable[ji]! : job.build();
+      // MESHLET-LOCAL indexing (task #76 projVertBuf dedup) — same as WorldRegistry: the
+      // shared deduped raster keys mesh clusters on vi−vBase, which needs each cluster's
+      // verts contiguous. Render-neutral reorder; idempotent (cache-safe).
+      const dag = meshletizeDag(usable ? usable[ji]! : job.build());
       lateV += dag.verts.length / DAG_VERT_STRIDE;
       lateT += dag.indices.length / 3;
       lateC += dag.clusters.length;

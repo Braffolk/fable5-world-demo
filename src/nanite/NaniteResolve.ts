@@ -1531,11 +1531,10 @@ export function buildNaniteResolve(
     // per-cluster hash tint (matches the ?nanitedbg=cluster view, but for the
     // full-frame migrated set) — visualises meshlet boundaries on the resolve
     if (nandbg === 'cluster') return vec4(hashColor(ci), 1) as unknown as NV4;
-    // ?nandbg=clhw — visualise the per-cluster SW/HW split (?clhw): RED = cluster the split
-    // routes to the HW instanced draw, GREEN = kept on the SW compute raster. Recomputes the
-    // SHARED clusterHwClass (bit-identical to the cull partition + SW-skip), so the tint IS the
-    // routing decision. Sweep ?clhwmax to watch clusters cross the boundary; works even with
-    // ?clhw off (it just shows how the split WOULD classify each cluster).
+    // ?nandbg=clhw — visualise the per-cluster SW/HW split: RED = cluster the split routes to
+    // the HW instanced draw, GREEN = kept on the SW compute raster. Recomputes the SHARED
+    // clusterHwClass (bit-identical to the cull partition + SW-skip), so the tint IS the
+    // routing decision. Sweep ?clhwmax to watch clusters cross the boundary.
     if (nandbg === 'clhw') {
       const projK = cam.cotHalfFov.mul(cam.uH).mul(0.5) as unknown as NF;
       const isHw = clusterHwClass(

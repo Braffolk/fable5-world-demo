@@ -4,15 +4,16 @@
  * convention).
  *
  *  • kHwArgs — builds the indirect draw args from the SW pass's hwQueue[0] append count.
- *  • buildHwMaterial — the SOUP (per-tri from hwQueue) OR the ?clhw INSTANCED per-cluster
- *    draw (verts pulled from qHwRaster). Both write depth (atomicMin) / combined (packed)
+ *  • buildHwMaterial — the SOUP (per-tri from hwQueue) OR the INSTANCED per-cluster draw
+ *    (verts pulled from qHwRaster). Both write depth (atomicMin) / combined (packed)
  *    / world1 (depth-keyed election), gated by `pass`.
  *  • hwRender / hwRenderCluster — the render-pass wrappers (own dead full-res rgba8 target,
  *    colorWrite off; ?hwrt=0 drops the redundant per-frame clear).
  *
- * NOTE: `clhw` is preserved exactly as computed by the caller (it defaults OFF — the cull
- * only supplies qHwRaster/hwClusterDraw under ?clhw=1). The instanced cluster scene is
- * therefore built only when the cull provided the queue, exactly as before.
+ * NOTE: the per-cluster SW/HW split is the permanent default — every camera/view/shadow cull
+ * supplies qHwRaster/hwClusterDraw, so the instanced cluster scene is built whenever those
+ * buffers are present. They are absent ONLY on the shadow-clipmap queue (depth-only), which
+ * never runs the world1 HW-cluster draw.
  */
 
 import { DoubleSide, Mesh, Scene, Vector3 } from 'three';
@@ -93,8 +94,8 @@ export function buildHw(p: {
   scarEl: (i: number) => ReturnType<U32Views['atomic']['element']>;
   /** ?hwrt=1 restores the per-frame full-res clear of the dead color target (A/B control). */
   hwrt: boolean;
-  /** ?clhw: instanced per-cluster draw (built only when the cull supplied the queue). */
-  clhw: boolean;
+  /** instanced per-cluster draw buffers — supplied by every camera/view/shadow cull (the
+   *  SW/HW split is the permanent default); null only on the shadow-clipmap queue. */
   qHwRasterRO: StorageBufferNode<'uint'> | null;
   hwClusterDrawAttr: IndirectStorageBufferAttribute | null;
 }): HwPath {
@@ -113,7 +114,6 @@ export function buildHw(p: {
     scar,
     scarEl,
     hwrt,
-    clhw,
     qHwRasterRO,
     hwClusterDrawAttr,
   } = p;
@@ -228,7 +228,7 @@ export function buildHw(p: {
         setVaryings(payload as unknown as NU, clip as unknown as NV4);
         return clip;
       }
-      // SOUP (default, ?clhw off — byte-identical to the pre-clhw shader): per-tri from hwQueue.
+      // SOUP path (non-instanced material): per-tri from hwQueue.
       const triIndex = vertexIndex.div(3) as unknown as NU;
       const base = triIndex.mul(uint(2)).add(uint(1));
       const payload = elemU(hwQueueV.ro, base).toVar();
@@ -313,12 +313,13 @@ export function buildHw(p: {
   hwMesh.frustumCulled = false;
   hwScene.add(hwMesh);
 
-  // ?clhw: the INSTANCED per-cluster HW draw — one instance per big/near cluster, drawn
+  // The INSTANCED per-cluster HW draw — one instance per big/near cluster, drawn
   // MAX_CLUSTER_TRIS*3 verts each (partial-cluster tail clips out). Own geometry + scene;
   // shares hwRT + the world1 election (buildHwMaterial('world1', instanced=true)). Rendered
-  // in world1() right after the soup hwRender. Built only when the cull supplied the queue.
-  const hwClusterScene = clhw ? new Scene() : null;
-  if (clhw && hwClusterScene && hwClusterDrawAttr) {
+  // in world1() right after the soup hwRender. Built whenever the cull supplied the queue
+  // (absent only on the shadow-clipmap queue, which never runs the world1 HW-cluster draw).
+  const hwClusterScene = hwClusterDrawAttr ? new Scene() : null;
+  if (hwClusterScene && hwClusterDrawAttr) {
     const g = new BufferGeometry();
     g.setAttribute('position', new Float32BufferAttribute(new Float32Array(3), 3));
     g.setIndirect(hwClusterDrawAttr, 0);

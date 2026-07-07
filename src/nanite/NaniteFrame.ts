@@ -584,9 +584,9 @@ export function buildNaniteFrame(
           ...cull.phase1Batch(), // [kClearHier, kSeedRoots, (args,traverse)×D, kRasterArgs]
           ...cull.fullArgsBatch(), // [kRasterArgs2]
           ...(voxActive ? cull.voxFanoutBatch() : []),
-          // ?clhw: fill qHwRaster from the cut (read-only on qRaster ⇒ order-free vs the
-          // voxel fanout) so world1's SW skip + instanced HW draw agree. [] when off.
-          ...(cull.clhwEnabled ? cull.hwPartitionBatch() : []),
+          // fill qHwRaster from the cut (read-only on qRaster ⇒ order-free vs the voxel
+          // fanout) so world1's SW skip + instanced HW draw agree.
+          ...cull.hwPartitionBatch(),
           ...shadowCut,
         ]);
       } else {
@@ -607,8 +607,8 @@ export function buildNaniteFrame(
         // (one re-scan) when no voxel heads were registered; gated to ?voxreg/?forcevox
         // so a pure-triangle world pays nothing. The Stage-2 voxel raster consumes it.
         if (voxActive) cull.runVoxFanout(renderer);
-        // ?clhw: fill qHwRaster from the cut (read-only on qRaster; see the batched path).
-        if (cull.clhwEnabled) dispatchBatchMixed(renderer, [...cull.hwPartitionBatch()]);
+        // fill qHwRaster from the cut (read-only on qRaster; see the batched path).
+        dispatchBatchMixed(renderer, [...cull.hwPartitionBatch()]);
       }
     }
     // PERF-VB4 (D-N45): single SW + single HW pass — 24-bit depth election (visPayloadV)

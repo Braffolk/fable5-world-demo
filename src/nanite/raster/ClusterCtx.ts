@@ -50,14 +50,12 @@ export function buildClusterCtx(p: {
   qRasterRO: BufOf<UV2>;
   makeCtx: (instId: NU, ci: NU) => VertCtx;
   projK: NF;
-  clhw: boolean;
   clhwMax: number;
   wind?: TrunkWindOpt;
   /** bool→uint select (shared with the world1 broadcast; kept identical). */
   b2u: (b: NB) => NU;
 }): ClusterCtxBundle {
-  const { ctxPrepass, gpu, cam, qRasterRO, makeCtx, projK, clhw, clhwMax, wind, b2u } =
-    p;
+  const { ctxPrepass, gpu, cam, qRasterRO, makeCtx, projK, clhwMax, wind, b2u } = p;
 
   const clusterCtxAttr = ctxPrepass
     ? new StorageBufferAttribute(new Uint32Array(QRASTER_CAP * CTX_STRIDE), 1)
@@ -111,16 +109,14 @@ export function buildClusterCtx(p: {
                 .shiftRight(uint(8))
                 .bitAnd(uint(0xff)),
             );
-            if (clhw) {
-              wU(
-                11,
-                b2u(
-                  clusterHwClass(gpu, cam.camPos as unknown as NV3, projK, instId, ci, clhwMax),
-                ),
-              );
-            } else {
-              wU(11, uint(0));
-            }
+            // slot 11 = SW/HW cluster classify (the permanent-default split); the world1
+            // raster reads it for the uniform HW-cluster skip.
+            wU(
+              11,
+              b2u(
+                clusterHwClass(gpu, cam.camPos as unknown as NV3, projK, instId, ci, clhwMax),
+              ),
+            );
             wF(0, c.A.x as unknown as NF);
             wF(1, c.A.y as unknown as NF);
             wF(2, c.A.z as unknown as NF);

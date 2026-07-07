@@ -1,24 +1,31 @@
 /**
  * Mid.ts — `nanMidRaster`, the world1 mid-band (2..swmax) consumer (task #76 de-über).
  *
- * world1 appended the pre-projected, pre-wound corners to midQueue; this recomputes the
- * edge-setup (area2/bias/rw/rcpArea/bbox — cheap per-tri setup, NOT rasterisation) and
- * runs the ONE shared swScanline + the world1 election. This is the ONLY place the mid
- * band is rasterized — world1 no longer scanlines, so no tri is rastered twice. INDIRECT,
- * 2-D dispatch (kMidArgs split), like nanSplatElect.
+ * world1 appends ONLY the 1-u32 tri id (payload = itemIdx<<CLUSTER_TRI_BITS | localTri) to
+ * midQueue. This consumer re-reads that tri's 3 ALREADY-PROJECTED corners from projVertBuf
+ * (nanProjectVerts wrote them this frame; they are never freed), reproduces world1's winding
+ * (integer twice-area sign ⇒ the 1↔2 swap) + edge-setup (area2/bias/rw/rcpArea/bbox — cheap
+ * per-tri setup, NOT rasterisation), and runs the ONE shared swScanline + the world1 election.
+ * The corners it reconstructs are BIT-IDENTICAL to the fat 10-u32 record the old mid queue
+ * carried (same projVertBuf slots via `canonVertSlot`; the in-queue tri already passed nearOK +
+ * accept, so area2raw≠0 and the wound order = swap-to-positive-area) ⇒ same render. Collapsing
+ * the record 10 u32 → 1 u32 is the ~10× midQueue shrink at zero re-projection cost.
  *
- * The ?nomid disable-flag gates the APPEND site inside world1's classify/route (which is
- * left in NaniteRaster.ts this step); this consumer draws whatever landed in the queue.
+ * This is the ONLY place the mid band is rasterized — world1 no longer scanlines. INDIRECT,
+ * 2-D dispatch (kMidArgs split), like nanSplatElect. The ?nomid disable-flag gates the APPEND
+ * site inside world1's classify/route; this consumer draws whatever landed in the queue.
  */
 
 import { Fn, float, uint } from 'three/tsl';
 import { IndirectStorageBufferAttribute } from 'three/webgpu';
-import type { NF, NI, NU } from '../../gpu/TSLTypes';
+import type { NB, NF, NI, NU } from '../../gpu/TSLTypes';
+import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK } from '../GeometryRegistry';
 import { DISPATCH_ROW } from '../NaniteCommon';
 import {
   aLoadU,
   bcU2F,
   bcU2I,
+  elemU,
   localX,
   maxI,
   minI,
@@ -31,6 +38,8 @@ import {
   wgLinear,
 } from '../Tsl';
 import { depthKey24 } from './VisBuffer';
+import { canonVertSlot } from './Project';
+import { CTX_STRIDE } from './ClusterCtx';
 import { MID_CAP, MID_STRIDE } from './Queues';
 import type { SwScanline } from './Scanline';
 
@@ -44,14 +53,33 @@ interface ComputeKernel {
 export function buildMid(p: {
   midQueueV: U32Views | null;
   midDrawAttr: IndirectStorageBufferAttribute | null;
+  /** the projected-vert buffer nanProjectVerts filled + world1 read (READ here too). */
+  projVertV: U32Views | null;
+  /** the 35-word per-cluster ctx (READ for triStart+isHF, which canonVertSlot needs). */
+  clusterCtxV: U32Views | null;
+  /** gpu.indices — canonVertSlot reads it to dedup mesh corners (vi−vBase). */
+  indices: Parameters<typeof canonVertSlot>[5];
+  /** = MAX_CLUSTER_VERTS — the per-cluster unique-vert slot stride. */
+  vertsPerCluster: number;
   swScanline: SwScanline;
   /** the shipped depth-keyed election bound to the vis buffers (VisBuffer.makeElect). */
   elect: (px: NU, cand: NU, idStore: NU) => void;
   width: number;
   height: number;
 }): unknown | null {
-  const { midQueueV, midDrawAttr, swScanline, elect, width, height } = p;
-  if (!(midQueueV && midDrawAttr)) return null;
+  const {
+    midQueueV,
+    midDrawAttr,
+    projVertV,
+    clusterCtxV,
+    indices,
+    vertsPerCluster,
+    swScanline,
+    elect,
+    width,
+    height,
+  } = p;
+  if (!(midQueueV && midDrawAttr && projVertV && clusterCtxV)) return null;
   const kn = Fn(() => {
     // 2-D dispatch (nanMidArgs split): linear record index = wgLinear·64 + localX.
     const i = wgLinear(DISPATCH_ROW).mul(uint(64)).add(localX()).toVar();
@@ -60,37 +88,60 @@ export function buildMid(p: {
         minU(aLoadU(midQueueV.atomic.element(0)), uint(MID_CAP)),
       ),
     );
-    const mb = uint(1).add(i.mul(uint(MID_STRIDE)));
-    const xi0 = bcU2I(aLoadU(midQueueV.atomic.element(mb))).toVar();
-    const yi0 = bcU2I(
-      aLoadU(midQueueV.atomic.element(mb.add(uint(1)))),
-    ).toVar();
-    const xi1 = bcU2I(
-      aLoadU(midQueueV.atomic.element(mb.add(uint(2)))),
-    ).toVar();
-    const yi1 = bcU2I(
-      aLoadU(midQueueV.atomic.element(mb.add(uint(3)))),
-    ).toVar();
-    const xi2 = bcU2I(
-      aLoadU(midQueueV.atomic.element(mb.add(uint(4)))),
-    ).toVar();
-    const yi2 = bcU2I(
-      aLoadU(midQueueV.atomic.element(mb.add(uint(5)))),
-    ).toVar();
-    const dz0 = bcU2F(
-      aLoadU(midQueueV.atomic.element(mb.add(uint(6)))),
-    ).toVar();
-    const dz1 = bcU2F(
-      aLoadU(midQueueV.atomic.element(mb.add(uint(7)))),
-    ).toVar();
-    const dz2 = bcU2F(
-      aLoadU(midQueueV.atomic.element(mb.add(uint(8)))),
-    ).toVar();
+    // 1-u32 record = the tri id (payload). Decode (itemIdx, localTri) — the SAME split the
+    // resolve + world1 use — then read the 3 pre-projected corners from projVertBuf via
+    // canonVertSlot (the identical deduped slot the classifier read before appending).
     const pay = aLoadU(
-      midQueueV.atomic.element(mb.add(uint(9))),
+      midQueueV.atomic.element(uint(1).add(i.mul(uint(MID_STRIDE)))),
     ).toVar();
-    // edge-setup from the wound corners (positive twice-area) — SAME formulas as
-    // world1's inline edge-setup; cheap per-tri setup, not rasterisation.
+    const itemIdx = pay.shiftRight(uint(CLUSTER_TRI_BITS)).toVar();
+    const localTri = pay.bitAnd(uint(CLUSTER_TRI_MASK)).toVar();
+    const recCluster = itemIdx.mul(uint(vertsPerCluster)).toVar();
+    // canonVertSlot needs the cluster's triStart + isHF (mesh vi−vBase vs terrain per-corner);
+    // read from the SAME clusterCtx the projection + classifier used — CTX_U slots 0=isHF, 2=triStart.
+    const cBase = itemIdx.mul(uint(CTX_STRIDE)).toVar();
+    const triStart = elemU(clusterCtxV.ro, cBase.add(uint(2))).toVar();
+    const isHF = elemU(clusterCtxV.ro, cBase).equal(uint(1));
+    const rxi: NI[] = [];
+    const ryi: NI[] = [];
+    const rdz: NF[] = [];
+    for (const v of [0, 1, 2] as const) {
+      const rb = canonVertSlot(
+        recCluster,
+        triStart as unknown as NU,
+        isHF as unknown as NB,
+        localTri,
+        v,
+        indices,
+      ).toVar();
+      rxi[v] = bcU2I(elemU(projVertV.ro, rb)).toVar() as unknown as NI;
+      ryi[v] = bcU2I(
+        elemU(projVertV.ro, rb.add(uint(1))),
+      ).toVar() as unknown as NI;
+      rdz[v] = bcU2F(
+        elemU(projVertV.ro, rb.add(uint(2))),
+      ).toVar() as unknown as NF;
+    }
+    // reproduce world1's winding: the integer twice-area sign decides the 1↔2 swap so the
+    // rasterised triangle has positive area (a two-sided back-face was flipped; a mid-queue
+    // tri always passed accept ⇒ area2raw≠0 ⇒ the swap is unconditional on the sign).
+    const area2raw = ryi[2]
+      .sub(ryi[0])
+      .mul(rxi[1].sub(rxi[0]))
+      .sub(rxi[2].sub(rxi[0]).mul(ryi[1].sub(ryi[0])))
+      .toVar();
+    const flip = area2raw.lessThan(toI(0)).toVar();
+    const xi0 = rxi[0];
+    const yi0 = ryi[0];
+    const dz0 = rdz[0];
+    const xi1 = flip.select(rxi[2], rxi[1]).toVar();
+    const xi2 = flip.select(rxi[1], rxi[2]).toVar();
+    const yi1 = flip.select(ryi[2], ryi[1]).toVar();
+    const yi2 = flip.select(ryi[1], ryi[2]).toVar();
+    const dz1 = flip.select(rdz[2], rdz[1]).toVar();
+    const dz2 = flip.select(rdz[1], rdz[2]).toVar();
+    // edge-setup from the wound corners (positive twice-area) — SAME formulas as world1's
+    // inline edge-setup; cheap per-tri setup, not rasterisation.
     const area2 = yi2
       .sub(yi0)
       .mul(xi1.sub(xi0))

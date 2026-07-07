@@ -165,6 +165,50 @@ export interface DagBuild {
   stats: DagStats;
 }
 
+/**
+ * MESHLET-LOCAL vertex indexing (task #76 projVertBuf dedup). The DAG builder welds +
+ * reorders verts across LOD levels, so a cluster's ≤~500 unique verts end up SCATTERED
+ * across the whole pool (measured per-cluster index range up to 1.46 M for a 494-vert leaf
+ * cluster). That defeats a per-cluster `vi−vMin` dedup of the projected-vertex buffer. This
+ * re-emits EACH cluster's unique verts as a CONTIGUOUS block and rebases its triangle
+ * indices to that block, so every cluster's index range == its unique-vert count
+ * (`[0,uniqueCount)` after `−vMin`). Standard meshlet-local indexing.
+ *
+ * PARITY (the #1 requirement): whole vertex RECORDS are copied (all `vertStride` floats —
+ * position + normal + attrs), triangle ORDER is preserved (per-cluster `triStart/triCount`
+ * unchanged), and a vertex shared across N clusters is DUPLICATED into each (every copy
+ * bit-identical) — so the rasterised triangles occupy the exact same positions. Cluster
+ * metadata (spheres, errors, group links, level, lod0Count) is untouched ⇒ the runtime DAG
+ * cut is unchanged. Idempotent (re-meshletizing an already-meshletized DAG is a no-op).
+ */
+export function meshletizeDag(dag: DagBuild): DagBuild {
+  const stride = dag.vertStride;
+  const srcV = dag.verts;
+  const srcI = dag.indices;
+  // worst case (zero intra-cluster sharing) = one out-vert per corner = srcI.length verts.
+  const outV = new Float32Array(srcI.length * stride);
+  const outI = new Uint32Array(srcI.length);
+  const map = new Map<number, number>();
+  let cursor = 0;
+  for (const c of dag.clusters) {
+    map.clear();
+    const end = (c.triStart + c.triCount) * 3;
+    for (let ii = c.triStart * 3; ii < end; ii++) {
+      const dagVi = srcI[ii] as number;
+      let local = map.get(dagVi);
+      if (local === undefined) {
+        local = cursor++;
+        map.set(dagVi, local);
+        const so = dagVi * stride;
+        const dstO = local * stride;
+        for (let k = 0; k < stride; k++) outV[dstO + k] = srcV[so + k] as number;
+      }
+      outI[ii] = local;
+    }
+  }
+  return { ...dag, verts: outV.slice(0, cursor * stride), indices: outI };
+}
+
 // ---------------------------------------------------------------------------
 // quadric math (Garland-Heckbert): 10 floats per symmetric 4×4
 //   [ q0 q1 q2 q3 ]

@@ -34,7 +34,7 @@ import { VegClass } from '../gpu/passes/Scatter';
 import type { VegLib, VegPool, PoolPart } from '../vegetation/VegLibrary';
 import type { Heightfield } from '../world/Heightfield';
 import { WORLD_SIZE } from '../world/WorldConst';
-import { type DagBuild, type DagCluster, buildDag } from './BuildDag';
+import { type DagBuild, type DagCluster, buildDag, meshletizeDag } from './BuildDag';
 import { aggLodErrorK, buildAggregateDag, setAggLodErrorK } from './BuildAggregateDag';
 import { BootTrace, yieldIfDue } from '../debug/BootTrace';
 import {
@@ -1301,6 +1301,10 @@ export async function buildWorldRegistry(input: {
         deferred.push(`DAG ${item.label}: build failed (${e instanceof Error ? e.message : String(e)})`);
         continue;
       }
+      // MESHLET-LOCAL indexing (task #76 projVertBuf dedup): re-emit each cluster's verts
+      // contiguously so `vi−vBase` is a dense [0,uniqueCount) key. Render-neutral (measured
+      // +0.5% verts — the DAG verts were scattered but barely shared, so this is a reorder).
+      built = meshletizeDag(built);
       lateV += built.verts.length / DAG_VERT_STRIDE;
       lateT += built.indices.length / 3;
       lateC += built.clusters.length;
@@ -1334,6 +1338,7 @@ export async function buildWorldRegistry(input: {
         deferred.push(`AGG ${item.label}: build failed (${e instanceof Error ? e.message : String(e)})`);
         continue;
       }
+      built = meshletizeDag(built); // meshlet-local indexing (see toDag loop)
       aggV += built.verts.length / DAG_VERT_STRIDE;
       aggT += built.indices.length / 3;
       aggC += built.clusters.length;
