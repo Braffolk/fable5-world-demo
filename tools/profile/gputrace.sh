@@ -55,7 +55,11 @@ trap cleanup EXIT
 pkill -f "user-data-dir=${PROFILE_DIR}" 2>/dev/null || true   # clear a leftover instance
 rm -rf "${OUT}"* 2>/dev/null || true                          # stale trace(s)
 
-echo "[gputrace] launching Chrome — Dawn tracing armed, DEVICE_FILTER=laas-render"
+# NOROBUST=1 appends Dawn's disable_robustness toggle — strips the min(idx,len-1)
+# bounds clamps + length-loads Tint injects on every buffer access. DIAGNOSTIC ONLY
+# (the scene may glitch/OOB): measures the register cost of the robustness floor.
+DAWN_FEATURES="use_user_defined_labels_in_backend,disable_symbol_renaming${NOROBUST:+,disable_robustness}"
+echo "[gputrace] launching Chrome — Dawn tracing armed, DEVICE_FILTER=laas-render${NOROBUST:+  (ROBUSTNESS OFF)}"
 DAWN_TRACE_FILE_BASE="${OUT}" \
 DAWN_TRACE_DEVICE_FILTER=laas-render \
 MTL_CAPTURE_ENABLED=1 \
@@ -64,7 +68,7 @@ MTL_CAPTURE_ENABLED=1 \
     --disable-features=SkiaGraphite \
     --no-first-run --no-default-browser-check \
     --enable-logging=stderr --log-level=0 \
-    --enable-dawn-features=use_user_defined_labels_in_backend,disable_symbol_renaming \
+    --enable-dawn-features="${DAWN_FEATURES}" \
     "${URL}" >/dev/null 2>"$LOG" &
 CHROME_PID=$!
 

@@ -178,6 +178,11 @@ export function bcU2I(u: NU): NI {
   return bitcast(u, 'int') as unknown as NI;
 }
 
+/** i32 bits → uint (bit-preserving; store a signed fixed-point coord in a u32 buffer) */
+export function bcI2U(i: NI): NU {
+  return bitcast(i, 'uint') as unknown as NU;
+}
+
 /** WGSL unpack2x16float (typings return a bare PackFloatNode) */
 export function unpackHalfU(u: NU): NV2 {
   return unpackHalf2x16(u) as unknown as NV2;
