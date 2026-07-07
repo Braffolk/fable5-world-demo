@@ -17,6 +17,31 @@ export type UpdateFn = (dt: number, worldTime: number) => void;
 
 const P95_WINDOW = 120;
 
+/** index of the first element === value in an ascending-sorted array, or -1 */
+function sortedIndexOf(arr: number[], value: number): number {
+  let lo = 0;
+  let hi = arr.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1;
+    if (arr[mid] === value) return mid;
+    if (arr[mid] < value) lo = mid + 1;
+    else hi = mid - 1;
+  }
+  return -1;
+}
+
+/** insertion point keeping an ascending-sorted array sorted */
+function sortedInsertIndex(arr: number[], value: number): number {
+  let lo = 0;
+  let hi = arr.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (arr[mid] < value) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
 export class Engine {
   readonly renderer: WebGPURenderer;
   readonly scene: Scene;
@@ -35,7 +60,12 @@ export class Engine {
 
   private updateFns: UpdateFn[] = [];
   private lastT: number | null = null;
-  private frameMsRing: number[] = [];
+  /** fixed-size circular buffer of the last P95_WINDOW frame times */
+  private frameMsRing = new Float64Array(P95_WINDOW);
+  /** frameMsRing's contents kept in ascending order for O(log n) p95 lookup */
+  private frameMsSorted: number[] = [];
+  private ringIdx = 0;
+  private ringLen = 0;
   private fpsEma = 0;
   private frameCounter = 0;
   private settleWaiters: { frames: number; resolve: () => void }[] = [];
@@ -168,10 +198,24 @@ export class Engine {
   private collectStats(rawDt: number): void {
     const s = this.stats;
     const ms = rawDt * 1000;
-    this.frameMsRing.push(ms);
-    if (this.frameMsRing.length > P95_WINDOW) this.frameMsRing.shift();
-    const sorted = [...this.frameMsRing].sort((a, b) => a - b);
-    const p95 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] ?? ms;
+
+    // ring is full: evict the slot we're about to overwrite from the sorted view first
+    if (this.ringLen === P95_WINDOW) {
+      const evicted = this.frameMsRing[this.ringIdx];
+      const evictAt = sortedIndexOf(this.frameMsSorted, evicted);
+      this.frameMsSorted.splice(evictAt, 1);
+    } else {
+      this.ringLen++;
+    }
+    this.frameMsRing[this.ringIdx] = ms;
+    this.ringIdx = (this.ringIdx + 1) % P95_WINDOW;
+    this.frameMsSorted.splice(sortedInsertIndex(this.frameMsSorted, ms), 0, ms);
+
+    const p95Idx = Math.min(
+      this.frameMsSorted.length - 1,
+      Math.floor(this.frameMsSorted.length * 0.95),
+    );
+    const p95 = this.frameMsSorted[p95Idx] ?? ms;
     const fpsNow = rawDt > 0 ? 1 / rawDt : 0;
     this.fpsEma = this.fpsEma === 0 ? fpsNow : this.fpsEma * 0.95 + fpsNow * 0.05;
 
