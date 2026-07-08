@@ -18,6 +18,7 @@ docs/perf-runs/**/slices/shaders/
 docs/perf-runs/**/slices-*/
 docs/perf-runs/Nanite-UE5-shaders/
 temp/**
+profile-results-**
 
 # Reference papers/slides (large binaries) — kept local, not versioned.
 docs/**/*.pdf

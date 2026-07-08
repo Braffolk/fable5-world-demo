@@ -113,7 +113,15 @@ export let CLUSTER_TRI_MASK = 127; // MAX_CLUSTER_TRIS − 1 — payload localTr
  *  VCACHE_VERTS·12 B; 192 → 2.3 KB, well under the 16 KB workgroup limit). Bounds the
  *  shared array AND the per-cluster cache width. ≥ MAX_CLUSTER_TRIS so a 128-tri cluster
  *  with ~tight indexing always fits (avg unique 82, explicit 95% range ≤128). */
-export let VCACHE_VERTS = 192;
+// LEVER C: raised 192/382 → 512 (= MAX_CLUSTER_VERTS in raster/Project.ts) so populateVCompact
+// stores (vMin,count) for EVERY mesh cluster (real clusters ≤ ~494 unique < 512), CLOSING the
+// tooWide (vcCount==0) fallback ⇒ Lever B's per-cluster mesh reservation vertCount = vcCount is
+// EXACT for all mesh clusters. Verified-safe consumers: (1) NaniteVertexCache workgroupArray
+// ('vec3', 512) = 6 KB, but only built under ?vcompact (OFF by default + bitrotted) and safely
+// < the 16 KB threadgroup budget; (2) Project + NaniteVertexCache stride loops
+// ceil(512/MAX_CLUSTER_TRIS) still cover the unique range (3 strides @255, 4 @128). Bit-identical:
+// a cluster that switches tooWide→covered writes the SAME deduped slots (Lever 1 identity).
+export let VCACHE_VERTS = 512;
 
 /**
  * A/B (`?clustertris`): set the cluster triangle cap to 128 or 256 + derive the payload
@@ -132,7 +140,7 @@ export function setClusterTriCap(cap: number): void {
   // → the GPU reads triCount = 0 → `if (localTri < 0)` never fires → the cluster rasters
   // NOTHING → holes. So the high cap is 255, NOT 256 (identical cluster-count win).
   MAX_CLUSTER_TRIS = bits === 8 ? 255 : 128;
-  VCACHE_VERTS = MAX_CLUSTER_TRIS + (MAX_CLUSTER_TRIS >> 1); // 192 @128, ~382 @255
+  VCACHE_VERTS = 512; // LEVER C: full MAX_CLUSTER_VERTS coverage (was 192 @128 / ~382 @255)
 }
 export const LOD_NONE = 0xffffffff;
 /** N8-D2 Stage 2a: an evicted streaming-tile slot parks its mesh sphere here so

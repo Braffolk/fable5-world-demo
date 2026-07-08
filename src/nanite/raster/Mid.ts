@@ -91,8 +91,11 @@ export function buildMid(p: {
     // 1-u32 record = the tri id (payload). Decode (itemIdx, localTri) — the SAME split the
     // resolve + world1 use — then read the 3 pre-projected corners from projVertBuf via
     // canonVertSlot (the identical deduped slot the classifier read before appending).
+    // MID_STRIDE===1 ⇒ the record index is just `i`; emit it directly so the hot index
+    // path carries no dead `*1u` (a general fallback keeps other strides correct).
+    const recOff = (MID_STRIDE === 1 ? i : i.mul(uint(MID_STRIDE))) as unknown as NU;
     const pay = aLoadU(
-      midQueueV.atomic.element(uint(1).add(i.mul(uint(MID_STRIDE)))),
+      midQueueV.atomic.element(uint(1).add(recOff)),
     ).toVar();
     const itemIdx = pay.shiftRight(uint(CLUSTER_TRI_BITS)).toVar();
     const localTri = pay.bitAnd(uint(CLUSTER_TRI_MASK)).toVar();
@@ -131,6 +134,15 @@ export function buildMid(p: {
       .sub(rxi[2].sub(rxi[0]).mul(ryi[1].sub(ryi[0])))
       .toVar();
     const flip = area2raw.lessThan(toI(0)).toVar();
+    // A.1 — the re-wound twice-area is |area2raw| = flip ? −area2raw : area2raw (world1's
+    // NEGATE form, NaniteRaster.ts:1418), NOT a fresh cross-product from the wound corners:
+    // the SAME integer value, 2 fewer muls off the dependent chain the stall waits on.
+    // A.4 — resolve area2/rcpArea HERE (before the winding selects) so area2raw dies
+    // immediately and never coexists with the 6 wound-corner temps ⇒ smaller swap crest.
+    const area2 = flip.select(area2raw.mul(toI(-1)), area2raw).toVar();
+    const rcpArea = float(1).div(toF(area2 as unknown as NI)).toVar();
+    // wound corners (positive twice-area). area2raw is already consumed ⇒ only the wound
+    // set survives into the edge-setup below (SAME formulas as world1's inline edge-setup).
     const xi0 = rxi[0];
     const yi0 = ryi[0];
     const dz0 = rdz[0];
@@ -140,14 +152,6 @@ export function buildMid(p: {
     const yi2 = flip.select(ryi[1], ryi[2]).toVar();
     const dz1 = flip.select(rdz[2], rdz[1]).toVar();
     const dz2 = flip.select(rdz[1], rdz[2]).toVar();
-    // edge-setup from the wound corners (positive twice-area) — SAME formulas as world1's
-    // inline edge-setup; cheap per-tri setup, not rasterisation.
-    const area2 = yi2
-      .sub(yi0)
-      .mul(xi1.sub(xi0))
-      .sub(xi2.sub(xi0).mul(yi1.sub(yi0)))
-      .toVar();
-    const rcpArea = float(1).div(toF(area2 as unknown as NI)).toVar();
     const ex0 = yi1.sub(yi2);
     const ey0 = xi2.sub(xi1);
     const ex1 = yi2.sub(yi0);

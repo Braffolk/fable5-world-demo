@@ -110,7 +110,12 @@ import type { BufOf, UV2 } from './Tsl';
 import { CTX_STRIDE, CTX_U, buildClusterCtx } from './raster/ClusterCtx';
 import { buildHw } from './raster/Hw';
 import { buildMid } from './raster/Mid';
-import { NEAR_SENTINEL, PROJ_CLUSTER_CAP, buildProject, canonVertSlot } from './raster/Project';
+import {
+  NEAR_SENTINEL,
+  PROJ_CLUSTER_CAP,
+  buildProject,
+  canonVertSlot,
+} from './raster/Project';
 import {
   HW_CAP,
   MID_CAP,
@@ -462,7 +467,7 @@ export function buildNaniteRaster(
     Number(new URLSearchParams(window.location.search).get('clhwmax') ?? '16') || 16,
   );
   // projK = px per world-unit at unit depth (matches NaniteCull's cut projection exactly).
-  const projK = cam.cotHalfFov.mul(cam.uH).mul(0.5) as unknown as NF;
+  const projK = cam.cotHalfFov.mul(float(cam.uH)).mul(0.5) as unknown as NF;
   // (removed 2026-07-02 cleanup: ?noguard naive-FreePipe diagnostic — atomic-contention
   // hypothesis refuted long ago; ?f2b per-pixel early-out — measured null §5o)
   // HW vertex-pull pass: by DEFAULT drop the redundant per-frame full-res color CLEAR. The HW
@@ -527,6 +532,11 @@ export function buildNaniteRaster(
   const dbgNoSpl = dbgQ.get('nospl') === '1';
   const dbgNoMid = dbgQ.get('nomid') === '1';
   const dbgNoHw = dbgQ.get('nohw') === '1';
+  // ?middz — nanMidRaster incremental-depth path (Lever A.2): the scanline holds {z,dzdx,
+  // dzdy} and steps z instead of the per-pixel barycentric recompute. MID-ONLY; MEDIUM
+  // parity risk (float accumulation can differ in the depthKey24 LSB) ⇒ default OFF = the
+  // bit-identical recompute. Structured as a build-time branch so one side deletes trivially.
+  const midIncDepth = dbgQ.get('middz') === '1';
   // hw/splat/mid work queues + their indirect-args kernels (./raster/Queues). The splat/mid
   // queues + args exist only on the world1 path (splatElect); the ?scar counters + the
   // ?trihzb prev-frame HZB mirror fold into the hwQueue tail (SCAR_BASE/TRIHZB_BASE). triLvls
@@ -648,6 +658,7 @@ export function buildNaniteRaster(
     hasWind: !!wind,
     rasterDispatchFullAttr: cull.rasterDispatchFullAttr,
     indices: gpu.indices,
+    vcompact: gpu.vcompact,
   });
 
   // SWCOOP workgroup-shared element write (the NaniteVoxelRaster wgSet idiom —
@@ -702,8 +713,16 @@ export function buildNaniteRaster(
   // stores the full 25-bit id into the side buffer visBV; the resolve reconstructs depth
   // from the election key. No exact depthV (a 3rd hot-loop atomic buffer = a 3× cliff).
   // swScanline (./raster/Scanline): THE single fixed-point coverage loop, shared by the
-  // inline depth/combined/world1 paths AND nanMidRaster — no duplicate rasterisation.
+  // inline depth/combined/world1 paths — no duplicate rasterisation. Pass NO opts here so
+  // this instance is BYTE-IDENTICAL to the task-#76 extraction (world1's 56-reg path).
   const swScanline = makeScanline(cam);
+  // nanMidRaster gets its OWN instance with the mid-only crest cuts: A.3 packed bias
+  // (bit-identical) always on; A.2 incremental depth gated on ?middz. world1/depth/combined
+  // keep the plain `swScanline` above untouched.
+  const swScanlineMid = makeScanline(cam, {
+    packBias: true,
+    incDepth: midIncDepth,
+  });
 
   const rasterKernel = (
     mode: 'depth' | 'combined' | 'world1',
@@ -1799,7 +1818,11 @@ export function buildNaniteRaster(
                             uint(1),
                           ) as unknown as NU;
                           If(slot.lessThan(uint(MID_CAP)), () => {
-                            const mb = uint(1).add(slot.mul(uint(MID_STRIDE)));
+                            // MID_STRIDE===1 ⇒ no dead `*1u` in the hot append index.
+                            const mOff = (
+                              MID_STRIDE === 1 ? slot : slot.mul(uint(MID_STRIDE))
+                            ) as unknown as NU;
+                            const mb = uint(1).add(mOff);
                             atomicStore(midQueueV.atomic.element(mb), payload);
                           });
                         }
@@ -2158,7 +2181,7 @@ export function buildNaniteRaster(
     clusterCtxV,
     indices: gpu.indices,
     vertsPerCluster: projVertsPerCluster,
-    swScanline,
+    swScanline: swScanlineMid,
     elect,
     width,
     height,

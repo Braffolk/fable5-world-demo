@@ -252,7 +252,7 @@ export function buildNaniteHzb(
     // footprint in half-res pyramid texels picks the level where the sphere's
     // diameter fits one texel (2×2 window always covers it); /4 = NDC half-
     // screen factor × half-res pyramid
-    const radiusTexels = radius.mul(cam.cotHalfFov).mul(cam.uH).div(4).div(dist);
+    const radiusTexels = radius.mul(cam.cotHalfFov).mul(float(cam.uH)).div(4).div(dist);
     const levelF = radiusTexels.mul(2).max(1).log2().ceil().clamp(0, levelCountU.sub(1));
     const info = table.element(uint(levelF));
     const lw = uint(info.y).toVar();
@@ -332,7 +332,7 @@ export function buildNaniteHzb(
     const centerClip = vp.mul(vec4(center, 1)).toVar();
     const nearestZ = nearClip.z.div(nearClip.w);
     const ndc = centerClip.xy.div(centerClip.w);
-    const radiusTexels = radius.mul(cam.cotHalfFov).mul(cam.uH).div(4).div(dist);
+    const radiusTexels = radius.mul(cam.cotHalfFov).mul(float(cam.uH)).div(4).div(dist);
     const levelF = radiusTexels
       .mul(2)
       .max(1)
@@ -424,8 +424,8 @@ export function buildNaniteHzb(
     mat.vertexNode = vec4(positionGeometry.xy, 0, 1) as unknown as typeof mat.vertexNode;
     mat.fragmentNode = Fn(() => {
       // screenCoordinate is top-down; pyramid rows are bottom-up (buffer law)
-      const u = screenCoordinate.x.div(cam.uW);
-      const v = float(1).sub(screenCoordinate.y.div(cam.uH));
+      const u = screenCoordinate.x.div(float(cam.uW));
+      const v = float(1).sub(screenCoordinate.y.div(float(cam.uH)));
       const tx = minU(uint(u.mul(L.w)), uint(L.w - 1));
       const ty = minU(uint(v.mul(L.h)), uint(L.h - 1));
       const z = hzbF.ro.element(uint(L.offset).add(ty.mul(uint(L.w))).add(tx));

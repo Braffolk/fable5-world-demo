@@ -730,10 +730,10 @@ export function buildNaniteResolve(
             );
           if (nanbark === 'grad') {
             const dUVdx = uvAt(
-              rayDir(screenUV.add(vec2(float(1).div(cam.uW), 0)) as unknown as NV2),
+              rayDir(screenUV.add(vec2(float(1).div(float(cam.uW)), 0)) as unknown as NV2),
             ).sub(uvv) as unknown as NV2;
             const dUVdy = uvAt(
-              rayDir(screenUV.add(vec2(0, float(1).div(cam.uH))) as unknown as NV2),
+              rayDir(screenUV.add(vec2(0, float(1).div(float(cam.uH)))) as unknown as NV2),
             ).sub(uvv) as unknown as NV2;
             return base.depth(layer).grad(dUVdx, dUVdy) as unknown as NV4;
           }
@@ -1536,7 +1536,7 @@ export function buildNaniteResolve(
     // clusterHwClass (bit-identical to the cull partition + SW-skip), so the tint IS the
     // routing decision. Sweep ?clhwmax to watch clusters cross the boundary.
     if (nandbg === 'clhw') {
-      const projK = cam.cotHalfFov.mul(cam.uH).mul(0.5) as unknown as NF;
+      const projK = cam.cotHalfFov.mul(float(cam.uH)).mul(0.5) as unknown as NF;
       const isHw = clusterHwClass(
         gpu,
         vec3(cam.camPos) as unknown as NV3,

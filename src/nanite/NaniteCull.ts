@@ -480,7 +480,7 @@ export function buildNaniteCull(
   // N9-IMP per-instance min screen-SIZE (px diameter); below it the instance is
   // dropped whole (imposter far-field territory). 0 = off (the camera default).
   const instMinPx = opts?.instMinPx ?? uniformF(0);
-  const projK = cam.cotHalfFov.mul(cam.uH).mul(0.5) as unknown as NF;
+  const projK = cam.cotHalfFov.mul(float(cam.uH)).mul(0.5) as unknown as NF;
   // ---- buffers ---------------------------------------------------------------
   // counters: [1] raster pushes (emitted clusters), [5] DAG clusters, [6] visTris,
   // [7] DAG tris (HUD/SIM). The hier BFS reuses [0]/[4] as the two frontier counts.

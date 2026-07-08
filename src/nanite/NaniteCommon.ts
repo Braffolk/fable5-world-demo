@@ -16,10 +16,12 @@ import {
   uniformArrV4,
   uniformF,
   uniformMat4,
+  uniformU,
   uniformV3,
   type UniformArrV4,
   type UniformF,
   type UniformMat4,
+  type UniformU,
   type UniformV3,
 } from './Tsl';
 
@@ -141,8 +143,12 @@ export interface NaniteCam {
   prevCamPos: UniformV3;
   /** cot(fovY/2) — screen-space projection factor (HZB level pick) */
   cotHalfFov: UniformF;
-  uW: UniformF;
-  uH: UniformF;
+  /** framebuffer width/height in whole pixels — UINT uniforms so the hot raster
+   *  index math (rowBase = y·uW) skips the per-row f32→u32 convert. Consumers that
+   *  need a float wrap `float(cam.uW)`; since width/height are integer pixel counts,
+   *  `uint(width)` == `f32_to_u32(float(width))` ⇒ every reader stays bit-identical. */
+  uW: UniformU;
+  uH: UniformU;
   width: number;
   height: number;
   update(camera: PerspectiveCamera): void;
@@ -163,8 +169,8 @@ export function makeNaniteCam(width: number, height: number): NaniteCam {
     new Vector4(),
     new Vector4(),
   ]);
-  const uW = uniformF(width);
-  const uH = uniformF(height);
+  const uW = uniformU(width);
+  const uH = uniformU(height);
   const projScreen = new Matrix4();
   const frustum = new Frustum();
   return {
