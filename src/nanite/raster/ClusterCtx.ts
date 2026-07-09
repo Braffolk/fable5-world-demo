@@ -16,11 +16,11 @@
 import { Fn, instanceIndex, uint } from 'three/tsl';
 import { StorageBufferAttribute } from 'three/webgpu';
 import type { NB, NF, NU } from '../../gpu/TSLTypes';
-import { MESH_WORDS } from '../GeometryRegistry';
-import type { RegistryGpu } from '../GeometryRegistry';
+import { MESH_WORDS } from '../world/GeometryRegistry';
+import type { RegistryGpu } from '../world/GeometryRegistry';
 import { QRASTER_CAP, type NaniteCam } from '../NaniteCommon';
-import type { TrunkWindOpt, VertCtx } from '../NaniteFetch';
-import { clusterHwClass } from '../NaniteHwClass';
+import type { TrunkWindOpt, VertCtx } from './NaniteFetch';
+import { clusterHwClass } from '../cull/NaniteHwClass';
 import { bcF2U, elemU, returnIf, sU32Views } from '../Tsl';
 import type { BufOf, UV2 } from '../Tsl';
 

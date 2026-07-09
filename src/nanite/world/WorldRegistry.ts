@@ -28,17 +28,17 @@
 import type { Renderer, StorageBufferAttribute, StorageBufferNode } from 'three/webgpu';
 import type { BufferGeometry } from 'three';
 import { Vector2 } from 'three';
-import { internalSize } from '../render/RenderScale';
-import type { ScatterLayer, ScatterResult } from '../gpu/passes/Scatter';
-import { VegClass } from '../gpu/passes/Scatter';
-import { CROWN_LOD_SCHEDULE, type VegLib, type VegPool, type PoolPart } from '../vegetation/VegLibrary';
-import type { CrownLodLevel } from '../vegetation/TreeBuilder';
-import type { Heightfield } from '../world/Heightfield';
-import { WORLD_SIZE } from '../world/WorldConst';
-import { type DagBuild, type DagCluster, buildDag, meshletizeDag } from './BuildDag';
-import { setAggLodErrorK } from './BuildAggregateDag';
-import { type CrownLodLevelMesh, buildCrownLodDag, crownLodOwnErrors } from './BuildCrownLodDag';
-import { BootTrace, yieldIfDue } from '../debug/BootTrace';
+import { internalSize } from '../../render/RenderScale';
+import type { ScatterLayer, ScatterResult } from '../../gpu/passes/Scatter';
+import { VegClass } from '../../gpu/passes/Scatter';
+import { CROWN_LOD_SCHEDULE, type VegLib, type VegPool, type PoolPart } from '../../vegetation/VegLibrary';
+import type { CrownLodLevel } from '../../vegetation/TreeBuilder';
+import type { Heightfield } from '../../world/Heightfield';
+import { WORLD_SIZE } from '../../world/WorldConst';
+import { type DagBuild, type DagCluster, buildDag, meshletizeDag } from '../build/BuildDag';
+import { setAggLodErrorK } from '../build/BuildAggregateDag';
+import { type CrownLodLevelMesh, buildCrownLodDag, crownLodOwnErrors } from '../build/BuildCrownLodDag';
+import { BootTrace, yieldIfDue } from '../../debug/BootTrace';
 import {
   BootCache,
   type PackedFarTile,
@@ -47,8 +47,8 @@ import {
   type PackedPreparedCrown,
 } from './BootCache';
 import { appendPackedFarTiles, buildFarTilesAsync, FT_TILE_SIZE, type FarTileSpecies } from './FarTiles';
-import { clusterFill, setClusterFill } from './Clusterize';
-import { DagBuildWorker, DagWorkerPool, type DagBuilder, type HeightDagResult } from './DagWorkerClient';
+import { clusterFill, setClusterFill } from '../build/Clusterize';
+import { DagBuildWorker, DagWorkerPool, type DagBuilder, type HeightDagResult } from '../build/DagWorkerClient';
 import { TerrainStreamer, buildTerrainTile, type TileBuildDeps, type TileBuildStats } from './TerrainStreamer';
 import {
   type BuildReport,
@@ -62,7 +62,7 @@ import {
   explicitToDagVerts,
   setClusterTriCap,
 } from './GeometryRegistry';
-import { readBuffer } from './Tsl';
+import { readBuffer } from '../Tsl';
 import {
   appendPackedCrown,
   DEFAULT_VOXEL_GRID_DIM,
@@ -77,8 +77,8 @@ import {
   voxlodLevels,
   voxlodShell,
   voxlodSparseK,
-} from './VoxelizeCrown';
-import { BRICK_WORDS, type BrickCPU, readBrick } from './VoxelBrick';
+} from '../build/VoxelizeCrown';
+import { BRICK_WORDS, type BrickCPU, readBrick } from '../voxel/VoxelBrick';
 
 /** Forests ring radii (Forests.ts) — discrete LOD switch distances until N8 */
 const R0_FAR = 26;

@@ -20,9 +20,9 @@ import { buildHeightGrid } from './BuildHeightGrid';
 import { buildDag } from './BuildDag';
 import { buildAggregateDag, setAggLodErrorK } from './BuildAggregateDag';
 import { setClusterFill } from './Clusterize';
-import { packPreparedCrown } from './BootCache';
+import { packPreparedCrown } from '../world/BootCache';
 import { prepareVoxelCrown, setVoxOccThreshold, setVoxlodConfig } from './VoxelizeCrown';
-import type { ExplicitSource } from './GeometryRegistry';
+import type { ExplicitSource } from '../world/GeometryRegistry';
 import type { DagReq, DagRes } from './DagWorkerTypes';
 
 // DOM and webworker libs both define `self`; the cast pins the worker scope so

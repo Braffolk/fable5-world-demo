@@ -50,15 +50,15 @@ import {
   vec3,
   vec4,
 } from 'three/tsl';
-import type { NB, NF, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
-import { canopyAt, cellHash, cellHash2 } from '../gpu/passes/Scatter';
-import { gustAt, windContext, windExposure, windU } from '../render/Wind';
-import { terrainDispAt, type TerrainDisp } from './NaniteFetch';
-import type { Heightfield } from '../world/Heightfield';
-import { WORLD_SIZE } from '../world/WorldConst';
-import type { NaniteCam } from './NaniteCommon';
-import type { NaniteVisBuffers } from './NaniteRaster';
-import { bakeGrassRayTile } from './GrassRayBake';
+import type { NB, NF, NU, NV2, NV3, NV4 } from '../../gpu/TSLTypes';
+import { canopyAt, cellHash, cellHash2 } from '../../gpu/passes/Scatter';
+import { gustAt, windContext, windExposure, windU } from '../../render/Wind';
+import { terrainDispAt, type TerrainDisp } from '../raster/NaniteFetch';
+import type { Heightfield } from '../../world/Heightfield';
+import { WORLD_SIZE } from '../../world/WorldConst';
+import type { NaniteCam } from '../NaniteCommon';
+import type { NaniteVisBuffers } from '../raster/NaniteRaster';
+import { bakeGrassRayTile } from '../build/GrassRayBake';
 import {
   aLoadU,
   bcF2U,
@@ -73,7 +73,7 @@ import {
   toF,
   uniformF,
   unpackHalfU,
-} from './Tsl';
+} from '../Tsl';
 
 // ---- constants (GroundRing parity — the tuned reference) ---------------------------
 const GRID = 3072;

@@ -54,9 +54,9 @@ import {
 import { StorageBufferAttribute } from 'three/webgpu';
 import type { IndirectStorageBufferAttribute } from 'three/webgpu';
 import type { NB, NF, NI, NU, NV3, NV4 } from '../../gpu/TSLTypes';
-import { MAX_CLUSTER_TRIS, VCACHE_VERTS } from '../GeometryRegistry';
+import { MAX_CLUSTER_TRIS, VCACHE_VERTS } from '../world/GeometryRegistry';
 import { DISPATCH_ROW, QRASTER_CAP, type NaniteCam } from '../NaniteCommon';
-import type { NaniteFetch, VertCtx } from '../NaniteFetch';
+import type { NaniteFetch, VertCtx } from './NaniteFetch';
 import {
   bcF2U,
   bcI2U,
@@ -72,7 +72,7 @@ import {
 } from '../Tsl';
 import type { BufOf, UV2 } from '../Tsl';
 import { CTX_STRIDE, CTX_U } from './ClusterCtx';
-import { HWPROJ } from '../NaniteHwClass';
+import { HWPROJ } from '../cull/NaniteHwClass';
 
 type U32Views = ReturnType<typeof sU32Views>;
 

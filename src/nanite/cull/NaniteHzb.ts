@@ -26,8 +26,8 @@ import {
   uint,
   vec4,
 } from 'three/tsl';
-import type { NB, NF, NV3 } from '../gpu/TSLTypes';
-import type { NaniteCam } from './NaniteCommon';
+import type { NB, NF, NV3 } from '../../gpu/TSLTypes';
+import type { NaniteCam } from '../NaniteCommon';
 import type { SphereOccludedFn } from './NaniteCull';
 import {
   bcU2F,
@@ -40,7 +40,7 @@ import {
   uniformF,
   type UniformMat4,
   type UniformV3,
-} from './Tsl';
+} from '../Tsl';
 import { Vector4 } from 'three';
 
 const MAX_LEVELS = 16;

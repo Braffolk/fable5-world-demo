@@ -26,8 +26,8 @@ import {
   MAX_CLUSTER_TRIS,
   explicitToDagVerts,
   setClusterTriCap,
-} from '../nanite/GeometryRegistry';
-import { type DagBuild, buildDag, meshletizeDag } from '../nanite/BuildDag';
+} from '../nanite/world/GeometryRegistry';
+import { type DagBuild, buildDag, meshletizeDag } from '../nanite/build/BuildDag';
 import {
   BootCache,
   type PackedPreparedCrown,
@@ -36,8 +36,8 @@ import {
   unpackPreparedCrown,
   packFarTiles,
   unpackFarTiles,
-} from '../nanite/BootCache';
-import { buildAggregateDag, setAggLodErrorK } from '../nanite/BuildAggregateDag';
+} from '../nanite/world/BootCache';
+import { buildAggregateDag, setAggLodErrorK } from '../nanite/build/BuildAggregateDag';
 import {
   appendFarTiles,
   buildFarTilesAsync,
@@ -45,10 +45,10 @@ import {
   DEFAULT_FT_CELL,
   FT_TILE_SIZE,
   type FarTileSpecies,
-} from '../nanite/FarTiles';
-import type { BrickCPU } from '../nanite/VoxelBrick';
-import { setClusterFill } from '../nanite/Clusterize';
-import { DEFAULT_TRANSITION_DIST, geometryToSource } from '../nanite/WorldRegistry';
+} from '../nanite/world/FarTiles';
+import type { BrickCPU } from '../nanite/voxel/VoxelBrick';
+import { setClusterFill } from '../nanite/build/Clusterize';
+import { DEFAULT_TRANSITION_DIST, geometryToSource } from '../nanite/world/WorldRegistry';
 import {
   appendVoxelCrown,
   DEFAULT_VOXEL_GRID_DIM,
@@ -60,10 +60,10 @@ import {
   setVoxOccThreshold,
   voxOccThreshold,
   voxlodLevels,
-} from '../nanite/VoxelizeCrown';
+} from '../nanite/build/VoxelizeCrown';
 import { Vector2 } from 'three';
 import { internalSize } from '../render/RenderScale';
-import { buildNaniteView } from '../nanite/NaniteView';
+import { buildNaniteView } from '../nanite/frame/NaniteView';
 import { Heightfield } from '../world/Heightfield';
 import { SunSky } from '../sky/SunSky';
 import { PostStack } from '../render/PostStack';
@@ -384,7 +384,7 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
   // the reservation), append post-build. Each tile = 64 m of trees merged into one voxel
   // head; per-tree heads then END at aggDist (their maxDist is clamped in the append loop
   // below and setMaxDistance for bark).
-  let farTiles: import('../nanite/FarTiles').FarTileBuild[] = [];
+  let farTiles: import('../nanite/world/FarTiles').FarTileBuild[] = [];
   if (farTilesOn && toVoxel.length > 0 && !noLeaves) {
     const tFt0 = performance.now();
     // 0.75 m cells (not 0.5): 200k extrapolates to ~10.7M bricks at 0.5 (386 MB — over the
@@ -552,7 +552,7 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
       if (Number.isFinite(ws)) windU.strength.value = ws;
     }
     const post = new PostStack(engine, sunSky.atmosphere, bootTod);
-    const { buildNaniteFrame } = await import('../nanite/NaniteFrame');
+    const { buildNaniteFrame } = await import('../nanite/frame/NaniteFrame');
     const frame = buildNaniteFrame(engine, reg, hf, post, {
       gi: null,
       canopyTex: null,

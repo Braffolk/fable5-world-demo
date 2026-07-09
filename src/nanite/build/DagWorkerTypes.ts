@@ -7,7 +7,7 @@
  */
 import type { DagBuild, DagCluster, DagOpts } from './BuildDag';
 import type { AggregateDagOpts } from './BuildAggregateDag';
-import type { PackedPreparedCrown } from './BootCache';
+import type { PackedPreparedCrown } from '../world/BootCache';
 import type { HeightDagOpts, HeightDagStats } from './BuildHeightGrid';
 
 /** build an adaptive terrain LOD DAG on a (gridN+1)² heightfield (gridN = 2^k) */

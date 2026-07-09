@@ -23,23 +23,23 @@
 import { PerspectiveCamera, Vector2, Vector4 } from 'three';
 import { StorageBufferAttribute, type WebGPURenderer } from 'three/webgpu';
 import { Fn, float, instanceIndex, storage, uint, vec2, vec4 } from 'three/tsl';
-import type { NF } from '../gpu/TSLTypes';
-import type { Engine } from '../core/Engine';
-import type { PostStack } from '../render/PostStack';
-import { internalSize } from '../render/RenderScale';
-import type { Heightfield } from '../world/Heightfield';
-import type { GeometryRegistry } from './GeometryRegistry';
-import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK } from './GeometryRegistry';
-import { deriveLodParams, makeNaniteCam } from './NaniteCommon';
-import { buildNaniteCull } from './NaniteCull';
-import { buildNaniteHzb } from './NaniteHzb';
-import { buildGrassField } from './NaniteGrass';
-import { makeFetch } from './NaniteFetch';
-import { buildNaniteRaster, makeVisBuffers } from './NaniteRaster';
-import { buildNaniteResolve } from './NaniteResolve';
-import { buildNaniteShadowClip, type NaniteShadow } from './NaniteShadowClip';
-import { buildShadowHalf, type ShadowHalf } from './NaniteShadowHalf';
-import { bcU2F, dispatch, dispatchBatchMixed, elemU, readBuffer, returnIf, texLoadR, toF, uniformArrV4 } from './Tsl';
+import type { NF } from '../../gpu/TSLTypes';
+import type { Engine } from '../../core/Engine';
+import type { PostStack } from '../../render/PostStack';
+import { internalSize } from '../../render/RenderScale';
+import type { Heightfield } from '../../world/Heightfield';
+import type { GeometryRegistry } from '../world/GeometryRegistry';
+import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK } from '../world/GeometryRegistry';
+import { deriveLodParams, makeNaniteCam } from '../NaniteCommon';
+import { buildNaniteCull } from '../cull/NaniteCull';
+import { buildNaniteHzb } from '../cull/NaniteHzb';
+import { buildGrassField } from '../grass/NaniteGrass';
+import { makeFetch } from '../raster/NaniteFetch';
+import { buildNaniteRaster, makeVisBuffers } from '../raster/NaniteRaster';
+import { buildNaniteResolve } from '../shade/NaniteResolve';
+import { buildNaniteShadowClip, type NaniteShadow } from '../shade/NaniteShadowClip';
+import { buildShadowHalf, type ShadowHalf } from '../shade/NaniteShadowHalf';
+import { bcU2F, dispatch, dispatchBatchMixed, elemU, readBuffer, returnIf, texLoadR, toF, uniformArrV4 } from '../Tsl';
 
 export interface NaniteFrameHandles {
   render(): void;
@@ -51,9 +51,9 @@ export interface NaniteFrameHandles {
    *  non-resolve materials; undefined when the scene has no nanite sun shadows.
    *  pix = explicit IGN-noise coord — REQUIRED from compute (no fragCoord there). */
   sunVis?: (
-    wp: import('../gpu/TSLTypes').NV3,
-    n: import('../gpu/TSLTypes').NV3,
-    pix?: import('../gpu/TSLTypes').NV2,
+    wp: import('../../gpu/TSLTypes').NV3,
+    n: import('../../gpu/TSLTypes').NV3,
+    pix?: import('../../gpu/TSLTypes').NV2,
   ) => NF;
 }
 
@@ -76,16 +76,16 @@ export function buildNaniteFrame(
   hf: Heightfield,
   post: PostStack,
   world: {
-    gi: import('../gpu/passes/ProbeGI').ProbeGI | null;
+    gi: import('../../gpu/passes/ProbeGI').ProbeGI | null;
     canopyTex: import('three/webgpu').StorageTexture | null;
     /** "scene has sun shadows" — drives the nanite screen-density shadow clipmap. */
     sunShadows?: boolean;
     /** world-space cloud sun-transmittance gate — the resolve multiplies it into the
      *  sun term directly. */
-    cloudShadow?: ((wxz: import('../gpu/TSLTypes').NV2) => NF) | null;
+    cloudShadow?: ((wxz: import('../../gpu/TSLTypes').NV2) => NF) | null;
     /** P4: baked heightfield sun-visibility (FarShadow) — the beyond-clipmap term
      *  (mountains shade valleys at any distance). Multiplied like cloudShadow. */
-    farShadow?: ((wxz: import('../gpu/TSLTypes').NV2) => NF) | null;
+    farShadow?: ((wxz: import('../../gpu/TSLTypes').NV2) => NF) | null;
     barkTexA: import('three').Texture | null;
     barkTexB: import('three').Texture | null;
   },
@@ -290,22 +290,22 @@ export function buildNaniteFrame(
   // since the grass lean-light bake consumes it at build time.)
   const sunVis = shadow
     ? (
-        wp: import('../gpu/TSLTypes').NV3,
-        n: import('../gpu/TSLTypes').NV3,
-        pix?: import('../gpu/TSLTypes').NV2,
+        wp: import('../../gpu/TSLTypes').NV3,
+        n: import('../../gpu/TSLTypes').NV3,
+        pix?: import('../../gpu/TSLTypes').NV2,
       ): NF => {
         // pure expression chain — this runs at MATERIAL BUILD time, outside any
         // Fn() stack, so toVar()/assign() are illegal here (TSL "no stack" spam)
         let sf = (shadow.shadowFactor(wp, n, pix) as unknown as { clamp(a: number, b: number): NF })
           .clamp(0, 1) as NF;
         if (world.cloudShadow) {
-          const c = world.cloudShadow(wp.xz as unknown as import('../gpu/TSLTypes').NV2);
+          const c = world.cloudShadow(wp.xz as unknown as import('../../gpu/TSLTypes').NV2);
           const safe = c.equal(c).select(c.clamp(0, 1), float(1)) as unknown as NF;
           sf = sf.mul(safe) as unknown as NF;
         }
         if (world.farShadow) {
           const fv = world
-            .farShadow(wp.xz as unknown as import('../gpu/TSLTypes').NV2)
+            .farShadow(wp.xz as unknown as import('../../gpu/TSLTypes').NV2)
             .clamp(0, 1) as unknown as NF;
           sf = sf.mul(fv) as unknown as NF;
         }

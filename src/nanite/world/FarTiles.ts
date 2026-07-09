@@ -38,8 +38,8 @@
 
 import type { GeometryRegistry } from './GeometryRegistry';
 import type { PackedFarTile } from './BootCache';
-import { appendPackedCrown, appendVoxelCrown, buildVoxelPyramid, type PreparedVoxelCrown, type VoxelLevel } from './VoxelizeCrown';
-import { BRICK_DIM, type BrickCPU } from './VoxelBrick';
+import { appendPackedCrown, appendVoxelCrown, buildVoxelPyramid, type PreparedVoxelCrown, type VoxelLevel } from '../build/VoxelizeCrown';
+import { BRICK_DIM, type BrickCPU } from '../voxel/VoxelBrick';
 import {
   splatTiles,
   SPECIES_BRICK_STRIDE,

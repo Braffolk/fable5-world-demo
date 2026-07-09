@@ -17,7 +17,7 @@ import type {
 } from './DagWorkerTypes';
 import type { HeightDagOpts } from './BuildHeightGrid';
 import type { DagBuild } from './BuildDag';
-import type { PackedPreparedCrown } from './BootCache';
+import type { PackedPreparedCrown } from '../world/BootCache';
 
 export interface HeightDagResult {
   gridVerts: HeightDagOk['gridVerts'];

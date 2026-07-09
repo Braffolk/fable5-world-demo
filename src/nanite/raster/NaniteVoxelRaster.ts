@@ -46,16 +46,16 @@ import {
   workgroupArray,
   workgroupBarrier,
 } from 'three/tsl';
-import type { NB, NF, NU, NV3, NV4 } from '../gpu/TSLTypes';
-import { CLUSTER_WORDS } from './GeometryRegistry';
-import type { RegistryGpu } from './GeometryRegistry';
-import { BRICK_ALBEDO, BRICK_DIM, BRICK_HALF, BRICK_OCC_HI, BRICK_OCC_LO, BRICK_POS_X, BRICK_WORDS, MAX_BRICKS_PER_CLUSTER, brickWord } from './VoxelBrick';
-import { DISPATCH_ROW, QVOX_CAP } from './NaniteCommon';
-import type { NaniteCam } from './NaniteCommon';
-import { instTransformPoint, instYaw, instSphereRadius } from './NaniteCommon';
+import type { NB, NF, NU, NV3, NV4 } from '../../gpu/TSLTypes';
+import { CLUSTER_WORDS } from '../world/GeometryRegistry';
+import type { RegistryGpu } from '../world/GeometryRegistry';
+import { BRICK_ALBEDO, BRICK_DIM, BRICK_HALF, BRICK_OCC_HI, BRICK_OCC_LO, BRICK_POS_X, BRICK_WORDS, MAX_BRICKS_PER_CLUSTER, brickWord } from '../voxel/VoxelBrick';
+import { DISPATCH_ROW, QVOX_CAP } from '../NaniteCommon';
+import type { NaniteCam } from '../NaniteCommon';
+import { instTransformPoint, instYaw, instSphereRadius } from '../NaniteCommon';
 import { voxWindScalars, voxWindLocalOffset, VOX_CROWN_SWAY_PAD_M, type VoxWindScalars } from './NaniteVoxWind';
 import type { TrunkWindOpt } from './NaniteFetch';
-import { windContext } from '../render/Wind';
+import { windContext } from '../../render/Wind';
 import {
   aLoadU,
   bcU2F,
@@ -78,8 +78,8 @@ import {
   uniformArrV4,
   uniformF,
   wgLinear,
-} from './Tsl';
-import type { AtomicBuf, BufOf, UV2 } from './Tsl';
+} from '../Tsl';
+import type { AtomicBuf, BufOf, UV2 } from '../Tsl';
 
 // PAYLOAD bit budget (§4.5): the election id's low bits hold the qVoxRaster item index;
 // PAYLOAD_MASK clamps it below BUCKET_SHIFT (so the index always fits — QVOX_CAP ≪ 1<<28).

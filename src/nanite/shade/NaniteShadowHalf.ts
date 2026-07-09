@@ -40,11 +40,11 @@ import {
   vec3,
   vec4,
 } from 'three/tsl';
-import type { NB, NF, NU, NV3 } from '../gpu/TSLTypes';
-import type { NaniteCam } from './NaniteCommon';
+import type { NB, NF, NU, NV3 } from '../../gpu/TSLTypes';
+import type { NaniteCam } from '../NaniteCommon';
 import type { NaniteShadow } from './NaniteShadowClip';
-import type { NaniteVisBuffers } from './NaniteRaster';
-import { dispatch, elemU, minU, toF } from './Tsl';
+import type { NaniteVisBuffers } from '../raster/NaniteRaster';
+import { dispatch, elemU, minU, toF } from '../Tsl';
 
 interface NamedKernel {
   setName(n: string): unknown;

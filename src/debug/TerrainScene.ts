@@ -24,7 +24,7 @@ import { PostStack } from '../render/PostStack';
 import { Clouds } from '../sky/Clouds';
 import { SunSky } from '../sky/SunSky';
 import type { WorldContext } from './Scenes';
-import type { GeometryRegistry } from '../nanite/GeometryRegistry';
+import type { GeometryRegistry } from '../nanite/world/GeometryRegistry';
 
 export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   const { engine, params, seed } = ctx;
@@ -82,9 +82,9 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     };
   };
   const leafDensityQ = Number(qNan.get('naniteleafdensity'));
-  const worldRegistryModule = import('../nanite/WorldRegistry');
+  const worldRegistryModule = import('../nanite/world/WorldRegistry');
   let vegLibPromise: ReturnType<typeof buildVegLibrary> | null = null;
-  let vegPrepPromise: Promise<import('../nanite/WorldRegistry').WorldVegPrep> | null = null;
+  let vegPrepPromise: Promise<import('../nanite/world/WorldRegistry').WorldVegPrep> | null = null;
   if (vegEnabled) {
     const endVegSpan = BootTrace.span('veg library (overlapped with GPU phases)');
     // no progress callback: the bar is owned by the serial phases; interleaved
@@ -357,7 +357,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     // pipeline keeps booting/updating untouched. `cluster` = the deferred N1
     // checkpoint (meshlet colors on the real world).
     const nanitedbg = new URLSearchParams(window.location.search).get('nanitedbg');
-    let naniteSunVis: import('../nanite/NaniteFrame').NaniteFrameHandles['sunVis'];
+    let naniteSunVis: import('../nanite/frame/NaniteFrame').NaniteFrameHandles['sunVis'];
     if (
       nanitedbg === 'flat' ||
       nanitedbg === 'cluster' ||
@@ -365,7 +365,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       nanitedbg === 'hzb'
     ) {
       if (naniteRegistry) {
-        const { buildNaniteView } = await import('../nanite/NaniteView');
+        const { buildNaniteView } = await import('../nanite/frame/NaniteView');
         engine.post = buildNaniteView(engine, naniteRegistry, hf, nanitedbg);
         // eslint-disable-next-line no-console
         console.log(`[laas] nanitedbg=${nanitedbg}: N2 debug view replacing the frame render`);
@@ -377,7 +377,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       // N4 full-frame mode (D-N18/D-N19): nanite compute + in-scene resolve own
       // the migrated classes.
       BootTrace.phase('nanite: frame build (raster/resolve/grass)');
-      const { buildNaniteFrame } = await import('../nanite/NaniteFrame');
+      const { buildNaniteFrame } = await import('../nanite/frame/NaniteFrame');
       const nanFrame = buildNaniteFrame(engine, naniteRegistry, hf, post, {
         gi: ablate.has('gi') ? null : gi,
         canopyTex,

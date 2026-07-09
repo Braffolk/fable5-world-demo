@@ -51,9 +51,9 @@ import {
   vec3,
   vec4,
 } from 'three/tsl';
-import type { NB, NF, NU, NV3, NV4 } from '../gpu/TSLTypes';
-import { MESH_WORDS, readCluster } from './GeometryRegistry';
-import type { RegistryGpu } from './GeometryRegistry';
+import type { NB, NF, NU, NV3, NV4 } from '../../gpu/TSLTypes';
+import { MESH_WORDS, readCluster } from '../world/GeometryRegistry';
+import type { RegistryGpu } from '../world/GeometryRegistry';
 import { buildNaniteCull, type NaniteCullChain } from './NaniteCull';
 import {
   DISPATCH_ROW,
@@ -63,7 +63,7 @@ import {
   queueCapParam,
   registerQueueHw,
   type NaniteCam,
-} from './NaniteCommon';
+} from '../NaniteCommon';
 import {
   aLoadU,
   bcU2F,
@@ -83,8 +83,8 @@ import {
   wgLinear,
   type UniformArrV4,
   type UniformF,
-} from './Tsl';
-import type { BufOf, UV2 } from './Tsl';
+} from '../Tsl';
+import type { BufOf, UV2 } from '../Tsl';
 
 interface ComputeKernel {
   setName(name: string): unknown;

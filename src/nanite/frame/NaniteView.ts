@@ -18,14 +18,14 @@
 
 import { Vector2 } from 'three';
 import type { WebGPURenderer } from 'three/webgpu';
-import type { Engine } from '../core/Engine';
-import type { Heightfield } from '../world/Heightfield';
-import type { GeometryRegistry } from './GeometryRegistry';
-import { deriveLodParams, makeNaniteCam } from './NaniteCommon';
-import { buildNaniteCull } from './NaniteCull';
-import { buildNaniteHzb } from './NaniteHzb';
-import { buildNaniteRaster, makeVisBuffers } from './NaniteRaster';
-import { internalSize } from '../render/RenderScale';
+import type { Engine } from '../../core/Engine';
+import type { Heightfield } from '../../world/Heightfield';
+import type { GeometryRegistry } from '../world/GeometryRegistry';
+import { deriveLodParams, makeNaniteCam } from '../NaniteCommon';
+import { buildNaniteCull } from '../cull/NaniteCull';
+import { buildNaniteHzb } from '../cull/NaniteHzb';
+import { buildNaniteRaster, makeVisBuffers } from '../raster/NaniteRaster';
+import { internalSize } from '../../render/RenderScale';
 
 export interface NaniteViewHandles {
   render(): void;

@@ -28,10 +28,10 @@
  * build (frame-1 terrain). The worker is PERSISTENT — the streamer owns it and it
  * outlives boot so update() can build new tiles as the camera roams.
  */
-import { type DagCluster } from './BuildDag';
-import { buildHeightGrid, type HeightDagOpts } from './BuildHeightGrid';
-import { getCachedHeightDag, heightDagCacheKey, putCachedHeightDag } from './DagCache';
-import { type DagBuilder, type HeightDagResult } from './DagWorkerClient';
+import { type DagCluster } from '../build/BuildDag';
+import { buildHeightGrid, type HeightDagOpts } from '../build/BuildHeightGrid';
+import { getCachedHeightDag, heightDagCacheKey, putCachedHeightDag } from '../build/DagCache';
+import { type DagBuilder, type HeightDagResult } from '../build/DagWorkerClient';
 import { clipmapTiles, clipmapMaxTiles, type ClipmapConfig, type ClipmapTile } from './TerrainClipmap';
 import type { GeometryRegistry } from './GeometryRegistry';
 

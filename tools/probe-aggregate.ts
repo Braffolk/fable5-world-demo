@@ -24,9 +24,9 @@
  *   npx tsx tools/probe-aggregate.ts
  */
 
-import { buildAggregateDag, type AggregateDagOpts } from '../src/nanite/BuildAggregateDag';
-import { type DagBuild } from '../src/nanite/BuildDag';
-import { setClusterFill } from '../src/nanite/Clusterize';
+import { buildAggregateDag, type AggregateDagOpts } from '../src/nanite/build/BuildAggregateDag';
+import { type DagBuild } from '../src/nanite/build/BuildDag';
+import { setClusterFill } from '../src/nanite/build/Clusterize';
 import { Rng } from '../src/core/Seed';
 
 let failures = 0;

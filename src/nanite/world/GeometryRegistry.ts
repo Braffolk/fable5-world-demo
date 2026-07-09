@@ -41,11 +41,11 @@
 import { Fn, If, float, instanceIndex, normalize, storage, uint, vec3, vec4 } from 'three/tsl';
 import type { Renderer, StorageBufferNode } from 'three/webgpu';
 import { StorageBufferAttribute } from 'three/webgpu';
-import type { NF, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
-import type { DagBuild, DagCluster } from './BuildDag';
-import { buildDagHierarchy, buildHeightGridHierarchy, maxChainDepth } from './DagHierarchy';
-import { BRICK_WORDS, octDecode, octEncode } from './VoxelBrickCore';
-import { type BuiltClusters, type ClusterStats, clusterize } from './Clusterize';
+import type { NF, NU, NV2, NV3, NV4 } from '../../gpu/TSLTypes';
+import type { DagBuild, DagCluster } from '../build/BuildDag';
+import { buildDagHierarchy, buildHeightGridHierarchy, maxChainDepth } from '../build/DagHierarchy';
+import { BRICK_WORDS, octDecode, octEncode } from '../voxel/VoxelBrickCore';
+import { type BuiltClusters, type ClusterStats, clusterize } from '../build/Clusterize';
 import {
   type BufOf,
   type V4W,
@@ -62,7 +62,7 @@ import {
   toF,
   unpackHalfU,
   unpackSnormU,
-} from './Tsl';
+} from '../Tsl';
 
 export const VERT_WORDS = 6;
 export const CLUSTER_WORDS = 8;

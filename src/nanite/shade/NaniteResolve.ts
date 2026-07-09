@@ -54,27 +54,27 @@ import {
   vec3,
   vec4,
 } from 'three/tsl';
-import type { NB, NF, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
+import type { NB, NF, NU, NV2, NV3, NV4 } from '../../gpu/TSLTypes';
 import type { NaniteShadow } from './NaniteShadowClip';
 import type { ShadowHalf } from './NaniteShadowHalf';
-import { causticContext, causticDepth, causticTint } from '../render/Caustics';
-import { buildTerrainShading } from '../render/TerrainMaterial';
-import { sunU } from '../render/VegMaterials';
-import { canopyAt } from '../gpu/passes/Scatter';
-import { BARK_RES } from '../gpu/passes/BarkSynth';
-import { fbm3, valueNoise3 } from '../gpu/noise/NoiseTSL';
-import type { ProbeGI } from '../gpu/passes/ProbeGI';
-import type { Heightfield } from '../world/Heightfield';
-import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK, CLUSTER_WORDS, MESH_FLAG_FARTILE, MESH_WORDS, readVertex } from './GeometryRegistry';
-import type { RegistryGpu } from './GeometryRegistry';
-import { brickNormalTsl, brickWord, BRICK_ALBEDO, BRICK_NORMAL, BRICK_POS_X } from './VoxelBrick';
-import { makeFetch, slotHash } from './NaniteFetch';
-import { GRASS_FAR_BASE } from './NaniteGrass';
-import { CLHW_MAX, hashColor, instRotateDir, instTransformPoint, instYaw, type NaniteCam } from './NaniteCommon';
-import { clusterHwClass } from './NaniteHwClass';
-import type { NaniteVisBuffers } from './NaniteRaster';
-import { bcU2F, elemU, toF } from './Tsl';
-import type { BufOf, UV2 } from './Tsl';
+import { causticContext, causticDepth, causticTint } from '../../render/Caustics';
+import { buildTerrainShading } from '../../render/TerrainMaterial';
+import { sunU } from '../../render/VegMaterials';
+import { canopyAt } from '../../gpu/passes/Scatter';
+import { BARK_RES } from '../../gpu/passes/BarkSynth';
+import { fbm3, valueNoise3 } from '../../gpu/noise/NoiseTSL';
+import type { ProbeGI } from '../../gpu/passes/ProbeGI';
+import type { Heightfield } from '../../world/Heightfield';
+import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK, CLUSTER_WORDS, MESH_FLAG_FARTILE, MESH_WORDS, readVertex } from '../world/GeometryRegistry';
+import type { RegistryGpu } from '../world/GeometryRegistry';
+import { brickNormalTsl, brickWord, BRICK_ALBEDO, BRICK_NORMAL, BRICK_POS_X } from '../voxel/VoxelBrick';
+import { makeFetch, slotHash } from '../raster/NaniteFetch';
+import { GRASS_FAR_BASE } from '../grass/NaniteGrass';
+import { CLHW_MAX, hashColor, instRotateDir, instTransformPoint, instYaw, type NaniteCam } from '../NaniteCommon';
+import { clusterHwClass } from '../cull/NaniteHwClass';
+import type { NaniteVisBuffers } from '../raster/NaniteRaster';
+import { bcU2F, elemU, toF } from '../Tsl';
+import type { BufOf, UV2 } from '../Tsl';
 
 export interface NaniteResolveHandles {
   /** add to engine.scene; renderOrder −1000, castShadow off. In two-pass mode this is the

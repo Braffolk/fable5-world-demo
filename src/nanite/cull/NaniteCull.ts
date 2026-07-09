@@ -45,8 +45,8 @@ import {
   vec3,
   vec4,
 } from 'three/tsl';
-import { sunU } from '../render/VegMaterials';
-import type { NB, NF, NU, NV3, NV4 } from '../gpu/TSLTypes';
+import { sunU } from '../../render/VegMaterials';
+import type { NB, NF, NU, NV3, NV4 } from '../../gpu/TSLTypes';
 import {
   CLUSTER_FLAG_HEIGHTFIELD,
   CLUSTER_WORDS,
@@ -59,8 +59,8 @@ import {
   readCluster,
   readDag,
   readMesh,
-} from './GeometryRegistry';
-import type { RegistryGpu } from './GeometryRegistry';
+} from '../world/GeometryRegistry';
+import type { RegistryGpu } from '../world/GeometryRegistry';
 import { clusterHwClass } from './NaniteHwClass';
 import {
   CLHW_MAX,
@@ -77,7 +77,7 @@ import {
   queueCapParam,
   registerQueueHw,
   type NaniteCam,
-} from './NaniteCommon';
+} from '../NaniteCommon';
 import {
   aLoadU,
   bcU2F,
@@ -101,8 +101,8 @@ import {
   type UniformF,
   type UniformMat4,
   type UniformV3,
-} from './Tsl';
-import type { BufOf, UV2 } from './Tsl';
+} from '../Tsl';
+import type { BufOf, UV2 } from '../Tsl';
 
 
 /** queue high-water diag: default label sequence for unlabeled chains */

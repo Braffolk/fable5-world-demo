@@ -66,9 +66,9 @@ import {
   vec4,
 } from 'three/tsl';
 import { vogelDiskSample } from 'three/tsl';
-import type { NB, NF, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
-import { CLUSTER_WORDS, MESH_WORDS, readCluster } from './GeometryRegistry';
-import type { RegistryGpu } from './GeometryRegistry';
+import type { NB, NF, NU, NV2, NV3, NV4 } from '../../gpu/TSLTypes';
+import { CLUSTER_WORDS, MESH_WORDS, readCluster } from '../world/GeometryRegistry';
+import type { RegistryGpu } from '../world/GeometryRegistry';
 import {
   DISPATCH_ROW,
   instSphereRadius,
@@ -78,18 +78,18 @@ import {
   noteQueueHwRenderer,
   queueCapParam,
   type NaniteCam,
-} from './NaniteCommon';
-import { buildClipCull, type ClipCull } from './NaniteClipCull';
-import type { TerrainDisp, TrunkWindOpt } from './NaniteFetch';
-import { voxWindScalars, voxWindOffset } from './NaniteVoxWind';
-import { windContext } from '../render/Wind';
+} from '../NaniteCommon';
+import { buildClipCull, type ClipCull } from '../cull/NaniteClipCull';
+import type { TerrainDisp, TrunkWindOpt } from '../raster/NaniteFetch';
+import { voxWindScalars, voxWindOffset } from '../raster/NaniteVoxWind';
+import { windContext } from '../../render/Wind';
 import {
   buildNaniteRaster,
   makeVisBuffers,
   type NaniteRasterHandles,
   type NaniteVisBuffers,
-} from './NaniteRaster';
-import { BRICK_DIM, BRICK_HALF, BRICK_OCC_HI, BRICK_OCC_LO, BRICK_POS_X, BRICK_WORDS } from './VoxelBrick';
+} from '../raster/NaniteRaster';
+import { BRICK_DIM, BRICK_HALF, BRICK_OCC_HI, BRICK_OCC_LO, BRICK_POS_X, BRICK_WORDS } from '../voxel/VoxelBrick';
 import {
   bcF2U,
   bcU2F,
@@ -112,9 +112,9 @@ import {
   uniformF,
   uniformMat4,
   wgLinear,
-} from './Tsl';
-import type { UniformArrV4, UniformF, UniformMat4 } from './Tsl';
-import { sunU } from '../render/VegMaterials';
+} from '../Tsl';
+import type { UniformArrV4, UniformF, UniformMat4 } from '../Tsl';
+import { sunU } from '../../render/VegMaterials';
 
 export interface NaniteShadow {
   /** per-cascade: refresh cascade VP/planes, cull, depth-raster, copy → texture.

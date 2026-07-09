@@ -44,9 +44,9 @@ import {
   vertexIndex,
 } from 'three/tsl';
 import type { NB, NF, NU, NV3, NV4 } from '../../gpu/TSLTypes';
-import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK } from '../GeometryRegistry';
+import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK } from '../world/GeometryRegistry';
 import type { NaniteCam } from '../NaniteCommon';
-import type { NaniteFetch, VertCtx } from '../NaniteFetch';
+import type { NaniteFetch, VertCtx } from './NaniteFetch';
 import {
   aLoadU,
   bcF2U,

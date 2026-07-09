@@ -18,25 +18,25 @@
  *  - `?nocache=1` bypasses (build path untouched); `?cacheclear=1` purges then rebuilds.
  *  - GATE for any change here: byte-identical first-frame shot cold vs warm.
  */
-import type { CrownVoxelization, PreparedVoxelCrown, VoxelLevel, VoxelBlock } from './VoxelizeCrown';
+import type { CrownVoxelization, PreparedVoxelCrown, VoxelLevel, VoxelBlock } from '../build/VoxelizeCrown';
 import type { FarTileBuild } from './FarTiles';
-import { BRICK_WORDS, readBrick, writeBrick } from './VoxelBrickCore';
+import { BRICK_WORDS, readBrick, writeBrick } from '../voxel/VoxelBrickCore';
 // builder sources — hashed into the cache key (auto-invalidation on edit)
-import srcVoxelize from './VoxelizeCrown.ts?raw';
-import srcBuildDag from './BuildDag.ts?raw';
-import srcBuildAgg from './BuildAggregateDag.ts?raw';
-import srcBuildCrownLod from './BuildCrownLodDag.ts?raw';
+import srcVoxelize from '../build/VoxelizeCrown.ts?raw';
+import srcBuildDag from '../build/BuildDag.ts?raw';
+import srcBuildAgg from '../build/BuildAggregateDag.ts?raw';
+import srcBuildCrownLod from '../build/BuildCrownLodDag.ts?raw';
 import srcFarTiles from './FarTiles.ts?raw';
 import srcFarTilesSplat from './FarTilesSplat.ts?raw';
-import srcVoxelBrick from './VoxelBrick.ts?raw';
-import srcVoxelBrickCore from './VoxelBrickCore.ts?raw';
-import srcClusterize from './Clusterize.ts?raw';
+import srcVoxelBrick from '../voxel/VoxelBrick.ts?raw';
+import srcVoxelBrickCore from '../voxel/VoxelBrickCore.ts?raw';
+import srcClusterize from '../build/Clusterize.ts?raw';
 // crown-LOD ladder GEN (keep-mask hash + per-rung λ/growth/needle-μ/rows dispatch)
 // lives in TreeBuilder; the actual survivor MESHING (area-preserving width growth,
 // blade-row + needle-μ + stem coarsening) lives in LeafMesh — a change to EITHER
 // reshapes the ladder rungs and must invalidate the cached crown DAG.
-import srcTreeBuilder from '../vegetation/TreeBuilder.ts?raw';
-import srcLeafMesh from '../vegetation/LeafMesh.ts?raw';
+import srcTreeBuilder from '../../vegetation/TreeBuilder.ts?raw';
+import srcLeafMesh from '../../vegetation/LeafMesh.ts?raw';
 
 /** bump on changes to builder TRANSITIVE deps not covered by the ?raw hash list
  *  (DagCommon, VegLibrary geometry gen, registry append semantics).

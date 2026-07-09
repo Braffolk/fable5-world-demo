@@ -52,29 +52,29 @@ import {
   workgroupArray,
   workgroupBarrier,
 } from 'three/tsl';
-import type { NB, NF, NI, NU, NV3, NV4 } from '../gpu/TSLTypes';
+import type { NB, NF, NI, NU, NV3, NV4 } from '../../gpu/TSLTypes';
 import {
   CLUSTER_TRI_BITS,
   CLUSTER_TRI_MASK,
   CLUSTER_WORDS,
   MAX_CLUSTER_TRIS,
   MESH_WORDS,
-} from './GeometryRegistry';
-import type { RegistryGpu } from './GeometryRegistry';
+} from '../world/GeometryRegistry';
+import type { RegistryGpu } from '../world/GeometryRegistry';
 import {
   CLHW_MAX,
   DISPATCH_ROW,
   QRASTER_CAP,
   hashColor,
   type NaniteCam,
-} from './NaniteCommon';
+} from '../NaniteCommon';
 import {
   makeFetch,
   type TerrainDisp,
   type TrunkWindOpt,
   type VertCtx,
 } from './NaniteFetch';
-import { clusterHwClass, HWPROJ } from './NaniteHwClass';
+import { clusterHwClass, HWPROJ } from '../cull/NaniteHwClass';
 import {
   buildNaniteVoxelRaster,
   type VoxelRasterHandles,
@@ -98,36 +98,36 @@ import {
   toF,
   toI,
   wgLinear,
-} from './Tsl';
-import type { BufOf, UV2 } from './Tsl';
+} from '../Tsl';
+import type { BufOf, UV2 } from '../Tsl';
 // ─── extracted raster/ modules (task #76 vis-buffer rewrite, Step 1) ──────────────
-import { CTX_STRIDE, CTX_U, buildClusterCtx } from './raster/ClusterCtx';
-import { buildHw } from './raster/Hw';
-import { buildMid } from './raster/Mid';
+import { CTX_STRIDE, CTX_U, buildClusterCtx } from './ClusterCtx';
+import { buildHw } from './Hw';
+import { buildMid } from './Mid';
 import {
   NEAR_SENTINEL,
   PROJ_CLUSTER_CAP,
   buildProject,
   canonVertSlot,
-} from './raster/Project';
+} from './Project';
 import {
   HW_CAP,
   MID_CAP,
   MID_STRIDE,
   SPLAT_CAP,
   buildQueues,
-} from './raster/Queues';
-import { makeScanline } from './raster/Scanline';
-import { buildSplat } from './raster/Splat';
+} from './Queues';
+import { makeScanline } from './Scanline';
+import { buildSplat } from './Splat';
 import {
   buildVisClear,
   depthKey16,
   depthKey24,
   makeElect,
   type NaniteVisBuffers,
-} from './raster/VisBuffer';
-export { makeVisBuffers } from './raster/VisBuffer';
-export type { NaniteVisBuffers } from './raster/VisBuffer';
+} from './VisBuffer';
+export { makeVisBuffers } from './VisBuffer';
+export type { NaniteVisBuffers } from './VisBuffer';
 
 // HW_CAP / SPLAT_CAP / MID_CAP / MID_STRIDE now live in ./raster/Queues (imported).
 // ?swmax=N shrinks the SW/HW split (bbox extent ≤N px stays SW; larger → HW):

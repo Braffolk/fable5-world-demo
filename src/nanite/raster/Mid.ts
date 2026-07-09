@@ -19,7 +19,7 @@
 import { Fn, float, uint } from 'three/tsl';
 import { IndirectStorageBufferAttribute } from 'three/webgpu';
 import type { NB, NF, NI, NU } from '../../gpu/TSLTypes';
-import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK } from '../GeometryRegistry';
+import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK } from '../world/GeometryRegistry';
 import {
   bcU2F,
   bcU2I,

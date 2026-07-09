@@ -27,10 +27,10 @@
  */
 
 import { float, time, uint, vec2, vec3 } from 'three/tsl';
-import type { NF, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
-import { WORLD_SIZE } from '../world/WorldConst';
-import { gustAt, windExposure, windU } from '../render/Wind';
-import { instRotateDir, type InstYaw } from './NaniteCommon';
+import type { NF, NU, NV2, NV3, NV4 } from '../../gpu/TSLTypes';
+import { WORLD_SIZE } from '../../world/WorldConst';
+import { gustAt, windExposure, windU } from '../../render/Wind';
+import { instRotateDir, type InstYaw } from '../NaniteCommon';
 
 /** pcg-ish hash of a key → 0..1 — INLINE mirror of NaniteFetch/VegInstance
  *  `slotHash` (kept local so this module has no heavy import edge; the constants

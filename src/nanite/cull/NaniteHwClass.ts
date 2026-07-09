@@ -38,12 +38,12 @@
  * See docs/mobile-gpu-perf/SW-HW-CLUSTER-AUDIT.md.
  */
 import { If, float, max, sqrt, uint, vec3, vec4 } from 'three/tsl';
-import type { NB, NF, NU, NV3, NV4 } from '../gpu/TSLTypes';
-import { MESH_WORDS, readCluster } from './GeometryRegistry';
-import type { RegistryGpu } from './GeometryRegistry';
-import type { NaniteCam } from './NaniteCommon';
-import { instSphereRadius, instTransformPoint, instYaw } from './NaniteCommon';
-import { bcU2F, elemU } from './Tsl';
+import type { NB, NF, NU, NV3, NV4 } from '../../gpu/TSLTypes';
+import { MESH_WORDS, readCluster } from '../world/GeometryRegistry';
+import type { RegistryGpu } from '../world/GeometryRegistry';
+import type { NaniteCam } from '../NaniteCommon';
+import { instSphereRadius, instTransformPoint, instYaw } from '../NaniteCommon';
+import { bcU2F, elemU } from '../Tsl';
 
 // Mesh near gate margin = max(4·nearPlane, 0.3) with the Engine camera near = 0.3 ⇒ 1.2.
 // Every mesh HW vertex then has clip-w ≥ NEAR_MARGIN — the bound the `_clE` projVertBuf

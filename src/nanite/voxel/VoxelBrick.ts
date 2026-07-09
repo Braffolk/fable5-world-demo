@@ -52,8 +52,8 @@
  */
 
 import { Fn, uint } from 'three/tsl';
-import type { NU, NV3 } from '../gpu/TSLTypes';
-import { octDecodeTsl } from './GeometryRegistry';
+import type { NU, NV3 } from '../../gpu/TSLTypes';
+import { octDecodeTsl } from '../world/GeometryRegistry';
 import { BRICK_WORDS } from './VoxelBrickCore';
 
 // CPU codec + constants live in VoxelBrickCore.ts (THREE-FREE so the offline

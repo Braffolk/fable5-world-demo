@@ -35,7 +35,7 @@
 import type { DagBuild } from './BuildDag';
 import { type Sphere, mergeSpheres, partitionClusters } from './DagCommon';
 import { type DagHierarchy, validateDagHierarchy } from './DagHierarchy';
-import type { ExplicitSource, GeometryRegistry, MeshHandle } from './GeometryRegistry';
+import type { ExplicitSource, GeometryRegistry, MeshHandle } from '../world/GeometryRegistry';
 // VoxelBrickCore (NOT VoxelBrick): keeps this module's import chain THREE-FREE
 // so prepareVoxelCrown can run inside the DagWorker module Worker (2026-07-04).
 import {
@@ -46,8 +46,8 @@ import {
   brickCenterHalf,
   MAX_BRICKS_PER_CLUSTER,
   writeBrick,
-} from './VoxelBrickCore';
-import type { PackedLevel, PackedPreparedCrown } from './BootCache';
+} from '../voxel/VoxelBrickCore';
+import type { PackedLevel, PackedPreparedCrown } from '../world/BootCache';
 
 /** voxlod: number of MIP-pyramid levels (L0 finest … coarsest), each level 2x coarser (bricks 2x
  *  wider, the brick grid halved per axis). DEFAULT 7 = ceil(log2(maxDist/transitionDist))+1, the

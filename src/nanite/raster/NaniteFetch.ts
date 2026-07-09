@@ -13,23 +13,23 @@
 import type { Texture } from 'three';
 import type { StorageTexture } from 'three/webgpu';
 import { If, clamp, float, mix, smoothstep, texture, time, uint, vec2, vec3, wgslFn } from 'three/tsl';
-import type { NB, NF, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
-import { DISP } from '../render/TerrainMaterial';
-import { PERIOD_FBM, PERIOD_RID, PERIOD_VAL } from '../gpu/passes/NoiseBake';
-import { WORLD_SIZE } from '../world/WorldConst';
-import { gustAt, gustLagAt, windExposure, windU, WIND_LAG_M } from '../render/Wind';
-import { SKIRT_DEPTH_A, SKIRT_DEPTH_B } from './BuildHeightGrid';
+import type { NB, NF, NU, NV2, NV3, NV4 } from '../../gpu/TSLTypes';
+import { DISP } from '../../render/TerrainMaterial';
+import { PERIOD_FBM, PERIOD_RID, PERIOD_VAL } from '../../gpu/passes/NoiseBake';
+import { WORLD_SIZE } from '../../world/WorldConst';
+import { gustAt, gustLagAt, windExposure, windU, WIND_LAG_M } from '../../render/Wind';
+import { SKIRT_DEPTH_A, SKIRT_DEPTH_B } from '../build/BuildHeightGrid';
 import {
   CLUSTER_FLAG_DAG,
   MESH_FLAG_TWO_SIDED,
   MESH_WORDS,
   TRANSFORM_CHANNEL,
   VERT_WORDS,
-} from './GeometryRegistry';
-import type { RegistryGpu } from './GeometryRegistry';
-import { instTransformPoint, instYaw, type InstYaw } from './NaniteCommon';
-import type { UniformV3 } from './Tsl';
-import { bcU2F, elemU, maxU, minU, texLoadR, toF } from './Tsl';
+} from '../world/GeometryRegistry';
+import type { RegistryGpu } from '../world/GeometryRegistry';
+import { instTransformPoint, instYaw, type InstYaw } from '../NaniteCommon';
+import type { UniformV3 } from '../Tsl';
+import { bcU2F, elemU, maxU, minU, texLoadR, toF } from '../Tsl';
 
 /** cheap pcg-ish hash of an instance slot → 0..1 (mirror of VegInstance.slotHash
  *  — the trunk wind needs the SAME per-instance phase the old path baked; the
