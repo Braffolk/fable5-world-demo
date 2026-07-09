@@ -540,13 +540,13 @@ export function buildNaniteRaster(
   const dbgNoSpl = dbgQ.get('nospl') === '1';
   const dbgNoMid = dbgQ.get('nomid') === '1';
   const dbgNoHw = dbgQ.get('nohw') === '1';
-  // ?middz=0 — escape to nanMidRaster's bit-identical per-pixel barycentric recompute.
-  // Default ON (2026-07-09): the incremental path ({z,dzdx,dzdy} stepped per pixel) removes
-  // ~12 ALU ops/covered pixel from the scanline loop — the mid shader's largest measured
-  // per-line region (~36%) — and drops loop-carried state. Parity risk = depthKey24 LSB
-  // drift from float accumulation (deterministic, not noise); election ties may pick a
-  // different near-equal fragment on rare pixels. MID-ONLY; world1 untouched.
-  const midIncDepth = dbgQ.get('middz') !== '0';
+  // ?middz — nanMidRaster incremental-depth path. Default OFF (measured REGRESSION as
+  // default-ON, 2026-07-09 23:45): mid +8% absolute (anchor-normalized cross-trace) and the
+  // within-shader float bucket 12→20 instr / 8.3%→12.2% cost — the {z += dzdx} loop-carried
+  // SERIAL chain stalls more than the per-pixel barycentric recompute it replaced (the
+  // recompute is independent per pixel ⇒ the GPU overlaps it across the scanline). Fewer
+  // instructions lost to a longer dependence chain — keep the recompute.
+  const midIncDepth = dbgQ.get('middz') === '1';
   // hw/splat/mid work queues + their indirect-args kernels (./raster/Queues). The splat/mid
   // queues + args exist only on the world1 path (splatElect); the ?scar counters + the
   // ?trihzb prev-frame HZB mirror fold into the hwQueue tail (SCAR_BASE/TRIHZB_BASE). triLvls
