@@ -168,6 +168,12 @@ export interface NaniteCullCounts {
   visTris: number;
   /** D-N43 Stage 0.5: DAG-only rastered triangles (isolates leaf/aggregate tris) */
   dagTris: number;
+  /** F3 budget: Σ triCount of voxel-matclass clusters routed to the voxel raster (a
+   *  subset of visTris skipped by the SW classifier via matClass==7; slot 10). */
+  voxRoutedTris: number;
+  /** F3 budget: Σ triCount of clusters kHwPartition routes to the HW instanced draw
+   *  (a subset of visTris skipped by the SW classifier via clusterHwClass; slot 11). */
+  clhwTris: number;
   /** non-null when a queue clamped this frame */
   overflow: string | null;
 }
@@ -488,6 +494,17 @@ export function buildNaniteCull(
   countersAttr.name = 'nanCounters';
   const counters = sU32Views(countersAttr, 8).atomic;
 
+  // F3 triangle-budget CLUSTER-granular attribution (always-on; cluster-granular =
+  // thousands of atomicAdds/frame, cheap — NOT per-tri/per-pixel). [0] voxRoutedTris =
+  // Σ triCount of voxel-matclass clusters fanned to the voxel raster; [1] clhwTris =
+  // Σ triCount of clusters kHwPartition routes to the HW instanced draw. Both are counted
+  // where the SAME routing decision is made (matClass==7 / clusterHwClass), which the SW
+  // world1 classifier skips bit-for-bit (raster slots 10/11) ⇒ the F3 budget partitions
+  // submit (counters[6]) exactly: submit = mid+splat+hwQueue+voxRouted+clhw+per-tri-culled.
+  const budgetExtraAttr = new StorageBufferAttribute(new Uint32Array(2), 1);
+  budgetExtraAttr.name = 'nanBudgetExtra';
+  const budgetExtra = sU32Views(budgetExtraAttr, 2).atomic;
+
   const qRasterAttr = new StorageBufferAttribute(new Uint32Array((qCap + 1) * 2), 2);
   qRasterAttr.name = 'nanQRaster';
   const qRasterV = sUvec2(qRasterAttr, qCap + 1);
@@ -686,6 +703,7 @@ export function buildNaniteCull(
   // over the live qRaster count. Runs BEFORE kVoxFanout (its cursor + dispatch args).
   const kVoxFanoutArgs = Fn(() => {
     atomicStore(voxCount.element(0), uint(0));
+    atomicStore(budgetExtra.element(0), uint(0)); // F3 budget: reset voxRoutedTris (legacy path)
     const n = minU(aLoadU(counters.element(1)), uint(qCap));
     // one workgroup (64 threads) per 64 qRaster entries
     split2D(voxFanoutDispatch, n.add(uint(63)).div(uint(64)));
@@ -707,6 +725,10 @@ export function buildNaniteCull(
       .shiftRight(uint(8))
       .bitAnd(uint(0xff));
     If(matClass.equal(uint(VOXEL_MATCLASS)), () => {
+      // F3 budget: count this cluster's tris ONCE — UNCONDITIONAL on queue overflow, so it
+      // matches the SW classifier's matClass==7 skip (which drops all voxel clusters, queued
+      // or not). Re-reads triCount off the already-bound gpu.clusters (no new binding).
+      atomicAdd(budgetExtra.element(0), readCluster(gpu.clusters, ci).triCount);
       const slot = atomicAdd(voxCount.element(0), uint(1)) as unknown as NU;
       If(slot.lessThan(uint(vCap)), () => {
         qVoxRasterV.rw.element(slot.add(uint(1))).assign(uv2(instId, ci));
@@ -733,6 +755,7 @@ export function buildNaniteCull(
   const hwPart = (() => {
     const kHwPartitionArgs = Fn(() => {
       atomicStore(hwPartCount.element(0), uint(0));
+      atomicStore(budgetExtra.element(1), uint(0)); // F3 budget: reset clhwTris (before kHwPartition; hwPart batch runs every frame)
       const n = minU(aLoadU(counters.element(1)), uint(qCap));
       split2D(hwPartDispatch, n.add(uint(63)).div(uint(64)));
     })().compute(1, [1]);
@@ -755,6 +778,10 @@ export function buildNaniteCull(
         If(
           clusterHwClass(gpu, cam.camPos as unknown as NV3, projK, instId, ci, clhwMax),
           () => {
+            // F3 budget: count this cluster's tris ONCE — UNCONDITIONAL on qHwRaster overflow,
+            // matching the SW classifier's clusterHwClass skip (slot 11), which returns every
+            // clhw cluster regardless of the HW queue cap. Re-reads triCount off gpu.clusters.
+            atomicAdd(budgetExtra.element(1), readCluster(gpu.clusters, ci).triCount);
             const slot = atomicAdd(hwPartCount.element(0), uint(1)) as unknown as NU;
             If(slot.lessThan(uint(qCap)), () => {
               elemUW(qHwRasterV.rw, slot).assign(tid);
@@ -848,6 +875,7 @@ export function buildNaniteCull(
     for (let b = 0; b < K; b++) {
       atomicStore(voxBucketCount.element(uint(b)), uint(0));
     }
+    atomicStore(budgetExtra.element(0), uint(0)); // F3 budget: reset voxRoutedTris (F2B path, before kVoxCount)
     const n = minU(aLoadU(counters.element(1)), uint(qCap));
     split2D(voxFanoutDispatch, n.add(uint(63)).div(uint(64)));
   })().compute(1, [1]);
@@ -889,6 +917,10 @@ export function buildNaniteCull(
       .shiftRight(uint(8))
       .bitAnd(uint(0xff));
     If(matClass.equal(uint(VOXEL_MATCLASS)), () => {
+      // F3 budget: count this voxel cluster's tris ONCE (kVoxCount fires exactly once per
+      // voxel-matclass cluster, unconditional on queue overflow) → matches the SW classifier's
+      // matClass==7 skip. Re-reads triCount off the already-bound gpu.clusters (no new binding).
+      atomicAdd(budgetExtra.element(0), readCluster(gpu.clusters, ci).triCount);
       // build-time ternary: visibility bit (?voxprev) or depth slab (?voxf2b legacy) —
       // the unused branch (and its bindings: hzb pyramid vs voxRange) is compiled out.
       const bIdx = voxPrev
@@ -1425,12 +1457,14 @@ export function buildNaniteCull(
 
   const readCounts = async (renderer: Renderer): Promise<NaniteCullCounts> => {
     noteQueueHwRenderer(renderer); // queue high-water diag: stash for window.__qHW
-    const [buf, head] = await Promise.all([
+    const [buf, head, extra] = await Promise.all([
       readBuffer(renderer, countersAttr, 0, 32),
       readBuffer(renderer, qRasterAttr, 0, 8),
+      readBuffer(renderer, budgetExtraAttr, 0, 8),
     ]);
     const u = new Uint32Array(buf);
     const q = new Uint32Array(head);
+    const e = new Uint32Array(extra);
     // with occlusion, [0] holds the phase-2 re-expansion — phase 1 is in [4]
     const chunks = sphereOccluded ? (u[4] ?? 0) : (u[0] ?? 0);
     const visClusters = u[1] ?? 0;
@@ -1456,6 +1490,8 @@ export function buildNaniteCull(
       dagClusters,
       visTris,
       dagTris,
+      voxRoutedTris: e[0] ?? 0,
+      clhwTris: e[1] ?? 0,
       p2Appends,
       overflow,
     };

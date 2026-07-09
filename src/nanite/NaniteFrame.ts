@@ -748,6 +748,12 @@ export function buildNaniteFrame(
         out['nanite.dagClusters'] = c.dagClusters;
         out['nanite.visTris'] = c.visTris;
         out['nanite.dagTris'] = c.dagTris;
+        // F3 triangle-budget cluster-granular attribution (always-on; piggybacks the same
+        // readCounts async batch as visTris — no new stall). voxRouted = voxel-matclass
+        // clusters fanned to the voxel raster; clhw = clusters routed to the HW instanced
+        // draw. Both are subsets of visTris the SW classifier skips (raster slots 10/11).
+        out['nanite.voxRoutedTris'] = c.voxRoutedTris;
+        out['nanite.clhwTris'] = c.clhwTris;
         out['nanite.chunks'] = c.chunks;
         out['nanite.rejInst'] = c.rejInst;
         out['nanite.rejClust'] = c.rejClust;

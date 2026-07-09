@@ -6,15 +6,17 @@
  * The old F3 was one flat `white-space:pre` dump of every counter, sorted
  * alphabetically — an unreadable wall that overflowed the screen. Rethought as:
  *
- *   1. HEADER strip (always visible): fps / ms / p95 / gpuWall, internal render
- *      resolution (rscale-aware — the HONEST pixel denominator), and the
- *      pathology-at-a-glance number: submitted triangles ÷ rendered pixels, with
- *      the RATIO colored (green ≤2×, yellow 2–3×, red >3×).
+ *   1. HEADER strip (always visible): p95 frame-time is THE emphasized number (large,
+ *      bold, colored by the 90fps-floor thresholds — green ≤12.5ms, yellow ≤16.7, red
+ *      above; perf is judged on p95, NOT instantaneous fps), with fps/ms-now secondary.
+ *      Plus internal render resolution (rscale-aware — the HONEST pixel denominator) and
+ *      the pathology number: submitted triangles ÷ rendered pixels, RATIO colored.
  *
- *   2. TRIANGLE BUDGET (centerpiece, default-expanded): one row per raster layer
- *      — SW-mid, splat (sub-px), HW, voxel — each with count, % of submitted,
- *      ratio-to-pixels, a live sparkline, and cap utilization. This is THE tool
- *      for the tri-count-pathology census (visTris ~8M vs ~4M expected).
+ *   2. TRIANGLE BUDGET (centerpiece, default-expanded): one row per raster layer —
+ *      SW-mid, splat(1px), HW-tri, HW-cluster (clhw), vox-routed, vox brick — each with
+ *      count, % of submitted, ratio-to-pixels, a live sparkline, and cap utilization,
+ *      then a `culled·resid` row. The layers now PARTITION submit EXACTLY:
+ *      submit = SW-mid + splat + HW-tri + vox-routed + HW-cluster + culled(resid).
  *
  *   3. COLLAPSIBLE sections for everything else (cull, GPU passes, memory, CPU,
  *      misc) — grouped + aligned, no data deleted, just restructured. Collapse
@@ -26,9 +28,13 @@
  * + the LOD cut. It is the count SUBMITTED to the rasterizer — NOT tris that shaded
  * pixels. It includes sub-pixel clusters (→ splat), voxel-routed clusters (→ bricks,
  * never rasterized as tris), and cluster tris that fall off-screen or backface at
- * the triangle level (cull is per-cluster-sphere, conservative). So
- * visTris ≥ (mid + hw) actually-rastered tris; the gap ≈ voxel-routed + sub-pixel
- * -culled. The per-layer split below is what disambiguates overdraw vs broken LOD.
+ * the triangle level (cull is per-cluster-sphere, conservative). It is now attributed
+ * EXACTLY: voxel-routed clusters (matClass==7) → nanite.voxRoutedTris, clhw clusters
+ * (clusterHwClass) → nanite.clhwTris — both cluster-granular Σ triCount counted at the
+ * SAME routing decision the SW classifier skips on (raster slots 10/11) — and the SW
+ * per-tri classifier splits the rest into mid/splat/HW-tri, leaving the residual =
+ * backface / off-screen / sub-px / cap-dropped SW tris. The per-layer split disambiguates
+ * overdraw vs broken LOD; the residual isolates conservative-cull waste.
  *
  * The Series data model (HudCharts.ts) already carries a running max, so a future
  * fly-through census recorder ("record window + running max per layer") is a drop-in.
@@ -67,6 +73,13 @@ function ratioColor(r: number): string {
   return r <= 2 ? GREEN : r <= 3 ? YELLOW : RED;
 }
 
+/** p95 frame-time color (the 90fps-floor mandate — perf is judged on p95, NOT fps):
+ *  green ≤12.5 ms (80fps), yellow ≤16.7 (60fps), red above. */
+function p95Color(ms: number): string {
+  if (!Number.isFinite(ms)) return DIM;
+  return ms <= 12.5 ? GREEN : ms <= 16.7 ? YELLOW : RED;
+}
+
 /** compact count: 8123456 → "8.1M", 4200 → "4.2k". */
 function short(n: number): string {
   if (!Number.isFinite(n)) return '–';
@@ -88,11 +101,19 @@ interface LayerDef {
 
 // The raster layers, in pipeline order. mid/hw are per-triangle; splat is per
 // sub-pixel FRAGMENT (~1 px each); voxel bricks are per-pixel elections (?voxwrites).
+// The tri-partition layers (mid + splat + HW-tri + vox-routed + HW-cluster) sum with the
+// per-tri-culled residual to EXACTLY the submit total; `vox brick` is a per-PIXEL brick-write
+// diagnostic (not part of the tri sum). splat = 1 fragment append per elected sub-pixel tri
+// (≈1px tri, so it counts as tris here). vox-routed / HW-cluster are cluster-granular counts
+// (Σ triCount) of clusters the SW classifier skips (routed to the voxel raster / HW instanced
+// draw), counted where the SAME routing decision is made ⇒ the budget partitions submit.
 const LAYERS: LayerDef[] = [
   { key: 'mid', label: 'SW-mid', counter: 'nanite.midTris', color: 'rgb(90,169,230)', cap: MID_CAP },
-  { key: 'splat', label: 'splat', counter: 'nanite.splatFrags', color: 'rgb(224,178,62)', cap: SPLAT_CAP },
-  { key: 'hw', label: 'HW', counter: 'nanite.hwTris', color: 'rgb(199,125,255)', cap: HW_CAP },
-  { key: 'vox', label: 'vox brick', counter: 'nanite.voxBrickWrites', color: 'rgb(76,175,110)', cap: 0 },
+  { key: 'splat', label: 'splat(1px)', counter: 'nanite.splatFrags', color: 'rgb(224,178,62)', cap: SPLAT_CAP },
+  { key: 'hw', label: 'HW-tri', counter: 'nanite.hwTris', color: 'rgb(199,125,255)', cap: HW_CAP },
+  { key: 'clhw', label: 'HW-cluster', counter: 'nanite.clhwTris', color: 'rgb(157,140,255)', cap: 0 },
+  { key: 'voxr', label: 'vox-routed', counter: 'nanite.voxRoutedTris', color: 'rgb(76,175,110)', cap: 0 },
+  { key: 'vox', label: 'vox brick', counter: 'nanite.voxBrickWrites', color: 'rgb(110,150,120)', cap: 0 },
 ];
 
 interface Section {
@@ -142,6 +163,7 @@ export class Hud {
   // triangle budget
   private rows = new Map<string, BudgetRow>();
   private totalRow!: BudgetRow;
+  private residualRow!: BudgetRow;
   private deltaLine!: HTMLDivElement;
   private series = new Map<string, Series>();
 
@@ -233,7 +255,7 @@ export class Hud {
     title.style.cssText = `color:${DIM};font-size:10px;letter-spacing:0.5px`;
     title.textContent = `LAAS · seed ${this.params.seed} · ${this.params.scene}`;
     this.hHead1 = document.createElement('div');
-    this.hHead1.style.cssText = 'font-size:13px;font-weight:600;margin:1px 0';
+    this.hHead1.style.cssText = 'margin:1px 0;line-height:1.15';
     this.hHead2 = document.createElement('div');
     this.hHead2.style.cssText = `color:${DIM}`;
     this.hHead3 = document.createElement('div');
@@ -298,6 +320,10 @@ export class Hud {
     this.totalRow = this.makeBudgetRow('submit', FG, true);
     this.series.set('vis', new Series());
     sec.body.appendChild(this.totalRow.root);
+    // per-tri culled (residual) = submit − (mid+splat+HWtri+vox-routed+HW-cluster)
+    this.residualRow = this.makeBudgetRow('culled·resid', DIM, false);
+    this.series.set('residual', new Series());
+    sec.body.appendChild(this.residualRow.root);
     // caption
     this.deltaLine = document.createElement('div');
     this.deltaLine.style.cssText = `color:${DIM};font-size:9px;margin-top:3px;line-height:1.3`;
@@ -430,9 +456,13 @@ export class Hud {
     const px = Math.max(1, res.x * res.y);
     const visTris = cn('nanite.visTris') ?? 0;
 
-    // ── header ──
-    this.hHead1.textContent =
-      `${s.fps.toFixed(0)} fps · ${s.frameMs.toFixed(1)} ms (p95 ${s.frameMsP95.toFixed(1)})`;
+    // ── header ── p95 frame-time is THE number (user judges perf on p95, not fps): large,
+    // bold, colored by the 90fps-floor thresholds. Instantaneous fps/ms are secondary (dim/small).
+    const p95 = s.frameMsP95;
+    this.hHead1.innerHTML =
+      `<b style="font-size:18px;color:${p95Color(p95)}">p95 ${p95.toFixed(1)}</b>` +
+      `<span style="color:${DIM};font-size:11px"> ms</span>` +
+      `<span style="color:${DIM};font-size:11px;margin-left:8px">${s.fps.toFixed(0)} fps · ${s.frameMs.toFixed(1)} ms now</span>`;
     const gpu = (s.gpuPasses['render'] ?? 0) + (s.gpuPasses['compute'] ?? 0);
     this.hHead2.textContent =
       `${res.x}×${res.y}${RSCALE < 1 ? ` @${RSCALE.toFixed(2)}` : ''}` +
@@ -444,7 +474,6 @@ export class Hud {
       `<b style="color:${ratioColor(visR)}">${visR.toFixed(2)}×</b>`;
 
     // ── triangle budget rows ──
-    let sumTri = 0; // mid + hw (true rastered tris; splat = frags, separate)
     for (const L of LAYERS) {
       const row = this.rows.get(L.key)!;
       const raw = cn(L.counter);
@@ -458,7 +487,6 @@ export class Hud {
         continue;
       }
       ser.push(raw);
-      if (L.key === 'mid' || L.key === 'hw') sumTri += raw;
       row.count.textContent = short(raw);
       row.pct.textContent = visTris > 0 ? `${Math.round((raw / visTris) * 100)}%` : '';
       const r = raw / px;
@@ -489,14 +517,47 @@ export class Hud {
     if (this.totalRow.ctx) {
       drawSparkline(this.totalRow.ctx, SPARK_W, SPARK_H, visSer.window(), visSer.windowMax(), FG.startsWith('#') ? 'rgb(217,232,224)' : FG);
     }
-    // diagnostic caption: the visTris − (mid+hw) gap ≈ voxel-routed + sub-pixel-culled
-    const midHw = sumTri;
-    const gap = Math.max(0, visTris - midHw);
+    // ── per-tri culled (residual) row ──
+    // Identity: submit = mid + splat + HW-tri + vox-routed + HW-cluster + residual. So the
+    // residual = SW-cluster tris the classifier dropped (backface / off-screen / sample-miss
+    // / sub-pixel) + any queue-cap overflow. Voxel & clhw clusters are counted WHOLE at their
+    // routing decision — the SAME condition the SW classifier skips on (raster slots 10/11) —
+    // so those buckets partition submit exactly. A residual NEGATIVE beyond ~noise ⇒ a
+    // double-count bug (shown in red, still displayed as it's diagnostic).
+    const haveLayers = cn('nanite.midTris') !== undefined; // world1 single-pass path only
+    const mid = cn('nanite.midTris') ?? 0;
+    const splat = cn('nanite.splatFrags') ?? 0;
+    const hw = cn('nanite.hwTris') ?? 0;
+    const voxRouted = cn('nanite.voxRoutedTris') ?? 0;
+    const clhw = cn('nanite.clhwTris') ?? 0;
+    const residual = visTris - (mid + splat + hw + voxRouted + clhw);
+    const resSer = this.series.get('residual')!;
+    resSer.push(Math.max(0, residual));
+    this.residualRow.name.textContent = 'culled·resid';
+    if (haveLayers) {
+      this.residualRow.count.textContent = short(residual);
+      // negative beyond a 2%-of-submit noise floor ⇒ double-count bug → flag red
+      this.residualRow.count.style.color = residual < -Math.max(1000, visTris * 0.02) ? RED : FG;
+      this.residualRow.pct.textContent = visTris > 0 ? `${Math.round((residual / visTris) * 100)}%` : '';
+      const rr = residual / px;
+      this.residualRow.perPx.textContent = `${rr.toFixed(2)}×`;
+      this.residualRow.perPx.style.color = ratioColor(rr);
+    } else {
+      this.residualRow.count.textContent = '–';
+      this.residualRow.pct.textContent = '';
+      this.residualRow.perPx.textContent = '';
+    }
+    this.residualRow.cap.textContent = '';
+    if (this.residualRow.ctx) {
+      drawSparkline(this.residualRow.ctx, SPARK_W, SPARK_H, resSer.window(), resSer.windowMax(), DIM);
+    }
+
+    // caption
     const voxCl = cn('nanite.voxClusters');
     this.deltaLine.textContent =
-      `submit = cull-emitted cluster tris (pre-raster; incl. voxel-routed + sub-px). ` +
-      `mid+HW rastered ${short(midHw)}; Δ ${short(gap)} → voxel-brick/sub-px-culled` +
-      (voxCl !== undefined ? ` (${short(voxCl)} vox cl)` : '');
+      `submit = SW-mid + splat + HW-tri + vox-routed + HW-cluster + culled·resid. ` +
+      `resid = backface / off-screen / sub-px / cap-drop of SW clusters` +
+      (voxCl !== undefined ? ` · ${short(voxCl)} vox cl` : '');
 
     // ── collapsible sections ──
     this.renderCull(c);
@@ -568,6 +629,7 @@ export class Hud {
       'nanite.p2', 'nanite.orphans', 'nanite.covered', 'nanite.mb', 'gpu.geometries',
       'gpu.textures', 'gpu.buffers', 'nanite.meshes', 'nanite.clusters',
       'nanite.trisK', 'nanite.inst', 'nanite.dagTris',
+      'nanite.voxRoutedTris', 'nanite.clhwTris',
     ]);
     const lines = [
       `updateMs   ${((c['cpu.updateMs100'] ?? 0) / 100).toFixed(2)}`,
