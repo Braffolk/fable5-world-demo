@@ -1,0 +1,13 @@
+# THE one-value full-country flip: `assetgen fetch/cook --aoi estonia` runs the exact same
+# code path as the pilot, with the AOI = the union bbox of all 2357 1:10k sheets
+# (computed from the epk10T grid index at load time). Expect ~170 GB of DTM downloads.
+
+name = "estonia"
+whole_country = true
+
+[layers]
+height = true
+landcover = true
+water = true
+trees = true
+soil = true

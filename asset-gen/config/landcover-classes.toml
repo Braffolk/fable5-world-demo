@@ -1,0 +1,84 @@
+# ETAK kõlvik -> game land-cover class mapping. Cook FAILS LOUDLY on any (layer, tyyp)
+# it meets that is not listed here — extend this table, never guess in code.
+#
+# Game palette (classId u8). Nature-only world: no building/road classes; õu (yards)
+# render as grassland, roads are deliberately NOT burned (user law — see README).
+
+[palette]
+none = 0
+forest = 1
+shrub = 2
+grassland = 3
+barren = 4
+sand = 5
+field = 6
+yard = 7
+bog = 8          # raba — raised bog
+fen = 9          # madalsoo / soovik / õõtsik — minerotrophic wetland
+peatfield = 10
+water_still = 11
+water_flow = 12
+sea = 13
+
+# Paint order: listed layer blocks are rasterized top-to-bottom; later paints OVERWRITE
+# earlier ones (wetland over forest, water over everything).
+
+[[layer]]
+name = "E_301_muu_kolvik_a"
+[layer.tyyp]
+10 = "grassland"   # Haljasala
+20 = "barren"      # Jäätmaa
+30 = "barren"      # other artificial open (not yet seen in AOI)
+
+[[layer]]
+name = "E_304_lage_a"
+[layer.tyyp]
+10 = "grassland"   # Rohumaa
+20 = "sand"        # Liivane ala
+30 = "barren"      # Muu lage
+
+[[layer]]
+name = "E_303_haritav_maa_a"
+[layer.tyyp]
+10 = "field"       # Põld
+20 = "field"       # Aianduslik maa
+30 = "field"       # other cultivated variants
+
+[[layer]]
+name = "E_302_ou_a"
+[layer.tyyp]
+10 = "yard"        # Eraõu
+20 = "yard"        # Tootmisõu
+
+[[layer]]
+name = "E_305_puittaimestik_a"
+[layer.tyyp]
+10 = "forest"      # Mets
+20 = "shrub"       # (rare variant)
+30 = "shrub"       # Põõsastik
+
+[[layer]]
+name = "E_306_margala_a"
+[layer.tyyp]
+10 = "fen"         # Madalsoo
+20 = "bog"         # Raba
+30 = "fen"         # Soovik
+40 = "fen"         # Õõtsik
+
+[[layer]]
+name = "E_307_turbavali_a"
+[layer.tyyp]
+10 = "peatfield"
+20 = "peatfield"
+
+[[layer]]
+name = "E_202_seisuveekogu_a"
+default = "water_still"   # all tyyp values (järv/tiik/paisjärv/laugas/...) are still water
+
+[[layer]]
+name = "E_203_vooluveekogu_a"
+default = "water_flow"
+
+[[layer]]
+name = "E_201_meri_a"
+default = "sea"

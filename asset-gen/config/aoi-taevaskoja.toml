@@ -1,0 +1,16 @@
+# Pilot AOI: Taevaskoja + Ahja primeval valley + surroundings (Põlva county).
+# 16x16 km centered on Taevaskoja; snapped outward to the 2048 m chunk grid at load time.
+
+name = "taevaskoja"
+center_e = 679928
+center_n = 6443064
+half_m = 8000
+
+# Layers cooked at full detail for this AOI. Country-wide coarse height is a separate
+# always-on floor (see `assetgen cook --layer country-floor`).
+[layers]
+height = true
+landcover = true
+water = true
+trees = true
+soil = true

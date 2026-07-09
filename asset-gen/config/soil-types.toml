@@ -1,0 +1,169 @@
+# The COMPLETE official Mullastikukaart legend (muldade_tabel.pdf, "Mullastiku kaardi
+# legend") — every canonical soil type incl. gleyed (g), eroded (E2/E3), peat-thickness
+# (' / " / "') and turvastunud (1) variants is its own id. The pipeline ships the full
+# taxonomy; collapsing into a material palette is a renderer/art decision, made later.
+#
+# id 0 = no data (cities/water/islets are legally unmapped in the source).
+# id 255 = unparseable code (cook fails if these exceed `max_unknown_fraction`).
+# Data normalization: curly apostrophes/quotes fold to ' and ", so M’’’ == M'".
+
+max_unknown_fraction = 0.005
+
+[types]
+# --- paepealsed / rähk / leostunud / leetjas (automorphic on carbonate) ---
+"Kh'"   = { id = 1,  name = "Väga õhuke paepealne muld" }
+"Kh\""  = { id = 2,  name = "Õhuke paepealne muld" }
+"Kr"    = { id = 3,  name = "Koreserikas rähkmuld" }
+"K"     = { id = 4,  name = "Rähkmuld" }
+"Kk"    = { id = 5,  name = "Klibumuld" }
+"Kor"   = { id = 6,  name = "Koreserikas leostunud muld" }
+"Ko"    = { id = 7,  name = "Leostunud muld" }
+"KI"    = { id = 8,  name = "Leetjas muld" }
+# --- leetunud (podzolized) ---
+"LP"     = { id = 9,  name = "Kahkjas leetunud muld" }
+"LkI"    = { id = 10, name = "Nõrgalt leetunud muld" }
+"LkII"   = { id = 11, name = "Keskmiselt leetunud muld" }
+"LkIII"  = { id = 12, name = "Tugevasti leetunud muld" }
+"L(k)I"  = { id = 13, name = "Nõrgalt leetunud huumuslik leedemuld" }
+"L(k)II" = { id = 14, name = "Keskmiselt leetunud huumuslik leedemuld" }
+"L(k)III" = { id = 15, name = "Tugevasti leetunud huumuslik leedemuld" }
+"Lo"     = { id = 16, name = "Primitiivne leedemuld (liivmuld)" }
+"LI"     = { id = 17, name = "Nõrgalt leetunud leedemuld" }
+"LII"    = { id = 18, name = "Keskmiselt leetunud leedemuld" }
+"LIII"   = { id = 19, name = "Tugevasti leetunud leedemuld" }
+"Ls"     = { id = 20, name = "Sekundaarne leedemuld" }
+# --- gleistunud (gleyed) automorphic variants ---
+"Kh'g"   = { id = 21, name = "Gleistunud väga õhuke paepealne muld" }
+"Kh\"g"  = { id = 22, name = "Gleistunud õhuke paepealne muld" }
+"Krg"    = { id = 23, name = "Gleistunud koreserikas rähkmuld" }
+"Kg"     = { id = 24, name = "Gleistunud rähkmuld" }
+"Kkg"    = { id = 25, name = "Gleistunud klibumuld" }
+"Korg"   = { id = 26, name = "Gleistunud koreserikas leostunud muld" }
+"Kog"    = { id = 27, name = "Gleistunud leostunud muld" }
+"KIg"    = { id = 28, name = "Gleistunud leetjas muld" }
+"LPg"    = { id = 29, name = "Gleistunud kahkjas leetunud muld" }
+"LkIg"   = { id = 30, name = "Gleistunud nõrgalt leetunud muld" }
+"LkIIg"  = { id = 31, name = "Gleistunud keskmiselt leetunud muld" }
+"LkIIIg" = { id = 32, name = "Gleistunud tugevasti leetunud muld" }
+"L(k)Ig" = { id = 33, name = "Gleistunud nõrgalt leetunud huumuslik leedemuld" }
+"L(k)IIg" = { id = 34, name = "Gleistunud keskmiselt leetunud huumuslik leedemuld" }
+"L(k)IIIg" = { id = 35, name = "Gleistunud tugevasti leetunud huumuslik leedemuld" }
+"LIg"    = { id = 36, name = "Gleistunud nõrgalt leetunud leedemuld" }
+"LIIg"   = { id = 37, name = "Gleistunud keskmiselt leetunud leedemuld" }
+"LIIIg"  = { id = 38, name = "Gleistunud tugevasti leetunud leedemuld" }
+"Lsg"    = { id = 39, name = "Gleistunud sekundaarne leedemuld" }
+# --- gleimullad (gley soils) ---
+"Gh'"  = { id = 40, name = "Väga õhuke paepealne gleimuld" }
+"Gh\"" = { id = 41, name = "Õhuke paepealne gleimuld" }
+"Gkr"  = { id = 42, name = "Koreserikas rähkne gleimuld" }
+"Gk"   = { id = 43, name = "Rähkne gleimuld" }
+"Gor"  = { id = 44, name = "Koreserikas leostunud gleimuld" }
+"Go"   = { id = 45, name = "Leostunud gleimuld" }
+"GI"   = { id = 46, name = "Leetjas gleimuld" }
+"LPG"  = { id = 47, name = "Kahkjas leetunud gleimuld" }
+"LkG"  = { id = 48, name = "Leetunud gleimuld" }
+"LG"   = { id = 49, name = "Leede-gleimuld" }
+# --- turvastunud (peaty topsoil) ---
+"Gh1" = { id = 50, name = "Paepealne turvastunud muld" }
+"Go1" = { id = 51, name = "Küllastunud turvastunud muld" }
+"GI1" = { id = 52, name = "Küllastumata turvastunud muld" }
+"LG1" = { id = 53, name = "Leede-turvastunud muld" }
+# --- soomullad (peat soils) by thickness ---
+"M'"    = { id = 54, name = "Väga õhuke madalsoomuld" }
+"M\""   = { id = 55, name = "Õhuke madalsoomuld" }
+"M'\""  = { id = 56, name = "Sügav madalsoomuld" }
+"S'"    = { id = 57, name = "Väga õhuke siirdesoomuld" }
+"S\""   = { id = 58, name = "Õhuke siirdesoomuld" }
+"S'\""  = { id = 59, name = "Sügav siirdesoomuld" }
+"R'"    = { id = 60, name = "Väga õhuke rabamuld" }
+"R\""   = { id = 61, name = "Õhuke rabamuld" }
+"R'\""  = { id = 62, name = "Sügav rabamuld" }
+# --- erodeeritud (eroded) ---
+"E2k" = { id = 63, name = "Keskmiselt erodeeritud rähkmuld" }
+"E2o" = { id = 64, name = "Keskmiselt erodeeritud leostunud ja leetjas muld" }
+"E2I" = { id = 65, name = "Keskmiselt erodeeritud kahkjas leetunud ja leetunud muld" }
+"E3k" = { id = 66, name = "Tugevasti erodeeritud rähkmuld" }
+"E3o" = { id = 67, name = "Tugevasti erodeeritud leostunud ja leetjas muld" }
+"E3I" = { id = 68, name = "Tugevasti erodeeritud kahkjas leetunud ja leetunud muld" }
+# --- deluviaal / lammi (colluvial / floodplain) ---
+"D"     = { id = 69, name = "Deluviaalmuld" }
+"Dg"    = { id = 70, name = "Gleistunud deluviaalmuld" }
+"DG"    = { id = 71, name = "Deluviaal-gleimuld" }
+"Ag"    = { id = 72, name = "Gleistunud lammimuld" }
+"AG"    = { id = 73, name = "Lammi-gleimuld" }
+"AG1"   = { id = 74, name = "Lammi-turvastunud muld" }
+"AM'"   = { id = 75, name = "Väga õhuke lammi-madalsoomuld" }
+"AM\""  = { id = 76, name = "Õhuke lammi-madalsoomuld" }
+"AM'\"" = { id = 77, name = "Sügav lammi-madalsoomuld" }
+# --- sooldunud / ranniku / veealune (saline / coastal / subaqueous) ---
+"Ar"   = { id = 78, name = "Sooldunud primitiivne muld" }
+"ArG"  = { id = 79, name = "Sooldunud gleimuld" }
+"ArG1" = { id = 80, name = "Sooldunud turvastunud muld" }
+"Arv"  = { id = 81, name = "Sooldunud veealune muld" }
+"Gr"   = { id = 82, name = "Ranniku-gleimuld" }
+"Gr1"  = { id = 83, name = "Ranniku-turvastunud muld" }
+"Mr"   = { id = 84, name = "Ranniku-madalsoomuld" }
+"Av"   = { id = 85, name = "Veealune muld" }
+# --- rusukalle / tehnogeensed (talus / technogenic) ---
+"B"   = { id = 86, name = "Rusukaldemuld" }
+"Bg"  = { id = 87, name = "Gleistunud rusukaldemuld" }
+"BG"  = { id = 88, name = "Rusukalde gleimuld" }
+"Tx"  = { id = 89, name = "Eemaldatud muld" }
+"Txg" = { id = 90, name = "Gleistunud eemaldatud muld" }
+"TxG" = { id = 91, name = "Eemaldatud gleimuld" }
+"TxM" = { id = 92, name = "Eemaldatud madalsoomuld" }
+"TxR" = { id = 93, name = "Eemaldatud rabamuld" }
+"Ty"  = { id = 94, name = "Segatud muld" }
+"Tyg" = { id = 95, name = "Gleistunud segatud muld" }
+"TyG" = { id = 96, name = "Segatud gleimuld" }
+"TyM" = { id = 97, name = "Segatud madalsoomuld" }
+"Tz"  = { id = 98, name = "Maetud muld" }
+"Tzg" = { id = 99, name = "Gleistunud maetud muld" }
+"TzG" = { id = 100, name = "Maetud gleimuld" }
+"TzM" = { id = 101, name = "Maetud madalsoomuld" }
+"Tu"  = { id = 102, name = "Puistangumuld" }
+"Tug" = { id = 103, name = "Gleistunud puistangumuld" }
+"TuG" = { id = 104, name = "Puistangu gleimuld" }
+"TuM" = { id = 105, name = "Puistangu madalsoomuld" }
+"Pu"  = { id = 106, name = "Puistangupinnas" }
+"Pug" = { id = 107, name = "Gleistunud puistangupinnas" }
+"PuG" = { id = 108, name = "Glei-puistangupinnas" }
+"Pp"  = { id = 109, name = "Paljandpinnas" }
+"Ppg" = { id = 110, name = "Gleistunud paljandpinnas" }
+"PpG" = { id = 111, name = "Glei-paljandpinnas" }
+"C"   = { id = 112, name = "Tehispinnas" }
+# --- generic undifferentiated podzol variants (legend footnote) ---
+"L"   = { id = 113, name = "Leedemuld (leetumisaste eraldamata)" }
+"Lk"  = { id = 114, name = "Leetunud muld (leetumisaste eraldamata)" }
+"Lg"  = { id = 115, name = "Gleistunud leedemuld (leetumisaste eraldamata)" }
+"Lkg" = { id = 116, name = "Gleistunud leetunud muld (leetumisaste eraldamata)" }
+# --- variants present in the data but absent from the legend PDF (kept as their own
+#     ids — real pedological distinctions; names per seletuskiri conventions) ---
+"M"    = { id = 117, name = "Madalsoomuld (paksus eraldamata)" }
+"S"    = { id = 118, name = "Siirdesoomuld (paksus eraldamata)" }
+"R"    = { id = 119, name = "Rabamuld (paksus eraldamata)" }
+"LPe"  = { id = 120, name = "Nõrgalt erodeeritud kahkjas leetunud muld" }
+"Koe"  = { id = 121, name = "Nõrgalt erodeeritud leostunud muld" }
+"LkIe" = { id = 122, name = "Nõrgalt erodeeritud nõrgalt leetunud muld" }
+"Ke"   = { id = 123, name = "Nõrgalt erodeeritud rähkmuld" }
+"KIe"  = { id = 124, name = "Nõrgalt erodeeritud leetjas muld" }
+"Kre"  = { id = 125, name = "Nõrgalt erodeeritud koreserikas rähkmuld" }
+"Kore" = { id = 126, name = "Nõrgalt erodeeritud koreserikas leostunud muld" }
+"De"   = { id = 127, name = "Nõrgalt erodeeritud deluviaalmuld" }
+
+# Aliases: data spellings that fold into a canonical id. 'n' = nõrgalt (weak) qualifier,
+# trailing d/õ/z are map-sheet garnish; E2;3X = E2X/E3X combo -> the milder class.
+[aliases]
+"LGn"   = "LG"
+"LG1n"  = "LG1"
+"LkGn"  = "LkG"
+"LPGn"  = "LPG"
+"LIIgn" = "LIIg"
+"LIgn"  = "LIg"
+"LIIIgn" = "LIIIg"
+"Gon"   = "Go"
+"GIn"   = "GI"
+"E2;3I" = "E2I"
+"E2;3o" = "E2o"
+"E2;3k" = "E2k"
+"L0"    = "Lo"

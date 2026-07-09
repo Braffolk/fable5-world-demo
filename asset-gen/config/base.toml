@@ -1,0 +1,28 @@
+# Immutable world-grid + encoding parameters. Changing [grid] after assets ship breaks every
+# cooked chunk — bump manifest rev and recook everything instead.
+
+[grid]
+anchor_e = 368640        # L-EST97 easting of gameX=0 (multiple of chunk_m)
+anchor_n = 6635520       # L-EST97 northing of gameZ=0; gameZ = anchor_n - N (south is +Z)
+chunk_m = 2048           # LOD0 chunk footprint in meters
+lod_step = 4             # LOD k: texel = lod_step^k m, footprint = chunk_m * lod_step^k
+lods = [0, 1, 2, 3]      # texel sizes 1 / 4 / 16 / 64 m
+chunk_res = 2048         # payload is (chunk_res+1)^2 = 2049^2 incl. shared far edge apron
+
+[encode]
+codec = "deflate"        # "deflate" decodes with the browser's native DecompressionStream; "zstd" optional
+height_qscale = 0.01     # meters per quantization step (u16)
+water_qscale = 0.01
+zstd_level = 19
+deflate_level = 9
+
+[fetch]
+user_agent = "laas-assetgen/0.1 (Estonia 1:1 world research; estoniascape@gmail.com)"
+min_interval_s = 0.5     # per-host politeness spacing
+max_retries = 5
+
+[attribution]
+maaamet = "Eesti topograafia andmekogu / kõrgusandmed, Maa- ja Ruumiamet"
+metsaregister = "Metsaregister, Keskkonnaagentuur"
+eelis = "EELIS (Eesti Looduse Infosüsteem), Keskkonnaagentuur"
+license = "CC BY 4.0 (equivalent)"

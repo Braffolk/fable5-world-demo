@@ -1,0 +1,62 @@
+# Lõimis (texture) grammar vocabularies. The parser (process/soil.py) reads the SURFACE
+# component (before the first '/'), splits an optional coarse-skeleton prefix from the
+# fine-earth core, and encodes each in its own plane — nothing is collapsed.
+#
+# Reference: mullakaardi_seletuskiri.pdf. Unicode sub/superscripts fold to plain digits.
+
+max_unknown_fraction = 0.01
+
+# texCore plane: fine-earth class incl. graded variants. 255 = unparseable (censused).
+[core]
+none = 0
+l   = 1    # liiv (sand)
+pl  = 2    # peenliiv (fine sand)
+sl  = 3    # saviliiv (loamy sand)
+ls  = 4    # liivsavi, grade unspecified (sandy loam/loam)
+ls1 = 5    # kerge liivsavi
+ls2 = 6    # keskmine liivsavi
+ls3 = 7    # raske liivsavi
+s   = 8    # savi (clay)
+t   = 9    # turvas, thickness unspecified
+t1  = 10   # õhuke turvas
+t2  = 11   # keskmine turvas
+t3  = 12   # sügav turvas
+th  = 13   # hästilagunenud turvas
+tt  = 14   # halvasti lagunenud turvas
+
+# texSkeleton plane: coarse-fragment prefix family + grade 1..5 (v¹sl -> v1, r⁴ls -> r4).
+# Families: v veeris (pebbles), r rähk (carbonate gravel; 'rb' folds here), kr kruus
+# (gravel), kb klibu (shingle), k kivine (stony), d kividega, p paas contact, ko kores.
+# 255 = unparseable.
+[skeleton]
+none = 0
+v1 = 1
+v2 = 2
+v3 = 3
+v4 = 4
+v5 = 5
+r1 = 6
+r2 = 7
+r3 = 8
+r4 = 9
+r5 = 10
+kr1 = 11
+kr2 = 12
+kr3 = 13
+kr4 = 14
+kr5 = 15
+kb1 = 16
+kb2 = 17
+kb3 = 18
+kb4 = 19
+kb5 = 20
+k1 = 21
+k2 = 22
+k3 = 23
+k4 = 24
+k5 = 25
+d1 = 26
+d2 = 27
+d3 = 28
+p  = 29
+ko = 30

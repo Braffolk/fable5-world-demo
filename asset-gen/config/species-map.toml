@@ -1,0 +1,161 @@
+# FULL Estonian tree-species taxonomy. Every Metsaregister species code is its own id in
+# the cooked data (source of truth — the renderer maps ids -> archetypes for now, but the
+# DATA stays full-resolution; see memory asset-gen-is-source-of-truth). id fits in u8.
+#
+# Each entry: id, latin, english, leaf ("conifer"|"broadleaf"), ref_height_m (nominal
+# mature height; per-tree scale = detected_crown_h / ref_height_m). The manifest ships
+# this whole dictionary so the client knows what each id is.
+
+[species.MA] # harilik mänd
+id = 0
+latin = "Pinus sylvestris"
+english = "Scots pine"
+leaf = "conifer"
+ref_height_m = 28.0
+
+[species.KU] # harilik kuusk
+id = 1
+latin = "Picea abies"
+english = "Norway spruce"
+leaf = "conifer"
+ref_height_m = 30.0
+
+[species.NU] # nulg
+id = 2
+latin = "Abies"
+english = "fir"
+leaf = "conifer"
+ref_height_m = 30.0
+
+[species.LH] # lehis
+id = 3
+latin = "Larix"
+english = "larch"
+leaf = "conifer"
+ref_height_m = 32.0
+
+[species.SD] # seedermänd
+id = 4
+latin = "Pinus sibirica"
+english = "Siberian pine"
+leaf = "conifer"
+ref_height_m = 24.0
+
+[species.KS] # arukask
+id = 5
+latin = "Betula pendula"
+english = "silver birch"
+leaf = "broadleaf"
+ref_height_m = 25.0
+
+[species.SK] # sookask
+id = 6
+latin = "Betula pubescens"
+english = "downy birch"
+leaf = "broadleaf"
+ref_height_m = 20.0
+
+[species.HB] # harilik haab
+id = 7
+latin = "Populus tremula"
+english = "aspen"
+leaf = "broadleaf"
+ref_height_m = 28.0
+
+[species.PP] # pappel / hübriidhaab
+id = 8
+latin = "Populus"
+english = "hybrid poplar"
+leaf = "broadleaf"
+ref_height_m = 30.0
+
+[species.LV] # hall lepp
+id = 9
+latin = "Alnus incana"
+english = "grey alder"
+leaf = "broadleaf"
+ref_height_m = 18.0
+
+[species.LM] # sanglepp / must lepp
+id = 10
+latin = "Alnus glutinosa"
+english = "black alder"
+leaf = "broadleaf"
+ref_height_m = 24.0
+
+[species.TA] # tamm
+id = 11
+latin = "Quercus robur"
+english = "pedunculate oak"
+leaf = "broadleaf"
+ref_height_m = 26.0
+
+[species.SA] # saar
+id = 12
+latin = "Fraxinus excelsior"
+english = "European ash"
+leaf = "broadleaf"
+ref_height_m = 27.0
+
+[species.VA] # vaher
+id = 13
+latin = "Acer platanoides"
+english = "Norway maple"
+leaf = "broadleaf"
+ref_height_m = 22.0
+
+[species.JA] # jalakas
+id = 14
+latin = "Ulmus glabra"
+english = "wych elm"
+leaf = "broadleaf"
+ref_height_m = 25.0
+
+[species.KP] # künnapuu
+id = 15
+latin = "Ulmus laevis"
+english = "fluttering elm"
+leaf = "broadleaf"
+ref_height_m = 25.0
+
+[species.PN] # pärn
+id = 16
+latin = "Tilia cordata"
+english = "small-leaved lime"
+leaf = "broadleaf"
+ref_height_m = 26.0
+
+[species.RE] # remmelgas
+id = 17
+latin = "Salix"
+english = "willow"
+leaf = "broadleaf"
+ref_height_m = 16.0
+
+[species.PI] # pihlakas
+id = 18
+latin = "Sorbus aucuparia"
+english = "rowan"
+leaf = "broadleaf"
+ref_height_m = 12.0
+
+[species.TM] # toomingas
+id = 19
+latin = "Prunus padus"
+english = "bird cherry"
+leaf = "broadleaf"
+ref_height_m = 12.0
+
+# Dead standing stems (kuiv/lamapuu share of a stand) get their own id — a snag is a
+# distinct visual object regardless of former species.
+[species.SNAG]
+id = 20
+latin = ""
+english = "snag (dead standing)"
+leaf = "snag"
+ref_height_m = 14.0
+
+# Fallbacks when a stand's dominant code is unknown (logged, never crash).
+[fallback]
+conifer = "MA"
+broadleaf = "KS"
