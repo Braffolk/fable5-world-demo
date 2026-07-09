@@ -118,24 +118,51 @@ export interface VegPool {
  * `crownLod` param (CROWN_LOD_SCHEDULE below), and the meshing that consumes them
  * (LeafMesh.ts/TreeBuilder.ts) is in the SRC_HASH ⇒ any change auto-invalidates.
  */
-/** measured per-rung fraction of LOD0 tris (node validation): the broadleaf ladder
- *  lands ≈ [1.0, 0.70, 0.46, 0.41] and pushes ~½-⅔ of the cut into the blade-row
- *  reduction rather than leaf removal (λ stays ≥0.70 ⇒ little macro sparsening). */
+/** measured per-rung fraction of LOD0 tris (node validation): 6 rungs, the ladder
+ *  lands ≈ [1.0, 0.70, 0.46, 0.41, 0.24, 0.145]. tri math: a leaf = 4·rows+3 tris
+ *  (LOD0 rows4 = 19); with rows clamped ≥2 the row lever bottoms at 11/19 = 0.579×
+ *  by rung 2, so rungs 3-5 carry the cut with the ELEMENT-λ (whole 2-4-leaf clusters,
+ *  survivor WIDTH ×1/λ preserving area). Rung 5 λ=0.25 ⇒ 0.25·0.579 = 0.145× ≤ the
+ *  0.15 target that lets errorScale actually reach the ~3-5M mid reference band (the
+ *  4-rung ladder's 0.41 coarsest SATURATED at 9.46M — MID-DECOMPOSITION 2026-07-09).
+ *  Deep-rung fat-leaf px @ engagement (projK≈1143 px·m, world leaf w≈0.08 m): rung 5
+ *  ×4.0 width = 0.32 m ⇒ ~6.6 px at 55 m (native ~1.7 px) — the aggressive regime;
+ *  EYEBALL leaf chunkiness at 50 m. rows stays ≥2 (mid-leaf width peak always sampled).
+ *  HANDOFF WIDTH-OVERSHOOT RAMP (2026-07-09): rungs 4/5 carry widthBoost 1.15/1.3 on top
+ *  of 1/λ ⇒ TOTAL width ×2.74 (rung 4) / ×5.2 (rung 5); at the K=0.4 bake these deep rungs
+ *  own ~17-60 m, so the boost walks the mesh density UP to the conservatively-voxelized
+ *  sibling at the 60 m handoff (mesh at ~59 m was reading thinner than voxel at 61 m). */
 export const CROWN_LOD_BROADLEAF: readonly CrownLodRung[] = [
-  { lambda: 1.0, leafRows: 4, needleMu: 1, stemSegs: 4 },
-  { lambda: 0.88, leafRows: 3, needleMu: 1, stemSegs: 4 },
-  { lambda: 0.8, leafRows: 2, needleMu: 1, stemSegs: 4 },
-  { lambda: 0.7, leafRows: 2, needleMu: 1, stemSegs: 4 },
+  { lambda: 1.0, leafRows: 4, needleMu: 1, stemSegs: 4, widthBoost: 1.0 },
+  { lambda: 0.88, leafRows: 3, needleMu: 1, stemSegs: 4, widthBoost: 1.0 },
+  { lambda: 0.8, leafRows: 2, needleMu: 1, stemSegs: 4, widthBoost: 1.0 },
+  { lambda: 0.7, leafRows: 2, needleMu: 1, stemSegs: 4, widthBoost: 1.0 },
+  { lambda: 0.42, leafRows: 2, needleMu: 1, stemSegs: 4, widthBoost: 1.15 },
+  { lambda: 0.25, leafRows: 2, needleMu: 1, stemSegs: 4, widthBoost: 1.3 },
 ];
 
-/** conifer ladder ≈ [1.0, 0.72, 0.51, 0.37] of LOD0 tris, with the needle-μ lever
- *  carrying ~70% of the cut so the whole-spray λ can stay very gentle (spruce-safe:
- *  λ never below 0.80 ⇒ ≤20% of sprays ever removed). */
+/** conifer ladder ≈ [1.0, 0.72, 0.51, 0.37, 0.25, 0.13] of LOD0 tris (6 rungs). tri
+ *  math: a spray = 2·(stemSegs + round(μ·C)) tris (spruce C=90 needles, LOD0=188;
+ *  pine C=264, LOD0=536), so frac ≈ λ·μ + a small stem term. The needle-μ lever
+ *  carries most of the cut so the whole-spray λ stays gentle (spruce was the worst
+ *  historical spike offender ⇒ least MACRO sparsening): rung 5 λ=0.55 keeps 55% of
+ *  sprays. rung 5 (λ0.55,μ0.22,seg2) measures ≈ 0.13× (spruce) / 0.12× (pine) ≤ 0.15.
+ *  Fat-needle px @ engagement (projK≈1143 px·m, native needle w=0.024 m): area-preserve
+ *  width = ×(1/λ)·(count/kept) ≈ ×8.2 at rung 5 ⇒ 0.20 m ⇒ ~4.1 px at 55 m (native
+ *  ~0.5 px, sub-pixel). Needles fill the same spray footprint (fewer, wider) — the
+ *  Cook aggressive regime; EYEBALL spruce 40-60 m for blobbiness. LENGTH never scaled
+ *  (elongation = the spike) — width-only.
+ *  HANDOFF WIDTH-OVERSHOOT RAMP (2026-07-09): rungs 4/5 carry widthBoost 1.15/1.3 on top
+ *  of (1/λ·count/kept) ⇒ TOTAL width ≈ ×4.7 (rung 4) / ×10.7 (rung 5); walks the deep-rung
+ *  mesh needle density up to the voxel sibling at the 60 m handoff (K=0.4 bake ⇒ rung 5
+ *  owns ~20-60 m). */
 export const CROWN_LOD_CONIFER: readonly CrownLodRung[] = [
-  { lambda: 1.0, leafRows: 4, needleMu: 1.0, stemSegs: 4 },
-  { lambda: 0.92, leafRows: 4, needleMu: 0.78, stemSegs: 4 },
-  { lambda: 0.85, leafRows: 4, needleMu: 0.6, stemSegs: 3 },
-  { lambda: 0.8, leafRows: 4, needleMu: 0.46, stemSegs: 2 },
+  { lambda: 1.0, leafRows: 4, needleMu: 1.0, stemSegs: 4, widthBoost: 1.0 },
+  { lambda: 0.92, leafRows: 4, needleMu: 0.78, stemSegs: 4, widthBoost: 1.0 },
+  { lambda: 0.85, leafRows: 4, needleMu: 0.6, stemSegs: 3, widthBoost: 1.0 },
+  { lambda: 0.8, leafRows: 4, needleMu: 0.46, stemSegs: 2, widthBoost: 1.0 },
+  { lambda: 0.70, leafRows: 4, needleMu: 0.35, stemSegs: 2, widthBoost: 1.15 },
+  { lambda: 0.55, leafRows: 4, needleMu: 0.22, stemSegs: 2, widthBoost: 1.3 },
 ];
 
 /** the rung schedule for a species (conifer vs broadleaf lever set). */
@@ -145,7 +172,7 @@ export function crownLodScheduleFor(sp: SpeciesParams): readonly CrownLodRung[] 
 
 /** cache-key witness: BOTH per-kind schedules, JSON-serialized into the crown-DAG
  *  BootCache key (WorldRegistry) so ANY rung edit invalidates stale crowns. The
- *  rung COUNT (both length 4) also sets the DAG ladder depth. */
+ *  rung COUNT (both length 6) also sets the DAG ladder depth. */
 export const CROWN_LOD_SCHEDULE = {
   broadleaf: CROWN_LOD_BROADLEAF,
   conifer: CROWN_LOD_CONIFER,

@@ -159,10 +159,9 @@ export function buildNaniteView(
           engine.stats.counters['nanite.covered'] = aud.covered;
         }
         engine.stats.counters['nanite.visClusters'] = c.visClusters;
-        engine.stats.counters['nanite.chunks'] = c.chunks;
-        engine.stats.counters['nanite.rejInst'] = c.rejInst;
-        engine.stats.counters['nanite.rejClust'] = c.rejClust;
-        engine.stats.counters['nanite.p2'] = c.p2Appends;
+        // chunks / rejInst / rejClust / p2 are RELICS of the pre-hier cull — left UNWIRED
+        // (HUD renders '–') instead of misleading 0s / visClusters mirrors. See NaniteFrame
+        // meterRead for the per-slot rationale; readCounts still uses them for overflow only.
         engine.stats.counters['nanite.hwTris'] = hw;
         if (c.overflow && warned !== c.overflow) {
           warned = c.overflow;

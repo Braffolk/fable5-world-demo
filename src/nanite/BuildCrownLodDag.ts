@@ -60,10 +60,13 @@ const CROWN_CUT_TAU = 3;
 /** engagement distance of each COARSER rung as a fraction of transitionDist, at
  *  errorScale=1 — where that rung takes over from the finer one inside the mesh
  *  band. Rung 0 (λ=1) owns 0..frac[0]. Chosen to span 0..transitionDist and meet
- *  the voxel handoff at transitionDist. The 3 entries map onto CROWN_LOD_SCHEDULE's
- *  3 coarser rungs (λ = 0.7, 0.5, 0.35). errorScale (?leaflodk) shifts the whole
- *  set: >1 pushes rungs farther (fuller near crown / more tris), <1 nearer. */
-const CROWN_ENGAGE_FRAC = [0.28, 0.56, 0.84];
+ *  the voxel handoff at transitionDist. The 5 entries map onto CROWN_LOD_SCHEDULE's
+ *  5 coarser rungs; at transitionDist=60 m they engage at ≈13 / 24 / 33 / 42 / 51 m,
+ *  so the two DEEPEST rungs (4,5) own the far HALF (42-60 m) — the band the mid census
+ *  found back-loaded (45-60 m alone = 5.2M; MID-DECOMPOSITION 2026-07-09). errorScale
+ *  (?leaflodk) shifts the whole set: >1 pushes rungs farther (fuller / more tris),
+ *  <1 nearer. The cut itself stays pixel-error-driven; this only PLACES the ladder. */
+const CROWN_ENGAGE_FRAC = [0.22, 0.40, 0.55, 0.70, 0.85];
 
 /**
  * Per-rung ownError (LOCAL-space metres) that lands each coarser rung's cut across
@@ -71,7 +74,7 @@ const CROWN_ENGAGE_FRAC = [0.28, 0.56, 0.84];
  * CROWN_ENGAGE_FRAC[L-1]·transitionDist (at errorScale=1). Reuses the SAME
  * projK-anchored formula the voxel ladder uses (computeVoxlodAnchorL0 = d·τ/projK),
  * so mesh + voxel errors share one τ with no rescale. errorScale = ?leaflodk /
- * AGG_LOD_CFG style tuning multiplier (design §5.2). Extra rungs beyond the 3
+ * AGG_LOD_CFG style tuning multiplier (design §5.2). Extra rungs beyond the 5
  * fractions extrapolate on the last octave (kept monotone).
  */
 export function crownLodOwnErrors(

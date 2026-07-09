@@ -272,10 +272,13 @@ interface VegKnobs {
   ftCell: number;
   anchorH: number;
   /** crown-LOD Phase 2: error-scale on the near-crown mesh LOD ladder cuts
-   *  (BuildCrownLodDag). DEFAULT 1.0 (the ladder's engagement fractions already
-   *  span 0..transitionDist); ?leaflodk overrides it (>1 pushes rungs farther /
-   *  fuller near crown, <1 nearer). Own default because the crown ladder's error
-   *  scale is NOT the aggregate builder's (which stays 0.4 for grass/fartiles). */
+   *  (BuildCrownLodDag). DEFAULT 0.4 (2026-07-09 user-approved bake, was 1.0): at
+   *  scale 1 the coarsest rungs only engage in the far half of the 0..60 m band;
+   *  0.4 pulls the whole ladder K× nearer so the deep rungs (4,5) own ~17..60 m and
+   *  the mid census's back-loaded 42-60 m band is coarsened. ?leaflodk overrides it
+   *  (>1 pushes rungs farther / fuller near crown, <1 nearer). It happens to MATCH
+   *  the aggregate builder's default (0.4 for grass/fartiles) but is a SEPARATE
+   *  knob (crown ladder vs aggregate ladder); the shared ?leaflodk sets both. */
   crownLodErrorK: number;
   /** raw ?stress / ?naniteleafdensity / ladder-knob params — cache-key fragments */
   stressRaw: string | null;
@@ -329,9 +332,10 @@ function resolveVegKnobs(renderer: Renderer): VegKnobs {
     if (occRaw !== null) setVoxOccThreshold(Number(occRaw));
   }
   // crown-LOD ladder error scale: shares the ?leaflodk knob but keeps its OWN
-  // default (1.0) — the crown ladder's engagement fractions are baked for scale 1,
-  // unlike the aggregate builder's 0.4 (a different, compounding error scale).
-  const crownLodErrorK = lkRaw !== null && Number.isFinite(Number(lkRaw)) && Number(lkRaw) > 0 ? Number(lkRaw) : 1.0;
+  // default (0.4, 2026-07-09 user-approved bake — was 1.0). At scale 1 the deep
+  // rungs only engaged in the far half of 0..60 m; 0.4 pulls the whole ladder K×
+  // nearer so rungs 4/5 own ~17..60 m (the band the eye reads at the voxel handoff).
+  const crownLodErrorK = lkRaw !== null && Number.isFinite(Number(lkRaw)) && Number(lkRaw) > 0 ? Number(lkRaw) : 0.4;
   const voxLod = qVox.get('voxlod') !== '0';
   const anchorH = internalSize(renderer, new Vector2()).y; // ?rscale: τ anchor follows the render res
   {

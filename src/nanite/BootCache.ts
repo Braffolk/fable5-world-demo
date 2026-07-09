@@ -50,8 +50,18 @@ import srcLeafMesh from '../vegetation/LeafMesh.ts?raw';
  *  rev 5 (2026-07-09): crown-LOD area preservation + intra-element coarsening —
  *  ladder rungs now grow survivors (width ×1/λ) and coarsen them (blade rows /
  *  needle-μ / stem segs), so every coarse rung's GEOMETRY changed; schedule is now
- *  a per-kind rung table (+ LeafMesh.ts joins SRC_HASH). */
-const CACHE_REV = 5;
+ *  a per-kind rung table (+ LeafMesh.ts joins SRC_HASH).
+ *  rev 6 (2026-07-09): crown-LOD ladder deepened 4→6 rungs (coarsest ~0.41→~0.13-0.15×
+ *  of LOD0) — the crown DAG gains 2 anchor-chain levels (payload SHAPE change), and
+ *  CROWN_ENGAGE_FRAC re-spaced to 5 fractions. Schedule count is in the params key too,
+ *  but the DAG-shape change warrants the explicit rev bump.
+ *  rev 7 (2026-07-09): crown default errorK 1.0→0.4 (user-approved bake) + per-rung
+ *  HANDOFF WIDTH-OVERSHOOT ramp (CrownLodRung.widthBoost; rungs 4/5 ×1.15/1.3) — deep
+ *  rung survivor GEOMETRY widens (walks mesh density up to the voxel at the 60 m handoff).
+ *  Both ride the params key (crownLodErrorK + crownLod=CROWN_LOD_SCHEDULE) and the
+ *  widthMul multiply is in srcTreeBuilder's SRC_HASH; the rev bump is belt-and-suspenders
+ *  since the schedule table lives in VegLibrary (not in the ?raw SRC_HASH list). */
+const CACHE_REV = 7;
 
 const DB_NAME = 'laas-bootcache';
 const STORE = 'artifacts';

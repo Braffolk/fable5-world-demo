@@ -754,10 +754,15 @@ export function buildNaniteFrame(
         // draw. Both are subsets of visTris the SW classifier skips (raster slots 10/11).
         out['nanite.voxRoutedTris'] = c.voxRoutedTris;
         out['nanite.clhwTris'] = c.clhwTris;
-        out['nanite.chunks'] = c.chunks;
-        out['nanite.rejInst'] = c.rejInst;
-        out['nanite.rejClust'] = c.rejClust;
-        out['nanite.p2'] = c.p2Appends;
+        // RELICS of the pre-hierarchical (chunked / two-phase-occlusion) cull — LEFT
+        // UNWIRED (HUD shows '–' like orphans/covered) rather than misleading live-looking
+        // numbers. In the current hier-BFS cull these counter slots have NO honest producer:
+        //   chunks  = counters[0]/[4], now REPURPOSED as the FA/FB BFS frontier counts;
+        //   rejInst = counters[2], rejClust = counters[3] — NEVER written in hier mode
+        //             (kClearHier zeroes them; two-phase occlusion re-test was never built);
+        //   p2 append = qRaster[0].x − .y, but phase2Base is hard-coded 0 (single-phase),
+        //             so it only ever mirrors visClusters.
+        // (readCounts still computes them for the internal overflow check — see NaniteCull.)
         out['nanite.hwTris'] = hw;
         // F3 triangle-budget per-layer append counts (RAW, pre-cap). Only present on the
         // single-pass world1 path (null otherwise → omitted so the HUD shows n/a).

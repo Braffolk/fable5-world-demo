@@ -28,6 +28,18 @@ export interface CrownLodRung {
   needleMu: number;
   /** CONIFER: stem strip render segments (LOD0 = 4). BROADLEAF: unused. */
   stemSegs: number;
+  /** HANDOFF WIDTH-OVERSHOOT RAMP (2026-07-09): a multiplicative width factor applied
+   *  ON TOP of the area-preserving 1/λ (broadleaf) / (1/λ·count/kept) (conifer) growth.
+   *  WHY: Cook §3.3 growth preserves the MESH's own visible area, but the voxel sibling
+   *  that takes over at the 60 m handoff is CONSERVATIVELY voxelized (VoxelizeCrown SAT
+   *  + supersampled coverage smears thin leaves/needles into whole cells ⇒ coverage
+   *  OVERSHOOT), so an exactly-area-preserved crown at ~59 m reads THINNER than its
+   *  voxel at 61 m — a density JUMP at the handoff. This factor over-widens the DEEP
+   *  rungs (which own the approach to the handoff) to walk the mesh density UP to the
+   *  voxel. WIDTH-ONLY (never length/transform — the spike law). Default/absent = 1.0
+   *  ⇒ rung 0 (λ=1, boost 1) stays byte-identical to LOD0. Tunable per rung in the
+   *  schedule tables (VegLibrary.CROWN_LOD_BROADLEAF / _CONIFER). */
+  widthBoost?: number;
 }
 
 /** One rung of the crown-LOD ladder (crown-LOD Phase 1). Each level regenerates
@@ -260,7 +272,11 @@ export function buildTree(
           // area-preserving survivor growth (§3.3 Eq 3; s = 1/λ exact since λ ≫ r,
           // Eq 7 — one leaf/spray vs the whole crown gives r ≈ 5e-4). Realized as
           // WIDTH-only growth (paper Fig 2c/d), never length/transform ⇒ no spikes.
-          const widthMul = lambda > 0 ? 1 / lambda : 1;
+          // The per-rung HANDOFF WIDTH-OVERSHOOT boost (CrownLodRung.widthBoost, deep
+          // rungs only) multiplies on top — walks the deep-rung mesh density up to the
+          // conservatively-voxelized sibling at the 60 m handoff. Still WIDTH-only, so
+          // rung 0 (λ=1, boost 1) stays byte-identical to LOD0.
+          const widthMul = (lambda > 0 ? 1 / lambda : 1) * (rung.widthBoost ?? 1);
           let kept = 0;
           for (let i = 0; i < meshAnchors.length; i++) {
             const anchor = meshAnchors[i] as LeafAnchor;
