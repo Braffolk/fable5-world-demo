@@ -112,9 +112,3 @@ export function ridged2(p: NV2, octaves: number, lacunarity = 2.1, gain = 0.53):
   return sum.div(norm);
 }
 
-/** 2D domain warp: p + amp * (fbm-derived offset vector) */
-export function warp2(p: NV2, amp: number, octaves = 4): NV2 {
-  const wx = fbm2(p.add(vec2(5.2, 1.3)), octaves).mul(2).sub(1);
-  const wy = fbm2(p.add(vec2(-3.7, 9.2)), octaves).mul(2).sub(1);
-  return p.add(vec2(wx, wy).mul(amp));
-}

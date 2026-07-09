@@ -25,8 +25,6 @@ import {
   type UniformV3,
 } from './Tsl';
 
-/** one work item per 64 clusters in the expansion queue */
-export const CHUNK_CLUSTERS = 64;
 /** chunk queue capacity (items; ~8 MB at uvec2) — F14: clamp + HUD flag */
 export const QCHUNK_CAP = 1_048_576;
 

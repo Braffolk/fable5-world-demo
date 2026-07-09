@@ -1,7 +1,7 @@
 /**
- * N2 vis-buffer raster on REGISTRY buffers — the spike pipeline (SpikeRaster)
- * ported onto GeometryRegistry mega-buffers + the world heightfield texture,
- * consuming the N2 cull chain's work queue. Option C only (D-N5): pass 1
+ * N2 vis-buffer raster on REGISTRY buffers — GeometryRegistry mega-buffers +
+ * the world heightfield texture, consuming the N2 cull chain's work queue.
+ * Option C only (D-N5): pass 1
  * atomicMin(f32-depth-bits), pass 2 equality payload store; near-crossing and
  * oversized triangles route to the HW queue whose fragment stage writes the
  * SAME buffers (depthWrite off — one resolve, one convention).

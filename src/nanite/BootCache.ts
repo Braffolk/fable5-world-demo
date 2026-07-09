@@ -19,7 +19,6 @@
  *  - GATE for any change here: byte-identical first-frame shot cold vs warm.
  */
 import type { CrownVoxelization, PreparedVoxelCrown, VoxelLevel, VoxelBlock } from './VoxelizeCrown';
-import type { DagBuild } from './BuildDag';
 import type { FarTileBuild } from './FarTiles';
 import { BRICK_WORDS, readBrick, writeBrick } from './VoxelBrickCore';
 // builder sources — hashed into the cache key (auto-invalidation on edit)
@@ -420,6 +419,3 @@ export function unpackFarTiles(packed: PackedFarTile[]): FarTileBuild[] {
   return packed.map((t) => ({ center: t.center, prep: unpackPreparedCrown(t.prep) }));
 }
 
-/** DagBuild is typed arrays + plain-object clusters/groups/stats — structured clone
- *  round-trips it exactly; no custom pack needed. */
-export type PackedDagBuilds = DagBuild[];

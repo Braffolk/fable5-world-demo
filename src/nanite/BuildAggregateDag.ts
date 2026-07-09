@@ -88,9 +88,6 @@ const AGG_LOD_CFG = { errorK: 0.4 };
 export function setAggLodErrorK(k: number): void {
   if (Number.isFinite(k) && k > 0) AGG_LOD_CFG.errorK = k;
 }
-export function aggLodErrorK(): number {
-  return AGG_LOD_CFG.errorK;
-}
 
 /** the per-level decision + grown geometry the group loop consumes. Islands are
  *  pre-grown into `gverts`; `keepTri` already folds in each tri's island keep

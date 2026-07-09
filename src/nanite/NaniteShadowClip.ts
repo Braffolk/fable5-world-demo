@@ -162,7 +162,7 @@ export interface NaniteShadow {
 const D_OFF = 8192;
 const D_RANGE = 16384;
 
-// PCSS (mirrors ShadowSetup.ts — world-metric penumbra)
+// PCSS — world-metric penumbra
 const BLOCKER_TAPS = 6;
 const PCF_TAPS = 9;
 const SUN_TAN = 0.011;

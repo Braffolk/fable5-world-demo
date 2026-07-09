@@ -15,8 +15,6 @@ export const BRICK_WORDS = 9;
 
 /** edge length of a brick cell-grid (4×4×4). */
 export const BRICK_DIM = 4;
-/** cells per brick = BRICK_DIM³. */
-export const BRICK_CELLS = BRICK_DIM * BRICK_DIM * BRICK_DIM; // 64
 
 /** word offsets inside a brick record (added to bi*BRICK_WORDS). */
 export const BRICK_OCC_LO = 0;
@@ -164,9 +162,3 @@ export function brickCenterHalf(
   ];
 }
 
-/** test cell occupancy on a CPU brick record (occLo/occHi as written by writeBrick). */
-export function brickCellOccupied(occLo: number, occHi: number, cell: number): boolean {
-  return cell < 32
-    ? ((occLo >>> cell) & 1) === 1
-    : ((occHi >>> (cell - 32)) & 1) === 1;
-}

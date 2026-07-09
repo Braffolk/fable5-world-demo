@@ -80,23 +80,6 @@ function hueShift(base: NV3, hue: NF, amount: number): NV3 {
   return shifted;
 }
 
-export interface BarkMatParams {
-  color: { r: number; g: number; b: number };
-  roughness?: number;
-}
-
-export function barkMaterial(p: BarkMatParams): MeshStandardNodeMaterial {
-  const mat = new MeshPhysicalNodeMaterial();
-  mat.name = 'vegBark';
-  mat.specularIntensity = 0.45;
-  const d = vdata();
-  const base = vec3(p.color.r, p.color.g, p.color.b);
-  mat.colorNode = hueShift(base, d.x, 0.18).mul(d.w.mul(0.75).add(0.25));
-  mat.roughness = p.roughness ?? 0.93;
-  mat.metalness = 0;
-  return mat;
-}
-
 /**
  * Synthesized bark material: tileable albedo/cavity + normal/rough/height.
  * Cavity feeds `aoNode` — AO on indirect light only (DEVIATIONS D-1 close).

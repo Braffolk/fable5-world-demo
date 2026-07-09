@@ -35,7 +35,6 @@ import {
   max,
   min,
   mix,
-  smoothstep,
   texture,
   texture3D,
   textureStore,
@@ -399,11 +398,3 @@ export class ProbeGI {
   }
 }
 
-/** smooth fallback ambient used outside the probe domain (world edge) */
-export function edgeAmbient(atmo: Atmosphere, n: NV3): NV3 {
-  const sky = atmo.skyColor(vec3(0, 1, 0));
-  const horizon = atmo.skyColor(vec3(0.7, 0.12, 0.7).normalize());
-  const ground = horizon.mul(0.35).mul(vec3(1.0, 0.92, 0.8));
-  const up = clamp(n.y.mul(0.5).add(0.5), 0, 1);
-  return mix(ground, mix(horizon, sky, smoothstep(0.4, 1, up)), up);
-}
