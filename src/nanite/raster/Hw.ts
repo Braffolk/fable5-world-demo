@@ -50,6 +50,7 @@ import type { NaniteFetch, VertCtx } from '../NaniteFetch';
 import {
   aLoadU,
   bcF2U,
+  bcU2F,
   elemU,
   minU,
   sU32Views,
@@ -59,6 +60,7 @@ import type { IndirectStorageBufferAttribute } from 'three/webgpu';
 import type { NaniteVisBuffers } from './VisBuffer';
 import { depthKey16, depthKey24 } from './VisBuffer';
 import { HW_CAP } from './Queues';
+import { CTX_STRIDE, CTX_U } from './ClusterCtx';
 
 type U32Views = ReturnType<typeof sU32Views>;
 
@@ -98,6 +100,24 @@ export function buildHw(p: {
    *  SW/HW split is the permanent default); null only on the shadow-clipmap queue. */
   qHwRasterRO: StorageBufferNode<'uint'> | null;
   hwClusterDrawAttr: IndirectStorageBufferAttribute | null;
+  /** A2 (2026-07-09 HW vertex-prepass) — Option A + class split. Non-null ONLY on the world1
+   *  (singlePass) camera path: the per-cluster ctx PRE-PASS buffer (ClusterCtx). When present
+   *  the `_cl` world1 draw READS the decoded 35-word ctx (`clusterCtxV[tid·CTX_STRIDE]`) instead
+   *  of re-running `makeCtx` per vertex (Option A), AND is CLASS-SPLIT into two draws — a mesh
+   *  (explicit) draw + a terrain (isHF) draw — each with its own single-arm fetch variant. When
+   *  null (shadow/view) the single 'both' makeCtx `_cl` material is kept (dormant — never rendered
+   *  off the camera path). */
+  clusterCtxV: U32Views | null;
+  /** trunk/leaf wind present ⇒ the explicit `_cl` draw decodes the wind ctx slots (11–20). */
+  hasWind: boolean;
+  /** A2 class-split fetch variants: 'explicit' (mesh) and 'terrain' (isHF) — each compiles ONLY
+   *  its own fetch arm, shedding the other class's branch-union registers. */
+  nfetchExplicit: NaniteFetch;
+  nfetchTerrain: NaniteFetch;
+  /** A2 terrain-class draw args (isHF clusters, back-filled into qHwRaster from qCap-1). */
+  hwClusterDrawTerrainAttr: IndirectStorageBufferAttribute | null;
+  /** A2 qHwRaster capacity — the terrain draw reads qHwRaster[hwRasterCap-1-instanceIndex]. */
+  hwRasterCap: number;
 }): HwPath {
   const {
     cam,
@@ -116,8 +136,66 @@ export function buildHw(p: {
     hwrt,
     qHwRasterRO,
     hwClusterDrawAttr,
+    clusterCtxV,
+    hasWind,
+    nfetchExplicit,
+    nfetchTerrain,
+    hwClusterDrawTerrainAttr,
+    hwRasterCap,
   } = p;
-  const { makeCtx, fetchWorldVert, fetchWorldVertDyn } = nfetch;
+  // makeCtx used by the SOUP path (per-tri) + the legacy single 'both' `_cl` fallback; the
+  // per-vertex fetch is resolved PER MATERIAL below (mFetch) so a class-split draw can bind its
+  // single-arm variant. (A2: the `_cl` world1 flat path drops makeCtx entirely.)
+  const { makeCtx } = nfetch;
+
+  // A2 Option A: decode the 35-word per-cluster ctx the ClusterCtx PRE-PASS wrote to global
+  // memory (keyed by tid = qHwRaster[instanceIndex]) into a VertCtx — the SAME layout + bitcasts
+  // the SW classifier (NaniteRaster) and the projection pre-pass (Project) already read. The
+  // `_cl` world1 vertex shader consumes this instead of re-running makeCtx per vertex, so the
+  // per-vertex metadata loads + gust texture samples + wind precompute all vanish (they ran ONCE
+  // per cluster in the pre-pass). `withWind` is false for the terrain draw (isHF has no wind) and
+  // hasWind for the explicit draw ⇒ each draw reserves only its own wind registers. By
+  // construction bit-identical to makeCtx (the pre-pass stored makeCtx's own outputs).
+  const decodeCtx = (tid: NU, withWind: boolean): VertCtx => {
+    const cv = clusterCtxV as U32Views;
+    const base = tid.mul(uint(CTX_STRIDE)).toVar();
+    const rU = (i: number): NU =>
+      elemU(cv.ro, base.add(uint(i))).toVar() as unknown as NU;
+    const rF = (i: number): NF =>
+      bcU2F(elemU(cv.ro, base.add(uint(CTX_U + i)))).toVar() as unknown as NF;
+    return {
+      isHF: rU(0).equal(uint(1)),
+      isDAG: rU(1).equal(uint(1)),
+      A: vec4(rF(0), rF(1), rF(2), rF(3)) as unknown as NV4,
+      B: vec4(rF(4), rF(5), rF(6), rF(7)) as unknown as NV4,
+      yawSc: { cy: rF(21), sy: rF(22) },
+      triStart: rU(2),
+      triCount: rU(3),
+      meshId: rU(4),
+      channel: rU(5),
+      twoSided: rU(9).equal(uint(1)),
+      wind: withWind
+        ? {
+            h0: rF(11),
+            dirX: rF(12),
+            dirY: rF(13),
+            leanBase: rF(14),
+            swayABase: rF(15),
+            swayPhase: rF(16),
+            ph: rF(17),
+            branchBase: rF(18),
+            flutBase: rF(19),
+            swayXPhase: rF(20),
+          }
+        : null,
+      gx: rU(6),
+      gz: rU(7),
+      qxw: rU(8),
+      oX: rF(8),
+      oZ: rF(9),
+      cell: rF(10),
+    } as unknown as VertCtx;
+  };
   const visDepthV = vis.depthV;
   const visPayloadV = vis.payloadV;
   const visBV = vis.visBV;
@@ -149,8 +227,23 @@ export function buildHw(p: {
     // ?clhw INSTANCED per-cluster draw: one instance per HW cluster, verts pulled from
     // qHwRaster instead of the per-tri soup queue. Same FS election ⇒ resolve unchanged.
     instanced = false,
+    // A2 (2026-07-09): the class-split instanced world1 draw. When present the vertex shader
+    // READS the pre-decoded per-cluster ctx (Option A) via the given single-arm `fetch` variant
+    // ('explicit'|'terrain'), and — for the terrain draw — reads its cluster index from the
+    // BACK of qHwRaster (reversed = qHwRaster[hwRasterCap-1-instanceIndex]). Undefined ⇒ the
+    // legacy single 'both' makeCtx `_cl` material (dormant off the camera path) or the soup.
+    hwOpts?: { fetch: NaniteFetch; withWind: boolean; reversed: boolean },
   ): NodeMaterial => {
-    const sfx = instanced ? `${pass}_cl` : pass;
+    const clSfx = hwOpts ? (hwOpts.reversed ? '_clT' : '_clE') : '_cl';
+    const sfx = instanced ? `${pass}${clSfx}` : pass;
+    // A2 Option A: when the ctx pre-pass exists AND this is a class-split draw, read the flat
+    // decoded ctx instead of makeCtx. The per-material fetch is the single-arm variant (or the
+    // module 'both' fetch for the legacy single draw / soup).
+    const useFlat = !!hwOpts && clusterCtxV != null;
+    const mFetch = hwOpts?.fetch ?? nfetch;
+    const mMakeCtx = mFetch.makeCtx;
+    const mFetchWorldVert = mFetch.fetchWorldVert;
+    const mFetchWorldVertDyn = mFetch.fetchWorldVertDyn;
     const mat = new NodeMaterial();
     mat.name = `nanRaster_${sfx}`;
     const vPayLo = varyingProperty('float', `nanPayLo_${sfx}`) as unknown as NF;
@@ -171,10 +264,10 @@ export function buildHw(p: {
         (vW as unknown as { assign: (v: unknown) => void }).assign(clip.w);
       };
       const fetchWorld = (ctx: VertCtx, localTri: NU): NV3 => {
-        if (hw1fetch) return fetchWorldVertDyn(ctx, localTri, corner);
-        const w0 = fetchWorldVert(ctx, localTri, 0);
-        const w1 = fetchWorldVert(ctx, localTri, 1);
-        const w2 = fetchWorldVert(ctx, localTri, 2);
+        if (hw1fetch) return mFetchWorldVertDyn(ctx, localTri, corner);
+        const w0 = mFetchWorldVert(ctx, localTri, 0);
+        const w1 = mFetchWorldVert(ctx, localTri, 1);
+        const w2 = mFetchWorldVert(ctx, localTri, 2);
         return corner
           .equal(uint(1))
           .select(w1, corner.equal(uint(2)).select(w2, w0)) as unknown as NV3;
@@ -184,15 +277,28 @@ export function buildHw(p: {
         // = the cluster's qRaster INDEX (tid). localTri = vertexIndex/3 (partial-cluster tail
         // clips out). payload = tid<<bits|localTri EXACTLY like the soup ⇒ resolve unchanged.
         const localTri = (vertexIndex.div(3) as unknown as NU).toVar();
+        // A2: the terrain draw reads its cluster index from the BACK of the shared qHwRaster
+        // (partition back-fills isHF clusters from qCap-1); the mesh / legacy draw reads forward.
+        const instIdx = hwOpts?.reversed
+          ? (uint(hwRasterCap - 1).sub(instanceIndex) as unknown as NU)
+          : (instanceIndex as unknown as NU);
         const tid = elemU(
           qHwRasterRO as StorageBufferNode<'uint'>,
-          instanceIndex,
+          instIdx,
         ).toVar();
-        const item = qRasterRO.element(tid.add(uint(1)));
-        const instId = item.x.toVar();
-        const ci = item.y.toVar();
         const payload = tid.shiftLeft(uint(CLUSTER_TRI_BITS)).bitOr(localTri).toVar();
-        const ctx = makeCtx(instId, ci);
+        // A2 Option A: read the pre-decoded 35-word ctx (no per-vertex makeCtx / gust samples /
+        // wind precompute). The legacy single 'both' draw (useFlat false) keeps makeCtx — which
+        // needs the qRaster item for (instId, ci); the flat path needs neither (ctx carries A/B),
+        // so it also sheds the qRaster binding from this pipeline.
+        const ctx = useFlat
+          ? decodeCtx(tid, hwOpts!.withWind)
+          : (() => {
+              const item = qRasterRO.element(tid.add(uint(1)));
+              const instId = item.x.toVar();
+              const ci = item.y.toVar();
+              return mMakeCtx(instId, ci);
+            })();
         const world = fetchWorld(ctx, localTri);
         const clip = cam.vp.mul(vec4(world, 1)).toVar();
         // D (?clhw seam): snap clip.xy onto the SAME 1/256-px screen grid the SW
@@ -319,14 +425,51 @@ export function buildHw(p: {
   // in world1() right after the soup hwRender. Built whenever the cull supplied the queue
   // (absent only on the shadow-clipmap queue, which never runs the world1 HW-cluster draw).
   const hwClusterScene = hwClusterDrawAttr ? new Scene() : null;
-  if (hwClusterScene && hwClusterDrawAttr) {
+  const clusterGeom = (attr: IndirectStorageBufferAttribute): BufferGeometry => {
     const g = new BufferGeometry();
     g.setAttribute('position', new Float32BufferAttribute(new Float32Array(3), 3));
-    g.setIndirect(hwClusterDrawAttr, 0);
+    g.setIndirect(attr, 0);
     g.boundingSphere = new Sphere(new Vector3(), Number.POSITIVE_INFINITY);
-    const m = new Mesh(g, buildHwMaterial('world1', true));
+    return g;
+  };
+  const addClusterMesh = (
+    attr: IndirectStorageBufferAttribute,
+    mat: NodeMaterial,
+  ): void => {
+    const m = new Mesh(clusterGeom(attr), mat);
     m.frustumCulled = false;
-    hwClusterScene.add(m);
+    (hwClusterScene as Scene).add(m);
+  };
+  if (hwClusterScene && hwClusterDrawAttr) {
+    if (clusterCtxV != null) {
+      // A2 (2026-07-09): CLASS-SPLIT `_cl` world1 draw — a MESH (explicit, forward-indexed)
+      // draw + a TERRAIN (isHF, back-indexed) draw, each reading the flat pre-decoded ctx
+      // (Option A) through its own single-arm fetch variant so it sheds the other class's
+      // fetch-union registers. Both write the SAME vis election ⇒ resolve unchanged; the cull
+      // partition guarantees each HW cluster lands in exactly one draw (disjoint sets).
+      addClusterMesh(
+        hwClusterDrawAttr,
+        buildHwMaterial('world1', true, {
+          fetch: nfetchExplicit,
+          withWind: hasWind,
+          reversed: false,
+        }),
+      );
+      if (hwClusterDrawTerrainAttr) {
+        addClusterMesh(
+          hwClusterDrawTerrainAttr,
+          buildHwMaterial('world1', true, {
+            fetch: nfetchTerrain,
+            withWind: false,
+            reversed: true,
+          }),
+        );
+      }
+    } else {
+      // Non-world1 (shadow/view) path: no ctx pre-pass ⇒ keep the single 'both' makeCtx `_cl`
+      // material (dormant — hwRenderCluster is only invoked from the camera world1()).
+      addClusterMesh(hwClusterDrawAttr, buildHwMaterial('world1', true));
+    }
   }
   // The HW pass renders into this dead full-res rgba8 (colorWrite=false -> never read).
   // It stays full-res unconditionally: r184 derives the render-pass viewport from

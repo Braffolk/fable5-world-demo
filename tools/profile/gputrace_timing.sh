@@ -36,13 +36,29 @@ GPUTRACE="$(command -v gputrace || echo "$HOME/go/bin/gputrace")"
 [ -x "$GPUTRACE" ] || { echo "[gputrace_timing] gputrace not found — run: go install github.com/tmc/gputrace/cmd/gputrace@latest" >&2; exit 1; }
 [ -d "$RAW" ] && [ -e "$RAW/capture" -o -e "$RAW/unsorted-capture" ] || { echo "[gputrace_timing] $RAW is not a raw .gputrace (no capture stream)" >&2; exit 1; }
 
-# locate the exported plist (Xcode export puts it as a FILE ending in .gpuprofiler_raw)
+# locate the exported plist (Xcode export puts it as a FILE ending in .gpuprofiler_raw).
+# The perf stream is ALWAYS a standalone *.gpuprofiler_raw FILE — never inside store0.
 if [ -d "$EXP" ]; then
   BPLIST="$(find "$EXP" -maxdepth 1 -name '*.gpuprofiler_raw' -type f | head -1)"
 else
   BPLIST="$EXP"
 fi
-[ -e "$BPLIST" ] || { echo "[gputrace_timing] no *.gpuprofiler_raw plist found in $EXP (did you Export with 'Profile GPU Trace' on?)" >&2; exit 1; }
+if [ -z "${BPLIST:-}" ] || [ ! -e "$BPLIST" ]; then
+  if [ -d "$EXP" ] && [ -f "$EXP/store0" ]; then
+    cat >&2 <<EOF
+[gputrace_timing] no *.gpuprofiler_raw in $EXP.
+  This is a CAPTURE-ONLY export (store0 + index only) — it carries NO performance data.
+  The perf stream is a standalone *.gpuprofiler_raw FILE and is NEVER inside store0.
+  Re-export from Xcode: open the RAW .gputrace, run the GPU profiler (Replay /
+  Debug ▸ 'Profile GPU Trace' so counters populate), then File ▸ Export… with
+  "Embed performance data" ENABLED. A correct profiled export contains a
+  *.gpuprofiler_raw file (GBs) AND a thumbnails_encoder/ folder. See docs/METAL-PROFILING.md.
+EOF
+  else
+    echo "[gputrace_timing] no *.gpuprofiler_raw plist found in $EXP (pass an EXPORTED profiled .gputrace)" >&2
+  fi
+  exit 1
+fi
 
 # graft into the tmc/gputrace layout: <raw>/profile.gpuprofiler_raw/streamData
 PDIR="$RAW/profile.gpuprofiler_raw"

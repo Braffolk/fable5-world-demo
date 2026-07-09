@@ -28,19 +28,43 @@ TS="$(date +%Y%m%d-%H%M%S)"; OUT="${3:-$PWD/profile-results-$TS}"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 mkdir -p "$OUT/summary" "$OUT/runtime" "$OUT/static" || { echo "cannot create $OUT" >&2; exit 1; }
 ERR="$OUT/summary/_errors.log"; : >"$ERR"
-echo "profile run-all"; echo "  raw:      $RAW"; echo "  exported: ${EXP:-<none>}"; echo "  output →  $OUT"; echo
+
+# Distinguish a PROFILED export (has a standalone *.gpuprofiler_raw FILE = timings/counters/
+# per-line samples) from a CAPTURE-ONLY export (store0 + index only, NO perf data). The perf
+# stream is NEVER inside store0, so a capture-only bundle yields structure+static ONLY.
+CAPONLY=""
+if [[ -n "$EXP" && -d "$EXP" ]]; then
+  if [[ -z "$(find "$EXP" -maxdepth 1 -name '*.gpuprofiler_raw' -type f 2>/dev/null | head -1)" ]]; then
+    if [[ -f "$EXP/store0" ]]; then CAPONLY=1; fi
+  fi
+fi
+
+echo "profile run-all"; echo "  raw:      $RAW"; echo "  exported: ${EXP:-<none>}"; echo "  output →  $OUT"
+if [[ -n "$CAPONLY" ]]; then
+  echo
+  echo "  ⚠️  CAPTURE-ONLY export — no *.gpuprofiler_raw ⇒ NO performance data."
+  echo "      Skipping profiled steps (runtime per-line / timing / counters / device / report)."
+  echo "      Producing structure + STATIC per-line only (both come from the RAW trace)."
+  echo "      Re-export from Xcode WITH \"Embed performance data\" ENABLED (run the GPU profiler on"
+  echo "      Replay first). A correct profiled export has a *.gpuprofiler_raw file + thumbnails_encoder/."
+  # keep the profiled steps from running, but leave EXP recorded for the INDEX note
+  EXP_PROFILED=""
+else
+  EXP_PROFILED="$EXP"
+fi
+echo
 
 run() { local out="$1"; shift; printf '  … %-30s' "$out"; if "$@" >"$OUT/$out" 2>>"$ERR"; then echo ok; else echo "FAILED (summary/_errors.log)"; fi; }
 
 # ---- summaries (whole-frame; full detail, no truncation) ----
 run summary/structure.txt     "$DIR/trace_static.py" "$RAW" --top 100000
 run summary/structure.json    "$DIR/trace_static.py" "$RAW" --json
-if [[ -n "$EXP" ]]; then
-  run summary/device.txt      "$DIR/profile_report.py" "$EXP" device
-  run summary/report.txt      "$DIR/profile_report.py" "$EXP" summary
-  run summary/counters.txt    "$DIR/profile_report.py" "$EXP" counters
+if [[ -n "$EXP_PROFILED" ]]; then
+  run summary/device.txt      "$DIR/profile_report.py" "$EXP_PROFILED" device
+  run summary/report.txt      "$DIR/profile_report.py" "$EXP_PROFILED" summary
+  run summary/counters.txt    "$DIR/profile_report.py" "$EXP_PROFILED" counters
   # per-kernel timing: full JSON (full names) + the tmc table + a full-name sorted table
-  run summary/timing_table.txt "$DIR/gputrace_timing.sh" "$RAW" "$EXP" timing --json "$OUT/summary/timing.json"
+  run summary/timing_table.txt "$DIR/gputrace_timing.sh" "$RAW" "$EXP_PROFILED" timing --json "$OUT/summary/timing.json"
   if [[ -s "$OUT/summary/timing.json" ]]; then
     printf '  … %-30s' "summary/kernels_by_ms.txt"
     python3 - "$OUT/summary/timing.json" >"$OUT/summary/kernels_by_ms.txt" 2>>"$ERR" <<'PY' && echo ok || echo "FAILED"
@@ -62,8 +86,8 @@ fi
 run static/_run.log           "$DIR/perline_remarks.py" "$RAW" --outdir "$OUT/static"
 
 # ---- per-shader RUNTIME (exported): one file per shader, all lines, full source + msl/*.metal ----
-if [[ -n "$EXP" ]]; then
-  run runtime/_run.log        "$DIR/runtime_perline.py" "$EXP" --src --outdir "$OUT/runtime"
+if [[ -n "$EXP_PROFILED" ]]; then
+  run runtime/_run.log        "$DIR/runtime_perline.py" "$EXP_PROFILED" --src --outdir "$OUT/runtime"
 fi
 
 # ---- INDEX ----
@@ -72,6 +96,20 @@ fi
   echo
   echo "raw: \`$RAW\`  ·  exported: \`${EXP:-<none>}\`"
   echo
+  if [[ -n "$CAPONLY" ]]; then
+    echo "> ⚠️ **CAPTURE-ONLY export — no performance data.** The exported bundle has \`store0\` +"
+    echo "> \`index\` but no \`*.gpuprofiler_raw\` file, so it carries NO timings / counters / per-line"
+    echo "> samples. The perf stream is ALWAYS a standalone \`*.gpuprofiler_raw\` FILE — it is never"
+    echo "> packed inside \`store0\` (store0 is only shader source + resource dumps). **runtime/,**"
+    echo "> **timing, counters, device, report are empty.** Only \`summary/structure.*\` and \`static/\`"
+    echo "> (both from the RAW trace) are populated below."
+    echo ">"
+    echo "> **Fix:** in Xcode open the RAW .gputrace → run the GPU profiler (Replay / Debug ▸"
+    echo "> 'Profile GPU Trace' so counters+Shaders populate) → File ▸ Export… with **\"Embed"
+    echo "> performance data\" ENABLED**. A correct profiled export contains a \`*.gpuprofiler_raw\`"
+    echo "> file (GBs) AND a \`thumbnails_encoder/\` folder next to store0. See docs/METAL-PROFILING.md."
+    echo
+  fi
   echo "## How to use (one shader at a time)"
   echo "1. Pick a target from a ranking: \`summary/kernels_by_ms.txt\` (GPU ms), \`runtime/_ranking.txt\` (%GPU per-line),"
   echo "   or \`static/_ranking.txt\` (occupancy cost = spills/temp-regs)."

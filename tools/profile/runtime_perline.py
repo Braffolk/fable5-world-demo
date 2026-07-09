@@ -52,11 +52,12 @@ def unarchive(a):
 
 
 def find_raw(p):
-    if os.path.isdir(p):
-        h = [x for x in glob.glob(os.path.join(p, "*.gpuprofiler_raw")) if os.path.isfile(x)]
-        if not h: sys.exit(f"[runtime] no .gpuprofiler_raw FILE in {p} (was 'Profile GPU Trace' on during Replay, then File▸Export?)")
-        return h[0]
-    return p
+    # perf stream is ALWAYS a standalone *.gpuprofiler_raw FILE (never inside store0); a
+    # capture-only export (store0 + index only) has no perf data — see _export.py for the
+    # precise re-export instructions.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import _export
+    return _export.require_gpuprofiler_raw(p, "runtime")
 
 
 LOW = re.compile(r"DW_AT_low_pc\s*\(0x([0-9a-fA-F]+)\)")

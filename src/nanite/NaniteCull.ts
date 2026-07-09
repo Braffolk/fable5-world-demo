@@ -49,6 +49,7 @@ import {
 import { sunU } from '../render/VegMaterials';
 import type { NB, NF, NU, NV3, NV4 } from '../gpu/TSLTypes';
 import {
+  CLUSTER_FLAG_HEIGHTFIELD,
   CLUSTER_WORDS,
   LOD_NONE,
   MAX_CLUSTER_TRIS,
@@ -215,8 +216,14 @@ export interface NaniteCullChain {
   /** per-cluster SW/HW split: HW-cluster work queue — [i] = the qRaster index (tid) of the
    *  i-th big/near triangle cluster; the instanced HW draw reads one per instanceIndex. */
   qHwRasterRO: StorageBufferNode<'uint'>;
-  /** instanced draw args [vertexCount, instanceCount, 0, 0] for the HW-cluster draw. */
+  /** instanced draw args [vertexCount, instanceCount, 0, 0] for the MESH (explicit) HW-cluster
+   *  draw — the front-filled region of qHwRaster (A2 class split). */
   hwClusterDrawAttr: IndirectStorageBufferAttribute;
+  /** A2: instanced draw args for the TERRAIN (isHF) HW-cluster draw — the back-filled region
+   *  of qHwRaster (read at qHwRaster[hwRasterCap-1-instanceIndex]). */
+  hwClusterDrawTerrainAttr: IndirectStorageBufferAttribute;
+  /** A2: qHwRaster capacity (= qCap) — the terrain draw reads qHwRaster[hwRasterCap-1-inst]. */
+  hwRasterCap: number;
   /** [kHwPartitionArgs, kHwPartition, kHwClusterArgs] to fold into the cull submit
    *  AFTER voxFanoutBatch (reads the cut → qHwRaster). */
   hwPartitionBatch(): readonly unknown[];
@@ -605,6 +612,25 @@ export function buildNaniteCull(
     hwClusterDrawAttr as unknown as StorageBufferAttribute,
     4,
   ).rw;
+  // A2 (HW vertex-prepass, task 2026-07-09): the `_cl` world1 draw is CLASS-SPLIT into a
+  // terrain (isHF) draw + a mesh (explicit) draw, each compiling ONLY its own fetch arm so it
+  // sheds the branch-union registers. kHwPartition routes each HW cluster to ONE of the two by
+  // its heightfield flag into a SINGLE 0-MB shared qHwRaster buffer: mesh fills FORWARD from 0,
+  // terrain fills BACKWARD from qCap-1 (the terrain `_cl` draw reads qHwRaster[qCap-1-inst]).
+  // Only the singlePass camera world1 path renders these draws (world1() is camera-only), so
+  // the repartition never affects the dormant single 'both' `_cl` material shadow/view build.
+  const hwPartCountTerrainAttr = new StorageBufferAttribute(new Uint32Array(1), 1);
+  hwPartCountTerrainAttr.name = 'nanHwPartCountTerrain';
+  const hwPartCountTerrain = sU32Views(hwPartCountTerrainAttr, 1).atomic;
+  const hwClusterDrawTerrainAttr = new IndirectStorageBufferAttribute(
+    new Uint32Array(4),
+    4,
+  );
+  hwClusterDrawTerrainAttr.name = 'nanHwClusterDrawTerrain';
+  const hwClusterDrawTerrain = sU32Views(
+    hwClusterDrawTerrainAttr as unknown as StorageBufferAttribute,
+    4,
+  ).rw;
 
   const split2D = (
     args: ReturnType<typeof sU32Views>['rw'],
@@ -754,7 +780,8 @@ export function buildNaniteCull(
   // kHwClusterArgs: publish the instanced draw args (MAX_CLUSTER_TRIS*3 verts × HW-count).
   const hwPart = (() => {
     const kHwPartitionArgs = Fn(() => {
-      atomicStore(hwPartCount.element(0), uint(0));
+      atomicStore(hwPartCount.element(0), uint(0)); // A2: mesh (explicit, forward-fill) count
+      atomicStore(hwPartCountTerrain.element(0), uint(0)); // A2: terrain (isHF, back-fill) count
       atomicStore(budgetExtra.element(1), uint(0)); // F3 budget: reset clhwTris (before kHwPartition; hwPart batch runs every frame)
       const n = minU(aLoadU(counters.element(1)), uint(qCap));
       split2D(hwPartDispatch, n.add(uint(63)).div(uint(64)));
@@ -770,7 +797,14 @@ export function buildNaniteCull(
       const ci = item.y.toVar();
       // skip voxel(7) clusters — they render via the scatter voxel raster, not as tris
       // (their word6/7 point at bricks; drawing them as tris would be garbage).
-      const meshId = readCluster(gpu.clusters, ci).meshId.toVar();
+      const c = readCluster(gpu.clusters, ci);
+      const meshId = c.meshId.toVar();
+      // A2: heightfield flag — the SAME word7 bit makeCtx/ClusterCtx derive isHF from (ctx
+      // slot 0), so the partition route can never disagree with the `_cl` shader's decoded ctx.
+      const isHF = c.flags
+        .bitAnd(uint(CLUSTER_FLAG_HEIGHTFIELD))
+        .notEqual(uint(0))
+        .toVar();
       const matClass = elemU(gpu.meshes, meshId.mul(uint(MESH_WORDS)).add(uint(6)))
         .shiftRight(uint(8))
         .bitAnd(uint(0xff));
@@ -782,9 +816,22 @@ export function buildNaniteCull(
             // matching the SW classifier's clusterHwClass skip (slot 11), which returns every
             // clhw cluster regardless of the HW queue cap. Re-reads triCount off gpu.clusters.
             atomicAdd(budgetExtra.element(1), readCluster(gpu.clusters, ci).triCount);
-            const slot = atomicAdd(hwPartCount.element(0), uint(1)) as unknown as NU;
-            If(slot.lessThan(uint(qCap)), () => {
-              elemUW(qHwRasterV.rw, slot).assign(tid);
+            // A2 CLASS PARTITION into the shared qHwRaster (0 MB): terrain (isHF) back-fills from
+            // qCap-1, mesh (explicit) forward-fills from 0 — disjoint regions (they only collide
+            // under >qCap total HW clusters, the pre-existing overflow-drop case, guarded below).
+            If(isHF, () => {
+              const j = atomicAdd(
+                hwPartCountTerrain.element(0),
+                uint(1),
+              ) as unknown as NU;
+              If(j.lessThan(uint(qCap)), () => {
+                elemUW(qHwRasterV.rw, uint(qCap - 1).sub(j)).assign(tid);
+              });
+            }).Else(() => {
+              const slot = atomicAdd(hwPartCount.element(0), uint(1)) as unknown as NU;
+              If(slot.lessThan(uint(qCap)), () => {
+                elemUW(qHwRasterV.rw, slot).assign(tid);
+              });
             });
           },
         );
@@ -796,9 +843,15 @@ export function buildNaniteCull(
     const kHwClusterArgs = Fn(() => {
       const n = minU(aLoadU(hwPartCount.element(0)), uint(qCap));
       elemUW(hwClusterDraw, 0).assign(uint(MAX_CLUSTER_TRIS * 3)); // vertexCount/instance
-      elemUW(hwClusterDraw, 1).assign(n); // instanceCount = HW-cluster count
+      elemUW(hwClusterDraw, 1).assign(n); // instanceCount = MESH (explicit) HW-cluster count
       elemUW(hwClusterDraw, 2).assign(uint(0));
       elemUW(hwClusterDraw, 3).assign(uint(0));
+      // A2: the terrain (isHF) draw args — instanceCount = the back-filled terrain count.
+      const nT = minU(aLoadU(hwPartCountTerrain.element(0)), uint(qCap));
+      elemUW(hwClusterDrawTerrain, 0).assign(uint(MAX_CLUSTER_TRIS * 3));
+      elemUW(hwClusterDrawTerrain, 1).assign(nT);
+      elemUW(hwClusterDrawTerrain, 2).assign(uint(0));
+      elemUW(hwClusterDrawTerrain, 3).assign(uint(0));
     })().compute(1, [1]);
     (kHwClusterArgs as unknown as ComputeKernel).setName('nanHwClusterArgs');
 
@@ -1514,6 +1567,10 @@ export function buildNaniteCull(
     // per-cluster SW/HW split (always built — the permanent default)
     qHwRasterRO: qHwRasterV.ro,
     hwClusterDrawAttr,
+    // A2 (2026-07-09): the terrain-class `_cl` draw args (isHF clusters, back-filled into
+    // qHwRaster from qCap-1) + the buffer capacity the terrain draw needs to read qCap-1-inst.
+    hwClusterDrawTerrainAttr,
+    hwRasterCap: qCap,
     hwPartitionBatch: (): readonly unknown[] => [...hwPart],
     runPhase1,
     phase1Batch: () => phase1BatchList,

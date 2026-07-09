@@ -274,6 +274,10 @@ export function buildNaniteRaster(
      *  (ClipLevelQueue, depth-only) which never runs the HW-cluster instanced draw. */
     qHwRasterRO?: StorageBufferNode<'uint'> | null;
     hwClusterDrawAttr?: IndirectStorageBufferAttribute | null;
+    /** A2 (2026-07-09 HW vertex-prepass): the terrain-class `_cl` draw args + qHwRaster cap.
+     *  Present on every full cull; consumed only by the singlePass camera world1 `_cl` split. */
+    hwClusterDrawTerrainAttr?: IndirectStorageBufferAttribute | null;
+    hwRasterCap?: number;
   },
   vis: NaniteVisBuffers,
   tint: 'flat' | 'cluster' | 'lod',
@@ -591,6 +595,13 @@ export function buildNaniteRaster(
   const nfetch = makeFetch(gpu, heightTex, disp, wind);
   // fetchWorldVertDyn is used only by the HW vertex stage (./raster/Hw, via nfetch).
   const { makeCtx, fetchWorldVert } = nfetch;
+  // A2 (2026-07-09 HW vertex-prepass): CLASS-SPLIT fetch variants for the two `_cl` world1
+  // draws — 'explicit' (leaf/trunk/rock) compiles only explicitWorldByIndex, 'terrain' (isHF)
+  // only the heightfield arm — so each `_cl` vertex shader sheds the OTHER class's fetch-union
+  // registers (same trick ?ksplit uses for the SW kernel). Consumed by buildHw ONLY on the
+  // world1 (ctxPrepass / clusterCtxV != null) camera path; the flat ctx read replaces makeCtx.
+  const nfetchExplicit = makeFetch(gpu, heightTex, disp, wind, true, 'explicit');
+  const nfetchTerrain = makeFetch(gpu, heightTex, disp, wind, true, 'terrain');
   // M2l hw1fetch: HW vertex stage reconstructs ONE corner (runtime-selected) instead
   // of fetching all 3 and selecting — same selected vertex by construction.
   const hw1fetch =
@@ -2310,6 +2321,15 @@ export function buildNaniteRaster(
     hwrt,
     qHwRasterRO: cull.qHwRasterRO ?? null,
     hwClusterDrawAttr: cull.hwClusterDrawAttr ?? null,
+    // A2 (2026-07-09): flat per-cluster ctx read (Option A) + the class-split `_cl` draws.
+    // clusterCtxV non-null ONLY on the world1 (singlePass) camera path ⇒ the split renders
+    // there; every other raster keeps the single 'both' makeCtx `_cl` material (dormant).
+    clusterCtxV,
+    hasWind: !!wind,
+    nfetchExplicit,
+    nfetchTerrain,
+    hwClusterDrawTerrainAttr: cull.hwClusterDrawTerrainAttr ?? null,
+    hwRasterCap: cull.hwRasterCap ?? QRASTER_CAP,
   });
   const {
     kHwArgs,

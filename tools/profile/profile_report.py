@@ -44,14 +44,12 @@ UID = plistlib.UID
 
 # ----------------------------------------------------------------------------- IO
 def find_raw(path):
-    """Accept an exported .gputrace dir or the .gpuprofiler_raw directly."""
-    if os.path.isdir(path):
-        hits = glob.glob(os.path.join(path, "*.gpuprofiler_raw"))
-        if not hits:
-            sys.exit(f"[profile] no *.gpuprofiler_raw in {path} — did you EXPORT "
-                     f"from Xcode with 'Profile GPU Trace' on? (a raw capture has none)")
-        return hits[0]
-    return path
+    """Accept an exported .gputrace dir or the .gpuprofiler_raw directly. A capture-only
+    export (store0 + index, no *.gpuprofiler_raw) has NO perf data — the stream is never
+    inside store0; _export.py explains how to re-export with performance data embedded."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import _export
+    return _export.require_gpuprofiler_raw(path, "profile")
 
 
 def unarchive(archive):
