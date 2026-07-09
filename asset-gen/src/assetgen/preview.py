@@ -165,6 +165,70 @@ def preview_trees(base: BaseConfig, aoi_name: str, bbox_en, log=print) -> list[P
     return [p]
 
 
+COMMUNITY_COLORS = {
+    0: (30, 30, 30), 1: (150, 120, 70), 2: (60, 100, 70), 3: (110, 160, 80),
+    4: (90, 180, 90), 5: (140, 90, 130), 6: (100, 130, 140), 7: (170, 200, 110),
+    8: (120, 150, 100), 9: (130, 140, 80),
+}
+DEBRIS_COLORS = {
+    0: (30, 30, 30), 1: (120, 100, 60), 2: (150, 120, 70), 3: (135, 110, 65),
+    4: (90, 100, 70), 5: (150, 150, 150), 6: (180, 180, 180), 7: (210, 200, 150),
+    8: (90, 110, 100),
+}
+
+
+def preview_ground(base: BaseConfig, aoi_name: str, bbox_en, log=print) -> list[Path]:
+    """Understory community, debris class, and boulder-dot previews with density brightness."""
+    from .cook.encode import decode_records
+
+    written = []
+    for layer, colors, tag in [("understory", COMMUNITY_COLORS, "understory"),
+                                ("debris", DEBRIS_COLORS, "debris")]:
+        cls = _assemble_u8(base, layer, bbox_en, 0, 2)
+        dens = _assemble_u8(base, layer, bbox_en, 1, 2)
+        if cls is None:
+            continue
+        rgb = np.zeros((*cls.shape, 3), dtype=np.float32)
+        for cid, color in colors.items():
+            rgb[cls == cid] = color
+        bright = 0.35 + 0.65 * (dens.astype(np.float32) / 255.0)
+        img = (rgb * bright[..., None]).astype(np.uint8)
+        PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+        p = PREVIEW_DIR / f"{aoi_name}-{tag}.png"
+        Image.fromarray(img[::2, ::2], "RGB").save(p, optimize=True)
+        written.append(p)
+        log(f"  {p.name}: classes {sorted(int(v) for v in np.unique(cls))}, mean density {dens.mean():.0f}/255")
+
+    # boulders as dots over a neutral field
+    ids = chunks_covering_bbox_en(base.grid, bbox_en, 0)
+    xs = sorted({c.cx for c in ids})
+    zs = sorted({c.cz for c in ids})
+    side = base.grid.chunk_m // 4
+    img = np.full((len(zs) * side, len(xs) * side, 3), 20, dtype=np.uint8)
+    total = 0
+    for c in ids:
+        p = DATA_WORK / "chunks" / "boulders" / "0" / f"{c.cx}_{c.cz}.lac"
+        if not p.exists():
+            continue
+        meta, payload = read_chunk(p)
+        if meta.count == 0:
+            continue
+        x, z, kind, sz, _ = decode_records(base.encode, payload, meta.count, ["u2", "u2", "u1", "u1", "u1"])
+        px = (x.astype(np.float32) / 65535 * side).astype(int) + xs.index(c.cx) * side
+        pz = (z.astype(np.float32) / 65535 * side).astype(int) + zs.index(c.cz) * side
+        for j in range(meta.count):
+            col = (230, 180, 90) if kind[j] else (200, 200, 200)
+            r = 2 if kind[j] else 1
+            img[max(0, pz[j] - r):pz[j] + r + 1, max(0, px[j] - r):px[j] + r + 1] = col
+        total += meta.count
+    if total:
+        p = PREVIEW_DIR / f"{aoi_name}-boulders.png"
+        Image.fromarray(img, "RGB").save(p, optimize=True)
+        written.append(p)
+        log(f"  {p.name}: {total} boulders (piles gold, singles grey)")
+    return written
+
+
 def _assemble_wet_mask(base: BaseConfig, bbox_en) -> np.ndarray | None:
     """Wet texels across the AOI: quantized value > 0 (q == 0 is the reserved dry code)."""
     import zlib

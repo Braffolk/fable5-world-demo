@@ -9,8 +9,14 @@ from ..process.landcover import BIOME_TEXEL, load_rules, rasterize_classes, veg_
 from ..process.mosaic import RasterStack, dem_sources
 from ..process.soil import check_unknown_budget, rasterize_soil, unmapped_textures, unmapped_types
 from ..process.water import rasterize_water
-from .chunkio import ChunkMeta, write_chunk
-from .encode import decode_quant16, encode_quant16, encode_u8_planes
+from .chunkio import ChunkMeta, read_chunk, write_chunk
+from .encode import (
+    decode_quant16,
+    decode_u8_planes,
+    encode_quant16,
+    encode_records,
+    encode_u8_planes,
+)
 from .height_cook import chunk_path
 
 
@@ -89,3 +95,75 @@ def cook_soil(base: BaseConfig, bbox_en, log=print) -> None:
     check_unknown_budget(len(chunks) * _res_2m(base) ** 2, log=log)
     if unmapped_types or unmapped_textures:
         log("  soil: unparseable codes present but under budget (censused above)")
+
+
+def _read_planes(base: BaseConfig, layer: str, c, nplanes: int) -> list | None:
+    p = chunk_path(layer, c)
+    if not p.exists():
+        return None
+    meta, payload = read_chunk(p)
+    return decode_u8_planes(base.encode, payload, meta.res, nplanes)
+
+
+def cook_understory(base: BaseConfig, bbox_en, log=print) -> None:
+    from ..process.understory import rasterize_understory, unmapped_site_types
+
+    chunks = chunks_covering_bbox_en(base.grid, bbox_en, 0)
+    for i, c in enumerate(chunks):
+        dest = chunk_path("understory", c)
+        if dest.exists():
+            continue
+        biome = _read_planes(base, "biome", c, 2)
+        soil = _read_planes(base, "soil", c, 5)
+        if biome is None or soil is None:
+            raise FileNotFoundError("understory needs biome + soil cooked first")
+        planes = rasterize_understory(_window_2m(base, c), biome[0], biome[1], soil[4])
+        payload = encode_u8_planes(base.encode, planes)
+        write_chunk(dest, _meta(base, "understory", c, enc=2), payload)
+        if (i + 1) % 16 == 0 or i + 1 == len(chunks):
+            log(f"  understory [{i + 1}/{len(chunks)}]")
+    if unmapped_site_types:
+        log(f"  understory: unmapped site types {dict(sorted(unmapped_site_types.items(), key=lambda kv: -kv[1]))}")
+
+
+def cook_debris(base: BaseConfig, bbox_en, log=print) -> None:
+    from ..process.debris import rasterize_debris
+
+    chunks = chunks_covering_bbox_en(base.grid, bbox_en, 0)
+    for i, c in enumerate(chunks):
+        dest = chunk_path("debris", c)
+        if dest.exists():
+            continue
+        biome = _read_planes(base, "biome", c, 2)
+        soil = _read_planes(base, "soil", c, 5)
+        if biome is None or soil is None:
+            raise FileNotFoundError("debris needs biome + soil cooked first")
+        planes = rasterize_debris(_window_2m(base, c), biome[0], soil[3])
+        payload = encode_u8_planes(base.encode, planes)
+        write_chunk(dest, _meta(base, "debris", c, enc=2), payload)
+        if (i + 1) % 16 == 0 or i + 1 == len(chunks):
+            log(f"  debris [{i + 1}/{len(chunks)}]")
+
+
+def cook_boulders(base: BaseConfig, bbox_en, log=print) -> None:
+    from ..process.boulders import boulders_for_chunk
+
+    chunks = chunks_covering_bbox_en(base.grid, bbox_en, 0)
+    total = 0
+    for i, c in enumerate(chunks):
+        dest = chunk_path("boulders", c)
+        if dest.exists():
+            continue
+        cols = boulders_for_chunk(chunk_bounds_en(base.grid, c), base.grid.chunk_m)
+        if len(cols) == 0:
+            continue  # absent chunk = no mapped boulders
+        columns = [cols.x, cols.z, cols.kind, cols.size, cols.variant]
+        payload = encode_records(base.encode, columns)
+        b = chunk_bounds_en(base.grid, c)
+        meta = ChunkMeta(
+            layer="boulders", lod=0, enc=3, cx=c.cx, cz=c.cz, res=0, count=len(cols),
+            origin_e=b[0], origin_n=b[3], qoffset=0.0, qscale=base.grid.chunk_m / 65535.0,
+        )
+        write_chunk(dest, meta, payload)
+        total += len(cols)
+    log(f"  boulders: {total} mapped boulders across AOI")

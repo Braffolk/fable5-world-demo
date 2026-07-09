@@ -28,6 +28,18 @@ def _species_dictionary() -> dict[int, dict]:
 
     return load_species_map().dictionary
 
+
+def _understory_dictionary() -> dict[int, dict]:
+    from .process.understory import load_communities
+
+    return load_communities().dictionary
+
+
+def _debris_dictionary() -> dict[int, dict]:
+    from .process.debris import load_debris
+
+    return load_debris().dictionary
+
 LAYER_DOC = {
     "height": {"enc": 1, "semantics": "u16 heights, meters EH2000; texel(i,j) center at origin+(i+0.5)*t"},
     "biome": {"enc": 2, "texelMeters": 2, "planes": ["classId", "vegDensity"],
@@ -47,6 +59,16 @@ LAYER_DOC = {
         "variant = art seed. NO y — client grounds tree on rendered terrain; NO yaw/lean — "
         "client hashes (cx,cz,x,z) for cosmetic orientation.",
     },
+    "understory": {"enc": 2, "texelMeters": 2, "planes": ["communityId", "density"],
+                    "semantics": "ground-flora SCATTER FIELD (see understoryMap): client scatters "
+                    "the community's plant palette at density/255 * base_density plants/m^2"},
+    "debris": {"enc": 2, "texelMeters": 2, "planes": ["surfaceClass", "density"],
+                "semantics": "debris/litter SCATTER FIELD (see debrisMap): client scatters "
+                "stones/deadwood/litter from the class palette at density/255 * base_density"},
+    "boulders": {"enc": 3, "columns": [["x", "u16"], ["z", "u16"], ["kind", "u8"], ["size", "u8"],
+                  ["variant", "u8"]],
+                  "semantics": "real ETAK-mapped boulders; kind 0=single 1=pile; size ~cm/40; "
+                  "NO y (client grounds); absent chunk = none"},
 }
 
 
@@ -117,6 +139,8 @@ def build_release(base: BaseConfig, cook_rev: int, log=print) -> Path:
         "codec": base.encode.codec,
         "container": "LAC1 v1 (56-byte LE header + compressed payload; see chunkio.py)",
         "speciesMap": _species_dictionary(),
+        "understoryMap": _understory_dictionary(),
+        "debrisMap": _debris_dictionary(),
         "layers": layers,
     }
     blob = json.dumps(manifest, indent=1, sort_keys=True).encode()

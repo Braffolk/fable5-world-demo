@@ -120,7 +120,8 @@ def country_floor(workers: int, min_lod: int) -> None:
 @main.command()
 @click.option("--aoi", required=True)
 @click.option("--layer", "layers_opt", multiple=True,
-              type=click.Choice(["height", "biome", "water", "soil", "trees"]),
+              type=click.Choice(["height", "biome", "water", "soil", "trees",
+                                  "understory", "debris", "boulders"]),
               help="Cook only these layers (default: all the AOI enables)")
 @click.option("--workers", default=6, show_default=True)
 def cook(aoi: str, layers_opt: tuple[str, ...], workers: int) -> None:
@@ -153,7 +154,21 @@ def cook(aoi: str, layers_opt: tuple[str, ...], workers: int) -> None:
         from .cook.trees_cook import cook_trees
 
         cook_trees(base, bbox, log=click.echo)
-    for name in sorted(wanted - {"height", "biome", "water", "soil", "trees"}):
+    # understory/debris read the cooked biome+soil planes, so they run after them
+    if "understory" in wanted:
+        from .cook.layers_cook import cook_understory
+
+        cook_understory(base, bbox, log=click.echo)
+    if "debris" in wanted:
+        from .cook.layers_cook import cook_debris
+
+        cook_debris(base, bbox, log=click.echo)
+    if "boulders" in wanted:
+        from .cook.layers_cook import cook_boulders
+
+        cook_boulders(base, bbox, log=click.echo)
+    known = {"height", "biome", "water", "soil", "trees", "understory", "debris", "boulders"}
+    for name in sorted(wanted - known):
         click.echo(f"(layer {name}: cooker lands in a later phase)")
     click.echo("cook complete.")
 
@@ -177,10 +192,16 @@ def preview(aoi: str, composite: bool, composite_scale: int) -> None:
     base, cfg = load_base(), load_aoi(aoi)
     session = PoliteSession(base.fetch)
     from .fetch.maaamet import ensure_sheet_grids
-    from .preview import debug_composite, preview_height, preview_layers, preview_trees
+    from .preview import (
+        debug_composite,
+        preview_ground,
+        preview_height,
+        preview_layers,
+        preview_trees,
+    )
 
     bbox = _resolve_bbox(session, cfg, ensure_sheet_grids(session))
-    for fn in (preview_height, preview_layers, preview_trees):
+    for fn in (preview_height, preview_layers, preview_trees, preview_ground):
         for p in fn(base, cfg.name, bbox, log=click.echo):
             click.echo(p)
     if composite:

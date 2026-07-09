@@ -1,0 +1,67 @@
+# Ground debris/litter as a scatter FIELD (per 2 m cell: surfaceClass + density). Client
+# scatters stones/deadwood/leaves/needles from the class palette + hash — the nanite pipeline
+# can go as dense as it likes. Derived: stones from soil stoniness (Kivisus) + coarse-skeleton
+# texture; litter type from the dominant leaf type of the covering forest; deadwood from
+# forest presence. Real mapped BOULDERS ship separately as explicit instances (process/boulders).
+#
+# manifest ships this dictionary (id -> name, palette, base_density pieces/m^2).
+
+[classes.none]
+id = 0
+name = "bare/none"
+base_density = 0.0
+palette = []
+
+[classes.needle_litter]
+id = 1
+name = "conifer needle litter"
+base_density = 40.0
+palette = ["needle_duff:6", "fallen_cone:1", "twig:2", "dead_branch:1"]
+
+[classes.leaf_litter]
+id = 2
+name = "broadleaf leaf litter"
+base_density = 45.0
+palette = ["leaf_litter:6", "acorn:1", "twig:2", "dead_branch:1"]
+
+[classes.mixed_litter]
+id = 3
+name = "mixed forest litter"
+base_density = 42.0
+palette = ["leaf_litter:3", "needle_duff:3", "twig:2", "fallen_cone:1", "dead_branch:1"]
+
+[classes.mossy_deadwood]
+id = 4
+name = "mossy deadwood floor"
+base_density = 30.0
+palette = ["fallen_log:2", "mossy_log:2", "stump:1", "branch_pile:2", "leaf_litter:2"]
+
+[classes.stony]
+id = 5
+name = "stony ground"
+base_density = 6.0
+palette = ["stone_small:5", "stone_med:3", "gravel_patch:2", "stone_large:1"]
+
+[classes.scree]
+id = 6
+name = "scree/very stony"
+base_density = 14.0
+palette = ["stone_small:5", "stone_med:4", "stone_large:3", "boulder_small:1"]
+
+[classes.sandy]
+id = 7
+name = "sandy/gravel"
+base_density = 3.0
+palette = ["gravel_patch:4", "stone_small:2", "driftwood:1"]
+
+[classes.wetland_debris]
+id = 8
+name = "wetland debris"
+base_density = 8.0
+palette = ["fallen_log:2", "tussock:3", "dead_reed:2", "branch:1"]
+
+# Soil stoniness (Kivisus roman 0..6) -> whether the ground reads as stony/scree. Applied
+# where no litter class dominates.
+[stoniness]
+scree_threshold = 4   # Kivisus >= IV => scree
+stony_threshold = 2   # Kivisus >= II => stony

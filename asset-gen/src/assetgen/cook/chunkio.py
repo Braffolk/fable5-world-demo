@@ -15,7 +15,10 @@ MAGIC = b"LAC1"
 FMT = "<4sBBBBiiHxxIddffII"  # 56 bytes
 HEADER_SIZE = struct.calcsize(FMT)
 
-LAYER_IDS = {"height": 0, "biome": 1, "water": 2, "trees": 3, "soil": 4}
+LAYER_IDS = {
+    "height": 0, "biome": 1, "water": 2, "trees": 3, "soil": 4,
+    "understory": 5, "debris": 6, "boulders": 7,
+}
 LAYER_NAMES = {v: k for k, v in LAYER_IDS.items()}
 
 

@@ -14,3 +14,6 @@ landcover = true
 water = true
 trees = true
 soil = true
+understory = true
+debris = true
+boulders = true

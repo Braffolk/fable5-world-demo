@@ -1,0 +1,116 @@
+# Ground-flora communities. Understory can't be detected per-plant from any dataset, so we
+# ship a COMMUNITY FIELD (per 2 m cell: community id + density) and the client scatters the
+# actual plants from the community's palette + a position hash. Data-driven: community comes
+# from the forest site type (metsakasvukohatüüp) where a stand exists, else from land cover.
+#
+# The manifest ships this whole dictionary (id -> name, palette, moisture, base_density) so
+# the client knows what to scatter. palette = plant kinds with relative weights; the renderer
+# owns the meshes. Go as dense as the nanite pipeline allows (base_density = plants/m^2 at
+# full lushness; client multiplies by the per-cell density byte / 255).
+
+[communities.none]
+id = 0
+name = "sparse/bare"
+moisture = "any"
+base_density = 0.5
+palette = []
+
+[communities.heath]
+id = 1
+name = "dry heath"
+moisture = "dry"
+base_density = 8.0
+palette = ["cowberry:3", "heather:3", "reindeer_lichen:2", "haircap_moss:1", "juniper_seedling:1"]
+
+[communities.bilberry]
+id = 2
+name = "bilberry-moss"
+moisture = "fresh"
+base_density = 14.0
+palette = ["bilberry:5", "feather_moss:4", "cowberry:2", "wavy_hairgrass:1", "spruce_seedling:1"]
+
+[communities.herb_mesic]
+id = 3
+name = "herb-rich mesic"
+moisture = "fresh"
+base_density = 20.0
+palette = ["wood_sorrel:4", "lady_fern:2", "wood_anemone:2", "hepatica:1", "may_lily:2", "bilberry:1"]
+
+[communities.tall_herb]
+id = 4
+name = "lush tall-herb"
+moisture = "moist"
+base_density = 26.0
+palette = ["goutweed:4", "meadowsweet:3", "ostrich_fern:2", "stinging_nettle:2", "hepatica:1", "oxalis:1"]
+
+[communities.bog]
+id = 5
+name = "raised-bog dwarf"
+moisture = "wet"
+base_density = 16.0
+palette = ["sphagnum:6", "cottongrass:2", "labrador_tea:2", "bog_cranberry:2", "cloudberry:1", "heather:1"]
+
+[communities.fen_sedge]
+id = 6
+name = "sedge fen"
+moisture = "wet"
+base_density = 18.0
+palette = ["sedge:5", "sphagnum:3", "marsh_marigold:1", "cottongrass:2", "horsetail:1", "reed:1"]
+
+[communities.meadow]
+id = 7
+name = "meadow herb"
+moisture = "fresh"
+base_density = 30.0
+palette = ["meadow_grass:5", "clover:2", "buttercup:2", "yarrow:1", "oxeye_daisy:1", "knapweed:1"]
+
+[communities.drained_fern]
+id = 8
+name = "drained-peat fern"
+moisture = "moist"
+base_density = 22.0
+palette = ["lady_fern:4", "reed_grass:2", "bilberry:2", "raspberry:1", "goutweed:1"]
+
+[communities.scrub]
+id = 9
+name = "scrub understory"
+moisture = "fresh"
+base_density = 12.0
+palette = ["raspberry:2", "grass:3", "fern:2", "willowherb:1", "juniper:1"]
+
+# Metsakasvukohatüüp (forest site type, Lõhmus) code -> community. Unlisted -> herb_mesic (logged).
+[site_type]
+JK = "herb_mesic"   # jänesekapsa (wood sorrel), fresh fertile
+JP = "bilberry"     # jänesekapsa-pohla
+JM = "bilberry"     # jänesekapsa-mustika
+JO = "herb_mesic"   # jänesekapsa-oxalis group
+PH = "heath"        # pohla (cowberry), dry poor
+MO = "bilberry"     # mustika (bilberry)
+MS = "bilberry"     # mustika-sinika
+MP = "bilberry"     # mustika-pohla
+KM = "bilberry"     # karusambla-mustika (hair moss-bilberry), wet poor
+SS = "tall_herb"    # sinilille (hepatica), rich
+SN = "tall_herb"    # sinilille-naadi
+ND = "tall_herb"    # naadi (goutweed), rich moist
+AN = "tall_herb"    # angervaksa (meadowsweet), wet rich
+RB = "bog"          # raba (raised bog)
+TR = "bog"          # tarna-raba (sedge-bog)
+TA = "fen_sedge"    # tarna (sedge)
+LD = "fen_sedge"    # lodu (swampy)
+SL = "fen_sedge"    # sinika-lodu
+SM = "fen_sedge"    # sooviku
+MD = "fen_sedge"    # madalsoo
+KR = "drained_fern" # kõdusoo (drained peat)
+KS = "drained_fern" # kastikuloo
+KN = "heath"        # kanarbiku (heather), dry sand
+
+# Land-cover class (game palette from landcover-classes.toml) -> community, for cells with no
+# forest stand. Keyed by classId.
+[land_cover]
+1  = "bilberry"     # forest (no stand data) -> generic conifer floor
+2  = "scrub"        # shrub
+3  = "meadow"       # grassland
+8  = "bog"          # bog
+9  = "fen_sedge"    # fen
+10 = "fen_sedge"    # peatfield
+# field(6)/yard(7)/sand(5)/barren(4)/water/sea -> none (not listed => none)
