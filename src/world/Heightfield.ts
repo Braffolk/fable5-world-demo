@@ -28,7 +28,7 @@ import {
   vec3,
   vec4,
 } from 'three/tsl';
-import type { LaasParams } from '../core/Params';
+import { activeTier } from '../core/Quality';
 import type { WorldSeed } from '../core/Seed';
 import { bilerpFloatBuffer, uvToGrid } from '../gpu/BufferSample';
 import { bakeNoiseTextures } from '../gpu/passes/NoiseBake';
@@ -108,11 +108,10 @@ export class Heightfield {
 
   static async generate(
     renderer: Renderer,
-    params: LaasParams,
     seed: WorldSeed,
     progress: ProgressFn,
   ): Promise<Heightfield> {
-    const cfg = qualityConfig(params.preset);
+    const cfg = qualityConfig(activeTier());
     const mp = makeMacroParams(seed);
 
     progress(0.04, `terrain: synthesizing ${cfg.heightRes}² heightfield`);

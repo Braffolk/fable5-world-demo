@@ -1,7 +1,5 @@
 /** URL parameter parsing — every run is fully described by its URL. */
 
-export type QualityPreset = 'low' | 'high' | 'ultra';
-
 export interface LaasParams {
   /** world seed — reproduces the entire world */
   seed: number;
@@ -9,8 +7,6 @@ export interface LaasParams {
   scene: string;
   /** time of day, hours 0..24 */
   timeOfDay: number;
-  /** quality preset: low (iGPU floor), high (default), ultra (max grids) */
-  preset: QualityPreset;
   /** HUD visible at boot */
   hud: boolean;
   /** camera pose: "px,py,pz,yaw,pitch[,fov]" */
@@ -33,15 +29,11 @@ function num(v: string | null, fallback: number): number {
 
 export function parseParams(search: string = window.location.search): LaasParams {
   const q = new URLSearchParams(search);
-  const presetRaw = q.get('preset') ?? 'high';
-  const preset: QualityPreset =
-    presetRaw === 'low' || presetRaw === 'ultra' ? presetRaw : 'high';
   const shotN = num(q.get('shot'), 0);
   return {
     seed: Math.floor(num(q.get('seed'), 1)) >>> 0,
     scene: q.get('scene') ?? 'world',
     timeOfDay: Math.min(24, Math.max(0, num(q.get('T'), 11))),
-    preset,
     // full debug panel hidden by default — F3 toggles it (fps chip always on)
     hud: q.get('hud') === '1',
     cam: q.get('cam'),

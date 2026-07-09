@@ -64,6 +64,7 @@ import {
 import type { RegistryGpu } from './GeometryRegistry';
 import { clusterHwClass } from './NaniteHwClass';
 import {
+  CLHW_MAX,
   CONE_SLACK,
   DISPATCH_ROW,
   QCHUNK_CAP,
@@ -589,11 +590,8 @@ export function buildNaniteCull(
   // clusterHwClass decision — no qRaster mutation, so resolve/soup/voxel readers are
   // untouched) and the HW instanced draw paints them PROPERLY: one instance per cluster,
   // vertices transformed once (vs the per-tri soup that double-transforms & shares nothing).
-  // ALWAYS built (the split is the permanent default); ?clhwmax tunes the SW↔HW crossover.
-  const clhwMax = Math.max(
-    2,
-    Number(new URLSearchParams(window.location.search).get('clhwmax') ?? '16') || 16,
-  );
+  // ALWAYS built (the split is the permanent default); CLHW_MAX = the SW↔HW crossover.
+  const clhwMax = CLHW_MAX;
   const qHwRasterAttr = new StorageBufferAttribute(new Uint32Array(qCap), 1);
   qHwRasterAttr.name = 'nanQHwRaster';
   const qHwRasterV = sU32Views(qHwRasterAttr, qCap);

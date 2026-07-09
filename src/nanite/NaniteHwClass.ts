@@ -64,7 +64,7 @@ export const HWPROJ =
   new URLSearchParams(location.search).get('hwproj') === '1';
 
 /** TRUE ⇒ this cluster's tris are big enough on screen that the HW rasterizer should draw the
- *  whole cluster (SW skips it). `swmaxCl` = the SW/HW crossover in pixels (?clhwmax, default 16).
+ *  whole cluster (SW skips it). `swmaxCl` = the SW/HW crossover in pixels (CLHW_MAX).
  *  Mesh clusters additionally require the near + vcompact-coverage gates (header (a)/(b)). */
 export function clusterHwClass(
   gpu: RegistryGpu,

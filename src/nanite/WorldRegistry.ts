@@ -908,6 +908,10 @@ export async function buildWorldRegistry(input: {
     params: {
       scene: 'world',
       seed: seed ?? 0,
+      // resolved heightfield grid config (quality tier low vs medium/high) — the
+      // FARTILES splat bakes the terrain, so a low-grid world must never hit a
+      // high-grid cache entry (counts usually differ too, but this is exact).
+      grid: hf.cfg,
       counts: [...idCounts.entries()].sort((x, y) => x[0] - y[0]),
       classes: classes ? [...classes].sort() : null,
       dagClasses: dag ? [...dag].sort() : null,

@@ -179,10 +179,9 @@ export interface NaniteFetch {
    *  the window-grid heightfield has no index buffer (count=0 ⇒ never called). */
   fetchWorldVertByIndex(ctx: VertCtx, vi: NU): NV3;
   /** fetchWorldVert with a RUNTIME corner (0..2). Selects the index / grid offset
-   *  by `corner` BEFORE fetching, so exactly ONE vertex is reconstructed — the
-   *  hw1fetch lever (M2l): the HW vertex stage previously fetched all 3 corners
-   *  and selected 1. Same selected vertex by construction (identical per-corner
-   *  math as the static-v arms of fetchWorldVert). */
+   *  by `corner` BEFORE fetching, so exactly ONE vertex is reconstructed (the HW
+   *  vertex stage's single-fetch path). Same selected vertex by construction
+   *  (identical per-corner math as the static-v arms of fetchWorldVert). */
   fetchWorldVertDyn(ctx: VertCtx, localTri: NU, corner: NU): NV3;
   /** mesh-record word 6: matClass u8 (bits 8–15) etc. */
   meshWord(meshId: NU, word: number): NU;

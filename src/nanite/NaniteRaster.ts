@@ -62,6 +62,7 @@ import {
 } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
 import {
+  CLHW_MAX,
   DISPATCH_ROW,
   QRASTER_CAP,
   hashColor,
@@ -389,15 +390,6 @@ export function buildNaniteRaster(
   // clipmap level + the HW vertex stage (all share buildNaniteRaster).
   const wgcache =
     new URLSearchParams(window.location.search).get('wgcache') !== '0';
-  // ?ctxsm — keep the wgcache broadcast ctx SHARED-MEMORY-resident instead of hoisting all
-  // ~30 fields into registers (.toVar()). world1 is register-bound (116 temp regs, spilling →
-  // occupancy floor → the election-atomic latency can't hide); the ctx already lives in shU/shF,
-  // so reading fields on-demand from on-chip threadgroup memory (cheap on Apple) trades the
-  // scarce resource (registers) for the spare one (shared reads) with NO new buffer/bandwidth/
-  // dispatch. Byte-identical (shared mem is read-only after the broadcast barrier). Default OFF
-  // (A/B via `?ctxsm=1`); if tint re-hoists or the peak is makeCtx not the per-tri fetch, no win.
-  const ctxsm =
-    new URLSearchParams(window.location.search).get('ctxsm') === '1';
   // ?coopv — RADICAL restructure (de-risk build): split the world1 kernel into
   //   PHASE 1 (cooperative per-corner vertex fetch+transform → clip, written to shared)
   //   → barrier → PHASE 2 (per-triangle raster reads clip from shared).
@@ -470,10 +462,7 @@ export function buildNaniteRaster(
   // shadow-clipmap queue (ClipLevelQueue, depth-only), which never runs the world1 path or
   // the HW-cluster draw — so this presence check keeps that path untouched.
   const clhw = !!cull.qHwRasterRO && !!cull.hwClusterDrawAttr;
-  const clhwMax = Math.max(
-    2,
-    Number(new URLSearchParams(window.location.search).get('clhwmax') ?? '16') || 16,
-  );
+  const clhwMax = CLHW_MAX;
   // projK = px per world-unit at unit depth (matches NaniteCull's cut projection exactly).
   const projK = cam.cotHalfFov.mul(float(cam.uH)).mul(0.5) as unknown as NF;
   // (removed 2026-07-02 cleanup: ?noguard naive-FreePipe diagnostic — atomic-contention
@@ -604,15 +593,6 @@ export function buildNaniteRaster(
   // world1 (ctxPrepass / clusterCtxV != null) camera path; the flat ctx read replaces makeCtx.
   const nfetchExplicit = makeFetch(gpu, heightTex, disp, wind, true, 'explicit');
   const nfetchTerrain = makeFetch(gpu, heightTex, disp, wind, true, 'terrain');
-  // M2l hw1fetch (DEFAULT ON): HW vertex stage reconstructs ONE corner (runtime-selected
-  // via fetchWorldVertDyn) instead of fetching all 3 corners and selecting one — the single
-  // fetch is bit-identical by NaniteFetch's own contract ("same selected vertex by
-  // construction"), and drops 2× index-read + vert-decode + transform + wind plus the two
-  // extra live world-pos temps that pinned the register ceiling. The 3-fetch path was a stale
-  // default from when per-vertex makeCtx dominated (Phase 1 removed makeCtx); `?hw1fetch=0` is
-  // the disable-only escape back to it.
-  const hw1fetch =
-    new URLSearchParams(window.location.search).get('hw1fetch') !== '0';
   // HW vertex-prepass (2026-07-09, DEFAULT ON): the `_clE` mesh HW draw reads its verts
   // pre-projected from projVertBuf (w=1 screen-linear clip) instead of re-running the
   // compute-fetch + wind + vp + snap path. `?hwproj=0` is the disable-only escape back to
@@ -937,12 +917,12 @@ export function buildNaniteRaster(
           ).assign(v);
         const getU = (i: number): NU => shU.element(uint(i)) as unknown as NU;
         const getF = (i: number): NF => shF.element(uint(i)) as unknown as NF;
-        // ?ctxsm: shared-resident ctx — return the raw shared-mem read (re-read on each use)
-        // instead of pinning it into a register via .toVar(). Baseline (ctxsm off) is byte-identical.
-        const tU = (i: number): NU =>
-          ctxsm ? getU(i) : (getU(i).toVar() as unknown as NU);
-        const tF = (i: number): NF =>
-          ctxsm ? getF(i) : (getF(i).toVar() as unknown as NF);
+        // shared-resident ctx: read fields on-demand from on-chip threadgroup memory (cheap on
+        // Apple) rather than pinning ~30 of them into registers — world1 is register-bound, and
+        // the ctx already lives in shU/shF, so this trades the scarce resource (registers) for
+        // the spare one (shared reads). Read-only after the broadcast barrier.
+        const tU = (i: number): NU => getU(i);
+        const tF = (i: number): NF => getF(i);
         If(localTri.equal(uint(0)), () => {
           const c = kMakeCtx(instId, ci);
           setU(0, b2u(c.isHF));
@@ -2318,7 +2298,6 @@ export function buildNaniteRaster(
     width,
     height,
     nfetch,
-    hw1fetch,
     qRasterRO,
     vis,
     hwQueueV,

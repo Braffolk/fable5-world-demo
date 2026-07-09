@@ -88,7 +88,6 @@ export interface LaasPageOptions {
   seed?: number;
   T?: number;
   cam?: string;
-  preset?: string;
   hud?: boolean;
   freeze?: boolean;
   width?: number;
@@ -102,7 +101,6 @@ export function laasUrl(opts: LaasPageOptions, base = 'http://localhost:5173/'):
   if (opts.seed !== undefined) q.set('seed', String(opts.seed));
   if (opts.T !== undefined) q.set('T', String(opts.T));
   if (opts.cam) q.set('cam', opts.cam);
-  if (opts.preset) q.set('preset', opts.preset);
   q.set('hud', opts.hud ? '1' : '0');
   if (opts.freeze !== false) q.set('freeze', '1');
   for (const [k, v] of Object.entries(opts.extra ?? {})) q.set(k, v);

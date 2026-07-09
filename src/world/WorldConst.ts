@@ -52,13 +52,10 @@ export interface QualityConfig {
   tileVerts: number; // vertices per tile edge
 }
 
-export function qualityConfig(preset: 'low' | 'high' | 'ultra'): QualityConfig {
-  switch (preset) {
-    case 'low':
-      return { heightRes: 2048, simRes: 1024, erosionIters: 500, tileVerts: 49 };
-    case 'ultra':
-      return { heightRes: 4096, simRes: 2048, erosionIters: 900, tileVerts: 81 };
-    case 'high':
-      return { heightRes: HEIGHT_RES, simRes: SIM_RES, erosionIters: 640, tileVerts: 65 };
+export function qualityConfig(tier: 'low' | 'medium' | 'high'): QualityConfig {
+  if (tier === 'low') {
+    return { heightRes: 2048, simRes: 1024, erosionIters: 500, tileVerts: 49 };
   }
+  // medium + high share the full-detail grids (the shipped universal default)
+  return { heightRes: HEIGHT_RES, simRes: SIM_RES, erosionIters: 640, tileVerts: 65 };
 }

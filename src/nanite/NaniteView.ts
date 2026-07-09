@@ -21,11 +21,10 @@ import type { WebGPURenderer } from 'three/webgpu';
 import type { Engine } from '../core/Engine';
 import type { Heightfield } from '../world/Heightfield';
 import type { GeometryRegistry } from './GeometryRegistry';
-import { makeNaniteCam } from './NaniteCommon';
+import { deriveLodParams, makeNaniteCam } from './NaniteCommon';
 import { buildNaniteCull } from './NaniteCull';
 import { buildNaniteHzb } from './NaniteHzb';
 import { buildNaniteRaster, makeVisBuffers } from './NaniteRaster';
-import { uniformF } from './Tsl';
 import { internalSize } from '../render/RenderScale';
 
 export interface NaniteViewHandles {
@@ -56,17 +55,9 @@ export function buildNaniteView(
   const vis = makeVisBuffers(size.x * size.y);
   // packed (hier combined) path: the raster writes no depthV — the HZB reads visA's key
   const hzb = buildNaniteHzb(vis.payloadV.ro, cam, true);
-  // N9-IMP test: ?instminpx=N drops instances smaller than N px on screen (the
-  // imposter far-field). ?loderr=τ sets the screen-error cut. Both default off/1.
-  const instMinPx = uniformF(Math.max(0, Number(params.get('instminpx') ?? '0')));
-  const loderrVal = Number(params.get('loderr') ?? '1');
-  const tau = uniformF(Number.isFinite(loderrVal) ? loderrVal : 1);
-  // lodWarp falloff: ?simband=S (τ doubles S m past the plateau; 0=off, the linear
-  // case), ?lodnear=N (full-detail plateau radius m), ?lodpow=P (P<1 = detail drops
-  // FAST near / SLOW far — concentrate detail on the player; P=1 linear).
-  const simBandD = uniformF(Math.max(0, Number(params.get('simband') ?? '0')));
-  const lodNear = uniformF(Math.max(0, Number(params.get('lodnear') ?? '0')));
-  const lodPow = uniformF(Math.max(0.05, Number(params.get('lodpow') ?? '1')));
+  // LOD-warp cut params — shared with the live frame (NaniteFrame) via deriveLodParams
+  // so the debug view matches the shipped defaults. The setters below sweep them live.
+  const { tau, simBandD, lodNear, lodPow, instMinPx } = deriveLodParams(params, size);
   const cull = buildNaniteCull(
     registry.gpu,
     registry.instanceCount,

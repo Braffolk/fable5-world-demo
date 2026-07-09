@@ -33,7 +33,7 @@ import { internalSize } from '../render/RenderScale';
 import type { Heightfield } from '../world/Heightfield';
 import type { GeometryRegistry } from './GeometryRegistry';
 import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK } from './GeometryRegistry';
-import { makeNaniteCam } from './NaniteCommon';
+import { deriveLodParams, makeNaniteCam } from './NaniteCommon';
 import { buildNaniteCull } from './NaniteCull';
 import { buildNaniteHzb } from './NaniteHzb';
 import { buildGrassField } from './NaniteGrass';
@@ -43,7 +43,7 @@ import { buildNaniteResolve } from './NaniteResolve';
 import { buildNaniteShadow, type NaniteShadow } from './NaniteShadow';
 import { buildNaniteShadowClip } from './NaniteShadowClip';
 import { buildShadowHalf, type ShadowHalf } from './NaniteShadowHalf';
-import { bcU2F, dispatch, dispatchBatchMixed, elemU, readBuffer, returnIf, texLoadR, toF, uniformArrV4, uniformF } from './Tsl';
+import { bcU2F, dispatch, dispatchBatchMixed, elemU, readBuffer, returnIf, texLoadR, toF, uniformArrV4 } from './Tsl';
 
 export interface NaniteFrameHandles {
   render(): void;
@@ -171,49 +171,10 @@ export function buildNaniteFrame(
   }
   const occl = params.get('occl') !== '0';
   const frozenParam = params.get('cullfreeze') === '1';
-  // N8-D1 continuous-LOD cut threshold τ (screen-error px). The cull applies it per
-  // DAG cluster (project(own)≤τ AND project(parent)>τ); pre-DAG / terrain pools ignore
-  // it. DEFAULT 3 px (banded-τ perf landing 2026-06-17: ~2× fewer visible clusters vs
-  // τ=1, near-invisible at eye level — judge shots in docs/perf-runs). ?loderr=N for
-  // A/B (1 = finest/sub-pixel); the setter below lets a probe sweep it live.
-  const loderrParam = Number(params.get('loderr') ?? '3');
-  const tau = uniformF(Number.isFinite(loderrParam) && loderrParam > 0 ? loderrParam : 3);
-  // N8-D1e min-screen-size cull (D-N33): drop any cluster whose projected sphere
-  // radius < minPx, and for DAG'd meshes REPLACE the finite hybrid draw envelope
-  // with this sub-pixel bound (Nanite-style "draw until it vanishes" — trees no
-  // longer wink out at 496 m). Crack-safe: any gap left is sub-pixel by definition.
-  // DEFAULT 2 px (banded-τ perf landing) — drops clusters whose error-sphere projects
-  // sub-2px (safe: any gap is sub-pixel by definition). ?nanitemin=0 to disable.
-  const minpxParam = Number(params.get('nanitemin') ?? '2');
-  const minPx = uniformF(Number.isFinite(minpxParam) && minpxParam > 0 ? minpxParam : 0);
-  // PERF-VB3: the LOD-WARP falloff — distance-banded τ (region collapse) + plateau +
-  // power. THESE WERE ONLY WIRED IN THE DEBUG VIEW (NaniteView) before — now wired here
-  // too. Defaults are the validated preset (NaniteView at lodnear=4/simband=6/lodpow=0.6/
-  // instminpx=256): full detail to lodNear m, τ doubles every simBandD m past it, lodPow
-  // <1 = detail drops fast near / slow far. ?simband/?lodnear/?lodpow override.
-  // lodnear 4→20 / simband 6→25 (2026-07-02 beautification): the old curve doubled τ every
-  // 6 m past 4 m — visible crown mush from ~20 m out. The softened curve keeps real leaf
-  // shapes through the whole (now 90 m) mesh band; perf cost user-accepted.
-  const simbandParam = Number(params.get('simband') ?? '25');
-  const simBandD = uniformF(Number.isFinite(simbandParam) && simbandParam > 0 ? simbandParam : 0);
-  const lodnearParam = Number(params.get('lodnear') ?? '20');
-  const lodNear = uniformF(Number.isFinite(lodnearParam) && lodnearParam > 0 ? lodnearParam : 0);
-  const lodpowParam = Number(params.get('lodpow') ?? '0.6');
-  const lodPow = uniformF(Number.isFinite(lodpowParam) && lodpowParam > 0 ? Math.max(0.05, lodpowParam) : 1);
-  // PERF-VB3 / D-N33: per-INSTANCE min screen-SIZE cull (px diameter) — drops a whole
-  // instance whose projected sphere is smaller than this. THE far-field bound for the
-  // hier cull (hier has no brute draw-envelope; without a bound every visible instance
-  // seeds ≥1 root). Was wired only in NaniteView; now here. DEFAULT 0 = drop nothing
-  // (full forest; the lodWarp below still collapses far DETAIL to roots so the count
-  // stays bounded without losing trees). DEFAULT = resolution-relative 0.075 × min(framebuffer
-  // dim) (≈128 px at the dev res) so far trees hand off to impostors consistently across
-  // resolutions. ?instminpx=N overrides as an absolute px diameter; ?instminpx=0 disables
-  // (full forest). The N9 cross-instance MERGE will remove this per-instance floor properly.
-  const instMinPxDefault = Math.round(0.075 * Math.min(size.x, size.y));
-  const instminpxRaw = params.get('instminpx');
-  const instminpxParam =
-    instminpxRaw != null && Number.isFinite(Number(instminpxRaw)) ? Number(instminpxRaw) : instMinPxDefault;
-  const instMinPx = uniformF(instminpxParam > 0 ? instminpxParam : 0);
+  // LOD-warp cut params (τ / min-px culls / distance-banded falloff) — shared with
+  // the ?nanitedbg debug view via deriveLodParams so the two stay in lockstep. The
+  // live setters below (probe sweeps) mutate these uniforms in place.
+  const { tau, minPx, simBandD, lodNear, lodPow, instMinPx } = deriveLodParams(params, size);
 
   const cam = makeNaniteCam(size.x, size.y);
   const vis = makeVisBuffers(size.x * size.y);
@@ -309,15 +270,13 @@ export function buildNaniteFrame(
       ? buildNaniteShadowClip(registry.gpu, registry.instanceCount, hf.heightTex, disp, windOpt, measuredHierDepth, voxActive)
       : buildNaniteShadow(registry.gpu, registry.instanceCount, hf.heightTex, disp, windOpt, measuredHierDepth)
     : null;
-  // CAMERA||SHADOW CULL OVERLAP (item 4): fold the (CLIP-path) shadow shared-cut cull into
-  // the SAME submit as the camera cull so Dawn can overlap the two disjoint culls on frames
-  // where shadows re-raster. DEFAULT ON as of 2026-07-09 — the fold is documented order-
-  // equivalent (disjoint buffers: shadow cut writes its own counters/queues, read-only on
-  // qRaster; appended last ⇒ same order as the separate-submit leg). Its win fires when the
-  // camera moves enough to re-raster a shadow level (fewer moving-frame submit bubbles).
-  // Escape ?culloverlap=0 restores the separate-submit ordering. Requires the clip shadow's
-  // cullPrepass (cascade path has no shared cut).
-  const cullOverlap = params.get('culloverlap') !== '0' && typeof shadow?.cullPrepass === 'function';
+  // CAMERA||SHADOW CULL OVERLAP: fold the (CLIP-path) shadow shared-cut cull into the SAME
+  // submit as the camera cull so Dawn can overlap the two disjoint culls on frames where
+  // shadows re-raster. Order-equivalent (disjoint buffers: the shadow cut writes its own
+  // counters/queues, read-only on qRaster; appended last ⇒ same order as a separate submit).
+  // The win fires when the camera moves enough to re-raster a shadow level. Requires the clip
+  // shadow's cullPrepass — the cascade path has no shared cut, so it stays on the plain leg.
+  const cullOverlap = typeof shadow?.cullPrepass === 'function';
   // SUBMIT-COALESCE (?coalesce=1, spec-orchestration-submit-folds §1): fold the frame's
   // 7 foldable submits into 2 — cull side (BFS + kRasterArgs2 + voxel fan-out [+ shadow
   // cut]) becomes ONE dispatchBatchMixed, and the raster side folds the HZB chain into
@@ -582,9 +541,9 @@ export function buildNaniteFrame(
         // submit. RAW audit (spec): kRasterArgs2 reads qRaster[0] written by kRasterArgs
         // one dispatch earlier; the fan-out chain reads counters[1]/qRaster and writes
         // its own args/queues; the shadow cut writes DISJOINT buffers (own counters/
-        // queues), so appending it last is equivalent to today's order. culloverlap is
-        // default-off + forest-dormant (csm=null); null cut ⇒ empty tail (shadow run()
-        // sees prepassMask===0, same fall-through semantics as the legacy leg).
+        // queues), so appending it last is equivalent to today's order. When the shadow
+        // is forest-dormant (csm=null) the cut is null ⇒ empty tail (shadow run() sees
+        // prepassMask===0, same fall-through semantics as the plain leg).
         const shadowCut =
           cullOverlap && shadow?.cullPrepass
             ? (shadow.cullPrepass(renderer, engine.camera) ?? [])

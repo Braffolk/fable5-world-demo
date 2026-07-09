@@ -72,7 +72,7 @@ import type { RegistryGpu } from './GeometryRegistry';
 import { brickNormalTsl, brickWord, BRICK_ALBEDO, BRICK_NORMAL, BRICK_POS_X } from './VoxelBrick';
 import { makeFetch, slotHash } from './NaniteFetch';
 import { GRASS_FAR_BASE } from './NaniteGrass';
-import { hashColor, instRotateDir, instTransformPoint, instYaw, type NaniteCam } from './NaniteCommon';
+import { CLHW_MAX, hashColor, instRotateDir, instTransformPoint, instYaw, type NaniteCam } from './NaniteCommon';
 import { clusterHwClass } from './NaniteHwClass';
 import type { NaniteVisBuffers } from './NaniteRaster';
 import { bcU2F, elemU, toF, uniformF } from './Tsl';
@@ -284,8 +284,8 @@ export function buildNaniteResolve(
   const fetch = makeFetch(gpu, heightTex, undefined, windOn ? { camPos: cam.camPos } : undefined, false);
   const nandepth = q.get('nandepth');
   const nandbg = q.get('nandbg');
-  // ?clhwmax — SW/HW crossover px for the ?nandbg=clhw split tint (matches the raster's default).
-  const clhwMax = Math.max(2, Number(q.get('clhwmax') ?? '16') || 16);
+  // SW/HW crossover px for the ?nandbg=clhw split tint (matches the raster's CLHW_MAX).
+  const clhwMax = CLHW_MAX;
   // ?nanbark= bisect: const (flat brown) | lN (force mip N) | grad (anisotropic
   // ray-plane derivatives — known NaN on near trunks, default is analytic LOD)
   const nanbark = q.get('nanbark');
@@ -1545,7 +1545,7 @@ export function buildNaniteResolve(
     // ?nandbg=clhw — visualise the per-cluster SW/HW split: RED = cluster the split routes to
     // the HW instanced draw, GREEN = kept on the SW compute raster. Recomputes the SHARED
     // clusterHwClass (bit-identical to the cull partition + SW-skip), so the tint IS the
-    // routing decision. Sweep ?clhwmax to watch clusters cross the boundary.
+    // routing decision.
     if (nandbg === 'clhw') {
       const projK = cam.cotHalfFov.mul(float(cam.uH)).mul(0.5) as unknown as NF;
       const isHw = clusterHwClass(gpu, cam, projK, instId, ci, clhwMax);

@@ -103,9 +103,7 @@ const GRASS_DBG = new URLSearchParams(window.location.search).get('grassdbg');
  *  ?grassbakres  — tile texels per edge (article 64; "1 texel ≈ 1 screen px")
  *  ?grassbakang  — angle slices (article uses 8, up to 64)
  *  ?grassshiftk  — bake fiber-shift heuristic, cells/cell (inclined-blade approx)
- *  ?grassthickk  — bake thicken-with-distance heuristic, fraction/cell (taper approx)
- *  ?grassbomb=0  — disable texture bombing (see the raw tiling)
- *  ?grassshear=0 — disable the march-space wind shear */
+ *  ?grassthickk  — bake thicken-with-distance heuristic, fraction/cell (taper approx) */
 const qNum = (k: string, d: number, lo: number, hi: number): number => {
   const v = Number(new URLSearchParams(window.location.search).get(k) ?? String(d));
   return Number.isFinite(v) && v >= lo && v <= hi ? v : d;
@@ -114,12 +112,6 @@ const BAKE_RES = Math.round(qNum('grassbakres', 64, 16, 256));
 const BAKE_ANG = Math.round(qNum('grassbakang', 8, 4, 64));
 const BAKE_SHIFTK = qNum('grassshiftk', 0.22, 0, 1);
 const BAKE_THICKK = qNum('grassthickk', 0.18, 0, 2);
-const RAY_BOMB = new URLSearchParams(window.location.search).get('grassbomb') !== '0';
-const RAY_SHEAR = new URLSearchParams(window.location.search).get('grassshear') !== '0';
-/** static per-tile swirl lean (?grasstilt=0 off): rides the SAME oblique basis as
- *  the wind (the article's variable-incline-fibers case) — whole 0.84 m patches
- *  lean in hash-varied directions, breaking the straight-vertical-prism look. */
-const RAY_TILT = new URLSearchParams(window.location.search).get('grasstilt') !== '0';
 /** sway amplitude scale (?grasssway=K, 0 = steady gust-bend only) */
 const RAY_SWAY = qNum('grasssway', 1, 0, 5);
 /** golden-angle overlay layer (?grasslayers=1 disables): the article's layered
@@ -595,16 +587,14 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
           fz,
         ) as unknown as NV2;
       };
-      let caB: NF = float(1) as unknown as NF;
-      let saB: NF = float(0) as unknown as NF;
-      if (RAY_BOMB) {
-        const th = (smN(0x0b0b).x as unknown as NF).mul(6.2831853).toVar() as unknown as NF;
-        caB = th.cos() as unknown as NF;
-        saB = th.sin() as unknown as NF;
-      }
+      // texture bombing: per-cell random rotation breaks the raw tiling
+      const thB = (smN(0x0b0b).x as unknown as NF).mul(6.2831853).toVar() as unknown as NF;
+      const caB = thB.cos() as unknown as NF;
+      const saB = thB.sin() as unknown as NF;
       let SwxB: NF = float(0) as unknown as NF;
       let SwzB: NF = float(0) as unknown as NF;
-      if (RAY_SHEAR && windContext()) {
+      // march-space wind shear — only where there is wind to shear
+      if (windContext()) {
         const st = (windU.strength as unknown as NF).toVar() as unknown as NF;
         const K = amp
           .mul(st.mul(0.55).add(0.6))
@@ -634,22 +624,18 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
         SwxB = wd.x.mul(K).add(swx.mul(swayA)) as unknown as NF;
         SwzB = wd.y.mul(K).add(swz.mul(swayA)) as unknown as NF;
       }
-      let SlxB: NF = float(0) as unknown as NF;
-      let SlzB: NF = float(0) as unknown as NF;
-      let a1xB: NF = float(0) as unknown as NF;
-      let a1zB: NF = float(0) as unknown as NF;
-      if (RAY_TILT) {
-        // staticArc(0x3333) + the ~120°-offset lean, riding the same noise
-        const n = smN(0x3333);
-        const ba = (n.x as unknown as NF).mul(6.2831853).toVar() as unknown as NF;
-        const bm = (n.y as unknown as NF).mul(0.25).add(0.12) as unknown as NF;
-        a1xB = ba.cos().mul(bm) as unknown as NF;
-        a1zB = ba.sin().mul(bm) as unknown as NF;
-        const la = (n.x as unknown as NF).mul(6.2831853).add(2.1) as unknown as NF;
-        const lm = (n.y as unknown as NF).mul(0.05).add(0.02) as unknown as NF;
-        SlxB = la.cos().mul(lm) as unknown as NF;
-        SlzB = la.sin().mul(lm) as unknown as NF;
-      }
+      // static per-tile swirl lean: staticArc(0x3333) + the ~120°-offset lean, riding the
+      // SAME oblique basis as the wind — whole 0.84 m patches lean in hash-varied directions,
+      // breaking the straight-vertical-prism look.
+      const nT = smN(0x3333);
+      const baT = (nT.x as unknown as NF).mul(6.2831853).toVar() as unknown as NF;
+      const bmT = (nT.y as unknown as NF).mul(0.25).add(0.12) as unknown as NF;
+      const a1xB = baT.cos().mul(bmT) as unknown as NF;
+      const a1zB = baT.sin().mul(bmT) as unknown as NF;
+      const laT = (nT.x as unknown as NF).mul(6.2831853).add(2.1) as unknown as NF;
+      const lmT = (nT.y as unknown as NF).mul(0.05).add(0.02) as unknown as NF;
+      const SlxB = laT.cos().mul(lmT) as unknown as NF;
+      const SlzB = laT.sin().mul(lmT) as unknown as NF;
       const txu = i.mod(uint(GUIDE_RES));
       const tzu = i.div(uint(GUIDE_RES));
       textureStore(
@@ -1127,7 +1113,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
             const Slz = (f1.y as unknown as NF).toVar() as unknown as NF;
             const Swx = (f1.z as unknown as NF).toVar() as unknown as NF;
             const Swz = (f1.w as unknown as NF).toVar() as unknown as NF;
-            /** quad basis = wind + static arc (f2.zw; 0 when ?grasstilt=0) */
+            /** quad basis = wind + static arc (f2.zw) */
             const Sqx = Swx.add(f2.z).toVar() as unknown as NF;
             const Sqz = Swz.add(f2.w).toVar() as unknown as NF;
             const texOx = gfx.add(txf.mul(GUIDE_SUB)).mul(CELL).toVar() as unknown as NF;
@@ -1493,7 +1479,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                 const ca2 = ca.mul(GC).sub(sa.mul(GS)).toVar() as unknown as NF;
                 const sa2 = sa.mul(GC).add(ca.mul(GS)).toVar() as unknown as NF;
                 // L2 arc = NEGATED L1 arc (f2.zw) — an independent direction
-                // without a third baked field; 0 when ?grasstilt=0, same as L1
+                // without a third baked field, same as L1
                 const Q2x = Swx.sub(f2.z) as unknown as NF;
                 const Q2z = Swz.sub(f2.w) as unknown as NF;
                 const of2x = Slx.add(Q2x.mul(hgt)).mul(hgt) as unknown as NF;

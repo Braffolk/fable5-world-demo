@@ -532,7 +532,7 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
     // GI/CSM/canopy = null (no GI bounce, no shadows — forest trees are castShadows:false
     // anyway; a shadow profile is a separate follow-up). Bark textures come from VegLib.
     ctx.progress(0.93, 'forest: env for the full pipe (heightfield + sky + post)');
-    const hf = await Heightfield.generate(engine.renderer, ctx.params, seed, (p, m) =>
+    const hf = await Heightfield.generate(engine.renderer, seed, (p, m) =>
       ctx.progress(0.93 + p * 0.05, m),
     );
     bootStage('vox append + heightfield');

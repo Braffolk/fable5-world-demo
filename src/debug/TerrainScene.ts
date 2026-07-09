@@ -146,7 +146,6 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   BootTrace.phase('heightfield (GPU gen + erosion)');
   const hf = await Heightfield.generate(
     engine.renderer,
-    params,
     seed,
     (p, m) => ctx.progress(p * 0.92, m),
   );

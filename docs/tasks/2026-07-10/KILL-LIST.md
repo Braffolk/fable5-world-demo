@@ -20,8 +20,8 @@ Hardcode `naniteOn=true` in TerrainScene.ts:48/80 + ForestScene.ts:525; delete t
 | item | payload | notes |
 |---|---|---|
 | **`?preset` removal (USER-DECIDED)** | param + 'ultra' arm | quality low→qualityConfig('low'), med/high→'high'; verify grid cfg in BootCache key or bump CACHE_REV |
-| `ksplit` → always 1 | un-split 'both' world1 kernel + `variant:'both'` makeFetch arm | kills a dual compile; verify Stage-2 queue-partition note first |
-| `fp16w` → always 1 | f32 TSL wind path in NaniteFetch | kills a dual compile |
+| ~~`ksplit` → always 1~~ REFUTED (S1 premise-audit) | — | ksplit=1 is a MEASUREMENT scaffold: doubled whole-queue launches ≈ +1ms until the Stage-2 cull-side queue partition lands; `variant:'both'` in makeFetch is LIVE (depth/combined/ctx/vcache users), not the dead side. Param stays until Stage 2. |
+| `fp16w` → always 1 — **NEEDS USER CALL** | f32 TSL wind path | fp16w defaults OFF: f32 is the SHIPPED default; fp16 path requires device shader-f16 with NO fallback (Engine gates `enable f16;` on feature presence) and is not bit-identical. Folding = making shader-f16 a hard hw requirement. |
 | `ctxsm` → always 1 | register-hoist ctx variant (~10 ln) | kills a dual compile |
 | `clhwmax` → const 32 | numeric fold | FIX the 3-site independently-defaulted skew (NaniteCull/NaniteRaster/NaniteResolve) in same commit |
 | `hw1fetch` → always 1 | 3-corner fetch path raster/Hw.ts:292-299 (~10 ln + plumbing) | measured winner |
@@ -92,8 +92,34 @@ Hardcode `naniteOn=true` in TerrainScene.ts:48/80 + ForestScene.ts:525; delete t
 - Untracked artifacts to `rm` (no commit): .DS_Store ×2, tools/.cache/, tools/geo/*.json
   (0-byte) + shots/, __pycache__/, last_ab.json regenerates.
 
-## S6 — FINAL: restructure src/nanite/ into hierarchical layout (user 07-10)
+## S4b — DEEP dead-code review (user 07-10: "import-graph sweep is bullshit... there
+## may be dead crap thats imported and unused. or imported but gated under some
+## non-existing vars now")
+After S1-S4 land (tree is smallest + tsc-clean), a real symbol-level pass:
+1. Deterministic tooling first: knip / ts-prune (unused exports, unused files,
+   unused deps) + tsc noUnusedLocals sweep — machine truth, not LLM grep.
+2. Dead-gate hunt: conditions that can never be true anymore — reads of URL params
+   that no longer exist anywhere, window globals nothing sets, config fields with no
+   writer, `if (x)` where x is a constant false / never-assigned option field.
+3. Within-file dead symbols: exported-and-imported but caller-side dead (imported for
+   a branch deleted in S1-S3), private methods with no call site.
+4. Opus verification agents on every candidate before deletion (false-positive check:
+   dynamic access, TSL/node-material reflection, worker `new URL` refs, ?raw SRC_HASH
+   imports — this repo has all four patterns).
+Findings → same gates, one commit.
+
+## S6 — restructure src/nanite/ into hierarchical layout (user 07-10)
 Pure moves + import rewrites after all deletions land. Same gates.
+
+## S7 — LAST (user 07-10, after the nanite restructure): scene unification
+Go over GalleryScene + ForestScene: strip weird quirky scene-specific behavior and
+share as much as possible with the world scene (TerrainScene) — one common
+boot/frame/registry path, scenes differ only in content + camera, not in plumbing.
+CRITICAL (user): sharing means EXTRACT into common functions/classes that all three
+scenes call — NOT copying the world scene's code into the others. Zero duplication;
+if two scenes need the same behavior, it moves to one shared implementation.
+Watch for known drift: ForestScene defaults were NOT in bootcache SRC_HASH
+(beautification-arc lesson); forest csm:null quirk; gallery's own knob reads.
 
 ---
 

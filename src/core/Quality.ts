@@ -89,3 +89,17 @@ export function applyPreset(tier: QualityTier): void {
     history.replaceState(null, '', `${window.location.pathname}?${q.toString()}`);
   }
 }
+
+/** The quality tier resolved for THIS boot. boot.ts sets it (before the engine
+ *  module graph loads) so downstream readers — the heightfield grid sizing and
+ *  its bootcache key — see the picker/URL choice without re-deriving it. The
+ *  interactive picker's choice never reaches the URL (so a reload re-asks), which
+ *  is why this rides module state rather than location.search. Defaults to MEDIUM
+ *  so non-boot contexts (unit tests / workers) get the shipped grid config. */
+let resolvedTier: QualityTier = 'medium';
+export function setResolvedTier(tier: QualityTier): void {
+  resolvedTier = tier;
+}
+export function activeTier(): QualityTier {
+  return resolvedTier;
+}

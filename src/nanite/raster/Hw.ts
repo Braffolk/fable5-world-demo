@@ -86,8 +86,6 @@ export function buildHw(p: {
   width: number;
   height: number;
   nfetch: NaniteFetch;
-  /** M2l: HW vertex stage reconstructs ONE runtime-selected corner (?hw1fetch=1). */
-  hw1fetch: boolean;
   qRasterRO: { element(i: NU | number): { x: NU; y: NU } };
   vis: NaniteVisBuffers;
   hwQueueV: U32Views;
@@ -140,7 +138,6 @@ export function buildHw(p: {
     width,
     height,
     nfetch,
-    hw1fetch,
     qRasterRO,
     vis,
     hwQueueV,
@@ -267,7 +264,6 @@ export function buildHw(p: {
       hwproj && useFlat && !!hwOpts && !hwOpts.reversed && projVertV != null;
     const mFetch = hwOpts?.fetch ?? nfetch;
     const mMakeCtx = mFetch.makeCtx;
-    const mFetchWorldVert = mFetch.fetchWorldVert;
     const mFetchWorldVertDyn = mFetch.fetchWorldVertDyn;
     const mat = new NodeMaterial();
     mat.name = `nanRaster_${sfx}`;
@@ -288,15 +284,11 @@ export function buildHw(p: {
         (vZ as unknown as { assign: (v: unknown) => void }).assign(clip.z);
         (vW as unknown as { assign: (v: unknown) => void }).assign(clip.w);
       };
-      const fetchWorld = (ctx: VertCtx, localTri: NU): NV3 => {
-        if (hw1fetch) return mFetchWorldVertDyn(ctx, localTri, corner);
-        const w0 = mFetchWorldVert(ctx, localTri, 0);
-        const w1 = mFetchWorldVert(ctx, localTri, 1);
-        const w2 = mFetchWorldVert(ctx, localTri, 2);
-        return corner
-          .equal(uint(1))
-          .select(w1, corner.equal(uint(2)).select(w2, w0)) as unknown as NV3;
-      };
+      // HW vertex stage reconstructs ONE runtime-selected corner (fetchWorldVertDyn) rather
+      // than fetching all 3 and selecting — bit-identical by NaniteFetch's contract ("same
+      // selected vertex by construction"), and sheds 2× index-read + decode + transform + wind.
+      const fetchWorld = (ctx: VertCtx, localTri: NU): NV3 =>
+        mFetchWorldVertDyn(ctx, localTri, corner);
       if (hwProjRead) {
         // ── `_clE` (mesh class) projVertBuf READER (HW vertex-prepass, 2026-07-09) ──────────
         // The mesh HW cluster's verts were ALREADY projected this frame by nanProjectVerts
