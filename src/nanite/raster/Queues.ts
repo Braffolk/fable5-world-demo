@@ -28,30 +28,35 @@ interface ComputeKernel {
 // SW raster's 16 px i32-safe limit, so a dense crown routes hundreds of thousands
 // of them to the HW vertex-pulling path. The old 262k cap overflowed (clamp →
 // dropped tris → black holes in foliage; measured 876k hwTris in a dense stand).
-// CENSUS 2026-07-09 (docs/tasks/2026-07-08/census-baseline.json — 824-sample
-// worst-case flythrough, RAW pre-cap counters): peak hwTris = 480,178 at the
-// dense-forest look-across (t=0.375, ?cam=-595.4,299.1,999.2,2.5755,-0.0061),
-// p95 = 40,783. 1M = 2.2× the census peak AND still above the historical 876k
-// dense-stand load. (was 2_097_152; 2 u32/record ⇒ −8.4 MB)
+// CENSUS 2026-07-09 POST crown-LOD ladder (docs/tasks/2026-07-09/census-post-ladder.json,
+// 898-sample flythrough): peak hwTris = 262,186 at the dense-forest look-across
+// (t=0.375, ?cam=-596.4,298.9,998.6,2.5760,-0.0060) — DOWN from the pre-ladder 480,178.
+// KEPT at 1M: the binding constraint is NOT the flythrough peak but the historical 876k
+// dense-stand load that overflowed the old 262k cap (black holes in foliage) — 1.5×262k
+// ≈ 393k would sit BELOW that documented black-hole trigger. 1M = 1.2× the 876k load;
+// reclaiming to 1.5× the fresh peak saves only ~4 MiB at real regression risk. Held.
 export const HW_CAP = 1_048_576;
 
 // SPLAT/MID overflow semantics: if the RAW append count exceeds a cap the extra
 // fragments are DROPPED (overflow → holes) and WHICH subset lands is the
 // non-deterministic atomic order ⇒ the field blinks; midQueue goes 2-D dispatch
 // to cover past the 65535·64 1-D indirect-grid ceiling (SPLAT stays 1-D: ceil(cap/64) ≤ 65535).
-// CENSUS 2026-07-09 (docs/tasks/2026-07-08/census-baseline.json): peak splatFrags =
-// 27,668 @ t=0.238 (?cam=153.0,317.6,1385.5,2.0398,-0.0590), p95 = 7,300. 131,072 =
-// 4.7× the peak — deliberately extra-generous (splat overflow = visible holes) because
-// a slot is only 12 B. (was 4_194_240 = the full 1-D ceiling ⇒ −48.8 MB)
+// CENSUS 2026-07-09 POST crown-LOD ladder (docs/tasks/2026-07-09/census-post-ladder.json):
+// peak splatFrags = 3,995 @ t=0.238 (?cam=157.7,319.2,1386.8,2.0355,-0.0591) — DOWN from
+// the pre-ladder 27,668 (coarser far crowns emit far fewer sub-px tris). KEPT at 131,072
+// (now 33× the fresh peak): splat overflow = visible holes and a slot is only 12 B, so
+// the whole queue is ~1.5 MB — right-sizing to 1.5× would reclaim ~1.3 MB (noise) at real
+// hole-risk on a moving cam. Fresh peak just confirms it is amply sized.
 export const SPLAT_CAP = 131_072;
 // MID goes 2-D dispatch + a 1-u32 record. The old 41.9M cap was sized to the pre-
 // crown-LOD overdraw pathology (~32-35M mid tris in dense forest).
-// CENSUS 2026-07-09 (docs/tasks/2026-07-08/census-baseline.json): peak midTris =
-// 13,328,568 at the dense-forest look-across (t=0.375,
-// ?cam=-595.4,299.1,999.2,2.5755,-0.0061), p95 = 1,554,438. 20M binary = 1.57× the
-// census peak. Below the RAW demand the atomic-append order drops a non-deterministic
-// subset ⇒ the mid field blinks. (was 41_943_040; 4 B/record ⇒ 168 → 84 MB, −83.9 MB)
-export const MID_CAP = 20_971_520;
+// CENSUS 2026-07-09 POST crown-LOD ladder (docs/tasks/2026-07-09/census-post-ladder.json,
+// 898-sample flythrough): peak midTris = 4,774,720 at the dense-forest look-across
+// (t=0.373, ?cam=-582.1,302.4,1006.1,2.5692,-0.0077) — DOWN from the pre-ladder
+// 13,328,568 (−64%, the crown 4→6-rung ladder). 8Mi = 8,388,608 = 1.76× the fresh peak
+// (with headroom for moving-cam undersampling; overflow drops a non-deterministic subset
+// ⇒ the mid field blinks). (was 20_971_520; 4 B/record ⇒ 84 → 33.6 MB, −50.3 MB)
+export const MID_CAP = 8_388_608;
 // Mid record = 1 u32: the tri id (payload = itemIdx<<CLUSTER_TRI_BITS | localTri). The
 // consumer (nanMidRaster) re-reads the tri's 3 already-projected corners from projVertBuf
 // (they were projected once by nanProjectVerts and never freed) and re-derives the winding

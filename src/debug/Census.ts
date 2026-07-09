@@ -40,6 +40,10 @@ const LAYERS: LayerDef[] = [
   { key: 'voxRouted', label: 'vox-routed', counter: 'nanite.voxRoutedTris' },
   { key: 'submit', label: 'submit', counter: 'nanite.visTris' },
   { key: 'voxBrick', label: 'vox brick', counter: 'nanite.voxBrickWrites' },
+  // visible-cluster count — bounds PROJ_CLUSTER_CAP (projVertBuf reserves one
+  // MAX_CLUSTER_VERTS slot-region per visible cluster). Already sitting in
+  // stats.counters (NaniteFrame.ts writes nanite.visClusters); read like the rest.
+  { key: 'visClusters', label: 'visClusters', counter: 'nanite.visClusters' },
 ];
 
 export interface CensusPose {

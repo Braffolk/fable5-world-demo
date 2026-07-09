@@ -129,14 +129,19 @@ export const canonVertSlot = (
 // no finite dz can equal; compared as a raw u32 (no float NaN semantics) ⇒ robust.
 export const NEAR_SENTINEL = 0x7f800001;
 // Cluster-indexed reservation: the buffer holds PROJ_CLUSTER_CAP cluster slots ×
-// MAX_CLUSTER_VERTS unique-vert slots × 3 u32. Sized to cover the MEASURED dense-forest
-// visible-cluster peak (nanite.visClusters ≈ 150K in the canonical world config) with
-// headroom, while the single-buffer alloc stays well under the ~4.29 GB maxBufferSize /
-// the OOM point. 192K × 512 × 3 u32 = 1.18 GB (was 128K × 765 = 1.20 GB, but 128K was
-// BELOW the 150K peak ⇒ dropped clusters; this both fixes that AND dedups). A cluster past
-// the cap gets no projected verts (ProjectVerts + Classify guard the same bound ⇒ it simply
-// doesn't render — surfaced overflow, not corruption).
-export const PROJ_CLUSTER_CAP = Math.min(QRASTER_CAP, 192 * 1024);
+// MAX_CLUSTER_VERTS unique-vert slots × 3 u32. Sized to the MEASURED dense-forest
+// visible-cluster peak with headroom (a cluster past the cap gets no projected verts —
+// ProjectVerts + Classify guard the same bound ⇒ it simply doesn't render; surfaced
+// overflow, not corruption).
+// CENSUS 2026-07-09 POST crown-LOD ladder (docs/tasks/2026-07-09/census-post-ladder.json,
+// 898-sample flythrough): peak nanite.visClusters = 66,827 at the dense-forest look-across
+// (t=0.373, ?cam=-582.1,302.4,1006.1,2.5692,-0.0077) — the stale "≈150K" that forced the
+// old 192K cap was the PRE-ladder number; the crown 4→6-rung ladder more than halved the
+// visible-cluster count. 128Ki = 131,072 = 1.96× the fresh peak.
+// projVertBuf = cap × 512 × 3 u32 × 4 B = cap × 6144 B: 192Ki → 1.18 GB, 128Ki → 0.805 GB
+// (−384 MiB / −402.7 MB, the single biggest memory item in the pipeline). Alloc stays far
+// under the ~4.29 GB maxBufferSize. QRASTER_CAP (world = 1M) still caps visClusters upstream.
+export const PROJ_CLUSTER_CAP = Math.min(QRASTER_CAP, 128 * 1024);
 
 export interface ProjectBundle {
   projVertAttr: StorageBufferAttribute | null;
@@ -196,7 +201,7 @@ export function buildProject(p: {
   }
 
   // FLAT layout: PROJ_CLUSTER_CAP cluster slots × MAX_CLUSTER_VERTS unique-vert slots × 3 u32.
-  // 192K × 512 × 3 u32 = 1.18 GB — each cluster owns a fixed itemIdx·512 region (no compaction).
+  // 128Ki × 512 × 3 u32 = 0.805 GB — each cluster owns a fixed itemIdx·512 region (no compaction).
   const count = PROJ_CLUSTER_CAP * vertsPerCluster * PROJ_VERT_STRIDE;
   const projVertAttr = new StorageBufferAttribute(new Uint32Array(count), 1);
   projVertAttr.name = 'nanProjVert';
