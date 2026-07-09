@@ -810,7 +810,7 @@ export function buildNaniteCull(
         .bitAnd(uint(0xff));
       If(matClass.notEqual(uint(VOXEL_MATCLASS)), () => {
         If(
-          clusterHwClass(gpu, cam.camPos as unknown as NV3, projK, instId, ci, clhwMax),
+          clusterHwClass(gpu, cam, projK, instId, ci, clhwMax),
           () => {
             // F3 budget: count this cluster's tris ONCE — UNCONDITIONAL on qHwRaster overflow,
             // matching the SW classifier's clusterHwClass skip (slot 11), which returns every

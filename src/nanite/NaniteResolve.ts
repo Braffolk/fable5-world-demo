@@ -79,8 +79,16 @@ import { bcU2F, elemU, toF, uniformF } from './Tsl';
 import type { BufOf, UV2, UniformF } from './Tsl';
 
 export interface NaniteResolveHandles {
-  /** add to engine.scene; renderOrder −1000, castShadow off */
+  /** add to engine.scene; renderOrder −1000, castShadow off. In two-pass mode this is the
+   *  'terr' pass (matClass 0 terrain ONLY); in forest single-pass ('both') it is the whole
+   *  merged resolve. */
   mesh: Mesh;
+  /** resolve P2 (class-family split): the 'mesh' pass — shades the mesh material families
+   *  (rock/bark/leaf/deadwood/legacy-grass, matClass 1-5) and Discards terrain + voxel pixels.
+   *  renderOrder −999.5 (between `mesh` at −1000 and `voxMesh` at −999). Present only in the
+   *  two-pass mode; undefined under the forest single-pass 'both' merge. Add to engine.scene
+   *  right after `mesh`. ?nores must cover it (skip all resolve meshes). */
+  meshMesh?: Mesh;
   /** voxel-foliage two-pass resolve (spec §4.6 / §7): a SECOND fullscreen pass that
    *  shades ONLY voxel-winner pixels (bit31 marker). Present only when the voxel queue
    *  is wired (?voxreg/?forcevox). The MAIN `mesh` above then DROPS voxelBricks/
@@ -383,7 +391,15 @@ export function buildNaniteResolve(
   //     stays at 7 (payloadV/visBV/clusters/meshes/instances + voxelBricks/qVoxRasterRO).
   // Both passes are provably ≤10 fragment storage buffers. The 'vox' pass is built only when
   // the voxel queue is present (cull.qVoxRasterRO) — a pure-triangle world has ONE pass.
-  const buildMat = (pass: 'tri' | 'vox' | 'both'): NodeMaterial => {
+  // resolve P2 (class-family split): the old 'tri' pass evaluated EVERY material family
+  // (terrain + rock/bark/leaf/legacy-grass) in one fragment shader — a register/latency wall
+  // at low occupancy. It is now SPLIT into 'terr' (matClass 0 terrain ONLY) and 'mesh'
+  // (rock/bark/leaf/deadwood/legacy-grass, matClass 1-5); each fullscreen pass Discards the
+  // OTHER family right after the matClass decode and BEFORE wp reconstruction (the RP-5 reorder
+  // precedent), and — crucially — BUILDS only its own family's subgraphs, so 'terr' never
+  // binds/builds verts/indices/barkTex and 'mesh' never binds the terrain samplers/caustics.
+  // The 'vox' (voxel-side) and 'both' (forest single-pass merge) kinds are unchanged.
+  const buildMat = (pass: 'terr' | 'mesh' | 'vox' | 'both'): NodeMaterial => {
   const mat = new NodeMaterial();
   mat.name = `naniteResolve_${pass}`;
   mat.vertexNode = vec4(positionGeometry.xy, 0, 1) as unknown as typeof mat.vertexNode;
@@ -447,39 +463,34 @@ export function buildNaniteResolve(
     const isV = pRaw.shiftRight(uint(31)).bitAnd(uint(1)).toVar();
     // procedural grass marker: bits 31|30 (voxel ids never set bit30; mesh ids never
     // set bit31) — grass pixels ride the vox-side pass via the isV partition above.
-    const grassProcOn = !!world.grassProc && pass !== 'tri';
+    // grass-procedural pixels (bits 31|30) shade on the vox-side passes only.
+    const grassProcOn = !!world.grassProc && (pass === 'vox' || pass === 'both');
     const isGP: NB | null = grassProcOn
       ? (pRaw.shiftRight(uint(30)).equal(uint(3)).toVar() as unknown as NB)
       : null;
-    if (pass === 'tri') {
-      // MAIN pass: skip voxel-winner pixels (the 'vox' pass shades them). On a pure-triangle
-      // world (no voxel queue) bit31 is never set, so this never fires.
+    if (pass === 'terr' || pass === 'mesh') {
+      // TRI-SIDE passes: skip voxel-winner pixels (bit31) — the 'vox' pass shades them, and
+      // grass-procedural pixels (bit31|bit30) too. On a pure-triangle world bit31 is never set.
       If(isV.equal(uint(1)), () => {
         Discard();
       });
     } else if (pass === 'vox') {
-      // VOXEL pass: skip every pixel that is NOT a voxel winner (the 'tri' pass shades them).
+      // VOXEL pass: skip every pixel that is NOT a voxel winner (the tri-side passes shade them).
       If(isV.equal(uint(0)), () => {
         Discard();
       });
     }
-    // 24-bit depth in the high bits (8-bit id tiebreak below) ⇒ cz = 1 − (key>>8)/16777215
-    const zDev = float(1).sub(toF(elect.shiftRight(uint(8))).div(16777215)) as unknown as NF;
-    const wpv = getViewPosition(screenUV, zDev, cameraProjectionMatrixInverse) as unknown as NV3;
-    const wp = (
-      (cameraWorldMatrix as unknown as { mul(v: NV4): NV4 }).mul(
-        (vec4 as unknown as (a: NV3, b: number) => NV4)(wpv, 1),
-      ) as unknown as NV4
-    ).xyz.toVar() as unknown as NV3;
-    // (instId, ci): the 'tri' pass decodes from qRasterRO (the unchanged triangle path); the
-    // 'vox' pass decodes from qVoxRaster (low 30 bits = the qVoxRaster item index → the voxel
-    // cluster's (instId, ci); its word6 = brickBase points at gpu.voxelBricks, §4.1). The two
-    // decodes are in mutually-exclusive branches, so only ONE of qRasterRO / qVoxRasterRO is
-    // referenced per material build ⇒ each pass binds only its own queue. The 'both' pass
-    // branches per PIXEL on isV instead (same partition, same decodes — both queues bound).
+    // (instId, ci) DECODE — moved ABOVE the wp reconstruction (RP-5 reorder, extended to the P2
+    // class-family split): the terr/mesh family Discard below needs only matClass, so decoding it
+    // first lets the majority family each pass skips avoid the view-pos math entirely (pure
+    // reorder — the decode is side-effect-free and independent of wp/zDev). The tri-side passes
+    // (terr/mesh) decode from qRasterRO (the unchanged triangle path); the 'vox' pass decodes from
+    // qVoxRaster (low 30 bits = item index → the voxel cluster's (instId, ci)); the 'both' pass
+    // branches per PIXEL on isV. The decodes are in mutually-exclusive branches, so only ONE of
+    // qRasterRO / qVoxRasterRO is referenced per material build ⇒ each pass binds only its queue.
     let instId: NU;
     let ci: NU;
-    if (pass === 'tri') {
+    if (pass === 'terr' || pass === 'mesh') {
       const triItemIdx = pRaw.shiftRight(uint(CLUSTER_TRI_BITS)).toVar();
       const triItem = cull.qRasterRO.element(triItemIdx.add(uint(1)));
       instId = triItem.x.toVar();
@@ -524,8 +535,8 @@ export function buildNaniteResolve(
     }
     const meshId = elemU(gpu.clusters, ci.mul(uint(CLUSTER_WORDS)).add(uint(7))).shiftRight(uint(16));
     // (localTri = pRaw & CLUSTER_TRI_MASK is read inside the rock/bark/leaf branches; those
-    // branches run ONLY in the 'tri' pass, where pRaw IS a triangle id. In the 'vox' pass the
-    // low bits are the qVoxRaster index and the explicit-mesh branches are not built at all.)
+    // branches run ONLY in the 'mesh'/'both' passes, where pRaw IS a triangle id. In the 'vox'
+    // pass the low bits are the qVoxRaster index and the explicit-mesh branches are not built.)
     const matClass = elemU(gpu.meshes, meshId.mul(uint(MESH_WORDS)).add(uint(6)))
       .shiftRight(uint(8))
       .bitAnd(uint(0xff))
@@ -539,6 +550,31 @@ export function buildNaniteResolve(
         matClass.assign(uint(255));
       });
     }
+    // P2 CLASS-FAMILY partition Discard (before the wp reconstruction below, RP-5 precedent):
+    // a tri-side pixel is shaded by EXACTLY ONE of the two passes — matClass==0 (terrain) vs
+    // matClass!=0 (rock/bark/leaf/deadwood/legacy-grass). The decode above is identical in both
+    // passes ⇒ the partition is exact + deterministic (no pixel double-shaded, none dropped). The
+    // 'both'/'vox' passes shade their whole set (no family discard here). Skipping the other
+    // family before wp means its view-pos math + shading never run; and each pass BUILDS only its
+    // family's subgraphs (guards below) — the register/occupancy win.
+    if (pass === 'terr') {
+      If(matClass.notEqual(uint(0)), () => {
+        Discard();
+      });
+    } else if (pass === 'mesh') {
+      If(matClass.equal(uint(0)), () => {
+        Discard();
+      });
+    }
+    // 24-bit depth in the high bits (8-bit id tiebreak above) ⇒ cz = 1 − (key>>8)/16777215.
+    // Reconstructed AFTER the partition discards so discarded-family pixels skip this math.
+    const zDev = float(1).sub(toF(elect.shiftRight(uint(8))).div(16777215)) as unknown as NF;
+    const wpv = getViewPosition(screenUV, zDev, cameraProjectionMatrixInverse) as unknown as NV3;
+    const wp = (
+      (cameraWorldMatrix as unknown as { mul(v: NV4): NV4 }).mul(
+        (vec4 as unknown as (a: NV3, b: number) => NV4)(wpv, 1),
+      ) as unknown as NV4
+    ).xyz.toVar() as unknown as NV3;
     const item = { x: instId, y: ci } as unknown as { x: NU; y: NU };
     const isT = matClass.equal(uint(0));
 
@@ -567,19 +603,20 @@ export function buildNaniteResolve(
     const blCol = vec3(0).toVar() as unknown as NV3;
     const blK = float(0).toVar() as unknown as NF;
     // The ROCK/BARK/LEAF material branches re-fetch the cluster triangle (gpu.verts /
-    // gpu.indices) — the tri-only buffers the 'vox' pass must NOT bind. Each of those three
-    // If() blocks is therefore guarded by `pass === 'tri'` below: in the 'vox' pass they would
-    // never fire anyway (matClass=voxel(7) ⇒ isR/isBD/isL all false), and skipping their
-    // CONSTRUCTION is what keeps verts/indices out of the voxel material's binding set. The
-    // const declarations stay at top-level so the shared mux + lighting compile in BOTH passes.
-    // TERRAIN reads no storage buffer, so it was previously left unguarded as "harmless" — but it
-    // is NOT free in the 'vox' pass: buildTerrainShading's implicit-derivative texture() samples are
-    // the vox shader's ONLY demote-forcing op, and the whole subgraph (~14 samples + fbm + caustics)
-    // inflates register/instruction pressure → collapsed occupancy → the per-pixel voxel-decode
-    // latency chain can't be hidden. Measured as the dominant driver of the close-up voxel r.scene
-    // cliff (37.5ms inside a crown). Voxel pixels are never matClass 0 (isT always false in 'vox'),
-    // so guarding by `pass === 'tri'` is output-identical and strips the graph from the vox shader.
-    if (pass !== 'vox' && hasClass(0)) If(isT, () => {
+    // gpu.indices) — buffers the 'terr'/'vox' passes must NOT bind. Each of those If() blocks is
+    // therefore guarded by `pass === 'mesh' || pass === 'both'` below: in 'terr'/'vox' they would
+    // never fire anyway (terr Discards matClass!=0; vox has matClass=voxel(7) ⇒ isR/isBD/isL all
+    // false), and skipping their CONSTRUCTION is what keeps verts/indices out of those materials'
+    // binding sets. The const declarations stay at top-level so the shared mux + lighting compile
+    // in EVERY pass. TERRAIN reads no storage buffer, but its subgraph is NOT free: buildTerrain-
+    // Shading's implicit-derivative texture() samples are the demote-forcing op, and the whole
+    // subgraph (~14 samples + fbm + caustics) inflates register/instruction pressure → collapsed
+    // occupancy (measured as the dominant driver of the close-up voxel r.scene cliff, 37.5ms in a
+    // crown). Under the P2 split it is built ONLY in 'terr'/'both' — the 'mesh'/'vox' shaders never
+    // pay it (a mesh/voxel pixel is never matClass 0), which is the whole point of the family split.
+    // P2: TERRAIN family built ONLY in the 'terr' and 'both' passes (NOT 'mesh'/'vox') — this is
+    // what keeps buildTerrainShading's samplers + caustics out of the mesh material's bindings.
+    if ((pass === 'terr' || pass === 'both') && hasClass(0)) If(isT, () => {
       const shading = buildTerrainShading({
         normalTex: hf.normalTex,
         biomeTex: hf.biomeTex as StorageTexture,
@@ -612,7 +649,8 @@ export function buildNaniteResolve(
     // ported rockMaterial. Gated on isR so terrain (heightfield clusters, no
     // explicit verts) never enters the explicit-mesh fetch.
     const isR = matClass.equal(uint(1)).toVar();
-    if (pass !== 'vox' && hasClass(1)) If(isR, () => {
+    // P2: MESH family (rock) built ONLY in 'mesh'/'both' — keeps verts/indices out of 'terr'.
+    if ((pass === 'mesh' || pass === 'both') && hasClass(1)) If(isR, () => {
       const instId = item.x;
       const localTri = pRaw.bitAnd(uint(CLUSTER_TRI_MASK));
       const ctx = fetch.makeCtx(instId, ci);
@@ -650,7 +688,7 @@ export function buildNaniteResolve(
     const isB = matClass.equal(uint(2)).toVar();
     const isD = matClass.equal(uint(3)).toVar();
     const isBD = isB.or(isD).toVar();
-    if (pass !== 'vox' && world.barkTexA && world.barkTexB && (hasClass(2) || hasClass(3))) {
+    if ((pass === 'mesh' || pass === 'both') && world.barkTexA && world.barkTexB && (hasClass(2) || hasClass(3))) {
       const barkTexA = world.barkTexA;
       const barkTexB = world.barkTexB;
       If(isBD, () => {
@@ -817,7 +855,7 @@ export function buildNaniteResolve(
     // Same explicit-mesh fetch as bark, minus UV/TBN/texture (leaves have no detail
     // map). The geometric normal is FLIPPED to face the camera (two-sided lighting).
     const isL = matClass.equal(uint(4)).toVar();
-    if (pass !== 'vox' && hasClass(4)) If(isL, () => {
+    if ((pass === 'mesh' || pass === 'both') && hasClass(4)) If(isL, () => {
       const instId = item.x;
       const localTri = pRaw.bitAnd(uint(CLUSTER_TRI_MASK));
       // per-species tint from matParam (mesh word 7): linear RGB + hueVar (4×u8) —
@@ -928,7 +966,7 @@ export function buildNaniteResolve(
       return mix(hx, hy, u.y) as unknown as NV2;
     };
     const isG = matClass.equal(uint(5)).toVar();
-    if (pass !== 'vox' && hasClass(5)) If(isG, () => {
+    if ((pass === 'mesh' || pass === 'both') && hasClass(5)) If(isG, () => {
       const instId = item.x;
       const localTri = pRaw.bitAnd(uint(CLUSTER_TRI_MASK));
       const distG = wp.sub(vec3(camPos) as unknown as NV3).length();
@@ -1020,7 +1058,7 @@ export function buildNaniteResolve(
     // default otherwise) — never gray. The 'tri' pass is unchanged (its grass/debris
     // fall-through still uses `palette`; voxel pixels were already Discarded there).
     const isVox = matClass.equal(uint(7)).toVar();
-    if (pass !== 'tri' && cull.qVoxRasterRO) {
+    if ((pass === 'vox' || pass === 'both') && cull.qVoxRasterRO) {
       // Non-tri passes: every surviving pixel is a bit31 voxel winner (old
       // isVoxDefault == isV). SEED the dark-green foliage default albedo + the
       // voxel-tier backlight (blCol=voxCol default, blK=0.032) so a stale id
@@ -1274,7 +1312,7 @@ export function buildNaniteResolve(
     // — top bricks point up regardless of yaw). Foliage is translucent: use the standard
     // wrapped diffuse N·L·0.5+0.5 for voxel pixels — per-brick variation survives, but
     // no yaw can crash a crown to the floor.
-    if (pass !== 'tri') {
+    if (pass === 'vox' || pass === 'both') {
       // FLOOR at 0.18: albedo-debug proved the residual far dark clumps are lighting-side —
       // deeply down/away-facing tile-brick mean normals bottom the plain wrap out at ~0.05.
       // No foliage pixel drops below ~0.16·sun; per-brick variation survives above the floor.
@@ -1409,7 +1447,7 @@ export function buildNaniteResolve(
     // otherwise gets the dark ground ambient (3× darker than sky) and reads as an oddly
     // dark tree even with the wrapped sun floor (user round 3: "still some, half less").
     // A canopy always sees sky; floor its ambient mix at 0.6.
-    if (pass !== 'tri') {
+    if (pass === 'vox' || pass === 'both') {
       // (grass pixels keep the plain hemisphere — their normal is terrain-pulled,
       // and the 0.6 sky floor was tuned for canopy chunks, not ground cover)
       const ambGate = isGP
@@ -1510,14 +1548,7 @@ export function buildNaniteResolve(
     // routing decision. Sweep ?clhwmax to watch clusters cross the boundary.
     if (nandbg === 'clhw') {
       const projK = cam.cotHalfFov.mul(float(cam.uH)).mul(0.5) as unknown as NF;
-      const isHw = clusterHwClass(
-        gpu,
-        vec3(cam.camPos) as unknown as NV3,
-        projK,
-        instId,
-        ci,
-        clhwMax,
-      );
+      const isHw = clusterHwClass(gpu, cam, projK, instId, ci, clhwMax);
       return vec4(
         isHw.select(
           vec3(1, 0.12, 0.08) as unknown as NV3,
@@ -1585,14 +1616,34 @@ export function buildNaniteResolve(
     // eslint-disable-next-line no-console
     console.log('[nanite] resolve single-pass (RP-4): tri+vox merged into one fullscreen draw');
 
-  // MAIN pass (always): shades triangle pixels, skips voxel pixels — or, under ?respass=1,
-  // shades BOTH tiers in one draw.
-  const mesh = new Mesh(geometry, buildMat(singlePass ? 'both' : 'tri'));
-  mesh.name = 'naniteResolve';
+  // MAIN resolve mesh. Two-pass (default): the tri-side is SPLIT by material family (resolve P2)
+  // into a 'terr' pass (matClass 0 terrain ONLY) here at renderOrder −1000 and a 'mesh' pass
+  // (rock/bark/leaf/deadwood/legacy-grass, matClass 1-5) below at −999.5 — each Discards the
+  // OTHER family right after the matClass decode (before wp) and builds only its own subgraphs,
+  // halving the register/latency load of the old single tri shader (it evaluated every family in
+  // one pass). Under the forest single-pass 'both' merge (?respass), the whole partition shades
+  // in ONE draw here. ZERO new buffers — the split reuses the SAME vis targets; the only cost is
+  // one extra fullscreen draw. ?nores (NaniteFrame) skips ALL resolve meshes.
+  const mesh = new Mesh(geometry, buildMat(singlePass ? 'both' : 'terr'));
+  mesh.name = singlePass ? 'naniteResolve' : 'naniteResolveTerr';
   mesh.frustumCulled = false;
   mesh.renderOrder = -1000;
   mesh.castShadow = false;
   mesh.receiveShadow = false;
+
+  // MESH-family pass (two-pass only): shades matClass 1-5, Discards terrain + voxel pixels.
+  // Disjoint pixel set from the 'terr' pass (matClass==0 vs !=0), so depthTest=false + the shared
+  // depthNode composite cleanly regardless of draw order. renderOrder −999.5 sits between terr
+  // (−1000) and vox (−999), all before the sky/scene remainder.
+  let meshMesh: Mesh | undefined;
+  if (!singlePass) {
+    meshMesh = new Mesh(geometry, buildMat('mesh'));
+    meshMesh.name = 'naniteResolveMesh';
+    meshMesh.frustumCulled = false;
+    meshMesh.renderOrder = -999.5;
+    meshMesh.castShadow = false;
+    meshMesh.receiveShadow = false;
+  }
 
   // VOXEL pass (only when the voxel queue is wired): shades ONLY voxel-winner pixels. Both the
   // MAIN and the VOXEL material have depthTest=false + the same depthNode, so the two fullscreen
@@ -1610,5 +1661,5 @@ export function buildNaniteResolve(
     voxMesh.castShadow = false;
     voxMesh.receiveShadow = false;
   }
-  return { mesh, voxMesh, keepFullU };
+  return { mesh, meshMesh, voxMesh, keepFullU };
 }

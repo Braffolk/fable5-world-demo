@@ -540,11 +540,13 @@ export function buildNaniteRaster(
   const dbgNoSpl = dbgQ.get('nospl') === '1';
   const dbgNoMid = dbgQ.get('nomid') === '1';
   const dbgNoHw = dbgQ.get('nohw') === '1';
-  // ?middz — nanMidRaster incremental-depth path (Lever A.2): the scanline holds {z,dzdx,
-  // dzdy} and steps z instead of the per-pixel barycentric recompute. MID-ONLY; MEDIUM
-  // parity risk (float accumulation can differ in the depthKey24 LSB) ⇒ default OFF = the
-  // bit-identical recompute. Structured as a build-time branch so one side deletes trivially.
-  const midIncDepth = dbgQ.get('middz') === '1';
+  // ?middz=0 — escape to nanMidRaster's bit-identical per-pixel barycentric recompute.
+  // Default ON (2026-07-09): the incremental path ({z,dzdx,dzdy} stepped per pixel) removes
+  // ~12 ALU ops/covered pixel from the scanline loop — the mid shader's largest measured
+  // per-line region (~36%) — and drops loop-carried state. Parity risk = depthKey24 LSB
+  // drift from float accumulation (deterministic, not noise); election ties may pick a
+  // different near-equal fragment on rare pixels. MID-ONLY; world1 untouched.
+  const midIncDepth = dbgQ.get('middz') !== '0';
   // hw/splat/mid work queues + their indirect-args kernels (./raster/Queues). The splat/mid
   // queues + args exist only on the world1 path (splatElect); the ?scar counters + the
   // ?trihzb prev-frame HZB mirror fold into the hwQueue tail (SCAR_BASE/TRIHZB_BASE). triLvls
@@ -602,10 +604,22 @@ export function buildNaniteRaster(
   // world1 (ctxPrepass / clusterCtxV != null) camera path; the flat ctx read replaces makeCtx.
   const nfetchExplicit = makeFetch(gpu, heightTex, disp, wind, true, 'explicit');
   const nfetchTerrain = makeFetch(gpu, heightTex, disp, wind, true, 'terrain');
-  // M2l hw1fetch: HW vertex stage reconstructs ONE corner (runtime-selected) instead
-  // of fetching all 3 and selecting — same selected vertex by construction.
+  // M2l hw1fetch (DEFAULT ON): HW vertex stage reconstructs ONE corner (runtime-selected
+  // via fetchWorldVertDyn) instead of fetching all 3 corners and selecting one — the single
+  // fetch is bit-identical by NaniteFetch's own contract ("same selected vertex by
+  // construction"), and drops 2× index-read + vert-decode + transform + wind plus the two
+  // extra live world-pos temps that pinned the register ceiling. The 3-fetch path was a stale
+  // default from when per-vertex makeCtx dominated (Phase 1 removed makeCtx); `?hw1fetch=0` is
+  // the disable-only escape back to it.
   const hw1fetch =
-    new URLSearchParams(window.location.search).get('hw1fetch') === '1';
+    new URLSearchParams(window.location.search).get('hw1fetch') !== '0';
+  // HW vertex-prepass (2026-07-09, DEFAULT ON): the `_clE` mesh HW draw reads its verts
+  // pre-projected from projVertBuf (w=1 screen-linear clip) instead of re-running the
+  // compute-fetch + wind + vp + snap path. `?hwproj=0` is the disable-only escape back to
+  // the compute-fetch vertex — selected at BUILD time in buildHw (the other body is never
+  // compiled), never a runtime shader branch.
+  const hwproj =
+    new URLSearchParams(window.location.search).get('hwproj') !== '0';
   // PERF-3 win #2 — the cooperative vertex-transform cache lives in its own module
   // (default OFF, ?vcompact=1; measured marginal/conditional — see NaniteVertexCache).
   const vcache = makeVertexCache(gpu, nfetch);
@@ -788,9 +802,7 @@ export function buildNaniteRaster(
       // computed ONCE on thread 0 and broadcast (slot 11, below) — NOT 128×/cluster on the SW
       // hot path. The ?wgcache=0 fallback classifies per-thread (uniform ⇒ all threads return).
       if (clhw && mode === 'world1' && !wgcache) {
-        returnIf(
-          clusterHwClass(gpu, cam.camPos as unknown as NV3, projK, instId, ci, clhwMax),
-        );
+        returnIf(clusterHwClass(gpu, cam, projK, instId, ci, clhwMax));
       }
       // ?relect (build-time, world1 only): per-thread election-key accumulator + the
       // election emitter shared by BOTH world1 sites (emitW1 small bin + inline scanline).
@@ -958,9 +970,7 @@ export function buildNaniteRaster(
             // read after the barrier for a uniform early-out (vs 128×/cluster per-thread).
             setU(
               11,
-              b2u(
-                clusterHwClass(gpu, cam.camPos as unknown as NV3, projK, instId, ci, clhwMax),
-              ),
+              b2u(clusterHwClass(gpu, cam, projK, instId, ci, clhwMax)),
             );
           }
           setF(0, c.A.x as unknown as NF);
@@ -2330,6 +2340,12 @@ export function buildNaniteRaster(
     nfetchTerrain,
     hwClusterDrawTerrainAttr: cull.hwClusterDrawTerrainAttr ?? null,
     hwRasterCap: cull.hwRasterCap ?? QRASTER_CAP,
+    // HW vertex-prepass: the `_clE` mesh draw reads the SAME projected-vert records the SW
+    // classifier + Mid consume (non-null only on the world1 / ctxPrepass path, like clusterCtxV).
+    projVertV,
+    indices: gpu.indices,
+    vertsPerCluster: projVertsPerCluster,
+    hwproj,
   });
   const {
     kHwArgs,

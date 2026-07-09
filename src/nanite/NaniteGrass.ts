@@ -70,7 +70,6 @@ import {
   packHalfU,
   returnIf,
   sU32Views,
-  sUvec2,
   sUvec4RO,
   toF,
   uniformF,
@@ -394,17 +393,41 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
   // A hit emits a self-describing id + depth into the election, so the resolve/
   // shadows/GTAO/TRAA pipeline is untouched; normal+tip ride rayNrmTex.
 
-  // ---- guide buffers + per-frame bake (ray lane only; 4-word ctx + 2-word mask) ------
-  const gWords = GUIDE_N * 4;
-  const guideCtxAttr = new StorageBufferAttribute(new Uint32Array(gWords), 1);
-  guideCtxAttr.name = 'grassGuideCtx';
-  const guideCtxW = sU32Views(guideCtxAttr, gWords);
-  const guideCtx4 = sUvec4RO(guideCtxAttr, GUIDE_N);
-  const mWords = GUIDE_N * 2;
-  const guideMaskAttr = new StorageBufferAttribute(new Uint32Array(mWords), 1);
-  guideMaskAttr.name = 'grassGuideMask';
-  const guideMaskW = sU32Views(guideMaskAttr, mWords);
-  const guideMask2 = sUvec2(guideMaskAttr, GUIDE_N);
+  // ---- guide buffers + per-frame bake (ray lane only) ------------------------------
+  // MERGED RECORD (P3(b)): ctx (4 words) + mask (2 words) live in ONE 8-word / 32-byte
+  // line-aligned record per guide texel — kRay's per-step fetch touched TWO buffers
+  // (guideCtx @16B + guideMask @8B) = two cache lines/texel; one 32B record collapses
+  // that to ONE line. Word layout per texel i (base = i*8):
+  //   [0] ground     f32 bitcast   (bcF2U)
+  //   [1] grad       half2         (dgdx, dgdz)   packHalfU
+  //   [2] (topOut,amp) half2       packHalfU      ← topOut in .x drives the skip test
+  //   [3] widenT     f32 bitcast   (bcF2U)
+  //   [4] mask0      u32 bits 0..31
+  //   [5] mask1      u32 bits 32..63
+  //   [6..7] spare   (written 0)   — pads to 32B so records stay line-aligned
+  // CONSTRAINT: the above-sward SKIP test reads ONLY ground(w0)+topOut(w2) ⇒ words
+  // 0..3 (first half); mask (w4..5) is read only on the DESCEND branch. So the ctx
+  // uvec4 fetch keeps the skip path at one 16B load / one cache line.
+  // Values are bit-identical to the pre-merge split — same pack fns, just relocated.
+  // VRAM: was GUIDE_N*(16+8)=24B → now GUIDE_N*32B, net +GUIDE_N*8B ≈ +1.13 MB (≤1.5 MB).
+  const REC_WORDS_PER = 8;
+  const recWords = GUIDE_N * REC_WORDS_PER;
+  const guideRecAttr = new StorageBufferAttribute(new Uint32Array(recWords), 1);
+  guideRecAttr.name = 'grassGuideRec';
+  // raw u32 view — bake writes go here (one record's 8 words per texel)
+  const guideRecW = sU32Views(guideRecAttr, recWords);
+  // uvec4 view over the record halves: element(2*i)=ctx words 0..3, element(2*i+1)=
+  // mask/spare words 4..7 (mask0=.x, mask1=.y). Two RO wrappers preserve the old
+  // guideCtx4 / guideMask2 call sites BYTE-FOR-BYTE (index just *2 [+1]).
+  const guideRec4 = sUvec4RO(guideRecAttr, GUIDE_N * 2);
+  const recElem = (i: NU | number): NU =>
+    (typeof i === 'number' ? uint(i) : i).mul(uint(2)) as unknown as NU;
+  const guideCtx4 = { element: (i: NU | number) => guideRec4.element(recElem(i)) };
+  const guideMask2 = {
+    ro: {
+      element: (i: NU | number) => guideRec4.element(recElem(i).add(uint(1))),
+    },
+  };
   // L2 coarse max-top: per 4×4-texel cell, max(ground + topOut) over its 16
   // children (empty texels have topOut 0 ⇒ contribute ground alone) — an f32
   // bitcast in one u32 word each (~37 KB). Rebuilt by kGuideCoarse right after
@@ -538,16 +561,20 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
             .mul(gustAt(wpos).mul(0.9).add(0.3))
             .mul(windExposure(wpos))
         : (float(0) as unknown as NF)) as unknown as NF;
-      const base = i.mul(uint(4));
-      guideCtxW.rw.element(base).assign(bcF2U(g));
-      guideCtxW.rw.element(base.add(uint(1))).assign(packHalfU(vec2(dgdx, dgdz) as unknown as NV2));
-      guideCtxW.rw.element(base.add(uint(2))).assign(packHalfU(vec2(topOut, amp) as unknown as NV2));
+      // merged 8-word record (see layout at decl): ctx words 0..3, mask words 4..5,
+      // spare words 6..7 (write 0). Same values/pack fns as the pre-merge split.
+      const base = i.mul(uint(REC_WORDS_PER));
+      guideRecW.rw.element(base).assign(bcF2U(g));
+      guideRecW.rw.element(base.add(uint(1))).assign(packHalfU(vec2(dgdx, dgdz) as unknown as NV2));
+      guideRecW.rw.element(base.add(uint(2))).assign(packHalfU(vec2(topOut, amp) as unknown as NV2));
       // word 3: widenT (kRay ladder widen) — baked here so the march skips the
       // per-step 1/sqrt(grassThin) re-derive; exact f32 bitcast (was dead uint(0))
-      guideCtxW.rw.element(base.add(uint(3))).assign(bcF2U(widenT));
-      const mb = i.mul(uint(2));
-      guideMaskW.rw.element(mb).assign(m0);
-      guideMaskW.rw.element(mb.add(uint(1))).assign(m1);
+      guideRecW.rw.element(base.add(uint(3))).assign(bcF2U(widenT));
+      guideRecW.rw.element(base.add(uint(4))).assign(m0);
+      guideRecW.rw.element(base.add(uint(5))).assign(m1);
+      // spare tail — keep the 32B record fully defined (line-aligned padding)
+      guideRecW.rw.element(base.add(uint(6))).assign(uint(0));
+      guideRecW.rw.element(base.add(uint(7))).assign(uint(0));
       // ---- per-texel FIELD bake (guideFieldT1/T2 — see decl): the kRay per-step
       // smNoise+trig monster, folded to texel rate. Same fields, same salts.
       const smN = (salt: number): NV2 => {

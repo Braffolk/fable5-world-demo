@@ -107,21 +107,54 @@ export function getScreenPositionFast(viewPosition: Node, proj: Node): NV2 {
 }
 
 /**
- * Faithful port of stock getNormalFromDepth so its interior unprojects route
- * through getViewPositionFast (single matrix multiply). Copies
- * PostProcessingUtils.getNormalFromDepth op-for-op ⇒ bit-identical.
+ * PERF-P3 view-position reconstruction from a LINEAR view-Z (the half-res
+ * DepthHalf source), skipping the per-tap inverse-projection unproject.
+ *
+ * Derivation (standard perspective, incl. TRAA-jittered P02/P12): with the
+ * projection's third row = (0,0,-1,0), clip.w = -viewZ, so
+ *   projInv · vec4(ndc.xy, 0, 1) = [ (ndc.x+P02)/P00, (ndc.y+P12)/P11, -1, · ]
+ * and the true view position is that ray.xyz scaled by (1/w) = -viewZ. This is
+ * algebraically identical to getViewPositionFast(uv, ndc.z) — it just consumes
+ * viewZ directly instead of recovering it from ndc.z, so a tap needs only the
+ * scalar viewZ texel (no mat4×vec4 per sample). viewZ is independent of ndc.xy,
+ * but the reconstructed x/y are not — pass the tap's own uv.
  */
-function getNormalFromDepthFast(uvN: Node, depthTexture: Node, projInv: Node): NV3 {
+export function getViewPositionFromViewZ(screenPosition: Node, viewZ: Node, projInv: Node): NV3 {
+  const sp = vec2((screenPosition as unknown as NV2).x, (screenPosition as unknown as NV2).y.oneMinus())
+    .mul(2.0)
+    .sub(1.0);
+  const ray = vec4(
+    (projInv as unknown as NM4).mul(vec4(vec3(sp, 0.0), 1.0) as unknown as NV4) as unknown as NV4,
+  ).toVar();
+  return ray.xyz.mul((viewZ as unknown as NF).negate()) as unknown as NV3;
+}
+
+/**
+ * Port of stock getNormalFromDepth, re-sourced onto the half-res LINEAR view-Z
+ * texture (PERF-P3). Same op structure — 3×3 texel stencil, pick the smoother
+ * neighbour per axis, cross the two view-space edge vectors — but the samples
+ * are half-res view-Z texels (nearest textureLoad, hardware-clamped) and the
+ * view positions come from getViewPositionFromViewZ, so no per-sample unproject.
+ *
+ * The discontinuity metric (2·n1−n2−c0) is evaluated on linear view-Z instead
+ * of ndc.z; it is still only a monotone selector for "which side is flatter",
+ * so the choice is unchanged on planar surfaces. Consequence (honesty): the
+ * derived normal is a HALF-RES central difference — one-texel-thin ridges the
+ * full-res port could resolve are averaged out, softening AO on thin features.
+ */
+function getNormalFromViewZFast(uvN: Node, viewZTexture: Node, projInv: Node): NV3 {
   const size = textureSize(
-    textureLoad(depthTexture as unknown as Parameters<typeof textureLoad>[0]),
+    textureLoad(viewZTexture as unknown as Parameters<typeof textureLoad>[0]),
   );
   const sizeV = size as unknown as NV2;
   const p = ivec2((uvN as unknown as NV2).mul(sizeV)).toVar();
   const load = (coord?: unknown): NF =>
-    textureLoad(
-      depthTexture as unknown as Parameters<typeof textureLoad>[0],
-      coord as unknown as Parameters<typeof textureLoad>[1],
-    ) as unknown as NF;
+    (
+      textureLoad(
+        viewZTexture as unknown as Parameters<typeof textureLoad>[0],
+        coord as unknown as Parameters<typeof textureLoad>[1],
+      ) as unknown as NV4
+    ).x as unknown as NF;
 
   const c0 = load(p).toVar();
   const l2 = load(p.sub(ivec2(2, 0))).toVar();
@@ -138,19 +171,19 @@ function getNormalFromDepthFast(uvN: Node, depthTexture: Node, projInv: Node): N
   const db = abs(sub(float(2).mul(b1).sub(b2), c0)).toVar();
   const dt = abs(sub(float(2).mul(t1).sub(t2), c0)).toVar();
 
-  const ce = getViewPositionFast(uvN, c0, projInv).toVar();
+  const ce = getViewPositionFromViewZ(uvN, c0, projInv).toVar();
   const uv2 = uvN as unknown as NV2;
   const dpdx = dl
     .lessThan(dr)
     .select(
-      ce.sub(getViewPositionFast(uv2.sub(vec2(float(1).div(sizeV.x), 0)), l1, projInv)),
-      ce.negate().add(getViewPositionFast(uv2.add(vec2(float(1).div(sizeV.x), 0)), r1, projInv)),
+      ce.sub(getViewPositionFromViewZ(uv2.sub(vec2(float(1).div(sizeV.x), 0)), l1, projInv)),
+      ce.negate().add(getViewPositionFromViewZ(uv2.add(vec2(float(1).div(sizeV.x), 0)), r1, projInv)),
     );
   const dpdy = db
     .lessThan(dt)
     .select(
-      ce.sub(getViewPositionFast(uv2.add(vec2(0, float(1).div(sizeV.y))), b1, projInv)),
-      ce.negate().add(getViewPositionFast(uv2.sub(vec2(0, float(1).div(sizeV.y))), t1, projInv)),
+      ce.sub(getViewPositionFromViewZ(uv2.add(vec2(0, float(1).div(sizeV.y))), b1, projInv)),
+      ce.negate().add(getViewPositionFromViewZ(uv2.sub(vec2(0, float(1).div(sizeV.y))), t1, projInv)),
     );
 
   return normalize(cross(dpdx as unknown as NV3, dpdy as unknown as NV3)) as unknown as NV3;
@@ -163,6 +196,7 @@ function getNormalFromDepthFast(uvN: Node, depthTexture: Node, projInv: Node): N
  */
 export function gtaoLayer(
   depthTex: DepthTexLike,
+  viewZTex: DepthTexLike,
   camera: PerspectiveCamera,
   resolution: ReturnType<typeof uniform>,
   opts: GtaoOptions,
@@ -189,8 +223,14 @@ export function gtaoLayer(
 
   return Fn((): NV4 => {
     const uvNode = uv();
+    // CENTER stays full-res (output contract §3): the returned viewPosition.z is
+    // the bilateral-upsample depth guide and the sky/maxDist reject must be exact.
     const sampleDepth = (uvS: unknown): NF =>
       (depthTex.sample(uvS) as NV4).r as unknown as NF;
+    // MARCH taps read the half-res LINEAR view-Z source (nearest, hw-clamped) and
+    // reconstruct view position without a per-tap unproject (PERF-P3).
+    const sampleViewZ = (uvS: unknown): NF =>
+      (viewZTex.sample(uvS) as NV4).x as unknown as NF;
 
     const result = float(1).toVar();
     const depth = sampleDepth(uvNode).toVar();
@@ -204,9 +244,9 @@ export function gtaoLayer(
     // PERF-4: also skip past uMaxDist (the consumer fades AO→1 there, so the
     // marched value is discarded) — kills the far-vista march for free.
     If(depth.lessThan(1.0).and(viewPosition.length().lessThan(uMaxDist as unknown as NF)), () => {
-      const viewNormal = getNormalFromDepthFast(
+      const viewNormal = getNormalFromViewZFast(
         uvNode,
-        depthTex.value as unknown as Node,
+        viewZTex.value as unknown as Node,
         uProjInv as unknown as Node,
       ).toVar();
       // own full-res depth texel — used to reject degenerate self-samples
@@ -275,10 +315,10 @@ export function gtaoLayer(
                 viewPosition.add(sampleViewOffset),
                 uProj as unknown as Node,
               ).toVar();
-              const sampleDepthX = sampleDepth(sampleScreenPositionX).toVar();
-              const sampleSceneViewPositionX = getViewPositionFast(
+              const sampleViewZX = sampleViewZ(sampleScreenPositionX).toVar();
+              const sampleSceneViewPositionX = getViewPositionFromViewZ(
                 sampleScreenPositionX,
-                sampleDepthX,
+                sampleViewZX,
                 uProjInv as unknown as Node,
               ).toVar();
               const viewDeltaX = sampleSceneViewPositionX.sub(viewPosition).toVar();
@@ -316,10 +356,10 @@ export function gtaoLayer(
                 viewPosition.sub(sampleViewOffset),
                 uProj as unknown as Node,
               ).toVar();
-              const sampleDepthY = sampleDepth(sampleScreenPositionY).toVar();
-              const sampleSceneViewPositionY = getViewPositionFast(
+              const sampleViewZY = sampleViewZ(sampleScreenPositionY).toVar();
+              const sampleSceneViewPositionY = getViewPositionFromViewZ(
                 sampleScreenPositionY,
-                sampleDepthY,
+                sampleViewZY,
                 uProjInv as unknown as Node,
               ).toVar();
               const viewDeltaY = sampleSceneViewPositionY.sub(viewPosition).toVar();

@@ -334,6 +334,14 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   //   VOX_SPLAT_FLOOR < area ≤ voxCellMinArea → the NEW conservative dilated ray (below).
   //   area > voxCellMinArea → the existing ray path, unchanged.
   const VOX_SPLAT_FLOOR = 6; // px² — a ~2.5px brick and smaller stays the cheap flat splat
+  // TIER SPLIT threshold (px²). A brick whose footprint area ≤ this is rasterized INLINE by its
+  // owning Phase-A lane (a serial ≤T-trip loop, zero shared traffic); a bigger brick stores its
+  // record to shared for Phase B's cooperative per-pixel spread. The typical far-field brick is
+  // 1-6 px, so almost every brick takes the inline path and Phase B's cooperative outer-loop
+  // scaffold (loop guard + tail + 13 shared reads per brick) is paid only for the few big ones.
+  // NOT a URL knob (a code constant, per the no-new-knobs law); T is deliberately small so the
+  // inline serial loop can never grind (≤32 trips on one lane vs a big brick's ≤128×128 spread).
+  const VOX_TIER1_MAX = 32; // px² — footprint ≤ this ⇒ inline (tier 1); above ⇒ Phase B (tier 2)
   // Fix 1 — DENSITY-DRIVEN COVERAGE, DEFAULT ON (was the ?voxalpha=1 prototype). Binary-opaque
   // bricks are why voxel crowns read fat + cubic: a ~33%-covered edge cell paints as solid as a
   // dense interior one (occupancy-threshold slimming measured no-op — the interior saturates at
@@ -627,6 +635,15 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
     const wgBbW = workgroupArray('uint', WG_RASTER);
     const wgBbH = workgroupArray('uint', WG_RASTER);
     const wgCand = workgroupArray('uint', WG_RASTER); // depthKey24<<8 | id8 (loss-exact key)
+    // TIER-2 COMPACTION list (Phase A → Phase B). After the barrier, lane 0 scans the records and
+    // appends every TIER-2 (non-empty, bbW>0) brick's SLOT INDEX densely into wgCompact, with the
+    // count in wgCompactN[0]; Phase B then loops only wgCompactN[0] entries (typically 0-3) instead
+    // of all 128 slots. A dedicated array is needed (not "reused"): every record array above is
+    // still read per brick in Phase B, so none is free to repurpose; this is 129 u32 of shared
+    // memory (~516 B, NOT VRAM), negligible. Indices (not record copies) keep the lane-0 scan to
+    // one read + one write per kept brick.
+    const wgCompact = workgroupArray('uint', WG_RASTER);
+    const wgCompactN = workgroupArray('uint', 1);
     // OCCUPANCY GATE (?voxlod=1): per-brick 16-bit (OCC_MASK_DIM x OCC_MASK_DIM) SCREEN mask of
     // which footprint-bbox buckets contain a projected occupied 4x4x4 sub-cell. Phase A builds it
     // by projecting each occupied cell centre into the brick's clamped bbox + DILATING by +-1
@@ -717,6 +734,16 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
       // texture-style Y-flip would over-cull). ?voxoccl=0 disables it for the A/B; with NO param
       // the upgraded footprint cull is the DEFAULT production path.
       const wgVisible = workgroupArray('uint', 1);
+      // DEAD-LOOP KILL (P1): 1-word workgroup flag — 0 = every brick in this cluster produced an
+      // EMPTY record (occlusion-culled / off-screen / degenerate), so Phase B would grind the full
+      // nBricks outer loop reading zero-area records and paint NOTHING. Lane 0 seeds it 0 here;
+      // every lane that stores a NON-EMPTY record in Phase A plain-stores 1 (benign race — all
+      // writers write the same 1). The Phase-A→B barrier (~line 1220) publishes it before the read
+      // that gates phaseB(). Skipped workgroups painted zero-area records before ⇒ pixel-identical.
+      const wgAnyLive = workgroupArray('uint', 1);
+      If(brickLocal.equal(uint(0)), () => {
+        wgSet(wgAnyLive, uint(0), uint(0));
+      });
       // ?voxwind: crown wind scalars computed ONCE per workgroup (lane 0) — gustAt +
       // windExposure sample TEXTURES, so a per-lane call is 128× the taps; hoist to one
       // call and broadcast via wgWind (synced by the same barrier as wgVisible below).
@@ -804,432 +831,35 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
         workgroupBarrier();
       }
 
-      // ── PHASE A (1 lane = 1 brick): decode + project + CLAMP → store the brick's footprint
-      // RECORD into shared memory. This lane does NOT raster the footprint — it only SETS UP
-      // the bbox + election key so Phase B can spread the pixels across all lanes. Seed the
-      // record EMPTY (bbW=0) for every lane first so a culled/idle lane contributes 0 area.
-      wgSet(wgBbW, brickLocal, uint(0));
-      wgSet(wgBbH, brickLocal, uint(0));
-      wgSet(wgCand, brickLocal, uint(0));
-      wgSet(wgBbX0, brickLocal, uint(0));
-      wgSet(wgBbY0, brickLocal, uint(0));
-      // OCCUPANCY-GATE seed (?voxlod=1): default 0xffff = ALL buckets painted ⇒ a brick whose
-      // gate never arms (small footprint / mask stays full) behaves EXACTLY like voxlod=0 (no
-      // pixel dropped). Phase A overwrites it with the real screen mask only when the gate arms.
-      if (voxOccGate && wgOccMask) wgSet(wgOccMask, brickLocal, uint(0xffff));
-      // ?voxcell seed: ineligible until Phase A proves a clean non-straddle record.
-      if (voxCell && wgCellOk) wgSet(wgCellOk, brickLocal, uint(0));
-      const brickActive = brickLocal.lessThan(brickCount).and((wgVisible.element(uint(0)) as unknown as NU).equal(uint(1)));
-      If(brickActive, () => {
-        const bAbs = brickBase.add(brickLocal).toVar();      // absolute brick index
-        const bWordBase = bAbs.mul(uint(BRICK_WORDS)).toVar();
-        // per-brick LOCAL center (words 5..7) + half-extent (word8) — the real grid cell.
-        const brLocalRest = vec3(
-          bcU2F(elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_POS_X)))),
-          bcU2F(elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_POS_X + 1)))),
-          bcU2F(elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_POS_X + 2)))),
-        ) as unknown as NV3;
-        // ?voxwind: rigid crown sway — offset the brick's LOCAL centre ONCE, from the
-        // per-workgroup wind scalars broadcast in wgWind (all lanes read the 6 floats).
-        // The footprint (brWCenter), the voxCell ray AABB (wgBrCx/y/z) and the occ-mask
-        // cells all derive from brLocal, so they shift together; the ray→local transform
-        // uses A (not brLocal), so it still lands on the swayed brick. .toVar() = 1 eval.
-        const wscShared: VoxWindScalars | null =
-          voxWind && wgWind
-            ? {
-                dirX: (wgWind.element(uint(0)) as unknown as NF).toVar(),
-                dirY: (wgWind.element(uint(1)) as unknown as NF).toVar(),
-                leanBase: (wgWind.element(uint(2)) as unknown as NF).toVar(),
-                swayABase: (wgWind.element(uint(3)) as unknown as NF).toVar(),
-                swayS: (wgWind.element(uint(4)) as unknown as NF).toVar(),
-                swayXS: (wgWind.element(uint(5)) as unknown as NF).toVar(),
-              }
-            : null;
-        const brLocal = (
-          voxWind && wscShared
-            ? brLocalRest.add(voxWindLocalOffset(wscShared, brLocalRest.y, yawSc, A.w as unknown as NF))
-            : brLocalRest
-        ).toVar() as unknown as NV3;
-        const brHalf = bcU2F(elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_HALF)))).toVar();
-        const brWCenter = instTransformPoint(A, B, yawSc, brLocal);
-        const brWR = instSphereRadius(A, B, brHalf as unknown as NF, float(0)).toVar();
+      // Per-cluster ray/clip basis handles (voxCell). Built by buildRayBasis, carried in PixelCtx.
+      type RayBasis = {
+        roLx: NF; roLy: NF; roLz: NF;
+        rayBaseL: NV3; rayDxL: NV3; rayDyL: NV3;
+        clipP0zw: { z: NF; w: NF };
+        clipDb: { z: NF; w: NF };
+        clipDx: { z: NF; w: NF };
+        clipDy: { z: NF; w: NF };
+      };
+      // Everything the single-source per-pixel body reads. Built identically from registers
+      // (tier-1 inline) or from shared reads (Phase B) so the elected pixels + keys match.
+      type PixelCtx = {
+        bbW: NU; bbH: NU; bbX0: NU; bbY0: NU;
+        cand: NU; voxIdB: NU;
+        aActive: NB | null; aAlpha: NF | null;
+        occMask: NU | null; gateActive: NB | null;
+        invW: NF | null; invH: NF | null;
+        cellElig: NB | null;
+        brCx: NF | null; brCy: NF | null; brCz: NF | null;
+        brHf: NF | null; cellEhf: NF | null;
+        cOccLo: NU | null; cOccHi: NU | null; cMaskFull: NB | null;
+        ray: RayBasis | null;
+      };
 
-        // project the 8 corners of THIS brick's world AABB cube [brWCenter ± brWR] → screen bbox
-        // + near z. A near-plane-straddling brick's surviving corners can fling the bbox to
-        // extreme coords; those degenerate corners are detected + excluded (see STRADDLE FLAG)
-        // and the brick is routed to a stable centre-box footprint instead.
-        const sMinX = float(1e9).toVar();
-        const sMinY = float(1e9).toVar();
-        const sMaxX = float(-1e9).toVar();
-        const sMaxY = float(-1e9).toVar();
-        const nearZ = float(1e9).toVar();
-        const allBehind = uint(1).toVar();
-        // STRADDLE FLAG: set if ANY of the 8 AABB corners is degenerate — i.e. at/behind the
-        // near plane (w ≤ NEAR_EPS) OR projecting wildly off-screen (|ndc.x|>NDC_EXPLODE or
-        // |ndc.y|>NDC_EXPLODE). Both signal a corner near the near plane whose tiny positive w
-        // makes ndc = p/w shoot to extreme coords; such a corner has NO trustworthy 2D position,
-        // so we EXCLUDE it from sMin/sMax (it would otherwise drag the bbox into empty sky — the
-        // root of the iter-1 monolith columns) and route the whole brick to the stable centre-box
-        // SILHOUETTE branch below. A genuinely on-screen corner (|ndc| ≤ NDC_EXPLODE=3, i.e. up
-        // to three screens past centre — far looser than any real foliage brick) is UNCHANGED, so
-        // every normal in-front brick keeps 54c3947's exact column-free footprint.
-        const straddles = uint(0).toVar();
-        loopI('sz3', toI(0), toI(1), (zc) => {
-          loopI('sy3', toI(0), toI(1), (yc) => {
-            loopI('sx3', toI(0), toI(1), (xc) => {
-              const sx = toF(xc).mul(2).sub(1);
-              const sy = toF(yc).mul(2).sub(1);
-              const sz = toF(zc).mul(2).sub(1);
-              const wp = vec3(
-                brWCenter.x.add(sx.mul(brWR)),
-                brWCenter.y.add(sy.mul(brWR)),
-                brWCenter.z.add(sz.mul(brWR)),
-              ) as unknown as NV3;
-              const p = (cam.vp.mul(vec4(wp, 1)) as unknown as NV4).toVar();
-              If(p.w.greaterThan(float(NEAR_EPS)), () => {
-                const ndc = p.xyz.div(p.w).toVar();
-                const exploded = ndc.x
-                  .abs()
-                  .greaterThan(float(NDC_EXPLODE))
-                  .or(ndc.y.abs().greaterThan(float(NDC_EXPLODE)));
-                If(exploded, () => {
-                  straddles.assign(uint(1)); // near-plane blowup ⇒ exclude this corner from the bbox
-                }).Else(() => {
-                  allBehind.assign(uint(0));
-                  // RAW projected corner — bit-IDENTICAL to 54c3947's per-brick bbox accumulation
-                  // for an all-in-front (non-straddling) brick: the COLUMN-FREE, KNOWN-CORRECT path.
-                  sMinX.assign(sMinX.min(ndc.x.add(1).mul(0.5).mul(W)));
-                  sMaxX.assign(sMaxX.max(ndc.x.add(1).mul(0.5).mul(W)));
-                  sMinY.assign(sMinY.min(ndc.y.add(1).mul(0.5).mul(H)));
-                  sMaxY.assign(sMaxY.max(ndc.y.add(1).mul(0.5).mul(H)));
-                  nearZ.assign(nearZ.min(ndc.z));
-                });
-              }).Else(() => {
-                straddles.assign(uint(1)); // a corner at/behind the near plane ⇒ degenerate bbox
-              });
-            });
-          });
-        });
-        // ENTER if the brick has ANY usable footprint: a clean non-straddle bbox (some in-front
-        // corner survived ⇒ allBehind=0) OR a straddle whose stable centre is in front (handled
-        // inside). A brick with no in-front corner AND no in-front centre is genuinely off-screen
-        // /behind and is dropped.
-        If(allBehind.equal(uint(0)).or(straddles.equal(uint(1))), () => {
-          // ── FOOTPRINT BBOX. Two regimes — the fix for the iter-1 monolith columns:
-          //
-          //  (1) NON-STRADDLER (all 8 corners in front + on-screen, the normal/far/mid case): use
-          //      54c3947's RAW framebuffer-clamped projected AABB EXACTLY (floor(sMin)..ceil(sMax)
-          //      clamped to the framebuffer). This is the column-free, KNOWN-CORRECT footprint,
-          //      restored bit-for-bit. A SPAN CAP to 2·BRICK_MAX_EXT px (measured from the bbox
-          //      min) is applied purely as the cooperative-raster stall guard; a real foliage
-          //      brick is ≪ this, so it is a no-op here and the silhouette matches 54c3947.
-          //
-          //  (2) STRADDLER (≥1 corner near/behind the near plane — camera literally inside the
-          //      brick, forcevox=all close-up): the projected AABB is DEGENERATE — a surviving
-          //      near-plane corner with tiny w explodes ndc, which dragged sMin/sMax to extreme
-          //      coords, and 4fe6821's centre-anchored ±64 box then painted a SOLID 128-px slab
-          //      of EMPTY SKY ⇒ the tall vertical monolith columns. For a straddler we IGNORE the
-          //      degenerate sMin/sMax and instead paint a small BRICK_MAX_EXT box centred on the
-          //      brick's STABLE projected centre IF that centre is in front (depth taken from the
-          //      centre, clamped near so the up-close brick still wins its election); if the
-          //      centre itself is behind the near plane (camera dead-centre in the brick) we DROP
-          //      the brick rather than smear a column. This bounds the close-up footprint to the
-          //      brick's true on-screen position — no sky columns.
-          const startX = toI(0).toVar();
-          const startY = toI(0).toVar();
-          const endX = toI(-1).toVar(); // endX<startX ⇒ invalid until a regime sets it
-          const endY = toI(-1).toVar();
-          const bbNearZ = nearZ.toVar();
-          If(straddles.equal(uint(0)), () => {
-            const sx0 = maxI(toI(0), toI(sMinX.floor())).toVar();
-            const sy0 = maxI(toI(0), toI(sMinY.floor())).toVar();
-            // SPAN CAP (stall guard only): far edge ≤ near edge + 2·BRICK_MAX_EXT px.
-            const capX = minI(toI(width - 1), sx0.add(toI(2 * BRICK_MAX_EXT))).toVar();
-            const capY = minI(toI(height - 1), sy0.add(toI(2 * BRICK_MAX_EXT))).toVar();
-            startX.assign(sx0);
-            startY.assign(sy0);
-            endX.assign(minI(minI(toI(width - 1), toI(sMaxX.ceil())), capX));
-            endY.assign(minI(minI(toI(height - 1), toI(sMaxY.ceil())), capY));
-          }).Else(() => {
-            // straddler → small box at the STABLE projected centre. CLAMP, do not DROP: a brick
-            // the camera sits INSIDE is the NEAREST thing on screen, so it MUST win its election,
-            // not vanish (the iter-1 close-up sparseness bug = this centre being dropped when it
-            // fell behind the near plane). Clamp w to a small positive epsilon so a centre at/
-            // behind the near plane still yields a STABLE on-screen position; paint the bounded
-            // BRICK_MAX_EXT centre box there (NOT the degenerate sMin/sMax slab ⇒ no columns),
-            // and pin bbNearZ via the centre's clamped ndc.z (nz.clamp(0,1) below maps an at/
-            // behind-near depth to 0 = nearest). This keeps the 048f451 silhouette fix (bounded
-            // box, no tall sky monolith) while recovering every close-up brick.
-            const cp = (cam.vp.mul(vec4(brWCenter, 1)) as unknown as NV4).toVar();
-            const cw = cp.w.max(float(NEAR_EPS)).toVar(); // clamp w ≥ ε so a behind-near centre is still placeable
-            const cndc = cp.xyz.div(cw).toVar();
-            const ccx = cndc.x.add(1).mul(0.5).mul(W).toVar();
-            const ccy = cndc.y.add(1).mul(0.5).mul(H).toVar();
-            startX.assign(maxI(toI(0), toI(ccx.sub(float(BRICK_MAX_EXT)).floor())));
-            startY.assign(maxI(toI(0), toI(ccy.sub(float(BRICK_MAX_EXT)).floor())));
-            endX.assign(minI(toI(width - 1), toI(ccx.add(float(BRICK_MAX_EXT)).ceil())));
-            endY.assign(minI(toI(height - 1), toI(ccy.add(float(BRICK_MAX_EXT)).ceil())));
-            // depth from the centre (the in-front corners may all have been excluded ⇒ nearZ
-            // would still be its 1e9 seed). min with the centre's clamped ndc.z, then clamp to
-            // [0,1] below — a behind-near centre lands at/below 0 ⇒ nearest, wins its election.
-            bbNearZ.assign(bbNearZ.min(cndc.z));
-          });
-          const validBB = startX.lessThanEqual(endX).and(startY.lessThanEqual(endY));
-          // ?voxbocc — PER-BRICK occlusion (flag comment above): the brick's own clamped bbox
-          // + front-slab key vs voxOccPyr, exact mirror of the per-block test's conservative
-          // idiom (min-pool ⇒ any see-through texel keeps the brick; |0xff ⇒ keep-on-tie).
-          // Straddlers (camera inside the brick) are exempt — they must always win.
-          const bVis = uint(1).toVar();
-          if (voxBocc && voxOccl) {
-            If(validBB.and(straddles.equal(uint(0))), () => {
-              const nzT = bbNearZ.clamp(0, 1);
-              const bKey = depthKey24(nzT as unknown as NF).shiftLeft(uint(8)).bitOr(uint(0xff)).toVar();
-              const rPx = toF(endX.sub(startX).add(toI(1)))
-                .max(toF(endY.sub(startY).add(toI(1))))
-                .mul(0.5)
-                .toVar();
-              const levelF = (rPx as unknown as { max(o: number): NF })
-                .max(1)
-                .log2()
-                .ceil()
-                .clamp(0, (pyrLevelCountU as unknown as { sub(o: number): NF }).sub(1))
-                .toVar();
-              const info = pyrTable.element(uint(levelF));
-              const lw = uint(info.y).toVar();
-              const lh = uint(info.z).toVar();
-              const lo = uint(info.x).toVar();
-              const px = toF(startX.add(endX).add(toI(1)))
-                .mul(0.5)
-                .div(float(width))
-                .mul(toF(lw))
-                .toVar();
-              const py = toF(startY.add(endY).add(toI(1)))
-                .mul(0.5)
-                .div(float(height))
-                .mul(toF(lh))
-                .toVar();
-              const x0 = uint((px.sub(0.5) as unknown as { clamp(a: number, b: NF): NF }).clamp(0, toF(lw.sub(uint(1))))).toVar();
-              const y0 = uint((py.sub(0.5) as unknown as { clamp(a: number, b: NF): NF }).clamp(0, toF(lh.sub(uint(1))))).toVar();
-              const x1 = minU(x0.add(uint(1)), lw.sub(uint(1))).toVar();
-              const y1 = minU(y0.add(uint(1)), lh.sub(uint(1))).toVar();
-              const z00 = elemU(voxOccPyr.ro, lo.add(y0.mul(lw)).add(x0)).toVar();
-              const z01 = elemU(voxOccPyr.ro, lo.add(y0.mul(lw)).add(x1)).toVar();
-              const z10 = elemU(voxOccPyr.ro, lo.add(y1.mul(lw)).add(x0)).toVar();
-              const z11 = elemU(voxOccPyr.ro, lo.add(y1.mul(lw)).add(x1)).toVar();
-              const occK = minU(minU(z00, z01), minU(z10, z11));
-              If(bKey.lessThanEqual(occK), () => {
-                bVis.assign(uint(0));
-              });
-            });
-          }
-          If(validBB.and(bVis.equal(uint(1))), () => {
-            const nz = bbNearZ.clamp(0, 1).toVar();
-            // ONE voxCz per BRICK (coarse one-sample default, §6.4) — the brick AABB front-slab.
-            // Precompute the FULL election key ONCE per brick (loss-exact — voxCz is loop-
-            // invariant, exactly as the prior per-pixel re-derivation produced) so Phase B
-            // never re-derives depthKey24 per pixel.
-            const cand = depthKey24(nz as unknown as NF)
-              .shiftLeft(uint(8))
-              .bitOr(payload.bitAnd(uint(0xff)))
-              .toVar();
-            // store the brick's footprint RECORD (clamped bbox origin + width/height + key).
-            const bbW = uint(endX).sub(uint(startX)).add(uint(1)).toVar();
-            const bbH = uint(endY).sub(uint(startY)).add(uint(1)).toVar();
-            wgSet(wgBbX0, brickLocal, uint(startX));
-            wgSet(wgBbY0, brickLocal, uint(startY));
-            wgSet(wgBbW, brickLocal, bbW);
-            wgSet(wgBbH, brickLocal, bbH);
-            wgSet(wgCand, brickLocal, cand);
-            // ?voxcell record: local AABB + 4³ occupancy, written for EVERY brick that reached a
-            // valid footprint above — straddlers INCLUDED, and with NO straddle- or dagLevel-gate
-            // here (wgCellOk=1 unconditionally; see the Fix-2 note below). The ray-vs-flat routing
-            // is decided DOWNSTREAM in Phase B SOLELY by footprint area (cellElig = wgCellOk ∧
-            // area>VOX_SPLAT_FLOOR): near/fine L0 bricks (≤~6 px at the 60m handoff) fall below the
-            // floor and keep the cheap flat path on their own — running the ray on the dense L0
-            // shell was measured +7-16 ms at 4k trees — while a camera-inside straddler's centre-
-            // box footprint clears the floor, so it carves to its cube silhouette instead of a slab.
-            if (voxCell && wgBrCx && wgBrCy && wgBrCz && wgBrHf && wgCellLo && wgCellHi && wgCellOk) {
-              wgSetF(wgBrCx, brickLocal, brLocal.x);
-              wgSetF(wgBrCy, brickLocal, brLocal.y);
-              wgSetF(wgBrCz, brickLocal, brLocal.z);
-              wgSetF(wgBrHf, brickLocal, brHalf as unknown as NF);
-              wgSet(wgCellLo, brickLocal, elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_OCC_LO))));
-              wgSet(wgCellHi, brickLocal, elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_OCC_HI))));
-              // eligibility = the record was set up (Fix 2: STRADDLERS ARE NOW ELIGIBLE too —
-              // the ray origin is the camera, near-clamped by tEnter.max(0), so a camera-inside
-              // brick carves to its cube silhouette instead of painting the solid centre-box slab
-              // that read as the worst ?voxnear plane forms). The ray-vs-flat routing is decided
-              // solely by the Phase-B area gate (area > VOX_SPLAT_FLOOR). ?fartiles tile L0 bricks
-              // are dagLevel=0 yet BIG on screen — they need the ray path or they paint solid rects.
-              wgSet(wgCellOk, brickLocal, uint(1));
-            }
-            // ── OCCUPANCY-GATE MASK BUILD (?voxlod=1, Phase A). For a COARSE (dagLevel>0),
-            // LARGE-footprint (area ≥ OCC_GATE_MIN_AREA) brick — i.e. screen-big enough for empty
-            // interior to matter — build a OCC_MASK_DIM×OCC_MASK_DIM screen mask of which bbox
-            // buckets a projected OCCUPIED 4×4×4 sub-cell overlaps, so Phase B skips the empty
-            // buckets between sparse children. The build re-binned occLo/occHi into THIS brick's
-            // tight [center±half] cube (downsampleBrickGrid), so each cell's LOCAL centre is
-            // brLocal + (cell+0.5−BRICK_DIM/2)·cellLocalSize and its half-extent is cellLocalSize/2.
-            // For each OCCUPIED cell we project its 8 LOCAL-AABB corners, take their SCREEN bbox,
-            // and mark EVERY bbox bucket that rect overlaps — a CONSERVATIVE SUPERSET of the cell's
-            // true coverage ⇒ a covered pixel's bucket is ALWAYS set ⇒ provably NO holes at ANY
-            // perspective (validated by tools/voxlod-occgate-nohole.ts: 0 holes / 5966 armed
-            // bricks). A small or L0 brick keeps the 0xffff seed (paints solid, no behaviour change;
-            // near-dense crown intact, fine-end rule preserved).
-            if (voxOccGate && wgOccMask && dagLevel) {
-              const gateArea = bbW.mul(bbH).toVar();
-              // ARM only on a COARSE brick (dagLevel>0) whose footprint is big enough for empty
-              // interior to matter. A fine/near (L0) brick keeps the 0xffff seed ⇒ paints solid.
-              let armCond = gateArea.greaterThanEqual(uint(OCC_GATE_MIN_AREA)).and(dagLevel.greaterThan(uint(0)));
-              if (voxMaskRay && voxCell) {
-                // ?voxmaskray: RAY-ELIGIBLE ⇒ wgOccMask is provably unread (dead value) — skip the
-                // build. Mirrors the Phase-B cellElig gate EXACTLY (wgCellOk = 1 for all set-up
-                // records incl. straddlers; area STRICTLY > VOX_SPLAT_FLOOR at the cellElig site) —
-                // keep the two in sync. Since a mask only arms at area ≥ OCC_GATE_MIN_AREA (16) >
-                // VOX_SPLAT_FLOOR, every armed brick is ray-eligible when voxCell is on ⇒ the flat
-                // occ-mask carve is superseded by the ray's own DDA carve (correct, not a miss).
-                const rayEligible = gateArea.greaterThan(uint(VOX_SPLAT_FLOOR));
-                armCond = armCond.and(rayEligible.not());
-              }
-              If(armCond, () => {
-                const occLo = elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_OCC_LO))).toVar();
-                const occHi = elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_OCC_HI))).toVar();
-                // SPARSITY GUARD: build the mask only when the brick is sparse enough that the
-                // carved buckets save MORE elections than the ≤512-projection build costs. A
-                // near-full brick (>OCC_MASK_FULL of 64 cells set) carves little, so building the
-                // mask would be a net GPU LOSS — skip it and paint solid (the 0xffff seed). This is
-                // the cost-model guard that keeps the gate from re-introducing a slowdown on DENSE
-                // coarse bricks (the prior iterations' failure mode), measured by popcount once
-                // per brick (cheap) — NOT per pixel.
-                const occCount = (countOneBits(occLo) as unknown as NU)
-                  .add(countOneBits(occHi) as unknown as NU)
-                  .toVar();
-                const sparseEnough = occCount.lessThanEqual(uint(OCC_MASK_FULL)).toVar();
-                If(sparseEnough, () => {
-                  const cellLocalSize = brHalf.mul(2).div(float(BRICK_DIM)).toVar(); // local edge of one cell
-                  const halfDim = float(BRICK_DIM).mul(0.5).toVar();
-                  const fbbW = toF(bbW).toVar();
-                  const fbbH = toF(bbH).toVar();
-                  const mask = uint(0).toVar();
-                  // loop the 64 cells; only OCCUPIED cells contribute (occLo/occHi bit test).
-                  loopI('ocz', toI(0), toI(BRICK_DIM), (czc) => {
-                    loopI('ocy', toI(0), toI(BRICK_DIM), (cyc) => {
-                      loopI('ocx', toI(0), toI(BRICK_DIM), (cxc) => {
-                        // cell linear index = x + y*4 + z*16 (VoxelBrick.brickCellIndex order).
-                        const cellIdx = (cxc as unknown as { toUint(): NU })
-                          .toUint()
-                          .add((cyc as unknown as { toUint(): NU }).toUint().mul(uint(BRICK_DIM)))
-                          .add((czc as unknown as { toUint(): NU }).toUint().mul(uint(BRICK_DIM * BRICK_DIM)))
-                          .toVar();
-                        // occupied? bit cellIdx of the 64-bit occLo|occHi mask. Pick the word by
-                        // the hi-bit (cellIdx≥32) and shift by cellIdx&31 — both shifts use an
-                        // IN-RANGE [0,31] amount (no UB underflow shift, robust on Metal); select
-                        // then keeps the LO result for cells 0..31 and the HI result for 32..63.
-                        const cellLow = cellIdx.bitAnd(uint(31)).toVar();
-                        const loBit = occLo.shiftRight(cellLow).bitAnd(uint(1)).toVar();
-                        const hiBit = occHi.shiftRight(cellLow).bitAnd(uint(1)).toVar();
-                        const occBit = cellIdx.lessThan(uint(32)).select(loBit, hiBit).toVar();
-                        If(occBit.equal(uint(1)), () => {
-                          // CONSERVATIVE per-cell mask: project the cell's 8 LOCAL-AABB corners,
-                          // accumulate their SCREEN bbox, and mark EVERY bbox bucket the cell's
-                          // screen rect overlaps. This is a SUPERSET of the cell's true coverage,
-                          // so a covered pixel's bucket is ALWAYS set ⇒ provably NO holes at ANY
-                          // perspective — including the close-up case where a cell projects across
-                          // many buckets (the centre+dilate scheme missed those: a near cell spans
-                          // > ±1 bucket and a covered pixel fell outside the dilated neighbourhood).
-                          // Near a cell spans the whole bbox ⇒ marks all buckets ⇒ brick stays
-                          // solid (near dense, no carving); far a cell is ~1 bucket ⇒ carves the
-                          // empty interior. The cell LOCAL centre = brLocal + (cell+0.5−halfDim)·
-                          // cellLocalSize; half-cell extent = cellLocalSize·0.5.
-                          const clx = brLocal.x.add(toF(cxc).add(0.5).sub(halfDim).mul(cellLocalSize)).toVar();
-                          const cly = brLocal.y.add(toF(cyc).add(0.5).sub(halfDim).mul(cellLocalSize)).toVar();
-                          const clz = brLocal.z.add(toF(czc).add(0.5).sub(halfDim).mul(cellLocalSize)).toVar();
-                          const hc = cellLocalSize.mul(0.5).toVar();
-                          const cMinX = float(1e9).toVar();
-                          const cMinY = float(1e9).toVar();
-                          const cMaxX = float(-1e9).toVar();
-                          const cMaxY = float(-1e9).toVar();
-                          const cFront = uint(0).toVar();
-                          loopI('ccz', toI(0), toI(2), (kz) => {
-                            loopI('ccy', toI(0), toI(2), (ky) => {
-                              loopI('ccx', toI(0), toI(2), (kx) => {
-                                const ccl = vec3(
-                                  clx.add(toF(kx).mul(2).sub(1).mul(hc)),
-                                  cly.add(toF(ky).mul(2).sub(1).mul(hc)),
-                                  clz.add(toF(kz).mul(2).sub(1).mul(hc)),
-                                ) as unknown as NV3;
-                                const ccw = instTransformPoint(A, B, yawSc, ccl);
-                                const ccp = (cam.vp.mul(vec4(ccw, 1)) as unknown as NV4).toVar();
-                                If(ccp.w.greaterThan(float(NEAR_EPS)), () => {
-                                  cFront.assign(uint(1));
-                                  const cndc = ccp.xyz.div(ccp.w).toVar();
-                                  const csx = cndc.x.add(1).mul(0.5).mul(W).toVar();
-                                  const csy = cndc.y.add(1).mul(0.5).mul(H).toVar();
-                                  cMinX.assign(cMinX.min(csx));
-                                  cMaxX.assign(cMaxX.max(csx));
-                                  cMinY.assign(cMinY.min(csy));
-                                  cMaxY.assign(cMaxY.max(csy));
-                                });
-                              });
-                            });
-                          });
-                          If(cFront.equal(uint(1)), () => {
-                            // screen bbox → INCLUSIVE bucket range, clamped to [0, OCC_MASK_DIM).
-                            const fU0 = cMinX.sub(toF(startX)).div(fbbW).mul(float(OCC_MASK_DIM)).toVar();
-                            const fU1 = cMaxX.sub(toF(startX)).div(fbbW).mul(float(OCC_MASK_DIM)).toVar();
-                            const fV0 = cMinY.sub(toF(startY)).div(fbbH).mul(float(OCC_MASK_DIM)).toVar();
-                            const fV1 = cMaxY.sub(toF(startY)).div(fbbH).mul(float(OCC_MASK_DIM)).toVar();
-                            const u0 = maxI(toI(0), minI(toI(OCC_MASK_DIM - 1), toI(fU0.floor()))).toVar();
-                            const u1 = maxI(toI(0), minI(toI(OCC_MASK_DIM - 1), toI(fU1.floor()))).toVar();
-                            const v0 = maxI(toI(0), minI(toI(OCC_MASK_DIM - 1), toI(fV0.floor()))).toVar();
-                            const v1 = maxI(toI(0), minI(toI(OCC_MASK_DIM - 1), toI(fV1.floor()))).toVar();
-                            // FIXED 0..OCC_MASK_DIM loops with an in-[u0,u1]×[v0,v1] guard (constant
-                            // loop bounds = the codegen-safe pattern; variable bounds avoided).
-                            loopI('mbv', toI(0), toI(OCC_MASK_DIM), (vv) => {
-                              loopI('mbu', toI(0), toI(OCC_MASK_DIM), (uu) => {
-                                const inR = vv
-                                  .greaterThanEqual(v0)
-                                  .and(vv.lessThanEqual(v1))
-                                  .and(uu.greaterThanEqual(u0))
-                                  .and(uu.lessThanEqual(u1));
-                                If(inR, () => {
-                                  const bit = (vv as unknown as { toUint(): NU })
-                                    .toUint()
-                                    .mul(uint(OCC_MASK_DIM))
-                                    .add((uu as unknown as { toUint(): NU }).toUint())
-                                    .toVar();
-                                  mask.assign(mask.bitOr(uint(1).shiftLeft(bit)));
-                                });
-                              });
-                            });
-                          });
-                        });
-                      });
-                    });
-                  });
-                  // a degenerate all-behind-near projection could leave mask 0 ⇒ that would paint
-                  // NOTHING (a hole). Guard: an empty mask falls back to 0xffff (paint solid).
-                  const safeMask = mask.equal(uint(0)).select(uint(0xffff), mask).toVar();
-                  wgSet(wgOccMask, brickLocal, safeMask);
-                });
-              });
-            }
-          });
-        });
-      });
-      workgroupBarrier(); // Phase A records complete before Phase B reads them
-
-      // ── PHASE B (ALL lanes, cooperative per-BRICK raster): loop over every brick in the
-      // cluster; WITHIN each brick, stride its OWN footprint [0, area) across all WG_RASTER
-      // lanes. localPx is BY CONSTRUCTION in [0, area) ⇒ it can NEVER exceed bbW·bbH, so the
-      // ly = localPx/bbW overflow column is structurally impossible and NO pixel is ever
-      // dropped. This restores 54c3947's density (every footprint pixel of every non-empty
-      // brick reaches the election) with no flat-index reconstruction, no prefix array, and
-      // no binary search (the 99.2%-loss + duplicate-prefix hazard, all deleted). A big brick
-      // still spreads across all 128 lanes via its inner stride ⇒ the 4fe6821 stall-fix
-      // (O(area/WG) per lane, BRICK_MAX_EXT caps any one brick at ≤128×128) is preserved;
-      // tiny/empty bricks (area 0) contribute a zero-trip inner loop.
-      const nBricks = minU(brickCount, uint(WG_RASTER)).toVar();
+      // ?voxcell per-CLUSTER ray/clip bases as an explicit function so BOTH the tier-1 inline path
+      // (Phase A) and Phase B build the IDENTICAL per-cluster basis. Returns null when voxCell is
+      // off (build-time) so the ray path is never emitted (byte-identical to voxcell=0).
+      const buildRayBasis = (): RayBasis | null => {
+        if (!voxCell) return null;
       // ?voxcell per-CLUSTER ray/clip bases (uniform across the workgroup — A/B/yawSc are
       // per-cluster). Two linearizations make the per-pixel ray path cheap:
       //  (1) RAY DIRECTION IS LINEAR IN NDC. invVp·(x,y,1,1) has a CONSTANT w across x,y
@@ -1241,24 +871,13 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
       //  (2) CLIP DEPTH IS LINEAR IN t. clip(t) = vp·(camPos + dW·t) ⇒ (z,w) = P0zw + Dzw·t
       //      where Dzw(x,y) is itself linear in ndc — per pixel the exact depth costs a few
       //      FMAs + one divide instead of transform→mat4.
-      let roLx: NF | null = null;
-      let roLy: NF | null = null;
-      let roLz: NF | null = null;
-      let rayBaseL: NV3 | null = null;
-      let rayDxL: NV3 | null = null;
-      let rayDyL: NV3 | null = null;
-      let clipP0zw: { z: NF; w: NF } | null = null;
-      let clipDb: { z: NF; w: NF } | null = null;
-      let clipDx: { z: NF; w: NF } | null = null;
-      let clipDy: { z: NF; w: NF } | null = null;
-      if (voxCell) {
         const q = (cam.camPos.sub(A.xyz) as unknown as NV3).toVar();
         const invS = float(1).div(A.w).toVar();
         const xp = q.x.sub(B.y.mul(q.y)).toVar();
         const zp = q.z.sub(B.z.mul(q.y)).toVar();
-        roLx = yawSc.cy.mul(xp).sub(yawSc.sy.mul(zp)).mul(invS).toVar() as unknown as NF;
-        roLy = q.y.mul(invS).toVar() as unknown as NF;
-        roLz = yawSc.sy.mul(xp).add(yawSc.cy.mul(zp)).mul(invS).toVar() as unknown as NF;
+        const roLx = yawSc.cy.mul(xp).sub(yawSc.sy.mul(zp)).mul(invS).toVar() as unknown as NF;
+        const roLy = q.y.mul(invS).toVar() as unknown as NF;
+        const roLz = yawSc.sy.mul(xp).add(yawSc.cy.mul(zp)).mul(invS).toVar() as unknown as NF;
         // world-space far-plane ray basis
         const K = (cam.invVp.mul(vec4(0, 0, 1, 1)) as unknown as NV4).toVar();
         const Bx = (cam.invVp.mul(vec4(1, 0, 1, 1)) as unknown as NV4).sub(K).toVar();
@@ -1277,109 +896,39 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
             yawSc.sy.mul(dxp).add(yawSc.cy.mul(dzp)).mul(invS),
           ) as unknown as NV3;
         };
-        rayBaseL = (dirToLocal(baseW as unknown as NV3) as unknown as NV3).toVar() as unknown as NV3;
-        rayDxL = (dirToLocal(dxW as unknown as NV3) as unknown as NV3).toVar() as unknown as NV3;
-        rayDyL = (dirToLocal(dyW as unknown as NV3) as unknown as NV3).toVar() as unknown as NV3;
+        const rayBaseL = (dirToLocal(baseW as unknown as NV3) as unknown as NV3).toVar() as unknown as NV3;
+        const rayDxL = (dirToLocal(dxW as unknown as NV3) as unknown as NV3).toVar() as unknown as NV3;
+        const rayDyL = (dirToLocal(dyW as unknown as NV3) as unknown as NV3).toVar() as unknown as NV3;
         // clip-depth basis
         const p0 = (cam.vp.mul(vec4(cam.camPos, 1)) as unknown as NV4).toVar();
         const db = (cam.vp.mul(vec4(baseW as unknown as NV3, 0)) as unknown as NV4).toVar();
         const dx4 = (cam.vp.mul(vec4(dxW as unknown as NV3, 0)) as unknown as NV4).toVar();
         const dy4 = (cam.vp.mul(vec4(dyW as unknown as NV3, 0)) as unknown as NV4).toVar();
-        clipP0zw = { z: p0.z as unknown as NF, w: p0.w as unknown as NF };
-        clipDb = { z: db.z as unknown as NF, w: db.w as unknown as NF };
-        clipDx = { z: dx4.z as unknown as NF, w: dx4.w as unknown as NF };
-        clipDy = { z: dy4.z as unknown as NF, w: dy4.w as unknown as NF };
-      }
-      // ?voxrdbg=2 STOP point: skip the ENTIRE Phase-B election (no per-pixel atomicMax / visBV
-      // store). Build-time gate ⇒ when OFF (production) this whole block is emitted byte-identical.
-      const phaseB = (): void =>
-      loopU(uint(0), nBricks, (slot) => {
-        const b = slot;
-        // recover this brick's footprint RECORD (set up in Phase A).
-        const bbW = (wgBbW.element(b) as unknown as NU).toVar();
-        const brickBody = (): void => {
-        const bbX0 = (wgBbX0.element(b) as unknown as NU).toVar();
-        const bbY0 = (wgBbY0.element(b) as unknown as NU).toVar();
-        const bbH = (wgBbH.element(b) as unknown as NU).toVar();
-        const cand = (wgCand.element(b) as unknown as NU).toVar();
-        // ?voxbn: this brick's id for the election store — voxId with the brick index in
-        // bits 21-27 (see the flag note at voxBrickShade). Built at per-brick scope so the
-        // per-pixel election below stores the WINNING brick, not just the block.
-        const voxIdB = voxBrickShade ? voxId.bitOr(b.shiftLeft(uint(21))).toVar() : voxId;
-        // ?voxalpha per-brick density (BRICK_ALBEDO alpha byte) — one load per brick,
-        // amortized over its footprint; aActive is UNIFORM across the brick's pixels.
-        const aDens = voxAlpha
-          ? toF(elemU(gpu.voxelBricks, brickWord(brickBase.add(b), uint(BRICK_ALBEDO))).shiftRight(uint(24)))
-              .div(255)
-              .toVar()
-          : null;
-        // alpha-ACTIVE (stipples) iff density < DENS_SOLID; ≥ DENS_SOLID keeps every pixel (solid
-        // fast path). UNIFORM across the brick's pixels ⇒ the per-pixel gate is a uniform branch.
-        const aActive = aDens ? aDens.lessThan(float(DENS_SOLID)).toVar() : null;
-        // HONEST coverage ramp: alpha = clamp(density / DENS_SOLID, VOX_ALPHA_MIN, 1). A 0.33
-        // single-leaf brick keeps ~39% of its pixels; a wisp keeps VOX_ALPHA_MIN (never balder).
-        const aAlpha = aDens ? aDens.div(float(DENS_SOLID)).clamp(VOX_ALPHA_MIN, 1).toVar() : null;
-        // OCCUPANCY-GATE mask (?voxlod=1): which OCC_MASK_DIM×OCC_MASK_DIM bbox buckets a
-        // projected occupied sub-cell touched (Phase A). 0xffff (all) for an unarmed brick.
-        const occMask = voxOccGate && wgOccMask ? (wgOccMask.element(b) as unknown as NU).toVar() : null;
-        // per-brick: does the mask actually CARVE (≠ 0xffff)? Only then does Phase B pay the
-        // per-pixel bucket test. A full (0xffff) mask — every L0/near/dense brick — takes the
-        // plain solid path with ZERO added per-pixel arithmetic (near dense path unchanged).
-        const gateActive = occMask ? occMask.notEqual(uint(0xffff)).toVar() : null;
-        const area = bbW.mul(bbH).toVar(); // 0 for a culled/idle brick ⇒ zero-trip inner loop
-        // ?voxrecip: ONE reciprocal per brick replaces the per-pixel integer div+mod below
-        // (footprint addressing AND, for carved bricks, the occupancy-gate su/sv bucket index).
-        const invW = voxRecip ? float(1).div(toF(bbW)).toVar() : null;
-        const invH = voxRecip ? float(1).div(toF(bbH)).toVar() : null;
-        // ?voxcell per-brick ray data: eligibility (record set up incl. straddlers AND big enough
-        // for the ray path to pay — see cellElig below), local AABB, occupancy words, full-mask
-        // shortcut.
-        const cellOn =
-          voxCell && wgCellOk && wgBrCx && wgBrCy && wgBrCz && wgBrHf && wgCellLo && wgCellHi;
-        // RAY-eligible iff the record was set up (wgCellOk=1, incl. straddlers) AND the brick is
-        // bigger than the flat-splat floor. Fix 2: alpha-active bricks NO LONGER take the flat
-        // path — the ray path applies the SAME hash-stable stipple at the hit-accept (front-slab
-        // depth was the reason edge bricks kept showing the plane forms in the near field).
-        const cellElig = cellOn
-          ? (wgCellOk!.element(b) as unknown as NU)
-              .equal(uint(1))
-              .and(area.greaterThan(uint(VOX_SPLAT_FLOOR)))
-              .toVar()
-          : null;
-        const brCx = cellOn ? (wgBrCx!.element(b) as unknown as NF).toVar() : null;
-        const brCy = cellOn ? (wgBrCy!.element(b) as unknown as NF).toVar() : null;
-        const brCz = cellOn ? (wgBrCz!.element(b) as unknown as NF).toVar() : null;
-        const brHf = cellOn ? (wgBrHf!.element(b) as unknown as NF).toVar() : null;
-        const cOccLo = cellOn ? (wgCellLo!.element(b) as unknown as NU).toVar() : null;
-        const cOccHi = cellOn ? (wgCellHi!.element(b) as unknown as NU).toVar() : null;
-        const cMaskFull = cellOn
-          ? cOccLo!.equal(uint(0xffffffff)).and(cOccHi!.equal(uint(0xffffffff))).toVar()
-          : null;
-        // CONSERVATIVE-RAY DILATION (Fix 2), per-brick uniform — hoisted out of the pixel loop.
-        // A pixel-CENTRE ray misses a box that genuinely overlaps the pixel's footprint at small
-        // screen sizes (classic conservative-raster failure ⇒ the "invisible far bricks" the old
-        // area>64 gate worked around). Dilate the slab-test AABB by ~half a pixel's world footprint
-        // at brick depth. Derivation with NO depth/matrix term: the brick's world diameter (2·brWR)
-        // projects to `span` px, so one pixel = 2·brWR/span world; half = brWR/span; and the brick
-        // LOCAL half brHf = brWR·invS = brWR/scale, so 0.5·pixelWorld in LOCAL units = brHf/span.
-        // span = the brick's larger screen extent (max(bbW,bbH)). Applied ONLY in the small band
-        // (area ≤ voxCellMinArea): >64px bricks are many pixels wide, pixel-centre sampling is fine,
-        // and the design keeps their existing (undilated) ray path byte-identical ⇒ dil = 0 there.
-        // The DDA cell grid still uses the RAW brHf (bmn = brC−brHf below); only the coarse slab
-        // hit-test box grows, so a grazing hit is a slightly fattened silhouette (heals #69 gaps),
-        // never a shifted cell index. Conservative: a larger box only ADDS a sub-pixel edge, never
-        // a hole.
-        const cellEhf = cellOn && brHf
-          ? brHf
-              .add(
-                area
-                  .lessThanEqual(uint(voxCellMinArea))
-                  .select(brHf.div(toF(bbW).max(toF(bbH)).max(float(1))), float(0)),
-              )
-              .toVar()
-          : null;
-        // each lane strides this brick's footprint: localPx = brickLocal, brickLocal+128, …
-        loopU(brickLocal, area, (localPx) => {
+        const clipP0zw = { z: p0.z as unknown as NF, w: p0.w as unknown as NF };
+        const clipDb = { z: db.z as unknown as NF, w: db.w as unknown as NF };
+        const clipDx = { z: dx4.z as unknown as NF, w: dx4.w as unknown as NF };
+        const clipDy = { z: dy4.z as unknown as NF, w: dy4.w as unknown as NF };
+        return { roLx, roLy, roLz, rayBaseL, rayDxL, rayDyL, clipP0zw, clipDb, clipDx, clipDy };
+      };
+
+      // ── SINGLE-SOURCE per-pixel election body (flat + ray), shared VERBATIM by the tier-1
+      // inline raster (Phase A) and Phase B. Keeping ONE copy keeps the cand-built-in-the-same-
+      // conditional-subtree idiom (the known TSL codegen/perf trap) in exactly one place. pb carries
+      // every per-brick + per-cluster value; both call sites build pb so the pixel set + cand keys
+      // are identical. (Body indentation is inherited from its prior site; purely cosmetic.)
+      const emitPixel = (pb: PixelCtx, localPx: NU): void => {
+        const { bbW, bbH, bbX0, bbY0, cand, voxIdB, aActive, aAlpha, occMask, gateActive, invW, invH, cellElig, brCx, brCy, brCz, brHf, cellEhf, cOccLo, cOccHi, cMaskFull, ray } = pb;
+        const cellOn = !!(cellElig && brCx && brCy && brCz && brHf && cellEhf && cOccLo && cOccHi && cMaskFull && ray);
+        const roLx = ray ? ray.roLx : null;
+        const roLy = ray ? ray.roLy : null;
+        const roLz = ray ? ray.roLz : null;
+        const rayBaseL = ray ? ray.rayBaseL : null;
+        const rayDxL = ray ? ray.rayDxL : null;
+        const rayDyL = ray ? ray.rayDyL : null;
+        const clipP0zw = ray ? ray.clipP0zw : null;
+        const clipDb = ray ? ray.clipDb : null;
+        const clipDx = ray ? ray.clipDx : null;
+        const clipDy = ray ? ray.clipDy : null;
           // ly/lx: integer div+mod by default; per-brick float reciprocal under ?voxrecip
           // (loss-exact, see flag note) — Apple has no HW int-divide so the default path pays
           // a microcoded sequence on every fragment.
@@ -1641,13 +1190,674 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
           } else {
             flatPath();
           }
-        }, WG_RASTER);
-        }; // end brickBody
-        brickBody();
+      };
+
+      // ── PHASE A (1 lane = 1 brick): decode + project + CLAMP → store the brick's footprint
+      // RECORD into shared memory. This lane does NOT raster the footprint — it only SETS UP
+      // the bbox + election key so Phase B can spread the pixels across all lanes. Seed the
+      // record EMPTY (bbW=0) for every lane first so a culled/idle lane contributes 0 area.
+      wgSet(wgBbW, brickLocal, uint(0));
+      wgSet(wgBbH, brickLocal, uint(0));
+      wgSet(wgCand, brickLocal, uint(0));
+      wgSet(wgBbX0, brickLocal, uint(0));
+      wgSet(wgBbY0, brickLocal, uint(0));
+      // OCCUPANCY-GATE seed (?voxlod=1): default 0xffff = ALL buckets painted ⇒ a brick whose
+      // gate never arms (small footprint / mask stays full) behaves EXACTLY like voxlod=0 (no
+      // pixel dropped). Phase A overwrites it with the real screen mask only when the gate arms.
+      if (voxOccGate && wgOccMask) wgSet(wgOccMask, brickLocal, uint(0xffff));
+      // ?voxcell seed: ineligible until Phase A proves a clean non-straddle record.
+      if (voxCell && wgCellOk) wgSet(wgCellOk, brickLocal, uint(0));
+      const brickActive = brickLocal.lessThan(brickCount).and((wgVisible.element(uint(0)) as unknown as NU).equal(uint(1)));
+      If(brickActive, () => {
+        const bAbs = brickBase.add(brickLocal).toVar();      // absolute brick index
+        const bWordBase = bAbs.mul(uint(BRICK_WORDS)).toVar();
+        // per-brick LOCAL center (words 5..7) + half-extent (word8) — the real grid cell.
+        const brLocalRest = vec3(
+          bcU2F(elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_POS_X)))),
+          bcU2F(elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_POS_X + 1)))),
+          bcU2F(elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_POS_X + 2)))),
+        ) as unknown as NV3;
+        // ?voxwind: rigid crown sway — offset the brick's LOCAL centre ONCE, from the
+        // per-workgroup wind scalars broadcast in wgWind (all lanes read the 6 floats).
+        // The footprint (brWCenter), the voxCell ray AABB (wgBrCx/y/z) and the occ-mask
+        // cells all derive from brLocal, so they shift together; the ray→local transform
+        // uses A (not brLocal), so it still lands on the swayed brick. .toVar() = 1 eval.
+        const wscShared: VoxWindScalars | null =
+          voxWind && wgWind
+            ? {
+                dirX: (wgWind.element(uint(0)) as unknown as NF).toVar(),
+                dirY: (wgWind.element(uint(1)) as unknown as NF).toVar(),
+                leanBase: (wgWind.element(uint(2)) as unknown as NF).toVar(),
+                swayABase: (wgWind.element(uint(3)) as unknown as NF).toVar(),
+                swayS: (wgWind.element(uint(4)) as unknown as NF).toVar(),
+                swayXS: (wgWind.element(uint(5)) as unknown as NF).toVar(),
+              }
+            : null;
+        const brLocal = (
+          voxWind && wscShared
+            ? brLocalRest.add(voxWindLocalOffset(wscShared, brLocalRest.y, yawSc, A.w as unknown as NF))
+            : brLocalRest
+        ).toVar() as unknown as NV3;
+        const brHalf = bcU2F(elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_HALF)))).toVar();
+        const brWCenter = instTransformPoint(A, B, yawSc, brLocal);
+        const brWR = instSphereRadius(A, B, brHalf as unknown as NF, float(0)).toVar();
+
+        // project the 8 corners of THIS brick's world AABB cube [brWCenter ± brWR] → screen bbox
+        // + near z. A near-plane-straddling brick's surviving corners can fling the bbox to
+        // extreme coords; those degenerate corners are detected + excluded (see STRADDLE FLAG)
+        // and the brick is routed to a stable centre-box footprint instead.
+        const sMinX = float(1e9).toVar();
+        const sMinY = float(1e9).toVar();
+        const sMaxX = float(-1e9).toVar();
+        const sMaxY = float(-1e9).toVar();
+        const nearZ = float(1e9).toVar();
+        const allBehind = uint(1).toVar();
+        // STRADDLE FLAG: set if ANY of the 8 AABB corners is degenerate — i.e. at/behind the
+        // near plane (w ≤ NEAR_EPS) OR projecting wildly off-screen (|ndc.x|>NDC_EXPLODE or
+        // |ndc.y|>NDC_EXPLODE). Both signal a corner near the near plane whose tiny positive w
+        // makes ndc = p/w shoot to extreme coords; such a corner has NO trustworthy 2D position,
+        // so we EXCLUDE it from sMin/sMax (it would otherwise drag the bbox into empty sky — the
+        // root of the iter-1 monolith columns) and route the whole brick to the stable centre-box
+        // SILHOUETTE branch below. A genuinely on-screen corner (|ndc| ≤ NDC_EXPLODE=3, i.e. up
+        // to three screens past centre — far looser than any real foliage brick) is UNCHANGED, so
+        // every normal in-front brick keeps 54c3947's exact column-free footprint.
+        const straddles = uint(0).toVar();
+        loopI('sz3', toI(0), toI(1), (zc) => {
+          loopI('sy3', toI(0), toI(1), (yc) => {
+            loopI('sx3', toI(0), toI(1), (xc) => {
+              const sx = toF(xc).mul(2).sub(1);
+              const sy = toF(yc).mul(2).sub(1);
+              const sz = toF(zc).mul(2).sub(1);
+              const wp = vec3(
+                brWCenter.x.add(sx.mul(brWR)),
+                brWCenter.y.add(sy.mul(brWR)),
+                brWCenter.z.add(sz.mul(brWR)),
+              ) as unknown as NV3;
+              const p = (cam.vp.mul(vec4(wp, 1)) as unknown as NV4).toVar();
+              If(p.w.greaterThan(float(NEAR_EPS)), () => {
+                const ndc = p.xyz.div(p.w).toVar();
+                const exploded = ndc.x
+                  .abs()
+                  .greaterThan(float(NDC_EXPLODE))
+                  .or(ndc.y.abs().greaterThan(float(NDC_EXPLODE)));
+                If(exploded, () => {
+                  straddles.assign(uint(1)); // near-plane blowup ⇒ exclude this corner from the bbox
+                }).Else(() => {
+                  allBehind.assign(uint(0));
+                  // RAW projected corner — bit-IDENTICAL to 54c3947's per-brick bbox accumulation
+                  // for an all-in-front (non-straddling) brick: the COLUMN-FREE, KNOWN-CORRECT path.
+                  sMinX.assign(sMinX.min(ndc.x.add(1).mul(0.5).mul(W)));
+                  sMaxX.assign(sMaxX.max(ndc.x.add(1).mul(0.5).mul(W)));
+                  sMinY.assign(sMinY.min(ndc.y.add(1).mul(0.5).mul(H)));
+                  sMaxY.assign(sMaxY.max(ndc.y.add(1).mul(0.5).mul(H)));
+                  nearZ.assign(nearZ.min(ndc.z));
+                });
+              }).Else(() => {
+                straddles.assign(uint(1)); // a corner at/behind the near plane ⇒ degenerate bbox
+              });
+            });
+          });
+        });
+        // ENTER if the brick has ANY usable footprint: a clean non-straddle bbox (some in-front
+        // corner survived ⇒ allBehind=0) OR a straddle whose stable centre is in front (handled
+        // inside). A brick with no in-front corner AND no in-front centre is genuinely off-screen
+        // /behind and is dropped.
+        If(allBehind.equal(uint(0)).or(straddles.equal(uint(1))), () => {
+          // ── FOOTPRINT BBOX. Two regimes — the fix for the iter-1 monolith columns:
+          //
+          //  (1) NON-STRADDLER (all 8 corners in front + on-screen, the normal/far/mid case): use
+          //      54c3947's RAW framebuffer-clamped projected AABB EXACTLY (floor(sMin)..ceil(sMax)
+          //      clamped to the framebuffer). This is the column-free, KNOWN-CORRECT footprint,
+          //      restored bit-for-bit. A SPAN CAP to 2·BRICK_MAX_EXT px (measured from the bbox
+          //      min) is applied purely as the cooperative-raster stall guard; a real foliage
+          //      brick is ≪ this, so it is a no-op here and the silhouette matches 54c3947.
+          //
+          //  (2) STRADDLER (≥1 corner near/behind the near plane — camera literally inside the
+          //      brick, forcevox=all close-up): the projected AABB is DEGENERATE — a surviving
+          //      near-plane corner with tiny w explodes ndc, which dragged sMin/sMax to extreme
+          //      coords, and 4fe6821's centre-anchored ±64 box then painted a SOLID 128-px slab
+          //      of EMPTY SKY ⇒ the tall vertical monolith columns. For a straddler we IGNORE the
+          //      degenerate sMin/sMax and instead paint a small BRICK_MAX_EXT box centred on the
+          //      brick's STABLE projected centre IF that centre is in front (depth taken from the
+          //      centre, clamped near so the up-close brick still wins its election); if the
+          //      centre itself is behind the near plane (camera dead-centre in the brick) we DROP
+          //      the brick rather than smear a column. This bounds the close-up footprint to the
+          //      brick's true on-screen position — no sky columns.
+          const startX = toI(0).toVar();
+          const startY = toI(0).toVar();
+          const endX = toI(-1).toVar(); // endX<startX ⇒ invalid until a regime sets it
+          const endY = toI(-1).toVar();
+          const bbNearZ = nearZ.toVar();
+          If(straddles.equal(uint(0)), () => {
+            const sx0 = maxI(toI(0), toI(sMinX.floor())).toVar();
+            const sy0 = maxI(toI(0), toI(sMinY.floor())).toVar();
+            // SPAN CAP (stall guard only): far edge ≤ near edge + 2·BRICK_MAX_EXT px.
+            const capX = minI(toI(width - 1), sx0.add(toI(2 * BRICK_MAX_EXT))).toVar();
+            const capY = minI(toI(height - 1), sy0.add(toI(2 * BRICK_MAX_EXT))).toVar();
+            startX.assign(sx0);
+            startY.assign(sy0);
+            endX.assign(minI(minI(toI(width - 1), toI(sMaxX.ceil())), capX));
+            endY.assign(minI(minI(toI(height - 1), toI(sMaxY.ceil())), capY));
+          }).Else(() => {
+            // straddler → small box at the STABLE projected centre. CLAMP, do not DROP: a brick
+            // the camera sits INSIDE is the NEAREST thing on screen, so it MUST win its election,
+            // not vanish (the iter-1 close-up sparseness bug = this centre being dropped when it
+            // fell behind the near plane). Clamp w to a small positive epsilon so a centre at/
+            // behind the near plane still yields a STABLE on-screen position; paint the bounded
+            // BRICK_MAX_EXT centre box there (NOT the degenerate sMin/sMax slab ⇒ no columns),
+            // and pin bbNearZ via the centre's clamped ndc.z (nz.clamp(0,1) below maps an at/
+            // behind-near depth to 0 = nearest). This keeps the 048f451 silhouette fix (bounded
+            // box, no tall sky monolith) while recovering every close-up brick.
+            const cp = (cam.vp.mul(vec4(brWCenter, 1)) as unknown as NV4).toVar();
+            const cw = cp.w.max(float(NEAR_EPS)).toVar(); // clamp w ≥ ε so a behind-near centre is still placeable
+            const cndc = cp.xyz.div(cw).toVar();
+            const ccx = cndc.x.add(1).mul(0.5).mul(W).toVar();
+            const ccy = cndc.y.add(1).mul(0.5).mul(H).toVar();
+            startX.assign(maxI(toI(0), toI(ccx.sub(float(BRICK_MAX_EXT)).floor())));
+            startY.assign(maxI(toI(0), toI(ccy.sub(float(BRICK_MAX_EXT)).floor())));
+            endX.assign(minI(toI(width - 1), toI(ccx.add(float(BRICK_MAX_EXT)).ceil())));
+            endY.assign(minI(toI(height - 1), toI(ccy.add(float(BRICK_MAX_EXT)).ceil())));
+            // depth from the centre (the in-front corners may all have been excluded ⇒ nearZ
+            // would still be its 1e9 seed). min with the centre's clamped ndc.z, then clamp to
+            // [0,1] below — a behind-near centre lands at/below 0 ⇒ nearest, wins its election.
+            bbNearZ.assign(bbNearZ.min(cndc.z));
+          });
+          const validBB = startX.lessThanEqual(endX).and(startY.lessThanEqual(endY));
+          // ?voxbocc — PER-BRICK occlusion (flag comment above): the brick's own clamped bbox
+          // + front-slab key vs voxOccPyr, exact mirror of the per-block test's conservative
+          // idiom (min-pool ⇒ any see-through texel keeps the brick; |0xff ⇒ keep-on-tie).
+          // Straddlers (camera inside the brick) are exempt — they must always win.
+          const bVis = uint(1).toVar();
+          if (voxBocc && voxOccl) {
+            If(validBB.and(straddles.equal(uint(0))), () => {
+              const nzT = bbNearZ.clamp(0, 1);
+              const bKey = depthKey24(nzT as unknown as NF).shiftLeft(uint(8)).bitOr(uint(0xff)).toVar();
+              const rPx = toF(endX.sub(startX).add(toI(1)))
+                .max(toF(endY.sub(startY).add(toI(1))))
+                .mul(0.5)
+                .toVar();
+              const levelF = (rPx as unknown as { max(o: number): NF })
+                .max(1)
+                .log2()
+                .ceil()
+                .clamp(0, (pyrLevelCountU as unknown as { sub(o: number): NF }).sub(1))
+                .toVar();
+              const info = pyrTable.element(uint(levelF));
+              const lw = uint(info.y).toVar();
+              const lh = uint(info.z).toVar();
+              const lo = uint(info.x).toVar();
+              const px = toF(startX.add(endX).add(toI(1)))
+                .mul(0.5)
+                .div(float(width))
+                .mul(toF(lw))
+                .toVar();
+              const py = toF(startY.add(endY).add(toI(1)))
+                .mul(0.5)
+                .div(float(height))
+                .mul(toF(lh))
+                .toVar();
+              const x0 = uint((px.sub(0.5) as unknown as { clamp(a: number, b: NF): NF }).clamp(0, toF(lw.sub(uint(1))))).toVar();
+              const y0 = uint((py.sub(0.5) as unknown as { clamp(a: number, b: NF): NF }).clamp(0, toF(lh.sub(uint(1))))).toVar();
+              const x1 = minU(x0.add(uint(1)), lw.sub(uint(1))).toVar();
+              const y1 = minU(y0.add(uint(1)), lh.sub(uint(1))).toVar();
+              const z00 = elemU(voxOccPyr.ro, lo.add(y0.mul(lw)).add(x0)).toVar();
+              const z01 = elemU(voxOccPyr.ro, lo.add(y0.mul(lw)).add(x1)).toVar();
+              const z10 = elemU(voxOccPyr.ro, lo.add(y1.mul(lw)).add(x0)).toVar();
+              const z11 = elemU(voxOccPyr.ro, lo.add(y1.mul(lw)).add(x1)).toVar();
+              const occK = minU(minU(z00, z01), minU(z10, z11));
+              If(bKey.lessThanEqual(occK), () => {
+                bVis.assign(uint(0));
+              });
+            });
+          }
+          If(validBB.and(bVis.equal(uint(1))), () => {
+            // FOOTPRINT RECORD, built into REGISTERS. The tier split below either rasterizes this
+            // brick INLINE (tier 1) or stores this record to shared for Phase B (tier 2) — never
+            // both. So wgAnyLive + the shared record stores move DOWN into the tier-2 branch; a
+            // tier-1 brick keeps its shared record EMPTY (bbW stays 0 from the Phase-A seed).
+            const nz = bbNearZ.clamp(0, 1).toVar();
+            // ONE voxCz per BRICK (coarse one-sample default, §6.4) — the brick AABB front-slab.
+            // Precompute the FULL election key ONCE per brick (loss-exact — voxCz is loop-
+            // invariant) so neither the inline raster nor Phase B re-derives depthKey24 per pixel.
+            const cand = depthKey24(nz as unknown as NF)
+              .shiftLeft(uint(8))
+              .bitOr(payload.bitAnd(uint(0xff)))
+              .toVar();
+            const bbW = uint(endX).sub(uint(startX)).add(uint(1)).toVar();
+            const bbH = uint(endY).sub(uint(startY)).add(uint(1)).toVar();
+            const area = bbW.mul(bbH).toVar();
+            // brick 4³ occupancy words (voxCell ray DDA + occ-gate build) — loaded ONCE into regs
+            // and consumed by BOTH the tier-1 inline path and the tier-2 shared store (no double
+            // load). SAME expression the prior ?voxcell store + occ build used ⇒ bit-for-bit.
+            const occLoReg =
+              voxCell || voxOccGate
+                ? elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_OCC_LO))).toVar()
+                : null;
+            const occHiReg =
+              voxCell || voxOccGate
+                ? elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_OCC_HI))).toVar()
+                : null;
+            // OCC-GATE screen mask → a REGISTER (0xffff seed = paint solid). The build below is the
+            // unchanged Phase-A occupancy-gate build, but its result now lands here instead of
+            // straight into shared, so tier-1 (inline) and tier-2 (Phase B) share the ONE build and
+            // apply the SAME carve ⇒ identical elected pixels regardless of tier.
+            const occMaskReg = voxOccGate && wgOccMask ? uint(0xffff).toVar() : null;
+            // ── OCCUPANCY-GATE MASK BUILD (?voxlod=1, Phase A). For a COARSE (dagLevel>0),
+            // LARGE-footprint (area ≥ OCC_GATE_MIN_AREA) brick — i.e. screen-big enough for empty
+            // interior to matter — build a OCC_MASK_DIM×OCC_MASK_DIM screen mask of which bbox
+            // buckets a projected OCCUPIED 4×4×4 sub-cell overlaps, so Phase B skips the empty
+            // buckets between sparse children. The build re-binned occLo/occHi into THIS brick's
+            // tight [center±half] cube (downsampleBrickGrid), so each cell's LOCAL centre is
+            // brLocal + (cell+0.5−BRICK_DIM/2)·cellLocalSize and its half-extent is cellLocalSize/2.
+            // For each OCCUPIED cell we project its 8 LOCAL-AABB corners, take their SCREEN bbox,
+            // and mark EVERY bbox bucket that rect overlaps — a CONSERVATIVE SUPERSET of the cell's
+            // true coverage ⇒ a covered pixel's bucket is ALWAYS set ⇒ provably NO holes at ANY
+            // perspective (validated by tools/voxlod-occgate-nohole.ts: 0 holes / 5966 armed
+            // bricks). A small or L0 brick keeps the 0xffff seed (paints solid, no behaviour change;
+            // near-dense crown intact, fine-end rule preserved).
+            if (voxOccGate && wgOccMask && dagLevel) {
+              const gateArea = bbW.mul(bbH).toVar();
+              // ARM only on a COARSE brick (dagLevel>0) whose footprint is big enough for empty
+              // interior to matter. A fine/near (L0) brick keeps the 0xffff seed ⇒ paints solid.
+              let armCond = gateArea.greaterThanEqual(uint(OCC_GATE_MIN_AREA)).and(dagLevel.greaterThan(uint(0)));
+              if (voxMaskRay && voxCell) {
+                // ?voxmaskray: RAY-ELIGIBLE ⇒ wgOccMask is provably unread (dead value) — skip the
+                // build. Mirrors the Phase-B cellElig gate EXACTLY (wgCellOk = 1 for all set-up
+                // records incl. straddlers; area STRICTLY > VOX_SPLAT_FLOOR at the cellElig site) —
+                // keep the two in sync. Since a mask only arms at area ≥ OCC_GATE_MIN_AREA (16) >
+                // VOX_SPLAT_FLOOR, every armed brick is ray-eligible when voxCell is on ⇒ the flat
+                // occ-mask carve is superseded by the ray's own DDA carve (correct, not a miss).
+                const rayEligible = gateArea.greaterThan(uint(VOX_SPLAT_FLOOR));
+                armCond = armCond.and(rayEligible.not());
+              }
+              If(armCond, () => {
+                const occLo = elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_OCC_LO))).toVar();
+                const occHi = elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_OCC_HI))).toVar();
+                // SPARSITY GUARD: build the mask only when the brick is sparse enough that the
+                // carved buckets save MORE elections than the ≤512-projection build costs. A
+                // near-full brick (>OCC_MASK_FULL of 64 cells set) carves little, so building the
+                // mask would be a net GPU LOSS — skip it and paint solid (the 0xffff seed). This is
+                // the cost-model guard that keeps the gate from re-introducing a slowdown on DENSE
+                // coarse bricks (the prior iterations' failure mode), measured by popcount once
+                // per brick (cheap) — NOT per pixel.
+                const occCount = (countOneBits(occLo) as unknown as NU)
+                  .add(countOneBits(occHi) as unknown as NU)
+                  .toVar();
+                const sparseEnough = occCount.lessThanEqual(uint(OCC_MASK_FULL)).toVar();
+                If(sparseEnough, () => {
+                  const cellLocalSize = brHalf.mul(2).div(float(BRICK_DIM)).toVar(); // local edge of one cell
+                  const halfDim = float(BRICK_DIM).mul(0.5).toVar();
+                  const fbbW = toF(bbW).toVar();
+                  const fbbH = toF(bbH).toVar();
+                  const mask = uint(0).toVar();
+                  // loop the 64 cells; only OCCUPIED cells contribute (occLo/occHi bit test).
+                  loopI('ocz', toI(0), toI(BRICK_DIM), (czc) => {
+                    loopI('ocy', toI(0), toI(BRICK_DIM), (cyc) => {
+                      loopI('ocx', toI(0), toI(BRICK_DIM), (cxc) => {
+                        // cell linear index = x + y*4 + z*16 (VoxelBrick.brickCellIndex order).
+                        const cellIdx = (cxc as unknown as { toUint(): NU })
+                          .toUint()
+                          .add((cyc as unknown as { toUint(): NU }).toUint().mul(uint(BRICK_DIM)))
+                          .add((czc as unknown as { toUint(): NU }).toUint().mul(uint(BRICK_DIM * BRICK_DIM)))
+                          .toVar();
+                        // occupied? bit cellIdx of the 64-bit occLo|occHi mask. Pick the word by
+                        // the hi-bit (cellIdx≥32) and shift by cellIdx&31 — both shifts use an
+                        // IN-RANGE [0,31] amount (no UB underflow shift, robust on Metal); select
+                        // then keeps the LO result for cells 0..31 and the HI result for 32..63.
+                        const cellLow = cellIdx.bitAnd(uint(31)).toVar();
+                        const loBit = occLo.shiftRight(cellLow).bitAnd(uint(1)).toVar();
+                        const hiBit = occHi.shiftRight(cellLow).bitAnd(uint(1)).toVar();
+                        const occBit = cellIdx.lessThan(uint(32)).select(loBit, hiBit).toVar();
+                        If(occBit.equal(uint(1)), () => {
+                          // CONSERVATIVE per-cell mask: project the cell's 8 LOCAL-AABB corners,
+                          // accumulate their SCREEN bbox, and mark EVERY bbox bucket the cell's
+                          // screen rect overlaps. This is a SUPERSET of the cell's true coverage,
+                          // so a covered pixel's bucket is ALWAYS set ⇒ provably NO holes at ANY
+                          // perspective — including the close-up case where a cell projects across
+                          // many buckets (the centre+dilate scheme missed those: a near cell spans
+                          // > ±1 bucket and a covered pixel fell outside the dilated neighbourhood).
+                          // Near a cell spans the whole bbox ⇒ marks all buckets ⇒ brick stays
+                          // solid (near dense, no carving); far a cell is ~1 bucket ⇒ carves the
+                          // empty interior. The cell LOCAL centre = brLocal + (cell+0.5−halfDim)·
+                          // cellLocalSize; half-cell extent = cellLocalSize·0.5.
+                          const clx = brLocal.x.add(toF(cxc).add(0.5).sub(halfDim).mul(cellLocalSize)).toVar();
+                          const cly = brLocal.y.add(toF(cyc).add(0.5).sub(halfDim).mul(cellLocalSize)).toVar();
+                          const clz = brLocal.z.add(toF(czc).add(0.5).sub(halfDim).mul(cellLocalSize)).toVar();
+                          const hc = cellLocalSize.mul(0.5).toVar();
+                          const cMinX = float(1e9).toVar();
+                          const cMinY = float(1e9).toVar();
+                          const cMaxX = float(-1e9).toVar();
+                          const cMaxY = float(-1e9).toVar();
+                          const cFront = uint(0).toVar();
+                          loopI('ccz', toI(0), toI(2), (kz) => {
+                            loopI('ccy', toI(0), toI(2), (ky) => {
+                              loopI('ccx', toI(0), toI(2), (kx) => {
+                                const ccl = vec3(
+                                  clx.add(toF(kx).mul(2).sub(1).mul(hc)),
+                                  cly.add(toF(ky).mul(2).sub(1).mul(hc)),
+                                  clz.add(toF(kz).mul(2).sub(1).mul(hc)),
+                                ) as unknown as NV3;
+                                const ccw = instTransformPoint(A, B, yawSc, ccl);
+                                const ccp = (cam.vp.mul(vec4(ccw, 1)) as unknown as NV4).toVar();
+                                If(ccp.w.greaterThan(float(NEAR_EPS)), () => {
+                                  cFront.assign(uint(1));
+                                  const cndc = ccp.xyz.div(ccp.w).toVar();
+                                  const csx = cndc.x.add(1).mul(0.5).mul(W).toVar();
+                                  const csy = cndc.y.add(1).mul(0.5).mul(H).toVar();
+                                  cMinX.assign(cMinX.min(csx));
+                                  cMaxX.assign(cMaxX.max(csx));
+                                  cMinY.assign(cMinY.min(csy));
+                                  cMaxY.assign(cMaxY.max(csy));
+                                });
+                              });
+                            });
+                          });
+                          If(cFront.equal(uint(1)), () => {
+                            // screen bbox → INCLUSIVE bucket range, clamped to [0, OCC_MASK_DIM).
+                            const fU0 = cMinX.sub(toF(startX)).div(fbbW).mul(float(OCC_MASK_DIM)).toVar();
+                            const fU1 = cMaxX.sub(toF(startX)).div(fbbW).mul(float(OCC_MASK_DIM)).toVar();
+                            const fV0 = cMinY.sub(toF(startY)).div(fbbH).mul(float(OCC_MASK_DIM)).toVar();
+                            const fV1 = cMaxY.sub(toF(startY)).div(fbbH).mul(float(OCC_MASK_DIM)).toVar();
+                            const u0 = maxI(toI(0), minI(toI(OCC_MASK_DIM - 1), toI(fU0.floor()))).toVar();
+                            const u1 = maxI(toI(0), minI(toI(OCC_MASK_DIM - 1), toI(fU1.floor()))).toVar();
+                            const v0 = maxI(toI(0), minI(toI(OCC_MASK_DIM - 1), toI(fV0.floor()))).toVar();
+                            const v1 = maxI(toI(0), minI(toI(OCC_MASK_DIM - 1), toI(fV1.floor()))).toVar();
+                            // FIXED 0..OCC_MASK_DIM loops with an in-[u0,u1]×[v0,v1] guard (constant
+                            // loop bounds = the codegen-safe pattern; variable bounds avoided).
+                            loopI('mbv', toI(0), toI(OCC_MASK_DIM), (vv) => {
+                              loopI('mbu', toI(0), toI(OCC_MASK_DIM), (uu) => {
+                                const inR = vv
+                                  .greaterThanEqual(v0)
+                                  .and(vv.lessThanEqual(v1))
+                                  .and(uu.greaterThanEqual(u0))
+                                  .and(uu.lessThanEqual(u1));
+                                If(inR, () => {
+                                  const bit = (vv as unknown as { toUint(): NU })
+                                    .toUint()
+                                    .mul(uint(OCC_MASK_DIM))
+                                    .add((uu as unknown as { toUint(): NU }).toUint())
+                                    .toVar();
+                                  mask.assign(mask.bitOr(uint(1).shiftLeft(bit)));
+                                });
+                              });
+                            });
+                          });
+                        });
+                      });
+                    });
+                  });
+                  // a degenerate all-behind-near projection could leave mask 0 ⇒ that would paint
+                  // NOTHING (a hole). Guard: an empty mask falls back to 0xffff (paint solid).
+                  const safeMask = mask.equal(uint(0)).select(uint(0xffff), mask).toVar();
+                  if (occMaskReg) occMaskReg.assign(safeMask); // register, not shared (see head)
+                });
+              });
+            }
+            // ── TIER SPLIT. INVARIANT (load-bearing): every brick is rasterized EXACTLY ONCE —
+            // tier-1 INLINE here XOR tier-2 via Phase B — over the same footprint pixel set
+            // [0, area) with the same per-brick `cand` key. atomicMax is order-free, so the
+            // elected image is BIT-IDENTICAL no matter which tier a brick takes. tier-1 leaves its
+            // shared record empty (bbW=0) so the Phase-B compaction never lists it; tier-2 is the
+            // ONLY tier that sets wgAnyLive (tier-1 no longer needs Phase B).
+            If(area.lessThanEqual(uint(VOX_TIER1_MAX)), () => {
+              // TIER 1 (footprint ≤ VOX_TIER1_MAX px): the OWNING lane serially rasterizes its own
+              // brick — NO shared traffic; the typical far brick (1-6 px) is a 0-or-few-trip loop.
+              // Working vars are declared INSIDE this If so they do NOT extend Phase-A live state
+              // across the corner projection / occ-mask build (register-pressure guard). ?voxrdbg≥2
+              // (build-time measurement ablation) skips this election exactly as it skips Phase B.
+              if (voxRdbg < 2) {
+                const voxIdB = voxBrickShade
+                  ? voxId.bitOr(brickLocal.shiftLeft(uint(21))).toVar()
+                  : voxId;
+                // per-brick alpha density — SAME expression as the Phase-B prelude (loss-exact).
+                const aDens = voxAlpha
+                  ? toF(
+                      elemU(
+                        gpu.voxelBricks,
+                        brickWord(brickBase.add(brickLocal), uint(BRICK_ALBEDO)),
+                      ).shiftRight(uint(24)),
+                    )
+                      .div(255)
+                      .toVar()
+                  : null;
+                const aActive = aDens ? aDens.lessThan(float(DENS_SOLID)).toVar() : null;
+                const aAlpha = aDens
+                  ? aDens.div(float(DENS_SOLID)).clamp(VOX_ALPHA_MIN, 1).toVar()
+                  : null;
+                const gateActive = occMaskReg ? occMaskReg.notEqual(uint(0xffff)).toVar() : null;
+                const invW = voxRecip ? float(1).div(toF(bbW)).toVar() : null;
+                const invH = voxRecip ? float(1).div(toF(bbH)).toVar() : null;
+                // ?voxcell ray data straight from registers (mirrors the Phase-B shared reads). The
+                // record is VALID here (wgCellOk would be 1), so cellElig = area > splat floor.
+                const cellReg =
+                  voxCell && wgCellOk && wgBrCx && wgBrCy && wgBrCz && wgBrHf && wgCellLo && wgCellHi;
+                const cellElig = cellReg
+                  ? area.greaterThan(uint(VOX_SPLAT_FLOOR)).toVar()
+                  : null;
+                const brCx = cellReg ? brLocal.x.toVar() : null;
+                const brCy = cellReg ? brLocal.y.toVar() : null;
+                const brCz = cellReg ? brLocal.z.toVar() : null;
+                const brHf = cellReg ? (brHalf as unknown as NF).toVar() : null;
+                const cOccLo = cellReg && occLoReg ? occLoReg.toVar() : null;
+                const cOccHi = cellReg && occHiReg ? occHiReg.toVar() : null;
+                const cMaskFull =
+                  cellReg && cOccLo && cOccHi
+                    ? cOccLo.equal(uint(0xffffffff)).and(cOccHi.equal(uint(0xffffffff))).toVar()
+                    : null;
+                const cellEhf =
+                  cellReg && brHf
+                    ? brHf
+                        .add(
+                          area
+                            .lessThanEqual(uint(voxCellMinArea))
+                            .select(brHf.div(toF(bbW).max(toF(bbH)).max(float(1))), float(0)),
+                        )
+                        .toVar()
+                    : null;
+                const pb: PixelCtx = {
+                  bbW,
+                  bbH,
+                  bbX0: uint(startX).toVar(),
+                  bbY0: uint(startY).toVar(),
+                  cand,
+                  voxIdB,
+                  aActive,
+                  aAlpha,
+                  occMask: occMaskReg,
+                  gateActive,
+                  invW,
+                  invH,
+                  cellElig,
+                  brCx,
+                  brCy,
+                  brCz,
+                  brHf,
+                  cellEhf,
+                  cOccLo,
+                  cOccHi,
+                  cMaskFull,
+                  ray: buildRayBasis(), // per-cluster basis, localized to tier-1 (register-bounded)
+                };
+                // SERIAL raster on this ONE lane: localPx = 0..area-1 (default stride 1, ≤T trips).
+                loopU(uint(0), area, (localPx) => emitPixel(pb, localPx));
+              }
+            }).Else(() => {
+              // TIER 2 (footprint > VOX_TIER1_MAX px): store the record to shared for Phase B's
+              // cooperative per-pixel spread, and set wgAnyLive (the only tier that needs Phase B).
+              wgSet(wgAnyLive, uint(0), uint(1));
+              wgSet(wgBbX0, brickLocal, uint(startX));
+              wgSet(wgBbY0, brickLocal, uint(startY));
+              wgSet(wgBbW, brickLocal, bbW);
+              wgSet(wgBbH, brickLocal, bbH);
+              wgSet(wgCand, brickLocal, cand);
+              // ?voxcell record (straddlers INCLUDED; ray-vs-flat routing is the Phase-B area gate).
+              if (
+                voxCell &&
+                wgBrCx &&
+                wgBrCy &&
+                wgBrCz &&
+                wgBrHf &&
+                wgCellLo &&
+                wgCellHi &&
+                wgCellOk &&
+                occLoReg &&
+                occHiReg
+              ) {
+                wgSetF(wgBrCx, brickLocal, brLocal.x);
+                wgSetF(wgBrCy, brickLocal, brLocal.y);
+                wgSetF(wgBrCz, brickLocal, brLocal.z);
+                wgSetF(wgBrHf, brickLocal, brHalf as unknown as NF);
+                wgSet(wgCellLo, brickLocal, occLoReg);
+                wgSet(wgCellHi, brickLocal, occHiReg);
+                wgSet(wgCellOk, brickLocal, uint(1));
+              }
+              if (voxOccGate && wgOccMask && occMaskReg) {
+                wgSet(wgOccMask, brickLocal, occMaskReg);
+              }
+            });
+          });
+        });
+      });
+      workgroupBarrier(); // Phase A records complete before Phase B reads them
+
+      // ── PHASE B (ALL lanes, cooperative per-BRICK raster): loop over every brick in the
+      // cluster; WITHIN each brick, stride its OWN footprint [0, area) across all WG_RASTER
+      // lanes. localPx is BY CONSTRUCTION in [0, area) ⇒ it can NEVER exceed bbW·bbH, so the
+      // ly = localPx/bbW overflow column is structurally impossible and NO pixel is ever
+      // dropped. This restores 54c3947's density (every footprint pixel of every non-empty
+      // brick reaches the election) with no flat-index reconstruction, no prefix array, and
+      // no binary search (the 99.2%-loss + duplicate-prefix hazard, all deleted). A big brick
+      // still spreads across all 128 lanes via its inner stride ⇒ the 4fe6821 stall-fix
+      // (O(area/WG) per lane, BRICK_MAX_EXT caps any one brick at ≤128×128) is preserved;
+      // tiny/empty bricks (area 0) contribute a zero-trip inner loop.
+      const nBricks = minU(brickCount, uint(WG_RASTER)).toVar();
+      // ── TIER-2 COMPACTION: lane 0 densely lists the non-empty (tier-2) records so Phase B
+      // loops only the few big bricks (typically 0-3) instead of all 128 slots. Serial single-lane
+      // scan (no workgroup atomics; TSL r184 has none). A SECOND barrier publishes the list before
+      // the cooperative Phase-B read (mandatory: lane 0 writes wgCompact/wgCompactN, every lane
+      // reads them). The barrier sits OUTSIDE the divergent If, so it stays workgroup-uniform.
+      If(brickLocal.equal(uint(0)), () => {
+        const cn = uint(0).toVar();
+        loopU(uint(0), nBricks, (s) => {
+          If((wgBbW.element(s) as unknown as NU).greaterThan(uint(0)), () => {
+            wgSet(wgCompact, cn, s);
+            cn.assign(cn.add(uint(1)));
+          });
+        });
+        wgSet(wgCompactN, uint(0), cn);
+      });
+      workgroupBarrier(); // publish the compacted tier-2 index list to all lanes
+      const compactCount = (wgCompactN.element(uint(0)) as unknown as NU).toVar();
+      // ?voxcell per-CLUSTER ray/clip bases (uniform across the workgroup) — built ONCE, shared by
+      // every Phase-B brick (tier-1 builds its own inside the Phase-A inline path).
+      const rayB = buildRayBasis();
+      // ?voxrdbg=2 STOP point: skip the ENTIRE Phase-B election (no per-pixel atomicMax / visBV
+      // store). Build-time gate ⇒ when OFF (production) this whole block is emitted byte-identical.
+      const phaseB = (): void =>
+      loopU(uint(0), compactCount, (k) => {
+        const b = (wgCompact.element(k) as unknown as NU).toVar();
+        // recover this brick's footprint RECORD (set up in Phase A).
+        const bbW = (wgBbW.element(b) as unknown as NU).toVar();
+        const bbX0 = (wgBbX0.element(b) as unknown as NU).toVar();
+        const bbY0 = (wgBbY0.element(b) as unknown as NU).toVar();
+        const bbH = (wgBbH.element(b) as unknown as NU).toVar();
+        const cand = (wgCand.element(b) as unknown as NU).toVar();
+        // ?voxbn: this brick's id for the election store — voxId with the brick index in
+        // bits 21-27 (see the flag note at voxBrickShade). Built at per-brick scope so the
+        // per-pixel election below stores the WINNING brick, not just the block.
+        const voxIdB = voxBrickShade ? voxId.bitOr(b.shiftLeft(uint(21))).toVar() : voxId;
+        // ?voxalpha per-brick density (BRICK_ALBEDO alpha byte) — one load per brick,
+        // amortized over its footprint; aActive is UNIFORM across the brick's pixels.
+        const aDens = voxAlpha
+          ? toF(elemU(gpu.voxelBricks, brickWord(brickBase.add(b), uint(BRICK_ALBEDO))).shiftRight(uint(24)))
+              .div(255)
+              .toVar()
+          : null;
+        // alpha-ACTIVE (stipples) iff density < DENS_SOLID; ≥ DENS_SOLID keeps every pixel (solid
+        // fast path). UNIFORM across the brick's pixels ⇒ the per-pixel gate is a uniform branch.
+        const aActive = aDens ? aDens.lessThan(float(DENS_SOLID)).toVar() : null;
+        // HONEST coverage ramp: alpha = clamp(density / DENS_SOLID, VOX_ALPHA_MIN, 1). A 0.33
+        // single-leaf brick keeps ~39% of its pixels; a wisp keeps VOX_ALPHA_MIN (never balder).
+        const aAlpha = aDens ? aDens.div(float(DENS_SOLID)).clamp(VOX_ALPHA_MIN, 1).toVar() : null;
+        // OCCUPANCY-GATE mask (?voxlod=1): which OCC_MASK_DIM×OCC_MASK_DIM bbox buckets a
+        // projected occupied sub-cell touched (Phase A). 0xffff (all) for an unarmed brick.
+        const occMask = voxOccGate && wgOccMask ? (wgOccMask.element(b) as unknown as NU).toVar() : null;
+        // per-brick: does the mask actually CARVE (≠ 0xffff)? Only then does Phase B pay the
+        // per-pixel bucket test. A full (0xffff) mask — every L0/near/dense brick — takes the
+        // plain solid path with ZERO added per-pixel arithmetic (near dense path unchanged).
+        const gateActive = occMask ? occMask.notEqual(uint(0xffff)).toVar() : null;
+        const area = bbW.mul(bbH).toVar(); // 0 for a culled/idle brick ⇒ zero-trip inner loop
+        // ?voxrecip: ONE reciprocal per brick replaces the per-pixel integer div+mod below
+        // (footprint addressing AND, for carved bricks, the occupancy-gate su/sv bucket index).
+        const invW = voxRecip ? float(1).div(toF(bbW)).toVar() : null;
+        const invH = voxRecip ? float(1).div(toF(bbH)).toVar() : null;
+        // ?voxcell per-brick ray data: eligibility (record set up incl. straddlers AND big enough
+        // for the ray path to pay — see cellElig below), local AABB, occupancy words, full-mask
+        // shortcut.
+        const cellOn =
+          voxCell && wgCellOk && wgBrCx && wgBrCy && wgBrCz && wgBrHf && wgCellLo && wgCellHi;
+        // RAY-eligible iff the record was set up (wgCellOk=1, incl. straddlers) AND the brick is
+        // bigger than the flat-splat floor. Fix 2: alpha-active bricks NO LONGER take the flat
+        // path — the ray path applies the SAME hash-stable stipple at the hit-accept (front-slab
+        // depth was the reason edge bricks kept showing the plane forms in the near field).
+        const cellElig = cellOn
+          ? (wgCellOk!.element(b) as unknown as NU)
+              .equal(uint(1))
+              .and(area.greaterThan(uint(VOX_SPLAT_FLOOR)))
+              .toVar()
+          : null;
+        const brCx = cellOn ? (wgBrCx!.element(b) as unknown as NF).toVar() : null;
+        const brCy = cellOn ? (wgBrCy!.element(b) as unknown as NF).toVar() : null;
+        const brCz = cellOn ? (wgBrCz!.element(b) as unknown as NF).toVar() : null;
+        const brHf = cellOn ? (wgBrHf!.element(b) as unknown as NF).toVar() : null;
+        const cOccLo = cellOn ? (wgCellLo!.element(b) as unknown as NU).toVar() : null;
+        const cOccHi = cellOn ? (wgCellHi!.element(b) as unknown as NU).toVar() : null;
+        const cMaskFull = cellOn
+          ? cOccLo!.equal(uint(0xffffffff)).and(cOccHi!.equal(uint(0xffffffff))).toVar()
+          : null;
+        // CONSERVATIVE-RAY DILATION (Fix 2), per-brick uniform — hoisted out of the pixel loop.
+        // A pixel-CENTRE ray misses a box that genuinely overlaps the pixel's footprint at small
+        // screen sizes (classic conservative-raster failure ⇒ the "invisible far bricks" the old
+        // area>64 gate worked around). Dilate the slab-test AABB by ~half a pixel's world footprint
+        // at brick depth. Derivation with NO depth/matrix term: the brick's world diameter (2·brWR)
+        // projects to `span` px, so one pixel = 2·brWR/span world; half = brWR/span; and the brick
+        // LOCAL half brHf = brWR·invS = brWR/scale, so 0.5·pixelWorld in LOCAL units = brHf/span.
+        // span = the brick's larger screen extent (max(bbW,bbH)). Applied ONLY in the small band
+        // (area ≤ voxCellMinArea): >64px bricks are many pixels wide, pixel-centre sampling is fine,
+        // and the design keeps their existing (undilated) ray path byte-identical ⇒ dil = 0 there.
+        // The DDA cell grid still uses the RAW brHf (bmn = brC−brHf below); only the coarse slab
+        // hit-test box grows, so a grazing hit is a slightly fattened silhouette (heals #69 gaps),
+        // never a shifted cell index. Conservative: a larger box only ADDS a sub-pixel edge, never
+        // a hole.
+        const cellEhf = cellOn && brHf
+          ? brHf
+              .add(
+                area
+                  .lessThanEqual(uint(voxCellMinArea))
+                  .select(brHf.div(toF(bbW).max(toF(bbH)).max(float(1))), float(0)),
+              )
+              .toVar()
+          : null;
+        // pack the per-brick record + the shared per-cluster ray basis, then spread this brick's
+        // footprint [0, area) across all WG_RASTER lanes via emitPixel (the single-source body).
+        const pb: PixelCtx = {
+          bbW, bbH, bbX0, bbY0, cand, voxIdB, aActive, aAlpha,
+          occMask, gateActive, invW, invH, cellElig,
+          brCx, brCy, brCz, brHf, cellEhf, cOccLo, cOccHi, cMaskFull,
+          ray: rayB,
+        };
+        loopU(brickLocal, area, (localPx) => emitPixel(pb, localPx), WG_RASTER);
       });
       // build-time gate: ?voxrdbg>=2 skips the whole election.
       if (voxRdbg < 2) {
-        phaseB();
+        // DEAD-LOOP KILL (P1): skip Phase B entirely when NO brick in this cluster produced a
+        // non-empty record (occlusion-culled / off-screen / degenerate). Workgroup-uniform (all
+        // lanes read the same published flag) and Phase B contains NO barriers, so the skip is
+        // legal — no divergent-barrier hazard. Subsumes the wgVisible block-cull gate. A skipped
+        // workgroup only ever held zero-area records ⇒ it painted nothing ⇒ pixel-identical.
+        If((wgAnyLive.element(uint(0)) as unknown as NU).equal(uint(1)), () => {
+          phaseB();
+        });
       }
     });
     // ONE WORKGROUP per voxel cluster work-item (split2D indirect args over the fanned count,

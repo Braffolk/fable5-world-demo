@@ -15,7 +15,7 @@
 
 import { Fn, instanceIndex, uint } from 'three/tsl';
 import { StorageBufferAttribute } from 'three/webgpu';
-import type { NB, NF, NU, NV3 } from '../../gpu/TSLTypes';
+import type { NB, NF, NU } from '../../gpu/TSLTypes';
 import { MESH_WORDS } from '../GeometryRegistry';
 import type { RegistryGpu } from '../GeometryRegistry';
 import { QRASTER_CAP, type NaniteCam } from '../NaniteCommon';
@@ -110,12 +110,12 @@ export function buildClusterCtx(p: {
                 .bitAnd(uint(0xff)),
             );
             // slot 11 = SW/HW cluster classify (the permanent-default split); the world1
-            // raster reads it for the uniform HW-cluster skip.
+            // raster reads it for the uniform HW-cluster skip, and the projection pre-pass
+            // reads it (with slot 0) for its terrain-HW skip — same helper as kHwPartition,
+            // so routing and projection-skip stay consistent by construction.
             wU(
               11,
-              b2u(
-                clusterHwClass(gpu, cam.camPos as unknown as NV3, projK, instId, ci, clhwMax),
-              ),
+              b2u(clusterHwClass(gpu, cam, projK, instId, ci, clhwMax)),
             );
             wF(0, c.A.x as unknown as NF);
             wF(1, c.A.y as unknown as NF);

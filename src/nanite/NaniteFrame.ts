@@ -397,12 +397,16 @@ export function buildNaniteFrame(
       ? { derive: grass.resolveDerive, lean: grassLean, ray: grass.resolveRay }
       : null,
   });
-  // ?nores=1 — MEASUREMENT ablation (default OFF): skip BOTH fullscreen resolve passes
-  // (the tri `mesh` + vox `voxMesh`). Decomposes the frame: (baseline − nores) gpuWall =
-  // the cost of the two per-pixel resolve passes, which survive ?pure=1 and have no other
-  // isolating flag. Nothing shades when ON (the scene pass renders sky only) — perf probe only.
+  // ?nores=1 — MEASUREMENT ablation (default OFF): skip ALL fullscreen resolve passes (the
+  // class-family split `mesh`/`meshMesh` + vox `voxMesh`). Decomposes the frame: (baseline −
+  // nores) gpuWall = the cost of the per-pixel resolve passes, which survive ?pure=1 and have no
+  // other isolating flag. Nothing shades when ON (the scene pass renders sky only) — perf probe.
   const noResolve = params.get('nores') === '1';
   if (!noResolve) engine.scene.add(resolve.mesh);
+  // resolve P2 (class-family split): the 'mesh' pass — shades mesh families (matClass 1-5),
+  // Discards terrain + voxel pixels. Present only in two-pass mode (undefined under 'both'
+  // single-pass merge). renderOrder −999.5, right after the 'terr' `mesh`.
+  if (resolve.meshMesh && !noResolve) engine.scene.add(resolve.meshMesh);
   // voxel-foliage two-pass resolve (spec §4.6): the SECOND fullscreen pass that shades only
   // voxel-winner pixels (present only when ?voxreg/?forcevox wired the voxel queue). Splitting
   // the resolve in two keeps BOTH materials ≤10 fragment storage buffers — the single-pass

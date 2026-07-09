@@ -103,17 +103,20 @@ export const PROJ_VERT_STRIDE = 3;
  *     vi−vBase ∈ [0, uniqueCount) is a dense bijection — shared verts collapse to one slot.
  *  `recCluster` = itemIdx·MAX_CLUSTER_VERTS (the flat per-cluster base; the caller hoists it
  *  once). The minU clamp uses the fixed MAX_CLUSTER_VERTS-1 moat so a rogue canonLocal can
- *  never spill into the next cluster's fixed region. */
+ *  never spill into the next cluster's fixed region. `corner` may be a compile-time 0|1|2
+ *  (the compute consumers unroll corners) or a runtime NU (the HW `_clE` vertex stage derives
+ *  it from vertexIndex) — identical math either way. */
 export const canonVertSlot = (
   recCluster: NU,
   triStart: NU,
   isHF: NB,
   localTri: NU,
-  corner: number,
+  corner: number | NU,
   indices: Parameters<typeof elemU>[0],
 ): NU => {
-  const perCorner = localTri.mul(uint(3)).add(uint(corner));
-  const vi = elemU(indices, triStart.add(localTri).mul(uint(3)).add(uint(corner)));
+  const cornerU = (typeof corner === 'number' ? uint(corner) : corner) as NU;
+  const perCorner = localTri.mul(uint(3)).add(cornerU);
+  const vi = elemU(indices, triStart.add(localTri).mul(uint(3)).add(cornerU));
   const vBase = elemU(indices, triStart.mul(uint(3)));
   const meshLocal = vi.sub(vBase);
   const canonLocal = minU(
@@ -326,16 +329,20 @@ export function buildProject(p: {
     // their corner slots stay untouched (and Classify skips them too ⇒ never read). Reads
     // SHARED (post-barrier); the value is workgroup-uniform ⇒ all threads return together.
     returnIf(rU(10).equal(uint(7)));
-    // skip clusters the cull routed to the HW instanced draw (slot 11) — world1 does the
-    // same before any vertex work. ⛔ Phase 2 / Option D (project HW clusters too, `_cl`
-    // reads pre-projected verts) was BUILT then REVERTED 2026-07-09: measured a WASH —
-    // projecting the fat near HW clusters ballooned nanProjectVerts 7.66→12.78% of frame
-    // (7× the estimate; terrain HW clusters are PER-CORNER, no dedup) while `_cl` only fell
-    // 12.92→8.43% with the 80B spill INTACT (the compiled real-clip fallback kept the
-    // register ceiling — the design's own Gate-2 warning). Net ≈ 0. Do not retry without
-    // BOTH (a) near-cross soup-routing so the fallback is not compiled, AND (b) a dedup
-    // story for terrain HW verts. (Profile pair: profile-results-20260709-{194832,204125}.)
-    returnIf(rU(11).equal(uint(1)));
+    // skip TERRAIN (isHF) HW clusters only (slot 11 AND slot 0) — the `_clT` draw keeps the
+    // full compute-fetch vertex path and never reads projVertBuf. MESH HW clusters DO flow
+    // through (the `_clE` vertex now reads their pre-projected verts). The Phase-2 retry
+    // conditions (the 2026-07-09 revert: projection ballooned 7.66→12.78% projecting
+    // per-corner terrain HW clusters, and the compiled real-clip fallback kept `_cl`'s
+    // 80-reg/80B-spill ceiling) are BOTH MET here:
+    //   (a) near-crossers never reach the mesh HW path — clusterHwClass gates mesh
+    //       HW-eligibility on view-z clear of the near plane (min sphere clip-w >
+    //       NEAR_MARGIN), so `_clE` compiles NO sentinel/real-clip fallback;
+    //   (b) terrain is EXCLUDED from projection (this skip) — only DEDUPED mesh clusters
+    //       project, and clusterHwClass's coverage gate (vcompact count > 0) guarantees
+    //       every projected mesh HW cluster takes the per-UNIQUE-VERT path below.
+    // (Profile pair of the revert: profile-results-20260709-{194832,204125}.)
+    returnIf(rU(11).equal(uint(1)).and(rU(0).equal(uint(1))));
 
     const triCount = rU(3);
     // NB: the per-thread `localTri < triCount` gate is NOT a global early-out anymore — the

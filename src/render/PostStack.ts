@@ -51,7 +51,8 @@ import type { Atmosphere } from '../sky/Atmosphere';
 import { CLOUD_BOTTOM, CLOUD_TOP, type Clouds } from '../sky/Clouds';
 import { GradeUniforms, gradeParamsAt } from './ColorScript';
 import { runiform } from '../gpu/RenderUniform';
-import { getScreenPositionFast, getViewPositionFast, gtaoLayer } from './Gtao';
+import { getScreenPositionFast, getViewPositionFast, getViewPositionFromViewZ, gtaoLayer } from './Gtao';
+import { DepthHalfNode } from './DepthHalf';
 import { HalfResMrtNode, type HalfResEntry } from './HalfResMrt';
 import { RSCALE, internalSize } from './RenderScale';
 
@@ -185,6 +186,17 @@ export class PostStack {
     this.sceneDepthNode = depthTex;
     const velocityTex = skyveldbg ? scenePass.getTextureNode('velocity') : null;
 
+    // --- half-res linear view-Z prefix (PERF-P3) -------------------------------
+    // A tiny pass writing one half-res r16float LINEAR view-Z texture (top-left
+    // point-sample of each 2×2 full-res depth texel). The half-res GTAO march +
+    // normal stencil and the bounce gather read THIS instead of full-res raw
+    // depth — a compact, cache-resident source that also drops the per-tap
+    // inverse-projection unproject (getViewPositionFromViewZ). It renders right
+    // before the über-quad because the entries below reference its texture (see
+    // DepthHalf.ts ordering note). CENTER pixels keep the full-res depth read.
+    const depthHalf = new DepthHalfNode(depthTex as unknown as { value: unknown }, uProjInv);
+    const viewZTex = depthHalf.getTextureNode();
+
     // --- merged half-res MRT pass: clouds march + GTAO + SS bounce -------------
     // These three layers ran as separate half-res passes (two RTTNodes + a
     // GTAONode) — three rasters, three encoders, three RT round-trips over
@@ -221,6 +233,7 @@ export class PostStack {
         rg: q.get('aorg') !== '0',
         node: gtaoLayer(
           depthTex as unknown as Parameters<typeof gtaoLayer>[0],
+          viewZTex as unknown as Parameters<typeof gtaoLayer>[1],
           camera,
           halfAo,
           // GTAO defaults are mesh-viewer scale: 16 samples cost ~50 ms on
@@ -253,8 +266,11 @@ export class PostStack {
             const offX = Math.cos(ga) * rr;
             const offY = Math.sin(ga) * rr;
             const uvS = screenUV.add(vec2(offX, offY).mul(rPx));
-            const dS = texture(depthTex.value, uvS).x;
-            const pS = getViewPositionFast(uvS, dS, uProjInv);
+            // PERF-P3: gather taps read the half-res linear view-Z (nearest) and
+            // reconstruct without an unproject. The receiver (viewPos above)
+            // stays full-res. viewZTex.value is a RedFormat r16f ⇒ view-Z in .x.
+            const vzS = texture(viewZTex.value, uvS).x;
+            const pS = getViewPositionFromViewZ(uvS, vzS, uProjInv);
             const w = smoothstep(1.8, 0.25, pS.sub(viewPos).length());
             sum.addAssign(texture(beauty.value, uvS).rgb.mul(w));
             wsum.addAssign(w);

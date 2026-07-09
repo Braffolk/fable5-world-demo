@@ -35,6 +35,7 @@ import {
   atomicAdd,
   atomicMax,
   atomicMin,
+  bool,
   float,
   instanceIndex,
   screenCoordinate,
@@ -43,7 +44,7 @@ import {
   vec4,
   vertexIndex,
 } from 'three/tsl';
-import type { NF, NU, NV3, NV4 } from '../../gpu/TSLTypes';
+import type { NB, NF, NU, NV3, NV4 } from '../../gpu/TSLTypes';
 import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK } from '../GeometryRegistry';
 import type { NaniteCam } from '../NaniteCommon';
 import type { NaniteFetch, VertCtx } from '../NaniteFetch';
@@ -51,6 +52,7 @@ import {
   aLoadU,
   bcF2U,
   bcU2F,
+  bcU2I,
   elemU,
   minU,
   sU32Views,
@@ -61,6 +63,7 @@ import type { NaniteVisBuffers } from './VisBuffer';
 import { depthKey16, depthKey24 } from './VisBuffer';
 import { HW_CAP } from './Queues';
 import { CTX_STRIDE, CTX_U } from './ClusterCtx';
+import { PROJ_CLUSTER_CAP, canonVertSlot } from './Project';
 
 type U32Views = ReturnType<typeof sU32Views>;
 
@@ -118,6 +121,19 @@ export function buildHw(p: {
   hwClusterDrawTerrainAttr: IndirectStorageBufferAttribute | null;
   /** A2 qHwRaster capacity — the terrain draw reads qHwRaster[hwRasterCap-1-instanceIndex]. */
   hwRasterCap: number;
+  /** HW vertex-prepass (2026-07-09): the projected-vert buffer nanProjectVerts filled (the
+   *  SAME records the SW classifier + Mid read). Non-null ONLY on the world1 (singlePass)
+   *  path — the `_clE` mesh draw reads its verts from here instead of re-fetching world +
+   *  wind + projecting (see the vertex body). */
+  projVertV: U32Views | null;
+  /** gpu.indices — canonVertSlot reads it for the mesh dedup key (vi−vBase). */
+  indices: Parameters<typeof canonVertSlot>[5];
+  /** = MAX_CLUSTER_VERTS — the per-cluster unique-vert slot stride of projVertBuf. */
+  vertsPerCluster: number;
+  /** ?hwproj (default ON; `?hwproj=0` = the disable-only escape): `_clE` reads projVertBuf.
+   *  OFF restores the previous compute-fetch `_clE` vertex — selected at BUILD time (two
+   *  closures, the other body never compiled), not a runtime shader branch. */
+  hwproj: boolean;
 }): HwPath {
   const {
     cam,
@@ -142,6 +158,10 @@ export function buildHw(p: {
     nfetchTerrain,
     hwClusterDrawTerrainAttr,
     hwRasterCap,
+    projVertV,
+    indices,
+    vertsPerCluster,
+    hwproj,
   } = p;
   // makeCtx used by the SOUP path (per-tri) + the legacy single 'both' `_cl` fallback; the
   // per-vertex fetch is resolved PER MATERIAL below (mFetch) so a class-split draw can bind its
@@ -240,6 +260,11 @@ export function buildHw(p: {
     // decoded ctx instead of makeCtx. The per-material fetch is the single-arm variant (or the
     // module 'both' fetch for the legacy single draw / soup).
     const useFlat = !!hwOpts && clusterCtxV != null;
+    // HW vertex-prepass: the MESH (`_clE`, forward-indexed) draw reads projVertBuf instead of
+    // the compute-fetch path — BUILD-time selection (?hwproj=0 compiles the old body instead;
+    // `_clT` terrain + the soup keep the full path unconditionally).
+    const hwProjRead =
+      hwproj && useFlat && !!hwOpts && !hwOpts.reversed && projVertV != null;
     const mFetch = hwOpts?.fetch ?? nfetch;
     const mMakeCtx = mFetch.makeCtx;
     const mFetchWorldVert = mFetch.fetchWorldVert;
@@ -272,6 +297,74 @@ export function buildHw(p: {
           .equal(uint(1))
           .select(w1, corner.equal(uint(2)).select(w2, w0)) as unknown as NV3;
       };
+      if (hwProjRead) {
+        // ── `_clE` (mesh class) projVertBuf READER (HW vertex-prepass, 2026-07-09) ──────────
+        // The mesh HW cluster's verts were ALREADY projected this frame by nanProjectVerts
+        // (Project.ts no longer skips mesh HW clusters; clusterHwClass's coverage gate
+        // guarantees the per-unique-vert path filled every slot). This vertex stage therefore
+        // does NO world fetch, NO wind, NO vp transform and NO snap/seam block — it reads the
+        // 3-u32 record (xi, yi, dz) and rebuilds clip with w = 1. The verts are pre-quantized
+        // on the SW 1/256-px grid — that IS the SW↔HW seam alignment (the old seam-D snap
+        // reproduced exactly this grid).
+        // NEAR_SENTINEL absence is GUARANTEED by construction — clusterHwClass admits a mesh
+        // cluster to this draw only when its padded sphere's min view-z clears NEAR_MARGIN,
+        // which implies projectVert's ok-test for every vert — so NO sentinel compare and NO
+        // real-clip fallback is compiled (the compiled fallback is what kept the previous
+        // Phase-2 attempt at the 80-register/80-byte-spill ceiling).
+        // w = 1 makes HW depth/varying interpolation SCREEN-LINEAR — exactly the SW
+        // scanline's cz metric (dz interpolated linearly in screen space) — INTENTIONAL: the
+        // SW and HW paths now agree bit-for-bit on the depth metric, the leading fix for the
+        // long-standing near-camera depth-flicker (SW screen-linear vs HW perspective-correct
+        // mismatch). The FS depth key stays depthKey24(vZ/vW) = depthKey24(dz), identical to SW.
+        const localTri = (vertexIndex.div(3) as unknown as NU).toVar();
+        const tid = elemU(
+          qHwRasterRO as StorageBufferNode<'uint'>,
+          instanceIndex as unknown as NU,
+        ).toVar();
+        const payload = tid.shiftLeft(uint(CLUSTER_TRI_BITS)).bitOr(localTri).toVar();
+        // slim ctx read — only triStart (slot 2) + triCount (slot 3); no full decodeCtx.
+        const cv = clusterCtxV as U32Views;
+        const cBase = tid.mul(uint(CTX_STRIDE)).toVar();
+        const triStart = elemU(cv.ro, cBase.add(uint(2))).toVar();
+        const triCount = elemU(cv.ro, cBase.add(uint(3))).toVar();
+        const clip = vec4(0, 0, 2, 1).toVar();
+        // tail-degenerate guard (localTri ≥ triCount ⇒ degenerate clip) + the projVertBuf
+        // cluster-cap guard: a cluster past PROJ_CLUSTER_CAP has no projected verts (the
+        // projection + SW classifier guard the same bound ⇒ it doesn't render anywhere —
+        // surfaced overflow, not garbage pixels).
+        If(
+          localTri
+            .lessThan(triCount)
+            .and(tid.lessThan(uint(PROJ_CLUSTER_CAP))),
+          () => {
+            // THE shared slot function (Project.ts) — mesh key vi−vBase; isHF is
+            // constant-false by the class partition (this draw receives mesh clusters only).
+            const rb = canonVertSlot(
+              tid.mul(uint(vertsPerCluster)) as unknown as NU,
+              triStart as unknown as NU,
+              bool(false) as unknown as NB,
+              localTri,
+              corner,
+              indices,
+            ).toVar();
+            const pvv = projVertV as U32Views;
+            const xi = toF(bcU2I(elemU(pvv.ro, rb)));
+            const yi = toF(bcU2I(elemU(pvv.ro, rb.add(uint(1)))));
+            const dz = bcU2F(elemU(pvv.ro, rb.add(uint(2))));
+            // EXACT inverse of projectVert's screen mapping (Project.ts): forward is
+            //   screen = (ndc.xy + 1)·0.5·(W,H);  xi/yi = round(screen·256)
+            // (no half-pixel offset, same for x and y — the seam-D block inverted the same
+            // way), so:  ndc.x = (xi/256)/W·2 − 1,  ndc.y = (yi/256)/H·2 − 1,  z = dz, w = 1.
+            const W = float(cam.uW);
+            const H = float(cam.uH);
+            const ndcX = xi.div(256).div(W).mul(2).sub(1);
+            const ndcY = yi.div(256).div(H).mul(2).sub(1);
+            clip.assign(vec4(ndcX, ndcY, dz, 1) as unknown as NV4);
+          },
+        );
+        setVaryings(payload as unknown as NU, clip as unknown as NV4);
+        return clip;
+      }
       if (instanced) {
         // ?clhw INSTANCED cluster draw: one instance per HW cluster. qHwRaster[instanceIndex]
         // = the cluster's qRaster INDEX (tid). localTri = vertexIndex/3 (partial-cluster tail
@@ -299,38 +392,36 @@ export function buildHw(p: {
               const ci = item.y.toVar();
               return mMakeCtx(instId, ci);
             })();
-        const world = fetchWorld(ctx, localTri);
-        const clip = cam.vp.mul(vec4(world, 1)).toVar();
-        // D (?clhw seam): snap clip.xy onto the SAME 1/256-px screen grid the SW
-        // rasterizer quantizes to (s = (ndc+1)·0.5·(W,H) then ×256 round, ~:1175).
-        // A shared SW↔HW cluster edge then lands on identical subpixel positions, so
-        // no pixel near the seam is dropped by both paths. This is the exact inverse
-        // of the SW screen transform with the quantize in the middle; the Y-up↔Y-down
-        // framebuffer flip preserves the grid (H integer ⇒ H·256 integer). Per-component
-        // scalar rounds match the SW path exactly.
-        {
+        // partial-cluster tail: fixed MAX_CLUSTER_TRIS*3 verts over-cover a <triCount cluster.
+        // Tail verts (localTri >= ctx.triCount) emit the degenerate clipped point (z/w=2)
+        // DIRECTLY — the whole fetch + transform + seam-snap runs only under the If, never for
+        // the tail. Divergence is warp-contiguous at the cluster tail. The degenerate sentinel
+        // (vec4(0,0,2,1)) is exactly the value the old branchless collapse selected.
+        const clip = vec4(0, 0, 2, 1).toVar();
+        If(localTri.lessThan(ctx.triCount), () => {
+          const world = fetchWorld(ctx, localTri);
+          const c = cam.vp.mul(vec4(world, 1)).toVar();
+          // D (?clhw seam): snap c.xy onto the SAME 1/256-px screen grid the SW
+          // rasterizer quantizes to (s = (ndc+1)·0.5·(W,H) then ×256 round, ~:1175).
+          // A shared SW↔HW cluster edge then lands on identical subpixel positions, so
+          // no pixel near the seam is dropped by both paths. This is the exact inverse
+          // of the SW screen transform with the quantize in the middle; the Y-up↔Y-down
+          // framebuffer flip preserves the grid (H integer ⇒ H·256 integer). Per-component
+          // scalar rounds match the SW path exactly.
           const W = float(cam.uW);
           const H = float(cam.uH);
-          const sx = clip.x.div(clip.w).add(1).mul(0.5).mul(W).mul(256).round().div(256);
-          const sy = clip.y.div(clip.w).add(1).mul(0.5).mul(H).mul(256).round().div(256);
-          clip.assign(
+          const sx = c.x.div(c.w).add(1).mul(0.5).mul(W).mul(256).round().div(256);
+          const sy = c.y.div(c.w).add(1).mul(0.5).mul(H).mul(256).round().div(256);
+          c.assign(
             vec4(
-              sx.div(W).mul(2).sub(1).mul(clip.w),
-              sy.div(H).mul(2).sub(1).mul(clip.w),
-              clip.z,
-              clip.w,
+              sx.div(W).mul(2).sub(1).mul(c.w),
+              sy.div(H).mul(2).sub(1).mul(c.w),
+              c.z,
+              c.w,
             ) as unknown as NV4,
           );
-        }
-        // partial-cluster tail: fixed MAX_CLUSTER_TRIS*3 verts over-cover a <128-tri cluster
-        // ⇒ collapse those verts to a clipped point (z/w=2).
-        clip.assign(
-          (
-            localTri.lessThan(ctx.triCount) as unknown as {
-              select(a: NV4, b: NV4): NV4;
-            }
-          ).select(clip as unknown as NV4, vec4(0, 0, 2, 1) as unknown as NV4),
-        );
+          clip.assign(c as unknown as NV4);
+        });
         setVaryings(payload as unknown as NU, clip as unknown as NV4);
         return clip;
       }
