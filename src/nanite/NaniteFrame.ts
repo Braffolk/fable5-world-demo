@@ -1,13 +1,10 @@
 /**
  * Full-frame nanite integration (N4-C0, D-N18/D-N19) — `?nanite=1` without
  * `?nanitedbg`: the cull→raster compute runs BEFORE the post pipeline each
- * frame, and the resolve mesh (NaniteResolve) shades the migrated classes
- * inside the main scene pass, depth-composing with everything the old
- * pipeline still draws (grass, cards, water, sky). The migrated classes' old
- * CAMERA draws are suppressed by the scene (same predicate as the registry
- * filter); their SHADOW casting is now the nanite shadow system (N5/D-N28:
- * depth-only SW raster into our own r32 cascades, default-on). The old
- * ShadowProxy / per-pool caster meshes only run under ?oldgeo (the A/B ref).
+ * frame, and the resolve mesh (NaniteResolve) shades the world inside the main
+ * scene pass, depth-composing with everything else the scene draws (water, sky,
+ * particles). Sun-shadow casting is the nanite shadow system (N5/D-N28:
+ * depth-only SW raster into our own r32 cascades, default-on).
  *
  * JITTER MIRROR (D-N18): TRAA applies a per-frame Halton view offset to the
  * scene camera inside the pipeline render (onBeforeRenderPipeline), AFTER our
@@ -81,12 +78,10 @@ export function buildNaniteFrame(
   world: {
     gi: import('../gpu/passes/ProbeGI').ProbeGI | null;
     canopyTex: import('three/webgpu').StorageTexture | null;
-    csm: import('three/addons/csm/CSMShadowNode.js').CSMShadowNode | null;
-    /** P2 (shadow arc): "scene has sun shadows" WITHOUT a legacy CSM node — the
-     *  nanite-only world severs the CSM (empty-map keepalive) and signals here. */
+    /** "scene has sun shadows" — drives the nanite screen-density shadow clipmap. */
     sunShadows?: boolean;
-    /** P2: world-space cloud sun-transmittance gate (rode the CSM filterNode before
-     *  the sever; the resolve now multiplies it into the sun term directly). */
+    /** world-space cloud sun-transmittance gate — the resolve multiplies it into the
+     *  sun term directly. */
     cloudShadow?: ((wxz: import('../gpu/TSLTypes').NV2) => NF) | null;
     /** P4: baked heightfield sun-visibility (FarShadow) — the beyond-clipmap term
      *  (mountains shade valleys at any distance). Multiplied like cloudShadow. */
@@ -254,14 +249,11 @@ export function buildNaniteFrame(
   // sampled by the resolve's own PCSS. R1 caches per cascade (re-raster only on a
   // VP change) → ~0 cost static, the [1,2,3,6] cadence moving. ON BY DEFAULT;
   // ?nanshadow=0 disables the whole system (producer here + receive in the resolve,
-  // same flag). Built BEFORE the resolve so the resolve binds shadowFactor; needs
-  // the CSM (its cascade ortho cameras provide the per-cascade light VPs).
+  // same flag). Built BEFORE the resolve so the resolve binds shadowFactor.
   const shadowOn =
-    params.get('nanshadow') !== '0' && (world.csm !== null || world.sunShadows === true);
-  // S3 (D-N29): the SCREEN-DENSITY SHADOW CLIPMAP replaces the 4 fixed CSM
-  // cascades (the resolved sun-shadow rethink — CSM dropped for shadow geometry).
-  // world.csm stays alive only as the resolve's cloud-gate carrier until that gate
-  // is re-sourced.
+    params.get('nanshadow') !== '0' && world.sunShadows === true;
+  // S3 (D-N29): the SCREEN-DENSITY SHADOW CLIPMAP — a camera-centred clipmap fits
+  // its own per-level light VPs (no CSM cascade cameras).
   const shadow: NaniteShadow | null = shadowOn
     ? buildNaniteShadowClip(registry.gpu, registry.instanceCount, hf.heightTex, disp, windOpt, measuredHierDepth, voxActive)
     : null;
@@ -330,7 +322,6 @@ export function buildNaniteFrame(
     presentClasses: registry.presentClasses,
     gi: world.gi,
     canopyTex: world.canopyTex,
-    csm: world.csm,
     sunShadows: world.sunShadows,
     cloudShadow: world.cloudShadow,
     farShadow: world.farShadow,
@@ -425,11 +416,6 @@ export function buildNaniteFrame(
   (window as unknown as { __laasNanite?: object }).__laasNanite = {
     setProbe: probeSet,
     readProbe: probeRead,
-    /** within-boot A/B of the three-CSM keep sample: 1=full-screen (old), 0=corner-only (the
-     *  ?reskeep=0 optimisation). Thermal-invariant — flip it inside ONE boot to read the cost. */
-    setKeepFull: (v: number) => {
-      resolve.keepFullU.value = v;
-    },
     vp: () => cam.vp.value.toArray(),
     /** N8-D1: live τ (screen-error px) for the continuous-zoom gate / A-B */
     setTau: (v: number) => {
@@ -527,8 +513,8 @@ export function buildNaniteFrame(
         // submit. RAW audit (spec): kRasterArgs2 reads qRaster[0] written by kRasterArgs
         // one dispatch earlier; the fan-out chain reads counters[1]/qRaster and writes
         // its own args/queues; the shadow cut writes DISJOINT buffers (own counters/
-        // queues), so appending it last is equivalent to today's order. When the shadow
-        // is forest-dormant (csm=null) the cut is null ⇒ empty tail (shadow run() sees
+        // queues), so appending it last is equivalent to today's order. When no shadow
+        // level re-rasters this frame the cut is null ⇒ empty tail (shadow run() sees
         // prepassMask===0, same fall-through semantics as the plain leg).
         const shadowCut =
           cullOverlap && shadow?.cullPrepass
@@ -583,13 +569,10 @@ export function buildNaniteFrame(
       hzb.build(renderer); // this frame's depth → next frame's occluder
     }
     if (probeRun && params.get('nanprobeat') === 'hzb') probeRun(renderer);
-    // Nanite shadows (R0+R1): per-cascade light-frustum cull → depth-only SW
-    // raster into our own r32 cascade textures (R1 skips a cascade when its VP is
-    // unchanged → cached). The resolve KEEPS three's CSM node built (a ×1
-    // keep-alive on the empty black-slate map — NaniteResolve), so three runs its
-    // setup + per-frame cascade FIT; shadow.run then reads the fitted
-    // csm.lights[c].shadow.camera VPs (one frame stale, absorbed by lightMargin).
-    if (shadow && !frozen) shadow.run(renderer, world.csm, engine.camera);
+    // Nanite shadows (R0+R1): per-level light-frustum cull → depth-only SW raster
+    // into our own r32 cascade textures (R1 skips a level when its VP is unchanged
+    // → cached). The clipmap fits its own per-level light VPs.
+    if (shadow && !frozen) shadow.run(renderer, engine.camera);
     // S0: half-res shadow eval over the FINAL vis depth (after payload), before the
     // resolve samples it. Runs every frame the resolve does (incl. frozen — the vis
     // reprojects), reading cam.invVp set by cam.update above.

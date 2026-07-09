@@ -34,11 +34,6 @@ import {
 import { buildLog, buildStump, type DecayState } from "./Deadfall";
 import { captureFoliageAtlas } from "./FoliageCards";
 import { twigGeometry } from "./GroundCover";
-import {
-  captureImpostor,
-  type ImpostorAtlas,
-  type ImpostorPart,
-} from "./Impostors";
 import { buildRock } from "./RockBuilder";
 import { TREE_SPECIES } from "./Species";
 import { buildTree, type CrownLodLevel, type CrownLodRung, type HeroDiet } from "./TreeBuilder";
@@ -192,8 +187,6 @@ export const HERO_DIETS: Record<string, HeroDiet> = {
 
 export interface VegLib {
   pools: VegPool[];
-  /** tree species cls → octahedral impostor atlas (captured from variant 0) */
-  impostors: Map<number, ImpostorAtlas>;
   /** per-class cull data, indexed by VegClass (length 20) */
   clsHeight: number[];
   clsRadius: number[];
@@ -250,11 +243,6 @@ export async function buildVegLibrary(
    *  real fix; this caps it to a stable hero density. Default 2500; higher = fuller + heavier. */
   opts?: {
     leafAnchorTarget?: number;
-    /** false = the caller never samples impostor atlases (e.g. ForestScene, which builds no
-     *  ImpostorRuntime) — skips the octahedral bake: 6 species × 64 views × 3 passes of GPU
-     *  renders + readback stalls + dilate floods, a large count-independent boot chunk that
-     *  was pure wasted load time when unused. Default true (world scene behavior unchanged). */
-    impostors?: boolean;
   },
 ): Promise<VegLib> {
   // N9-C0: per-crown real-leaf anchor budget for the nanite leaf head. Default 4000
@@ -358,8 +346,8 @@ export async function buildVegLibrary(
         // are NO cards in the SW raster (alpha-test, D-N3). The card-era
         // meshAnchorTarget (a sparse detail layer ON TOP of all-anchor cards) read as
         // a near-bare tree through nanite, so build the real needle/leaf crown at
-        // FULL anchor density to match the old card coverage. (cardTarget kept for the
-        // impostor bake + the ?oldgeo ref; only the mesh anchors densify.)
+        // FULL anchor density to match the old card coverage. (cardTarget still shapes
+        // the card foliage build; only the mesh anchors densify.)
         hero: {
           ...(HERO_DIETS[sp.id] ?? { cardTarget: 1500 }),
           meshAnchorTarget: leafAnchorTarget,
@@ -399,8 +387,8 @@ export async function buildVegLibrary(
         height: b.height,
         radius: b.radius,
         // N9-C0: the same real mesh-leaf crown pushed into r0 above, exposed for
-        // the leaf MATERIAL_CLASS registration (the old-path r0 part stays for the
-        // ?oldgeo A/B; the nanite leaf head repacks this geometry separately).
+        // the leaf MATERIAL_CLASS registration (the nanite leaf head repacks this
+        // geometry separately).
         leaf: t0.foliageMesh
           ? {
               geo: t0.foliageMesh,
@@ -432,54 +420,6 @@ export async function buildVegLibrary(
       `veg: ${sp.id} pool`,
     );
   }
-
-  // ---- tree impostors (variant 0 R1 geometry, relightable octahedral) -------
-  // Impostors are the FAR-FIELD LOD ring (>424 m, ImpostorRuntime). Under ?forcevox the voxel
-  // foliage path represents that whole band instead, so baking impostors (6 species × 8×8 views
-  // × 3 RTTs each) is pure wasted LOAD time — they are never sampled. Skip the bake when voxels
-  // supersede them, or on an explicit ?noimpostors / ?ablate=impostors. DEFAULT (no forcevox) is
-  // unchanged: impostors still bake, so the normal far field is visually intact.
-  const impParams = new URLSearchParams(
-    typeof window !== "undefined" ? window.location.search : "",
-  );
-  const skipImpostors =
-    opts?.impostors === false ||
-    impParams.get("forcevox") !== null ||
-    impParams.get("noimpostors") === "1" ||
-    (impParams.get("ablate") ?? "").includes("impostors");
-  progress(0.56, "veg: capturing octahedral impostors");
-  const impostors = new Map<number, ImpostorAtlas>();
-  if (!skipImpostors)
-    for (let ci = 0; ci < TREE_SPECIES.length; ci++) {
-      await yieldIfDue();
-      const sp = TREE_SPECIES[ci] as SpeciesParams;
-      const t = buildTree(sp, seed.rng(`veg/${sp.id}/0`), {
-        lod: 1,
-        inst: variantInstance(seed, sp.id, 0),
-      });
-      const parts: ImpostorPart[] = [
-        { geometry: t.bark, kind: "bark", barkTex: barkOf(sp.barkLayer) },
-      ];
-      const atlas = atlases.get(sp.id);
-      if (t.foliage && atlas)
-        parts.push({ geometry: t.foliage, kind: "cards", atlas });
-      const radius = Math.max(
-        t.stats.height * 0.55,
-        t.skeleton.crownRadius * 1.4,
-        2,
-      );
-      impostors.set(
-        ci,
-        await captureImpostor(renderer, parts, {
-          centerY: t.stats.height * 0.5,
-          radius,
-        }),
-      );
-      progress(
-        0.56 + 0.18 * ((ci + 1) / TREE_SPECIES.length),
-        `veg: impostor ${sp.id}`,
-      );
-    }
 
   // ---- understory: shrubs / fern / flowers (R1 only) -------------------------
   progress(0.76, "veg: understory pools");
@@ -826,7 +766,6 @@ export async function buildVegLibrary(
   progress(1, "veg: pools ready");
   return {
     pools,
-    impostors,
     clsHeight,
     clsRadius,
     clsMaxDist,

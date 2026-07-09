@@ -104,11 +104,6 @@ import {
 } from './Tsl';
 import type { BufOf, UV2 } from './Tsl';
 
-/** occlusion-reject list caps (F14). Overflow is graceful: victims miss
- *  phase 2 THIS frame only (next frame's phase 1 re-tests everything) —
- *  measured at ?stress=5 bm3: 3.8M inst rejects, flag fired, image intact. */
-const REJ_INST_CAP = 1_048_576;
-const REJ_CLUST_CAP = 1_048_576;
 
 /** queue high-water diag: default label sequence for unlabeled chains */
 let chainSeq = 0;
@@ -156,9 +151,6 @@ export interface NaniteCullCounts {
   chunks: number;
   /** raster items = visible clusters across both phases (pre-clamp) */
   visClusters: number;
-  /** phase-2 inputs: occlusion-rejected instances / clusters from phase 1 */
-  rejInst: number;
-  rejClust: number;
   /** clusters phase 2 brought back (appended past the phase-1 base) */
   p2Appends: number;
   /** N8-D1: emitted clusters carrying a DAG record (the rock screen-error cut) */
@@ -961,13 +953,12 @@ export function buildNaniteCull(
     const qFrontierBAttr = new StorageBufferAttribute(new Uint32Array(fcap * 2), 2);
     qFrontierBAttr.name = 'nanQFrontierB';
     const qFrontierB = sUvec2(qFrontierBAttr, fcap);
-    // frontier counts A/B reuse counters slots 2/3 (rejInst/rejClust — unused in
-    // hier mode) so kTraverse stays ≤10 storage buffers WITH the HZB occlusion read
-    // (the HZB pyramid is itself a storage buffer, NaniteHzb).
+    // frontier counts A/B reuse spare counter slots (2/3, unused in hier mode) so
+    // kTraverse stays ≤10 storage buffers WITH the HZB occlusion read (the HZB
+    // pyramid is itself a storage buffer, NaniteHzb).
     const frontierCount = counters;
     // frontier counts use counters slots 0/4 (chunk-push / chunk-snapshot — unused
-    // in hier mode), leaving slot 3 (rejClust count) + the rejClustV buffer free for
-    // the TWO-PHASE occlusion re-test (record-not-drop, then kClusterCull2b vs fresh HZB).
+    // in hier mode).
     const FA = 0;
     const FB = 4;
     const traverseDispatchAttr = new IndirectStorageBufferAttribute(new Uint32Array(3), 3);
@@ -1385,8 +1376,6 @@ export function buildNaniteCull(
     // with occlusion, [0] holds the phase-2 re-expansion — phase 1 is in [4]
     const chunks = sphereOccluded ? (u[4] ?? 0) : (u[0] ?? 0);
     const visClusters = u[1] ?? 0;
-    const rejInst = u[2] ?? 0;
-    const rejClust = u[3] ?? 0;
     const dagClusters = u[5] ?? 0;
     const visTris = u[6] ?? 0;
     const dagTris = u[7] ?? 0;
@@ -1397,13 +1386,9 @@ export function buildNaniteCull(
     };
     over('qChunks', chunks, QCHUNK_CAP);
     over('qRaster', visClusters, qCap);
-    over('rejInst', rejInst, REJ_INST_CAP);
-    over('rejClust', rejClust, REJ_CLUST_CAP);
     return {
       chunks,
       visClusters,
-      rejInst,
-      rejClust,
       dagClusters,
       visTris,
       dagTris,

@@ -111,7 +111,19 @@ Findings → same gates, one commit.
 ## S6 — restructure src/nanite/ into hierarchical layout (user 07-10)
 Pure moves + import rewrites after all deletions land. Same gates.
 
-## S7 — LAST (user 07-10, after the nanite restructure): scene unification
+## S8 — after S7 (user 07-10): delete Impostors.ts + FoliageCards.ts
+User: "after the scene standardisation we can get rid of impostors and foliage cards
+(we simply remove the impostor render stuff from gallery)". S3 verified card geometry
+is NOT in the live nanite pools (WorldRegistry defers card/leaf parts, registers only
+opaque parts[0]+LODs), so this is gallery-review-surface surgery only: strip the
+impostor demo row + card/fern/vine preview usage from GalleryScene, then delete
+Impostors.ts (~326) + FoliageCards.ts (~322) + card hooks in TreeBuilder/Understory
++ captureFoliageAtlas→lib.atlases IF nothing live samples them (verify: bark/leaf
+texture arrays for resolve are separate). ShadowSetup.ts + CsmCached.ts die earlier,
+in S4 with ShadowTest/VoxelDebug scenes (their only remaining importers + gallery
+already stripped).
+
+## S7 — after S6 (user 07-10): scene unification
 Go over GalleryScene + ForestScene: strip weird quirky scene-specific behavior and
 share as much as possible with the world scene (TerrainScene) — one common
 boot/frame/registry path, scenes differ only in content + camera, not in plumbing.

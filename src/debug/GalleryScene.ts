@@ -24,7 +24,6 @@ import { hash12 } from '../gpu/noise/NoiseTSL';
 import type { DataTexture } from 'three';
 import { bakeBarkTextures, type BarkTextures } from '../gpu/passes/BarkSynth';
 import { PostStack } from '../render/PostStack';
-import { setupSunShadows } from '../render/ShadowSetup';
 import {
   barkTexturedMaterial,
   deadwoodMaterial,
@@ -103,11 +102,6 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
   const sunSky = new SunSky(engine, params.timeOfDay);
   await sunSky.init(engine.renderer);
   updateSunUniforms(sunSky.sun);
-
-  setupSunShadows(sunSky.sun, engine.camera, undefined, {
-    maxFar: 320,
-    lightMargin: 90,
-  });
 
   // ---- ground: neutral matte with a faint 5 m scale grid ---------------------
   const groundMat = new MeshStandardNodeMaterial();

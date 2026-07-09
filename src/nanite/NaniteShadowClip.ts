@@ -29,9 +29,7 @@
  * reused for the next level — levels are processed sequentially), plus one r32f
  * texture per level the resolve samples. Cheaper than 4 cascades' 4 vis buffers.
  *
- * CSM is dropped for shadow GEOMETRY; world.csm survives only as the cloud-gate
- * carrier in the resolve (severed in a later cleanup). run()'s csm arg is ignored
- * — VPs come from the sun + camera.
+ * CSM is dropped entirely: the clipmap VPs come from the sun + camera.
  */
 
 import {
@@ -121,7 +119,7 @@ import { sunU } from '../render/VegMaterials';
 export interface NaniteShadow {
   /** per-cascade: refresh cascade VP/planes, cull, depth-raster, copy → texture.
    *  Call BEFORE post.render() (the resolve samples the textures that frame). */
-  run(renderer: Renderer, csm: object | null, mainCamera: PerspectiveCamera): void;
+  run(renderer: Renderer, mainCamera: PerspectiveCamera): void;
   /** CAMERA||SHADOW OVERLAP (item 4, CLIP path only, opt-in): do the CPU-side VP fit +
    *  cadence decision NOW and return the camera-DISJOINT shadow-cut cull BATCH (or null
    *  when no level re-rasters this frame), WITHOUT dispatching it. The caller concatenates
@@ -1143,7 +1141,7 @@ export function buildNaniteShadowClip(
     return clipCull.sharedCutBatch();
   };
 
-  const run = (renderer: Renderer, _csm: object | null, mainCamera: PerspectiveCamera): void => {
+  const run = (renderer: Renderer, mainCamera: PerspectiveCamera): void => {
     noteQueueHwRenderer(renderer); // queue high-water diag: stash for window.__qHW
     // OVERLAP PATH: cullPrepass() already fit + dispatched the shared cut (folded into the
     // camera-cull submit). Consume that mask, skip the re-fit + runSharedCut, raster levels.

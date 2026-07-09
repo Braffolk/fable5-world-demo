@@ -178,9 +178,7 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
     engine.renderer,
     seed,
     (p, m) => ctx.progress(0.1 + p * 0.4, m),
-    // impostors:false — ForestScene never builds an ImpostorRuntime, so the octahedral bake
-    // (6 species × 192 GPU renders + readbacks) was pure wasted boot time (~confirmed 2026-07-01).
-    { leafAnchorTarget: leafDensity, impostors: false },
+    { leafAnchorTarget: leafDensity },
   );
   // canopy species with a bark trunk + a real leaf crown (cls 0–4)
   const pools = lib.pools.filter((p): p is VegPool => p.cls <= 4 && !!p.r0?.[0] && !!p.leaf);
@@ -558,7 +556,6 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
     const frame = buildNaniteFrame(engine, reg, hf, post, {
       gi: null,
       canopyTex: null,
-      csm: null,
       barkTexA: lib.barkArray?.texA ?? null,
       barkTexB: lib.barkArray?.texB ?? null,
     });

@@ -42,7 +42,6 @@ import {
   int,
   max,
   mix,
-  nodeObject,
   normalize,
   positionGeometry,
   screenCoordinate,
@@ -56,7 +55,6 @@ import {
   vec4,
 } from 'three/tsl';
 import type { NB, NF, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
-import type { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js';
 import type { NaniteShadow } from './NaniteShadowClip';
 import type { ShadowHalf } from './NaniteShadowHalf';
 import { causticContext, causticDepth, causticTint } from '../render/Caustics';
@@ -75,8 +73,8 @@ import { GRASS_FAR_BASE } from './NaniteGrass';
 import { CLHW_MAX, hashColor, instRotateDir, instTransformPoint, instYaw, type NaniteCam } from './NaniteCommon';
 import { clusterHwClass } from './NaniteHwClass';
 import type { NaniteVisBuffers } from './NaniteRaster';
-import { bcU2F, elemU, toF, uniformF } from './Tsl';
-import type { BufOf, UV2, UniformF } from './Tsl';
+import { bcU2F, elemU, toF } from './Tsl';
+import type { BufOf, UV2 } from './Tsl';
 
 export interface NaniteResolveHandles {
   /** add to engine.scene; renderOrder −1000, castShadow off. In two-pass mode this is the
@@ -97,9 +95,6 @@ export interface NaniteResolveHandles {
    *  pixel never re-derives a triangle) so it also stays ≤10. Add to engine.scene right
    *  after `mesh` (renderOrder −999, just after the main resolve). */
   voxMesh?: Mesh;
-  /** runtime gate for the full-screen three-CSM `keep` sample (1=full, 0=corner-only). Shared
-   *  by both resolve passes. Exposed for a thermal-invariant within-boot A/B (setKeepFull). */
-  keepFullU: UniformF;
 }
 
 export interface ResolveWorld {
@@ -113,21 +108,10 @@ export interface ResolveWorld {
   presentClasses?: ReadonlySet<number>;
   gi: ProbeGI | null;
   canopyTex: StorageTexture | null;
-  /** sun CSM cascades (D-N17 shadow receive) — sampled at the reconstructed
-   *  world position via receivedShadowPositionNode; null = no sun shadows.
-   *  At runtime this is the CachedCsmShadowNode (default), whose
-   *  shadowPositionWorld-based cascade-select is what makes per-pixel
-   *  reconstructed positions select the right cascade (?shadowcache=0 falls
-   *  back to the base positionView.z select — a debug-only A/B). */
-  csm: CSMShadowNode | null;
-  /** P2 (shadow arc): "scene has sun shadows" WITHOUT a legacy CSM node. The
-   *  nanite-only world severs the CSM entirely (its maps were empty; the keepalive
-   *  rendered ~2 blank 2048² cascades/frame and the full-screen `keep` sample paid
-   *  a per-pixel CSM PCSS purely to keep the node built). */
+  /** "scene has sun shadows" — drives the nanite depth-shadow receive. */
   sunShadows?: boolean;
-  /** P2: world-space cloud sun-transmittance gate — pre-sever it rode the CSM
-   *  filterNode (pcssFilter × clouds.shadowAt) and reached us through `keep`; now
-   *  multiplied into the sun term directly (full-res, NaN-guarded). */
+  /** world-space cloud sun-transmittance gate — multiplied into the sun term
+   *  directly (full-res, NaN-guarded). */
   cloudShadow?: ((wxz: NV2) => NF) | null;
   /** P4: baked heightfield sun-visibility (FarShadow, 1 bilinear tap) — the
    *  beyond-clipmap far-field term (mountains shade valleys at any distance). */
@@ -138,8 +122,7 @@ export interface ResolveWorld {
   barkTexB: Texture | null;
   /** N5-R0 (D-N28): nanite's own depth-only shadow path. When present, the resolve
    *  takes the sun-shadow factor from shadowFactor() (PCSS over our r32 cascade
-   *  textures) INSTEAD of three's CSM node — three's shadow map stays empty in the
-   *  black slate. null = fall back to the old csm receive (?oldgeo). */
+   *  textures). null = no sun-shadow receive. */
   naniteShadow: NaniteShadow | null;
   /** S0 (D-N29): when present, the sun-shadow factor is taken from a HALF-RES PCSS
    *  eval + depth-aware bilateral upsample (NaniteShadowHalf) instead of the per-
@@ -286,10 +269,9 @@ export function buildNaniteResolve(
   const nanbark = q.get('nanbark');
   // ?nanshadow=0 — master off for the whole nanite shadow system (this receive
   // term AND the per-cascade producer in NaniteFrame read the same flag). Default
-  // ON. With the producer on, world.naniteShadow drives the PCSS branch below; the
-  // csm-only branch is the ?oldgeo fallback (receives the old caster maps).
+  // ON. With the producer on, world.naniteShadow drives the PCSS branch below.
   const shadowsOn =
-    (world.csm !== null || world.sunShadows === true) && q.get('nanshadow') !== '0';
+    world.sunShadows === true && q.get('nanshadow') !== '0';
   // ?voxao=0 — disable the per-brick DIRECTIONAL self-shading on VOXEL foliage. Voxels are shaded
   // with each brick's BAKED mean normal (VoxelBrick word2), which drives the sun N·L (line ~722) +
   // the normal.y ambient floor (line ~782) below, so brick faces angled away from the sun read
@@ -341,23 +323,6 @@ export function buildNaniteResolve(
   // skipped (sub-texel there). 0 disables (legacy full-detail everywhere). Default 60.
   const resFarRaw = Number(q.get('resfar') ?? '60');
   const resFarDist = Number.isFinite(resFarRaw) && resFarRaw >= 0 ? resFarRaw : 60;
-  // ?reskeep=0 — drop the redundant three-CSM `keep` factor in the lighting (below).
-  // When OUR nanite depth-shadow is active (default), the resolve ALSO references three's
-  // CSMShadowNode purely to multiply in `keep` — but three's cascade maps are EMPTY in the
-  // black slate (all casters render through the nanite path, castShadow=false), so every
-  // PCSS/PCF tap returns "lit" ⇒ keep≡1 and the whole per-pixel sample is wasted work that the
-  // half-res shadow optimisation does NOT quarter (it is full-res). Dropping it also makes
-  // `receivedShadowPositionNode` (which exists ONLY to feed that CSM node) dead → a SECOND
-  // per-pixel wp reconstruction vanishes. Default ON (=keep present = bit-identical old path).
-  // CAVEAT: referencing the CSM node is also what makes three run its per-frame cascade FIT
-  // that NaniteShadow.run consumes; with keep dropped the fit is driven explicitly (see
-  // NaniteFrame). Static measurement + shotdiff are fit-independent. Naniteshadow-active only.
-  const keepOn = q.get('reskeep') !== '0';
-  // Runtime-toggleable gate for the keep sample (see the lighting block). Default mirrors the
-  // reskeep flag; window.__laasNanite.setKeepFull(0|1) flips it WITHIN a boot for a clean,
-  // thermal-invariant A/B of the full-screen CSM sample cost (cross-boot gpuWall is thermally
-  // noisy). Shared by both resolve passes so the toggle affects tri + vox together.
-  const keepFullU = uniformF(keepOn ? 1 : 0);
   // PERF-VB4 (D-N45): the WORLD raster is single-pass — ONE SW+HW pass elects the 24-bit
   // depth key into visPayloadV (high bits) and stores the full 25-bit id into the side
   // buffer visBV. The resolve takes the id from visBV and reconstructs depth from the
@@ -398,36 +363,6 @@ export function buildNaniteResolve(
   const mat = new NodeMaterial();
   mat.name = `naniteResolve_${pass}`;
   mat.vertexNode = vec4(positionGeometry.xy, 0, 1) as unknown as typeof mat.vertexNode;
-
-  // D-N17 shadow receive: the CSM cascade-select + sampling read
-  // `shadowPositionWorld`, which ShadowBaseNode sources from
-  // material.receivedShadowPositionNode. The fullscreen triangle's
-  // positionWorld is the clip-space vertex (useless), so supply the
-  // per-pixel RECONSTRUCTED world position — self-contained like depthNode,
-  // not a closure var, so it builds inside the shadow subgraph cleanly.
-  // P2: exists ONLY to feed the legacy CSM node — gate on csm (the severed
-  // world skips this SECOND per-pixel wp reconstruction entirely).
-  if (shadowsOn && world.csm) {
-    (mat as unknown as { receivedShadowPositionNode?: unknown }).receivedShadowPositionNode = Fn(
-      () => {
-        const fy = float(cam.uH).sub(screenCoordinate.y);
-        const pixelIndex = uint(fy).mul(uint(cam.uW)).add(uint(screenCoordinate.x));
-        const zDev = float(1).sub(
-          toF(elemU(vis.payloadV.ro, pixelIndex).shiftRight(uint(8))).div(16777215),
-        ) as unknown as NF;
-        const wpv = getViewPosition(
-          screenUV,
-          zDev,
-          cameraProjectionMatrixInverse,
-        ) as unknown as NV3;
-        return (
-          (cameraWorldMatrix as unknown as { mul(v: NV4): NV4 }).mul(
-            (vec4 as unknown as (a: NV3, b: number) => NV4)(wpv, 1),
-          ) as unknown as NV4
-        ).xyz;
-      },
-    )();
-  }
 
   mat.fragmentNode = Fn(() => {
     // vis-buffer fetch (bottom-up rows: raster writes y·W+x with y bottom-up,
@@ -1280,12 +1215,9 @@ export function buildNaniteResolve(
       });
     }
 
-    // ---- MANUAL lighting (D-N17): sun lambert × CSM shadow + sky ambient +
-    // probe GI. The CSM node (proven on the old path) is referenced as a
-    // multiplicative factor exactly like AnalyticLightNode does
-    // (colorNode.mul(shadowNode)); it carries OUR pcssFilter + the cloud
-    // gate, sampling at receivedShadowPositionNode set above. Exact IBL
-    // parity for the ambient is the remaining N4-C1 term.
+    // ---- MANUAL lighting (D-N17): sun lambert × nanite depth-shadow + sky
+    // ambient + probe GI. Exact IBL parity for the ambient is the remaining
+    // N4-C1 term.
     const sunDir = normalize(vec3(sunU.dir)) as unknown as NV3;
     let nDotL = max(dot(wNormal, sunDir), 0) as unknown as NF;
     // WRAP LIGHTING for VOXEL foliage (user report round 2: whole trees "extremely dark
@@ -1316,10 +1248,7 @@ export function buildNaniteResolve(
     let direct: NF = nDotL;
     if (shadowsOn && world.naniteShadow) {
       // N5-R0 (D-N28): OUR depth-only shadow — PCSS over our r32 cascade textures,
-      // sampled at the reconstructed world pos. We still REFERENCE three's CSM node
-      // (keep) so three runs its per-frame cascade FIT (NaniteShadow.run reads the
-      // fitted cascade VPs); its own map is EMPTY in the black slate → keep == 1 →
-      // folds out (and a cheap blocker-search-only sample). ?oldgeo → csm path.
+      // sampled at the reconstructed world pos.
       // S0: half-res PCSS + bilateral upsample when wired (default), else the
       // full-res per-pixel sample (?shalfres=0). camDist drives the bilateral.
       const sf = float(1).toVar() as unknown as NF;
@@ -1331,28 +1260,10 @@ export function buildNaniteResolve(
           ? world.shadowHalf.upsample(wp as unknown as NV3, camDist)
           : world.naniteShadow!.shadowFactor(wp as unknown as NV3, wNormal as unknown as NV3);
         sf.assign((myRaw as unknown as { clamp(a: number, b: number): NF }).clamp(0, 1));
-        // keep ≡ three's CSM factor — ≈1 here (empty black-slate maps). keepFullU (default =
-        // !reskeep) gates whether the FULL-SCREEN per-pixel CSM cascade-select + PCSS sample runs:
-        //   1 → sampled on every covered pixel (old path, value = sf·keep).
-        //   0 → sampled ONLY the [0,0] corner pixel, so three's CSM node stays BUILT (its per-frame
-        //       cascade FIT — consumed by NaniteShadow.run, NaniteFrame:484 — keeps running) while
-        //       every real pixel skips the wasted ≈1 sample. That sample is FULL-res, NOT quartered
-        //       by the half-res shadow, so it is pure waste when our nanite shadow is active.
-        // Bit-identical for real pixels (keep≡1); the corner pixel only keeps the node alive.
-        if (world.csm) {
-          const keep = (nodeObject(world.csm) as unknown as NV4).x.clamp(0, 1) as unknown as NF;
-          const isCorner = (screenCoordinate.x as unknown as NF)
-            .lessThan(float(1))
-            .and((screenCoordinate.y as unknown as NF).lessThan(float(1)));
-          If(isCorner.or((keepFullU as unknown as NF).greaterThan(float(0.5))), () => {
-            sf.assign((sf as unknown as { mul(o: NF): NF }).mul(keep));
-          });
-        }
         if (world.cloudShadow) {
-          // P2: the cloud sun-transmittance gate, applied directly (it used to reach
-          // this pixel through the CSM filterNode via `keep`). Clamp + self-equality
-          // guard mirror ShadowSetup: one NaN from the cloud sample would otherwise
-          // poison the multiply and erase ALL cast shadows.
+          // the cloud sun-transmittance gate, applied directly. Clamp + self-equality
+          // guard: one NaN from the cloud sample would otherwise poison the multiply
+          // and erase ALL cast shadows.
           const c = world.cloudShadow(wp.xz as unknown as NV2);
           const safe = c.equal(c).select(c.clamp(0, 1), float(1)) as unknown as NF;
           sf.assign((sf as unknown as { mul(o: NF): NF }).mul(safe));
@@ -1366,9 +1277,6 @@ export function buildNaniteResolve(
         }
       };
       fullShadow();
-      direct = nDotL.mul(sf) as unknown as NF;
-    } else if (shadowsOn && world.csm) {
-      const sf = (nodeObject(world.csm) as unknown as NV4).x.clamp(0, 1).toVar() as unknown as NF;
       direct = nDotL.mul(sf) as unknown as NF;
     }
     // ENERGY-CORRECT lighting (D-N22, user choice — NOT pixel-parity with the
@@ -1562,17 +1470,11 @@ export function buildNaniteResolve(
   // the second pass's payloadV+visBV loads + discard over every pixel). Legal only where
   // the union binding set is ≤10 storage buffers: forest (gi null) is EXACTLY 10 — any
   // config with a probe buffer (world.gi) would hit the 11th-binding silent pipeline death,
-  // so the merge is refused there. DEFAULT ON in exactly the proven config shape (voxel
-  // queue + no gi + no csm = forest; identity gates 2026-07-02 §5m: TAA-still pairs in the
-  // D0 band + no-TAA phase-aligned pairs 0.13-0.45% vs ~5-6% ambient floor). ?respass=0
-  // reverts to two-pass; ?respass=1 forces the merge in any gi-free config (e.g. with csm).
+  // so the merge is refused there. DEFAULT ON in the proven config shape (voxel queue + no
+  // gi; identity gates 2026-07-02 §5m: TAA-still pairs in the D0 band + no-TAA phase-aligned
+  // pairs 0.13-0.45% vs ~5-6% ambient floor). ?respass=0 reverts to two-pass.
   const respassFlag = q.get('respass');
-  const singlePass =
-    respassFlag === '0'
-      ? false
-      : respassFlag === '1'
-        ? !!cull.qVoxRasterRO && !world.gi
-        : !!cull.qVoxRasterRO && !world.gi && world.csm === null;
+  const singlePass = respassFlag !== '0' && !!cull.qVoxRasterRO && !world.gi;
   if (respassFlag === '1' && cull.qVoxRasterRO && world.gi)
     // eslint-disable-next-line no-console
     console.warn(
@@ -1627,5 +1529,5 @@ export function buildNaniteResolve(
     voxMesh.castShadow = false;
     voxMesh.receiveShadow = false;
   }
-  return { mesh, meshMesh, voxMesh, keepFullU };
+  return { mesh, meshMesh, voxMesh };
 }
