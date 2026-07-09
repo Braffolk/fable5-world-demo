@@ -42,7 +42,7 @@ import {
 } from 'three/tsl';
 import type { NB, NF, NU, NV3 } from '../gpu/TSLTypes';
 import type { NaniteCam } from './NaniteCommon';
-import type { NaniteShadow } from './NaniteShadow';
+import type { NaniteShadow } from './NaniteShadowClip';
 import type { NaniteVisBuffers } from './NaniteRaster';
 import { dispatch, elemU, minU, toF } from './Tsl';
 

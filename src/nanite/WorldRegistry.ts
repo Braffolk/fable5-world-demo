@@ -36,7 +36,7 @@ import type { CrownLodLevel } from '../vegetation/TreeBuilder';
 import type { Heightfield } from '../world/Heightfield';
 import { WORLD_SIZE } from '../world/WorldConst';
 import { type DagBuild, type DagCluster, buildDag, meshletizeDag } from './BuildDag';
-import { buildAggregateDag, setAggLodErrorK } from './BuildAggregateDag';
+import { setAggLodErrorK } from './BuildAggregateDag';
 import { type CrownLodLevelMesh, buildCrownLodDag, crownLodOwnErrors } from './BuildCrownLodDag';
 import { BootTrace, yieldIfDue } from '../debug/BootTrace';
 import {
@@ -1433,120 +1433,6 @@ export async function buildWorldRegistry(input: {
     console.log(
       `[worldreg] crown-LOD DAG: ${toAggregate.length} crowns in ${aggBuildMs.toFixed(0)} ms` +
         (usableDags ? (prep.dagsFromCache ? ' (bootcache)' : ' (veg prep)') : ' (inline)'),
-    );
-  }
-  // ---- GRASS patch-DAG lane — DEMOTED TO REFERENCE (?grasspatch=1 opt-in;
-  // 2026-07-03 rethink verdict, docs/perf-runs/2026-07-03-grass-arc.md):
-  // world-wide stored patches + aggregate DAGs FAILED the perf mandate (+4.66M
-  // near tris through the full election, 508k instances re-scanned per frame,
-  // 4-variant cut checkerboard). The SHIPPING lane is the procedural
-  // zero-storage field (NaniteGrass.ts — default on, ?grass=0 escape). This
-  // block is kept as the stored-instance A/B control only.
-  if (new URLSearchParams(window.location.search).get('grasspatch') === '1') {
-    const { grassPatchGeometry, GRASS_PATCH_SIZE, GRASS_PATCH_VARIANTS } = await import(
-      '../vegetation/GrassPatch'
-    );
-    const tG0 = performance.now();
-    // v3 key: vdata + widen grow + maxLevels 5 changed the payload
-    const cachedGrass = await bootCache.getMany<DagBuild>('grassdags3');
-    const usableGrass = cachedGrass && cachedGrass.length === GRASS_PATCH_VARIANTS ? cachedGrass : null;
-    const variantHandles: MeshHandle[] = [];
-    const grassPacks: DagBuild[] = [];
-    let grassTris = 0;
-    for (let v = 0; v < GRASS_PATCH_VARIANTS; v++) {
-      const src = geometryToSource(grassPatchGeometry(v));
-      const h = reg.registerMesh(src, 'grass', {
-        transformChannel: 'grass', // S1: GroundRing wind (tip² cantilever + shimmer)
-        castShadows: false,
-        twoSided: true,
-        aggregate: true,
-        // cull bound pad: wind tip deflection (≤0.6) + per-vertex terrain
-        // conform delta within a 4 m patch (center-snap vs local bumps, ±~2 m)
-        swayPad: 2.5,
-        label: `grass/p${v}`,
-      });
-      reg.setMaxDistance(h, 265); // R3 far edge; the splat owns beyond (S4)
-      variantHandles.push(h);
-      try {
-        const built = usableGrass
-          ? (usableGrass[v] as DagBuild)
-          : buildAggregateDag(explicitToDagVerts(src), DAG_VERT_STRIDE, src.indices, {
-              seed: (seed ?? 0) + v,
-              maxTris: MAX_CLUSTER_TRIS,
-              // grass blades WIDEN to conserve coverage (ring thin×widen law) —
-              // uniform growth stacked into multi-metre blade columns at coarse
-              // levels (the ravine-wall monsters)
-              growMode: 'widen',
-              // STOP at L4: 8+ halvings degenerate a 50k-tri patch into a
-              // 128-tri root of ×256-widened blade sheets (coverage broken,
-              // measured near-invisible at 60 m). L4 root ≈ 3k tris of ≤×4
-              // widened blades = the ring's far-band widen clamp — the root IS
-              // the legitimate far representation, held to maxDistance (265 m).
-              maxLevels: 5,
-            });
-        reg.addLate({
-          verts: built.verts.length / DAG_VERT_STRIDE,
-          tris: built.indices.length / 3,
-          clusters: built.clusters.length,
-        });
-        dagBuilds.push({ handle: h, dag: built });
-        grassPacks.push(built);
-        grassTris += built.stats.totalTris;
-      } catch (e) {
-        deferred.push(`grass S2 DAG p${v} build failed: ${e instanceof Error ? e.message : String(e)}`);
-      }
-    }
-    if (!usableGrass && grassPacks.length === GRASS_PATCH_VARIANTS) {
-      void bootCache.putMany('grassdags3', grassPacks);
-    }
-    // WORLD-WIDE placement: every 4 m cell that passes the hard gates gets a
-    // patch instance — the same static-registration model as the 200k trees;
-    // the cull's lodDist envelope (265 m) + frustum + HZB own the frame set.
-    const HALF_CELLS = Math.floor((WORLD_SIZE / 2 - 8) / GRASS_PATCH_SIZE);
-    const hp = GRASS_PATCH_SIZE / 2;
-    const streams = new Map<number, { a: number[]; b: number[] }>();
-    let placed = 0;
-    for (let pz = -HALF_CELLS; pz < HALF_CELLS; pz++) {
-      for (let px = -HALF_CELLS; px < HALF_CELLS; px++) {
-        const x = px * GRASS_PATCH_SIZE;
-        const z = pz * GRASS_PATCH_SIZE;
-        const cx = x + hp;
-        const cz = z + hp;
-        // hard gates (the ring's law): no standing water, no steep ground
-        // (cliff carpets were both the worst artifact site and wasted emit)
-        const hC = hf.heightAtCpu(cx, cz);
-        if (hf.waterYAtCpu(cx, cz) > hC - 0.05) continue;
-        let steep = false;
-        for (const [dx, dz] of [[-hp, 0], [hp, 0], [0, -hp], [0, hp]] as const) {
-          if (Math.abs(hf.heightAtCpu(cx + dx, cz + dz) - hC) / hp > 0.6) {
-            steep = true;
-            break;
-          }
-        }
-        if (steep) continue;
-        // variant by world-cell hash (deterministic, no rng state)
-        const hsh = ((px * 73856093) ^ (pz * 19349663)) >>> 0;
-        const v = hsh % GRASS_PATCH_VARIANTS;
-        let st = streams.get(v);
-        if (!st) {
-          st = { a: [], b: [] };
-          streams.set(v, st);
-        }
-        st.a.push(x, hC, z, 1);
-        st.b.push(0, 0, 0, st.a.length / 4);
-        placed++;
-      }
-    }
-    for (const [v, st] of streams) {
-      const h = variantHandles[v];
-      if (h !== undefined)
-        reg.bindInstances(h, { a: new Float32Array(st.a), b: new Float32Array(st.b) });
-    }
-    // eslint-disable-next-line no-console
-    console.log(
-      `[worldreg] grass: ${placed} patches WORLD-WIDE (${GRASS_PATCH_VARIANTS} variants @ ~${Math.round(
-        grassTris / Math.max(1, GRASS_PATCH_VARIANTS) / 1000,
-      )}k DAG tris), ${(performance.now() - tG0).toFixed(0)} ms${usableGrass ? ' (bootcache)' : ''}`,
     );
   }
   // voxel-foliage (§5.3 HARD precondition): reserve the brick budget BEFORE build()

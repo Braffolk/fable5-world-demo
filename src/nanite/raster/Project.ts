@@ -174,7 +174,7 @@ export function buildProject(p: {
    *  clusters (vi−vBase). SAME buffer world1's fetch reads; ProjectVerts already binds it. */
   indices: Parameters<typeof elemU>[0];
   /** gpu.vcompact — per-cluster (vMin, count) built in GeometryRegistry.populateVCompact
-   *  (unconditional at upload; the ?vcompact flag gates only the NaniteVertexCache consumer).
+   *  (unconditional at upload; consumed here for the per-unique-vert dispatch).
    *  count>0 ⇒ the cluster's global vertex indices span the DENSE range [vMin, vMin+count)
    *  ⇒ this pass projects each UNIQUE vert ONCE (per-unique-vert dispatch, task #76 Lever 1)
    *  instead of ~3–6× per shared corner. count==0 (tooWide / window-grid / streamed-terrain)
@@ -277,7 +277,7 @@ export function buildProject(p: {
     // per-corner dispatch had ALL threads re-issue the IDENTICAL global loads (broadcast reads),
     // the measured buffer-READ-limiter(92%) / LLC(96%) wall (~94% of load-issues redundant). Load
     // them ONCE per workgroup into threadgroup memory, barrier, then decode from shared. Exact
-    // idiom already shipping in NaniteVertexCache + the wgcache path (NaniteRaster ~866-961).
+    // idiom already shipping in the wgcache path (NaniteRaster ~866-961).
     // ≈148 B/workgroup on-chip (37 u32); zero VRAM; the values — hence the written xi/yi/dz
     // records — are BYTE-IDENTICAL (a plain u32 copy → same bitcasts → same projectVert()).
     const shCtx = workgroupArray('uint', CTX_STRIDE) as unknown as {

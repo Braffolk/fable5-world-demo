@@ -40,8 +40,7 @@ import { buildGrassField } from './NaniteGrass';
 import { makeFetch } from './NaniteFetch';
 import { buildNaniteRaster, makeVisBuffers } from './NaniteRaster';
 import { buildNaniteResolve } from './NaniteResolve';
-import { buildNaniteShadow, type NaniteShadow } from './NaniteShadow';
-import { buildNaniteShadowClip } from './NaniteShadowClip';
+import { buildNaniteShadowClip, type NaniteShadow } from './NaniteShadowClip';
 import { buildShadowHalf, type ShadowHalf } from './NaniteShadowHalf';
 import { bcU2F, dispatch, dispatchBatchMixed, elemU, readBuffer, returnIf, texLoadR, toF, uniformArrV4 } from './Tsl';
 
@@ -249,7 +248,6 @@ export function buildNaniteFrame(
   const raster = buildNaniteRaster(
     registry.gpu, hf.heightTex, cam, cull, vis, 'flat', true, disp, windOpt, false, true, voxActive,
     grass ? { batch: grass.batch, renderHw: grass.renderHw, enabled: grass.enabled } : undefined,
-    hzb.raw, // W2 ?trihzb per-tri occlusion reject (build-time gated inside)
   );
 
   // Nanite shadows (N5, D-N28): depth-only SW raster into own r32 cascade textures,
@@ -262,13 +260,10 @@ export function buildNaniteFrame(
     params.get('nanshadow') !== '0' && (world.csm !== null || world.sunShadows === true);
   // S3 (D-N29): the SCREEN-DENSITY SHADOW CLIPMAP replaces the 4 fixed CSM
   // cascades (the resolved sun-shadow rethink — CSM dropped for shadow geometry).
-  // ?shadowclip=0 A/Bs back to the cascade path (NaniteShadow.ts). world.csm stays
-  // alive only as the resolve's cloud-gate carrier until that gate is re-sourced.
-  const useClip = params.get('shadowclip') !== '0';
+  // world.csm stays alive only as the resolve's cloud-gate carrier until that gate
+  // is re-sourced.
   const shadow: NaniteShadow | null = shadowOn
-    ? useClip
-      ? buildNaniteShadowClip(registry.gpu, registry.instanceCount, hf.heightTex, disp, windOpt, measuredHierDepth, voxActive)
-      : buildNaniteShadow(registry.gpu, registry.instanceCount, hf.heightTex, disp, windOpt, measuredHierDepth)
+    ? buildNaniteShadowClip(registry.gpu, registry.instanceCount, hf.heightTex, disp, windOpt, measuredHierDepth, voxActive)
     : null;
   // CAMERA||SHADOW CULL OVERLAP: fold the (CLIP-path) shadow shared-cut cull into the SAME
   // submit as the camera cull so Dawn can overlap the two disjoint culls on frames where
@@ -326,15 +321,6 @@ export function buildNaniteFrame(
       }
     : undefined;
 
-  // G-D lean grass lighting: bake sunVis + probe irradiance per guide texel each
-  // frame (kGuideLight, dispatched inside runGrass) so grass-won resolve pixels
-  // take ONE filtered tap instead of the bilateral shadow upsample + GI chain —
-  // the measured ~7 ms pixel-proportional grass wall. Needs the nanite shadow
-  // (without it the full path's csm-only branch has no lean equivalent — lean
-  // stays off and the resolve keeps the old path). ?grasslean=0 reverts.
-  if (grass && sunVis) grass.attachLightBake({ sunVis, gi: world.gi });
-  const grassLean = grass && sunVis ? grass.resolveLean : null;
-
   // voxel-foliage (Stage 2 §7): give the resolve the voxel work-queue ONLY when active, so
   // a pure-triangle world's resolve never binds qVoxRaster/voxelBricks (stays at 8 buffers).
   const resolveCull = voxActive ? { qRasterRO: cull.qRasterRO, qVoxRasterRO: cull.qVoxRasterRO } : cull;
@@ -353,7 +339,7 @@ export function buildNaniteFrame(
     naniteShadow: shadow,
     shadowHalf,
     grassProc: grass
-      ? { derive: grass.resolveDerive, lean: grassLean, ray: grass.resolveRay }
+      ? { derive: grass.resolveDerive, ray: grass.resolveRay }
       : null,
   });
   // ?nores=1 — MEASUREMENT ablation (default OFF): skip ALL fullscreen resolve passes (the
@@ -588,26 +574,13 @@ export function buildNaniteFrame(
     // (dispatchVoxel's pyr+scatter batch — HZB still runs strictly AFTER kVoxScatter,
     // UAV-synced in-pass, so it pools the identical post-vox election). Excluded when
     // frozen (HZB must NOT rebuild — legacy line below) and under ?nanprobe=1 (keeps the
-    // probe insertion points' semantics exact). Folded order runs HZB before raster.scar;
-    // audited disjoint (scar reads visPayload/visB + writes scar counters; HZB reads
-    // visPayload + writes hzbF — zero shared writes ⇒ swap cannot change any value).
+    // probe insertion points' semantics exact).
     const foldHzb = coalesce && !frozen && !probeOn;
-    // W2 ?trihzb: append the pyramid→hwQueue-tail mirror to the HZB chain (reads the
-    // fresh pyramid, writes only the tail slots — next frame's world1 reads them).
-    const hzbChain = foldHzb
-      ? raster.triHzbCopyKernel
-        ? [...hzb.batch(), raster.triHzbCopyKernel]
-        : hzb.batch()
-      : [];
+    const hzbChain = foldHzb ? hzb.batch() : [];
     raster.world1(renderer, engine.camera, hzbChain);
-    // 0a SCAR (?scar=1): the per-pixel covered-pixel denominator post-pass over the
-    // FINAL world1 winners. No-op unless ?scar=1. The per-fragment band/total counters
-    // are already accumulated inside world1 itself.
-    raster.scar(renderer);
     if (probeRun && params.get('nanprobeat') === 'payload') probeRun(renderer);
     if (!frozen && !foldHzb) {
       hzb.build(renderer); // this frame's depth → next frame's occluder
-      if (raster.triHzbCopyKernel) dispatchBatchMixed(renderer, [raster.triHzbCopyKernel]);
     }
     if (probeRun && params.get('nanprobeat') === 'hzb') probeRun(renderer);
     // Nanite shadows (R0+R1): per-cascade light-frustum cull → depth-only SW
@@ -652,7 +625,6 @@ export function buildNaniteFrame(
   // so MeasureHarness can run them on a drained queue BETWEEN samples (per-frame
   // counters in every MeasuredFrame, zero perturbation of gpuWallMs).
   const meterRead = (r: WebGPURenderer): Promise<Record<string, number>> => {
-    const scarOn = params.get('scar') === '1';
     const out: Record<string, number> = {};
     return Promise.all([
       cull.readCounts(r),
@@ -661,14 +633,13 @@ export function buildNaniteFrame(
       raster.readMidCount(r),
       shadow ? shadow.readCounts(r) : Promise.resolve(null),
       grass ? grass.readCounts(r) : Promise.resolve(null),
-      scarOn ? raster.readScar(r) : Promise.resolve(null),
       voxActive ? cull.readVoxCount(r) : Promise.resolve(null),
       voxActive ? raster.readVoxWrites(r) : Promise.resolve(null),
       // ?voxprev gate counters (spec §6 R9): per-bucket cluster counts. B1 ≈ 0 ⇒ the
       // partition classifier is degenerate — no perf verdict may be read while so.
       voxActive && cull.voxPrevEnabled ? cull.readVoxBuckets(r) : Promise.resolve(null),
     ])
-      .then(([c, hw, splatFrags, midTris, sh, grassCounts, scar, voxCount, voxWrites, voxBuckets]) => {
+      .then(([c, hw, splatFrags, midTris, sh, grassCounts, voxCount, voxWrites, voxBuckets]) => {
         if (grassCounts) {
           out['nanite.grassClumps'] = grassCounts.clumps;
           out['nanite.grassHwTris'] = grassCounts.hwTris;
@@ -685,22 +656,6 @@ export function buildNaniteFrame(
         if (voxBuckets) {
           out['nanite.voxB0'] = voxBuckets[0] ?? 0; // pass A: probably-visible
           out['nanite.voxB1'] = voxBuckets[1] ?? 0; // pass B: probably-occluded
-        }
-        if (scar) {
-          // 0a SCAR readouts → HUD / window.__laas.stats.counters (the Verify agent
-          // reads these). overdraw = band fragments / band covered pixels; bandShare =
-          // band fragments / all frame fragments. Counters scaled ×100 where fractional
-          // (the HUD/stats are integers): scarOverdrawX100, scarBandShareX1000.
-          const bandPx = scar.bandPx;
-          const ovX100 = bandPx > 0 ? Math.round((scar.bandFrags / bandPx) * 100) : 0;
-          const shareX1000 =
-            scar.totalFrags > 0 ? Math.round((scar.bandFrags / scar.totalFrags) * 1000) : 0;
-          out['nanite.scarBandFrags'] = scar.bandFrags;
-          out['nanite.scarBandPx'] = bandPx;
-          out['nanite.scarTotalFrags'] = scar.totalFrags;
-          out['nanite.scarBandClusters'] = scar.bandClusters;
-          out['nanite.scarOverdrawX100'] = ovX100;
-          out['nanite.scarBandShareX1000'] = shareX1000;
         }
         if (sh) {
           let shTotal = 0;

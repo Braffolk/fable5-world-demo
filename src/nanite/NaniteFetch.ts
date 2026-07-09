@@ -28,7 +28,6 @@ import {
 } from './GeometryRegistry';
 import type { RegistryGpu } from './GeometryRegistry';
 import { instTransformPoint, instYaw, type InstYaw } from './NaniteCommon';
-import { GRASS_PATCH_SIZE } from '../vegetation/GrassPatch';
 import type { UniformV3 } from './Tsl';
 import { bcU2F, elemU, maxU, minU, texLoadR, toF } from './Tsl';
 
@@ -174,7 +173,7 @@ export interface NaniteFetch {
   fetchWorldVert(ctx: VertCtx, localTri: NU, v: 0 | 1 | 2): NV3;
   /** world-space position of a vertex BY its global index `vi` (the value
    *  `fetchWorldVert` reads from `gpu.indices`). Same math as `fetchWorldVert`,
-   *  keyed by vi — the PERF-3 cooperative vertex cache transforms each unique vi
+   *  keyed by vi — the projection pre-pass (raster/Project) transforms each unique vi
    *  ONCE through this. Defined for the explicit and adaptive-DAG conventions;
    *  the window-grid heightfield has no index buffer (count=0 ⇒ never called). */
   fetchWorldVertByIndex(ctx: VertCtx, vi: NU): NV3;
@@ -242,15 +241,6 @@ export function makeFetch(
    *  register set (the branch-union that inflated world1's occupancy floor). */
   variant: 'both' | 'explicit' | 'terrain' = 'both',
 ): NaniteFetch {
-  // ?grasspatch (task #76): the geometry grass patch-DAG lane is a DEMOTED REFERENCE —
-  // WorldRegistry registers the transformChannel:'grass' mesh ONLY under ?grasspatch=1, so
-  // by default (ray grass, and the grass=0 raster config) NO cluster ever carries
-  // channel==grass. The grass wind branches below (a gust sample in makeCtx + a heightTex
-  // sample & instTransformPoint in explicitWorldByIndex) then compile into the raster's
-  // register UNION yet are never reached = pure dead register weight. Gate them on the flag
-  // ⇒ byte-identical (the branch was unreachable without the mesh), registers freed.
-  const grassGeom =
-    new URLSearchParams(window.location.search).get('grasspatch') === '1';
   // ?fp16w (task #76): route the per-vertex trunk/leaf wind offset through the f16 wgslFn
   // (nanWindF16) instead of the f32 TSL math — halves that math's registers + ALU. Off =
   // byte-identical f32 path.
@@ -374,23 +364,6 @@ export function makeFetch(
       //              (the shipped ring only zeroes shimmer in far mode — the fade
       //              is the new lane's TRAA-stability upgrade, §2 item 6)
       //   swayXPhase ← the hoisted shimmer sine
-      // grass geometry lane is ?grasspatch-only ⇒ skip compiling this branch by default.
-      if (grassGeom)
-      If(channel.equal(uint(TRANSFORM_CHANNEL.grass)), () => {
-        const origin = A.xyz as unknown as NV3;
-        const s = windU.strength as unknown as NF;
-        const dist = origin.sub(vec3(wind.camPos)).length();
-        const e = windExposure(origin.xz as unknown as NV2);
-        const g = gustAt(origin.xz as unknown as NV2);
-        const amp = s.mul(g.mul(0.9).add(0.3)).mul(e).toVar();
-        leanBase.assign(amp.mul(s.mul(0.55).add(0.6)).mul((A.w as unknown as NF).mul(0.42)));
-        const instPhase = slotHash(posKey, 211).toVar();
-        ph.assign(instPhase.mul(6.2832));
-        const flutAtten = float(1).sub(dist.sub(40).div(80).clamp(0, 1));
-        flutBase.assign(amp.mul(0.05).mul(flutAtten));
-        // shimmer sine: time·5.2 + per-instance phase + world-pos decorrelation
-        natW.assign(float(5.2)); // reuse: swayXPhase below = sin(time·natW·1.31 + ph·1.7)
-      });
       // HOIST the per-vertex sines here: their args (natW, ph per-instance; time
       // per-frame) are cluster-invariant, so compute the 2 sines ONCE per cluster
       // instead of 384×/cluster in fetchWorldVert. Cached via wgcache like the rest.
@@ -432,7 +405,7 @@ export function makeFetch(
 
   // ---- world-reconstruction helpers (split out of fetchWorldVert at PERF-3 stage
   //      2a — behavior-preserving: fetchWorldVert recomposes the SAME math. The
-  //      by-INDEX forms exist so the cooperative vertex cache (NaniteRaster) can
+  //      by-INDEX forms exist so the projection pre-pass (raster/Project) can
   //      transform each UNIQUE vert ONCE, keyed by its global index vi). ----------
 
   /** heightfield TAIL shared by both HF conventions: grid texel (sx,sz) + skirtDrop
@@ -545,48 +518,6 @@ export function makeFetch(
         const flex = toF(vd.shiftRight(uint(8)).bitAnd(uint(0xff))).div(255);
         out.assign(out.add(windOffset(w, localY as unknown as NF, flex as unknown as NF)));
       });
-      // GRASS (S1): the GroundRing response verbatim — cantilever bend ∝ tip²
-      // (tips dip as they deflect, dy = bend·t·−0.4), shimmer perpendicular to
-      // the wind (per-instance hoisted sine × tip). t = clump-local y (blades
-      // are unit height; the clump's tallest blade reaches ~1.27 — clamp).
-      // grass geometry lane is ?grasspatch-only ⇒ skip compiling this branch (with its
-      // heightTex sample + instTransformPoint) by default — dead register weight otherwise.
-      if (grassGeom)
-      If(ctx.channel.equal(uint(TRANSFORM_CHANNEL.grass)), () => {
-        const w = ctx.wind as TrunkWindFields;
-        const vd = elemU(gpu.verts, vb.add(uint(5)));
-        const tN = (p as unknown as NV3).y.clamp(0, 1);
-        const bend = w.leanBase.mul(tN).mul(tN);
-        // per-BLADE shimmer phase (vdata.z): one hoisted sine per patch made
-        // 1440 clumps wave in lockstep (user: "repetitive illogical movement").
-        // 1 sin/vertex; the argument's per-instance part rides w.ph.
-        const phB = toF(vd.shiftRight(uint(16)).bitAnd(uint(0xff))).div(255).mul(6.2832);
-        const flut = time.mul(5.2).add(w.ph).add(phB).sin().mul(tN).mul(w.flutBase);
-        out.assign(
-          out.add(
-            vec3(
-              w.dirX.mul(bend).sub(w.dirY.mul(flut)),
-              bend.mul(tN).mul(-0.4),
-              w.dirY.mul(bend).add(w.dirX.mul(flut)),
-            ),
-          ),
-        );
-        // S2 TERRAIN CONFORM, ROOT-ANCHORED (v2): sample the heightfield at the
-        // blade's ROOT xz (vdata.xy, patch-local — baked at build), NOT at the
-        // displaced vertex xz — v1 sheared blades along slopes (tip re-based to
-        // the ground under the TIP) and fed wind motion back into height (the
-        // ravine-wall "fat glitching blades", user 2026-07-03). The whole blade
-        // moves rigidly with its root; one filtered tap per unique vertex.
-        const rl = vec3(
-          toF(vd.bitAnd(uint(0xff))).div(255).mul(GRASS_PATCH_SIZE) as unknown as NF,
-          float(0) as unknown as NF,
-          toF(vd.shiftRight(uint(8)).bitAnd(uint(0xff))).div(255).mul(GRASS_PATCH_SIZE) as unknown as NF,
-        );
-        const rootW = instTransformPoint(ctx.A, ctx.B, ctx.yawSc, rl as unknown as NV3);
-        const uvH = rootW.xz.div(WORLD_SIZE).add(0.5);
-        const hG = (texture(heightTex, uvH as unknown as NV2, 0) as unknown as NV4).x;
-        out.y.assign(out.y.sub(ctx.A.y as unknown as NF).add(hG));
-      });
     }
     return out as unknown as NV3;
   };
@@ -692,7 +623,7 @@ export function makeFetch(
       out.assign(explicitWorldByIndex(ctx, vi));
     } else if (variant === 'terrain') {
       // only the adaptive-DAG convention has explicit vertex indices; window-grid
-      // clusters have vcompact count=0, so the cooperative cache never calls this.
+      // clusters have vcompact count=0, so the projection pre-pass never calls this.
       out.assign(dagWorldByIndex(ctx, vi));
     } else {
       If(ctx.isHF, () => {

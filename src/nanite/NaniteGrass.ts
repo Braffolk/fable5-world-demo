@@ -39,7 +39,6 @@ import {
   float,
   instanceIndex,
   mix,
-  normalize,
   smoothstep,
   texture,
   texture3D,
@@ -124,14 +123,6 @@ const RAY_END = ((): number => {
   const v = Number(new URLSearchParams(window.location.search).get('grassrayend') ?? '155');
   return Number.isFinite(v) && v >= 20 && v <= 300 ? v : 155;
 })();
-/** G-D LEAN resolve lighting (?grasslean=1, MEASURED NO-WIN 2026-07-04 → opt-in):
- *  bake sunVis (PCSS×cloud×far) + probe irradiance PER GUIDE TEXEL, resolve takes
- *  ONE filtered tap instead of the shadow-upsample + GI chain. Built on the
- *  "resolve wall" hypothesis — REFUTED by direct A/B: lean on/off identical at
- *  eye (p50 24.9/25.0 @dpr1.5), even under ?shalfres=0 full-res PCSS. The ~7 ms
- *  hwnoemit delta is the EMIT PATH (election atomics × blade overdraw), not the
- *  resolve shading. Kept opt-in: correct, verified, may win on tap-bound GPUs. */
-const GRASS_LEAN = new URLSearchParams(window.location.search).get('grasslean') === '1';
 const RAY_SHELL_H = 1.5; // max blade reach above ground (incl. mid-card 2× + wind)
 // ---- GUIDE FIELD (ray lane) — the precomputed-intersection lever ---------------------
 // A camera-centered world-space context field REBAKED EVERY FRAME by a tiny compute
@@ -229,17 +220,6 @@ export interface GrassBuildOpts {
 }
 
 
-/** lighting providers for the per-texel light bake (built AFTER the grass field —
- *  the shadow system doesn't exist yet when buildGrassField runs) */
-export interface GrassLightOpts {
-  /** composed sun visibility: clipmap PCSS × cloud transmittance × far-shadow
-   *  (the water-arc sunVis closure — NaniteFrame builds it from NaniteShadow).
-   *  pix = explicit IGN-noise coord (compute has no fragCoord — MUST be passed) */
-  sunVis: (wp: NV3, n: NV3, pix?: NV2) => NF;
-  /** probe-GI irradiance (world.gi); null → ambient floor only */
-  gi: { irradiance(wp: NV3, n: NV3, lift?: number, groundY?: NF): NV3 } | null;
-}
-
 export interface GrassField {
   /** compute kernels for world1's batched submit (after kVisClear, before kHwArgs) */
   batch: readonly unknown[];
@@ -250,19 +230,12 @@ export interface GrassField {
   renderHw(renderer: Renderer, camera: PerspectiveCamera): void;
   /** resolve-side shading reconstruction (call INSIDE the resolve fragment Fn) */
   resolveDerive(body: NU, wp: NV3): { t: NF; nrm: NV3 };
-  /** G-D lean lighting: one filtered tap of the per-frame texel light field →
-   *  vec4(sunVis, irradianceRGB). null when the lean path is off (?grasslean=0,
-   *  geo lane, or attachLightBake never called). Call INSIDE the resolve Fn. */
-  resolveLean: ((wpXZ: NV2) => NV4) | null;
   /** G-E article lane (?grass=ray): the algorithm's own output IS depth+normal —
    *  kRay writes the baked-fetch hit normal + tip param per pixel into a screen
    *  StorageTexture; the resolve taps it instead of the analytic resolveDerive
    *  (whose per-blade id decode the article lane doesn't have). vec4(nrm, t).
    *  null on every other lane. */
   resolveRay: ((px: NU) => NV4) | null;
-  /** attach the per-texel light bake kernel (call once the shadow system + GI
-   *  exist — NaniteFrame, after buildNaniteShadow*). No-op on non-lean lanes. */
-  attachLightBake(l: GrassLightOpts): void;
   setEnabled(v: boolean): void;
   enabled(): boolean;
   readCounts(renderer: Renderer): Promise<{ clumps: number; hwTris: number }>;
@@ -685,83 +658,6 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
     return k;
   })();
 
-  // ---- G-D per-texel LIGHT bake (lean resolve): sunVis + probe irradiance ----------
-  // rgba16float StorageTexture — filterable (the resolve gets HW bilinear in ONE
-  // tap) and a texture, not a buffer (the resolve fragment rides the 10-storage-
-  // buffer ceiling; float lighting has none of the uint-mistype/NaN-bit hazards
-  // that forced the ctx/mask to buffers). The kernel is attached LATER
-  // (attachLightBake) because the shadow system is built after the grass field.
-  // It reads THIS frame's guide ctx (own dispatch, after kGuideBake) and lights
-  // the texel at sward mid-height with the terrain normal; shadow maps are the
-  // last-updated ones (toroidal clipmap ≈ static — 1-frame lag is invisible).
-  const guideLightTex = ((): StorageTexture | null => {
-    if (!GRASS_LEAN) return null;
-    const t = new StorageTexture(GUIDE_RES, GUIDE_RES);
-    t.type = HalfFloatType;
-    t.format = RGBAFormat;
-    t.magFilter = LinearFilter;
-    t.minFilter = LinearFilter;
-    t.generateMipmaps = false;
-    t.name = 'grassGuideLight';
-    return t;
-  })();
-  let kGuideLight: unknown = null;
-  const attachLightBake = (l: GrassLightOpts): void => {
-    if (!guideLightTex || kGuideLight) return;
-    const k = Fn(() => {
-      returnIf((uOn as unknown as NF).lessThan(0.5) as unknown as NB);
-      const i = instanceIndex;
-      returnIf(i.greaterThanEqual(uint(GUIDE_N)));
-      const tx = i.mod(uint(GUIDE_RES));
-      const tz = i.div(uint(GUIDE_RES));
-      const fb = vec2(uGFx as unknown as NF, uGFz as unknown as NF).add(
-        vec2(toF(tx), toF(tz)).mul(GUIDE_SUB),
-      ) as unknown as NV2;
-      const wpos = fb.add(GUIDE_SUB / 2).mul(CELL).toVar() as unknown as NV2;
-      const dist = wpos.sub(vec2(cam.camPos.x, cam.camPos.z)).length() as unknown as NF;
-      // circle gate — the square guide's corners are beyond grass reach (−21%)
-      returnIf(dist.greaterThan(R + 1) as unknown as NB);
-      const cv = guideCtx4.element(i);
-      const ground = bcU2F(cv.x as unknown as NU).toVar() as unknown as NF;
-      const grad = unpackHalfU(cv.y as unknown as NU).toVar() as unknown as NV2;
-      const ta = unpackHalfU(cv.z as unknown as NU).toVar() as unknown as NV2;
-      const tn = normalize(
-        vec3(grad.x.negate(), 1, grad.y.negate()) as unknown as NV3,
-      ) as unknown as NV3;
-      const wp3 = vec3(
-        wpos.x,
-        ground.add(ta.x.mul(0.5)).add(0.05),
-        wpos.y,
-      ) as unknown as NV3;
-      // IGN noise coord = the texel index (compute has no fragCoord — the
-      // ShadowHalf idiom); per-texel phase keeps the PCSS dither decorrelated
-      const sun = l.sunVis(wp3, tn, vec2(toF(tx), toF(tz)) as unknown as NV2).clamp(0, 1) as unknown as NF;
-      let irr = (
-        l.gi ? l.gi.irradiance(wp3, tn, 2.0, heightAt(wpos)) : (vec3(0) as unknown as NV3)
-      ) as unknown as NV3;
-      if (l.gi && canopyTex) {
-        // same canopy damping the resolve's full GI path applies
-        irr = irr.mul(canopyAt(canopyTex, wpos).mul(0.18).oneMinus()) as unknown as NV3;
-      }
-      textureStore(guideLightTex, uvec2(tx, tz), vec4(sun, irr)).toWriteOnly();
-    })().compute(GUIDE_N, [256]);
-    (k as unknown as { setName(n: string): void }).setName('grassLight');
-    kGuideLight = k;
-  };
-  /** lean resolve tap: world XZ → guide uv → ONE filtered sample. Texel i's data
-   *  sits at uv (i+0.5)/RES; a point at a texel center has (wp/CELL − gf)/8 =
-   *  i+0.5 — the mapping is exactly center-aligned, HW bilinear does the rest. */
-  const resolveLean = guideLightTex
-    ? (wpXZ: NV2): NV4 => {
-        const uv = wpXZ
-          .div(CELL)
-          .sub(vec2(uGFx as unknown as NF, uGFz as unknown as NF))
-          .div(GUIDE_SUB * GUIDE_RES)
-          .clamp(0, 1) as unknown as NV2;
-        return texture(guideLightTex, uv, 0) as unknown as NV4;
-      }
-    : null;
-
   // ---- G-E: THE ARTICLE'S PRECOMPUTATION (⚠️ USER DIRECTIVE 2026-07-04) ---------------
   // Boot-baked raycast tile (GrassRayBake.ts): 3D texture (x, z in tile, angle) →
   // R = path length 1/(1+d), GBA = normal — traced over infinitely-tiled FULL-density
@@ -1068,7 +964,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
             // ---- FIELD FETCH (perf rewrite 2026-07-04): every smooth per-step
             // field (swirl θ as cos/sin, wind quad-term, static arc, lean) comes
             // from the per-frame per-texel bake in kGuideBake, HW-bilinear at the
-            // ray's CONTINUOUS world pos (resolveLean's center-aligned uv idiom).
+            // ray's CONTINUOUS world pos (center-aligned uv idiom).
             // ⚠️ GRID HISTORY: fields must be continuous ACROSS SPACE — piecewise-
             // BILINEAR of texel-center samples qualifies; the user's 0.84m quilt
             // was piecewise-CONSTANT fields. This replaces 3× value noise (12
@@ -1677,7 +1573,6 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
     // timestamps; the whole-frame A/B is the ground truth either way)
     dispatch(renderer, kGuideBake);
     dispatch(renderer, kGuideCoarse); // L2 reduce of this frame's ctx (kRay's coarse walk)
-    if (kGuideLight) dispatch(renderer, kGuideLight); // reads this frame's ctx
     dispatch(renderer, kRay);
   };
 
@@ -1685,9 +1580,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
     batch: [],
     renderHw: runGrass,
     resolveDerive,
-    resolveLean,
     resolveRay,
-    attachLightBake,
     setEnabled(v: boolean): void {
       onCpu = v;
       uOn.value = v ? 1 : 0;

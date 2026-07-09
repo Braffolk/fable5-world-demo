@@ -111,17 +111,12 @@ export interface VisClearParams {
   vis: NaniteVisBuffers;
   hwQueueV: U32Views;
   auditV: U32Views;
-  /** ?scar tail counters (folded into hwQueue); scarEl(i) → the atomic slot. */
-  scar: boolean;
-  scarEl: (i: number) => ReturnType<U32Views['atomic']['element']>;
   splatQueueV: U32Views | null;
   midQueueV: U32Views | null;
   /** singlePass/packed: clear payload/visB to 0 (atomicMax target) not the sentinel. */
   packedClear: boolean;
-  /** ?dvclear: skip the depthV sentinel clear when nothing reads it. */
+  /** skip the depthV sentinel clear on the single-pass path where nothing reads it. */
   skipDepthClear: boolean;
-  /** ?visclear=0: skip the two hot vis clears (measurement only). */
-  skipVisClear: boolean;
 }
 
 export function buildVisClear(p: VisClearParams): {
@@ -133,13 +128,10 @@ export function buildVisClear(p: VisClearParams): {
     vis,
     hwQueueV,
     auditV,
-    scar,
-    scarEl,
     splatQueueV,
     midQueueV,
     packedClear,
     skipDepthClear,
-    skipVisClear,
   } = p;
   const visDepthV = vis.depthV;
   const visPayloadV = vis.payloadV;
@@ -164,26 +156,17 @@ export function buildVisClear(p: VisClearParams): {
         atomicStore(visDepthV.atomic.element(instanceIndex), uint(0xffffffff));
       // packed/single-pass: payload(+visB) are atomicMax/side targets ⇒ clear to 0 (the
       // smallest, "no fragment"). legacy: payload keeps the 0xffffffff orphan sentinel.
-      // ?visclear=0 DEBUG (measurement only): skip the 2 hot vis clears to A/B the WAR-stall hypothesis; produces a dirty render.
-      if (!skipVisClear) {
-        atomicStore(
-          visPayloadV.atomic.element(instanceIndex),
-          uint(packedClear ? 0 : 0xffffffff),
-        );
-        if (packedClear)
-          atomicStore(visBV.atomic.element(instanceIndex), uint(0));
-      }
+      atomicStore(
+        visPayloadV.atomic.element(instanceIndex),
+        uint(packedClear ? 0 : 0xffffffff),
+      );
+      if (packedClear)
+        atomicStore(visBV.atomic.element(instanceIndex), uint(0));
     });
     If(instanceIndex.equal(uint(0)), () => {
       atomicStore(hwQueueV.atomic.element(0), uint(0));
       atomicStore(auditV.atomic.element(0), uint(0));
       atomicStore(auditV.atomic.element(1), uint(0));
-      if (scar) {
-        atomicStore(scarEl(0), uint(0));
-        atomicStore(scarEl(1), uint(0));
-        atomicStore(scarEl(2), uint(0));
-        atomicStore(scarEl(3), uint(0));
-      }
       // reset the sub-pixel + mid append counters (WAW-before the raster's atomicAdd).
       if (splatQueueV) atomicStore(splatQueueV.atomic.element(0), uint(0));
       if (midQueueV) atomicStore(midQueueV.atomic.element(0), uint(0));

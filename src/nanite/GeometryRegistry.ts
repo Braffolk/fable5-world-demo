@@ -116,9 +116,7 @@ export let CLUSTER_TRI_MASK = 127; // MAX_CLUSTER_TRIS − 1 — payload localTr
 // LEVER C: raised 192/382 → 512 (= MAX_CLUSTER_VERTS in raster/Project.ts) so populateVCompact
 // stores (vMin,count) for EVERY mesh cluster (real clusters ≤ ~494 unique < 512), CLOSING the
 // tooWide (vcCount==0) fallback ⇒ Lever B's per-cluster mesh reservation vertCount = vcCount is
-// EXACT for all mesh clusters. Verified-safe consumers: (1) NaniteVertexCache workgroupArray
-// ('vec3', 512) = 6 KB, but only built under ?vcompact (OFF by default + bitrotted) and safely
-// < the 16 KB threadgroup budget; (2) Project + NaniteVertexCache stride loops
+// EXACT for all mesh clusters. Verified-safe consumer: Project's stride loops
 // ceil(512/MAX_CLUSTER_TRIS) still cover the unique range (3 strides @255, 4 @128). Bit-identical:
 // a cluster that switches tooWide→covered writes the SAME deduped slots (Lever 1 identity).
 export let VCACHE_VERTS = 512;

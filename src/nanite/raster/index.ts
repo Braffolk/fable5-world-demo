@@ -29,7 +29,6 @@ export {
   SPLAT_CAP,
   buildQueues,
   type Queues,
-  type TriHzbLevel,
 } from './Queues';
 export {
   CTX_F,

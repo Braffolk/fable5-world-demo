@@ -57,7 +57,7 @@ import {
 } from 'three/tsl';
 import type { NB, NF, NU, NV2, NV3, NV4 } from '../gpu/TSLTypes';
 import type { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js';
-import type { NaniteShadow } from './NaniteShadow';
+import type { NaniteShadow } from './NaniteShadowClip';
 import type { ShadowHalf } from './NaniteShadowHalf';
 import { causticContext, causticDepth, causticTint } from '../render/Caustics';
 import { buildTerrainShading } from '../render/TerrainMaterial';
@@ -151,11 +151,6 @@ export interface ResolveWorld {
    *  (zero storage buffers — the binding budget is untouched). */
   grassProc?: {
     derive(body: NU, wp: NV3): { t: NF; nrm: NV3 };
-    /** G-D lean lighting: one filtered tap of the per-frame guide light field →
-     *  vec4(sunVis, irradianceRGB). Non-null ⇒ grass pixels SKIP the bilateral
-     *  shadow upsample + GI probe chain (the measured ~7 ms pixel-proportional
-     *  wall) and use this instead. ?grasslean=0 → null → old path. */
-    lean?: ((wpXZ: NV2) => NV4) | null;
     /** G-E article lane (?grass=ray): per-pixel vec4(worldNrm, tipParam) from the
      *  raycast lane's screen texture (the algorithm's own depth+normal output).
      *  Non-null ⇒ grass pixels use it INSTEAD of derive() (whose per-blade id
@@ -1218,13 +1213,6 @@ export function buildNaniteResolve(
     // ~1.6 m patch dryness × canopy shade; blade normal pulled to the terrain normal
     // hardening with distance). Zero storage buffers — texture taps + ALU only.
     const gpTip = float(0.5).toVar() as unknown as NF;
-    // G-D lean lighting (vec4 sunVis+irradiance from the per-frame guide light
-    // field, ONE filtered tap) — fetched here inside the isGP branch, consumed by
-    // the sun + GI blocks below, which then SKIP the bilateral shadow upsample +
-    // probe chain for grass pixels (the ~7 ms pixel-proportional wall).
-    const gpLean = (isGP && world.grassProc?.lean) || null;
-    const gpSun = float(1).toVar() as unknown as NF;
-    const gpIrr = vec3(0).toVar() as unknown as NV3;
     // ?grassdbg=flatres — attribution stop: grass pixels keep their election/depth
     // but the resolve stubs derive+material+per-pixel work to constants. Splits
     // "grass pixels EXIST downstream" from "grass resolve work" in the frame A/B.
@@ -1243,11 +1231,6 @@ export function buildNaniteResolve(
           ao.assign(float(1));
           gpTip.assign(float(0.5));
           return;
-        }
-        if (gpLean) {
-          const L = gpLean(wp.xz as unknown as NV2) as unknown as NV4;
-          gpSun.assign(L.x as unknown as NF);
-          gpIrr.assign((L as unknown as { yzw: NV3 }).yzw);
         }
         const body = pRaw.bitAnd(uint(0x3fffffff));
         // G-E article lane: normal + tip come straight from the raycast lane's
@@ -1382,16 +1365,7 @@ export function buildNaniteResolve(
           sf.assign((sf as unknown as { mul(o: NF): NF }).mul(fv));
         }
       };
-      // G-D lean: grass pixels take the pre-composed texel sunVis (PCSS×cloud×far
-      // baked in kGuideLight) — the whole upsample/keep/cloud/far chain above is
-      // skipped for them. Non-grass pixels run the identical old path.
-      if (gpLean) {
-        If(isGP as NB, () => {
-          sf.assign(gpSun);
-        }).Else(fullShadow);
-      } else {
-        fullShadow();
-      }
+      fullShadow();
       direct = nDotL.mul(sf) as unknown as NF;
     } else if (shadowsOn && world.csm) {
       const sf = (nodeObject(world.csm) as unknown as NV4).x.clamp(0, 1).toVar() as unknown as NF;
@@ -1424,15 +1398,7 @@ export function buildNaniteResolve(
         }
         irrV.assign(irr);
       };
-      // G-D lean: grass pixels take the texel-baked probe irradiance (canopy
-      // damping already applied in kGuideLight); the probe chain is skipped.
-      if (gpLean) {
-        If(isGP as NB, () => {
-          irrV.assign(gpIrr);
-        }).Else(fullGi);
-      } else {
-        fullGi();
-      }
+      fullGi();
       radiance = radiance.add(irrV.mul(ao)) as unknown as NV3;
     }
     // AMBIENT FLOOR (fixes black back-faces; bdb24c7 dropped the hemisphere ambient to

@@ -40,7 +40,6 @@ import {
   fract,
   instanceIndex,
   sin,
-  storageBarrier,
   uint,
   vec3,
   vec4,
@@ -130,26 +129,22 @@ export interface VoxelRasterDeps {
   qVoxRasterRO: BufOf<UV2>;
   /** 2D-split dispatch args over the voxel-cluster count (cull.voxRasterDispatchAttr). */
   voxRasterDispatchAttr: IndirectStorageBufferAttribute;
-  /** DEPTH-BUCKET F2B (?voxf2b): per-bucket (base,count) the K near→far scatter
+  /** bucketed scatter (?voxprev): per-bucket (base,count) the K near→far scatter
    *  instances read (STORAGE, cull.voxBucketRangeRO). */
   voxBucketRangeRO: BufOf<UV2>;
-  /** DEPTH-BUCKET F2B: per-bucket 2D-split indirect dispatch args (cull.voxBucketDispatchAttr,
+  /** bucketed scatter: per-bucket 2D-split indirect dispatch args (cull.voxBucketDispatchAttr,
    *  length = voxF2bK), ordered NEAR→FAR (index 0 = nearest). */
   voxBucketDispatchAttr: IndirectStorageBufferAttribute[];
-  /** DEPTH-BUCKET F2B: the BUILD-TIME bucket count K (must equal cull.voxF2bK so the K
-   *  baked scatter instances line up with the K cull dispatch attrs). */
+  /** the BUILD-TIME bucket count K (must equal cull.voxF2bK so the K baked scatter instances
+   *  line up with the K cull dispatch attrs). 2 under the ?voxprev visibility partition. */
   voxF2bK: number;
-  /** DEPTH-BUCKET F2B: front-to-back ordering. DEFAULT FALSE since 2026-06-26 — the K
-   *  bucket dispatches are barrier-serialized and the intended per-block-cull pre-seed is
-   *  never realized (the occlusion pyramid is built once, not rebuilt between buckets), so
-   *  F2B measured a pure net-loss scaling with K (worst single-tree pose 25.4→10.8 ms gpuWall,
-   *  42→121 fps with it OFF). The default is now the single unordered whole-list dispatch;
-   *  ?voxf2b=1 restores the old K-bucket path (A/B control / future large-batch opt-in). */
+  /** whether the bucketed two-pass scatter is ON (= ?voxprev active in the cull). When false
+   *  the raster runs the single unordered whole-list dispatch over voxRasterDispatchAttr. */
   voxF2bEnabled: boolean;
   /** ?voxprev two-pass visibility partition active in the cull (implies voxF2bEnabled,
    *  K=2). Forces the 2-wave dispatch: pass A → vox-inclusive voxOccPyr rebuild → pass B
    *  (spec-prev-frame-occlusion §2.4.2). Threaded from cull.voxPrevEnabled — NOT re-parsed
-   *  from the URL, so the ?occl=0 / explicit-?voxf2b diagnostic combos stay exact. */
+   *  from the URL, so the ?occl=0 diagnostic combos stay exact. */
   voxPrevEnabled: boolean;
   /** the SAME 24-bit depth key the world1 raster + resolve use (§6.7). */
   depthKey24: (cz: NF) => NU;
@@ -220,11 +215,6 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // > 75% of its 64 cells carves too little to pay the ≤512-projection build ⇒ net loss. 48/64.
   const OCC_MASK_FULL = 48;
 
-  // The ?voxraster flag (scatter vs the REFUTED depth-bucketed bin) is gone: scatter is the
-  // ONLY voxel raster (the bin path lost the frame at every config and was removed). The param
-  // is still read defensively so a stale ?voxraster=bin URL is a harmless no-op (scatter runs).
-  new URLSearchParams(window.location.search).get('voxraster');
-
   // ---- atomicBuf: a single debug BRICK-WRITE counter (Stage-2 overdraw overlay, §A2).
   // One word [WRITE_CTR]; scatter atomicAdds it per election win and kClearWrite zeroes it.
   // DEFAULT OFF: that per-win atomicAdd targets ONE global word, so every election win on the
@@ -262,16 +252,16 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // near-black crowns, 2026-07-01 review); per-brick decode breaks them back into a crown.
   // Bit budget: itemIdx < QVOX_CAP = 2^21 (bits 0-20), brickIdx bits 21-27, VOX_BIT = 31.
   const voxBrickShade = new URLSearchParams(window.location.search).get('voxbn') !== '0';
-  // ?voxwaves=N (with ?voxf2b=1): chunk the K F2B bucket dispatches into N near→far waves
-  // with a voxOccPyr rebuild between waves, so later waves' per-block occlusion cull sees
-  // earlier waves' voxel elections (vox-behind-vox). See dispatchVoxel. 0/1 = off (old path).
+  // ?voxwaves=N (with the bucketed scatter): chunk the K bucket dispatches into N near→far
+  // waves with a voxOccPyr rebuild between waves, so later waves' per-block occlusion cull
+  // sees earlier waves' voxel elections (vox-behind-vox). See dispatchVoxel. 0/1 = off.
   const voxWavesRaw = parseInt(new URLSearchParams(window.location.search).get('voxwaves') ?? '0', 10);
   // ?voxprev (DEFAULT ON, spec-prev-frame-occlusion §2.4.2) forces the 2-wave dispatch:
   // pass A (probably-visible) scatters first, voxOccPyr REBUILDS (now vox-inclusive),
   // pass B (probably-occluded) then culls against real same-frame vox occluders.
   // Overrides an explicit ?voxwaves while active. deps.voxPrevEnabled is the CULL's
-  // resolved gate (flag && classifier non-null), so ?occl=0 and ?voxprev=0+?voxf2b=1
-  // diagnostic combos keep their exact legacy dispatch shapes.
+  // resolved gate (flag && classifier non-null), so ?occl=0 and ?voxprev=0 diagnostic
+  // combos keep their exact dispatch shapes.
   const voxWaves = deps.voxPrevEnabled
     ? 2
     : Number.isFinite(voxWavesRaw)
@@ -486,18 +476,8 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // full-res visPayloadV.ro; level k reduces level k−1 THROUGH THE SAME rw view (a 2nd ro
   // view of one buffer in one dispatch is a same-scope usage violation — same as NaniteHzb).
   const voxPyrKernels: unknown[] = [];
-  // W4 (?pyrfuse=1, spec-orchestration-submit-folds §Stage-3): fuse the ≤1024-texel tail
-  // levels into ONE single-workgroup kernel (storageBarrier() between virtual levels —
-  // one workgroup ⇒ the barrier covers all participating lanes). Mirror of the NaniteHzb
-  // fused tail with minU instead of max. fuseFrom clamped ≥ 1 (level 0 decodes the
-  // full-res visPayload source). Bit-identical pyramid contents. DEFAULT OFF.
-  const pyrfuse = new URLSearchParams(window.location.search).get('pyrfuse') === '1';
-  const PYR_FUSE_MAX_TEXELS = 1024;
-  const pyrRawFrom = pyrLevels.findIndex((l) => l.w * l.h <= PYR_FUSE_MAX_TEXELS);
-  const pyrFuseFrom = pyrfuse && pyrRawFrom !== -1 ? Math.max(1, pyrRawFrom) : -1;
-  const pyrPerLevelCount = pyrFuseFrom === -1 ? pyrLevelCount : pyrFuseFrom;
   if (voxOccl) {
-    for (let k = 0; k < pyrPerLevelCount; k++) {
+    for (let k = 0; k < pyrLevelCount; k++) {
       const info = pyrLevels[k] as { offset: number; w: number; h: number };
       const kn = Fn(() => {
         const lw = uint(info.w);
@@ -539,44 +519,6 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
       })().compute(info.w * info.h, [64]);
       (kn as { setName(n: string): unknown }).setName(`nanVoxOccPyrL${k}`);
       voxPyrKernels.push(kn);
-    }
-    if (pyrFuseFrom !== -1) {
-      const kFusedTail = Fn(() => {
-        // 256 lanes, ONE workgroup — instanceIndex == the local lane id here
-        const tid = instanceIndex;
-        for (let k = pyrFuseFrom; k < pyrLevelCount; k++) {
-          // STATIC unroll (JS loop) — uniform control flow; barrier at Fn top level
-          const info = pyrLevels[k] as { offset: number; w: number; h: number };
-          const srcL = pyrLevels[k - 1] as { offset: number; w: number; h: number };
-          const n = info.w * info.h;
-          for (let base = 0; base < n; base += 256) {
-            const i = uint(base).add(tid);
-            If(i.lessThan(uint(n)), () => {
-              const lw = uint(info.w);
-              const x = i.mod(lw);
-              const y = i.div(lw);
-              const sx = x.mul(uint(2));
-              const sy = y.mul(uint(2));
-              const srcW = uint(srcL.w);
-              const swMax = uint(srcL.w - 1);
-              const shMax = uint(srcL.h - 1);
-              const m = uint(0xffffffff).toVar();
-              for (let dy = 0; dy < 2; dy++) {
-                for (let dx = 0; dx < 2; dx++) {
-                  const tx = minU(sx.add(uint(dx)), swMax);
-                  const ty = minU(sy.add(uint(dy)), shMax);
-                  const e = elemU(voxOccPyr.rw, uint(srcL.offset).add(ty.mul(srcW)).add(tx)).toVar();
-                  m.assign(minU(m, e));
-                }
-              }
-              (voxOccPyr.rw.element(uint(info.offset).add(y.mul(lw)).add(x)) as unknown as { assign(v: NU): void }).assign(m);
-            });
-          }
-          storageBarrier();
-        }
-      })().compute(256, [256]);
-      (kFusedTail as { setName(n: string): unknown }).setName('nanVoxOccPyrFusedTail');
-      voxPyrKernels.push(kFusedTail);
     }
   }
   // ── COOPERATIVE-RASTER WORKGROUP MEMORY (the close-up overdraw-imbalance fix) ──────
@@ -1866,9 +1808,8 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
     // `.compute(count,[wg])` is the static fallback; the indirect args drive the real WG count.
   })().compute(DISPATCH_ROW * WG_RASTER, [WG_RASTER]);
 
-  // WHOLE-LIST scatter (F2B OFF, ?voxf2b=0): the legacy unordered single dispatch over the
-  // full qVoxRaster — itemIdx = wgLinear, guard = itemIdx < qVoxRaster[0].x. Byte-identical
-  // to today's kVoxScatter for the A/B control.
+  // WHOLE-LIST scatter (the ?voxprev=0 unordered path): the single dispatch over the
+  // full qVoxRaster — itemIdx = wgLinear, guard = itemIdx < qVoxRaster[0].x.
   const kVoxScatter = makeVoxScatter(() => {
     const itemIdx = wgLinear(DISPATCH_ROW).toVar();
     const itemCount = qVoxRasterRO.element(0).x;
@@ -1879,7 +1820,7 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // inside the coalesced batch. Harmless to the legacy explicit dispatchIndirect path.
   setIndirectDispatch(kVoxScatter, voxRasterDispatchAttr);
 
-  // K PER-BUCKET scatter instances (F2B ON), ordered NEAR→FAR (bucket 0 = nearest). Each
+  // K PER-BUCKET scatter instances (?voxprev bucketed scatter), ordered NEAR→FAR (bucket 0 = nearest). Each
   // closes over its bucket's (base_b, count_b) read from the voxBucketRange STORAGE buffer:
   // local = wgLinear; itemIdx = local + base_b (absolute slot); guard = local < count_b. The
   // qVoxRaster slice [base_b, base_b+count_b) is this bucket's contiguous depth slab. In-pass
@@ -1932,10 +1873,10 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
     const clearBinsK = voxWrites ? [kClearBins] : [];
     if (voxF2bEnabled) {
       if (voxWaves > 1) {
-        // ?voxwaves=N (needs ?voxf2b=1): the fix for the F2B postmortem's "per-block-cull
-        // pre-seed is never realized" — the pyramid was built ONCE (mesh-only), so bucket
-        // b+1's occlusion cull never saw bucket b's voxel depth and F2B paid K barriers for
-        // zero occlusion gain. Here the K near→far bucket kernels are chunked into N
+        // ?voxwaves=N (within the bucketed scatter): rebuild voxOccPyr between waves so a
+        // later wave's per-block occlusion cull sees earlier waves' voxel depth (without it
+        // the pyramid is built ONCE mesh-only, so bucket b+1's cull never saw bucket b's
+        // voxel depth). Here the K near→far bucket kernels are chunked into N
         // contiguous WAVES with a voxOccPyr REBUILD between waves: wave w+1's per-block
         // cull then tests against the near canopy wave w just elected, so far blocks fully
         // behind it are skipped WHOLE (vox-behind-vox occlusion, invisible to the mesh-only
@@ -1953,11 +1894,11 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
         dispatchBatchMixed(renderer, [...clearBinsK, ...kVoxScatterB]);
       }
     } else {
-      // ?voxf2b=0 — EXACTLY today: (kClearBins if its producer exists) + ONE dispatchIndirect.
+      // ?voxprev=0 — the unordered path: (kClearBins if its producer exists) + ONE dispatchIndirect.
       if (voxWrites) dispatch(renderer, kClearBins);
       dispatchIndirect(renderer, kVoxScatter as never, voxRasterDispatchAttr);
     }
-    // coalesce + F2B/voxwaves: the HZB tail still folds out of the frame's separate
+    // coalesce + bucketed/voxwaves: the HZB tail still folds out of the frame's separate
     // hzb.build() into ONE trailing batch here (strictly after every scatter above).
     if (tail.length > 0) dispatchBatchMixed(renderer, tail);
   };

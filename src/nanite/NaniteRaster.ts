@@ -75,7 +75,6 @@ import {
   type VertCtx,
 } from './NaniteFetch';
 import { clusterHwClass, HWPROJ } from './NaniteHwClass';
-import { makeVertexCache } from './NaniteVertexCache';
 import {
   buildNaniteVoxelRaster,
   type VoxelRasterHandles,
@@ -90,20 +89,14 @@ import {
   dispatchIndirect,
   elemU,
   localX,
-  loopI,
-  loopU,
-  loopUN,
   maxI,
-  maxU,
   minI,
-  minU,
   readBuffer,
   returnIf,
   sU32Views,
   setIndirectDispatch,
   toF,
   toI,
-  uniformF,
   wgLinear,
 } from './Tsl';
 import type { BufOf, UV2 } from './Tsl';
@@ -137,19 +130,14 @@ export { makeVisBuffers } from './raster/VisBuffer';
 export type { NaniteVisBuffers } from './raster/VisBuffer';
 
 // HW_CAP / SPLAT_CAP / MID_CAP / MID_STRIDE now live in ./raster/Queues (imported).
-// ?swmax=N shrinks the SW/HW split (bbox extent ≤N px stays SW; larger → HW).
-// Diagnostic: the relect ablation proved the SW loop cost is intrinsic
-// per-covered-pixel walk+interp, so the last untested lever is letting the HW
-// rasterizer eat the mid-size (5-16px) tris. Default 16 = shipped behavior.
+// ?swmax=N shrinks the SW/HW split (bbox extent ≤N px stays SW; larger → HW):
+// lets the HW rasterizer eat the mid-size (5-16px) tris. Default 16 = shipped behavior.
 const MAX_RASTER_SIZE = (() => {
   const v = Number(
     new URLSearchParams(window.location.search).get('swmax') ?? '16',
   );
   return Number.isFinite(v) && v >= 2 ? Math.floor(v) : 16;
 })();
-// SWCOOP small-bin threshold: clamped bbox EXTENT ≤4 px both axes (≤5×5=25 candidate
-// pixels) stays lane-private; larger (up to MAX_RASTER_SIZE) goes cooperative.
-const SW_SMALL_EXT = 4;
 const NEAR_EPS = 1e-4;
 
 /**
@@ -221,26 +209,9 @@ export interface NaniteRasterHandles {
   /** count covered/orphan pixels (NaniteView ?audit=1) */
   audit(renderer: Renderer): void;
   readAudit(renderer: Renderer): Promise<{ orphans: number; covered: number }>;
-  /** 0a SCAR calibration (?scar=1): run the per-pixel covered-pixel counter for the
-   *  mid/far foliage band AFTER world1. No-op unless ?scar=1. (The per-fragment band
-   *  + total counters are accumulated inside the world1 raster itself.) */
-  scar(renderer: Renderer): void;
-  /** read the SCAR band counters back: band fragments (numerator), band covered
-   *  pixels (denominator), total frame fragments, band cluster-emit count. */
-  readScar(
-    renderer: Renderer,
-  ): Promise<{
-    bandFrags: number;
-    bandPx: number;
-    totalFrags: number;
-    bandClusters: number;
-  }>;
   /** Stage-2 voxel BRICK-WRITE count (the occlusion-skip overlay number, §A2) — total
    *  per-pixel wgElect wins across all tiles this frame. null when no voxel raster. */
   readVoxWrites(renderer: Renderer): Promise<number | null>;
-  /** W2 ?trihzb: the pyramid→hwQueue-tail mirror kernel, to append to the HZB
-   *  build batch (null when the flag is off). */
-  triHzbCopyKernel: unknown | null;
 }
 
 // NaniteVisBuffers + makeVisBuffers now live in ./raster/VisBuffer (imported +
@@ -260,7 +231,7 @@ export function buildNaniteRaster(
      *  scatter voxel-brick raster runs in world1() after hwRender. */
     qVoxRasterRO?: BufOf<UV2>;
     voxRasterDispatchAttr?: IndirectStorageBufferAttribute;
-    /** DEPTH-BUCKET F2B (?voxf2b): per-bucket (base,count) + per-bucket indirect args +
+    /** bucketed scatter (?voxprev): per-bucket (base,count) + per-bucket indirect args +
      *  the build-time K + the on/off flag (cull.voxBucketRangeRO / voxBucketDispatchAttr /
      *  voxF2bK / voxF2bEnabled). Present whenever the voxel queue is. */
     voxBucketRangeRO?: BufOf<UV2>;
@@ -320,41 +291,8 @@ export function buildNaniteRaster(
     renderHw(renderer: Renderer, camera: PerspectiveCamera): void;
     enabled(): boolean;
   },
-  /** 90fps-arc W2 EXPERIMENT (?trihzb=1): per-TRIANGLE occlusion reject in the
-   *  world1 SW path — the tri's nearest ndc.z vs the PREV-frame HZB farthest over
-   *  its pixel bbox (2×2 window at a fixed 32-px-pitch level). Kills the whole
-   *  scanline walk of triangles hidden behind the canopy wall that the CLUSTER
-   *  cull can't reject (cluster bboxes poke through gaps). Same staleness class
-   *  as the cluster occlusion cull (1-frame disocclusion holes possible — gate
-   *  with stills before any default flip). +1 storage binding, world1-only,
-   *  build-time gated. */
-  triHzb?: {
-    ro: import('./Tsl').BufOf<NF>;
-    levels: { offset: number; w: number; h: number }[];
-  },
 ): NaniteRasterHandles {
   const { width, height } = cam;
-  // Mirror pyramid levels 0..TRI_HZB_MAX into the hwQueue tail (level k texel
-  // pitch = 2^(k+1) full-res px); the per-tri test picks the FINEST level whose
-  // 2×2 window covers the tri's bbox — fine levels carry ~all the rejection
-  // power in porous foliage (a coarse window almost always contains a gap).
-  const TRI_HZB_MAX = 4;
-  const triLvls =
-    new URLSearchParams(window.location.search).get('trihzb') === '1' &&
-    triHzb != null &&
-    triHzb.levels.length > TRI_HZB_MAX
-      ? triHzb.levels.slice(0, TRI_HZB_MAX + 1)
-      : null;
-  // dest offsets within the tail (source offsets differ — pyramid layout)
-  const triDst: number[] = [];
-  {
-    let acc = 0;
-    for (const l of triLvls ?? []) {
-      triDst.push(acc);
-      acc += l.w * l.h;
-    }
-  }
-  const triHzbRO = triHzb?.ro;
   // single-pass clears the id buffers like `packed` (election anchor → 0, side id →
   // 0) but keeps the exact-depth sentinel (depthV → 0xffffffff, atomicMin).
   const packedClear = packed || singlePass;
@@ -390,70 +328,6 @@ export function buildNaniteRaster(
   // clipmap level + the HW vertex stage (all share buildNaniteRaster).
   const wgcache =
     new URLSearchParams(window.location.search).get('wgcache') !== '0';
-  // ?coopv — RADICAL restructure (de-risk build): split the world1 kernel into
-  //   PHASE 1 (cooperative per-corner vertex fetch+transform → clip, written to shared)
-  //   → barrier → PHASE 2 (per-triangle raster reads clip from shared).
-  // Goal: the AGX allocator reuses phase-1 transform registers for phase-2 raster, so the
-  // 116-reg peak (→ 27% occupancy) drops toward the raster-core size, lifting occupancy to
-  // fill the measured ALU headroom. THIS BUILD IS A HYPOTHESIS TEST: corner-indexed (no
-  // dedup, 384 clip slots = 6 KB shared) so it works for ALL cluster types with zero
-  // enumeration — its ONLY job is to read the compiled register count. If registers drop,
-  // the dedup + DAG-enumeration + shared-shrink follow-up is worth building. Byte-identical
-  // (same transform, same clip). Default OFF (?coopv=1).
-  const coopv =
-    new URLSearchParams(window.location.search).get('coopv') === '1';
-  // SWCOOP (90fps arc, pixel-loop structural rewrite; WORLD1 kernel only) — MODES:
-  //   0 = old scanline loop VERBATIM (the revert path).
-  //   1 = two-bin with a COOPERATIVE large bin: small tris (bbox extent ≤4 px both
-  //       axes) lane-private full walk; large (5..16 px) appended to workgroup shared
-  //       memory + all 128 lanes stride each tri's pixels (the kVoxScatter Phase A/B
-  //       pattern). MEASURED STRONGLY NEGATIVE 2026-07-04 (eye 23.2→40.8, oblique
-  //       34.5→45.0 ms grass-off dpr2 even after thread-0 list compaction; 50.7/59.3
-  //       uncompacted): tri footprints (≤289 px) are too small to amortize the two
-  //       barriers + serial compaction scan + ~7 KB extra workgroup memory (on the
-  //       kernel's existing ~8 KB → occupancy), and a cluster's 128 tris are size-
-  //       coherent so the lane-divergence "union of bboxes" cost the audit targeted
-  //       is small in practice. Kept build-time-gated as the measured A/B evidence.
-  //   2 = two-bin split, both bins LANE-PRIVATE (small = full walk dropping the
-  //       per-row x-span solve, large = the old row-solve scanline; no shared
-  //       memory, no barriers, voxel returnIf preserved). MEASURED NEUTRAL
-  //       (eye 23.4 vs 23.2, oblique 34.2 vs 34.1 — the fp32 row solve was never
-  //       the wall-time driver).
-  // DEFAULT 0 (the shipped loop verbatim): both alternatives are neutral-or-worse,
-  // so the old loop stays the default and 1/2 remain as measured diagnostics.
-  // BIT-IDENTITY LAW (all modes): same edge coefficients, same coverage rule
-  // (biased cw ≥ 0 at the same pixel centres), same depth interp op-order, same
-  // election — only work DISTRIBUTION changes. Gates 2026-07-04: scarTotalFrags
-  // bit-equal across modes at a deterministic pose (6871171 oblique), shot diffs at
-  // the cross-boot floor. Forced 0 under ?rdbg: its mid-kernel returnIf stops would
-  // precede mode 1's barrier (non-uniform barrier ⇒ naga validation failure).
-  const swcoopQ = Number(
-    new URLSearchParams(window.location.search).get('swcoop') ?? '0',
-  );
-  const swcoop = rdbg !== 0 ? 0 : swcoopQ === 1 || swcoopQ === 2 ? swcoopQ : 0;
-  // ?relect — WORLD1 ELECTION ABLATION (90fps-arc pixel-loop split, 2026-07-04).
-  // BUILD-TIME gate. The world1 per-covered-pixel ELECTION is: relaxed atomicLoad
-  // guard of visPayloadV → If(cand>prev) → atomicMax(visPayloadV) → winner-conditional
-  // atomicStore of visBV. This param replaces it (in BOTH the emitW1 small-bin closure
-  // AND the inline large-bin/scanline site — default swcoop=2 runs both) to measure the
-  // election's share of the ~7.8/18.4 ms pixel loop vs the coverage-walk+interp compute:
-  //   1 (DEFAULT) = shipped election, UNTOUCHED (production pristine — no elecSink, no
-  //       kernel-end sink; the `relect !== 1` gates below all fall through to the verbatim
-  //       atomicMax/atomicStore, so the emitted world1 kernel is byte-for-byte the shipped one).
-  //   0 = NO election. The full loop still runs (row solve, coverage, depth interp, 24-bit
-  //       key pack) but each covered fragment ACCUMULATES `cand` into a per-thread register
-  //       (elecSink, free); ONE atomicMax sink write per raster thread at loop end keeps the
-  //       whole chain live (the compiler cannot DCE the loop). default − relect0 = ELECTION TOTAL.
-  //   2 = KEEP the atomicLoad guard + `cand>prev` compare; REPLACE only the atomicMax RMW +
-  //       winner atomicStore with the register accumulate. default − relect2 = RMW/STORE side;
-  //       relect2 − relect0 = the guard-load/compare side.
-  // The kernel-end sink (visBV, already bound; unread under relect≠1 since the election that
-  // wrote it is gone) is one atomic/thread at a hashed px — the same low-contention idiom the
-  // rdbg=1/2 sinks use (NOT one-per-fragment ⇒ no artificial atomic-contention mirage). Frame
-  // renders wrong/black in the nanite region under relect 0/2 — DIAGNOSTIC ONLY.
-  const relect = Number(
-    new URLSearchParams(window.location.search).get('relect') ?? '1',
-  );
   // per-cluster SW/HW split (see docs/mobile-gpu-perf/SW-HW-CLUSTER-AUDIT.md). The SW world1
   // kernel skips clusters the cull classified HW (clusterHwClass, bit-identical to
   // kHwPartition ⇒ no holes/double), and an instanced HW draw paints those clusters properly.
@@ -479,27 +353,7 @@ export function buildNaniteRaster(
   // dead rgba8 via autoClear=false around hwRender (loadOp Clear->Load). The store of the
   // unchanged texture remains (the backend hardcodes storeOp=Store), but the per-frame
   // full-res CLEAR -- the addressable waste -- is gone. Byte-identical: viewport/coverage
-  // unchanged, vis buffers unchanged, color target never read. DEFAULT skips the clear (the
-  // byte-exact win, A/B-validated); ?hwrt=1 RESTORES it (the A/B control).
-  const hwrt = new URLSearchParams(window.location.search).get('hwrt') === '1';
-  // ?scar=1 — 0a SCAR CALIBRATION (voxel-foliage spec §11 Stage 0a / §6.0). A
-  // lightweight, BUILD-TIME-gated overdraw counter on the EXISTING world1 triangle
-  // raster (production pristine when off — zero atomics injected). It measures, for
-  // the MID/FAR FOLIAGE BAND (leaf clusters whose instance sits in [scarNear, scarFar],
-  // ≈ the voxelizable distance window from transitionDist out to the instMinPx cull
-  // edge): (1) the OVERDRAW factor = band fragments / band covered-pixels, and (2) the
-  // band's share of frame fragments. This is the cheapest disproof of the SCAR (§6.0):
-  // voxels only win if the band overdraws enough that (covered-px + brick-bin cost) <
-  // the triangle fragments this counter reports. NOTHING about raster behaviour changes
-  // — only atomic counters are added, gated on `scar`. The band is classified per
-  // CLUSTER on instance distance (== the same A.xyz the cull uses), matching the
-  // covered-pixel post-pass so numerator and denominator share one band definition.
-  const scarParams = new URLSearchParams(window.location.search);
-  const scar = scarParams.get('scar') === '1';
-  // band bounds (m), tuneable: DEFAULT ≈ the spec's transitionDist (~40 m) out to the
-  // instMinPx ~110 px cull edge (~90 m for R≈3.5 m). ?scarnear= / ?scarfar= override.
-  const scarNear = uniformF(Number(scarParams.get('scarnear') ?? '40'));
-  const scarFar = uniformF(Number(scarParams.get('scarfar') ?? '90'));
+  // unchanged, vis buffers unchanged, color target never read.
   const qRasterRO = cull.qRasterRO;
   const visDepthV = vis.depthV;
   const visPayloadV = vis.payloadV;
@@ -521,35 +375,15 @@ export function buildNaniteRaster(
   // 9→10, at the ceiling (the ctx pre-pass already shed gpu.clusters/instances/meshes → 9).
   // nanSplatElect binds only visPayloadV/visBV/splatQueue = 3 ⇒ lean.
   const splatElect = singlePass;
-  // ── DIAGNOSTIC path isolation (task #76 de-über debug; TEMPORARY — remove once the blink
-  // is pinned). Independently DROP each of world1's routed classes to see one in isolation:
-  // ?nospl = ≤1px splat, ?nomid = 2..swmax mid, ?nohw = big/near HW (world1's per-tri append).
-  // e.g. ?nospl=1&nohw=1 = ONLY the mid-band SW tris render (isolates nanMidRaster).
-  const dbgQ = new URLSearchParams(window.location.search);
-  const dbgNoSpl = dbgQ.get('nospl') === '1';
-  const dbgNoMid = dbgQ.get('nomid') === '1';
-  const dbgNoHw = dbgQ.get('nohw') === '1';
-  // ?middz — nanMidRaster incremental-depth path. Default OFF (measured REGRESSION as
-  // default-ON, 2026-07-09 23:45): mid +8% absolute (anchor-normalized cross-trace) and the
-  // within-shader float bucket 12→20 instr / 8.3%→12.2% cost — the {z += dzdx} loop-carried
-  // SERIAL chain stalls more than the per-pixel barycentric recompute it replaced (the
-  // recompute is independent per pixel ⇒ the GPU overlaps it across the scanline). Fewer
-  // instructions lost to a longer dependence chain — keep the recompute.
-  const midIncDepth = dbgQ.get('middz') === '1';
   // hw/splat/mid work queues + their indirect-args kernels (./raster/Queues). The splat/mid
-  // queues + args exist only on the world1 path (splatElect); the ?scar counters + the
-  // ?trihzb prev-frame HZB mirror fold into the hwQueue tail (SCAR_BASE/TRIHZB_BASE). triLvls
-  // sizes the mirror. Caps (HW_CAP/SPLAT_CAP/MID_CAP/MID_STRIDE) are imported from Queues.
-  const queues = buildQueues({ splatElect, triLvls });
+  // queues + args exist only on the world1 path (splatElect). Caps (HW_CAP/SPLAT_CAP/
+  // MID_CAP/MID_STRIDE) are imported from Queues.
+  const queues = buildQueues({ splatElect });
   const {
     hwQueueAttr,
     hwQueueV,
     hwDrawAttr,
     hwDrawBuf,
-    SCAR_BASE,
-    TRIHZB_BASE,
-    triTailN,
-    scarEl,
     splatQueueAttr,
     splatQueueV,
     splatDrawAttr,
@@ -566,21 +400,6 @@ export function buildNaniteRaster(
   const auditAttr = new StorageBufferAttribute(new Uint32Array(4), 1);
   auditAttr.name = 'nanRasterAudit';
   const auditV = sU32Views(auditAttr, 4);
-
-  // 0a SCAR band counters (?scar=1). [0] = band fragments (the OVERDRAW numerator —
-  // every covered fragment a band leaf cluster rasterizes, incl. occluded ones),
-  // [1] = band covered PIXELS (the denominator — filled by the kScarCovered post-pass:
-  // exactly 1 per pixel whose FINAL winner is a band leaf cluster), [2] = total frame
-  // fragments (all clusters → the band's fragment share), [3] = band cluster-emit count
-  // (diagnostic). Overdraw = [0]/[1]; band share = [0]/[2].
-  // ⚠ BINDING BUDGET (see hwQueue above): world1's compute stage is already at the WebGPU
-  // 10-storage-buffer ceiling, so scar's 4 counters are FOLDED into the hwQueue buffer at
-  // [SCAR_BASE..+4) — same buffer object = same binding = no 11th slot. `scarV` aliases
-  // `hwQueueV`; every scar access below is offset by SCAR_BASE (helper `scarEl`). The
-  // readback reads hwQueueAttr at byte offset SCAR_BASE*4.
-  // scar counters live in the hwQueue tail at [SCAR_BASE..+4); scarEl (from buildQueues)
-  // aliases hwQueueV. The readback reads hwQueueAttr at byte offset SCAR_BASE*4.
-  const scarAttr = hwQueueAttr;
 
   // ---- shared fetch helpers (NaniteFetch.ts — also the resolve's decode) ----------
   const nfetch = makeFetch(gpu, heightTex, disp, wind);
@@ -599,9 +418,6 @@ export function buildNaniteRaster(
   // the compute-fetch vertex — selected at BUILD time in buildHw (the other body is never
   // compiled), never a runtime shader branch.
   const hwproj = HWPROJ; // opt-in flagship — single source of truth in NaniteHwClass
-  // PERF-3 win #2 — the cooperative vertex-transform cache lives in its own module
-  // (default OFF, ?vcompact=1; measured marginal/conditional — see NaniteVertexCache).
-  const vcache = makeVertexCache(gpu, nfetch);
 
   // ?ksplit (PERF task #76): build world1 as TWO class-specialized kernels —
   // 'explicit' (leaf/trunk/rock) + 'terrain' (heightfield) — each compiling ONLY its
@@ -671,49 +487,29 @@ export function buildNaniteRaster(
     vcompact: gpu.vcompact,
   });
 
-  // SWCOOP workgroup-shared element write (the NaniteVoxelRaster wgSet idiom —
-  // .element() is typed as a bare Node in @types; ONE cast here, call sites clean).
-  const wgW = (
-    arr: ReturnType<typeof workgroupArray>,
-    i: NU,
-    v: unknown,
-  ): void => {
-    (arr.element(i) as unknown as { assign(x: unknown): unknown }).assign(v);
-  };
-
   // ---- kVisClear ------------------------------------------------------------------
-  // W1 (?dvclear=0, spec-orchestration-submit-folds §Stage-2): in the world single-pass
-  // path NOTHING reads or writes visDepthV (exhaustive consumer table in the spec — the
-  // election lives in visPayloadV; HZB/resolve/shadowHalf read payload, never depthV), so
-  // its 3.3M-pixel 0xffffffff clear is pure store traffic. Build-time gated + auto-kept
-  // under every debug flag that DOES read it (nanprobe/audit/rdbg). Shadow/View raster
-  // instances have singlePass=false ⇒ never gated. DEFAULT ON — clear SKIPPED (gate
-  // passed 2026-07-02: shot-diff at D0 band, medians sub-noise). ?dvclear=1 = keep clear.
+  // In the world single-pass path NOTHING reads or writes visDepthV (the election lives
+  // in visPayloadV; HZB/resolve/shadowHalf read payload, never depthV), so its 3.3M-pixel
+  // 0xffffffff clear is pure store traffic and is SKIPPED. Auto-kept under every debug
+  // flag that DOES read it (nanprobe/audit/rdbg). Shadow/View raster instances have
+  // singlePass=false ⇒ never skipped.
   const dvParams = new URLSearchParams(window.location.search);
   const skipDepthClear =
     singlePass &&
-    dvParams.get('dvclear') !== '1' &&
     dvParams.get('nanprobe') !== '1' && // probe reads vis.depthV.ro
     dvParams.get('audit') !== '1' && // kAudit reads visDepthV.ro
     rdbg === 0; // rdbg sinks atomicMin depthV
-  // ?visclear=0 DEBUG (measurement only): A/B whether the ~11ms c.nanVisClear timestamp is
-  // real store cost or a render‖compute WAR-stall artifact — skips the 2 hot full-screen
-  // vis clears (payloadV + visBV). OFF (default / flag absent) = byte-identical to today.
-  const skipVisClear = dvParams.get('visclear') === '0';
   // kVisClear (full-screen) + kHwQueueClear (the counter-only tail, reused by the scoped
-  // shadow clear) live in ./raster/VisBuffer — both reset the queue + audit + scar counters.
+  // shadow clear) live in ./raster/VisBuffer — both reset the queue + audit counters.
   const { kVisClear, kHwQueueClear } = buildVisClear({
     pixelCount,
     vis,
     hwQueueV,
     auditV,
-    scar,
-    scarEl,
     splatQueueV,
     midQueueV,
     packedClear,
     skipDepthClear,
-    skipVisClear,
   });
 
   // ---- SW raster kernels (fixed-point integer scanline) ------------------------------
@@ -726,12 +522,11 @@ export function buildNaniteRaster(
   // inline depth/combined/world1 paths — no duplicate rasterisation. Pass NO opts here so
   // this instance is BYTE-IDENTICAL to the task-#76 extraction (world1's 56-reg path).
   const swScanline = makeScanline(cam);
-  // nanMidRaster gets its OWN instance with the mid-only crest cuts: A.3 packed bias
-  // (bit-identical) always on; A.2 incremental depth gated on ?middz. world1/depth/combined
-  // keep the plain `swScanline` above untouched.
+  // nanMidRaster gets its OWN instance with the mid-only crest cut: A.3 packed bias
+  // (bit-identical) always on. world1/depth/combined keep the plain `swScanline` above
+  // untouched.
   const swScanlineMid = makeScanline(cam, {
     packBias: true,
-    incDepth: midIncDepth,
   });
 
   const rasterKernel = (
@@ -740,20 +535,14 @@ export function buildNaniteRaster(
     // compiles ONLY that arm; undefined = the unified kernel (byte-identical default).
     splitVariant?: 'explicit' | 'terrain',
   ): unknown => {
-    // Variant-specific fetch + vertex cache: the specialized kernel decodes and
-    // transforms through the arm-selected makeFetch so it never reserves the other
-    // class's registers. splitVariant===undefined ⇒ the module nfetch/vcache (identical
-    // node graph to the pre-split kernel).
+    // Variant-specific fetch: the specialized kernel decodes and transforms through the
+    // arm-selected makeFetch so it never reserves the other class's registers.
+    // splitVariant===undefined ⇒ the module nfetch (identical node graph to the
+    // pre-split kernel).
     const kFetch = splitVariant
       ? makeFetch(gpu, heightTex, disp, wind, true, splitVariant)
       : nfetch;
     const kMakeCtx = kFetch.makeCtx;
-    const kVcache = splitVariant ? makeVertexCache(gpu, kFetch) : vcache;
-    // SWCOOP applies to the world single pass only; depth/combined keep the old
-    // scanline loop byte-identical (build-time — the flag picks WHICH loop is emitted).
-    const coopMode = mode === 'world1' ? swcoop : 0;
-    const coop = coopMode === 1; // cooperative large bin (shared memory + barriers)
-    const split = coopMode === 2; // two-bin, both lane-private (no shared memory)
     const kn = Fn(() => {
       const itemIdx = wgLinear(DISPATCH_ROW).toVar();
       const localTri = localX().toVar();
@@ -783,34 +572,19 @@ export function buildNaniteRaster(
       if (clhw && mode === 'world1' && !wgcache) {
         returnIf(clusterHwClass(gpu, cam, projK, instId, ci, clhwMax));
       }
-      // ?relect (build-time, world1 only): per-thread election-key accumulator + the
-      // election emitter shared by BOTH world1 sites (emitW1 small bin + inline scanline).
-      // null / verbatim election when relect===1 (default) ⇒ world1 kernel stays pristine.
-      const elecSink =
-        mode === 'world1' && relect !== 1 ? uint(0).toVar() : null;
+      // world1 per-covered-pixel election: relaxed atomicLoad guard of visPayloadV →
+      // If(cand>prev) → atomicMax(visPayloadV) → winner-conditional atomicStore of visBV.
       const doElection = (px: NU, cand: NU, idStore: NU): void => {
-        if (mode === 'world1' && relect === 0) {
-          // NO election: fold the key into the per-thread register (one sink at loop end).
-          (elecSink as NonNullable<typeof elecSink>).addAssign(cand);
-        } else if (mode === 'world1' && relect === 2) {
-          // guard-load + compare KEPT; RMW + winner-store replaced by the register sink.
-          const prevE = aLoadU(visPayloadV.atomic.element(px));
-          If(cand.greaterThan(prevE), () => {
-            (elecSink as NonNullable<typeof elecSink>).addAssign(cand);
+        const prevE = aLoadU(visPayloadV.atomic.element(px));
+        If(cand.greaterThan(prevE), () => {
+          const wonE = atomicMax(
+            visPayloadV.atomic.element(px),
+            cand,
+          ) as unknown as NU;
+          If(cand.greaterThan(wonE), () => {
+            atomicStore(visBV.atomic.element(px), idStore);
           });
-        } else {
-          // relect===1 (default) — the SHIPPED election, verbatim.
-          const prevE = aLoadU(visPayloadV.atomic.element(px));
-          If(cand.greaterThan(prevE), () => {
-            const wonE = atomicMax(
-              visPayloadV.atomic.element(px),
-              cand,
-            ) as unknown as NU;
-            If(cand.greaterThan(wonE), () => {
-              atomicStore(visBV.atomic.element(px), idStore);
-            });
-          });
-        }
+        });
       };
       if (mode === 'world1' && rdbg === 4) {
         // RAW LAUNCH floor (?rdbg=4): return BEFORE makeCtx + the wgcache broadcast —
@@ -993,8 +767,8 @@ export function buildNaniteRaster(
         }
         // ?ksplit routing: the explicit kernel skips heightfield clusters, the terrain
         // kernel skips non-heightfield — class = the broadcast isHF slot (0). Uniform per
-        // cluster ⇒ every live thread returns together (post-barrier, before vcache's
-        // barrier) — no partial-workgroup barrier, same shape as the clhw skip above.
+        // cluster ⇒ every live thread returns together (post-barrier) — no
+        // partial-workgroup barrier, same shape as the clhw skip above.
         if (splitVariant) {
           returnIf(
             splitVariant === 'explicit'
@@ -1050,14 +824,7 @@ export function buildNaniteRaster(
         }
       }
 
-      // PERF-3 win #2 — cooperative vertex-transform cache (own module; ?vcompact=1).
-      // MUST run BEFORE the voxel returnIf below: prime() emits a workgroupBarrier, and
-      // a barrier after a storage-derived returnIf is non-uniform control flow to naga
-      // ⇒ WGSL validation failure ⇒ the whole world1 pipeline silently dies (the
-      // "?vcompact renders an empty scene" bitrot, found 2026-07-02). Voxel clusters
-      // have vcCount=0 (no compact range) so their populate no-ops — they pay only the
-      // barrier before bailing.
-      const corner = kVcache.prime(ctx, ci, localTri);
+      const corner = (lt: NU, v: 0 | 1 | 2): NV3 => kFetch.fetchWorldVert(ctx, lt, v);
 
       // voxel-foliage (spec §4.1 / §A1): SKIP voxel(7) clusters in the TRIANGLE raster.
       // The cut emits voxel clusters into the SAME qRaster as triangles (§4.6); the
@@ -1066,14 +833,8 @@ export function buildNaniteRaster(
       // (registerVoxelHead), so fetchWorldVert would read garbage triangle data —
       // bail before any vertex work. UNIFORM across the workgroup (matClass is per
       // cluster, broadcast via ctx.meshId), so every live thread returns (no barrier
-      // deadlock; the wgcache + vcache barriers above already ran). The bricks render
-      // via the scatter voxel raster (Stage 2) into the same vis buffers.
-      // SWCOOP: the coop variant may NOT return here — its Phase A/B workgroupBarrier
-      // sits at kernel top scope BELOW, and a barrier after a storage-derived return is
-      // non-uniform control flow to naga (the ?vcompact bitrot, 2026-07-02). The skip
-      // becomes a per-lane GUARD on the triangle work instead (execution-identical:
-      // voxel clusters do no triangle work either way; their Phase-B slots stay empty).
-      let swVoxGuard: NB | null = null;
+      // deadlock; the wgcache barrier above already ran). The bricks render via the
+      // scatter voxel raster (Stage 2) into the same vis buffers.
       {
         // matClass (F): reuse the wgcache broadcast when present; else per-thread reload.
         const mcVox =
@@ -1081,40 +842,7 @@ export function buildNaniteRaster(
           elemU(gpu.meshes, ctx.meshId.mul(uint(MESH_WORDS)).add(uint(6)))
             .shiftRight(uint(8))
             .bitAnd(uint(0xff));
-        if (coop || coopv) {
-          // ?coopv also needs the guard form: its Phase-1 barrier is at kernel top scope,
-          // so voxel-cluster threads must reach it (a storage-derived return before a
-          // barrier is non-uniform to naga — the same ?vcompact bitrot).
-          swVoxGuard = mcVox.notEqual(uint(7)).toVar() as unknown as NB;
-        } else {
-          returnIf(mcVox.equal(uint(7)));
-        }
-      }
-
-      // 0a SCAR per-cluster band classification (?scar=1, world1 only). Computed ONCE
-      // per cluster (hoisted out of the per-fragment loop): is this a LEAF (matClass==4)
-      // cluster whose instance sits in the voxelizable mid/far band [scarNear, scarFar]?
-      // Distance is instance-A → camera (the SAME center the cull screen-sizes on,
-      // NaniteCull.ts:393), so this matches the covered-pixel post-pass band exactly.
-      // `bandFlag` is the per-fragment gate; null when scar is off (production pristine).
-      let bandFlag: NB | null = null;
-      if (scar && mode === 'world1') {
-        const mc = elemU(
-          gpu.meshes,
-          ctx.meshId.mul(uint(MESH_WORDS)).add(uint(6)),
-        )
-          .shiftRight(uint(8))
-          .bitAnd(uint(0xff));
-        const isLeaf = mc.equal(uint(4));
-        const distC = vec3(cam.camPos).sub(ctx.A.xyz).length();
-        bandFlag = isLeaf
-          .and(distC.greaterThanEqual(scarNear))
-          .and(distC.lessThanEqual(scarFar))
-          .toVar() as unknown as NB;
-        // count band cluster emits (diagnostic), once per cluster (thread 0).
-        If(localTri.equal(uint(0)).and(bandFlag), () => {
-          atomicAdd(scarEl(3), uint(1));
-        });
+        returnIf(mcVox.equal(uint(7)));
       }
 
       if (mode === 'depth' && rdbg === 3) {
@@ -1177,96 +905,7 @@ export function buildNaniteRaster(
         returnIf(itemCount.greaterThanEqual(uint(0)));
       }
 
-      // ── SWCOOP shared LARGE-bin records (Phase A → Phase B), slot = localTri.
-      // 3 i32 edge values at the clamped bbox origin + 3 PACKED per-unit edge steps
-      // (ex|ey as i16 pairs — a ≤16 px bbox bounds vert spread to <17·256 = 4352
-      // subpixel units, i16-safe; Phase B sign-extends and ×256 exactly as the old
-      // setup did) + packed bbox origin + packed w/h/bias-bits + payload + 4 f32
-      // depth-interp constants = 13 words/tri × 128 tris = 6.5 KB workgroup memory.
-      // ⚠️ BUDGET: the kernel already carries ~8.3 KB (wgcache broadcast + vcache);
-      // the 16-word layout (unpacked steps) hit 16528 B > the 16384 B device default
-      // — the packing is what keeps the pipeline valid.
-      const swSh = coop
-        ? {
-            rw0: workgroupArray('int', MAX_CLUSTER_TRIS),
-            rw1: workgroupArray('int', MAX_CLUSTER_TRIS),
-            rw2: workgroupArray('int', MAX_CLUSTER_TRIS),
-            exy0: workgroupArray('uint', MAX_CLUSTER_TRIS),
-            exy1: workgroupArray('uint', MAX_CLUSTER_TRIS),
-            exy2: workgroupArray('uint', MAX_CLUSTER_TRIS),
-            xy: workgroupArray('uint', MAX_CLUSTER_TRIS),
-            wh: workgroupArray('uint', MAX_CLUSTER_TRIS),
-            pay: workgroupArray('uint', MAX_CLUSTER_TRIS),
-            z0: workgroupArray('float', MAX_CLUSTER_TRIS),
-            z1: workgroupArray('float', MAX_CLUSTER_TRIS),
-            z2: workgroupArray('float', MAX_CLUSTER_TRIS),
-            rcp: workgroupArray('float', MAX_CLUSTER_TRIS),
-            // COMPACTED slot list + count (thread-0 scan between the two barriers).
-            // Without it Phase B scanned ALL ≤128 slots on ALL 128 lanes in EVERY
-            // workgroup (incl. the ~20k voxel workgroups) — ~1e9 shared-mem probes
-            // per frame, measured 23.2 → 50.7 ms eye (the first-cut regression).
-            list: workgroupArray('uint', MAX_CLUSTER_TRIS),
-            count: workgroupArray('uint', 1),
-          }
-        : null;
-      if (coop && swSh) {
-        // EVERY lane seeds its slot EMPTY (wh=0 ⇒ area 0 ⇒ zero-trip Phase-B loop) so
-        // small-bin/HW-routed/rejected/voxel/idle lanes contribute nothing (the voxel
-        // kernel's seeding idiom, NaniteVoxelRaster.ts:739).
-        wgW(swSh.wh, localTri, uint(0));
-      }
-      // SWCOOP world1 fragment emission — VERBATIM the swcoop=0 loop's depth interp
-      // (unbiased integer weights, same f32 op order — see the bias rationale in the
-      // old loop below), [0,1] gate, scar counters and 24-bit election. Shared by the
-      // small-bin lane-private walk (Phase A) and the cooperative Phase B, so the two
-      // bins cannot drift apart. `cand` is built INSIDE the consuming subtree (the TSL
-      // hoist-pathology rule, NaniteVoxelRaster.ts:1264).
-      const emitW1 =
-        coop || split
-          ? (
-              px: NU,
-              uw0: NI,
-              uw1: NI,
-              uw2: NI,
-              z0: NF,
-              z1: NF,
-              z2: NF,
-              rcp: NF,
-              pay: NU,
-            ): void => {
-              const cz = toF(uw0)
-                .mul(z0)
-                .add(toF(uw1).mul(z1))
-                .add(toF(uw2).mul(z2))
-                .mul(rcp)
-                .toVar();
-              If(cz.greaterThanEqual(0).and(cz.lessThanEqual(1)), () => {
-                if (scar) {
-                  atomicAdd(scarEl(2), uint(1));
-                  if (bandFlag) {
-                    If(bandFlag, () => {
-                      atomicAdd(scarEl(0), uint(1));
-                    });
-                  }
-                }
-                const cand = depthKey24(cz as unknown as NF)
-                  .shiftLeft(uint(8))
-                  .bitOr(pay.bitAnd(uint(0xff)))
-                  .toVar();
-                doElection(px, cand, pay);
-              });
-            }
-          : null;
-
-      // (vcache.prime moved ABOVE the voxel returnIf — its barrier must precede any
-      // storage-derived return; see the note there.)
-      const swTriLive =
-        coop && swVoxGuard
-          ? (swVoxGuard as unknown as { and(o: NB): NB }).and(
-              localTri.lessThan(ctx.triCount),
-            )
-          : localTri.lessThan(ctx.triCount);
-      If(swTriLive, () => {
+      If(localTri.lessThan(ctx.triCount), () => {
         const payload = itemIdx
           .shiftLeft(uint(CLUSTER_TRI_BITS))
           .bitOr(localTri)
@@ -1336,32 +975,6 @@ export function buildNaniteRaster(
             yiA[v] = toI(sv.y.mul(256).round()).toVar() as unknown as NI;
           }
 
-          if (mode === 'world1' && rdbg === 5) {
-            // ?rdbg=5 (world1) — STOP right after the 3-corner projection (fetch + vp
-            // transform + ndc + snap), BEFORE winding/bbox/edge-setup. (Only the non-
-            // ctxPrepass world1 build reaches here; the shipped world1 now reads projVertBuf.)
-            const sinkV = (dzA[0] as NF)
-              .add(dzA[1] as NF)
-              .add(dzA[2] as NF)
-              .add(toF(xiA[0] as unknown as NI))
-              .add(toF(yiA[0] as unknown as NI))
-              .add(toF(xiA[1] as unknown as NI))
-              .add(toF(yiA[1] as unknown as NI))
-              .add(toF(xiA[2] as unknown as NI))
-              .add(toF(yiA[2] as unknown as NI))
-              .mul(1 / 9)
-              .clamp(0, 1);
-            const sinkPx = itemIdx
-              .mul(uint(2654435761))
-              .add(localTri)
-              .mod(uint(pixelCount));
-            atomicMin(
-              visDepthV.atomic.element(sinkPx),
-              bcF2U(sinkV as unknown as NF),
-            );
-            returnIf(itemCount.greaterThanEqual(uint(0)));
-          }
-
           if (mode === 'depth' && rdbg === 1) {
             // ?rdbg=1 — stop right after the streaming vertex assembly. The sink atomicMin
             // consumes all three dz (= p.z/p.w for each corner) BEFORE the early-out, so the
@@ -1390,17 +1003,15 @@ export function buildNaniteRaster(
 
         If(nearOK.not(), () => {
           // near-plane crossing → HW path clips it (never drop, F10c)
-          if (!dbgNoHw) {
-            const slot = atomicAdd(
-              hwQueueV.atomic.element(0),
-              uint(1),
-            ) as unknown as NU;
-            If(slot.lessThan(uint(HW_CAP)), () => {
-              const base = slot.mul(uint(2)).add(uint(1));
-              atomicStore(hwQueueV.atomic.element(base), payload);
-              atomicStore(hwQueueV.atomic.element(base.add(uint(1))), instId);
-            });
-          }
+          const slot = atomicAdd(
+            hwQueueV.atomic.element(0),
+            uint(1),
+          ) as unknown as NU;
+          If(slot.lessThan(uint(HW_CAP)), () => {
+            const base = slot.mul(uint(2)).add(uint(1));
+            atomicStore(hwQueueV.atomic.element(base), payload);
+            atomicStore(hwQueueV.atomic.element(base.add(uint(1))), instId);
+          });
         }).Else(() => {
           // R1 — winding + two-sided re-wind decided on the INTEGER twice-area the
           // scanline already trusts. Kills the redundant float areaNdc (and edgeFn) AND the
@@ -1502,77 +1113,12 @@ export function buildNaniteRaster(
                 const coversSample = firstCx
                   .lessThanEqual(toF(xiMax as unknown as NI))
                   .and(firstCy.lessThanEqual(toF(yiMax as unknown as NI)));
-                // W2 ?trihzb: conservative per-tri occlusion — nearest tri z vs the
-                // prev-frame HZB farthest over the bbox (2×2 window, 32-px texels
-                // cover the ≤17-px bbox), read from the hwQueue TAIL MIRROR (binding
-                // budget — see TRIHZB_BASE). Positive-f32 bits compare monotonically
-                // as u32, so no bitcast needed. Tail 1.0f-filled ⇒ frame-0 and
-                // sky-backed tris never reject. world1 only (depth/shadow untouched).
-                let triVis: NB | null = null;
-                if (mode === 'world1' && triLvls) {
-                  const nearBits = bcF2U(
-                    dz0.min(dz1).min(dz2).clamp(0, 1) as unknown as NF,
-                  ).toVar();
-                  // finest mirrored level whose 2×2 window covers the bbox:
-                  // pitch(k) = 2^(k+1) px; need extent < 2·pitch ⇒ k = max(0,
-                  // ceil(log2(e+1)) − 2), clamped to TRI_HZB_MAX.
-                  const ext = maxI(endX.sub(startX), endY.sub(startY)).toVar();
-                  const lvl = uint(
-                    toF(ext as unknown as NI)
-                      .add(1)
-                      .max(1)
-                      .log2()
-                      .ceil()
-                      .sub(2)
-                      .clamp(0, TRI_HZB_MAX),
-                  ).toVar();
-                  // per-level (dstOff, width) via select chains (5 static levels)
-                  let offSel: NU = uint(
-                    TRIHZB_BASE + (triDst[0] ?? 0),
-                  ) as unknown as NU;
-                  let wSel: NU = uint(triLvls[0]?.w ?? 1) as unknown as NU;
-                  for (let k = 1; k <= TRI_HZB_MAX; k++) {
-                    const isK = lvl.equal(uint(k));
-                    offSel = isK.select(
-                      uint(TRIHZB_BASE + (triDst[k] ?? 0)),
-                      offSel,
-                    ) as unknown as NU;
-                    wSel = isK.select(
-                      uint(triLvls[k]?.w ?? 1),
-                      wSel,
-                    ) as unknown as NU;
-                  }
-                  const shift = lvl.add(uint(1));
-                  const lo = offSel;
-                  const lw = wSel;
-                  const tx0 = uint(startX).shiftRight(shift).toVar();
-                  const ty0 = uint(startY).shiftRight(shift).toVar();
-                  const tx1 = uint(endX).shiftRight(shift).toVar();
-                  const ty1 = uint(endY).shiftRight(shift).toVar();
-                  const z00 = aLoadU(
-                    hwQueueV.atomic.element(lo.add(ty0.mul(lw)).add(tx0)),
-                  );
-                  const z01 = aLoadU(
-                    hwQueueV.atomic.element(lo.add(ty0.mul(lw)).add(tx1)),
-                  );
-                  const z10 = aLoadU(
-                    hwQueueV.atomic.element(lo.add(ty1.mul(lw)).add(tx0)),
-                  );
-                  const z11 = aLoadU(
-                    hwQueueV.atomic.element(lo.add(ty1.mul(lw)).add(tx1)),
-                  );
-                  const farBits = maxU(maxU(z00, z01), maxU(z10, z11));
-                  triVis = nearBits.lessThanEqual(farBits) as unknown as NB;
-                }
-                const rasterGate = triVis
-                  ? area2.greaterThan(toI(0)).and(coversSample).and(triVis)
-                  : area2.greaterThan(toI(0)).and(coversSample);
+                const rasterGate = area2.greaterThan(toI(0)).and(coversSample);
                 If(rasterGate, () => {
                   // edge i is opposite vertex i; ex/ey = dE per +1 UNIT (1/256 px)
                   // R3: edge deltas kept LAZY (no toVar) so they never pin 6 registers
                   // across the edge-setup crest — the bias (sign-only) and sx/sy (×256)
-                  // consume them inline; the swcoop path (default-off) recomputes them for
-                  // packEdge. Identical i32 values either way.
+                  // consume them inline.
                   const ex0 = yi1.sub(yi2);
                   const ey0 = xi2.sub(xi1);
                   const ex1 = yi2.sub(yi0);
@@ -1662,9 +1208,8 @@ export function buildNaniteRaster(
                     returnIf(itemCount.greaterThanEqual(uint(0)));
                   }
 
-                  // OLD scanline (verbatim) as an emit closure: swcoop=0 emits it alone;
-                  // swcoop=2 emits it as the LARGE-bin branch. Same code, same point.
-                  const oldScanline = (): void => {
+                  // Row-span scanline as an emit closure (the mid/large-tri path).
+                  const scanline = (): void => {
                     // per-mode emit — swScanline computes coverage + the UNBIASED-weight
                     // depth cz and hands us (px, cz); this only does the mode-specific write.
                     // (depth atomicMin Z / combined packed idLo|idHi / world1 24-bit election)
@@ -1692,16 +1237,6 @@ export function buildNaniteRaster(
                           );
                         });
                       } else if (mode === 'world1') {
-                        // 0a SCAR (?scar=1): count this covered fragment — election below is
-                        // BYTE-IDENTICAL whether or not scar is on.
-                        if (scar) {
-                          atomicAdd(scarEl(2), uint(1));
-                          if (bandFlag) {
-                            If(bandFlag, () => {
-                              atomicAdd(scarEl(0), uint(1));
-                            });
-                          }
-                        }
                         const cand = depthKey24(cz as unknown as NF)
                           .shiftLeft(uint(8))
                           .bitOr(payload.bitAnd(uint(0xff)))
@@ -1733,8 +1268,7 @@ export function buildNaniteRaster(
                       emit,
                     );
                   };
-                  if (coopMode === 0) {
-                    if (mode === 'world1' && !scar) {
+                  if (mode === 'world1') {
                       // task #76 PERF: a single-pixel-bbox tri is EXACTLY one scanline
                       // iteration at (startX,startY) where cw==rw ⇒ point-sample it
                       // directly and skip the whole coverage loop (no trip-count
@@ -1779,7 +1313,7 @@ export function buildNaniteRaster(
                                   // nanSplatElect kernel elects it. splatQueueV is non-null
                                   // on every world1 (singlePass) kernel; the guard is only
                                   // TS null-safety for the unused non-singlePass build.
-                                  if (splatQueueV && !dbgNoSpl) {
+                                  if (splatQueueV) {
                                     const slot = atomicAdd(
                                       splatQueueV.atomic.element(0),
                                       uint(1),
@@ -1818,7 +1352,7 @@ export function buildNaniteRaster(
                         // projected/wound corners) is the ~10× midQueue shrink — the projected
                         // verts already live in projVertBuf, so re-reading them is free of any new
                         // projection. world1 itself runs NO coverage loop — it only projects + routes.
-                        if (midQueueV && !dbgNoMid) {
+                        if (midQueueV) {
                           const slot = atomicAdd(
                             midQueueV.atomic.element(0),
                             uint(1),
@@ -1834,310 +1368,30 @@ export function buildNaniteRaster(
                         }
                       });
                     } else {
-                      oldScanline();
+                      scanline();
                     }
-                  } else {
-                    // ── SWCOOP two-bin split (replaces the unconditional row-span
-                    // scanline). Coverage/depth/election are decided by the SAME math
-                    // as the old loop (bit-identity law) — only work distribution
-                    // changes. Small bin is lane-private in BOTH modes; the large bin
-                    // is cooperative (mode 1) or the old scanline (mode 2).
-                    const extW = endX.sub(startX).toVar();
-                    const extH = endY.sub(startY).toVar();
-                    If(
-                      extW
-                        .lessThanEqual(toI(SW_SMALL_EXT))
-                        .and(extH.lessThanEqual(toI(SW_SMALL_EXT))),
-                      () => {
-                        // SMALL bin (≤5×5 candidates): lane-private full-bbox walk with
-                        // the incremental fixed-point edge tests. The old per-row x-span
-                        // solve (3 fp32 divides + ~50 ALU ≈ 10 walked pixels PER ROW) is
-                        // dropped — at this size it costs more than it skips; the exact
-                        // per-pixel cw≥0 test below is what decides emission either way.
-                        loopI(
-                          'cy',
-                          startY as unknown as NI,
-                          endY as unknown as NI,
-                          (y) => {
-                            const cw0 = rw0.toVar();
-                            const cw1 = rw1.toVar();
-                            const cw2 = rw2.toVar();
-                            loopI(
-                              'cx',
-                              startX as unknown as NI,
-                              endX as unknown as NI,
-                              (x) => {
-                                If(
-                                  cw0
-                                    .greaterThanEqual(toI(0))
-                                    .and(cw1.greaterThanEqual(toI(0)))
-                                    .and(cw2.greaterThanEqual(toI(0))),
-                                  () => {
-                                    const uw0 = cw0.sub(bias0).toVar();
-                                    const uw1 = cw1.sub(bias1).toVar();
-                                    const uw2 = cw2.sub(bias2).toVar();
-                                    const px = uint(y)
-                                      .mul(uint(cam.uW))
-                                      .add(uint(x))
-                                      .toVar();
-                                    emitW1!(
-                                      px,
-                                      uw0,
-                                      uw1,
-                                      uw2,
-                                      dz0,
-                                      dz1,
-                                      dz2,
-                                      rcpArea,
-                                      payload,
-                                    );
-                                  },
-                                );
-                                cw0.addAssign(sx0);
-                                cw1.addAssign(sx1);
-                                cw2.addAssign(sx2);
-                              },
-                            );
-                            rw0.addAssign(sy0);
-                            rw1.addAssign(sy1);
-                            rw2.addAssign(sy2);
-                          },
-                        );
-                      },
-                    ).Else(() => {
-                      if (split) {
-                        // mode 2: the LARGE bin keeps the OLD lane-private row-solve
-                        // scanline verbatim — no shared memory, no barriers.
-                        oldScanline();
-                        return;
-                      }
-                      // mode 1 LARGE bin (extent 5..16 px): append this tri's raster
-                      // record into shared slot [localTri]; Phase B (below, after the
-                      // barrier) strides its pixels across all 128 lanes.
-                      const s = swSh!;
-                      wgW(s.rw0, localTri, rw0);
-                      wgW(s.rw1, localTri, rw1);
-                      wgW(s.rw2, localTri, rw2);
-                      // per-UNIT steps packed as (ey<<16 | ex&0xffff) i16 pairs
-                      const packEdge = (ex: NI, ey: NI): NU =>
-                        uint(ex.bitAnd(toI(0xffff))).bitOr(
-                          uint(ey.bitAnd(toI(0xffff))).shiftLeft(uint(16)),
-                        );
-                      wgW(
-                        s.exy0,
-                        localTri,
-                        packEdge(ex0 as unknown as NI, ey0 as unknown as NI),
-                      );
-                      wgW(
-                        s.exy1,
-                        localTri,
-                        packEdge(ex1 as unknown as NI, ey1 as unknown as NI),
-                      );
-                      wgW(
-                        s.exy2,
-                        localTri,
-                        packEdge(ex2 as unknown as NI, ey2 as unknown as NI),
-                      );
-                      wgW(
-                        s.xy,
-                        localTri,
-                        uint(startX).bitOr(uint(startY).shiftLeft(uint(16))),
-                      );
-                      // bias bits (1 ⇔ old bias −1; Phase B unbiases via uw = e + bit)
-                      const bb0 = bias0
-                        .lessThan(toI(0))
-                        .select(uint(1), uint(0)) as unknown as NU;
-                      const bb1 = bias1
-                        .lessThan(toI(0))
-                        .select(uint(1), uint(0)) as unknown as NU;
-                      const bb2 = bias2
-                        .lessThan(toI(0))
-                        .select(uint(1), uint(0)) as unknown as NU;
-                      wgW(
-                        s.wh,
-                        localTri,
-                        uint(extW.add(toI(1)))
-                          .bitOr(uint(extH.add(toI(1))).shiftLeft(uint(8)))
-                          .bitOr(bb0.shiftLeft(uint(16)))
-                          .bitOr(bb1.shiftLeft(uint(17)))
-                          .bitOr(bb2.shiftLeft(uint(18))),
-                      );
-                      wgW(s.pay, localTri, payload);
-                      wgW(s.z0, localTri, dz0);
-                      wgW(s.z1, localTri, dz1);
-                      wgW(s.z2, localTri, dz2);
-                      wgW(s.rcp, localTri, rcpArea);
-                    });
-                  }
                 });
               },
             ).Else(() => {
-              if (!dbgNoHw) {
-                If(validBB, () => {
-                  // big triangle → HW queue
-                  const slot = atomicAdd(
-                    hwQueueV.atomic.element(0),
-                    uint(1),
-                  ) as unknown as NU;
-                  If(slot.lessThan(uint(HW_CAP)), () => {
-                    const base = slot.mul(uint(2)).add(uint(1));
-                    atomicStore(hwQueueV.atomic.element(base), payload);
-                    atomicStore(
-                      hwQueueV.atomic.element(base.add(uint(1))),
-                      instId,
-                    );
-                  });
+              If(validBB, () => {
+                // big triangle → HW queue
+                const slot = atomicAdd(
+                  hwQueueV.atomic.element(0),
+                  uint(1),
+                ) as unknown as NU;
+                If(slot.lessThan(uint(HW_CAP)), () => {
+                  const base = slot.mul(uint(2)).add(uint(1));
+                  atomicStore(hwQueueV.atomic.element(base), payload);
+                  atomicStore(
+                    hwQueueV.atomic.element(base.add(uint(1))),
+                    instId,
+                  );
                 });
-              }
+              });
             });
           });
         });
       });
-
-      if (coop && swSh && emitW1) {
-        // ── SWCOOP Phase B (the kVoxScatter cooperative-footprint idiom,
-        // NaniteVoxelRaster.ts:1121): loop the shared LARGE-bin slots; WITHIN each
-        // tri all 128 lanes stride its bbox pixels together (pixelIndex = lane,
-        // lane+128, …; worst case 17×17 = 289 px = 3 strides/lane), each lane
-        // evaluating the 3 edge functions DIRECTLY from the stored coefficients
-        // (3 i32 mul-adds each — no incremental state). No lane-private nested walk
-        // ⇒ a subgroup never runs the UNION of its worst lanes' bboxes. Empty slots
-        // (small/HW/rejected/voxel/idle) have wh=0 ⇒ area 0 ⇒ zero-trip inner loop.
-        // The barrier is at KERNEL TOP SCOPE: every returnIf above it is driven by
-        // read-only-storage values (uniform to naga — the wgcache-barrier precedent);
-        // the storage-derived voxel skip became a guard, not a return.
-        //workgroupBarrier(); // Phase A records complete before the compaction scan
-        // thread-0 COMPACTION: serial scan of the sparse slots into a dense list +
-        // count (no workgroup atomics in r184 TSL — WorkgroupInfoNode has no atomic
-        // element type, so an atomicAdd append can't be expressed; a single-lane
-        // scan is ≤128 shared loads per workgroup, latency-hidden by resident
-        // neighbours). Both barriers are at kernel top scope (uniform).
-        If(localTri.equal(uint(0)), () => {
-          const n = uint(0).toVar();
-          loopUN(
-            'swsc',
-            uint(0),
-            minU(ctx.triCount, uint(MAX_CLUSTER_TRIS)),
-            (slot) => {
-              const wv = swSh.wh.element(slot) as unknown as NU;
-              If(wv.bitAnd(uint(0xff)).notEqual(uint(0)), () => {
-                wgW(swSh.list, n, slot);
-                n.addAssign(uint(1));
-              });
-            },
-          );
-          wgW(swSh.count, uint(0), n);
-        });
-        //workgroupBarrier(); // compacted list visible to all lanes
-        const laneB = localX();
-        const nLarge = (swSh.count.element(uint(0)) as unknown as NU).toVar();
-        loopUN('swct', uint(0), nLarge, (li) => {
-          const slot = (swSh.list.element(li) as unknown as NU).toVar();
-          const whW = (swSh.wh.element(slot) as unknown as NU).toVar();
-          const w = whW.bitAnd(uint(0xff)).toVar();
-          {
-            const h = whW.shiftRight(uint(8)).bitAnd(uint(0xff)).toVar();
-            const area = w.mul(h).toVar();
-            const xyW = (swSh.xy.element(slot) as unknown as NU).toVar();
-            const x0 = xyW.bitAnd(uint(0xffff)).toVar();
-            const y0 = xyW.shiftRight(uint(16)).toVar();
-            const bRw0 = (swSh.rw0.element(slot) as unknown as NI).toVar();
-            const bRw1 = (swSh.rw1.element(slot) as unknown as NI).toVar();
-            const bRw2 = (swSh.rw2.element(slot) as unknown as NI).toVar();
-            // unpack the i16 (ex, ey) pair and rebuild the PER-PIXEL steps ×256 —
-            // identical i32 values to the old setup's sx/sy (sign-extend is exact).
-            const exyW0 = (swSh.exy0.element(slot) as unknown as NU).toVar();
-            const exyW1 = (swSh.exy1.element(slot) as unknown as NU).toVar();
-            const exyW2 = (swSh.exy2.element(slot) as unknown as NU).toVar();
-            const sExt = (w16: NU): NI =>
-              bcU2I(w16.shiftLeft(uint(16))).shiftRight(
-                toI(16),
-              ) as unknown as NI;
-            const bSx0 = sExt(exyW0.bitAnd(uint(0xffff)))
-              .mul(toI(256))
-              .toVar();
-            const bSx1 = sExt(exyW1.bitAnd(uint(0xffff)))
-              .mul(toI(256))
-              .toVar();
-            const bSx2 = sExt(exyW2.bitAnd(uint(0xffff)))
-              .mul(toI(256))
-              .toVar();
-            const bSy0 = sExt(exyW0.shiftRight(uint(16)))
-              .mul(toI(256))
-              .toVar();
-            const bSy1 = sExt(exyW1.shiftRight(uint(16)))
-              .mul(toI(256))
-              .toVar();
-            const bSy2 = sExt(exyW2.shiftRight(uint(16)))
-              .mul(toI(256))
-              .toVar();
-            const bPay = (swSh.pay.element(slot) as unknown as NU).toVar();
-            const bZ0 = (swSh.z0.element(slot) as unknown as NF).toVar();
-            const bZ1 = (swSh.z1.element(slot) as unknown as NF).toVar();
-            const bZ2 = (swSh.z2.element(slot) as unknown as NF).toVar();
-            const bRcp = (swSh.rcp.element(slot) as unknown as NF).toVar();
-            // bias bits (1 ⇔ old bias −1): uw = cw − bias = e + bit
-            const bB0 = toI(
-              whW.shiftRight(uint(16)).bitAnd(uint(1)) as unknown as NF,
-            ).toVar();
-            const bB1 = toI(
-              whW.shiftRight(uint(17)).bitAnd(uint(1)) as unknown as NF,
-            ).toVar();
-            const bB2 = toI(
-              whW.shiftRight(uint(18)).bitAnd(uint(1)) as unknown as NF,
-            ).toVar();
-            loopU(
-              laneB,
-              area,
-              (lp) => {
-                const ly = lp.div(w).toVar();
-                const lx = lp.sub(ly.mul(w)).toVar();
-                const dx = toI(lx as unknown as NF).toVar();
-                const dy = toI(ly as unknown as NF).toVar();
-                // edge values DIRECTLY from coefficients — identical i32 results to
-                // the old loop's incremental adds at the same pixel (exact integers).
-                const e0 = bRw0.add(dx.mul(bSx0)).add(dy.mul(bSy0)).toVar();
-                const e1 = bRw1.add(dx.mul(bSx1)).add(dy.mul(bSy1)).toVar();
-                const e2 = bRw2.add(dx.mul(bSx2)).add(dy.mul(bSy2)).toVar();
-                If(
-                  e0
-                    .greaterThanEqual(toI(0))
-                    .and(e1.greaterThanEqual(toI(0)))
-                    .and(e2.greaterThanEqual(toI(0))),
-                  () => {
-                    const uw0 = e0.add(bB0).toVar();
-                    const uw1 = e1.add(bB1).toVar();
-                    const uw2 = e2.add(bB2).toVar();
-                    const px = y0
-                      .add(ly)
-                      .mul(uint(cam.uW))
-                      .add(x0.add(lx))
-                      .toVar();
-                    emitW1(px, uw0, uw1, uw2, bZ0, bZ1, bZ2, bRcp, bPay);
-                  },
-                );
-              },
-              MAX_CLUSTER_TRIS,
-            );
-          }
-        });
-      }
-
-      // ?relect (world1 0/2) — kernel-end election-key sink: ONE atomicMax per raster
-      // thread (lanes with a real triangle) at a hashed px into visBV (already bound;
-      // unread under relect≠1 since the election that fed it is gone). This keeps the
-      // whole pixel loop live (elecSink ← every covered fragment's key ⇒ no DCE) with
-      // NO per-fragment election atomics — the same one-atomic-per-thread cost the rdbg
-      // sinks pay, so the split reads clean against the rdbg2 floor.
-      if (mode === 'world1' && relect !== 1 && elecSink) {
-        If(localTri.lessThan(ctx.triCount), () => {
-          const sinkPx = itemIdx
-            .mul(uint(2654435761))
-            .add(localTri)
-            .mod(uint(pixelCount));
-          atomicMax(visBV.atomic.element(sinkPx), elecSink);
-        });
-      }
     })().compute(QRASTER_CAP * MAX_CLUSTER_TRIS, [MAX_CLUSTER_TRIS]);
     return kn;
   };
@@ -2193,40 +1447,6 @@ export function buildNaniteRaster(
     height,
   });
 
-  // ---- kTriHzbCopy (W2 ?trihzb) — mirror one pyramid level into the hwQueue tail.
-  // Own 2-buffer pipeline (pyramid ro + hwQueue) dispatched right after the HZB
-  // build; world1 then reads the mirror through its EXISTING hwQueue binding.
-  const kTriHzbCopy =
-    triLvls && triHzbRO
-      ? (() => {
-          const kn = Fn(() => {
-            If(instanceIndex.lessThan(uint(triTailN)), () => {
-              // map flat tail index → (level, src pyramid index) via static ranges
-              const idx = instanceIndex;
-              const src = uint(0).toVar();
-              for (let k = 0; k <= TRI_HZB_MAX; k++) {
-                const l = triLvls[k];
-                const d0 = triDst[k] ?? 0;
-                if (!l) continue;
-                const inK = idx
-                  .greaterThanEqual(uint(d0))
-                  .and(idx.lessThan(uint(d0 + l.w * l.h)));
-                src.assign(
-                  inK.select(uint(l.offset).add(idx.sub(uint(d0))), src),
-                );
-              }
-              const v = triHzbRO.element(src);
-              atomicStore(
-                hwQueueV.atomic.element(uint(TRIHZB_BASE).add(idx)),
-                bcF2U(v as unknown as NF),
-              );
-            });
-          })().compute(triTailN, [64]);
-          (kn as unknown as ComputeKernel).setName('nanTriHzbCopy');
-          return kn;
-        })()
-      : null;
-
   // ---- kAudit (?audit=1) — run AFTER the payload passes: a covered pixel
   // whose payload is still the clear sentinel means no pass-2 writer ever
   // reproduced the stored depth (raster pass inconsistency). Gate: 0.
@@ -2242,51 +1462,6 @@ export function buildNaniteRaster(
     });
   })().compute(pixelCount, [256]);
   (kAudit as unknown as ComputeKernel).setName('nanAudit');
-
-  // ---- kScarCovered (?scar=1) — the 0a OVERDRAW DENOMINATOR -------------------------
-  // Runs AFTER world1: one thread per pixel. Decodes the pixel's FINAL winner (the same
-  // visBV→qRaster→cluster→mesh chain the resolve uses, NaniteResolve.ts:283-290) and, if
-  // it is a BAND leaf cluster (matClass==4 + its instance in [scarNear, scarFar]), counts
-  // exactly ONE covered pixel into scarV[1]. So scarV[1] is the EXACT count of unique
-  // pixels finally owned by the mid/far foliage band, and overdraw = scarV[0]/scarV[1]
-  // (band fragments rasterized per band pixel covered). The band test mirrors the raster
-  // side (instance-A distance), so numerator and denominator share one definition.
-  const kScarCovered = Fn(() => {
-    returnIf(instanceIndex.greaterThanEqual(uint(pixelCount)));
-    // world1/single-pass covered-test: election anchor 0 = cleared (no fragment).
-    const elect = elemU(visPayloadV.ro, instanceIndex);
-    If(elect.notEqual(uint(0)), () => {
-      const pRaw = elemU(visBV.ro, instanceIndex);
-      const itemIdx = pRaw.shiftRight(uint(CLUSTER_TRI_BITS));
-      const item = qRasterRO.element(itemIdx.add(uint(1)));
-      const instId = item.x;
-      const ci = item.y;
-      const meshId = elemU(
-        gpu.clusters,
-        ci.mul(uint(CLUSTER_WORDS)).add(uint(7)),
-      ).shiftRight(uint(16));
-      const matClass = elemU(
-        gpu.meshes,
-        meshId.mul(uint(MESH_WORDS)).add(uint(6)),
-      )
-        .shiftRight(uint(8))
-        .bitAnd(uint(0xff));
-      const A = gpu.instances.element(instId.mul(uint(2))) as unknown as NV4;
-      const distC = vec3(cam.camPos)
-        .sub(A.xyz as unknown as NV3)
-        .length();
-      If(
-        matClass
-          .equal(uint(4))
-          .and(distC.greaterThanEqual(scarNear))
-          .and(distC.lessThanEqual(scarFar)),
-        () => {
-          atomicAdd(scarEl(1), uint(1));
-        },
-      );
-    });
-  })().compute(pixelCount, [256]);
-  (kScarCovered as unknown as ComputeKernel).setName('nanScarCovered');
 
   // ---- HW big/near-triangle path (./raster/Hw): the vertex-pulling materials + scenes +
   // render wrappers + kHwArgs. The instanced per-cluster draw is built whenever the cull
@@ -2304,9 +1479,6 @@ export function buildNaniteRaster(
     hwDrawAttr,
     hwDrawBuf,
     elect,
-    scar,
-    scarEl,
-    hwrt,
     qHwRasterRO: cull.qHwRasterRO ?? null,
     hwClusterDrawAttr: cull.hwClusterDrawAttr ?? null,
     // A2 (2026-07-09): flat per-cluster ctx read (Option A) + the class-split `_cl` draws.
@@ -2517,7 +1689,7 @@ export function buildNaniteRaster(
           cam,
           qVoxRasterRO: cull.qVoxRasterRO,
           voxRasterDispatchAttr: cull.voxRasterDispatchAttr,
-          // DEPTH-BUCKET F2B: the cull always publishes these alongside the voxel queue.
+          // bucketed scatter (?voxprev): the cull always publishes these alongside the voxel queue.
           voxBucketRangeRO: cull.voxBucketRangeRO as BufOf<UV2>,
           voxBucketDispatchAttr: cull.voxBucketDispatchAttr ?? [],
           voxF2bK: cull.voxF2bK ?? 1,
@@ -2638,30 +1810,6 @@ export function buildNaniteRaster(
     const u = new Uint32Array(buf);
     return { orphans: u[0] ?? 0, covered: u[1] ?? 0 };
   };
-  // 0a SCAR: the per-fragment band/total counters are accumulated INSIDE world1; this
-  // runs the covered-pixel denominator post-pass. No-op unless ?scar=1 (so production
-  // pays nothing — neither the dispatch nor the world1 atomics fire).
-  const scarRun = (renderer: Renderer): void => {
-    if (scar) dispatch(renderer, kScarCovered);
-  };
-  const readScar = async (
-    renderer: Renderer,
-  ): Promise<{
-    bandFrags: number;
-    bandPx: number;
-    totalFrags: number;
-    bandClusters: number;
-  }> => {
-    // scar counters live in the hwQueue tail at slot SCAR_BASE (byte offset SCAR_BASE*4).
-    const buf = await readBuffer(renderer, scarAttr, SCAR_BASE * 4, 16);
-    const u = new Uint32Array(buf);
-    return {
-      bandFrags: u[0] ?? 0,
-      bandPx: u[1] ?? 0,
-      totalFrags: u[2] ?? 0,
-      bandClusters: u[3] ?? 0,
-    };
-  };
 
   const readVoxWrites = async (renderer: Renderer): Promise<number | null> =>
     voxRaster ? voxRaster.readWriteCount(renderer) : null;
@@ -2680,9 +1828,6 @@ export function buildNaniteRaster(
     readMidCount,
     audit,
     readAudit,
-    scar: scarRun,
-    readScar,
     readVoxWrites,
-    triHzbCopyKernel: kTriHzbCopy,
   };
 }
