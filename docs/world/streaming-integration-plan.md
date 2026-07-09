@@ -117,6 +117,22 @@ builds — the BootCache determinism gate transfers directly).
 
 ---
 
+## 4b. Scatter-guidance fields (understory, debris) — NOT paint-by-numbers
+
+`understory` (communityId + density) and `debris` (surfaceClass + density) are **coarse scatter
+guidance**, like a biome/splat map — never a 1:1 stamp. The cook already: (a) cut density by a
+multi-variable ecological suitability model (slope from the heightmap, soil wetness/texture/
+stoniness/fertility) so a community only appears where the gradients allow it; and (b) domain-warped
+the source-polygon boundaries with globally-continuous noise and noise-modulated the density, so no
+cadastral polygon edges survive and the field is seamless across chunk borders.
+
+The client must still: **jitter each instance** (position/rotation/scale from a position hash) and
+**blend palettes across the class-field neighborhood** so ecotones are fuzzy, not hard. Treating a
+cell's class as a hard mask would reintroduce seams the data worked to remove. Density byte /255 ×
+the community/class `base_density` (from `understoryMap`/`debrisMap`) = plants-or-pieces per m². The
+nanite pipeline expands this into arbitrarily dense stones/plants/litter — the field is intentionally
+tiny (2 planes @ 2 m); the density is in the renderer, not the asset.
+
 ## 5. Biome / water / soil rasters
 
 Same windowing as height (every consumer samples through `Heightfield` helpers):

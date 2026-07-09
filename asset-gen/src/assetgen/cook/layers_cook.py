@@ -105,9 +105,30 @@ def _read_planes(base: BaseConfig, layer: str, c, nplanes: int) -> list | None:
     return decode_u8_planes(base.encode, payload, meta.res, nplanes)
 
 
+def _slope_2m(base: BaseConfig, c, res_2m: int) -> np.ndarray:
+    """Slope (deg) on the 2 m grid from the cooked LOD0 height chunk."""
+    from ..process.suitability import slope_deg_from_height
+
+    p = chunk_path("height", c)
+    if not p.exists():
+        return np.zeros((res_2m, res_2m), dtype=np.float32)
+    meta, payload = read_chunk(p)
+    h = decode_quant16(base.encode, payload, meta.res, meta.qoffset, meta.qscale)
+    return slope_deg_from_height(h, res_2m)
+
+
 def cook_understory(base: BaseConfig, bbox_en, log=print) -> None:
+    from ..process.fieldnoise import soften_field
+    from ..process.suitability import (
+        cell_richness,
+        cell_wetness,
+        community_targets,
+        understory_suitability,
+    )
     from ..process.understory import rasterize_understory, unmapped_site_types
 
+    tw, tf = community_targets()
+    res2 = _res_2m(base)
     chunks = chunks_covering_bbox_en(base.grid, bbox_en, 0)
     for i, c in enumerate(chunks):
         dest = chunk_path("understory", c)
@@ -117,8 +138,17 @@ def cook_understory(base: BaseConfig, bbox_en, log=print) -> None:
         soil = _read_planes(base, "soil", c, 5)
         if biome is None or soil is None:
             raise FileNotFoundError("understory needs biome + soil cooked first")
-        planes = rasterize_understory(_window_2m(base, c), biome[0], biome[1], soil[4])
-        payload = encode_u8_planes(base.encode, planes)
+        window = _window_2m(base, c)
+        community, density = rasterize_understory(window, biome[0], biome[1], soil[4])
+        # ecological suitability: cut density by slope + soil wetness/richness + stoniness
+        slope = _slope_2m(base, c, res2)
+        wet = cell_wetness(soil[0], soil[1])
+        rich = cell_richness(soil[4], soil[1])
+        suit = understory_suitability(community, tw, tf, slope, wet, rich, soil[3])
+        density = np.clip(density.astype(np.float32) * suit, 0, 255).astype(np.uint8)
+        # fuzz the polygon edges + break up flat interiors (seamless across chunks)
+        community, density = soften_field(community, density, window, seed=1101)
+        payload = encode_u8_planes(base.encode, [community, density])
         write_chunk(dest, _meta(base, "understory", c, enc=2), payload)
         if (i + 1) % 16 == 0 or i + 1 == len(chunks):
             log(f"  understory [{i + 1}/{len(chunks)}]")
@@ -128,7 +158,10 @@ def cook_understory(base: BaseConfig, bbox_en, log=print) -> None:
 
 def cook_debris(base: BaseConfig, bbox_en, log=print) -> None:
     from ..process.debris import rasterize_debris
+    from ..process.fieldnoise import soften_field
+    from ..process.suitability import debris_suitability
 
+    res2 = _res_2m(base)
     chunks = chunks_covering_bbox_en(base.grid, bbox_en, 0)
     for i, c in enumerate(chunks):
         dest = chunk_path("debris", c)
@@ -138,8 +171,13 @@ def cook_debris(base: BaseConfig, bbox_en, log=print) -> None:
         soil = _read_planes(base, "soil", c, 5)
         if biome is None or soil is None:
             raise FileNotFoundError("debris needs biome + soil cooked first")
-        planes = rasterize_debris(_window_2m(base, c), biome[0], soil[3])
-        payload = encode_u8_planes(base.encode, planes)
+        window = _window_2m(base, c)
+        surface, density = rasterize_debris(window, biome[0], soil[3])
+        slope = _slope_2m(base, c, res2)
+        suit = debris_suitability(surface, slope, soil[3])
+        density = np.clip(density.astype(np.float32) * suit, 0, 255).astype(np.uint8)
+        surface, density = soften_field(surface, density, window, seed=2202)
+        payload = encode_u8_planes(base.encode, [surface, density])
         write_chunk(dest, _meta(base, "debris", c, enc=2), payload)
         if (i + 1) % 16 == 0 or i + 1 == len(chunks):
             log(f"  debris [{i + 1}/{len(chunks)}]")

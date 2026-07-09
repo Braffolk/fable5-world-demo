@@ -60,11 +60,15 @@ LAYER_DOC = {
         "client hashes (cx,cz,x,z) for cosmetic orientation.",
     },
     "understory": {"enc": 2, "texelMeters": 2, "planes": ["communityId", "density"],
-                    "semantics": "ground-flora SCATTER FIELD (see understoryMap): client scatters "
-                    "the community's plant palette at density/255 * base_density plants/m^2"},
+                    "semantics": "ground-flora SCATTER GUIDANCE (see understoryMap), NOT a 1:1 stamp. "
+                    "density already cut by slope/soil-wetness/texture/stoniness/fertility suitability "
+                    "and polygon edges domain-warped + noise-broken (seamless across chunks). Client "
+                    "scatters the community palette at density/255 * base_density plants/m^2, MUST jitter "
+                    "per plant and SHOULD blend palettes across the class neighborhood (fuzzy ecotones)"},
     "debris": {"enc": 2, "texelMeters": 2, "planes": ["surfaceClass", "density"],
-                "semantics": "debris/litter SCATTER FIELD (see debrisMap): client scatters "
-                "stones/deadwood/litter from the class palette at density/255 * base_density"},
+                "semantics": "debris/litter SCATTER GUIDANCE (see debrisMap), NOT a 1:1 stamp. Same "
+                "suitability + edge-softening as understory (litter thins on slopes, stone/scree exposed "
+                "on steep/thin/stony ground). Client scatters stones/deadwood/litter, jittered + blended"},
     "boulders": {"enc": 3, "columns": [["x", "u16"], ["z", "u16"], ["kind", "u8"], ["size", "u8"],
                   ["variant", "u8"]],
                   "semantics": "real ETAK-mapped boulders; kind 0=single 1=pile; size ~cm/40; "

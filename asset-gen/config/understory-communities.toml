@@ -12,6 +12,7 @@
 id = 0
 name = "sparse/bare"
 moisture = "any"
+fertility = "poor"
 base_density = 0.5
 palette = []
 
@@ -19,6 +20,7 @@ palette = []
 id = 1
 name = "dry heath"
 moisture = "dry"
+fertility = "poor"
 base_density = 8.0
 palette = ["cowberry:3", "heather:3", "reindeer_lichen:2", "haircap_moss:1", "juniper_seedling:1"]
 
@@ -26,6 +28,7 @@ palette = ["cowberry:3", "heather:3", "reindeer_lichen:2", "haircap_moss:1", "ju
 id = 2
 name = "bilberry-moss"
 moisture = "fresh"
+fertility = "moderate"
 base_density = 14.0
 palette = ["bilberry:5", "feather_moss:4", "cowberry:2", "wavy_hairgrass:1", "spruce_seedling:1"]
 
@@ -33,6 +36,7 @@ palette = ["bilberry:5", "feather_moss:4", "cowberry:2", "wavy_hairgrass:1", "sp
 id = 3
 name = "herb-rich mesic"
 moisture = "fresh"
+fertility = "rich"
 base_density = 20.0
 palette = ["wood_sorrel:4", "lady_fern:2", "wood_anemone:2", "hepatica:1", "may_lily:2", "bilberry:1"]
 
@@ -40,6 +44,7 @@ palette = ["wood_sorrel:4", "lady_fern:2", "wood_anemone:2", "hepatica:1", "may_
 id = 4
 name = "lush tall-herb"
 moisture = "moist"
+fertility = "rich"
 base_density = 26.0
 palette = ["goutweed:4", "meadowsweet:3", "ostrich_fern:2", "stinging_nettle:2", "hepatica:1", "oxalis:1"]
 
@@ -47,6 +52,7 @@ palette = ["goutweed:4", "meadowsweet:3", "ostrich_fern:2", "stinging_nettle:2",
 id = 5
 name = "raised-bog dwarf"
 moisture = "wet"
+fertility = "poor"
 base_density = 16.0
 palette = ["sphagnum:6", "cottongrass:2", "labrador_tea:2", "bog_cranberry:2", "cloudberry:1", "heather:1"]
 
@@ -54,6 +60,7 @@ palette = ["sphagnum:6", "cottongrass:2", "labrador_tea:2", "bog_cranberry:2", "
 id = 6
 name = "sedge fen"
 moisture = "wet"
+fertility = "moderate"
 base_density = 18.0
 palette = ["sedge:5", "sphagnum:3", "marsh_marigold:1", "cottongrass:2", "horsetail:1", "reed:1"]
 
@@ -61,6 +68,7 @@ palette = ["sedge:5", "sphagnum:3", "marsh_marigold:1", "cottongrass:2", "horset
 id = 7
 name = "meadow herb"
 moisture = "fresh"
+fertility = "moderate"
 base_density = 30.0
 palette = ["meadow_grass:5", "clover:2", "buttercup:2", "yarrow:1", "oxeye_daisy:1", "knapweed:1"]
 
@@ -68,6 +76,7 @@ palette = ["meadow_grass:5", "clover:2", "buttercup:2", "yarrow:1", "oxeye_daisy
 id = 8
 name = "drained-peat fern"
 moisture = "moist"
+fertility = "moderate"
 base_density = 22.0
 palette = ["lady_fern:4", "reed_grass:2", "bilberry:2", "raspberry:1", "goutweed:1"]
 
@@ -75,6 +84,7 @@ palette = ["lady_fern:4", "reed_grass:2", "bilberry:2", "raspberry:1", "goutweed
 id = 9
 name = "scrub understory"
 moisture = "fresh"
+fertility = "moderate"
 base_density = 12.0
 palette = ["raspberry:2", "grass:3", "fern:2", "willowherb:1", "juniper:1"]
 
