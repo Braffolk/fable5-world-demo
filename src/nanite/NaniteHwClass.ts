@@ -50,6 +50,19 @@ import { bcU2F, elemU } from './Tsl';
 // reader relies on (see header (a)).
 const NEAR_MARGIN = Math.max(4 * 0.3, 0.3);
 
+/** ?hwproj=1 — the HW vertex-prepass flagship (the `_clE` projVertBuf reader + the mesh
+ *  near/coverage routing gates + the narrowed Project.ts skip). OPT-IN (default OFF,
+ *  2026-07-09 23:xx): with the gates active the SW-skip (ClusterCtx slot-11) and the HW
+ *  partition must agree on a CAMERA-DEPENDENT near test evaluated in two different kernels —
+ *  any per-frame skew between them (uniform update timing / jitter) makes a marginal cluster
+ *  SW-skipped but not HW-drawn ⇒ large tris flicker out near trunks (user-observed at melee
+ *  range, round-2 bisect). The old size-only rule has the same theoretical skew but its
+ *  disagreement zone is distant sub-pixel clusters. Re-enable only with a consistency fix
+ *  (single-kernel decision or slot-11-as-the-only-source-of-truth for routing). */
+export const HWPROJ =
+  typeof location !== 'undefined' &&
+  new URLSearchParams(location.search).get('hwproj') === '1';
+
 /** TRUE ⇒ this cluster's tris are big enough on screen that the HW rasterizer should draw the
  *  whole cluster (SW skips it). `swmaxCl` = the SW/HW crossover in pixels (?clhwmax, default 16).
  *  Mesh clusters additionally require the near + vcompact-coverage gates (header (a)/(b)). */
@@ -101,6 +114,7 @@ export function clusterHwClass(
   const covered = elemU(gpu.vcompact, ci.mul(uint(2)).add(uint(1))).greaterThan(
     uint(0),
   ) as unknown as NB;
+  if (!HWPROJ) return bigEnough; // pre-flagship rule: size only (see HWPROJ note)
   return bigEnough.and(
     (isHF as unknown as NB).or(nearClear.and(covered)),
   ) as unknown as NB;
