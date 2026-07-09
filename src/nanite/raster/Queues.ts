@@ -28,20 +28,30 @@ interface ComputeKernel {
 // SW raster's 16 px i32-safe limit, so a dense crown routes hundreds of thousands
 // of them to the HW vertex-pulling path. The old 262k cap overflowed (clamp →
 // dropped tris → black holes in foliage; measured 876k hwTris in a dense stand).
-// Sized for that load; the queue only costs memory + the HW pass only pays for the
-// tris actually present. The real reduction (halving the dup, shedding far crowns)
-// is the two-sided raster + the aggregate DAG (N9-C2).
-export const HW_CAP = 2_097_152;
+// CENSUS 2026-07-09 (docs/tasks/2026-07-08/census-baseline.json — 824-sample
+// worst-case flythrough, RAW pre-cap counters): peak hwTris = 480,178 at the
+// dense-forest look-across (t=0.375, ?cam=-595.4,299.1,999.2,2.5755,-0.0061),
+// p95 = 40,783. 1M = 2.2× the census peak AND still above the historical 876k
+// dense-stand load. (was 2_097_152; 2 u32/record ⇒ −8.4 MB)
+export const HW_CAP = 1_048_576;
 
-// SPLAT/MID caps = 65535·64 (max 1-D indirect grid; ceil(N/64) ≤ 65535). ~50 MB /
-// ~167 MB respectively. If the RAW append count exceeds a cap the extra fragments are
-// DROPPED (overflow → holes) and WHICH subset lands is the non-deterministic atomic
-// order ⇒ the field blinks; midQueue goes 2-D dispatch to cover past the 1-D ceiling.
-export const SPLAT_CAP = 4_194_240; // 1-D dispatch, sub-pixel is a couple % ⇒ fits.
-// MID goes 2-D dispatch + a 1-u32 record, so the cap can cover the dense-forest mid count
-// (~32-35M tris) cheaply — 40M × 4 B = ~168 MB (was 1.28 GB at the old 10-u32 record). Below
-// this the atomic-append order drops a non-deterministic subset ⇒ the mid field blinks.
-export const MID_CAP = 41_943_040;
+// SPLAT/MID overflow semantics: if the RAW append count exceeds a cap the extra
+// fragments are DROPPED (overflow → holes) and WHICH subset lands is the
+// non-deterministic atomic order ⇒ the field blinks; midQueue goes 2-D dispatch
+// to cover past the 65535·64 1-D indirect-grid ceiling (SPLAT stays 1-D: ceil(cap/64) ≤ 65535).
+// CENSUS 2026-07-09 (docs/tasks/2026-07-08/census-baseline.json): peak splatFrags =
+// 27,668 @ t=0.238 (?cam=153.0,317.6,1385.5,2.0398,-0.0590), p95 = 7,300. 131,072 =
+// 4.7× the peak — deliberately extra-generous (splat overflow = visible holes) because
+// a slot is only 12 B. (was 4_194_240 = the full 1-D ceiling ⇒ −48.8 MB)
+export const SPLAT_CAP = 131_072;
+// MID goes 2-D dispatch + a 1-u32 record. The old 41.9M cap was sized to the pre-
+// crown-LOD overdraw pathology (~32-35M mid tris in dense forest).
+// CENSUS 2026-07-09 (docs/tasks/2026-07-08/census-baseline.json): peak midTris =
+// 13,328,568 at the dense-forest look-across (t=0.375,
+// ?cam=-595.4,299.1,999.2,2.5755,-0.0061), p95 = 1,554,438. 20M binary = 1.57× the
+// census peak. Below the RAW demand the atomic-append order drops a non-deterministic
+// subset ⇒ the mid field blinks. (was 41_943_040; 4 B/record ⇒ 168 → 84 MB, −83.9 MB)
+export const MID_CAP = 20_971_520;
 // Mid record = 1 u32: the tri id (payload = itemIdx<<CLUSTER_TRI_BITS | localTri). The
 // consumer (nanMidRaster) re-reads the tri's 3 already-projected corners from projVertBuf
 // (they were projected once by nanProjectVerts and never freed) and re-derives the winding
