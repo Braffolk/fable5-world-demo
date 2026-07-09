@@ -26,7 +26,7 @@
 
 /** one blade of the canonical clump table (NaniteGrass BLADES — passed in to
  *  avoid a module cycle) */
-export interface BakeBlade {
+interface BakeBlade {
   c: number;
   s: number;
   ox: number;

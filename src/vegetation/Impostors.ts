@@ -39,11 +39,11 @@ import {
 import type { BufferGeometry } from 'three';
 import type { NF, NV2, NV3, NV4 } from '../gpu/TSLTypes';
 
-export const IMPOSTOR_GRID = 8;
-export const IMPOSTOR_TILE = 256;
+const IMPOSTOR_GRID = 8;
+const IMPOSTOR_TILE = 256;
 
 /** hemi-octahedral uv → hemisphere direction (y-up) */
-export function hemiOctDecode(u: number, v: number): Vector3 {
+function hemiOctDecode(u: number, v: number): Vector3 {
   const x = u * 2 - 1;
   const z = v * 2 - 1;
   const px = (x + z) * 0.5;

@@ -29,7 +29,7 @@ import { grassTranslucency } from '../render/VegMaterials';
 import { MeshGrower } from './TubeMesh';
 
 /** single grass blade: tapered 4-segment strip with a built-in bend */
-export function grassBladeGeometry(SEG = 4): BufferGeometry {
+function grassBladeGeometry(SEG = 4): BufferGeometry {
   const pos: number[] = [];
   const nrm: number[] = [];
   const uvA: number[] = [];
@@ -70,7 +70,7 @@ export function grassBladeGeometry(SEG = 4): BufferGeometry {
   return g;
 }
 
-export function grassMaterial(): MeshStandardNodeMaterial {
+function grassMaterial(): MeshStandardNodeMaterial {
   const mat = new MeshStandardNodeMaterial();
   mat.name = 'grassBlade';
   const id = attribute('idata', 'vec4') as unknown as NV4;

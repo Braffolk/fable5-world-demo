@@ -35,11 +35,11 @@ import {
 import type { NF, NV2 } from '../TSLTypes';
 import { fbm2, hash22, ridged2, valueNoise2 } from '../noise/NoiseTSL';
 
-export const NOISE_TEX_RES = 1024;
+const NOISE_TEX_RES = 1024;
 export const PERIOD_VAL = 256;
 export const PERIOD_FBM = 64;
 export const PERIOD_RID = 32;
-export const PERIOD_WOR = 128;
+const PERIOD_WOR = 128;
 
 export interface NoiseTextures {
   texA: StorageTexture;

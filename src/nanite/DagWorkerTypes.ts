@@ -11,7 +11,7 @@ import type { PackedPreparedCrown } from './BootCache';
 import type { HeightDagOpts, HeightDagStats } from './BuildHeightGrid';
 
 /** build an adaptive terrain LOD DAG on a (gridN+1)² heightfield (gridN = 2^k) */
-export interface HeightDagReq {
+interface HeightDagReq {
   id: number;
   kind: 'height';
   /** (gridN+1)² row-major heights */
@@ -87,21 +87,21 @@ export interface HeightDagOk {
 
 /** buildDag / buildAggregateDag result — DagBuild's typed arrays transfer
  *  zero-copy; clusters/groups/stats (plain-number structs) structured-clone. */
-export interface MeshDagOk {
+interface MeshDagOk {
   id: number;
   ok: true;
   kind: 'mesh' | 'aggregate';
   dag: DagBuild;
 }
 
-export interface CrownOk {
+interface CrownOk {
   id: number;
   ok: true;
   kind: 'crown';
   pack: PackedPreparedCrown;
 }
 
-export interface DagErr {
+interface DagErr {
   id: number;
   ok: false;
   error: string;

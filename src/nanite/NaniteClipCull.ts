@@ -91,7 +91,7 @@ interface ComputeKernel {
 }
 
 /** the shared raster queue every clipmap level's raster consumes (sequential reuse) */
-export interface ClipLevelQueue {
+interface ClipLevelQueue {
   /** the queue's item capacity (?qshcap) — consumers clamp counts against THIS,
    *  not the camera's QRASTER_CAP (which may now be smaller than the shadow cap) */
   cap: number;

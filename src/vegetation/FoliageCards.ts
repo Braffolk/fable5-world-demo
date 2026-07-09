@@ -33,7 +33,7 @@ import { buildLeaf, buildNeedleSpray } from './LeafMesh';
 import { MeshGrower } from './TubeMesh';
 import type { LeafAnchor, SpeciesParams } from './VegTypes';
 
-export const ATLAS_RES = 1024;
+const ATLAS_RES = 1024;
 
 const _m = new Matrix4();
 const _q = new Quaternion();

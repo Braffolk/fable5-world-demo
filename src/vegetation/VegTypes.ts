@@ -52,7 +52,7 @@ export interface LevelParams {
   planar?: number;
 }
 
-export interface FoliageParams {
+interface FoliageParams {
   kind: 'needleSpray' | 'leafCluster';
   /** branch level that carries anchors */
   anchorLevel: number;

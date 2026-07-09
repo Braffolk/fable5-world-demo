@@ -127,7 +127,7 @@ export interface VegPool {
  *  of 1/λ ⇒ TOTAL width ×2.74 (rung 4) / ×5.2 (rung 5); at the K=0.4 bake these deep rungs
  *  own ~17-60 m, so the boost walks the mesh density UP to the conservatively-voxelized
  *  sibling at the 60 m handoff (mesh at ~59 m was reading thinner than voxel at 61 m). */
-export const CROWN_LOD_BROADLEAF: readonly CrownLodRung[] = [
+const CROWN_LOD_BROADLEAF: readonly CrownLodRung[] = [
   { lambda: 1.0, leafRows: 4, needleMu: 1, stemSegs: 4, widthBoost: 1.0 },
   { lambda: 0.88, leafRows: 3, needleMu: 1, stemSegs: 4, widthBoost: 1.0 },
   { lambda: 0.8, leafRows: 2, needleMu: 1, stemSegs: 4, widthBoost: 1.0 },
@@ -151,7 +151,7 @@ export const CROWN_LOD_BROADLEAF: readonly CrownLodRung[] = [
  *  of (1/λ·count/kept) ⇒ TOTAL width ≈ ×4.7 (rung 4) / ×10.7 (rung 5); walks the deep-rung
  *  mesh needle density up to the voxel sibling at the 60 m handoff (K=0.4 bake ⇒ rung 5
  *  owns ~20-60 m). */
-export const CROWN_LOD_CONIFER: readonly CrownLodRung[] = [
+const CROWN_LOD_CONIFER: readonly CrownLodRung[] = [
   { lambda: 1.0, leafRows: 4, needleMu: 1.0, stemSegs: 4, widthBoost: 1.0 },
   { lambda: 0.92, leafRows: 4, needleMu: 0.78, stemSegs: 4, widthBoost: 1.0 },
   { lambda: 0.85, leafRows: 4, needleMu: 0.6, stemSegs: 3, widthBoost: 1.0 },
@@ -161,7 +161,7 @@ export const CROWN_LOD_CONIFER: readonly CrownLodRung[] = [
 ];
 
 /** the rung schedule for a species (conifer vs broadleaf lever set). */
-export function crownLodScheduleFor(sp: SpeciesParams): readonly CrownLodRung[] {
+function crownLodScheduleFor(sp: SpeciesParams): readonly CrownLodRung[] {
   return sp.kind === 'conifer' ? CROWN_LOD_CONIFER : CROWN_LOD_BROADLEAF;
 }
 

@@ -346,7 +346,7 @@ function emitTile(grid: SplatGridSpec, res: TileSplatOut): FarTileBuild | null {
  *  set, not the whole map's (the world-scene OOM, 2026-07-03). `map` (optional)
  *  transforms each build AS IT EMITS — pass a packer to keep only the compact form
  *  in memory (the accumulated BrickCPU objects for a whole map are heap-fatal). */
-export function buildFarTiles<T = FarTileBuild>(
+function buildFarTiles<T = FarTileBuild>(
   opts: FarTileOpts,
   map?: (b: FarTileBuild, jobIndex: number) => T,
 ): T[] {

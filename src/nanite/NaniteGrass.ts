@@ -228,14 +228,10 @@ export interface GrassField {
    *  draw runs depth-tested — occluded blade fragments never invoke the election
    *  shader. Call right after the raster's hwRender (world1 only). */
   renderHw(renderer: Renderer, camera: PerspectiveCamera): void;
-  /** resolve-side shading reconstruction (call INSIDE the resolve fragment Fn) */
-  resolveDerive(body: NU, wp: NV3): { t: NF; nrm: NV3 };
-  /** G-E article lane (?grass=ray): the algorithm's own output IS depth+normal —
-   *  kRay writes the baked-fetch hit normal + tip param per pixel into a screen
-   *  StorageTexture; the resolve taps it instead of the analytic resolveDerive
-   *  (whose per-blade id decode the article lane doesn't have). vec4(nrm, t).
-   *  null on every other lane. */
-  resolveRay: ((px: NU) => NV4) | null;
+  /** resolve-side shading tap (call INSIDE the resolve fragment Fn): kRay writes
+   *  the hit normal + tip param per pixel into a screen StorageTexture — the
+   *  algorithm's own output is depth+normal. vec4(nrm, t). */
+  resolveRay(px: NU): NV4;
   setEnabled(v: boolean): void;
   enabled(): boolean;
   readCounts(renderer: Renderer): Promise<{ clumps: number; hwTris: number }>;
@@ -338,14 +334,6 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
       ? dens.mul(above.greaterThanEqual(0.04).select(float(1), float(0)))
       : dens) as unknown as NF;
   };
-
-  /** legacy resolve hook — NEVER CALLED on this lane (grassProc.ray supplies
-   *  normal+tip from the raycast's screen texture; the analytic per-blade id
-   *  reconstruction died with the geo lane). Kept as a type-shaped stub. */
-  const resolveDerive = (_body: NU, _wp: NV3): { t: NF; nrm: NV3 } => ({
-    t: float(0.55) as unknown as NF,
-    nrm: vec3(0, 1, 0) as unknown as NV3,
-  });
 
   /** the ray lane emits per-pixel — no counters exist */
   const readCounts = async (): Promise<{ clumps: number; hwTris: number }> => ({
@@ -669,7 +657,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
    *  per-fiber arcs live in the bake at mid-height; root-id validation carries
    *  the overhang) */
   const RAY_BANDS = Math.round(qNum('grassbands', 1, 1, 3));
-  const rayBake = ((): { texs: Data3DTexture[]; dMaxTile: number } | null => {
+  const rayBake = ((): { texs: Data3DTexture[]; dMaxTile: number } => {
 
     const b = bakeGrassRayTile({
       res: BAKE_RES,
@@ -709,8 +697,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
   // the article's OUTPUT is depth+normal — the hit normal/tip can't ride the 30-bit
   // election id, so kRay writes them per pixel into a screen StorageTexture (a
   // texture, not a buffer: the resolve fragment is at the 10-storage-buffer ceiling).
-  const rayNrmTex = ((): StorageTexture | null => {
-    if (!rayBake) return null;
+  const rayNrmTex = ((): StorageTexture => {
     const t = new StorageTexture(cam.width, cam.height);
     t.type = HalfFloatType;
     t.format = RGBAFormat;
@@ -722,15 +709,13 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
   })();
   /** resolve-side tap: pixel index (bottom-up rows, the election convention —
    *  kRay stores with the same row indexing, so no flip) → vec4(worldNrm, t) */
-  const resolveRay = rayNrmTex
-    ? (px: NU): NV4 => {
-        const uv = vec2(
-          toF(px.mod(uint(cam.width))).add(0.5).div(cam.width),
-          toF(px.div(uint(cam.width))).add(0.5).div(cam.height),
-        ) as unknown as NV2;
-        return texture(rayNrmTex, uv, 0) as unknown as NV4;
-      }
-    : null;
+  const resolveRay = (px: NU): NV4 => {
+    const uv = vec2(
+      toF(px.mod(uint(cam.width))).add(0.5).div(cam.width),
+      toF(px.div(uint(cam.width))).add(0.5).div(cam.height),
+    ) as unknown as NV2;
+    return texture(rayNrmTex, uv, 0) as unknown as NV4;
+  };
 
   const kRay = ((): unknown => {
     const W = cam.width;
@@ -803,10 +788,10 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
       // G-E article lane: the accepted hit's baked normal + tip param, stored to
       // the screen StorageTexture next to the election emit (the article's output
       // is depth+normal — see rayNrmTex above)
-      const nrmV = rayBake ? (vec3(0, 1, 0).toVar() as unknown as NV3) : null;
-      const tParV = rayBake ? (float(0.5).toVar() as unknown as NF) : null;
+      const nrmV = vec3(0, 1, 0).toVar() as unknown as NV3;
+      const tParV = float(0.5).toVar() as unknown as NF;
       /** per-PIXEL golden-layer budget — L2 is a hole-filler, not a second march */
-      const l2n = rayBake && RAY_LAYER2 ? (uint(0).toVar() as unknown as NU) : null;
+      const l2n = RAY_LAYER2 ? (uint(0).toVar() as unknown as NU) : null;
       if (GRASS_DBG === 'raysetup') {
         // attribution stop: ray gen + scene-depth reconstruct only
         If(tEnd.lessThan(-1), () => {
@@ -958,7 +943,6 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
           // and blade-height law (the bake is 2D/height-free), and a reject steps
           // past the fiber and refetches (expected ≤2-3 per pixel at meadow fill).
           const bakedTexel = (): void => {
-            if (!rayBake || !nrmV || !tParV) return;
             const txI = gfx.div(GUIDE_SUB).add(txf) as unknown as NF;
             const tzI = gfz.div(GUIDE_SUB).add(tzf) as unknown as NF;
             // ---- FIELD FETCH (perf rewrite 2026-07-04): every smooth per-step
@@ -1058,7 +1042,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
             const fetchBand = (u: NF, v: NF, w: NF): NV4 => {
               const smpAt = (i: number): NV4 =>
                 texture3D(
-                  (rayBake as { texs: Data3DTexture[] }).texs[i] as unknown as Parameters<
+                  rayBake.texs[i] as unknown as Parameters<
                     typeof texture3D
                   >[0],
                   vec3(u, v, w) as unknown as NV3,
@@ -1402,7 +1386,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                 const tHit2 = tCur0.add(dT2.mul(GUIDE_PITCH).div(e2L)).toVar() as unknown as NF;
                 If(
                   dT2
-                    .lessThan((rayBake as { dMaxTile: number }).dMaxTile * 0.94)
+                    .lessThan(rayBake.dMaxTile * 0.94)
                     .and(tHit2.lessThan(tAcc))
                     .and(tHit2.lessThan(tMax)),
                   () => {
@@ -1538,12 +1522,10 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                   cz as unknown as NF,
                   bodyBest,
                 );
-                if (rayNrmTex && nrmV && tParV) {
-                  // the article's depth+normal output: normal + tip param ride a
-                  // screen texture to the resolve (the 30-bit election id can't
-                  // carry them). Same bottom-up row indexing — resolveRay matches.
-                  textureStore(rayNrmTex, uvec2(x2, y2), vec4(nrmV, tParV)).toWriteOnly();
-                }
+                // the article's depth+normal output: normal + tip param ride a
+                // screen texture to the resolve (the 30-bit election id can't
+                // carry them). Same bottom-up row indexing — resolveRay matches.
+                textureStore(rayNrmTex, uvec2(x2, y2), vec4(nrmV, tParV)).toWriteOnly();
               };
               if (dx === 0 && dy === 0) doEmit();
               else
@@ -1579,7 +1561,6 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
   return {
     batch: [],
     renderHw: runGrass,
-    resolveDerive,
     resolveRay,
     setEnabled(v: boolean): void {
       onCpu = v;

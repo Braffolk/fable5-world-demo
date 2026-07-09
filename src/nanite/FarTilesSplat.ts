@@ -19,12 +19,12 @@
 
 /** per-cell coverage threshold — a cell below it contributes NO occupancy bit
  *  (gap-preserving masks; see FarTiles.ts POST-pass comment). */
-export const OCC_COVER = 0.22;
+const OCC_COVER = 0.22;
 
 /** flat species brick stream stride: cx,cy,cz,half, r,g,b, nx,ny,nz, density */
 export const SPECIES_BRICK_STRIDE = 11;
 
-export interface SplatSpeciesFlat {
+interface SplatSpeciesFlat {
   /** flat brick stream, SPECIES_BRICK_STRIDE floats per brick (crown-LOCAL space). */
   bricks: Float32Array;
   /** crown-local min Y (trunk column top, pre-scale). */

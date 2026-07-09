@@ -140,7 +140,7 @@ export interface DagLevelStats {
   triReduction: number;
 }
 
-export interface DagStats {
+interface DagStats {
   buildMs: number;
   levels: number;
   lod0Clusters: number;

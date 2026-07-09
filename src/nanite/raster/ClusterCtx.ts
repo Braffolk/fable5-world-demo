@@ -31,7 +31,7 @@ interface ComputeKernel {
 // uint slots: isHF,isDAG,triStart,triCount,meshId,channel,gx,gz,qxw,twoSided,matClass,clhw
 export const CTX_U = 12;
 // float slots: A.xyzw,B.xyzw,oX,oZ,cell,wind[11..20],yawSc.cy,yawSc.sy
-export const CTX_F = 23;
+const CTX_F = 23;
 export const CTX_STRIDE = CTX_U + CTX_F; // 35 u32 / cluster
 
 type U32Views = ReturnType<typeof sU32Views>;

@@ -330,7 +330,7 @@ export function buildNaniteFrame(
     naniteShadow: shadow,
     shadowHalf,
     grassProc: grass
-      ? { derive: grass.resolveDerive, ray: grass.resolveRay }
+      ? { ray: grass.resolveRay }
       : null,
   });
   // ?nores=1 — MEASUREMENT ablation (default OFF): skip ALL fullscreen resolve passes (the

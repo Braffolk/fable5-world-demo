@@ -51,8 +51,8 @@ import { SUN_E } from '../../sky/Atmosphere';
 import { hash12 } from '../noise/NoiseTSL';
 import type { NF, NI, NV2, NV3 } from '../TSLTypes';
 
-export const PROBE_XZ = 256;
-export const PROBE_LAYERS = 6;
+const PROBE_XZ = 256;
+const PROBE_LAYERS = 6;
 /** layer i sits LAYER_BASE·LAYER_RATIO^i meters above ground */
 const LAYER_BASE = 1.5;
 const LAYER_RATIO = 2.36;

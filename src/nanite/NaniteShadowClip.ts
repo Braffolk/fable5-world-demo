@@ -222,7 +222,7 @@ interface Level {
   activeRects: [number, number, number, number][] | null;
 }
 
-export interface ShadowClipParams {
+interface ShadowClipParams {
   levels: number;
   base: number;
   minPx: number;

@@ -481,7 +481,7 @@ export function releaseVoxelizerScratch(): void {
  * @param voxlod       voxlod: build the MIP pyramid (levels[]) when true. FALSE (default)
  *                     emits exactly today's single grid — byte-identical, no extra work.
  */
-export function voxelizeCrown(
+function voxelizeCrown(
   src: ExplicitSource,
   albedo: { r: number; g: number; b: number; hueVar?: number },
   voxelGridDim: number = DEFAULT_VOXEL_GRID_DIM,
@@ -1547,29 +1547,6 @@ function validateVoxelPyramid(levels: VoxelLevel[]): void {
   }
 }
 
-/** world-space center of a brick in the grid (local crown space) — for the throwaway
- *  debug render's instanced-box placement. */
-export function brickCenterLocal(
-  vox: CrownVoxelization,
-  brickIndex: number,
-): [number, number, number] {
-  const { x: bgx, y: bgy } = vox.brickGrid;
-  const bx = brickIndex % bgx;
-  const by = Math.floor(brickIndex / bgx) % bgy;
-  const bz = Math.floor(brickIndex / (bgx * bgy));
-  const bs = BRICK_DIM * vox.cellSize;
-  return [
-    vox.origin[0] + (bx + 0.5) * bs,
-    vox.origin[1] + (by + 0.5) * bs,
-    vox.origin[2] + (bz + 0.5) * bs,
-  ];
-}
-
-/** world size of one brick edge (BRICK_DIM cells). */
-export function brickWorldSize(vox: CrownVoxelization): number {
-  return BRICK_DIM * vox.cellSize;
-}
-
 // ---------------------------------------------------------------------------
 // REGISTRY WIRING (§5.2/§5.3) — the offline-voxelizer ↔ GeometryRegistry path:
 // reserve bricks BEFORE build() (addLate freezes caps), then append + register a
@@ -1648,7 +1625,7 @@ export function prepareVoxelCrown(
  */
 /** one block handed to registerVoxelHead — a ≤128-brick voxel cluster + its AABB bound,
  *  plus (voxlod) the DAG cut metadata (own/parent error+sphere) and child cluster links. */
-export interface VoxelHeadBlock {
+interface VoxelHeadBlock {
   brickBase: number;
   brickCount: number;
   aabb: { min: [number, number, number]; max: [number, number, number] };
@@ -1700,7 +1677,7 @@ function cpuLevel(bricks: BrickCPU[], occupied: number[], cellSize: number, bloc
         if (b) writeBrick(dst, base + i, b);
       }
     },
-    // b.center/b.half are EXACTLY brickCenterLocal(vox,bi) ± (BRICK_DIM·cellSize·0.5) —
+    // b.center/b.half are the brick's local-space center ± (BRICK_DIM·cellSize·0.5),
     // both computed from origin + (bx+0.5)·brickWorld — so the AABBs are unchanged.
     centerHalf: (i) => {
       const b = bricks[occupied[i] as number] as BrickCPU;

@@ -9,17 +9,14 @@ export const WORLD_SIZE = 4096;
 export const WORLD_HALF = WORLD_SIZE / 2;
 
 /** final composed heightfield resolution (1 m/texel) */
-export const HEIGHT_RES = 4096;
+const HEIGHT_RES = 4096;
 /** erosion / hydrology simulation grid (2 m/texel) — spec floor ≥2048 */
-export const SIM_RES = 2048;
+const SIM_RES = 2048;
 
 /** vertical range: heights are meters above sea/datum 0 */
 export const LAKE_LEVEL = 142;
 export const KARST_PLATEAU = 380;
 export const TREELINE = 950;
-
-/** far-shell vista ring: analytic terrain from WORLD_HALF out to FAR_RADIUS */
-export const FAR_RADIUS = 14000;
 
 /** biome ids (stored quantized in classification texture r-channel) */
 export const enum Biome {

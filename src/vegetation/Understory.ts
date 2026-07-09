@@ -36,7 +36,7 @@ const bushLevels = (gnarl: number): SpeciesParams['levels'] => [
   },
 ];
 
-export const BUSH_HAZEL: SpeciesParams = {
+const BUSH_HAZEL: SpeciesParams = {
   id: 'bushHazel',
   label: 'Hazel shrub',
   kind: 'broadleaf',
@@ -66,7 +66,7 @@ export const BUSH_HAZEL: SpeciesParams = {
   stubChance: 0.02,
 };
 
-export const BUSH_PINKFLOWER: SpeciesParams = {
+const BUSH_PINKFLOWER: SpeciesParams = {
   id: 'bushPink',
   label: 'Pink flowering shrub',
   kind: 'broadleaf',
@@ -97,7 +97,7 @@ export const BUSH_PINKFLOWER: SpeciesParams = {
   stubChance: 0.02,
 };
 
-export const BUSH_JUNIPER: SpeciesParams = {
+const BUSH_JUNIPER: SpeciesParams = {
   id: 'bushJuniper',
   label: 'Juniper mound',
   kind: 'conifer',

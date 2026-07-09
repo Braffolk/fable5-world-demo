@@ -23,7 +23,7 @@ export type QualityTier = 'low' | 'medium' | 'high';
 /** Per-tier URL-param defaults. Every entry must be justified by a measured
  *  ms delta AND (for HIGH) a visible A/B shot difference — see
  *  docs/perf-runs notes for the 2026-07-04 quality-preset tuning run. */
-export const PRESET_PARAMS: Record<QualityTier, Record<string, string>> = {
+const PRESET_PARAMS: Record<QualityTier, Record<string, string>> = {
   // LOW — weaker machines. Shadows down more (one fewer clipmap level + 768²),
   // cheaper grass (shorter ray band + single overlay layer), voxel handoff pulled
   // in (meshes give way to cheaper voxels sooner). PRESET VALUES ONLY — no engine

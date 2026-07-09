@@ -102,7 +102,7 @@ function anchorPosHash(px: number, py: number, pz: number, seed: number): number
  *
  * Returns a boolean per anchor: true = survives at fraction `lambda`.
  */
-export function crownLodKeepMask(
+function crownLodKeepMask(
   anchors: readonly LeafAnchor[],
   lambda: number,
   seed: number,

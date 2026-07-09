@@ -220,7 +220,7 @@ export interface V4W {
 }
 
 /** writable f32 element */
-export interface FW {
+interface FW {
   assign(v: NF | number): void;
 }
 /** readable + writable f32 element (kernels that reduce within ONE buffer

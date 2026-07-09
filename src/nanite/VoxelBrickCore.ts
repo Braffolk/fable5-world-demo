@@ -20,13 +20,13 @@ export const BRICK_DIM = 4;
 export const BRICK_OCC_LO = 0;
 export const BRICK_OCC_HI = 1;
 export const BRICK_NORMAL = 2;
-export const BRICK_SPREAD = 3;
+const BRICK_SPREAD = 3;
 export const BRICK_ALBEDO = 4;
 /** per-brick LOCAL-space center (f32 bits) — the oversized-square fix (§6.2): the raster
  *  projects EACH brick's own AABB, not the whole ≤128-brick block. */
 export const BRICK_POS_X = 5;
-export const BRICK_POS_Y = 6;
-export const BRICK_POS_Z = 7;
+const BRICK_POS_Y = 6;
+const BRICK_POS_Z = 7;
 /** per-brick LOCAL half-extent (f32 bits) = BRICK_DIM·cellSize·0.5. */
 export const BRICK_HALF = 8;
 
@@ -89,7 +89,7 @@ export function brickCellIndex(x: number, y: number, z: number): number {
 }
 
 /** pack one RGBA8 word (each component a 0..1 float → 8-bit). */
-export function packRGBA8(r: number, g: number, b: number, a: number): number {
+function packRGBA8(r: number, g: number, b: number, a: number): number {
   const q = (v: number): number => Math.max(0, Math.min(255, Math.round(v * 255)));
   return (q(r) | (q(g) << 8) | (q(b) << 16) | (q(a) << 24)) >>> 0;
 }

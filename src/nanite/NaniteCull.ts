@@ -146,7 +146,7 @@ export type SphereOccludedFn = (
   camPos: UniformV3,
 ) => NB;
 
-export interface NaniteCullCounts {
+interface NaniteCullCounts {
   /** chunk items pushed in phase 1 (pre-clamp) */
   chunks: number;
   /** raster items = visible clusters across both phases (pre-clamp) */

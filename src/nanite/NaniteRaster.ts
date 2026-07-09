@@ -140,37 +140,6 @@ const MAX_RASTER_SIZE = (() => {
 })();
 const NEAR_EPS = 1e-4;
 
-/**
- * N9-C2 two-sided raster orientation (D-N43 Stage 0). The integer scanline core
- * below is built for POSITIVE-area (CCW) triangles — `area2`, `rcpArea`, the edge
- * walk and the top-left coverage rule all assume it. A single-sided cluster keeps
- * the classic back-face cull (accept front-faces, areaNdc > 0). A TWO-SIDED cluster
- * (leaf crowns) instead RE-WINDS a back-face to CCW in place — swap v1↔v2, which
- * negates the signed area (edgeFn = cross(v1−v0, v2−v0)) — so the SAME core rasters
- * whichever side faces the camera, exactly once. This replaces the leaf geometry's
- * reversed-winding triangle duplicate: half the leaf triangles, half the leaf
- * clusters, identical pixels (the resolve flips the leaf normal camera-ward, so
- * shading is unaffected by which winding rastered). `ndc1`/`ndc2` are the caller's
- * toVar()'d apex-relative corners, mutated in place; ndc0 (the shared apex) is
- * unchanged. Returns the accept gate — a degenerate area==0 still falls out at the
- * downstream integer `area2 > 0` test.
- */
-export function orientForRaster(
-  ndc1: NV3,
-  ndc2: NV3,
-  areaNdc: NF,
-  twoSided: NB,
-): NB {
-  const flip = twoSided.and(areaNdc.lessThan(0)).toVar();
-  const keep1 = vec3(ndc1).toVar(); // snapshot v1 before the in-place swap
-  ndc1.assign(flip.select(ndc2, ndc1));
-  ndc2.assign(flip.select(keep1, ndc2));
-  return twoSided.select(
-    areaNdc.notEqual(0),
-    areaNdc.greaterThan(0),
-  ) as unknown as NB;
-}
-
 interface ComputeKernel {
   setName(name: string): unknown;
 }

@@ -77,20 +77,7 @@ export const MESH_WORDS = 18;
  *  gpu.dagLinks, for the top-down hierarchical traversal (only a group's owner
  *  parent carries them; 0 = leaf/non-owner). Sidecar keeps the cut kernel ≤10
  *  storage bindings (F9). */
-export const DAG_WORDS = 12;
-/** voxel-foliage (spec §4.3): u32 words per packed brick record in gpu.voxelBricks.
- *  A brick is a 4×4×4 = 64-cell block: occupancy 2×u32 (no u64 in WGSL r184) +
- *  mean-normal oct snorm2x16 + normal-spread f32 + packed albedo RGBA8 = 5 u32, PLUS
- *  the per-brick LOCAL-SPACE position so the raster paints each brick's OWN small
- *  footprint at its real grid cell — NOT the whole ≤128-brick BLOCK as one giant slab
- *  (the oversized-square bug). word5..7 = brick local center xyz (f32 bits), word8 =
- *  brick local half-extent (f32 bits, = BRICK_DIM·cellSize·0.5) = 9 u32 (36 B). The
- *  cluster's block sphere (word0-3) is now used ONLY as the instance-cull / per-block
- *  occlusion bound; the raster iterates the block's bricks and projects each brick AABB.
- *  The authoritative read/write codec is VoxelBrick.ts; the stride now LIVES in the
- *  three-free VoxelBrickCore.ts (worker-safe voxelizer, 2026-07-04) and is re-exported
- *  here unchanged so the registry's importers keep working. */
-export { BRICK_WORDS, octEncode, octDecode } from './VoxelBrickCore';
+const DAG_WORDS = 12;
 /** N8-D1: vertex layout fed to buildDag for a registry mesh — pos@0..2,
  *  nrm@3..5, uv@6..7, vdata@8..11 (UNPACKED to 0..1 floats so QEM can
  *  interpolate them). attachDag re-packs this back into VERT_WORDS. */
@@ -144,9 +131,9 @@ export const LOD_NONE = 0xffffffff;
 /** N8-D2 Stage 2a: an evicted streaming-tile slot parks its mesh sphere here so
  *  kInstCull's frustum test always rejects it (belt + suspenders alongside the
  *  authoritative clusterCount=0, which makes lodSelectAndPush enqueue 0 chunks). */
-export const TILE_EVICTED_FAR = 1e9;
+const TILE_EVICTED_FAR = 1e9;
 
-export const MATERIAL_CLASS = {
+const MATERIAL_CLASS = {
   terrain: 0,
   rock: 1,
   bark: 2,
@@ -173,8 +160,8 @@ export type TransformChannel = keyof typeof TRANSFORM_CHANNEL;
 
 /** mesh-record flag bits (byte 2 of word 6) */
 export const MESH_FLAG_HEIGHTFIELD = 1;
-export const MESH_FLAG_AGGREGATE = 2;
-export const MESH_FLAG_CAST_SHADOWS = 4;
+const MESH_FLAG_AGGREGATE = 2;
+const MESH_FLAG_CAST_SHADOWS = 4;
 /** N8-D1: mesh's clusterStart/Count point at its FULL DAG cluster range (all
  *  levels) and lodNext = NONE — the cull applies the per-cluster screen-error
  *  cut (project(own)≤τ AND project(parent)>τ) instead of the discrete LOD chain */
@@ -248,12 +235,12 @@ export interface RegisterOpts {
 export type MeshHandle = number;
 
 /** CPU instance records — A/B vec4 pairs, counts must match */
-export interface InstanceStreamCPU {
+interface InstanceStreamCPU {
   a: Float32Array;
   b: Float32Array;
 }
 /** GPU-resident instance records (scatter layers) — copied by kernel at build/flush */
-export interface InstanceStreamGPU {
+interface InstanceStreamGPU {
   bufA: StorageBufferNode<'vec4'>;
   bufB: StorageBufferNode<'vec4'>;
   count: number;
@@ -280,7 +267,7 @@ export interface LateBudget {
   bricks: number;
 }
 
-export interface MeshReport {
+interface MeshReport {
   label: string;
   matClass: MaterialClassId;
   verts: number;
@@ -322,17 +309,17 @@ export interface BuildReport {
 const f32Scratch = new Float32Array(1);
 const u32Scratch = new Uint32Array(f32Scratch.buffer);
 
-export function f32Bits(v: number): number {
+function f32Bits(v: number): number {
   f32Scratch[0] = v;
   return u32Scratch[0] as number;
 }
-export function bitsF32(u: number): number {
+function bitsF32(u: number): number {
   u32Scratch[0] = u >>> 0;
   return f32Scratch[0] as number;
 }
 
 /** IEEE f32 → f16 bits, round-to-nearest-even (matches WGSL pack semantics) */
-export function f32ToF16(v: number): number {
+function f32ToF16(v: number): number {
   f32Scratch[0] = v;
   const x = u32Scratch[0] as number;
   const sign = (x >>> 16) & 0x8000;
@@ -357,7 +344,7 @@ export function f32ToF16(v: number): number {
   return sign | h;
 }
 
-export function f16ToF32(h: number): number {
+function f16ToF32(h: number): number {
   const sign = h & 0x8000 ? -1 : 1;
   const exp = (h >>> 10) & 0x1f;
   const man = h & 0x3ff;
@@ -369,7 +356,7 @@ export function f16ToF32(h: number): number {
 // snorm16/octEncode/octDecode moved to VoxelBrickCore.ts (three-free worker
 // import chain, 2026-07-04) — imported below and re-exported above unchanged.
 
-export interface VertexCPU {
+interface VertexCPU {
   pos: [number, number, number];
   nrm: [number, number, number];
   uv: [number, number];
@@ -387,7 +374,7 @@ export function decodeVertexCPU(verts: Uint32Array, vi: number): VertexCPU {
   };
 }
 
-export interface ClusterCPU {
+interface ClusterCPU {
   sphere: [number, number, number, number];
   coneAxis: [number, number, number];
   coneCos: number;
@@ -416,7 +403,7 @@ export function decodeClusterCPU(recs: Uint32Array, ci: number): ClusterCPU {
   };
 }
 
-export interface MeshCPU {
+interface MeshCPU {
   clusterStart: number;
   clusterCount: number;
   instFirst: number;
@@ -473,7 +460,7 @@ export function decodeMeshCPU(table: Uint32Array, mi: number): MeshCPU {
  * by construction (instance-level cull soundness needs containment, not
  * minimality).
  */
-export function meshSphereFromClusters(
+function meshSphereFromClusters(
   spheres: Float32Array,
   count: number,
 ): [number, number, number, number] {
@@ -583,7 +570,7 @@ export function readCluster(recs: StorageBufferNode<'uint'>, ci: NU): ClusterNod
   };
 }
 
-export interface DagRecordCPU {
+interface DagRecordCPU {
   ownError: number;
   /** xyz center, w radius — the sphere ownError is measured against */
   ownSphere: [number, number, number, number];

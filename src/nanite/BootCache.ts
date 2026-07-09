@@ -235,7 +235,7 @@ export class BootCache {
 // build's writeBrick output); only build-time intermediates (fartile splat INPUT)
 // see oct-normal / rgba8-albedo quantization — a cold-only, >280 m far-field effect.
 
-export interface PackedGrid {
+interface PackedGrid {
   occupied: Uint32Array;
   words: Uint32Array; // BRICK_WORDS per brick — gpu.voxelBricks record, occupied[] order
   totalBricks: number;
@@ -249,7 +249,7 @@ export interface PackedLevel extends PackedGrid {
   blocks: VoxelBlock[]; // plain data (Sphere = plain xyzr) — structured clone handles it
 }
 
-export interface PackedVox {
+interface PackedVox {
   grid: PackedGrid;
   brickGrid: CrownVoxelization['brickGrid'];
   cellGrid: CrownVoxelization['cellGrid'];
@@ -300,7 +300,7 @@ function unpackGrid(p: PackedGrid): { bricks: BrickList; occupied: number[] } {
   return { bricks, occupied };
 }
 
-export function packVox(vox: CrownVoxelization): PackedVox {
+function packVox(vox: CrownVoxelization): PackedVox {
   return {
     grid: packGrid(vox.bricks, vox.occupied),
     brickGrid: vox.brickGrid,
@@ -319,7 +319,7 @@ export function packVox(vox: CrownVoxelization): PackedVox {
   };
 }
 
-export function unpackVox(p: PackedVox): CrownVoxelization {
+function unpackVox(p: PackedVox): CrownVoxelization {
   const g = unpackGrid(p.grid);
   const levels: VoxelLevel[] | undefined = p.levels?.map((l) => {
     const lg = unpackGrid(l);
@@ -358,53 +358,6 @@ export function packPreparedCrown(prep: PreparedVoxelCrown): PackedPreparedCrown
 export function unpackPreparedCrown(p: PackedPreparedCrown): PreparedVoxelCrown {
   return {
     vox: unpackVox(p.vox),
-    brickCount: p.brickCount,
-    clusterCount: p.clusterCount,
-    dagLinkCount: p.dagLinkCount,
-  };
-}
-
-/**
- * unpackPreparedCrown with a cooperative `tick` between pyramid levels — a big
- * crown's unpack (millions of BrickCPU objects) is otherwise a single 1-2 s
- * main-thread slab (cold-boot yields, 2026-07-04). Identical output to
- * unpackPreparedCrown; `tick` is the caller's yieldIfDue.
- */
-export async function unpackPreparedCrownAsync(
-  p: PackedPreparedCrown,
-  tick: () => Promise<void>,
-): Promise<PreparedVoxelCrown> {
-  const g = unpackGrid(p.vox.grid);
-  await tick();
-  let levels: VoxelLevel[] | undefined;
-  if (p.vox.levels) {
-    levels = [];
-    for (const l of p.vox.levels) {
-      const lg = unpackGrid(l);
-      levels.push({
-        level: l.level,
-        bricks: lg.bricks,
-        occupied: lg.occupied,
-        brickGrid: l.brickGrid,
-        cellSize: l.cellSize,
-        geomError: l.geomError,
-        blocks: l.blocks,
-      });
-      await tick();
-    }
-  }
-  const vox: CrownVoxelization = {
-    bricks: g.bricks,
-    occupied: g.occupied,
-    brickGrid: p.vox.brickGrid,
-    cellGrid: p.vox.cellGrid,
-    origin: p.vox.origin,
-    cellSize: p.vox.cellSize,
-    stats: p.vox.stats,
-  };
-  if (levels) vox.levels = levels;
-  return {
-    vox,
     brickCount: p.brickCount,
     clusterCount: p.clusterCount,
     dagLinkCount: p.dagLinkCount,

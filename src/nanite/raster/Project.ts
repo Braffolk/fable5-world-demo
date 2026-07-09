@@ -88,10 +88,10 @@ interface ComputeKernel {
 //     ≤ 384 corner slots, already < the stride, so no grid-index math is needed.
 // 512 covers both with margin (an overflow guard clamps + the runtime check reports any
 // cluster that would exceed it). projVertBuf stride shrinks 765 → 512 (~⅓ smaller).
-export const MAX_CLUSTER_VERTS = 512;
+const MAX_CLUSTER_VERTS = 512;
 export const projVertsPerCluster = (): number => MAX_CLUSTER_VERTS;
 // projected-vert record = xi(i32 bits) | yi(i32 bits) | dz(f32 bits, or NEAR_SENTINEL).
-export const PROJ_VERT_STRIDE = 3;
+const PROJ_VERT_STRIDE = 3;
 
 /** THE shared canonical projVertBuf slot — element index of the xi word of the DEDUPED
  *  record for (cluster item, localTri, corner). ONE definition, used by ALL THREE stages

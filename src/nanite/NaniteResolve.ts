@@ -128,17 +128,12 @@ export interface ResolveWorld {
    *  eval + depth-aware bilateral upsample (NaniteShadowHalf) instead of the per-
    *  pixel shadowFactor — ~4× fewer PCSS taps. null = full-res (?shalfres=0). */
   shadowHalf: ShadowHalf | null;
-  /** procedural grass (NaniteGrass, grass rethink 2026-07-03): grass pixels carry
-   *  the bit31|bit30 id namespace and shade in the vox-side pass ('vox'/'both').
-   *  derive() re-builds the pixel's blade triangle from its self-describing id
-   *  (zero storage buffers — the binding budget is untouched). */
+  /** procedural grass (NaniteGrass): grass pixels carry the bit31|bit30 id
+   *  namespace and shade in the vox-side pass ('vox'/'both'). ray() taps the
+   *  raycast lane's screen texture: per-pixel vec4(worldNrm, tipParam) — the
+   *  algorithm's own depth+normal output. */
   grassProc?: {
-    derive(body: NU, wp: NV3): { t: NF; nrm: NV3 };
-    /** G-E article lane (?grass=ray): per-pixel vec4(worldNrm, tipParam) from the
-     *  raycast lane's screen texture (the algorithm's own depth+normal output).
-     *  Non-null ⇒ grass pixels use it INSTEAD of derive() (whose per-blade id
-     *  reconstruction the baked-fetch lane doesn't carry). */
-    ray?: ((px: NU) => NV4) | null;
+    ray(px: NU): NV4;
   } | null;
 }
 
@@ -1168,17 +1163,12 @@ export function buildNaniteResolve(
           return;
         }
         const body = pRaw.bitAnd(uint(0x3fffffff));
-        // G-E article lane: normal + tip come straight from the raycast lane's
-        // screen texture (ONE tap) — the analytic id re-derivation is bypassed.
-        const g = gp.ray
-          ? ((): { t: NF; nrm: NV3 } => {
-              const rv = gp.ray!(pixelIndex as unknown as NU) as unknown as NV4;
-              return {
-                t: rv.w as unknown as NF,
-                nrm: normalize(rv.xyz as unknown as NV3) as unknown as NV3,
-              };
-            })()
-          : gp.derive(body as unknown as NU, wp);
+        // normal + tip come straight from the raycast lane's screen texture (ONE tap)
+        const rv = gp.ray(pixelIndex as unknown as NU) as unknown as NV4;
+        const g = {
+          t: rv.w as unknown as NF,
+          nrm: normalize(rv.xyz as unknown as NV3) as unknown as NV3,
+        };
         const distG = wp.sub(vec3(camPos) as unknown as NV3).length();
         const toCamG = normalize(camPos.sub(wp)) as unknown as NV3;
         const nF = dot(g.nrm, toCamG).lessThan(0).select(g.nrm.negate(), g.nrm) as unknown as NV3;
