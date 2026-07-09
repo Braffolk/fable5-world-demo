@@ -56,3 +56,34 @@ levers listed in task #55; shadow levers in task #61/70).
   IF user says they look NEW/different in character → bisect vs f0cc6a6 FIRST.
 - Full-config tri budget: 18M submit / 1.8M culled-resid (vs 15M base) — shadows+grass add ~3M submit; the
   full-config frame cost split (shadows vs grass ms) is STILL UNMEASURED (profile was base config).
+
+## 23:20 STATE — BLITZ SHIPPED (rounds 1+2), FLAGSHIP PULLED, EXPORT PENDING
+- COMMITS on nanite-raster: 5e45ae7 (round 1: mid ghost-dispatch+de-atomic+middz-on,
+  vcompact-at-attach w/ vBase ANCHOR fix, resolve accumulators, clE 1-fetch+tail-skip,
+  vox wgAnyLive gate, GTAO mat-dedup+const-loops, shadow caster-fold+culloverlap-on,
+  grass 2-level max-top guide, tools/perf/interleaved_ab.mjs) · d9e56ff (round 2:
+  clE projVert flagship, vox tier-split, GTAO half-res viewZ taps, resolve terr/mesh
+  split, grass 32B record merge) · 9bac513 (fix: flagship → ?hwproj=1 OPT-IN).
+- ⚠️ REGRESSION FOUND+FIXED (user bisect vs round-1 worktree): large trunk tris
+  flickering out at melee range = the flagship's near/coverage ROUTING GATE — the
+  SW-skip (ClusterCtx slot-11 prepass) and kHwPartition re-derive a CAMERA-DEPENDENT
+  near test in two kernels; per-frame skew ⇒ cluster SW-skipped but not HW-drawn.
+  hwproj=0/middz=0/hw1fetch=0 all cleared their pieces; the gate was unflagged.
+  RE-LAND CONDITION (documented at HWPROJ const, NaniteHwClass.ts): single source
+  of truth for routing (slot-11 as the ONLY authority), not two kernels agreeing.
+  Cap-overflow theory REFUTED (soup 430K ≪ 1M at trunk poses).
+- 21:30 "specs" artifact = SEPARATE pre-existing bug (user: "tiny depth
+  inconsistencies", still present, unrelated to the large-tri regression).
+- USER IDEA booked: classify-time BACKFACE REJECT for one-sided classes (bark/rock/
+  terrain) via sign(area2raw) — ~half trunk tris free + fixes inside-trunk rendering.
+- Shadow split measured (interleaved, fly-path): ~4ms p95 moving (noisy 0.4-7.5).
+  Shadow P4 (+30MB) VETOED on memory. Grass/AO/resolve/vox rounds all landed ≤ couple MB.
+- STATIC post-blitz vs 19:48 (raw-trace remarks, hash-verified same-source set):
+  voxB0/B1 76r/0 spill BOTH runs (+~600 ALU = designed tier-1 trade), world1 36r
+  static both runs. resolve_tri (was 208r) + clE vertex = fragment/vertex ⇒ ONLY the
+  Xcode export shows them.
+- PENDING: user exporting /tmp/laas_trace_postblitz-2026-07-09T23-12-25-c000.gputrace
+  (≈30 min) → run_all.sh → per-shader frame-share % diff vs profile-results-
+  20260709-194832 (the ONLY valid cross-run timing metric) → decide final-hour target.
+- Branch note: other session made estonia-asset-gen (asset-gen commits + a stray
+  cherry-picked fix); nanite-raster is canonical; checkout switched back 23:20.
