@@ -1,5 +1,13 @@
 # HANDOFF 00:05 2026-07-10 — perf arc CLOSED (scorecard below), CLEANUP ARC ACTIVE
 
+## WHY (user, 07-10): the cleanup is the PREREQUISITE for the next arc
+User verbatim: "after the whole cleanup is done, i will have the biggest refactor demand
+yet. hence the cleanup. we couldnt go on with this absolute mess of a branching case and
+half-repo-dead-code state into that. for optimal progress, we needed lean codebase!"
+The refactor itself is not yet specified — do not speculate; finish the cleanup slices
+(incl. S4b deep review, S6 nanite restructure, S7 scene unification) to the full-excision
+bar, then ask for the refactor brief.
+
 ## THE ACTIVE TASK (user, ~00:00): serious cleanup of the codebase
 User verbatim: "a long due cleanup of all unnecessary branching, esp dead, params. not the
 ones that are actual quality knobs that are used for different quality settings. but all of
