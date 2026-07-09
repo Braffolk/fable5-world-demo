@@ -212,20 +212,33 @@ export function buildProject(p: {
   const H = float(cam.uH);
   const NEAR_EPS = 1e-4;
 
-  // projectVert — VERBATIM the world1 inline projection (NaniteRaster streaming assembly):
-  //   clip = vp·(wv,1) → ok = w>NEAR_EPS → ndc = clip.xyz/clip.w → dz = ndc.z →
+  // projectVert — the world1 inline projection (NaniteRaster streaming assembly):
+  //   clip = vp·(wv,1) → ok gate → ndc = clip.xyz/clip.w → dz = ndc.z →
   //   screen = (ndc.xy+1)·0.5·(W,H) → xi/yi = round(screen·256) as i32.
-  // Called ONLY here now; kept a named closure so it can be reused verbatim later.
+  // ok = w>NEAR_EPS AND the fixed-point snap does NOT i32-SATURATE (FIX-FIRST audit
+  // Finding A, 2026-07-09): a camera-plane-grazing corner (w>EPS but |ndc| huge) used
+  // to pass ok with xi/yi clamped to ±2^31 — the SW classifier then routed the tri to
+  // the hwQueue via the not-smallEnough escape (correct), but the Phase-2 `_cl` HOT
+  // path has no oversize escape and rendered the bent corner. Folding saturation into
+  // ok ⇒ the corner carries NEAR_SENTINEL ⇒ SW: nearOK=false → hwQueue soup (real
+  // clip — the same destination smallEnough sent it, minus dead setup work); `_cl`:
+  // the per-tri fallback (real clip). 1e8 < 2^31 leaves ~21× margin over any bbox
+  // the SW path could accept while catching all saturating values.
   const projectVert = (
     wv: NV3,
   ): { xi: NI; yi: NI; dz: NF; ok: NB } => {
     const pv = cam.vp.mul(vec4(wv, 1)).toVar() as unknown as NV4;
-    const ok = pv.w.greaterThan(NEAR_EPS) as unknown as NB;
     const ndc = pv.xyz.div(pv.w).toVar();
     const dz = ndc.z.toVar() as unknown as NF;
     const sv = ndc.xy.add(1).mul(0.5).mul(vec2(W, H)).toVar();
-    const xi = toI(sv.x.mul(256).round()).toVar() as unknown as NI;
-    const yi = toI(sv.y.mul(256).round()).toVar() as unknown as NI;
+    const sx = sv.x.mul(256).toVar();
+    const sy = sv.y.mul(256).toVar();
+    const ok = pv.w
+      .greaterThan(NEAR_EPS)
+      .and(sx.abs().lessThan(1e8))
+      .and(sy.abs().lessThan(1e8)) as unknown as NB;
+    const xi = toI(sx.round()).toVar() as unknown as NI;
+    const yi = toI(sy.round()).toVar() as unknown as NI;
     return { xi, yi, dz, ok };
   };
 
@@ -314,8 +327,14 @@ export function buildProject(p: {
     // SHARED (post-barrier); the value is workgroup-uniform ⇒ all threads return together.
     returnIf(rU(10).equal(uint(7)));
     // skip clusters the cull routed to the HW instanced draw (slot 11) — world1 does the
-    // same before any vertex work (the SW/HW cluster split is the permanent default). Same
-    // shared-read, post-barrier, workgroup-uniform early-out as above.
+    // same before any vertex work. ⛔ Phase 2 / Option D (project HW clusters too, `_cl`
+    // reads pre-projected verts) was BUILT then REVERTED 2026-07-09: measured a WASH —
+    // projecting the fat near HW clusters ballooned nanProjectVerts 7.66→12.78% of frame
+    // (7× the estimate; terrain HW clusters are PER-CORNER, no dedup) while `_cl` only fell
+    // 12.92→8.43% with the 80B spill INTACT (the compiled real-clip fallback kept the
+    // register ceiling — the design's own Gate-2 warning). Net ≈ 0. Do not retry without
+    // BOTH (a) near-cross soup-routing so the fallback is not compiled, AND (b) a dedup
+    // story for terrain HW verts. (Profile pair: profile-results-20260709-{194832,204125}.)
     returnIf(rU(11).equal(uint(1)));
 
     const triCount = rU(3);
