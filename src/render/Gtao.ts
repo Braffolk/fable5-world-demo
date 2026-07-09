@@ -31,10 +31,8 @@ import {
   dot,
   float,
   floor,
-  getNormalFromDepth,
-  getScreenPosition,
-  getViewPosition,
   int,
+  ivec2,
   mat3,
   max,
   mix,
@@ -46,6 +44,7 @@ import {
   sqrt,
   sub,
   texture,
+  textureLoad,
   textureSize,
   uniform,
   uv,
@@ -53,8 +52,9 @@ import {
   vec3,
   vec4,
 } from 'three/tsl';
+import type { Node } from 'three/webgpu';
 import { runiform } from '../gpu/RenderUniform';
-import type { NF, NI, NV2, NV3, NV4 } from '../gpu/TSLTypes';
+import type { NF, NI, NM4, NV2, NV3, NV4 } from '../gpu/TSLTypes';
 
 export interface GtaoOptions {
   samples: number;
@@ -76,6 +76,87 @@ interface DepthTexLike {
 }
 
 /**
+ * Equivalents of three's PostProcessingUtils getViewPosition/getScreenPosition
+ * (and a local getNormalFromDepth port) that evaluate the mat4×vec4 product
+ * ONCE. The stock versions reference the un-toVar'd product node for both the
+ * xyz/xy read and the w read, so the matrix multiply is emitted twice; the
+ * .toVar() here forces a single evaluation. Identical operations, deduplicated
+ * ⇒ bit-identical output. WebGPU coordinate system only — this project renders
+ * exclusively through three/webgpu, so only that branch of stock
+ * getViewPosition is ever emitted.
+ */
+export function getViewPositionFast(screenPosition: Node, depth: Node, projInv: Node): NV3 {
+  const sp = vec2((screenPosition as unknown as NV2).x, (screenPosition as unknown as NV2).y.oneMinus())
+    .mul(2.0)
+    .sub(1.0);
+  const clip = vec4(vec3(sp, depth as unknown as NF), 1.0);
+  const v = vec4(
+    (projInv as unknown as NM4).mul(clip as unknown as NV4) as unknown as NV4,
+  ).toVar();
+  return v.xyz.div(v.w) as unknown as NV3;
+}
+
+export function getScreenPositionFast(viewPosition: Node, proj: Node): NV2 {
+  const clip = vec4(
+    (proj as unknown as NM4).mul(
+      vec4(viewPosition as unknown as NV3, 1.0) as unknown as NV4,
+    ) as unknown as NV4,
+  ).toVar();
+  const sampleUv = clip.xy.div(clip.w).mul(0.5).add(0.5).toVar();
+  return vec2(sampleUv.x, sampleUv.y.oneMinus());
+}
+
+/**
+ * Faithful port of stock getNormalFromDepth so its interior unprojects route
+ * through getViewPositionFast (single matrix multiply). Copies
+ * PostProcessingUtils.getNormalFromDepth op-for-op ⇒ bit-identical.
+ */
+function getNormalFromDepthFast(uvN: Node, depthTexture: Node, projInv: Node): NV3 {
+  const size = textureSize(
+    textureLoad(depthTexture as unknown as Parameters<typeof textureLoad>[0]),
+  );
+  const sizeV = size as unknown as NV2;
+  const p = ivec2((uvN as unknown as NV2).mul(sizeV)).toVar();
+  const load = (coord?: unknown): NF =>
+    textureLoad(
+      depthTexture as unknown as Parameters<typeof textureLoad>[0],
+      coord as unknown as Parameters<typeof textureLoad>[1],
+    ) as unknown as NF;
+
+  const c0 = load(p).toVar();
+  const l2 = load(p.sub(ivec2(2, 0))).toVar();
+  const l1 = load(p.sub(ivec2(1, 0))).toVar();
+  const r1 = load(p.add(ivec2(1, 0))).toVar();
+  const r2 = load(p.add(ivec2(2, 0))).toVar();
+  const b2 = load(p.add(ivec2(0, 2))).toVar();
+  const b1 = load(p.add(ivec2(0, 1))).toVar();
+  const t1 = load(p.sub(ivec2(0, 1))).toVar();
+  const t2 = load(p.sub(ivec2(0, 2))).toVar();
+
+  const dl = abs(sub(float(2).mul(l1).sub(l2), c0)).toVar();
+  const dr = abs(sub(float(2).mul(r1).sub(r2), c0)).toVar();
+  const db = abs(sub(float(2).mul(b1).sub(b2), c0)).toVar();
+  const dt = abs(sub(float(2).mul(t1).sub(t2), c0)).toVar();
+
+  const ce = getViewPositionFast(uvN, c0, projInv).toVar();
+  const uv2 = uvN as unknown as NV2;
+  const dpdx = dl
+    .lessThan(dr)
+    .select(
+      ce.sub(getViewPositionFast(uv2.sub(vec2(float(1).div(sizeV.x), 0)), l1, projInv)),
+      ce.negate().add(getViewPositionFast(uv2.add(vec2(float(1).div(sizeV.x), 0)), r1, projInv)),
+    );
+  const dpdy = db
+    .lessThan(dt)
+    .select(
+      ce.sub(getViewPositionFast(uv2.add(vec2(0, float(1).div(sizeV.y))), b1, projInv)),
+      ce.negate().add(getViewPositionFast(uv2.sub(vec2(0, float(1).div(sizeV.y))), t1, projInv)),
+    );
+
+  return normalize(cross(dpdx as unknown as NV3, dpdy as unknown as NV3)) as unknown as NV3;
+}
+
+/**
  * Builds the AO fragment expression for the merged half-res pass.
  * `resolution` is the live half-res dimensions uniform (HalfResMrtNode owns
  * it) — drives the noise tiling exactly like stock GTAONode's resolution.
@@ -91,7 +172,14 @@ export function gtaoLayer(
   const uDistanceExponent = runiform(opts.distanceExponent ?? 1);
   const uDistanceFallOff = runiform(opts.distanceFallOff);
   const uScale = runiform(opts.scale ?? 1);
-  const uSamples = runiform(opts.samples);
+  // DIRECTIONS/STEPS are compile-time literals, NOT a runtime uniform trip
+  // count: a uniform loop bound forces Tint to emit while(true) + a u64
+  // loop-counter carry chain with no unroll and no cross-iteration CSE;
+  // constant bounds let Metal unroll. Same derivation as stock GTAONode
+  // (select(3,5) on the sample count; ceil-divide for steps) evaluated
+  // JS-side ⇒ identical values.
+  const DIRECTIONS = opts.samples < 30 ? 3 : 5;
+  const STEPS = Math.floor((opts.samples + (DIRECTIONS - 1)) / DIRECTIONS);
   const uMaxDist = runiform(opts.maxDist ?? 1e9);
   // live object references — read current (jittered) values at upload time,
   // matching stock GTAONode's uniform(camera.projectionMatrix)
@@ -106,22 +194,20 @@ export function gtaoLayer(
 
     const result = float(1).toVar();
     const depth = sampleDepth(uvNode).toVar();
-    const viewPosition = getViewPosition(
+    const viewPosition = getViewPositionFast(
       uvNode,
       depth,
-      uProjInv as unknown as Parameters<typeof getViewPosition>[2],
+      uProjInv as unknown as Node,
     ).toVar();
 
     // stock: depth.greaterThanEqual(1.0).discard() onto a white-cleared RT.
     // PERF-4: also skip past uMaxDist (the consumer fades AO→1 there, so the
     // marched value is discarded) — kills the far-vista march for free.
     If(depth.lessThan(1.0).and(viewPosition.length().lessThan(uMaxDist as unknown as NF)), () => {
-      const viewNormal = (
-        getNormalFromDepth(
-          uvNode,
-          depthTex.value as Parameters<typeof getNormalFromDepth>[1],
-          uProjInv as unknown as Parameters<typeof getNormalFromDepth>[2],
-        ) as unknown as NV3
+      const viewNormal = getNormalFromDepthFast(
+        uvNode,
+        depthTex.value as unknown as Node,
+        uProjInv as unknown as Node,
       ).toVar();
       // own full-res depth texel — used to reject degenerate self-samples
       // (deviation from stock, see below; depth is drawing-buffer sized)
@@ -140,17 +226,14 @@ export function gtaoLayer(
       const bitangent = vec3(tangent.y.mul(-1.0), tangent.x, 0.0);
       const kernelMatrix = mat3(tangent, bitangent, vec3(0.0, 0.0, 1.0));
 
-      const DIRECTIONS = (uSamples as unknown as NF).lessThan(30).select(3, 5).toVar();
-      const STEPS = add((uSamples as unknown as NF), DIRECTIONS.sub(1)).div(DIRECTIONS).toVar();
-
       const ao = float(0).toVar();
 
       Loop(
-        { start: int(0), end: DIRECTIONS as unknown as NI, type: 'int', condition: '<' },
+        { start: int(0), end: int(DIRECTIONS), type: 'int', condition: '<' },
         ({ i }: { readonly i: NI }) => {
           // stock adds _temporalDirection here — always 0 with temporal
           // filtering off (our configuration), omitted
-          const angle = float(i).div(float(DIRECTIONS as unknown as NF)).mul(PI).toVar();
+          const angle = float(i).div(float(DIRECTIONS)).mul(PI).toVar();
           const sampleDir = vec4(
             cos(angle),
             sin(angle),
@@ -175,28 +258,28 @@ export function gtaoLayer(
           Loop(
             // 'name' missing from @types LoopNodeObjectParameter but required
             // at runtime: it names the loop var AND the destructure key
-            { end: STEPS as unknown as NI, type: 'int', name: 'j', condition: '<' } as unknown as Parameters<typeof Loop>[0],
+            { end: int(STEPS), type: 'int', name: 'j', condition: '<' } as unknown as Parameters<typeof Loop>[0],
             (({ j }: { readonly j: NI }) => {
               const sampleViewOffset = sampleDir.xyz
                 .mul(radiusToUse as unknown as NF)
                 .mul(sampleDir.w)
                 .mul(
                   pow(
-                    div(float(j).add(1.0), float(STEPS as unknown as NF)),
+                    div(float(j).add(1.0), float(STEPS)),
                     uDistanceExponent as unknown as NF,
                   ),
                 );
 
               // x
-              const sampleScreenPositionX = getScreenPosition(
+              const sampleScreenPositionX = getScreenPositionFast(
                 viewPosition.add(sampleViewOffset),
-                uProj as unknown as Parameters<typeof getScreenPosition>[1],
+                uProj as unknown as Node,
               ).toVar();
               const sampleDepthX = sampleDepth(sampleScreenPositionX).toVar();
-              const sampleSceneViewPositionX = getViewPosition(
+              const sampleSceneViewPositionX = getViewPositionFast(
                 sampleScreenPositionX,
                 sampleDepthX,
-                uProjInv as unknown as Parameters<typeof getViewPosition>[2],
+                uProjInv as unknown as Node,
               ).toVar();
               const viewDeltaX = sampleSceneViewPositionX.sub(viewPosition).toVar();
               // sub-texel rejection (deviation from stock, horizon-black
@@ -229,15 +312,15 @@ export function gtaoLayer(
               });
 
               // y
-              const sampleScreenPositionY = getScreenPosition(
+              const sampleScreenPositionY = getScreenPositionFast(
                 viewPosition.sub(sampleViewOffset),
-                uProj as unknown as Parameters<typeof getScreenPosition>[1],
+                uProj as unknown as Node,
               ).toVar();
               const sampleDepthY = sampleDepth(sampleScreenPositionY).toVar();
-              const sampleSceneViewPositionY = getViewPosition(
+              const sampleSceneViewPositionY = getViewPositionFast(
                 sampleScreenPositionY,
                 sampleDepthY,
-                uProjInv as unknown as Parameters<typeof getViewPosition>[2],
+                uProjInv as unknown as Node,
               ).toVar();
               const viewDeltaY = sampleSceneViewPositionY.sub(viewPosition).toVar();
               const offTexelY = dot(
@@ -291,7 +374,7 @@ export function gtaoLayer(
         },
       );
 
-      ao.assign(clamp(ao.div(DIRECTIONS as unknown as NF), 0, 1));
+      ao.assign(clamp(ao.div(float(DIRECTIONS)), 0, 1));
       ao.assign(pow(ao, uScale as unknown as NF));
       result.assign(ao);
     });

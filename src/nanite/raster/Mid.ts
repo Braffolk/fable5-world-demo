@@ -20,9 +20,7 @@ import { Fn, float, uint } from 'three/tsl';
 import { IndirectStorageBufferAttribute } from 'three/webgpu';
 import type { NB, NF, NI, NU } from '../../gpu/TSLTypes';
 import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK } from '../GeometryRegistry';
-import { DISPATCH_ROW } from '../NaniteCommon';
 import {
-  aLoadU,
   bcU2F,
   bcU2I,
   elemU,
@@ -35,7 +33,7 @@ import {
   sU32Views,
   toF,
   toI,
-  wgLinear,
+  wgLinearDyn,
 } from '../Tsl';
 import { depthKey24 } from './VisBuffer';
 import { canonVertSlot } from './Project';
@@ -81,12 +79,13 @@ export function buildMid(p: {
   } = p;
   if (!(midQueueV && midDrawAttr && projVertV && clusterCtxV)) return null;
   const kn = Fn(() => {
-    // 2-D dispatch (nanMidArgs split): linear record index = wgLinear·64 + localX.
-    const i = wgLinear(DISPATCH_ROW).mul(uint(64)).add(localX()).toVar();
+    // 2-D dispatch (nanMidArgs balanced split): linear record index uses the LIVE grid
+    // width from the indirect args (wgLinearDyn), matching kMidArgs' x=ceil(wg/y) grid.
+    // Queue reads are non-atomic: appends happened in world1 (a prior pass — RAW across a
+    // pass boundary), this consumer never writes midQueue, so bind the read-only view only.
+    const i = wgLinearDyn().mul(uint(64)).add(localX()).toVar();
     returnIf(
-      i.greaterThanEqual(
-        minU(aLoadU(midQueueV.atomic.element(0)), uint(MID_CAP)),
-      ),
+      i.greaterThanEqual(minU(elemU(midQueueV.ro, uint(0)), uint(MID_CAP))),
     );
     // 1-u32 record = the tri id (payload). Decode (itemIdx, localTri) — the SAME split the
     // resolve + world1 use — then read the 3 pre-projected corners from projVertBuf via
@@ -94,9 +93,7 @@ export function buildMid(p: {
     // MID_STRIDE===1 ⇒ the record index is just `i`; emit it directly so the hot index
     // path carries no dead `*1u` (a general fallback keeps other strides correct).
     const recOff = (MID_STRIDE === 1 ? i : i.mul(uint(MID_STRIDE))) as unknown as NU;
-    const pay = aLoadU(
-      midQueueV.atomic.element(uint(1).add(recOff)),
-    ).toVar();
+    const pay = elemU(midQueueV.ro, uint(1).add(recOff)).toVar();
     const itemIdx = pay.shiftRight(uint(CLUSTER_TRI_BITS)).toVar();
     const localTri = pay.bitAnd(uint(CLUSTER_TRI_MASK)).toVar();
     const recCluster = itemIdx.mul(uint(vertsPerCluster)).toVar();

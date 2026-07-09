@@ -199,15 +199,18 @@ export function buildQueues(p: {
           const kn = Fn(() => {
             const n = minU(aLoadU(midQueueV.atomic.element(0)), uint(MID_CAP));
             const wg = n.add(uint(63)).div(uint(64));
-            midDrawBuf.element(0).assign(minU(wg, uint(DISPATCH_ROW)));
-            midDrawBuf
-              .element(1)
-              .assign(
-                maxU(
-                  wg.add(uint(DISPATCH_ROW - 1)).div(uint(DISPATCH_ROW)),
-                  uint(1),
-                ),
-              );
+            // Balanced grid: y=ceil(wg/65535), x=ceil(wg/y) ⇒ overshoot < y workgroups.
+            // The old min(wg,65535)×ceil grid dispatched up to ~2× ghost threads once
+            // wg > 65535 (mid > 4.19M tris — exactly the dense-forest worst pose), each
+            // paying the full prologue + an atomic count-load before returning. The
+            // consumer must index with the LIVE grid width (wgLinearDyn), not 65535.
+            const gy = maxU(
+              wg.add(uint(DISPATCH_ROW - 1)).div(uint(DISPATCH_ROW)),
+              uint(1),
+            );
+            const gx = wg.add(gy).sub(uint(1)).div(gy);
+            midDrawBuf.element(0).assign(gx);
+            midDrawBuf.element(1).assign(gy);
             midDrawBuf.element(2).assign(uint(1));
           })().compute(1, [1]);
           (kn as unknown as ComputeKernel).setName('nanMidArgs');

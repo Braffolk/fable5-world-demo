@@ -1652,6 +1652,31 @@ export class GeometryRegistry {
       dArr[db + 11] = bitsF32(hier.childCount[c] as number);
     }
 
+    // PERF-3 (stage 1): vcompact records for the appended DAG clusters. populateVCompact
+    // ran ONCE over boot clusters only, so without this every post-build DAG cluster (all
+    // veg trunk DAGs + the entire crown-LOD ladder) takes the per-corner projection
+    // fallback — the majority of worst-pose visible clusters.
+    // ⚠️ ANCHOR INVARIANT: the projection's unique-vert writer enumerates verts from
+    // vcMin, but ALL readers (canonVertSlot) compute slot = vi − indices[triStart*3] —
+    // the FIRST corner, not the min. Boot clusters get first-corner==min from
+    // meshletizeDag; DAG clusters carry NO such guarantee. So anchor the record at the
+    // reader's vBase: store (vBase, mx−vBase+1), and stay 0 (per-corner fallback) if any
+    // vi < vBase (the reader's subtraction would wrap) or the anchored window > cache.
+    let vcCached = 0;
+    for (let c = 0; c < cCount; c++) {
+      const dc = dag.clusters[c] as DagCluster;
+      if (dc.triCount === 0) continue;
+      const vBase0 = iArr[(tBase + dc.triStart) * 3] ?? 0;
+      const { mn, count } = this.vcompactSpan(iArr, tBase + dc.triStart, dc.triCount);
+      const width = mn + count - vBase0; // mx − vBase + 1
+      if (mn >= vBase0 && count > 0 && width <= VCACHE_VERTS) {
+        this.vcompactArr[(cBase + c) * 2] = vBase0;
+        this.vcompactArr[(cBase + c) * 2 + 1] = width;
+        vcCached++;
+      }
+    }
+    console.log(`[laas][vcompact] attachDag ${entry.label}: cached ${vcCached}/${cCount} DAG clusters`);
+
     this.vertCursor += vCount;
     this.triCursor += tCount;
     this.clusterCursor += cCount;
@@ -1689,6 +1714,7 @@ export class GeometryRegistry {
     this.pushRange(this.vertsAttr, vBase * VERT_WORDS, vCount * VERT_WORDS);
     this.pushRange(this.idxAttr, tBase * 3, tCount * 3);
     this.pushRange(this.clusterAttr, cBase * CLUSTER_WORDS, cCount * CLUSTER_WORDS);
+    this.pushRange(this.vcompactAttr, cBase * 2, cCount * 2);
     this.pushRange(this.dagAttr, cBase * DAG_WORDS, cCount * DAG_WORDS);
     this.pushRange(this.dagLinksAttr, linkBase, rootCount + childTotal);
     this.pushRange(this.meshAttr, entry.handle * MESH_WORDS, MESH_WORDS);
@@ -2324,6 +2350,29 @@ export class GeometryRegistry {
    *  fallback. Window-grid heightfield clusters (isHF && !isDAG) have NO index buffer
    *  (triStart packs gx|gz) ⇒ skipped. Streamed terrain tiles attach POST-build ⇒ stay 0
    *  (their DAG index ranges are wide anyway — 40% > 1024). */
+  /** Global-index span of a cluster's triangles as [mn, count] (count = max−min+1,
+   *  the unique-vertex window width). Caller writes vcompactArr only when
+   *  0 < count ≤ VCACHE_VERTS; a wider span stays 0 = per-thread projection fallback.
+   *  Shared by populateVCompact (boot clusters) and attachDag (post-build DAG clusters)
+   *  so both cache the SAME window semantics. `globalTriStart` is the cluster's word-6
+   *  global triStart; indices are already rebased onto the appended vertex block. */
+  private vcompactSpan(
+    idx: Uint32Array,
+    globalTriStart: number,
+    triCount: number,
+  ): { mn: number; count: number } {
+    let mn = 0xffffffff;
+    let mx = 0;
+    for (let t = 0; t < triCount; t++) {
+      for (let v = 0; v < 3; v++) {
+        const vi = idx[(globalTriStart + t) * 3 + v] ?? 0;
+        if (vi < mn) mn = vi;
+        if (vi > mx) mx = vi;
+      }
+    }
+    return { mn, count: mx - mn + 1 };
+  }
+
   private populateVCompact(): void {
     const idx = this.idxArr;
     const cl = this.clusterArr;
@@ -2340,16 +2389,7 @@ export class GeometryRegistry {
       const isDAG = (flags & CLUSTER_FLAG_DAG) !== 0;
       if (triCount === 0 || (isHF && !isDAG)) continue;
       eligible++;
-      let mn = 0xffffffff;
-      let mx = 0;
-      for (let t = 0; t < triCount; t++) {
-        for (let v = 0; v < 3; v++) {
-          const vi = idx[(triStart + t) * 3 + v] ?? 0;
-          if (vi < mn) mn = vi;
-          if (vi > mx) mx = vi;
-        }
-      }
-      const count = mx - mn + 1;
+      const { mn, count } = this.vcompactSpan(idx, triStart, triCount);
       if (count > 0 && count <= VCACHE_VERTS) {
         this.vcompactArr[c * 2] = mn;
         this.vcompactArr[c * 2 + 1] = count;

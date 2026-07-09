@@ -30,6 +30,7 @@ import type { PerspectiveCamera } from 'three';
 import { StorageBufferAttribute, StorageTexture, type Renderer } from 'three/webgpu';
 import {
   Break,
+  Continue,
   Fn,
   If,
   atan,
@@ -64,6 +65,7 @@ import {
   bcF2U,
   bcU2F,
   dispatch,
+  elemU,
   loopUN,
   packHalfU,
   returnIf,
@@ -158,8 +160,16 @@ const RAY_SHELL_H = 1.5; // max blade reach above ground (incl. mid-card 2× + w
 // roundtrips could canonicalize mask NaN bit patterns).
 const GUIDE_SUB = 8; // fine cells per texel edge
 const GUIDE_PITCH = CELL * GUIDE_SUB; // 0.84 m
-const GUIDE_RES = Math.max(384, Math.ceil(((RAY_END + 4) * 2) / GUIDE_PITCH)); // ≥ ray reach
+/** L2 coarse guide level (kRay's two-level walk): 4×4 texels per coarse cell
+ *  (3.36 m). One R32F max-sward-top word per cell lets a horizontal eye ray
+ *  answer 16 texels with ONE dependent load where it provably passes above. */
+const COARSE_SUB = 4;
+// ≥ ray reach, padded to a whole number of coarse cells (default stays 384)
+const GUIDE_RES =
+  Math.ceil(Math.max(384, Math.ceil(((RAY_END + 4) * 2) / GUIDE_PITCH)) / COARSE_SUB) * COARSE_SUB;
 const GUIDE_N = GUIDE_RES * GUIDE_RES; // 384² = 147k texels ≈ 3.5 MB total
+const COARSE_RES = GUIDE_RES / COARSE_SUB; // 96 cells over the default window
+const COARSE_N = COARSE_RES * COARSE_RES; // 96² × 4 B ≈ 37 KB
 const NEAR_EPS = 1e-4;
 
 /** continuous distance thinning, conserved by widening (GroundRing verbatim) */
@@ -395,6 +405,15 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
   guideMaskAttr.name = 'grassGuideMask';
   const guideMaskW = sU32Views(guideMaskAttr, mWords);
   const guideMask2 = sUvec2(guideMaskAttr, GUIDE_N);
+  // L2 coarse max-top: per 4×4-texel cell, max(ground + topOut) over its 16
+  // children (empty texels have topOut 0 ⇒ contribute ground alone) — an f32
+  // bitcast in one u32 word each (~37 KB). Rebuilt by kGuideCoarse right after
+  // every kGuideBake: the bake rewrites the WHOLE window each frame (indices
+  // are window-local, no ring scroll), so a full-grid reduce always aggregates
+  // exactly the window the march walks.
+  const coarseAttr = new StorageBufferAttribute(new Uint32Array(COARSE_N), 1);
+  coarseAttr.name = 'grassGuideCoarse';
+  const guideCoarse = sU32Views(coarseAttr, COARSE_N);
   /** guide origin = fine-cell index of texel (0,0)'s first cell, snapped to the
    *  8-cell texel grid — mask bits stay congruent with WORLD cells (the field is
    *  world-anchored, only the window moves). Integer-valued floats, exact ≤ 2^23. */
@@ -618,6 +637,38 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
       ).toWriteOnly();
     })().compute(GUIDE_N, [256]);
     (k as unknown as { setName(n: string): void }).setName('grassGuide');
+    return k;
+  })();
+
+  /** L2 reduce: coarse cell = max over its 16 texels of the EXACT per-texel
+   *  sward top the march tests (same packed ctx words: ground f32 bitcast +
+   *  topOut half — so the coarse bound can never round below a fine value it
+   *  must dominate). O(COARSE_N) ≈ 9k threads, negligible next to the bake. */
+  const kGuideCoarse = ((): unknown => {
+    const k = Fn(() => {
+      returnIf((uOn as unknown as NF).lessThan(0.5) as unknown as NB);
+      const i = instanceIndex;
+      returnIf(i.greaterThanEqual(uint(COARSE_N)));
+      const cx = i.mod(uint(COARSE_RES));
+      const cz = i.div(uint(COARSE_RES));
+      const mx = float(-1e9).toVar() as unknown as NF;
+      loopUN('gcv', uint(0), uint(COARSE_SUB), (v) => {
+        loopUN('gcu', uint(0), uint(COARSE_SUB), (u) => {
+          // GUIDE_RES is a COARSE_SUB multiple ⇒ children always in range
+          const ti = cz
+            .mul(uint(COARSE_SUB))
+            .add(v)
+            .mul(uint(GUIDE_RES))
+            .add(cx.mul(uint(COARSE_SUB)).add(u)) as unknown as NU;
+          const cv = guideCtx4.element(ti);
+          const g = bcU2F(cv.x) as unknown as NF;
+          const topOut = unpackHalfU(cv.z).x as unknown as NF;
+          (mx as unknown as { assign(v: unknown): void }).assign(mx.max(g.add(topOut)));
+        });
+      });
+      guideCoarse.rw.element(i).assign(bcF2U(mx));
+    })().compute(COARSE_N, [256]);
+    (k as unknown as { setName(n: string): void }).setName('grassGuideCoarse');
     return k;
   })();
 
@@ -871,6 +922,11 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
         .greaterThanEqual(0)
         .select(rd.z.max(1e-6), rd.z.min(-1e-6))
         .toVar() as unknown as NF;
+      // L2 walk state: the ONE currently-descended coarse cell. tCur is
+      // monotone along a straight ray ⇒ a left cell is never re-entered, so a
+      // single index doubles as the level flag (0xffffffff = coarse level) —
+      // the only loop-carried addition; all coarse temps live inside the loop.
+      const cCur = uint(0xffffffff).toVar() as unknown as NU;
       loopUN('gro', uint(0), uint(256), () => {
         If(tCur.greaterThanEqual(tEnd).or(tCur.greaterThan(tBest.add(0.3))), () => {
           Break();
@@ -892,6 +948,59 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
           .floor()
           .clamp(0, GUIDE_RES - 1)
           .toVar() as unknown as NF;
+        // ---- L2 coarse gate: entering a NEW coarse cell costs ONE dependent
+        // load answering all 16 texels; inside a descended cell the fine walk
+        // below runs with zero added loads (one uint compare).
+        const cxf = txf.mul(1 / COARSE_SUB).floor().toVar() as unknown as NF;
+        const czf = tzf.mul(1 / COARSE_SUB).floor().toVar() as unknown as NF;
+        const ci = uint(czf.mul(COARSE_RES).add(cxf)).toVar() as unknown as NU;
+        If(ci.notEqual(cCur), () => {
+          const cTop = bcU2F(elemU(guideCoarse.ro, ci)).toVar() as unknown as NF;
+          // coarse cell exit t (3.36 m world grid anchored at the guide origin)
+          const cbx = gfx
+            .add(
+              cxf
+                .add(rd.x.greaterThanEqual(0).select(float(1), float(0)))
+                .mul(GUIDE_SUB * COARSE_SUB),
+            )
+            .mul(CELL) as unknown as NF;
+          const cbz = gfz
+            .add(
+              czf
+                .add(rd.z.greaterThanEqual(0).select(float(1), float(0)))
+                .mul(GUIDE_SUB * COARSE_SUB),
+            )
+            .mul(CELL) as unknown as NF;
+          const cEx = cbx
+            .sub(ro.x)
+            .div(sdx)
+            .min(cbz.sub(ro.z).div(sdz))
+            .max(tCur.add(1e-3))
+            .toVar() as unknown as NF; // always progress
+          const cExC = cEx.min(tEnd) as unknown as NF;
+          const rayYminC = ro.y.add(
+            rd.y.mul(rd.y.lessThan(0).select(cExC, tCur)),
+          ) as unknown as NF;
+          // SKIP IS CONSERVATIVE: cTop = max over the cell's texels of the exact
+          // per-texel `ground+ta.x` the fine test compares against (same packed
+          // words, max'd in kGuideCoarse), and ray Y is linear in t ⇒ its min
+          // over any texel sub-span ⊆ [tCur, cExC] is ≥ its min over the full
+          // span; so rayYminC > cTop ⇒ every texel in the cell passes its own
+          // fine skip test — only texels the ray provably misses are skipped.
+          If(rayYminC.greaterThan(cTop), () => {
+            // beyond the exit: the fine skip's terrain-Lipschitz jump, vs cTop —
+            // cTop ≥ every texel-center ground here (topOut ≥ 0), a HIGHER
+            // reference than the fine path's local ground ⇒ never jumps farther
+            // than the fine walk would from any texel of this cell
+            const headC = pos.y.sub(cTop).sub(MAXTOP) as unknown as NF;
+            tCur.assign(cEx.add(1e-3).max(tCur.add(headC.max(0).div(1.4))));
+          }).Else(() => {
+            cCur.assign(ci); // descend — the unchanged fine walk owns this cell
+          });
+        });
+        If(ci.notEqual(cCur), () => {
+          Continue(); // coarse-skipped: re-enter the coarse walk at the new tCur
+        });
         const ti = uint(tzf.mul(GUIDE_RES).add(txf)).toVar() as unknown as NU;
         const cv = guideCtx4.element(ti);
         const ground = bcU2F(cv.x).toVar() as unknown as NF;
@@ -1554,6 +1663,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
     // timers clean (batched compute overlaps the render passes and smears their
     // timestamps; the whole-frame A/B is the ground truth either way)
     dispatch(renderer, kGuideBake);
+    dispatch(renderer, kGuideCoarse); // L2 reduce of this frame's ctx (kRay's coarse walk)
     if (kGuideLight) dispatch(renderer, kGuideLight); // reads this frame's ctx
     dispatch(renderer, kRay);
   };

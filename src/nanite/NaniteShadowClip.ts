@@ -99,7 +99,6 @@ import {
   bcU2F,
   dispatch,
   dispatchBatchMixed,
-  dispatchIndirect,
   elemU,
   elemUW,
   localX,
@@ -1226,18 +1225,12 @@ export function buildNaniteShadowClip(
       if (shVox) dispatch(renderer, voxSplatKernels[k] as never);
       // P3b (?shvox2, DEFAULT OFF): the PROVEN vox crown caster — atomicMin the
       // matClass-7 bricks' sun-facing depth into the shared vis buffer AFTER the tri
-      // depth (SW+HW) and BEFORE kCopy publishes it. dispatchIndirect WITH EXPLICIT
-      // ARGS = kVoxScatter's every-frame re-dispatch pattern (NOT kSplat's tag-only
-      // plain dispatch that runs once). Separate submit ⇒ serialized after hwDepth,
-      // before the kCopy submit — atomicMin is order-free vs the tri depth either way.
-      if (shVox2) {
-        dispatchIndirect(
-          renderer,
-          voxCasterKernels[k] as never,
-          clipCull.queue.rasterDispatchAttr,
-        );
-      }
-      dispatchBatchMixed(renderer, [lv.kCopy]);
+      // depth (SW+HW) and BEFORE kCopy publishes it. The caster is indirect-tagged at
+      // BUILD time (setIndirectDispatch, ~line 868) so it folds into the post-HW batch
+      // as a regular batch element — kCaster→kCopy order preserved in-batch, one submit
+      // instead of two (moving-frame serialization-bubble cut). atomicMin is order-free
+      // vs the tri depth, and the pass's UAV auto-sync keeps caster→kCopy RAW ordered.
+      dispatchBatchMixed(renderer, shVox2 ? [voxCasterKernels[k], lv.kCopy] : [lv.kCopy]);
     }
   };
 

@@ -1,0 +1,75 @@
+{
+  "at": "2026-07-09T18:24:17.951Z",
+  "args": {
+    "base": "http://localhost:5173/?scene=world&nanite=1&dpr=1&nanodisp=1&clhwmax=32&grass=0&nanshadow=0&ksplit=1&fp16w=1&ctxsm=1&cam=-582.1,302.4,1006.1,2.5692,-0.0077",
+    "alt": "http://localhost:5173/?scene=world&nanite=1&dpr=1&nanodisp=1&clhwmax=32&grass=0&nanshadow=0&ksplit=1&fp16w=1&ctxsm=1&cam=-582.1,302.4,1006.1,2.5692,-0.0077&middz=1",
+    "cycles": 1,
+    "warmup": 3,
+    "sample": 5,
+    "port": 5173,
+    "headed": false
+  },
+  "readings": [
+    {
+      "index": 0,
+      "cycle": 0,
+      "arm": "A",
+      "url": "http://localhost:5173/?scene=world&nanite=1&dpr=1&nanodisp=1&clhwmax=32&grass=0&nanshadow=0&ksplit=1&fp16w=1&ctxsm=1&cam=-582.1,302.4,1006.1,2.5692,-0.0077",
+      "failed": false,
+      "p50": 24.60000000000582,
+      "p95": 25.5,
+      "frames": 228,
+      "meanFps": 45.59726416415012,
+      "thermBefore": {
+        "limit": 100,
+        "throttled": false,
+        "at": "2026-07-09T18:22:18.464Z"
+      },
+      "thermAfter": {
+        "limit": 100,
+        "throttled": false,
+        "at": "2026-07-09T18:23:40.566Z"
+      },
+      "throttledAt": null,
+      "error": null
+    },
+    {
+      "index": 1,
+      "cycle": 0,
+      "arm": "B",
+      "url": "http://localhost:5173/?scene=world&nanite=1&dpr=1&nanodisp=1&clhwmax=32&grass=0&nanshadow=0&ksplit=1&fp16w=1&ctxsm=1&cam=-582.1,302.4,1006.1,2.5692,-0.0077&middz=1",
+      "failed": false,
+      "p50": 24.5,
+      "p95": 25.26000000000349,
+      "frames": 235,
+      "meanFps": 47,
+      "thermBefore": {
+        "limit": 100,
+        "throttled": false,
+        "at": "2026-07-09T18:23:40.579Z"
+      },
+      "thermAfter": {
+        "limit": 100,
+        "throttled": false,
+        "at": "2026-07-09T18:24:17.669Z"
+      },
+      "throttledAt": null,
+      "error": null
+    }
+  ],
+  "perCycleDeltas": [
+    {
+      "cycle": 0,
+      "p95Delta": -0.23999999999650967,
+      "p50Delta": -0.10000000000582077,
+      "throttled": false
+    }
+  ],
+  "summary": {
+    "medianP95A": 25.5,
+    "medianP95B": 25.26000000000349,
+    "medianP95Delta": -0.23999999999650967,
+    "verdict": "WASH — B within ±3% of A on median per-cycle p95 delta (-0.9%)",
+    "anyThrottled": false
+  }
+}

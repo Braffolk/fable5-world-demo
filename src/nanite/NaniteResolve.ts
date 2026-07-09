@@ -548,8 +548,24 @@ export function buildNaniteResolve(
     // up-normal) reaching the select changes nothing ⇒ BIT-IDENTICAL. Mirrors the
     // isR/isBD/isL gating. (roughnessNode was computed-then-void'd/unused — dropped.)
     const camPos = vec3(cam.camPos) as unknown as NV3;
-    const terrainCol = vec3(0.3).toVar() as unknown as NV3;
-    const terrainNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
+    // SHARED shading accumulators (P1 accumulator restructure): ONE live triplet
+    // (+ backlight source/strength) in place of six per-class output Vars that
+    // stayed live from their branch to a tail nested-select mux (~35-40 f32 of
+    // forced cross-branch liveness — the register wall). Init = the innermost
+    // fall-through the old mux resolved to when NO class matched: palette albedo,
+    // up-normal, ao 1, no backlight. Each class If() below ASSIGNS these and its
+    // internal state then dies at the branch close.
+    // OUTPUT-IDENTITY: matClass is single-valued and the class If() guards are
+    // mutually exclusive, so exactly ONE assigns per legit pixel — bit-identical
+    // to the old isT.select(isR.select(...)) chain. Classes whose subgraph is not
+    // built are unreachable per RP-1 (their guard can never fire). wNormal is
+    // uniform (every old class-normal default was up), so its init covers every
+    // fall-through. blCol/blK fold the old blSrc/blGate/kBl backlight selects.
+    const albedo = vec3(0.35, 0.33, 0.3).toVar() as unknown as NV3;
+    const wNormal = vec3(0, 1, 0).toVar() as unknown as NV3;
+    const ao = float(1).toVar() as unknown as NF;
+    const blCol = vec3(0).toVar() as unknown as NV3;
+    const blK = float(0).toVar() as unknown as NF;
     // The ROCK/BARK/LEAF material branches re-fetch the cluster triangle (gpu.verts /
     // gpu.indices) — the tri-only buffers the 'vox' pass must NOT bind. Each of those three
     // If() blocks is therefore guarded by `pass === 'tri'` below: in the 'vox' pass they would
@@ -587,8 +603,8 @@ export function buildNaniteResolve(
         wetCol = mix(wetCol, wetCol.mul(vec3(0.72, 0.86, 0.55)), biofilm.mul(0.65)) as unknown as NV3;
         tc = wetCol.mul(caust.mul(1.7).add(1)) as unknown as NV3;
       }
-      terrainCol.assign(tc);
-      terrainNrm.assign(shading.worldNormalNode);
+      albedo.assign(tc);
+      wNormal.assign(shading.worldNormalNode);
     });
 
     // ---- ROCK shading (N4-C2): re-fetch the cluster triangle, barycentric-
@@ -596,9 +612,6 @@ export function buildNaniteResolve(
     // ported rockMaterial. Gated on isR so terrain (heightfield clusters, no
     // explicit verts) never enters the explicit-mesh fetch.
     const isR = matClass.equal(uint(1)).toVar();
-    const rockCol = vec3(0.3).toVar() as unknown as NV3;
-    const rockNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
-    const rockAo = float(1).toVar() as unknown as NF;
     if (pass !== 'vox' && hasClass(1)) If(isR, () => {
       const instId = item.x;
       const localTri = pRaw.bitAnd(uint(CLUSTER_TRI_MASK));
@@ -622,9 +635,9 @@ export function buildNaniteResolve(
           .add(instRotateDir(ctx.yawSc, c.nrm).mul(bw.z)),
       ) as unknown as NV3;
       const rk = rockShade(dv, wp, nrm);
-      rockCol.assign(rk.albedo);
-      rockNrm.assign(nrm);
-      rockAo.assign(rk.ao);
+      albedo.assign(rk.albedo);
+      wNormal.assign(nrm);
+      ao.assign(rk.ao);
     });
 
     // ---- BARK + DEADWOOD shading (N4-C3): textured trunks/snags. Same
@@ -637,9 +650,6 @@ export function buildNaniteResolve(
     const isB = matClass.equal(uint(2)).toVar();
     const isD = matClass.equal(uint(3)).toVar();
     const isBD = isB.or(isD).toVar();
-    const barkCol = vec3(0.3).toVar() as unknown as NV3;
-    const barkNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
-    const barkAo = float(1).toVar() as unknown as NF;
     if (pass !== 'vox' && world.barkTexA && world.barkTexB && (hasClass(2) || hasClass(3))) {
       const barkTexA = world.barkTexA;
       const barkTexB = world.barkTexB;
@@ -715,9 +725,9 @@ export function buildNaniteResolve(
         const layer = int(fetch.meshWord(ctx.meshId, 7).bitAnd(uint(0xff)));
         // ?nanbark=const — flat brown, no texture (fetch/branch sanity)
         if (nanbark === 'const') {
-          barkCol.assign(vec3(0.4, 0.25, 0.13) as unknown as NV3);
-          barkNrm.assign(gnrm);
-          barkAo.assign(float(1) as unknown as NF);
+          albedo.assign(vec3(0.4, 0.25, 0.13) as unknown as NV3);
+          wNormal.assign(gnrm);
+          ao.assign(float(1) as unknown as NF);
           return;
         }
         // ?nanbark=lN — force mip level N (inspect the generated chain)
@@ -794,9 +804,9 @@ export function buildNaniteResolve(
           h1,
         ) as unknown as NV3;
         const tintVal = h2.mul(tK * 1.6).add(1 - tK * 0.8);
-        barkCol.assign((isD.select(deadAlb, barkAlb) as unknown as NV3).mul(warmCool).mul(tintVal));
-        barkNrm.assign(pert);
-        barkAo.assign(tA.w as unknown as NF);
+        albedo.assign((isD.select(deadAlb, barkAlb) as unknown as NV3).mul(warmCool).mul(tintVal));
+        wNormal.assign(pert);
+        ao.assign(tA.w as unknown as NF);
       });
     }
 
@@ -807,8 +817,6 @@ export function buildNaniteResolve(
     // Same explicit-mesh fetch as bark, minus UV/TBN/texture (leaves have no detail
     // map). The geometric normal is FLIPPED to face the camera (two-sided lighting).
     const isL = matClass.equal(uint(4)).toVar();
-    const leafCol = vec3(0.1, 0.2, 0.08).toVar() as unknown as NV3;
-    const leafNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
     if (pass !== 'vox' && hasClass(4)) If(isL, () => {
       const instId = item.x;
       const localTri = pRaw.bitAnd(uint(CLUSTER_TRI_MASK));
@@ -843,7 +851,7 @@ export function buildNaniteResolve(
           .mul(k.clamp(0, 1))
           .add(base.mul(vec3(0.7, 0.95, 1.25)).mul(k.negate().clamp(0, 1)))
           .add(base.mul(float(1).sub(k.abs()))) as unknown as NV3;
-        leafCol.assign(tintedHue.mul(dv.w.mul(0.8).add(0.2)) as unknown as NV3);
+        albedo.assign(tintedHue.mul(dv.w.mul(0.8).add(0.2)) as unknown as NV3);
         // instance-rotated geometric normal, flipped to face the camera (two-sided)
         const gnrm = normalize(
           instRotateDir(ctx.yawSc, va.nrm)
@@ -852,7 +860,7 @@ export function buildNaniteResolve(
             .add(instRotateDir(ctx.yawSc, vc.nrm).mul(bw.z)),
         ) as unknown as NV3;
         const toCam = normalize(camPos.sub(wp)) as unknown as NV3;
-        leafNrm.assign(dot(gnrm, toCam).lessThan(0).select(gnrm.negate(), gnrm) as unknown as NV3);
+        wNormal.assign(dot(gnrm, toCam).lessThan(0).select(gnrm.negate(), gnrm) as unknown as NV3);
       };
       if (resFarDist > 0 || leafCheapAll) {
         // ?resfar cheap FAR-leaf path (beyond resfar·0.6 ≈ 36 m by default; the voxel band
@@ -869,12 +877,15 @@ export function buildNaniteResolve(
           const yawSc = instYaw(B);
           const gn = normalize(instRotateDir(yawSc, va.nrm)) as unknown as NV3;
           const toCam = normalize(camPos.sub(wp)) as unknown as NV3;
-          leafNrm.assign(dot(gn, toCam).lessThan(0).select(gn.negate(), gn) as unknown as NV3);
-          leafCol.assign(base.mul(0.68) as unknown as NV3);
+          wNormal.assign(dot(gn, toCam).lessThan(0).select(gn.negate(), gn) as unknown as NV3);
+          albedo.assign(base.mul(0.68) as unknown as NV3);
         }).Else(fullLeaf);
       } else {
         fullLeaf();
       }
+      // leaf backlight source (old blSrc=leafCol / kBl=0.032) — dies at branch close.
+      blCol.assign(albedo);
+      blK.assign(float(0.032));
     });
 
     // ---- GRASS shading (S0, 31-grass-plan §5): matClass 5 — the GroundRing blade
@@ -917,9 +928,6 @@ export function buildNaniteResolve(
       return mix(hx, hy, u.y) as unknown as NV2;
     };
     const isG = matClass.equal(uint(5)).toVar();
-    const grassCol = vec3(0.04, 0.09, 0.02).toVar() as unknown as NV3;
-    const grassNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
-    const grassTip = float(0.5).toVar() as unknown as NF;
     if (pass !== 'vox' && hasClass(5)) If(isG, () => {
       const instId = item.x;
       const localTri = pRaw.bitAnd(uint(CLUSTER_TRI_MASK));
@@ -967,7 +975,7 @@ export function buildNaniteResolve(
         texture(hf.normalTex, hf.uvFromWorld(wp.xz as unknown as NV2), 0) as unknown as NV4
       ).xyz.normalize() as unknown as NV3;
       const upK = smoothstep(8, 70, distG).mul(0.35).add(0.5) as unknown as NF;
-      grassNrm.assign(normalize(mix(nF, tNrm, upK)) as unknown as NV3);
+      wNormal.assign(normalize(mix(nF, tNrm, upK)) as unknown as NV3);
       const fresh = mix(
         vec3(0.02, 0.062, 0.011),
         vec3(0.065, 0.148, 0.028),
@@ -986,8 +994,12 @@ export function buildNaniteResolve(
       let alb = mix(fresh, dryC, dryK) as unknown as NV3;
       alb = alb.mul(patchY.sub(0.5).mul(0.4).add(1)) as unknown as NV3;
       alb = mix(alb, vec3(0.018, 0.052, 0.014) as unknown as NV3, cov.mul(0.55)) as unknown as NV3;
-      grassCol.assign(alb);
-      grassTip.assign(t);
+      albedo.assign(alb);
+      // grass tip-AO + tip-weighted backlight (old grassAo(grassTip) consumer and
+      // blSrc=grassCol / kBl=grassTip·0.09) folded in — grassTip state dies here.
+      ao.assign(smoothstep(0.0, 0.55, t).mul(0.55).add(0.45));
+      blCol.assign(alb);
+      blK.assign((t as unknown as NF).mul(0.09) as unknown as NF);
     });
 
     // ---- VOXEL shading (Stage 2 §7.2): matClass=voxel(7). The SECOND resolve pass shades
@@ -1008,10 +1020,20 @@ export function buildNaniteResolve(
     // default otherwise) — never gray. The 'tri' pass is unchanged (its grass/debris
     // fall-through still uses `palette`; voxel pixels were already Discarded there).
     const isVox = matClass.equal(uint(7)).toVar();
-    const voxCol = vec3(0.1, 0.2, 0.08).toVar() as unknown as NV3;
-    const voxNrm = vec3(0, 1, 0).toVar() as unknown as NV3;
     if (pass !== 'tri' && cull.qVoxRasterRO) {
-      If(isVox, () => {
+      // Non-tri passes: every surviving pixel is a bit31 voxel winner (old
+      // isVoxDefault == isV). SEED the dark-green foliage default albedo + the
+      // voxel-tier backlight (blCol=voxCol default, blK=0.032) so a stale id
+      // decoding matClass!=7 still reads FOLIAGE, never gray (the GRAY-SLAB fix).
+      // wNormal is NOT reseeded — its init is already the up-normal the old
+      // voxNrmDefault fell through to. The clean matClass==7 decode overrides
+      // inside. An isV==0 pixel skips this block entirely, so its own class If
+      // keeps priority — exactly the old isVoxDefault.select fall-through.
+      If(isV.equal(uint(1)), () => {
+        albedo.assign(vec3(0.1, 0.2, 0.08) as unknown as NV3);
+        blCol.assign(vec3(0.1, 0.2, 0.08) as unknown as NV3);
+        blK.assign(float(0.032));
+        If(isVox, () => {
         // ?voxao= (default ON): the per-brick DIRECTIONAL self-shading. Decode the BAKED brick-mean
         // normal, rotate by instance yaw, flip camera-ward — it then drives the sun N·L + ambient
         // floor below, giving the darkening on faces angled away from the sun. =0 SKIPS this block
@@ -1060,9 +1082,9 @@ export function buildNaniteResolve(
             const blend = normalize(
               gn.mul(1 - voxBeadK).add(bead.mul(voxBeadK)),
             ) as unknown as NV3;
-            voxNrm.assign(dot(blend, toCamV).lessThan(0).select(blend.negate(), blend) as unknown as NV3);
+            wNormal.assign(dot(blend, toCamV).lessThan(0).select(blend.negate(), blend) as unknown as NV3);
           } else {
-            voxNrm.assign(dot(gn, toCamV).lessThan(0).select(gn.negate(), gn) as unknown as NV3);
+            wNormal.assign(dot(gn, toCamV).lessThan(0).select(gn.negate(), gn) as unknown as NV3);
           }
           // (the earlier 30% sunward normal wrap was REPLACED by proper WRAP LIGHTING on
           // the sun term below — bending the normal also skewed the ambient hemisphere
@@ -1081,9 +1103,9 @@ export function buildNaniteResolve(
             // washing out into uniformly-lit pale plates (user report, w6-oblique).
             const mFlags = fetch.meshWord(meshId, 6).shiftRight(uint(16)).bitAnd(uint(0xff));
             If(mFlags.bitAnd(uint(MESH_FLAG_FARTILE)).notEqual(uint(0)), () => {
-              const upK = float(ftNrmK).mul(voxNrm.y.clamp(0, 1));
-              voxNrm.assign(
-                normalize(mix(voxNrm, vec3(0, 1, 0) as unknown as NV3, upK)) as unknown as NV3,
+              const upK = float(ftNrmK).mul(wNormal.y.clamp(0, 1));
+              wNormal.assign(
+                normalize(mix(wNormal, vec3(0, 1, 0) as unknown as NV3, upK)) as unknown as NV3,
               );
             });
           }
@@ -1098,7 +1120,7 @@ export function buildNaniteResolve(
             toF(albWord.shiftRight(uint(8)).bitAnd(uint(0xff))),
             toF(albWord.shiftRight(uint(16)).bitAnd(uint(0xff))),
           ).div(255) as unknown as NV3;
-          voxCol.assign(bAlb.mul(0.8) as unknown as NV3);
+          albedo.assign(bAlb.mul(0.8) as unknown as NV3);
         } else {
           // leaf-tint color path (§7.2.6): mesh word7 = packed linear RGB + hueVar. No per-leaf
           // vdata jitter (no triangle) — use the mid tint (k=0 ⇒ base) × a mid crown-AO (0.6).
@@ -1108,7 +1130,7 @@ export function buildNaniteResolve(
             toF(mp.shiftRight(uint(8)).bitAnd(uint(0xff))),
             toF(mp.shiftRight(uint(16)).bitAnd(uint(0xff))),
           ).div(255) as unknown as NV3;
-          voxCol.assign(base.mul(0.8) as unknown as NV3);
+          albedo.assign(base.mul(0.8) as unknown as NV3);
         }
         if (voxJitK > 0) {
           // ?voxjit: world-anchored per-cell value jitter (flag comment above) — breaks the
@@ -1117,7 +1139,7 @@ export function buildNaniteResolve(
           const h = fract(
             sin(dot(cellQ, vec3(12.9898, 78.233, 37.719) as unknown as NV3)).mul(43758.5453),
           ) as unknown as NF;
-          voxCol.assign(voxCol.mul(h.mul(2 * voxJitK).add(1 - voxJitK)) as unknown as NV3);
+          albedo.assign(albedo.mul(h.mul(2 * voxJitK).add(1 - voxJitK)) as unknown as NV3);
         }
         if (voxJit2K > 0) {
           // ?voxjit2: clump-scale (~3 m) variation — see the knob comment above.
@@ -1125,7 +1147,7 @@ export function buildNaniteResolve(
           const h2 = fract(
             sin(dot(clumpQ, vec3(41.017, 17.933, 91.381) as unknown as NV3)).mul(28461.7331),
           ) as unknown as NF;
-          voxCol.assign(voxCol.mul(h2.mul(2 * voxJit2K).add(1 - voxJit2K)) as unknown as NV3);
+          albedo.assign(albedo.mul(h2.mul(2 * voxJit2K).add(1 - voxJit2K)) as unknown as NV3);
         }
         if (voxGradK > 0) {
           // ?voxgrad (2026-07-02 beautification, default 0.35): CROWN-SCALE vertical light
@@ -1136,46 +1158,20 @@ export function buildNaniteResolve(
           const vInstIdG = item.x;
           const vAg = gpu.instances.element(vInstIdG.mul(uint(2))).toVar() as unknown as NV4;
           const hgt = wp.y.sub(vAg.y).mul(0.08).clamp(0, 1) as unknown as NF;
-          voxCol.assign(
-            voxCol.mul(hgt.mul(voxGradK).add(1 - voxGradK * 0.5)) as unknown as NV3,
+          albedo.assign(
+            albedo.mul(hgt.mul(voxGradK).add(1 - voxGradK * 0.5)) as unknown as NV3,
           );
         }
+        // clean-decode voxel backlight source = the shaded voxel albedo (kBl stays
+        // 0.032 from the seed). Dies with the branch.
+        blCol.assign(albedo);
+        });
       });
     }
-
-    // unported explicit classes (grass/debris — N10) keep a flat gray; voxel pixels take
-    // the innermost fall-through. In the 'vox' pass gate on `isV` (every surviving pixel
-    // IS a voxel) so a mis-decoded matClass never drops to the gray slab; in the 'tri'
-    // pass voxel pixels were Discarded, so `isVTri` is the original `isVox` (matClass==7),
-    // leaving grass/debris on the gray `palette` exactly as before (loss-exact for tri).
-    const palette = vec3(0.35, 0.33, 0.3) as unknown as NV3;
-    const isVoxDefault = pass === 'tri' ? isVox : isV.equal(uint(1));
-    const voxAlbDefault = isVoxDefault.select(voxCol, palette) as unknown as NV3;
-    const voxNrmDefault = isVoxDefault.select(voxNrm, vec3(0, 1, 0)) as unknown as NV3;
-    const albedo = isT
-      .select(
-        terrainCol,
-        isR.select(
-          rockCol,
-          isBD.select(barkCol, isL.select(leafCol, isG.select(grassCol, voxAlbDefault))),
-        ),
-      )
-      .toVar() as unknown as NV3;
-    const wNormal = isT
-      .select(
-        terrainNrm,
-        isR.select(
-          rockNrm,
-          isBD.select(barkNrm, isL.select(leafNrm, isG.select(grassNrm, voxNrmDefault))),
-        ),
-      )
-      .toVar() as unknown as NV3;
-    // aoNode (rock/bark cavity + grass tip-AO fake base self-shadow): indirect only
-    const grassAo = smoothstep(0.0, 0.55, grassTip).mul(0.55).add(0.45) as unknown as NF;
-    const ao = (isR.select(
-      rockAo,
-      isBD.select(barkAo, isG.select(grassAo, float(1))),
-    ) as unknown as NF).toVar() as unknown as NF;
+    // (the old class fall-through mux + voxAlbDefault/voxNrmDefault/palette live in
+    // the shared albedo/wNormal/ao accumulators now — assigned inside each class If
+    // above; grass tip-AO folded into `ao` in the grass branch, rock/bark cavity AO
+    // into their branches. wNormal init IS the old up-normal fall-through.)
 
     // ---- PROCEDURAL GRASS shading (grass rethink 2026-07-03, NaniteGrass) — the
     // bit31|bit30 pixels. Re-derive the blade triangle from the self-describing id
@@ -1199,6 +1195,10 @@ export function buildNaniteResolve(
     if (isGP && world.grassProc) {
       const gp = world.grassProc;
       If(isGP, () => {
+        // procedural-grass owns these pixels: cancel the voxel-tier backlight the
+        // isV==1 seed set (old blGate.and(isGP.not())). Their own tip-weighted term
+        // (gBl) is added below. Applies to both the gpFlat stub and the full path.
+        blK.assign(float(0));
         if (gpFlat) {
           albedo.assign(vec3(0.05, 0.12, 0.03) as unknown as NV3);
           wNormal.assign(vec3(0, 1, 0) as unknown as NV3);
@@ -1430,44 +1430,17 @@ export function buildNaniteResolve(
       // VOXEL pixels get the same translucent forward-scatter (they ARE foliage) —
       // its absence was part of the "suddenly very dark trees" report: mesh crowns
       // glowed toward the sun while voxel crowns did not.
-      // 'both': voxel pixels glow with voxCol, leaf pixels with leafCol — the per-pixel
-      // union of what the two split passes each applied to their own tier.
-      // GRASS (S0): tip-weighted forward scatter — grassTranslucency's k=0.09·tipT
-      // vs the leaf constant 0.032 (VegMaterials.grassTranslucency port).
-      const grassOn = pass !== 'vox' && hasClass(5);
-      const blSrc =
-        pass === 'tri'
-          ? grassOn
-            ? (isG.select(grassCol, leafCol) as unknown as NV3)
-            : leafCol
-          : pass === 'vox'
-            ? voxCol
-            : (isV
-                .equal(uint(1))
-                .select(voxCol, grassOn ? isG.select(grassCol, leafCol) : leafCol) as unknown as NV3);
-      let blGate =
-        pass === 'tri'
-          ? grassOn
-            ? (isL.or(isG) as unknown as typeof isL)
-            : isL
-          : pass === 'vox'
-            ? (isV.equal(uint(1)) as unknown as typeof isL)
-            : (isV.equal(uint(1)).or(grassOn ? isL.or(isG) : isL) as unknown as typeof isL);
-      // procedural-grass pixels: excluded from the voxel-tier backlight (their voxCol
-      // is a garbage decode) — they get their own tip-weighted term below.
-      if (isGP) {
-        blGate = blGate.and(
-          (isGP as unknown as { not(): NB }).not() as unknown as typeof isL,
-        ) as unknown as typeof isL;
-      }
-      const kBl = grassOn
-        ? (isG.select(grassTip.mul(0.09), float(0.032)) as unknown as NF)
-        : (float(0.032) as unknown as NF);
-      const backlight = blSrc
+      // Source (blCol) + strength (blK) were accumulated per class above, folding the
+      // old blSrc/blGate/kBl selects: leaf → leafCol / 0.032, grass → grassCol /
+      // tip·0.09, voxel (isV) → voxCol / 0.032, procedural-grass → blK 0 (own term
+      // below), everything else → blK 0. blK==0 self-zeros the term, so no gate select
+      // is needed. Bit-identical: the old blSrc gave voxCol for every isV pixel (isV
+      // priority), which is exactly what the isV==1 seed assigned.
+      const backlight = blCol
         .mul(sunU.color as unknown as NV3)
-        .mul(glow.div(0.032).mul(kBl))
+        .mul(glow.div(0.032).mul(blK))
         .mul(vec3(0.9, 1.05, 0.55)) as unknown as NV3;
-      lit = lit.add(blGate.select(backlight, vec3(0))) as unknown as NV3;
+      lit = lit.add(backlight) as unknown as NV3;
       if (isGP) {
         // grassTranslucency port for the procedural lane: albedo already holds the
         // grass color on these pixels; k = 0.09 × tip weight (S0 parity).

@@ -311,10 +311,13 @@ export function buildNaniteFrame(
     : null;
   // CAMERA||SHADOW CULL OVERLAP (item 4): fold the (CLIP-path) shadow shared-cut cull into
   // the SAME submit as the camera cull so Dawn can overlap the two disjoint culls on frames
-  // where shadows re-raster. OFF by default — the proven separate-submit ordering ships; the
-  // overlap is a measured A/B (its win only fires when the camera moves enough to re-raster a
-  // shadow level). Requires the clip shadow's cullPrepass (cascade path has no shared cut).
-  const cullOverlap = params.get('culloverlap') === '1' && typeof shadow?.cullPrepass === 'function';
+  // where shadows re-raster. DEFAULT ON as of 2026-07-09 — the fold is documented order-
+  // equivalent (disjoint buffers: shadow cut writes its own counters/queues, read-only on
+  // qRaster; appended last ⇒ same order as the separate-submit leg). Its win fires when the
+  // camera moves enough to re-raster a shadow level (fewer moving-frame submit bubbles).
+  // Escape ?culloverlap=0 restores the separate-submit ordering. Requires the clip shadow's
+  // cullPrepass (cascade path has no shared cut).
+  const cullOverlap = params.get('culloverlap') !== '0' && typeof shadow?.cullPrepass === 'function';
   // SUBMIT-COALESCE (?coalesce=1, spec-orchestration-submit-folds §1): fold the frame's
   // 7 foldable submits into 2 — cull side (BFS + kRasterArgs2 + voxel fan-out [+ shadow
   // cut]) becomes ONE dispatchBatchMixed, and the raster side folds the HZB chain into

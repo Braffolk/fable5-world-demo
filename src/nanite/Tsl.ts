@@ -32,6 +32,7 @@ import {
   unpackSnorm2x16,
   uvec2,
   workgroupId,
+  numWorkgroups,
 } from 'three/tsl';
 import type { Matrix4, Texture, Vector3, Vector4 } from 'three';
 import type { Renderer, StorageBufferNode } from 'three/webgpu';
@@ -368,6 +369,18 @@ export function localX(): NU {
 export function wgLinear(rowSize: number): NU {
   const wid = workgroupId as unknown as { x: NU; y: NU };
   return wid.y.mul(uint(rowSize)).add(wid.x);
+}
+
+/**
+ * Linearized workgroup id for a BALANCED 2-D indirect grid: row width = the live
+ * numWorkgroups.x (from the indirect args), not a compile-time row constant. Pair with an
+ * args kernel that computes y=ceil(wg/65535), x=ceil(wg/y) — overshoot < y workgroups,
+ * vs up to ~2× ghost threads with the min(wg,65535)×ceil grid once wg > 65535.
+ */
+export function wgLinearDyn(): NU {
+  const wid = workgroupId as unknown as { x: NU; y: NU };
+  const nw = numWorkgroups as unknown as { x: NU };
+  return wid.y.mul(nw.x).add(wid.x);
 }
 
 /** textureLoad .r at an integer texel coord (TextureNode.load is untyped) */

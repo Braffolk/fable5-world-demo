@@ -23,8 +23,6 @@ import {
   clamp,
   dot,
   float,
-  getScreenPosition,
-  getViewPosition,
   instanceIndex,
   instancedArray,
   log2,
@@ -53,7 +51,7 @@ import type { Atmosphere } from '../sky/Atmosphere';
 import { CLOUD_BOTTOM, CLOUD_TOP, type Clouds } from '../sky/Clouds';
 import { GradeUniforms, gradeParamsAt } from './ColorScript';
 import { runiform } from '../gpu/RenderUniform';
-import { gtaoLayer } from './Gtao';
+import { getScreenPositionFast, getViewPositionFast, gtaoLayer } from './Gtao';
 import { HalfResMrtNode, type HalfResEntry } from './HalfResMrt';
 import { RSCALE, internalSize } from './RenderScale';
 
@@ -198,9 +196,9 @@ export class PostStack {
     if (clouds && !ablate.has('clouds')) {
       const cloudLayer = Fn((): NV4 => {
         const d = depthTex.x;
-        const viewDirV = getViewPosition(screenUV, float(0.5), uProjInv).normalize();
+        const viewDirV = getViewPositionFast(screenUV, float(0.5), uProjInv).normalize();
         const dirW = uCamWorld.mul(vec4(viewDirV, 0)).xyz.normalize().toVar();
-        const dist = getViewPosition(screenUV, d, uProjInv).length();
+        const dist = getViewPositionFast(screenUV, d, uProjInv).length();
         const isSky = d.lessThanEqual(1e-7).or(d.greaterThanEqual(0.9999999));
         const maxD = isSky.select(float(1e9), dist);
         const jitter = hash12(
@@ -243,7 +241,7 @@ export class PostStack {
         const d = depthTex.x;
         const isSky = d.lessThanEqual(1e-7).or(d.greaterThanEqual(0.9999999));
         If(isSky.not(), () => {
-          const viewPos = getViewPosition(screenUV, d, uProjInv);
+          const viewPos = getViewPositionFast(screenUV, d, uProjInv);
           const dist = viewPos.length();
           // ≈0.6 m world-space gather radius projected to screen
           const rPx = clamp(float(0.55).div(dist), 0.004, 0.07);
@@ -256,7 +254,7 @@ export class PostStack {
             const offY = Math.sin(ga) * rr;
             const uvS = screenUV.add(vec2(offX, offY).mul(rPx));
             const dS = texture(depthTex.value, uvS).x;
-            const pS = getViewPosition(uvS, dS, uProjInv);
+            const pS = getViewPositionFast(uvS, dS, uProjInv);
             const w = smoothstep(1.8, 0.25, pS.sub(viewPos).length());
             sum.addAssign(texture(beauty.value, uvS).rgb.mul(w));
             wsum.addAssign(w);
@@ -293,9 +291,9 @@ export class PostStack {
       const col = beauty.rgb.toVar();
       // ray direction from a FIXED finite depth (the far-plane depth value
       // degenerates through the inverse projection)
-      const viewDirV = getViewPosition(screenUV, float(0.5), uProjInv).normalize();
+      const viewDirV = getViewPositionFast(screenUV, float(0.5), uProjInv).normalize();
       const dirW = uCamWorld.mul(vec4(viewDirV, 0)).xyz.normalize().toVar();
-      const viewPos = getViewPosition(screenUV, d, uProjInv);
+      const viewPos = getViewPositionFast(screenUV, d, uProjInv);
       const dist = viewPos.length();
       const distKm = dist.div(1000);
       const camAltKm = camPosW.y.div(1000).max(0.005);
@@ -398,7 +396,7 @@ export class PostStack {
     const aoSrc = aoTexNode;
     const aoFaded = aoSrc
       ? Fn((): NF => {
-          const viewC = getViewPosition(screenUV, depthTex.x, uProjInv);
+          const viewC = getViewPositionFast(screenUV, depthTex.x, uProjInv);
           const dist = viewC.length();
           const k = smoothstep(aoFadeNear, aoFadeFar, dist);
           const result = float(1).toVar();
@@ -453,7 +451,7 @@ export class PostStack {
       const result = float(1).toVar();
       const d = depthTex.x;
       const isSky = d.lessThanEqual(1e-7).or(d.greaterThanEqual(0.9999999));
-      const viewPos = getViewPosition(screenUV, d, uProjInv);
+      const viewPos = getViewPositionFast(screenUV, d, uProjInv);
       const dist = viewPos.length();
       If(isSky.not().and(dist.lessThan(240)), () => {
         const sunW = vec3(atmosphere.sunDir).normalize();
@@ -473,14 +471,14 @@ export class PostStack {
           const f = (s / SSCS_STEPS) ** 1.6;
           If(hitF.greaterThan(1.5), () => {
             const sampleV = viewPos.add(sunV.mul(range).mul(jit).mul(f));
-            const uvS = getScreenPosition(sampleV, uProj);
+            const uvS = getScreenPositionFast(sampleV, uProj);
             const inFrame = uvS.x
               .greaterThan(0.001)
               .and(uvS.x.lessThan(0.999))
               .and(uvS.y.greaterThan(0.001))
               .and(uvS.y.lessThan(0.999));
             const dS = texture(depthTex.value, uvS).x;
-            const bufV = getViewPosition(uvS, dS, uProjInv);
+            const bufV = getViewPositionFast(uvS, dS, uProjInv);
             const dz = bufV.z.sub(sampleV.z); // >0: buffer closer to camera
             const hit = dz.greaterThan(0.05).and(dz.lessThan(1.4)).and(inFrame);
             If(hit, () => {
@@ -551,7 +549,7 @@ export class PostStack {
       // would be wrong — velocityTex.size() on the MRT attachment returned 0).
       const uvv = texel.div(vec2(uInternalSize));
       const d = (depthTex.load(texel as unknown as Parameters<typeof depthTex.load>[0]) as unknown as NV4).x;
-      const posV = getViewPosition(uvv, d, uProjInv);
+      const posV = getViewPositionFast(uvv, d, uProjInv);
       const posW = uCamWorld.mul(vec4(posV, 1)).xyz;
       const posVPrev = uPrevView.mul(vec4(posW, 1)).xyz;
       const clipPrev = uPrevProj.mul(vec4(posVPrev, 1));
@@ -687,7 +685,7 @@ export class PostStack {
             const raw = (velocityTex.load(texel as unknown as Parameters<typeof velocityTex.load>[0]) as unknown as NV4).xy;
             const d = (depthTex.load(texel as unknown as Parameters<typeof depthTex.load>[0]) as unknown as NV4).x;
             const isSky = d.lessThanEqual(1e-7).or(d.greaterThanEqual(0.9999999));
-            const dist = getViewPosition(screenUV, d, uProjInv).length();
+            const dist = getViewPositionFast(screenUV, d, uProjInv).length();
             const farGeo = isSky.not().and(dist.greaterThan(1500));
             const ana = velReproject(texel);
             const mode = q.get('skyveldbg');
