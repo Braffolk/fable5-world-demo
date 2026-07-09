@@ -60,8 +60,13 @@ import srcLeafMesh from '../vegetation/LeafMesh.ts?raw';
  *  rung survivor GEOMETRY widens (walks mesh density up to the voxel at the 60 m handoff).
  *  Both ride the params key (crownLodErrorK + crownLod=CROWN_LOD_SCHEDULE) and the
  *  widthMul multiply is in srcTreeBuilder's SRC_HASH; the rev bump is belt-and-suspenders
- *  since the schedule table lives in VegLibrary (not in the ?raw SRC_HASH list). */
-const CACHE_REV = 7;
+ *  since the schedule table lives in VegLibrary (not in the ?raw SRC_HASH list).
+ *  rev 8 (2026-07-09): crown VOXELIZER de-fattening — OCC_SOLID 0.02→0.15 + support-
+ *  hysteresis erosion (VoxelizeCrown). Occupancy bits (crown silhouette) now differ, so any
+ *  cached fat crown is stale. srcVoxelize's ?raw SRC_HASH already covers the edit; this rev is
+ *  belt-and-suspenders + also invalidates the ?voxocc-DEFAULT crowns (default value changed,
+ *  and voxOcc rides the params key so a non-default ?voxocc keyed separately regardless). */
+const CACHE_REV = 8;
 
 const DB_NAME = 'laas-bootcache';
 const STORE = 'artifacts';

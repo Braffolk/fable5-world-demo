@@ -202,25 +202,53 @@ export const DEFAULT_VOXEL_GRID_DIM = 256;
  *  samples/cell — enough to resolve a sub-cell needle as partial density. Offline. */
 const COVERAGE_SUPERSAMPLE = 3;
 
-/** a cell counts as OCCUPIED (occupancy bit set) once its fractional coverage clears
- *  this — low so a thin-needle smear still sets the bit (no bald spots). Occupancy is
- *  build/raster-only in the coarse path (§4.4); density carries the real weight.
- *  2026-07-02 beautification: TUNABLE (?voxocc, setVoxOccThreshold) — but the DEFAULT
- *  STAYS 0.02. The slimming idea FAILED both ways: sweeps 0.12-0.5 were visually a no-op
- *  (coverage histogram: interior cells saturate at 1.0, single-leaf cells sit at exactly
- *  ~0.33 — thresholds between bite nothing that shows), and 0.12 COST ~+3.5 ms (thinner
- *  occupancy masks push bricks off the free full-mask solid path onto the per-pixel
- *  gate/DDA). The voxel-vs-mesh crown fatness is a representation property (planes →
- *  solid cells), not an occupancy-threshold problem. */
-let OCC_COVERAGE_THRESHOLD = 0.02;
+/** OCC_SOLID — a cell is occupied OUTRIGHT once its fractional coverage clears this.
+ *  RAISED 0.02 → 0.15 (2026-07-09, user report "voxels too thicc at the finest level —
+ *  the voxelizer too easily voxelizes on a barely-got-a-hit"). The COVERAGE PHYSICS
+ *  (S³ = 27 supersamples, per-sub-sample weight subW = 1/27), verified against the raster
+ *  math below:
+ *    • a leaf PLANE fully crossing a cell lights one ~S² sheet of sub-cells ⇒ cov ≈ 1/S ≈
+ *      0.33 (the histogram's single-leaf peak) — this is the MAIN SHAPE; always ≥ OCC_SOLID
+ *      ⇒ it survives, silhouette intact.
+ *    • a leaf/needle TIP grazing a corner lights 1-3 sub-cells ⇒ cov ≈ 0.037-0.11 — a
+ *      "barely got a hit" speck. The old 0.02 threshold minted a SOLID cube for EVERY such
+ *      graze (even a single sub-sample = 1/27 = 0.037 ≥ 0.02), so crowns read THICKER than
+ *      the source mesh. 0.15 sits between the graze band (≤ ~0.11) and the plane peak (0.33).
+ *  ⚠️ The 2026-07-02 "threshold sweeps were a visual no-op" record is STALE — it predates the
+ *  occupancy-GATED ray-band renderer (NaniteVoxelRaster occ-gate mask + cOccLo/cOccHi DDA,
+ *  ~:1092 / :1349) that now PROJECTS and DDA-marches the per-cell occupancy bits. Clearing a
+ *  cell's bit removes it from the silhouette the raster paints ⇒ this erosion GEOMETRICALLY
+ *  thins the crown (NOT a render-side dither; the vetoed ?voxalpha stipple stays default-off).
+ *  Occupancy is build/raster-only in the coarse path (§4.4); density (word4) carries the real
+ *  weight and is UNCHANGED (true mean coverage over all covered cells).
+ *  TUNABLE via ?voxocc / setVoxOccThreshold (same clamps). If thin sparse conifer needles lose
+ *  too much body this is the per-species tuning lever — LOWER OCC_SOLID for conifers (no
+ *  species split unless the kept/dropped numbers demand it). */
+let OCC_COVERAGE_THRESHOLD = 0.15;
 
-/** ?voxocc= — override the occupancy coverage threshold (build-time; call BEFORE
- *  prepareVoxelCrown). Clamped to [0.005, 0.6]; NaN/out-of-range ignored. */
+/** OCC_GRAZE — the SUPPORT-HYSTERESIS floor (fixed constant, no URL knob). A BORDERLINE cell
+ *  with coverage in [OCC_GRAZE, OCC_SOLID) is the shape-preserver's domain: it survives IFF
+ *  ≥ OCC_SUPPORT_MIN of its 6 face-neighbours are SOLID (cov ≥ OCC_SOLID) — so a rim cell
+ *  hugging the solid crown surface stays (the main shape keeps its skin), while an ISOLATED
+ *  graze speck with no solid support is eroded. Below OCC_GRAZE a cell is ALWAYS dropped
+ *  (pure "barely got a hit" corner-clip). 0.06 sits inside the graze band so the faintest
+ *  clips go regardless of support, while the mid-graze band [0.06,0.15) is support-gated. */
+const OCC_GRAZE = 0.06;
+/** hysteresis: min SOLID face-neighbours (of 6) for a borderline cell to survive. */
+const OCC_SUPPORT_MIN = 2;
+
+/** ?voxocc= — override OCC_SOLID, the outright-occupancy coverage threshold (build-time; call
+ *  BEFORE prepareVoxelCrown). Clamped to [0.005, 0.95]; NaN/out-of-range ignored. */
 export function setVoxOccThreshold(t: number): void {
   if (Number.isFinite(t) && t >= 0.005 && t <= 0.95) OCC_COVERAGE_THRESHOLD = t;
 }
 export function voxOccThreshold(): number { return OCC_COVERAGE_THRESHOLD; }
 let occHistoLogged = false;
+/** per-crown erosion census: crowns are voxelized ONCE PER SPECIES POOL (not per instance —
+ *  ForestScene/WorldRegistry loop the pools), so the first ~24 census lines ARE the per-species
+ *  kept/eroded/dropped breakdown. Capped so a many-pool world can't spam the console. */
+let occCensusCount = 0;
+const OCC_CENSUS_CAP = 24;
 
 /** voxlod: one resolved BLOCK of a pyramid level — a contiguous (<=MAX_BRICKS_PER_CLUSTER)
  *  run of that level's occupied bricks that becomes ONE voxel cluster. Carries the DAG cut
@@ -579,24 +607,82 @@ export function voxelizeCrown(
     }
   }
 
-  // ---- aggregate cells → bricks (the COARSE one-sample-per-brick step) ----
-  // one-shot coverage histogram (?voxocc calibration — 2026-07-02): the threshold sweep
-  // 0.02→0.5 changed NOTHING visually; log the real distribution once per session so the
-  // slimming threshold can be picked from data instead of a coverage model.
-  if (!occHistoLogged) {
-    occHistoLogged = true;
-    const nz: number[] = [];
-    for (let i = 0; i < cellTotal; i++) {
-      const c = acc.cov[i] as number;
-      if (c > 0) nz.push(Math.min(1, c));
+  // ---- SUPPORT-HYSTERESIS EROSION (2026-07-09 crown de-fattening) ---------
+  // Decide per-cell occupancy on the FULL crown cell grid BEFORE brick packing. Face-neighbour
+  // lookups cross brick boundaries, so this MUST run on the grid (cellLin is global), not
+  // per-brick. Rule (constants OCC_SOLID / OCC_GRAZE / OCC_SUPPORT_MIN above):
+  //   cov ≥ OCC_SOLID                → SOLID   (kept — the plane-crossing main shape)
+  //   OCC_GRAZE ≤ cov < OCC_SOLID    → kept IFF ≥ OCC_SUPPORT_MIN solid face-neighbours
+  //                                    (rim cells hugging the surface survive; lone specks erode)
+  //   0 < cov < OCC_GRAZE            → dropped (pure "barely got a hit" graze)
+  // "SOLID" is read from the coverage SNAPSHOT acc.cov (never mutated), so every borderline
+  // cell sees the SIMULTANEOUS solid state — no order-dependent cascade that could eat past the
+  // true surface. Density/normal/colour accumulation stays UNCHANGED (word4 density is still the
+  // true mean coverage over ALL covered cells — the erosion only clears occupancy BITS). A cell
+  // whose acc.cov > 1 (many tris) is solid (OCC_SOLID ≤ 0.95 < the clamp). keptMask drives the
+  // brick occLo/occHi below; a brick with zero kept cells is emitted EMPTY (density 0, skipped).
+  const OCC_SOLID = OCC_COVERAGE_THRESHOLD;
+  const keptMask = new Uint8Array(cellTotal);
+  let cellsSolid = 0, cellsSupported = 0, cellsEroded = 0, cellsDropped = 0;
+  const solidAt = (x: number, y: number, z: number): boolean =>
+    x >= 0 && x < cgX && y >= 0 && y < cgY && z >= 0 && z < cgZ &&
+    (acc.cov[cellLin(x, y, z)] as number) >= OCC_SOLID;
+  for (let cz = 0; cz < cgZ; cz++) {
+    for (let cy = 0; cy < cgY; cy++) {
+      for (let cx = 0; cx < cgX; cx++) {
+        const li = cellLin(cx, cy, cz);
+        const cov = acc.cov[li] as number;
+        if (cov <= 0) continue;
+        if (cov >= OCC_SOLID) { keptMask[li] = 1; cellsSolid++; continue; }
+        if (cov < OCC_GRAZE) { cellsDropped++; continue; }
+        // borderline [OCC_GRAZE, OCC_SOLID): keep iff supported by enough solid neighbours
+        let solidN = 0;
+        if (solidAt(cx - 1, cy, cz)) solidN++;
+        if (solidAt(cx + 1, cy, cz)) solidN++;
+        if (solidAt(cx, cy - 1, cz)) solidN++;
+        if (solidAt(cx, cy + 1, cz)) solidN++;
+        if (solidAt(cx, cy, cz - 1)) solidN++;
+        if (solidAt(cx, cy, cz + 1)) solidN++;
+        if (solidN >= OCC_SUPPORT_MIN) { keptMask[li] = 1; cellsSupported++; }
+        else cellsEroded++;
+      }
     }
-    nz.sort((a, b) => a - b);
-    const pct = (p: number): string =>
-      nz.length ? (nz[Math.min(nz.length - 1, Math.floor(p * nz.length))] as number).toFixed(3) : 'n/a';
+  }
+
+  // ---- aggregate cells → bricks (the COARSE one-sample-per-brick step) ----
+  // erosion census (?voxocc calibration): logs the kept/eroded/dropped split so the crown
+  // de-fattening is measurable at boot. The FIRST crown also prints the full cell-coverage
+  // percentile histogram; the next OCC_CENSUS_CAP crowns print the compact per-species split
+  // (one prepareVoxelCrown call PER SPECIES POOL ⇒ these lines are the per-species stats).
+  // NOTE the 2026-07-02 "sweeps a no-op" claim is STALE (the occupancy-gated raster now renders
+  // per-cell bits — see OCC_SOLID doc); this census is how the effect is now read.
+  if (occCensusCount < OCC_CENSUS_CAP) {
+    occCensusCount++;
+    const covered = cellsSolid + cellsSupported + cellsEroded + cellsDropped;
+    const kept = cellsSolid + cellsSupported;
+    const frac = (a: number): string => (covered > 0 ? (a / covered).toFixed(2) : '0');
+    if (!occHistoLogged) {
+      occHistoLogged = true;
+      const nz: number[] = [];
+      for (let i = 0; i < cellTotal; i++) {
+        const c = acc.cov[i] as number;
+        if (c > 0) nz.push(Math.min(1, c));
+      }
+      nz.sort((a, b) => a - b);
+      const pct = (p: number): string =>
+        nz.length ? (nz[Math.min(nz.length - 1, Math.floor(p * nz.length))] as number).toFixed(3) : 'n/a';
+      // eslint-disable-next-line no-console
+      console.log(
+        `[voxocc] first-crown cell coverage: n=${nz.length} p10=${pct(0.1)} p25=${pct(0.25)} ` +
+          `p50=${pct(0.5)} p75=${pct(0.75)} p90=${pct(0.9)} solid=${OCC_SOLID} graze=${OCC_GRAZE}`,
+      );
+    }
     // eslint-disable-next-line no-console
     console.log(
-      `[voxocc] first-crown cell coverage: n=${nz.length} p10=${pct(0.1)} p25=${pct(0.25)} ` +
-        `p50=${pct(0.5)} p75=${pct(0.75)} p90=${pct(0.9)} thresh=${OCC_COVERAGE_THRESHOLD}`,
+      `[voxocc] crown#${occCensusCount} tris=${triCount} cells=${covered} ` +
+        `kept=${kept}(${frac(kept)}) solid=${cellsSolid}(${frac(cellsSolid)}) ` +
+        `supported=${cellsSupported}(${frac(cellsSupported)}) eroded=${cellsEroded}(${frac(cellsEroded)}) ` +
+        `dropped=${cellsDropped}(${frac(cellsDropped)})`,
     );
   }
   const bricks: BrickCPU[] = [];
@@ -625,8 +711,10 @@ export function voxelizeCrown(
               // a cell may have been hit by several tris ⇒ clamp coverage to 1
               const cellCov = Math.min(1, acc.cov[li] as number);
               if (cellCov <= 0) continue;
-              const cell = brickCellIndex(lx, ly, lz);
-              if (cellCov >= OCC_COVERAGE_THRESHOLD) {
+              // occupancy bit follows the erosion pass (keptMask), NOT the raw threshold — a
+              // graze speck that survived accumulation may have been eroded above.
+              if (keptMask[li]) {
+                const cell = brickCellIndex(lx, ly, lz);
                 if (cell < 32) occLo |= (1 << cell);
                 else occHi |= (1 << (cell - 32));
               }
@@ -652,9 +740,12 @@ export function voxelizeCrown(
           originY + (by + 0.5) * brickWorld,
           originZ + (bz + 0.5) * brickWorld,
         ];
-        if (bcov <= 0 || bcolW <= 0) {
+        if (bcov <= 0 || bcolW <= 0 || (occLo === 0 && occHi === 0)) {
           // empty brick — still emit a record so the grid addresses linearly, but
-          // mark it density 0 (callers skip via `occupied`)
+          // mark it density 0 (callers skip via `occupied`). ALSO empty when the erosion
+          // pass cleared every occupancy bit (zero-bit brick): it would paint nothing under
+          // the occupancy-gated raster, so don't emit it to `occupied[]`/the pyramid — the
+          // downsample keys off density>0, so this thinning propagates to the coarse levels.
           bricks.push({
             occLo: 0, occHi: 0, normal: [0, 1, 0], spread: 0, albedo: [0, 0, 0], density: 0,
             center: bCenter, half: brickHalf,

@@ -316,32 +316,46 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
   // wind fades to 0 by this distance (mirrors NaniteFetch farAtten 380→480), so beyond
   // it lane 0 SKIPS gustAt entirely — the "only call it when necessary" cut.
   const WIND_FADE_END_M = 480;
-  // 64 (not 12): at 200k the far field is THOUSANDS of small (≤8px) sparse coarse bricks;
-  // running the ray+DDA on them measured +6/+17/+19 ms (eye/oblique/aerial) because carved
-  // pixels pay the full DDA miss. A ≤8px brick never reads as a square — only the BIG
-  // warp-inflated bricks do, and those are exactly the area>64 set the ray path keeps.
+  // voxcellmin (64) is NO LONGER the ray-path floor — it is now the DILATION-BAND UPPER EDGE
+  // (the "existing-path threshold"): 6 < area ≤ 64 px² take the NEW CONSERVATIVE dilated ray
+  // (VOX_SPLAT_FLOOR..voxCellMinArea, half-pixel-footprint AABB dilation heals the pixel-centre
+  // miss that made small bricks INVISIBLE when the old floor was lowered), and area > 64 keeps
+  // the EXISTING (undilated) ray path byte-identical. Historical note: the old floor sat at 64
+  // because lowering it below (voxcellmin=12/16/0) either made far bricks invisible OR cost
+  // +6/+17/+19 ms of DDA-miss march — BOTH now addressed (dilation kills the invisibility; the
+  // 6-step conservative-accept DDA bound below caps the miss cost; the honest silhouette REMOVES
+  // the over-painted flat-rect corner pixels). ⚠️ RE-PROFILE (validation §4/§5): if p95 regresses,
+  // VOX_SPLAT_FLOOR is the tuning lever (a code constant, raise it), NOT this URL default.
   const voxCellMinAreaRaw = Number(new URLSearchParams(window.location.search).get('voxcellmin') ?? '64');
   const voxCellMinArea = Number.isFinite(voxCellMinAreaRaw) && voxCellMinAreaRaw >= 0 ? voxCellMinAreaRaw : 64;
-  // ?voxalpha (2026-07-02 beautification PROTOTYPE, default OFF): density-driven stochastic
-  // opacity for LOW-density bricks (UE5-style). Binary-opaque bricks are why voxel crowns
-  // read fat + cubic: a wispy edge cell paints as solid as a dense interior one (occupancy-
-  // threshold slimming measured no-op — the interior saturates at coverage 1.0 while edges
-  // sit at ~0.33, histogram 2026-07-02). Here: a brick with density < VOX_ALPHA_MAXD keeps
-  // only a hash-stable fraction of its footprint pixels (alpha ramps 0.25→1 with density);
-  // dropped pixels reveal the brick behind ⇒ soft translucent crown edges, TAA smooths the
-  // stipple. Dense bricks (≥ MAXD — the whole interior) take the UNCHANGED solid path, so
-  // the added per-pixel cost rides only the sparse edge-brick footprints. Alpha-active
-  // bricks also skip the ?voxcell ray path (front-slab depth is fine for a stippled edge).
-  // DEFAULT OFF — USER-REJECTED 2026-07-02 ("random noise"): the stipple reads as noise
-  // in stills; TAA does not integrate it away convincingly enough at retina. Kept ONLY as
-  // an experiment flag; remove entirely if it stays unused.
+  // Fix 2 (conservative small-brick ray) BANDING — fixed code constants, no knobs:
+  //   area ≤ VOX_SPLAT_FLOOR px² → keep the flat splat (a ~2px brick IS a splat; cube-ness
+  //     invisible, and the DDA on a screen-tiny brick never pays off).
+  //   VOX_SPLAT_FLOOR < area ≤ voxCellMinArea → the NEW conservative dilated ray (below).
+  //   area > voxCellMinArea → the existing ray path, unchanged.
+  const VOX_SPLAT_FLOOR = 6; // px² — a ~2.5px brick and smaller stays the cheap flat splat
+  // Fix 1 — DENSITY-DRIVEN COVERAGE, DEFAULT ON (was the ?voxalpha=1 prototype). Binary-opaque
+  // bricks are why voxel crowns read fat + cubic: a ~33%-covered edge cell paints as solid as a
+  // dense interior one (occupancy-threshold slimming measured no-op — the interior saturates at
+  // coverage 1.0 while single-leaf edges sit at ~0.33; raising OCC_COVERAGE_THRESHOLD bit nothing
+  // and 0.12 cost +3.5 ms by pushing bricks off the full-mask fast path). The coverage that fixes
+  // it is ALREADY BAKED per brick (VoxelBrick word4.A = brick mean density, density-MEAN-inherited
+  // up the coarse levels in VoxelizeCrown.downsampleBrickGrid ⇒ far-field thinning is free). An
+  // election raster cannot alpha-blend, so partial opacity = keep a HASH-STABLE screen-anchored
+  // fraction of the brick's footprint pixels. ⛔ DEFAULT OFF — USER VETO 2026-07-09: shipped
+  // default-on it turned distant crowns (all low-density rim bricks) into a DOT CLOUD against the
+  // sky — exactly the beautification law "perf buys DETAIL only, NO NOISE TRICKS". Stochastic
+  // stipple IS a noise trick regardless of hash-stability; it stays an opt-in experiment
+  // (?voxalpha=1) and any future thinning must be GEOMETRIC (the ray path's honest cube
+  // silhouette, occupancy carving), never dither.
   const voxAlpha = new URLSearchParams(window.location.search).get('voxalpha') === '1';
-  // ?voxalphad — density cutoff: bricks BELOW it stipple, above are solid. Brick density
-  // is the brick's occupancy FRACTION (mean cell coverage over 64 cells), so interior
-  // partially-filled bricks sit ~0.3-0.8 and crown-rim wisps ~0.05-0.2. 0.55 stippled the
-  // whole canopy (first prototype shot — ghost forest); default targets the rim only.
-  const voxAlphaDRaw = Number(new URLSearchParams(window.location.search).get('voxalphad') ?? '0.18');
-  const VOX_ALPHA_MAXD = Number.isFinite(voxAlphaDRaw) && voxAlphaDRaw > 0 && voxAlphaDRaw <= 1 ? voxAlphaDRaw : 0.18;
+  // The HONEST coverage ramp (replaces the prototype's 0.4+0.6·d/MAXD): alpha = clamp(density /
+  // DENS_SOLID, VOX_ALPHA_MIN, 1). DENS_SOLID = 0.85 ⇒ interior bricks (~1.0) stay fully solid
+  // (fast path preserved); VOX_ALPHA_MIN = 0.3 ⇒ never balder than the ~0.33 single-leaf coverage
+  // (no holes). A 0.33-coverage rim brick then paints ~39% of its pixels — the aggregate thins
+  // toward the mesh density. A brick is alpha-ACTIVE (stipples) iff density < DENS_SOLID.
+  const DENS_SOLID = 0.85; // density ≥ this ⇒ solid (fast path); below ⇒ density-fraction stipple
+  const VOX_ALPHA_MIN = 0.3; // stipple floor — never balder than the single-leaf ~0.33 coverage
   // ?voxmaskray (spec-vox-kernel-microcuts A) — DEFAULT ON (2026-07-02, gate PASSED):
   // skip the ≤512-projection occ-mask BUILD for RAY-ELIGIBLE bricks. cellElig is per-brick-
   // uniform, an eligible brick's pixels ALL take the ray path, and the ray path provably never
@@ -1026,11 +1040,14 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
             wgSet(wgBbW, brickLocal, bbW);
             wgSet(wgBbH, brickLocal, bbH);
             wgSet(wgCand, brickLocal, cand);
-            // ?voxcell record: local AABB + 4³ occupancy; eligible only for a clean
-            // NON-straddling COARSE brick (dagLevel>0). Near/fine L0 bricks are ≤~6 px at
-            // the handoff — they never read as squares, and running the ray on the dense L0
-            // shell was measured +7-16 ms at 4k trees; they keep the cheap flat path. (A
-            // camera-inside straddler keeps the flat centre-box regardless.)
+            // ?voxcell record: local AABB + 4³ occupancy, written for EVERY brick that reached a
+            // valid footprint above — straddlers INCLUDED, and with NO straddle- or dagLevel-gate
+            // here (wgCellOk=1 unconditionally; see the Fix-2 note below). The ray-vs-flat routing
+            // is decided DOWNSTREAM in Phase B SOLELY by footprint area (cellElig = wgCellOk ∧
+            // area>VOX_SPLAT_FLOOR): near/fine L0 bricks (≤~6 px at the 60m handoff) fall below the
+            // floor and keep the cheap flat path on their own — running the ray on the dense L0
+            // shell was measured +7-16 ms at 4k trees — while a camera-inside straddler's centre-
+            // box footprint clears the floor, so it carves to its cube silhouette instead of a slab.
             if (voxCell && wgBrCx && wgBrCy && wgBrCz && wgBrHf && wgCellLo && wgCellHi && wgCellOk) {
               wgSetF(wgBrCx, brickLocal, brLocal.x);
               wgSetF(wgBrCy, brickLocal, brLocal.y);
@@ -1038,11 +1055,13 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
               wgSetF(wgBrHf, brickLocal, brHalf as unknown as NF);
               wgSet(wgCellLo, brickLocal, elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_OCC_LO))));
               wgSet(wgCellHi, brickLocal, elemU(gpu.voxelBricks, bWordBase.add(uint(BRICK_OCC_HI))));
-              // eligibility = non-straddler only. (An earlier dagLevel>0 gate was REMOVED:
-              // the Phase-B area>voxcellmin gate already excludes the dense near L0 shell
-              // (≤6px bricks at the 60m handoff), and ?fartiles tile L0 bricks are dagLevel=0
-              // yet BIG on screen — they need the ray path or they paint as solid rects.)
-              wgSet(wgCellOk, brickLocal, uint(1).sub(straddles));
+              // eligibility = the record was set up (Fix 2: STRADDLERS ARE NOW ELIGIBLE too —
+              // the ray origin is the camera, near-clamped by tEnter.max(0), so a camera-inside
+              // brick carves to its cube silhouette instead of painting the solid centre-box slab
+              // that read as the worst ?voxnear plane forms). The ray-vs-flat routing is decided
+              // solely by the Phase-B area gate (area > VOX_SPLAT_FLOOR). ?fartiles tile L0 bricks
+              // are dagLevel=0 yet BIG on screen — they need the ray path or they paint solid rects.
+              wgSet(wgCellOk, brickLocal, uint(1));
             }
             // ── OCCUPANCY-GATE MASK BUILD (?voxlod=1, Phase A). For a COARSE (dagLevel>0),
             // LARGE-footprint (area ≥ OCC_GATE_MIN_AREA) brick — i.e. screen-big enough for empty
@@ -1064,9 +1083,12 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
               let armCond = gateArea.greaterThanEqual(uint(OCC_GATE_MIN_AREA)).and(dagLevel.greaterThan(uint(0)));
               if (voxMaskRay && voxCell) {
                 // ?voxmaskray: RAY-ELIGIBLE ⇒ wgOccMask is provably unread (dead value) — skip the
-                // build. Mirrors the Phase-B eligibility EXACTLY (wgCellOk = 1−straddles above;
-                // area STRICTLY > voxCellMinArea at the cellElig site) — keep the three in sync.
-                const rayEligible = straddles.equal(uint(0)).and(gateArea.greaterThan(uint(voxCellMinArea)));
+                // build. Mirrors the Phase-B cellElig gate EXACTLY (wgCellOk = 1 for all set-up
+                // records incl. straddlers; area STRICTLY > VOX_SPLAT_FLOOR at the cellElig site) —
+                // keep the two in sync. Since a mask only arms at area ≥ OCC_GATE_MIN_AREA (16) >
+                // VOX_SPLAT_FLOOR, every armed brick is ray-eligible when voxCell is on ⇒ the flat
+                // occ-mask carve is superseded by the ray's own DDA carve (correct, not a miss).
+                const rayEligible = gateArea.greaterThan(uint(VOX_SPLAT_FLOOR));
                 armCond = armCond.and(rayEligible.not());
               }
               If(armCond, () => {
@@ -1291,9 +1313,12 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
               .div(255)
               .toVar()
           : null;
-        const aActive = aDens ? aDens.lessThan(float(VOX_ALPHA_MAXD)).toVar() : null;
-        // alpha ramp 0.4→1 over density [0, MAXD): even the wispiest brick keeps 40%.
-        const aAlpha = aDens ? aDens.div(VOX_ALPHA_MAXD).mul(0.6).add(0.4).toVar() : null;
+        // alpha-ACTIVE (stipples) iff density < DENS_SOLID; ≥ DENS_SOLID keeps every pixel (solid
+        // fast path). UNIFORM across the brick's pixels ⇒ the per-pixel gate is a uniform branch.
+        const aActive = aDens ? aDens.lessThan(float(DENS_SOLID)).toVar() : null;
+        // HONEST coverage ramp: alpha = clamp(density / DENS_SOLID, VOX_ALPHA_MIN, 1). A 0.33
+        // single-leaf brick keeps ~39% of its pixels; a wisp keeps VOX_ALPHA_MIN (never balder).
+        const aAlpha = aDens ? aDens.div(float(DENS_SOLID)).clamp(VOX_ALPHA_MIN, 1).toVar() : null;
         // OCCUPANCY-GATE mask (?voxlod=1): which OCC_MASK_DIM×OCC_MASK_DIM bbox buckets a
         // projected occupied sub-cell touched (Phase A). 0xffff (all) for an unarmed brick.
         const occMask = voxOccGate && wgOccMask ? (wgOccMask.element(b) as unknown as NU).toVar() : null;
@@ -1306,17 +1331,19 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
         // (footprint addressing AND, for carved bricks, the occupancy-gate su/sv bucket index).
         const invW = voxRecip ? float(1).div(toF(bbW)).toVar() : null;
         const invH = voxRecip ? float(1).div(toF(bbH)).toVar() : null;
-        // ?voxcell per-brick ray data: eligibility (non-straddler AND big enough for the ray
-        // path to pay), local AABB, occupancy words, full-mask shortcut.
+        // ?voxcell per-brick ray data: eligibility (record set up incl. straddlers AND big enough
+        // for the ray path to pay — see cellElig below), local AABB, occupancy words, full-mask
+        // shortcut.
         const cellOn =
           voxCell && wgCellOk && wgBrCx && wgBrCy && wgBrCz && wgBrHf && wgCellLo && wgCellHi;
+        // RAY-eligible iff the record was set up (wgCellOk=1, incl. straddlers) AND the brick is
+        // bigger than the flat-splat floor. Fix 2: alpha-active bricks NO LONGER take the flat
+        // path — the ray path applies the SAME hash-stable stipple at the hit-accept (front-slab
+        // depth was the reason edge bricks kept showing the plane forms in the near field).
         const cellElig = cellOn
           ? (wgCellOk!.element(b) as unknown as NU)
               .equal(uint(1))
-              .and(area.greaterThan(uint(voxCellMinArea)))
-              // ?voxalpha: alpha-active (edge) bricks take the flat path — the stochastic
-              // stipple needs dispatchElect, and front-slab depth is fine for a soft edge.
-              .and(voxAlpha && aActive ? (aActive.not() as unknown as NB) : (uint(1).equal(uint(1)) as unknown as NB))
+              .and(area.greaterThan(uint(VOX_SPLAT_FLOOR)))
               .toVar()
           : null;
         const brCx = cellOn ? (wgBrCx!.element(b) as unknown as NF).toVar() : null;
@@ -1327,6 +1354,29 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
         const cOccHi = cellOn ? (wgCellHi!.element(b) as unknown as NU).toVar() : null;
         const cMaskFull = cellOn
           ? cOccLo!.equal(uint(0xffffffff)).and(cOccHi!.equal(uint(0xffffffff))).toVar()
+          : null;
+        // CONSERVATIVE-RAY DILATION (Fix 2), per-brick uniform — hoisted out of the pixel loop.
+        // A pixel-CENTRE ray misses a box that genuinely overlaps the pixel's footprint at small
+        // screen sizes (classic conservative-raster failure ⇒ the "invisible far bricks" the old
+        // area>64 gate worked around). Dilate the slab-test AABB by ~half a pixel's world footprint
+        // at brick depth. Derivation with NO depth/matrix term: the brick's world diameter (2·brWR)
+        // projects to `span` px, so one pixel = 2·brWR/span world; half = brWR/span; and the brick
+        // LOCAL half brHf = brWR·invS = brWR/scale, so 0.5·pixelWorld in LOCAL units = brHf/span.
+        // span = the brick's larger screen extent (max(bbW,bbH)). Applied ONLY in the small band
+        // (area ≤ voxCellMinArea): >64px bricks are many pixels wide, pixel-centre sampling is fine,
+        // and the design keeps their existing (undilated) ray path byte-identical ⇒ dil = 0 there.
+        // The DDA cell grid still uses the RAW brHf (bmn = brC−brHf below); only the coarse slab
+        // hit-test box grows, so a grazing hit is a slightly fattened silhouette (heals #69 gaps),
+        // never a shifted cell index. Conservative: a larger box only ADDS a sub-pixel edge, never
+        // a hole.
+        const cellEhf = cellOn && brHf
+          ? brHf
+              .add(
+                area
+                  .lessThanEqual(uint(voxCellMinArea))
+                  .select(brHf.div(toF(bbW).max(toF(bbH)).max(float(1))), float(0)),
+              )
+              .toVar()
           : null;
         // each lane strides this brick's footprint: localPx = brickLocal, brickLocal+128, …
         loopU(brickLocal, area, (localPx) => {
@@ -1403,7 +1453,7 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
           // ── ?voxcell RAY PATH: slab-test the pixel ray against the brick's LOCAL AABB
           // (rotated-cube silhouette), DDA a non-full 4³ occupancy mask to the first occupied
           // cell, elect with the EXACT per-pixel hit depth. Misses paint nothing (the carve).
-          if (cellOn && cellElig && brCx && brCy && brCz && brHf && cOccLo && cOccHi && cMaskFull && roLx && roLy && roLz && rayBaseL && rayDxL && rayDyL && clipP0zw && clipDb && clipDx && clipDy) {
+          if (cellOn && cellElig && brCx && brCy && brCz && brHf && cellEhf && cOccLo && cOccHi && cMaskFull && roLx && roLy && roLz && rayBaseL && rayDxL && rayDyL && clipP0zw && clipDb && clipDx && clipDy) {
             If(cellElig, () => {
               // OVERDRAW EARLY-OUT: the Phase-A front-slab key `cand` is an UPPER BOUND on any
               // per-pixel hit key of this brick (a hit is at/behind the front slab ⇒ farther ⇒
@@ -1430,16 +1480,19 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
               const invDx = float(1).div(rdX).toVar();
               const invDy = float(1).div(rdY).toVar();
               const invDz = float(1).div(rdZ).toVar();
-              // slab test vs [brC ± brHf]
+              // slab test vs the DILATED box [brC ± cellEhf] (conservative half-pixel dilation in
+              // the small band; cellEhf == brHf for >64px bricks ⇒ existing path unchanged). The
+              // DDA cell grid below keeps the RAW box min (bmn = brC − brHf) so cell indices never
+              // shift — only the coarse hit-test box grows.
               const bmnX = brCx.sub(brHf).toVar();
               const bmnY = brCy.sub(brHf).toVar();
               const bmnZ = brCz.sub(brHf).toVar();
-              const t1x = bmnX.sub(roLx).mul(invDx).toVar();
-              const t2x = brCx.add(brHf).sub(roLx).mul(invDx).toVar();
-              const t1y = bmnY.sub(roLy).mul(invDy).toVar();
-              const t2y = brCy.add(brHf).sub(roLy).mul(invDy).toVar();
-              const t1z = bmnZ.sub(roLz).mul(invDz).toVar();
-              const t2z = brCz.add(brHf).sub(roLz).mul(invDz).toVar();
+              const t1x = brCx.sub(cellEhf).sub(roLx).mul(invDx).toVar();
+              const t2x = brCx.add(cellEhf).sub(roLx).mul(invDx).toVar();
+              const t1y = brCy.sub(cellEhf).sub(roLy).mul(invDy).toVar();
+              const t2y = brCy.add(cellEhf).sub(roLy).mul(invDy).toVar();
+              const t1z = brCz.sub(cellEhf).sub(roLz).mul(invDz).toVar();
+              const t2z = brCz.add(cellEhf).sub(roLz).mul(invDz).toVar();
               const tEnter = t1x.min(t2x).max(t1y.min(t2y)).max(t1z.min(t2z)).max(0).toVar();
               const tExit = t1x.max(t2x).min(t1y.max(t2y)).min(t1z.max(t2z)).toVar();
               If(tExit.greaterThanEqual(tEnter), () => {
@@ -1472,10 +1525,22 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
                   const tMz = bmnZ.add(toF(ciz.add(offZ)).mul(cellSz)).sub(roLz).mul(invDz).toVar();
                   const done = uint(0).toVar();
                   const tCur = tEnter.toVar();
-                  // 6 steps (not the worst-case 10): on exhaustion the pixel is ACCEPTED at the
-                  // current cell (conservative fill — a slightly denser far brick, never a hole).
-                  // Misses through sparse masks were the 200k cost driver; this bounds them.
-                  loopU(uint(0), uint(6), () => {
+                  // 10 steps = the TRUE worst case, so the budget NEVER binds: a segment inside a
+                  // 4³ grid starts in 1 cell and crosses at most 3 boundaries per axis (4−1 each),
+                  // so it visits ≤ 1 + 3·(4−1) = 3·4−2 = 10 cells. The old 6-step budget with an
+                  // exhaustion-ACCEPT was a cost cap ("misses through sparse masks were the 200k
+                  // cost driver") — but an oblique ray visits up to 10 cells, so at oblique view
+                  // angles rays through SPARSE occupancy exhausted at 6 WITHOUT reaching an
+                  // occupied cell or the exit and got ACCEPTED ⇒ the footprint painted as a flat
+                  // fill at mid-brick depth ⇒ the view-angle-dependent "crossing planes"
+                  // (user-verified repro: orbiting turns planes⇄cubes — axis-on angles resolved
+                  // to cubes, oblique to planes, thickness varying with angle). Now: exhaustion
+                  // is DEAD (budget ≥ worst case) and a no-hit exit REJECTS (paints nothing).
+                  // Perf: the per-step tExit test below terminates most rays well before 10
+                  // steps, and every false-ACCEPT removed also removes a full election
+                  // (atomicMax + payload store) ⇒ plausibly neutral-or-better; the standing
+                  // re-profile gates it.
+                  loopU(uint(0), uint(10), () => {
                     If(done.equal(uint(0)), () => {
                       const bit = uint(cix).add(uint(ciy).mul(uint(4))).add(uint(ciz).mul(uint(16))).toVar();
                       const occ = bit
@@ -1504,27 +1569,29 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
                             tMz.assign(tMz.add(tDz));
                           });
                         });
-                        // walked out of the brick ⇒ miss
+                        // walked out of the brick (cell index out of range) OR the march t
+                        // passed the slab EXIT (tCur > tExit — the ray has left the box even
+                        // if the clamped indices linger in range) ⇒ MISS: done=1 with hit
+                        // STILL 0, so the pixel paints nothing (the carve).
                         const out = cix
                           .lessThan(toI(0))
                           .or(cix.greaterThan(toI(3)))
                           .or(ciy.lessThan(toI(0)))
                           .or(ciy.greaterThan(toI(3)))
                           .or(ciz.lessThan(toI(0)))
-                          .or(ciz.greaterThan(toI(3)));
+                          .or(ciz.greaterThan(toI(3)))
+                          .or(tCur.greaterThan(tExit));
                         If(out, () => {
                           done.assign(uint(1));
                         });
                       });
                     });
                   });
-                  // step budget exhausted while STILL IN-BOUNDS (done=0 ⇒ neither hit nor
-                  // walked out) ⇒ conservative HIT at the current march point — a slightly
-                  // denser far brick, never a hole. Bounds the sparse-mask miss cost.
-                  If(done.equal(uint(0)), () => {
-                    hit.assign(uint(1));
-                    tHit.assign(tCur);
-                  });
+                  // NO exhaustion-accept: the 10-step budget covers the worst case, so done=0
+                  // here is unreachable — a ray either HIT an occupied cell (hit=1) or exited
+                  // the brick without one (hit stays 0 ⇒ REJECT, paints nothing). The old
+                  // conservative fill here was the view-dependent "crossing planes" artifact
+                  // (see the budget note above).
                 });
                 If(hit.equal(uint(1)), () => {
                   // exact per-pixel depth via the linear clip basis: clip.zw = P0zw + Dzw·t,
@@ -1541,12 +1608,31 @@ export function buildNaniteVoxelRaster(deps: VoxelRasterDeps): VoxelRasterHandle
                       .shiftLeft(uint(8))
                       .bitOr(payload.bitAnd(uint(0xff)))
                       .toVar();
-                    If(candL.greaterThan(prevE), () => {
-                      const wonE = atomicMax(visPayloadV.atomic.element(px), candL) as unknown as NU;
-                      If(candL.greaterThan(wonE), () => {
-                        atomicStore(visBV.atomic.element(px), voxIdB);
+                    // election body — candL (the atomicMax value) is built above in this same
+                    // conditional subtree; the atomic consumer nests below it (hoist-safe).
+                    const rayElect = (): void => {
+                      If(candL.greaterThan(prevE), () => {
+                        const wonE = atomicMax(visPayloadV.atomic.element(px), candL) as unknown as NU;
+                        If(candL.greaterThan(wonE), () => {
+                          atomicStore(visBV.atomic.element(px), voxIdB);
+                        });
                       });
-                    });
+                    };
+                    // Fix 1 in the ray path: accept = ray-hit AND (dense OR hash < alpha). The
+                    // hash is the SAME screen-anchored 2D dither the flat path uses (stable, no
+                    // shimmer). Dense bricks (aActive false, uniform) take the .not() branch to a
+                    // plain election — the fract/sin hash lives in the untaken Else ⇒ zero added
+                    // per-pixel cost for the solid fast path.
+                    if (voxAlpha && aActive && aAlpha) {
+                      If(aActive.not(), rayElect).Else(() => {
+                        const h = fract(
+                          sin(toF(x).mul(12.9898).add(toF(y).mul(78.233))).mul(43758.5453),
+                        ) as unknown as NF;
+                        If(h.lessThan(aAlpha), rayElect);
+                      });
+                    } else {
+                      rayElect();
+                    }
                   });
                 });
               });
