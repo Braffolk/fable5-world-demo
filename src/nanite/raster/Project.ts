@@ -72,6 +72,7 @@ import {
 } from '../Tsl';
 import type { BufOf, UV2 } from '../Tsl';
 import { CTX_STRIDE, CTX_U } from './ClusterCtx';
+import { HWPROJ } from '../NaniteHwClass';
 
 type U32Views = ReturnType<typeof sU32Views>;
 
@@ -342,7 +343,14 @@ export function buildProject(p: {
     //       project, and clusterHwClass's coverage gate (vcompact count > 0) guarantees
     //       every projected mesh HW cluster takes the per-UNIQUE-VERT path below.
     // (Profile pair of the revert: profile-results-20260709-{194832,204125}.)
-    returnIf(rU(11).equal(uint(1)).and(rU(0).equal(uint(1))));
+    // With the flagship OFF (HWPROJ, default — see NaniteHwClass) nobody reads projected
+    // verts for HW clusters ⇒ skip ALL of them (the pre-flagship rule); narrowed to
+    // terrain-only when the ?hwproj=1 opt-in compiles the `_clE` reader.
+    if (HWPROJ) {
+      returnIf(rU(11).equal(uint(1)).and(rU(0).equal(uint(1))));
+    } else {
+      returnIf(rU(11).equal(uint(1)));
+    }
 
     const triCount = rU(3);
     // NB: the per-thread `localTri < triCount` gate is NOT a global early-out anymore — the

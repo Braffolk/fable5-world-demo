@@ -73,7 +73,7 @@ import {
   type TrunkWindOpt,
   type VertCtx,
 } from './NaniteFetch';
-import { clusterHwClass } from './NaniteHwClass';
+import { clusterHwClass, HWPROJ } from './NaniteHwClass';
 import { makeVertexCache } from './NaniteVertexCache';
 import {
   buildNaniteVoxelRaster,
@@ -618,8 +618,7 @@ export function buildNaniteRaster(
   // compute-fetch + wind + vp + snap path. `?hwproj=0` is the disable-only escape back to
   // the compute-fetch vertex — selected at BUILD time in buildHw (the other body is never
   // compiled), never a runtime shader branch.
-  const hwproj =
-    new URLSearchParams(window.location.search).get('hwproj') !== '0';
+  const hwproj = HWPROJ; // opt-in flagship — single source of truth in NaniteHwClass
   // PERF-3 win #2 — the cooperative vertex-transform cache lives in its own module
   // (default OFF, ?vcompact=1; measured marginal/conditional — see NaniteVertexCache).
   const vcache = makeVertexCache(gpu, nfetch);
