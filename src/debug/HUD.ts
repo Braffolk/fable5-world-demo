@@ -577,17 +577,16 @@ export class Hud {
 
   private renderCull(c: Record<string, number>): void {
     if (!this.sections.get('cull')?.open) return;
-    this.secPre('cull').textContent = this.kv([
+    const keys: [string, string][] = [
       ['nanite.visClusters', 'visClusters'],
       ['nanite.dagClusters', 'dagClusters'],
-      ['nanite.chunks', 'chunks'],
-      ['nanite.rejInst', 'rejInst'],
-      ['nanite.rejClust', 'rejClust'],
-      ['nanite.p2', 'p2 append'],
       ['nanite.voxClusters', 'voxClusters'],
-      ['nanite.orphans', 'orphans'],
-      ['nanite.covered', 'covered'],
-    ], c);
+    ];
+    // orphans / covered are ?audit-gated (only populated under ?audit — see NaniteView):
+    // show the rows ONLY when a value exists, rather than a permanent '–'.
+    if (c['nanite.orphans'] !== undefined) keys.push(['nanite.orphans', 'orphans']);
+    if (c['nanite.covered'] !== undefined) keys.push(['nanite.covered', 'covered']);
+    this.secPre('cull').textContent = this.kv(keys, c);
   }
 
   private renderGpu(s: Engine['stats']): void {
@@ -625,8 +624,7 @@ export class Hud {
     const known = new Set([
       'nanite.visTris', 'nanite.midTris', 'nanite.splatFrags', 'nanite.hwTris',
       'nanite.voxBrickWrites', 'nanite.voxClusters', 'nanite.visClusters',
-      'nanite.dagClusters', 'nanite.chunks', 'nanite.rejInst', 'nanite.rejClust',
-      'nanite.p2', 'nanite.orphans', 'nanite.covered', 'nanite.mb', 'gpu.geometries',
+      'nanite.dagClusters', 'nanite.orphans', 'nanite.covered', 'nanite.mb', 'gpu.geometries',
       'gpu.textures', 'gpu.buffers', 'nanite.meshes', 'nanite.clusters',
       'nanite.trisK', 'nanite.inst', 'nanite.dagTris',
       'nanite.voxRoutedTris', 'nanite.clhwTris',

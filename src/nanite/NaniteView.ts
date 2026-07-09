@@ -13,8 +13,7 @@
  * `cluster` paints meshlet hash colors (the N1 checkpoint); `hzb` shows a
  * pyramid level (`&hzblevel=N`); `?occl=0` disables occlusion; `?cullfreeze=1`
  * freezes visibility (cull + HZB stop; fly to inspect what was culled).
- * HUD: nanite.visClusters / chunks / rejInst / rejClust / hwTris (+ overflow
- * warnings, F14).
+ * HUD: nanite.visClusters / hwTris (+ overflow warnings, F14).
  */
 
 import { Vector2 } from 'three';
@@ -159,9 +158,6 @@ export function buildNaniteView(
           engine.stats.counters['nanite.covered'] = aud.covered;
         }
         engine.stats.counters['nanite.visClusters'] = c.visClusters;
-        // chunks / rejInst / rejClust / p2 are RELICS of the pre-hier cull — left UNWIRED
-        // (HUD renders '–') instead of misleading 0s / visClusters mirrors. See NaniteFrame
-        // meterRead for the per-slot rationale; readCounts still uses them for overflow only.
         engine.stats.counters['nanite.hwTris'] = hw;
         if (c.overflow && warned !== c.overflow) {
           warned = c.overflow;
