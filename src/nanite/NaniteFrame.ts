@@ -247,10 +247,12 @@ export function buildNaniteFrame(
       // ?voxprev two-pass partition classifier — the LIBERAL centre test, NOT the
       // conservative emit test (spec-prev-frame-occlusion §2.1). null at ?occl=0 ⇒ inert.
       voxPrevTest: occl ? hzb.sphereProbablyOccluded : null,
-      // ?crownlod0 (DEFAULT ON, user mandate 2026-07-04): leaf crowns are LOD0 (full
-      // detail) or voxel — never a simplified aggregate level. =0 reverts to the
-      // aggregate-ladder cut. Camera path only (shadow culls omit it).
-      crownLod0: params.get('crownlod0') !== '0',
+      // crown-LOD Phase 2 (2026-07-08): the near-crown mesh LOD ladder is now the
+      // DEFAULT — leaf clusters emit at coarser rungs inside 0..60 m (BuildCrownLodDag).
+      // ?crownlod0=1 is the DISABLE-only compare flag: it force-descends every leaf
+      // cluster with children back to full LOD0 (the pre-Phase-2 behavior), for A/B.
+      // Camera path only (shadow culls omit it — casters already stay coarse).
+      crownLod0: params.get('crownlod0') === '1',
     },
   );
   if (!hf.biomeTex || !hf.fieldsTex || !hf.noiseA || !hf.noiseB) {
@@ -689,6 +691,8 @@ export function buildNaniteFrame(
     return Promise.all([
       cull.readCounts(r),
       raster.readHwCount(r),
+      raster.readSplatCount(r),
+      raster.readMidCount(r),
       shadow ? shadow.readCounts(r) : Promise.resolve(null),
       grass ? grass.readCounts(r) : Promise.resolve(null),
       scarOn ? raster.readScar(r) : Promise.resolve(null),
@@ -698,7 +702,7 @@ export function buildNaniteFrame(
       // partition classifier is degenerate — no perf verdict may be read while so.
       voxActive && cull.voxPrevEnabled ? cull.readVoxBuckets(r) : Promise.resolve(null),
     ])
-      .then(([c, hw, sh, grassCounts, scar, voxCount, voxWrites, voxBuckets]) => {
+      .then(([c, hw, splatFrags, midTris, sh, grassCounts, scar, voxCount, voxWrites, voxBuckets]) => {
         if (grassCounts) {
           out['nanite.grassClumps'] = grassCounts.clumps;
           out['nanite.grassHwTris'] = grassCounts.hwTris;
@@ -749,6 +753,10 @@ export function buildNaniteFrame(
         out['nanite.rejClust'] = c.rejClust;
         out['nanite.p2'] = c.p2Appends;
         out['nanite.hwTris'] = hw;
+        // F3 triangle-budget per-layer append counts (RAW, pre-cap). Only present on the
+        // single-pass world1 path (null otherwise → omitted so the HUD shows n/a).
+        if (splatFrags !== null) out['nanite.splatFrags'] = splatFrags;
+        if (midTris !== null) out['nanite.midTris'] = midTris;
         if (c.overflow && warned !== c.overflow) {
           warned = c.overflow;
           // eslint-disable-next-line no-console

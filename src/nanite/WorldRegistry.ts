@@ -31,11 +31,13 @@ import { Vector2 } from 'three';
 import { internalSize } from '../render/RenderScale';
 import type { ScatterLayer, ScatterResult } from '../gpu/passes/Scatter';
 import { VegClass } from '../gpu/passes/Scatter';
-import type { VegLib, VegPool, PoolPart } from '../vegetation/VegLibrary';
+import { CROWN_LOD_SCHEDULE, type VegLib, type VegPool, type PoolPart } from '../vegetation/VegLibrary';
+import type { CrownLodLevel } from '../vegetation/TreeBuilder';
 import type { Heightfield } from '../world/Heightfield';
 import { WORLD_SIZE } from '../world/WorldConst';
 import { type DagBuild, type DagCluster, buildDag, meshletizeDag } from './BuildDag';
-import { aggLodErrorK, buildAggregateDag, setAggLodErrorK } from './BuildAggregateDag';
+import { buildAggregateDag, setAggLodErrorK } from './BuildAggregateDag';
+import { type CrownLodLevelMesh, buildCrownLodDag, crownLodOwnErrors } from './BuildCrownLodDag';
 import { BootTrace, yieldIfDue } from '../debug/BootTrace';
 import {
   BootCache,
@@ -269,6 +271,12 @@ interface VegKnobs {
   aggDist: number;
   ftCell: number;
   anchorH: number;
+  /** crown-LOD Phase 2: error-scale on the near-crown mesh LOD ladder cuts
+   *  (BuildCrownLodDag). DEFAULT 1.0 (the ladder's engagement fractions already
+   *  span 0..transitionDist); ?leaflodk overrides it (>1 pushes rungs farther /
+   *  fuller near crown, <1 nearer). Own default because the crown ladder's error
+   *  scale is NOT the aggregate builder's (which stays 0.4 for grass/fartiles). */
+  crownLodErrorK: number;
   /** raw ?stress / ?naniteleafdensity / ladder-knob params — cache-key fragments */
   stressRaw: string | null;
   leafDensityRaw: string | null;
@@ -314,12 +322,16 @@ function resolveVegKnobs(renderer: Renderer): VegKnobs {
   const farTilesOn = qVox.get('fartiles') !== '0';
   const aggDist = Number(qVox.get('aggdist') ?? 280) || 280;
   const ftCell = Number(qVox.get('ftcell') ?? 0.75) || 0.75;
+  const lkRaw = qVox.get('leaflodk');
   {
-    const lk = qVox.get('leaflodk');
-    if (lk !== null) setAggLodErrorK(Number(lk));
+    if (lkRaw !== null) setAggLodErrorK(Number(lkRaw));
     const occRaw = qVox.get('voxocc');
     if (occRaw !== null) setVoxOccThreshold(Number(occRaw));
   }
+  // crown-LOD ladder error scale: shares the ?leaflodk knob but keeps its OWN
+  // default (1.0) — the crown ladder's engagement fractions are baked for scale 1,
+  // unlike the aggregate builder's 0.4 (a different, compounding error scale).
+  const crownLodErrorK = lkRaw !== null && Number.isFinite(Number(lkRaw)) && Number(lkRaw) > 0 ? Number(lkRaw) : 1.0;
   const voxLod = qVox.get('voxlod') !== '0';
   const anchorH = internalSize(renderer, new Vector2()).y; // ?rscale: τ anchor follows the render res
   {
@@ -349,6 +361,7 @@ function resolveVegKnobs(renderer: Renderer): VegKnobs {
     aggDist,
     ftCell,
     anchorH,
+    crownLodErrorK,
     stressRaw: qVox.get('stress'),
     leafDensityRaw: qVox.get('naniteleafdensity'),
     keyKnobs: ['voxlodk', 'voxlodlevels', 'voxlodsparse', 'voxlodshell', 'leaflodk', 'clustertris', 'clusterfill'].map(
@@ -380,6 +393,10 @@ interface VegDagJob {
   /** LAZY (memoized per pool geometry): a full cache hit must not pay ~90
    *  geometryToSource materializations on every warm boot. */
   source: () => ExplicitSource;
+  /** crown-LOD Phase 2 (aggregate/leaf jobs only): the pre-pruned ladder rungs in
+   *  DAG vertex form (finest→coarsest), fed to buildCrownLodDag. LAZY/memoized like
+   *  `source`. Absent ⇒ single-level fallback (LOD0-only, today's behavior). */
+  ladder?: () => CrownLodLevelMesh[];
 }
 interface VegCrownJob extends VegDagJob {
   idF: number;
@@ -392,6 +409,38 @@ interface VegJobPlan {
   aggJobs: VegDagJob[];
   /** crown voxelizations — keyed by idF (order-independent) */
   crownJobs: VegCrownJob[];
+}
+
+/** convert a Phase-1 crown ladder (BufferGeometry rungs) → DAG-vertex meshes for
+ *  buildCrownLodDag. Empty when the pool has no ladder (fallback → single LOD0). */
+function ladderToMeshes(ladder: CrownLodLevel[] | null | undefined): CrownLodLevelMesh[] {
+  if (!ladder || ladder.length === 0) return [];
+  return ladder.map((l) => {
+    const src = geometryToSource(l.geo);
+    return { verts: explicitToDagVerts(src), indices: src.indices };
+  });
+}
+
+/** crown-LOD Phase 2 (design §5.8 OPTION A): build the leaf crown's LOD DAG from
+ *  the pre-pruned ladder — a PASSTHROUGH (no re-prune / weld / grow). Falls back to
+ *  a single LOD0 level (== today's maxLevels:1 aggregate) when the ladder is absent.
+ *  ownError placement + errorScale come from the resolved knobs; deterministic. */
+function buildCrownDag(
+  ladderMeshes: CrownLodLevelMesh[],
+  fallbackSource: ExplicitSource,
+  knobs: { transitionDist: number; anchorH: number; crownLodErrorK: number },
+): DagBuild {
+  const levels: CrownLodLevelMesh[] =
+    ladderMeshes.length > 0
+      ? ladderMeshes
+      : [{ verts: explicitToDagVerts(fallbackSource), indices: fallbackSource.indices }];
+  const ownErrors = crownLodOwnErrors(levels.length, {
+    transitionDist: knobs.transitionDist,
+    renderHeight: knobs.anchorH,
+    fov: APP_FOV_DEG,
+    errorScale: knobs.crownLodErrorK,
+  });
+  return buildCrownLodDag(levels, DAG_VERT_STRIDE, { maxTris: MAX_CLUSTER_TRIS, ownErrors });
 }
 
 /** enumerate the expensive per-pool build jobs with EXACTLY the pool walk's
@@ -421,9 +470,15 @@ function planVegJobs(
     }
     if (leafOn && pool.leaf) {
       const leafGeo = pool.leaf.geo;
+      const buildLadder = pool.leaf.buildLadder;
       let leafSrc: ExplicitSource | null = null;
+      let leafRungs: CrownLodLevelMesh[] | null = null;
       const leafSource = (): ExplicitSource => (leafSrc ??= geometryToSource(leafGeo));
-      plan.aggJobs.push({ label: `${label}/leaf`, source: leafSource });
+      // LAZY: the ladder is only regenerated when this thunk fires (crown-DAG cache
+      // miss — see runDag). On a cache hit it is never called, so no ladder gen.
+      const ladder = (): CrownLodLevelMesh[] =>
+        (leafRungs ??= ladderToMeshes(buildLadder ? buildLadder() : null));
+      plan.aggJobs.push({ label: `${label}/leaf`, source: leafSource, ladder });
       if (knobs.voxReg && (!knobs.forceVoxOn || knobs.forceVoxAll || knobs.forceVoxId === idF)) {
         plan.crownJobs.push({ idF, label: `${label}/voxel`, source: leafSource, color: pool.leaf.color });
       }
@@ -493,6 +548,10 @@ export async function prepareWorldVeg(input: {
       anchorH: knobs.anchorH,
       fov: APP_FOV_DEG,
       leafDensity: knobs.leafDensityRaw,
+      // crown-LOD Phase 2: the ladder's λ schedule + count + error scale set the
+      // crown DAG payload — a miss here would silently serve stale (LOD0-only) crowns.
+      crownLod: CROWN_LOD_SCHEDULE,
+      crownLodErrorK: knobs.crownLodErrorK,
       knobs: knobs.keyKnobs,
     },
   });
@@ -586,48 +645,46 @@ export async function prepareWorldVeg(input: {
         (async (): Promise<void> => {
           let built: DagBuild | null = null;
           const src = job.source();
+          if (agg) {
+            // crown-LOD Phase 2 (design §5.8 OPTION A): the leaf crown DAG is a
+            // multi-level ladder (maxLevels>1), fed the PRE-PRUNED rungs — a
+            // passthrough (no weld/grow). Built on the MAIN thread: the DagWorker's
+            // single-source AggDagReq can't carry the 4-mesh ladder, and the build
+            // (clusterize each rung) is cheap next to the ladder GEN (VegLibrary).
+            try {
+              await yieldIfDue();
+              built = buildCrownDag(job.ladder ? job.ladder() : [], src, knobs);
+            } catch (e) {
+              console.warn(`[worldveg] CROWNLOD ${job.label} build failed:`, e);
+              built = null;
+            }
+            dagOut[idx] = built;
+            return;
+          }
           if (pool) {
             try {
-              built = agg
-                ? await pool.buildAggregate({
-                    verts: explicitToDagVerts(src),
-                    vertStride: DAG_VERT_STRIDE,
-                    indices: src.indices,
-                    // P4 (user mandate): crown aggregate = LOD0-ONLY. crownlod0 makes the
-                    // camera use LOD0-or-voxel, and the leaf mesh is castShadows:false, so
-                    // the coarse aggregate mid-levels render NOWHERE — pure build+mem waste.
-                    opts: { seed: seed ?? 0, maxTris, maxLevels: 1 },
-                    clusterFill: fill,
-                    aggErrorK: aggLodErrorK(),
-                  })
-                : await pool.buildMesh({
-                    verts: explicitToDagVerts(src),
-                    vertStride: DAG_VERT_STRIDE,
-                    indices: src.indices,
-                    opts: { normalOffset: 3, maxTris },
-                    clusterFill: fill,
-                  });
+              built = await pool.buildMesh({
+                verts: explicitToDagVerts(src),
+                vertStride: DAG_VERT_STRIDE,
+                indices: src.indices,
+                opts: { normalOffset: 3, maxTris },
+                clusterFill: fill,
+              });
             } catch (e) {
-              console.warn(`[worldveg] ${agg ? 'AGG' : 'DAG'} worker ${job.label} failed — sync fallback:`, e);
+              console.warn(`[worldveg] DAG worker ${job.label} failed — sync fallback:`, e);
             }
           }
           if (!built) {
             try {
               await yieldIfDue();
-              built = agg
-                ? buildAggregateDag(explicitToDagVerts(src), DAG_VERT_STRIDE, src.indices, {
-                    seed: seed ?? 0,
-                    maxTris,
-                    maxLevels: 1, // P4: crown aggregate LOD0-only (dead post-crownlod0)
-                  })
-                : buildDag(explicitToDagVerts(src), DAG_VERT_STRIDE, src.indices, {
-                    normalOffset: 3,
-                    maxTris,
-                  });
+              built = buildDag(explicitToDagVerts(src), DAG_VERT_STRIDE, src.indices, {
+                normalOffset: 3,
+                maxTris,
+              });
             } catch (e) {
               // a null slot makes the registry re-attempt inline → same deferred
               // note as the pre-worker behavior; never fatal
-              console.warn(`[worldveg] ${agg ? 'AGG' : 'DAG'} ${job.label} build failed:`, e);
+              console.warn(`[worldveg] DAG ${job.label} build failed:`, e);
               built = null;
             }
           }
@@ -824,10 +881,17 @@ export async function buildWorldRegistry(input: {
   // N8-D1: heads whose class wants a DAG — built after registration, attached
   // after build(). The DAG comes off the head's FULL-detail source (rings[0]).
   const toDag: { handle: MeshHandle; source: ExplicitSource; label: string }[] = [];
-  // N9-C2: leaf crowns get the AREA-PRESERVING aggregate DAG (BuildAggregateDag —
-  // QEM degenerates on disconnected leaves) instead of QEM. Same DagBuild contract,
-  // so it rides the identical attachDag + cut; extends the crown to TREE_GEO_FAR.
-  const toAggregate: { handle: MeshHandle; source: ExplicitSource; label: string }[] = [];
+  // N9-C2 / crown-LOD Phase 2: leaf crowns get a multi-level LOD DAG built from the
+  // PRE-PRUNED ladder (BuildCrownLodDag — passthrough, no weld/grow). Same DagBuild
+  // contract, so it rides the identical attachDag + cut; extends across the mesh band.
+  // `buildLadder` = the LAZY ladder regen (invoked only if the inline fallback runs —
+  // the normal path is prep's prebuilt DAGs, so the ladder is never regenerated here).
+  const toAggregate: {
+    handle: MeshHandle;
+    source: ExplicitSource;
+    label: string;
+    buildLadder: (() => CrownLodLevel[] | null) | undefined;
+  }[] = [];
   // (voxel-foliage / far-tile knob RESOLUTION moved to resolveVegKnobs — shared with
   // the early prepareWorldVeg overlap path; destructured into locals above.)
   // ── boot cache (DDC — same store the forest path uses): the FARTILES splat is
@@ -856,6 +920,9 @@ export async function buildWorldRegistry(input: {
       fov: APP_FOV_DEG,
       stress: knobs.stressRaw,
       leafDensity: knobs.leafDensityRaw,
+      // crown-LOD Phase 2 ladder params (parity with the world-veg key).
+      crownLod: CROWN_LOD_SCHEDULE,
+      crownLodErrorK: knobs.crownLodErrorK,
       knobs: knobs.keyKnobs,
     },
   });
@@ -949,7 +1016,12 @@ export async function buildWorldRegistry(input: {
         aggregate: true,
       });
       reg.setMaxDistance(leafHead, TREE_GEO_FAR);
-      toAggregate.push({ handle: leafHead, source: leafSource, label: `${label}/leaf` });
+      toAggregate.push({
+        handle: leafHead,
+        source: leafSource,
+        label: `${label}/leaf`,
+        buildLadder: pool.leaf.buildLadder,
+      });
       leafHeads.set(idF, leafHead);
       // voxel-foliage (§5.2): voxelize this crown OFFLINE now (cost-tolerant) so the
       // brick total is known before the addLate reservation freezes (§5.3). The voxel
@@ -1313,10 +1385,10 @@ export async function buildWorldRegistry(input: {
     }
     reg.addLate({ verts: lateV, tris: lateT, clusters: lateC });
   }
-  // N9-C2: leaf-crown aggregate DAGs (area-preserving). Same DagBuild contract +
-  // attach queue as the QEM meshes above, so they ride the identical cut. Built
-  // synchronously here today; the boot cost is measured (the DAG-section flag) and
-  // moves to the Worker/time-slice path if it threatens the D6 world-gen budget.
+  // crown-LOD Phase 2: leaf-crown LOD DAGs from the pre-pruned ladder (Option A
+  // passthrough). Same DagBuild contract + attach queue as the QEM meshes above, so
+  // they ride the identical cut. The NORMAL path is prep's prebuilt DAGs (usableDags);
+  // this INLINE build only runs on a prep miss/mismatch, rebuilding from the ladder.
   const tAgg0 = performance.now();
   if (toAggregate.length > 0) {
     let aggV = 0;
@@ -1324,18 +1396,19 @@ export async function buildWorldRegistry(input: {
     let aggC = 0;
     for (let ai = 0; ai < toAggregate.length; ai++) {
       await yieldIfDue();
-      const item = toAggregate[ai] as { handle: MeshHandle; source: ExplicitSource; label: string };
+      const item = toAggregate[ai] as {
+        handle: MeshHandle;
+        source: ExplicitSource;
+        label: string;
+        buildLadder: (() => CrownLodLevel[] | null) | undefined;
+      };
       let built: DagBuild;
       try {
         built =
           usableDags?.[toDag.length + ai] ??
-          buildAggregateDag(explicitToDagVerts(item.source), DAG_VERT_STRIDE, item.source.indices, {
-            seed: seed ?? 0,
-            maxTris: MAX_CLUSTER_TRIS,
-            maxLevels: 1, // P4: crown aggregate LOD0-only (dead post-crownlod0)
-          });
+          buildCrownDag(ladderToMeshes(item.buildLadder ? item.buildLadder() : null), item.source, knobs);
       } catch (e) {
-        deferred.push(`AGG ${item.label}: build failed (${e instanceof Error ? e.message : String(e)})`);
+        deferred.push(`CROWNLOD ${item.label}: build failed (${e instanceof Error ? e.message : String(e)})`);
         continue;
       }
       built = meshletizeDag(built); // meshlet-local indexing (see toDag loop)
@@ -1350,8 +1423,8 @@ export async function buildWorldRegistry(input: {
   const aggBuildMs = performance.now() - tAgg0;
   if (toAggregate.length > 0) {
     console.log(
-      `[worldreg] leaf aggregate DAG: ${toAggregate.length} crowns in ${aggBuildMs.toFixed(0)} ms` +
-        (usableDags ? (prep.dagsFromCache ? ' (bootcache)' : ' (veg prep workers)') : ''),
+      `[worldreg] crown-LOD DAG: ${toAggregate.length} crowns in ${aggBuildMs.toFixed(0)} ms` +
+        (usableDags ? (prep.dagsFromCache ? ' (bootcache)' : ' (veg prep)') : ' (inline)'),
     );
   }
   // ---- GRASS patch-DAG lane — DEMOTED TO REFERENCE (?grasspatch=1 opt-in;

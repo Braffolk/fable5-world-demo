@@ -1181,13 +1181,13 @@ export function buildNaniteCull(
             });
           }
           if (crownLod0) {
-            // ?crownlod0 (DEFAULT ON — user mandate): leaf crowns render at LOD0 (full
-            // detail) or VOXEL, never a simplified aggregate level. The leaf head's draw
-            // envelope = voxnear, so every leaf cluster reaching this CAMERA traverse is
-            // inside the mesh band. Force any leaf cluster that still has DAG children to
-            // DESCEND regardless of screen-error; only true LOD0 leaves (childCount==0 ⇒
-            // ownError 0 ⇒ pOwn 0 ≤ τ) emit — watertight, no hole. Shadow culls never pass
-            // crownLod0 (caster leaf LOD stays coarse — LOD0 casters would blow the raster).
+            // crown-LOD Phase 2: the near-crown mesh LOD ladder (BuildCrownLodDag) is now
+            // the DEFAULT — leaf clusters emit at coarser rungs inside 0..60 m via the
+            // normal screen-error cut. ?crownlod0=1 is the DISABLE-only compare flag:
+            // force any leaf cluster that still has DAG children to DESCEND regardless of
+            // screen-error, so only true LOD0 leaves (childCount==0 ⇒ ownError 0 ⇒
+            // pOwn 0 ≤ τ) emit — the pre-Phase-2 full-detail crown, watertight, for A/B.
+            // Shadow culls never pass crownLod0 (caster leaf LOD stays coarse).
             If(mc.equal(uint(LEAF_MATCLASS)).and(rec.childCount.greaterThan(uint(0))), () => {
               forceDescend.assign(1);
             });

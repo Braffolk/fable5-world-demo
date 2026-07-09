@@ -106,6 +106,21 @@ export class Rng {
   fork(label: string): Rng {
     return new Rng(hashCombine(this.u32(), hashString(label)));
   }
+
+  /**
+   * Snapshot this stream at its current position. The clone produces the exact
+   * same subsequent sequence as the original, without advancing the original —
+   * used by the crown-LOD ladder to REPLAY the identical foliage RNG stream for
+   * every pruned level, so survivors are bit-identical to the full-density mesh.
+   */
+  clone(): Rng {
+    const r = new Rng(0);
+    r.a = this.a;
+    r.b = this.b;
+    r.c = this.c;
+    r.d = this.d;
+    return r;
+  }
 }
 
 /** Root world seed container with named stream derivation. */

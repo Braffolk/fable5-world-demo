@@ -280,6 +280,13 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
           buildAggregateDag(explicitToDagVerts(leafSrc), DAG_VERT_STRIDE, leafSrc.indices, {
             seed: seed.seed,
             maxTris: MAX_CLUSTER_TRIS,
+            // crown-LOD Phase 2 (2026-07-08): ?crownlod0's default flipped OFF (the
+            // world near-crown mesh ladder is now default-on). ForestScene still uses
+            // the OLD grow-based aggregate, whose coarse levels are the spiky/merged
+            // crowns crownlod0 used to hide — so pin it LOD0-only here to preserve
+            // ForestScene's appearance. (A ladder bring-up for ?scene=forest is a
+            // follow-up; the world scene is the Phase-2 target.)
+            maxLevels: 1,
           }),
       });
     }

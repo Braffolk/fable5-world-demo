@@ -26,18 +26,32 @@ import { BRICK_WORDS, readBrick, writeBrick } from './VoxelBrickCore';
 import srcVoxelize from './VoxelizeCrown.ts?raw';
 import srcBuildDag from './BuildDag.ts?raw';
 import srcBuildAgg from './BuildAggregateDag.ts?raw';
+import srcBuildCrownLod from './BuildCrownLodDag.ts?raw';
 import srcFarTiles from './FarTiles.ts?raw';
 import srcFarTilesSplat from './FarTilesSplat.ts?raw';
 import srcVoxelBrick from './VoxelBrick.ts?raw';
 import srcVoxelBrickCore from './VoxelBrickCore.ts?raw';
 import srcClusterize from './Clusterize.ts?raw';
+// crown-LOD ladder GEN (keep-mask hash + per-rung λ/growth/needle-μ/rows dispatch)
+// lives in TreeBuilder; the actual survivor MESHING (area-preserving width growth,
+// blade-row + needle-μ + stem coarsening) lives in LeafMesh — a change to EITHER
+// reshapes the ladder rungs and must invalidate the cached crown DAG.
+import srcTreeBuilder from '../vegetation/TreeBuilder.ts?raw';
+import srcLeafMesh from '../vegetation/LeafMesh.ts?raw';
 
 /** bump on changes to builder TRANSITIVE deps not covered by the ?raw hash list
  *  (DagCommon, VegLibrary geometry gen, registry append semantics).
  *  rev 2 (2026-07-04): brick pack format f64-lanes → 9×u32 GPU words (heap cut).
  *  rev 3 (2026-07-05): crown aggregate DAG → LOD0-only (maxLevels 1) — the coarse
- *  aggregate mid-levels are dead post-crownlod0/castShadows:false; drop build+mem. */
-const CACHE_REV = 3;
+ *  aggregate mid-levels are dead post-crownlod0/castShadows:false; drop build+mem.
+ *  rev 4 (2026-07-08): crown-LOD Phase 2 — crown DAG is now a MULTI-LEVEL ladder
+ *  (BuildCrownLodDag, fed the pre-pruned CROWN_LOD_SCHEDULE rungs); the 'dags'
+ *  payload for leaf crowns changed shape (LOD0-only → 4-rung anchor-chain).
+ *  rev 5 (2026-07-09): crown-LOD area preservation + intra-element coarsening —
+ *  ladder rungs now grow survivors (width ×1/λ) and coarsen them (blade rows /
+ *  needle-μ / stem segs), so every coarse rung's GEOMETRY changed; schedule is now
+ *  a per-kind rung table (+ LeafMesh.ts joins SRC_HASH). */
+const CACHE_REV = 5;
 
 const DB_NAME = 'laas-bootcache';
 const STORE = 'artifacts';
@@ -50,7 +64,7 @@ function fnv1a(s: string, h = 0x811c9dc5): number {
   return h >>> 0;
 }
 
-const SRC_HASH = [srcVoxelize, srcBuildDag, srcBuildAgg, srcFarTiles, srcFarTilesSplat, srcVoxelBrick, srcVoxelBrickCore, srcClusterize]
+const SRC_HASH = [srcVoxelize, srcBuildDag, srcBuildAgg, srcBuildCrownLod, srcFarTiles, srcFarTilesSplat, srcVoxelBrick, srcVoxelBrickCore, srcClusterize, srcTreeBuilder, srcLeafMesh]
   .reduce((h, s) => fnv1a(s, h), 0x811c9dc5)
   .toString(16);
 

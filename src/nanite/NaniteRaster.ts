@@ -213,6 +213,10 @@ export interface NaniteRasterHandles {
     hzbTail?: readonly unknown[],
   ): void;
   readHwCount(renderer: Renderer): Promise<number>;
+  /** F3 triangle-budget: RAW splat/mid queue append counts at slot [0] (pre-cap).
+   *  null when the queues don't exist (single-pass world1 only). */
+  readSplatCount(renderer: Renderer): Promise<number | null>;
+  readMidCount(renderer: Renderer): Promise<number | null>;
   /** count covered/orphan pixels (NaniteView ?audit=1) */
   audit(renderer: Renderer): void;
   readAudit(renderer: Renderer): Promise<{ orphans: number; covered: number }>;
@@ -551,8 +555,10 @@ export function buildNaniteRaster(
     TRIHZB_BASE,
     triTailN,
     scarEl,
+    splatQueueAttr,
     splatQueueV,
     splatDrawAttr,
+    midQueueAttr,
     midQueueV,
     midDrawAttr,
     kSplatArgs,
@@ -2595,6 +2601,19 @@ export function buildNaniteRaster(
     const buf = await readBuffer(renderer, hwQueueAttr, 0, 4);
     return new Uint32Array(buf)[0] ?? 0;
   };
+  // F3 triangle-budget: the RAW per-layer append counts at queue slot [0] (pre-cap;
+  // may exceed the cap ⇒ overflow/drops). splat = sub-pixel fragment appends (≈1px each),
+  // mid = 2..swmax SW-raster tri records. null when the queues don't exist (!splatElect).
+  const readSplatCount = async (renderer: Renderer): Promise<number | null> => {
+    if (!splatQueueAttr) return null;
+    const buf = await readBuffer(renderer, splatQueueAttr, 0, 4);
+    return new Uint32Array(buf)[0] ?? 0;
+  };
+  const readMidCount = async (renderer: Renderer): Promise<number | null> => {
+    if (!midQueueAttr) return null;
+    const buf = await readBuffer(renderer, midQueueAttr, 0, 4);
+    return new Uint32Array(buf)[0] ?? 0;
+  };
   const audit = (renderer: Renderer): void => {
     dispatch(renderer, kAudit);
   };
@@ -2643,6 +2662,8 @@ export function buildNaniteRaster(
     combined,
     world1,
     readHwCount,
+    readSplatCount,
+    readMidCount,
     audit,
     readAudit,
     scar: scarRun,

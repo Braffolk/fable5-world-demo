@@ -41,7 +41,7 @@ import {
 } from "./Impostors";
 import { buildRock } from "./RockBuilder";
 import { TREE_SPECIES } from "./Species";
-import { buildTree, type HeroDiet } from "./TreeBuilder";
+import { buildTree, type CrownLodLevel, type CrownLodRung, type HeroDiet } from "./TreeBuilder";
 import {
   buildFern,
   buildFlower,
@@ -83,6 +83,12 @@ export interface VegPool {
     geo: BufferGeometry;
     tris: number;
     color: { r: number; g: number; b: number; hueVar: number };
+    /** crown-LOD Phase 2: LAZY builder for the pre-pruned mesh ladder (finest→
+     *  coarsest, λ per CROWN_LOD_SCHEDULE) fed to BuildCrownLodDag as the DAG's LOD
+     *  levels. Deterministically REGENERATES the crown (same seed) and returns its
+     *  `foliageLadder`; invoked ONLY on a crown-DAG cache MISS (the ~17 s ladder gen
+     *  never runs on a warm boot). null when the species built no foliage mesh. */
+    buildLadder?: () => CrownLodLevel[] | null;
   };
 }
 
@@ -92,6 +98,59 @@ export interface VegPool {
  * Measured by tools/herotris.ts; mesh leaves carry the detail, bark radial
  * segs dieted where twig tube counts explode (beech: 24k anchors).
  */
+/**
+ * Crown-LOD ladder schedule (design §5.2) — one entry per rung, finest →
+ * coarsest. Rung 0 is native (λ=1, full detail, growth 1) so it stays
+ * byte-identical to LOD0; coarser rungs both PRUNE whole elements (λ) and coarsen
+ * the SURVIVORS' internal detail, then GROW survivors to preserve area (§3.3).
+ *
+ * The reduction is split so the ELEMENT-pruning λ can stay GENTLE (little macro
+ * sparsening — the thing the eye reads as "thinning") while the tri cut is carried
+ * mostly by INTRA-element detail reduction, which does not empty the silhouette:
+ *   - broadleaf: fewer blade `leafRows` at the same leaf envelope, survivor WIDTH
+ *     ×(1/λ). (needleMu/stemSegs unused.)
+ *   - conifer: intra-spray needle pruning `needleMu` (survivors width ×count/kept,
+ *     spray placement untouched) + gentle stem `stemSegs`, survivor WIDTH ×(1/λ).
+ *     Spruce/pine share this; conifer λ is gentler than broadleaf (spruce was the
+ *     worst historical offender ⇒ least macro pruning). (leafRows unused.)
+ *
+ * Seed-deterministic; the rung VALUES ride the BootCache key via WorldRegistry's
+ * `crownLod` param (CROWN_LOD_SCHEDULE below), and the meshing that consumes them
+ * (LeafMesh.ts/TreeBuilder.ts) is in the SRC_HASH ⇒ any change auto-invalidates.
+ */
+/** measured per-rung fraction of LOD0 tris (node validation): the broadleaf ladder
+ *  lands ≈ [1.0, 0.70, 0.46, 0.41] and pushes ~½-⅔ of the cut into the blade-row
+ *  reduction rather than leaf removal (λ stays ≥0.70 ⇒ little macro sparsening). */
+export const CROWN_LOD_BROADLEAF: readonly CrownLodRung[] = [
+  { lambda: 1.0, leafRows: 4, needleMu: 1, stemSegs: 4 },
+  { lambda: 0.88, leafRows: 3, needleMu: 1, stemSegs: 4 },
+  { lambda: 0.8, leafRows: 2, needleMu: 1, stemSegs: 4 },
+  { lambda: 0.7, leafRows: 2, needleMu: 1, stemSegs: 4 },
+];
+
+/** conifer ladder ≈ [1.0, 0.72, 0.51, 0.37] of LOD0 tris, with the needle-μ lever
+ *  carrying ~70% of the cut so the whole-spray λ can stay very gentle (spruce-safe:
+ *  λ never below 0.80 ⇒ ≤20% of sprays ever removed). */
+export const CROWN_LOD_CONIFER: readonly CrownLodRung[] = [
+  { lambda: 1.0, leafRows: 4, needleMu: 1.0, stemSegs: 4 },
+  { lambda: 0.92, leafRows: 4, needleMu: 0.78, stemSegs: 4 },
+  { lambda: 0.85, leafRows: 4, needleMu: 0.6, stemSegs: 3 },
+  { lambda: 0.8, leafRows: 4, needleMu: 0.46, stemSegs: 2 },
+];
+
+/** the rung schedule for a species (conifer vs broadleaf lever set). */
+export function crownLodScheduleFor(sp: SpeciesParams): readonly CrownLodRung[] {
+  return sp.kind === 'conifer' ? CROWN_LOD_CONIFER : CROWN_LOD_BROADLEAF;
+}
+
+/** cache-key witness: BOTH per-kind schedules, JSON-serialized into the crown-DAG
+ *  BootCache key (WorldRegistry) so ANY rung edit invalidates stale crowns. The
+ *  rung COUNT (both length 4) also sets the DAG ladder depth. */
+export const CROWN_LOD_SCHEDULE = {
+  broadleaf: CROWN_LOD_BROADLEAF,
+  conifer: CROWN_LOD_CONIFER,
+} as const;
+
 export const HERO_DIETS: Record<string, HeroDiet> = {
   // cards stay UNTHINNED at hero range: thinning enlarges the survivors
   // (sqrt-coverage rule) and a 1.65×-size card 4 m away is a giant flat
@@ -278,6 +337,11 @@ export async function buildVegLibrary(
           ...(HERO_DIETS[sp.id] ?? { cardTarget: 1500 }),
           meshAnchorTarget: leafAnchorTarget,
         },
+        // crown-LOD Phase 2: the ladder is NOT built here — regenerating 4 pruned
+        // rungs per crown adds ~17 s to EVERY boot (measured; pine +2.5 s/variant),
+        // and it is consumed ONLY to build the crown DAG, which the BootCache stores.
+        // So it is built LAZILY (pool.leaf.buildLadder, below) — invoked only on a
+        // DAG cache MISS. Warm boots (DAG cached) pay zero, exactly as before Phase 2.
       });
       const t1 = buildTree(sp, seed.rng(label), { lod: 1, inst, junctions: junctionsOn });
       const t2 = buildTree(sp, seed.rng(label), { lod: 2, inst, junctions: junctionsOn });
@@ -315,6 +379,22 @@ export async function buildVegLibrary(
               geo: t0.foliageMesh,
               tris: t0.foliageMesh.index ? t0.foliageMesh.index.count / 3 : 0,
               color: sp.foliageColor,
+              // crown-LOD Phase 2: lazy ladder regen (DAG-cache-miss only). Rebuilds
+              // this crown WITH the LOD schedule using the SAME seed/variant, so the
+              // λ=1 rung matches this pool's LOD0 crown deterministically. `sp`, `inst`,
+              // `label`, and the hero diet are captured from this pool's build above.
+              buildLadder: ((spC, rngLabel, instC) => (): CrownLodLevel[] | null =>
+                buildTree(spC, seed.rng(rngLabel), {
+                  lod: 0,
+                  inst: instC,
+                  junctions: junctionsOn,
+                  foliageMode: "hybrid",
+                  hero: {
+                    ...(HERO_DIETS[spC.id] ?? { cardTarget: 1500 }),
+                    meshAnchorTarget: leafAnchorTarget,
+                  },
+                  crownLodLevels: crownLodScheduleFor(spC),
+                }).foliageLadder)(sp, label, inst),
             }
           : undefined,
       });
