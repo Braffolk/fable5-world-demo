@@ -522,7 +522,7 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
   // PostStack), so tree render speed can be profiled through the actual pipeline, not
   // just the flat debug resolve. `?nanitedbg=cluster|flat|lod` keeps the lean NaniteView.
   const nanitedbg = q.get('nanitedbg');
-  const fullFrame = q.get('nanite') === '1' && !nanitedbg && q.get('naniteframe') !== '0';
+  const fullFrame = !nanitedbg && q.get('naniteframe') !== '0';
 
   if (fullFrame) {
     // The forest has NO terrain clusters, so the resolve's required hf maps are bound

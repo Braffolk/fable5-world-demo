@@ -48,7 +48,6 @@ function expandPureAblation(): void {
   const q = new URLSearchParams(window.location.search);
   if (q.get('pure') !== '1') return;
   const implied: Record<string, string> = {
-    nanite: '1',
     postmin: '1',
     nanshadow: '0',
     nandbg: 'flat',

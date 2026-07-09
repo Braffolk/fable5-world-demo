@@ -42,10 +42,9 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
    *  the veg block so the full-frame build below can thread it */
   let naniteBark: { texA: import('three').Texture; texB: import('three').Texture } | null = null;
   const qNan = new URLSearchParams(window.location.search);
-  /** `?nanite=1` without a debug view = full-frame mode (N4); `?naniteframe=0`
-   *  keeps N1 build-only semantics (boot probes) */
-  const naniteFrameMode =
-    qNan.get('nanite') === '1' && !qNan.get('nanitedbg') && qNan.get('naniteframe') !== '0';
+  /** nanite is THE renderer (unconditional since 2026-07-10); no debug view =
+   *  full-frame mode (N4); `?naniteframe=0` keeps N1 build-only semantics (boot probes) */
+  const naniteFrameMode = !qNan.get('nanitedbg') && qNan.get('naniteframe') !== '0';
 
   // ── USER DIRECTIVE (2026-06-13): OLD GEOMETRY HARD-DISABLED ──────────────
   // Every default (non-nanite) SOLID-GEOMETRY render path is switched OFF so
@@ -77,7 +76,6 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   );
   const view = new URLSearchParams(window.location.search).get('view');
   const vegEnabled = view !== 'scatter' && !ablate.has('veg');
-  const naniteOn = qNan.get('nanite') === '1';
   // D-N19 migration set: explicit ?naniteclasses=csv|all wins; full-frame mode
   // defaults to the ported set; dbg/build-only modes take everything. Resolved
   // in ONE place — the early prep and the registry build must never drift.
@@ -107,7 +105,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     };
   };
   const leafDensityQ = Number(qNan.get('naniteleafdensity'));
-  const worldRegistryModule = naniteOn ? import('../nanite/WorldRegistry') : null;
+  const worldRegistryModule = import('../nanite/WorldRegistry');
   let vegLibPromise: ReturnType<typeof buildVegLibrary> | null = null;
   let vegPrepPromise: Promise<import('../nanite/WorldRegistry').WorldVegPrep> | null = null;
   if (vegEnabled) {
@@ -295,82 +293,79 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       });
     }
 
-    // ?nanite=1 — N1-C4: build the GeometryRegistry from all opaque pools
-    // (cluster tables + packed mega-buffers only; rendering unchanged until
-    // N2/N3). ?nanite=0/absent: this block never runs.
-    if (naniteOn && worldRegistryModule) {
-      BootTrace.phase('nanite: world registry');
-      ctx.progress(0.985, 'nanite: clusterizing opaque pools');
-      const { buildWorldRegistry, PORTED_CLASSES } = await worldRegistryModule;
-      // class/DAG/leaf resolution shared with the early prep kick (top of function)
-      const setup = resolveNaniteSetup(PORTED_CLASSES as readonly MatCls[]);
-      const classes = setup.classes;
-      naniteClasses = classes ?? new Set(NAN_ALL);
-      const dagClasses = setup.dagClasses;
-      // N8-D2 Stage 2e (D-N39) — the "boot only to dag" FLIP: terrain is the full-res
-      // clip-STREAMED DAG by default, no window-grid fallback. `?nanitedterrain` absent ⇒
-      // production default (gridN 128, clip on). `?nanitedterrain=0` is the explicit opt-out
-      // to the legacy implicit window grid (tooling / A-B). An explicit `?nanitedterrain=<gridN>`
-      // (>0) selects that grid and stays one-shot uniform unless `?nanitedclip=1` (preserves
-      // the per-flag tool semantics — probe-dterrain etc.).
-      const dterrainParam = qNan.get('nanitedterrain');
-      const terrainDefault = dterrainParam == null;
-      const dagTerrainGridN = terrainDefault ? 128 : Math.max(0, Math.floor(Number(dterrainParam)));
-      // N8-D2 (D-N38): ?nanitedtiles=T → split the terrain DAG into T×T tiles.
-      const dtilesParam = qNan.get('nanitedtiles');
-      const dagTerrainTiles = dtilesParam ? Math.max(1, Math.floor(Number(dtilesParam))) : 1;
-      // N8-D2 Stage 2b-1 (D-N39): ?nanitedpool=1 → route terrain tiles through the
-      // streaming tile POOL (reserveTilePool/attachHeightDagTile) rather than the
-      // per-tile registerHeightDag+attachHeightDag path. GPU-render parity proof.
-      const dagTerrainPool = qNan.get('nanitedpool') === '1';
-      // N8-D2 Stage 2b-2/2e (D-N39): the geometry CLIPMAP (concentric same-gridN rings,
-      // true full-res at the center, coarse to the field edge, bounded). DEFAULT ON (the
-      // 2e flip); `?nanitedclip=1` also forces it for an explicit gridN. Implies the pool.
-      const dagTerrainClip = terrainDefault || qNan.get('nanitedclip') === '1';
-      // N8-D2 Stage 2d: ?nanitedskirt=0 disables the inter-level seam skirts (A/B). Default ON.
-      const dagTerrainSkirt = qNan.get('nanitedskirt') !== '0';
-      // N9-C0/C2: leaf heads — resolved in resolveNaniteSetup (see above)
-      const naniteLeaf = setup.naniteLeaf;
-      const wr = await buildWorldRegistry({
-        renderer: engine.renderer,
-        hf,
-        scatter,
-        lib,
-        counters: engine.stats.counters,
-        seed: seed.seed,
-        ...(classes ? { classes } : {}),
-        ...(dagClasses && dagClasses.size > 0 ? { dag: dagClasses } : {}),
-        ...(dagTerrainGridN > 0 ? { dagTerrainGridN } : {}),
-        ...(dagTerrainTiles > 1 ? { dagTerrainTiles } : {}),
-        ...(dagTerrainPool ? { dagTerrainPool: true } : {}),
-        ...(dagTerrainClip ? { dagTerrainClip: true } : {}),
-        ...(dagTerrainSkirt ? {} : { dagTerrainSkirt: false }),
-        ...(naniteLeaf ? { leaf: true } : {}),
-        // cold-boot overlap: crowns+DAGs already building since the top of boot
-        ...(vegPrepPromise ? { pre: vegPrepPromise } : {}),
+    // N1-C4: build the GeometryRegistry from all opaque pools
+    // (cluster tables + packed mega-buffers only).
+    BootTrace.phase('nanite: world registry');
+    ctx.progress(0.985, 'nanite: clusterizing opaque pools');
+    const { buildWorldRegistry, PORTED_CLASSES } = await worldRegistryModule;
+    // class/DAG/leaf resolution shared with the early prep kick (top of function)
+    const setup = resolveNaniteSetup(PORTED_CLASSES as readonly MatCls[]);
+    const classes = setup.classes;
+    naniteClasses = classes ?? new Set(NAN_ALL);
+    const dagClasses = setup.dagClasses;
+    // N8-D2 Stage 2e (D-N39) — the "boot only to dag" FLIP: terrain is the full-res
+    // clip-STREAMED DAG by default, no window-grid fallback. `?nanitedterrain` absent ⇒
+    // production default (gridN 128, clip on). `?nanitedterrain=0` is the explicit opt-out
+    // to the legacy implicit window grid (tooling / A-B). An explicit `?nanitedterrain=<gridN>`
+    // (>0) selects that grid and stays one-shot uniform unless `?nanitedclip=1` (preserves
+    // the per-flag tool semantics — probe-dterrain etc.).
+    const dterrainParam = qNan.get('nanitedterrain');
+    const terrainDefault = dterrainParam == null;
+    const dagTerrainGridN = terrainDefault ? 128 : Math.max(0, Math.floor(Number(dterrainParam)));
+    // N8-D2 (D-N38): ?nanitedtiles=T → split the terrain DAG into T×T tiles.
+    const dtilesParam = qNan.get('nanitedtiles');
+    const dagTerrainTiles = dtilesParam ? Math.max(1, Math.floor(Number(dtilesParam))) : 1;
+    // N8-D2 Stage 2b-1 (D-N39): ?nanitedpool=1 → route terrain tiles through the
+    // streaming tile POOL (reserveTilePool/attachHeightDagTile) rather than the
+    // per-tile registerHeightDag+attachHeightDag path. GPU-render parity proof.
+    const dagTerrainPool = qNan.get('nanitedpool') === '1';
+    // N8-D2 Stage 2b-2/2e (D-N39): the geometry CLIPMAP (concentric same-gridN rings,
+    // true full-res at the center, coarse to the field edge, bounded). DEFAULT ON (the
+    // 2e flip); `?nanitedclip=1` also forces it for an explicit gridN. Implies the pool.
+    const dagTerrainClip = terrainDefault || qNan.get('nanitedclip') === '1';
+    // N8-D2 Stage 2d: ?nanitedskirt=0 disables the inter-level seam skirts (A/B). Default ON.
+    const dagTerrainSkirt = qNan.get('nanitedskirt') !== '0';
+    // N9-C0/C2: leaf heads — resolved in resolveNaniteSetup (see above)
+    const naniteLeaf = setup.naniteLeaf;
+    const wr = await buildWorldRegistry({
+      renderer: engine.renderer,
+      hf,
+      scatter,
+      lib,
+      counters: engine.stats.counters,
+      seed: seed.seed,
+      ...(classes ? { classes } : {}),
+      ...(dagClasses && dagClasses.size > 0 ? { dag: dagClasses } : {}),
+      ...(dagTerrainGridN > 0 ? { dagTerrainGridN } : {}),
+      ...(dagTerrainTiles > 1 ? { dagTerrainTiles } : {}),
+      ...(dagTerrainPool ? { dagTerrainPool: true } : {}),
+      ...(dagTerrainClip ? { dagTerrainClip: true } : {}),
+      ...(dagTerrainSkirt ? {} : { dagTerrainSkirt: false }),
+      ...(naniteLeaf ? { leaf: true } : {}),
+      // cold-boot overlap: crowns+DAGs already building since the top of boot
+      ...(vegPrepPromise ? { pre: vegPrepPromise } : {}),
+    });
+    (engine as unknown as { naniteRegistry?: unknown }).naniteRegistry = wr.registry;
+    naniteRegistry = wr.registry;
+    // eslint-disable-next-line no-console
+    console.log(
+      `[laas] nanite registry: total ${wr.totalMs.toFixed(0)} ms (readback ` +
+        `${wr.readbackMs.toFixed(0)} + partition ${wr.partitionMs.toFixed(0)} + terrain minMax ` +
+        `${wr.terrainMs.toFixed(0)} + build ${wr.buildMs.toFixed(0)}` +
+        (wr.dagMeshes > 0
+          ? ` + DAG ${wr.dagMeshes}m/${wr.dagBuildMs.toFixed(0)}ms/${(wr.dagTris / 1000).toFixed(0)}k tris`
+          : '') +
+        `); deferred instances ${wr.deferredInstances}\n${wr.report.table}\ndeferred: ${wr.deferred.join('; ')}`,
+    );
+    // N8-D2 Stage 2b-3 (D-N39): drive the clipmap streamer from the live camera
+    // — re-center the 1 m detail rings each frame (evict departed / stream in
+    // arrived). The coarser resident ring backstops in-flight loads ⇒ no holes.
+    if (wr.terrainStreamer) {
+      const streamer = wr.terrainStreamer;
+      engine.onUpdate(() => {
+        streamer.update(engine.camera.position.x, engine.camera.position.z);
+        Object.assign(engine.stats.counters, streamer.counters());
       });
-      (engine as unknown as { naniteRegistry?: unknown }).naniteRegistry = wr.registry;
-      naniteRegistry = wr.registry;
-      // eslint-disable-next-line no-console
-      console.log(
-        `[laas] nanite registry: total ${wr.totalMs.toFixed(0)} ms (readback ` +
-          `${wr.readbackMs.toFixed(0)} + partition ${wr.partitionMs.toFixed(0)} + terrain minMax ` +
-          `${wr.terrainMs.toFixed(0)} + build ${wr.buildMs.toFixed(0)}` +
-          (wr.dagMeshes > 0
-            ? ` + DAG ${wr.dagMeshes}m/${wr.dagBuildMs.toFixed(0)}ms/${(wr.dagTris / 1000).toFixed(0)}k tris`
-            : '') +
-          `); deferred instances ${wr.deferredInstances}\n${wr.report.table}\ndeferred: ${wr.deferred.join('; ')}`,
-      );
-      // N8-D2 Stage 2b-3 (D-N39): drive the clipmap streamer from the live camera
-      // — re-center the 1 m detail rings each frame (evict departed / stream in
-      // arrived). The coarser resident ring backstops in-flight loads ⇒ no holes.
-      if (wr.terrainStreamer) {
-        const streamer = wr.terrainStreamer;
-        engine.onUpdate(() => {
-          streamer.update(engine.camera.position.x, engine.camera.position.z);
-          Object.assign(engine.stats.counters, streamer.counters());
-        });
-      }
     }
 
     // near-field carpets: 800k-blade grass ring + 80k debris ring

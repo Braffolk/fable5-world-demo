@@ -25,6 +25,23 @@ the junk that makes our code very unclean. and ALL of the dead files and non nan
    arms → delete dead files. Gates: tsc + headless smoke at worst pose (scratchpad/smoke.mjs
    pattern) + census counter parity (visTris/mid/clhw/hwTris/splat byte-match) per slice;
    one commit per slice for surgical revert.
+4. **(user 07-10) THIRD inventory agent added: tools/ folder audit** — ~85 probe-*.ts
+   one-offs + misc scripts; sort by last git edit oldest-first; KEEP-CORE (tools/profile/ +
+   tools/perf/interleaved_ab.mjs are untouchable) / KEEP-NICHE / DELETE / JUDGMENT; feeds
+   the same kill-list.
+### User decisions already made (07-10, pre-approval-round)
+- **`?preset` is REMOVED; `?quality` is the single quality axis.** The old
+  `preset=low|high|ultra` (Params.ts:36 → WorldConst.qualityConfig() → Heightfield.ts:115,
+  world-build grids heightRes/simRes/erosionIters/tileVerts) must be driven by the quality
+  tier instead. Mapping: quality low→qualityConfig('low'), medium/high→'high' (today's
+  default for everyone); DELETE the 'ultra' arm. ⚠️ low-tier users' world grids change
+  (2048/1024/500/49 vs high) — that's the intent, but heightfield output feeds BootCache:
+  verify the cache key carries the grid config or bump CACHE_REV.
+
+5. **(user 07-10) FINAL cleanup stage — AFTER all deletion slices land: restructure
+   src/nanite/** — reorganize the kept files into a hierarchical, readable folder structure.
+   Do NOT start until every other cleanup task is done. Pure moves + import rewrites,
+   behavior-identical; same gates (tsc + smoke + counter parity).
 
 ## PERF ARC CLOSE-OUT (2026-07-09 blitz — scorecard, all committed)
 - nanite-raster HEAD **345426c**: 5e45ae7 round-1 + d9e56ff round-2 + 9bac513 flagship→
