@@ -1245,14 +1245,19 @@ export function buildVoxelPyramid(
   },
 ): VoxelLevel[] {
   const levels: VoxelLevel[] = [];
-  // recover the L0 grid origin from any L0 brick so coarse centers tile exactly on it
-  // (brick(0,0,0).center = origin + 0.5*brickWorld). If the grid is empty, origin stays 0.
-  const l0World = BRICK_DIM * l0CellSize;
-  let gridOrigin = origin;
-  if (l0Bricks.length > 0) {
-    const b0 = l0Bricks[0] as BrickCPU;
-    gridOrigin = [b0.center[0] - 0.5 * l0World, b0.center[1] - 0.5 * l0World, b0.center[2] - 0.5 * l0World];
-  }
+  // TRUST the passed `origin` — do NOT re-derive it from l0Bricks[0].center. The old
+  // "recovery" (origin = b0.center − 0.5·brickWorld) silently CORRUPTED the fartile
+  // pyramids (#69, root-caused 2026-07-09): FarTiles.emitTile pads empty slots with a
+  // shared EMPTY_BRICK whose center is [0,0,0], so whenever a tile's corner brick was
+  // empty the recovered origin was off by ~+30.5 m ⇒ every coarse re-bin clamped its
+  // children to sub-cell 0 ⇒ one lit cell layer per coarse brick, phase-locked across
+  // the tile grid = the axis-aligned see-through stripes (period = one coarse-brick
+  // pitch; healed at oblique yaws; bimodal per tile on corner-brick emptiness). Crowns
+  // were immune (their empty bricks carry true centers ⇒ recovery == origin). Node A/B
+  // over the shipping splat: corrupted origin −1.455 vs true −32.0; L1 see-through
+  // columns 33/44 → 0/44 with the origin trusted. Both callers pass the exact grid
+  // origin (grep-verified). Full evidence: docs/tasks/2026-07-09/FARTILE-GAPS-DIAGNOSIS.md.
+  const gridOrigin = origin;
 
   // -- build the level pyramid (bricks + per-level blocks) -------------------
   // L0 ownError = 0 (the finest level ALWAYS emits — it has no children, so a near block can
