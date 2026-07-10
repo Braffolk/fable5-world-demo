@@ -71,7 +71,7 @@ import { WORLD_SIZE } from '../world/WorldConst';
 import { FLOW_CYC } from './WaterMaterial';
 
 /** world meters spanned by one caustic tile */
-export const CAUSTIC_TILE = 11;
+const CAUSTIC_TILE = 11;
 const RES = 512;
 
 /**
@@ -254,20 +254,6 @@ export function causticTint(wp: NV3, depthIn?: NF): NF {
   const sunUp = smoothstep(0.03, 0.16, sunDir.y);
   return pat.mul(submerged).mul(focal).mul(deepFade).mul(sunUp);
 }
-
-/** lit-graph triage variant: x = gated tint, y = gate product, z = raw pattern */
-export function causticTintParts(wp: NV3, depthIn?: NF): NV3 {
-  if (!ctx) throw new Error('caustic context not set');
-  const depth = depthIn ?? causticDepth(wp);
-  const sunDir = vec3(ctx.sunDir as unknown as NV3);
-  const gates = smoothstep(0.025, 0.09, depth)
-    .mul(smoothstep(0.04, 0.5, depth))
-    .mul(exp(depth.max(0).mul(-0.32)))
-    .mul(smoothstep(0.03, 0.16, sunDir.y));
-  const tint = causticTint(wp, depth);
-  return vec3(tint, gates, tint.div(gates.max(1e-4)));
-}
-
 
 /**
  * Wrap a material's albedo with the caustic factor. Call INSIDE the factory

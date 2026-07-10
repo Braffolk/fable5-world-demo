@@ -303,7 +303,7 @@ export function tubeForBranch(
 }
 
 /** ring resolution by branch level (LOD scales these down) */
-export function ringsForLevel(level: number, lodK: number): number {
+function ringsForLevel(level: number, lodK: number): number {
   const base = level === 0 ? 14 : level === 1 ? 8 : level === 2 ? 6 : 5;
   return Math.max(4, Math.round(base * lodK));
 }

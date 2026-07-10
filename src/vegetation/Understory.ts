@@ -10,8 +10,7 @@ import type { BufferGeometry } from 'three';
 import type { Rng } from '../core/Seed';
 import { buildTree } from './TreeBuilder';
 import { MeshGrower } from './TubeMesh';
-import type { LeafAnchor, SpeciesParams } from './VegTypes';
-import { buildFoliageCards } from './FoliageCards';
+import type { SpeciesParams } from './VegTypes';
 
 // ---------------------------------------------------------------------------
 // Shrub species (bush-tuned growth params; same grammar)
@@ -36,7 +35,7 @@ const bushLevels = (gnarl: number): SpeciesParams['levels'] => [
   },
 ];
 
-export const BUSH_HAZEL: SpeciesParams = {
+const BUSH_HAZEL: SpeciesParams = {
   id: 'bushHazel',
   label: 'Hazel shrub',
   kind: 'broadleaf',
@@ -55,7 +54,6 @@ export const BUSH_HAZEL: SpeciesParams = {
     clusterSize: [2, 3],
     normalBend: 0.6,
     planarLeaves: true,
-    card: { mode: 'cross', sizeK: 2.3 },
     leaf: { len: 1.0, width: 0.6, shapePow: 1.2, fold: 0.3, curl: 0.2, needleCount: 0, brush: 0 },
   },
   flare: { amp: 0.2, height: 0.3, lobes: 3 },
@@ -66,7 +64,7 @@ export const BUSH_HAZEL: SpeciesParams = {
   stubChance: 0.02,
 };
 
-export const BUSH_PINKFLOWER: SpeciesParams = {
+const BUSH_PINKFLOWER: SpeciesParams = {
   id: 'bushPink',
   label: 'Pink flowering shrub',
   kind: 'broadleaf',
@@ -85,7 +83,6 @@ export const BUSH_PINKFLOWER: SpeciesParams = {
     clusterSize: [2, 3],
     normalBend: 0.62,
     planarLeaves: true,
-    card: { mode: 'cross', sizeK: 2.3 },
     leaf: { len: 1.0, width: 0.5, shapePow: 1.25, fold: 0.28, curl: 0.18, needleCount: 0, brush: 0 },
   },
   flare: { amp: 0.2, height: 0.3, lobes: 3 },
@@ -97,7 +94,7 @@ export const BUSH_PINKFLOWER: SpeciesParams = {
   stubChance: 0.02,
 };
 
-export const BUSH_JUNIPER: SpeciesParams = {
+const BUSH_JUNIPER: SpeciesParams = {
   id: 'bushJuniper',
   label: 'Juniper mound',
   kind: 'conifer',
@@ -133,7 +130,6 @@ export const BUSH_JUNIPER: SpeciesParams = {
     clusterSize: [1, 1],
     normalBend: 0.6,
     planarLeaves: true,
-    card: { mode: 'lying', sizeK: 2.5 },
     leaf: { len: 0.05, width: 0.012, shapePow: 1, fold: 0, curl: 0, needleCount: 26, brush: 0 },
   },
   flare: { amp: 0.25, height: 0.25, lobes: 3 },
@@ -150,18 +146,21 @@ export const UNDERSTORY_SPECIES: readonly SpeciesParams[] = [
   BUSH_JUNIPER,
 ];
 
-/** multi-stem shrub: 3–5 leaning stems merged into one bark+foliage pair */
+/**
+ * multi-stem shrub: 3–5 leaning stems merged into one bark geometry.
+ * TODO(missing-leaves, CRITICAL): shrubs are BARK-ONLY — foliage was the card
+ * layer (deleted with the card pipeline, S8). They need a real MESH leaf crown
+ * (buildTree foliageMode 'mesh' per stem, or a merged crown) to read as plants.
+ */
 export function buildShrub(
   sp: SpeciesParams,
   rng: Rng,
-): { bark: BufferGeometry; foliage: BufferGeometry | null; tris: number } {
+): { bark: BufferGeometry; tris: number } {
   const stems = 3 + rng.int(3);
   const barkG = new MeshGrower();
-  const folG = new MeshGrower();
   const m = new Matrix4();
   const q = new Quaternion();
   const p = new Vector3();
-  let any = false;
   for (let i = 0; i < stems; i++) {
     const a = (i / stems) * Math.PI * 2 + rng.float();
     const lean = 0.12 + rng.float() * 0.22;
@@ -176,14 +175,9 @@ export function buildShrub(
     q.identity();
     m.compose(p, q, new Vector3(1, 1, 1));
     appendGeometry(barkG, tree.bark, m);
-    if (tree.foliage) {
-      appendGeometry(folG, tree.foliage, m);
-      any = true;
-    }
   }
   const bark = barkG.build();
-  const foliage = any ? folG.build() : null;
-  return { bark, foliage, tris: barkG.triCount + folG.triCount };
+  return { bark, tris: barkG.triCount };
 }
 
 /** append a built BufferGeometry into a grower (positions/normals/uv/vdata) */
@@ -214,57 +208,12 @@ function appendGeometry(g: MeshGrower, src: BufferGeometry, m: Matrix4): void {
 }
 
 // ---------------------------------------------------------------------------
-// Ferns
+// Ferns — REMOVED (S8, card-pipeline deletion).
+// TODO(missing-leaves, CRITICAL): ferns were ENTIRELY foliage-card geometry
+// (buildFern → buildFoliageCards) and are gone — no fern pool, no fern rows.
+// Rebuild as real MESH fronds (LeafMesh needle-spray) to restore them; they
+// were already invisible in the shipped world (card class deferred to N9).
 // ---------------------------------------------------------------------------
-
-/** capture species for the fern frond atlas (pinnate comb spray) */
-export const FERN_CAPTURE: SpeciesParams = {
-  ...BUSH_HAZEL,
-  id: 'fern',
-  label: 'Fern',
-  foliage: {
-    kind: 'needleSpray',
-    anchorLevel: 2,
-    spacing: 0.1,
-    tStart: 0.1,
-    scale: [0.3, 0.45],
-    tilt: 0.6,
-    clusterSize: [1, 1],
-    normalBend: 0.55,
-    planarLeaves: true,
-    captureStyle: 'frond',
-    card: { mode: 'cross', sizeK: 2.2 },
-    leaf: { len: 0.1, width: 0.032, shapePow: 1, fold: 0, curl: 0, needleCount: 30, brush: 0 },
-  },
-  foliageColor: { r: 0.045, g: 0.14, b: 0.028, hueVar: 0.22 },
-};
-
-/** fern plant: rosette of 6–10 frond cards rising from a center */
-export function buildFern(rng: Rng): BufferGeometry {
-  const g = new MeshGrower();
-  const fronds = 6 + rng.int(5);
-  const anchors: LeafAnchor[] = [];
-  const q = new Quaternion();
-  const qt = new Quaternion();
-  const Y = new Vector3(0, 1, 0);
-  const X = new Vector3(1, 0, 0);
-  for (let i = 0; i < fronds; i++) {
-    const az = (i / fronds) * Math.PI * 2 + rng.float() * 0.6;
-    const pitch = 0.75 + rng.float() * 0.4; // steep at the base, arches over
-    q.setFromAxisAngle(Y, az);
-    qt.setFromAxisAngle(X, -(Math.PI / 2 - pitch));
-    q.multiply(qt);
-    anchors.push({
-      pos: new Vector3(Math.cos(az) * 0.03, 0.02, Math.sin(az) * 0.03),
-      quat: q.clone(),
-      scale: 0.2 + rng.float() * 0.14,
-      hue: rng.float() * 2 - 1,
-      age: rng.float() * 0.4,
-    });
-  }
-  buildFoliageCards(g, anchors, { mode: 'lying', sizeK: 2.4, bend: 1.0 }, rng);
-  return g.build();
-}
 
 // ---------------------------------------------------------------------------
 // Flowers

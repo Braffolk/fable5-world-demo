@@ -19,6 +19,7 @@ import {
   PRESET_LABELS,
   applyPreset,
   normalizeTier,
+  setResolvedTier,
   type QualityTier,
 } from './core/Quality';
 
@@ -172,6 +173,7 @@ async function preboot(): Promise<void> {
   } else {
     tier = await showQualityPicker(loadRemembered() ?? 'medium');
   }
+  setResolvedTier(tier); // downstream grid sizing + bootcache key read this
   applyPreset(tier);
   await import('./main'); // main.ts self-runs its boot() on import
 }

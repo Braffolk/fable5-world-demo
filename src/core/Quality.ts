@@ -23,7 +23,7 @@ export type QualityTier = 'low' | 'medium' | 'high';
 /** Per-tier URL-param defaults. Every entry must be justified by a measured
  *  ms delta AND (for HIGH) a visible A/B shot difference — see
  *  docs/perf-runs notes for the 2026-07-04 quality-preset tuning run. */
-export const PRESET_PARAMS: Record<QualityTier, Record<string, string>> = {
+const PRESET_PARAMS: Record<QualityTier, Record<string, string>> = {
   // LOW — weaker machines. Shadows down more (one fewer clipmap level + 768²),
   // cheaper grass (shorter ray band + single overlay layer), voxel handoff pulled
   // in (meshes give way to cheaper voxels sooner). PRESET VALUES ONLY — no engine
@@ -88,4 +88,18 @@ export function applyPreset(tier: QualityTier): void {
   if (changed) {
     history.replaceState(null, '', `${window.location.pathname}?${q.toString()}`);
   }
+}
+
+/** The quality tier resolved for THIS boot. boot.ts sets it (before the engine
+ *  module graph loads) so downstream readers — the heightfield grid sizing and
+ *  its bootcache key — see the picker/URL choice without re-deriving it. The
+ *  interactive picker's choice never reaches the URL (so a reload re-asks), which
+ *  is why this rides module state rather than location.search. Defaults to MEDIUM
+ *  so non-boot contexts (unit tests / workers) get the shipped grid config. */
+let resolvedTier: QualityTier = 'medium';
+export function setResolvedTier(tier: QualityTier): void {
+  resolvedTier = tier;
+}
+export function activeTier(): QualityTier {
+  return resolvedTier;
 }

@@ -25,8 +25,6 @@ import {
   type UniformV3,
 } from './Tsl';
 
-/** one work item per 64 clusters in the expansion queue */
-export const CHUNK_CLUSTERS = 64;
 /** chunk queue capacity (items; ~8 MB at uvec2) — F14: clamp + HUD flag */
 export const QCHUNK_CAP = 1_048_576;
 
@@ -128,6 +126,13 @@ export const DISPATCH_ROW = 65_535;
  *  absorbs lean shear (≤ ~0.15 rad normal tilt) + wind sway axis drift */
 export const CONE_SLACK = 0.25;
 
+/** per-cluster SW↔HW raster crossover (projected px). A cluster whose on-screen
+ *  span exceeds this rasterizes via the HW instanced draw; smaller clusters stay
+ *  in the SW soup. Read by the cull (partition), the raster (world1 SW skip), and
+ *  the resolve (?nandbg=clhw split tint) — one constant so those three can never
+ *  skew apart. */
+export const CLHW_MAX = 32;
+
 /** per-frame camera state shared by cull/raster/resolve kernels */
 export interface NaniteCam {
   /** projection · view (current frame) */
@@ -201,6 +206,56 @@ export function makeNaniteCam(width: number, height: number): NaniteCam {
       }
     },
   };
+}
+
+/** the LOD-warp cut parameters (screen-error τ + min-px culls + distance-banded
+ *  falloff), shared by the live frame (NaniteFrame) and the ?nanitedbg debug view
+ *  (NaniteView) so both derive them from ONE place with ONE set of defaults.
+ *
+ *  N8-D1 continuous-LOD cut threshold τ (screen-error px, applied per DAG cluster:
+ *  project(own)≤τ AND project(parent)>τ). nanitemin = min-screen-size cull (drop a
+ *  cluster whose error-sphere projects sub-Npx; also the sub-pixel draw envelope for
+ *  DAG'd meshes so trees no longer wink out). The LOD-WARP falloff: full detail to
+ *  lodNear m, τ doubles every simBandD m past it, lodPow<1 = detail drops fast near /
+ *  slow far. instMinPx = per-instance min screen-SIZE cull (px diameter; the far-field
+ *  bound for the hier cull) — default = resolution-relative 0.075×min(fb dim) so far
+ *  trees hand off to impostors consistently across resolutions; ?instminpx=N overrides
+ *  as an absolute px, ?instminpx=0 disables. (Defaults from the 2026-07-02
+ *  beautification landing: lodnear 20 / simband 25 keep real leaf shapes through the
+ *  whole 90 m mesh band.) */
+export interface LodParams {
+  tau: UniformF;
+  minPx: UniformF;
+  simBandD: UniformF;
+  lodNear: UniformF;
+  lodPow: UniformF;
+  instMinPx: UniformF;
+}
+
+export function deriveLodParams(
+  params: URLSearchParams,
+  size: { x: number; y: number },
+): LodParams {
+  const loderrParam = Number(params.get('loderr') ?? '3');
+  const tau = uniformF(Number.isFinite(loderrParam) && loderrParam > 0 ? loderrParam : 3);
+  const minpxParam = Number(params.get('nanitemin') ?? '2');
+  const minPx = uniformF(Number.isFinite(minpxParam) && minpxParam > 0 ? minpxParam : 0);
+  const simbandParam = Number(params.get('simband') ?? '25');
+  const simBandD = uniformF(Number.isFinite(simbandParam) && simbandParam > 0 ? simbandParam : 0);
+  const lodnearParam = Number(params.get('lodnear') ?? '20');
+  const lodNear = uniformF(Number.isFinite(lodnearParam) && lodnearParam > 0 ? lodnearParam : 0);
+  const lodpowParam = Number(params.get('lodpow') ?? '0.6');
+  const lodPow = uniformF(
+    Number.isFinite(lodpowParam) && lodpowParam > 0 ? Math.max(0.05, lodpowParam) : 1,
+  );
+  const instMinPxDefault = Math.round(0.075 * Math.min(size.x, size.y));
+  const instminpxRaw = params.get('instminpx');
+  const instminpxParam =
+    instminpxRaw != null && Number.isFinite(Number(instminpxRaw))
+      ? Number(instminpxRaw)
+      : instMinPxDefault;
+  const instMinPx = uniformF(instminpxParam > 0 ? instminpxParam : 0);
+  return { tau, minPx, simBandD, lodNear, lodPow, instMinPx };
 }
 
 /** instance yaw sin/cos pair, computed once per consumer */

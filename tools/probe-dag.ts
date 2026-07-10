@@ -20,8 +20,8 @@
  * + error-monotone makes it ~0 for sane cameras but is not a pointwise guarantee).
  */
 
-import { buildDag, type DagBuild } from '../src/nanite/BuildDag';
-import { buildDagHierarchy, validateDagHierarchy } from '../src/nanite/DagHierarchy';
+import { buildDag, type DagBuild } from '../src/nanite/build/BuildDag';
+import { buildDagHierarchy, validateDagHierarchy } from '../src/nanite/build/DagHierarchy';
 import { Rng } from '../src/core/Seed';
 import { buildRock } from '../src/vegetation/RockBuilder';
 import { buildTree } from '../src/vegetation/TreeBuilder';

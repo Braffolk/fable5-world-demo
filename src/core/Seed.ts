@@ -5,7 +5,7 @@
  */
 
 /** FNV-1a 32-bit over a string, for stream derivation. */
-export function hashString(s: string): number {
+function hashString(s: string): number {
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) {
     h ^= s.charCodeAt(i);
@@ -26,7 +26,7 @@ export function mix32(h: number): number {
 }
 
 /** Combine two 32-bit values into one well-mixed 32-bit value. */
-export function hashCombine(a: number, b: number): number {
+function hashCombine(a: number, b: number): number {
   return mix32((Math.imul(a, 0x9e3779b1) ^ Math.imul(b, 0x85ebca77)) >>> 0);
 }
 

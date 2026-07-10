@@ -80,23 +80,6 @@ function hueShift(base: NV3, hue: NF, amount: number): NV3 {
   return shifted;
 }
 
-export interface BarkMatParams {
-  color: { r: number; g: number; b: number };
-  roughness?: number;
-}
-
-export function barkMaterial(p: BarkMatParams): MeshStandardNodeMaterial {
-  const mat = new MeshPhysicalNodeMaterial();
-  mat.name = 'vegBark';
-  mat.specularIntensity = 0.45;
-  const d = vdata();
-  const base = vec3(p.color.r, p.color.g, p.color.b);
-  mat.colorNode = hueShift(base, d.x, 0.18).mul(d.w.mul(0.75).add(0.25));
-  mat.roughness = p.roughness ?? 0.93;
-  mat.metalness = 0;
-  return mat;
-}
-
 /**
  * Synthesized bark material: tileable albedo/cavity + normal/rough/height.
  * Cavity feeds `aoNode` — AO on indirect light only (DEVIATIONS D-1 close).
@@ -286,60 +269,6 @@ export function foliageMaterial(p: FoliageMatParams): MeshStandardNodeMaterial {
     translucency(tinted as unknown as NV3, 0.032) as unknown as Parameters<typeof varying>[0],
   ) as unknown as typeof mat.emissiveNode;
   mat.roughness = 0.8; // real leaves keep a little sheen, far less than default
-  mat.metalness = 0;
-  mat.side = DoubleSide;
-  return mat;
-}
-
-/** captured cluster-card material: sqrt-decoded atlas albedo, alpha-tested */
-export function foliageCardMaterial(
-  atlas: Texture,
-  p: FoliageMatParams,
-): MeshStandardNodeMaterial {
-  // see foliageMaterial: cards are worse — ONE flat normal per card means
-  // the sheen paints whole cards silver coherently. Near-diffuse.
-  const mat = new MeshPhysicalNodeMaterial();
-  mat.name = 'vegFoliageCard';
-  mat.specularIntensity = 0.18;
-  const d = vdata();
-  const t = texture(atlas, uv() as never) as unknown as NV4;
-  const albedo = t.rgb.mul(t.rgb); // sqrt-encoded at capture
-  // vertex-stage hoist (Phase 7 perf): hueShift is LINEAR in its base color
-  // (per-channel factor) and vdata is flat per card — fold hue + age into
-  // one varying factor and multiply the atlas read by it per fragment.
-  // Translucency glow likewise (view/sun terms are smooth at card scale).
-  const tintF = varying(
-    hueShift(vec3(1, 1, 1), d.x, p.color.hueVar * 0.8).mul(
-      d.w.mul(0.75).add(0.25),
-    ) as unknown as Parameters<typeof varying>[0],
-  ) as unknown as NV3;
-  mat.colorNode = albedo.mul(tintF);
-  mat.emissiveNode = albedo.mul(
-    varying(
-      translucency(tintF, 0.06) as unknown as Parameters<typeof varying>[0],
-    ) as unknown as NV3,
-  );
-  // edge-on fade: a card whose plane is parallel to the view ray shows as a
-  // bare dark sheet at close range (DELTA #5 — they read as floating slabs).
-  // Fade those out within ~70 m; cross-plane cards keep crown coverage via
-  // their perpendicular plane, and beyond 70 m a card is a few px anyway.
-  // (flat card normal + ≤2 m extent → vertex eval is identical)
-  const viewDir = cameraPosition.sub(positionWorld).normalize();
-  const ndv = normalWorld.normalize().dot(viewDir).abs();
-  const camDist = positionWorld.sub(cameraPosition).length();
-  const edgeFade = varying(
-    mix(
-      smoothstep(0.06, 0.2, ndv),
-      float(1),
-      smoothstep(35, 70, camDist),
-    ) as unknown as Parameters<typeof varying>[0],
-  ) as unknown as NF;
-  mat.opacityNode = t.w.mul(edgeFade);
-  mat.alphaTest = 0.32;
-  // near-diffuse: one flat normal per card means any real specular paints
-  // the WHOLE card with a uniform silver sheen at glancing sun angles —
-  // big cards then read as slate slabs (user: "sun lights some leaves up")
-  mat.roughness = 0.92;
   mat.metalness = 0;
   mat.side = DoubleSide;
   return mat;

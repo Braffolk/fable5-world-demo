@@ -276,7 +276,7 @@ async function readCount(
  * out to an AO-like smudge). Doubles as the spec's canopy-shadow density
  * field for later passes.
  */
-export const CANOPY_RES = 1024;
+const CANOPY_RES = 1024;
 
 export async function buildCanopyMap(
   renderer: Renderer,

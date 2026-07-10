@@ -22,7 +22,7 @@
 
 import { Rng } from '../src/core/Seed';
 import { buildRock } from '../src/vegetation/RockBuilder';
-import { buildDag, type DagBuild } from '../src/nanite/BuildDag';
+import { buildDag, type DagBuild } from '../src/nanite/build/BuildDag';
 import {
   CLUSTER_FLAG_DAG,
   DAG_ROOT_PARENT_ERR,
@@ -36,7 +36,7 @@ import {
   decodeVertexCPU,
   explicitToDagVerts,
   type ExplicitSource,
-} from '../src/nanite/GeometryRegistry';
+} from '../src/nanite/world/GeometryRegistry';
 
 let failures = 0;
 const fail = (msg: string): void => {

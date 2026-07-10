@@ -16,11 +16,11 @@
 import { Fn, instanceIndex, uint } from 'three/tsl';
 import { StorageBufferAttribute } from 'three/webgpu';
 import type { NB, NF, NU } from '../../gpu/TSLTypes';
-import { MESH_WORDS } from '../GeometryRegistry';
-import type { RegistryGpu } from '../GeometryRegistry';
+import { MESH_WORDS } from '../world/GeometryRegistry';
+import type { RegistryGpu } from '../world/GeometryRegistry';
 import { QRASTER_CAP, type NaniteCam } from '../NaniteCommon';
-import type { TrunkWindOpt, VertCtx } from '../NaniteFetch';
-import { clusterHwClass } from '../NaniteHwClass';
+import type { TrunkWindOpt, VertCtx } from './NaniteFetch';
+import { clusterHwClass } from '../cull/NaniteHwClass';
 import { bcF2U, elemU, returnIf, sU32Views } from '../Tsl';
 import type { BufOf, UV2 } from '../Tsl';
 
@@ -31,7 +31,7 @@ interface ComputeKernel {
 // uint slots: isHF,isDAG,triStart,triCount,meshId,channel,gx,gz,qxw,twoSided,matClass,clhw
 export const CTX_U = 12;
 // float slots: A.xyzw,B.xyzw,oX,oZ,cell,wind[11..20],yawSc.cy,yawSc.sy
-export const CTX_F = 23;
+const CTX_F = 23;
 export const CTX_STRIDE = CTX_U + CTX_F; // 35 u32 / cluster
 
 type U32Views = ReturnType<typeof sU32Views>;

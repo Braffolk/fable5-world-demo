@@ -17,11 +17,7 @@ import { BootTrace } from './debug/BootTrace';
 import { Hud } from './debug/HUD';
 import { buildForestScene } from './debug/ForestScene';
 import { buildGalleryScene } from './debug/GalleryScene';
-import { buildRasterSpikeScene } from './debug/RasterSpikeScene';
-import { buildSanityScene } from './debug/SanityScene';
-import { buildShadowTestScene } from './debug/ShadowTestScene';
 import { buildTerrainScene } from './debug/TerrainScene';
-import { buildVoxelDebugScene } from './debug/VoxelDebugScene';
 import { buildScene, registerScene, type WorldContext } from './debug/Scenes';
 
 /**
@@ -48,7 +44,6 @@ function expandPureAblation(): void {
   const q = new URLSearchParams(window.location.search);
   if (q.get('pure') !== '1') return;
   const implied: Record<string, string> = {
-    nanite: '1',
     postmin: '1',
     nanshadow: '0',
     nandbg: 'flat',
@@ -123,18 +118,11 @@ async function boot(): Promise<void> {
   // during interactive motion (clouds/aerial visibly lagged the camera).
   const fly = new FlyCamera(engine.camera, engine.renderer.domElement);
   engine.onUpdate((dt) => fly.update(dt));
-  // probe surface: scripted camera control (tools/probe-pan.ts drives yaw)
-  (window as unknown as { __laasFly?: FlyCamera }).__laasFly = fly;
 
   const seed = new WorldSeed(params.seed);
-  registerScene('sanity', buildSanityScene);
   registerScene('terrain', buildTerrainScene);
   registerScene('gallery', buildGalleryScene);
-  registerScene('shadowtest', buildShadowTestScene);
-  registerScene('rasterspike', buildRasterSpikeScene);
   registerScene('forest', buildForestScene);
-  // THROWAWAY voxel-crown inspection view (voxel-foliage spec §11 Stage 1).
-  registerScene('voxdbg', buildVoxelDebugScene);
   // 'world' becomes the streamed open world once terrain tiles land.
   registerScene('world', buildTerrainScene);
 

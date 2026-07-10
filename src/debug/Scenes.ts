@@ -1,4 +1,4 @@
-/** Scene registry — `?scene=` selects the boot scene (world | sanity | terrain | gallery …). */
+/** Scene registry — `?scene=` selects the boot scene (world | terrain | gallery | forest). */
 
 import type { Engine } from '../core/Engine';
 import type { LaasHooks } from '../core/Hooks';
@@ -29,8 +29,4 @@ export async function buildScene(name: string, ctx: WorldContext): Promise<void>
     throw new Error(`Unknown scene "${name}". Known scenes: ${known}`);
   }
   await builder(ctx);
-}
-
-export function sceneNames(): string[] {
-  return [...registry.keys()];
 }

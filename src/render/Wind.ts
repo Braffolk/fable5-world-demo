@@ -34,8 +34,8 @@
 
 import { Vector2 } from 'three';
 import type { StorageTexture } from 'three/webgpu';
-import { attribute, float, texture, time, vec2, vec3 } from 'three/tsl';
-import type { NF, NV2, NV3, NV4 } from '../gpu/TSLTypes';
+import { float, texture, time, vec2 } from 'three/tsl';
+import type { NF, NV2, NV4 } from '../gpu/TSLTypes';
 import { PERIOD_FBM } from '../gpu/passes/NoiseBake';
 import { canopyAt } from '../gpu/passes/Scatter';
 import { runiform } from '../gpu/RenderUniform';
@@ -103,115 +103,3 @@ export function windExposure(xz: NV2): NF {
   return float(1).sub(canopyAt(ctx.canopyTex, xz).mul(0.6));
 }
 
-/**
- * Leaf micro-flutter axes (vegWindOffset term 4): two zero-mean advected-fbm
- * gradient channels (along- + across-wind), decorrelated per vertex by the baked
- * vdata.z phase and per instance by `instPhase`. A SHIMMER, not a shake (features
- * ~6 m advected ~0.75 Hz, clamped). The caller scales by its own amplitude `flutA`.
- * Shared so the old foliage material AND the nanite 'leaf' transform channel read
- * the SAME tuned motion — never reinvented, never drifting. (Exported for nanite.)
- */
-export function leafFlutterAxes(xz: NV2, vdataZ: NF, instPhase: NF): NV2 {
-  if (!ctx) throw new Error('wind context not set');
-  const d = vec2(windU.dir as unknown as NV2);
-  const pF = xz
-    .add(vdataZ.mul(vec2(37.1, 17.7)))
-    .add(vec2(instPhase.mul(91), 0))
-    .sub(d.mul(time.mul(4.5)))
-    .div(6 * PERIOD_FBM);
-  const fl = texture(ctx.noiseA, pF, 0) as unknown as NV4;
-  return vec2(fl.z.clamp(-1.2, 1.2), fl.w.clamp(-1.2, 1.2)) as unknown as NV2;
-}
-
-export interface WindBind {
-  /** overall response scale (1 = trees) */
-  k: number;
-  /** natural-frequency multiplier (understory rocks faster than trees) */
-  freq: number;
-  /** trunk-bend profile knee (m): ~6 for trees, ~0.9 for shrubs */
-  h0: number;
-}
-
-export interface WindVertexArgs {
-  /** world-space instance origin */
-  origin: NV3;
-  /** scaled local-space height of the vertex above the instance base (m) */
-  localY: NF;
-  /** per-instance uniform scale (A.w) — bigger plants swing slower */
-  scale: NF;
-  /** per-instance hash 0..1 — phase + natural-frequency jitter */
-  instPhase: NF;
-  /** main-camera distance (vegViewPos-based, NEVER TSL cameraPosition) */
-  dist: NF;
-  bind: WindBind;
-}
-
-/**
- * Per-vertex wind displacement for instanced vegetation. Reads the baked
- * vdata flex (y: 0 trunk base → 1 branch tips) / phase (z: along the
- * branch run) attributes. Pure expression chain — material node graphs
- * have no Fn stack, so no toVar/assign in here.
- */
-export function vegWindOffset(a: WindVertexArgs): NV3 {
-  if (!ctx) throw new Error('wind context not set');
-  const vd = attribute('vdata', 'vec4') as unknown as NV4;
-  const flex = vd.y;
-  const d = vec2(windU.dir as unknown as NV2);
-  const s = windU.strength as unknown as NF;
-  const { k, freq, h0 } = a.bind;
-
-  const e = windExposure(a.origin.xz);
-  const g = gustAt(a.origin.xz);
-  const gL = gustLagAt(a.origin.xz, LAG_M);
-
-  // trunk-bend cantilever profile: 0 at the base, ~1 near a tall crown top
-  // (asymptotic — no per-species height needed); tips streamline a little
-  // extra via flex
-  const yn = a.localY.div(a.localY.add(h0));
-  const prof = yn.mul(yn).mul(1.7).add(flex.mul(0.3)).min(1.6);
-
-  // everything stops by the impostor band — impostors are rigid, and a
-  // displaced ring crossfading into a static one shimmers at the boundary
-  const farAtten = float(1).sub(a.dist.sub(380).div(100).clamp(0, 1));
-  const eks = e.mul(k).mul(farAtten);
-
-  // 1) mean lean ∝ strength², modulated by the front field (slow)
-  const lean = s.mul(s).mul(g.mul(0.9).add(0.5)).mul(eks).mul(1.1).mul(prof);
-
-  // 2) sway at the per-instance natural frequency; gusts scale AMPLITUDE
-  const fJit = a.instPhase.mul(7.31).fract();
-  const natW = fJit
-    .mul(0.3)
-    .add(0.15)
-    .mul(6.2832 * freq)
-    .div(a.scale.max(0.25).sqrt());
-  const ph = a.instPhase.mul(6.2832);
-  const swayA = s.mul(g.mul(0.75).add(0.25)).mul(eks).mul(0.5).mul(prof);
-  const sway = time.mul(natW).add(ph).sin().mul(swayA);
-  const swayX = time.mul(natW.mul(1.31)).add(ph.mul(1.7)).sin().mul(swayA).mul(0.45);
-
-  // 3) branch secondary motion: lagged front, flex-weighted, overshoots rest
-  const brAtten = float(1).sub(a.dist.sub(160).div(140).clamp(0, 1));
-  const branch = gL.sub(0.45).mul(flex).mul(s).mul(eks).mul(0.55).mul(brAtten);
-
-  // 4) aperiodic micro-flutter: advected fbm GRADIENTS (zero-mean, two
-  // independent axes in one tap), decorrelated per vertex by vdata.z.
-  // Leaf flutter is a SHIMMER, not a shake: a few cm at the tips, features
-  // ~6 m advected slowly (~0.75 Hz) — the first cut (±12 cm, 3–4 Hz
-  // decorrelation) read as "leaves shaking wildly" (user)
-  const flutAtten = float(1).sub(a.dist.sub(40).div(80).clamp(0, 1));
-  const flutAx = leafFlutterAxes(a.origin.xz, vd.z, a.instPhase);
-  const flutA = s.mul(g.mul(0.7).add(0.3)).mul(eks).mul(flex).mul(0.07).mul(flutAtten);
-  const flutD = flutAx.x.mul(flutA);
-  const flutP = flutAx.y.mul(flutA);
-
-  const along = lean.add(sway).add(branch).add(flutD);
-  const across = swayX.add(flutP);
-  // cantilever arc: tips dip slightly as they deflect
-  const dy = along.abs().add(across.abs()).mul(flex).mul(-0.2);
-  return vec3(
-    d.x.mul(along).sub(d.y.mul(across)),
-    dy,
-    d.y.mul(along).add(d.x.mul(across)),
-  );
-}

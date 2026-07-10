@@ -12,14 +12,14 @@
  * the record 10 u32 → 1 u32 is the ~10× midQueue shrink at zero re-projection cost.
  *
  * This is the ONLY place the mid band is rasterized — world1 no longer scanlines. INDIRECT,
- * 2-D dispatch (kMidArgs split), like nanSplatElect. The ?nomid disable-flag gates the APPEND
- * site inside world1's classify/route; this consumer draws whatever landed in the queue.
+ * 2-D dispatch (kMidArgs split), like nanSplatElect. This consumer draws whatever world1's
+ * classify/route landed in the queue.
  */
 
 import { Fn, float, uint } from 'three/tsl';
 import { IndirectStorageBufferAttribute } from 'three/webgpu';
 import type { NB, NF, NI, NU } from '../../gpu/TSLTypes';
-import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK } from '../GeometryRegistry';
+import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK } from '../world/GeometryRegistry';
 import {
   bcU2F,
   bcU2I,

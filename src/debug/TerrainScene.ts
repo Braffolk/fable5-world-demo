@@ -14,23 +14,17 @@ import { PARTICLE_COUNT, Particles } from '../gpu/passes/Particles';
 import { ProbeGI } from '../gpu/passes/ProbeGI';
 import { buildCanopyMap, runScatter } from '../gpu/passes/Scatter';
 import { addScatterDebug } from './ScatterDebug';
-import { Forests } from '../vegetation/Forests';
-import { GroundRing } from '../vegetation/GroundRing';
 import { buildVegLibrary } from '../vegetation/VegLibrary';
 import { CausticsBake, setCausticContext } from '../render/Caustics';
 import { setWindContext, windU } from '../render/Wind';
 import { sunU, updateSunUniforms } from '../render/VegMaterials';
-import { buildCanopyShell } from '../world/CanopyShell';
 import { Heightfield } from '../world/Heightfield';
-import { buildTerrainShadowProxy } from '../world/ShadowProxy';
-import { TerrainTiles } from '../world/TerrainTiles';
 import { WaterSurface } from '../world/WaterSurface';
 import { PostStack } from '../render/PostStack';
-import { setupSunShadows } from '../render/ShadowSetup';
 import { Clouds } from '../sky/Clouds';
 import { SunSky } from '../sky/SunSky';
 import type { WorldContext } from './Scenes';
-import type { GeometryRegistry } from '../nanite/GeometryRegistry';
+import type { GeometryRegistry } from '../nanite/world/GeometryRegistry';
 
 export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   const { engine, params, seed } = ctx;
@@ -42,27 +36,9 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
    *  the veg block so the full-frame build below can thread it */
   let naniteBark: { texA: import('three').Texture; texB: import('three').Texture } | null = null;
   const qNan = new URLSearchParams(window.location.search);
-  /** `?nanite=1` without a debug view = full-frame mode (N4); `?naniteframe=0`
-   *  keeps N1 build-only semantics (boot probes) */
-  const naniteFrameMode =
-    qNan.get('nanite') === '1' && !qNan.get('nanitedbg') && qNan.get('naniteframe') !== '0';
-
-  // ── USER DIRECTIVE (2026-06-13): OLD GEOMETRY HARD-DISABLED ──────────────
-  // Every default (non-nanite) SOLID-GEOMETRY render path is switched OFF so
-  // the ONLY thing that can appear in the world is the nanite-rendered output.
-  // No fallback: with this true, ?nanite=0 shows bare sky. The DATA those
-  // systems produce (heightfield, scatter, VegLibrary, GI, canopy map) still
-  // builds because the nanite registry is constructed from it — only the
-  // camera-pass meshes are withheld from engine.scene. Environment systems
-  // (sky/atmosphere/clouds/froxels/CSM/post) stay on so there is a frame to
-  // look at. Flip to false to restore the full old pipeline (the N7 A/B path).
-  // Overrides the NANITE-SPEC.md "?nanite=0 boots the untouched old pipeline"
-  // constraint deliberately, for the duration of the nanite build.
-  // DEFAULT = disabled; `?oldgeo=1` restores the full old world — used ONLY to
-  // capture the parity reference for the N4 lighting gate (and to bring back
-  // the CSM shadow casters the nanite terrain receives from until N5). The
-  // default still shows bare nanite; this is a gate harness, not a fallback.
-  const DISABLE_OLD_GEOMETRY = qNan.get('oldgeo') !== '1';
+  /** nanite is THE renderer (unconditional since 2026-07-10); no debug view =
+   *  full-frame mode (N4); `?naniteframe=0` keeps N1 build-only semantics (boot probes) */
+  const naniteFrameMode = !qNan.get('nanitedbg') && qNan.get('naniteframe') !== '0';
 
   // ── COLD-BOOT OVERLAP (2026-07-04): the VegLibrary build and the nanite
   // crown/DAG worker prep depend only on (renderer, seed, lib) — kick them NOW
@@ -77,7 +53,6 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   );
   const view = new URLSearchParams(window.location.search).get('view');
   const vegEnabled = view !== 'scatter' && !ablate.has('veg');
-  const naniteOn = qNan.get('nanite') === '1';
   // D-N19 migration set: explicit ?naniteclasses=csv|all wins; full-frame mode
   // defaults to the ported set; dbg/build-only modes take everything. Resolved
   // in ONE place — the early prep and the registry build must never drift.
@@ -107,9 +82,9 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     };
   };
   const leafDensityQ = Number(qNan.get('naniteleafdensity'));
-  const worldRegistryModule = naniteOn ? import('../nanite/WorldRegistry') : null;
+  const worldRegistryModule = import('../nanite/world/WorldRegistry');
   let vegLibPromise: ReturnType<typeof buildVegLibrary> | null = null;
-  let vegPrepPromise: Promise<import('../nanite/WorldRegistry').WorldVegPrep> | null = null;
+  let vegPrepPromise: Promise<import('../nanite/world/WorldRegistry').WorldVegPrep> | null = null;
   if (vegEnabled) {
     const endVegSpan = BootTrace.span('veg library (overlapped with GPU phases)');
     // no progress callback: the bar is owned by the serial phases; interleaved
@@ -148,7 +123,6 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   BootTrace.phase('heightfield (GPU gen + erosion)');
   const hf = await Heightfield.generate(
     engine.renderer,
-    params,
     seed,
     (p, m) => ctx.progress(p * 0.92, m),
   );
@@ -227,166 +201,96 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     }
   }
 
-  BootTrace.phase('terrain tiles');
-  ctx.progress(0.958, 'terrain: building tiles');
-  let tilesRef: TerrainTiles | null = null;
   if (view === 'scatter') addScatterDebug(engine.scene, scatter);
-  if (view === 'split' && hf.preErosion) {
-    // erosion before/after: pre-erosion clay on the left, eroded on the right
-    const pre = new TerrainTiles(hf, null, {
-      heightBuf: hf.preErosion,
-      neutral: true,
-      screenHalf: 'left',
-    });
-    const post = new TerrainTiles(hf, null, { neutral: true, screenHalf: 'right' });
-    engine.scene.add(pre.mesh, post.mesh);
-    engine.onUpdate(() => {
-      pre.update(engine.camera);
-      post.update(engine.camera);
-    });
-  } else if (!DISABLE_OLD_GEOMETRY) {
-    const tiles = new TerrainTiles(hf, view, { gi, canopyTex });
-    tilesRef = tiles;
-    engine.scene.add(tiles.mesh);
-    engine.scene.add(tiles.farShell);
-    // ?ablate=proxy — drop the terrain shadow caster (shadow-debug bisect)
-    if (!ablate.has('proxy')) engine.scene.add(buildTerrainShadowProxy(hf));
-    engine.onUpdate(() => {
-      // suppressed by the nanite full-frame mode (D-N19): skip the CDLOD
-      // walk too — the registry heightfield owns the camera-pass terrain
-      if (!tiles.mesh.visible) return;
-      tiles.update(engine.camera);
-      engine.stats.counters['terrain.tiles'] = tiles.activeTiles;
-    });
-  }
 
-  // Phase 6: stream/lake water clipmap (?ablate=water to A/B). Lives in BOTH
-  // slates (30-water-plan W1) and is CONSTRUCTED AFTER the nanite frame below —
-  // W2 threads the frame's composed sun-visibility (clipmap PCSS × cloud × far
-  // shadow) into the foam/glint lighting (the severed-CSM slate would otherwise
-  // sun-light foam in cliff shade).
+  // Phase 6: stream/lake water clipmap (?ablate=water to A/B) is CONSTRUCTED
+  // AFTER the nanite frame below — W2 threads the frame's composed sun-visibility
+  // (clipmap PCSS × cloud × far shadow) into the foam/glint lighting.
 
-  // Phase 5: variant pools + GPU cull → compacted indirect draws
-  let forestsRef: Forests | null = null;
+  // Phase 5: variant pools → nanite registry
   if (vegEnabled && vegLibPromise) {
     // kicked at the top of the function (cold-boot overlap) — by now most/all of
     // it ran interleaved with the GPU phases above; this await is just the tail
     BootTrace.phase('veg library (await tail)');
     ctx.progress(0.963, 'vegetation: variant pools');
     const lib = await vegLibPromise;
-    // sun uniforms feed the nanite terrain shading too — keep them current
-    // even when the old veg render is disabled
+    // sun uniforms feed the nanite terrain shading
     updateSunUniforms(sunSky.sun);
     naniteBark = lib.barkArray; // resolve bark/deadwood sampled-array (N4-C3)
-    if (!DISABLE_OLD_GEOMETRY) {
-      const forests = new Forests(
-        hf,
-        scatter,
-        lib,
-        ablate.has('gi') ? null : gi,
-        canopyTex,
-      );
-      forests.init(engine.renderer);
-      forestsRef = forests;
-      engine.scene.add(forests.group);
+
+    // N1-C4: build the GeometryRegistry from all opaque pools
+    // (cluster tables + packed mega-buffers only).
+    BootTrace.phase('nanite: world registry');
+    ctx.progress(0.985, 'nanite: clusterizing opaque pools');
+    const { buildWorldRegistry, PORTED_CLASSES } = await worldRegistryModule;
+    // class/DAG/leaf resolution shared with the early prep kick (top of function)
+    const setup = resolveNaniteSetup(PORTED_CLASSES as readonly MatCls[]);
+    const classes = setup.classes;
+    naniteClasses = classes ?? new Set(NAN_ALL);
+    const dagClasses = setup.dagClasses;
+    // N8-D2 Stage 2e (D-N39) — the "boot only to dag" FLIP: terrain is the full-res
+    // clip-STREAMED DAG by default, no window-grid fallback. `?nanitedterrain` absent ⇒
+    // production default (gridN 128, clip on). `?nanitedterrain=0` is the explicit opt-out
+    // to the legacy implicit window grid (tooling / A-B). An explicit `?nanitedterrain=<gridN>`
+    // (>0) selects that grid and stays one-shot uniform unless `?nanitedclip=1` (preserves
+    // the per-flag tool semantics — probe-dterrain etc.).
+    const dterrainParam = qNan.get('nanitedterrain');
+    const terrainDefault = dterrainParam == null;
+    const dagTerrainGridN = terrainDefault ? 128 : Math.max(0, Math.floor(Number(dterrainParam)));
+    // N8-D2 (D-N38): ?nanitedtiles=T → split the terrain DAG into T×T tiles.
+    const dtilesParam = qNan.get('nanitedtiles');
+    const dagTerrainTiles = dtilesParam ? Math.max(1, Math.floor(Number(dtilesParam))) : 1;
+    // N8-D2 Stage 2b-1 (D-N39): ?nanitedpool=1 → route terrain tiles through the
+    // streaming tile POOL (reserveTilePool/attachHeightDagTile) rather than the
+    // per-tile registerHeightDag+attachHeightDag path. GPU-render parity proof.
+    const dagTerrainPool = qNan.get('nanitedpool') === '1';
+    // N8-D2 Stage 2b-2/2e (D-N39): the geometry CLIPMAP (concentric same-gridN rings,
+    // true full-res at the center, coarse to the field edge, bounded). DEFAULT ON (the
+    // 2e flip); `?nanitedclip=1` also forces it for an explicit gridN. Implies the pool.
+    const dagTerrainClip = terrainDefault || qNan.get('nanitedclip') === '1';
+    // N8-D2 Stage 2d: ?nanitedskirt=0 disables the inter-level seam skirts (A/B). Default ON.
+    const dagTerrainSkirt = qNan.get('nanitedskirt') !== '0';
+    // N9-C0/C2: leaf heads — resolved in resolveNaniteSetup (see above)
+    const naniteLeaf = setup.naniteLeaf;
+    const wr = await buildWorldRegistry({
+      renderer: engine.renderer,
+      hf,
+      scatter,
+      lib,
+      counters: engine.stats.counters,
+      seed: seed.seed,
+      ...(classes ? { classes } : {}),
+      ...(dagClasses && dagClasses.size > 0 ? { dag: dagClasses } : {}),
+      ...(dagTerrainGridN > 0 ? { dagTerrainGridN } : {}),
+      ...(dagTerrainTiles > 1 ? { dagTerrainTiles } : {}),
+      ...(dagTerrainPool ? { dagTerrainPool: true } : {}),
+      ...(dagTerrainClip ? { dagTerrainClip: true } : {}),
+      ...(dagTerrainSkirt ? {} : { dagTerrainSkirt: false }),
+      ...(naniteLeaf ? { leaf: true } : {}),
+      // cold-boot overlap: crowns+DAGs already building since the top of boot
+      ...(vegPrepPromise ? { pre: vegPrepPromise } : {}),
+    });
+    (engine as unknown as { naniteRegistry?: unknown }).naniteRegistry = wr.registry;
+    naniteRegistry = wr.registry;
+    // eslint-disable-next-line no-console
+    console.log(
+      `[laas] nanite registry: total ${wr.totalMs.toFixed(0)} ms (readback ` +
+        `${wr.readbackMs.toFixed(0)} + partition ${wr.partitionMs.toFixed(0)} + terrain minMax ` +
+        `${wr.terrainMs.toFixed(0)} + build ${wr.buildMs.toFixed(0)}` +
+        (wr.dagMeshes > 0
+          ? ` + DAG ${wr.dagMeshes}m/${wr.dagBuildMs.toFixed(0)}ms/${(wr.dagTris / 1000).toFixed(0)}k tris`
+          : '') +
+        `); deferred instances ${wr.deferredInstances}\n${wr.report.table}\ndeferred: ${wr.deferred.join('; ')}`,
+    );
+    // N8-D2 Stage 2b-3 (D-N39): drive the clipmap streamer from the live camera
+    // — re-center the 1 m detail rings each frame (evict departed / stream in
+    // arrived). The coarser resident ring backstops in-flight loads ⇒ no holes.
+    if (wr.terrainStreamer) {
+      const streamer = wr.terrainStreamer;
       engine.onUpdate(() => {
-        forests.update(engine.renderer, engine.camera);
-        Object.assign(engine.stats.counters, forests.counterSnapshot());
+        streamer.update(engine.camera.position.x, engine.camera.position.z);
+        Object.assign(engine.stats.counters, streamer.counters());
       });
-    }
-
-    // ?nanite=1 — N1-C4: build the GeometryRegistry from all opaque pools
-    // (cluster tables + packed mega-buffers only; rendering unchanged until
-    // N2/N3). ?nanite=0/absent: this block never runs.
-    if (naniteOn && worldRegistryModule) {
-      BootTrace.phase('nanite: world registry');
-      ctx.progress(0.985, 'nanite: clusterizing opaque pools');
-      const { buildWorldRegistry, PORTED_CLASSES } = await worldRegistryModule;
-      // class/DAG/leaf resolution shared with the early prep kick (top of function)
-      const setup = resolveNaniteSetup(PORTED_CLASSES as readonly MatCls[]);
-      const classes = setup.classes;
-      naniteClasses = classes ?? new Set(NAN_ALL);
-      const dagClasses = setup.dagClasses;
-      // N8-D2 Stage 2e (D-N39) — the "boot only to dag" FLIP: terrain is the full-res
-      // clip-STREAMED DAG by default, no window-grid fallback. `?nanitedterrain` absent ⇒
-      // production default (gridN 128, clip on). `?nanitedterrain=0` is the explicit opt-out
-      // to the legacy implicit window grid (tooling / A-B). An explicit `?nanitedterrain=<gridN>`
-      // (>0) selects that grid and stays one-shot uniform unless `?nanitedclip=1` (preserves
-      // the per-flag tool semantics — probe-dterrain etc.).
-      const dterrainParam = qNan.get('nanitedterrain');
-      const terrainDefault = dterrainParam == null;
-      const dagTerrainGridN = terrainDefault ? 128 : Math.max(0, Math.floor(Number(dterrainParam)));
-      // N8-D2 (D-N38): ?nanitedtiles=T → split the terrain DAG into T×T tiles.
-      const dtilesParam = qNan.get('nanitedtiles');
-      const dagTerrainTiles = dtilesParam ? Math.max(1, Math.floor(Number(dtilesParam))) : 1;
-      // N8-D2 Stage 2b-1 (D-N39): ?nanitedpool=1 → route terrain tiles through the
-      // streaming tile POOL (reserveTilePool/attachHeightDagTile) rather than the
-      // per-tile registerHeightDag+attachHeightDag path. GPU-render parity proof.
-      const dagTerrainPool = qNan.get('nanitedpool') === '1';
-      // N8-D2 Stage 2b-2/2e (D-N39): the geometry CLIPMAP (concentric same-gridN rings,
-      // true full-res at the center, coarse to the field edge, bounded). DEFAULT ON (the
-      // 2e flip); `?nanitedclip=1` also forces it for an explicit gridN. Implies the pool.
-      const dagTerrainClip = terrainDefault || qNan.get('nanitedclip') === '1';
-      // N8-D2 Stage 2d: ?nanitedskirt=0 disables the inter-level seam skirts (A/B). Default ON.
-      const dagTerrainSkirt = qNan.get('nanitedskirt') !== '0';
-      // N9-C0/C2: leaf heads — resolved in resolveNaniteSetup (see above)
-      const naniteLeaf = setup.naniteLeaf;
-      const wr = await buildWorldRegistry({
-        renderer: engine.renderer,
-        hf,
-        scatter,
-        lib,
-        counters: engine.stats.counters,
-        seed: seed.seed,
-        ...(classes ? { classes } : {}),
-        ...(dagClasses && dagClasses.size > 0 ? { dag: dagClasses } : {}),
-        ...(dagTerrainGridN > 0 ? { dagTerrainGridN } : {}),
-        ...(dagTerrainTiles > 1 ? { dagTerrainTiles } : {}),
-        ...(dagTerrainPool ? { dagTerrainPool: true } : {}),
-        ...(dagTerrainClip ? { dagTerrainClip: true } : {}),
-        ...(dagTerrainSkirt ? {} : { dagTerrainSkirt: false }),
-        ...(naniteLeaf ? { leaf: true } : {}),
-        // cold-boot overlap: crowns+DAGs already building since the top of boot
-        ...(vegPrepPromise ? { pre: vegPrepPromise } : {}),
-      });
-      (engine as unknown as { naniteRegistry?: unknown }).naniteRegistry = wr.registry;
-      naniteRegistry = wr.registry;
-      // eslint-disable-next-line no-console
-      console.log(
-        `[laas] nanite registry: total ${wr.totalMs.toFixed(0)} ms (readback ` +
-          `${wr.readbackMs.toFixed(0)} + partition ${wr.partitionMs.toFixed(0)} + terrain minMax ` +
-          `${wr.terrainMs.toFixed(0)} + build ${wr.buildMs.toFixed(0)}` +
-          (wr.dagMeshes > 0
-            ? ` + DAG ${wr.dagMeshes}m/${wr.dagBuildMs.toFixed(0)}ms/${(wr.dagTris / 1000).toFixed(0)}k tris`
-            : '') +
-          `); deferred instances ${wr.deferredInstances}\n${wr.report.table}\ndeferred: ${wr.deferred.join('; ')}`,
-      );
-      // N8-D2 Stage 2b-3 (D-N39): drive the clipmap streamer from the live camera
-      // — re-center the 1 m detail rings each frame (evict departed / stream in
-      // arrived). The coarser resident ring backstops in-flight loads ⇒ no holes.
-      if (wr.terrainStreamer) {
-        const streamer = wr.terrainStreamer;
-        engine.onUpdate(() => {
-          streamer.update(engine.camera.position.x, engine.camera.position.z);
-          Object.assign(engine.stats.counters, streamer.counters());
-        });
-      }
-    }
-
-    // near-field carpets: 800k-blade grass ring + 80k debris ring
-    if (!ablate.has('grass') && !DISABLE_OLD_GEOMETRY) {
-      const ring = new GroundRing(hf, canopyTex, seed, ablate.has('gi') ? null : gi);
-      ring.init(lib.atlases.get('beech') ?? null);
-      engine.scene.add(ring.group);
-      engine.onUpdate(() => {
-        ring.update(engine.renderer, engine.camera);
-        Object.assign(engine.stats.counters, ring.counterSnapshot());
-      });
-    }
-
-    // far forests: aggregate canopy shell beyond the impostor mid-band
-    if (!ablate.has('shell') && !DISABLE_OLD_GEOMETRY) {
-      engine.scene.add(buildCanopyShell(hf, canopyTex));
     }
   }
 
@@ -403,37 +307,24 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     lastWt = wt;
   });
 
-  // 4-cascade CSM + PCSS contact hardening; cloud shadows gate the sun term.
-  // P2 (shadow arc 2026-07-03): in the default nanite-only world (?oldgeo off, clip
-  // shadow path) the legacy CSM is SEVERED — with old geometry disabled its render
-  // lists hold ZERO casters, so CachedCsmShadowNode rendered ~2 empty 2048² maps per
-  // frame purely to drive a fit the clip path ignores, and the resolve paid a
-  // full-screen `keep` sample only to keep the node alive. The cloud gate (the one
-  // real thing the CSM filter carried) moves into the resolve via world.cloudShadow.
-  // The cascade fallback (?shadowclip=0) still reads the fitted cascade VPs → keeps
-  // the rig; ?oldgeo keeps the full legacy pipeline.
-  const severCsm = DISABLE_OLD_GEOMETRY && qNan.get('shadowclip') !== '0';
-  const shadowRig = severCsm
-    ? { csm: null as unknown as import('three/addons/csm/CSMShadowNode.js').CSMShadowNode }
-    : setupSunShadows(sunSky.sun, engine.camera, (wxz) => clouds.shadowAt(wxz));
+  // Sun shadows are the nanite screen-density shadow clipmap (built inside the
+  // nanite frame below); the cloud sun-transmittance gate is applied directly by
+  // the resolve via world.cloudShadow. There is no CSM rig in the world path.
   // P4 (shadow arc): baked heightfield sun-visibility — mountains shade valleys at
   // ANY distance (the clipmap reaches 384 m; this is the far-field term). Re-baked
   // on ToD edits below. ?ablate=farshadow drops it.
   const farSh =
-    severCsm && !ablate.has('shadows') && !ablate.has('farshadow')
+    !ablate.has('shadows') && !ablate.has('farshadow')
       ? new (await import('../gpu/passes/FarShadow')).FarShadow(hf, sunSky.atmosphere)
       : null;
   if (farSh) await farSh.init(engine.renderer);
-  // cascade cameras drive the per-cascade caster cull in Forests
-  forestsRef?.setCSM(shadowRig.csm ?? null);
   (window as unknown as { __laasDbg?: Record<string, unknown> }).__laasDbg = {
     engine,
     sunSky,
-    shadowRig,
   };
 
   // GPU particles: snow/pollen/leaves riding the wind (?ablate=particles)
-  if (view !== 'split' && !ablate.has('particles') && !DISABLE_OLD_GEOMETRY) {
+  if (!ablate.has('particles')) {
     const parts = new Particles(hf, canopyTex, ablate.has('gi') ? null : gi);
     engine.scene.add(parts.mesh);
     engine.onUpdate((dt) => parts.update(engine.renderer, engine.camera, dt));
@@ -466,7 +357,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     // pipeline keeps booting/updating untouched. `cluster` = the deferred N1
     // checkpoint (meshlet colors on the real world).
     const nanitedbg = new URLSearchParams(window.location.search).get('nanitedbg');
-    let naniteSunVis: import('../nanite/NaniteFrame').NaniteFrameHandles['sunVis'];
+    let naniteSunVis: import('../nanite/frame/NaniteFrame').NaniteFrameHandles['sunVis'];
     if (
       nanitedbg === 'flat' ||
       nanitedbg === 'cluster' ||
@@ -474,7 +365,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       nanitedbg === 'hzb'
     ) {
       if (naniteRegistry) {
-        const { buildNaniteView } = await import('../nanite/NaniteView');
+        const { buildNaniteView } = await import('../nanite/frame/NaniteView');
         engine.post = buildNaniteView(engine, naniteRegistry, hf, nanitedbg);
         // eslint-disable-next-line no-console
         console.log(`[laas] nanitedbg=${nanitedbg}: N2 debug view replacing the frame render`);
@@ -484,20 +375,17 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       }
     } else if (naniteRegistry && naniteClasses && naniteFrameMode) {
       // N4 full-frame mode (D-N18/D-N19): nanite compute + in-scene resolve own
-      // the migrated classes; their old camera draws hide (shadow casting stays
-      // on the old path until N5 — ShadowProxy + per-cascade caster siblings)
+      // the migrated classes.
       BootTrace.phase('nanite: frame build (raster/resolve/grass)');
-      const { buildNaniteFrame } = await import('../nanite/NaniteFrame');
-      const { migratedMatClass } = await import('../nanite/WorldRegistry');
+      const { buildNaniteFrame } = await import('../nanite/frame/NaniteFrame');
       const nanFrame = buildNaniteFrame(engine, naniteRegistry, hf, post, {
         gi: ablate.has('gi') ? null : gi,
         canopyTex,
-        csm: shadowRig.csm ?? null,
-        // P2: with the CSM severed, sunShadows carries the "scene has sun shadows"
-        // signal (was csm !== null) and the cloud gate is applied by the resolve.
-        sunShadows: severCsm && !ablate.has('shadows'),
+        // sunShadows carries the "scene has sun shadows" signal; the cloud gate is
+        // applied directly by the resolve.
+        sunShadows: !ablate.has('shadows'),
         cloudShadow:
-          severCsm && !ablate.has('cloudshadow')
+          !ablate.has('cloudshadow')
             ? (wxz: import('../gpu/TSLTypes').NV2) => clouds.shadowAt(wxz)
             : null,
         farShadow: farSh ? (wxz: import('../gpu/TSLTypes').NV2) => farSh.visAt(wxz) : null,
@@ -506,23 +394,17 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       });
       engine.post = nanFrame;
       naniteSunVis = nanFrame.sunVis;
-      if (naniteClasses.has('terrain') && tilesRef) {
-        tilesRef.mesh.visible = false;
-        tilesRef.farShell.visible = false;
-      }
-      const hidden = forestsRef?.suppressMigrated(migratedMatClass, naniteClasses) ?? 0;
       // eslint-disable-next-line no-console
       console.log(
-        `[laas] nanite full-frame: classes [${[...naniteClasses].join(',')}]; suppressed ` +
-          `${hidden} pool draws${naniteClasses.has('terrain') ? ' + terrain tiles/far shell' : ''}`,
+        `[laas] nanite full-frame: classes [${[...naniteClasses].join(',')}]`,
       );
     }
 
     // Phase 6 water (moved after the nanite frame — W2 needs its sunVis): the
     // clipmap draws in the scene pass after the resolve meshes (transparent,
-    // depthWrite) — the SLW-over-resolve seam. In the severed-CSM slate the
-    // foam/glint lighting is manual, gated by nanite sun visibility.
-    if (view !== 'split' && !ablate.has('water')) {
+    // depthWrite) — the SLW-over-resolve seam. The foam/glint lighting is manual,
+    // gated by nanite sun visibility.
+    if (!ablate.has('water')) {
       const water = new WaterSurface(
         hf,
         sunSky.atmosphere,

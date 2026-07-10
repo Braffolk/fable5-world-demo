@@ -65,14 +65,12 @@ async function main(): Promise<void> {
   if (args['T'] !== undefined) urlOpts.T = Number(str(args['T']));
   const cam = str(args['cam']);
   if (cam) urlOpts.cam = cam;
-  const preset = str(args['preset']);
-  if (preset) urlOpts.preset = preset;
   urlOpts.hud = args['hud'] === true || args['hud'] === '1';
   urlOpts.freeze = args['nofreeze'] !== true;
   // forward any flag not consumed above as a raw ?key=value page param
   const consumed = new Set([
     'w', 'h', 'scene', 'out', 'settle', 'timeout', 'seed', 'T', 'cam',
-    'preset', 'hud', 'nofreeze', 'stats',
+    'hud', 'nofreeze', 'stats',
   ]);
   const extra: Record<string, string> = {};
   for (const [k, v] of Object.entries(args)) {

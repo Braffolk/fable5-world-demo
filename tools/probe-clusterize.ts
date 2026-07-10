@@ -12,7 +12,7 @@
  *  N  every face normal lies inside its cluster's cone (or cone disabled)
  */
 
-import { clusterize } from '../src/nanite/Clusterize';
+import { clusterize } from '../src/nanite/build/Clusterize';
 import { Rng } from '../src/core/Seed';
 import { buildRock } from '../src/vegetation/RockBuilder';
 

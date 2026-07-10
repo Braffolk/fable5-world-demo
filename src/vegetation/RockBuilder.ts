@@ -13,7 +13,7 @@ import { BufferAttribute, BufferGeometry, Vector3 } from 'three';
 import { fbm3, ridged3 } from '../core/NoiseJS';
 import type { Rng } from '../core/Seed';
 
-export interface RockParams {
+interface RockParams {
   /** overall radius (m) */
   radius: number;
   /** ellipsoid squash (y typically < 1) */
@@ -35,7 +35,7 @@ export interface RockParams {
   micro: number;
 }
 
-export const ROCK_PRESETS = {
+const ROCK_PRESETS = {
   hero: {
     radius: 3.4, squash: [1, 0.82, 0.9] as [number, number, number],
     macro: 0.38, strata: 0.16, strataFreq: 3.1, strataTilt: 0.3,

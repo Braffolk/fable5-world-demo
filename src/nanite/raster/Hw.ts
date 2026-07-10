@@ -8,7 +8,7 @@
  *    (verts pulled from qHwRaster). Both write depth (atomicMin) / combined (packed)
  *    / world1 (depth-keyed election), gated by `pass`.
  *  • hwRender / hwRenderCluster — the render-pass wrappers (own dead full-res rgba8 target,
- *    colorWrite off; ?hwrt=0 drops the redundant per-frame clear).
+ *    colorWrite off; the redundant per-frame clear is dropped).
  *
  * NOTE: the per-cluster SW/HW split is the permanent default — every camera/view/shadow cull
  * supplies qHwRaster/hwClusterDraw, so the instanced cluster scene is built whenever those
@@ -32,7 +32,6 @@ import {
 import {
   Fn,
   If,
-  atomicAdd,
   atomicMax,
   atomicMin,
   bool,
@@ -45,9 +44,9 @@ import {
   vertexIndex,
 } from 'three/tsl';
 import type { NB, NF, NU, NV3, NV4 } from '../../gpu/TSLTypes';
-import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK } from '../GeometryRegistry';
+import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK } from '../world/GeometryRegistry';
 import type { NaniteCam } from '../NaniteCommon';
-import type { NaniteFetch, VertCtx } from '../NaniteFetch';
+import type { NaniteFetch, VertCtx } from './NaniteFetch';
 import {
   aLoadU,
   bcF2U,
@@ -86,8 +85,6 @@ export function buildHw(p: {
   width: number;
   height: number;
   nfetch: NaniteFetch;
-  /** M2l: HW vertex stage reconstructs ONE runtime-selected corner (?hw1fetch=1). */
-  hw1fetch: boolean;
   qRasterRO: { element(i: NU | number): { x: NU; y: NU } };
   vis: NaniteVisBuffers;
   hwQueueV: U32Views;
@@ -95,10 +92,6 @@ export function buildHw(p: {
   hwDrawBuf: U32Views['rw'];
   /** the shipped depth-keyed election bound to the vis buffers (VisBuffer.makeElect). */
   elect: (px: NU, cand: NU, idStore: NU) => void;
-  scar: boolean;
-  scarEl: (i: number) => ReturnType<U32Views['atomic']['element']>;
-  /** ?hwrt=1 restores the per-frame full-res clear of the dead color target (A/B control). */
-  hwrt: boolean;
   /** instanced per-cluster draw buffers — supplied by every camera/view/shadow cull (the
    *  SW/HW split is the permanent default); null only on the shadow-clipmap queue. */
   qHwRasterRO: StorageBufferNode<'uint'> | null;
@@ -140,16 +133,12 @@ export function buildHw(p: {
     width,
     height,
     nfetch,
-    hw1fetch,
     qRasterRO,
     vis,
     hwQueueV,
     hwDrawAttr,
     hwDrawBuf,
     elect,
-    scar,
-    scarEl,
-    hwrt,
     qHwRasterRO,
     hwClusterDrawAttr,
     clusterCtxV,
@@ -267,7 +256,6 @@ export function buildHw(p: {
       hwproj && useFlat && !!hwOpts && !hwOpts.reversed && projVertV != null;
     const mFetch = hwOpts?.fetch ?? nfetch;
     const mMakeCtx = mFetch.makeCtx;
-    const mFetchWorldVert = mFetch.fetchWorldVert;
     const mFetchWorldVertDyn = mFetch.fetchWorldVertDyn;
     const mat = new NodeMaterial();
     mat.name = `nanRaster_${sfx}`;
@@ -288,15 +276,11 @@ export function buildHw(p: {
         (vZ as unknown as { assign: (v: unknown) => void }).assign(clip.z);
         (vW as unknown as { assign: (v: unknown) => void }).assign(clip.w);
       };
-      const fetchWorld = (ctx: VertCtx, localTri: NU): NV3 => {
-        if (hw1fetch) return mFetchWorldVertDyn(ctx, localTri, corner);
-        const w0 = mFetchWorldVert(ctx, localTri, 0);
-        const w1 = mFetchWorldVert(ctx, localTri, 1);
-        const w2 = mFetchWorldVert(ctx, localTri, 2);
-        return corner
-          .equal(uint(1))
-          .select(w1, corner.equal(uint(2)).select(w2, w0)) as unknown as NV3;
-      };
+      // HW vertex stage reconstructs ONE runtime-selected corner (fetchWorldVertDyn) rather
+      // than fetching all 3 and selecting — bit-identical by NaniteFetch's contract ("same
+      // selected vertex by construction"), and sheds 2× index-read + decode + transform + wind.
+      const fetchWorld = (ctx: VertCtx, localTri: NU): NV3 =>
+        mFetchWorldVertDyn(ctx, localTri, corner);
       if (hwProjRead) {
         // ── `_clE` (mesh class) projVertBuf READER (HW vertex-prepass, 2026-07-09) ──────────
         // The mesh HW cluster's verts were ALREADY projected this frame by nanProjectVerts
@@ -469,12 +453,6 @@ export function buildHw(p: {
             );
           });
         } else if (pass === 'world1') {
-          // 0a SCAR (?scar=1): count this HW fragment into the whole-frame total [2] so
-          // the band-share denominator includes the large/near tris the HW vertex-pull
-          // path carries (terrain, trunks, near-plane-crossing leaf edges). The band
-          // NUMERATOR [0] stays SW-only by design — mid/far foliage leaves rasterize on
-          // the SW path; the HW path holds non-band near geometry. No band classify here.
-          if (scar) atomicAdd(scarEl(2), uint(1));
           // PERF-VB4 single-pass WORLD (mirrors the SW world1 path): a depth24-keyed
           // atomicMax election whose WINNER write-stores the full id + its exact depth.
           const cand = depthKey24(z as unknown as NF)
@@ -565,7 +543,7 @@ export function buildHw(p: {
   // The HW pass renders into this dead full-res rgba8 (colorWrite=false -> never read).
   // It stays full-res unconditionally: r184 derives the render-pass viewport from
   // RenderTarget.viewport (= texture size), so shrinking it would clip HW coverage and
-  // starve the vis buffers. ?hwrt=0 instead drops only the per-frame CLEAR (see hwRender).
+  // starve the vis buffers. Only the per-frame CLEAR is dropped (see hwRender).
   const hwRT = new RenderTarget(width, height, { depthBuffer: false });
   hwRT.texture.name = 'nanHwPass';
 
@@ -577,7 +555,7 @@ export function buildHw(p: {
     const prevRT = renderer.getRenderTarget();
     renderer.setRenderTarget(hwRT);
     hwMesh.material = mat;
-    // ?hwrt=0: skip the per-frame full-res CLEAR of the dead rgba8 color target. With
+    // Skip the per-frame full-res CLEAR of the dead rgba8 color target. With
     // autoClear=false the backend uses loadOp=Load (Background.js:209-217 -> the
     // descriptor's loadOp becomes Load not Clear). The HW fragment has colorWrite=false,
     // so it never writes the target; nothing downstream reads it; the only effect is the
@@ -585,9 +563,9 @@ export function buildHw(p: {
     // write are unchanged -> byte-identical. hwScene has no .background, so forceClear
     // stays false and autoClear=false is honored. RESTORED immediately after the render.
     const prevAutoClear = renderer.autoClear;
-    if (!hwrt) renderer.autoClear = false;
+    renderer.autoClear = false;
     renderer.render(hwScene, camera);
-    if (!hwrt) renderer.autoClear = prevAutoClear;
+    renderer.autoClear = prevAutoClear;
     renderer.setRenderTarget(prevRT);
   };
   // ?clhw: the instanced per-cluster HW draw into the same hwRT/vis buffers (never clears —

@@ -1,9 +1,7 @@
 /**
  * Queues.ts — the three deferred-raster work queues and their indirect-args kernels.
  *
- *  • hwQueue — [0]=atomic count, then (payload, instId) pairs. The ?scar counters and
- *    the ?trihzb prev-frame HZB mirror are FOLDED into its tail (the WebGPU 10-storage-
- *    buffer ceiling forbids separate buffers on the already-full world1 stage).
+ *  • hwQueue — [0]=atomic count, then (payload, instId) pairs.
  *  • splatQueue — the sub-pixel append list (px, cand, payload) consumed by Splat.
  *  • midQueue — the 2..swmax pre-projected corner records consumed by Mid.
  *  • kSplatArgs / kMidArgs — the indirect dispatch args (1-D for splat; 2-D split for
@@ -64,25 +62,12 @@ export const MID_CAP = 8_388_608;
 // the id alone: ~10× smaller midQueue at zero projection cost + bit-identical render.
 export const MID_STRIDE = 1;
 
-/** Tail-fold pyramid level descriptor for the ?trihzb mirror (sizes the hwQueue tail). */
-export interface TriHzbLevel {
-  offset: number;
-  w: number;
-  h: number;
-}
-
 export interface Queues {
-  // hwQueue (+ scar/trihzb tail folds)
+  // hwQueue
   hwQueueAttr: StorageBufferAttribute;
   hwQueueV: U32Views;
   hwDrawAttr: IndirectStorageBufferAttribute;
   hwDrawBuf: U32Views['rw'];
-  /** ?scar counters live at hwQueue[SCAR_BASE..+4). scarAttr aliases hwQueueAttr. */
-  SCAR_BASE: number;
-  scarEl: (i: number) => ReturnType<U32Views['atomic']['element']>;
-  /** ?trihzb prev-frame HZB mirror at hwQueue[TRIHZB_BASE..+triTailN). */
-  TRIHZB_BASE: number;
-  triTailN: number;
   // splat queue (null when !splatElect)
   splatQueueAttr: StorageBufferAttribute | null;
   splatQueueV: U32Views | null;
@@ -101,43 +86,20 @@ export interface Queues {
 export function buildQueues(p: {
   /** = singlePass: the splat/mid queues + their args only exist on the world1 path. */
   splatElect: boolean;
-  /** the sliced ?trihzb levels (or null) — sizes the hwQueue mirror tail. */
-  triLvls: TriHzbLevel[] | null;
 }): Queues {
-  const { splatElect, triLvls } = p;
+  const { splatElect } = p;
 
   // hwQueue: [0] = atomic count, then (payload, instId) pairs.
-  // ⚠ SCAR FOLD (?scar=1): world1's compute stage is ALREADY at the WebGPU 10-storage-
-  // buffer per-stage ceiling, so a SEPARATE scar buffer makes it 11 (validation error →
-  // invalid pipeline → black frame, no counters). The scar counters (4 u32) are therefore
-  // CARVED INTO THE TAIL of this already-bound hwQueue buffer at [SCAR_BASE..+4) — they
-  // never overlap the queue's [0 .. 1+HW_CAP*2) range, so no new binding, stays at 10.
-  const SCAR_BASE = 1 + HW_CAP * 2;
-  // W2 ?trihzb TAIL FOLD (same binding-budget law as scar above): the per-tri
-  // occlusion test needs the prev-frame HZB, but binding the pyramid buffer in
-  // world1 is an 11th storage buffer (measured: validation error, dead pipeline).
-  // So a tiny copy kernel (own 2-buffer pipeline, runs right after the pyramid
-  // build) mirrors ONE fixed level into this buffer's tail at [TRIHZB_BASE..).
-  // Tail is pre-filled with 1.0f bits (far) so frame-0 rejects nothing; clears
-  // never touch it ([0] + scar slots only).
-  const TRIHZB_BASE = SCAR_BASE + 4;
-  const triTailN = (triLvls ?? []).reduce((a, l) => a + l.w * l.h, 0);
-  const hwQueueInit = new Uint32Array(TRIHZB_BASE + triTailN);
-  if (triTailN > 0) hwQueueInit.fill(0x3f800000, TRIHZB_BASE); // 1.0f = far
-  const hwQueueAttr = new StorageBufferAttribute(hwQueueInit, 1);
+  const hwQueueLen = 1 + HW_CAP * 2;
+  const hwQueueAttr = new StorageBufferAttribute(new Uint32Array(hwQueueLen), 1);
   hwQueueAttr.name = 'nanHwQueue';
-  const hwQueueV = sU32Views(hwQueueAttr, TRIHZB_BASE + triTailN);
+  const hwQueueV = sU32Views(hwQueueAttr, hwQueueLen);
   const hwDrawAttr = new IndirectStorageBufferAttribute(new Uint32Array(4), 4);
   hwDrawAttr.name = 'nanHwDraw';
   const hwDrawBuf = sU32Views(
     hwDrawAttr as unknown as StorageBufferAttribute,
     4,
   ).rw;
-
-  // scar atomic element [i] lives at hwQueue slot SCAR_BASE+i. Returns the atomic ref
-  // (what atomicStore/atomicAdd take), so call sites read like the old scarV.atomic.element.
-  const scarEl = (i: number): ReturnType<U32Views['atomic']['element']> =>
-    hwQueueV.atomic.element(uint(SCAR_BASE + i));
 
   // ─── Splat-election (task #76) — sub-pixel append list ───────────────────────────
   const splatQueueAttr = splatElect
@@ -223,10 +185,6 @@ export function buildQueues(p: {
     hwQueueV,
     hwDrawAttr,
     hwDrawBuf,
-    SCAR_BASE,
-    scarEl,
-    TRIHZB_BASE,
-    triTailN,
     splatQueueAttr,
     splatQueueV,
     splatDrawAttr,

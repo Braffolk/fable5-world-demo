@@ -75,7 +75,7 @@ export interface LaasHooks {
 }
 
 /** options for __laas.measureFrames (serializable across the Playwright boundary) */
-export interface MeasureFramesOpts {
+interface MeasureFramesOpts {
   frames: number;
   warmup?: number;
   dt?: number;

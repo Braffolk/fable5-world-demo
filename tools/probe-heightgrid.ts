@@ -23,9 +23,9 @@
  *
  *   npx tsx tools/probe-heightgrid.ts
  */
-import type { DagBuild, DagCluster } from '../src/nanite/BuildDag';
-import { buildHeightGrid, type HeightField } from '../src/nanite/BuildHeightGrid';
-import { buildHeightGridHierarchy, validateDagHierarchy } from '../src/nanite/DagHierarchy';
+import type { DagBuild, DagCluster } from '../src/nanite/build/BuildDag';
+import { buildHeightGrid, type HeightField } from '../src/nanite/build/BuildHeightGrid';
+import { buildHeightGridHierarchy, validateDagHierarchy } from '../src/nanite/build/DagHierarchy';
 
 let failures = 0;
 const fail = (msg: string): void => {

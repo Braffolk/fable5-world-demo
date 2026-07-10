@@ -16,7 +16,7 @@
  *  D  DETERMINISTIC — same camera ⇒ identical key set.
  */
 
-import { clipmapTiles, clipmapMaxTiles, type ClipmapConfig, type ClipmapTile } from '../src/nanite/TerrainClipmap';
+import { clipmapTiles, clipmapMaxTiles, type ClipmapConfig, type ClipmapTile } from '../src/nanite/world/TerrainClipmap';
 
 let failures = 0;
 const fail = (m: string): void => {

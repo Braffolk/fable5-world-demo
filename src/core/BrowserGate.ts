@@ -36,7 +36,7 @@ function clientHints(): UAClientHints | undefined {
 }
 
 /** phone/tablet detection — capability + UA based, never screen metrics */
-export function isMobileDevice(): boolean {
+function isMobileDevice(): boolean {
   if (clientHints()?.mobile === true) return true;
   const ua = navigator.userAgent;
   // Android tablets drop "Mobile" but keep "Android"; Kindle = Silk
@@ -48,7 +48,7 @@ export function isMobileDevice(): boolean {
 }
 
 /** Chrome or any Chromium-based browser (Edge, Brave, Arc, Opera, ...) */
-export function isChromiumBrowser(): boolean {
+function isChromiumBrowser(): boolean {
   const brands = clientHints()?.brands;
   if (brands && brands.length > 0) {
     return brands.some((b) => /Chromium|Google Chrome/i.test(b.brand));

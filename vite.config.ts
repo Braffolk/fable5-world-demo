@@ -25,6 +25,10 @@ export default defineConfig(({ command }) => ({
         "**/dist/**",
         "**/.git/**",
         "**/tools/**",
+        "**/asset-gen/**",
+        "**/temp/**",
+        "**/profile-results-**",
+
       ],
     },
   },

@@ -4,31 +4,24 @@
  * captured foliage atlas via the standard card material.
  */
 
-import { Quaternion, Vector3 } from 'three';
+import { Vector3 } from 'three';
 import type { BufferGeometry } from 'three';
 import type { Rng } from '../core/Seed';
 import { MeshGrower } from './TubeMesh';
-import { buildFoliageCards } from './FoliageCards';
-import type { LeafAnchor } from './VegTypes';
 
 /**
  * Hanging vine curtain: `count` strands sagging from a top anchor line
- * (local origin = top center, strands hang −y). Returns stem geometry and
- * leaf-card geometry (texture via any broadleaf atlas).
+ * (local origin = top center, strands hang −y). Returns stem geometry only.
+ * TODO(missing-leaves): vine leaves were foliage cards (deleted with the card
+ * pipeline, S8) — the strands hang BARE. Rebuild leaves as real mesh if wanted.
  */
 export function buildVines(
   rng: Rng,
   width: number,
   drop: number,
   count: number,
-): { stems: BufferGeometry; leaves: BufferGeometry } {
+): { stems: BufferGeometry } {
   const stems = new MeshGrower();
-  const leaves = new MeshGrower();
-  const anchors: LeafAnchor[] = [];
-  const q = new Quaternion();
-  const qt = new Quaternion();
-  const Y = new Vector3(0, 1, 0);
-  const X = new Vector3(1, 0, 0);
   for (let s = 0; s < count; s++) {
     const x0 = (s / (count - 1) - 0.5) * width + (rng.float() - 0.5) * 0.3;
     const z0 = (rng.float() - 0.5) * 0.25;
@@ -82,28 +75,8 @@ export function buildVines(
         stems.quad(a[k] as number, a[k + 1] as number, b[k + 1] as number, b[k] as number);
       }
     }
-    // leaf cards along the strand
-    const nl = Math.round(len / 0.22);
-    for (let i = 0; i < nl; i++) {
-      const t = (i + 0.5) / nl;
-      const idxF = t * segs;
-      const i0 = Math.min(segs - 1, Math.floor(idxF));
-      const f = idxF - i0;
-      const pos = (pts[i0] as Vector3).clone().lerp(pts[i0 + 1] as Vector3, f);
-      q.setFromAxisAngle(Y, rng.float() * Math.PI * 2);
-      qt.setFromAxisAngle(X, -Math.PI / 2 + 0.35 + (rng.float() - 0.5) * 0.6);
-      q.multiply(qt);
-      anchors.push({
-        pos,
-        quat: q.clone(),
-        scale: 0.1 + rng.float() * 0.07,
-        hue: rng.float() * 2 - 1,
-        age: rng.float() * 0.5,
-      });
-    }
   }
-  buildFoliageCards(leaves, anchors, { mode: 'cross', sizeK: 2.0 }, rng);
-  return { stems: stems.build(), leaves: leaves.build() };
+  return { stems: stems.build() };
 }
 
 /**

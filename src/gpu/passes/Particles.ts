@@ -1,4 +1,11 @@
 /**
+ * ⚠️ CRITICAL — NEEDS REWORK. Re-enabled 2026-07-10 after being accidentally dead
+ * behind the removed `?oldgeo` gate since 06-13 (the shipped nanite world silently
+ * had NO ambient particles for that whole window). Now built unconditionally in
+ * TerrainScene. AUDIT before trusting: (1) perf cost against the nanite frame
+ * budget, (2) visual fit — particles are a Standard-material scene draw layered
+ * over the nanite resolve, never validated in that composite.
+ *
  * GPU particles (Phase 6) — snow at altitude, pollen motes in forest air,
  * drifting leaves under canopy. ≥100k budget (spec §2), wind-advected
  * (GPU-systems #12), zero CPU per-instance work.

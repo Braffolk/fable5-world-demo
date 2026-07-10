@@ -14,13 +14,7 @@ export type NV2 = Node<'vec2'>;
 export type NV3 = Node<'vec3'>;
 export type NV4 = Node<'vec4'>;
 export type NIV2 = Node<'ivec2'>;
-export type NUV2 = Node<'uvec2'>;
-export type NUV3 = Node<'uvec3'>;
-export type NM3 = Node<'mat3'>;
 export type NM4 = Node<'mat4'>;
-
-/** anything a float slot accepts */
-export type F = NF | number;
 
 // @types/three types exp/log as float-only; WGSL builtins are component-wise.
 // Single deliberate cast point for vector transcendental math.
