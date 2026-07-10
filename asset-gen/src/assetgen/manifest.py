@@ -43,10 +43,21 @@ def _debris_dictionary() -> dict[int, dict]:
 LAYER_DOC = {
     "height": {"enc": 1, "semantics": "u16 heights, meters EH2000; texel(i,j) center at origin+(i+0.5)*t"},
     "biome": {"enc": 2, "texelMeters": 2, "planes": ["classId", "vegDensity"],
-               "semantics": "land-cover class (see config/landcover-classes.toml palette) + canopy fraction"},
+               "semantics": "land-cover class (see config/landcover-classes.toml palette) + canopy fraction; "
+               "texel = texelMeters * lodStep^lod m. LOD >= 1 reduces the finer rung per 4x4 block: "
+               "classId = MAJORITY (ties -> higher classId, so water/sea/wetland win mixed coast texels), "
+               "vegDensity = mean; texels beyond cooked coverage count as none(0)"},
     "water": {"enc": 1, "texelMeters": 2,
                "semantics": "waterY surface elevation on wet texels; quantized value 0 = DRY - "
-               "client substitutes (own bed height - 2.0 m); absent chunk = all dry"},
+               "client substitutes (own bed height - 2.0 m); absent chunk = all dry; "
+               "texel = texelMeters * lodStep^lod m. LOD1 texel is wet iff >= 8 of its 16 finer "
+               "texels are wet (ties lean wet), level = mean of the wet levels"},
+    "canopy": {"enc": 2, "texelMeters": 2, "planes": ["heightM", "cover"],
+                "semantics": "far-forest canopy from the summer CHM; LODs 1-4 ONLY (no LOD0 - near "
+                "canopy derives from tree records); texel = texelMeters * lodStep^lod m. heightM = mean "
+                "canopy height in meters over canopy area (CHM >= 2 m), u8 clamp 0-255, 0 where cover 0; "
+                "cover = canopy-cover fraction * 255. Coarser rungs: heightM cover-weighted mean, cover "
+                "plain mean. cover 0 = treeless OR unmeasured; absent chunk = no canopy data"},
     "soil": {"enc": 2, "texelMeters": 2,
               "planes": ["soilType", "texCore", "texSkeleton", "stoniness", "boniteet"],
               "semantics": "full Mullastikukaart taxonomy (config/soil-types.toml + soil-texture.toml); 0 = no data, 255 = unparseable"},

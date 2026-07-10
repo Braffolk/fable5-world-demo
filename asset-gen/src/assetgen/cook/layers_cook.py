@@ -1,10 +1,11 @@
-"""Vector-derived layer cooks (biome / water / soil) — 2 m/texel rasters at LOD0 chunks."""
+"""Vector-derived layer cooks (biome / water / soil) — 2 m/texel rasters at LOD0 chunks,
+plus their coarse rungs (and the CHM-derived canopy layer) reduced via cook.pyramid."""
 from __future__ import annotations
 
 import numpy as np
 
 from ..config import DATA_IN, BaseConfig
-from ..grid import ChunkId, chunk_bounds_en, chunks_covering_bbox_en
+from ..grid import ChunkId, chunk_bounds_en, chunks_covering_bbox_en, lod_footprint
 from ..process.landcover import BIOME_TEXEL, load_rules, rasterize_classes, veg_density
 from ..process.mosaic import RasterStack, dem_sources
 from ..process.soil import check_unknown_budget, rasterize_soil, unmapped_textures, unmapped_types
@@ -18,6 +19,9 @@ from .encode import (
     encode_u8_planes,
 )
 from .height_cook import chunk_path
+from .pyramid import assemble_finer, blocks16, majority_u8, mean_u8, weighted_mean_u8, wet_majority
+
+CANOPY_MIN_M = 2.0  # CHM >= this counts as canopy — same threshold as veg_density
 
 
 def _window_2m(base: BaseConfig, c: ChunkId) -> tuple[float, float, float, float, float]:
@@ -32,7 +36,7 @@ def _res_2m(base: BaseConfig) -> int:
 def _meta(base: BaseConfig, layer: str, c: ChunkId, enc: int, qoffset=0.0, qscale=0.0) -> ChunkMeta:
     b = chunk_bounds_en(base.grid, c)
     return ChunkMeta(
-        layer=layer, lod=0, enc=enc, cx=c.cx, cz=c.cz, res=_res_2m(base), count=0,
+        layer=layer, lod=c.lod, enc=enc, cx=c.cx, cz=c.cz, res=_res_2m(base), count=0,
         origin_e=b[0], origin_n=b[3], qoffset=qoffset, qscale=qscale,
     )
 
@@ -51,6 +55,27 @@ def cook_biome(base: BaseConfig, bbox_en, log=print) -> None:
         write_chunk(dest, _meta(base, "biome", c, enc=2), payload)
         if (i + 1) % 16 == 0 or i + 1 == len(chunks):
             log(f"  biome [{i + 1}/{len(chunks)}]")
+
+    # coarse rungs: majority classId + mean vegDensity over the finer rung
+    n = _res_2m(base) - 1
+    for lod in (l for l in base.grid.lods if l >= 1):
+        done = 0
+        for c in chunks_covering_bbox_en(base.grid, bbox_en, lod):
+            dest = chunk_path("biome", c)
+            if dest.exists():
+                done += 1
+                continue
+            big = assemble_finer(
+                lambda f: _read_planes(base, "biome", f, 2), c, n, fills=[0, 0]
+            )
+            if big is None:
+                continue  # no cooked finer data at all under this chunk
+            cls = majority_u8(blocks16(big[0]))
+            dens = mean_u8(blocks16(big[1]))
+            payload = encode_u8_planes(base.encode, [cls, dens])
+            write_chunk(dest, _meta(base, "biome", c, enc=2), payload)
+            done += 1
+        log(f"  biome lod{lod}: {done} chunks")
 
 
 def cook_water(base: BaseConfig, bbox_en, log=print) -> None:
@@ -79,6 +104,94 @@ def cook_water(base: BaseConfig, bbox_en, log=print) -> None:
         if (i + 1) % 16 == 0 or i + 1 == len(chunks):
             log(f"  water [{i + 1}/{len(chunks)}] ({n_wet} wet)")
     log(f"  water: {n_wet}/{len(chunks)} chunks carry water")
+
+    # LOD1: texel wet iff >= half its 16 finer texels are wet; level = their mean
+    def read_wet(c: ChunkId) -> list[np.ndarray] | None:
+        p = chunk_path("water", c)
+        if not p.exists():
+            return None  # absent chunk = all dry
+        meta, payload = read_chunk(p)
+        w = decode_quant16(base.encode, payload, meta.res, meta.qoffset, meta.qscale)
+        w[w <= meta.qoffset + meta.qscale * 0.5] = np.nan  # reserved q=0 = dry
+        return [w]
+
+    n = _res_2m(base) - 1
+    n_wet1 = 0
+    for c in chunks_covering_bbox_en(base.grid, bbox_en, 1):
+        dest = chunk_path("water", c)
+        if dest.exists():
+            n_wet1 += 1
+            continue
+        big = assemble_finer(read_wet, c, n, fills=[np.nan])
+        if big is None:
+            continue
+        water = wet_majority(blocks16(big[0]))
+        if not np.isfinite(water).any():
+            continue  # majority-dry everywhere: omitted like LOD0
+        qscale = base.encode.water_qscale
+        payload, qoffset = encode_quant16(base.encode, water.astype(np.float64), qscale)
+        out = decode_quant16(base.encode, payload, water.shape[0], qoffset, qscale)
+        wet = np.isfinite(water)
+        assert float(np.max(np.abs(out[wet] - water[wet]))) <= qscale * 0.5 + 1e-3
+        write_chunk(
+            dest, _meta(base, "water", c, enc=1, qoffset=qoffset, qscale=qscale), payload
+        )
+        n_wet1 += 1
+    log(f"  water lod1: {n_wet1} wet chunks")
+
+
+def cook_canopy(base: BaseConfig, bbox_en, log=print) -> None:
+    """Far-forest canopy planes [heightM, cover] from the CHM — LODs 1..4 only (near
+    canopy derives from tree records, so LOD0 is deliberately not cooked)."""
+    chm_paths = sorted((DATA_IN / "chm").glob("*.tif"))
+    if not chm_paths:
+        raise FileNotFoundError("no CHM rasters — run `assetgen fetch --only elevation`")
+    stack = RasterStack(chm_paths)
+    n = _res_2m(base) - 1
+
+    # LOD1 straight from the CHM at 2 m: 16 samples per 8 m texel
+    done = 0
+    for c in chunks_covering_bbox_en(base.grid, bbox_en, 1):
+        dest = chunk_path("canopy", c)
+        if dest.exists():
+            done += 1
+            continue
+        e_min, n_min, e_max, n_max = chunk_bounds_en(base.grid, c)
+        t = lod_footprint(base.grid, 1) // n  # coarse texel (8 m) = apron width
+        chm = np.nan_to_num(
+            stack.read_window(e_min, n_min - t, e_max + t, n_max, BIOME_TEXEL), nan=0.0
+        )
+        canopy = (chm >= CANOPY_MIN_M).astype(np.uint8)
+        height = weighted_mean_u8(blocks16(np.clip(chm, 0, 255)), blocks16(canopy))
+        cover = np.rint(blocks16(canopy).mean(axis=-1) * 255).astype(np.uint8)
+        if not cover.any():
+            continue  # no canopy (or no CHM coverage): absent chunk = no canopy data
+        payload = encode_u8_planes(base.encode, [height, cover])
+        write_chunk(dest, _meta(base, "canopy", c, enc=2), payload)
+        done += 1
+    log(f"  canopy lod1: {done} chunks")
+
+    # LODs 2..4 reduce the previous rung (cover-weighted height, mean cover)
+    for lod in (l for l in base.grid.lods if l >= 2):
+        done = 0
+        for c in chunks_covering_bbox_en(base.grid, bbox_en, lod):
+            dest = chunk_path("canopy", c)
+            if dest.exists():
+                done += 1
+                continue
+            big = assemble_finer(
+                lambda f: _read_planes(base, "canopy", f, 2), c, n, fills=[0, 0]
+            )
+            if big is None:
+                continue
+            hb, cb = blocks16(big[0]), blocks16(big[1])
+            height, cover = weighted_mean_u8(hb, cb), mean_u8(cb)
+            if not cover.any():
+                continue
+            payload = encode_u8_planes(base.encode, [height, cover])
+            write_chunk(dest, _meta(base, "canopy", c, enc=2), payload)
+            done += 1
+        log(f"  canopy lod{lod}: {done} chunks")
 
 
 def cook_soil(base: BaseConfig, bbox_en, log=print) -> None:

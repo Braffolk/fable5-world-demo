@@ -13,6 +13,7 @@ height = true
 landcover = true
 water = true
 trees = true
+canopy = true
 soil = true
 understory = true
 debris = true
