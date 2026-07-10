@@ -18,19 +18,18 @@
  *  - GroundRing grass/debris: clipmap-instanced (not boot-static scatter) —
  *    stays on its bespoke path until N6/N10 per the audit table.
  *
- * Instances: scatter layers are GPU-resident MIXED-class buffers (idF =
- * cls·8+variant in B.w). C4 reads each layer back ONCE at boot (placements
- * are static) and partitions on CPU into per-mesh contiguous streams —
- * deterministic, order-preserving, and the registry uploads one packed blob.
- * Instances of deferred classes are counted and skipped.
+ * Instances: per-species contiguous streams {a,b,fill} built by ChunkContent
+ * from the WorldSource's record chunks (S2 — Source→ChunkContent→registry is
+ * THE placement path; the registry never sees a scatter buffer). idF =
+ * cls·8+variant in B.w. Instances of deferred classes are counted and skipped.
  */
 
-import type { Renderer, StorageBufferAttribute, StorageBufferNode } from 'three/webgpu';
+import type { Renderer } from 'three/webgpu';
 import type { BufferGeometry } from 'three';
 import { Vector2 } from 'three';
 import { internalSize } from '../../render/RenderScale';
-import type { ScatterLayer, ScatterResult } from '../../gpu/passes/Scatter';
 import { VegClass } from '../../gpu/passes/Scatter';
+import type { ChunkContentStreams } from './ChunkContent';
 import { CROWN_LOD_SCHEDULE, type VegLib, type VegPool, type PoolPart } from '../../vegetation/VegLibrary';
 import type { CrownLodLevel } from '../../vegetation/TreeBuilder';
 import type { Heightfield } from '../../world/Heightfield';
@@ -62,7 +61,6 @@ import {
   explicitToDagVerts,
   setClusterTriCap,
 } from './GeometryRegistry';
-import { readBuffer } from '../Tsl';
 import {
   appendPackedCrown,
   DEFAULT_VOXEL_GRID_DIM,
@@ -134,9 +132,7 @@ const ROCK_CLASSES: ReadonlySet<number> = new Set([
 export interface WorldRegistryResult {
   registry: GeometryRegistry;
   report: BuildReport;
-  /** ms: scatter readback, CPU partition, terrain minMax scan, registry build */
-  readbackMs: number;
-  partitionMs: number;
+  /** ms: terrain minMax scan, registry build */
   terrainMs: number;
   buildMs: number;
   totalMs: number;
@@ -151,10 +147,6 @@ export interface WorldRegistryResult {
   /** N8-D2 Stage 2b-3 (D-N39): the live clipmap streamer in ?nanitedclip mode —
    *  TerrainScene drives streamer.update(camXZ) per frame. Absent otherwise. */
   terrainStreamer?: TerrainStreamer;
-}
-
-function attrOf(node: StorageBufferNode<'vec4'>): StorageBufferAttribute {
-  return (node as unknown as { value: StorageBufferAttribute }).value;
 }
 
 /** BufferGeometry → packed ExplicitSource (vdata vec4 → 4×u8 word) */
@@ -236,19 +228,6 @@ function classPolicy(
   if (DEADWOOD_CLASSES.has(cls)) return { matClass: 'deadwood', channel: 'rigid', lodDist: EX_R1_FAR, swayPad: 0 };
   if (ROCK_CLASSES.has(cls)) return { matClass: 'rock', channel: 'rigid', lodDist: EX_R1_FAR, swayPad: 0 };
   return null; // ferns/flowers — leafy, N9
-}
-
-async function readLayer(
-  renderer: Renderer,
-  layer: ScatterLayer,
-): Promise<{ a: Float32Array; b: Float32Array; count: number }> {
-  const n = layer.count;
-  if (n === 0) return { a: new Float32Array(0), b: new Float32Array(0), count: 0 };
-  const [ab, bb] = await Promise.all([
-    readBuffer(renderer, attrOf(layer.bufA), 0, n * 16),
-    readBuffer(renderer, attrOf(layer.bufB), 0, n * 16),
-  ]);
-  return { a: new Float32Array(ab), b: new Float32Array(bb), count: n };
 }
 
 /** cull projK FOV reference: no camera exists at build time, so the app FOV
@@ -755,7 +734,9 @@ export async function prepareWorldVeg(input: {
 export async function buildWorldRegistry(input: {
   renderer: Renderer;
   hf: Heightfield;
-  scatter: ScatterResult;
+  /** per-species instance streams from ChunkContent (Source→ChunkContent→registry
+   *  is THE placement path — S2; the S7 pool replaces this boot-static bind). */
+  streams: ChunkContentStreams;
   lib: VegLib;
   counters?: Record<string, number>;
   /** D-N19 incremental migration: only these material classes register +
@@ -808,7 +789,7 @@ export async function buildWorldRegistry(input: {
   const {
     renderer,
     hf,
-    scatter,
+    streams,
     lib,
     counters,
     classes,
@@ -849,47 +830,12 @@ export async function buildWorldRegistry(input: {
   // after the scatter readback below — the jobs are already running either way.
   const prepPromise = input.pre ?? prepareWorldVeg({ renderer, lib, seed, classes, dag, leaf: leafOn });
 
-  // ---- scatter readback (placements are boot-static) ------------------------
-  BootTrace.phase('registry: scatter readback + partition');
-  const layers = await Promise.all([
-    readLayer(renderer, scatter.trees),
-    readLayer(renderer, scatter.understory),
-    readLayer(renderer, scatter.extras),
-    readLayer(renderer, scatter.stones),
-  ]);
-  const tRead = performance.now();
-
-  // ---- partition by idF = cls·8 + variant (order-preserving) ----------------
-  const perId = new Map<number, { a: Float32Array; b: Float32Array; fill: number }>();
+  // ---- instance streams (ChunkContent — placements are boot-static) ----------
+  // idCounts (per-species totals) feed pool sizing AND the fartile boot-cache key;
+  // ChunkContent preserves exact per-id counts, so cache keys are undisturbed.
+  const perId = streams.perId;
   const idCounts = new Map<number, number>();
-  for (const layer of layers) {
-    for (let i = 0; i < layer.count; i++) {
-      const id = Math.round(layer.b[i * 4 + 3] as number);
-      idCounts.set(id, (idCounts.get(id) ?? 0) + 1);
-    }
-  }
-  for (const [id, n] of idCounts) {
-    perId.set(id, { a: new Float32Array(n * 4), b: new Float32Array(n * 4), fill: 0 });
-  }
-  for (const layer of layers) {
-    await yieldIfDue();
-    for (let i = 0; i < layer.count; i++) {
-      const id = Math.round(layer.b[i * 4 + 3] as number);
-      const s = perId.get(id);
-      if (!s) continue;
-      const d = s.fill * 4;
-      s.a[d] = layer.a[i * 4] as number;
-      s.a[d + 1] = layer.a[i * 4 + 1] as number;
-      s.a[d + 2] = layer.a[i * 4 + 2] as number;
-      s.a[d + 3] = layer.a[i * 4 + 3] as number;
-      s.b[d] = layer.b[i * 4] as number;
-      s.b[d + 1] = layer.b[i * 4 + 1] as number;
-      s.b[d + 2] = layer.b[i * 4 + 2] as number;
-      s.b[d + 3] = layer.b[i * 4 + 3] as number;
-      s.fill++;
-    }
-  }
-  const tPart = performance.now();
+  for (const [id, s] of perId) idCounts.set(id, s.fill);
 
   // ---- register pools --------------------------------------------------------
   const reg = new GeometryRegistry();
@@ -1671,8 +1617,6 @@ export async function buildWorldRegistry(input: {
   return {
     registry: reg,
     report,
-    readbackMs: tRead - t0,
-    partitionMs: tPart - tRead,
     terrainMs: tTerr1 - tTerr0,
     buildMs: t1 - tBuild0,
     totalMs: t1 - t0,

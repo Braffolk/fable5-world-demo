@@ -15,7 +15,11 @@ export type LayerName =
   | 'understory'
   | 'debris'
   | 'boulders'
-  | 'canopy';
+  | 'canopy'
+  // generated-source record layers (F2: first-class streams; Estonia derives
+  // equivalents from its understory/debris guidance planes at S9)
+  | 'extras'
+  | 'stones';
 
 export interface ChunkKey {
   lod: number;
@@ -41,6 +45,12 @@ export type ChunkPayload =
         yaw?: Float32Array;
         leanX?: Float32Array;
         leanZ?: Float32Array;
+        // exact game-absolute positions (the S2 byte-identity gate): re-anchoring
+        // a f32 world coordinate to chunk-local f32 and back is NOT lossless (±half
+        // an ulp at footprint magnitude), so the generated source passes the original
+        // absolute f32 through. Consumers use xw/zw when present, else origin + x/z.
+        xw?: Float32Array;
+        zw?: Float32Array;
       };
     };
 
@@ -66,6 +76,12 @@ export interface WorldGrid {
   chunkMeters: number;
   chunkRes: number;
   lodStep: number;
+  /** game-space position of chunk (0,0)'s min corner. Estonia: (0,0) — game coords
+   *  are anchored so chunks tile from the anchor. Generated: (−WORLD_HALF, −WORLD_HALF)
+   *  — the world is centered on the game origin, so tiling from the min corner keeps
+   *  the 4096 m world = 2×2 LOD0 chunks + ONE LOD1 chunk. */
+  originX: number;
+  originZ: number;
 }
 
 export interface WorldLayerMeta {
@@ -104,10 +120,13 @@ export interface WorldManifest {
   dictionaries: WorldDictionaries;
   /** Authoritative absence: null = the chunk does not exist (no request needed). */
   coverage(layer: LayerName, key: ChunkKey): ChunkRef | null;
+  /** Enumerate every existing chunk of a layer at one lod (boot fills iterate this;
+   *  runtime residency uses ring arithmetic + coverage() point queries instead). */
+  chunks(layer: LayerName, lod: number): ChunkKey[];
 }
 
 export interface WorldSource {
-  open(progress?: (msg: string) => void): Promise<WorldManifest>;
+  open(progress?: (frac: number, msg: string) => void): Promise<WorldManifest>;
   fetch(layer: LayerName, key: ChunkKey, signal?: AbortSignal): Promise<ChunkPayload | null>;
   close(): void;
 }

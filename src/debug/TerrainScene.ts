@@ -12,13 +12,15 @@ import { BootTrace } from './BootTrace';
 import { Froxels } from '../gpu/passes/Froxels';
 import { PARTICLE_COUNT, Particles } from '../gpu/passes/Particles';
 import { ProbeGI } from '../gpu/passes/ProbeGI';
-import { buildCanopyMap, runScatter } from '../gpu/passes/Scatter';
+import { buildCanopyMap } from '../gpu/passes/Scatter';
 import { addScatterDebug } from './ScatterDebug';
 import { buildVegLibrary } from '../vegetation/VegLibrary';
 import { CausticsBake, setCausticContext } from '../render/Caustics';
 import { setWindContext, windU } from '../render/Wind';
 import { sunU, updateSunUniforms } from '../render/VegMaterials';
-import { Heightfield } from '../world/Heightfield';
+import type { Heightfield } from '../world/Heightfield';
+import { GeneratedWorldSource } from '../world/source/GeneratedWorldSource';
+import { buildChunkContentStreams } from '../nanite/world/ChunkContent';
 import { WaterSurface } from '../world/WaterSurface';
 import { PostStack } from '../render/PostStack';
 import { Clouds } from '../sky/Clouds';
@@ -120,12 +122,13 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     }
   }
 
-  BootTrace.phase('heightfield (GPU gen + erosion)');
-  const hf = await Heightfield.generate(
-    engine.renderer,
-    seed,
-    (p, m) => ctx.progress(p * 0.92, m),
-  );
+  // WORLD SOURCE (S2): heightfield + scatter run ONCE inside the source; the scene
+  // consumes chunk-keyed views for placement and the live hf/scatter handles for the
+  // consumers whose windowed ports land at S3a/S4.
+  BootTrace.phase('world source (heightfield + scatter)');
+  const worldSource = new GeneratedWorldSource(engine.renderer, seed);
+  const worldManifest = await worldSource.open((p, m) => ctx.progress(p * 0.94, m));
+  const hf: Heightfield = worldSource.heightfield;
   (engine as unknown as { heightfield?: Heightfield }).heightfield = hf;
 
   if (hf.cpuHeights) {
@@ -149,13 +152,12 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // tooling probe handle (tools/probe-state.ts) — light/scene state triage
   (window as unknown as { __laasDbg?: unknown }).__laasDbg = { engine, sunSky };
 
-  // vegetation/rock placement (Phase 5): GPU clustered-Poisson scatter +
-  // canopy coverage map — BEFORE the probe field (probes ray-march the bare
-  // heightfield; the canopy map is their only knowledge of the forest) and
-  // before tiles (under-crown ambient)
-  BootTrace.phase('scatter + canopy map');
-  ctx.progress(0.94, 'vegetation: scattering instances');
-  const scatter = await runScatter(engine.renderer, hf, seed);
+  // canopy coverage map from the source's live scatter (S4 ports it to the canopy
+  // window) — BEFORE the probe field (probes ray-march the bare heightfield; the
+  // canopy map is their only knowledge of the forest) and before tiles
+  BootTrace.phase('canopy map');
+  ctx.progress(0.945, 'vegetation: canopy map');
+  const scatter = worldSource.scatter;
   const canopyTex = await buildCanopyMap(engine.renderer, scatter.trees);
   engine.stats.counters['veg.trees'] = scatter.trees.count;
   engine.stats.counters['veg.under'] = scatter.understory.count;
@@ -252,10 +254,20 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     const dagTerrainSkirt = qNan.get('nanitedskirt') !== '0';
     // N9-C0/C2: leaf heads — resolved in resolveNaniteSetup (see above)
     const naniteLeaf = setup.naniteLeaf;
+    // S2: placement flows Source→ChunkContent→registry — the ONE placement path
+    // (record chunks → per-species streams; the registry never sees scatter buffers)
+    BootTrace.phase('nanite: chunk content streams');
+    const tStreams0 = performance.now();
+    const streams = await buildChunkContentStreams(worldSource, worldManifest);
+    const streamsMs = performance.now() - tStreams0;
+    if (qNan.get('s2gate') === '1') {
+      // gate probe handle (scratchpad/s2gate.mjs) — own global; __laasDbg gets reassigned
+      (window as unknown as { __laasS2Gate?: unknown }).__laasS2Gate = { rawLayers: worldSource.rawLayers, streams };
+    }
     const wr = await buildWorldRegistry({
       renderer: engine.renderer,
       hf,
-      scatter,
+      streams,
       lib,
       counters: engine.stats.counters,
       seed: seed.seed,
@@ -274,8 +286,8 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     naniteRegistry = wr.registry;
     // eslint-disable-next-line no-console
     console.log(
-      `[laas] nanite registry: total ${wr.totalMs.toFixed(0)} ms (readback ` +
-        `${wr.readbackMs.toFixed(0)} + partition ${wr.partitionMs.toFixed(0)} + terrain minMax ` +
+      `[laas] nanite registry: total ${wr.totalMs.toFixed(0)} ms (streams ` +
+        `${streamsMs.toFixed(0)} + terrain minMax ` +
         `${wr.terrainMs.toFixed(0)} + build ${wr.buildMs.toFixed(0)}` +
         (wr.dagMeshes > 0
           ? ` + DAG ${wr.dagMeshes}m/${wr.dagBuildMs.toFixed(0)}ms/${(wr.dagTris / 1000).toFixed(0)}k tris`

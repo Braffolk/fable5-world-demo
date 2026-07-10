@@ -51,14 +51,16 @@ export class RemoteWorldSource implements WorldSource {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
   }
 
-  async open(progress?: (msg: string) => void): Promise<WorldManifest> {
+  async open(progress?: (frac: number, msg: string) => void): Promise<WorldManifest> {
     const latest = (await getJson(`${this.baseUrl}/latest.json`, 'no-cache')) as { manifest: string };
-    progress?.(`manifest ${latest.manifest}`);
+    progress?.(0, `manifest ${latest.manifest}`);
     const m = (await getJson(`${this.baseUrl}/${latest.manifest}`, 'default')) as ManifestJson;
     if (m.format !== 1) throw new Error(`RemoteWorldSource: unsupported manifest format ${m.format}`);
     const manifestDir = latest.manifest.slice(0, latest.manifest.lastIndexOf('/'));
 
-    for (const [name, meta] of Object.entries(m.layers)) {
+    const entries = Object.entries(m.layers);
+    for (let li = 0; li < entries.length; li++) {
+      const [name, meta] = entries[li] as (typeof entries)[number];
       if (!(name in LAC1_LAYER_IDS)) continue; // future layers (e.g. canopy) until the codec knows them
       const layer = name as LayerName;
       const bin = await getBytes(`${this.baseUrl}/${manifestDir}/${meta.index}`);
@@ -74,17 +76,26 @@ export class RemoteWorldSource implements WorldSource {
         planes: meta.planes,
         columns: meta.columns as WorldLayerMeta['columns'],
       };
-      progress?.(`index ${layer}: ${map.size} chunks`);
+      progress?.((li + 1) / entries.length, `index ${layer}: ${map.size} chunks`);
     }
 
     this.pool = new DecodePool(DECODE_WORKERS);
     const indexes = this.indexes;
     return {
-      grid: { anchorE: m.anchor.e, anchorN: m.anchor.n, chunkMeters: m.chunkMeters, chunkRes: m.chunkRes, lodStep: m.lodStep },
+      // Estonia game coords are anchored to the manifest anchor, so chunks tile from
+      // game (0,0): originX/Z = 0.
+      grid: { anchorE: m.anchor.e, anchorN: m.anchor.n, chunkMeters: m.chunkMeters, chunkRes: m.chunkRes, lodStep: m.lodStep, originX: 0, originZ: 0 },
       layers: this.layers,
       dictionaries: parseDictionaries(m),
       coverage(layer: LayerName, key: ChunkKey): ChunkRef | null {
         return indexes.get(layer)?.get(packChunkKey(key.lod, key.cx, key.cz)) ?? null;
+      },
+      chunks(layer: LayerName, lod: number): ChunkKey[] {
+        const out: ChunkKey[] = [];
+        for (const ref of indexes.get(layer)?.values() ?? []) {
+          if (ref.lod === lod) out.push({ lod: ref.lod, cx: ref.cx, cz: ref.cz });
+        }
+        return out;
       },
     };
   }
