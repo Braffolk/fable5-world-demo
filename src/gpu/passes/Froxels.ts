@@ -32,7 +32,6 @@ import {
   If,
   Loop,
   Return,
-  clamp,
   exp,
   float,
   instanceIndex,
@@ -53,9 +52,8 @@ import type { Atmosphere } from '../../sky/Atmosphere';
 import type { TerrainField } from '../../nanite/world/TerrainField';
 import { sunU } from '../../render/VegMaterials';
 import { windU } from '../../render/Wind';
-import { WORLD_SIZE } from '../../world/WorldConst';
 import { PERIOD_FBM } from './NoiseBake';
-import { canopyAt } from './Scatter';
+import type { CanopyWindow } from './CanopyWindow';
 import { hash13 } from '../noise/NoiseTSL';
 import type { NF, NI, NV2, NV3, NV4 } from '../TSLTypes';
 
@@ -79,11 +77,10 @@ export class Froxels {
 
   constructor(
     field: TerrainField,
-    // moisture + billow noise stay on the source-provided textures this slice
-    // (S3b/S4 move moisture onto the TerrainField fields plane)
-    env: { fieldsTex: StorageTexture | null; noiseA: StorageTexture | null },
+    // billow noise stays on the source-provided periodic bake (position-independent)
+    env: { noiseA: StorageTexture | null },
     atm: Atmosphere,
-    canopyTex: StorageTexture | null,
+    canopy: CanopyWindow | null,
     clouds: Clouds | null,
   ) {
     const mk = (name: string): Storage3DTexture => {
@@ -96,8 +93,7 @@ export class Froxels {
     this.integTex = mk('froxelInteg');
 
     const noiseA = env.noiseA;
-    const fieldsTex = env.fieldsTex;
-    if (!noiseA || !fieldsTex) throw new Error('froxels need noise + fields');
+    if (!noiseA) throw new Error('froxels need the wind noise bake');
 
     /** exponential slice parameter (0..1) → view distance (m) */
     const sliceDist = (u: NF): NF => float(NEAR).mul(float(FAR / NEAR).pow(u));
@@ -136,8 +132,9 @@ export class Froxels {
       const billow = (texture(noiseA, p.xz.add(drift).div(38 * PERIOD_FBM), 0) as unknown as NV4)
         .y.mul(0.85)
         .add(0.45);
-      const uvW = clamp(p.xz.div(WORLD_SIZE).add(0.5), 0, 1);
-      const moisture = (texture(fieldsTex, uvW, 0) as unknown as NV4).x;
+      // hydrology moisture from the TerrainField surface-fields plane (S4 —
+      // the boot fieldsTex is released post-boot)
+      const moisture = (field.fieldsAt(p.xz as unknown as NV2) as unknown as NV4).x;
       // dawn/dusk fog is the look; noon goes NEAR-ZERO (user: global fog
       // washed out an already-soft scene — aerial perspective owns daytime
       // distance haze, froxels own dawn mist + shafts)
@@ -165,11 +162,11 @@ export class Froxels {
         const q = p.add(sunDirN.mul(dSun));
         vis.mulAssign(smoothstep(-10, 2, q.y.sub(field.fieldHeightFinestNearest(q.xz))));
       }
-      if (canopyTex) {
-        // crown slab pierce point: gaps in the canopy map become shafts
+      if (canopy) {
+        // crown slab pierce point: gaps in the canopy window become shafts
         const dy = groundY.add(13).sub(p.y);
         const off = sunDirN.xz.mul(dy.max(0).div(sunDirN.y.max(0.08)));
-        const cov = canopyAt(canopyTex, p.xz.add(off));
+        const cov = canopy.covAt(p.xz.add(off) as unknown as NV2);
         vis.mulAssign(
           dy.greaterThan(0).select(cov.mul(0.88).oneMinus(), float(1)),
         );

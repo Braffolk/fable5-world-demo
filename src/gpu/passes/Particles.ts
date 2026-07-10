@@ -27,12 +27,11 @@
 import { DoubleSide, InstancedMesh, PlaneGeometry, Vector3 } from 'three';
 import type { PerspectiveCamera } from 'three';
 import { IrradianceNode, MeshStandardNodeMaterial } from 'three/webgpu';
-import type { ComputeNode, Renderer, StorageTexture } from 'three/webgpu';
+import type { ComputeNode, Renderer } from 'three/webgpu';
 import {
   Fn,
   If,
   Return,
-  clamp,
   float,
   fract,
   instanceIndex,
@@ -41,7 +40,6 @@ import {
   positionLocal,
   positionWorld,
   smoothstep,
-  texture,
   time,
   uniform,
   uv,
@@ -52,8 +50,7 @@ import {
 import { hash13 } from '../noise/NoiseTSL';
 import type { NF, NV2, NV3, NV4 } from '../TSLTypes';
 import type { TerrainField } from '../../nanite/world/TerrainField';
-import { WORLD_SIZE } from '../../world/WorldConst';
-import { canopyAt } from './Scatter';
+import type { CanopyWindow } from './CanopyWindow';
 import type { ProbeGI } from './ProbeGI';
 import { gustAt, windContext, windU } from '../../render/Wind';
 
@@ -75,10 +72,7 @@ export class Particles {
 
   constructor(
     field: TerrainField,
-    // snow-biome roll stays on the source-provided biome texture this slice
-    // (S4 moves it onto the TerrainField biome plane)
-    biomeTex: StorageTexture | null,
-    canopyTex: StorageTexture | null,
+    canopy: CanopyWindow | null,
     gi: ProbeGI | null = null,
   ) {
     // (x, y, z, type) — type carries through until the particle re-rolls
@@ -86,12 +80,11 @@ export class Particles {
     // (phase, size01, age, ttl)
     const misc = instancedArray(PARTICLE_COUNT, 'vec4');
 
-    if (!biomeTex) throw new Error('particles need the biome texture');
-
     const rollType = (p: NV3, h: NF): NF => {
-      const uvW = clamp(p.xz.div(WORLD_SIZE).add(0.5), 0, 1);
-      const snow = (texture(biomeTex, uvW, 0) as unknown as NV4).y;
-      const cov = canopyTex ? canopyAt(canopyTex, p.xz) : (float(0) as NF);
+      // snow from the TerrainField surface-fields plane (S4 — the boot
+      // biomeTex is released post-boot), canopy from the S4 window
+      const snow = (field.fieldsAt(p.xz as unknown as NV2) as unknown as NV4).z;
+      const cov = canopy ? canopy.covAt(p.xz as unknown as NV2) : (float(0) as NF);
       const isSnow = snow.greaterThan(0.35);
       const leafRoll = h.lessThan(0.45).and(cov.greaterThan(0.3));
       return isSnow.select(

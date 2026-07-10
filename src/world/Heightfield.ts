@@ -494,16 +494,17 @@ export class Heightfield {
   }
 
   /**
-   * S3b finale: free the BOOT-ONLY GPU field set once every runtime consumer
+   * S3b/S4 finale: free the BOOT-ONLY GPU field set once every runtime consumer
    * reads the TerrainField planes — normalTex (classification/scatter input),
-   * the full-res height + hardness buffers and the sim-res erosion scratch.
-   * The waterY/waterYFar/flow buffers STAY (water material + caustics read
-   * them at runtime until their windowed ports). Call strictly AFTER boot
-   * bakes complete (scatter/BiomeSnow run inside source.open; ProbeGI +
-   * FarShadow sample the TerrainField since S3b). Safe under ?profile=1:
-   * these resources are not in the swap handoff and nothing on the render
-   * device references them, so the loading-device copies just die early.
-   * Idempotent; returns the MB freed for the boot ledger.
+   * the full-res height + hardness buffers, the sim-res erosion scratch, and
+   * since S4 biomeTex + fieldsTex (their last runtime readers — ProbeGI albedo,
+   * Particles snow, Froxels moisture — sample the streamed biome/fields planes;
+   * the remaining reads run inside source.open, before this call). The
+   * waterY/waterYFar/flow buffers STAY (water material + caustics read them at
+   * runtime until their S9 ports). Call strictly AFTER boot bakes complete.
+   * Safe under ?profile=1: these resources are not in the swap handoff and
+   * nothing on the render device references them, so the loading-device copies
+   * just die early. Idempotent; returns the MB freed for the boot ledger.
    */
   releaseBootGpuSet(renderer: Renderer): number {
     if (this.bootGpuReleased) return 0;
@@ -533,6 +534,16 @@ export class Heightfield {
     this.simSediment = null;
     this.normalTex.dispose();
     bytes += r2 * 8; // rgba16f
+    if (this.biomeTex) {
+      this.biomeTex.dispose();
+      this.biomeTex = null;
+      bytes += r2 * 4; // rgba8
+    }
+    if (this.fieldsTex) {
+      this.fieldsTex.dispose();
+      this.fieldsTex = null;
+      bytes += s2 * 8; // rgba16f
+    }
     return bytes / 2 ** 20;
   }
 }

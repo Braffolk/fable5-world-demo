@@ -12,7 +12,7 @@ import { BootTrace } from './BootTrace';
 import { Froxels } from '../gpu/passes/Froxels';
 import { PARTICLE_COUNT, Particles } from '../gpu/passes/Particles';
 import { ProbeGI } from '../gpu/passes/ProbeGI';
-import { buildCanopyMap } from '../gpu/passes/Scatter';
+import { CanopyWindow } from '../gpu/passes/CanopyWindow';
 import { addScatterDebug } from './ScatterDebug';
 import { buildVegLibrary } from '../vegetation/VegLibrary';
 import { CausticsBake, setCausticContext } from '../render/Caustics';
@@ -129,13 +129,13 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   BootTrace.phase('world source (heightfield + scatter)');
   const worldSource = new GeneratedWorldSource(engine.renderer, seed);
   const worldManifest = await worldSource.open((p, m) => ctx.progress(p * 0.94, m));
-  // The live boot heightfield — after S3b it feeds ONLY boot-time consumers
-  // (scatter + classification inside source.open, the registry terrain build,
-  // canopy map until its S4 window), the still-live waterY/flow buffers (water
-  // material + caustics), biome/fields textures (Froxels/Particles until S4/S9),
-  // wind noise, and the ?profile=1 texture handoff. Every hot shader terrain
-  // read lives on the TerrainField below; the boot-only GPU set is released
-  // right after the render graph builds (releaseBootGpuSet).
+  // The live boot heightfield — after S4 it feeds ONLY boot-time consumers
+  // (scatter + classification inside source.open, the registry terrain build),
+  // the still-live waterY/flow buffers (water material + caustics — S9 ports),
+  // wind noise, and the ?profile=1 texture handoff. Every other runtime read
+  // lives on the TerrainField planes + the S4 windows below; the boot-only GPU
+  // set (incl. biome/fields textures since S4) is released right after the
+  // render graph builds (releaseBootGpuSet).
   const hf: Heightfield = worldSource.heightfield;
   (engine as unknown as { heightfield?: Heightfield }).heightfield = hf;
 
@@ -167,13 +167,22 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // tooling probe handle (tools/probe-state.ts) — light/scene state triage
   (window as unknown as { __laasDbg?: unknown }).__laasDbg = { engine, sunSky };
 
-  // canopy coverage map from the source's live scatter (S4 ports it to the canopy
-  // window) — BEFORE the probe field (probes ray-march the bare heightfield; the
-  // canopy map is their only knowledge of the forest) and before tiles
-  BootTrace.phase('canopy map');
-  ctx.progress(0.945, 'vegetation: canopy map');
+  // canopy coverage window from the source's TREE RECORDS (S4 — the WorldSource
+  // path both sources ride; pinned over the whole generated world) — BEFORE the
+  // probe field (probes ray-march the bare heightfield; the canopy window is
+  // their only knowledge of the forest) and before tiles
+  BootTrace.phase('canopy window');
+  ctx.progress(0.945, 'vegetation: canopy window');
   const scatter = worldSource.scatter;
-  const canopyTex = await buildCanopyMap(engine.renderer, scatter.trees);
+  const canopy = await CanopyWindow.build(
+    engine.renderer,
+    worldSource,
+    worldManifest,
+    field,
+    engine.camera.position.x,
+    engine.camera.position.z,
+  );
+  const canopyTex = canopy?.tex ?? null;
   engine.stats.counters['veg.trees'] = scatter.trees.count;
   engine.stats.counters['veg.under'] = scatter.understory.count;
   engine.stats.counters['veg.extras'] = scatter.extras.count;
@@ -186,10 +195,9 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   BootTrace.phase('probe GI');
   ctx.progress(0.95, 'gi: gathering irradiance probes');
   const gi = new ProbeGI(
-    hf,
     field,
     sunSky.atmosphere,
-    ablate.has('canopygi') ? null : canopyTex,
+    ablate.has('canopygi') ? null : canopy,
   );
   await gi.init(engine.renderer);
   sunSky.dimAmbientForGI();
@@ -352,9 +360,19 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     sunSky,
   };
 
+  // S4 camera-follow: the subsystem windows track the camera every frame (on
+  // the generated world their coverage clamp pins them — these are no-ops; S5's
+  // roaming camera drives real scrolls through the same three calls).
+  engine.onUpdate(() => {
+    const c = engine.camera.position;
+    canopy?.update(engine.renderer, c.x, c.z);
+    gi.followCamera(c.x, c.z);
+    farSh?.follow(engine.renderer, c.x, c.z);
+  });
+
   // GPU particles: snow/pollen/leaves riding the wind (?ablate=particles)
   if (!ablate.has('particles')) {
-    const parts = new Particles(field, hf.biomeTex, canopyTex, ablate.has('gi') ? null : gi);
+    const parts = new Particles(field, canopy, ablate.has('gi') ? null : gi);
     engine.scene.add(parts.mesh);
     engine.onUpdate((dt) => parts.update(engine.renderer, engine.camera, dt));
     engine.stats.counters['particles'] = PARTICLE_COUNT;
@@ -363,7 +381,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // froxel volumetrics: canopy shafts + valley fog (?ablate=froxels, ?fog=N)
   let froxels: Froxels | null = null;
   if (!ablate.has('froxels')) {
-    froxels = new Froxels(field, { fieldsTex: hf.fieldsTex, noiseA: hf.noiseA }, sunSky.atmosphere, canopyTex, clouds);
+    froxels = new Froxels(field, { noiseA: hf.noiseA }, sunSky.atmosphere, canopy, clouds);
     const fq = Number(new URLSearchParams(window.location.search).get('fog') ?? NaN);
     if (Number.isFinite(fq)) froxels.fogK.value = fq;
     const fx = froxels;
@@ -481,11 +499,10 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       // swap and writes them onto the render device afterward.
       textures: (
         [
-          // heightTex is EXCISED and normalTex/height are RELEASED post-boot
-          // (S3b finale) — the render device never references them, so they
-          // are deliberately NOT transferred across the ?profile device swap.
-          hf.biomeTex && { tex: hf.biomeTex },
-          hf.fieldsTex && { tex: hf.fieldsTex },
+          // heightTex is EXCISED and normalTex/height/biomeTex/fieldsTex are
+          // RELEASED post-boot (S3b/S4 finales) — the render device never
+          // references them, so they are deliberately NOT transferred across
+          // the ?profile device swap.
           hf.noiseA && { tex: hf.noiseA },
           hf.noiseB && { tex: hf.noiseB },
           bark && { tex: bark.texA, mips: true },
@@ -507,18 +524,21 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     console.log('[profile] render graph deferred — ProfileBoot builds it on laas-render');
   }
 
-  // S3b finale: every boot bake that read the hf GPU field set has run (scatter/
-  // classification inside source.open; GI + far-shadow sample the TerrainField)
-  // — free the boot-only GPU set (height + hardness + erosion scratch buffers,
-  // normalTex). waterY/flow stay (water material + caustics read them live).
-  // Under ?profile these are loading-device resources outside the swap handoff,
-  // so releasing early is safe (see Heightfield.releaseBootGpuSet).
+  // S3b/S4 finale: every boot bake that read the hf GPU field set has run
+  // (scatter/classification inside source.open; GI/far-shadow/canopy/froxels/
+  // particles all live on the TerrainField planes + S4 windows) — free the
+  // boot-only GPU set (height + hardness + erosion scratch buffers, normalTex,
+  // and since S4 biomeTex + fieldsTex). waterY/flow stay (water material +
+  // caustics read them live until their S9 ports). Under ?profile these are
+  // loading-device resources outside the swap handoff, so releasing early is
+  // safe (see Heightfield.releaseBootGpuSet).
   {
     const freedMb = hf.releaseBootGpuSet(engine.renderer);
     // eslint-disable-next-line no-console
     console.log(
       `[laas] heightfield boot GPU set released: ${freedMb.toFixed(1)} MB ` +
-        `(height/hardness/erosion-scratch buffers + normalTex; heightTex is excised — never allocated)`,
+        `(height/hardness/erosion-scratch buffers + normalTex + biomeTex + fieldsTex; ` +
+        `heightTex is excised — never allocated)`,
     );
   }
 

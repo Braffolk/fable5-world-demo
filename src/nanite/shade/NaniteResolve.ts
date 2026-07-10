@@ -236,8 +236,10 @@ export function buildNaniteResolve(
   world: ResolveWorld,
 ): NaniteResolveHandles {
   const hf = world.hf;
-  if (!hf.biomeTex || !hf.fieldsTex || !hf.noiseA || !hf.noiseB) {
-    throw new Error('NaniteResolve: heightfield derived maps missing (boot order)');
+  // only the noise bakes are read from hf here — biomeTex/fieldsTex are S4-released
+  // boot textures (may already be gone under the ?profile deferred graph build)
+  if (!hf.noiseA || !hf.noiseB) {
+    throw new Error('NaniteResolve: heightfield noise bakes missing (boot order)');
   }
   const q = new URLSearchParams(window.location.search);
   // ROCK (and future explicit-mesh classes) need per-vertex attributes →

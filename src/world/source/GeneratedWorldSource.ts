@@ -17,10 +17,12 @@
  *             buffers read back lazily) and 'water' (waterY f32 windows of the
  *             existing cpuWaterY mirror) — the TerrainField plane fills.
  *
- * The scene's not-yet-ported scatter/heightfield consumers (canopy map, GI,
- * counters — S4 ports) read `.heightfield`/`.scatter` directly; placement flows
- * ONLY through fetch('records') → ChunkContent; terrain planes flow ONLY through
- * fetch('height'|'biome'|'fields'|'water') → TerrainField.
+ * The scene reads `.heightfield` for the still-live boot handles (waterY/flow
+ * until S9, wind noise, registry terrain build) and `.scatter` for the HUD
+ * counters/debug view; placement flows ONLY through fetch('records') →
+ * ChunkContent; terrain planes flow ONLY through
+ * fetch('height'|'biome'|'fields'|'water') → TerrainField; the S4 canopy window
+ * flows through fetch('trees').
  */
 import type { Renderer } from 'three/webgpu';
 import { Fn, If, Return, instanceIndex, instancedArray, textureLoad, uint, uvec2 } from 'three/tsl';
@@ -106,7 +108,7 @@ export class GeneratedWorldSource implements WorldSource {
     return this.hf;
   }
 
-  /** the live GPU scatter result — canopy map/debug/counters read it until S4. */
+  /** the live GPU scatter result — HUD counters + the ?view=scatter debug. */
   get scatter(): ScatterResult {
     if (!this.scatterResult) throw new Error('GeneratedWorldSource: scatter before open()');
     return this.scatterResult;

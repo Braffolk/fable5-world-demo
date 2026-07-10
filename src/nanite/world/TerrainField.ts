@@ -91,6 +91,17 @@ interface RasterGeom {
   lodStep: number;
 }
 
+/** chunk-aligned world box of the source's height coverage — the S4 subsystem
+ *  windows (ProbeGI / FarShadow / canopy) clamp their camera-centered bases into
+ *  it, so a window spanning the whole box is PINNED (the generated world's
+ *  static-output guarantee falls out of the same clamp Estonia roams under). */
+export interface CoverageBox {
+  minX: number;
+  minZ: number;
+  maxX: number;
+  maxZ: number;
+}
+
 export class TerrainField {
   /** finest → coarsest; index = the `level` arg of fieldHeight */
   readonly heightLevels: readonly HeightLevel[];
@@ -102,6 +113,7 @@ export class TerrainField {
   readonly water: HeightLevel | null;
   /** ×8 min-reduced far waterY (conservative: channels vanish, lakes survive) */
   readonly waterFar: HeightLevel | null;
+  readonly coverageBox: CoverageBox;
 
   private constructor(
     heightLevels: HeightLevel[],
@@ -109,6 +121,7 @@ export class TerrainField {
     fieldsLevels: FieldLevel[],
     water: HeightLevel | null,
     waterFar: HeightLevel | null,
+    coverageBox: CoverageBox,
   ) {
     if (heightLevels.length === 0) throw new Error('TerrainField: needs at least one height level');
     this.heightLevels = heightLevels;
@@ -116,6 +129,7 @@ export class TerrainField {
     this.fieldsLevels = fieldsLevels;
     this.water = water;
     this.waterFar = waterFar;
+    this.coverageBox = coverageBox;
     const mb = this.vramBytes() / 2 ** 20;
     // eslint-disable-next-line no-console
     console.log(
@@ -181,7 +195,7 @@ export class TerrainField {
       }, farData);
     }
 
-    return new TerrainField(heightLevels, biomeLevels, fieldsLevels, water, waterFar);
+    return new TerrainField(heightLevels, biomeLevels, fieldsLevels, water, waterFar, coverageBoxM(manifest));
   }
 
   /** One-level field over a flat/explicit height array — forest/gallery-class
@@ -205,7 +219,12 @@ export class TerrainField {
       n0x: 0,
       n0z: 0,
     };
-    return new TerrainField([makeHeightLevel('terrainFieldHeightL0', 0, opts.res, place, data)], [], [], null, null);
+    return new TerrainField([makeHeightLevel('terrainFieldHeightL0', 0, opts.res, place, data)], [], [], null, null, {
+      minX: opts.worldMinX,
+      minZ: opts.worldMinZ,
+      maxX: opts.worldMinX + opts.res * opts.texel,
+      maxZ: opts.worldMinZ + opts.res * opts.texel,
+    });
   }
 
   // ---- CPU sampling (walk probe, spawn, bookmarks) --------------------------------
@@ -521,8 +540,14 @@ function levelRes(spanM: number, texel: number, windowRes: number, cap: number):
   return r >= cov ? r : windowRes;
 }
 
-/** coverage centroid from the FINEST height lod's chunk set (F-7) */
-function coverageCenter(manifest: WorldManifest): { cx: number; cz: number } {
+/** chunk box (indices) of the FINEST height lod's chunk set + its chunk span (m) */
+function heightChunkBox(manifest: WorldManifest): {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+  span: number;
+} {
   const meta = manifest.layers.height as NonNullable<WorldManifest['layers']['height']>;
   const finest = Math.min(...meta.lods);
   const keys = manifest.chunks('height', finest);
@@ -537,11 +562,28 @@ function coverageCenter(manifest: WorldManifest): { cx: number; cz: number } {
     minZ = Math.min(minZ, k.cz);
     maxZ = Math.max(maxZ, k.cz);
   }
+  return { minX, maxX, minZ, maxZ, span: manifest.grid.chunkMeters * manifest.grid.lodStep ** finest };
+}
+
+/** coverage centroid from the FINEST height lod's chunk set (F-7) */
+function coverageCenter(manifest: WorldManifest): { cx: number; cz: number } {
+  const b = heightChunkBox(manifest);
   const g = manifest.grid;
-  const span = g.chunkMeters * g.lodStep ** finest;
   return {
-    cx: g.originX + ((minX + maxX + 1) / 2) * span,
-    cz: g.originZ + ((minZ + maxZ + 1) / 2) * span,
+    cx: g.originX + ((b.minX + b.maxX + 1) / 2) * b.span,
+    cz: g.originZ + ((b.minZ + b.maxZ + 1) / 2) * b.span,
+  };
+}
+
+/** chunk-aligned world box of the height coverage (generated: exactly ±WORLD_HALF) */
+function coverageBoxM(manifest: WorldManifest): CoverageBox {
+  const b = heightChunkBox(manifest);
+  const g = manifest.grid;
+  return {
+    minX: g.originX + b.minX * b.span,
+    minZ: g.originZ + b.minZ * b.span,
+    maxX: g.originX + (b.maxX + 1) * b.span,
+    maxZ: g.originZ + (b.maxZ + 1) * b.span,
   };
 }
 
