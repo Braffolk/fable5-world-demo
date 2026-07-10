@@ -304,8 +304,10 @@ export function encodeRecordColumns(cols: readonly RecordColumn[]): Uint8Array {
 
 /** trees.scale u8 = crownHeight/refHeight·64 → f32 multiplier vs species ref height. */
 export const TREE_SCALE_Q = 1 / 64;
-/** boulders.size u8 ≈ cm/40 → f32 size in meters. */
-export const BOULDER_SIZE_STEP_M = 0.4;
+/** boulders.size u8 = height_m·40 → meters = size/40 (0.2..6.4 m). Raw 40/80 usually
+ *  means the cook's unmeasured default (1 m single / 2 m pile) — ETAK korgus is absent
+ *  for ~97% of surveyed features. */
+export const BOULDER_SIZE_STEP_M = 1 / 40;
 
 /** Per-layer wire schema from the manifest (enc2 plane count, enc3 column list). */
 export interface Lac1LayerSchema {
@@ -316,7 +318,7 @@ export interface Lac1LayerSchema {
 /** Decode one inflated payload into the spec §2 decoded-f32 ChunkPayload. Record layers
  *  map manifest columns onto the fixed cols shape: x/z u16 dequantize by header qscale
  *  (= footprint/65535 → chunk-local meters); trees scale = u8/64; boulders kind→species,
- *  size→scale (meters, 0.4 m step). */
+ *  size→scale (meters = size/40). */
 export function decodeChunkPayload(h: Lac1Header, raw: Uint8Array, schema: Lac1LayerSchema = {}): ChunkPayload {
   switch (h.enc) {
     case 1:

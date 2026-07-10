@@ -82,8 +82,11 @@ LAYER_DOC = {
                 "on steep/thin/stony ground). Client scatters stones/deadwood/litter, jittered + blended"},
     "boulders": {"enc": 3, "columns": [["x", "u16"], ["z", "u16"], ["kind", "u8"], ["size", "u8"],
                   ["variant", "u8"]],
-                  "semantics": "real ETAK-mapped boulders; kind 0=single 1=pile; size ~cm/40; "
-                  "NO y (client grounds); absent chunk = none"},
+                  "semantics": "real ETAK-mapped boulders; kind 0=single 1=pile (ETAK tyyp 10/20); "
+                  "size = height_m * 40, so meters = size/40 (clamp 0.2..6.4 m) — from ETAK korgus "
+                  "where surveyed, else default 1 m single / 2 m pile (korgus is 0 for ~97% of "
+                  "features, so size 40/80 usually means 'default'); NO y (client grounds); "
+                  "absent chunk = none"},
 }
 
 

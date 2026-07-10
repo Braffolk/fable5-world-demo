@@ -328,8 +328,12 @@ PATH; excision checklist per slice; one commit per slice.
 - **Header qscale does double duty and is f32**: enc1 dequant step AND enc3 x/z record
   dequant step (= footprint/65535). Expectation math must Math.fround(qscale) first.
 - **CRC is over the COMPRESSED payload** (zlib.crc32), checked before inflate.
-- Boulders' scale decodes to METERS (×0.4 step) vs trees' unitless ×1/64 — two
-  semantics, documented at TREE_SCALE_Q/BOULDER_SIZE_STEP_M in Lac1.ts (S7 consumer).
+- Boulders' scale decodes to METERS = size/40 (AG3-corrected: the original LAYER_DOC's
+  "cm/40" was wrong; raw 80 = 2.0 m pile, raw 40 = 1.0 m single — and those two values
+  are usually the cook's unmeasured DEFAULT, since ETAK korgus is absent for ~97% of
+  features; kind + positions are real survey data). Trees stay unitless ×1/64.
+  Constants: TREE_SCALE_Q / BOULDER_SIZE_STEP_M in Lac1.ts. The rocks spec §H class
+  ladder (size_m thresholds) still applies unchanged — sizes are just honest now.
 - Height lods are NOW [0..4] (AG1 landed LOD4, qscale 0.25/1.0 at LOD3/4); coarse res
   still 2049. RemoteWorldSource.open() skips manifest layers the codec doesn't know —
   canopy streams automatically once its LAC1 layer id (8) is added to LAC1_LAYER_IDS.
