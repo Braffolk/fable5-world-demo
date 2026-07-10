@@ -150,6 +150,12 @@ export interface WorldRegistryResult {
   /** S5: terrain streams through the brain (clip mode) — TerrainScene drives
    *  brain.update/drain per frame. False on the legacy uniform/window paths. */
   streamedTerrain: boolean;
+  /** S7: idF → chain-head MeshHandle — the streamed instance band resolves a
+   *  record's idF to its pool head(s) to write the block's per-slot meshId. */
+  heads: Map<number, MeshHandle>;
+  /** S7: idF → co-located leaf-crown head (trees only; renders on the SAME
+   *  instance as the bark trunk within the near band). */
+  leafHeads: Map<number, MeshHandle>;
 }
 
 /** BufferGeometry → packed ExplicitSource (vdata vec4 → 4×u8 word) */
@@ -792,6 +798,11 @@ export async function buildWorldRegistry(input: {
    *  scene=world path): boot tiles bake brain-side from decoded chunks and the
    *  runtime clipmap streams through its mailbox. The scene owns + drives it. */
   brain?: StreamBrainClient;
+  /** S7: reserve a streamed-instance pool (§5, A4) sized blockSize·blocks. STREAMED
+   *  world only — the generated world keeps its boot-bound instances (omit ⇒ no pool,
+   *  instanceCount byte-identical). Reserved before build() so the frozen cull
+   *  dispatch covers the parked capacity. */
+  instancePool?: { blockSize: number; blocks: number };
 }): Promise<WorldRegistryResult> {
   const {
     renderer,
@@ -1506,6 +1517,16 @@ export async function buildWorldRegistry(input: {
   // C (memory arc): crown workers are disposed; free any main-thread inline-fallback
   // cell-accumulator scratch before the big build slab (defensive — normally never allocated).
   releaseVoxelizerScratch();
+  // S7: reserve the streamed-instance pool BEFORE build() (advances instCursor so the
+  // frozen cull dispatch covers the parked capacity). Streamed world only — the
+  // generated world omits input.instancePool and keeps identical instance words.
+  if (input.instancePool) {
+    reg.reserveInstancePool(input.instancePool.blockSize, input.instancePool.blocks);
+    deferred.push(
+      `instance pool: ${input.instancePool.blocks}×${input.instancePool.blockSize} = ${reg.instancePoolCapacity} slots ` +
+        `(${((reg.instancePoolCapacity * 8 * 4) / 1048576).toFixed(1)} MB mirror), parked off-world`,
+    );
+  }
   BootTrace.phase('registry: build + upload');
   await yieldIfDue(0); // enter the big sync slab on a fresh task
   const report = reg.build(renderer, counters);
@@ -1623,5 +1644,7 @@ export async function buildWorldRegistry(input: {
     dagBuildMs,
     dagTris,
     streamedTerrain: streamBrain !== null,
+    heads,
+    leafHeads,
   };
 }

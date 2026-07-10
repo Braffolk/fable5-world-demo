@@ -230,6 +230,11 @@ export function buildNaniteFrame(
   // ?nanodisp=1 — disable terrain micro-displacement (root-cause bisect for
   // near-camera transparency: the disp branch only runs within 85 m)
   const dispOff = params.get('nanodisp') === '1';
+  // S6e: the render-anchor uniform for terrain FIELD sampling (NaniteFetch hfWorld /
+  // terrainDispAt) — the S6d anchor-relative vert positions must be re-absoluted to
+  // hit the world-anchored field planes. Streamed only; undefined ⇒ generated compiles
+  // the verbatim absolute path (byte-identical shader).
+  const fieldAnchor = world.streamAnchor ? cam.anchor : undefined;
   const disp = dispOff
     ? undefined
     : {
@@ -237,6 +242,7 @@ export function buildNaniteFrame(
         noiseA: hf.noiseA,
         noiseB: hf.noiseB,
         camPos: cam.camPos,
+        anchor: fieldAnchor,
       };
   // trunk wind (matches the resolve's makeFetch — both read ?nanwind so the
   // rastered geometry and the resolve's barycentric corners stay bit-identical)
@@ -255,6 +261,7 @@ export function buildNaniteFrame(
   const raster = buildNaniteRaster(
     registry.gpu, field, cam, cull, vis, 'flat', true, disp, windOpt, false, true, voxActive,
     grass ? { batch: grass.batch, renderHw: grass.renderHw, enabled: grass.enabled } : undefined,
+    fieldAnchor, // S6e: absolute field-sample coords for the anchor-relative terrain verts
   );
 
   // Nanite shadows (N5, D-N28): depth-only SW raster into own r32 cascade textures,
@@ -277,6 +284,7 @@ export function buildNaniteFrame(
         voxActive,
         world.streamAnchor, // S6d: fit the light frame in the StreamOrigin-relative space
         world.streamAnchor ? () => registry.tileEpoch : undefined, // S6d: dirty on tile stream
+        fieldAnchor, // S6e: absolute field-sample coords in the shadow depth raster's fetch
       )
     : null;
   // CAMERA||SHADOW CULL OVERLAP: fold the (CLIP-path) shadow shared-cut cull into the SAME
@@ -381,7 +389,7 @@ export function buildNaniteFrame(
   let probeRead: (() => Promise<Float32Array>) | null = null;
   let probeSet: ((pix: number[][]) => void) | null = null;
   if (probeOn) {
-    const fetchDbg = makeFetch(registry.gpu, field);
+    const fetchDbg = makeFetch(registry.gpu, field, undefined, undefined, true, 'both', fieldAnchor);
     const probeAttr = new StorageBufferAttribute(new Float32Array(32), 1);
     probeAttr.name = 'nanProbeReadback';
     const outBuf = storage(probeAttr, 'float', 32);

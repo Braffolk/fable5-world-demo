@@ -114,7 +114,7 @@ import {
   uniformMat4,
   wgLinear,
 } from '../Tsl';
-import type { UniformArrV4, UniformF, UniformMat4 } from '../Tsl';
+import type { UniformArrV4, UniformF, UniformMat4, UniformV3 } from '../Tsl';
 import { sunU } from '../../render/VegMaterials';
 
 export interface NaniteShadow {
@@ -278,6 +278,11 @@ export function buildNaniteShadowClip(
    *  terrain stops) without waiting for a camera texel-snap. Omitted / static ⇒ no
    *  extra re-raster (generated world) ⇒ byte-identical schedule. */
   tileEpoch?: () => number,
+  /** S6e: render anchor A for the terrain FIELD sampling inside the depth rasters'
+   *  fetch — the S6d anchor-relative tile vert coords are re-absoluted to hit the
+   *  world-anchored field planes (same uniform the camera raster threads). Streamed
+   *  only; omitted ⇒ the verbatim absolute (generated) build. */
+  fieldAnchor?: UniformV3,
 ): NaniteShadow {
   const cfg = readClipParams();
   const LEVELS = cfg.levels;
@@ -538,7 +543,7 @@ export function buildNaniteShadowClip(
   });
   for (let k = 0; k < LEVELS; k++) {
     const lv = levels[k]!;
-    lv.raster = buildNaniteRaster(gpu, heightSrc, lv.cam, clipCull.queue, vis, 'flat', false, disp, wind);
+    lv.raster = buildNaniteRaster(gpu, heightSrc, lv.cam, clipCull.queue, vis, 'flat', false, disp, wind, false, false, false, undefined, fieldAnchor);
   }
 
   // ---- P3b VOX CROWN SHADOW CASTERS (?shvox2, DEFAULT OFF — additive opt-in) -----

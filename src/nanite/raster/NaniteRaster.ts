@@ -100,7 +100,7 @@ import {
   toI,
   wgLinear,
 } from '../Tsl';
-import type { BufOf, UV2 } from '../Tsl';
+import type { BufOf, UniformV3, UV2 } from '../Tsl';
 // ─── extracted raster/ modules (task #76 vis-buffer rewrite, Step 1) ──────────────
 import { CTX_STRIDE, CTX_U, buildClusterCtx } from './ClusterCtx';
 import { buildHw } from './Hw';
@@ -262,6 +262,10 @@ export function buildNaniteRaster(
     renderHw(renderer: Renderer, camera: PerspectiveCamera): void;
     enabled(): boolean;
   },
+  /** S6e: render anchor A for the terrain FIELD sampling in makeFetch — the S6d
+   *  anchor-relative vert coords are re-absoluted to hit the world-anchored field
+   *  planes. Streamed only; omitted ⇒ the verbatim absolute (generated) build. */
+  fieldAnchor?: UniformV3,
 ): NaniteRasterHandles {
   const { width, height } = cam;
   // single-pass clears the id buffers like `packed` (election anchor → 0, side id →
@@ -373,7 +377,7 @@ export function buildNaniteRaster(
   const auditV = sU32Views(auditAttr, 4);
 
   // ---- shared fetch helpers (NaniteFetch.ts — also the resolve's decode) ----------
-  const nfetch = makeFetch(gpu, heightSrc, disp, wind);
+  const nfetch = makeFetch(gpu, heightSrc, disp, wind, true, 'both', fieldAnchor);
   // fetchWorldVertDyn is used only by the HW vertex stage (./raster/Hw, via nfetch).
   const { makeCtx, fetchWorldVert } = nfetch;
   // A2 (2026-07-09 HW vertex-prepass): CLASS-SPLIT fetch variants for the two `_cl` world1
@@ -381,8 +385,8 @@ export function buildNaniteRaster(
   // only the heightfield arm — so each `_cl` vertex shader sheds the OTHER class's fetch-union
   // registers (same trick ?ksplit uses for the SW kernel). Consumed by buildHw ONLY on the
   // world1 (ctxPrepass / clusterCtxV != null) camera path; the flat ctx read replaces makeCtx.
-  const nfetchExplicit = makeFetch(gpu, heightSrc, disp, wind, true, 'explicit');
-  const nfetchTerrain = makeFetch(gpu, heightSrc, disp, wind, true, 'terrain');
+  const nfetchExplicit = makeFetch(gpu, heightSrc, disp, wind, true, 'explicit', fieldAnchor);
+  const nfetchTerrain = makeFetch(gpu, heightSrc, disp, wind, true, 'terrain', fieldAnchor);
   // HW vertex-prepass (2026-07-09, DEFAULT ON): the `_clE` mesh HW draw reads its verts
   // pre-projected from projVertBuf (w=1 screen-linear clip) instead of re-running the
   // compute-fetch + wind + vp + snap path. `?hwproj=0` is the disable-only escape back to
@@ -511,7 +515,7 @@ export function buildNaniteRaster(
     // splitVariant===undefined ⇒ the module nfetch (identical node graph to the
     // pre-split kernel).
     const kFetch = splitVariant
-      ? makeFetch(gpu, heightSrc, disp, wind, true, splitVariant)
+      ? makeFetch(gpu, heightSrc, disp, wind, true, splitVariant, fieldAnchor)
       : nfetch;
     const kMakeCtx = kFetch.makeCtx;
     const kn = Fn(() => {

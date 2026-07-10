@@ -25,6 +25,9 @@ import type { WorldSource } from '../world/source/WorldSource';
 import { buildChunkContentStreams, type ChunkContentStreams } from '../nanite/world/ChunkContent';
 import { StreamBrainClient } from '../nanite/world/StreamBrainClient';
 import { StreamOrigin } from '../nanite/world/StreamOrigin';
+import { buildSpeciesMap } from '../nanite/world/SpeciesMap';
+import { InstanceBand } from '../nanite/world/InstanceBand';
+import { VegClass } from '../gpu/passes/Scatter';
 import { chunkBox, coverageCenter } from '../nanite/world/PlaneFill';
 import type { TerrainField } from '../nanite/world/TerrainField';
 import { WaterSurface } from '../world/WaterSurface';
@@ -137,6 +140,17 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // WorldSource/WorldManifest/TerrainField abstraction and never learns which
   // source feeds it.
   const streamed = params.src === 'estonia';
+  // S7 streamed-instance pool + band sizing (§5, A4/A12). A tree consumes 2 slots
+  // (trunk + crown head), a boulder 1; 8k/block × 24 blocks = 196k parked slots
+  // (~6.3 MB f32 mirror + equal VRAM). This is ABOVE §6's 40k/2 MB estimate — that
+  // predated (a) the per-head trunk+crown split and (b) whole-2 km-chunk residency
+  // (records are per-chunk; we load the whole chunk though only ~300 m is visible).
+  // Measured pilot: 4 dense LOD0 chunks in the band = ~18 blocks (133 k slots); 24
+  // gives a motion-churn margin (band.* HUD reports live usage). Still trivial vs the
+  // arc's −290 MB net.
+  const INST_BLOCK_SIZE = 8192;
+  const INST_BLOCKS = 24;
+  const INST_BAND_DIST = 300;
   BootTrace.phase(streamed ? 'world source (estonia stream)' : 'world source (heightfield + scatter)');
   const worldSource: WorldSource = streamed
     ? new RemoteWorldSource(params.dataUrl ?? undefined)
@@ -366,6 +380,9 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       ...(vegPrepPromise ? { pre: vegPrepPromise } : {}),
       // S5: clip terrain streams through the brain (boot tiles + runtime clipmap)
       brain,
+      // S7: streamed worlds reserve an instance pool (§5, A4) for the tree/boulder
+      // band; the generated world keeps its boot-bound instances (no pool).
+      ...(streamed ? { instancePool: { blockSize: INST_BLOCK_SIZE, blocks: INST_BLOCKS } } : {}),
     });
     (engine as unknown as { naniteRegistry?: unknown }).naniteRegistry = wr.registry;
     naniteRegistry = wr.registry;
@@ -379,6 +396,39 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
           : '') +
         `); deferred instances ${wr.deferredInstances}\n${wr.report.table}\ndeferred: ${wr.deferred.join('; ')}`,
     );
+
+    // S7: arm the streamed tree/boulder instance band (Estonia only — the generated
+    // world's instances are boot-bound). SpeciesMap folds the manifest species dict
+    // onto the 6 tree pools; unmapped ids route to the KarstGnarl fallback pool
+    // (logged loud) until the dedicated checker material lands. ETAK boulders ride
+    // the SAME pool via EtakBoulders (§H), grounded per chunk on the height window.
+    if (streamed) {
+      const speciesMap = buildSpeciesMap(worldManifest.dictionaries, VegClass.KarstGnarl * 8);
+      // eslint-disable-next-line no-console
+      console.log(speciesMap.summary);
+      const band = new InstanceBand({
+        source: worldSource,
+        manifest: worldManifest,
+        idFOf: speciesMap.idFOf,
+        boulderRadiusOf: (cls) => lib.clsRadius[cls] ?? 1,
+        headsOf: (idF) => {
+          const out: number[] = [];
+          const bark = wr.heads.get(idF);
+          if (bark !== undefined) out.push(bark);
+          const leaf = wr.leafHeads.get(idF);
+          if (leaf !== undefined) out.push(leaf); // co-located crown (trees only)
+          return out;
+        },
+        reg: wr.registry,
+        bandDist: INST_BAND_DIST,
+      });
+      brain.setInstanceBand(band);
+      // eslint-disable-next-line no-console
+      console.log(
+        `[laas] instance band armed: bandDist ${INST_BAND_DIST} m, pool ` +
+          `${wr.registry.instancePoolBlockCount}×${wr.registry.instancePoolBlockSize} = ${wr.registry.instancePoolCapacity} slots`,
+      );
+    }
   }
 
   // S5: drive the STREAM BRAIN from the live camera — pose feed at ~10 Hz
@@ -439,6 +489,8 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   (window as unknown as { __laasDbg?: Record<string, unknown> }).__laasDbg = {
     engine,
     sunSky,
+    naniteRegistry,
+    streamOrigin,
   };
 
   // S4 camera-follow: the subsystem windows track the camera every frame (on

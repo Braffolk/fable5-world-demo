@@ -848,6 +848,21 @@ export class GeometryRegistry {
   /** handle resident in each slot, or -1 if free (parallel to the free-stack) */
   private tileSlotOccupant: Int32Array | null = null;
 
+  /** S7 instance pool (SPEC-STREAMING-WORLD §5, A4): a FLAT reserved region of
+   *  `capacity` instance slots pre-parked off-world at build() so the frozen cull
+   *  dispatch (registry.instanceCount) already covers it. Streamed trees/boulders
+   *  are written per-BLOCK (`rewriteInstanceBlock`) — each slot's meshId is set
+   *  per-instance, so ONE block can host many species (unlike the per-mesh
+   *  consecutive-stream bindInstances path). NULL on the generated world (its
+   *  instances stay boot-bound; the pool is ADDITIONAL streamed-only capacity ⇒
+   *  instanceCount is byte-identical there). A-words are StreamOrigin-relative
+   *  (poolOrigin subtract on write; rebaseInstanceOrigins shifts the region). */
+  private instPool: { first: number; blockSize: number; blocks: number; capacity: number } | null = null;
+  private instBlockFree: number[] = [];
+  /** parked-slot y (off any frustum — frustum-culled at NaniteCull kSeedRoots
+   *  regardless of the parked meshId, so a freed/parked slot is ~free). */
+  private static readonly INST_PARK_Y = -1e6;
+
   // backing arrays === attribute arrays (created at build; capacity-sized)
   private vertsArr!: Uint32Array;
   /** N8-D2 Stage 2e: stride-1 terrain-DAG vertex buffer (one packed texel coord/vert). */
@@ -1475,6 +1490,7 @@ export class GeometryRegistry {
     for (const e of this.entries) this.copyEntry(e);
     this.populateVCompact();
     for (const s of this.cpuStreams) this.copyCpuStream(s);
+    this.parkInstancePoolRegion(); // S7: park the reserved streamed-instance pool off-world
     this.built = true;
     this.runGpuCopies(renderer);
 
@@ -1929,6 +1945,104 @@ export class GeometryRegistry {
     if (h == null) throw new Error(`GeometryRegistry: tile slot ${slot} has no handle`);
     return h;
   }
+
+  // ---- S7 instance pool (§5, A4) --------------------------------------------------------
+
+  /**
+   * Reserve a FLAT instance-pool region of `blockSize·blocks` slots BEFORE build()
+   * (streamed world only). Advances instCursor so registry.instanceCount — which
+   * sizes the frozen cull dispatch (NaniteCull.ts:250, kSeedRoots :983) — covers the
+   * whole pool; build() parks every slot off-world (≈free via frustum cull). Blocks
+   * are the free-list granularity (8k/chunk-block by default); a streamed chunk claims
+   * ≥1 block. NEVER call on the generated world (keeps its instance words identical).
+   */
+  reserveInstancePool(blockSize: number, blocks: number): void {
+    if (this.built) throw new Error('GeometryRegistry: reserveInstancePool after build()');
+    if (this.instPool) throw new Error('GeometryRegistry: instance pool already reserved');
+    if (blockSize <= 0 || blocks <= 0) throw new Error('GeometryRegistry: reserveInstancePool needs positive blockSize/blocks');
+    const capacity = blockSize * blocks;
+    const first = this.instCursor;
+    this.instCursor += capacity;
+    this.instPool = { first, blockSize, blocks, capacity };
+    this.instBlockFree = [];
+    for (let b = blocks - 1; b >= 0; b--) this.instBlockFree.push(b);
+  }
+
+  /** park every pool slot off-world at build (called from build() once instArr
+   *  exists). Zero-init already gives scale 0 / meshId 0; only y needs the sentinel. */
+  private parkInstancePoolRegion(): void {
+    const pool = this.instPool;
+    if (!pool) return;
+    for (let i = 0; i < pool.capacity; i++) this.instArr[(pool.first + i) * 8 + 1] = GeometryRegistry.INST_PARK_Y;
+  }
+
+  get instancePoolBlockCount(): number {
+    return this.instPool?.blocks ?? 0;
+  }
+  get instancePoolFreeBlocks(): number {
+    return this.instBlockFree.length;
+  }
+  get instancePoolCapacity(): number {
+    return this.instPool?.capacity ?? 0;
+  }
+  get instancePoolBlockSize(): number {
+    return this.instPool?.blockSize ?? 0;
+  }
+
+  /** pop a free instance block, or -1 if the pool is full (caller evicts first). */
+  allocInstanceBlock(): number {
+    if (!this.instPool) throw new Error('GeometryRegistry: no instance pool reserved');
+    return this.instBlockFree.pop() ?? -1;
+  }
+
+  /** park a block's slots + return it to the free-list. */
+  freeInstanceBlock(block: number): void {
+    const pool = this.instPool;
+    if (!pool) throw new Error('GeometryRegistry: no instance pool reserved');
+    if (block < 0 || block >= pool.blocks) throw new Error(`GeometryRegistry: freeInstanceBlock ${block} out of range`);
+    this.rewriteInstanceBlock(block, 0, new Float32Array(0), new Float32Array(0), new Uint32Array(0));
+    this.instBlockFree.push(block);
+  }
+
+  /**
+   * F-4: overwrite a pooled instance block with `count` live instances and PARK the
+   * rest. `a` = A-words (x,y,z,scale) ABSOLUTE game-space; stored StreamOrigin-relative
+   * (poolOrigin subtract — 0 on generated ⇒ no-op). `b` = B-words (yaw,leanX,leanZ,idF).
+   * `meshIds` = per-slot chain-head handle (idF→head resolved main-side). Writes through
+   * the live instArr/instMeshArr mirrors (NOT released post-boot) + one pushRange each
+   * (the S7 §9b F-4 method — ~per-block, block ≤ blockSize).
+   */
+  rewriteInstanceBlock(block: number, count: number, a: Float32Array, b: Float32Array, meshIds: Uint32Array): void {
+    const pool = this.instPool;
+    if (!pool) throw new Error('GeometryRegistry: no instance pool reserved');
+    if (block < 0 || block >= pool.blocks) throw new Error(`GeometryRegistry: rewriteInstanceBlock ${block} out of range`);
+    if (count > pool.blockSize) throw new Error(`GeometryRegistry: block ${block} count ${count} > blockSize ${pool.blockSize}`);
+    const base = pool.first + block * pool.blockSize;
+    const oX = this.poolOriginX;
+    const oZ = this.poolOriginZ;
+    for (let i = 0; i < count; i++) {
+      const d = (base + i) * 8;
+      this.instArr[d] = (a[i * 4] as number) - oX;
+      this.instArr[d + 1] = a[i * 4 + 1] as number;
+      this.instArr[d + 2] = (a[i * 4 + 2] as number) - oZ;
+      this.instArr[d + 3] = a[i * 4 + 3] as number;
+      this.instArr[d + 4] = b[i * 4] as number;
+      this.instArr[d + 5] = b[i * 4 + 1] as number;
+      this.instArr[d + 6] = b[i * 4 + 2] as number;
+      this.instArr[d + 7] = b[i * 4 + 3] as number;
+      this.instMeshArr[base + i] = meshIds[i] as number;
+    }
+    for (let i = count; i < pool.blockSize; i++) {
+      const d = (base + i) * 8;
+      this.instArr[d] = 0;
+      this.instArr[d + 1] = GeometryRegistry.INST_PARK_Y;
+      this.instArr[d + 2] = 0;
+      this.instArr[d + 3] = 0;
+      this.instMeshArr[base + i] = 0;
+    }
+    this.pushRange(this.instAttr, base * 8, pool.blockSize * 8);
+    this.pushRange(this.instMeshAttr, base, pool.blockSize);
+  }
   /** slot's fixed geometry base offsets (constant for the pool's lifetime;
    *  cluster base also = the mesh record's clusterStart after a load). Probe/debug. */
   tileSlotBase(slot: number): { vert: number; tri: number; cluster: number } {
@@ -2040,6 +2154,126 @@ export class GeometryRegistry {
       }
       this.pushRange(this.instAttr, s.first * 8, count * 8);
     }
+    // S7: the streamed-instance pool stores StreamOrigin-relative A-words too — shift
+    // the WHOLE region (parked slots keep y = INST_PARK_Y ⇒ still frustum-culled, so
+    // touching them is harmless and avoids per-block residency tracking here). Matches
+    // rebaseTilePoolOrigins' poolOriginX/Z accumulation (called first by StreamOrigin).
+    const pool = this.instPool;
+    if (pool) {
+      for (let i = 0; i < pool.capacity; i++) {
+        const d = (pool.first + i) * 8;
+        this.instArr[d] = (this.instArr[d] as number) - dx;
+        this.instArr[d + 2] = (this.instArr[d + 2] as number) - dz;
+      }
+      this.pushRange(this.instAttr, pool.first * 8, pool.capacity * 8);
+    }
+  }
+
+  /**
+   * S6e FRAME-MIXING DETECTOR (diagnostic; cheap CPU scan). The cull invariant is
+   * ONE coordinate frame for every input: cluster/DAG sphere centres, cam.camPos
+   * and cam.planes must all be StreamOrigin-relative (= within a few km of the
+   * anchor). This scans every RESIDENT tile-pool cluster and counts those whose
+   * centre sits > `farM` metres from the anchor (ax,az) — a sphere still in the
+   * absolute ~311 km frame while the camera went anchor-relative. Nonzero while
+   * the anchor is non-zero ⇒ a rebase/attach bookkeeping bug (the S6e regression).
+   * Returns totals + the worst offender for the console/HUD.
+   */
+  frameMixStats(
+    camX: number,
+    camY: number,
+    camZ: number,
+    ax: number,
+    az: number,
+    projK: number,
+    tau: number,
+    vp: number[],
+    farM = 64000,
+  ): {
+    residentTiles: number;
+    clustersScanned: number;
+    farFromOrigin: number;
+    maxCenterKm: number;
+    roots: { total: number; emit: number; descend: number };
+    nearest: {
+      handle: number;
+      cx: number;
+      cz: number;
+      centerKm: number;
+      ownError: number;
+      denO: number;
+      pOwn: number;
+      ndc: [number, number, number];
+    } | null;
+  } {
+    const clF = new Float32Array(this.clusterArr.buffer, this.clusterArr.byteOffset, this.clusterArr.length);
+    const cpX = camX - ax;
+    const cpY = camY;
+    const cpZ = camZ - az;
+    let residentTiles = 0;
+    let clustersScanned = 0;
+    let farFromOrigin = 0;
+    let maxCenter = 0;
+    let rootTotal = 0;
+    let rootEmit = 0;
+    let rootDescend = 0;
+    let nearest: {
+      handle: number; cx: number; cz: number; centerKm: number;
+      ownError: number; denO: number; pOwn: number; ndc: [number, number, number];
+    } | null = null;
+    let nearestDist = Infinity;
+    // project (x,y,z) by the row-major .toArray() (column-major) mat4 → ndc
+    const proj = (x: number, y: number, z: number): [number, number, number] => {
+      const w = vp[3] * x + vp[7] * y + vp[11] * z + vp[15];
+      const cx2 = vp[0] * x + vp[4] * y + vp[8] * z + vp[12];
+      const cy2 = vp[1] * x + vp[5] * y + vp[9] * z + vp[13];
+      const cz2 = vp[2] * x + vp[6] * y + vp[10] * z + vp[14];
+      const iw = w !== 0 ? 1 / w : 0;
+      return [cx2 * iw, cy2 * iw, cz2 * iw];
+    };
+    for (const h of this.tilePoolHandles) {
+      const e = this.entries[h];
+      if (!e?.hf || !e.uploaded || e.clusterCount === 0) continue;
+      residentTiles++;
+      for (let i = 0; i < e.clusterCount; i++) {
+        const cw = (e.clusterBase + i) * CLUSTER_WORDS;
+        const cx = clF[cw] as number;
+        const cz = clF[cw + 2] as number;
+        const center = Math.hypot(cx, cz); // distance from the RELATIVE origin
+        clustersScanned++;
+        if (center > farM) farFromOrigin++;
+        if (center > maxCenter) maxCenter = center;
+        // DAG record: ownError @ w0, ownSphere.xyz @ w1/2/3, ownR @ w4. Root ⇔ parentErr not finite.
+        const db = (e.clusterBase + i) * DAG_WORDS;
+        const parentErr = this.dagArr[db + 5] as number;
+        if (parentErr !== DAG_ROOT_PARENT_ERR) continue; // roots only
+        rootTotal++;
+        const ownError = this.dagArr[db] as number;
+        const oex = this.dagArr[db + 1] as number;
+        const oey = this.dagArr[db + 2] as number;
+        const oez = this.dagArr[db + 3] as number;
+        const ownR = this.dagArr[db + 4] as number;
+        const dvx = cpX - oex;
+        const dvy = cpY - oey;
+        const dvz = cpZ - oez;
+        const denO = Math.max(1e-6, Math.sqrt(Math.max(1e-6, dvx * dvx + dvy * dvy + dvz * dvz - ownR * ownR)));
+        const pOwn = (projK * 1 * ownError) / denO;
+        if (pOwn <= tau) rootEmit++;
+        else rootDescend++;
+        const cdist = Math.hypot(cpX - oex, cpZ - oez);
+        if (cdist < nearestDist) {
+          nearestDist = cdist;
+          nearest = {
+            handle: h, cx, cz, centerKm: center / 1000,
+            ownError, denO, pOwn, ndc: proj(oex, oey, oez),
+          };
+        }
+      }
+    }
+    return {
+      residentTiles, clustersScanned, farFromOrigin, maxCenterKm: maxCenter / 1000,
+      roots: { total: rootTotal, emit: rootEmit, descend: rootDescend }, nearest,
+    };
   }
 
   /**

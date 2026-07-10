@@ -39,6 +39,7 @@ import type {
   TileGeometry,
 } from './StreamProtocol';
 import { packetBytes, payloadTransfers } from './StreamProtocol';
+import type { InstanceBand } from './InstanceBand';
 
 /** the ONE token bucket (F13): per-frame upload budget across all classes. */
 const BUCKET_BYTES = 2 * 2 ** 20;
@@ -76,6 +77,9 @@ export class StreamBrainClient {
   private readonly tileOpts: BrainTileOpts;
   private field: TerrainField | null = null;
   private reg: GeometryRegistry | null = null;
+  /** S7: the streamed tree/boulder instance band (Estonia). null on the generated
+   *  world (its instances are boot-bound). Driven off the same pose/drain cadence. */
+  private band: InstanceBand | null = null;
   /** the FIFO mailbox — never reordered (F-8) */
   private readonly mailbox: StreamPacket[] = [];
   /** tile key → pool slot (registry bookkeeping, not policy) */
@@ -115,6 +119,11 @@ export class StreamBrainClient {
 
   get fieldPlan(): FieldPlan {
     return this.plan;
+  }
+
+  /** S7: arm the streamed instance band (post-registry-build; Estonia only). */
+  setInstanceBand(band: InstanceBand): void {
+    this.band = band;
   }
 
   /** manifest snapshot → transferable brain init (chunk key/hash tables per
@@ -266,6 +275,7 @@ export class StreamBrainClient {
   /** feed the camera pose to the brain at ~10 Hz (velocity from the pose delta;
    *  teleports are detected brain-side from the discontinuity). */
   update(camX: number, camZ: number): void {
+    this.band?.update(camX, camZ); // own ~5 Hz throttle; residency diff is cheap
     const now = performance.now();
     if (this.havePose && now - this.lastPoseAt < POSE_HZ_MS) return;
     const dt = this.havePose ? (now - this.lastPoseAt) / 1000 : 0;
@@ -280,12 +290,6 @@ export class StreamBrainClient {
 
   /** drain the mailbox strictly FIFO under the token bucket (≥1 packet a frame). */
   drain(renderer: Renderer): void {
-    if (this.mailbox.length === 0) {
-      this.lastDrainMs = 0;
-      this.lastDrainBytes = 0;
-      this.lastDrainPackets = 0;
-      return;
-    }
     const t0 = performance.now();
     let bytes = 0;
     let n = 0;
@@ -295,6 +299,12 @@ export class StreamBrainClient {
       bytes += packetBytes(p);
       n++;
       this.applyPacket(p, renderer);
+    }
+    // S7: the instance band shares the SAME token bucket, drained AFTER the brain's
+    // FIFO packets (tile/plane transaction ordering wins the budget first). Block
+    // writes go through the live instArr mirror — no renderer call needed.
+    if (this.band && bytes < BUCKET_BYTES && performance.now() - t0 < BUCKET_MS) {
+      bytes += this.band.drainBudget(BUCKET_BYTES - bytes);
     }
     this.lastDrainMs = performance.now() - t0;
     this.lastDrainBytes = bytes;
@@ -389,6 +399,7 @@ export class StreamBrainClient {
   counters(): Record<string, number> {
     return {
       ...this.brainCounters,
+      ...(this.band ? this.band.counters() : {}),
       'stream.mailbox.depth': this.mailbox.length,
       'stream.bucket.ms': Math.round(this.lastDrainMs * 100) / 100,
       'stream.bucket.kb': Math.round(this.lastDrainBytes / 1024),

@@ -15,6 +15,7 @@
  *   lean = slope-normal.xz · 0.18 + (hash − ½)·0.12   (Scatter.ts:469-470 formula)
  */
 import type { ChunkKey, ChunkPayload, LayerName, WorldManifest, WorldSource } from '../../world/source/WorldSource';
+import { ingestEtakBoulders, type EtakBoulderRecords } from '../../vegetation/EtakBoulders';
 
 export interface InstanceStream {
   a: Float32Array;
@@ -103,6 +104,87 @@ export async function buildChunkContentStreams(
     }
   }
   return { perId, total };
+}
+
+// --- S7: single-chunk instance build (the streamed instance-band pool) -------------------
+
+export interface ChunkInstanceOpts {
+  /** (species, variant) → library idF for TREE records (SpeciesMap on Estonia). */
+  idFOf: (species: number, variant: number) => number;
+  /** nominal radius per rock class — presence enables ETAK boulder ingest. */
+  boulderRadiusOf?: (cls: number) => number;
+}
+
+export interface ChunkInstances {
+  a: Float32Array; // A-words (x,y,z,scale) — ABSOLUTE game space
+  b: Float32Array; // B-words (yaw,leanX,leanZ,idF)
+  count: number;
+}
+
+/**
+ * Build ONE LOD0 chunk's flat instance list (trees + ETAK boulders) for the S7
+ * streamed instance pool — the SAME placement rules as the boot streams, one chunk
+ * at a time. Positions are ABSOLUTE game space (rewriteInstanceBlock stores them
+ * StreamOrigin-relative). Trees derive y/yaw/lean when the source omits them
+ * (Estonia); boulders ride EtakBoulders (§H) grounded on this chunk's height window.
+ */
+export async function buildChunkInstances(
+  source: WorldSource,
+  manifest: WorldManifest,
+  key: ChunkKey,
+  opts: ChunkInstanceOpts,
+): Promise<ChunkInstances> {
+  const footprint = manifest.grid.chunkMeters * manifest.grid.lodStep ** key.lod;
+  const minX = manifest.grid.originX + key.cx * footprint;
+  const minZ = manifest.grid.originZ + key.cz * footprint;
+  const derive = await makeDeriver(source, manifest, key);
+  const aArr: number[] = [];
+  const bArr: number[] = [];
+
+  const trees = manifest.layers.trees ? await source.fetch('trees', key) : null;
+  if (trees && trees.kind === 'records') {
+    const { cols, count } = trees;
+    for (let i = 0; i < count; i++) {
+      const scale = cols.scale[i] as number;
+      const xLocal = cols.x[i] as number;
+      const zLocal = cols.z[i] as number;
+      const x = cols.xw ? (cols.xw[i] as number) : minX + xLocal;
+      const z = cols.zw ? (cols.zw[i] as number) : minZ + zLocal;
+      const id = opts.idFOf(cols.species[i] as number, cols.variant[i] as number);
+      const dv = cols.y && cols.yaw && cols.leanX && cols.leanZ ? null : derive(xLocal, zLocal);
+      aArr.push(x, cols.y ? (cols.y[i] as number) : (dv as { h: number }).h - scale * 0.12, z, scale);
+      bArr.push(
+        cols.yaw ? (cols.yaw[i] as number) : (dv as { yaw: number }).yaw,
+        cols.leanX ? (cols.leanX[i] as number) : (dv as { leanX: number }).leanX,
+        cols.leanZ ? (cols.leanZ[i] as number) : (dv as { leanZ: number }).leanZ,
+        id,
+      );
+    }
+  }
+
+  if (opts.boulderRadiusOf && manifest.layers.boulders) {
+    const bpay = await source.fetch('boulders', key);
+    if (bpay && bpay.kind === 'records') {
+      const recs: EtakBoulderRecords = {
+        count: bpay.count,
+        x: bpay.cols.x,
+        z: bpay.cols.z,
+        kind: bpay.cols.species,
+        sizeM: bpay.cols.scale,
+        variant: bpay.cols.variant,
+      };
+      const inst = ingestEtakBoulders(recs, {
+        originX: minX,
+        originZ: minZ,
+        radiusOf: opts.boulderRadiusOf,
+        heightAt: (wx, wz) => derive(wx - minX, wz - minZ).h,
+      });
+      for (let i = 0; i < inst.a.length; i++) aArr.push(inst.a[i] as number);
+      for (let i = 0; i < inst.b.length; i++) bArr.push(inst.b[i] as number);
+    }
+  }
+
+  return { a: Float32Array.from(aArr), b: Float32Array.from(bArr), count: aArr.length / 4 };
 }
 
 // --- derive-if-absent --------------------------------------------------------------------

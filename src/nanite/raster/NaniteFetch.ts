@@ -95,6 +95,11 @@ export interface TerrainDisp {
   noiseA: StorageTexture;
   noiseB: StorageTexture;
   camPos: UniformV3;
+  /** S6e: the render anchor A (= StreamOrigin) on the STREAMED world. `wpos` passed to
+   *  terrainDispAt is ABSOLUTE (field/noise samplers are world-anchored), but camPos is
+   *  ANCHOR-relative since S6d — the fade distance must compare like frames, so the
+   *  camera is re-absoluted with this. Omitted on generated ⇒ verbatim absolute build. */
+  anchor?: UniformV3;
 }
 
 /**
@@ -105,7 +110,13 @@ export interface TerrainDisp {
  * EXACT same expression tree as the terrain vertices. Call inside an Fn stack.
  */
 export function terrainDispAt(disp: TerrainDisp, wpos: NV2, groundH: NF): NF {
-  const camD = wpos.sub(vec3(disp.camPos).xz).length();
+  // S6e: wpos is ABSOLUTE; disp.camPos is anchor-relative since S6d — re-absolute the
+  // camera on streamed (anchor set) so the fade distance compares like frames. The f32
+  // re-add costs ~3 cm at 311 km on a 45→85 m fade — immaterial. Generated: verbatim.
+  const camXZ = disp.anchor
+    ? (vec3(disp.camPos).xz.add(vec3(disp.anchor).xz) as unknown as NV2)
+    : (vec3(disp.camPos).xz as unknown as NV2);
+  const camD = wpos.sub(camXZ).length();
   const dOut = float(0).toVar();
   If(camD.lessThan(float(DISP.fade1)), () => {
     // slope = height-plane CD (the retired normalTex.w stencil); flow/snow/
@@ -252,6 +263,14 @@ export function makeFetch(
    *  A specialized raster kernel picks one class so it never reserves the other's
    *  register set (the branch-union that inflated world1's occupancy floor). */
   variant: 'both' | 'explicit' | 'terrain' = 'both',
+  /** S6e: the render anchor A (= StreamOrigin) on the STREAMED world. Terrain vert
+   *  positions (tile origin words) are ANCHOR-relative since S6d, but the TerrainField
+   *  planes are ABSOLUTE-world-anchored — height/biome sampling at the relative coord
+   *  read the field ~311 km off (flat, wrong-height terrain mesh while grass/trees sat
+   *  at true heights). hfWorld re-absolutes the SAMPLE coord with this; the emitted
+   *  vertex position stays anchor-relative (the S6d projection chain consumes it).
+   *  Omitted on generated ⇒ the verbatim absolute build (byte-identical shader). */
+  anchor?: UniformV3,
 ): NaniteFetch {
   // ?fp16w (task #76): route the per-vertex trunk/leaf wind offset through the f16 wgslFn
   // (nanWindF16) instead of the f32 TSL math — halves that math's registers + ALU. Off =
@@ -427,13 +446,19 @@ export function makeFetch(
     const out = vec3(0).toVar();
     const wx = toF(sx).mul(ctx.cell).add(ctx.oX);
     const wz = toF(sz).mul(ctx.cell).add(ctx.oZ);
+    // S6e: on streamed, (wx,wz) is ANCHOR-relative (S6d tile origin words) while the
+    // field planes are ABSOLUTE-world-anchored — sample at wx+A (the ~3 cm f32 ULP at
+    // 311 km is immaterial for a ≥1 m-bilinear height read). The vertex POSITION below
+    // keeps the relative (wx,wz) — the anchored VP consumes it. Generated: verbatim.
+    const wsx = anchor ? (wx.add(anchor.x) as unknown as NF) : wx;
+    const wsz = anchor ? (wz.add(anchor.z) as unknown as NF) : wz;
     // S3b: height from the TerrainField plane pyramid — terrain verts sit ON the
     // finest lattice, so the finest arm's exact-texel tap is bit-identical to the
     // retired global heightTex read; coarser windows bilerp. One branch arm runs,
     // near-uniform per cluster (A15's level-select cost stays off the hot path).
-    const h = field.fieldHeightHot(vec2(wx, wz) as unknown as NV2);
+    const h = field.fieldHeightHot(vec2(wsx, wsz) as unknown as NV2);
     const y = h.toVar();
-    if (disp) y.addAssign(terrainDispAt(disp, vec2(wx, wz) as unknown as NV2, h));
+    if (disp) y.addAssign(terrainDispAt(disp, vec2(wsx, wsz) as unknown as NV2, h));
     // Far-forest canopy: on COARSE tiles (texel ≥ 16 m — trees are sub-texel
     // there, so no crown geometry is emitted) the cooked CHM canopy becomes REAL
     // surface displacement, raising forest masses on the horizon. Fine/near bands
@@ -442,7 +467,7 @@ export function makeFetch(
     // fine tiles skips the biome tap entirely. cover 0 / heightM 0 (the generated
     // world, every water and non-forest texel) ⇒ +0 ⇒ bit-identical.
     If(ctx.cell.greaterThanEqual(float(CANOPY_DISP_TEXEL_M)), () => {
-      const bio = field.biomeAt(vec2(wx, wz) as unknown as NV2);
+      const bio = field.biomeAt(vec2(wsx, wsz) as unknown as NV2);
       const canopyH = (bio.z as unknown as NF).mul(255); // heightM: mean canopy height, m
       const cover = bio.w as unknown as NF; // cover fraction [0,1]
       y.addAssign(canopyH.mul(smoothstep(0.15, 0.7, cover)));

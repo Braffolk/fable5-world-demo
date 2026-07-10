@@ -437,7 +437,22 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
         .add(vec2(tx, tz).mul(GUIDE_SUB))
         .toVar() as unknown as NV2;
       const wpos = fb.add(GUIDE_SUB / 2).mul(CELL).toVar() as unknown as NV2;
-      const dist = wpos.sub(vec2(cam.camPos.x, cam.camPos.z)).length().toVar() as unknown as NF;
+      // S6e: cam.camPos is ANCHOR-relative since S6d, while wpos is ABSOLUTE —
+      // subtracting them on streamed put the camera ~311 km away from every texel
+      // (density/thin gates → 0 ⇒ empty guide ⇒ the ray lane painted NO grass).
+      // Streamed distances are therefore formed in the GUIDE-ORIGIN frame: texel
+      // offset (exact small math) vs uRoM (the CPU f64 camera − guideOrigin,
+      // already computed for the march). Generated keeps the verbatim absolute
+      // expression — its shader stays byte-identical (A/A gate).
+      const wposG = vec2(tx, tz)
+        .mul(GUIDE_SUB)
+        .add(GUIDE_SUB / 2)
+        .mul(CELL)
+        .toVar() as unknown as NV2;
+      const camG = vec2(uRoMx as unknown as NF, uRoMz as unknown as NF) as unknown as NV2;
+      const dist = (streamed ? wposG.sub(camG) : wpos.sub(vec2(cam.camPos.x, cam.camPos.z)))
+        .length()
+        .toVar() as unknown as NF;
       // ground (heightfield + micro-displacement) and its gradient (central diff at
       // ±half pitch). Blades plane-reconstruct off these: ≤ cm error at 0.84 m pitch
       // over the ~1 m-bilinear heightfield; meadow disp amplitude is ~0.04 m
@@ -460,7 +475,13 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
       // tighter hybrid seam).
       const pCorner = (dx: number, dz: number): NF => {
         const cw = wpos.add(vec2(dx * (GUIDE_PITCH / 2), dz * (GUIDE_PITCH / 2))) as unknown as NV2;
-        const dC = cw.sub(vec2(cam.camPos.x, cam.camPos.z)).length() as unknown as NF;
+        // S6e: guide-origin-frame distance on streamed (see dist above); cw stays
+        // ABSOLUTE — the density/height field samplers below take world coords.
+        const dC = (
+          streamed
+            ? wposG.add(vec2(dx * (GUIDE_PITCH / 2), dz * (GUIDE_PITCH / 2))).sub(camG)
+            : cw.sub(vec2(cam.camPos.x, cam.camPos.z))
+        ).length() as unknown as NF;
         const eC = float(1).sub(smoothstep(R * 0.9, R, dC)) as unknown as NF;
         return densityAt(cw, heightAt(cw), dC, true)
           .mul(grassThin(dC))

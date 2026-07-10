@@ -1,0 +1,88 @@
+/**
+ * SpeciesMap — the Estonia manifest species dictionary → VegLibrary tree pools
+ * (SPEC-STREAMING-WORLD §7, S7). The cooked release enumerates ~21 species ids
+ * (code + leaf class + ref height); the library has 6 tree pools (Spruce, Pine,
+ * Beech, Birch, KarstGnarl, Snag). This resolver folds the many ids onto the few
+ * pools by Estonian forestry code first, then by leaf class, and routes anything
+ * it can't place to the LOUD checker placeholder (F15) — logged ONCE at boot.
+ *
+ * Pure/node-testable (no GPU/DOM). idF = cls·8 + (variant & 3), the VegLibrary
+ * pool identity (Scatter.ts TREE_VARIANTS = 4); the generated world never uses
+ * this (its species column IS the VegClass — ChunkContent's identity default).
+ */
+
+import { VegClass, TREE_VARIANTS } from '../../gpu/passes/Scatter';
+import type { SpeciesEntry, WorldDictionaries } from '../../world/source/WorldSource';
+
+/** const-enum has no runtime reverse map — name the tree pools for the boot line. */
+const CLASS_NAME: Record<number, string> = {
+  [VegClass.Spruce]: 'Spruce',
+  [VegClass.Pine]: 'Pine',
+  [VegClass.Beech]: 'Beech',
+  [VegClass.Birch]: 'Birch',
+  [VegClass.KarstGnarl]: 'KarstGnarl',
+  [VegClass.Snag]: 'Snag',
+};
+
+/** Estonian forestry codes → the specific library pool the pilot expects. Anything
+ *  not named here falls through to the leaf-class buckets below. */
+const CODE_TO_CLASS: Record<string, VegClass> = {
+  MA: VegClass.Pine, // mänd — Scots pine (the pilot's dominant)
+  KU: VegClass.Spruce, // kuusk — Norway spruce
+  KS: VegClass.Birch, // kask — birch
+  HB: VegClass.Birch, // haab — aspen (broadleaf; birch crown is the closest library pool)
+};
+
+/** one species entry → a tree VegClass, or null when nothing in the library fits
+ *  (→ placeholder). Code wins; leaf class is the fallback so an unlisted broadleaf
+ *  still gets a plausible crown rather than the checker. */
+function classForSpecies(e: SpeciesEntry): VegClass | null {
+  const code = (e.code ?? '').toUpperCase();
+  if (code in CODE_TO_CLASS) return CODE_TO_CLASS[code] as VegClass;
+  if (e.leaf === 'snag') return VegClass.Snag;
+  if (e.leaf === 'conifer') return VegClass.Spruce;
+  if (e.leaf === 'broadleaf') return VegClass.Beech;
+  return null;
+}
+
+export interface SpeciesMap {
+  /** (species id, variant) → library idF; unmapped ids → placeholderIdF. */
+  idFOf(species: number, variant: number): number;
+  /** one boot summary line (F15: "placeholders active: …"). */
+  summary: string;
+  /** species ids routed to the placeholder (empty = clean map). */
+  unmapped: number[];
+}
+
+/**
+ * Build the resolver from the manifest dictionary. `placeholderIdF` is the
+ * checker-tree pool's idF (registered through the normal TreeBuilder→DAG path).
+ * The per-id table is precomputed so idFOf is a plain array lookup on the hot path.
+ */
+export function buildSpeciesMap(dict: WorldDictionaries, placeholderIdF: number): SpeciesMap {
+  const table = new Map<number, VegClass>();
+  const unmapped: number[] = [];
+  const perPool = new Map<VegClass, number>();
+  for (const [id, entry] of dict.species) {
+    const cls = classForSpecies(entry);
+    if (cls === null) {
+      unmapped.push(id);
+      continue;
+    }
+    table.set(id, cls);
+    perPool.set(cls, (perPool.get(cls) ?? 0) + 1);
+  }
+  const idFOf = (species: number, variant: number): number => {
+    const cls = table.get(species);
+    if (cls === undefined) return placeholderIdF;
+    return cls * 8 + (variant & (TREE_VARIANTS - 1));
+  };
+  const poolBits = [...perPool.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([cls, n]) => `${CLASS_NAME[cls] ?? `c${cls}`}×${n}`)
+    .join(', ');
+  const summary =
+    `[laas] SpeciesMap: ${dict.species.size} manifest species → ${perPool.size} pools (${poolBits})` +
+    (unmapped.length > 0 ? `; ${unmapped.length} placeholder-routed [${unmapped.join(',')}]` : '; 0 placeholder');
+  return { idFOf, summary, unmapped };
+}
