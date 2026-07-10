@@ -36,7 +36,7 @@
  */
 
 import { DataTexture, FloatType, LinearFilter, NearestFilter, RGBAFormat, RedFormat, UnsignedByteType, Vector2 } from 'three';
-import { If, clamp, float, floor, fract, mix, texture, uniform, vec2, vec4 } from 'three/tsl';
+import { If, clamp, float, floor, fract, mix, texture, uniform, vec2, vec3, vec4 } from 'three/tsl';
 import { texLoadR } from '../Tsl';
 import type { NB, NF, NU, NV2, NV4 } from '../../gpu/TSLTypes';
 import type { LayerName, WorldManifest, WorldSource } from '../../world/source/WorldSource';
@@ -291,11 +291,22 @@ export class TerrainField {
   /** central-difference slope (rise/run) from the height planes — the in-shader
    *  replacement for the retired normalTex.w: the SAME ±1-texel stencil the old
    *  bake ran (Heightfield derived-maps kernel), evaluated at the nearest texel
-   *  of the finest containing level. */
-  fieldSlope(wxz: NV2): NF {
+   *  of the finest containing level. `level` HOISTS the select for consumers
+   *  whose window containment is guaranteed (grass guide ring ≪ the L0 window). */
+  fieldSlope(wxz: NV2, level?: number): NF {
+    if (level !== undefined) return slope4(this.heightLevels[level] as HeightLevel, wxz);
     const out = float(0).toVar();
     hotLevelChain(this.heightLevels, wxz, (lvl) => out.assign(slope4(lvl, wxz)));
     return out as unknown as NF;
+  }
+
+  /** central-difference world normal (xyz) + slope (w) — the retired normalTex's
+   *  EXACT bake stencil (n = normalize(hl−hr, 2·texel, hd−hu); slope = |∇h|/2texel)
+   *  evaluated in-shader at the finest containing level (S3b resolve). */
+  fieldNormalSlope(wxz: NV2): NV4 {
+    const out = vec4(0, 1, 0, 0).toVar();
+    hotLevelChain(this.heightLevels, wxz, (lvl) => out.assign(normalSlope4(lvl, wxz)));
+    return out as unknown as NV4;
   }
 
   /** surface-fields sample [moisture, flowStrength, snow, rockExposure] — one
@@ -389,9 +400,9 @@ function planeLinear(lvl: FieldLevel, wxz: NV2): NV4 {
   return texture(lvl.tex, uv as unknown as NV2, 0) as unknown as NV4;
 }
 
-/** ±1-texel central-difference slope at the nearest texel — the normalTex
- *  bake's exact stencil (see Heightfield rebuildDerivedMaps history) */
-function slope4(lvl: FieldLevel, wxz: NV2): NF {
+/** ±1-texel central differences at the nearest texel — the normalTex bake's
+ *  exact stencil (see Heightfield rebuildDerivedMaps history) */
+function cdTaps(lvl: FieldLevel, wxz: NV2): { dx: NF; dz: NF } {
   const g = clamp(gridCoords(lvl, wxz).add(0.5), 1, lvl.res - 2);
   const x = floor(g.x).toUint() as NU;
   const y = floor(g.y).toUint() as NU;
@@ -399,7 +410,20 @@ function slope4(lvl: FieldLevel, wxz: NV2): NF {
   const hr = texLoadR(lvl.tex, x.add(1) as unknown as NU, y);
   const hd = texLoadR(lvl.tex, x, y.sub(1) as unknown as NU);
   const hu = texLoadR(lvl.tex, x, y.add(1) as unknown as NU);
-  return vec2(hl.sub(hr), hd.sub(hu)).length().div(lvl.texel * 2) as unknown as NF;
+  return { dx: hl.sub(hr) as unknown as NF, dz: hd.sub(hu) as unknown as NF };
+}
+
+function slope4(lvl: FieldLevel, wxz: NV2): NF {
+  const { dx, dz } = cdTaps(lvl, wxz);
+  return vec2(dx, dz).length().div(lvl.texel * 2) as unknown as NF;
+}
+
+/** vec4(world normal, slope) — the retired normalTex texel, derived live:
+ *  n = normalize(hl−hr, 2·texel, hd−hu); slope = |(hl−hr, hd−hu)| / 2·texel */
+function normalSlope4(lvl: FieldLevel, wxz: NV2): NV4 {
+  const { dx, dz } = cdTaps(lvl, wxz);
+  const n = vec3(dx, lvl.texel * 2, dz).normalize();
+  return vec4(n, vec2(dx, dz).length().div(lvl.texel * 2)) as unknown as NV4;
 }
 
 export function planeBilerp(lvl: FieldLevel, wxz: NV2): NF {

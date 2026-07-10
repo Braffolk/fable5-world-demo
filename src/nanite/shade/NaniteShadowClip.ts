@@ -43,7 +43,7 @@ import {
   Vector4,
   WebGPUCoordinateSystem,
 } from 'three';
-import type { PerspectiveCamera, Texture } from 'three';
+import type { PerspectiveCamera } from 'three';
 import { IndirectStorageBufferAttribute, StorageBufferAttribute, StorageTexture, type Renderer } from 'three/webgpu';
 import {
   Fn,
@@ -81,6 +81,7 @@ import {
 } from '../NaniteCommon';
 import { buildClipCull, type ClipCull } from '../cull/NaniteClipCull';
 import type { TerrainDisp, TrunkWindOpt } from '../raster/NaniteFetch';
+import type { TerrainField } from '../world/TerrainField';
 import { voxWindScalars, voxWindOffset } from '../raster/NaniteVoxWind';
 import { windContext } from '../../render/Wind';
 import {
@@ -247,7 +248,9 @@ function readClipParams(): ShadowClipParams {
 export function buildNaniteShadowClip(
   gpu: RegistryGpu,
   instanceCount: number,
-  heightTex: Texture,
+  /** terrain height source for the depth rasters' terrain fetch: the
+   *  TerrainField plane pyramid */
+  heightSrc: TerrainField,
   disp?: TerrainDisp,
   wind?: TrunkWindOpt,
   /** item 6: the measured deepest DAG anchor-chain (registry.maxDagDepth + margin) — the
@@ -517,7 +520,7 @@ export function buildNaniteShadowClip(
   });
   for (let k = 0; k < LEVELS; k++) {
     const lv = levels[k]!;
-    lv.raster = buildNaniteRaster(gpu, heightTex, lv.cam, clipCull.queue, vis, 'flat', false, disp, wind);
+    lv.raster = buildNaniteRaster(gpu, heightSrc, lv.cam, clipCull.queue, vis, 'flat', false, disp, wind);
   }
 
   // ---- P3b VOX CROWN SHADOW CASTERS (?shvox2, DEFAULT OFF — additive opt-in) -----

@@ -129,12 +129,13 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   BootTrace.phase('world source (heightfield + scatter)');
   const worldSource = new GeneratedWorldSource(engine.renderer, seed);
   const worldManifest = await worldSource.open((p, m) => ctx.progress(p * 0.94, m));
-  // The live boot heightfield — after S3a it feeds ONLY the not-yet-ported
-  // consumers: the hot raster/resolve/grass/shadow heightTex+biome+fields+normal
-  // reads and the registry terrain build (S3b), ProbeGI / FarShadow / canopy map
-  // windows (S4), water's waterY/flow buffers (water arc), wind noise (stays),
-  // and the ?profile=1 texture handoff. Everything CPU-side + the cold shader
-  // height/waterY reads live on the TerrainField below.
+  // The live boot heightfield — after S3b it feeds ONLY boot-time consumers
+  // (scatter + classification inside source.open, the registry terrain build,
+  // canopy map until its S4 window), the still-live waterY/flow buffers (water
+  // material + caustics), biome/fields textures (Froxels/Particles until S4/S9),
+  // wind noise, and the ?profile=1 texture handoff. Every hot shader terrain
+  // read lives on the TerrainField below; the boot-only GPU set is released
+  // right after the render graph builds (releaseBootGpuSet).
   const hf: Heightfield = worldSource.heightfield;
   (engine as unknown as { heightfield?: Heightfield }).heightfield = hf;
 
@@ -186,6 +187,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   ctx.progress(0.95, 'gi: gathering irradiance probes');
   const gi = new ProbeGI(
     hf,
+    field,
     sunSky.atmosphere,
     ablate.has('canopygi') ? null : canopyTex,
   );
@@ -342,7 +344,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // on ToD edits below. ?ablate=farshadow drops it.
   const farSh =
     !ablate.has('shadows') && !ablate.has('farshadow')
-      ? new (await import('../gpu/passes/FarShadow')).FarShadow(hf, sunSky.atmosphere)
+      ? new (await import('../gpu/passes/FarShadow')).FarShadow(field, sunSky.atmosphere)
       : null;
   if (farSh) await farSh.init(engine.renderer);
   (window as unknown as { __laasDbg?: Record<string, unknown> }).__laasDbg = {
@@ -479,8 +481,9 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       // swap and writes them onto the render device afterward.
       textures: (
         [
-          hf.heightTex && { tex: hf.heightTex },
-          hf.normalTex && { tex: hf.normalTex },
+          // heightTex is EXCISED and normalTex/height are RELEASED post-boot
+          // (S3b finale) — the render device never references them, so they
+          // are deliberately NOT transferred across the ?profile device swap.
           hf.biomeTex && { tex: hf.biomeTex },
           hf.fieldsTex && { tex: hf.fieldsTex },
           hf.noiseA && { tex: hf.noiseA },
@@ -502,6 +505,21 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     };
     // eslint-disable-next-line no-console
     console.log('[profile] render graph deferred — ProfileBoot builds it on laas-render');
+  }
+
+  // S3b finale: every boot bake that read the hf GPU field set has run (scatter/
+  // classification inside source.open; GI + far-shadow sample the TerrainField)
+  // — free the boot-only GPU set (height + hardness + erosion scratch buffers,
+  // normalTex). waterY/flow stay (water material + caustics read them live).
+  // Under ?profile these are loading-device resources outside the swap handoff,
+  // so releasing early is safe (see Heightfield.releaseBootGpuSet).
+  {
+    const freedMb = hf.releaseBootGpuSet(engine.renderer);
+    // eslint-disable-next-line no-console
+    console.log(
+      `[laas] heightfield boot GPU set released: ${freedMb.toFixed(1)} MB ` +
+        `(height/hardness/erosion-scratch buffers + normalTex; heightTex is excised — never allocated)`,
+    );
   }
 
   // terrain/water probe for the camera rig: walk-mode ground physics + the

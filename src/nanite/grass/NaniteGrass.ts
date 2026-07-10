@@ -54,8 +54,7 @@ import type { NB, NF, NU, NV2, NV3, NV4 } from '../../gpu/TSLTypes';
 import { canopyAt, cellHash, cellHash2 } from '../../gpu/passes/Scatter';
 import { gustAt, windContext, windExposure, windU } from '../../render/Wind';
 import { terrainDispAt, type TerrainDisp } from '../raster/NaniteFetch';
-import type { Heightfield } from '../../world/Heightfield';
-import { WORLD_SIZE } from '../../world/WorldConst';
+import type { TerrainField } from '../world/TerrainField';
 import type { NaniteCam } from '../NaniteCommon';
 import type { NaniteVisBuffers } from '../raster/NaniteRaster';
 import { bakeGrassRayTile } from '../build/GrassRayBake';
@@ -212,7 +211,10 @@ const BLADES = bladeTable(5, 4);
 export interface GrassBuildOpts {
   cam: NaniteCam;
   vis: NaniteVisBuffers;
-  hf: Heightfield;
+  /** the TerrainField planes — THE grass terrain source (guide-bake height
+   *  4-tap → height plane L0, density fields/biome/slope → plane taps +
+   *  height-plane CD, water gate → waterY plane). */
+  field: TerrainField;
   canopyTex: StorageTexture | null;
   /** terrain micro-displacement (NaniteFrame's disp) — blades must root on the
    *  DISPLACED surface or short blades sink into the near-field relief. */
@@ -238,40 +240,15 @@ export interface GrassField {
 }
 
 export function buildGrassField(opts: GrassBuildOpts): GrassField {
-  const { cam, vis, hf } = opts;
+  const { cam, vis, field } = opts;
   const canopyTex = opts.canopyTex;
-  const heightRes = (hf as unknown as { res: number }).res ?? 2048;
-  const hasWater = (hf as unknown as { waterY: unknown }).waterY != null;
-  const biomeTex = hf.biomeTex as NonNullable<typeof hf.biomeTex>;
-  const fieldsTex = hf.fieldsTex as NonNullable<typeof hf.fieldsTex>;
   const uOn = uniformF(1);
   let onCpu = true;
 
-  // manual-bilinear height from the heightTex TEXTURE (not the height storage
-  // buffer — the resolve fragment is at the 10-storage-buffer ceiling; texture
-  // taps are free there, and both stages MUST share one derivation).
-  const heightAt = (p: NV2): NF => {
-    const g = p
-      .div(WORLD_SIZE)
-      .add(0.5)
-      .clamp(0, 1)
-      .mul(heightRes)
-      .sub(0.5) as unknown as NV2;
-    const i0 = g.floor() as unknown as NV2;
-    const f = g.fract() as unknown as NV2;
-    const tap = (dx: number, dy: number): NF => {
-      const uvT = i0
-        .add(vec2(dx + 0.5, dy + 0.5))
-        .div(heightRes)
-        .clamp(0, 1) as unknown as NV2;
-      return (texture(hf.heightTex, uvT, 0) as unknown as NV4).x as unknown as NF;
-    };
-    return mix(
-      mix(tap(0, 0), tap(1, 0), f.x),
-      mix(tap(0, 1), tap(1, 1), f.x),
-      f.y,
-    ) as unknown as NF;
-  };
+  // ground height for the guide bake: the height plane's bilerp, HOISTED to
+  // L0 — the guide ring (±161 m around the camera) always sits inside the
+  // finest window, so the level select costs nothing (A15 idiom).
+  const heightAt = (p: NV2): NF => field.fieldHeight(p, 0);
 
   /** ground height a blade roots on = heightfield + terrain micro-displacement */
   const groundAt = (p: NV2): NF => {
@@ -302,38 +279,50 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
     return e;
   };
 
-  /** shared field-density (fine + far kernels; far skips scruff) */
+  /** shared field-density (fine + far kernels; far skips scruff) — the
+   *  GroundRing law over TerrainField planes: biome plane [classId byte,
+   *  vegDensity], fields plane [moisture, flow, snow, rockExposure], slope =
+   *  height-plane CD (the retired normalTex.w stencil), water gate = waterY
+   *  plane (−1e4 sentinel when the source has no water ⇒ bank/gate pass).
+   *  riverDepth is NOT stored (spec §3): derived waterY − h, max 0 — the
+   *  legacy filtered sim-res riverDepth spilled ~a texel onto banks, the
+   *  derived point value doesn't; the bank smoothstep + hard gate carry the
+   *  visible suppression (S3b parity gate was the witness). Fields/biome stay
+   *  on the finest-containing CHAIN (the generated L0 u8 window is
+   *  world-centered pre-S5 — a far camera's ring falls through to L1). */
   const densityAt = (wpos: NV2, h: NF, dist: NF, scruff: boolean): NF => {
-    const uvW = wpos.div(WORLD_SIZE).add(0.5);
-    const bio = texture(biomeTex, uvW, 0) as unknown as NV4;
-    const fl = texture(fieldsTex, uvW, 0) as unknown as NV4;
-    const ns = texture(hf.normalTex, uvW, 0) as unknown as NV4;
-    const bioId = bio.x.mul(8).add(0.5).floor() as unknown as NF;
-    const above = hasWater
-      ? (h.sub(hf.sampleWaterYNearest(wpos)) as unknown as NF)
-      : (float(1) as unknown as NF);
+    const bio = field.biomeAt(wpos);
+    const fld = field.fieldsAt(wpos);
+    const bioId = bio.x.mul(255).add(0.5).floor() as unknown as NF;
+    const vegDensity = bio.y as unknown as NF;
+    const rockExposure = fld.w as unknown as NF;
+    const snow = fld.z as unknown as NF;
+    const moisture = fld.x as unknown as NF;
+    const slope = field.fieldSlope(wpos, 0);
+    const waterY = field.fieldWaterYNearest(wpos);
+    const above = h.sub(waterY) as unknown as NF;
+    const riverDepth = waterY.sub(h).max(0) as unknown as NF;
     const bank = smoothstep(0.06, 0.5, above).mul(
-      float(1).sub(smoothstep(0.2, 1.1, fl.z).mul(0.78)),
+      float(1).sub(smoothstep(0.2, 1.1, riverDepth).mul(0.78)),
     ) as unknown as NF;
     const canopy = canopyTex ? canopyAt(canopyTex, wpos) : (float(0) as unknown as NF);
     let dens = byBio(bioId, [0.18, 0.7, 0.62, 0.7, 1.5, 1.1])
       .mul(bank)
-      .mul(bio.z.mul(0.85).add(0.15))
-      .mul(float(1).sub(bio.w.mul(0.55)))
+      .mul(vegDensity.mul(0.85).add(0.15))
+      .mul(float(1).sub(rockExposure.mul(0.55)))
       .mul(float(1).sub(canopy.mul(0.45)))
-      .mul(fl.x.mul(0.35).add(0.75)) as unknown as NF;
+      .mul(moisture.mul(0.35).add(0.75)) as unknown as NF;
     if (scruff) {
       dens = dens.max(
         float(0.3).mul(float(1).sub(smoothstep(8, 14, dist))).mul(bank),
       ) as unknown as NF;
     }
     dens = dens
-      .mul(float(1).sub(bio.y.mul(0.95)))
-      .mul(float(1).sub(smoothstep(0.55, 0.95, ns.w))) as unknown as NF;
-    // hard water gate (ring: return when above < 0.04)
-    return (hasWater
-      ? dens.mul(above.greaterThanEqual(0.04).select(float(1), float(0)))
-      : dens) as unknown as NF;
+      .mul(float(1).sub(snow.mul(0.95)))
+      .mul(float(1).sub(smoothstep(0.55, 0.95, slope))) as unknown as NF;
+    // hard water gate (ring: return when above < 0.04); the −1e4 dry/no-water
+    // sentinel makes `above` huge ⇒ gate self-passes.
+    return dens.mul(above.greaterThanEqual(0.04).select(float(1), float(0))) as unknown as NF;
   };
 
   /** the ray lane emits per-pixel — no counters exist */

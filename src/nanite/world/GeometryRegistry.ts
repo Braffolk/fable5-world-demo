@@ -1764,7 +1764,7 @@ export class GeometryRegistry {
    * registerHeightDag mesh. Mirrors attachDag — same cluster records + 10-float
    * DAG cut records + the SAME flat kClusterCull cut — but the vertex pool packs
    * TEXEL grid coords (word0 = gx | gz<<16, already clamped to [0,res-1]; words
-   * 1-5 unused — height comes from heightTex, normal from normalTex on the GPU)
+   * 1-5 unused — height + normal come from the TerrainField planes on the GPU)
    * and the cluster carries CLUSTER_FLAG_HEIGHTFIELD|CLUSTER_FLAG_DAG so the
    * decode takes the indexed-heightfield path. (Wasting 5/6 vertex words is a
    * known memory cost; a stride-1 terrain vertex buffer is a later optimisation.)

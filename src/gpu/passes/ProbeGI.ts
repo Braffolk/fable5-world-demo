@@ -46,6 +46,7 @@ import {
 } from 'three/tsl';
 import { WORLD_SIZE } from '../../world/WorldConst';
 import type { Heightfield } from '../../world/Heightfield';
+import type { TerrainField } from '../../nanite/world/TerrainField';
 import type { Atmosphere } from '../../sky/Atmosphere';
 import { SUN_E } from '../../sky/Atmosphere';
 import { hash12 } from '../noise/NoiseTSL';
@@ -101,6 +102,10 @@ export class ProbeGI {
 
   constructor(
     private hf: Heightfield,
+    /** the TerrainField planes — the probes' height/normal source (S3b: the
+     *  gather kernel re-dispatches per frame, so it must NOT read the released
+     *  boot hf.height buffer / normalTex; biomeTex stays on hf — it lives on) */
+    private field: TerrainField,
     private atmosphere: Atmosphere,
     private canopyTex: StorageTexture | null = null,
   ) {
@@ -121,8 +126,9 @@ export class ProbeGI {
 
   async init(renderer: Renderer): Promise<void> {
     const hf = this.hf;
+    const field = this.field;
 
-    const heightAt = (p: NV2): NF => hf.sampleHeight(p);
+    const heightAt = (p: NV2): NF => field.fieldHeightFinest(p);
 
     // canopy coverage 0..1 at a world xz (0 when no canopy map is wired)
     const canopy = this.canopyTex;
@@ -167,7 +173,7 @@ export class ProbeGI {
     const hitRadiance = (hp: NV3): NV3 => {
       const uv = hp.xz.div(WORLD_SIZE).add(0.5);
       const bio = texture(hf.biomeTex as NonNullable<typeof hf.biomeTex>, uv, 0);
-      const nrm = texture(hf.normalTex, uv, 0).xyz;
+      const nrm = field.fieldNormalSlope(hp.xz as unknown as NV2).xyz as unknown as NV3;
       const grass = vec3(0.16, 0.2, 0.09);
       const rock = vec3(0.3, 0.28, 0.25);
       const snow = vec3(0.8, 0.82, 0.88);
@@ -366,11 +372,10 @@ export class ProbeGI {
    * Sample point is pushed up by `lift` meters (normal offset of the caller).
    */
   /** `groundY`: optional pre-sampled ground height. The vis-buffer resolve
-   *  (F9, ≤10 storage buffers/stage) passes the height from heightTex (a
-   *  TEXTURE — "plentiful") so it need not bind the height storage buffer;
-   *  other callers omit it and use the buffer sampler. */
+   *  (F9, ≤10 storage buffers/stage) passes its own height-plane tap; other
+   *  callers omit it and sample the TerrainField height planes here. */
   irradiance(wp: NV3, n: NV3, lift = 2.0, groundY?: NF): NV3 {
-    const gY = groundY ?? this.hf.sampleHeight(wp.xz);
+    const gY = groundY ?? this.field.fieldHeightFinest(wp.xz);
     const hAbove = max(wp.y.sub(gY).add(lift), 0.0);
     // invert layerH = BASE·RATIO^i  →  i = log2(h/BASE)/log2(RATIO)
     const li = clamp(

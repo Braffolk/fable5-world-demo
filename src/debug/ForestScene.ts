@@ -526,6 +526,12 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
       barkTexB: lib.barkArray?.texB ?? null,
     });
     engine.post = frame as unknown as typeof engine.post;
+    // S3b finale: the env heightfield now feeds only noise + macro params —
+    // free its boot-only GPU field set (same call the world scene makes).
+    // eslint-disable-next-line no-console
+    console.log(
+      `[laas] heightfield boot GPU set released: ${hf.releaseBootGpuSet(engine.renderer).toFixed(1)} MB (forest env)`,
+    );
     // meter() is driven once/frame by Engine.renderStep (this.post.meter) — same as
     // the world scene. Do NOT also wire it via onUpdate or it dispatches autoExposure
     // (and the cull/raster/shadow readbacks) TWICE per frame.
@@ -534,7 +540,7 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
   } else {
     // lean cull→raster→flat-resolve debug view — the field's flat height plane
     // is the raster's terrain binding (no terrain clusters ⇒ never sampled).
-    const view = buildNaniteView(engine, reg, field.heightPlane(0), mode);
+    const view = buildNaniteView(engine, reg, field, mode);
     engine.post = view as unknown as typeof engine.post;
     // metered once/frame by Engine.renderStep (this.post.meter) — see note above.
   }

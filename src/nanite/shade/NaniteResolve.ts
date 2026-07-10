@@ -65,6 +65,7 @@ import { BARK_RES } from '../../gpu/passes/BarkSynth';
 import { fbm3, valueNoise3 } from '../../gpu/noise/NoiseTSL';
 import type { ProbeGI } from '../../gpu/passes/ProbeGI';
 import type { Heightfield } from '../../world/Heightfield';
+import type { TerrainField } from '../world/TerrainField';
 import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK, CLUSTER_WORDS, MESH_FLAG_FARTILE, MESH_WORDS, readVertex } from '../world/GeometryRegistry';
 import type { RegistryGpu } from '../world/GeometryRegistry';
 import { brickNormalTsl, brickWord, BRICK_ALBEDO, BRICK_NORMAL, BRICK_POS_X } from '../voxel/VoxelBrick';
@@ -99,6 +100,9 @@ export interface NaniteResolveHandles {
 
 export interface ResolveWorld {
   hf: Heightfield;
+  /** the TerrainField planes — THE resolve terrain source (terrain shading,
+   *  in-shader CD normals, GI ground height, grass terrain pull) */
+  field: TerrainField;
   /** RP-1 (deep-review 16 tri-class specialization): matClass ids with ≥1 registered
    *  mesh (GeometryRegistry.presentClasses). When set, the tri resolve SKIPS BUILDING
    *  the shading subgraphs of absent classes — output-identical (their If() guards can
@@ -218,7 +222,8 @@ function rockShade(d: NV4, wp: NV3, nrm: NV3): { albedo: NV3; ao: NF } {
 
 export function buildNaniteResolve(
   gpu: RegistryGpu,
-  heightTex: Texture,
+  /** terrain height source for makeFetch's (resolve-dead) heightfield arm */
+  heightSrc: TerrainField,
   cam: NaniteCam,
   cull: {
     qRasterRO: BufOf<UV2>;
@@ -254,7 +259,7 @@ export function buildNaniteResolve(
   // bindHfVerts=false: the resolve reconstructs terrain world pos from DEPTH and only
   // calls fetchWorldVert for rock/bark (the explicit-mesh else branch), so it must NOT
   // bind the stride-1 terrain buffer — one fewer storage buffer in the fragment stage (2e).
-  const fetch = makeFetch(gpu, heightTex, undefined, windOn ? { camPos: cam.camPos } : undefined, false);
+  const fetch = makeFetch(gpu, heightSrc, undefined, windOn ? { camPos: cam.camPos } : undefined, false);
   const nandepth = q.get('nandepth');
   const nandbg = q.get('nandbg');
   // SW/HW crossover px for the ?nandbg=clhw split tint (matches the raster's CLHW_MAX).
@@ -542,10 +547,10 @@ export function buildNaniteResolve(
     // P2: TERRAIN family built ONLY in the 'terr' and 'both' passes (NOT 'mesh'/'vox') — this is
     // what keeps buildTerrainShading's samplers + caustics out of the mesh material's bindings.
     if ((pass === 'terr' || pass === 'both') && hasClass(0)) If(isT, () => {
+      // TerrainField planes: normal/slope = in-shader height-plane CD,
+      // fields/biome plane taps, riverDepth derived (spec §3).
       const shading = buildTerrainShading({
-        normalTex: hf.normalTex,
-        biomeTex: hf.biomeTex as StorageTexture,
-        fieldsTex: hf.fieldsTex as StorageTexture,
+        field: world.field,
         noiseA: hf.noiseA as StorageTexture,
         noiseB: hf.noiseB as StorageTexture,
         mp: hf.mp,
@@ -934,9 +939,7 @@ export function buildNaniteResolve(
       // two-sided: flip camera-ward, then pull toward the terrain normal
       const toCamG = normalize(camPos.sub(wp)) as unknown as NV3;
       const nF = dot(nG, toCamG).lessThan(0).select(nG.negate(), nG) as unknown as NV3;
-      const tNrm = (
-        texture(hf.normalTex, hf.uvFromWorld(wp.xz as unknown as NV2), 0) as unknown as NV4
-      ).xyz.normalize() as unknown as NV3;
+      const tNrm = world.field.fieldNormalSlope(wp.xz as unknown as NV2).xyz as unknown as NV3;
       const upK = smoothstep(8, 70, distG).mul(0.35).add(0.5) as unknown as NF;
       wNormal.assign(normalize(mix(nF, tNrm, upK)) as unknown as NV3);
       const fresh = mix(
@@ -1172,9 +1175,7 @@ export function buildNaniteResolve(
         const distG = wp.sub(vec3(camPos) as unknown as NV3).length();
         const toCamG = normalize(camPos.sub(wp)) as unknown as NV3;
         const nF = dot(g.nrm, toCamG).lessThan(0).select(g.nrm.negate(), g.nrm) as unknown as NV3;
-        const tNrm = (
-          texture(hf.normalTex, hf.uvFromWorld(wp.xz as unknown as NV2), 0) as unknown as NV4
-        ).xyz.normalize() as unknown as NV3;
+        const tNrm = world.field.fieldNormalSlope(wp.xz as unknown as NV2).xyz as unknown as NV3;
         // far super-tufts (body ≥ GRASS_FAR_BASE): full terrain-normal pull (ring far mode)
         const isFarG = body.greaterThanEqual(uint(GRASS_FAR_BASE));
         const upK = isFarG.select(
@@ -1285,11 +1286,10 @@ export function buildNaniteResolve(
     if (world.gi) {
       const irrV = vec3(0).toVar() as unknown as NV3;
       const fullGi = (): void => {
-        // F9: read ground height from heightTex (TEXTURE — plentiful) so the
-        // resolve does not bind the height STORAGE buffer (10-buffer/stage cap)
-        const groundY = (
-          texture(hf.heightTex, hf.uvFromWorld(wp.xz)) as unknown as NV4
-        ).x as unknown as NF;
+        // F9: read ground height from TEXTURES (plentiful) so the resolve does
+        // not bind the height STORAGE buffer (10-buffer/stage cap) — the
+        // TerrainField height planes, finest containing level.
+        const groundY = world.field.fieldHeightHot(wp.xz as unknown as NV2);
         let irr = world.gi!.irradiance(wp, wNormal, 2.0, groundY) as unknown as NV3;
         if (world.canopyTex) {
           irr = irr.mul(canopyAt(world.canopyTex, wp.xz).mul(0.18).oneMinus()) as unknown as NV3;

@@ -219,35 +219,20 @@ export function buildNaniteFrame(
       crownLod0: params.get('crownlod0') === '1',
     },
   );
-  if (!hf.biomeTex || !hf.fieldsTex || !hf.noiseA || !hf.noiseB) {
-    throw new Error('NaniteFrame: heightfield derived maps missing (boot order)');
+  if (!hf.noiseA || !hf.noiseB) {
+    throw new Error('NaniteFrame: heightfield noise bakes missing (boot order)');
   }
   // ?nanodisp=1 — disable terrain micro-displacement (root-cause bisect for
   // near-camera transparency: the disp branch only runs within 85 m)
   const dispOff = params.get('nanodisp') === '1';
-  // ?tfield — TEMPORARY S3b staging bitmask for interleaved A/B against the
-  // legacy hf-texture paths (bit0 raster+disp · bit1 grass · bit2 shadow ·
-  // bit3 resolve). Absent = all migrated. EXCISED with the legacy arms at S3b end.
-  const tfield = params.has('tfield') ? Number(params.get('tfield')) : 0xf;
   const disp = dispOff
     ? undefined
-    : tfield & 1
-      ? {
-          field,
-          noiseA: hf.noiseA,
-          noiseB: hf.noiseB,
-          camPos: cam.camPos,
-        }
-      : {
-          normalTex: hf.normalTex,
-          biomeTex: hf.biomeTex,
-          fieldsTex: hf.fieldsTex,
-          noiseA: hf.noiseA,
-          noiseB: hf.noiseB,
-          camPos: cam.camPos,
-        };
-  // the raster kernels' terrain height source (S3b sub-slice 1)
-  const heightSrc = tfield & 1 ? field : hf.heightTex;
+    : {
+        field,
+        noiseA: hf.noiseA,
+        noiseB: hf.noiseB,
+        camPos: cam.camPos,
+      };
   // trunk wind (matches the resolve's makeFetch — both read ?nanwind so the
   // rastered geometry and the resolve's barycentric corners stay bit-identical)
   const windOn = params.get('nanwind') !== '0';
@@ -260,10 +245,10 @@ export function buildNaniteFrame(
   const grassMode = params.get('grass');
   const grassOn = grassMode !== '0' && grassMode !== 'off';
   const grass = grassOn
-    ? buildGrassField({ cam, vis, hf, canopyTex: world.canopyTex, disp })
+    ? buildGrassField({ cam, vis, field, canopyTex: world.canopyTex, disp })
     : null;
   const raster = buildNaniteRaster(
-    registry.gpu, heightSrc, cam, cull, vis, 'flat', true, disp, windOpt, false, true, voxActive,
+    registry.gpu, field, cam, cull, vis, 'flat', true, disp, windOpt, false, true, voxActive,
     grass ? { batch: grass.batch, renderHw: grass.renderHw, enabled: grass.enabled } : undefined,
   );
 
@@ -277,7 +262,7 @@ export function buildNaniteFrame(
   // S3 (D-N29): the SCREEN-DENSITY SHADOW CLIPMAP — a camera-centred clipmap fits
   // its own per-level light VPs (no CSM cascade cameras).
   const shadow: NaniteShadow | null = shadowOn
-    ? buildNaniteShadowClip(registry.gpu, registry.instanceCount, hf.heightTex, disp, windOpt, measuredHierDepth, voxActive)
+    ? buildNaniteShadowClip(registry.gpu, registry.instanceCount, field, disp, windOpt, measuredHierDepth, voxActive)
     : null;
   // CAMERA||SHADOW CULL OVERLAP: fold the (CLIP-path) shadow shared-cut cull into the SAME
   // submit as the camera cull so Dawn can overlap the two disjoint culls on frames where
@@ -338,8 +323,9 @@ export function buildNaniteFrame(
   // voxel-foliage (Stage 2 §7): give the resolve the voxel work-queue ONLY when active, so
   // a pure-triangle world's resolve never binds qVoxRaster/voxelBricks (stays at 8 buffers).
   const resolveCull = voxActive ? { qRasterRO: cull.qRasterRO, qVoxRasterRO: cull.qVoxRasterRO } : cull;
-  const resolve = buildNaniteResolve(registry.gpu, hf.heightTex, cam, resolveCull, vis, {
+  const resolve = buildNaniteResolve(registry.gpu, field, cam, resolveCull, vis, {
     hf,
+    field,
     // RP-1: registered matClass ids — the resolve strips absent classes' subgraphs
     presentClasses: registry.presentClasses,
     gi: world.gi,
@@ -380,7 +366,7 @@ export function buildNaniteFrame(
   let probeRead: (() => Promise<Float32Array>) | null = null;
   let probeSet: ((pix: number[][]) => void) | null = null;
   if (probeOn) {
-    const fetchDbg = makeFetch(registry.gpu, heightSrc);
+    const fetchDbg = makeFetch(registry.gpu, field);
     const probeAttr = new StorageBufferAttribute(new Float32Array(32), 1);
     probeAttr.name = 'nanProbeReadback';
     const outBuf = storage(probeAttr, 'float', 32);

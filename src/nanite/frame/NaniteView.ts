@@ -17,7 +17,6 @@
  */
 
 import { Vector2 } from 'three';
-import type { Texture } from 'three';
 import type { WebGPURenderer } from 'three/webgpu';
 import type { Engine } from '../../core/Engine';
 import type { TerrainField } from '../world/TerrainField';
@@ -36,10 +35,10 @@ export interface NaniteViewHandles {
 export function buildNaniteView(
   engine: Engine,
   registry: GeometryRegistry,
-  /** terrain height source for the raster's terrain fetch — the TerrainField
-   *  planes (S3b) or a raw r32float texture (scenes without terrain clusters
-   *  bind a real-but-never-sampled plane) */
-  heightSrc: Texture | TerrainField,
+  /** terrain height source for the raster's terrain fetch — the scene's
+   *  TerrainField planes (scenes without terrain clusters pass their
+   *  single-level field; it binds but never samples) */
+  heightSrc: TerrainField,
   mode: 'flat' | 'cluster' | 'hzb' | 'lod',
 ): NaniteViewHandles {
   const renderer = engine.renderer;

@@ -75,7 +75,7 @@ function clampTexel(t: number, res: number): number {
  * Build ONE terrain tile DAG at texel origin (tx0,tz0), `tileStride` texels/cell,
  * gridN cells — subsample the field (cache-aware), build the DAG (worker or sync),
  * and remap the tile-local grid coords to GLOBAL texel coords (so the GPU reads
- * the full-res heightTex). Off-field samples clamp to the field edge. Shared by
+ * the full-res height lattice). Off-field samples clamp to the field edge. Shared by
  * the uniform-tile path (WorldRegistry) and the clipmap streamer.
  */
 export async function buildTerrainTile(

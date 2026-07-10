@@ -43,7 +43,7 @@ import {
   vec4,
 } from 'three/tsl';
 import type { NF, NV2 } from '../TSLTypes';
-import type { Heightfield } from '../../world/Heightfield';
+import type { TerrainField } from '../../nanite/world/TerrainField';
 import type { Atmosphere } from '../../sky/Atmosphere';
 import { WORLD_SIZE } from '../../world/WorldConst';
 import { dispatch } from '../../nanite/Tsl';
@@ -64,7 +64,9 @@ export class FarShadow {
   private kBake: unknown = null;
 
   constructor(
-    private hf: Heightfield,
+    /** the TerrainField height planes — bake() re-marches on ToD edits, so it
+     *  must NOT read the released boot hf.height buffer (S3b) */
+    private field: TerrainField,
     private atmosphere: Atmosphere,
   ) {
     const t = new StorageTexture(RES, RES);
@@ -78,7 +80,7 @@ export class FarShadow {
   }
 
   async init(renderer: Renderer): Promise<void> {
-    const hf = this.hf;
+    const field = this.field;
     const sunDir = this.atmosphere.sunDir;
     const tex = this.tex;
     const kBake = Fn(() => {
@@ -89,7 +91,7 @@ export class FarShadow {
         const wx = float(tx).add(0.5).div(RES).sub(0.5).mul(WORLD_SIZE);
         const wz = float(ty).add(0.5).div(RES).sub(0.5).mul(WORLD_SIZE);
         const p0 = vec2(wx, wz) as unknown as NV2;
-        const h0 = hf.sampleHeight(p0).add(BASE_LIFT).toVar();
+        const h0 = field.fieldHeightFinest(p0).add(BASE_LIFT).toVar();
         const sunXZ = vec2(sunDir.x, sunDir.z) as unknown as NV2;
         const dy = (sunDir.y as unknown as NF).max(0.08);
         // worst occluder EXCESS (m above the sun ray) across the march
@@ -99,7 +101,7 @@ export class FarShadow {
             (sunXZ as unknown as { mul(o: number): NV2 }).mul(t),
           );
           const rayY = h0.add(dy.mul(t)).add(SLOPE_SLACK * t);
-          const excess = hf.sampleHeight(sp).sub(rayY);
+          const excess = field.fieldHeightFinest(sp).sub(rayY);
           worst.assign(worst.max(excess));
         }
         const vis = float(1).sub(smoothstep(float(0), float(SOFT_M), worst));

@@ -18,7 +18,7 @@
  */
 
 export interface ClipmapConfig {
-  /** field texels per side (heightTex resolution) */
+  /** field texels per side (the full-res height lattice) */
   res: number;
   /** tile resolution — cells per side (every level, every tile) */
   gridN: number;

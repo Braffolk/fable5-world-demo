@@ -21,7 +21,7 @@
 
 import { Mesh, Scene, Vector3 } from 'three';
 import { BufferGeometry, Float32BufferAttribute, Sphere } from 'three';
-import type { PerspectiveCamera, Texture } from 'three';
+import type { PerspectiveCamera } from 'three';
 import type { TerrainField } from '../world/TerrainField';
 import {
   IndirectStorageBufferAttribute,
@@ -189,9 +189,8 @@ export interface NaniteRasterHandles {
 
 export function buildNaniteRaster(
   gpu: RegistryGpu,
-  /** terrain height source: TerrainField planes (S3b default) or the legacy
-   *  global heightTex (?tfield staging arm) */
-  heightSrc: Texture | TerrainField,
+  /** terrain height source: the TerrainField plane pyramid */
+  heightSrc: TerrainField,
   cam: NaniteCam,
   cull: {
     qRasterRO: BufOf<UV2>;

@@ -751,7 +751,7 @@ export async function buildWorldRegistry(input: {
    *  gridN² (power-of-two) SUBSAMPLE of the field instead of the discrete
    *  window grid. SYNC at boot (≈1 s @256², ≈5 s @512²) — full-res needs the
    *  D1d Worker. Texel coords are packed so the GPU still reads the full-res
-   *  heightTex. 0 = the discrete window path (default). */
+   *  height lattice (TerrainField L0). 0 = the discrete window path (default). */
   dagTerrainGridN?: number;
   /** N8-D2 (D-N38): split the terrain DAG into T×T independent tiles, each gridN²
    *  over its texel sub-region. Tile perimeters auto-lock (mesh boundary) ⇒ seams

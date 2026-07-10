@@ -31,6 +31,7 @@ import {
   vec3,
 } from 'three/tsl';
 import type { NF, NV2, NV3, NV4 } from '../gpu/TSLTypes';
+import type { TerrainField } from '../nanite/world/TerrainField';
 import { hash12 } from '../gpu/noise/NoiseTSL';
 import {
   PERIOD_FBM,
@@ -39,15 +40,15 @@ import {
 } from '../gpu/passes/NoiseBake';
 import { sunU } from './VegMaterials';
 import { zoneMasks, type MacroParams } from '../world/MacroMap';
-import { LAKE_LEVEL, WORLD_HALF, WORLD_SIZE } from '../world/WorldConst';
+import { LAKE_LEVEL, WORLD_HALF } from '../world/WorldConst';
 
 export interface TerrainShadingInputs {
-  /** rgba16f: xyz world normal, w slope */
-  normalTex: StorageTexture;
-  /** rgba8: biomeId/8, snow, vegDensity, rockExposure (LINEAR-filtered) */
-  biomeTex: StorageTexture;
-  /** rgba16f at sim res: moisture, flowStrength, riverDepth, W */
-  fieldsTex: StorageTexture;
+  /** the TerrainField plane set — THE terrain data source. Normal+slope =
+   *  height-plane central differences (the retired normalTex's bake stencil,
+   *  in-shader), snow/rockExposure/moisture/flow = ONE filtered fields-plane
+   *  tap + vegDensity from the biome plane, riverDepth = DERIVED waterY − h
+   *  (spec §3: not stored). */
+  field: TerrainField;
   /** baked tileable noise (NoiseBake channel map) */
   noiseA: StorageTexture;
   noiseB: StorageTexture;
@@ -78,8 +79,6 @@ export interface TerrainShading {
   worldNormalNode: NV3;
 }
 
-const uvFromWorld = (p: NV2): NV2 => p.div(WORLD_SIZE).add(0.5);
-
 /**
  * Micro-displacement constants — SHARED by the TerrainTiles vertex stage
  * (geometry) and the fragment normal counterpart below. fbm(2.6 m) rolls +
@@ -108,7 +107,6 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
   const wp = inp.surf?.wp ?? (positionWorld as unknown as NV3);
   const camPos = inp.surf?.camPos ?? (cameraPosition as unknown as NV3);
   const wxz = wp.xz;
-  const uv = uvFromWorld(wxz);
   const h = wp.y;
 
   // --- baked-noise helpers (uv = world / (scale · channel period)) -----------
@@ -130,11 +128,35 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
   const band = (phase: NF, lane: NF): NF =>
     texture(inp.noiseA, vec2(phase, lane).div(PERIOD_VAL)).x;
 
-  const ns = inp.baseNormalSlope ?? texture(inp.normalTex, uv);
+  // terrain field context: the TerrainField planes (S3b).
+  const field = inp.field;
+  const ns: NV4 = inp.baseNormalSlope ?? field.fieldNormalSlope(wxz);
+  const fld = field.fieldsAt(wxz);
+  const bio = field.biomeAt(wxz);
+  const snowRaw = fld.z as unknown as NF;
+  const vegRaw = bio.y as unknown as NF;
+  const rockRaw = fld.w as unknown as NF;
+  const moistRaw = fld.x as unknown as NF;
+  const flowRaw = fld.y as unknown as NF;
+  // riverDepth DERIVED (spec §3): waterY plane − this pixel's surface height
+  // (h = the rendered surface — self-consistent per pixel). BILINEAR waterY:
+  // dry texels hold the bed−2 sentinel, a nearest tap zeroes whole sim-texel
+  // patches of submerged bed; max(0) absorbs the sentinel and the no-water −1e4.
+  const riverRaw = (field.water ? field.fieldWaterY(wxz) : float(-1e4)).sub(h).max(0) as unknown as NF;
+  /** standing-water magnitude for the silt-bed term (see pondK): the retired
+   *  fieldsTex.z was NOT the water column — it was the hydrology CARVE metric
+   *  (FlowRivers carveK: depth·0.45+0.12, lakes = fill depth), and pondK's
+   *  1.1–2.6 m knees are calibrated to IT (the real column rarely tops 1.5 m).
+   *  Reconstruct it from the flowStrength PLANE (lakes carry 1 ⇒ 3.5; rivers
+   *  match FlowRivers' sB^1.35·7.5·0.45+0.12 law), gated on being actually
+   *  submerged — carve gullies that render dry stay silt-free (legacy rdGate). */
+  const pondDepth = flowRaw
+    .pow(1.35)
+    .mul(3.375)
+    .add(0.12)
+    .mul(smoothstep(0.02, 0.1, riverRaw)) as unknown as NF;
   const baseNormal = ns.xyz.normalize().toVar();
   const slope = ns.w.toVar();
-  const bio = texture(inp.biomeTex, uv);
-  const fields = texture(inp.fieldsTex, uv);
   // Beyond the world edge the baked maps clamp to their last texel row and
   // SMEAR it radially across the vista shell (pale streaks). Cross-fade to
   // procedural estimates outside the domain (far shell only).
@@ -148,12 +170,12 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
   const snowProc = smoothstep(950, 1300, h.add(valS(620, 0.23, 0.57).mul(140)));
   const vegProc = smoothstep(0.55, 0.28, slope).mul(smoothstep(1350, 900, h));
   const rockProc = smoothstep(0.55, 0.95, slope);
-  const snowField = mix(bio.g, snowProc, outsideK);
-  const vegDensity = mix(bio.b, vegProc, outsideK);
-  const rockExposure = mix(bio.a, rockProc, outsideK);
-  const moisture = mix(fields.x, float(0.35), outsideK);
-  const flowStrength = mix(fields.y, float(0), outsideK);
-  const riverDepth = mix(fields.z, float(0), outsideK);
+  const snowField = mix(snowRaw, snowProc, outsideK);
+  const vegDensity = mix(vegRaw, vegProc, outsideK);
+  const rockExposure = mix(rockRaw, rockProc, outsideK);
+  const moisture = mix(moistRaw, float(0.35), outsideK);
+  const flowStrength = mix(flowRaw, float(0), outsideK);
+  const riverDepth = mix(riverRaw, float(0), outsideK);
   const zm = zoneMasks(wxz, inp.mp);
 
   // ---------- macro variation (2–50 m breakup — tiling killer) ----------------
@@ -252,7 +274,7 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
   // ---------- composite -----------------------------------------------------------
   // standing-water beds (kettle ponds, lake): fine dark silt, not gravel —
   // the real Phase-6 water surface + Beer–Lambert absorption sit above this
-  const pondK = smoothstep(1.1, 2.6, riverDepth).mul(smoothstep(0.3, 0.12, slope));
+  const pondK = smoothstep(1.1, 2.6, mix(pondDepth, float(0), outsideK)).mul(smoothstep(0.3, 0.12, slope));
   let col: NV3 = soil;
   col = mix(col, grassCol, grassW);
   col = mix(col, forestFloor, forestW);
