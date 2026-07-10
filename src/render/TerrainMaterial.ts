@@ -331,6 +331,27 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
   ).mul(snowW.oneMinus());
   col = col.mul(wet.mul(0.55).oneMinus());
 
+  // far-forest canopy masses (far shell only): where the cooked canopy layer
+  // reports cover (CHM ≥ 2 m), the horizon shows treetops — not the ground
+  // material under them — as a darker, cooler, richer green than open field.
+  // cover drives the blend; canopy height deepens the shade (tall boreal
+  // spruce/pine read darkest). ETAK land-cover carries NO conifer/deciduous
+  // split (its filtered classId is scatter-only), so the tint leans on
+  // cover+height, not species. Gated to inp.far + cover ⇒ the generated world
+  // (no canopy layer ⇒ cover 0, heightM 0) is BIT-IDENTICAL. Water/sea never
+  // tint: the CHM has no canopy over water ⇒ cover 0 there.
+  if (inp.far) {
+    const cover = bio.w as unknown as NF;
+    const canopyH = (bio.z as unknown as NF).mul(255); // heightM, m
+    const forestK = smoothstep(0.12, 0.62, cover).mul(smoothstep(1, 6, canopyH));
+    const canopyCol = mix(
+      vec3(0.038, 0.066, 0.03),
+      vec3(0.02, 0.043, 0.024),
+      smoothstep(6, 26, canopyH),
+    );
+    col = mix(col, canopyCol, forestK.mul(0.9)) as NV3;
+  }
+
   // ---------- normal perturbation ---------------------------------------------------
   // far-detail synthesis (Pillar D): serrated normal-domain detail keeps
   // mid/far ridges craggy where geometric density has LOD'd out. Applied by

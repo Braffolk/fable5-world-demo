@@ -32,6 +32,12 @@ import { instTransformPoint, instYaw, type InstYaw } from '../NaniteCommon';
 import type { UniformV3 } from '../Tsl';
 import { bcU2F, elemU, maxU, minU, toF } from '../Tsl';
 
+/** Far-forest canopy displacement fires only where a tile's texel is at least
+ *  this coarse (m). Below it, trees are ≥1 texel and render as real crown
+ *  geometry (and S8 fartiles own the coarser far country) — so the near/mid
+ *  bands must NOT lift, or they'd double-count the canopy. */
+const CANOPY_DISP_TEXEL_M = 16;
+
 /** cheap pcg-ish hash of an instance slot → 0..1 (mirror of VegInstance.slotHash
  *  — the trunk wind needs the SAME per-instance phase the old path baked; the
  *  resolve reuses it for the per-instance tint, AUDIT-1a). */
@@ -426,12 +432,22 @@ export function makeFetch(
     // retired global heightTex read; coarser windows bilerp. One branch arm runs,
     // near-uniform per cluster (A15's level-select cost stays off the hot path).
     const h = field.fieldHeightHot(vec2(wx, wz) as unknown as NV2);
-    if (disp) {
-      const dOut = terrainDispAt(disp, vec2(wx, wz) as unknown as NV2, h);
-      out.assign(vec3(wx, h.add(dOut).sub(skirtDrop), wz));
-    } else {
-      out.assign(vec3(wx, h.sub(skirtDrop), wz));
-    }
+    const y = h.toVar();
+    if (disp) y.addAssign(terrainDispAt(disp, vec2(wx, wz) as unknown as NV2, h));
+    // Far-forest canopy: on COARSE tiles (texel ≥ 16 m — trees are sub-texel
+    // there, so no crown geometry is emitted) the cooked CHM canopy becomes REAL
+    // surface displacement, raising forest masses on the horizon. Fine/near bands
+    // stay flat (crowns render as actual geometry there; S8 fartiles own the far
+    // country) — the cell gate is dynamically uniform per cluster, so a warp of
+    // fine tiles skips the biome tap entirely. cover 0 / heightM 0 (the generated
+    // world, every water and non-forest texel) ⇒ +0 ⇒ bit-identical.
+    If(ctx.cell.greaterThanEqual(float(CANOPY_DISP_TEXEL_M)), () => {
+      const bio = field.biomeAt(vec2(wx, wz) as unknown as NV2);
+      const canopyH = (bio.z as unknown as NF).mul(255); // heightM: mean canopy height, m
+      const cover = bio.w as unknown as NF; // cover fraction [0,1]
+      y.addAssign(canopyH.mul(smoothstep(0.15, 0.7, cover)));
+    });
+    out.assign(vec3(wx, y.sub(skirtDrop), wz));
     return out as unknown as NV3;
   };
 

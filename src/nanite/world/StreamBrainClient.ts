@@ -122,7 +122,7 @@ export class StreamBrainClient {
    *  cache keys). */
   private buildInit(manifest: WorldManifest): BrainInitMsg {
     const layers: BrainInitMsg['layers'] = {};
-    for (const layer of ['height', 'biome', 'fields', 'water'] as const) {
+    for (const layer of ['height', 'biome', 'fields', 'water', 'canopy'] as const) {
       const meta = manifest.layers[layer];
       if (!meta) continue;
       const chunkKeys: Record<number, Float64Array> = {};

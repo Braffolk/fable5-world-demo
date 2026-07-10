@@ -36,6 +36,7 @@ import type { ChunkKey, ChunkPayload, LayerName } from '../../world/source/World
 import { clipmapMaxTiles, clipmapTiles, type ClipmapConfig, type ClipmapTile } from './TerrainClipmap';
 import {
   BIOME_CHANNELS,
+  CANOPY_CHANNELS,
   FIELDS_CHANNELS,
   WATER_DRY_SENTINEL,
   WATER_FAR_FACTOR,
@@ -301,9 +302,16 @@ export class StreamBrainCore {
       ['biome', this.plan.biome, BIOME_CHANNELS],
       ['fields', this.plan.fields, FIELDS_CHANNELS],
     ] as const) {
+      // far forests: the canopy layer (heightM, cover; LODs 1-4) merges into the
+      // biome plane's channels 2/3. A source without a canopy layer (the generated
+      // world) leaves the overlay undefined ⇒ the fill stays bit-identical.
+      const overlay =
+        plane === 'biome' && this.layers.canopy
+          ? { layer: 'canopy' as LayerName, channels: CANOPY_CHANNELS }
+          : undefined;
       for (let i = 0; i < plans.length; i++) {
         const plan = plans[i] as PlanePlan;
-        const data = await this.assembleU8(plane, plan, plan.n0x, plan.n0z, channels);
+        const data = await this.assembleU8(plane, plan, plan.n0x, plan.n0z, channels, overlay);
         packets.push({ kind: 'fill', plane, level: i, x: 0, y: 0, w: plan.res, h: plan.res, u8: data });
         transfers.push(data.buffer);
       }
@@ -367,6 +375,7 @@ export class StreamBrainCore {
     n0x: number,
     n0z: number,
     channels: readonly (readonly [string, number])[],
+    overlay?: { layer: LayerName; channels: readonly (readonly [string, number])[] },
   ): Promise<Uint8Array> {
     const geo = this.layerGeo(layer);
     const names = this.layers[layer]?.planes ?? [];
@@ -377,6 +386,19 @@ export class StreamBrainCore {
       const payload = await this.fetchChunk(layer, key);
       if (!payload || payload.kind !== 'planes') continue;
       box = copyChunkU8(out, plan.res, plan.res, place, geo, key.cx, key.cz, payload.planes, payload.res, names, channels, box);
+    }
+    // second-layer overlay (far-forest canopy → channels 2/3) on the levels that
+    // layer cooks. It shares this plane's texelMeters, so the same lattice window
+    // indexes it; untouched channels stay 0 (cover 0 = no forest). The rim clamp
+    // rides the base layer's box — canopy sits inside the biome coverage.
+    const oMeta = overlay ? this.layers[overlay.layer] : undefined;
+    if (overlay && oMeta?.lods.includes(plan.lod)) {
+      const oNames = oMeta.planes ?? [];
+      for (const key of chunksInWindow(geo, plan.lod, n0x, n0z, plan.res)) {
+        const payload = await this.fetchChunk(overlay.layer, key);
+        if (!payload || payload.kind !== 'planes') continue;
+        copyChunkU8(out, plan.res, plan.res, place, geo, key.cx, key.cz, payload.planes, payload.res, oNames, overlay.channels, box);
+      }
     }
     if (box) clampExtend(out, plan.res, plan.res, 4, box);
     return out;

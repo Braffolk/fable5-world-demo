@@ -25,6 +25,7 @@ export const LAC1_LAYER_IDS = {
   understory: 5,
   debris: 6,
   boulders: 7,
+  canopy: 8,
 } as const;
 
 export interface Lac1Header {

@@ -85,7 +85,16 @@ export const WATER_FAR_FACTOR = 8;
 export const BIOME_CHANNELS: readonly (readonly [string, number])[] = [
   ['classId', 0],
   ['vegDensity', 1],
-  // canopyHeight (2) + cover (3) stay 0 — the S4 canopy window owns them
+  // canopyHeight (2) + cover (3): L0 stays 0 (near = the S4 canopy window); the
+  // far levels (LODs 1-4) merge the canopy layer via CANOPY_CHANNELS at boot.
+];
+/** far-forest canopy layer planes [heightM, cover] → biome plane channels 2/3.
+ *  Merged onto the biome plane for the levels the canopy layer cooks (LODs 1-4).
+ *  heightM = mean canopy height in meters (u8); cover = canopy-cover fraction×255
+ *  (0 = treeless/unmeasured ⇒ no far tint/displacement). */
+export const CANOPY_CHANNELS: readonly (readonly [string, number])[] = [
+  ['heightM', 2],
+  ['cover', 3],
 ];
 export const FIELDS_CHANNELS: readonly (readonly [string, number])[] = [
   ['moisture', 0],
