@@ -19,7 +19,12 @@ export type LayerName =
   // generated-source record layers (F2: first-class streams; Estonia derives
   // equivalents from its understory/debris guidance planes at S9)
   | 'extras'
-  | 'stones';
+  | 'stones'
+  // generated-source surface-fields planes (moisture/flowStrength/snow/
+  // rockExposure — the TerrainField F-1 fill; Estonia derives snow/rock
+  // in-shader and moisture/river from its water/soil layers, so its manifest
+  // simply omits this layer)
+  | 'fields';
 
 export interface ChunkKey {
   lod: number;

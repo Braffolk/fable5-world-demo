@@ -21,6 +21,7 @@ import { sunU, updateSunUniforms } from '../render/VegMaterials';
 import type { Heightfield } from '../world/Heightfield';
 import { GeneratedWorldSource } from '../world/source/GeneratedWorldSource';
 import { buildChunkContentStreams } from '../nanite/world/ChunkContent';
+import { TerrainField } from '../nanite/world/TerrainField';
 import { WaterSurface } from '../world/WaterSurface';
 import { PostStack } from '../render/PostStack';
 import { Clouds } from '../sky/Clouds';
@@ -128,6 +129,12 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   BootTrace.phase('world source (heightfield + scatter)');
   const worldSource = new GeneratedWorldSource(engine.renderer, seed);
   const worldManifest = await worldSource.open((p, m) => ctx.progress(p * 0.94, m));
+  // The live boot heightfield — after S3a it feeds ONLY the not-yet-ported
+  // consumers: the hot raster/resolve/grass/shadow heightTex+biome+fields+normal
+  // reads and the registry terrain build (S3b), ProbeGI / FarShadow / canopy map
+  // windows (S4), water's waterY/flow buffers (water arc), wind noise (stays),
+  // and the ?profile=1 texture handoff. Everything CPU-side + the cold shader
+  // height/waterY reads live on the TerrainField below.
   const hf: Heightfield = worldSource.heightfield;
   (engine as unknown as { heightfield?: Heightfield }).heightfield = hf;
 
@@ -139,6 +146,13 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     }
     engine.stats.counters['terrain.maxH'] = Math.round(maxH);
   }
+
+  // TERRAIN FIELD (S3a): the streamed terrain plane set, filled through
+  // source.fetch — the SAME path Estonia rides (S5 turns static fill into
+  // camera-window scroll). The scene handle for every ported consumer.
+  BootTrace.phase('terrain field (plane fills via source.fetch)');
+  ctx.progress(0.942, 'terrain field: filling planes');
+  const field = await TerrainField.fromSource(worldSource, worldManifest);
 
   // physical sky first: probe gathering needs the atmosphere LUTs.
   // ?shot=N boots straight into a composed bookmark — use ITS time of day
@@ -183,10 +197,11 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // set before any material factory runs (terrain tiles, rocks, debris all
   // self-apply at build time). ?ablate=caustics to A/B, ?caustk=N to tune.
   if (!ablate.has('caustics')) {
+    if (!hf.flow) throw new Error('caustic context without hydrology');
     const bake = new CausticsBake();
     const ck = Number(new URLSearchParams(window.location.search).get('caustk') ?? NaN);
     if (Number.isFinite(ck)) bake.focusK.value = ck;
-    setCausticContext({ hf, bake, sunDir: sunU.dir });
+    setCausticContext({ field, flow: hf.flow, simRes: hf.simRes, noiseA: hf.noiseA, bake, sunDir: sunU.dir });
     engine.onUpdate(() => bake.update(engine.renderer));
   }
 
@@ -337,7 +352,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
 
   // GPU particles: snow/pollen/leaves riding the wind (?ablate=particles)
   if (!ablate.has('particles')) {
-    const parts = new Particles(hf, canopyTex, ablate.has('gi') ? null : gi);
+    const parts = new Particles(field, hf.biomeTex, canopyTex, ablate.has('gi') ? null : gi);
     engine.scene.add(parts.mesh);
     engine.onUpdate((dt) => parts.update(engine.renderer, engine.camera, dt));
     engine.stats.counters['particles'] = PARTICLE_COUNT;
@@ -346,7 +361,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // froxel volumetrics: canopy shafts + valley fog (?ablate=froxels, ?fog=N)
   let froxels: Froxels | null = null;
   if (!ablate.has('froxels')) {
-    froxels = new Froxels(hf, sunSky.atmosphere, canopyTex, clouds);
+    froxels = new Froxels(field, { fieldsTex: hf.fieldsTex, noiseA: hf.noiseA }, sunSky.atmosphere, canopyTex, clouds);
     const fq = Number(new URLSearchParams(window.location.search).get('fog') ?? NaN);
     if (Number.isFinite(fq)) froxels.fogK.value = fq;
     const fx = froxels;
@@ -378,7 +393,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     ) {
       if (naniteRegistry) {
         const { buildNaniteView } = await import('../nanite/frame/NaniteView');
-        engine.post = buildNaniteView(engine, naniteRegistry, hf, nanitedbg);
+        engine.post = buildNaniteView(engine, naniteRegistry, hf.heightTex, nanitedbg);
         // eslint-disable-next-line no-console
         console.log(`[laas] nanitedbg=${nanitedbg}: N2 debug view replacing the frame render`);
       } else {
@@ -419,6 +434,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     if (!ablate.has('water')) {
       const water = new WaterSurface(
         hf,
+        field,
         sunSky.atmosphere,
         canopyTex,
         ablate.has('gi') ? null : gi,
@@ -491,8 +507,8 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // terrain/water probe for the camera rig: walk-mode ground physics + the
   // fly-mode soft collision / underwater guard both live in FlyCamera now
   ctx.hooks.groundProbe = (x, z) => ({
-    ground: hf.heightAtCpu(x, z),
-    water: hf.waterYAtCpu(x, z),
+    ground: field.heightAt(x, z),
+    water: field.waterAt(x, z),
   });
 
   // camera spawn: ground-clamped (?alt/x/z → fly) or the DEFAULT WALK SPAWN
@@ -506,15 +522,15 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       const z = Number(q.get('z') ?? 900);
       const yaw = Number(q.get('yaw') ?? 2.4); // rad; 0 = looking −z (north)
       const pitch = Number(q.get('pitch') ?? -0.04); // rad; negative = down
-      const y = hf.heightAtCpu(x, z) + alt;
+      const y = field.heightAt(x, z) + alt;
       // the fly camera doesn't exist yet — main applies this after rigging
       ctx.hooks.initialPose = { p: [x, y, z], yaw, pitch };
       ctx.hooks.initialPoseMode = 'fly';
       engine.camera.position.set(x, y, z);
     } else {
-      const spawn = findWalkSpawn(hf);
+      const spawn = findWalkSpawn(field);
       ctx.hooks.initialPose = {
-        p: [spawn.x, hf.heightAtCpu(spawn.x, spawn.z) + 1.7, spawn.z],
+        p: [spawn.x, field.heightAt(spawn.x, spawn.z) + 1.7, spawn.z],
         yaw: -0.78, // face NE — the serrated massif anchors the first frame
         pitch: -0.02,
       };
@@ -524,7 +540,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   }
 
   // composed bookmarks (keys 1-9, ?shot=N) + 92 s flythrough (?fly=1 / F)
-  installBookmarks(engine, hf, ctx.hooks, params);
+  installBookmarks(engine, field, ctx.hooks, params);
 
   BootTrace.phase('first frames (compile + settle)');
   ctx.progress(1, 'terrain ready');
@@ -535,17 +551,17 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
  * out from the map center (dry = waterY sits below the bed there; flat =
  * central-difference slope under ~19°).
  */
-function findWalkSpawn(hf: Heightfield): { x: number; z: number } {
+function findWalkSpawn(field: TerrainField): { x: number; z: number } {
   for (let r = 0; r <= 240; r += 12) {
     const steps = Math.max(1, Math.round((2 * Math.PI * r) / 18));
     for (let k = 0; k < steps; k++) {
       const a = (k / steps) * Math.PI * 2;
       const x = Math.cos(a) * r;
       const z = Math.sin(a) * r;
-      const h = hf.heightAtCpu(x, z);
-      if (hf.waterYAtCpu(x, z) > h - 0.05) continue; // wet or waterline
-      const sx = hf.heightAtCpu(x + 6, z) - hf.heightAtCpu(x - 6, z);
-      const sz = hf.heightAtCpu(x, z + 6) - hf.heightAtCpu(x, z - 6);
+      const h = field.heightAt(x, z);
+      if (field.waterAt(x, z) > h - 0.05) continue; // wet or waterline
+      const sx = field.heightAt(x + 6, z) - field.heightAt(x - 6, z);
+      const sz = field.heightAt(x, z + 6) - field.heightAt(x, z - 6);
       if (Math.hypot(sx, sz) / 12 > 0.35) continue; // too steep
       return { x, z };
     }

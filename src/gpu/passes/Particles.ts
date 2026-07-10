@@ -51,7 +51,7 @@ import {
 } from 'three/tsl';
 import { hash13 } from '../noise/NoiseTSL';
 import type { NF, NV2, NV3, NV4 } from '../TSLTypes';
-import type { Heightfield } from '../../world/Heightfield';
+import type { TerrainField } from '../../nanite/world/TerrainField';
 import { WORLD_SIZE } from '../../world/WorldConst';
 import { canopyAt } from './Scatter';
 import type { ProbeGI } from './ProbeGI';
@@ -73,13 +73,19 @@ export class Particles {
   private readonly uCamUp = uniform(new Vector3(0, 1, 0));
   private readonly uDt = uniform(0.016);
 
-  constructor(hf: Heightfield, canopyTex: StorageTexture | null, gi: ProbeGI | null = null) {
+  constructor(
+    field: TerrainField,
+    // snow-biome roll stays on the source-provided biome texture this slice
+    // (S4 moves it onto the TerrainField biome plane)
+    biomeTex: StorageTexture | null,
+    canopyTex: StorageTexture | null,
+    gi: ProbeGI | null = null,
+  ) {
     // (x, y, z, type) — type carries through until the particle re-rolls
     const pos = instancedArray(PARTICLE_COUNT, 'vec4');
     // (phase, size01, age, ttl)
     const misc = instancedArray(PARTICLE_COUNT, 'vec4');
 
-    const biomeTex = hf.biomeTex;
     if (!biomeTex) throw new Error('particles need the biome texture');
 
     const rollType = (p: NV3, h: NF): NF => {
@@ -138,7 +144,7 @@ export class Particles {
       p.addAssign(vec3(vx, vy, vz).mul(this.uDt as unknown as NF));
 
       // --- respawn: out of box / under ground / expired ----------------------------
-      const ground = hf.sampleHeightNearest(p.xz);
+      const ground = field.fieldHeightFinestNearest(p.xz);
       const out = p.x
         .sub(cam.x)
         .abs()
@@ -157,7 +163,7 @@ export class Particles {
           cam.z.add(r3.sub(0.5).mul(2 * BOX_R)),
         ).toVar();
         // never spawn under the terrain
-        const g2 = hf.sampleHeightNearest(np.xz);
+        const g2 = field.fieldHeightFinestNearest(np.xz);
         np.y.assign(np.y.max(g2.add(0.6)));
         p.assign(np);
         // altitude band 0..1 of the box → type environment roll

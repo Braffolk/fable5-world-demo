@@ -29,6 +29,7 @@ import type { PerspectiveCamera, WebGPURenderer } from 'three/webgpu';
 import type { StorageTexture } from 'three/webgpu';
 import type { ProbeGI } from '../gpu/passes/ProbeGI';
 import type { NV2, NV4 } from '../gpu/TSLTypes';
+import type { TerrainField } from '../nanite/world/TerrainField';
 import { waterMaterial } from '../render/WaterMaterial';
 import { internalSize } from '../render/RenderScale';
 import type { Atmosphere } from '../sky/Atmosphere';
@@ -122,6 +123,9 @@ export class WaterSurface {
 
   constructor(
     hf: Heightfield,
+    // S3a: terrain-height reads (wet guard, reflection horizon) come from the
+    // TerrainField planes; hf keeps only waterY/flow/noise until the water arc
+    field: TerrainField,
     atm: Atmosphere,
     canopyTex: StorageTexture | null,
     gi: ProbeGI | null,
@@ -137,6 +141,7 @@ export class WaterSurface {
       const innerRect = runiform(new Vector4(1e9, 1e9, -1e9, -1e9));
       const mat = waterMaterial(
         hf,
+        field,
         atm,
         canopyTex,
         gi,

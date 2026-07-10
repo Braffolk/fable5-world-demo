@@ -65,8 +65,9 @@ import {
 } from 'three/tsl';
 import { bilerpVec2Buffer, uvToGrid } from '../gpu/BufferSample';
 import { PERIOD_FBM } from '../gpu/passes/NoiseBake';
+import type { FlowResult } from '../gpu/passes/FlowRivers';
 import type { NF, NV2, NV3, NV4 } from '../gpu/TSLTypes';
-import type { Heightfield } from '../world/Heightfield';
+import type { TerrainField } from '../nanite/world/TerrainField';
 import { WORLD_SIZE } from '../world/WorldConst';
 import { FLOW_CYC } from './WaterMaterial';
 
@@ -175,7 +176,14 @@ export class CausticsBake {
 }
 
 export interface CausticCtx {
-  hf: Heightfield;
+  /** waterY comes from the TerrainField water plane (S3a) */
+  field: TerrainField;
+  /** hydrology flow field for the advection — still the source's sim-res
+   *  buffers (a flowDir plane/window is the water arc's S4+ concern) */
+  flow: FlowResult;
+  simRes: number;
+  /** baked fbm noise for the static domain warp (position-independent) */
+  noiseA: import('three/webgpu').StorageTexture | null;
   bake: CausticsBake;
   /** unit direction TOWARD the sun (shared scene uniform) */
   sunDir: { value: { x: number; y: number; z: number } };
@@ -193,7 +201,7 @@ export function causticContext(): CausticCtx | null {
 /** water column above this fragment (m); negative above the waterline */
 export function causticDepth(wp: NV3): NF {
   if (!ctx) throw new Error('caustic context not set');
-  return ctx.hf.sampleWaterY(wp.xz).sub(wp.y);
+  return ctx.field.fieldWaterY(wp.xz).sub(wp.y);
 }
 
 /**
@@ -203,9 +211,7 @@ export function causticDepth(wp: NV3): NF {
  */
 export function causticTint(wp: NV3, depthIn?: NF): NF {
   if (!ctx) throw new Error('caustic context not set');
-  const { hf, bake } = ctx;
-  const flow = hf.flow;
-  if (!flow) throw new Error('caustic context without hydrology');
+  const { flow, simRes, bake } = ctx;
   const depth = depthIn ?? causticDepth(wp);
 
   // bed point → surface entry point along the refracted sun ray
@@ -214,8 +220,8 @@ export function causticTint(wp: NV3, depthIn?: NF): NF {
   const surf = wp.xz.sub(rDir.xz.mul(depth.max(0).div(rDir.y.negate().max(0.25))));
 
   // two-phase flowmap advection — same cycle as the water ripples/foam
-  const g = uvToGrid(clamp(surf.div(WORLD_SIZE).add(0.5), 0, 1), hf.simRes);
-  const flowV = bilerpVec2Buffer(flow.flowDir, hf.simRes, g);
+  const g = uvToGrid(clamp(surf.div(WORLD_SIZE).add(0.5), 0, 1), simRes);
+  const flowV = bilerpVec2Buffer(flow.flowDir, simRes, g);
   const vel = flowV.mul(1.9).add(vec2(0.045, 0.03));
   const ph1 = fract(time.mul(FLOW_CYC));
   const ph2 = fract(time.mul(FLOW_CYC).add(0.5));
@@ -228,7 +234,7 @@ export function causticTint(wp: NV3, depthIn?: NF): NF {
   // repeat never lines up (user: "weird very repetitive pattern close to
   // the camera"). Time-invariant — the advection still flows through it.
   let surfW = surf;
-  const nA = hf.noiseA;
+  const nA = ctx.noiseA;
   if (nA) {
     const wgrad = (
       texture(nA, surf.div(31 * PERIOD_FBM), 0) as unknown as NV4

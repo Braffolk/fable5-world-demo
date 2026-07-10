@@ -17,7 +17,6 @@
  * HUD:    nanite.visClusters / chunks / hwTris (the numbers we're driving down).
  */
 
-import { FloatType, StorageTexture } from 'three/webgpu';
 import type { WorldContext } from './Scenes';
 import { BootTrace } from './BootTrace';
 import { buildVegLibrary, type VegPool } from '../vegetation/VegLibrary';
@@ -66,6 +65,7 @@ import {
 import { Vector2 } from 'three';
 import { internalSize } from '../render/RenderScale';
 import { buildNaniteView } from '../nanite/frame/NaniteView';
+import { TerrainField } from '../nanite/world/TerrainField';
 import { Heightfield } from '../world/Heightfield';
 import { SunSky } from '../sky/SunSky';
 import { PostStack } from '../render/PostStack';
@@ -481,6 +481,13 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
   const nanitedbg = q.get('nanitedbg');
   const fullFrame = !nanitedbg && q.get('naniteframe') !== '0';
 
+  // S3a: the scene's TerrainField — single level over the forest's TRUE ground
+  // (the flat y=0 plane the trees are planted on; the fullFrame Heightfield below
+  // is only a bindings donor for the S3b-hot resolve/raster maps, its heights are
+  // NOT this scene's terrain). Serves the walk/fly probe; the lean branch binds
+  // its plane where the old 1×1 fake-hf hack sat (F11).
+  const field = TerrainField.singleLevel({ res: 64, texel: 128, worldMinX: -4096, worldMinZ: -4096 });
+
   if (fullFrame) {
     // The forest has NO terrain clusters, so the resolve's required hf maps are bound
     // but NEVER sampled (terrain shading is gated on terrain pixels). Generate a real
@@ -525,12 +532,9 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
     // eslint-disable-next-line no-console
     console.log('[forest] FULL-FRAME pipe (NaniteFrame resolve + post) — ?nanitedbg=cluster for the lean debug view');
   } else {
-    // lean cull→raster→flat-resolve debug view (dummy 1×1 heightTex — never sampled).
-    const heightTex = new StorageTexture(1, 1);
-    heightTex.name = 'forestSceneHeight';
-    heightTex.type = FloatType;
-    const hf = { heightTex } as unknown as Heightfield;
-    const view = buildNaniteView(engine, reg, hf, mode);
+    // lean cull→raster→flat-resolve debug view — the field's flat height plane
+    // is the raster's terrain binding (no terrain clusters ⇒ never sampled).
+    const view = buildNaniteView(engine, reg, field.heightPlane(0), mode);
     engine.post = view as unknown as typeof engine.post;
     // metered once/frame by Engine.renderStep (this.post.meter) — see note above.
   }
@@ -539,6 +543,6 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
   ctx.hooks.initialPose = { p: [0, 2, 0], yaw: 0.6, pitch: -0.02 };
   ctx.hooks.initialPoseMode = 'fly';
   engine.camera.position.set(0, 2, 0);
-  ctx.hooks.groundProbe = () => ({ ground: 0, water: -1e9 });
+  ctx.hooks.groundProbe = (x, z) => ({ ground: field.heightAt(x, z), water: field.waterAt(x, z) });
   ctx.progress(1, 'forest: ready');
 }

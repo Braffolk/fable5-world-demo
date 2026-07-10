@@ -18,7 +18,7 @@ import { CatmullRomCurve3, Vector3 } from 'three';
 import type { Engine } from '../core/Engine';
 import type { LaasHooks } from '../core/Hooks';
 import type { LaasParams } from '../core/Params';
-import type { Heightfield } from '../world/Heightfield';
+import type { TerrainField } from '../nanite/world/TerrainField';
 import { Census } from './Census';
 
 export interface Bookmark {
@@ -45,22 +45,22 @@ export const BOOKMARKS: Bookmark[] = [
   { name: 'Valley network aerial', x: -600, z: 700, alt: 260, yaw: -0.6, pitch: -0.5, tod: 17.5 },
 ];
 
-function poseY(hf: Heightfield, b: Bookmark): number {
-  const ground = hf.heightAtCpu(b.x, b.z) + b.alt;
-  const water = hf.waterYAtCpu(b.x, b.z) + 0.6;
+function poseY(field: TerrainField, b: Bookmark): number {
+  const ground = field.heightAt(b.x, b.z) + b.alt;
+  const water = field.waterAt(b.x, b.z) + 0.6;
   return Math.max(ground, water);
 }
 
 export function installBookmarks(
   engine: Engine,
-  hf: Heightfield,
+  field: TerrainField,
   hooks: LaasHooks,
   params: LaasParams,
 ): void {
   const apply = (i: number): void => {
     const b = BOOKMARKS[i];
     if (!b) return;
-    hooks.setPose?.({ p: [b.x, poseY(hf, b), b.z], yaw: b.yaw, pitch: b.pitch });
+    hooks.setPose?.({ p: [b.x, poseY(field, b), b.z], yaw: b.yaw, pitch: b.pitch });
     hooks.setTimeOfDay?.(b.tod);
   };
 
@@ -118,7 +118,7 @@ export function installBookmarks(
 
   /** ground/water floor at (x,z) with clearance — the per-frame lift target. */
   const floorAt = (x: number, z: number): number =>
-    Math.max(hf.heightAtCpu(x, z) + FLY_GROUND_CLEAR, hf.waterYAtCpu(x, z) + WADE_CLEAR);
+    Math.max(field.heightAt(x, z) + FLY_GROUND_CLEAR, field.waterAt(x, z) + WADE_CLEAR);
 
   class Flythrough {
     private active = false;
@@ -140,7 +140,7 @@ export function installBookmarks(
       hooks.flyCamEnabled?.(!this.active);
       if (this.active && !this.curve) {
         this.curve = new CatmullRomCurve3(
-          TOUR.map((w) => new Vector3(w.x, poseY(hf, { ...w, tod: 0, name: '' } as Bookmark), w.z)),
+          TOUR.map((w) => new Vector3(w.x, poseY(field, { ...w, tod: 0, name: '' } as Bookmark), w.z)),
           false,
           'centripetal',
           0.5,
@@ -204,7 +204,7 @@ export function installBookmarks(
   if (params.shot !== null && params.cam === null) {
     const b = BOOKMARKS[params.shot - 1];
     if (b) {
-      hooks.initialPose = { p: [b.x, poseY(hf, b), b.z], yaw: b.yaw, pitch: b.pitch };
+      hooks.initialPose = { p: [b.x, poseY(field, b), b.z], yaw: b.yaw, pitch: b.pitch };
     }
   }
 }

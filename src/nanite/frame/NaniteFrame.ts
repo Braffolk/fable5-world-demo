@@ -183,6 +183,10 @@ export function buildNaniteFrame(
   // buildNaniteCull. Clamped ≥ 1. Going too LOW under-traverses = holes, so we never go
   // below the measured value; the margin only ever ADDS passes.
   const measuredHierDepth = Math.max(1, registry.maxDagDepth + 2);
+  // A14: the pass count is now BAKED into the cull pipelines — any later attach
+  // growing the DAG depth past it throws at the attach instead of silently
+  // never emitting its deep leaves.
+  registry.freezeHierDepth(measuredHierDepth);
   const cull = buildNaniteCull(
     registry.gpu,
     registry.instanceCount,

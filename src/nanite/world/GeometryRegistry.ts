@@ -870,6 +870,10 @@ export class GeometryRegistry {
    *  leaf (fewer => HOLES). Folded up as DAGs attach; exposed via maxDagDepth. Starts 1
    *  (a flat / no-DAG world traverses in one pass). */
   private _maxDagDepth = 1;
+  /** A14 (SPEC-STREAMING-WORLD §9b): the BFS pass count the cull FROZE at frame
+   *  build. Once set, any attach that grows the depth PAST it would silently
+   *  never emit its deep leaves (holes) — so growth past the freeze throws. */
+  private frozenHierDepth: number | null = null;
   /** voxel-foliage: flat brick records (BRICK_WORDS u32 each) — see RegistryGpu.voxelBricks */
   private voxelBricksArr!: Uint32Array;
 
@@ -935,6 +939,25 @@ export class GeometryRegistry {
    *  uniform grid depth). >= 1 always. */
   get maxDagDepth(): number {
     return this._maxDagDepth;
+  }
+  /** A14: the frame build calls this with the hierDepth it bakes into the cull
+   *  pipelines; later attaches assert against it (throw-loud, never silent holes). */
+  freezeHierDepth(depth: number): void {
+    if (this._maxDagDepth > depth) {
+      throw new Error(`GeometryRegistry: freezing hierDepth ${depth} below the attached max DAG depth ${this._maxDagDepth}`);
+    }
+    this.frozenHierDepth = depth;
+  }
+  /** fold an attached DAG's chain depth into the global max — throws if a frozen
+   *  cull pass count could no longer emit every leaf (A14) */
+  private growDagDepth(depth: number): void {
+    if (depth > this._maxDagDepth) this._maxDagDepth = depth;
+    if (this.frozenHierDepth !== null && this._maxDagDepth > this.frozenHierDepth) {
+      throw new Error(
+        `GeometryRegistry: attached DAG depth ${this._maxDagDepth} exceeds the frozen cull hierDepth ` +
+          `${this.frozenHierDepth} — its deep leaves would silently never render (rebuild the frame or raise the margin)`,
+      );
+    }
   }
   get triCount(): number {
     return this.triCursor;
@@ -1221,7 +1244,7 @@ export class GeometryRegistry {
         childIndices: Uint32Array.from(lcIdx),
         rootIndices: Uint32Array.from(lcRoots),
       };
-      this._maxDagDepth = Math.max(this._maxDagDepth, maxChainDepth(localHier));
+      this.growDagDepth(maxChainDepth(localHier));
     }
 
     // upload: copyEntry (clusters + mesh record) at flush; the DAG/dagLinks ranges are
@@ -1577,7 +1600,7 @@ export class GeometryRegistry {
     const hier = buildDagHierarchy(dag);
     // item 6: fold this DAG's deepest anchor chain into the global max (sets the
     // minimum BFS pass count the cull needs to emit every leaf — under = holes).
-    this._maxDagDepth = Math.max(this._maxDagDepth, maxChainDepth(hier));
+    this.growDagDepth(maxChainDepth(hier));
     const linkBase = this.dagLinksCursor;
     const rootCount = hier.rootIndices.length;
     const childTotal = hier.childIndices.length;
@@ -2016,8 +2039,10 @@ export class GeometryRegistry {
     // rootCount → kSeedRoots + the BFS traverse render terrain through the SAME hier cull
     // as vegetation (no brute path, no hybrid).
     const hier = buildHeightGridHierarchy(clusters);
-    // item 6: the terrain anchor-chain depth also counts toward the global BFS pass floor.
-    this._maxDagDepth = Math.max(this._maxDagDepth, maxChainDepth(hier));
+    // item 6 + A14: the terrain anchor-chain depth also counts toward the global BFS
+    // pass floor — tile attaches happen AFTER the frame froze hierDepth, so this is
+    // the throw-loud site the silent _maxDagDepth growth used to hide behind.
+    this.growDagDepth(maxChainDepth(hier));
     const dlBase = this.tilePoolBase.dagLinks + slot * pool.dagLinksCap;
     const rootCount = hier.rootIndices.length;
     const childTotal = hier.childIndices.length;

@@ -12,11 +12,15 @@
  *             xw/zw — the original absolute f32 words pass through byte-exact).
  *  - planes:  biome classification (classId/vegDensity/snow/rockExposure) from the
  *             boot biomeTex, read back lazily on first fetch (S3a's consumer; costs
- *             nothing until asked).
+ *             nothing until asked). Since S3a also: 'fields' surface planes
+ *             (moisture/flowStrength/snow/rockExposure at sim res, hydrology flow
+ *             buffers read back lazily) and 'water' (waterY f32 windows of the
+ *             existing cpuWaterY mirror) — the TerrainField plane fills.
  *
- * The scene's not-yet-ported scatter/heightfield consumers (canopy map, GI, water,
- * counters — S3a/S4 ports) read `.heightfield`/`.scatter` directly; placement flows
- * ONLY through fetch('records') → ChunkContent.
+ * The scene's not-yet-ported scatter/heightfield consumers (canopy map, GI,
+ * counters — S4 ports) read `.heightfield`/`.scatter` directly; placement flows
+ * ONLY through fetch('records') → ChunkContent; terrain planes flow ONLY through
+ * fetch('height'|'biome'|'fields'|'water') → TerrainField.
  */
 import type { Renderer } from 'three/webgpu';
 import { Fn, If, Return, instanceIndex, instancedArray, textureLoad, uint, uvec2 } from 'three/tsl';
@@ -24,6 +28,7 @@ import type { WorldSeed } from '../../core/Seed';
 import { readBuffer } from '../../nanite/Tsl';
 import type { NV4, NU } from '../../gpu/TSLTypes';
 import { runScatter, type ScatterLayer, type ScatterResult } from '../../gpu/passes/Scatter';
+import type { FloatBuffer } from '../../gpu/passes/HeightSynthesis';
 import { Heightfield } from '../Heightfield';
 import { WORLD_HALF, WORLD_SIZE } from '../WorldConst';
 import { packChunkKey } from './Lac1';
@@ -35,6 +40,14 @@ const LOD_STEP = 4;
 /** height lods served: the world sits inside ONE lod1 chunk already, so further
  *  rungs would be pure clamp-padding (S3a's TerrainField decides if it wants them). */
 const HEIGHT_LODS = [0, 1];
+/** biome/fields lods: lod1 lets the TerrainField's 1024² u8 planes cover the whole
+ *  4096 m world (lod0 = the native-texel near window). */
+const BIOME_LODS = [0, 1];
+const FIELDS_LODS = [0, 1];
+/** waterY is already windowed at sim res; one lod covers the world at plane res */
+const WATER_LODS = [0];
+const BIOME_PLANES = ['classId', 'vegDensity', 'snow', 'rockExposure'] as const;
+const FIELDS_PLANES = ['moisture', 'flowStrength', 'snow', 'rockExposure'] as const;
 
 const RECORD_LAYERS = ['trees', 'understory', 'extras', 'stones'] as const;
 type RecordLayer = (typeof RECORD_LAYERS)[number];
@@ -76,6 +89,9 @@ export class GeneratedWorldSource implements WorldSource {
   private scatterResult: ScatterResult | null = null;
   private readonly bins = new Map<RecordLayer, Map<number, RecordBin>>();
   private biomePlanes: Uint8Array[] | null = null;
+  /** lazy sim-res surface-fields planes (FIELDS_PLANES order) — hydrology flow
+   *  readback + biome snow/rock subsample, built on first fetch('fields') */
+  private fieldsPlanes: Uint8Array[] | null = null;
   /** ?s2gate=1: the raw pre-binning readback, retained for the byte-identity probe. */
   rawLayers: Partial<Record<RecordLayer, RawScatterLayer>> | null = null;
 
@@ -119,26 +135,24 @@ export class GeneratedWorldSource implements WorldSource {
 
     const bins = this.bins;
     const texel = WORLD_SIZE / hf.res;
+    const simTexel = WORLD_SIZE / hf.simRes;
     const chunkRes = Math.round(CHUNK_METERS / texel);
     const layers: WorldManifest['layers'] = {
       height: { enc: 1, lods: [...HEIGHT_LODS], chunkCount: 5, texelMeters: texel },
-      biome: {
-        enc: 2,
-        lods: [0],
-        chunkCount: 4,
-        texelMeters: texel,
-        planes: ['classId', 'vegDensity', 'snow', 'rockExposure'],
-      },
+      biome: { enc: 2, lods: [...BIOME_LODS], chunkCount: 5, texelMeters: texel, planes: BIOME_PLANES },
+      fields: { enc: 2, lods: [...FIELDS_LODS], chunkCount: 5, texelMeters: simTexel, planes: FIELDS_PLANES },
+      water: { enc: 1, lods: [...WATER_LODS], chunkCount: 4, texelMeters: simTexel },
     };
     for (const name of RECORD_LAYERS) {
       layers[name] = { enc: 3, lods: [0], chunkCount: bins.get(name)?.size ?? 0, columns: RECORD_COLUMNS };
     }
     const rasterRef = (layer: LayerName, key: ChunkKey): ChunkRef | null => {
-      const lods = layers[layer]?.lods ?? [];
-      if (!lods.includes(key.lod)) return null;
+      const meta = layers[layer];
+      if (!meta?.lods.includes(key.lod) || !meta.texelMeters) return null;
       const side = key.lod === 0 ? 2 : 1; // 2×2 lod0 chunks; ONE chunk per coarser lod
       if (key.cx < 0 || key.cz < 0 || key.cx >= side || key.cz >= side) return null;
-      return { ...key, size: (chunkRes + 1) ** 2 * 4, hash64: 0n };
+      const resW = Math.round(CHUNK_METERS / meta.texelMeters) + 1;
+      return { ...key, size: resW * resW * (meta.enc === 2 ? meta.planes?.length ?? 1 : 4), hash64: 0n };
     };
     return {
       grid: {
@@ -186,14 +200,26 @@ export class GeneratedWorldSource implements WorldSource {
       return { kind: 'records', count, cols: { x, z, species, scale, variant, y, yaw, leanX, leanZ, xw, zw } };
     }
     if (layer === 'height') {
-      if (!HEIGHT_LODS.includes(key.lod)) return null;
-      const heights = this.heightWindow(key);
-      return heights ? { kind: 'height', res: Math.round(CHUNK_METERS / (WORLD_SIZE / hf.res)) + 1, heights } : null;
+      if (!this.rasterKeyValid(key, HEIGHT_LODS)) return null;
+      const src = hf.cpuHeights;
+      if (!src) throw new Error('GeneratedWorldSource: cpuHeights missing');
+      return { kind: 'height', ...this.rasterWindowF32(src, hf.res, key) };
+    }
+    if (layer === 'water') {
+      if (!this.rasterKeyValid(key, WATER_LODS)) return null;
+      const src = hf.cpuWaterY;
+      if (!src) throw new Error('GeneratedWorldSource: cpuWaterY missing');
+      return { kind: 'height', ...this.rasterWindowF32(src, hf.simRes, key) };
     }
     if (layer === 'biome') {
-      if (key.lod !== 0 || key.cx < 0 || key.cz < 0 || key.cx > 1 || key.cz > 1) return null;
-      const planes = await this.biomeWindow(key);
-      return { kind: 'planes', res: Math.round(CHUNK_METERS / (WORLD_SIZE / hf.res)) + 1, planes };
+      if (!this.rasterKeyValid(key, BIOME_LODS)) return null;
+      const planes = this.biomePlanes ?? (this.biomePlanes = await this.readBiomePlanes());
+      return { kind: 'planes', ...this.planesWindow(planes, hf.res, key) };
+    }
+    if (layer === 'fields') {
+      if (!this.rasterKeyValid(key, FIELDS_LODS)) return null;
+      const planes = this.fieldsPlanes ?? (this.fieldsPlanes = await this.readFieldsPlanes());
+      return { kind: 'planes', ...this.planesWindow(planes, hf.simRes, key) };
     }
     return null;
   }
@@ -201,21 +227,21 @@ export class GeneratedWorldSource implements WorldSource {
   close(): void {
     this.bins.clear();
     this.biomePlanes = null;
+    this.fieldsPlanes = null;
     this.rawLayers = null;
   }
 
-  /** (chunkRes+1)² clamp-extended window of cpuHeights; coarse lods subsample the
-   *  native lattice at stride lodStep^k with a centered offset (A11: the generated
-   *  wire window is defined on the native texel-centered lattice). */
-  private heightWindow(key: ChunkKey): Float32Array | null {
-    const hf = this.heightfield;
-    const src = hf.cpuHeights;
-    if (!src) throw new Error('GeneratedWorldSource: cpuHeights missing');
-    const res = hf.res;
-    const texel = WORLD_SIZE / res;
-    const chunkRes = Math.round(CHUNK_METERS / texel);
+  private rasterKeyValid(key: ChunkKey, lods: readonly number[]): boolean {
     const side = key.lod === 0 ? 2 : 1;
-    if (key.cx < 0 || key.cz < 0 || key.cx >= side || key.cz >= side) return null;
+    return lods.includes(key.lod) && key.cx >= 0 && key.cz >= 0 && key.cx < side && key.cz < side;
+  }
+
+  /** (chunkRes+1)² clamp-extended window of a res×res f32 grid; coarse lods
+   *  subsample the native lattice at stride lodStep^k with a centered offset
+   *  (A11: the generated wire window is defined on the native texel-centered
+   *  lattice). chunkRes follows the grid's texel (height res vs sim res). */
+  private rasterWindowF32(src: Float32Array, res: number, key: ChunkKey): { res: number; heights: Float32Array } {
+    const chunkRes = Math.round(CHUNK_METERS / (WORLD_SIZE / res));
     const stride = LOD_STEP ** key.lod;
     const off = stride >> 1;
     const resW = chunkRes + 1;
@@ -229,25 +255,68 @@ export class GeneratedWorldSource implements WorldSource {
         out[j * resW + i] = src[row + Math.min(baseX + i * stride + off, res - 1)] as number;
       }
     }
-    return out;
+    return { res: resW, heights: out };
   }
 
-  private async biomeWindow(key: ChunkKey): Promise<Uint8Array[]> {
-    const planes = this.biomePlanes ?? (this.biomePlanes = await this.readBiomePlanes());
-    const hf = this.heightfield;
-    const res = hf.res;
+  /** same window/subsample over a u8 plane stack */
+  private planesWindow(planes: Uint8Array[], res: number, key: ChunkKey): { res: number; planes: Uint8Array[] } {
     const chunkRes = Math.round(CHUNK_METERS / (WORLD_SIZE / res));
+    const stride = LOD_STEP ** key.lod;
+    const off = stride >> 1;
     const resW = chunkRes + 1;
-    return planes.map((full) => {
-      const out = new Uint8Array(resW * resW);
+    const baseX = key.cx * chunkRes * stride;
+    const baseZ = key.cz * chunkRes * stride;
+    const out = planes.map((full) => {
+      const o = new Uint8Array(resW * resW);
       for (let j = 0; j < resW; j++) {
-        const sz = Math.min(key.cz * chunkRes + j, res - 1);
+        const sz = Math.min(baseZ + j * stride + off, res - 1);
+        const row = sz * res;
         for (let i = 0; i < resW; i++) {
-          out[j * resW + i] = full[sz * res + Math.min(key.cx * chunkRes + i, res - 1)] as number;
+          o[j * resW + i] = full[row + Math.min(baseX + i * stride + off, res - 1)] as number;
         }
       }
-      return out;
+      return o;
     });
+    return { res: resW, planes: out };
+  }
+
+  /** one-time sim-res surface-fields build (FIELDS_PLANES order): moisture +
+   *  flowStrength read back from the hydrology buffers, snow + rockExposure
+   *  subsampled from the full-res biome planes (offset-centered stride). */
+  private async readFieldsPlanes(): Promise<Uint8Array[]> {
+    const hf = this.heightfield;
+    const flow = hf.flow;
+    if (!flow) throw new Error('GeneratedWorldSource: hydrology missing for fields planes');
+    const res = hf.simRes;
+    const n = res * res;
+    const [moB, fsB] = await Promise.all([
+      readBuffer(this.renderer, attrOf(flow.moisture), 0, n * 4),
+      readBuffer(this.renderer, attrOf(flow.flowStrength), 0, n * 4),
+    ]);
+    const mo = new Float32Array(moB);
+    const fs = new Float32Array(fsB);
+    const biome = this.biomePlanes ?? (this.biomePlanes = await this.readBiomePlanes());
+    const snowFull = biome[2] as Uint8Array;
+    const rockFull = biome[3] as Uint8Array;
+    const stride = Math.round(hf.res / res);
+    const off = stride >> 1;
+    const q8 = (v: number): number => Math.round(Math.min(1, Math.max(0, v)) * 255);
+    const moisture = new Uint8Array(n);
+    const flowStrength = new Uint8Array(n);
+    const snow = new Uint8Array(n);
+    const rock = new Uint8Array(n);
+    for (let j = 0; j < res; j++) {
+      const bRow = Math.min(j * stride + off, hf.res - 1) * hf.res;
+      for (let i = 0; i < res; i++) {
+        const k = j * res + i;
+        moisture[k] = q8(mo[k] as number);
+        flowStrength[k] = q8(fs[k] as number);
+        const bi = bRow + Math.min(i * stride + off, hf.res - 1);
+        snow[k] = snowFull[bi] as number;
+        rock[k] = rockFull[bi] as number;
+      }
+    }
+    return [moisture, flowStrength, snow, rock];
   }
 
   /** one-time biomeTex → CPU readback (lazy: only a biome consumer pays for it).
@@ -293,7 +362,9 @@ export class GeneratedWorldSource implements WorldSource {
 
 // --- readback + binning ------------------------------------------------------------------
 
-function attrOf(node: ScatterLayer['bufA']): Parameters<typeof readBuffer>[1] {
+/** storage node → its backing attribute (scatter bufA/B and hydrology FloatBuffers
+ *  share the instancedArray shape) */
+function attrOf(node: ScatterLayer['bufA'] | FloatBuffer): Parameters<typeof readBuffer>[1] {
   return (node as unknown as { value: Parameters<typeof readBuffer>[1] }).value;
 }
 

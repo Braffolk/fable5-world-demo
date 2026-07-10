@@ -70,6 +70,7 @@ import { canopyAt } from '../gpu/passes/Scatter';
 import type { ProbeGI } from '../gpu/passes/ProbeGI';
 import type { NF, NI, NV2, NV3, NV4 } from '../gpu/TSLTypes';
 import type { Atmosphere } from '../sky/Atmosphere';
+import type { TerrainField } from '../nanite/world/TerrainField';
 import type { Heightfield } from '../world/Heightfield';
 import { WORLD_HALF } from '../world/WorldConst';
 
@@ -95,7 +96,12 @@ export interface WaterLevelHandles {
 }
 
 export function waterMaterial(
+  // hf carries ONLY the not-yet-windowed reads: waterY/waterYFar surface buffers,
+  // the hydrology flow field and the baked ripple noise (their TerrainField water
+  // plane migration is the S4/water-arc slice). Terrain HEIGHT reads live on the
+  // TerrainField planes since S3a.
   hf: Heightfield,
+  field: TerrainField,
   atm: Atmosphere,
   canopyTex: StorageTexture | null,
   gi: ProbeGI | null,
@@ -145,7 +151,7 @@ export function waterMaterial(
   // absorbs neighbourhood-min vs local-bed at the ~2 m sim texel; shoreline crosses
   // 0 exactly at the wet→dry bilinear edge so the opacity feather still finishes it.
   const wetGuard = new URLSearchParams(window.location.search).get('watermask') !== '0';
-  const bedH = lvl.far ? hf.sampleHeightNearest(p) : hf.sampleHeight(p);
+  const bedH = lvl.far ? field.fieldHeightFinestNearest(p) : field.fieldHeightFinest(p);
   const wet = positionWorld.y.greaterThan(bedH.sub(0.75));
   mat.maskNode = wetGuard ? insideInner.not().and(inWorld).and(wet) : insideInner.not().and(inWorld);
 
@@ -262,7 +268,7 @@ export function waterMaterial(
     for (const dRay of [9, 24, 65, 180]) {
       const q = positionWorld.xz.add(rdir.xz.mul(dRay));
       const rayY = positionWorld.y.add(rdir.y.mul(dRay));
-      let hQ = hf.sampleHeightNearest(q) as NF;
+      let hQ = field.fieldHeightFinestNearest(q);
       if (canopyTex) {
         hQ = hQ.add(canopyAt(canopyTex, q).mul(16)) as NF;
       }
