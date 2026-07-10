@@ -18,17 +18,15 @@ import {
   Vector3,
 } from 'three';
 import { MeshStandardNodeMaterial } from 'three/webgpu';
-import { float, mix, positionWorld, smoothstep, texture, uv, vec3 } from 'three/tsl';
-import type { NF, NV4 } from '../gpu/TSLTypes';
+import { float, mix, positionWorld, smoothstep, vec3 } from 'three/tsl';
+import type { NF } from '../gpu/TSLTypes';
 import { hash12 } from '../gpu/noise/NoiseTSL';
-import type { DataTexture } from 'three';
 import { bakeBarkTextures, type BarkTextures } from '../gpu/passes/BarkSynth';
 import { PostStack } from '../render/PostStack';
 import {
   barkTexturedMaterial,
   deadwoodMaterial,
   flowerMaterial,
-  foliageCardMaterial,
   foliageMaterial,
   mushroomMaterial,
   rockMaterial,
@@ -37,12 +35,10 @@ import {
 import { SunSky } from '../sky/SunSky';
 import { buildLog, buildStump, type DecayState } from '../vegetation/Deadfall';
 import { buildMushroom, buildVines } from '../vegetation/Dressing';
-import { captureFoliageAtlas } from '../vegetation/FoliageCards';
 import {
   barkChipGeometry,
   debrisMaterial,
   grassPatch,
-  litterMaterial,
   scatterInstances,
   twigGeometry,
 } from '../vegetation/GroundCover';
@@ -50,15 +46,8 @@ import { buildRock, type RockPreset } from '../vegetation/RockBuilder';
 import { TREE_SPECIES } from '../vegetation/Species';
 import { buildTree } from '../vegetation/TreeBuilder';
 import {
-  captureImpostor,
-  impostorPreviewMaterial,
-  type ImpostorPart,
-} from '../vegetation/Impostors';
-import {
-  buildFern,
   buildFlower,
   buildShrub,
-  FERN_CAPTURE,
   type FlowerKind,
   UNDERSTORY_SPECIES,
 } from '../vegetation/Understory';
@@ -157,17 +146,6 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
     return { x, z };
   };
 
-  // ---- foliage cluster atlases (captured once per species) -------------------
-  ctx.progress(0.08, 'gallery: capturing foliage atlases');
-  const atlases = new Map<string, DataTexture>();
-  for (const sp of [...TREE_SPECIES, ...UNDERSTORY_SPECIES, FERN_CAPTURE]) {
-    if (!sp.foliage) continue;
-    atlases.set(
-      sp.id,
-      await captureFoliageAtlas(engine.renderer, sp, seed.rng(`cards/${sp.id}`)),
-    );
-  }
-
   // ---- bark textures (synthesized per species layer) -------------------------
   ctx.progress(0.09, 'gallery: synthesizing bark');
   const barks = new Map<number, BarkTextures>();
@@ -177,21 +155,6 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
       sp.barkLayer,
       await bakeBarkTextures(engine.renderer, sp.barkLayer, seed.sub(`bark/${sp.barkLayer}`) % 977),
     );
-  }
-  if (q.get('view') === 'atlas') {
-    // raw atlas inspection row behind the trees
-    let ax = -30;
-    for (const tex of atlases.values()) {
-      const mat = new MeshStandardNodeMaterial();
-      const t = texture(tex, uv() as never) as unknown as NV4;
-      mat.colorNode = t.rgb.mul(t.rgb);
-      mat.opacityNode = t.w;
-      mat.alphaTest = 0.1;
-      const plane = new Mesh(new PlaneGeometry(10, 10), mat);
-      plane.position.set(ax, 6, -22);
-      engine.scene.add(plane);
-      ax += 12;
-    }
   }
 
   // ---- tree row: 6 species × 3 seeds ------------------------------------------
@@ -226,17 +189,10 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
       barkMesh.castShadow = true;
       barkMesh.receiveShadow = true;
       engine.scene.add(barkMesh);
-      const atlas = atlases.get(sp.id);
-      if (built.foliage && atlas && !noLeaves) {
-        const folMesh = new Mesh(
-          built.foliage,
-          foliageCardMaterial(atlas, { color: sp.foliageColor }),
-        );
-        folMesh.position.copy(barkMesh.position);
-        folMesh.castShadow = true;
-        folMesh.receiveShadow = true;
-        engine.scene.add(folMesh);
-      }
+      // TODO(missing-leaves, CRITICAL): this LOD tree-review row is now BARK-ONLY.
+      // It showed card foliage (deleted, S8); the live crown is the MESH leaf head
+      // (see the HERO row, foliageMode 'mesh'). Give this row a budgeted mesh crown
+      // to restore it as the species leaf-review surface.
       x += spacing;
     }
     x += groupGap;
@@ -298,7 +254,9 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
   }
   exhibit(48, RZ, 'Rock wall', 'stacked slabs');
 
-  // dressed cliff: leaning slab + dirt streaks + hanging vines + ledge ferns
+  // dressed cliff: leaning slab + dirt streaks + hanging vine STEMS
+  // TODO(missing-leaves, CRITICAL): vine leaves + ledge ferns were foliage cards
+  // (deleted, S8) — the vines hang bare and the ferns are gone. Rebuild as mesh.
   {
     const cliffRock = buildRock('cliffFace', seed.rng('cliff/0'), 6);
     rockTris += cliffRock.stats.tris;
@@ -316,29 +274,7 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
     vs.position.set(71.8, 7.6, RZ + 1.7);
     vs.castShadow = true;
     engine.scene.add(vs);
-    const hazelAtlas = atlases.get('bushHazel');
-    if (hazelAtlas) {
-      const vl = new Mesh(
-        vines.leaves,
-        foliageCardMaterial(hazelAtlas, { color: { r: 0.05, g: 0.12, b: 0.035, hueVar: 0.25 } }),
-      );
-      vl.position.copy(vs.position);
-      vl.castShadow = true;
-      engine.scene.add(vl);
-    }
-    const fernAtlas2 = atlases.get('fern');
-    if (fernAtlas2) {
-      for (let i = 0; i < 2; i++) {
-        const lf = new Mesh(
-          buildFern(seed.rng(`cliff/fern${i}`)),
-          foliageCardMaterial(fernAtlas2, { color: FERN_CAPTURE.foliageColor }),
-        );
-        lf.position.set(70.4 + i * 2.2, 1.5 + i * 1.3, RZ + 1.75 - i * 0.35);
-        lf.castShadow = true;
-        engine.scene.add(lf);
-      }
-    }
-    exhibit(72, RZ + 5, 'Dressed cliff', 'streaks+vines+ledge ferns', { pedestal: false });
+    exhibit(72, RZ + 5, 'Dressed cliff', 'streaks + bare vine stems', { pedestal: false });
   }
   engine.stats.counters['rock.tris'] = rockTris;
 
@@ -390,41 +326,12 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
       ch.position.set(-26, 0.015, GZ);
       engine.scene.add(ch);
     }
-    // leaf litter: quads with the beech atlas, browned
-    const beechAtlas = atlases.get('beech');
-    if (beechAtlas) {
-      const litterGeo = new PlaneGeometry(0.16, 0.16);
-      litterGeo.rotateX(-Math.PI / 2);
-      // random tile uvs per instance need per-instance offset — bake 4 variants
-      for (let v = 0; v < 4; v++) {
-        const lg = litterGeo.clone();
-        const uvA = lg.getAttribute('uv');
-        for (let i = 0; i < uvA.count; i++) {
-          uvA.setXY(i, uvA.getX(i) * 0.5 + (v % 2) * 0.5, uvA.getY(i) * 0.5 + Math.floor(v / 2) * 0.5);
-        }
-        const li = new InstancedMesh(lg, litterMaterial(beechAtlas), 90);
-        scatterInstances(li, seed.rng(`gc/lit${v}`), sq, 0.05, [0.7, 1.8], true);
-        li.position.set(-26, 0.03, GZ);
-        engine.scene.add(li);
-      }
-    }
-    exhibit(-26, GZ + 2, 'Ground square 2.4 m', 'cobbles+twigs+chips+litter', { pedestal: false });
+    // TODO(missing-leaves): leaf litter (beech foliage-atlas quads) removed with
+    // the card pipeline (S8) — the atlas capture it sampled is gone.
+    exhibit(-26, GZ + 2, 'Ground square 2.4 m', 'cobbles+twigs+chips', { pedestal: false });
 
-    // ferns
-    const fernAtlas = atlases.get('fern');
-    if (fernAtlas) {
-      for (let i = 0; i < 3; i++) {
-        const fern = new Mesh(
-          buildFern(seed.rng(`fern/${i}`)),
-          foliageCardMaterial(fernAtlas, { color: FERN_CAPTURE.foliageColor }),
-        );
-        fern.position.set(-12 + i * 3, 0.02, GZ + (i % 2));
-        fern.castShadow = true;
-        fern.receiveShadow = true;
-        engine.scene.add(fern);
-      }
-      exhibit(-9, GZ + 2.5, 'Ferns ×3', 'frond rosettes', { pedestal: false });
-    }
+    // TODO(missing-leaves, CRITICAL): fern row removed — ferns were entirely
+    // foliage cards (buildFern deleted, S8). Rebuild as real mesh fronds.
 
     // flower patches
     const flowerKinds: { kind: FlowerKind; color: { r: number; g: number; b: number }; n: number; label: string }[] = [
@@ -455,15 +362,9 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
       bm.castShadow = true;
       bm.receiveShadow = true;
       engine.scene.add(bm);
-      const at = atlases.get(sp.id);
-      if (shrub.foliage && at) {
-        const fm = new Mesh(shrub.foliage, foliageCardMaterial(at, { color: sp.foliageColor }));
-        fm.position.copy(bm.position);
-        fm.castShadow = true;
-        fm.receiveShadow = true;
-        engine.scene.add(fm);
-      }
-      exhibit(sx, GZ + 2.5, sp.label, 'multi-stem', { pedestal: false });
+      // TODO(missing-leaves, CRITICAL): shrubs are BARK-ONLY — foliage was card
+      // geometry (deleted, S8). Needs a real mesh leaf crown per stem.
+      exhibit(sx, GZ + 2.5, sp.label, 'multi-stem (bark only)', { pedestal: false });
       sx += 9;
     }
   }
@@ -514,21 +415,13 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
     let hx = -14;
     for (const sp of heroSpecs) {
       if (!sp) continue;
-      const built = buildTree(sp, seed.rng(`hero/${sp.id}`), { foliageMode: 'hybrid', junctions: junctionsOn });
+      const built = buildTree(sp, seed.rng(`hero/${sp.id}`), { foliageMode: 'mesh', junctions: junctionsOn });
       const at = exhibit(hx, HZ, `HERO ${sp.label}`, `${(built.stats.tris / 1000).toFixed(0)}k tris (mesh foliage)`);
       const bm = new Mesh(built.bark, barkTexturedMaterial(barks.get(sp.barkLayer) as BarkTextures));
       bm.position.set(at.x, 0.42, at.z);
       bm.castShadow = true;
       bm.receiveShadow = true;
       engine.scene.add(bm);
-      const heroAtlas = atlases.get(sp.id);
-      if (built.foliage && heroAtlas && !noLeaves) {
-        const fm = new Mesh(built.foliage, foliageCardMaterial(heroAtlas, { color: sp.foliageColor }));
-        fm.position.copy(bm.position);
-        fm.castShadow = true;
-        fm.receiveShadow = true;
-        engine.scene.add(fm);
-      }
       if (built.foliageMesh && !noLeaves) {
         const fm2 = new Mesh(built.foliageMesh, foliageMaterial({ color: sp.foliageColor }));
         fm2.position.copy(bm.position);
@@ -539,7 +432,9 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
       engine.stats.counters[`hero.${sp.id}`] = built.stats.tris;
       hx += 28;
     }
-    // tree-base dressing: mushroom cluster + litter ring at the beech hero
+    // tree-base dressing: mushroom cluster at the beech hero
+    // TODO(missing-leaves): the beech-atlas litter ring was removed with the card
+    // pipeline (S8) — it sampled the deleted foliage atlas capture.
     const mrng = seed.rng('fungi');
     for (let i = 0; i < 6; i++) {
       const mush = new Mesh(buildMushroom(mrng.fork(String(i)), 'cap'), mushroomMaterial());
@@ -548,50 +443,6 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
       mush.position.set(14 + Math.cos(a2) * rr, 0.42, HZ + Math.sin(a2) * rr);
       mush.castShadow = true;
       engine.scene.add(mush);
-    }
-    const beechAtlas2 = atlases.get('beech');
-    if (beechAtlas2) {
-      const lg = new PlaneGeometry(0.16, 0.16);
-      lg.rotateX(-Math.PI / 2);
-      const li = new InstancedMesh(lg, litterMaterial(beechAtlas2), 160);
-      scatterInstances(li, seed.rng('hero/litter'), 5, 0.04, [0.8, 2.0], true);
-      li.position.set(14, 0.44, HZ);
-      engine.scene.add(li);
-    }
-  }
-
-  // ---- impostor capture demo (8x8 octahedral, albedo+normal+depth) ------------
-  ctx.progress(0.97, 'gallery: capturing impostors');
-  await new Promise((r) => setTimeout(r, 0));
-  {
-    const sp = TREE_SPECIES[0];
-    const atlas0 = sp ? atlases.get(sp.id) : undefined;
-    if (sp && atlas0) {
-      const built = buildTree(sp, seed.rng(`tree/${sp.id}/0`));
-      const parts: ImpostorPart[] = [
-        { geometry: built.bark, kind: 'bark', barkTex: barks.get(sp.barkLayer) as BarkTextures },
-      ];
-      if (built.foliage) parts.push({ geometry: built.foliage, kind: 'cards', atlas: atlas0 });
-      const imp = await captureImpostor(engine.renderer, parts, {
-        centerY: built.stats.height * 0.5,
-        radius: built.stats.height * 0.62,
-      });
-      // preview cards: three captured views beside the real tree
-      // side-on tiles (grid center is the zenith view in hemi-oct mapping)
-      const views = [
-        { gx: 7, gy: 4 },
-        { gx: 4, gy: 7 },
-        { gx: 6, gy: 6 },
-      ];
-      for (let i = 0; i < views.length; i++) {
-        const card = new Mesh(
-          new PlaneGeometry(imp.radius * 2, imp.radius * 2),
-          impostorPreviewMaterial(imp, views[i] as { gx: number; gy: number }),
-        );
-        card.position.set(-150 - i * 0.01, imp.centerY + 0.42, ROW_Z.trees + i * 0.01);
-        engine.scene.add(card);
-      }
-      exhibit(-150, ROW_Z.trees, 'Impostor preview', '8×8 oct capture', { pedestal: false });
     }
   }
 

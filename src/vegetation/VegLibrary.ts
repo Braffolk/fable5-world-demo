@@ -11,7 +11,7 @@
  * GI, and dither fades on top.
  */
 
-import type { BufferGeometry, DataTexture } from "three";
+import type { BufferGeometry } from "three";
 import { yieldIfDue } from "../debug/BootTrace";
 import type { MeshStandardNodeMaterial, Renderer } from "three/webgpu";
 import type { WorldSeed } from "../core/Seed";
@@ -27,21 +27,17 @@ import {
   barkTexturedMaterial,
   deadwoodMaterial,
   flowerMaterial,
-  foliageCardMaterial,
   foliageMaterial,
   rockMaterial,
 } from "../render/VegMaterials";
 import { buildLog, buildStump, type DecayState } from "./Deadfall";
-import { captureFoliageAtlas } from "./FoliageCards";
 import { twigGeometry } from "./GroundCover";
 import { buildRock } from "./RockBuilder";
 import { TREE_SPECIES } from "./Species";
 import { buildTree, type CrownLodLevel, type CrownLodRung, type HeroDiet } from "./TreeBuilder";
 import {
-  buildFern,
   buildFlower,
   buildShrub,
-  FERN_CAPTURE,
   UNDERSTORY_SPECIES,
   type FlowerKind,
 } from "./Understory";
@@ -61,7 +57,7 @@ export interface VegPool {
    *  threaded to the nanite resolve as the texture-array slice (matParam).
    *  Undefined for rock/leaf pools (no bark texture). */
   barkLayer?: number;
-  /** hero ring (trees only): full bark + cards + real mesh leaves, ≤26 m */
+  /** hero ring (trees only): full bark + real mesh leaves, ≤26 m */
   r0?: PoolPart[] | null;
   r1: PoolPart[] | null;
   r2: PoolPart[] | null;
@@ -174,9 +170,7 @@ export const CROWN_LOD_SCHEDULE = {
 } as const;
 
 export const HERO_DIETS: Record<string, HeroDiet> = {
-  // cards stay UNTHINNED at hero range: thinning enlarges the survivors
-  // (sqrt-coverage rule) and a 1.65×-size card 4 m away is a giant flat
-  // sheet — full-count original-size cards + mesh leaves is the gallery look
+  // per-species real-leaf anchor budget + bark radial-seg multiplier for the hero ring.
   spruce: { meshAnchorTarget: 850, barkK: 0.8 },
   pine: { meshAnchorTarget: 350, barkK: 0.8 },
   beech: { meshAnchorTarget: 2200, barkK: 0.5 },
@@ -191,7 +185,6 @@ export interface VegLib {
   clsHeight: number[];
   clsRadius: number[];
   clsMaxDist: number[];
-  atlases: Map<string, DataTexture>;
   barks: Map<number, BarkTextures>;
   /** bark texture-array (slice == BARK_TABLE layer) for the nanite resolve */
   barkArray: BarkArrayTextures;
@@ -237,8 +230,7 @@ export async function buildVegLibrary(
   seed: WorldSeed,
   progress: (p: number, msg: string) => void = () => {},
   /** N9-C0: per-crown real-leaf anchor budget for the nanite leaf head (`?naniteleafdensity=N`).
-   *  The card-era hero leaned on all-anchor cards for fill, so the mesh crown was a sparse
-   *  detail layer (~850); the nanite path has NO cards (D-N3), so it must carry the crown.
+   *  The nanite path has NO cards (D-N3), so the mesh crown must carry the whole canopy.
    *  Full density (all anchors) is ~827 MB / the D-N41 cluster wall — the aggregate (C2) is the
    *  real fix; this caps it to a stable hero density. Default 2500; higher = fuller + heavier. */
   opts?: {
@@ -249,15 +241,6 @@ export async function buildVegLibrary(
   // — the density the user signed off on for spruce + pine; ?naniteleafdensity=N dials it.
   const leafAnchorTarget = opts?.leafAnchorTarget ?? 4000;
   // ---- shared captures -------------------------------------------------------
-  progress(0, "veg: capturing foliage atlases");
-  const atlases = new Map<string, DataTexture>();
-  for (const sp of [...TREE_SPECIES, ...UNDERSTORY_SPECIES, FERN_CAPTURE]) {
-    if (!sp.foliage || atlases.has(sp.id)) continue;
-    atlases.set(
-      sp.id,
-      await captureFoliageAtlas(renderer, sp, seed.rng(`cards/${sp.id}`)),
-    );
-  }
   progress(0.2, "veg: baking bark textures");
   const barks = new Map<number, BarkTextures>();
   const layers = new Set<number>([
@@ -292,7 +275,7 @@ export async function buildVegLibrary(
     clsRadius[cls] = Math.max(clsRadius[cls] ?? 1, r);
   };
 
-  // ---- trees: 6 species × 4 variants × (R1 cards, R2 branch-cards) ----------
+  // ---- trees: 6 species × 4 variants × (R0 hero, R1, R2 LOD rings) ----------
   progress(0.3, "veg: growing tree variant pools");
   const treeParts = (
     sp: SpeciesParams,
@@ -306,15 +289,6 @@ export async function buildVegLibrary(
         castShadow: true,
       },
     ];
-    const atlas = atlases.get(sp.id);
-    if (t.foliage && atlas) {
-      parts.push({
-        geo: t.foliage,
-        tris: t.foliage.index ? t.foliage.index.count / 3 : 0,
-        make: () => foliageCardMaterial(atlas, { color: sp.foliageColor }),
-        castShadow: true,
-      });
-    }
     return parts;
   };
 
@@ -334,22 +308,16 @@ export async function buildVegLibrary(
       await yieldIfDue();
       const label = `veg/${sp.id}/${v}`;
       const inst = variantInstance(seed, sp.id, v);
-      // hero ring: full tube hierarchy + thinned cards + REAL mesh leaves.
-      // Cards stay in the hero so the R0↔R1 swap only adds leaf geometry —
-      // the painted silhouette never changes (no pop).
+      // hero ring: full tube hierarchy + REAL mesh leaves (the crown the nanite
+      // leaf head renders as the WHOLE canopy — no cards in the SW raster, D-N3).
       const t0 = buildTree(sp, seed.rng(label), {
         lod: 0,
         inst,
         junctions: junctionsOn,
-        foliageMode: "hybrid",
-        // N9-C0: the nanite leaf head renders foliageMesh as the WHOLE crown — there
-        // are NO cards in the SW raster (alpha-test, D-N3). The card-era
-        // meshAnchorTarget (a sparse detail layer ON TOP of all-anchor cards) read as
-        // a near-bare tree through nanite, so build the real needle/leaf crown at
-        // FULL anchor density to match the old card coverage. (cardTarget still shapes
-        // the card foliage build; only the mesh anchors densify.)
+        foliageMode: "mesh",
+        // build the real needle/leaf crown at FULL anchor density (the canopy fill).
         hero: {
-          ...(HERO_DIETS[sp.id] ?? { cardTarget: 1500 }),
+          ...(HERO_DIETS[sp.id] ?? {}),
           meshAnchorTarget: leafAnchorTarget,
         },
         // crown-LOD Phase 2: the ladder is NOT built here — regenerating 4 pruned
@@ -366,8 +334,7 @@ export async function buildVegLibrary(
           geo: t0.foliageMesh,
           tris: t0.foliageMesh.index ? t0.foliageMesh.index.count / 3 : 0,
           make: () => foliageMaterial({ color: sp.foliageColor }),
-          // cards already cast equivalent crown coverage — mesh-leaf shadow
-          // casting would double the caster load for no visible gain
+          // mesh-leaf shadow casting would ~double the caster load for little gain
           castShadow: false,
         });
       }
@@ -403,9 +370,9 @@ export async function buildVegLibrary(
                   lod: 0,
                   inst: instC,
                   junctions: junctionsOn,
-                  foliageMode: "hybrid",
+                  foliageMode: "mesh",
                   hero: {
-                    ...(HERO_DIETS[spC.id] ?? { cardTarget: 1500 }),
+                    ...(HERO_DIETS[spC.id] ?? {}),
                     meshAnchorTarget: leafAnchorTarget,
                   },
                   crownLodLevels: crownLodScheduleFor(spC),
@@ -433,7 +400,10 @@ export async function buildVegLibrary(
       await yieldIfDue();
       const rng = seed.rng(`veg/${sp.id}/${v}`);
       const shrub = buildShrub(sp, rng);
-      const atlas = atlases.get(sp.id);
+      // TODO(missing-leaves, CRITICAL): shrubs (BushHazel/BushPink/Juniper) render
+      // as BARE bark stems — their only foliage was the deferred card layer, now
+      // deleted with the card pipeline (S8). They need a real MESH leaf crown
+      // (LeafMesh, like the tree leaf heads) before they read as live plants.
       const parts: PoolPart[] = [
         {
           geo: shrub.bark,
@@ -442,14 +412,6 @@ export async function buildVegLibrary(
           castShadow: true,
         },
       ];
-      if (shrub.foliage && atlas) {
-        parts.push({
-          geo: shrub.foliage,
-          tris: shrub.foliage.index ? shrub.foliage.index.count / 3 : 0,
-          make: () => foliageCardMaterial(atlas, { color: sp.foliageColor }),
-          castShadow: true,
-        });
-      }
       const b = bounds(parts.map((p) => p.geo));
       trackCls(cls, b.height, b.radius);
       pools.push({
@@ -466,38 +428,11 @@ export async function buildVegLibrary(
     }
     clsMaxDist[cls] = 170;
   }
-  // ferns
-  const fernAtlas = atlases.get("fern");
-  for (let v = 0; v < 4; v++) {
-    await yieldIfDue();
-    const geo = buildFern(seed.rng(`veg/fern/${v}`));
-    const tris = geo.index ? geo.index.count / 3 : 0;
-    const b = bounds([geo]);
-    trackCls(VegClass.Fern, b.height, b.radius);
-    pools.push({
-      cls: VegClass.Fern,
-      variant: v,
-      r1: fernAtlas
-        ? [
-            {
-              geo,
-              tris,
-              make: () =>
-                foliageCardMaterial(fernAtlas, {
-                  color: FERN_CAPTURE.foliageColor,
-                }),
-              castShadow: false,
-            },
-          ]
-        : null,
-      r2: null,
-      trisR1: tris,
-      trisR2: 0,
-      height: b.height,
-      radius: b.radius,
-    });
-  }
-  clsMaxDist[VegClass.Fern] = 140;
+  // TODO(missing-leaves, CRITICAL): ferns (VegClass.Fern) were ENTIRELY card
+  // geometry (buildFern → buildFoliageCards) and are now UNBUILDABLE — the fern
+  // pool + buildFern were deleted with the card pipeline (S8). Ferns are absent
+  // from the world until rebuilt as real MESH fronds (LeafMesh needle-spray).
+  // Note: they were already invisible in the shipped world (card class deferred).
   // flowers
   const flowerKinds: { cls: number; kind: FlowerKind }[] = [
     { cls: VegClass.FlowerUmbel, kind: "umbel" },
@@ -769,7 +704,6 @@ export async function buildVegLibrary(
     clsHeight,
     clsRadius,
     clsMaxDist,
-    atlases,
     barks,
     barkArray,
   };

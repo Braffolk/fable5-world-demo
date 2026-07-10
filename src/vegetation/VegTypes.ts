@@ -70,15 +70,6 @@ interface FoliageParams {
   normalBend: number;
   /** leaves/sprays alternate two-sided along the twig (vs spiral) */
   planarLeaves?: boolean;
-  /** capture-tile style override: 'frond' = single arching pinnate frond */
-  captureStyle?: 'frond';
-  /**
-   * cluster-card placement (default render path): captured twig atlas on
-   * big alpha-tested quads. 'lying' = bough-plane plates (conifer/beech),
-   * 'cross' = two perpendicular quads (volumetric broadleaf clusters).
-   * sizeK scales card size relative to anchor scale.
-   */
-  card: { mode: 'lying' | 'cross'; sizeK: number };
   /** species leaf geometry */
   leaf: LeafShapeParams;
 }

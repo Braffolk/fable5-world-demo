@@ -17,11 +17,10 @@ import {
   InstancedMesh,
   Matrix4,
   Quaternion,
-  type Texture,
   Vector3,
 } from 'three';
 import { MeshStandardNodeMaterial } from 'three/webgpu';
-import { attribute, float, mix, smoothstep, texture, uv, vec3 } from 'three/tsl';
+import { attribute, mix, smoothstep, uv, vec3 } from 'three/tsl';
 import type { Rng } from '../core/Seed';
 import type { NF, NV3, NV4 } from '../gpu/TSLTypes';
 import { applyCaustics } from '../render/Caustics';
@@ -271,28 +270,6 @@ export function debrisMaterial(kind: 'twig' | 'chip'): MeshStandardNodeMaterial 
   mat.colorNode = base.mul(d.x.mul(0.2).add(1)).mul(d.w);
   applyCaustics(mat); // twigs settle in streambeds
   mat.roughness = 0.95;
-  mat.metalness = 0;
-  mat.side = DoubleSide;
-  return mat;
-}
-
-/** dry leaf-litter card material: reuses a foliage atlas, browned */
-export function litterMaterial(atlas: Texture): MeshStandardNodeMaterial {
-  const mat = new MeshStandardNodeMaterial();
-  mat.name = 'vegLitter';
-  const t = texture(atlas, uv() as never) as unknown as NV4;
-  const albedo = t.rgb.mul(t.rgb);
-  // shift green leaf clusters toward dry browns
-  const browned = mix(
-    albedo.mul(vec3(1.7, 1.0, 0.42)).add(vec3(0.012, 0.006, 0.002)),
-    vec3(0.11, 0.072, 0.034),
-    float(0.5),
-  );
-  mat.colorNode = browned;
-  applyCaustics(mat); // drowned litter in stream margins
-  mat.opacityNode = t.w;
-  mat.alphaTest = 0.32;
-  mat.roughness = 0.92;
   mat.metalness = 0;
   mat.side = DoubleSide;
   return mat;
