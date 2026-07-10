@@ -318,6 +318,25 @@ PATH; excision checklist per slice; one commit per slice.
 - **S11** hardening: prefetch, rebase test (staggered shadows), budget audit, cold/warm
   fly p95 proof + time-to-detail budget.
 
+## 9a. S1 FORMAT DISCOVERIES (verified against real bytes; binding for all consumers)
+
+- **Water dry texels decode to NaN** in the kind:'height' payload (q=0 = dry; NaN keeps
+  dry distinguishable from a real surface at qoffset). Consumers must NaN-check.
+- **Height nodata**: cooker encodes NaN source texels as q=0 → decodes to qoffset
+  (= floor(min−1); the country LOD4 chunk bottoms at exactly −11 m Baltic). Do NOT read
+  those texels as bathymetry.
+- **Header qscale does double duty and is f32**: enc1 dequant step AND enc3 x/z record
+  dequant step (= footprint/65535). Expectation math must Math.fround(qscale) first.
+- **CRC is over the COMPRESSED payload** (zlib.crc32), checked before inflate.
+- Boulders' scale decodes to METERS (×0.4 step) vs trees' unitless ×1/64 — two
+  semantics, documented at TREE_SCALE_Q/BOULDER_SIZE_STEP_M in Lac1.ts (S7 consumer).
+- Height lods are NOW [0..4] (AG1 landed LOD4, qscale 0.25/1.0 at LOD3/4); coarse res
+  still 2049. RemoteWorldSource.open() skips manifest layers the codec doesn't know —
+  canopy streams automatically once its LAC1 layer id (8) is added to LAC1_LAYER_IDS.
+- ⚠️ **Pilot boulder data looks defaulted** (all 3 records in 148_90: kind=1, size=80 →
+  32 m!) — raw-bytes confirmed, not a decode bug. asset-gen boulders cook needs an
+  audit (queued AG track).
+
 ## 9b. ROUND-2 VERIFICATION FIXES (binding; override anything above where they conflict)
 
 - **F-2 brick ceiling**: distance-graded ftCell is the DESIGN, not an overflow fallback —
