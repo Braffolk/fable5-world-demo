@@ -363,6 +363,7 @@ export class Hud {
       ['cull', 'CULL & CLUSTERS'],
       ['gpu', 'GPU PASSES (ms)'],
       ['mem', 'MEMORY / VRAM'],
+      ['stream', 'STREAMING'],
       ['cpu', 'CPU / SHADOW / MISC'],
     ] as const) {
       const sec = this.makeSection(id, title, false);
@@ -563,6 +564,7 @@ export class Hud {
     this.renderCull(c);
     this.renderGpu(s);
     this.renderMem(c);
+    this.renderStream(c);
     this.renderCpu(c);
   }
 
@@ -617,6 +619,38 @@ export class Hud {
     ], c);
   }
 
+  /** S5 (F-9): stream-brain residency/queue/budget counters — resident tiles
+   *  per LOD, in-flight fetches/decodes/bakes, LRU + brain RAM, token-bucket
+   *  utilization, evictions/nacks, scroll + teleport tallies. */
+  private renderStream(c: Record<string, number>): void {
+    if (!this.sections.get('stream')?.open) return;
+    if (c['stream.tiles.resident'] === undefined) {
+      this.secPre('stream').textContent = 'no stream brain (forest/gallery scene)';
+      return;
+    }
+    const perLevel = Object.keys(c)
+      .filter((k) => k.startsWith('stream.res.L'))
+      .sort()
+      .map((k) => `${k.slice('stream.res.'.length)}:${c[k]}`)
+      .join(' ');
+    const lines = [
+      `tiles      ${this.fmt(c['stream.tiles.resident'])} resident (${perLevel})  pending ${this.fmt(c['stream.tiles.pending'])}`,
+      `loads      ${this.fmt(c['stream.tiles.loaded'])} loaded · ${this.fmt(c['stream.tiles.evicted'])} evicted · ` +
+        `${this.fmt(c['stream.tiles.skipped'])} skipped · ${this.fmt(c['stream.tiles.nacks'])} nacks`,
+      `bakes      ${this.fmt(c['stream.bake.cache'])} cached / ${this.fmt(c['stream.bake.built'])} built · ` +
+        `inflight ${this.fmt(c['stream.bake.inflight'])} · prefetch ${this.fmt(c['stream.prefetched'])}`,
+      `fetch      ${this.fmt(c['stream.fetch.total'])} total · inflight ${this.fmt(c['stream.fetch.inflight'])}`,
+      `brain RAM  ${this.fmt(c['stream.ram.mb'])} MB (lru ${this.fmt(c['stream.lru.mb'])} MB)`,
+      `bucket     ${((c['stream.bucket.ms'] ?? 0)).toFixed(2)} ms · ${this.fmt(c['stream.bucket.kb'])} KB · ` +
+        `${this.fmt(c['stream.bucket.packets'])} pkts · mailbox ${this.fmt(c['stream.mailbox.depth'])}`,
+      `scrolls    ${this.fmt(c['stream.scrolls'])} (${this.fmt(c['stream.scrolls.deferred'])} deferred) · ` +
+        `teleports ${this.fmt(c['stream.teleports'])}`,
+      `origin     (${this.fmt(c['stream.origin.x'])}, ${this.fmt(c['stream.origin.z'])}) · ` +
+        `rebases ${this.fmt(c['stream.origin.rebases'])}`,
+    ];
+    this.secPre('stream').textContent = lines.join('\n');
+  }
+
   private renderCpu(c: Record<string, number>): void {
     const sec = this.sections.get('cpu');
     if (!sec?.open) return;
@@ -636,7 +670,7 @@ export class Hud {
       `shRaster   ${this.fmt(c['nanite.shRaster'])}   shTotal ${this.fmt(c['nanite.shTotal'])}`,
     ];
     const rest = Object.keys(c)
-      .filter((k) => !known.has(k) && !k.startsWith('cpu.') && k !== 'nanite.jitterIdx' && k !== 'nanite.shRaster' && k !== 'nanite.shTotal')
+      .filter((k) => !known.has(k) && !k.startsWith('cpu.') && !k.startsWith('stream.') && k !== 'nanite.jitterIdx' && k !== 'nanite.shRaster' && k !== 'nanite.shTotal')
       .sort();
     if (rest.length > 0) {
       lines.push('—');

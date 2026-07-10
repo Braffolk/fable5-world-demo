@@ -1,56 +1,39 @@
 /**
- * TerrainField — the streamed terrain field set (SPEC-STREAMING-WORLD §3, S3a).
- * The scene handle threaded where the one-shot Heightfield goes: a camera-window
- * plane pyramid filled EXCLUSIVELY through WorldSource.fetch (the universal path
- * both the generated world and Estonia ride), never by copying a source's GPU
- * textures. Owns:
+ * TerrainField — the streamed terrain field set (SPEC-STREAMING-WORLD §3, S5).
+ * The scene handle threaded where the one-shot Heightfield went: a camera-window
+ * plane pyramid whose texels arrive EXCLUSIVELY as StreamBrain fill packets
+ * through the main-thread mailbox (the universal path both the generated world
+ * and Estonia ride) — this class allocates the planes from a placement PLAN
+ * (PlaneFill.planField — the same pure math the brain plans against) and
+ * applies fills/origin commits; it never fetches.
  *
- *  - HEIGHT plane pyramid — r32float, level k texel = base·4^k, res per level by
- *    the COVER-OR-WINDOW rule (levelRes): the 2048² spec window, grown ≤4096²
- *    when that covers the source's whole span (the generated world rides
- *    full-coverage static planes; Estonia keeps camera windows). Levels = the
- *    source's height lods (generated: [0,1], statically filled once; S5 adds
- *    toroidal scroll — per-level origins are already uniforms so scrolling
- *    re-points them without shader rebuilds).
- *  - BIOME/CANOPY planes — rgba8 (cover-or-window, 1024² window ≤2048² cap):
- *    classId, vegDensity, canopyHeight, cover. Generated fill provides
- *    class+vegDensity; canopyHeight/cover stay 0 until S4 fills them from
- *    resident tree records + the asset-gen canopy pyramid.
- *  - SURFACE-FIELDS planes (F-1) — rgba8, same res rule: moisture, flow, snow,
- *    rockExposure. riverDepth is NOT stored: it is exactly waterY − height at wet
- *    texels, both of which are planes here (one derivation, no duplicate field).
- *  - WATER planes (F-1) — waterY at ~sim-res texel + a ×8 min-reduced far level.
- *    r32float, NOT r16float: f16 ULP at the ~140-300 m elevations both worlds use
- *    is 0.125-0.25 m — useless against 1 cm water levels (§10 rejected r16 planes
- *    for the same reason).
+ *  - HEIGHT plane pyramid — r32float, level k texel = base·4^k, res per level
+ *    by the cover-or-window rule. A level whose window covers the layer span is
+ *    PINNED (plan.wraps=false — every generated level): its samplers compile
+ *    the exact pre-S5 form, bit-identical shaders. A wrapping level (Estonia's
+ *    near rungs) samples toroidally via its phase uniform and scrolls by brain
+ *    packets: fills land first, the origin commit re-points uOrigin/uPhase
+ *    after (promote-after-fill is packet order — F-8).
+ *  - BIOME/CANOPY + SURFACE-FIELDS planes — rgba8 (filtered), same rule.
+ *  - WATER planes — waterY (r32float) + ×8 min-reduced far level.
  *  - CPU mirrors — the DataTexture backing stores double as the mirrors (zero
- *    extra RAM): heightAt/waterAt serve walk probe, spawn and bookmarks.
+ *    extra RAM) and stay coherent under partial fills, so the ?profile=1
+ *    device swap re-uploads correct state and heightAt/waterAt serve walk
+ *    probe, spawn and bookmarks at any moment.
  *
- * Lattice: every level is anchored on the SOURCE's payload lattice (A11): plane
- * texel p samples world = origin + p·texel where origin is the exact world coord
- * of texel (0,0)'s sample point. L0 fills are therefore bit-identical to the
- * source raster. F-7: static fill centers all levels on the coverage centroid —
- * generated (0,0), where the coarsest level covers the full extent; Estonia's
- * coarsest (L4) must center on the AOI centroid (it never scrolls). S5 re-centers
- * the finer levels on the camera.
+ * Lattice honesty (A11) lives in PlaneFill.placeLevel: plane texel p IS source
+ * lattice sample n0+p — L0 fills are bit-identical to the source raster.
  */
 
 import { DataTexture, FloatType, LinearFilter, NearestFilter, RGBAFormat, RedFormat, UnsignedByteType, Vector2 } from 'three';
 import { If, clamp, float, floor, fract, mix, texture, uniform, vec2, vec3, vec4 } from 'three/tsl';
 import { texLoadR } from '../Tsl';
 import type { NB, NF, NU, NV2, NV4 } from '../../gpu/TSLTypes';
-import type { LayerName, WorldManifest, WorldSource } from '../../world/source/WorldSource';
+import type { CoverageBox, FieldPlan, PlanePlan } from './PlaneFill';
+import type { PlaneKind } from './StreamProtocol';
 
-const HEIGHT_PLANE_RES = 2048;
-const U8_PLANE_RES = 1024;
-/** cover-or-window rule (S3b): a level's plane res grows past the default window
- *  res up to this cap when it makes the plane cover the source's WHOLE layer
- *  span — a small world (the generated 4096 m) then rides full-coverage static
- *  planes with zero window seams, while a large one (Estonia) keeps the spec §3
- *  camera windows unchanged. The caps bound VRAM (throw-loud ceiling below). */
-const HEIGHT_PLANE_RES_CAP = 4096;
-const U8_PLANE_RES_CAP = 2048;
-const WATER_FAR_FACTOR = 8;
+export type { CoverageBox } from './PlaneFill';
+
 /** full 5-level Estonia set ≈ 84 (height) + 17 (biome) + ~40 (fields+water) MB;
  *  the generated full-coverage set ≈ 130 MB — anything past this is a leak, not
  *  a config (throw-loud VRAM law). */
@@ -64,42 +47,18 @@ export interface FieldLevel {
   /** world coord of texel (0,0)'s SAMPLE point (texel-centered source lattice) */
   originX: number;
   originZ: number;
-  /** origin as a uniform — S5 toroidal scroll re-points it per frame */
+  /** origin as a uniform — scroll commits re-point it without shader rebuilds */
   uOrigin: { value: Vector2 };
+  /** toroidal phase (n0 mod res) — only wrapping levels compile reads of it */
+  uPhase: { value: Vector2 };
+  /** frozen at plan time: window < coverage ⇒ the level scrolls toroidally.
+   *  Pinned levels (all generated ones) compile the exact pre-S5 samplers. */
+  wraps: boolean;
   tex: DataTexture;
 }
 
 interface HeightLevel extends FieldLevel {
   data: Float32Array;
-}
-
-interface LatticePlacement {
-  originX: number;
-  originZ: number;
-  texel: number;
-  stride: number;
-  /** plane texel p ↔ source lattice index n = n0 + p (units of stride base texels) */
-  n0x: number;
-  n0z: number;
-}
-
-interface RasterGeom {
-  texel0: number;
-  chunkRes: number;
-  originX: number;
-  originZ: number;
-  lodStep: number;
-}
-
-/** chunk-aligned world box of the source's height coverage — the S4 subsystem
- *  windows (ProbeGI / FarShadow / canopy) clamp their camera-centered bases into
- *  it, so a window spanning the whole box is PINNED (the generated world's
- *  static-output guarantee falls out of the same clamp Estonia roams under). */
-export interface CoverageBox {
-  minX: number;
-  minZ: number;
-  maxX: number;
-  maxZ: number;
 }
 
 export class TerrainField {
@@ -133,69 +92,25 @@ export class TerrainField {
     const mb = this.vramBytes() / 2 ** 20;
     // eslint-disable-next-line no-console
     console.log(
-      `[laas] terrain field: height [${heightLevels.map((l) => `${l.res}²@${l.texel}m`).join(' ')}] r32f + ` +
+      `[laas] terrain field: height [${heightLevels.map((l) => `${l.res}²@${l.texel}m${l.wraps ? '~' : ''}`).join(' ')}] r32f + ` +
         `biome [${biomeLevels.map((l) => `${l.res}²`).join(' ')}] + fields [${fieldsLevels.map((l) => `${l.res}²`).join(' ')}] rgba8 + ` +
         `water ${water ? `${water.res}² r32f (+far ${waterFar?.res ?? 0}²)` : 'none'} = ` +
-        `${mb.toFixed(1)} MB VRAM (CPU mirrors share the backing)`,
+        `${mb.toFixed(1)} MB VRAM (CPU mirrors share the backing; ~ = camera-window level)`,
     );
     if (mb > VRAM_CEILING_MB) {
       throw new Error(`TerrainField: ${mb.toFixed(1)} MB exceeds the ${VRAM_CEILING_MB} MB ceiling`);
     }
   }
 
-  /** Build + statically fill every plane from the source via fetch — the SAME
-   *  path Estonia uses (S5 turns the static fill into scroll updates). */
-  static async fromSource(source: WorldSource, manifest: WorldManifest): Promise<TerrainField> {
-    const heightMeta = manifest.layers.height;
-    if (!heightMeta) throw new Error('TerrainField: source has no height layer');
-    const { cx, cz } = coverageCenter(manifest);
-
-    const heightGeo = layerGeom(manifest, 'height');
-    const heightSpan = layerSpanM(manifest, 'height');
-    const heightLevels: HeightLevel[] = [];
-    for (const lod of heightMeta.lods) {
-      const res = levelRes(heightSpan, heightGeo.texel0 * heightGeo.lodStep ** lod, HEIGHT_PLANE_RES, HEIGHT_PLANE_RES_CAP);
-      const place = placeLevel(heightGeo, lod, res, cx, cz);
-      const data = await fillF32Level(source, manifest, 'height', lod, res, place, heightGeo);
-      heightLevels.push(makeHeightLevel(`terrainFieldHeightL${lod}`, lod, res, place, data));
-    }
-
-    const biomeLevels = await fillU8Layer(source, manifest, 'biome', cx, cz, [
-      ['classId', 0],
-      ['vegDensity', 1],
-      // canopyHeight (2) + cover (3) stay 0 — S4 fills them from tree records
-    ]);
-    const fieldsLevels = await fillU8Layer(source, manifest, 'fields', cx, cz, [
-      ['moisture', 0],
-      ['flowStrength', 1],
-      ['snow', 2],
-      ['rockExposure', 3],
-    ]);
-
-    let water: HeightLevel | null = null;
-    let waterFar: HeightLevel | null = null;
-    const waterMeta = manifest.layers.water;
-    if (waterMeta && waterMeta.lods.includes(0)) {
-      const geo = layerGeom(manifest, 'water');
-      const waterRes = levelRes(layerSpanM(manifest, 'water'), geo.texel0, HEIGHT_PLANE_RES, HEIGHT_PLANE_RES);
-      const place = placeLevel(geo, 0, waterRes, cx, cz);
-      // Estonia dry texels decode to NaN (§9a) — a NaN reaching bilinear poisons
-      // whole quads, so map to the dry sentinel the generated field already uses
-      // downstream of its bed−2 encoding. Generated payloads carry no NaN.
-      const data = await fillF32Level(source, manifest, 'water', 0, waterRes, place, geo, -1e4);
-      water = makeHeightLevel('terrainFieldWaterY', 0, waterRes, place, data);
-      const farRes = waterRes / WATER_FAR_FACTOR;
-      const farData = minReduce(data, waterRes, WATER_FAR_FACTOR);
-      waterFar = makeHeightLevel('terrainFieldWaterYFar', 0, farRes, {
-        ...place,
-        texel: place.texel * WATER_FAR_FACTOR,
-        // block (0,0) spans samples 0..7 — its representative point is their center
-        originX: place.originX + (place.texel * (WATER_FAR_FACTOR - 1)) / 2,
-        originZ: place.originZ + (place.texel * (WATER_FAR_FACTOR - 1)) / 2,
-      }, farData);
-    }
-
-    return new TerrainField(heightLevels, biomeLevels, fieldsLevels, water, waterFar, coverageBoxM(manifest));
+  /** Allocate every plane from the placement plan (PlaneFill.planField) —
+   *  texels arrive as StreamBrain fill packets (the S5 streaming path). */
+  static fromPlan(plan: FieldPlan): TerrainField {
+    const heightLevels = plan.height.map((p) => makeHeightLevel(`terrainFieldHeightL${p.lod}`, p));
+    const biomeLevels = plan.biome.map((p) => makeU8Level(`terrainFieldBiomeL${p.lod}`, p));
+    const fieldsLevels = plan.fields.map((p) => makeU8Level(`terrainFieldFieldsL${p.lod}`, p));
+    const water = plan.water ? makeHeightLevel('terrainFieldWaterY', plan.water) : null;
+    const waterFar = plan.waterFar ? makeHeightLevel('terrainFieldWaterYFar', plan.waterFar) : null;
+    return new TerrainField(heightLevels, biomeLevels, fieldsLevels, water, waterFar, plan.coverageBox);
   }
 
   /** One-level field over a flat/explicit height array — forest/gallery-class
@@ -211,20 +126,79 @@ export class TerrainField {
   }): TerrainField {
     const data = opts.heights ?? new Float32Array(opts.res * opts.res);
     if (data.length !== opts.res * opts.res) throw new Error('TerrainField.singleLevel: heights length != res²');
-    const place: LatticePlacement = {
+    const plan: PlanePlan = {
+      lod: 0,
+      res: opts.res,
+      wraps: false,
       originX: opts.worldMinX + opts.texel * 0.5,
       originZ: opts.worldMinZ + opts.texel * 0.5,
       texel: opts.texel,
       stride: 1,
       n0x: 0,
       n0z: 0,
+      nMinX: 0,
+      nMaxX: opts.res - 1,
+      nMinZ: 0,
+      nMaxZ: opts.res - 1,
     };
-    return new TerrainField([makeHeightLevel('terrainFieldHeightL0', 0, opts.res, place, data)], [], [], null, null, {
+    const lvl = makeHeightLevel('terrainFieldHeightL0', plan, data);
+    return new TerrainField([lvl], [], [], null, null, {
       minX: opts.worldMinX,
       minZ: opts.worldMinZ,
       maxX: opts.worldMinX + opts.res * opts.texel,
       maxZ: opts.worldMinZ + opts.res * opts.texel,
     });
+  }
+
+  // ---- stream mailbox application (the ONLY mutation surface) ----------------------
+
+  /** the level record a fill/origin packet targets. */
+  levelFor(plane: PlaneKind, level: number): FieldLevel {
+    const lvl =
+      plane === 'height'
+        ? this.heightLevels[level]
+        : plane === 'biome'
+          ? this.biomeLevels[level]
+          : plane === 'fields'
+            ? this.fieldsLevels[level]
+            : plane === 'water'
+              ? this.water
+              : this.waterFar;
+    if (!lvl) throw new Error(`TerrainField: no ${plane} level ${level}`);
+    return lvl;
+  }
+
+  /** write a physical-rect fill into the CPU backing (the mirror). The GPU
+   *  upload is the mailbox's job (writeTexture, or a full needsUpdate flip at
+   *  boot) — backing-first keeps the ?profile device swap coherent. */
+  applyFill(plane: PlaneKind, level: number, x: number, y: number, w: number, h: number, data: Float32Array | Uint8Array): void {
+    const lvl = this.levelFor(plane, level);
+    const backing = (lvl.tex.image as { data: Float32Array | Uint8Array }).data;
+    const ch = backing instanceof Float32Array ? 1 : 4;
+    if (data.length !== w * h * ch) throw new Error(`TerrainField: fill ${plane}L${level} ${w}×${h} data length mismatch`);
+    for (let row = 0; row < h; row++) {
+      backing.set(data.subarray(row * w * ch, (row + 1) * w * ch), ((y + row) * lvl.res + x) * ch);
+    }
+  }
+
+  /** re-point a wrapping level after its fills landed (F-8 packet order). */
+  commitOrigin(plane: PlaneKind, level: number, originX: number, originZ: number, phaseX: number, phaseY: number): void {
+    const lvl = this.levelFor(plane, level);
+    if (!lvl.wraps) throw new Error(`TerrainField: origin commit on pinned plane ${plane}L${level}`);
+    lvl.originX = originX;
+    lvl.originZ = originZ;
+    lvl.uOrigin.value.set(originX, originZ);
+    lvl.uPhase.value.set(phaseX, phaseY);
+  }
+
+  /** flip every plane's full backing to the GPU (boot: after the unbudgeted
+   *  mailbox drain filled the mirrors). */
+  markAllDirty(): void {
+    for (const lvl of this.allLevels()) lvl.tex.needsUpdate = true;
+  }
+
+  private allLevels(): FieldLevel[] {
+    return [...this.heightLevels, ...this.biomeLevels, ...this.fieldsLevels, ...(this.water ? [this.water] : []), ...(this.waterFar ? [this.waterFar] : [])];
   }
 
   // ---- CPU sampling (walk probe, spawn, bookmarks) --------------------------------
@@ -236,14 +210,14 @@ export class TerrainField {
       const lvl = L[i] as HeightLevel;
       const gx = (x - lvl.originX) / lvl.texel;
       const gz = (z - lvl.originZ) / lvl.texel;
-      // 1-texel margin: the plane rim is clamp-extended fill, the coarser level
-      // holds the real slope there
+      // 1-texel margin: the plane rim is clamp-extended fill (or the scroll
+      // rim), the coarser level holds the real slope there
       if (gx >= 1 && gx <= lvl.res - 2 && gz >= 1 && gz <= lvl.res - 2) {
-        return bilerpCpu(lvl.data, lvl.res, gx, gz);
+        return bilerpCpu(lvl, gx, gz);
       }
     }
     const lvl = L[L.length - 1] as HeightLevel;
-    return bilerpCpu(lvl.data, lvl.res, (x - lvl.originX) / lvl.texel, (z - lvl.originZ) / lvl.texel);
+    return bilerpCpu(lvl, (x - lvl.originX) / lvl.texel, (z - lvl.originZ) / lvl.texel);
   }
 
   /** bilinear waterY (m); dry cells sit well below the bed (sentinel/bed−2), so
@@ -251,7 +225,7 @@ export class TerrainField {
   waterAt(x: number, z: number): number {
     const w = this.water;
     if (!w) return -1e4;
-    return bilerpCpu(w.data, w.res, (x - w.originX) / w.texel, (z - w.originZ) / w.texel);
+    return bilerpCpu(w, (x - w.originX) / w.texel, (z - w.originZ) / w.texel);
   }
 
   // ---- TSL sampling ----------------------------------------------------------------
@@ -364,11 +338,7 @@ export class TerrainField {
 
   vramBytes(): number {
     let b = 0;
-    for (const l of this.heightLevels) b += l.res * l.res * 4;
-    for (const l of this.biomeLevels) b += l.res * l.res * 4;
-    for (const l of this.fieldsLevels) b += l.res * l.res * 4;
-    if (this.water) b += this.water.res * this.water.res * 4;
-    if (this.waterFar) b += this.waterFar.res * this.waterFar.res * 4;
+    for (const l of this.allLevels()) b += l.res * l.res * 4;
     return b;
   }
 
@@ -386,10 +356,29 @@ export class TerrainField {
 // ---- plane sampling helpers (TSL) ----------------------------------------------------
 // planeBilerp / planeNearest / insideLevel are exported for the S3b hot-shader
 // fetch (NaniteFetch composes its own level chain over field.heightLevels).
+// A PINNED level (wraps=false — every generated level) compiles the exact
+// pre-S5 addressing; a wrapping level adds the phase-mod on its texel indices.
 
-/** world → continuous sample-grid coords (integer = exact source sample) */
+/** world → continuous sample-grid coords (integer = exact source sample),
+ *  window-relative on wrapping levels. */
 export function gridCoords(lvl: FieldLevel, wxz: NV2): NV2 {
   return wxz.sub(vec2(lvl.uOrigin as unknown as NV2)).div(lvl.texel);
+}
+
+/** logical texel index → physical (toroidal) index on wrapping levels. `i` is
+ *  a float in [0, res-1]; the phase add stays < 2·res so one mod suffices. */
+function physF(lvl: FieldLevel, i: NF, axis: 0 | 1): NF {
+  if (!lvl.wraps) return i;
+  const p = vec2(lvl.uPhase as unknown as NV2);
+  const ph = (axis === 0 ? p.x : p.y) as unknown as NF;
+  return i.add(ph).mod(lvl.res) as unknown as NF;
+}
+
+function texelU(lvl: FieldLevel, ix: NF, iy: NF): { x: NU; y: NU } {
+  return {
+    x: floor(physF(lvl, ix, 0)).toUint() as NU,
+    y: floor(physF(lvl, iy, 1)).toUint() as NU,
+  };
 }
 
 /** finest-containing-level branch chain: runs `arm` for exactly one level (the
@@ -413,22 +402,43 @@ export function hotLevelChain(
   chain.Else(() => arm(levels[n - 1] as FieldLevel, false));
 }
 
-/** one hardware-filtered tap (LinearFilter rgba8 planes) at a level */
+/** one hardware-filtered tap (LinearFilter rgba8 planes) at a level. Wrapping
+ *  levels take the 4 texel loads instead (a filtered tap would blend across
+ *  the toroidal seam). */
 function planeLinear(lvl: FieldLevel, wxz: NV2): NV4 {
-  const uv = gridCoords(lvl, wxz).add(0.5).div(lvl.res);
-  return texture(lvl.tex, uv as unknown as NV2, 0) as unknown as NV4;
+  if (!lvl.wraps) {
+    const uv = gridCoords(lvl, wxz).add(0.5).div(lvl.res);
+    return texture(lvl.tex, uv as unknown as NV2, 0) as unknown as NV4;
+  }
+  const g = clamp(gridCoords(lvl, wxz), 0, lvl.res - 1);
+  const i0 = floor(g);
+  const f = fract(g);
+  const x0 = physF(lvl, i0.x as unknown as NF, 0);
+  const y0 = physF(lvl, i0.y as unknown as NF, 1);
+  const x1 = physF(lvl, clamp(i0.x.add(1), 0, lvl.res - 1) as unknown as NF, 0);
+  const y1 = physF(lvl, clamp(i0.y.add(1), 0, lvl.res - 1) as unknown as NF, 1);
+  const uvOf = (x: NF, y: NF): NV2 => vec2(x.add(0.5), y.add(0.5)).div(lvl.res) as unknown as NV2;
+  const s00 = texture(lvl.tex, uvOf(x0, y0), 0) as unknown as NV4;
+  const s10 = texture(lvl.tex, uvOf(x1, y0), 0) as unknown as NV4;
+  const s01 = texture(lvl.tex, uvOf(x0, y1), 0) as unknown as NV4;
+  const s11 = texture(lvl.tex, uvOf(x1, y1), 0) as unknown as NV4;
+  return mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y) as unknown as NV4;
 }
 
 /** ±1-texel central differences at the nearest texel — the normalTex bake's
  *  exact stencil (see Heightfield rebuildDerivedMaps history) */
 function cdTaps(lvl: FieldLevel, wxz: NV2): { dx: NF; dz: NF } {
   const g = clamp(gridCoords(lvl, wxz).add(0.5), 1, lvl.res - 2);
-  const x = floor(g.x).toUint() as NU;
-  const y = floor(g.y).toUint() as NU;
-  const hl = texLoadR(lvl.tex, x.sub(1) as unknown as NU, y);
-  const hr = texLoadR(lvl.tex, x.add(1) as unknown as NU, y);
-  const hd = texLoadR(lvl.tex, x, y.sub(1) as unknown as NU);
-  const hu = texLoadR(lvl.tex, x, y.add(1) as unknown as NU);
+  const gx = floor(g.x) as unknown as NF;
+  const gy = floor(g.y) as unknown as NF;
+  const tl = (ix: NF, iy: NF): NF => {
+    const t = texelU(lvl, ix, iy);
+    return texLoadR(lvl.tex, t.x, t.y);
+  };
+  const hl = tl(gx.sub(1) as unknown as NF, gy);
+  const hr = tl(gx.add(1) as unknown as NF, gy);
+  const hd = tl(gx, gy.sub(1) as unknown as NF);
+  const hu = tl(gx, gy.add(1) as unknown as NF);
   return { dx: hl.sub(hr) as unknown as NF, dz: hd.sub(hu) as unknown as NF };
 }
 
@@ -449,24 +459,29 @@ export function planeBilerp(lvl: FieldLevel, wxz: NV2): NF {
   const g = clamp(gridCoords(lvl, wxz), 0, lvl.res - 1);
   const i0 = floor(g);
   const f = fract(g);
-  const x0 = i0.x.toUint() as NU;
-  const y0 = i0.y.toUint() as NU;
-  const x1 = clamp(i0.x.add(1), 0, lvl.res - 1).toUint() as NU;
-  const y1 = clamp(i0.y.add(1), 0, lvl.res - 1).toUint() as NU;
-  const s00 = texLoadR(lvl.tex, x0, y0);
-  const s10 = texLoadR(lvl.tex, x1, y0);
-  const s01 = texLoadR(lvl.tex, x0, y1);
-  const s11 = texLoadR(lvl.tex, x1, y1);
+  const x0i = i0.x as unknown as NF;
+  const y0i = i0.y as unknown as NF;
+  const x1i = clamp(i0.x.add(1), 0, lvl.res - 1) as unknown as NF;
+  const y1i = clamp(i0.y.add(1), 0, lvl.res - 1) as unknown as NF;
+  const t00 = texelU(lvl, x0i, y0i);
+  const t10 = texelU(lvl, x1i, y0i);
+  const t01 = texelU(lvl, x0i, y1i);
+  const t11 = texelU(lvl, x1i, y1i);
+  const s00 = texLoadR(lvl.tex, t00.x, t00.y);
+  const s10 = texLoadR(lvl.tex, t10.x, t10.y);
+  const s01 = texLoadR(lvl.tex, t01.x, t01.y);
+  const s11 = texLoadR(lvl.tex, t11.x, t11.y);
   return mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
 }
 
 export function planeNearest(lvl: FieldLevel, wxz: NV2): NF {
   const g = clamp(gridCoords(lvl, wxz).add(0.5), 0, lvl.res - 1);
-  return texLoadR(lvl.tex, floor(g.x).toUint() as NU, floor(g.y).toUint() as NU);
+  const t = texelU(lvl, floor(g.x) as unknown as NF, floor(g.y) as unknown as NF);
+  return texLoadR(lvl.tex, t.x, t.y);
 }
 
 /** true where the point sits ≥1 texel inside the level's window (the rim texel is
- *  clamp-extended fill — the next-coarser level owns it) */
+ *  clamp-extended fill or the scroll seam — the next-coarser level owns it) */
 export function insideLevel(lvl: FieldLevel, wxz: NV2): NB {
   const g = gridCoords(lvl, wxz);
   return g.x
@@ -478,307 +493,53 @@ export function insideLevel(lvl: FieldLevel, wxz: NV2): NB {
 
 // ---- CPU bilinear ---------------------------------------------------------------------
 
-function bilerpCpu(data: Float32Array, res: number, gx: number, gz: number): number {
+function bilerpCpu(lvl: HeightLevel, gx: number, gz: number): number {
+  const res = lvl.res;
   const cx = Math.min(Math.max(gx, 0), res - 1.001);
   const cz = Math.min(Math.max(gz, 0), res - 1.001);
   const x0 = Math.floor(cx);
   const z0 = Math.floor(cz);
   const fx = cx - x0;
   const fz = cz - z0;
-  const at = (x: number, z: number): number => data[Math.min(z, res - 1) * res + Math.min(x, res - 1)] ?? 0;
+  const px = lvl.wraps ? lvl.uPhase.value.x : 0;
+  const pz = lvl.wraps ? lvl.uPhase.value.y : 0;
+  const at = (x: number, z: number): number => {
+    const ix = (Math.min(x, res - 1) + px) % res;
+    const iz = (Math.min(z, res - 1) + pz) % res;
+    return lvl.data[iz * res + ix] ?? 0;
+  };
   const a = at(x0, z0) * (1 - fx) + at(x0 + 1, z0) * fx;
   const b = at(x0, z0 + 1) * (1 - fx) + at(x0 + 1, z0 + 1) * fx;
   return a * (1 - fz) + b * fz;
 }
 
-// ---- construction: lattice placement + fetch fills --------------------------------------
+// ---- level construction -----------------------------------------------------------------
 
-function layerGeom(manifest: WorldManifest, layer: LayerName): RasterGeom {
-  const meta = manifest.layers[layer];
-  const t0 = meta?.texelMeters;
-  if (!meta || !t0) throw new Error(`TerrainField: layer '${layer}' missing texelMeters`);
-  const g = manifest.grid;
-  return {
-    texel0: t0,
-    chunkRes: Math.round(g.chunkMeters / t0),
-    originX: g.originX,
-    originZ: g.originZ,
-    lodStep: g.lodStep,
-  };
-}
-
-/** span (m) of a layer's finest-lod chunk coverage — the honest data extent
- *  the cover-or-window rule (levelRes) measures against */
-function layerSpanM(manifest: WorldManifest, layer: LayerName): number {
-  const meta = manifest.layers[layer];
-  if (!meta) return 0;
-  const finest = Math.min(...meta.lods);
-  const keys = manifest.chunks(layer, finest);
-  if (keys.length === 0) return 0;
-  let minX = Infinity;
-  let maxX = -Infinity;
-  let minZ = Infinity;
-  let maxZ = -Infinity;
-  for (const k of keys) {
-    minX = Math.min(minX, k.cx);
-    maxX = Math.max(maxX, k.cx);
-    minZ = Math.min(minZ, k.cz);
-    maxZ = Math.max(maxZ, k.cz);
-  }
-  const span = manifest.grid.chunkMeters * manifest.grid.lodStep ** finest;
-  return Math.max(maxX - minX + 1, maxZ - minZ + 1) * span;
-}
-
-/** cover-or-window plane res: the smallest power of two whose window at this
- *  texel covers the layer span, clamped to [256, cap]; a span past the cap
- *  falls back to the camera-window default (Estonia semantics, spec §3). */
-function levelRes(spanM: number, texel: number, windowRes: number, cap: number): number {
-  const cov = Math.round(spanM / texel);
-  if (cov <= 0) return windowRes;
-  let r = 256;
-  while (r < cov && r < cap) r *= 2;
-  return r >= cov ? r : windowRes;
-}
-
-/** chunk box (indices) of the FINEST height lod's chunk set + its chunk span (m) */
-function heightChunkBox(manifest: WorldManifest): {
-  minX: number;
-  maxX: number;
-  minZ: number;
-  maxZ: number;
-  span: number;
-} {
-  const meta = manifest.layers.height as NonNullable<WorldManifest['layers']['height']>;
-  const finest = Math.min(...meta.lods);
-  const keys = manifest.chunks('height', finest);
-  if (keys.length === 0) throw new Error('TerrainField: height layer has no chunks');
-  let minX = Infinity;
-  let maxX = -Infinity;
-  let minZ = Infinity;
-  let maxZ = -Infinity;
-  for (const k of keys) {
-    minX = Math.min(minX, k.cx);
-    maxX = Math.max(maxX, k.cx);
-    minZ = Math.min(minZ, k.cz);
-    maxZ = Math.max(maxZ, k.cz);
-  }
-  return { minX, maxX, minZ, maxZ, span: manifest.grid.chunkMeters * manifest.grid.lodStep ** finest };
-}
-
-/** coverage centroid from the FINEST height lod's chunk set (F-7) */
-function coverageCenter(manifest: WorldManifest): { cx: number; cz: number } {
-  const b = heightChunkBox(manifest);
-  const g = manifest.grid;
-  return {
-    cx: g.originX + ((b.minX + b.maxX + 1) / 2) * b.span,
-    cz: g.originZ + ((b.minZ + b.maxZ + 1) / 2) * b.span,
-  };
-}
-
-/** chunk-aligned world box of the height coverage (generated: exactly ±WORLD_HALF) */
-function coverageBoxM(manifest: WorldManifest): CoverageBox {
-  const b = heightChunkBox(manifest);
-  const g = manifest.grid;
-  return {
-    minX: g.originX + b.minX * b.span,
-    minZ: g.originZ + b.minZ * b.span,
-    maxX: g.originX + (b.maxX + 1) * b.span,
-    maxZ: g.originZ + (b.maxZ + 1) * b.span,
-  };
-}
-
-/** anchor a res² plane at `lod` on the source's payload lattice, centered as close
- *  to (centerX, centerZ) as the lattice allows. Payload sample i of chunk c sits at
- *  world = gridOrigin + ((c·chunkRes + i)·stride + off + 0.5)·texel0 with
- *  off = stride>>1 (the offset-centered coarse subsample, A11) — so the plane's
- *  sample n0+p lands EXACTLY on payload samples; L0 fills are bit-identical. */
-function placeLevel(geo: RasterGeom, lod: number, res: number, centerX: number, centerZ: number): LatticePlacement {
-  const stride = geo.lodStep ** lod;
-  const texel = geo.texel0 * stride;
-  const off = stride >> 1;
-  const n0x = Math.round((centerX - (res / 2) * texel - geo.originX) / texel);
-  const n0z = Math.round((centerZ - (res / 2) * texel - geo.originZ) / texel);
-  return {
-    n0x,
-    n0z,
-    stride,
-    texel,
-    originX: geo.originX + (n0x * stride + off + 0.5) * geo.texel0,
-    originZ: geo.originZ + (n0z * stride + off + 0.5) * geo.texel0,
-  };
-}
-
-interface FilledBox {
-  x0: number;
-  x1: number;
-  z0: number;
-  z1: number;
-}
-
-async function fillF32Level(
-  source: WorldSource,
-  manifest: WorldManifest,
-  layer: LayerName,
-  lod: number,
-  res: number,
-  place: LatticePlacement,
-  geo: RasterGeom,
-  mapNaN?: number,
-): Promise<Float32Array> {
-  const out = new Float32Array(res * res);
-  let box: FilledBox | null = null;
-  for (const key of manifest.chunks(layer, lod)) {
-    const payload = await source.fetch(layer, key);
-    if (!payload || payload.kind !== 'height') continue;
-    box = copyChunkF32(out, res, place, geo, key.cx, key.cz, payload.heights, payload.res, box, mapNaN);
-  }
-  if (!box) {
-    // eslint-disable-next-line no-console
-    console.warn(`[laas] terrain field: layer '${layer}' lod ${lod} — no chunks landed, plane is zero`);
-    return out;
-  }
-  clampExtend(out, res, 1, box);
-  return out;
-}
-
-function copyChunkF32(
-  out: Float32Array,
-  res: number,
-  place: LatticePlacement,
-  geo: RasterGeom,
-  ccx: number,
-  ccz: number,
-  src: Float32Array,
-  srcRes: number,
-  box: FilledBox | null,
-  mapNaN?: number,
-): FilledBox {
-  // chunk (ccx) holds lattice n ∈ [ccx·chunkRes, (ccx+1)·chunkRes]; skip the apron
-  // sample (n = (c+1)·chunkRes) — the east/south neighbor owns it, the world rim
-  // is clamp-extended afterwards
-  const pxLo = Math.max(0, ccx * geo.chunkRes - place.n0x);
-  const pxHi = Math.min(res - 1, (ccx + 1) * geo.chunkRes - 1 - place.n0x);
-  const pzLo = Math.max(0, ccz * geo.chunkRes - place.n0z);
-  const pzHi = Math.min(res - 1, (ccz + 1) * geo.chunkRes - 1 - place.n0z);
-  for (let pz = pzLo; pz <= pzHi; pz++) {
-    const i0 = (place.n0z + pz - ccz * geo.chunkRes) * srcRes + (place.n0x + pxLo - ccx * geo.chunkRes);
-    const o0 = pz * res + pxLo;
-    for (let k = 0; k <= pxHi - pxLo; k++) {
-      const v = src[i0 + k] as number;
-      out[o0 + k] = mapNaN !== undefined && Number.isNaN(v) ? mapNaN : v;
-    }
-  }
-  if (pxLo > pxHi || pzLo > pzHi) return box ?? { x0: res, x1: -1, z0: res, z1: -1 };
-  if (!box) return { x0: pxLo, x1: pxHi, z0: pzLo, z1: pzHi };
-  return {
-    x0: Math.min(box.x0, pxLo),
-    x1: Math.max(box.x1, pxHi),
-    z0: Math.min(box.z0, pzLo),
-    z1: Math.max(box.z1, pzHi),
-  };
-}
-
-/** extend the filled region's border texels to the plane rim (channels = words per
- *  texel: 1 for f32 planes, 4 for interleaved rgba8) */
-function clampExtend(data: Float32Array | Uint8Array, res: number, channels: number, box: FilledBox): void {
-  if (box.x1 < box.x0 || box.z1 < box.z0) return;
-  const row = res * channels;
-  for (let z = box.z0; z <= box.z1; z++) {
-    const r = z * row;
-    for (let c = 0; c < channels; c++) {
-      const lo = data[r + box.x0 * channels + c] as number;
-      const hi = data[r + box.x1 * channels + c] as number;
-      for (let x = 0; x < box.x0; x++) data[r + x * channels + c] = lo;
-      for (let x = box.x1 + 1; x < res; x++) data[r + x * channels + c] = hi;
-    }
-  }
-  for (let z = 0; z < box.z0; z++) data.copyWithin(z * row, box.z0 * row, box.z0 * row + row);
-  for (let z = box.z1 + 1; z < res; z++) data.copyWithin(z * row, box.z1 * row, box.z1 * row + row);
-}
-
-/** fill every lod of a u8-planes layer into rgba8 levels; channelMap = payload
- *  plane name → output channel. Missing layer/planes log once and stay zero. */
-async function fillU8Layer(
-  source: WorldSource,
-  manifest: WorldManifest,
-  layer: LayerName,
-  centerX: number,
-  centerZ: number,
-  channelMap: readonly (readonly [string, number])[],
-): Promise<FieldLevel[]> {
-  const meta = manifest.layers[layer];
-  if (!meta) {
-    // eslint-disable-next-line no-console
-    console.log(`[laas] terrain field: source has no '${layer}' layer — planes stay zero (derived at fill on sources that carry equivalents)`);
-    return [];
-  }
-  const names = meta.planes ?? [];
-  const geo = layerGeom(manifest, layer);
-  const span = layerSpanM(manifest, layer);
-  const levels: FieldLevel[] = [];
-  for (const lod of meta.lods) {
-    const res = levelRes(span, geo.texel0 * geo.lodStep ** lod, U8_PLANE_RES, U8_PLANE_RES_CAP);
-    const place = placeLevel(geo, lod, res, centerX, centerZ);
-    const out = new Uint8Array(res * res * 4);
-    let box: FilledBox | null = null;
-    for (const key of manifest.chunks(layer, lod)) {
-      const payload = await source.fetch(layer, key);
-      if (!payload || payload.kind !== 'planes') continue;
-      const pxLo = Math.max(0, key.cx * geo.chunkRes - place.n0x);
-      const pxHi = Math.min(res - 1, (key.cx + 1) * geo.chunkRes - 1 - place.n0x);
-      const pzLo = Math.max(0, key.cz * geo.chunkRes - place.n0z);
-      const pzHi = Math.min(res - 1, (key.cz + 1) * geo.chunkRes - 1 - place.n0z);
-      if (pxLo > pxHi || pzLo > pzHi) continue;
-      for (const [name, ch] of channelMap) {
-        const pi = names.indexOf(name);
-        if (pi < 0) continue;
-        const src = payload.planes[pi] as Uint8Array;
-        for (let pz = pzLo; pz <= pzHi; pz++) {
-          const i0 = (place.n0z + pz - key.cz * geo.chunkRes) * payload.res + (place.n0x + pxLo - key.cx * geo.chunkRes);
-          const o0 = (pz * res + pxLo) * 4 + ch;
-          for (let k = 0; k <= pxHi - pxLo; k++) out[o0 + k * 4] = src[i0 + k] as number;
-        }
-      }
-      box = !box
-        ? { x0: pxLo, x1: pxHi, z0: pzLo, z1: pzHi }
-        : { x0: Math.min(box.x0, pxLo), x1: Math.max(box.x1, pxHi), z0: Math.min(box.z0, pzLo), z1: Math.max(box.z1, pzHi) };
-    }
-    for (const [name] of channelMap) {
-      if (names.length > 0 && !names.includes(name)) {
-        // eslint-disable-next-line no-console
-        console.log(`[laas] terrain field: '${layer}' has no '${name}' plane — channel stays zero`);
-      }
-    }
-    if (box) clampExtend(out, res, 4, box);
-    const tex = new DataTexture(out, res, res, RGBAFormat, UnsignedByteType);
-    // rgba8 IS filterable — hot consumers (raster disp, grass density, resolve
-    // shading) take ONE hardware-filtered tap instead of a manual 4-tap bilerp
-    configurePlane(tex, `terrainField${layer[0]?.toUpperCase()}${layer.slice(1)}L${lod}`, LinearFilter);
-    levels.push({
-      lod,
-      res,
-      texel: place.texel,
-      originX: place.originX,
-      originZ: place.originZ,
-      uOrigin: uniform(new Vector2(place.originX, place.originZ)) as unknown as FieldLevel['uOrigin'],
-      tex,
-    });
-  }
-  return levels;
-}
-
-function makeHeightLevel(name: string, lod: number, res: number, place: LatticePlacement, data: Float32Array): HeightLevel {
-  const tex = new DataTexture(data, res, res, RedFormat, FloatType);
+function makeHeightLevel(name: string, plan: PlanePlan, data?: Float32Array): HeightLevel {
+  const backing = data ?? new Float32Array(plan.res * plan.res);
+  const tex = new DataTexture(backing, plan.res, plan.res, RedFormat, FloatType);
   configurePlane(tex, name);
+  return { ...levelCommon(plan), tex, data: backing };
+}
+
+function makeU8Level(name: string, plan: PlanePlan): FieldLevel {
+  const tex = new DataTexture(new Uint8Array(plan.res * plan.res * 4), plan.res, plan.res, RGBAFormat, UnsignedByteType);
+  // rgba8 IS filterable — hot consumers (raster disp, grass density, resolve
+  // shading) take ONE hardware-filtered tap instead of a manual 4-tap bilerp
+  configurePlane(tex, name, LinearFilter);
+  return { ...levelCommon(plan), tex };
+}
+
+function levelCommon(plan: PlanePlan): Omit<FieldLevel, 'tex'> {
   return {
-    lod,
-    res,
-    texel: place.texel,
-    originX: place.originX,
-    originZ: place.originZ,
-    uOrigin: uniform(new Vector2(place.originX, place.originZ)) as unknown as FieldLevel['uOrigin'],
-    tex,
-    data,
+    lod: plan.lod,
+    res: plan.res,
+    texel: plan.texel,
+    originX: plan.originX,
+    originZ: plan.originZ,
+    uOrigin: uniform(new Vector2(plan.originX, plan.originZ)) as unknown as FieldLevel['uOrigin'],
+    uPhase: uniform(new Vector2(0, 0)) as unknown as FieldLevel['uPhase'],
+    wraps: plan.wraps,
   };
 }
 
@@ -789,20 +550,4 @@ function configurePlane(tex: DataTexture, name: string, filter: typeof NearestFi
   tex.generateMipmaps = false;
   tex.flipY = false;
   tex.needsUpdate = true;
-}
-
-function minReduce(src: Float32Array, res: number, factor: number): Float32Array {
-  const farRes = Math.floor(res / factor);
-  const out = new Float32Array(farRes * farRes);
-  for (let z = 0; z < farRes; z++) {
-    for (let x = 0; x < farRes; x++) {
-      let mn = Infinity;
-      for (let oz = 0; oz < factor; oz++) {
-        const r = (z * factor + oz) * res + x * factor;
-        for (let ox = 0; ox < factor; ox++) mn = Math.min(mn, src[r + ox] as number);
-      }
-      out[z * farRes + x] = mn;
-    }
-  }
-  return out;
 }

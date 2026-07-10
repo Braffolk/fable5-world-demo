@@ -49,7 +49,8 @@ import {
 import { appendPackedFarTiles, buildFarTilesAsync, FT_TILE_SIZE, type FarTileSpecies } from './FarTiles';
 import { clusterFill, setClusterFill } from '../build/Clusterize';
 import { DagBuildWorker, DagWorkerPool, type DagBuilder, type HeightDagResult } from '../build/DagWorkerClient';
-import { TerrainStreamer, buildTerrainTile, type TileBuildDeps, type TileBuildStats } from './TerrainStreamer';
+import { buildTerrainTile, type TileBuildDeps, type TileBuildStats } from './TerrainStreamer';
+import type { StreamBrainClient } from './StreamBrainClient';
 import {
   type BuildReport,
   DAG_VERT_STRIDE,
@@ -146,9 +147,9 @@ export interface WorldRegistryResult {
   dagMeshes: number;
   dagBuildMs: number;
   dagTris: number;
-  /** N8-D2 Stage 2b-3 (D-N39): the live clipmap streamer in ?nanitedclip mode —
-   *  TerrainScene drives streamer.update(camXZ) per frame. Absent otherwise. */
-  terrainStreamer?: TerrainStreamer;
+  /** S5: terrain streams through the brain (clip mode) — TerrainScene drives
+   *  brain.update/drain per frame. False on the legacy uniform/window paths. */
+  streamedTerrain: boolean;
 }
 
 /** BufferGeometry → packed ExplicitSource (vdata vec4 → 4×u8 word) */
@@ -787,6 +788,10 @@ export async function buildWorldRegistry(input: {
    *  concurrently with the GPU boot phases). Omitted ⇒ built here (same results,
    *  no overlap). MUST come from the same lib/classes/dag/leaf args as this call. */
   pre?: Promise<WorldVegPrep>;
+  /** S5: the stream brain client — REQUIRED in clip-terrain mode (the default
+   *  scene=world path): boot tiles bake brain-side from decoded chunks and the
+   *  runtime clipmap streams through its mailbox. The scene owns + drives it. */
+  brain?: StreamBrainClient;
 }): Promise<WorldRegistryResult> {
   const {
     renderer,
@@ -803,6 +808,7 @@ export async function buildWorldRegistry(input: {
     dagTerrainSkirt,
     leaf: leafOn,
     seed,
+    brain,
   } = input;
   const inSet = (c: MaterialClassId): boolean => !classes || classes.has(c);
   const t0 = performance.now();
@@ -1103,10 +1109,10 @@ export async function buildWorldRegistry(input: {
   // N8-D2 Stage 2b-1 (D-N39): when dagTerrainPool, tiles are collected here and
   // loaded into the streaming tile POOL post-build (instead of a per-tile mesh).
   const terrainPoolTiles: { gridVerts: Uint32Array; indices: Uint32Array; clusters: DagCluster[] }[] = [];
-  // N8-D2 Stage 2b-3 (D-N39): the live clipmap streamer (?nanitedclip). Built +
-  // pool-reserved here (pre-build), boot tiles attached post-build, returned for
-  // TerrainScene to drive per frame. Owns the persistent DagWorker.
-  let terrainStreamer: TerrainStreamer | null = null;
+  // S5: clip mode = terrain streams through the BRAIN (boot tiles baked
+  // brain-side pre-build for pool-cap sizing, attached post-build, runtime
+  // clipmap through the mailbox). Armed here, attach + poolInfo after build().
+  let streamBrain: StreamBrainClient | null = null;
   if (inSet('terrain')) {
     const heights = hf.cpuHeights;
     if (!heights) throw new Error('WorldRegistry: hf.cpuHeights missing (boot order)');
@@ -1134,38 +1140,17 @@ export async function buildWorldRegistry(input: {
       }
       const stride = tileTexels / gridN; // texels per tile-DAG cell
       const tHd0 = performance.now();
-      // clip mode bakes tiles CONTINUOUSLY as the camera roams → a POOL of workers so
-      // a batch of arrivals bakes in parallel (#32, ~pool-size× shorter pop window);
-      // the one-shot uniform path only needs a single worker. Headless node has no
-      // Worker → construction throws → null → synchronous builds.
-      const cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
-      const poolSize = Math.max(2, Math.min(4, cores - 2));
-      let dagWorker: DagBuilder | null = null;
-      try {
-        dagWorker = dagTerrainClip ? new DagWorkerPool(poolSize) : new DagBuildWorker();
-      } catch {
-        dagWorker = null;
-      }
-      const bakeThreads = dagWorker instanceof DagWorkerPool ? dagWorker.size : dagWorker ? 1 : 0;
-      let poolMaxV = 0;
-      let poolMaxT = 0;
-      let poolMaxC = 0;
-      const tileStats: TileBuildStats = { nCache: 0, nBuilt: 0 };
-      const tileDeps: TileBuildDeps = { heights, res, cell, origin, gridN, seed: seed ?? null, worker: dagWorker };
 
       if (dagTerrainClip) {
-        // ---- CLIPMAP STREAMER (D-N39 2b-2 boot + 2b-3 follow) ------------------
-        // Build the spawn-centered ring set NOW (frame-1 terrain, no fallback),
-        // size the pool for the WHOLE clipmap (any camera pose ⇒ ≤ maxTiles
-        // resident) + headroom, attach post-build; the streamer then re-centers on
-        // the live camera each frame (TerrainScene drives streamer.update). The
-        // worker is PERSISTENT — handed to the streamer, NOT disposed at boot.
-        const streamer = new TerrainStreamer(
-          { reg, heights, res, cell, origin, gridN, seed: seed ?? null, worker: dagWorker, skirt: dagTerrainSkirt ?? true },
-          (m) => deferred.push(m),
-        );
-        const nBoot = await streamer.buildBootSet(res / 2, res / 2);
-        const pm = streamer.poolMax;
+        // ---- STREAMED CLIPMAP (S5) --------------------------------------------
+        // The spawn-centered boot ring bakes in the BRAIN (from its decoded-chunk
+        // height windows — never main-thread cpuHeights), returns pre-build to
+        // size the pool caps, attaches post-build (frame-1 terrain, no fallback);
+        // the runtime clipmap then streams through the brain's mailbox under the
+        // one token bucket (TerrainScene drives brain.update + brain.drain).
+        if (!brain) throw new Error('WorldRegistry: clip terrain streams through the brain — pass input.brain (S5)');
+        const boot = await brain.bootTilesAt(0, 0); // world center = the old res/2 texel center
+        const pm = boot.poolMax;
         // caps = boot-worst × generous margin; a reload hits arbitrary regions and
         // an over-cap tile is SKIPPED (coarser ring backstops), never fatal.
         const vCap = Math.ceil(pm.v * 1.5) + 256;
@@ -1174,22 +1159,32 @@ export async function buildWorldRegistry(input: {
         // headroom ABOVE clipmapMaxTiles so departed tiles can LINGER through the
         // async bake window (lazy eviction — the old LOD stays until its replacement
         // is resident; far stragglers are reclaimed first under pressure). ~1.5×.
-        const slots = streamer.maxTiles + Math.ceil(streamer.maxTiles / 2);
+        const slots = boot.maxTiles + Math.ceil(boot.maxTiles / 2);
         reg.reserveTilePool(
           'terrain',
           { originX: origin, originZ: origin, cellSize: cell },
           { slots, vertCap: vCap, triCap: tCap, clusterCap: cCap },
           { label: 'terrain' },
         );
-        terrainStreamer = streamer;
-        const s = streamer.bootSummary();
+        streamBrain = brain;
         deferred.push(
-          `terrain DAG ${streamer.clipDesc}: ${nBoot} boot / ${streamer.maxTiles} max tiles, ` +
-            `${s.tCl} cl, ${s.tTris | 0} tris, maxErr ${s.maxErr.toFixed(2)} m, offGrid ${s.offGrid}, ` +
-            `${s.nCache} cached/${s.nBuilt} built, POOL ${slots}×(v${vCap}/t${tCap}/c${cCap}), bake×${bakeThreads}, ` +
+          `terrain DAG CLIPMAP ${boot.levels}L (stream brain): ${boot.count} boot / ${boot.maxTiles} max tiles, ` +
+            `${boot.nCache} cached/${boot.nBuilt} built, POOL ${slots}×(v${vCap}/t${tCap}/c${cCap}), ` +
             `skirt ${dagTerrainSkirt ?? true ? 'on' : 'off'}, ${(performance.now() - tHd0).toFixed(0)} ms`,
         );
       } else {
+        // one-shot uniform tiles bake main-side from cpuHeights (tooling path)
+        let dagWorker: DagBuilder | null = null;
+        try {
+          dagWorker = new DagBuildWorker();
+        } catch {
+          dagWorker = null; // headless node — synchronous builds
+        }
+        let poolMaxV = 0;
+        let poolMaxT = 0;
+        let poolMaxC = 0;
+        const tileStats: TileBuildStats = { nCache: 0, nBuilt: 0 };
+        const tileDeps: TileBuildDeps = { heights, res, cell, origin, gridN, seed: seed ?? null, worker: dagWorker };
         // ---- uniform T×T tiles: per-tile mesh, or the 2b-1 all-resident pool ----
         let tCl = 0;
         let tTris = 0;
@@ -1252,9 +1247,8 @@ export async function buildWorldRegistry(input: {
             `${usePool ? `POOL ${terrainPoolTiles.length}×(v${Math.ceil(poolMaxV * 1.3) + 64}/c${Math.ceil(poolMaxC * 1.3) + 16}) ` : ''}` +
             `${(performance.now() - tHd0).toFixed(0)} ms`,
         );
+        dagWorker?.dispose(); // one-shot path — no runtime bakes
       }
-      // clip mode hands the worker to the streamer (persistent); others dispose now.
-      if (dagWorker && !dagTerrainClip) dagWorker.dispose();
     } else {
       const w = TERRAIN_WIN_QUADS;
       const windows = Math.ceil(quads / w);
@@ -1593,9 +1587,10 @@ export async function buildWorldRegistry(input: {
     }
     reg.attachHeightDagTile(slot, t);
   }
-  // N8-D2 Stage 2b-3: attach the clipmap streamer's boot ring set into pool slots
-  // (frame-1 terrain). The streamer then re-centers on the live camera per frame.
-  if (terrainStreamer) terrainStreamer.attachBootSet();
+  // S5: attach the brain's boot ring set into pool slots (frame-1 terrain) +
+  // arm runtime streaming with the pool geometry. The brain then re-centers the
+  // clipmap on the live pose feed; packets drain through the scene's bucket.
+  if (streamBrain) streamBrain.attachBootTiles(reg);
   // D (memory arc): once the app's render loop has bound + uploaded the immutable mega-
   // buffers (verts + bricks), free their CPU mirrors. Wait a generous margin of rAFs so the
   // first frames have definitely created the GPUBuffers (three uploads lazily on first bind).
@@ -1627,6 +1622,6 @@ export async function buildWorldRegistry(input: {
     dagMeshes: dagBuilds.length,
     dagBuildMs,
     dagTris,
-    ...(terrainStreamer ? { terrainStreamer } : {}),
+    streamedTerrain: streamBrain !== null,
   };
 }

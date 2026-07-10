@@ -1,11 +1,11 @@
 {
-  "at": "2026-07-09T18:24:17.951Z",
+  "at": "2026-07-10T13:17:39.231Z",
   "args": {
-    "base": "http://localhost:5173/?scene=world&nanite=1&dpr=1&nanodisp=1&clhwmax=32&grass=0&nanshadow=0&ksplit=1&fp16w=1&ctxsm=1&cam=-582.1,302.4,1006.1,2.5692,-0.0077",
-    "alt": "http://localhost:5173/?scene=world&nanite=1&dpr=1&nanodisp=1&clhwmax=32&grass=0&nanshadow=0&ksplit=1&fp16w=1&ctxsm=1&cam=-582.1,302.4,1006.1,2.5692,-0.0077&middz=1",
-    "cycles": 1,
-    "warmup": 3,
-    "sample": 5,
+    "base": "http://localhost:5173/?scene=world&cam=-582.1,302.4,1006.1,2.5692,-0.0077",
+    "alt": "http://localhost:5173/?scene=world&fly=1",
+    "cycles": 3,
+    "warmup": 6,
+    "sample": 12,
     "port": 5173,
     "headed": false
   },
@@ -14,21 +14,21 @@
       "index": 0,
       "cycle": 0,
       "arm": "A",
-      "url": "http://localhost:5173/?scene=world&nanite=1&dpr=1&nanodisp=1&clhwmax=32&grass=0&nanshadow=0&ksplit=1&fp16w=1&ctxsm=1&cam=-582.1,302.4,1006.1,2.5692,-0.0077",
+      "url": "http://localhost:5173/?scene=world&cam=-582.1,302.4,1006.1,2.5692,-0.0077",
       "failed": false,
-      "p50": 24.60000000000582,
-      "p95": 25.5,
-      "frames": 228,
-      "meanFps": 45.59726416415012,
+      "p50": 34,
+      "p95": 67.26000000000059,
+      "frames": 305,
+      "meanFps": 25.408620603475562,
       "thermBefore": {
         "limit": 100,
         "throttled": false,
-        "at": "2026-07-09T18:22:18.464Z"
+        "at": "2026-07-10T13:12:26.730Z"
       },
       "thermAfter": {
         "limit": 100,
         "throttled": false,
-        "at": "2026-07-09T18:23:40.566Z"
+        "at": "2026-07-10T13:14:03.701Z"
       },
       "throttledAt": null,
       "error": null
@@ -37,21 +37,113 @@
       "index": 1,
       "cycle": 0,
       "arm": "B",
-      "url": "http://localhost:5173/?scene=world&nanite=1&dpr=1&nanodisp=1&clhwmax=32&grass=0&nanshadow=0&ksplit=1&fp16w=1&ctxsm=1&cam=-582.1,302.4,1006.1,2.5692,-0.0077&middz=1",
+      "url": "http://localhost:5173/?scene=world&fly=1",
       "failed": false,
-      "p50": 24.5,
-      "p95": 25.26000000000349,
-      "frames": 235,
-      "meanFps": 47,
+      "p50": 15.700000000004366,
+      "p95": 24.16999999999752,
+      "frames": 887,
+      "meanFps": 73.87111281376484,
       "thermBefore": {
         "limit": 100,
         "throttled": false,
-        "at": "2026-07-09T18:23:40.579Z"
+        "at": "2026-07-10T13:14:03.717Z"
       },
       "thermAfter": {
         "limit": 100,
         "throttled": false,
-        "at": "2026-07-09T18:24:17.669Z"
+        "at": "2026-07-10T13:14:46.889Z"
+      },
+      "throttledAt": null,
+      "error": null
+    },
+    {
+      "index": 2,
+      "cycle": 1,
+      "arm": "A",
+      "url": "http://localhost:5173/?scene=world&cam=-582.1,302.4,1006.1,2.5692,-0.0077",
+      "failed": false,
+      "p50": 33.80000000000291,
+      "p95": 83.14999999999964,
+      "frames": 276,
+      "meanFps": 22.92834890965732,
+      "thermBefore": {
+        "limit": 100,
+        "throttled": false,
+        "at": "2026-07-10T13:14:46.901Z"
+      },
+      "thermAfter": {
+        "limit": 100,
+        "throttled": false,
+        "at": "2026-07-10T13:15:30.033Z"
+      },
+      "throttledAt": null,
+      "error": null
+    },
+    {
+      "index": 3,
+      "cycle": 1,
+      "arm": "B",
+      "url": "http://localhost:5173/?scene=world&fly=1",
+      "failed": false,
+      "p50": 16.69999999999709,
+      "p95": 25.099999999998545,
+      "frames": 669,
+      "meanFps": 55.67252240631787,
+      "thermBefore": {
+        "limit": 100,
+        "throttled": false,
+        "at": "2026-07-10T13:15:30.049Z"
+      },
+      "thermAfter": {
+        "limit": 100,
+        "throttled": false,
+        "at": "2026-07-10T13:16:12.680Z"
+      },
+      "throttledAt": null,
+      "error": null
+    },
+    {
+      "index": 4,
+      "cycle": 2,
+      "arm": "A",
+      "url": "http://localhost:5173/?scene=world&cam=-582.1,302.4,1006.1,2.5692,-0.0077",
+      "failed": false,
+      "p50": 41.099999999998545,
+      "p95": 86.81999999999955,
+      "frames": 273,
+      "meanFps": 22.726894324103835,
+      "thermBefore": {
+        "limit": 100,
+        "throttled": false,
+        "at": "2026-07-10T13:16:12.694Z"
+      },
+      "thermAfter": {
+        "limit": 100,
+        "throttled": false,
+        "at": "2026-07-10T13:16:56.115Z"
+      },
+      "throttledAt": null,
+      "error": null
+    },
+    {
+      "index": 5,
+      "cycle": 2,
+      "arm": "B",
+      "url": "http://localhost:5173/?scene=world&fly=1",
+      "failed": false,
+      "p50": 16.700000000004366,
+      "p95": 25.80000000000291,
+      "frames": 648,
+      "meanFps": 53.93976725989311,
+      "thermBefore": {
+        "limit": 100,
+        "throttled": false,
+        "at": "2026-07-10T13:16:56.129Z"
+      },
+      "thermAfter": {
+        "limit": 100,
+        "throttled": false,
+        "at": "2026-07-10T13:17:38.870Z"
       },
       "throttledAt": null,
       "error": null
@@ -60,16 +152,28 @@
   "perCycleDeltas": [
     {
       "cycle": 0,
-      "p95Delta": -0.23999999999650967,
-      "p50Delta": -0.10000000000582077,
+      "p95Delta": -43.09000000000307,
+      "p50Delta": -18.299999999995634,
+      "throttled": false
+    },
+    {
+      "cycle": 1,
+      "p95Delta": -58.05000000000109,
+      "p50Delta": -17.10000000000582,
+      "throttled": false
+    },
+    {
+      "cycle": 2,
+      "p95Delta": -61.01999999999664,
+      "p50Delta": -24.39999999999418,
       "throttled": false
     }
   ],
   "summary": {
-    "medianP95A": 25.5,
-    "medianP95B": 25.26000000000349,
-    "medianP95Delta": -0.23999999999650967,
-    "verdict": "WASH — B within ±3% of A on median per-cycle p95 delta (-0.9%)",
+    "medianP95A": 83.14999999999964,
+    "medianP95B": 25.099999999998545,
+    "medianP95Delta": -58.05000000000109,
+    "verdict": "B is FASTER than A by 58.05ms p95 (69.8%), consistent sign across all cycles",
     "anyThrottled": false
   }
 }

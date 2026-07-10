@@ -21,7 +21,9 @@ import { sunU, updateSunUniforms } from '../render/VegMaterials';
 import type { Heightfield } from '../world/Heightfield';
 import { GeneratedWorldSource } from '../world/source/GeneratedWorldSource';
 import { buildChunkContentStreams } from '../nanite/world/ChunkContent';
-import { TerrainField } from '../nanite/world/TerrainField';
+import { StreamBrainClient } from '../nanite/world/StreamBrainClient';
+import { StreamOrigin } from '../nanite/world/StreamOrigin';
+import type { TerrainField } from '../nanite/world/TerrainField';
 import { WaterSurface } from '../world/WaterSurface';
 import { PostStack } from '../render/PostStack';
 import { Clouds } from '../sky/Clouds';
@@ -148,12 +150,35 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     engine.stats.counters['terrain.maxH'] = Math.round(maxH);
   }
 
-  // TERRAIN FIELD (S3a): the streamed terrain plane set, filled through
-  // source.fetch — the SAME path Estonia rides (S5 turns static fill into
-  // camera-window scroll). The scene handle for every ported consumer.
-  BootTrace.phase('terrain field (plane fills via source.fetch)');
+  // N8-D2 Stage 2e (D-N39) — terrain mode resolution, hoisted above the stream
+  // brain (its tile config needs gridN/skirt): default = the clip-STREAMED DAG
+  // (gridN 128); `?nanitedterrain=0` = the legacy window grid; explicit
+  // `?nanitedterrain=<gridN>` = one-shot uniform tiles unless `?nanitedclip=1`.
+  const dterrainParam = qNan.get('nanitedterrain');
+  const terrainDefault = dterrainParam == null;
+  const dagTerrainGridN = terrainDefault ? 128 : Math.max(0, Math.floor(Number(dterrainParam)));
+  const dtilesParam = qNan.get('nanitedtiles');
+  const dagTerrainTiles = dtilesParam ? Math.max(1, Math.floor(Number(dtilesParam))) : 1;
+  const dagTerrainPool = qNan.get('nanitedpool') === '1';
+  const dagTerrainClip = terrainDefault || qNan.get('nanitedclip') === '1';
+  const dagTerrainSkirt = qNan.get('nanitedskirt') !== '0';
+
+  // TERRAIN FIELD + STREAM BRAIN (S5): the brain worker owns residency —
+  // plane-window fills/scrolls, the terrain tile clipmap, fetch/decode/bake
+  // orchestration; the scene allocates the TerrainField from the shared plan
+  // and drains the brain's packet mailbox under ONE token bucket per frame.
+  // The generated world's windows cover its whole span, so the boot fill pins
+  // everything resident — steady-state-identical to the pre-S5 static fill.
+  BootTrace.phase('terrain field (stream brain plane fills)');
   ctx.progress(0.942, 'terrain field: filling planes');
-  const field = await TerrainField.fromSource(worldSource, worldManifest);
+  const brain = new StreamBrainClient(worldSource, worldManifest, {
+    gridN: dagTerrainGridN > 0 ? dagTerrainGridN : 128,
+    tilesPerSide: 4,
+    skirt: dagTerrainSkirt,
+    seed: seed.seed,
+  });
+  const field = await brain.openField();
+  const streamOrigin = new StreamOrigin(worldManifest.grid.chunkMeters);
 
   // physical sky first: probe gathering needs the atmosphere LUTs.
   // ?shot=N boots straight into a composed bookmark — use ITS time of day
@@ -255,28 +280,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     const classes = setup.classes;
     naniteClasses = classes ?? new Set(NAN_ALL);
     const dagClasses = setup.dagClasses;
-    // N8-D2 Stage 2e (D-N39) — the "boot only to dag" FLIP: terrain is the full-res
-    // clip-STREAMED DAG by default, no window-grid fallback. `?nanitedterrain` absent ⇒
-    // production default (gridN 128, clip on). `?nanitedterrain=0` is the explicit opt-out
-    // to the legacy implicit window grid (tooling / A-B). An explicit `?nanitedterrain=<gridN>`
-    // (>0) selects that grid and stays one-shot uniform unless `?nanitedclip=1` (preserves
-    // the per-flag tool semantics — probe-dterrain etc.).
-    const dterrainParam = qNan.get('nanitedterrain');
-    const terrainDefault = dterrainParam == null;
-    const dagTerrainGridN = terrainDefault ? 128 : Math.max(0, Math.floor(Number(dterrainParam)));
-    // N8-D2 (D-N38): ?nanitedtiles=T → split the terrain DAG into T×T tiles.
-    const dtilesParam = qNan.get('nanitedtiles');
-    const dagTerrainTiles = dtilesParam ? Math.max(1, Math.floor(Number(dtilesParam))) : 1;
-    // N8-D2 Stage 2b-1 (D-N39): ?nanitedpool=1 → route terrain tiles through the
-    // streaming tile POOL (reserveTilePool/attachHeightDagTile) rather than the
-    // per-tile registerHeightDag+attachHeightDag path. GPU-render parity proof.
-    const dagTerrainPool = qNan.get('nanitedpool') === '1';
-    // N8-D2 Stage 2b-2/2e (D-N39): the geometry CLIPMAP (concentric same-gridN rings,
-    // true full-res at the center, coarse to the field edge, bounded). DEFAULT ON (the
-    // 2e flip); `?nanitedclip=1` also forces it for an explicit gridN. Implies the pool.
-    const dagTerrainClip = terrainDefault || qNan.get('nanitedclip') === '1';
-    // N8-D2 Stage 2d: ?nanitedskirt=0 disables the inter-level seam skirts (A/B). Default ON.
-    const dagTerrainSkirt = qNan.get('nanitedskirt') !== '0';
+    // terrain mode consts resolved above the stream brain (scene scope)
     // N9-C0/C2: leaf heads — resolved in resolveNaniteSetup (see above)
     const naniteLeaf = setup.naniteLeaf;
     // S2: placement flows Source→ChunkContent→registry — the ONE placement path
@@ -306,6 +310,8 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       ...(naniteLeaf ? { leaf: true } : {}),
       // cold-boot overlap: crowns+DAGs already building since the top of boot
       ...(vegPrepPromise ? { pre: vegPrepPromise } : {}),
+      // S5: clip terrain streams through the brain (boot tiles + runtime clipmap)
+      brain,
     });
     (engine as unknown as { naniteRegistry?: unknown }).naniteRegistry = wr.registry;
     naniteRegistry = wr.registry;
@@ -319,17 +325,21 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
           : '') +
         `); deferred instances ${wr.deferredInstances}\n${wr.report.table}\ndeferred: ${wr.deferred.join('; ')}`,
     );
-    // N8-D2 Stage 2b-3 (D-N39): drive the clipmap streamer from the live camera
-    // — re-center the 1 m detail rings each frame (evict departed / stream in
-    // arrived). The coarser resident ring backstops in-flight loads ⇒ no holes.
-    if (wr.terrainStreamer) {
-      const streamer = wr.terrainStreamer;
-      engine.onUpdate(() => {
-        streamer.update(engine.camera.position.x, engine.camera.position.z);
-        Object.assign(engine.stats.counters, streamer.counters());
-      });
-    }
   }
+
+  // S5: drive the STREAM BRAIN from the live camera — pose feed at ~10 Hz
+  // (ring/window diffs, bakes and priorities run in the worker; teleports are
+  // detected from the pose discontinuity) + the ONE token-bucket mailbox drain
+  // (≤2 MB or ≤1.5 ms/frame across plane fills + tile attaches, strict FIFO =
+  // the demote→scroll→promote transaction) + the StreamOrigin rebase check
+  // (generated world: origin stays (0,0) forever — under the 8 km threshold).
+  engine.onUpdate(() => {
+    const c = engine.camera.position;
+    brain.update(c.x, c.z);
+    brain.drain(engine.renderer);
+    streamOrigin.maybeRebase(c.x, c.z, naniteRegistry);
+    Object.assign(engine.stats.counters, brain.counters(), streamOrigin.counters());
+  });
 
   // volumetric clouds (noise bake + sun-shadow map)
   BootTrace.phase('clouds + shadows + post');

@@ -56,11 +56,13 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
-function serialize(r: HeightDagResult): CachedBlob {
-  const n = r.clusters.length;
+/** pack DagClusters into one transferable Float64Array (CF fields each) — the
+ *  IndexedDB blob format AND the S5 stream-brain attach-packet wire format. */
+export function packClusters(clusters: readonly DagCluster[]): Float64Array {
+  const n = clusters.length;
   const cd = new Float64Array(n * CF);
   for (let i = 0; i < n; i++) {
-    const c = r.clusters[i] as DagCluster;
+    const c = clusters[i] as DagCluster;
     const b = i * CF;
     cd[b] = c.sx;
     cd[b + 1] = c.sy;
@@ -84,14 +86,25 @@ function serialize(r: HeightDagResult): CachedBlob {
     cd[b + 19] = c.per;
     cd[b + 20] = c.level; // LOD level — packed into cluster word7 for ?nanitedbg=lod
   }
-  return { gridVerts: r.gridVerts, indices: r.indices, clusterData: cd, clusterCount: n, stats: r.stats };
+  return cd;
 }
 
-function deserialize(b: CachedBlob): HeightDagResult {
-  const d = b.clusterData;
+function serialize(r: HeightDagResult): CachedBlob {
+  return {
+    gridVerts: r.gridVerts,
+    indices: r.indices,
+    clusterData: packClusters(r.clusters),
+    clusterCount: r.clusters.length,
+    stats: r.stats,
+  };
+}
+
+/** unpack a packClusters array back into DagClusters (the attachHeightDagTile
+ *  subset; group linkage is not carried — the cut renders without it). */
+export function unpackClusters(d: Float64Array, count: number): DagCluster[] {
   const g = (k: number): number => d[k] as number;
-  const clusters: DagCluster[] = new Array(b.clusterCount) as DagCluster[];
-  for (let i = 0; i < b.clusterCount; i++) {
+  const clusters: DagCluster[] = new Array(count) as DagCluster[];
+  for (let i = 0; i < count; i++) {
     const o = i * CF;
     clusters[i] = {
       level: g(o + 20),
@@ -119,7 +132,16 @@ function deserialize(b: CachedBlob): HeightDagResult {
       groupAsParent: -1, // linkage is not needed to render the cached cut
     };
   }
-  return { gridVerts: b.gridVerts, indices: b.indices, clusters, stats: b.stats };
+  return clusters;
+}
+
+function deserialize(b: CachedBlob): HeightDagResult {
+  return {
+    gridVerts: b.gridVerts,
+    indices: b.indices,
+    clusters: unpackClusters(b.clusterData, b.clusterCount),
+    stats: b.stats,
+  };
 }
 
 /** load a cached terrain DAG, or null on miss / any IndexedDB error (→ rebuild). */

@@ -18,7 +18,8 @@
  */
 
 export interface ClipmapConfig {
-  /** field texels per side (the full-res height lattice) */
+  /** field texel bound: valid lattice coords are [latMin, res) (the full-res
+   *  height lattice; res = latMax+1) */
   res: number;
   /** tile resolution — cells per side (every level, every tile) */
   gridN: number;
@@ -28,6 +29,9 @@ export interface ClipmapConfig {
   levels: number;
   /** tiles per side per level (EVEN; the inner M/2 block is the hole) */
   tilesPerSide: number;
+  /** S5: lattice lower bound — 0 (default) for origin-anchored fields; Estonia's
+   *  chunk-snapped AOI runs signed (cx −2…183 ⇒ negative texels). */
+  latMin?: number;
 }
 
 export interface ClipmapTile {
@@ -54,6 +58,7 @@ export interface ClipmapTile {
  */
 export function clipmapTiles(camX: number, camZ: number, cfg: ClipmapConfig): ClipmapTile[] {
   const { res, gridN, baseStride, levels, tilesPerSide: M } = cfg;
+  const latMin = cfg.latMin ?? 0;
   if (M % 2 !== 0 || M < 2) throw new Error(`clipmap: tilesPerSide must be even ≥2, got ${M}`);
   if (levels < 1) throw new Error(`clipmap: levels must be ≥1, got ${levels}`);
   const tiles: ClipmapTile[] = [];
@@ -80,7 +85,7 @@ export function clipmapTiles(camX: number, camZ: number, cfg: ClipmapConfig): Cl
         const tx0 = ox + ti * Tk;
         const tz0 = oz + tj * Tk;
         // drop tiles entirely off the field
-        if (tx0 >= res || tz0 >= res || tx0 + Tk <= 0 || tz0 + Tk <= 0) continue;
+        if (tx0 >= res || tz0 >= res || tx0 + Tk <= latMin || tz0 + Tk <= latMin) continue;
         // hollow: the finer level already covers this tile fully
         if (prev && tx0 >= prev.x0 && tz0 >= prev.z0 && tx0 + Tk <= prev.x1 && tz0 + Tk <= prev.z1) {
           continue;

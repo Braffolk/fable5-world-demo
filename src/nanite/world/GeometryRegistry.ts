@@ -1950,16 +1950,44 @@ export class GeometryRegistry {
   }
 
   /**
-   * (Re)load a terrain tile (buildHeightGrid output, global-texel gridVerts) into
-   * a slot's FIXED byte range — overwrites the previous occupant in place; no
-   * cursor growth. Mirrors attachHeightDag's pack but addresses poolBase+slot*cap
-   * and is REUSABLE (no already-has-DAG guard). The slot's mesh record is
-   * repointed at the new cluster range + sphere; partial uploads make the next
-   * frame's kernels see it.
+   * StreamOrigin rebase (S5 / F-3): the tile-pool mesh records' hf origin words
+   * are StreamOrigin-relative — shift every occupied slot by −Δ and rewrite
+   * through the live rewriteMeshRecord path (hundreds × 72 B, trivial). Mesh
+   * spheres shift with them (instance cull). Cluster/DAG sphere words stay as
+   * attached — the brain re-attaches tiles after a rebase (it is a
+   * teleport-scale event), and the kernel-side origin add lands with S6's
+   * camera-relative pass; the generated world never rebases (origin (0,0)).
+   */
+  rebaseTilePoolOrigins(dx: number, dz: number): void {
+    if (dx === 0 && dz === 0) return;
+    for (const h of this.tilePoolHandles) {
+      const e = this.entries[h];
+      if (!e?.hf) continue;
+      e.hf.originX -= dx;
+      e.hf.originZ -= dz;
+      e.sphere = [e.sphere[0] - dx, e.sphere[1], e.sphere[2] - dz, e.sphere[3]];
+      if (this.built && e.uploaded) this.rewriteMeshRecord(e);
+    }
+  }
+
+  /**
+   * (Re)load a terrain tile (buildHeightGrid output) into a slot's FIXED byte
+   * range — overwrites the previous occupant in place; no cursor growth.
+   * Mirrors attachHeightDag's pack but addresses poolBase+slot*cap and is
+   * REUSABLE (no already-has-DAG guard). The slot's mesh record is repointed at
+   * the new cluster range + sphere; partial uploads make the next frame's
+   * kernels see it.
+   *
+   * S5: `hf` sets PER-TILE mesh-record origin words (gridVerts are then
+   * TILE-LOCAL texel coords) — StreamOrigin-relative placement (F-3): rebase
+   * rewrites these words via rebaseTilePoolOrigins, and Estonia's large signed
+   * lattice fits the 13-bit coord field. Omitted ⇒ the slot keeps the shared
+   * origin from reserveTilePool (the legacy uniform-tile path, global coords).
    */
   attachHeightDagTile(
     slot: number,
     build: { gridVerts: Uint32Array; indices: Uint32Array; clusters: DagCluster[] },
+    hf?: { originX: number; originZ: number; cellSize: number },
   ): void {
     if (!this.built) throw new Error('GeometryRegistry: attachHeightDagTile before build()');
     const pool = this.tilePool;
@@ -1967,6 +1995,13 @@ export class GeometryRegistry {
     if (slot < 0 || slot >= pool.slots) throw new Error(`GeometryRegistry: tile slot ${slot} out of range`);
     const handle = this.tilePoolHandles[slot] as number;
     const entry = this.entries[handle] as MeshEntry;
+    if (hf) {
+      const ehf = entry.hf;
+      if (!ehf) throw new Error(`GeometryRegistry: tile slot ${slot} is not a heightfield mesh`);
+      ehf.originX = hf.originX;
+      ehf.originZ = hf.originZ;
+      ehf.cellSize = hf.cellSize;
+    }
     const { gridVerts, indices, clusters } = build;
     const vCount = gridVerts.length;
     const tCount = indices.length / 3;
