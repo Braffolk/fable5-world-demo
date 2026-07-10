@@ -105,8 +105,9 @@ const TERRAIN_WIN_QUADS = 7;
 /** N9-C0: pack a per-species foliage tint into the leaf head's matParam (mesh
  *  word 7) — linear RGB in the low 3 bytes + hueVar in the high byte (each 8-bit
  *  unorm; the resolve isL branch unpacks it). The leaf channel carries no bark
- *  layer / wind-profile byte, so all 32 bits are the tint. */
-function packLeafTint(c: { r: number; g: number; b: number; hueVar: number }): number {
+ *  layer / wind-profile byte, so all 32 bits are the tint. Shared verbatim with
+ *  ForestScene (which registers the SAME leaf-head matParam on its own path). */
+export function packLeafTint(c: { r: number; g: number; b: number; hueVar: number }): number {
   const u8 = (x: number): number => Math.max(0, Math.min(255, Math.round(x * 255)));
   return (u8(c.r) | (u8(c.g) << 8) | (u8(c.b) << 16) | (u8(c.hueVar) << 24)) >>> 0;
 }
@@ -287,6 +288,36 @@ interface VegKnobs {
 }
 
 /**
+ * Apply the build-time module-global knobs that ForestScene and the world's
+ * resolveVegKnobs set IDENTICALLY from the URL — cluster caps (?clustertris 256 /
+ * ?clusterfill 0.95), aggregate leaf-LOD scale (?leaflodk), voxel occupancy
+ * (?voxocc), and the voxlod ladder (?voxlodk/levels/sparse/shell). ONE home so the
+ * two build paths can never drift (the historic ForestScene-vs-world config bug).
+ * anchorL0 is passed in because it is the one per-scene difference (world anchors on
+ * APP_FOV_DEG, forest on its live camera fov). Must run before any registerMesh /
+ * buildDag / voxelize consumes them.
+ */
+export function applyVegBuildKnobs(q: URLSearchParams, anchorL0: number): void {
+  setClusterTriCap(Number(q.get('clustertris')) || 256);
+  setClusterFill(Number(q.get('clusterfill')) || 0.95);
+  const lkRaw = q.get('leaflodk');
+  if (lkRaw !== null) setAggLodErrorK(Number(lkRaw));
+  const occRaw = q.get('voxocc');
+  if (occRaw !== null) setVoxOccThreshold(Number(occRaw));
+  const kRaw = q.get('voxlodk');
+  const lRaw = q.get('voxlodlevels');
+  const spRaw = q.get('voxlodsparse');
+  const shRaw = q.get('voxlodshell');
+  setVoxlodConfig({
+    anchorL0,
+    errorK: kRaw !== null ? Number(kRaw) : undefined,
+    levels: lRaw !== null ? Number(lRaw) : undefined,
+    sparseK: spRaw !== null ? Number(spRaw) : undefined,
+    shell: shRaw !== null ? Number(shRaw) : undefined,
+  });
+}
+
+/**
  * Parse + APPLY the world-scene build knobs (moved out of buildWorldRegistry for
  * the 2026-07-04 cold-boot overlap; the WHY of each default lives on the knob):
  *
@@ -313,8 +344,6 @@ interface VegKnobs {
  */
 function resolveVegKnobs(renderer: Renderer): VegKnobs {
   const qVox = new URLSearchParams(window.location.search);
-  setClusterTriCap(Number(qVox.get('clustertris')) || 256);
-  setClusterFill(Number(qVox.get('clusterfill')) || 0.95);
   const forceVoxRaw = qVox.get('forcevox');
   const forceVoxAll = forceVoxRaw === '1' || forceVoxRaw === 'all';
   const forceVoxId = forceVoxRaw !== null && !forceVoxAll ? Number(forceVoxRaw) : null;
@@ -323,14 +352,11 @@ function resolveVegKnobs(renderer: Renderer): VegKnobs {
   const voxGridDim = Number(qVox.get('voxgrid') ?? DEFAULT_VOXEL_GRID_DIM) || DEFAULT_VOXEL_GRID_DIM;
   const transitionDist = Number(qVox.get('voxnear') ?? DEFAULT_TRANSITION_DIST) || DEFAULT_TRANSITION_DIST;
   const farTilesOn = qVox.get('fartiles') !== '0';
+  // ⚠️ world-only defaults (NOT the forest's 140 / 0.6): aggDist 280 = hillside-wall
+  // fix (2026-07-03); ftCell 0.75 keeps the 4 km world under the 256 MB brick cliff.
   const aggDist = Number(qVox.get('aggdist') ?? 280) || 280;
   const ftCell = Number(qVox.get('ftcell') ?? 0.75) || 0.75;
   const lkRaw = qVox.get('leaflodk');
-  {
-    if (lkRaw !== null) setAggLodErrorK(Number(lkRaw));
-    const occRaw = qVox.get('voxocc');
-    if (occRaw !== null) setVoxOccThreshold(Number(occRaw));
-  }
   // crown-LOD ladder error scale: shares the ?leaflodk knob but keeps its OWN
   // default (0.4, 2026-07-09 user-approved bake — was 1.0). At scale 1 the deep
   // rungs only engaged in the far half of 0..60 m; 0.4 pulls the whole ladder K×
@@ -338,20 +364,10 @@ function resolveVegKnobs(renderer: Renderer): VegKnobs {
   const crownLodErrorK = lkRaw !== null && Number.isFinite(Number(lkRaw)) && Number(lkRaw) > 0 ? Number(lkRaw) : 0.4;
   const voxLod = qVox.get('voxlod') !== '0';
   const anchorH = internalSize(renderer, new Vector2()).y; // ?rscale: τ anchor follows the render res
-  {
-    const anchorL0 = computeVoxlodAnchorL0(transitionDist, anchorH, APP_FOV_DEG);
-    const kRaw = qVox.get('voxlodk');
-    const lRaw = qVox.get('voxlodlevels');
-    const spRaw = qVox.get('voxlodsparse');
-    const shRaw = qVox.get('voxlodshell');
-    setVoxlodConfig({
-      anchorL0,
-      errorK: kRaw !== null ? Number(kRaw) : undefined,
-      levels: lRaw !== null ? Number(lRaw) : undefined,
-      sparseK: spRaw !== null ? Number(spRaw) : undefined,
-      shell: shRaw !== null ? Number(shRaw) : undefined,
-    });
-  }
+  // APPLY the build-time module knobs shared VERBATIM with ForestScene. anchorL0
+  // is the sole scene difference — world anchors on APP_FOV_DEG (no camera exists
+  // at build time), forest on its live camera fov (both 55° today).
+  applyVegBuildKnobs(qVox, computeVoxlodAnchorL0(transitionDist, anchorH, APP_FOV_DEG));
   return {
     forceVoxRaw,
     forceVoxAll,

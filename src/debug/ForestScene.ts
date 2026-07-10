@@ -19,13 +19,13 @@
 
 import { FloatType, StorageTexture } from 'three/webgpu';
 import type { WorldContext } from './Scenes';
+import { BootTrace } from './BootTrace';
 import { buildVegLibrary, type VegPool } from '../vegetation/VegLibrary';
 import {
   GeometryRegistry,
   DAG_VERT_STRIDE,
   MAX_CLUSTER_TRIS,
   explicitToDagVerts,
-  setClusterTriCap,
 } from '../nanite/world/GeometryRegistry';
 import { type DagBuild, buildDag, meshletizeDag } from '../nanite/build/BuildDag';
 import {
@@ -37,7 +37,7 @@ import {
   packFarTiles,
   unpackFarTiles,
 } from '../nanite/world/BootCache';
-import { buildAggregateDag, setAggLodErrorK } from '../nanite/build/BuildAggregateDag';
+import { buildAggregateDag } from '../nanite/build/BuildAggregateDag';
 import {
   appendFarTiles,
   buildFarTilesAsync,
@@ -47,8 +47,12 @@ import {
   type FarTileSpecies,
 } from '../nanite/world/FarTiles';
 import type { BrickCPU } from '../nanite/voxel/VoxelBrick';
-import { setClusterFill } from '../nanite/build/Clusterize';
-import { DEFAULT_TRANSITION_DIST, geometryToSource } from '../nanite/world/WorldRegistry';
+import {
+  DEFAULT_TRANSITION_DIST,
+  applyVegBuildKnobs,
+  geometryToSource,
+  packLeafTint,
+} from '../nanite/world/WorldRegistry';
 import {
   appendVoxelCrown,
   DEFAULT_VOXEL_GRID_DIM,
@@ -56,8 +60,6 @@ import {
   computeVoxlodAnchorL0,
   prepareVoxelCrown,
   releaseVoxelizerScratch,
-  setVoxlodConfig,
-  setVoxOccThreshold,
   voxOccThreshold,
   voxlodLevels,
 } from '../nanite/build/VoxelizeCrown';
@@ -70,35 +72,14 @@ import { PostStack } from '../render/PostStack';
 import { updateSunUniforms } from '../render/VegMaterials';
 import { setWindContext, windU } from '../render/Wind';
 
-/** per-species leaf tint → matParam (linear RGB low 3 bytes + hueVar high byte) */
-function packLeafTint(c: { r: number; g: number; b: number; hueVar: number }): number {
-  const u8 = (x: number): number => Math.max(0, Math.min(255, Math.round(x * 255)));
-  return (u8(c.r) | (u8(c.g) << 8) | (u8(c.b) << 16) | (u8(c.hueVar) << 24)) >>> 0;
-}
-
 export async function buildForestScene(ctx: WorldContext): Promise<void> {
   const { engine, seed } = ctx;
   const q = new URLSearchParams(window.location.search);
-  // boot stage map ([forest][boot] lines) — feeds the boot-cache design (which stages
-  // are worth caching) and any future boot-regression triage.
-  const tBoot0 = performance.now();
-  let tBootPrev = tBoot0;
-  const bootStage = (label: string): void => {
-    const now = performance.now();
-    // eslint-disable-next-line no-console
-    console.log(`[forest][boot] ${label} +${(now - tBootPrev).toFixed(0)}ms (cum ${((now - tBoot0) / 1000).toFixed(1)}s)`);
-    tBootPrev = now;
-  };
   const nTrees = Math.max(1, Math.floor(Number(q.get('trees') ?? '200000')));
   const spacing = Number(q.get('spacing') ?? '4');
   const leafDensity = Math.max(1, Math.floor(Number(q.get('leafdensity') ?? '4000')));
   const wantDag = q.get('dag') !== '0';
   const mode = (q.get('nanitedbg') as 'flat' | 'cluster' | 'lod' | null) ?? 'cluster';
-  // A/B knobs — MUST be set before the DAG builds + the nanite shaders build (all read the
-  // cap live). ForestScene has its OWN build path (not buildWorldRegistry), so it wires these
-  // itself; without this `?clustertris`/`?clusterfill` are silently ignored here.
-  setClusterTriCap(Number(q.get('clustertris')) || 256);
-  setClusterFill(Number(q.get('clusterfill')) || 0.95);
 
   // voxel-foliage (spec §3 / Stage 3a): the canonical perf config is ?scene=forest, so the
   // mesh→voxel transition is wired HERE (ForestScene has its OWN build path). Voxelize each
@@ -126,32 +107,20 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
   // the SAME crown through a band-anchored octave ladder, near refines, picked by the screen-error
   // cut). ?voxlod=0 forces the old single-level degenerate always-cut DAG (the A/B baseline).
   const voxLod = q.get('voxlod') !== '0';
-  // ANCHOR the ladder to the band (correction 1): ownError(L0) = transitionDist*tau/projK so the
-  // FINEST level's cut lands at the mesh→voxel handoff and each octave of distance descends one
-  // level (spans [35,2000] m). projK mirrors the cull (cot(fovY/2)*renderHeight*0.5).
-  {
-    const anchorL0 = computeVoxlodAnchorL0(
+  // APPLY the build-time module knobs — cluster caps (?clustertris/?clusterfill), leaf-LOD
+  // scale (?leaflodk), voxel occupancy (?voxocc), and the band-anchored voxlod ladder
+  // (?voxlodk/levels/sparse/shell) — through the ONE helper the world path also uses, so
+  // the two build paths can never drift on these. anchorL0: ownError(L0) = transitionDist·τ/projK
+  // so the finest level's cut lands at the mesh→voxel handoff; forest anchors on the LIVE camera
+  // fov (world uses APP_FOV_DEG — equal at 55° today). MUST run before any DAG/voxelize build.
+  applyVegBuildKnobs(
+    q,
+    computeVoxlodAnchorL0(
       transitionDist,
       internalSize(engine.renderer, new Vector2()).y, // ?rscale: τ anchor follows render res
       engine.camera.fov,
-    );
-    // ?voxlodk= (anchor multiplier) / ?voxlodlevels= / ?voxlodsparse= / ?voxlodshell= sweep the
-    // ladder for A/B; unset = the band-anchored defaults (7 levels, K=1, sparse off, shell off).
-    const kRaw = q.get('voxlodk');
-    const lRaw = q.get('voxlodlevels');
-    const spRaw = q.get('voxlodsparse');
-    const shRaw = q.get('voxlodshell');
-    setVoxlodConfig({
-      anchorL0,
-      errorK: kRaw !== null ? Number(kRaw) : undefined,
-      levels: lRaw !== null ? Number(lRaw) : undefined,
-      sparseK: spRaw !== null ? Number(spRaw) : undefined,
-      shell: shRaw !== null ? Number(shRaw) : undefined,
-    });
-    // ?voxocc= — occupancy coverage threshold (crown slimming; see VoxelizeCrown).
-    const occRaw = q.get('voxocc');
-    if (occRaw !== null) setVoxOccThreshold(Number(occRaw));
-  }
+    ),
+  );
   // ?fartiles=1 (wave 3, EXPERIMENTAL): cross-instance far-field aggregation — beyond
   // ?aggdist (default 140 m) whole 64 m tiles of trees render as ONE merged voxel head
   // (crowns + trunk columns splatted at boot; see FarTiles.ts). Collapses far cluster/brick
@@ -161,18 +130,9 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
   // instMinPx pop-out to the horizon. ?fartiles=0 reverts to per-tree-only.
   const farTilesOn = q.get('fartiles') !== '0';
   const aggDist = Number(q.get('aggdist') ?? DEFAULT_AGG_DIST) || DEFAULT_AGG_DIST;
-  // ?leaflodk= — aggregate LEAF ladder error scale (see BuildAggregateDag AGG_LOD_CFG). The
-  // 2026-07-01 cost-map found the leaf-mesh band (<35 m) renders LOD0 everywhere (~10.3M of
-  // 12.4M eye visTris) because the ladder's L1 cut lands beyond the voxel handoff; K<1 pulls
-  // coarsening in-band (0.25 ≈ L1 at ~14 m). Baked at DAG build; set before buildAggregateDag.
-  {
-    // DEFAULT 0.4 lives in BuildAggregateDag AGG_LOD_CFG (SHARED forest+world since
-    // 2026-07-03); ?leaflodk= is the per-boot override.
-    const lk = q.get('leaflodk');
-    if (lk !== null) setAggLodErrorK(Number(lk));
-  }
 
   // ── tree geometry (real crowns, full leaf density) ────────────────────────
+  BootTrace.phase('forest: veg library (trees + bark textures)');
   ctx.progress(0.1, 'forest: building veg library');
   const lib = await buildVegLibrary(
     engine.renderer,
@@ -185,7 +145,7 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
   if (pools.length === 0) throw new Error('forest: no canopy tree pools with leaf crowns');
 
   // ── register bark + leaf per species ──────────────────────────────────────
-  bootStage('veg library (trees gen + bark textures)');
+  BootTrace.phase('forest: mesh registration + crown voxelization prep');
   ctx.progress(0.5, 'forest: registering tree meshes');
   // ── boot cache (DDC): crown voxelizations / DAG builds / fartiles splat ────
   // key = builder-source hash + every param feeding those builds (BootCache.ts).
@@ -293,7 +253,7 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
 
   // ── plant a jittered grid, species spatially mixed; per-mesh streams must be
   //    contiguous, so collect per-pool instance lists then bind each once ─────
-  bootStage('mesh registration + crown voxelization prep');
+  BootTrace.phase('forest: planting + instance streams');
   if (!cachedCrowns && voxOn && !noLeaves && crownPacks.length > 0) {
     void bootCache.put('crowns', pools.map((_, i) => crownPacks[i] ?? null));
   }
@@ -334,7 +294,7 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
   }
 
   // ── DAG build (sync; ~0.8 s/crown @ 4000) → addLate → build → attach ──────
-  bootStage('planting + instance streams');
+  BootTrace.phase('forest: LOD DAG builds + fartiles splat');
   const builds: { handle: number; dag: DagBuild }[] = [];
   if (dagJobs.length > 0) {
     ctx.progress(0.75, `forest: building ${dagJobs.length} LOD DAGs`);
@@ -441,13 +401,12 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
         `${ftClusters} clusters, aggDist ${aggDist} m, built in ${(performance.now() - tFt0).toFixed(0)} ms`,
     );
   }
-  bootStage('LOD DAG builds + fartiles splat');
   // C (memory arc): the inline (main-thread) crown voxelizations are done — drop the
   // persistent ~490 MB cell-accumulator scratch before it sits resident all session.
   releaseVoxelizerScratch();
+  BootTrace.phase('forest: registry build + upload (+ voxel/fartile append)');
   ctx.progress(0.9, 'forest: building registry');
   const report = reg.build(engine.renderer, engine.stats.counters);
-  bootStage('registry build + GPU upload');
   for (const b of builds) reg.attachDag(b.handle, b.dag);
   // voxel-foliage (§5.2 / Stage 3a): append each crown's bricks + register a voxel:7 sibling
   // head over the SAME instances now that build() froze the caps, then hand off the leaf head
@@ -529,11 +488,11 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
     // sit at y=0 over it (the terrain itself is not in the registry, so not rendered).
     // GI/CSM/canopy = null (no GI bounce, no shadows — forest trees are castShadows:false
     // anyway; a shadow profile is a separate follow-up). Bark textures come from VegLib.
+    BootTrace.phase('forest: env for the full pipe (heightfield + sky + post + NaniteFrame)');
     ctx.progress(0.93, 'forest: env for the full pipe (heightfield + sky + post)');
     const hf = await Heightfield.generate(engine.renderer, seed, (p, m) =>
       ctx.progress(0.93 + p * 0.05, m),
     );
-    bootStage('vox append + heightfield');
     const bootTod = ctx.params.timeOfDay;
     const sunSky = new SunSky(engine, bootTod);
     await sunSky.init(engine.renderer);
@@ -559,7 +518,6 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
       barkTexA: lib.barkArray?.texA ?? null,
       barkTexB: lib.barkArray?.texB ?? null,
     });
-    bootStage('sky + post + NaniteFrame build');
     engine.post = frame as unknown as typeof engine.post;
     // meter() is driven once/frame by Engine.renderStep (this.post.meter) — same as
     // the world scene. Do NOT also wire it via onUpdate or it dispatches autoExposure
