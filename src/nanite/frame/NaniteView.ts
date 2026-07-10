@@ -20,6 +20,7 @@ import { Vector2 } from 'three';
 import type { Texture } from 'three';
 import type { WebGPURenderer } from 'three/webgpu';
 import type { Engine } from '../../core/Engine';
+import type { TerrainField } from '../world/TerrainField';
 import type { GeometryRegistry } from '../world/GeometryRegistry';
 import { deriveLodParams, makeNaniteCam } from '../NaniteCommon';
 import { buildNaniteCull } from '../cull/NaniteCull';
@@ -35,9 +36,10 @@ export interface NaniteViewHandles {
 export function buildNaniteView(
   engine: Engine,
   registry: GeometryRegistry,
-  /** r32float terrain height texture for the raster's terrain fetch (scenes
-   *  without terrain clusters bind a real-but-never-sampled plane) */
-  heightTex: Texture,
+  /** terrain height source for the raster's terrain fetch — the TerrainField
+   *  planes (S3b) or a raw r32float texture (scenes without terrain clusters
+   *  bind a real-but-never-sampled plane) */
+  heightSrc: Texture | TerrainField,
   mode: 'flat' | 'cluster' | 'hzb' | 'lod',
 ): NaniteViewHandles {
   const renderer = engine.renderer;
@@ -70,7 +72,7 @@ export function buildNaniteView(
   );
   const raster = buildNaniteRaster(
     registry.gpu,
-    heightTex,
+    heightSrc,
     cam,
     cull,
     vis,

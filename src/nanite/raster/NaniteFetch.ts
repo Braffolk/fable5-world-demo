@@ -13,6 +13,7 @@
 import type { Texture } from 'three';
 import type { StorageTexture } from 'three/webgpu';
 import { If, clamp, float, mix, smoothstep, texture, time, uint, vec2, vec3, wgslFn } from 'three/tsl';
+import { TerrainField } from '../world/TerrainField';
 import type { NB, NF, NU, NV2, NV3, NV4 } from '../../gpu/TSLTypes';
 import { DISP } from '../../render/TerrainMaterial';
 import { PERIOD_FBM, PERIOD_RID, PERIOD_VAL } from '../../gpu/passes/NoiseBake';
@@ -78,8 +79,19 @@ interface TrunkWindFields {
  * 45→85 m) applied to heightfield vertices at fetch time, so the raster, the
  * HW passes and the resolve all see the displaced surface. (The full-frame
  * C1 gate vs ?nanite=0 is what verifies displacement.)
+ *
+ * S3b: two input shapes during the staged migration (?tfield A/B) — the FIELD
+ * shape reads the TerrainField planes (slope from a height-plane CD instead of
+ * normalTex.w; snow/rockExposure/flow from the fields plane; riverDepth derived
+ * as waterY − ground). The legacy hf-texture shape is EXCISED at S3b end.
  */
-export interface TerrainDisp {
+export interface TerrainDispField {
+  field: TerrainField;
+  noiseA: StorageTexture;
+  noiseB: StorageTexture;
+  camPos: UniformV3;
+}
+export interface TerrainDispLegacy {
   normalTex: StorageTexture;
   biomeTex: StorageTexture;
   fieldsTex: StorageTexture;
@@ -87,6 +99,7 @@ export interface TerrainDisp {
   noiseB: StorageTexture;
   camPos: UniformV3;
 }
+export type TerrainDisp = TerrainDispField | TerrainDispLegacy;
 
 /**
  * TerrainTiles micro-displacement at a world xz, verbatim (world-space fields;
@@ -95,23 +108,44 @@ export interface TerrainDisp {
  * a blade stands on is the DISPLACED surface, not raw heightTex) evaluate the
  * EXACT same expression tree as the terrain vertices. Call inside an Fn stack.
  */
-export function terrainDispAt(disp: TerrainDisp, wpos: NV2): NF {
+export function terrainDispAt(disp: TerrainDisp, wpos: NV2, groundH?: NF): NF {
+  if ('field' in disp && !groundH) {
+    // riverDepth is DERIVED (waterY − ground) on the field shape — every caller
+    // already holds the ground height it displaces (vert fetch / grass root)
+    throw new Error('terrainDispAt: field-shape disp needs the ground height');
+  }
   const camD = wpos.sub(vec3(disp.camPos).xz).length();
   const dOut = float(0).toVar();
   If(camD.lessThan(float(DISP.fade1)), () => {
-    const uvV = wpos.div(WORLD_SIZE).add(0.5) as unknown as NV2;
-    const nsV = texture(disp.normalTex, uvV, 0) as unknown as NV4;
-    const bioV = texture(disp.biomeTex, uvV, 0) as unknown as NV4;
-    const fldV = texture(disp.fieldsTex, uvV, 0) as unknown as NV4;
-    const rockK = smoothstep(DISP.slopeKnee0, DISP.slopeKnee1, nsV.w).max(
-      bioV.a.mul(0.85),
-    );
-    const gravelK = smoothstep(0.32, 0.7, fldV.y)
-      .max(smoothstep(0.02, 0.2, fldV.z))
-      .mul(float(DISP.gravel));
+    let rockK: NF;
+    let gravelK: NF;
+    let snow: NF;
+    if ('field' in disp) {
+      // TerrainField shape (S3b): slope = height-plane CD (the retired
+      // normalTex.w stencil); flow/snow/rockExposure = ONE filtered fields-plane
+      // tap; riverDepth = waterY − ground (spec §3: not stored, derived).
+      const fld = disp.field.fieldsAt(wpos);
+      const slope = disp.field.fieldSlope(wpos);
+      const riverDepth = disp.field.fieldWaterYNearest(wpos).sub(groundH as NF).max(0);
+      rockK = smoothstep(DISP.slopeKnee0, DISP.slopeKnee1, slope).max(fld.w.mul(0.85)) as unknown as NF;
+      gravelK = smoothstep(0.32, 0.7, fld.y)
+        .max(smoothstep(0.02, 0.2, riverDepth))
+        .mul(float(DISP.gravel)) as unknown as NF;
+      snow = fld.z as unknown as NF;
+    } else {
+      const uvV = wpos.div(WORLD_SIZE).add(0.5) as unknown as NV2;
+      const nsV = texture(disp.normalTex, uvV, 0) as unknown as NV4;
+      const bioV = texture(disp.biomeTex, uvV, 0) as unknown as NV4;
+      const fldV = texture(disp.fieldsTex, uvV, 0) as unknown as NV4;
+      rockK = smoothstep(DISP.slopeKnee0, DISP.slopeKnee1, nsV.w).max(bioV.a.mul(0.85)) as unknown as NF;
+      gravelK = smoothstep(0.32, 0.7, fldV.y)
+        .max(smoothstep(0.02, 0.2, fldV.z))
+        .mul(float(DISP.gravel)) as unknown as NF;
+      snow = bioV.g as unknown as NF;
+    }
     const dispAmp = (mix(float(DISP.base), float(DISP.rock), rockK) as unknown as NF)
       .max(gravelK)
-      .mul(bioV.g.mul(0.75).oneMinus())
+      .mul(snow.mul(0.75).oneMinus())
       .mul(clamp(float(DISP.fade1).sub(camD).div(DISP.fade1 - DISP.fade0), 0, 1));
     const f1 = (texture(disp.noiseA, wpos.div(DISP.sF1 * PERIOD_FBM), 0) as unknown as NV4).y
       .mul(2)
@@ -221,7 +255,9 @@ const nanWindF16 = (): ReturnType<typeof wgslFn> =>
 
 export function makeFetch(
   gpu: RegistryGpu,
-  heightTex: Texture,
+  /** terrain height source: the TerrainField plane pyramid (S3b default), or the
+   *  legacy global heightTex (?tfield staging arm — EXCISED at S3b end) */
+  heightSrc: Texture | TerrainField,
   disp?: TerrainDisp,
   wind?: TrunkWindOpt,
   /** N8-D2 Stage 2e: bind the stride-1 terrain-DAG vertex buffer (gpu.hfVerts) in
@@ -413,11 +449,17 @@ export function makeFetch(
    *  Only how (sx,sz) are obtained differs (adaptive-indexed vs implicit window grid). */
   const hfWorld = (ctx: VertCtx, sx: NU, sz: NU, skirtDrop: NF): NV3 => {
     const out = vec3(0).toVar();
-    const h = texLoadR(heightTex, sx, sz);
     const wx = toF(sx).mul(ctx.cell).add(ctx.oX);
     const wz = toF(sz).mul(ctx.cell).add(ctx.oZ);
+    // S3b: height from the TerrainField plane pyramid — terrain verts sit ON the
+    // finest lattice, so the finest arm's exact-texel tap is bit-identical to the
+    // legacy global heightTex read; coarser windows bilerp. One branch arm runs,
+    // near-uniform per cluster (A15's level-select cost stays off the hot path).
+    const h = heightSrc instanceof TerrainField
+      ? heightSrc.fieldHeightHot(vec2(wx, wz) as unknown as NV2)
+      : texLoadR(heightSrc, sx, sz);
     if (disp) {
-      const dOut = terrainDispAt(disp, vec2(wx, wz) as unknown as NV2);
+      const dOut = terrainDispAt(disp, vec2(wx, wz) as unknown as NV2, h);
       out.assign(vec3(wx, h.add(dOut).sub(skirtDrop), wz));
     } else {
       out.assign(vec3(wx, h.sub(skirtDrop), wz));

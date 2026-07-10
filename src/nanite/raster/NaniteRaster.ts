@@ -22,6 +22,7 @@
 import { Mesh, Scene, Vector3 } from 'three';
 import { BufferGeometry, Float32BufferAttribute, Sphere } from 'three';
 import type { PerspectiveCamera, Texture } from 'three';
+import type { TerrainField } from '../world/TerrainField';
 import {
   IndirectStorageBufferAttribute,
   NodeMaterial,
@@ -188,7 +189,9 @@ export interface NaniteRasterHandles {
 
 export function buildNaniteRaster(
   gpu: RegistryGpu,
-  heightTex: Texture,
+  /** terrain height source: TerrainField planes (S3b default) or the legacy
+   *  global heightTex (?tfield staging arm) */
+  heightSrc: Texture | TerrainField,
   cam: NaniteCam,
   cull: {
     qRasterRO: BufOf<UV2>;
@@ -371,7 +374,7 @@ export function buildNaniteRaster(
   const auditV = sU32Views(auditAttr, 4);
 
   // ---- shared fetch helpers (NaniteFetch.ts — also the resolve's decode) ----------
-  const nfetch = makeFetch(gpu, heightTex, disp, wind);
+  const nfetch = makeFetch(gpu, heightSrc, disp, wind);
   // fetchWorldVertDyn is used only by the HW vertex stage (./raster/Hw, via nfetch).
   const { makeCtx, fetchWorldVert } = nfetch;
   // A2 (2026-07-09 HW vertex-prepass): CLASS-SPLIT fetch variants for the two `_cl` world1
@@ -379,8 +382,8 @@ export function buildNaniteRaster(
   // only the heightfield arm — so each `_cl` vertex shader sheds the OTHER class's fetch-union
   // registers (same trick ?ksplit uses for the SW kernel). Consumed by buildHw ONLY on the
   // world1 (ctxPrepass / clusterCtxV != null) camera path; the flat ctx read replaces makeCtx.
-  const nfetchExplicit = makeFetch(gpu, heightTex, disp, wind, true, 'explicit');
-  const nfetchTerrain = makeFetch(gpu, heightTex, disp, wind, true, 'terrain');
+  const nfetchExplicit = makeFetch(gpu, heightSrc, disp, wind, true, 'explicit');
+  const nfetchTerrain = makeFetch(gpu, heightSrc, disp, wind, true, 'terrain');
   // HW vertex-prepass (2026-07-09, DEFAULT ON): the `_clE` mesh HW draw reads its verts
   // pre-projected from projVertBuf (w=1 screen-linear clip) instead of re-running the
   // compute-fetch + wind + vp + snap path. `?hwproj=0` is the disable-only escape back to
@@ -509,7 +512,7 @@ export function buildNaniteRaster(
     // splitVariant===undefined ⇒ the module nfetch (identical node graph to the
     // pre-split kernel).
     const kFetch = splitVariant
-      ? makeFetch(gpu, heightTex, disp, wind, true, splitVariant)
+      ? makeFetch(gpu, heightSrc, disp, wind, true, splitVariant)
       : nfetch;
     const kMakeCtx = kFetch.makeCtx;
     const kn = Fn(() => {

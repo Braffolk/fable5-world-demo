@@ -393,7 +393,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     ) {
       if (naniteRegistry) {
         const { buildNaniteView } = await import('../nanite/frame/NaniteView');
-        engine.post = buildNaniteView(engine, naniteRegistry, hf.heightTex, nanitedbg);
+        engine.post = buildNaniteView(engine, naniteRegistry, field, nanitedbg);
         // eslint-disable-next-line no-console
         console.log(`[laas] nanitedbg=${nanitedbg}: N2 debug view replacing the frame render`);
       } else {
@@ -405,7 +405,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       // the migrated classes.
       BootTrace.phase('nanite: frame build (raster/resolve/grass)');
       const { buildNaniteFrame } = await import('../nanite/frame/NaniteFrame');
-      const nanFrame = buildNaniteFrame(engine, naniteRegistry, hf, post, {
+      const nanFrame = buildNaniteFrame(engine, naniteRegistry, hf, field, post, {
         gi: ablate.has('gi') ? null : gi,
         canopyTex,
         // sunShadows carries the "scene has sun shadows" signal; the cloud gate is

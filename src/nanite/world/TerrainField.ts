@@ -5,14 +5,18 @@
  * both the generated world and Estonia ride), never by copying a source's GPU
  * textures. Owns:
  *
- *  - HEIGHT plane pyramid — r32float 2048² per level, level k texel = base·4^k.
- *    Levels = the source's height lods (generated: [0,1], statically filled once;
- *    S5 adds toroidal scroll — per-level origins are already uniforms so scrolling
+ *  - HEIGHT plane pyramid — r32float, level k texel = base·4^k, res per level by
+ *    the COVER-OR-WINDOW rule (levelRes): the 2048² spec window, grown ≤4096²
+ *    when that covers the source's whole span (the generated world rides
+ *    full-coverage static planes; Estonia keeps camera windows). Levels = the
+ *    source's height lods (generated: [0,1], statically filled once; S5 adds
+ *    toroidal scroll — per-level origins are already uniforms so scrolling
  *    re-points them without shader rebuilds).
- *  - BIOME/CANOPY planes — rgba8 1024²: classId, vegDensity, canopyHeight, cover.
- *    Generated fill provides class+vegDensity; canopyHeight/cover stay 0 until S4
- *    fills them from resident tree records + the asset-gen canopy pyramid.
- *  - SURFACE-FIELDS planes (F-1) — rgba8 1024², L0/L1: moisture, flow, snow,
+ *  - BIOME/CANOPY planes — rgba8 (cover-or-window, 1024² window ≤2048² cap):
+ *    classId, vegDensity, canopyHeight, cover. Generated fill provides
+ *    class+vegDensity; canopyHeight/cover stay 0 until S4 fills them from
+ *    resident tree records + the asset-gen canopy pyramid.
+ *  - SURFACE-FIELDS planes (F-1) — rgba8, same res rule: moisture, flow, snow,
  *    rockExposure. riverDepth is NOT stored: it is exactly waterY − height at wet
  *    texels, both of which are planes here (one derivation, no duplicate field).
  *  - WATER planes (F-1) — waterY at ~sim-res texel + a ×8 min-reduced far level.
@@ -31,17 +35,25 @@
  * the finer levels on the camera.
  */
 
-import { DataTexture, FloatType, NearestFilter, RGBAFormat, RedFormat, UnsignedByteType, Vector2 } from 'three';
-import { clamp, floor, fract, mix, uniform, vec2 } from 'three/tsl';
+import { DataTexture, FloatType, LinearFilter, NearestFilter, RGBAFormat, RedFormat, UnsignedByteType, Vector2 } from 'three';
+import { If, clamp, float, floor, fract, mix, texture, uniform, vec2, vec4 } from 'three/tsl';
 import { texLoadR } from '../Tsl';
-import type { NB, NF, NU, NV2 } from '../../gpu/TSLTypes';
+import type { NB, NF, NU, NV2, NV4 } from '../../gpu/TSLTypes';
 import type { LayerName, WorldManifest, WorldSource } from '../../world/source/WorldSource';
 
 const HEIGHT_PLANE_RES = 2048;
 const U8_PLANE_RES = 1024;
+/** cover-or-window rule (S3b): a level's plane res grows past the default window
+ *  res up to this cap when it makes the plane cover the source's WHOLE layer
+ *  span — a small world (the generated 4096 m) then rides full-coverage static
+ *  planes with zero window seams, while a large one (Estonia) keeps the spec §3
+ *  camera windows unchanged. The caps bound VRAM (throw-loud ceiling below). */
+const HEIGHT_PLANE_RES_CAP = 4096;
+const U8_PLANE_RES_CAP = 2048;
 const WATER_FAR_FACTOR = 8;
-/** full 5-level Estonia set ≈ 84 (height) + 17 (biome) + ~40 (fields+water) MB —
- *  anything past this is a leak, not a config (throw-loud VRAM law). */
+/** full 5-level Estonia set ≈ 84 (height) + 17 (biome) + ~40 (fields+water) MB;
+ *  the generated full-coverage set ≈ 130 MB — anything past this is a leak, not
+ *  a config (throw-loud VRAM law). */
 const VRAM_CEILING_MB = 160;
 
 export interface FieldLevel {
@@ -107,8 +119,8 @@ export class TerrainField {
     const mb = this.vramBytes() / 2 ** 20;
     // eslint-disable-next-line no-console
     console.log(
-      `[laas] terrain field: height ${heightLevels.length}×${HEIGHT_PLANE_RES}² r32f + ` +
-        `biome ${biomeLevels.length}L + fields ${fieldsLevels.length}L rgba8 + ` +
+      `[laas] terrain field: height [${heightLevels.map((l) => `${l.res}²@${l.texel}m`).join(' ')}] r32f + ` +
+        `biome [${biomeLevels.map((l) => `${l.res}²`).join(' ')}] + fields [${fieldsLevels.map((l) => `${l.res}²`).join(' ')}] rgba8 + ` +
         `water ${water ? `${water.res}² r32f (+far ${waterFar?.res ?? 0}²)` : 'none'} = ` +
         `${mb.toFixed(1)} MB VRAM (CPU mirrors share the backing)`,
     );
@@ -125,11 +137,13 @@ export class TerrainField {
     const { cx, cz } = coverageCenter(manifest);
 
     const heightGeo = layerGeom(manifest, 'height');
+    const heightSpan = layerSpanM(manifest, 'height');
     const heightLevels: HeightLevel[] = [];
     for (const lod of heightMeta.lods) {
-      const place = placeLevel(heightGeo, lod, HEIGHT_PLANE_RES, cx, cz);
-      const data = await fillF32Level(source, manifest, 'height', lod, HEIGHT_PLANE_RES, place, heightGeo);
-      heightLevels.push(makeHeightLevel(`terrainFieldHeightL${lod}`, lod, HEIGHT_PLANE_RES, place, data));
+      const res = levelRes(heightSpan, heightGeo.texel0 * heightGeo.lodStep ** lod, HEIGHT_PLANE_RES, HEIGHT_PLANE_RES_CAP);
+      const place = placeLevel(heightGeo, lod, res, cx, cz);
+      const data = await fillF32Level(source, manifest, 'height', lod, res, place, heightGeo);
+      heightLevels.push(makeHeightLevel(`terrainFieldHeightL${lod}`, lod, res, place, data));
     }
 
     const biomeLevels = await fillU8Layer(source, manifest, 'biome', cx, cz, [
@@ -149,14 +163,15 @@ export class TerrainField {
     const waterMeta = manifest.layers.water;
     if (waterMeta && waterMeta.lods.includes(0)) {
       const geo = layerGeom(manifest, 'water');
-      const place = placeLevel(geo, 0, HEIGHT_PLANE_RES, cx, cz);
+      const waterRes = levelRes(layerSpanM(manifest, 'water'), geo.texel0, HEIGHT_PLANE_RES, HEIGHT_PLANE_RES);
+      const place = placeLevel(geo, 0, waterRes, cx, cz);
       // Estonia dry texels decode to NaN (§9a) — a NaN reaching bilinear poisons
       // whole quads, so map to the dry sentinel the generated field already uses
       // downstream of its bed−2 encoding. Generated payloads carry no NaN.
-      const data = await fillF32Level(source, manifest, 'water', 0, HEIGHT_PLANE_RES, place, geo, -1e4);
-      water = makeHeightLevel('terrainFieldWaterY', 0, HEIGHT_PLANE_RES, place, data);
-      const farRes = HEIGHT_PLANE_RES / WATER_FAR_FACTOR;
-      const farData = minReduce(data, HEIGHT_PLANE_RES, WATER_FAR_FACTOR);
+      const data = await fillF32Level(source, manifest, 'water', 0, waterRes, place, geo, -1e4);
+      water = makeHeightLevel('terrainFieldWaterY', 0, waterRes, place, data);
+      const farRes = waterRes / WATER_FAR_FACTOR;
+      const farData = minReduce(data, waterRes, WATER_FAR_FACTOR);
       waterFar = makeHeightLevel('terrainFieldWaterYFar', 0, farRes, {
         ...place,
         texel: place.texel * WATER_FAR_FACTOR,
@@ -257,6 +272,60 @@ export class TerrainField {
     return planeBilerp(w, wxz);
   }
 
+  // ---- HOT samplers (S3b) — Fn-stack only (If/ElseIf level chains: exactly ONE
+  // arm executes, and the containment conditions are near-uniform per cluster).
+  // The cold material-build-time samplers above use select() chains instead.
+
+  /** height for hot per-vertex paths: finest containing level via a BRANCH
+   *  chain. Level 0 reads the exact texel — terrain verts sit ON the finest
+   *  lattice, so this is bit-identical to the retired global heightTex tap —
+   *  and coarser levels bilerp (their lattice is coarser than the verts'). */
+  fieldHeightHot(wxz: NV2): NF {
+    const out = float(0).toVar();
+    hotLevelChain(this.heightLevels, wxz, (lvl, finest) => {
+      out.assign(finest ? planeNearest(lvl, wxz) : planeBilerp(lvl, wxz));
+    });
+    return out as unknown as NF;
+  }
+
+  /** central-difference slope (rise/run) from the height planes — the in-shader
+   *  replacement for the retired normalTex.w: the SAME ±1-texel stencil the old
+   *  bake ran (Heightfield derived-maps kernel), evaluated at the nearest texel
+   *  of the finest containing level. */
+  fieldSlope(wxz: NV2): NF {
+    const out = float(0).toVar();
+    hotLevelChain(this.heightLevels, wxz, (lvl) => out.assign(slope4(lvl, wxz)));
+    return out as unknown as NF;
+  }
+
+  /** surface-fields sample [moisture, flowStrength, snow, rockExposure] — one
+   *  hardware-filtered rgba8 tap at the finest containing level. vec4(0) when
+   *  the source has no fields layer (forest/gallery single-level fields). */
+  fieldsAt(wxz: NV2): NV4 {
+    if (this.fieldsLevels.length === 0) return vec4(0) as unknown as NV4;
+    const out = vec4(0).toVar();
+    hotLevelChain(this.fieldsLevels, wxz, (lvl) => out.assign(planeLinear(lvl, wxz)));
+    return out as unknown as NV4;
+  }
+
+  /** biome/canopy sample [classId (raw id byte ⇒ ×255 to decode), vegDensity,
+   *  canopyHeight, cover] — one filtered rgba8 tap, finest containing level.
+   *  vec4(0) when the source has no biome layer. */
+  biomeAt(wxz: NV2): NV4 {
+    if (this.biomeLevels.length === 0) return vec4(0) as unknown as NV4;
+    const out = vec4(0).toVar();
+    hotLevelChain(this.biomeLevels, wxz, (lvl) => out.assign(planeLinear(lvl, wxz)));
+    return out as unknown as NV4;
+  }
+
+  /** nearest-texel waterY — hot gates (raster riverDepth, grass water gate).
+   *  −1e4 (the dry sentinel, far below any bed) when the source has no water. */
+  fieldWaterYNearest(wxz: NV2): NF {
+    const w = this.water;
+    if (!w) return float(-1e4) as unknown as NF;
+    return planeNearest(w, wxz);
+  }
+
   /** a height level's plane texture — raster/debug paths that bind the texture
    *  directly (their in-shader reads migrate at S3b) */
   heightPlane(level = 0): DataTexture {
@@ -285,13 +354,55 @@ export class TerrainField {
 }
 
 // ---- plane sampling helpers (TSL) ----------------------------------------------------
+// planeBilerp / planeNearest / insideLevel are exported for the S3b hot-shader
+// fetch (NaniteFetch composes its own level chain over field.heightLevels).
 
 /** world → continuous sample-grid coords (integer = exact source sample) */
-function gridCoords(lvl: FieldLevel, wxz: NV2): NV2 {
+export function gridCoords(lvl: FieldLevel, wxz: NV2): NV2 {
   return wxz.sub(vec2(lvl.uOrigin as unknown as NV2)).div(lvl.texel);
 }
 
-function planeBilerp(lvl: FieldLevel, wxz: NV2): NF {
+/** finest-containing-level branch chain: runs `arm` for exactly one level (the
+ *  last level is the unconditional backstop — always resident, spec §3). */
+export function hotLevelChain(
+  levels: readonly FieldLevel[],
+  wxz: NV2,
+  arm: (lvl: FieldLevel, finest: boolean) => void,
+): void {
+  const n = levels.length;
+  if (n === 0) throw new Error('TerrainField: hotLevelChain over zero levels');
+  if (n === 1) {
+    arm(levels[0] as FieldLevel, true);
+    return;
+  }
+  let chain = If(insideLevel(levels[0] as FieldLevel, wxz), () => arm(levels[0] as FieldLevel, true));
+  for (let i = 1; i < n - 1; i++) {
+    const lvl = levels[i] as FieldLevel;
+    chain = chain.ElseIf(insideLevel(lvl, wxz), () => arm(lvl, false));
+  }
+  chain.Else(() => arm(levels[n - 1] as FieldLevel, false));
+}
+
+/** one hardware-filtered tap (LinearFilter rgba8 planes) at a level */
+function planeLinear(lvl: FieldLevel, wxz: NV2): NV4 {
+  const uv = gridCoords(lvl, wxz).add(0.5).div(lvl.res);
+  return texture(lvl.tex, uv as unknown as NV2, 0) as unknown as NV4;
+}
+
+/** ±1-texel central-difference slope at the nearest texel — the normalTex
+ *  bake's exact stencil (see Heightfield rebuildDerivedMaps history) */
+function slope4(lvl: FieldLevel, wxz: NV2): NF {
+  const g = clamp(gridCoords(lvl, wxz).add(0.5), 1, lvl.res - 2);
+  const x = floor(g.x).toUint() as NU;
+  const y = floor(g.y).toUint() as NU;
+  const hl = texLoadR(lvl.tex, x.sub(1) as unknown as NU, y);
+  const hr = texLoadR(lvl.tex, x.add(1) as unknown as NU, y);
+  const hd = texLoadR(lvl.tex, x, y.sub(1) as unknown as NU);
+  const hu = texLoadR(lvl.tex, x, y.add(1) as unknown as NU);
+  return vec2(hl.sub(hr), hd.sub(hu)).length().div(lvl.texel * 2) as unknown as NF;
+}
+
+export function planeBilerp(lvl: FieldLevel, wxz: NV2): NF {
   const g = clamp(gridCoords(lvl, wxz), 0, lvl.res - 1);
   const i0 = floor(g);
   const f = fract(g);
@@ -306,14 +417,14 @@ function planeBilerp(lvl: FieldLevel, wxz: NV2): NF {
   return mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
 }
 
-function planeNearest(lvl: FieldLevel, wxz: NV2): NF {
+export function planeNearest(lvl: FieldLevel, wxz: NV2): NF {
   const g = clamp(gridCoords(lvl, wxz).add(0.5), 0, lvl.res - 1);
   return texLoadR(lvl.tex, floor(g.x).toUint() as NU, floor(g.y).toUint() as NU);
 }
 
 /** true where the point sits ≥1 texel inside the level's window (the rim texel is
  *  clamp-extended fill — the next-coarser level owns it) */
-function insideLevel(lvl: FieldLevel, wxz: NV2): NB {
+export function insideLevel(lvl: FieldLevel, wxz: NV2): NB {
   const g = gridCoords(lvl, wxz);
   return g.x
     .greaterThanEqual(1)
@@ -351,6 +462,39 @@ function layerGeom(manifest: WorldManifest, layer: LayerName): RasterGeom {
     originZ: g.originZ,
     lodStep: g.lodStep,
   };
+}
+
+/** span (m) of a layer's finest-lod chunk coverage — the honest data extent
+ *  the cover-or-window rule (levelRes) measures against */
+function layerSpanM(manifest: WorldManifest, layer: LayerName): number {
+  const meta = manifest.layers[layer];
+  if (!meta) return 0;
+  const finest = Math.min(...meta.lods);
+  const keys = manifest.chunks(layer, finest);
+  if (keys.length === 0) return 0;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  for (const k of keys) {
+    minX = Math.min(minX, k.cx);
+    maxX = Math.max(maxX, k.cx);
+    minZ = Math.min(minZ, k.cz);
+    maxZ = Math.max(maxZ, k.cz);
+  }
+  const span = manifest.grid.chunkMeters * manifest.grid.lodStep ** finest;
+  return Math.max(maxX - minX + 1, maxZ - minZ + 1) * span;
+}
+
+/** cover-or-window plane res: the smallest power of two whose window at this
+ *  texel covers the layer span, clamped to [256, cap]; a span past the cap
+ *  falls back to the camera-window default (Estonia semantics, spec §3). */
+function levelRes(spanM: number, texel: number, windowRes: number, cap: number): number {
+  const cov = Math.round(spanM / texel);
+  if (cov <= 0) return windowRes;
+  let r = 256;
+  while (r < cov && r < cap) r *= 2;
+  return r >= cov ? r : windowRes;
 }
 
 /** coverage centroid from the FINEST height lod's chunk set (F-7) */
@@ -504,9 +648,10 @@ async function fillU8Layer(
   }
   const names = meta.planes ?? [];
   const geo = layerGeom(manifest, layer);
+  const span = layerSpanM(manifest, layer);
   const levels: FieldLevel[] = [];
   for (const lod of meta.lods) {
-    const res = U8_PLANE_RES;
+    const res = levelRes(span, geo.texel0 * geo.lodStep ** lod, U8_PLANE_RES, U8_PLANE_RES_CAP);
     const place = placeLevel(geo, lod, res, centerX, centerZ);
     const out = new Uint8Array(res * res * 4);
     let box: FilledBox | null = null;
@@ -540,7 +685,9 @@ async function fillU8Layer(
     }
     if (box) clampExtend(out, res, 4, box);
     const tex = new DataTexture(out, res, res, RGBAFormat, UnsignedByteType);
-    configurePlane(tex, `terrainField${layer[0]?.toUpperCase()}${layer.slice(1)}L${lod}`);
+    // rgba8 IS filterable — hot consumers (raster disp, grass density, resolve
+    // shading) take ONE hardware-filtered tap instead of a manual 4-tap bilerp
+    configurePlane(tex, `terrainField${layer[0]?.toUpperCase()}${layer.slice(1)}L${lod}`, LinearFilter);
     levels.push({
       lod,
       res,
@@ -569,10 +716,10 @@ function makeHeightLevel(name: string, lod: number, res: number, place: LatticeP
   };
 }
 
-function configurePlane(tex: DataTexture, name: string): void {
+function configurePlane(tex: DataTexture, name: string, filter: typeof NearestFilter | typeof LinearFilter = NearestFilter): void {
   tex.name = name;
-  tex.magFilter = NearestFilter;
-  tex.minFilter = NearestFilter;
+  tex.magFilter = filter;
+  tex.minFilter = filter;
   tex.generateMipmaps = false;
   tex.flipY = false;
   tex.needsUpdate = true;

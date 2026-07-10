@@ -28,6 +28,7 @@ import type { Engine } from '../../core/Engine';
 import type { PostStack } from '../../render/PostStack';
 import { internalSize } from '../../render/RenderScale';
 import type { Heightfield } from '../../world/Heightfield';
+import type { TerrainField } from '../world/TerrainField';
 import type { GeometryRegistry } from '../world/GeometryRegistry';
 import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK } from '../world/GeometryRegistry';
 import { deriveLodParams, makeNaniteCam } from '../NaniteCommon';
@@ -74,6 +75,10 @@ export function buildNaniteFrame(
   engine: Engine,
   registry: GeometryRegistry,
   hf: Heightfield,
+  /** S3b: the streamed terrain field — the hot shaders' terrain data source
+   *  (height/fields/water planes); hf keeps feeding only the not-yet-ported
+   *  pieces (noise ctx, resolve/grass/shadow legacy reads until their slices) */
+  field: TerrainField,
   post: PostStack,
   world: {
     gi: import('../../gpu/passes/ProbeGI').ProbeGI | null;
@@ -220,16 +225,29 @@ export function buildNaniteFrame(
   // ?nanodisp=1 — disable terrain micro-displacement (root-cause bisect for
   // near-camera transparency: the disp branch only runs within 85 m)
   const dispOff = params.get('nanodisp') === '1';
+  // ?tfield — TEMPORARY S3b staging bitmask for interleaved A/B against the
+  // legacy hf-texture paths (bit0 raster+disp · bit1 grass · bit2 shadow ·
+  // bit3 resolve). Absent = all migrated. EXCISED with the legacy arms at S3b end.
+  const tfield = params.has('tfield') ? Number(params.get('tfield')) : 0xf;
   const disp = dispOff
     ? undefined
-    : {
-        normalTex: hf.normalTex,
-        biomeTex: hf.biomeTex,
-        fieldsTex: hf.fieldsTex,
-        noiseA: hf.noiseA,
-        noiseB: hf.noiseB,
-        camPos: cam.camPos,
-      };
+    : tfield & 1
+      ? {
+          field,
+          noiseA: hf.noiseA,
+          noiseB: hf.noiseB,
+          camPos: cam.camPos,
+        }
+      : {
+          normalTex: hf.normalTex,
+          biomeTex: hf.biomeTex,
+          fieldsTex: hf.fieldsTex,
+          noiseA: hf.noiseA,
+          noiseB: hf.noiseB,
+          camPos: cam.camPos,
+        };
+  // the raster kernels' terrain height source (S3b sub-slice 1)
+  const heightSrc = tfield & 1 ? field : hf.heightTex;
   // trunk wind (matches the resolve's makeFetch — both read ?nanwind so the
   // rastered geometry and the resolve's barycentric corners stay bit-identical)
   const windOn = params.get('nanwind') !== '0';
@@ -245,7 +263,7 @@ export function buildNaniteFrame(
     ? buildGrassField({ cam, vis, hf, canopyTex: world.canopyTex, disp })
     : null;
   const raster = buildNaniteRaster(
-    registry.gpu, hf.heightTex, cam, cull, vis, 'flat', true, disp, windOpt, false, true, voxActive,
+    registry.gpu, heightSrc, cam, cull, vis, 'flat', true, disp, windOpt, false, true, voxActive,
     grass ? { batch: grass.batch, renderHw: grass.renderHw, enabled: grass.enabled } : undefined,
   );
 
@@ -362,7 +380,7 @@ export function buildNaniteFrame(
   let probeRead: (() => Promise<Float32Array>) | null = null;
   let probeSet: ((pix: number[][]) => void) | null = null;
   if (probeOn) {
-    const fetchDbg = makeFetch(registry.gpu, hf.heightTex);
+    const fetchDbg = makeFetch(registry.gpu, heightSrc);
     const probeAttr = new StorageBufferAttribute(new Float32Array(32), 1);
     probeAttr.name = 'nanProbeReadback';
     const outBuf = storage(probeAttr, 'float', 32);

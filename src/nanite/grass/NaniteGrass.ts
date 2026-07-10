@@ -274,10 +274,11 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
   };
 
   /** ground height a blade roots on = heightfield + terrain micro-displacement */
-  const groundAt = (p: NV2): NF =>
-    (opts.disp
-      ? heightAt(p).add(terrainDispAt(opts.disp, p))
-      : heightAt(p)) as unknown as NF;
+  const groundAt = (p: NV2): NF => {
+    if (!opts.disp) return heightAt(p);
+    const h = heightAt(p);
+    return h.add(terrainDispAt(opts.disp, p, h)) as unknown as NF;
+  };
 
   const depthKey24 = (cz: NF): NU =>
     uint(float(1).sub(cz).mul(16777215).clamp(0, 16777215)) as unknown as NU;

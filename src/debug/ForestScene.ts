@@ -519,7 +519,7 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
     }
     const post = new PostStack(engine, sunSky.atmosphere, bootTod);
     const { buildNaniteFrame } = await import('../nanite/frame/NaniteFrame');
-    const frame = buildNaniteFrame(engine, reg, hf, post, {
+    const frame = buildNaniteFrame(engine, reg, hf, field, post, {
       gi: null,
       canopyTex: null,
       barkTexA: lib.barkArray?.texA ?? null,

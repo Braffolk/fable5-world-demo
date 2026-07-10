@@ -444,6 +444,10 @@ export function buildNaniteCull(
   const budgetExtraAttr = new StorageBufferAttribute(new Uint32Array(2), 1);
   budgetExtraAttr.name = 'nanBudgetExtra';
   const budgetExtra = sU32Views(budgetExtraAttr, 2).atomic;
+  // true once a writer batch (hw partition / voxel fanout) has been requested —
+  // gates the readCounts readback (see there): the lean NaniteView path never
+  // dispatches a writer, so the attribute never gets a GPU buffer to copy from.
+  let budgetExtraLive = false;
 
   const qRasterAttr = new StorageBufferAttribute(new Uint32Array((qCap + 1) * 2), 2);
   qRasterAttr.name = 'nanQRaster';
@@ -1337,6 +1341,7 @@ export function buildNaniteCull(
     kVoxScatterFan,
   ];
   const runVoxFanout = (renderer: Renderer): void => {
+    budgetExtraLive = true;
     if (voxPrev) {
       dispatchBatchMixed(renderer, voxF2bBatch);
     } else {
@@ -1365,10 +1370,15 @@ export function buildNaniteCull(
 
   const readCounts = async (renderer: Renderer): Promise<NaniteCullCounts> => {
     noteQueueHwRenderer(renderer); // queue high-water diag: stash for window.__qHW
+    // budgetExtra is written ONLY by the hw-partition / voxel-fanout kernels; the
+    // lean NaniteView path never dispatches them, so its GPU buffer never exists —
+    // reading it there rejects the whole counter batch every 15th frame. Gate the
+    // readback on a writer batch having been requested (NaniteFrame dispatches
+    // every batch it requests).
     const [buf, head, extra] = await Promise.all([
       readBuffer(renderer, countersAttr, 0, 32),
       readBuffer(renderer, qRasterAttr, 0, 8),
-      readBuffer(renderer, budgetExtraAttr, 0, 8),
+      budgetExtraLive ? readBuffer(renderer, budgetExtraAttr, 0, 8) : Promise.resolve(new ArrayBuffer(8)),
     ]);
     const u = new Uint32Array(buf);
     const q = new Uint32Array(head);
@@ -1420,13 +1430,18 @@ export function buildNaniteCull(
     // qHwRaster from qCap-1) + the buffer capacity the terrain draw needs to read qCap-1-inst.
     hwClusterDrawTerrainAttr,
     hwRasterCap: qCap,
-    hwPartitionBatch: (): readonly unknown[] => [...hwPart],
+    hwPartitionBatch: (): readonly unknown[] => {
+      budgetExtraLive = true;
+      return [...hwPart];
+    },
     runPhase1,
     phase1Batch: () => phase1BatchList,
     syncFullArgs,
     fullArgsBatch: () => [kRasterArgs2],
-    voxFanoutBatch: () =>
-      voxPrev ? voxF2bBatch : [kVoxFanoutArgs, kVoxFanout, kVoxRasterArgs],
+    voxFanoutBatch: () => {
+      budgetExtraLive = true;
+      return voxPrev ? voxF2bBatch : [kVoxFanoutArgs, kVoxFanout, kVoxRasterArgs];
+    },
     runVoxFanout,
     readVoxCount,
     readVoxBuckets,
