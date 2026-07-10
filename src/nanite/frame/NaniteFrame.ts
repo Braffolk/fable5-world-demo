@@ -93,6 +93,11 @@ export function buildNaniteFrame(
     farShadow?: ((wxz: import('../../gpu/TSLTypes').NV2) => NF) | null;
     barkTexA: import('three').Texture | null;
     barkTexB: import('three').Texture | null;
+    /** S6d PRECISION: the per-frame render anchor A (= StreamOrigin) for the
+     *  streamed (Estonia) world — the camera VP / reconstruct / shadow chain is
+     *  built RELATIVE to it so f32 stays sub-metre at ~311 km absolute coords.
+     *  Omitted on the generated world ⇒ A=(0,0) ⇒ byte-identical absolute build. */
+    streamAnchor?: () => { x: number; z: number };
   },
 ): NaniteFrameHandles {
   const renderer = engine.renderer;
@@ -262,7 +267,17 @@ export function buildNaniteFrame(
   // S3 (D-N29): the SCREEN-DENSITY SHADOW CLIPMAP — a camera-centred clipmap fits
   // its own per-level light VPs (no CSM cascade cameras).
   const shadow: NaniteShadow | null = shadowOn
-    ? buildNaniteShadowClip(registry.gpu, registry.instanceCount, field, disp, windOpt, measuredHierDepth, voxActive)
+    ? buildNaniteShadowClip(
+        registry.gpu,
+        registry.instanceCount,
+        field,
+        disp,
+        windOpt,
+        measuredHierDepth,
+        voxActive,
+        world.streamAnchor, // S6d: fit the light frame in the StreamOrigin-relative space
+        world.streamAnchor ? () => registry.tileEpoch : undefined, // S6d: dirty on tile stream
+      )
     : null;
   // CAMERA||SHADOW CULL OVERLAP: fold the (CLIP-path) shadow shared-cut cull into the SAME
   // submit as the camera cull so Dawn can overlap the two disjoint culls on frames where
@@ -504,7 +519,8 @@ export function buildNaniteFrame(
       // eslint-disable-next-line no-console
       console.log('[nanite] cullfreeze: visibility frozen — fly to inspect');
     }
-    cam.update(jitteredCamera());
+    const anchor = world.streamAnchor?.();
+    cam.update(jitteredCamera(), anchor?.x ?? 0, anchor?.z ?? 0);
     // PERF-VB3 HIER (single-phase BFS, the SOLE world cull): seed roots (terrain + veg)
     // → BFS-descend the DAG (reads LAST frame's HZB for occlusion) → fills qRaster
     // directly. Then ONE depth+payload over the NON-packed two-pass raster (depthV

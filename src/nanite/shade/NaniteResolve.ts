@@ -242,6 +242,12 @@ export function buildNaniteResolve(
     throw new Error('NaniteResolve: heightfield noise bakes missing (boot order)');
   }
   const q = new URLSearchParams(window.location.search);
+  // S6d KEYSTONE (build-time gate): the streamed (Estonia) world reconstructs the
+  // world pos in the StreamOrigin-relative frame — camWorldRel/cam.anchor are the
+  // anchored camera; the generated world compiles the verbatim absolute built-ins
+  // (cameraWorldMatrix, cam.camPos) ⇒ byte-identical shader. Same source, one
+  // compile-time constant — not a runtime fork.
+  const streamed = q.get('src') === 'estonia';
   // ROCK (and future explicit-mesh classes) need per-vertex attributes →
   // re-fetch the cluster triangle. Terrain reconstructs wp from depth and
   // never touches this. ?nanwind=0 A/Bs the trunk wind — MUST match the raster's
@@ -502,11 +508,24 @@ export function buildNaniteResolve(
     // Reconstructed AFTER the partition discards so discarded-family pixels skip this math.
     const zDev = float(1).sub(toF(elect.shiftRight(uint(8))).div(16777215)) as unknown as NF;
     const wpv = getViewPosition(screenUV, zDev, cameraProjectionMatrixInverse) as unknown as NV3;
-    const wp = (
-      (cameraWorldMatrix as unknown as { mul(v: NV4): NV4 }).mul(
+    // S6d: reconstruct the ANCHOR-RELATIVE world pos. camWorldRel's translation is
+    // shifted into the StreamOrigin frame ⇒ the multiply is small-coordinate (no
+    // 311 km f32 cancellation). getViewPosition's projection inverse is translation-
+    // free ⇒ view space is already precise; only the world matrix carried the anchor.
+    // wpRel matches the StreamOrigin-relative pooled verts that baryWeights /
+    // instTransformPoint mix with (and the anchor-relative shadow-clip levelVP).
+    const wpRel = (
+      ((streamed ? cam.camWorldRel : cameraWorldMatrix) as unknown as { mul(v: NV4): NV4 }).mul(
         (vec4 as unknown as (a: NV3, b: number) => NV4)(wpv, 1),
       ) as unknown as NV4
     ).xyz.toVar() as unknown as NV3;
+    // ABSOLUTE world pos for the world-space samplers (field/noise/canopy/cloud/far
+    // shadow/GI) + every camDist term: re-add the anchor ONCE (exact large+small add,
+    // ~3 cm ULP at 311 km — invisible, and never re-formed thereafter). Generated:
+    // wpRel is already absolute ⇒ wp === wpRel (byte-identical downstream).
+    const wp = (
+      streamed ? (wpRel as unknown as { add(o: NV3): NV3 }).add(vec3(cam.anchor)).toVar() : wpRel
+    ) as unknown as NV3;
     const item = { x: instId, y: ci } as unknown as { x: NU; y: NU };
     const isT = matClass.equal(uint(0));
 
@@ -515,7 +534,13 @@ export function buildNaniteResolve(
     // below already discards this for non-terrain pixels, so the default (vec3(0.3) /
     // up-normal) reaching the select changes nothing ⇒ BIT-IDENTICAL. Mirrors the
     // isR/isBD/isL gating. (roughnessNode was computed-then-void'd/unused — dropped.)
-    const camPos = vec3(cam.camPos) as unknown as NV3;
+    // S6d: ABSOLUTE camera position — pairs with the absolute `wp` in every camDist/
+    // view-dir term + the material black boxes (which sample field/noise on wp). On
+    // streamed cam.camPos is anchor-relative, so re-add the anchor; generated ⇒
+    // cam.camPos is already absolute ⇒ byte-identical.
+    const camPos = (
+      streamed ? (vec3(cam.camPos) as unknown as { add(o: NV3): NV3 }).add(vec3(cam.anchor)) : vec3(cam.camPos)
+    ) as unknown as NV3;
     // SHARED shading accumulators (P1 accumulator restructure): ONE live triplet
     // (+ backlight source/strength) in place of six per-class output Vars that
     // stayed live from their branch to a tail nested-select mux (~35-40 f32 of
@@ -589,7 +614,7 @@ export function buildNaniteResolve(
       const w0 = fetch.fetchWorldVert(ctx, localTri, 0);
       const w1 = fetch.fetchWorldVert(ctx, localTri, 1);
       const w2 = fetch.fetchWorldVert(ctx, localTri, 2);
-      const bw = baryWeights(wp, w0, w1, w2);
+      const bw = baryWeights(wpRel, w0, w1, w2); // S6d: SO-relative — matches the pooled verts
       const tb = ctx.triStart.add(localTri).mul(uint(3));
       const a = readVertex(gpu.verts, elemU(gpu.indices, tb));
       const b = readVertex(gpu.verts, elemU(gpu.indices, tb.add(uint(1))));
@@ -630,7 +655,7 @@ export function buildNaniteResolve(
         const w0 = fetch.fetchWorldVert(ctx, localTri, 0);
         const w1 = fetch.fetchWorldVert(ctx, localTri, 1);
         const w2 = fetch.fetchWorldVert(ctx, localTri, 2);
-        const bw = baryWeights(wp, w0, w1, w2);
+        const bw = baryWeights(wpRel, w0, w1, w2); // S6d: SO-relative — matches the pooled verts
         const tb = ctx.triStart.add(localTri).mul(uint(3));
         const va = readVertex(gpu.verts, elemU(gpu.indices, tb));
         const vb = readVertex(gpu.verts, elemU(gpu.indices, tb.add(uint(1))));
@@ -671,7 +696,7 @@ export function buildNaniteResolve(
         // hardware auto-mip is unusable here (uv is computed in non-uniform
         // control flow → undefined derivatives); anisotropic .grad() is future
         // work (?nanbark=grad — the ray-plane neighbour path NaNs on near trunks).
-        const C = vec3(cam.camPos) as unknown as NV3;
+        const C = camPos; // S6d: absolute (matches the absolute cameraWorldMatrix rayDir below)
         const dist = wp.sub(C).length();
         const pixWorld = dist.mul(2).div(float(cam.cotHalfFov).mul(float(cam.uH)));
         const wPerTexel = Traw.length().min(Braw.length()).div(BARK_RES).max(1e-6);
@@ -803,7 +828,7 @@ export function buildNaniteResolve(
         const w0 = fetch.fetchWorldVert(ctx, localTri, 0);
         const w1 = fetch.fetchWorldVert(ctx, localTri, 1);
         const w2 = fetch.fetchWorldVert(ctx, localTri, 2);
-        const bw = baryWeights(wp, w0, w1, w2);
+        const bw = baryWeights(wpRel, w0, w1, w2); // S6d: SO-relative — matches the pooled verts
         const tb = ctx.triStart.add(localTri).mul(uint(3));
         const va = readVertex(gpu.verts, elemU(gpu.indices, tb));
         const vb = readVertex(gpu.verts, elemU(gpu.indices, tb.add(uint(1))));
@@ -912,7 +937,7 @@ export function buildNaniteResolve(
         const w0 = fetch.fetchWorldVert(ctx, localTri, 0);
         const w1 = fetch.fetchWorldVert(ctx, localTri, 1);
         const w2 = fetch.fetchWorldVert(ctx, localTri, 2);
-        const bw = baryWeights(wp, w0, w1, w2);
+        const bw = baryWeights(wpRel, w0, w1, w2); // S6d: SO-relative — matches the pooled verts
         const tb = ctx.triStart.add(localTri).mul(uint(3));
         const va = readVertex(gpu.verts, elemU(gpu.indices, tb));
         const vb = readVertex(gpu.verts, elemU(gpu.indices, tb.add(uint(1))));
@@ -1045,7 +1070,7 @@ export function buildNaniteResolve(
             const crownDir = normalize(
               horiz.div(max(horiz.length(), float(0.05))).add(vec3(0, 0.55, 0)),
             ) as unknown as NV3;
-            const beadPix = normalize(wp.sub(ctrW)) as unknown as NV3;
+            const beadPix = normalize(wpRel.sub(ctrW)) as unknown as NV3; // S6d: ctrW is SO-relative (instTransformPoint)
             const bead = normalize(crownDir.mul(0.75).add(beadPix.mul(0.25))) as unknown as NV3;
             const blend = normalize(
               gn.mul(1 - voxBeadK).add(bead.mul(voxBeadK)),
@@ -1250,8 +1275,8 @@ export function buildNaniteResolve(
           .sub(camPos)
           .length();
         const myRaw = world.shadowHalf
-          ? world.shadowHalf.upsample(wp as unknown as NV3, camDist)
-          : world.naniteShadow!.shadowFactor(wp as unknown as NV3, wNormal as unknown as NV3);
+          ? world.shadowHalf.upsample(wpRel as unknown as NV3, camDist) // S6d: anchor-relative levelVP frame
+          : world.naniteShadow!.shadowFactor(wpRel as unknown as NV3, wNormal as unknown as NV3);
         sf.assign((myRaw as unknown as { clamp(a: number, b: number): NF }).clamp(0, 1));
         if (world.cloudShadow) {
           // the cloud sun-transmittance gate, applied directly. Clamp + self-equality
@@ -1370,13 +1395,13 @@ export function buildNaniteResolve(
       world.naniteShadow
     ) {
       if (nandbg === 'shadowc')
-        return vec4(world.naniteShadow.cascadeTint(wp as unknown as NV3), 1) as unknown as NV4;
+        return vec4(world.naniteShadow.cascadeTint(wpRel as unknown as NV3), 1) as unknown as NV4;
       if (nandbg === 'shadowd') {
-        const dd = world.naniteShadow.debugDepth(wp as unknown as NV3) as unknown as NF;
+        const dd = world.naniteShadow.debugDepth(wpRel as unknown as NV3) as unknown as NF;
         return vec4(dd, dd, dd, 1) as unknown as NV4;
       }
       const s = world.naniteShadow.shadowFactor(
-        wp as unknown as NV3,
+        wpRel as unknown as NV3, // S6d: anchor-relative levelVP frame
         wNormal as unknown as NV3,
       ) as unknown as NF;
       return vec4(s, s, s, 1) as unknown as NV4;

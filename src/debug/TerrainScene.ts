@@ -391,14 +391,15 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     const c = engine.camera.position;
     brain.update(c.x, c.z);
     brain.drain(engine.renderer);
-    // StreamOrigin rebase is HELD until the camera-relative raster hook lands
-    // (the NaniteFetch StreamOrigin add): rebasing rewrites tile-pool origins to
-    // be origin-relative, but the raster still projects with the ABSOLUTE camera,
-    // so rebased terrain lands off-frustum (Estonia would render nothing). Until
-    // that hook, both sources render at absolute coords — the generated world
-    // never breaches the 8 km threshold (so this is a no-op there), and Estonia
-    // accepts ≤6 cm f32 ULP jitter at 311 km as an S11 hardening item.
-    if (!streamed) streamOrigin.maybeRebase(c.x, c.z, naniteRegistry);
+    // S6d KEYSTONE: the camera-relative raster hook has landed (NaniteCam builds
+    // vp/invVp/camPos RELATIVE to StreamOrigin, the resolve reconstructs anchor-
+    // relative, the shadow-clip levelVP fits in the same frame), so rebasing is
+    // now LIVE on the streamed world too: the first frame snaps the origin near
+    // Estonia's ~311 km spawn, dropping the whole project chain to sub-metre f32.
+    // rebaseTilePoolOrigins shifts terrain-tile origin words; rebaseInstanceOrigins
+    // shifts the fartile identity A-words; both keep the pooled frame coherent with
+    // the new anchor. Generated: origin stays (0,0) forever (< 8 km) ⇒ a no-op.
+    streamOrigin.maybeRebase(c.x, c.z, naniteRegistry);
     // S6c PRECISION: on the streamed world (Estonia, absolute coords ~311 km) pin
     // every GPU field sampler's coordinate frame to a near-camera snapped anchor so
     // gridCoords stays sub-metre (the terrain height/normal sampling terraced on
@@ -518,6 +519,11 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
         farShadow: farSh ? (wxz: import('../gpu/TSLTypes').NV2) => farSh.visAt(wxz) : null,
         barkTexA: naniteBark?.texA ?? null,
         barkTexB: naniteBark?.texB ?? null,
+        // S6d KEYSTONE: on the streamed world feed the camera/reconstruct/shadow
+        // chain the live StreamOrigin as its render anchor (rebase-rare, 8 km-
+        // snapped) so the whole project chain is small-coordinate. Generated ⇒
+        // omitted ⇒ A=(0,0) ⇒ byte-identical absolute build.
+        streamAnchor: streamed ? () => ({ x: streamOrigin.x, z: streamOrigin.z }) : undefined,
       });
       engine.post = nanFrame;
       naniteSunVis = nanFrame.sunVis;

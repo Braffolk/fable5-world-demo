@@ -221,6 +221,11 @@ interface Level {
   scy: number;
   /** P9: the rects the level rasters THIS frame (window uv; null = cached) */
   activeRects: [number, number, number, number][] | null;
+  /** S6d: a tile streamed in/out that may intersect this level — a STICKY dirty
+   *  flag (survives budget-deferred frames) that forces a full re-raster once the
+   *  stagger budget lets this level run, then clears. Never set on the generated
+   *  world (no streaming) ⇒ the shadow schedule is byte-identical there. */
+  pendingDirty: boolean;
 }
 
 interface ShadowClipParams {
@@ -261,6 +266,18 @@ export function buildNaniteShadowClip(
    *  casters so the 60-496 m voxel band + fartiles CAST shadows (the tri depth raster
    *  discards class-7 per-thread, so they cast NOTHING otherwise). */
   voxSplat?: boolean,
+  /** S6d PRECISION: the per-frame render anchor A (= StreamOrigin) for the streamed
+   *  world. The light-plane frame (and its stored z_g) is fit RELATIVE to it so the
+   *  sun-axis distance stays inside the tuned [−D_OFF, D_OFF] range at ~311 km
+   *  absolute coords (out of range otherwise ⇒ the shadow reshuffle). The shadow
+   *  raster consumes StreamOrigin-relative pooled verts and the resolve samples with
+   *  the anchor-relative wpRel — one coherent frame. Omitted ⇒ A=(0,0) ⇒ absolute. */
+  streamAnchor?: () => { x: number; z: number },
+  /** S6d: the registry's tile-attach/evict epoch. When it changes, every clip level
+   *  is marked pending-dirty so newly-streamed terrain casts shadows (and evicted
+   *  terrain stops) without waiting for a camera texel-snap. Omitted / static ⇒ no
+   *  extra re-raster (generated world) ⇒ byte-identical schedule. */
+  tileEpoch?: () => number,
 ): NaniteShadow {
   const cfg = readClipParams();
   const LEVELS = cfg.levels;
@@ -471,6 +488,7 @@ export function buildNaniteShadowClip(
       scx: 0,
       scy: 0,
       activeRects: null,
+      pendingDirty: false,
     });
   }
 
@@ -774,6 +792,17 @@ export function buildNaniteShadowClip(
   const eye = new Vector3();
   const worldUpY = new Vector3(0, 1, 0);
   const worldUpZ = new Vector3(0, 0, 1);
+  const anchoredCp = new Vector3();
+  const anchoredCpCut = new Vector3();
+  // S6d: camera position in the render-anchor (StreamOrigin) frame — the whole
+  // light-plane fit derives from it, so everything downstream (ortho VP, lv.cam.vp,
+  // stored z_g) lands in the same anchor-relative frame as the pooled verts + wpRel.
+  const anchorRel = (out: Vector3, cam: PerspectiveCamera): Vector3 => {
+    const a = streamAnchor?.();
+    return a
+      ? out.set(cam.position.x - a.x, cam.position.y, cam.position.z - a.z)
+      : out.copy(cam.position);
+  };
   const vp = new Matrix4();
   const frustum = new Frustum();
   // S3-perf: the shared cut's ortho — covers the OUTER ring every frame (unsnapped,
@@ -813,6 +842,9 @@ export function buildNaniteShadowClip(
   // rule while active.
   const maxLv = Math.max(0, Number(qs.get('shmaxlv') ?? 0) || 0);
   let fitFrame = 0;
+  // S6d: last tile-attach/evict epoch this shadow reacted to (see the per-frame
+  // check in fitLevels). Starts 0 ⇒ a static/absent epoch never dirties a level.
+  let lastTileEpoch = 0;
 
   // PASS A (CPU, no GPU) — fit every level → strip rects + reRaster[] + mask.
   // TOROIDAL (default): a level re-rasters ONLY its newly-exposed window strips
@@ -821,6 +853,14 @@ export function buildNaniteShadowClip(
   // sun axis included (stored depth is global — cz affects only the raster slab).
   // LEGACY (?shtoro=0): full-window rect on any VP change (the old R1 gate).
   const fitLevels = (mainCamera: PerspectiveCamera): { mask: number; sinElev: number } => {
+    // S6d: terrain streamed in/out since last frame ⇒ mark every level pending-dirty
+    // (sticky; the per-level fit re-rasters it once the stagger budget allows). No-op
+    // on the generated world (tileEpoch static/undefined ⇒ never enters this branch).
+    const ep = tileEpoch?.() ?? 0;
+    if (ep !== lastTileEpoch) {
+      lastTileEpoch = ep;
+      for (const lv of levels) lv.pendingDirty = true;
+    }
     // sun "L" points surface→sun; the shadow view looks the other way.
     forward.copy(sunU.dir.value).normalize().multiplyScalar(-1);
     const sinElev = Math.max(0.12, sunU.dir.value.y); // sun elevation (≈ -forward.y)
@@ -831,7 +871,7 @@ export function buildNaniteShadowClip(
     right.crossVectors(worldUp, forward).normalize();
     up.crossVectors(forward, right).normalize();
 
-    const cp = mainCamera.position;
+    const cp = anchorRel(anchoredCp, mainCamera); // S6d: anchor-relative frame
     const cz = cp.dot(forward); // camera depth along the sun axis
 
     // sun moved ⇒ the light basis (and every stored z_g) is stale ⇒ full re-raster
@@ -982,6 +1022,21 @@ export function buildNaniteShadowClip(
       lv.prevSy = sy;
       lv.scx = scx;
       lv.scy = scy;
+      // S6d: fold in a pending tile-change dirty (a static camera didn't snap a
+      // texel, so the loop above left this level cached). Honour the SAME stagger
+      // budget as a snap — a deferred level keeps the sticky flag for a later frame
+      // — then full re-raster + clear. Inert on the generated world (never dirtied).
+      if (lv.pendingDirty && !full) {
+        const deferred =
+          allowMask >= 0
+            ? (allowMask & (1 << k)) === 0
+            : budgetOn && k >= COARSE_K && k !== coarsePick;
+        if (!deferred) {
+          full = true;
+          lv.pendingDirty = false;
+          lv.lastStrip = fitFrame;
+        }
+      }
       if (full) {
         lv.originX = 0;
         lv.originY = 0;
@@ -1031,7 +1086,7 @@ export function buildNaniteShadowClip(
   // centres sit outside the box still pass. uv.x runs along −right, uv.y along +up
   // (the P5 empirical basis).
   const fitCut = (mainCamera: PerspectiveCamera, sinElev: number): void => {
-    const cp = mainCamera.position;
+    const cp = anchorRel(anchoredCpCut, mainCamera); // S6d: anchor-relative frame
     const cz = cp.dot(forward);
     let maxHalf = 0;
     let rLo = Number.POSITIVE_INFINITY;

@@ -61,6 +61,7 @@ export class StreamOrigin {
     this.oz = nz;
     this.nRebases++;
     reg?.rebaseTilePoolOrigins(dx, dz);
+    reg?.rebaseInstanceOrigins(dx, dz);
     // eslint-disable-next-line no-console
     console.log(`[laas] stream origin rebased to (${nx}, ${nz}) — Δ(${dx}, ${dz}); shadow clips full-refill via their teleport path`);
     return { dx, dz };

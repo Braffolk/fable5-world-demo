@@ -135,11 +135,30 @@ export const CLHW_MAX = 32;
 
 /** per-frame camera state shared by cull/raster/resolve kernels */
 export interface NaniteCam {
-  /** projection · view (current frame) */
+  /** projection · view (current frame). S6d: on the streamed world this is built
+   *  RELATIVE to the render anchor A (= StreamOrigin) — `vp = proj·view·T(A)` — so
+   *  it consumes the StreamOrigin-relative pooled verts directly and the whole
+   *  project chain stays small-coordinate (no 311 km f32 cancellation). A = (0,0)
+   *  on the generated world ⇒ byte-identical to the absolute VP. */
   vp: UniformMat4;
-  /** inverse of vp — the resolve unprojects (ndc, storedZ) back to world */
+  /** inverse of vp — the resolve unprojects (ndc, storedZ) back to world (anchor-
+   *  relative on streamed; the shadow-half reconstruct reads it too) */
   invVp: UniformMat4;
+  /** camera position in the anchor-relative frame (camera.position − A) */
   camPos: UniformV3;
+  /** S6d: the camera world matrix with its translation shifted into the anchor
+   *  frame (translation = camera.position − A). The resolve reconstructs the
+   *  anchor-relative world pos with it (`camWorldRel · viewPos`) instead of the
+   *  three.js absolute cameraWorldMatrix built-in. A = (0,0) ⇒ == matrixWorld. */
+  camWorldRel: UniformMat4;
+  /** the render anchor A as a vec3 (A.x, 0, A.z). The resolve re-forms the
+   *  ABSOLUTE world pos for its world-space samplers (field/noise/canopy) as
+   *  `wpRel + anchor`, and the absolute camPos as `camPos + anchor`. */
+  anchor: UniformV3;
+  /** the render anchor as plain numbers (CPU readers: the shadow-clip levelVP fit
+   *  builds its light frame in the same anchor-relative space). A = StreamOrigin. */
+  anchorX: number;
+  anchorZ: number;
   planes: UniformArrV4;
   /** previous frame's VP + camera position — the occlusion-test pair
    *  (static world: prev matrices, current bounds). Frame 0 holds identity;
@@ -156,13 +175,19 @@ export interface NaniteCam {
   uH: UniformU;
   width: number;
   height: number;
-  update(camera: PerspectiveCamera): void;
+  /** rebuild the per-frame matrices. S6d: `ax`/`az` = the render anchor (=
+   *  StreamOrigin) subtracted from the camera + baked into the VP so the whole
+   *  project/reconstruct chain is anchor-relative. Default (0,0) = the absolute
+   *  build (generated world / debug view) — byte-identical to the pre-S6d path. */
+  update(camera: PerspectiveCamera, ax?: number, az?: number): void;
 }
 
 export function makeNaniteCam(width: number, height: number): NaniteCam {
   const vp = uniformMat4(new Matrix4());
   const invVp = uniformMat4(new Matrix4());
   const camPos = uniformV3(new Vector3());
+  const camWorldRel = uniformMat4(new Matrix4());
+  const anchor = uniformV3(new Vector3());
   const prevVp = uniformMat4(new Matrix4());
   const prevCamPos = uniformV3(new Vector3());
   const cotHalfFov = uniformF(1);
@@ -177,11 +202,23 @@ export function makeNaniteCam(width: number, height: number): NaniteCam {
   const uW = uniformU(width);
   const uH = uniformU(height);
   const projScreen = new Matrix4();
+  const anchorT = new Matrix4();
   const frustum = new Frustum();
+  // last frame's anchor — a rebase (StreamOrigin snap) moves it, and the prev
+  // matrices (occlusion test) were captured in the OLD anchor frame, so on a
+  // rebase frame they must be shifted by Δ into the new frame or the one-frame
+  // HZB test mixes two anchors (spurious cull). Rebase is a teleport-scale event
+  // (shadow-clip full refill) so the shift keeps that single frame consistent.
+  let lastAx = 0;
+  let lastAz = 0;
   return {
     vp,
     invVp,
     camPos,
+    camWorldRel,
+    anchor,
+    anchorX: 0,
+    anchorZ: 0,
     prevVp,
     prevCamPos,
     cotHalfFov,
@@ -190,14 +227,39 @@ export function makeNaniteCam(width: number, height: number): NaniteCam {
     uH,
     width,
     height,
-    update(camera: PerspectiveCamera): void {
+    update(camera: PerspectiveCamera, ax = 0, az = 0): void {
+      // prev = last frame's current (still in the LAST anchor frame here)
       prevVp.value.copy(vp.value);
       prevCamPos.value.copy(camPos.value);
+      const dAx = ax - lastAx;
+      const dAz = az - lastAz;
+      if (dAx !== 0 || dAz !== 0) {
+        // shift the captured prev matrices from the old anchor into the new one:
+        // p_new = p_old − Δ ⇒ prevCamPos −= Δ, prevVp := prevVp · T(Δ).
+        prevCamPos.value.x -= dAx;
+        prevCamPos.value.z -= dAz;
+        prevVp.value.multiply(anchorT.makeTranslation(dAx, 0, dAz));
+      }
+      lastAx = ax;
+      lastAz = az;
+      this.anchorX = ax;
+      this.anchorZ = az;
       camera.updateMatrixWorld();
       projScreen.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+      // vp_rel = proj·view·T(A): T(A) maps anchor-relative → absolute, so vp_rel
+      // consumes the StreamOrigin-relative pooled verts. A=(0,0) ⇒ T=I ⇒ == absolute.
+      if (ax !== 0 || az !== 0) projScreen.multiply(anchorT.makeTranslation(ax, 0, az));
       vp.value.copy(projScreen);
       invVp.value.copy(projScreen).invert();
-      camPos.value.copy(camera.position);
+      camPos.value.set(camera.position.x - ax, camera.position.y, camera.position.z - az);
+      // camWorldRel = matrixWorld with translation shifted into the anchor frame.
+      camWorldRel.value.copy(camera.matrixWorld);
+      camWorldRel.value.setPosition(
+        camera.position.x - ax,
+        camera.position.y,
+        camera.position.z - az,
+      );
+      anchor.value.set(ax, 0, az);
       cotHalfFov.value = 1 / Math.tan(((camera.fov * Math.PI) / 180) / 2);
       frustum.setFromProjectionMatrix(projScreen);
       for (let i = 0; i < 6; i++) {

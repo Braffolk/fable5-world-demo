@@ -1949,6 +1949,22 @@ export class GeometryRegistry {
     return slot ?? -1;
   }
 
+  /** S6d: the live StreamOrigin the tile pool is stored relative to (accumulated
+   *  rebase deltas). 0 on the generated world (never rebases) ⇒ attach is a no-op
+   *  subtraction ⇒ byte-identical. */
+  private poolOriginX = 0;
+  private poolOriginZ = 0;
+
+  /** S6d: monotone counter bumped on every tile attach/evict — the shadow-clip fit
+   *  reads it to dirty (re-raster) its levels when terrain streams in/out while the
+   *  camera is static (a texel-snap wouldn't fire, so newly-streamed casters would
+   *  cast no shadow / evicted ones leave a stale shadow — the S6c latent finding).
+   *  Never bumps on the generated world (no streaming) ⇒ shadow path byte-identical. */
+  private _tileEpoch = 0;
+  get tileEpoch(): number {
+    return this._tileEpoch;
+  }
+
   /**
    * StreamOrigin rebase (S5 / F-3): the tile-pool mesh records' hf origin words
    * are StreamOrigin-relative — shift every occupied slot by −Δ and rewrite
@@ -1960,6 +1976,13 @@ export class GeometryRegistry {
    */
   rebaseTilePoolOrigins(dx: number, dz: number): void {
     if (dx === 0 && dz === 0) return;
+    // S6d: the accumulated StreamOrigin — tiles the brain streams in AFTER a rebase
+    // arrive in ABSOLUTE coords, so attachHeightDagTile subtracts this to store them
+    // in the same StreamOrigin-relative frame as the already-shifted resident tiles.
+    this.poolOriginX += dx;
+    this.poolOriginZ += dz;
+    // f32 view over the cluster blob (sphere xyz-r are f32-bits in the u32 array)
+    const clF = new Float32Array(this.clusterArr.buffer, this.clusterArr.byteOffset, this.clusterArr.length);
     for (const h of this.tilePoolHandles) {
       const e = this.entries[h];
       if (!e?.hf) continue;
@@ -1967,6 +1990,55 @@ export class GeometryRegistry {
       e.hf.originZ -= dz;
       e.sphere = [e.sphere[0] - dx, e.sphere[1], e.sphere[2] - dz, e.sphere[3]];
       if (this.built && e.uploaded) this.rewriteMeshRecord(e);
+      // S6d: the per-cluster + DAG bounding spheres are baked ABSOLUTE world-space
+      // (the cull reads c.sphere as world-space for HF — NaniteCull instWorldSphere),
+      // so they must shift by −Δ too or the frustum/HZB/LOD tests reject every tile
+      // cluster once cam.planes go anchor-relative (= "0 tris"). This is the
+      // "kernel-side origin add [that] lands with S6's camera-relative pass". Cluster
+      // record: sphere xyz @ words 0/1/2. DAG record (DAG_WORDS): ownSphere.x/z @ 1/3,
+      // parentSphere.x/z @ 6/8 (siblings share the pair bit-exactly ⇒ a uniform shift
+      // keeps them equal). Only tile-pool (streamed) meshes; the generated world never
+      // rebases, so its cull inputs are byte-identical.
+      if (this.built && e.uploaded) {
+        const cB = e.clusterBase;
+        const cN = e.clusterCount;
+        for (let i = 0; i < cN; i++) {
+          const cw = (cB + i) * CLUSTER_WORDS;
+          clF[cw] = (clF[cw] as number) - dx;
+          clF[cw + 2] = (clF[cw + 2] as number) - dz;
+          const dw = (cB + i) * DAG_WORDS;
+          this.dagArr[dw + 1] = (this.dagArr[dw + 1] as number) - dx;
+          this.dagArr[dw + 3] = (this.dagArr[dw + 3] as number) - dz;
+          this.dagArr[dw + 6] = (this.dagArr[dw + 6] as number) - dx;
+          this.dagArr[dw + 8] = (this.dagArr[dw + 8] as number) - dz;
+        }
+        this.pushRange(this.clusterAttr, cB * CLUSTER_WORDS, cN * CLUSTER_WORDS);
+        this.pushRange(this.dagAttr, cB * DAG_WORDS, cN * DAG_WORDS);
+      }
+    }
+  }
+
+  /**
+   * StreamOrigin rebase (S6d): shift every CPU-stream instance's A-word
+   * translation by −Δ so the pooled instance frame stays StreamOrigin-relative
+   * alongside the terrain-tile origin words. The identity heads of the FarTiles
+   * far-forest crowns live here (their absolute tile-centre A-word) — without
+   * this shift they project off-frustum once the camera VP goes anchor-relative.
+   * Instance cull bounds are instTransformPoint(A, localSphere), so shifting A
+   * re-anchors both the transform and the cull in one write. Only CPU streams are
+   * touched (GPU-scatter streams — generated veg — are written straight to the GPU
+   * buffer and never rebase: the generated world holds StreamOrigin at (0,0)).
+   */
+  rebaseInstanceOrigins(dx: number, dz: number): void {
+    if (dx === 0 && dz === 0 || !this.built) return;
+    for (const s of this.cpuStreams) {
+      const count = s.a.length / 4;
+      for (let i = 0; i < count; i++) {
+        const d = (s.first + i) * 8;
+        this.instArr[d] = (this.instArr[d] as number) - dx;
+        this.instArr[d + 2] = (this.instArr[d + 2] as number) - dz;
+      }
+      this.pushRange(this.instAttr, s.first * 8, count * 8);
     }
   }
 
@@ -1995,11 +2067,17 @@ export class GeometryRegistry {
     if (slot < 0 || slot >= pool.slots) throw new Error(`GeometryRegistry: tile slot ${slot} out of range`);
     const handle = this.tilePoolHandles[slot] as number;
     const entry = this.entries[handle] as MeshEntry;
+    // S6d: convert the brain's ABSOLUTE tile coords into the StreamOrigin-relative
+    // pool frame (poolOrigin=0 on generated ⇒ no-op). The origin word, every cluster/
+    // DAG sphere, and the mesh sphere below all subtract it so a post-rebase attach
+    // lands in the SAME frame as the resident tiles + the anchor-relative camera VP.
+    const oX = this.poolOriginX;
+    const oZ = this.poolOriginZ;
     if (hf) {
       const ehf = entry.hf;
       if (!ehf) throw new Error(`GeometryRegistry: tile slot ${slot} is not a heightfield mesh`);
-      ehf.originX = hf.originX;
-      ehf.originZ = hf.originZ;
+      ehf.originX = hf.originX - oX;
+      ehf.originZ = hf.originZ - oZ;
       ehf.cellSize = hf.cellSize;
     }
     const { gridVerts, indices, clusters } = build;
@@ -2034,9 +2112,9 @@ export class GeometryRegistry {
     for (let c = 0; c < cCount; c++) {
       const dc = clusters[c] as DagCluster;
       const cb = (cBase + c) * CLUSTER_WORDS;
-      cArr[cb] = f32Bits(dc.sx);
+      cArr[cb] = f32Bits(dc.sx - oX); // S6d: WORLD-abs geo sphere → StreamOrigin-relative
       cArr[cb + 1] = f32Bits(dc.sy);
-      cArr[cb + 2] = f32Bits(dc.sz);
+      cArr[cb + 2] = f32Bits(dc.sz - oZ);
       cArr[cb + 3] = f32Bits(dc.sr);
       cArr[cb + 4] = octEncode(dc.cax, dc.cay, dc.caz);
       cArr[cb + 5] = f32Bits(dc.ccos);
@@ -2049,19 +2127,19 @@ export class GeometryRegistry {
       const db = (cBase + c) * DAG_WORDS;
       const root = !Number.isFinite(dc.parentError);
       dArr[db] = dc.ownError;
-      dArr[db + 1] = dc.oex;
+      dArr[db + 1] = dc.oex - oX; // S6d: error-sphere centre → StreamOrigin-relative
       dArr[db + 2] = dc.oey;
-      dArr[db + 3] = dc.oez;
+      dArr[db + 3] = dc.oez - oZ;
       dArr[db + 4] = dc.oer;
       dArr[db + 5] = root ? DAG_ROOT_PARENT_ERR : dc.parentError;
-      dArr[db + 6] = root ? dc.oex : dc.pex;
+      dArr[db + 6] = (root ? dc.oex : dc.pex) - oX;
       dArr[db + 7] = root ? dc.oey : dc.pey;
-      dArr[db + 8] = root ? dc.oez : dc.pez;
+      dArr[db + 8] = (root ? dc.oez : dc.pez) - oZ;
       dArr[db + 9] = root ? dc.oer : dc.per;
 
-      dagSpheres[c * 4] = dc.sx;
+      dagSpheres[c * 4] = dc.sx - oX; // S6d: → StreamOrigin-relative (mesh sphere below)
       dagSpheres[c * 4 + 1] = dc.sy;
-      dagSpheres[c * 4 + 2] = dc.sz;
+      dagSpheres[c * 4 + 2] = dc.sz - oZ;
       dagSpheres[c * 4 + 3] = dc.sr;
     }
 
@@ -2114,6 +2192,7 @@ export class GeometryRegistry {
     this.pushRange(this.dagAttr, cBase * DAG_WORDS, cCount * DAG_WORDS);
     this.pushRange(this.dagLinksAttr, dlBase, rootCount + childTotal);
     this.pushRange(this.meshAttr, handle * MESH_WORDS, MESH_WORDS);
+    this._tileEpoch++; // S6d: terrain changed ⇒ shadow-clip levels re-raster (staggered)
 
     if (this.tileSlotOccupant) this.tileSlotOccupant[slot] = handle;
   }
@@ -2142,6 +2221,7 @@ export class GeometryRegistry {
     this.pushRange(this.meshAttr, handle * MESH_WORDS, MESH_WORDS);
     if (occ) occ[slot] = -1;
     this.tileFreeSlots.push(slot);
+    this._tileEpoch++; // S6d: terrain changed ⇒ shadow-clip levels re-raster (staggered)
   }
 
   /** post-build backing arrays + attributes (probe/validation use only) */
