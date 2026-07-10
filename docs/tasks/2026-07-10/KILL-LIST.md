@@ -159,3 +159,17 @@ Watch for known drift: ForestScene defaults were NOT in bootcache SRC_HASH
 ## Working-tree note (07-10)
 Uncommitted docs reorg found (NOT mine, do not touch/stage): docs/NANITE-*.md +
 deep-review/ + DELTA/DEVIATIONS moved → docs/legacy/; mobile-gpu-perf/ → docs/deep-research/.
+
+---
+# ARC CLOSED 2026-07-10 ~03:40 — all slices executed
+S0 f66c8b0 · S1 15296a2 · S2 be9eb44 · S3 ede1282 · S4 c67bf19 · S4b 8babfe5 ·
+S5 32b6c13 · S6 5abc47f · S7 374a2a0 · S8 fa0f7af (+ docs 7dda3ce/a2f200d).
+Net ≈ −18.6k LOC (≈21k deletions). Every slice gated: tsc + worst-pose smoke +
+counter parity + visual; per-slice commits for surgical revert.
+OPEN ITEMS carried out of the arc:
+- fp16w fold = user call pending (f32 stays the shipped default until then).
+- TODO(missing-leaves, CRITICAL) sites from S8: shrubs bark-only, ferns gone,
+  vine stems leafless — need real MESH leaf crowns (LeafMesh) in a content pass.
+- Particles re-enabled with CRITICAL needs-rework comment (perf+visual audit due).
+- ksplit stays until Stage-2 cull-side queue partition lands.
+NEXT: the user's "biggest refactor demand yet" — brief not yet given.
