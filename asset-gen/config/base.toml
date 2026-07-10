@@ -6,12 +6,13 @@ anchor_e = 368640        # L-EST97 easting of gameX=0 (multiple of chunk_m)
 anchor_n = 6635520       # L-EST97 northing of gameZ=0; gameZ = anchor_n - N (south is +Z)
 chunk_m = 2048           # LOD0 chunk footprint in meters
 lod_step = 4             # LOD k: texel = lod_step^k m, footprint = chunk_m * lod_step^k
-lods = [0, 1, 2, 3]      # texel sizes 1 / 4 / 16 / 64 m
+lods = [0, 1, 2, 3, 4]   # texel sizes 1 / 4 / 16 / 64 / 256 m (LOD4 = one chunk over all Estonia)
 chunk_res = 2048         # payload is (chunk_res+1)^2 = 2049^2 incl. shared far edge apron
 
 [encode]
 codec = "deflate"        # "deflate" decodes with the browser's native DecompressionStream; "zstd" optional
 height_qscale = 0.01     # meters per quantization step (u16)
+height_qscale_by_lod = { 3 = 0.25, 4 = 1.0 }  # coarse rungs quantize coarser (nobody sees cm at 64-256 m texels; qscale is per-chunk header state, so mixing is free)
 water_qscale = 0.01
 zstd_level = 19
 deflate_level = 9

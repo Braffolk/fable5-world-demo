@@ -29,6 +29,11 @@ class EncodeConfig:
     water_qscale: float
     zstd_level: int
     deflate_level: int
+    height_qscale_by_lod: dict[int, float] = field(default_factory=dict)
+
+    def height_qscale_for(self, lod: int) -> float:
+        """Per-LOD quantization step; LODs without an override use height_qscale."""
+        return self.height_qscale_by_lod.get(lod, self.height_qscale)
 
 
 @dataclass(frozen=True)
@@ -90,6 +95,9 @@ def load_base() -> BaseConfig:
             water_qscale=e["water_qscale"],
             zstd_level=e["zstd_level"],
             deflate_level=e["deflate_level"],
+            height_qscale_by_lod={
+                int(lod): float(q) for lod, q in e.get("height_qscale_by_lod", {}).items()
+            },
         ),
         fetch=FetchConfig(
             user_agent=f["user_agent"],

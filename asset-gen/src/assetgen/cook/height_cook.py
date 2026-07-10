@@ -9,7 +9,7 @@ import numpy as np
 from ..config import DATA_IN, DATA_WORK, BaseConfig
 from ..grid import ChunkId, chunk_bounds_en, chunk_raster_window_en, chunks_covering_bbox_en
 from ..process.mosaic import RasterStack, dem_sources
-from .chunkio import ChunkMeta, write_chunk
+from .chunkio import ChunkMeta, read_header, write_chunk
 from .encode import decode_quant16, encode_quant16
 
 COOK_REV = 1
@@ -38,7 +38,9 @@ def _cook_one(c: ChunkId) -> tuple[ChunkId, int, bool]:
     base, stack = _worker_base, _worker_stack
     assert base is not None and stack is not None
     dest = chunk_path("height", c)
-    if dest.exists():
+    qscale = base.encode.height_qscale_for(c.lod)
+    # up-to-date == exists AND was quantized at the currently-configured step
+    if dest.exists() and read_header(dest).qscale == float(np.float32(qscale)):
         return c, dest.stat().st_size, True
 
     e_min, n_min, e_max, n_max, t = chunk_raster_window_en(base.grid, c)
@@ -46,7 +48,6 @@ def _cook_one(c: ChunkId) -> tuple[ChunkId, int, bool]:
     had_data = bool(np.isfinite(arr).any())
     arr = np.nan_to_num(arr, nan=SEA_LEVEL)  # sea / no-coverage texels sit at EH2000 zero
 
-    qscale = base.encode.height_qscale
     payload, qoffset = encode_quant16(base.encode, arr.astype(np.float64), qscale)
     # inline round-trip gate: never write a chunk that doesn't decode to within half a step
     out = decode_quant16(base.encode, payload, arr.shape[0], qoffset, qscale)

@@ -63,19 +63,30 @@ def write_chunk(path: Path, meta: ChunkMeta, payload: bytes) -> None:
     tmp.replace(path)
 
 
-def read_chunk(path: Path) -> tuple[ChunkMeta, bytes]:
-    blob = path.read_bytes()
+def _unpack_meta(path: Path, header: bytes) -> tuple[ChunkMeta, int, int]:
     (
         magic, layer, lod, enc, flags, cx, cz, res, count,
         origin_e, origin_n, qoffset, qscale, plen, crc,
-    ) = struct.unpack(FMT, blob[:HEADER_SIZE])
+    ) = struct.unpack(FMT, header)
     if magic != MAGIC:
         raise ValueError(f"{path}: bad magic {magic!r}")
-    payload = blob[HEADER_SIZE : HEADER_SIZE + plen]
-    if len(payload) != plen or zlib.crc32(payload) != crc:
-        raise ValueError(f"{path}: payload length/crc mismatch")
     meta = ChunkMeta(
         layer=LAYER_NAMES[layer], lod=lod, enc=enc, cx=cx, cz=cz, res=res, count=count,
         origin_e=origin_e, origin_n=origin_n, qoffset=qoffset, qscale=qscale, flags=flags,
     )
+    return meta, plen, crc
+
+
+def read_header(path: Path) -> ChunkMeta:
+    """Decode just the 56-byte header (no payload read/CRC) — cheap idempotence checks."""
+    with open(path, "rb") as f:
+        return _unpack_meta(path, f.read(HEADER_SIZE))[0]
+
+
+def read_chunk(path: Path) -> tuple[ChunkMeta, bytes]:
+    blob = path.read_bytes()
+    meta, plen, crc = _unpack_meta(path, blob[:HEADER_SIZE])
+    payload = blob[HEADER_SIZE : HEADER_SIZE + plen]
+    if len(payload) != plen or zlib.crc32(payload) != crc:
+        raise ValueError(f"{path}: payload length/crc mismatch")
     return meta, payload
