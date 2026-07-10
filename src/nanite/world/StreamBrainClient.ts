@@ -158,8 +158,14 @@ export class StreamBrainClient {
         seed: this.tileOpts.seed,
         cell: geo.texel0,
         origin: latticeWorld(geo, 0, 0, 'x'),
-        latMin: box.minX * geo.chunkRes,
-        latMax: (box.maxX + 1) * geo.chunkRes - 1,
+        // the tile clipmap is a SQUARE lattice; a non-square coverage (Estonia's
+        // Taevaskoja pilot spans chunk X 148-155 but Z 93-94) needs bounds that
+        // cover BOTH axes' ranges, else latZ clamps into the X band and the tiles
+        // land tens of km off the camera (frustum+size cull then drop them all).
+        // The generated world's box is square (2×2) ⇒ min/max collapse to the
+        // old X-only values, bit-identical.
+        latMin: Math.min(box.minX, box.minZ) * geo.chunkRes,
+        latMax: (Math.max(box.maxX, box.maxZ) + 1) * geo.chunkRes - 1,
       },
     };
   }

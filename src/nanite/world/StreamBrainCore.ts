@@ -187,7 +187,19 @@ export class StreamBrainCore {
     const M = t.tilesPerSide;
     // coarsest ring spans the coverage (always-resident backstop) — the same
     // level formula the pre-S5 streamer used, so the generated plan is identical
-    const levels = Math.max(1, Math.ceil(Math.log2((2 * span) / (M * t.gridN))) + 1);
+    const want = Math.max(1, Math.ceil(Math.log2((2 * span) / (M * t.gridN))) + 1);
+    // A tile vertex packs its LOCAL texel coord (gridN·stride) in a 13-bit field
+    // (mesh word0 bits 0-12; skirt code 13-15). The coarsest level's stride is
+    // 2^(levels-1), so gridN·2^(levels-1) must stay ≤ 0x1fff. Large streamed
+    // worlds (Estonia's pilot span) would exceed this; cap the base clipmap here
+    // — the coarser far country is served by fartiles (S8), not this pyramid.
+    // The generated 4 km world computes ≤5 levels ⇒ this cap never binds it.
+    const maxStride = Math.max(1, Math.floor(0x1fff / t.gridN));
+    const maxLevels = Math.max(1, Math.floor(Math.log2(maxStride)) + 1);
+    const levels = Math.min(want, maxLevels);
+    if (levels < want) {
+      this.deps.emit({ kind: 'log', level: 'warn', msg: `clipmap levels capped ${want}→${levels} (13-bit vert packing; far country = fartiles/S8)` });
+    }
     this.cfg = { res: t.latMax + 1, gridN: t.gridN, baseStride: 1, levels, tilesPerSide: M, latMin: t.latMin };
   }
 

@@ -18,11 +18,14 @@ import { buildVegLibrary } from '../vegetation/VegLibrary';
 import { CausticsBake, setCausticContext } from '../render/Caustics';
 import { setWindContext, windU } from '../render/Wind';
 import { sunU, updateSunUniforms } from '../render/VegMaterials';
-import type { Heightfield } from '../world/Heightfield';
+import { Heightfield } from '../world/Heightfield';
 import { GeneratedWorldSource } from '../world/source/GeneratedWorldSource';
-import { buildChunkContentStreams } from '../nanite/world/ChunkContent';
+import { RemoteWorldSource } from '../world/source/RemoteWorldSource';
+import type { WorldSource } from '../world/source/WorldSource';
+import { buildChunkContentStreams, type ChunkContentStreams } from '../nanite/world/ChunkContent';
 import { StreamBrainClient } from '../nanite/world/StreamBrainClient';
 import { StreamOrigin } from '../nanite/world/StreamOrigin';
+import { chunkBox, coverageCenter } from '../nanite/world/PlaneFill';
 import type { TerrainField } from '../nanite/world/TerrainField';
 import { WaterSurface } from '../world/WaterSurface';
 import { PostStack } from '../render/PostStack';
@@ -128,8 +131,16 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // WORLD SOURCE (S2): heightfield + scatter run ONCE inside the source; the scene
   // consumes chunk-keyed views for placement and the live hf/scatter handles for the
   // consumers whose windowed ports land at S3a/S4.
-  BootTrace.phase('world source (heightfield + scatter)');
-  const worldSource = new GeneratedWorldSource(engine.renderer, seed);
+  // STREAMED WORLD (S6): ?src=estonia streams the cooked Estonia release through
+  // RemoteWorldSource; default = the procedural GeneratedWorldSource. This is the
+  // ONE source-construction site (law 3) — every subsystem downstream rides the
+  // WorldSource/WorldManifest/TerrainField abstraction and never learns which
+  // source feeds it.
+  const streamed = params.src === 'estonia';
+  BootTrace.phase(streamed ? 'world source (estonia stream)' : 'world source (heightfield + scatter)');
+  const worldSource: WorldSource = streamed
+    ? new RemoteWorldSource(params.dataUrl ?? undefined)
+    : new GeneratedWorldSource(engine.renderer, seed);
   const worldManifest = await worldSource.open((p, m) => ctx.progress(p * 0.94, m));
   // The live boot heightfield — after S4 it feeds ONLY boot-time consumers
   // (scatter + classification inside source.open, the registry terrain build),
@@ -138,10 +149,17 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // lives on the TerrainField planes + the S4 windows below; the boot-only GPU
   // set (incl. biome/fields textures since S4) is released right after the
   // render graph builds (releaseBootGpuSet).
-  const hf: Heightfield = worldSource.heightfield;
+  // The generated source owns a live boot Heightfield; the streamed world has no
+  // procedural terrain — a stub carries ONLY the still-live boot handles the
+  // subsystems read off `hf` (real procedural noise for wind/froxels/resolve;
+  // placeholder dry water/flow for water+caustics until the S9 port). Terrain
+  // DATA lives on the TerrainField planes for BOTH.
+  const hf: Heightfield = streamed
+    ? await Heightfield.forStreamedWorld(engine.renderer, seed)
+    : (worldSource as GeneratedWorldSource).heightfield;
   (engine as unknown as { heightfield?: Heightfield }).heightfield = hf;
 
-  if (hf.cpuHeights) {
+  if (!streamed && hf.cpuHeights) {
     let maxH = -Infinity;
     for (let i = 0; i < hf.cpuHeights.length; i += 7) {
       const v = hf.cpuHeights[i] as number;
@@ -180,6 +198,30 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   const field = await brain.openField();
   const streamOrigin = new StreamOrigin(worldManifest.grid.chunkMeters);
 
+  // FAR-VIEW EXTENT (S6): the camera far plane is tuned for a 4 km world (30 km
+  // hardcoded); Estonia needs 100+ km. Derive it UNIVERSALLY from the height
+  // layer's coarsest-lod world span — the generated world's ≤8 km span keeps it
+  // below the 30 km floor (so today's value is untouched, bit-identical), while
+  // Estonia's country-spanning L4 lifts it. Aerial haze fully obscures terrain
+  // past ~50 km, so a 150 km cap covers the whole horizon with room to spare.
+  {
+    const hmeta = worldManifest.layers.height;
+    let extentHalf = 0;
+    for (const lod of hmeta?.lods ?? []) {
+      const box = chunkBox(worldManifest.chunks('height', lod));
+      if (!box) continue;
+      const foot = worldManifest.grid.chunkMeters * worldManifest.grid.lodStep ** lod;
+      extentHalf = Math.max(extentHalf, ((box.maxX - box.minX + 1) * foot) / 2, ((box.maxZ - box.minZ + 1) * foot) / 2);
+    }
+    const viewFar = Math.min(150000, extentHalf * 1.15);
+    if (viewFar > engine.camera.far) {
+      // eslint-disable-next-line no-console
+      console.log(`[laas] camera far ${engine.camera.far}→${Math.round(viewFar)} m (world half-extent ${Math.round(extentHalf / 1000)} km)`);
+      engine.camera.far = viewFar;
+      engine.camera.updateProjectionMatrix();
+    }
+  }
+
   // physical sky first: probe gathering needs the atmosphere LUTs.
   // ?shot=N boots straight into a composed bookmark — use ITS time of day
   const bootBm = params.shot !== null ? BOOKMARKS[params.shot - 1] : undefined;
@@ -198,20 +240,26 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // their only knowledge of the forest) and before tiles
   BootTrace.phase('canopy window');
   ctx.progress(0.945, 'vegetation: canopy window');
-  const scatter = worldSource.scatter;
-  const canopy = await CanopyWindow.build(
-    engine.renderer,
-    worldSource,
-    worldManifest,
-    field,
-    engine.camera.position.x,
-    engine.camera.position.z,
-  );
+  // streamed world (S6): no scatter yet — trees/understory are S7. The near
+  // CanopyWindow (record-fed) is therefore empty; canopy=null is the fully
+  // supported "source has no trees" state every downstream consumer accepts,
+  // and the FOREST reads from the far material's canopy-plane term instead.
+  const scatter = streamed ? null : (worldSource as GeneratedWorldSource).scatter;
+  const canopy = streamed
+    ? null
+    : await CanopyWindow.build(
+        engine.renderer,
+        worldSource,
+        worldManifest,
+        field,
+        engine.camera.position.x,
+        engine.camera.position.z,
+      );
   const canopyTex = canopy?.tex ?? null;
-  engine.stats.counters['veg.trees'] = scatter.trees.count;
-  engine.stats.counters['veg.under'] = scatter.understory.count;
-  engine.stats.counters['veg.extras'] = scatter.extras.count;
-  engine.stats.counters['veg.stones'] = scatter.stones.count;
+  engine.stats.counters['veg.trees'] = scatter?.trees.count ?? 0;
+  engine.stats.counters['veg.under'] = scatter?.understory.count ?? 0;
+  engine.stats.counters['veg.extras'] = scatter?.extras.count ?? 0;
+  engine.stats.counters['veg.stones'] = scatter?.stones.count ?? 0;
 
   // (ablate hoisted to the top of the function — the overlap kick needs it)
 
@@ -253,7 +301,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     }
   }
 
-  if (view === 'scatter') addScatterDebug(engine.scene, scatter);
+  if (view === 'scatter' && scatter) addScatterDebug(engine.scene, scatter);
 
   // Phase 6: stream/lake water clipmap (?ablate=water to A/B) is CONSTRUCTED
   // AFTER the nanite frame below — W2 threads the frame's composed sun-visibility
@@ -287,11 +335,17 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     // (record chunks → per-species streams; the registry never sees scatter buffers)
     BootTrace.phase('nanite: chunk content streams');
     const tStreams0 = performance.now();
-    const streams = await buildChunkContentStreams(worldSource, worldManifest);
+    // streamed world (S6): instance streams are EMPTY — Estonia trees/boulders
+    // need the SpeciesMap resolver (S7) before they can bind to library pools;
+    // S6 is terrain + far forests only. The registry builds its pools from an
+    // empty stream set (ChunkContent's empty path).
+    const streams: ChunkContentStreams = streamed
+      ? { perId: new Map(), total: 0 }
+      : await buildChunkContentStreams(worldSource, worldManifest);
     const streamsMs = performance.now() - tStreams0;
-    if (qNan.get('s2gate') === '1') {
+    if (qNan.get('s2gate') === '1' && !streamed) {
       // gate probe handle (scratchpad/s2gate.mjs) — own global; __laasDbg gets reassigned
-      (window as unknown as { __laasS2Gate?: unknown }).__laasS2Gate = { rawLayers: worldSource.rawLayers, streams };
+      (window as unknown as { __laasS2Gate?: unknown }).__laasS2Gate = { rawLayers: (worldSource as GeneratedWorldSource).rawLayers, streams };
     }
     const wr = await buildWorldRegistry({
       renderer: engine.renderer,
@@ -337,7 +391,14 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     const c = engine.camera.position;
     brain.update(c.x, c.z);
     brain.drain(engine.renderer);
-    streamOrigin.maybeRebase(c.x, c.z, naniteRegistry);
+    // StreamOrigin rebase is HELD until the camera-relative raster hook lands
+    // (the NaniteFetch StreamOrigin add): rebasing rewrites tile-pool origins to
+    // be origin-relative, but the raster still projects with the ABSOLUTE camera,
+    // so rebased terrain lands off-frustum (Estonia would render nothing). Until
+    // that hook, both sources render at absolute coords — the generated world
+    // never breaches the 8 km threshold (so this is a no-op there), and Estonia
+    // accepts ≤6 cm f32 ULP jitter at 311 km as an S11 hardening item.
+    if (!streamed) streamOrigin.maybeRebase(c.x, c.z, naniteRegistry);
     Object.assign(engine.stats.counters, brain.counters(), streamOrigin.counters());
   });
 
@@ -565,9 +626,20 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   const q = new URLSearchParams(window.location.search);
   const alt = Number(q.get('alt') ?? NaN);
   if (params.cam === null) {
-    if (Number.isFinite(alt)) {
-      const x = Number(q.get('x') ?? 600);
-      const z = Number(q.get('z') ?? 900);
+    if (streamed && !Number.isFinite(alt)) {
+      // Estonia default (S6): an elevated scenic fly over the pilot valley so the
+      // first frame shows the whole-country horizon + forested far shell. Walk
+      // mode (ground probe on streamed heights) is reachable via M / ?alt.
+      const c = coverageCenter(worldManifest);
+      const spawn = findWalkSpawn(field, c.cx, c.cz);
+      const y = field.heightAt(spawn.x, spawn.z) + 140;
+      ctx.hooks.initialPose = { p: [spawn.x, y, spawn.z], yaw: 2.4, pitch: -0.1 };
+      ctx.hooks.initialPoseMode = 'fly';
+      engine.camera.position.set(spawn.x, y, spawn.z);
+    } else if (Number.isFinite(alt)) {
+      const c = streamed ? coverageCenter(worldManifest) : { cx: 600, cz: 900 };
+      const x = Number(q.get('x') ?? c.cx);
+      const z = Number(q.get('z') ?? c.cz);
       const yaw = Number(q.get('yaw') ?? 2.4); // rad; 0 = looking −z (north)
       const pitch = Number(q.get('pitch') ?? -0.04); // rad; negative = down
       const y = field.heightAt(x, z) + alt;
@@ -599,13 +671,13 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
  * out from the map center (dry = waterY sits below the bed there; flat =
  * central-difference slope under ~19°).
  */
-function findWalkSpawn(field: TerrainField): { x: number; z: number } {
+function findWalkSpawn(field: TerrainField, cx = 0, cz = 0): { x: number; z: number } {
   for (let r = 0; r <= 240; r += 12) {
     const steps = Math.max(1, Math.round((2 * Math.PI * r) / 18));
     for (let k = 0; k < steps; k++) {
       const a = (k / steps) * Math.PI * 2;
-      const x = Math.cos(a) * r;
-      const z = Math.sin(a) * r;
+      const x = cx + Math.cos(a) * r;
+      const z = cz + Math.sin(a) * r;
       const h = field.heightAt(x, z);
       if (field.waterAt(x, z) > h - 0.05) continue; // wet or waterline
       const sx = field.heightAt(x + 6, z) - field.heightAt(x - 6, z);

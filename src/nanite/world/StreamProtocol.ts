@@ -205,7 +205,11 @@ export type BrainToMain =
 export function payloadTransfers(p: ChunkPayload | null): Transferable[] {
   if (!p) return [];
   if (p.kind === 'height') return [p.heights.buffer];
-  if (p.kind === 'planes') return p.planes.map((u) => u.buffer);
+  // RemoteWorldSource's decodePlanes returns per-plane SUBARRAY views over ONE
+  // raw buffer — dedupe so the transfer list never lists that buffer twice
+  // (postMessage rejects duplicate ArrayBuffers). The generated source's planes
+  // are distinct arrays, so this is a no-op there.
+  if (p.kind === 'planes') return [...new Set(p.planes.map((u) => u.buffer))];
   const t: Transferable[] = [];
   for (const col of Object.values(p.cols)) if (col) t.push(col.buffer);
   return [...new Set(t)];

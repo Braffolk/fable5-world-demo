@@ -72,7 +72,11 @@ export class RemoteWorldSource implements WorldSource {
         enc: meta.enc,
         lods: meta.lods,
         chunkCount: meta.count,
-        texelMeters: meta.texelMeters,
+        // the base raster (height) omits texelMeters — it IS the grid's finest
+        // lattice (chunkMeters/chunkRes); coarser rasters (biome/water/…) declare
+        // their own (e.g. water = 2 m). Fill the implied default so every raster
+        // layer carries an explicit texel for PlaneFill.layerGeom.
+        texelMeters: meta.texelMeters ?? (meta.enc !== 3 ? m.chunkMeters / m.chunkRes : undefined),
         planes: meta.planes,
         columns: meta.columns as WorldLayerMeta['columns'],
       };

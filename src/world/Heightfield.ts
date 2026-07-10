@@ -46,6 +46,11 @@ import { WORLD_SIZE, qualityConfig, type QualityConfig } from './WorldConst';
 
 export type ProgressFn = (p: number, msg: string) => void;
 
+/** dry-water sentinel (m) for the streamed-world stub: far below any bed, so
+ *  max(ground, waterAt) never lifts the camera and no water surface renders
+ *  (matches PlaneFill.WATER_DRY_SENTINEL). */
+const WATER_DRY_M = -1e4;
+
 export class Heightfield {
   readonly cfg: QualityConfig;
   readonly mp: MacroParams;
@@ -188,6 +193,79 @@ export class Heightfield {
     const wab = await renderer.getArrayBufferAsync(hf.waterY.value);
     hf.cpuWaterY = new Float32Array(wab);
     return hf;
+  }
+
+  /**
+   * Streamed-world stub (SPEC-STREAMING-WORLD S6): a Heightfield with NO
+   * procedural terrain — the height/biome/water DATA lives on the TerrainField
+   * planes fed by the WorldSource. This exists ONLY to satisfy the boot handles
+   * the subsystems still read off `hf` (they never learn which source feeds the
+   * world — law 3): the REAL procedural noise bake (wind/froxels/resolve need
+   * it, it is world-data-independent), plus tiny placeholder hydrology/water
+   * buffers so water + caustics construct and run (they render nothing — the
+   * water is the dry sentinel everywhere — until the S9 water port reads the
+   * TerrainField water plane). No boot GPU set to release (returns 0).
+   */
+  static async forStreamedWorld(renderer: Renderer, seed: WorldSeed): Promise<Heightfield> {
+    const cfg = qualityConfig(activeTier());
+    const mp = makeMacroParams(seed);
+    // the private ctor wants a SynthesisResult + normalTex; both are boot-only
+    // (unused at runtime and never freed here) so a 1-texel placeholder suffices.
+    const synth: SynthesisResult = {
+      res: cfg.heightRes,
+      height: instancedArray(1, 'float') as SynthesisResult['height'],
+      hardness: instancedArray(1, 'float') as SynthesisResult['hardness'],
+    };
+    const normalTex = new StorageTexture(1, 1);
+    normalTex.name = 'hfNormalTexStub';
+    normalTex.type = HalfFloatType;
+    normalTex.generateMipmaps = false;
+    const hf = new Heightfield(cfg, mp, synth, normalTex);
+    hf.bootGpuReleased = true; // nothing procedural to free — releaseBootGpuSet is a no-op
+
+    // REAL noise (procedural, world-independent) — wind/froxels/resolve read it
+    const noise = await bakeNoiseTextures(renderer);
+    hf.noiseA = noise.texA;
+    hf.noiseB = noise.texB;
+
+    // placeholder hydrology at a small sim res — zero flow, dry water everywhere.
+    // Water + caustics run on these until S9 reads the streamed water plane.
+    const simRes = 256;
+    hf.simRes = simRes;
+    const n = simRes * simRes;
+    const zeroF = (): FloatBuffer => instancedArray(n, 'float') as FloatBuffer;
+    const dryY = await Heightfield.fillConst(renderer, n, WATER_DRY_M);
+    hf.flow = {
+      waterSurface: zeroF(),
+      flowStrength: zeroF(),
+      riverDepth: zeroF(),
+      flowDir: instancedArray(n, 'vec2') as FlowResult['flowDir'],
+      moisture: zeroF(),
+      waterYRaw: dryY,
+    };
+    hf.waterY = await Heightfield.fillConst(renderer, n, WATER_DRY_M);
+    hf.waterFarRes = simRes >> 3;
+    hf.waterYFar = await Heightfield.fillConst(renderer, hf.waterFarRes * hf.waterFarRes, WATER_DRY_M);
+    hf.cpuWaterY = new Float32Array(n).fill(WATER_DRY_M);
+    // non-null so the registry's boot-order guard passes; its CONTENTS are never
+    // read in clip mode (terrain streams through the brain, not cpuHeights).
+    hf.cpuHeights = new Float32Array(1);
+    return hf;
+  }
+
+  /** a `count`-element f32 storage buffer filled with a constant (stub water). */
+  private static async fillConst(renderer: Renderer, count: number, val: number): Promise<FloatBuffer> {
+    const out = instancedArray(count, 'float');
+    const kernel = Fn(() => {
+      const i = instanceIndex;
+      If(i.greaterThanEqual(count), () => {
+        Return();
+      });
+      out.element(i).assign(float(val));
+    })().compute(count);
+    kernel.setName('streamWaterDryFill');
+    await renderer.computeAsync(kernel);
+    return out as FloatBuffer;
   }
 
   private static async buildWaterY(

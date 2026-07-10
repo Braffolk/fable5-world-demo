@@ -19,6 +19,13 @@ export interface LaasParams {
   mschart: boolean;
   /** device pixel ratio cap override */
   dpr: number | null;
+  /** world data source: null/'' = the procedural generated world (default),
+   *  'estonia' = stream the cooked Estonia release via RemoteWorldSource */
+  src: string | null;
+  /** base URL for the remote data release (RemoteWorldSource). null = the
+   *  built-in CDN default (braffolk.com/laas-data); dev passes a local static
+   *  server, e.g. ?dataurl=http://localhost:8787 over asset-gen/data/out */
+  dataUrl: string | null;
 }
 
 function num(v: string | null, fallback: number): number {
@@ -44,6 +51,8 @@ export function parseParams(search: string = window.location.search): LaasParams
     // &mschart=0 (the bars animate — a guaranteed-diff region otherwise)
     mschart: q.get('mschart') !== '0',
     dpr: q.get('dpr') !== null ? num(q.get('dpr'), 1) : null,
+    src: q.get('src'),
+    dataUrl: q.get('dataurl'),
   };
 }
 
