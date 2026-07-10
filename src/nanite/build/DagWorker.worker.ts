@@ -7,6 +7,7 @@
  *  - 'aggregate' buildAggregateDag (leaf-crown area-preserving DAG)
  *  - 'crown'     prepareVoxelCrown (tri raster + MIP pyramid + block DAG),
  *                returned in the BootCache packed form (flat typed arrays)
+ *  - 'rock'      generateRock (SDF-composed rock mesh bake, SPEC-ROCKS §G)
  * The whole build chain is three-free + typed-arrays in/out (VoxelizeCrown
  * imports VoxelBrickCore, not VoxelBrick), so this bundle carries no GPU/DOM
  * code. Output arrays are transferred back zero-copy; plain-number structs
@@ -22,6 +23,7 @@ import { buildAggregateDag, setAggLodErrorK } from './BuildAggregateDag';
 import { setClusterFill } from './Clusterize';
 import { packPreparedCrown } from '../world/BootCache';
 import { prepareVoxelCrown, setVoxOccThreshold, setVoxlodConfig } from './VoxelizeCrown';
+import { generateRock } from '../../vegetation/RockGen';
 import type { ExplicitSource } from '../world/GeometryRegistry';
 import type { DagReq, DagRes } from './DagWorkerTypes';
 
@@ -85,6 +87,17 @@ ctx.onmessage = (e: MessageEvent<DagReq>): void => {
       }
       const res: DagRes = { id: req.id, ok: true, kind: 'crown', pack };
       ctx.postMessage(res, transfer);
+      return;
+    }
+    if (req.kind === 'rock') {
+      const mesh = generateRock(req.archetype, req.variant, req.seed, req.gridRes, req.mod, req.domainScale);
+      const res: DagRes = { id: req.id, ok: true, kind: 'rock', mesh };
+      ctx.postMessage(res, [
+        mesh.positions.buffer,
+        mesh.normals.buffer,
+        mesh.vdata.buffer,
+        mesh.indices.buffer,
+      ]);
       return;
     }
     const bad: DagRes = { id: (req as { id: number }).id, ok: false, error: `unknown kind` };

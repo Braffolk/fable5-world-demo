@@ -37,6 +37,10 @@ import srcClusterize from '../build/Clusterize.ts?raw';
 // reshapes the ladder rungs and must invalidate the cached crown DAG.
 import srcTreeBuilder from '../../vegetation/TreeBuilder.ts?raw';
 import srcLeafMesh from '../../vegetation/LeafMesh.ts?raw';
+// rock library generator (SPEC-ROCKS): the 'rocks' store caches its meshes and
+// the world-veg 'dags' store caches QEM DAGs built FROM them — an edit must
+// invalidate both.
+import srcRockGen from '../../vegetation/RockGen.ts?raw';
 
 /** bump on changes to builder TRANSITIVE deps not covered by the ?raw hash list
  *  (DagCommon, VegLibrary geometry gen, registry append semantics).
@@ -64,8 +68,12 @@ import srcLeafMesh from '../../vegetation/LeafMesh.ts?raw';
  *  hysteresis erosion (VoxelizeCrown). Occupancy bits (crown silhouette) now differ, so any
  *  cached fat crown is stale. srcVoxelize's ?raw SRC_HASH already covers the edit; this rev is
  *  belt-and-suspenders + also invalidates the ?voxocc-DEFAULT crowns (default value changed,
- *  and voxOcc rides the params key so a non-default ?voxocc keyed separately regardless). */
-const CACHE_REV = 8;
+ *  and voxOcc rides the params key so a non-default ?voxocc keyed separately regardless).
+ *  rev 9 (2026-07-10): rocks arc R1 — rock/stone geometry source swapped RockBuilder →
+ *  RockGen (SDF-composed meshes, new 'rocks' store; RockGen.ts joins SRC_HASH). The rev
+ *  invalidates the world-veg 'dags' store, whose rock QEM DAGs were built from the OLD
+ *  icosphere geometry (that geometry source was never in any key). */
+const CACHE_REV = 9;
 
 const DB_NAME = 'laas-bootcache';
 const STORE = 'artifacts';
@@ -78,7 +86,7 @@ function fnv1a(s: string, h = 0x811c9dc5): number {
   return h >>> 0;
 }
 
-const SRC_HASH = [srcVoxelize, srcBuildDag, srcBuildAgg, srcBuildCrownLod, srcFarTiles, srcFarTilesSplat, srcVoxelBrick, srcVoxelBrickCore, srcClusterize, srcTreeBuilder, srcLeafMesh]
+const SRC_HASH = [srcVoxelize, srcBuildDag, srcBuildAgg, srcBuildCrownLod, srcFarTiles, srcFarTilesSplat, srcVoxelBrick, srcVoxelBrickCore, srcClusterize, srcTreeBuilder, srcLeafMesh, srcRockGen]
   .reduce((h, s) => fnv1a(s, h), 0x811c9dc5)
   .toString(16);
 

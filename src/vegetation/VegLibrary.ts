@@ -11,8 +11,8 @@
  * GI, and dither fades on top.
  */
 
-import type { BufferGeometry } from "three";
-import { yieldIfDue } from "../debug/BootTrace";
+import { BufferAttribute, BufferGeometry } from "three";
+import { BootTrace, yieldIfDue } from "../debug/BootTrace";
 import type { MeshStandardNodeMaterial, Renderer } from "three/webgpu";
 import type { WorldSeed } from "../core/Seed";
 import {
@@ -32,7 +32,15 @@ import {
 } from "../render/VegMaterials";
 import { buildLog, buildStump, type DecayState } from "./Deadfall";
 import { twigGeometry } from "./GroundCover";
-import { buildRock } from "./RockBuilder";
+import {
+  ETAK_ERRATIC_CLASS,
+  generateRock,
+  ROCK_LIBRARY,
+  type RockMesh,
+  type RockVariantSpec,
+} from "./RockGen";
+import { BootCache } from "../nanite/world/BootCache";
+import { DagWorkerPool } from "../nanite/build/DagWorkerClient";
 import { TREE_SPECIES } from "./Species";
 import { buildTree, type CrownLodLevel, type CrownLodRung, type HeroDiet } from "./TreeBuilder";
 import {
@@ -181,7 +189,7 @@ export const HERO_DIETS: Record<string, HeroDiet> = {
 
 export interface VegLib {
   pools: VegPool[];
-  /** per-class cull data, indexed by VegClass (length 20) */
+  /** per-class cull data, indexed by VegClass (covers ETAK_ERRATIC_CLASS 24) */
   clsHeight: number[];
   clsRadius: number[];
   clsMaxDist: number[];
@@ -208,6 +216,90 @@ function bounds(geos: BufferGeometry[]): { height: number; radius: number } {
     if (bs) radius = Math.max(radius, bs.center.length() + bs.radius);
   }
   return { height, radius };
+}
+
+// ---- rock library (SPEC-ROCKS R1): SDF-composed RockGen meshes -------------
+
+/** deterministic RockGen bake of the full §B library — BootCache 'rocks' store
+ *  first (rev/params/RockGen-source keyed), else fanned across a DagWorkerPool
+ *  ('rock' job kind; per-job sync fallback). Keyed `${class}/${variant}`. */
+async function buildRockMeshes(seedNum: number): Promise<Map<string, RockMesh>> {
+  const t0 = performance.now();
+  type Rec = { key: string; mesh: RockMesh };
+  const jobs: { key: string; gridRes: number; v: number; spec: RockVariantSpec }[] = [];
+  for (const cls of ROCK_LIBRARY) {
+    for (let v = 0; v < cls.variants.length; v++) {
+      jobs.push({ key: `${cls.name}/${v}`, gridRes: cls.gridRes, v, spec: cls.variants[v] as RockVariantSpec });
+    }
+  }
+  // the library table IS the per-tier res/count/recipe param set; RockGen.ts
+  // itself is in the BootCache SRC_HASH (any generator edit invalidates).
+  const cache = new BootCache({ params: { scene: "rocks", seed: seedNum, library: ROCK_LIBRARY } });
+  const cached = await cache.get<Rec[]>("rocks");
+  let recs: Rec[];
+  if (cached && cached.length === jobs.length) {
+    recs = cached;
+  } else {
+    const cores = (typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 4;
+    let pool: DagWorkerPool | null = null;
+    try {
+      pool = new DagWorkerPool(Math.max(1, Math.min(6, cores - 2)));
+    } catch {
+      pool = null; // no Worker (headless) — synchronous fallback below
+    }
+    recs = await Promise.all(
+      jobs.map(async (j): Promise<Rec> => {
+        let mesh: RockMesh | null = null;
+        if (pool) {
+          try {
+            mesh = await pool.buildRock({
+              archetype: j.spec.archetype,
+              variant: j.v,
+              seed: seedNum,
+              gridRes: j.gridRes,
+              mod: j.spec.mod,
+              domainScale: j.spec.domainScale ?? 1,
+            });
+          } catch (e) {
+            console.warn(`[rockgen] worker ${j.key} failed — sync fallback:`, e);
+          }
+        }
+        if (!mesh) {
+          await yieldIfDue();
+          mesh = generateRock(j.spec.archetype, j.v, seedNum, j.gridRes, j.spec.mod, j.spec.domainScale ?? 1);
+        }
+        return { key: j.key, mesh };
+      }),
+    );
+    pool?.dispose();
+    // store AFTER first frame (BootCache put discipline — serialization is
+    // main-thread work; the library is ~10 MB of typed arrays)
+    void BootTrace.whenFinished().then(() => cache.put("rocks", recs));
+  }
+  let tris = 0;
+  let verts = 0;
+  for (const r of recs) {
+    tris += r.mesh.stats.tris;
+    verts += r.mesh.stats.verts;
+  }
+  console.log(
+    `[rockgen] library: ${recs.length} variants, ${tris} tris / ${verts} verts ` +
+      `(${cached ? "cache" : "built"}, ${(performance.now() - t0).toFixed(0)} ms)`,
+  );
+  return new Map(recs.map((r) => [r.key, r.mesh]));
+}
+
+/** RockGen typed arrays → BufferGeometry. vdata u8 → float 0..1 vec4 attribute
+ *  (geometryToSource re-quantizes ×255 — an exact u8 round trip). */
+function rockGeometry(mesh: RockMesh): BufferGeometry {
+  const g = new BufferGeometry();
+  g.setAttribute("position", new BufferAttribute(mesh.positions, 3));
+  g.setAttribute("normal", new BufferAttribute(mesh.normals, 3));
+  const vd = new Float32Array(mesh.vdata.length);
+  for (let i = 0; i < vd.length; i++) vd[i] = (mesh.vdata[i] as number) / 255;
+  g.setAttribute("vdata", new BufferAttribute(vd, 4));
+  g.setIndex(new BufferAttribute(mesh.indices, 1));
+  return g;
 }
 
 function variantInstance(
@@ -267,9 +359,9 @@ export async function buildVegLibrary(
   );
 
   const pools: VegPool[] = [];
-  const clsHeight = new Array<number>(24).fill(1);
-  const clsRadius = new Array<number>(24).fill(1);
-  const clsMaxDist = new Array<number>(24).fill(150);
+  const clsHeight = new Array<number>(25).fill(1);
+  const clsRadius = new Array<number>(25).fill(1);
+  const clsMaxDist = new Array<number>(25).fill(150);
   const trackCls = (cls: number, h: number, r: number): void => {
     clsHeight[cls] = Math.max(clsHeight[cls] ?? 1, h);
     clsRadius[cls] = Math.max(clsRadius[cls] ?? 1, r);
@@ -467,8 +559,8 @@ export async function buildVegLibrary(
     clsMaxDist[cls] = 90;
   }
 
-  // ---- extras: deadfall + boulders/slabs -------------------------------------
-  progress(0.86, "veg: deadfall + boulder pools");
+  // ---- extras: deadfall -------------------------------------------------------
+  progress(0.86, "veg: deadfall pools");
   const deadTex = barkOf(5);
   // weathered-wood darkening: the snag bark bake is pale gray and logs read
   // as glowing white slivers in noon sun without it
@@ -525,139 +617,65 @@ export async function buildVegLibrary(
   }
   clsMaxDist[VegClass.Stump] = 170;
 
-  const rockPools: { cls: number; preset: "boulder" | "slab"; moss: number }[] =
-    [
-      { cls: VegClass.Boulder, preset: "boulder", moss: 0.3 },
-      { cls: VegClass.Slab, preset: "slab", moss: 0.12 },
-    ];
-  // scatter keys boulder/slab variants by rock exposure: 0/1 = pale bedrock
-  // blocks beside cliffs (matching them), 2/3 = dark mossy forest rocks
+  // ---- rocks: SDF-composed RockGen library (SPEC-ROCKS §B, R1) --------------
+  // One LOD0 mesh per variant — continuous LOD rides the nanite QEM DAG
+  // (dagClasses always carries 'rock'), so there is no discrete r2 ring.
+  // Variant semantics preserved for the context-keyed scatter kernels:
+  // v0/1 = pale/talus context, v2/3 = dark/mossy context (moss/tone below feed
+  // only the OLD-path rockMaterial; the nanite resolve is R2's rockShadeV2).
+  progress(0.9, "veg: rock library (RockGen)");
+  const rockMeshes = await buildRockMeshes(seed.seed);
   const paleRock = { r: 0.34, g: 0.33, b: 0.3 };
-  for (const { cls, preset, moss } of rockPools) {
-    for (let v = 0; v < 4; v++) {
+  const talusRock = { r: 0.35, g: 0.34, b: 0.31 };
+  const rockShadeOf = (cls: number, v: number): { moss: number; tone?: { r: number; g: number; b: number } } => {
+    if (cls === VegClass.Boulder) return v < 2 ? { moss: 0.08, tone: paleRock } : { moss: 0.3 };
+    if (cls === VegClass.Slab) return v < 2 ? { moss: 0.08, tone: paleRock } : { moss: 0.12 };
+    if (cls === VegClass.StoneL) return v < 2 ? { moss: 0.06, tone: talusRock } : { moss: 0.3 };
+    if (cls === VegClass.StoneM) return { moss: 0.12 };
+    if (cls === VegClass.StoneS) return { moss: 0.06 };
+    return { moss: 0.3 }; // EtakErratic heroes
+  };
+  const rockMaxDist: Record<number, number> = {
+    [VegClass.Boulder]: 700,
+    [VegClass.Slab]: 700,
+    [VegClass.StoneL]: 900,
+    [VegClass.StoneM]: 280,
+    [VegClass.StoneS]: 90,
+    // ETAK hero erratics (≥2.5 m): landmark-sized, visible as far as StoneL
+    [ETAK_ERRATIC_CLASS]: 900,
+  };
+  for (const rockCls of ROCK_LIBRARY) {
+    for (let v = 0; v < rockCls.variants.length; v++) {
       await yieldIfDue();
-      const tone = v < 2 ? paleRock : undefined;
-      const vMoss = v < 2 ? 0.08 : moss;
-      const hi = buildRock(preset, seed.rng(`veg/${preset}/${v}`), 4);
-      const lo = buildRock(preset, seed.rng(`veg/${preset}/${v}`), 3);
-      const b = bounds([hi.geometry]);
-      trackCls(cls, b.height, b.radius);
+      const mesh = rockMeshes.get(`${rockCls.name}/${v}`);
+      if (!mesh) throw new Error(`VegLibrary: rock mesh ${rockCls.name}/${v} missing from bake`);
+      const geo = rockGeometry(mesh);
+      const { moss, tone } = rockShadeOf(rockCls.classId, v);
+      const b = bounds([geo]);
+      trackCls(rockCls.classId, b.height, b.radius);
       pools.push({
-        cls,
+        cls: rockCls.classId,
         variant: v,
         r1: [
           {
-            geo: hi.geometry,
-            tris: hi.stats.tris,
-            make: () => rockMaterial({ moss: vMoss, tone }),
-            castShadow: true,
+            geo,
+            tris: mesh.stats.tris,
+            make: () => rockMaterial({ moss, tone }),
+            castShadow: rockCls.classId !== VegClass.StoneS,
           },
         ],
-        r2: [
-          {
-            geo: lo.geometry,
-            tris: lo.stats.tris,
-            make: () => rockMaterial({ moss: vMoss, tone }),
-            castShadow: true,
-          },
-        ],
-        trisR1: hi.stats.tris,
-        trisR2: lo.stats.tris,
+        r2: null,
+        trisR1: mesh.stats.tris,
+        trisR2: 0,
         height: b.height,
         radius: b.radius,
       });
     }
-    clsMaxDist[cls] = 700;
+    clsMaxDist[rockCls.classId] = rockMaxDist[rockCls.classId] ?? 150;
   }
 
-  // ---- size-stratified stones + fallen branches (no-bare-ground layer) ------
-  progress(0.93, "veg: stone/branch pools");
-  const stoneClasses: {
-    cls: number;
-    preset: "boulder" | "cobble";
-    d1: number;
-    d2: number | null;
-    moss: number;
-    maxDist: number;
-  }[] = [
-    {
-      cls: VegClass.StoneL,
-      preset: "boulder",
-      d1: 3,
-      d2: 2,
-      moss: 0.22,
-      maxDist: 900,
-    },
-    {
-      cls: VegClass.StoneM,
-      preset: "cobble",
-      d1: 2,
-      d2: 1,
-      moss: 0.12,
-      maxDist: 280,
-    },
-    {
-      cls: VegClass.StoneS,
-      preset: "cobble",
-      d1: 1,
-      d2: null,
-      moss: 0.06,
-      maxDist: 90,
-    },
-  ];
-  for (const sc of stoneClasses) {
-    for (let v = 0; v < 4; v++) {
-      await yieldIfDue();
-      // StoneL variants are context-keyed by the scatter kernel: 0/1 spawn
-      // on dry scree (pale faceted talus matching the cliff that shed it),
-      // 2/3 in streambeds (dark water-rounded, mossy) — scree stops reading
-      // as smooth dark blobs
-      const isTalus = sc.cls === VegClass.StoneL && v < 2;
-      const preset =
-        sc.cls === VegClass.StoneL
-          ? isTalus
-            ? "talus"
-            : "boulder"
-          : sc.preset;
-      const moss =
-        sc.cls === VegClass.StoneL ? (isTalus ? 0.06 : 0.3) : sc.moss;
-      const tone = isTalus ? { r: 0.35, g: 0.34, b: 0.31 } : undefined;
-      const hi = buildRock(preset, seed.rng(`veg/stone${sc.cls}/${v}`), sc.d1);
-      const lo =
-        sc.d2 !== null
-          ? buildRock(preset, seed.rng(`veg/stone${sc.cls}/${v}`), sc.d2)
-          : null;
-      const b = bounds([hi.geometry]);
-      trackCls(sc.cls, b.height, b.radius);
-      pools.push({
-        cls: sc.cls,
-        variant: v,
-        r1: [
-          {
-            geo: hi.geometry,
-            tris: hi.stats.tris,
-            make: () => rockMaterial({ moss, tone }),
-            castShadow: sc.cls !== VegClass.StoneS,
-          },
-        ],
-        r2: lo
-          ? [
-              {
-                geo: lo.geometry,
-                tris: lo.stats.tris,
-                make: () => rockMaterial({ moss, tone }),
-                castShadow: sc.cls === VegClass.StoneL,
-              },
-            ]
-          : null,
-        trisR1: hi.stats.tris,
-        trisR2: lo ? lo.stats.tris : 0,
-        height: b.height,
-        radius: b.radius,
-      });
-    }
-    clsMaxDist[sc.cls] = sc.maxDist;
-  }
+  // ---- fallen branches (no-bare-ground layer) --------------------------------
+  progress(0.93, "veg: branch pools");
   // fallen branches: scaled twig tubes, deadwood-shaded. Dimmed hard: the
   // snag-bark albedo is pale gray and read as glowing white sticks at noon.
   const branchDim = { r: 0.5, g: 0.42, b: 0.34 };

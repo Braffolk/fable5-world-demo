@@ -11,8 +11,8 @@
  *  - ferns/flowers (11–14): leafy card geometry — DEFERRED to N9 entirely.
  *  - logs/stumps (16–17), branches (23): deadwood, r1 (branch r2 is a clone
  *    that exists only for indirect-slot bookkeeping — one registration).
- *  - boulders/slabs (18–19), stones L/M (20–21): rock, r1→r2 LOD chain at
- *    EX_R1_FAR=120 m; StoneS (22): single ring.
+ *  - rocks (18–22 + EtakErratic 24): a single RockGen LOD0 ring — continuous
+ *    LOD rides the QEM DAG (dagClasses always has 'rock'); no discrete r2.
  *  - terrain: ONE heightfield source over the full field (winQuads 7,
  *    partial edge windows), single identity instance.
  *  - GroundRing grass/debris: clipmap-instanced (not boot-static scatter) —
@@ -31,6 +31,7 @@ import { internalSize } from '../../render/RenderScale';
 import { VegClass } from '../../gpu/passes/Scatter';
 import type { ChunkContentStreams } from './ChunkContent';
 import { CROWN_LOD_SCHEDULE, type VegLib, type VegPool, type PoolPart } from '../../vegetation/VegLibrary';
+import { ETAK_ERRATIC_CLASS } from '../../vegetation/RockGen';
 import type { CrownLodLevel } from '../../vegetation/TreeBuilder';
 import type { Heightfield } from '../../world/Heightfield';
 import { WORLD_SIZE } from '../../world/WorldConst';
@@ -127,6 +128,7 @@ const ROCK_CLASSES: ReadonlySet<number> = new Set([
   VegClass.StoneL,
   VegClass.StoneM,
   VegClass.StoneS,
+  ETAK_ERRATIC_CLASS, // hero erratics — ETAK-record instanced (R3), 0 until then
 ]);
 
 export interface WorldRegistryResult {

@@ -9,6 +9,7 @@ import type { DagBuild, DagCluster, DagOpts } from './BuildDag';
 import type { AggregateDagOpts } from './BuildAggregateDag';
 import type { PackedPreparedCrown } from '../world/BootCache';
 import type { HeightDagOpts, HeightDagStats } from './BuildHeightGrid';
+import type { RockArchetype, RockMesh, RockMod } from '../../vegetation/RockGen';
 
 /** build an adaptive terrain LOD DAG on a (gridN+1)² heightfield (gridN = 2^k) */
 interface HeightDagReq {
@@ -71,7 +72,21 @@ export interface CrownReq {
   cfg: { levels: number; errorK: number; sparseK: number; shell: number; anchorL0: number };
 }
 
-export type DagReq = HeightDagReq | MeshDagReq | AggDagReq | CrownReq;
+/** seeded SDF-composed rock mesh bake (RockGen.generateRock — SPEC-ROCKS §G):
+ *  deterministic params in, pure typed-array mesh out (transferred zero-copy).
+ *  The SDF never leaves the generator; the result is ordinary mesh data. */
+export interface RockReq {
+  id: number;
+  kind: 'rock';
+  archetype: RockArchetype;
+  variant: number;
+  seed: number;
+  gridRes: number;
+  mod?: RockMod;
+  domainScale: number;
+}
+
+export type DagReq = HeightDagReq | MeshDagReq | AggDagReq | CrownReq | RockReq;
 
 /** the subset of HeightDagBuild the registry consumes (gridVerts in build grid
  *  coords 0..gridN — the caller remaps to texel coords); arrays are transferred */
@@ -101,10 +116,17 @@ interface CrownOk {
   pack: PackedPreparedCrown;
 }
 
+interface RockOk {
+  id: number;
+  ok: true;
+  kind: 'rock';
+  mesh: RockMesh;
+}
+
 interface DagErr {
   id: number;
   ok: false;
   error: string;
 }
 
-export type DagRes = HeightDagOk | MeshDagOk | CrownOk | DagErr;
+export type DagRes = HeightDagOk | MeshDagOk | CrownOk | RockOk | DagErr;

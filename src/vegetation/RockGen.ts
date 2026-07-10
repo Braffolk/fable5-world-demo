@@ -867,11 +867,16 @@ export function generateRock(
 }
 
 // ---------------------------------------------------------------------------
-// §B library table. Slot-compatible VegClass ids 18-22; EtakErratic is the
-// new ETAK-only head — its class id is assigned when the head is registered
-// (R1). Variant semantics preserved: v0/1 = pale/talus context, v2/3 =
-// dark/mossy context. domainScale is the per-entry tri-target tuning lever
-// (same archetype serves multiple classes at different grid res).
+// §B library table. Slot-compatible VegClass ids 18-22 (Scatter.ts enum);
+// EtakErratic is the new ETAK-only hero head — class id 24, the first free
+// slot after Branch (23). It has NO scatter kernel: instances come from ETAK
+// boulder records at R3 (0 until then). Variant semantics preserved: v0/1 =
+// pale/talus context, v2/3 = dark/mossy context. domainScale is the per-entry
+// tri-target tuning lever (same archetype serves multiple classes at
+// different grid res).
+
+/** VegClass id of the ETAK-only hero-erratic head (first free slot ≥ 24) */
+export const ETAK_ERRATIC_CLASS = 24;
 
 export interface RockVariantSpec {
   archetype: RockArchetype;
@@ -881,7 +886,7 @@ export interface RockVariantSpec {
 
 export interface RockClassSpec {
   name: string;
-  /** VegClass id; -1 = assigned at registration (EtakErratic head, R1) */
+  /** VegClass id (Scatter.ts enum for 18-22; ETAK_ERRATIC_CLASS for the hero head) */
   classId: number;
   gridRes: number;
   /** LOD0 tri target per variant (SPEC-ROCKS §B, gate ±25%) */
@@ -936,7 +941,7 @@ export const ROCK_LIBRARY: RockClassSpec[] = [
     ],
   },
   {
-    name: 'EtakErratic', classId: -1, gridRes: 96, targetTris: 30000,
+    name: 'EtakErratic', classId: ETAK_ERRATIC_CLASS, gridRes: 96, targetTris: 30000,
     variants: [
       { archetype: 'graniteErratic', mod: 'hero' },
       { archetype: 'graniteErratic', mod: 'hero' },

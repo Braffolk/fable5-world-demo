@@ -14,10 +14,12 @@ import type {
   DagRes,
   HeightDagOk,
   MeshDagReq,
+  RockReq,
 } from './DagWorkerTypes';
 import type { HeightDagOpts } from './BuildHeightGrid';
 import type { DagBuild } from './BuildDag';
 import type { PackedPreparedCrown } from '../world/BootCache';
+import type { RockMesh } from '../../vegetation/RockGen';
 
 export interface HeightDagResult {
   gridVerts: HeightDagOk['gridVerts'];
@@ -41,6 +43,8 @@ export type MeshDagArgs = Omit<MeshDagReq, 'id' | 'kind'>;
 export type AggDagArgs = Omit<AggDagReq, 'id' | 'kind'>;
 /** prepareVoxelCrown job (workerized crown voxelization) — see CrownReq. */
 export type CrownArgs = Omit<CrownReq, 'id' | 'kind'>;
+/** generateRock job (workerized SDF rock mesh bake, SPEC-ROCKS §G) — see RockReq. */
+export type RockArgs = Omit<RockReq, 'id' | 'kind'>;
 
 /** an off-thread DAG builder — one Worker (DagBuildWorker) or a pool of them
  *  (DagWorkerPool). TileBuildDeps.worker is typed to this so either drops in. */
@@ -49,6 +53,7 @@ export interface DagBuilder {
   buildMesh(args: MeshDagArgs): Promise<DagBuild>;
   buildAggregate(args: AggDagArgs): Promise<DagBuild>;
   buildCrown(args: CrownArgs): Promise<PackedPreparedCrown>;
+  buildRock(args: RockArgs): Promise<RockMesh>;
   dispose(): void;
 }
 
@@ -129,6 +134,14 @@ export class DagBuildWorker implements DagBuilder {
     });
   }
 
+  buildRock(args: RockArgs): Promise<RockMesh> {
+    return this.request({ id: this.nextId++, kind: 'rock', ...args }).then((r) => {
+      if (!r.ok) throw new Error(r.error);
+      if (r.kind !== 'rock') throw new Error(`DagWorker: expected rock, got ${r.kind}`);
+      return r.mesh;
+    });
+  }
+
   dispose(): void {
     this.worker.terminate();
     this.dead = true;
@@ -206,6 +219,10 @@ export class DagWorkerPool implements DagBuilder {
 
   buildCrown(args: CrownArgs): Promise<PackedPreparedCrown> {
     return this.run((w) => w.buildCrown(args));
+  }
+
+  buildRock(args: RockArgs): Promise<RockMesh> {
+    return this.run((w) => w.buildRock(args));
   }
 
   dispose(): void {
