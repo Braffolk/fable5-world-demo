@@ -399,6 +399,15 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     // never breaches the 8 km threshold (so this is a no-op there), and Estonia
     // accepts ≤6 cm f32 ULP jitter at 311 km as an S11 hardening item.
     if (!streamed) streamOrigin.maybeRebase(c.x, c.z, naniteRegistry);
+    // S6c PRECISION: on the streamed world (Estonia, absolute coords ~311 km) pin
+    // every GPU field sampler's coordinate frame to a near-camera snapped anchor so
+    // gridCoords stays sub-metre (the terrain height/normal sampling terraced on
+    // slopes otherwise). Snapped to 512 m to keep the uniform stable across frames;
+    // the sampled VALUE is anchor-invariant, so the snap step is cosmetic. The
+    // generated world leaves the anchor at (0,0) ⇒ every sampler is IEEE-identical.
+    if (streamed) {
+      field.setRenderAnchor(Math.round(c.x / 512) * 512, Math.round(c.z / 512) * 512);
+    }
     Object.assign(engine.stats.counters, brain.counters(), streamOrigin.counters());
   });
 

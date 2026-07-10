@@ -244,6 +244,11 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
   const canopyTex = opts.canopyTex;
   const uOn = uniformF(1);
   let onCpu = true;
+  // S6c: absolute world coords reach ~311 km only on the streamed (Estonia) path;
+  // the generated world stays < 3 km where f32 is exact. Build-time flag so the
+  // guide-relative march below compiles ONLY for streamed — generated keeps the
+  // verbatim absolute expressions (byte-identical shader ⇒ A/A gate holds).
+  const streamed = new URLSearchParams(window.location.search).get('src') === 'estonia';
 
   // ground height for the guide bake: the height plane's bilerp, HOISTED to
   // L0 — the guide ring (±161 m around the camera) always sits inside the
@@ -385,6 +390,18 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
    *  world-anchored, only the window moves). Integer-valued floats, exact ≤ 2^23. */
   const uGFx = uniformF(0);
   const uGFz = uniformF(0);
+  // S6c PRECISION (streamed only): the guide-origin-RELATIVE ray origin in world
+  // metres (camPos − guideOriginWorld), computed CPU-side each frame. On Estonia
+  // camPos ≈ 311 km ⇒ the march's `pos.x/CELL − gfx` texel-index and the DDA
+  // `boundary − ro.x` are 311 km−311 km f32 cancellations (ULP ≈ 3 cm) → the ray
+  // picks the wrong guide texel with a view-dependent staircase = the terraced
+  // grass bands. Re-expressed against this small relative origin the whole march
+  // stays sub-metre ⇒ exact. GENERATED world keeps the verbatim absolute path
+  // (streamed=false below), so its shader is byte-identical (A/A gate). uGFx is
+  // an exact integer so guideOriginWorld = uGFx·CELL is exact; the CPU subtract
+  // is f64 ⇒ uRoM is the precise small offset.
+  const uRoMx = uniformF(0);
+  const uRoMz = uniformF(0);
 
   /** per-texel FIELD bake (perf): the march re-derived every smooth field PER
    *  STEP (3× value noise = 12 hashes + swirl/wind trig) — measured ~12 ms of
@@ -816,18 +833,31 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
           Break();
         });
         const pos = ro.add(rd.mul(tCur)).toVar() as unknown as NV3;
+        // S6c: guide-origin-relative horizontal march pos (metres), sub-metre on
+        // Estonia so the texel-index / DDA math is exact. `prCell*` = fine-cell
+        // offset from the guide origin (= pos.{x,z}/CELL − g{f}, but formed from
+        // the small relative pos ⇒ no 311 km cancellation). Non-streamed keeps the
+        // verbatim absolute expressions (byte-identical shader).
+        const prMx = streamed
+          ? (uRoMx as unknown as NF).add(rd.x.mul(tCur)).toVar()
+          : null;
+        const prMz = streamed
+          ? (uRoMz as unknown as NF).add(rd.z.mul(tCur)).toVar()
+          : null;
+        const prCellX = prMx ? (prMx as unknown as NF).div(CELL) : null;
+        const prCellZ = prMz ? (prMz as unknown as NF).div(CELL) : null;
         // guide texel under pos (fine-cell space → texel index; in-range by
         // construction — tEnd caps horizontal travel inside the guide window)
-        const txf = pos.x
-          .div(CELL)
-          .sub(gfx)
+        const txf = (
+          prCellX ? (prCellX as unknown as NF) : pos.x.div(CELL).sub(gfx)
+        )
           .div(GUIDE_SUB)
           .floor()
           .clamp(0, GUIDE_RES - 1)
           .toVar() as unknown as NF;
-        const tzf = pos.z
-          .div(CELL)
-          .sub(gfz)
+        const tzf = (
+          prCellZ ? (prCellZ as unknown as NF) : pos.z.div(CELL).sub(gfz)
+        )
           .div(GUIDE_SUB)
           .floor()
           .clamp(0, GUIDE_RES - 1)
@@ -841,24 +871,40 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
         If(ci.notEqual(cCur), () => {
           const cTop = bcU2F(elemU(guideCoarse.ro, ci)).toVar() as unknown as NF;
           // coarse cell exit t (3.36 m world grid anchored at the guide origin)
-          const cbx = gfx
-            .add(
-              cxf
+          // ray-relative coarse-cell exit boundary (metres from ro): streamed
+          // forms `boundary − ro` against the small relative origin (exact);
+          // non-streamed keeps the verbatim absolute `cbx − ro` expression.
+          const cbxRel = streamed
+            ? (cxf
                 .add(rd.x.greaterThanEqual(0).select(float(1), float(0)))
-                .mul(GUIDE_SUB * COARSE_SUB),
-            )
-            .mul(CELL) as unknown as NF;
-          const cbz = gfz
-            .add(
-              czf
+                .mul(GUIDE_SUB * COARSE_SUB)
+                .mul(CELL)
+                .sub(uRoMx as unknown as NF) as unknown as NF)
+            : (gfx
+                .add(
+                  cxf
+                    .add(rd.x.greaterThanEqual(0).select(float(1), float(0)))
+                    .mul(GUIDE_SUB * COARSE_SUB),
+                )
+                .mul(CELL)
+                .sub(ro.x) as unknown as NF);
+          const cbzRel = streamed
+            ? (czf
                 .add(rd.z.greaterThanEqual(0).select(float(1), float(0)))
-                .mul(GUIDE_SUB * COARSE_SUB),
-            )
-            .mul(CELL) as unknown as NF;
-          const cEx = cbx
-            .sub(ro.x)
+                .mul(GUIDE_SUB * COARSE_SUB)
+                .mul(CELL)
+                .sub(uRoMz as unknown as NF) as unknown as NF)
+            : (gfz
+                .add(
+                  czf
+                    .add(rd.z.greaterThanEqual(0).select(float(1), float(0)))
+                    .mul(GUIDE_SUB * COARSE_SUB),
+                )
+                .mul(CELL)
+                .sub(ro.z) as unknown as NF);
+          const cEx = cbxRel
             .div(sdx)
-            .min(cbz.sub(ro.z).div(sdz))
+            .min(cbzRel.div(sdz))
             .max(tCur.add(1e-3))
             .toVar() as unknown as NF; // always progress
           const cExC = cEx.min(tEnd) as unknown as NF;
@@ -891,16 +937,32 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
         const grad = (unpackHalfU(cv.y) as unknown as { toVar(): NV2 }).toVar() as unknown as NV2;
         const ta = (unpackHalfU(cv.z) as unknown as { toVar(): NV2 }).toVar() as unknown as NV2;
         // texel exit t (0.84 m world grid anchored at the guide origin)
-        const bx = gfx
-          .add(txf.add(rd.x.greaterThanEqual(0).select(float(1), float(0))).mul(GUIDE_SUB))
-          .mul(CELL) as unknown as NF;
-        const bz = gfz
-          .add(tzf.add(rd.z.greaterThanEqual(0).select(float(1), float(0))).mul(GUIDE_SUB))
-          .mul(CELL) as unknown as NF;
-        const tEx = bx
-          .sub(ro.x)
+        // ray-relative texel-exit boundary (metres from ro): streamed forms
+        // `bx − ro` against the small relative origin (exact); non-streamed keeps
+        // the verbatim absolute `bx − ro` expression.
+        const bxRel = streamed
+          ? (txf
+              .add(rd.x.greaterThanEqual(0).select(float(1), float(0)))
+              .mul(GUIDE_SUB)
+              .mul(CELL)
+              .sub(uRoMx as unknown as NF) as unknown as NF)
+          : (gfx
+              .add(txf.add(rd.x.greaterThanEqual(0).select(float(1), float(0))).mul(GUIDE_SUB))
+              .mul(CELL)
+              .sub(ro.x) as unknown as NF);
+        const bzRel = streamed
+          ? (tzf
+              .add(rd.z.greaterThanEqual(0).select(float(1), float(0)))
+              .mul(GUIDE_SUB)
+              .mul(CELL)
+              .sub(uRoMz as unknown as NF) as unknown as NF)
+          : (gfz
+              .add(tzf.add(rd.z.greaterThanEqual(0).select(float(1), float(0))).mul(GUIDE_SUB))
+              .mul(CELL)
+              .sub(ro.z) as unknown as NF);
+        const tEx = bxRel
           .div(sdx)
-          .min(bz.sub(ro.z).div(sdz))
+          .min(bzRel.div(sdz))
           .max(tCur.add(1e-3))
           .toVar() as unknown as NF; // always progress
         const tExC = tEx.min(tEnd).toVar() as unknown as NF;
@@ -944,8 +1006,12 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
             // was piecewise-CONSTANT fields. This replaces 3× value noise (12
             // hashes) + trig per march step — measured ~12 ms of kRay's 23 @dpr2.
             const guv = vec2(
-              pos.x.div(CELL).sub(gfx).div(GUIDE_SUB * GUIDE_RES),
-              pos.z.div(CELL).sub(gfz).div(GUIDE_SUB * GUIDE_RES),
+              (prCellX ? (prCellX as unknown as NF) : pos.x.div(CELL).sub(gfx)).div(
+                GUIDE_SUB * GUIDE_RES,
+              ),
+              (prCellZ ? (prCellZ as unknown as NF) : pos.z.div(CELL).sub(gfz)).div(
+                GUIDE_SUB * GUIDE_RES,
+              ),
             ).clamp(0, 1) as unknown as NV2;
             const f1 = (texture(guideFieldT1, guv, 0) as unknown as { toVar(): NV4 }).toVar();
             const f2 = (texture(guideFieldT2, guv, 0) as unknown as { toVar(): NV4 }).toVar();
@@ -986,22 +1052,32 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
             /** quad basis = wind + static arc (f2.zw) */
             const Sqx = Swx.add(f2.z).toVar() as unknown as NF;
             const Sqz = Swz.add(f2.w).toVar() as unknown as NF;
-            const texOx = gfx.add(txf.mul(GUIDE_SUB)).mul(CELL).toVar() as unknown as NF;
-            const texOz = gfz.add(tzf.mul(GUIDE_SUB)).mul(CELL).toVar() as unknown as NF;
+            // S6c: texel origin — RELATIVE to the guide origin on streamed (small,
+            // so the slope-amplified `grad·(pos − texC)` term below is exact), the
+            // verbatim absolute form otherwise. `phx/phz` is the march pos in the
+            // SAME frame (relative on streamed) so every subtraction stays sub-metre.
+            const texOx = (
+              streamed ? txf.mul(GUIDE_SUB).mul(CELL) : gfx.add(txf.mul(GUIDE_SUB)).mul(CELL)
+            ).toVar() as unknown as NF;
+            const texOz = (
+              streamed ? tzf.mul(GUIDE_SUB).mul(CELL) : gfz.add(tzf.mul(GUIDE_SUB)).mul(CELL)
+            ).toVar() as unknown as NF;
             const texCx = texOx.add(GUIDE_PITCH / 2).toVar() as unknown as NF;
             const texCz = texOz.add(GUIDE_PITCH / 2).toVar() as unknown as NF;
+            const phx = (prMx ? (prMx as unknown as NF) : pos.x) as unknown as NF;
+            const phz = (prMz ? (prMz as unknown as NF) : pos.z) as unknown as NF;
             // shear the CURRENT march point into tile space (height above the
             // texel's ground plane drives the shear), then bomb it
             const gP = ground
-              .add(grad.x.mul(pos.x.sub(texCx)))
-              .add(grad.y.mul(pos.z.sub(texCz))) as unknown as NF;
+              .add(grad.x.mul(phx.sub(texCx)))
+              .add(grad.y.mul(phz.sub(texCz))) as unknown as NF;
             // shear height clamped: past ~0.6 m the arc would wrap tile space by
             // whole tiles (far-field tall swards) — sub-pixel there anyway
             const hgt = pos.y.sub(gP).max(0).min(0.6).toVar() as unknown as NF;
             const offX = Slx.add(Sqx.mul(hgt)).mul(hgt) as unknown as NF; // Sl·h + Sq·h²
             const offZ = Slz.add(Sqz.mul(hgt)).mul(hgt) as unknown as NF;
-            const lxT = pos.x.sub(offX).sub(texOx).div(GUIDE_PITCH) as unknown as NF;
-            const lzT = pos.z.sub(offZ).sub(texOz).div(GUIDE_PITCH) as unknown as NF;
+            const lxT = phx.sub(offX).sub(texOx).div(GUIDE_PITCH) as unknown as NF;
+            const lzT = phz.sub(offZ).sub(texOz).div(GUIDE_PITCH) as unknown as NF;
             const qb0 = bombF(lxT.sub(0.5), lzT.sub(0.5)) as unknown as NV2;
             const qbx = qb0.x.add(0.5).toVar() as unknown as NF;
             const qbz = qb0.y.add(0.5).toVar() as unknown as NF;
@@ -1230,9 +1306,27 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
                 SALT ^ 0x7c01,
               ) as unknown as NF;
               const topEff = topB.mul(colH.mul(0.5).add(0.55)).toVar() as unknown as NF;
+              // S6c: root offset from texel centre — streamed forms it in the
+              // guide-relative frame (wcx−gfx is an exact small integer, texC is
+              // relative) so the slope term `grad·offset` is exact; otherwise
+              // verbatim. This is the on-slope blade-root height that terraced.
               const gRoot = ground
-                .add(grad.x.mul(wcx.add(0.5).mul(CELL).sub(texCx)))
-                .add(grad.y.mul(wcz.add(0.5).mul(CELL).sub(texCz)))
+                .add(
+                  grad.x.mul(
+                    (streamed
+                      ? wcx.sub(gfx).add(0.5).mul(CELL)
+                      : wcx.add(0.5).mul(CELL)
+                    ).sub(texCx),
+                  ),
+                )
+                .add(
+                  grad.y.mul(
+                    (streamed
+                      ? wcz.sub(gfz).add(0.5).mul(CELL)
+                      : wcz.add(0.5).mul(CELL)
+                    ).sub(texCz),
+                  ),
+                )
                 .toVar() as unknown as NF;
               const tPar = yH.sub(gRoot).div(topEff.max(0.05)) as unknown as NF;
               If(
@@ -1540,6 +1634,11 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
     const half = (GUIDE_RES / 2) * GUIDE_SUB;
     uGFx.value = Math.round(camera.position.x / GUIDE_PITCH) * GUIDE_SUB - half;
     uGFz.value = Math.round(camera.position.z / GUIDE_PITCH) * GUIDE_SUB - half;
+    // S6c: guide-origin-relative ray origin (metres) — f64 subtract of two ~311 km
+    // values done HERE on the CPU (exact) so the GPU march never forms the huge
+    // absolute coordinate. guideOriginWorld = uGFx·CELL (uGFx exact integer).
+    uRoMx.value = camera.position.x - uGFx.value * CELL;
+    uRoMz.value = camera.position.z - uGFz.value * CELL;
     // separate dispatches (own submits) — keeps c.grassGuide / c.grassRay pass
     // timers clean (batched compute overlaps the render passes and smears their
     // timestamps; the whole-frame A/B is the ground truth either way)

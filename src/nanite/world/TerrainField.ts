@@ -49,6 +49,16 @@ export interface FieldLevel {
   originZ: number;
   /** origin as a uniform — scroll commits re-point it without shader rebuilds */
   uOrigin: { value: Vector2 };
+  /** S6c PRECISION: origin relative to the render anchor (= uOrigin − uAnchor),
+   *  recomputed CPU-side (f64) whenever the origin or anchor moves. gridCoords
+   *  subtracts uAnchor from the (absolute) sample coord and uOriginRel here so the
+   *  texel-index math is small−small on Estonia (~311 km absolute ⇒ f32 ULP 3 cm
+   *  ⇒ the terrain height/normal sampling STAIRCASED into slope terraces). Anchor
+   *  stays (0,0) on the generated world ⇒ uOriginRel ≡ uOrigin and the result is
+   *  IEEE-identical to `wxz − uOrigin` (x−0 == x). */
+  uOriginRel: { value: Vector2 };
+  /** the shared render anchor (near-camera snapped world XZ; (0,0) = disabled) */
+  uAnchor: { value: Vector2 };
   /** toroidal phase (n0 mod res) — only wrapping levels compile reads of it */
   uPhase: { value: Vector2 };
   /** frozen at plan time: window < coverage ⇒ the level scrolls toroidally.
@@ -188,7 +198,23 @@ export class TerrainField {
     lvl.originX = originX;
     lvl.originZ = originZ;
     lvl.uOrigin.value.set(originX, originZ);
+    // S6c: keep the anchor-relative origin coherent with the new window origin.
+    lvl.uOriginRel.value.set(originX - lvl.uAnchor.value.x, originZ - lvl.uAnchor.value.y);
     lvl.uPhase.value.set(phaseX, phaseY);
+  }
+
+  /** S6c PRECISION — set the shared render anchor (near-camera snapped world XZ)
+   *  used by every GPU field sampler to keep gridCoords sub-metre on Estonia's
+   *  ~311 km absolute coords. Call per frame with the (snapped) camera XZ on the
+   *  streamed world; leave at (0,0) on the generated world (< 3 km ⇒ f32 exact,
+   *  and (0,0) makes every sampler IEEE-identical to the pre-S6c path). Only the
+   *  precision changes — gridCoords' value is anchor-invariant — so the anchor may
+   *  move any amount between frames with zero visual discontinuity. */
+  setRenderAnchor(ax: number, az: number): void {
+    for (const lvl of this.allLevels()) {
+      lvl.uAnchor.value.set(ax, az);
+      lvl.uOriginRel.value.set(lvl.originX - ax, lvl.originZ - az);
+    }
   }
 
   /** flip every plane's full backing to the GPU (boot: after the unbudgeted
@@ -362,7 +388,13 @@ export class TerrainField {
 /** world → continuous sample-grid coords (integer = exact source sample),
  *  window-relative on wrapping levels. */
 export function gridCoords(lvl: FieldLevel, wxz: NV2): NV2 {
-  return wxz.sub(vec2(lvl.uOrigin as unknown as NV2)).div(lvl.texel);
+  // S6c: (wxz − anchor) − (uOrigin − anchor), each side small on Estonia ⇒ the
+  // f32 subtraction no longer cancels two ~311 km values into texel-quantized
+  // noise. anchor (0,0) on generated ⇒ IEEE-identical to `wxz − uOrigin`.
+  return wxz
+    .sub(vec2(lvl.uAnchor as unknown as NV2))
+    .sub(vec2(lvl.uOriginRel as unknown as NV2))
+    .div(lvl.texel);
 }
 
 /** logical texel index → physical (toroidal) index on wrapping levels. `i` is
@@ -538,6 +570,9 @@ function levelCommon(plan: PlanePlan): Omit<FieldLevel, 'tex'> {
     originX: plan.originX,
     originZ: plan.originZ,
     uOrigin: uniform(new Vector2(plan.originX, plan.originZ)) as unknown as FieldLevel['uOrigin'],
+    // anchor (0,0) initially ⇒ uOriginRel ≡ uOrigin (generated-world identity)
+    uOriginRel: uniform(new Vector2(plan.originX, plan.originZ)) as unknown as FieldLevel['uOriginRel'],
+    uAnchor: uniform(new Vector2(0, 0)) as unknown as FieldLevel['uAnchor'],
     uPhase: uniform(new Vector2(0, 0)) as unknown as FieldLevel['uPhase'],
     wraps: plan.wraps,
   };
