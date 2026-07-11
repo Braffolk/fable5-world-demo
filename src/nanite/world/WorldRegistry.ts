@@ -7,7 +7,9 @@
  *  - tree pools (cls 0–5): bark part of r0/r1/r2 as a discrete LOD chain
  *    (switch at R0_FAR=26 m, R1_FAR=150 m — Forests ring radii); foliage
  *    CARDS + hero mesh leaves DEFERRED to N9 (alpha/leaf path).
- *  - shrubs (8–10): bark part, single ring.
+ *  - shrubs (8–10): bark part, single ring, + a co-located MATERIAL_CLASS.leaf
+ *    crown (the tree hero-crown path, scoped to understory: capped at clsMaxDist,
+ *    no far-field voxel sibling) so understory reads as leafy, not bare stems.
  *  - ferns/flowers (11–14): leafy card geometry — DEFERRED to N9 entirely.
  *  - logs/stumps (16–17), branches (23): deadwood, r1 (branch r2 is a clone
  *    that exists only for indirect-slot bookkeeping — one registration).
@@ -494,7 +496,10 @@ function planVegJobs(
       const ladder = (): CrownLodLevelMesh[] =>
         (leafRungs ??= ladderToMeshes(buildLadder ? buildLadder() : null));
       plan.aggJobs.push({ label: `${label}/leaf`, source: leafSource, ladder });
-      if (knobs.voxReg && (!knobs.forceVoxOn || knobs.forceVoxAll || knobs.forceVoxId === idF)) {
+      // voxel crown = the TREE mid/far LOD only (mirrors the pool walk's `isTree` gate,
+      // so crownJobs count matches the walk's toVoxel); shrub leaves are mesh-only.
+      const isTree = pool.cls <= TREE_MAX_CLS;
+      if (isTree && knobs.voxReg && (!knobs.forceVoxOn || knobs.forceVoxAll || knobs.forceVoxId === idF)) {
         plan.crownJobs.push({ idF, label: `${label}/voxel`, source: leafSource, color: pool.leaf.color });
       }
     }
@@ -981,7 +986,10 @@ export async function buildWorldRegistry(input: {
         matParam: packLeafTint(pool.leaf.color),
         aggregate: true,
       });
-      reg.setMaxDistance(leafHead, TREE_GEO_FAR);
+      // trees hand their crown to a voxel sibling at transitionDist and continue as
+      // impostors to TREE_GEO_FAR; understory shrubs are short-range dense cover — the
+      // leaf MESH owns the whole 0..clsMaxDist band (no voxel sibling), so cap it there.
+      reg.setMaxDistance(leafHead, isTree ? TREE_GEO_FAR : (lib.clsMaxDist[pool.cls] ?? 170));
       toAggregate.push({
         handle: leafHead,
         source: leafSource,
@@ -993,7 +1001,9 @@ export async function buildWorldRegistry(input: {
       // brick total is known before the addLate reservation freezes (§5.3). The voxel
       // sibling head + brick append happen post-build (a voxel cluster points at bricks,
       // not tris — that authoring is Stage 2; here we only reserve+upload the bricks).
-      if (voxReg && (!forceVoxOn || forceVoxAll || forceVoxId === idF)) {
+      // TREES ONLY: the voxel crown is the tree mid/far-field LOD; understory shrubs cap
+      // their leaf mesh at clsMaxDist (above) and never enter the voxel/fartile path.
+      if (isTree && voxReg && (!forceVoxOn || forceVoxAll || forceVoxId === idF)) {
         const matParam = packLeafTint(pool.leaf.color);
         // prep.crowns carries EVERY planned crown (cache hit or worker build — prepareWorldVeg
         // already stored the packed form). The world path appends STRAIGHT from the packed

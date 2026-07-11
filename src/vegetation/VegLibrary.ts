@@ -492,19 +492,16 @@ export async function buildVegLibrary(
       await yieldIfDue();
       const rng = seed.rng(`veg/${sp.id}/${v}`);
       const shrub = buildShrub(sp, rng);
-      // TODO(missing-leaves, CRITICAL): shrubs (BushHazel/BushPink/Juniper) render
-      // as BARE bark stems — their only foliage was the deferred card layer, now
-      // deleted with the card pipeline (S8). They need a real MESH leaf crown
-      // (LeafMesh, like the tree leaf heads) before they read as live plants.
       const parts: PoolPart[] = [
         {
           geo: shrub.bark,
-          tris: shrub.bark.index ? shrub.bark.index.count / 3 : 0,
+          tris: shrub.barkTris,
           make: () => barkTexturedMaterial(barkOf(2)),
           castShadow: true,
         },
       ];
-      const b = bounds(parts.map((p) => p.geo));
+      // bounds over bark + crown so the cull sphere covers the leaves.
+      const b = bounds(shrub.crown ? [shrub.bark, shrub.crown] : [shrub.bark]);
       trackCls(cls, b.height, b.radius);
       pools.push({
         cls,
@@ -512,10 +509,15 @@ export async function buildVegLibrary(
         barkLayer: 2, // shrub opaque part uses barkOf(2) above
         r1: parts,
         r2: null,
-        trisR1: shrub.tris,
+        trisR1: shrub.barkTris,
         trisR2: 0,
         height: b.height,
         radius: b.radius,
+        // real MESH leaf crown — the co-located MATERIAL_CLASS.leaf head (the SAME
+        // path the tree hero crown rides), so understory reads as leafy shrubs, not
+        // bare stems. WorldRegistry scopes it to understory: capped at clsMaxDist
+        // (170 m) with NO tree far-field voxel sibling (short-range dense cover).
+        leaf: shrub.crown ? { geo: shrub.crown, tris: shrub.crownTris, color: sp.foliageColor } : undefined,
       });
     }
     clsMaxDist[cls] = 170;

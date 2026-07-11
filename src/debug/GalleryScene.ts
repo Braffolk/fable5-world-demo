@@ -362,9 +362,13 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
       bm.castShadow = true;
       bm.receiveShadow = true;
       engine.scene.add(bm);
-      // TODO(missing-leaves, CRITICAL): shrubs are BARK-ONLY — foliage was card
-      // geometry (deleted, S8). Needs a real mesh leaf crown per stem.
-      exhibit(sx, GZ + 2.5, sp.label, 'multi-stem (bark only)', { pedestal: false });
+      // real MESH leaf crown (same foliage path as the tree hero ring)
+      if (shrub.crown) {
+        const cm = new Mesh(shrub.crown, foliageMaterial({ color: sp.foliageColor }));
+        cm.position.set(sx, 0, GZ);
+        engine.scene.add(cm);
+      }
+      exhibit(sx, GZ + 2.5, sp.label, 'multi-stem + leaf crown', { pedestal: false });
       sx += 9;
     }
   }

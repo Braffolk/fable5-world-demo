@@ -146,18 +146,30 @@ export const UNDERSTORY_SPECIES: readonly SpeciesParams[] = [
   BUSH_JUNIPER,
 ];
 
+/** per-stem real-leaf anchor budget for the shrub crown (foliageMode 'mesh').
+ *  Understory is dense (~495 k instances) + short-range (≤170 m), so the crown is
+ *  kept LOW-POLY: this strides buildTree's anchors down to ~10 leaf clusters /
+ *  needle sprays per stem — a small leafy mass, not a hero canopy. Measured merged-
+ *  shrub crown: ~1.4–2.4 k tris (leaf-cluster hazel/pink), ~4.6–6.6 k (needle-spray
+ *  juniper); the aggregate DAG coarsens it with distance and it culls at clsMaxDist. */
+const SHRUB_LEAF_ANCHORS = 10;
+
 /**
- * multi-stem shrub: 3–5 leaning stems merged into one bark geometry.
- * TODO(missing-leaves, CRITICAL): shrubs are BARK-ONLY — foliage was the card
- * layer (deleted with the card pipeline, S8). They need a real MESH leaf crown
- * (buildTree foliageMode 'mesh' per stem, or a merged crown) to read as plants.
+ * multi-stem shrub: 3–5 leaning stems merged into ONE bark geometry + ONE leaf
+ * crown geometry. The crown is the SAME real MESH foliage the tree hero ring builds
+ * (buildTree foliageMode 'mesh' → leaf-cluster / needle-spray per anchor), strided to
+ * SHRUB_LEAF_ANCHORS so it stays cheap. The bark stream is byte-identical to the
+ * bark-only path (foliage forks its own RNG in buildTree, never touching the stem/
+ * tube stream), so this adds leaves without moving any existing placement.
  */
 export function buildShrub(
   sp: SpeciesParams,
   rng: Rng,
-): { bark: BufferGeometry; tris: number } {
+): { bark: BufferGeometry; crown: BufferGeometry | null; barkTris: number; crownTris: number } {
   const stems = 3 + rng.int(3);
   const barkG = new MeshGrower();
+  const crownG = new MeshGrower();
+  let crownTris = 0;
   const m = new Matrix4();
   const q = new Quaternion();
   const p = new Vector3();
@@ -165,6 +177,8 @@ export function buildShrub(
     const a = (i / stems) * Math.PI * 2 + rng.float();
     const lean = 0.12 + rng.float() * 0.22;
     const tree = buildTree(sp, rng.fork(`stem${i}`), {
+      foliageMode: 'mesh',
+      hero: { meshAnchorTarget: SHRUB_LEAF_ANCHORS },
       inst: {
         leanX: Math.cos(a) * lean,
         leanZ: Math.sin(a) * lean,
@@ -175,9 +189,14 @@ export function buildShrub(
     q.identity();
     m.compose(p, q, new Vector3(1, 1, 1));
     appendGeometry(barkG, tree.bark, m);
+    if (tree.foliageMesh) {
+      appendGeometry(crownG, tree.foliageMesh, m);
+      crownTris = crownG.triCount;
+    }
   }
   const bark = barkG.build();
-  return { bark, tris: barkG.triCount };
+  const crown = crownTris > 0 ? crownG.build() : null;
+  return { bark, crown, barkTris: barkG.triCount, crownTris };
 }
 
 /** append a built BufferGeometry into a grower (positions/normals/uv/vdata) */

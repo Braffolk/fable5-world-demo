@@ -71,8 +71,13 @@ import srcRockGen from '../../vegetation/RockGen.ts?raw';
  *  rev 9 (2026-07-10): rocks arc R1 — rock/stone geometry source swapped RockBuilder →
  *  RockGen (SDF-composed meshes, new 'rocks' store; RockGen.ts joins SRC_HASH). The rev
  *  invalidates the world-veg 'dags' store, whose rock QEM DAGs were built from the OLD
- *  icosphere geometry (that geometry source was never in any key). */
-const CACHE_REV = 9;
+ *  icosphere geometry (that geometry source was never in any key).
+ *  rev 10 (#105): understory shrubs (BushHazel/BushPink/Juniper) gained a real MESH leaf
+ *  crown — buildShrub now emits a foliage geometry attached as pool.leaf, so the world-veg
+ *  'dags' store gains a leaf aggregate DAG per shrub pool. Understory.ts/VegLibrary.ts are
+ *  not in the ?raw SRC_HASH list (the job-count change self-invalidates 'dags', but the rev
+ *  is the sanctioned explicit invalidation for a geometry-gen change outside SRC_HASH). */
+const CACHE_REV = 10;
 
 const DB_NAME = 'laas-bootcache';
 const STORE = 'artifacts';
