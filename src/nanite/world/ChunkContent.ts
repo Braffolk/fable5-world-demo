@@ -17,6 +17,7 @@
 import type { ChunkKey, ChunkPayload, LayerName, WorldManifest, WorldSource } from '../../world/source/WorldSource';
 import { makeGroundDeriver, type GroundDeriver } from '../../world/source/RecordGround';
 import { ingestEtakBoulders, type EtakBoulderRecords } from '../../vegetation/EtakBoulders';
+import { ageStageVariant, ditherOfVariant } from '../../vegetation/AgeForm';
 
 export interface InstanceStream {
   a: Float32Array;
@@ -57,12 +58,20 @@ export async function buildChunkContentStreams(
     }
   }
 
-  // two passes: exact per-id sizes, then fill (same shape the registry pools expect)
+  // two passes: exact per-id sizes, then fill (same shape the registry pools expect).
+  // #110: TREES pick their variant SLOT from the per-tree scale (age proxy), so the
+  // low idF bits select an age-stage FORM instead of a random one — count and fill
+  // MUST derive it identically (ageStageVariant is pure/deterministic). Other layers
+  // (understory/rocks/…) keep their own variant semantics untouched.
   const counts = new Map<number, number>();
-  for (const { payload } of jobs) {
-    const { species, variant } = payload.cols;
+  for (const { layer, payload } of jobs) {
+    const { species, variant, scale } = payload.cols;
+    const isTree = layer === 'trees';
     for (let i = 0; i < payload.count; i++) {
-      const id = idFOf(species[i] as number, variant[i] as number);
+      const v = isTree
+        ? ageStageVariant(scale[i] as number, ditherOfVariant(variant[i] as number))
+        : (variant[i] as number);
+      const id = idFOf(species[i] as number, v);
       counts.set(id, (counts.get(id) ?? 0) + 1);
     }
   }
@@ -76,13 +85,17 @@ export async function buildChunkContentStreams(
     const minX = manifest.grid.originX + key.cx * footprint;
     const minZ = manifest.grid.originZ + key.cz * footprint;
     const derive = cols.y && cols.yaw && cols.leanX && cols.leanZ ? null : await makeDeriver(source, manifest, key);
+    const isTree = layer === 'trees';
     for (let i = 0; i < count; i++) {
-      const id = idFOf(cols.species[i] as number, cols.variant[i] as number);
+      const scale = cols.scale[i] as number;
+      const v = isTree
+        ? ageStageVariant(scale, ditherOfVariant(cols.variant[i] as number))
+        : (cols.variant[i] as number);
+      const id = idFOf(cols.species[i] as number, v);
       const s = perId.get(id) as InstanceStream;
       const d = s.fill * 4;
       const x = cols.xw ? (cols.xw[i] as number) : minX + (cols.x[i] as number);
       const z = cols.zw ? (cols.zw[i] as number) : minZ + (cols.z[i] as number);
-      const scale = cols.scale[i] as number;
       s.a[d] = x;
       s.a[d + 2] = z;
       s.a[d + 3] = scale;
@@ -150,7 +163,11 @@ export async function buildChunkInstances(
       const zLocal = cols.z[i] as number;
       const x = cols.xw ? (cols.xw[i] as number) : minX + xLocal;
       const z = cols.zw ? (cols.zw[i] as number) : minZ + zLocal;
-      const id = opts.idFOf(cols.species[i] as number, cols.variant[i] as number);
+      // #110: age-stage variant slot from the per-tree scale (see buildChunkContentStreams).
+      const id = opts.idFOf(
+        cols.species[i] as number,
+        ageStageVariant(scale, ditherOfVariant(cols.variant[i] as number)),
+      );
       const dv = cols.y && cols.yaw && cols.leanX && cols.leanZ ? null : derive(xLocal, zLocal);
       aArr.push(x, cols.y ? (cols.y[i] as number) : (dv as { h: number }).h - scale * 0.12, z, scale);
       bArr.push(

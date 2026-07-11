@@ -147,6 +147,14 @@ export function buildTree(
     /** false → legacy independent open-tube bark (G5 A/B ablation, ?nojunctions) */
     junctions?: boolean;
     /**
+     * #110 AGE FORM: when true, `inst.age` drives ontogenetic PROPORTIONS in the
+     * growth grammar (crown-base lift / self-pruning, crown broaden, trunk
+     * stoutening) and the baked height is decoupled from age (so the runtime A.w
+     * scale carries the real absolute size, not a doubled age term). Trees pass
+     * true; shrubs / gallery leave it false ⇒ legacy skeleton unchanged.
+     */
+    ageForm?: boolean;
+    /**
      * crown-LOD rung schedule (finest→coarsest; e.g. VegLibrary.crownLodScheduleFor).
      * When supplied AND the foliage MESH is built (mesh/hybrid, lod 0), emit a
      * `foliageLadder` — one regeneration per rung: prune whole anchors to λ,
@@ -158,7 +166,7 @@ export function buildTree(
   },
 ): BuiltTree {
   const lod = opts?.lod ?? 0;
-  const skel = growSkeleton(sp, rng, opts?.inst);
+  const skel = growSkeleton(sp, rng, opts?.inst, opts?.ageForm ?? false);
 
   // ---- bark/tubes ------------------------------------------------------------
   // Ring LODs stop the tube hierarchy BELOW the anchor level — the leaf

@@ -38,6 +38,48 @@ function crownEnvelope(shape: CrownShape, t: number, rng: Rng): number {
   }
 }
 
+/**
+ * #110 ONTOGENY — per-crown-shape maturity response (only used when growSkeleton
+ * is called with ageForm=true, i.e. TREES; shrubs/gallery keep the legacy form).
+ * `inst.age` (0 juvenile .. 1 veteran) drives real growth-form change grounded in
+ * dendrology (see AgeForm.ts / the #110 reference spec):
+ *   - crownBaseMax: crown BASE (height-to-crown-base fraction) an old tree lifts
+ *     to via self-pruning of shaded lower branches. Young trees keep the species'
+ *     natural low crown (crown near the ground); old trees clear a bare lower
+ *     trunk. Scots pine (dome) self-prunes hardest → long bare orange bole + flat
+ *     umbrella; shade-tolerant spruce (cone) lifts gently; beech/birch moderate.
+ *   - broadenMax: how much the crown WIDENS from a narrow juvenile silhouette to a
+ *     broad mature one (old pine flat-topped, old beech broad-domed). Applied to
+ *     the trunk's primary-branch length only (crown width), never trunk height.
+ * Trunk SLENDERNESS (young whippy/slender → old stout) is a global lerp below.
+ */
+interface OntoResp {
+  crownBaseMax: number;
+  broadenMax: number;
+}
+function ontoRespFor(crown: CrownShape): OntoResp {
+  switch (crown) {
+    case 'dome':
+      return { crownBaseMax: 0.55, broadenMax: 0.3 }; // Scots pine: bare bole, flat umbrella
+    case 'cone':
+      return { crownBaseMax: 0.32, broadenMax: 0.18 }; // spruce: gentle lift, modest broaden
+    case 'ellipsoid':
+      return { crownBaseMax: 0.38, broadenMax: 0.3 }; // beech: clear bole → broad dome
+    case 'column':
+      return { crownBaseMax: 0.35, broadenMax: 0.14 }; // birch: lifts + opens, stays slim
+    case 'irregular':
+      return { crownBaseMax: 0.22, broadenMax: 0.2 }; // karst gnarl: low, gnarled cliff form
+  }
+}
+/** trunk radius-vs-height factor across maturity: young slender (high H/D) → old
+ *  stout. Roughly halves slenderness from juvenile to veteran (H/D ~90 → ~50). */
+const SLENDER_YOUNG = 0.72;
+const SLENDER_OLD = 1.3;
+/** young crown-width factor (narrows the juvenile silhouette below the reference). */
+const BROADEN_YOUNG = 0.82;
+
+const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
+
 /** stable orthonormal basis perpendicular to dir */
 function perpBasis(dir: Vector3, outN: Vector3, outB: Vector3): void {
   const ref = Math.abs(dir.y) < 0.94 ? UP : new Vector3(1, 0, 0);
@@ -53,6 +95,8 @@ interface GrowCtx {
   anchors: LeafAnchor[];
   /** total branch count guard */
   budget: number;
+  /** #110: apply inst.age-driven ontogeny to proportions (trees only). */
+  ageForm: boolean;
 }
 
 interface BranchSpec {
@@ -147,7 +191,14 @@ function growBranch(ctx: GrowCtx, spec: BranchSpec): SkelBranch | null {
   const childLevel = spec.level + 1;
   if (childLevel < sp.levels.length) {
     const cp = sp.levels[childLevel] as LevelParams;
-    const span = Math.max(0, cp.childEnd - cp.childStart);
+    // #110 ontogeny: on the TRUNK only, lift the crown base with age (self-pruning
+    // of shaded lower branches → bare lower trunk) and broaden the primary crown
+    // with age. Trunk-only so the width factor compounds once, not per branch level.
+    const onTrunk = ctx.ageForm && isTrunk;
+    const resp = onTrunk ? ontoRespFor(sp.crown) : null;
+    const childStart = resp ? lerp(cp.childStart, resp.crownBaseMax, inst.age) : cp.childStart;
+    const broadenK = resp ? lerp(BROADEN_YOUNG, 1 + resp.broadenMax, inst.age) : 1;
+    const span = Math.max(0, cp.childEnd - childStart);
     const densityScale = 0.75 + inst.age * 0.45;
     const count = Math.round(effLen * span * cp.density * densityScale);
     if (count > 0) {
@@ -156,7 +207,7 @@ function growBranch(ctx: GrowCtx, spec: BranchSpec): SkelBranch | null {
       const groups = whorl >= 2 ? Math.max(1, Math.round(count / whorl)) : count;
       let azimuth = rng.float() * Math.PI * 2;
       for (let gi = 0; gi < groups; gi++) {
-        const tG = cp.childStart + span * ((gi + 0.5) / groups);
+        const tG = childStart + span * ((gi + 0.5) / groups);
         const inWhorl = whorl >= 2 ? whorl : 1;
         azimuth += whorl >= 2 ? GOLDEN * 0.5 + rng.float() * 0.4 : 0;
         for (let wi = 0; wi < inWhorl; wi++) {
@@ -202,7 +253,7 @@ function growBranch(ctx: GrowCtx, spec: BranchSpec): SkelBranch | null {
               (cDir.x * inst.biasX + cDir.z * inst.biasZ) *
               (isTrunk ? 1 : 0.4);
           const cLen =
-            effLen * cp.lenRatio * env * asymK * (1 + (rng.float() - 0.5) * 2 * cp.lenJitter);
+            effLen * cp.lenRatio * env * asymK * broadenK * (1 + (rng.float() - 0.5) * 2 * cp.lenJitter);
           if (cLen < 0.05) continue;
           const cR = Math.min(pR * cp.radRatio * (0.55 + env * 0.45), pR * 0.8);
           const stub = sp.stubChance > 0 && rng.chance(sp.stubChance);
@@ -291,6 +342,7 @@ export function growSkeleton(
   sp: SpeciesParams,
   rng: Rng,
   inst?: Partial<GrowthInstance>,
+  ageForm = false,
 ): Skeleton {
   const instance: GrowthInstance = {
     leanX: (rng.float() - 0.5) * 0.12,
@@ -306,9 +358,18 @@ export function growSkeleton(
     instance.biasZ = Math.sin(a);
   }
 
+  // #110: under ageForm the runtime A.w (per-tree `scale`) carries the REAL
+  // absolute height (Estonia's measured nDSM canopy height; the generated jitter),
+  // so DECOUPLE the baked height from age — otherwise a small-scale tree that also
+  // picked a young slot would be shrunk twice (the doubled term that read insane).
+  // Bake at the ladder's mean maturity (0.85, the legacy variant mean) so average
+  // baked size is unchanged; age instead shapes PROPORTIONS below.
+  const heightAge = ageForm ? 0.85 : instance.age;
   const height =
     (sp.height[0] + rng.float() * (sp.height[1] - sp.height[0])) *
-    (0.72 + instance.age * 0.36);
+    (0.72 + heightAge * 0.36);
+  // trunk slenderness: young whippy/slender → old stout (ageForm only).
+  const slenderK = ageForm ? lerp(SLENDER_YOUNG, SLENDER_OLD, instance.age) : 1;
   const ctx: GrowCtx = {
     sp,
     rng,
@@ -316,13 +377,14 @@ export function growSkeleton(
     branches: [],
     anchors: [],
     budget: 9000,
+    ageForm,
   };
   growBranch(ctx, {
     level: 0,
     basePos: new Vector3(0, 0, 0),
     baseDir: new Vector3(instance.leanX * 0.7, 1, instance.leanZ * 0.7).normalize(),
     len: height,
-    baseR: height * sp.trunkRadiusK,
+    baseR: height * sp.trunkRadiusK * slenderK,
     tParent: 0,
     azimuth: 0,
     stub: false,

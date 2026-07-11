@@ -42,6 +42,7 @@ import {
 import { BootCache } from "../nanite/world/BootCache";
 import { DagWorkerPool } from "../nanite/build/DagWorkerClient";
 import { TREE_SPECIES } from "./Species";
+import { ageForSlot } from "./AgeForm";
 import { buildTree, type CrownLodLevel, type CrownLodRung, type HeroDiet } from "./TreeBuilder";
 import {
   buildFlower,
@@ -313,7 +314,12 @@ function variantInstance(
     leanZ: (vr.float() - 0.5) * 0.14,
     biasX: (vr.float() - 0.5) * 1.6,
     biasZ: (vr.float() - 0.5) * 1.6,
-    age: 0.7 + vr.float() * 0.3,
+    // #110 age ladder: the K=4 variant slots are a young→old maturity gradient
+    // (ageForSlot) so that scale-driven slot selection maps small trees to young
+    // FORMS and large trees to old FORMS (Skeleton.ts ontogeny turns this into
+    // real proportion differences — crown-base lift, broaden, trunk stoutening —
+    // instead of a uniform blow-up). Small per-slot jitter keeps the draw count.
+    age: Math.max(0, Math.min(1, ageForSlot(v) + (vr.float() - 0.5) * 0.08)),
   };
 }
 
@@ -405,6 +411,9 @@ export async function buildVegLibrary(
       const t0 = buildTree(sp, seed.rng(label), {
         lod: 0,
         inst,
+        // #110: age-dependent growth form (crown-base lift, broaden, trunk
+        // stoutening) driven by inst.age — the ladder slot's maturity.
+        ageForm: true,
         junctions: junctionsOn,
         foliageMode: "mesh",
         // build the real needle/leaf crown at FULL anchor density (the canopy fill).
@@ -418,8 +427,8 @@ export async function buildVegLibrary(
         // So it is built LAZILY (pool.leaf.buildLadder, below) — invoked only on a
         // DAG cache MISS. Warm boots (DAG cached) pay zero, exactly as before Phase 2.
       });
-      const t1 = buildTree(sp, seed.rng(label), { lod: 1, inst, junctions: junctionsOn });
-      const t2 = buildTree(sp, seed.rng(label), { lod: 2, inst, junctions: junctionsOn });
+      const t1 = buildTree(sp, seed.rng(label), { lod: 1, inst, ageForm: true, junctions: junctionsOn });
+      const t2 = buildTree(sp, seed.rng(label), { lod: 2, inst, ageForm: true, junctions: junctionsOn });
       const r0 = treeParts(sp, t0);
       if (t0.foliageMesh) {
         r0.push({
@@ -461,6 +470,7 @@ export async function buildVegLibrary(
                 buildTree(spC, seed.rng(rngLabel), {
                   lod: 0,
                   inst: instC,
+                  ageForm: true,
                   junctions: junctionsOn,
                   foliageMode: "mesh",
                   hero: {
