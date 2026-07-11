@@ -999,21 +999,26 @@ export function buildNaniteCull(
       const lodDist = bcU2F(elemU(gpu.meshes, headBase.add(uint(5))));
       const instDist = cam.camPos.sub(A.xyz).length();
       returnIf(lodNext.equal(uint(LOD_NONE)).and(lodDist.greaterThan(0)).and(instDist.greaterThan(lodDist)));
-      // voxel-foliage (spec §3 / Stage 3a) — the mesh→voxel HANDOFF, NEAR side. The mesh's
-      // word-8 nearDist is the per-mesh NEAR draw envelope: drop an instance NEARER than it
-      // (the VOXEL sibling sets nearDist=transitionDist so it seeds only BEYOND the handoff,
-      // while the LEAF head's lodDist=transitionDist keeps it nearer → a clean hard switch,
-      // either mesh OR voxel at a distance, no double-render, no gap). 0 = unlimited near
-      // (every non-voxel mesh). The cull picks tier by distance — NOT a per-cluster math path.
-      const nearDist = bcU2F(elemU(gpu.meshes, headBase.add(uint(8))));
-      // seedVoxAllDist (shadow cull): KEEP the voxel sibling in the near band so it casts
-      // the crown shadow <60 m — the leaf crown mesh is castShadows:false, so otherwise
-      // near crowns cast NOTHING. Camera culls drop it here as before (render handoff
-      // stays a clean 60 m line; only the SHADOW gains near voxel casters).
-      if (!seedVoxAllDist) {
-        returnIf(nearDist.greaterThan(0).and(instDist.lessThan(nearDist)));
-      }
+      // Mesh word 8 is a TAGGED UNION keyed by MESH_FLAG_HEIGHTFIELD: a heightfield stores
+      // hfOriginZ there (read by NaniteFetch for vertex reconstruction), everything else
+      // stores nearDist. It MUST be read behind its tag — an untagged read as nearDist on a
+      // streamed terrain tile (which is BOTH a heightfield AND hierarchical since S6, so this
+      // seed runs on it) reinterprets hfOriginZ as a NEAR envelope and drops every +Z tile
+      // whose hfOriginZ > |camPos| (identity terrain instances sit at the origin ⇒ instDist =
+      // |camPos|, not the tile distance) — the Estonia spawn-void. isHF IS the union tag.
       const isHF = head.flags.bitAnd(uint(MESH_FLAG_HEIGHTFIELD)).notEqual(uint(0));
+      // voxel-foliage (spec §3 / Stage 3a) — the mesh→voxel HANDOFF, NEAR side. word-8 nearDist
+      // is the per-mesh NEAR draw envelope: drop an instance NEARER than it (the VOXEL sibling
+      // sets nearDist=transitionDist so it seeds only BEYOND the handoff, while the LEAF head's
+      // lodDist=transitionDist keeps it nearer → a clean hard switch, either mesh OR voxel at a
+      // distance, no double-render, no gap). 0 = unlimited near. Non-heightfield only (the tag):
+      // terrain has no voxel sibling and no near envelope. seedVoxAllDist (shadow cull): KEEP the
+      // voxel sibling in the near band so it casts the crown shadow <60 m (the leaf crown mesh is
+      // castShadows:false, so otherwise near crowns cast NOTHING); camera culls drop it as before.
+      if (!seedVoxAllDist) {
+        const nearDist = bcU2F(elemU(gpu.meshes, headBase.add(uint(8))));
+        returnIf(isHF.not().and(nearDist.greaterThan(0)).and(instDist.lessThan(nearDist)));
+      }
       const s = instWorldSphere(A, B, isHF as unknown as NB, head.sphere, head.swayPad);
       returnIf(frustumVisible(s.center, s.radius).lessThan(0.5));
       const sizePx = projK
