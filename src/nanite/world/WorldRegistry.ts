@@ -1478,12 +1478,30 @@ export async function buildWorldRegistry(input: {
       reachMargin: 20,
       tint: toVoxel[0]?.matParam ?? 0,
     };
-    // CALIBRATED pool ceilings (logged at boot; measure ft.*.free peak → tighten). The
-    // boot pilot baked 3417 all-fine tiles / 94624 clusters / 274 MB over the 4 km world;
-    // ring-grading keeps a similar TILE (slot) count but coarsens far cells so the CLUSTER
-    // + BRICK totals fall well below that. Generous first cut, throw-loud on overflow (§7).
-    const ftSlots = 8000;
-    const ftClusterCap = 64;
+    // Pool ceilings from RING ARITHMETIC, not a magic number (#109). The far ring is a
+    // Chebyshev square of FT_CELL_METERS cells out to FT_HORIZON; grading coarsens a cell's
+    // BRICKS (cellSize) with distance but NEVER its tile count — every cell emits
+    // (FT_CELL_METERS/FT_TILE_SIZE)² tiles = one SLOT each AT EVERY RING. The slot ceiling is
+    // therefore the FULL-FOREST ring tile count (grade-independent). The old 8000 magic number
+    // under-counted it (a fully-treed 3 km ring needs ~10.8k), so Estonia exhausted the pool
+    // (ft.slots.free → 0) and left PERMANENT far-forest holes — treed cells re-nominated every
+    // tick and threw on the dry slot pool (#109).
+    const ftCellsPerAxis = 2 * Math.ceil(FT_HORIZON / FT_CELL_METERS) + 1; // 13 @ 3000/512
+    const ftTilesPerCell = (FT_CELL_METERS / FT_TILE_SIZE) ** 2; // 64 @ 512/64
+    const ftRingTiles = ftCellsPerAxis * ftCellsPerAxis * ftTilesPerCell; // 10816
+    // + headroom for the transient double-residency while a re-grading cell holds BOTH its old
+    //   and new slot set until the new bake commits (bounded — a handful of cells at once).
+    const ftRegradeHeadroom = 8 * ftTilesPerCell; // ~8 cells re-grading concurrently
+    const ftSlots = ftRingTiles + ftRegradeHeadroom; // 11328
+    // clusterCap = the per-slot cluster-record STRIDE and a HARD ceiling (attachFartileSlot
+    // throws when a tile's cluster count exceeds it). MEASURED peak = 38 clusters on the
+    // densest 64 m near tile (near-geometric max for a full canopy); 44 keeps ~16% margin.
+    // The old 64 was 1.7× over — right-sizing it DOWN funds the slot raise at NET-FLAT VRAM
+    // (no-vram-hogs law: 11328·44 = 498k cluster-slots < the old 8000·64 = 512k).
+    const ftClusterCap = 44;
+    // granules ≡ clusters: the SHARED brick free-list, sized by the ring's TOTAL cluster count
+    // (Σ over tiles, avg ~4/tile → ~43k at full forest, measured 31352 used at Taevaskoja).
+    // 48000 covers it with margin; the brick tail (the DOMINANT fartile VRAM) stays FLAT.
     const ftGranules = 48000;
     reg.reserveFartilePool(
       { slots: ftSlots, clusterCap: ftClusterCap, granules: ftGranules },
@@ -1493,7 +1511,8 @@ export async function buildWorldRegistry(input: {
     // cluster-side reservation = slots·clusterCap × (CLUSTER_WORDS 8 + DAG_WORDS 12 + 1 link)
     const clusterMB = (ftSlots * ftClusterCap * 21 * 4) / 1048576;
     console.log(
-      `[worldreg] fartile pool CEILING: ${ftSlots} slots × ${ftClusterCap} clusters + ${ftGranules} granules ` +
+      `[worldreg] fartile pool: ${ftSlots} slots (ring ${ftCellsPerAxis}²×${ftTilesPerCell} = ${ftRingTiles} + ${ftRegradeHeadroom} re-grade) ` +
+        `× ${ftClusterCap} clusters/tile (peak 38) + ${ftGranules} granules ` +
         `(bricks ≤ ${brickMB.toFixed(1)} MB tail + clusters ≤ ${clusterMB.toFixed(1)} MB); ${ftSpeciesPools.length} species crown pools; ` +
         `grades ${ftArm.cellSizes.map((c) => c.toFixed(2)).join('/')} m @ <${ftArm.gradeRadii.join('/')} m, horizon ${FT_HORIZON} m`,
     );

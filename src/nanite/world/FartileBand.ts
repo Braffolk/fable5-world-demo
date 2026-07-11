@@ -29,6 +29,7 @@ import type { ChunkKey, ChunkPayload, LayerName } from '../../world/source/World
 import { makeGroundDeriver } from '../../world/source/RecordGround';
 import { planFarTilesFlat, emitTile, packFarTiles } from './FarTilesCore';
 import { splatTiles, type SplatPoolFlat, type TileSplatJob } from './FarTilesSplat';
+import type { PackedLevel } from '../build/CrownPack';
 import type { FtArmMsg, StreamPacket } from './StreamProtocol';
 
 /** the grid geometry the band needs (a subset of WorldGrid + the LOD0 tree layer). */
@@ -94,6 +95,7 @@ export class FartileBand {
   private nEvicted = 0;
   private nRebaked = 0;
   private nHeads = 0;
+  private nMaxTileClusters = 0; // peak clusters emitted by ANY one tile — sets the clusterCap floor
 
   constructor(deps: FartileBandDeps) {
     this.deps = deps;
@@ -222,16 +224,24 @@ export class FartileBand {
     return pair;
   }
 
-  /** bake ONE cell: assemble its trees, plan at the ring grade, splat+emit+pack each
-   *  tile, reserve slot+granules, emit ftAttach. Interleaved so the brain stays live.
+  /** bake ONE cell: assemble its trees, plan at the ring grade, splat+emit+pack each tile,
+   *  then RESERVE THE WHOLE CELL's slots+granules AT ONCE (or defer it cleanly if the pool
+   *  is transiently full) and emit ftAttach. Interleaved so the brain stays live.
+   *
+   *  RESERVE-WHOLE-CELL (law 9 — the partial-cell/leak is unrepresentable): the free-lists
+   *  are touched only AFTER the whole cell is proven to fit; a dry pool or a mid-flight
+   *  eviction drops the ENTIRE cell with nothing popped, so no tile emits without its cell
+   *  and no slot/granule ever leaks (the pre-#109 mid-loop-throw stranded the slots already
+   *  popped for the cell's earlier tiles).
    *
    *  A bake is a TOTAL function to residency (law 9 — no stranded-bake state): a cell
    *  with no pooled-species trees (a clearing / forest edge) or no plannable content
    *  bakes to an EMPTY resident cell (0 slots) — a TERMINAL state, so pose() never
    *  re-nominates it (the pre-fix `flats.length===0 → return-without-resident` left the
-   *  cell forever re-baking, the `baking=1` stuck-cell bug). The ONLY non-commit outcome
-   *  is a bake SUPERSEDED by a mid-flight re-grade eviction (its predecessor's gen went
-   *  −1) — those attaches have no home and roll back. */
+   *  cell forever re-baking, the `baking=1` stuck-cell bug). The two non-commit outcomes
+   *  both drop the cell with NOTHING reserved (no leak): a bake SUPERSEDED by a mid-flight
+   *  re-grade eviction (its predecessor's gen went −1, no home), and a DEFER when the pool
+   *  is only transiently full (re-nominated next tick). */
   private async bakeCell(fcx: number, fcz: number, grade: number, key: number): Promise<void> {
     const myGen = this.cellGen++;
     try {
@@ -264,8 +274,12 @@ export class FartileBand {
       // ONLY once the new bake is ready to attach (no uncover). Snapshot the old here.
       const old = this.resident.get(key);
 
-      const slots: number[] = [];
-      const granules: number[] = [];
+      // PASS 1 — build EVERY tile (splat → emit → pack) WITHOUT touching the free-lists. The
+      // heavy per-tile work (law 5: ~4 ms/tile) stays yield-interleaved; nothing is reserved
+      // yet, so a dry pool or a mid-flight eviction drops the WHOLE cell with no partial emit
+      // and no leaked slots/granules.
+      const tiles: { levels: PackedLevel[]; center: [number, number, number]; nClusters: number }[] = [];
+      let needGranules = 0;
       if (plan) {
         for (let j = 0; j < plan.jobs.length; j++) {
           const splatted = splatTiles(plan.grid, plan.poolsFlat, [plan.jobs[j] as TileSplatJob]);
@@ -279,31 +293,44 @@ export class FartileBand {
           if (!levels || levels.length === 0) continue;
           let nClusters = 0;
           for (const l of levels) nClusters += l.blocks.length;
-          // reserve granules (== clusters) + one slot — throw-loud on a dry pool (§5)
-          if (this.slotFree.length === 0) throw new Error('fartile pool: out of SLOTS — raise reserveFartilePool slots (ring/grade arithmetic bug)');
-          if (this.granuleFree.length < nClusters) throw new Error(`fartile pool: out of GRANULES (${this.granuleFree.length} < ${nClusters}) — raise reserveFartilePool granules`);
-          const slot = this.slotFree.pop() as number;
-          const gids = new Uint32Array(nClusters);
-          for (let g = 0; g < nClusters; g++) gids[g] = this.granuleFree.pop() as number;
-          slots.push(slot);
-          for (const g of gids) granules.push(g);
-          this.deps.emit(
-            { kind: 'ftAttach', slot, granules: gids, center: packed.center, levels },
-            [gids.buffer, ...levels.flatMap((l) => [l.words.buffer, l.occupied.buffer])],
-          );
+          if (nClusters > this.nMaxTileClusters) this.nMaxTileClusters = nClusters;
+          tiles.push({ levels, center: packed.center, nClusters });
+          needGranules += nClusters;
           if ((j & 15) === 15) await this.deps.yield();
         }
       }
+      const needSlots = tiles.length;
 
-      // stale check (tx-owns-bake): a re-grade whose resident predecessor was evicted
-      // mid-bake (its gen went −1) has no home — roll back the attaches (evict + free).
-      if (old && old.gen === -1) {
-        if (slots.length > 0) {
-          this.deps.emit({ kind: 'ftEvict', slots: slots.slice() }, []);
-          for (const s of slots) this.slotFree.push(s);
-          for (const g of granules) this.granuleFree.push(g);
-        }
-        return;
+      // stale (tx-owns-bake): our resident predecessor was evicted mid-bake (gen → −1), so
+      // this bake has no home. Nothing reserved yet — just drop it (no rollback needed).
+      if (old && old.gen === -1) return;
+
+      // RESERVE-WHOLE-CELL or DEFER (law 9 — no partial cell, no leak): the cell commits
+      // all-or-nothing. A cell whose need exceeds the ENTIRE pool is a genuine ring/grade
+      // arithmetic bug (throw-loud — must never fire once provisioning is correct). Else if
+      // the pool is only TRANSIENTLY full (other residents, or a re-grade's old set still
+      // held) DEFER the whole cell: emit NOTHING and leave it un-resident so pose()
+      // re-nominates it next tick. No slot/granule is popped until the cell is guaranteed
+      // to land — the mid-bake throw that stranded earlier tiles' slots (#109) is gone.
+      if (needSlots > this.cfg.slots)
+        throw new Error(`fartile pool: cell needs ${needSlots} SLOTS > pool ${this.cfg.slots} (ring/grade arithmetic bug)`);
+      if (needGranules > this.cfg.granules)
+        throw new Error(`fartile pool: cell needs ${needGranules} GRANULES > pool ${this.cfg.granules} (ring/grade arithmetic bug)`);
+      if (this.slotFree.length < needSlots || this.granuleFree.length < needGranules) return;
+
+      // COMMIT PASS 2 — reserve + attach every tile (no throw path: the pool is pre-verified).
+      const slots: number[] = [];
+      const granules: number[] = [];
+      for (const t of tiles) {
+        const slot = this.slotFree.pop() as number;
+        const gids = new Uint32Array(t.nClusters);
+        for (let g = 0; g < t.nClusters; g++) gids[g] = this.granuleFree.pop() as number;
+        slots.push(slot);
+        for (const g of gids) granules.push(g);
+        this.deps.emit(
+          { kind: 'ftAttach', slot, granules: gids, center: t.center, levels: t.levels },
+          [gids.buffer, ...t.levels.flatMap((l) => [l.words.buffer, l.occupied.buffer])],
+        );
       }
 
       // commit: a resident cell (0..N slots) — TERMINAL. A re-grade evicts the old set
@@ -394,6 +421,7 @@ export class FartileBand {
       'ft.baked': this.nBaked,
       'ft.rebaked': this.nRebaked,
       'ft.evicted': this.nEvicted,
+      'ft.maxTileClusters': this.nMaxTileClusters,
     };
   }
 }
