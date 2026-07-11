@@ -26,7 +26,9 @@ import { buildChunkContentStreams, type ChunkContentStreams } from '../nanite/wo
 import { StreamBrainClient } from '../nanite/world/StreamBrainClient';
 import { StreamOrigin } from '../nanite/world/StreamOrigin';
 import { buildSpeciesMap } from '../nanite/world/SpeciesMap';
-import { InstanceBand } from '../nanite/world/InstanceBand';
+import { buildScatterMap } from '../nanite/world/ScatterMap';
+import { InstanceBand, treeBoulderPlan } from '../nanite/world/InstanceBand';
+import { understoryDebrisPlan } from '../nanite/world/UnderstoryScatter';
 import { VegClass } from '../gpu/passes/Scatter';
 import { chunkBox, coverageCenter } from '../nanite/world/PlaneFill';
 import type { TerrainField } from '../nanite/world/TerrainField';
@@ -155,6 +157,13 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   const INST_BLOCK_SIZE = 8192;
   const INST_BLOCKS = 40;
   const INST_BAND_DIST = 300;
+  // S9a understory/debris ride a TIGHT sub-chunk ring (ground cover renders only to
+  // ~150 m; 2048 m-chunk residency would be a VRAM hog for 97%-culled content — demand
+  // law §5). 256 m cells (÷ the 2048 m data chunk) within 160 m: ≤ ~9 resident cells ×
+  // ~65 k m² × ~0.02/m² × 2 layers ≈ 24 k pool slots worst-case, atop trees' ~190 k in
+  // the 327 k pool (band.* / uband.* HUD report live usage; no INST_BLOCKS change).
+  const UBAND_CELL = 256;
+  const UBAND_DIST = 160;
   BootTrace.phase(streamed ? 'world source (estonia stream)' : 'world source (heightfield + scatter)');
   const worldSource: WorldSource = streamed
     ? new RemoteWorldSource(params.dataUrl ?? undefined)
@@ -416,32 +425,47 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       speciesMap = buildSpeciesMap(worldManifest.dictionaries, VegClass.KarstGnarl * 8);
       // eslint-disable-next-line no-console
       console.log(speciesMap.summary);
+      // idF → EVERY rendering head. Trees add a leaf + voxel crown sibling on the SAME
+      // instance (co-located near crown ≤ transitionDist; voxel crown owns the mid/far
+      // band to TREE_GEO_FAR — without it streamed trees go bare past the 60 m mesh
+      // handoff). Shrubs/deadwood/stones (S9a) have a single mesh head (no leaf/voxel).
+      const headsOf = (idF: number): number[] => {
+        const out: number[] = [];
+        const bark = wr.heads.get(idF);
+        if (bark !== undefined) out.push(bark);
+        const leaf = wr.leafHeads.get(idF);
+        if (leaf !== undefined) out.push(leaf);
+        const vox = wr.voxHeads.get(idF);
+        if (vox !== undefined) out.push(vox);
+        return out;
+      };
+      // S7 tree/boulder band (2048 m data-chunk cells).
       const band = new InstanceBand({
-        source: worldSource,
-        manifest: worldManifest,
-        idFOf: speciesMap.idFOf,
-        boulderRadiusOf: (cls) => lib.clsRadius[cls] ?? 1,
-        headsOf: (idF) => {
-          const out: number[] = [];
-          const bark = wr.heads.get(idF);
-          if (bark !== undefined) out.push(bark);
-          const leaf = wr.leafHeads.get(idF);
-          if (leaf !== undefined) out.push(leaf); // co-located near crown (mesh, ≤ transitionDist)
-          // S8: the voxel-crown sibling owns the mid/far crown band (transitionDist..
-          // TREE_GEO_FAR). Without it, streamed trees go bare past the 60 m mesh handoff
-          // while generated (boot-bound) trees keep a crown — the reported "bare streamed
-          // trees" bug. Binding it on the SAME instance restores parity across the band.
-          const vox = wr.voxHeads.get(idF);
-          if (vox !== undefined) out.push(vox);
-          return out;
-        },
+        plan: treeBoulderPlan(worldSource, worldManifest, {
+          idFOf: speciesMap.idFOf,
+          boulderRadiusOf: (cls) => lib.clsRadius[cls] ?? 1,
+          bandDist: INST_BAND_DIST,
+        }),
+        headsOf,
         reg: wr.registry,
-        bandDist: INST_BAND_DIST,
       });
-      brain.setInstanceBand(band);
+      brain.addInstanceBand(band);
+      // S9a understory/debris band (tight sub-chunk cells, guidance-plane scatter). The
+      // generated world's understory/extras/stones bind at boot from records; Estonia
+      // derives them here from its (categoryId, density) planes — ONE derivation, no fork.
+      const scatterMap = buildScatterMap(worldManifest.dictionaries);
+      // eslint-disable-next-line no-console
+      console.log(scatterMap.summary);
+      const uband = new InstanceBand({
+        plan: understoryDebrisPlan(worldSource, worldManifest, scatterMap, { cellMeters: UBAND_CELL, bandDist: UBAND_DIST }),
+        headsOf,
+        reg: wr.registry,
+      });
+      brain.addInstanceBand(uband);
       // eslint-disable-next-line no-console
       console.log(
-        `[laas] instance band armed: bandDist ${INST_BAND_DIST} m, pool ` +
+        `[laas] instance bands armed: trees bandDist ${INST_BAND_DIST} m, understory/debris ` +
+          `cell ${UBAND_CELL} m/dist ${UBAND_DIST} m; pool ` +
           `${wr.registry.instancePoolBlockCount}×${wr.registry.instancePoolBlockSize} = ${wr.registry.instancePoolCapacity} slots`,
       );
     }

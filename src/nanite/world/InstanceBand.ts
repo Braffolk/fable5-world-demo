@@ -1,25 +1,47 @@
 /**
- * InstanceBand — the streamed tree/boulder instance band (SPEC-STREAMING-WORLD §5
- * A4, A12; S7). Its OWN residency ring, independent of the terrain tile clipmap:
- * the LOD0 chunks within ~a near radius of the camera (the "2×2 + ½-chunk
- * hysteresis" band) hold their trees + ETAK boulders as pool instances; chunks
- * that leave the exit radius are evicted (parked). Beyond the band trees pop —
- * S8 fartiles cover the mid/far field (noted for S8).
+ * InstanceBand — the streamed near-field instance ring (SPEC-STREAMING-WORLD §5
+ * A4, A12; S7 trees/boulders, S9a understory/debris). Its OWN residency ring,
+ * independent of the terrain tile clipmap: the cells within `bandDist` of the camera
+ * hold their instances as pool slots; cells that leave the exit radius are evicted.
+ *
+ * ONE ring, TWO content plans (law 6, no fork): the tree/boulder band uses 2048 m
+ * data-chunk cells (`treeBoulderPlan` → buildChunkInstances), while the understory/
+ * debris band uses a TIGHT sub-chunk cell (`understoryDebrisPlan` → the guidance-plane
+ * scatter) because ground cover renders only to ~150 m and chunk-granular residency
+ * for it would be a VRAM hog (demand law §5). Both plans emit ABSOLUTE {a,b,idF}
+ * words the same buildBlocks → rewriteInstanceBlock binds into the SAME shared pool.
  *
  * WHY main-side (not the brain): the record→instance build is entangled with
  * main-thread library knowledge — SpeciesMap idF, idF→head handles, EtakBoulders'
  * per-class nominal radii, ChunkContent's height-derive — while the record FETCH
  * already decodes off-main in RemoteWorldSource's Lac1 workers. Replicating all of
- * that across the worker boundary for a trivial 2×2 chunk diff is large, fragile
- * surface for no win (go-up-a-level: the demand law wants band-only FETCHES + off-
- * frame processing, both satisfied here). The band's async fetch/build stays off the
- * token bucket; only the GPU block writes are bucketed (rewriteInstanceBlock), FIFO
- * with the brain's own packet drain.
+ * that across the worker boundary for a trivial cell diff is large, fragile surface
+ * for no win. The band's async fetch/build stays off the token bucket; only the GPU
+ * block writes are bucketed (rewriteInstanceBlock), FIFO with the brain's packet drain.
  */
 
 import type { GeometryRegistry } from './GeometryRegistry';
 import { buildChunkInstances, type ChunkInstances } from './ChunkContent';
-import type { ChunkKey, WorldManifest, WorldSource } from '../../world/source/WorldSource';
+import type { WorldManifest, WorldSource } from '../../world/source/WorldSource';
+
+/** the residency-grain + content contract for one band. Cells are integer (cx,cz)
+ *  over a grid of `cellMeters` anchored at (originX,originZ); `build` produces the
+ *  cell's flat instance list (ABSOLUTE game space). */
+export interface CellPlan {
+  cellMeters: number;
+  /** enter radius (m) a cell must reach to load; exit = this + cellMeters/2. */
+  bandDist: number;
+  originX: number;
+  originZ: number;
+  /** counter prefix (e.g. 'band', 'uband') — keeps the two bands' HUD keys distinct. */
+  label: string;
+  /** does a cell exist (has any streamable content)? */
+  exists(cx: number, cz: number): boolean;
+  /** build one cell's flat instance list. */
+  build(cx: number, cz: number): Promise<ChunkInstances>;
+  /** optional extra HUD counters (e.g. the understory/debris split). */
+  extra?(): Record<string, number>;
+}
 
 /** one block ready to write: head-resolved, ≤ blockSize instances. */
 interface ReadyBlock {
@@ -42,20 +64,13 @@ interface ResidentChunk {
 }
 
 export interface InstanceBandDeps {
-  source: WorldSource;
-  manifest: WorldManifest;
-  /** trees (species, variant) → library idF (SpeciesMap on Estonia). */
-  idFOf: (species: number, variant: number) => number;
-  /** rock class → nominal radius (lib.clsRadius) — enables ETAK boulder ingest. */
-  boulderRadiusOf: (cls: number) => number;
+  /** the residency-grain + content plan (tree/boulder or understory/debris). */
+  plan: CellPlan;
   /** idF → EVERY head that renders on this instance (bark trunk + near leaf crown +
-   *  mid/far voxel crown for trees; the single rock head for boulders). Empty ⇒
-   *  instance dropped. A tree therefore consumes 3 pool slots (trunk + leaf + voxel),
-   *  a boulder 1. */
+   *  mid/far voxel crown for trees; the single mesh head for a shrub/rock/deadwood).
+   *  Empty ⇒ instance dropped. A tree consumes 3 pool slots, a ground instance 1. */
   headsOf: (idF: number) => number[];
   reg: GeometryRegistry;
-  /** near radius (m) a chunk must reach to load; exit = this + ½ chunk (hysteresis). */
-  bandDist: number;
 }
 
 const KEY = (cx: number, cz: number): string => `${cx}:${cz}`;
@@ -63,9 +78,10 @@ const KEY = (cx: number, cz: number): string => `${cx}:${cz}`;
 export class InstanceBand {
   private readonly d: InstanceBandDeps;
   private readonly blockSize: number;
-  private readonly chunkM: number;
+  private readonly cellM: number;
   private readonly originX: number;
   private readonly originZ: number;
+  private readonly label: string;
 
   private readonly resident = new Map<string, ResidentChunk>();
   private readonly inflight = new Set<string>();
@@ -85,23 +101,19 @@ export class InstanceBand {
     this.d = deps;
     this.blockSize = deps.reg.instancePoolBlockSize;
     if (this.blockSize <= 0) throw new Error('InstanceBand: registry has no instance pool reserved');
-    this.chunkM = deps.manifest.grid.chunkMeters; // LOD0 stride
-    this.originX = deps.manifest.grid.originX;
-    this.originZ = deps.manifest.grid.originZ;
+    this.cellM = deps.plan.cellMeters;
+    this.originX = deps.plan.originX;
+    this.originZ = deps.plan.originZ;
+    this.label = deps.plan.label;
   }
 
-  /** chunk footprint → nearest-point distance to (px,pz). */
+  /** cell footprint → nearest-point distance to (px,pz). */
   private chunkDist(cx: number, cz: number, px: number, pz: number): number {
-    const x0 = this.originX + cx * this.chunkM;
-    const z0 = this.originZ + cz * this.chunkM;
-    const dx = px < x0 ? x0 - px : px > x0 + this.chunkM ? px - (x0 + this.chunkM) : 0;
-    const dz = pz < z0 ? z0 - pz : pz > z0 + this.chunkM ? pz - (z0 + this.chunkM) : 0;
+    const x0 = this.originX + cx * this.cellM;
+    const z0 = this.originZ + cz * this.cellM;
+    const dx = px < x0 ? x0 - px : px > x0 + this.cellM ? px - (x0 + this.cellM) : 0;
+    const dz = pz < z0 ? z0 - pz : pz > z0 + this.cellM ? pz - (z0 + this.cellM) : 0;
     return Math.hypot(dx, dz);
-  }
-
-  private chunkExists(cx: number, cz: number): boolean {
-    const key: ChunkKey = { lod: 0, cx, cz };
-    return this.d.manifest.coverage('trees', key) !== null || this.d.manifest.coverage('boulders', key) !== null;
   }
 
   /** pose-driven residency diff (throttled ~5 Hz). */
@@ -112,18 +124,18 @@ export class InstanceBand {
     if (now - this.lastDiffAt < 200) return;
     this.lastDiffAt = now;
 
-    // desired = existing LOD0 chunks within bandDist of the camera
-    const enter = this.d.bandDist;
-    const exit = enter + this.chunkM * 0.5; // ½-chunk hysteresis
-    const c0x = Math.floor((camX - enter - this.originX) / this.chunkM);
-    const c1x = Math.floor((camX + enter - this.originX) / this.chunkM);
-    const c0z = Math.floor((camZ - enter - this.originZ) / this.chunkM);
-    const c1z = Math.floor((camZ + enter - this.originZ) / this.chunkM);
+    // desired = existing cells within bandDist of the camera
+    const enter = this.d.plan.bandDist;
+    const exit = enter + this.cellM * 0.5; // ½-cell hysteresis
+    const c0x = Math.floor((camX - enter - this.originX) / this.cellM);
+    const c1x = Math.floor((camX + enter - this.originX) / this.cellM);
+    const c0z = Math.floor((camZ - enter - this.originZ) / this.cellM);
+    const c1z = Math.floor((camZ + enter - this.originZ) / this.cellM);
     const want = new Set<string>();
     for (let cz = c0z; cz <= c1z; cz++) {
       for (let cx = c0x; cx <= c1x; cx++) {
         if (this.chunkDist(cx, cz, camX, camZ) > enter) continue;
-        if (!this.chunkExists(cx, cz)) continue;
+        if (!this.d.plan.exists(cx, cz)) continue;
         const key = KEY(cx, cz);
         want.add(key);
         if (this.resident.has(key) || this.inflight.has(key) || this.ready.some((r) => r.key === key)) continue;
@@ -133,7 +145,7 @@ export class InstanceBand {
     }
     this.wanted = want;
 
-    // evict resident chunks past the exit radius (hysteresis keeps the band steady)
+    // evict resident cells past the exit radius (hysteresis keeps the band steady)
     for (const [key, rc] of this.resident) {
       if (want.has(key)) continue;
       if (this.chunkDist(rc.cx, rc.cz, camX, camZ) <= exit) continue;
@@ -146,11 +158,8 @@ export class InstanceBand {
 
   private async load(cx: number, cz: number, key: string): Promise<void> {
     try {
-      const inst = await buildChunkInstances(this.d.source, this.d.manifest, { lod: 0, cx, cz }, {
-        idFOf: this.d.idFOf,
-        boulderRadiusOf: this.d.boulderRadiusOf,
-      });
-      // if the chunk left the band while loading, drop the result
+      const inst = await this.d.plan.build(cx, cz);
+      // if the cell left the band while loading, drop the result
       if (!this.wanted.has(key)) {
         this.inflight.delete(key);
         return;
@@ -162,7 +171,7 @@ export class InstanceBand {
     } catch (e) {
       this.inflight.delete(key);
       // eslint-disable-next-line no-console
-      console.warn(`[laas][band] chunk ${key} load failed: ${e instanceof Error ? e.message : String(e)}`);
+      console.warn(`[laas][${this.label}] cell ${key} load failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
@@ -200,7 +209,7 @@ export class InstanceBand {
   }
 
   /** write ready blocks under the token bucket (returns bytes written). Allocates a
-   *  block per write; on a dry pool evicts the farthest non-wanted resident chunk. */
+   *  block per write; on a dry pool evicts the farthest non-wanted resident cell. */
   drainBudget(bytesRemaining: number): number {
     let used = 0;
     while (this.ready.length > 0 && used < bytesRemaining) {
@@ -212,9 +221,9 @@ export class InstanceBand {
         if (!this.dropWarned) {
           this.dropWarned = true;
           // eslint-disable-next-line no-console
-          console.warn('[laas][band] instance pool full of wanted chunks — raise the pool block count');
+          console.warn(`[laas][${this.label}] instance pool full of wanted cells — raise the pool block count`);
         }
-        rc.blocks.length = 0; // drop the rest of this chunk
+        rc.blocks.length = 0; // drop the rest of this cell
       } else {
         this.d.reg.rewriteInstanceBlock(slot, blk.count, blk.a, blk.b, blk.meshIds);
         const res = this.resident.get(rc.key) ?? { cx: rc.cx, cz: rc.cz, blocks: [], instCount: 0 };
@@ -232,7 +241,7 @@ export class InstanceBand {
     return used;
   }
 
-  /** evict the farthest non-wanted resident chunk → free a block; -1 if none. */
+  /** evict the farthest non-wanted resident cell → free a block; -1 if none. */
   private evictFarthest(): number {
     let worstKey: string | null = null;
     let worstD = -1;
@@ -254,16 +263,41 @@ export class InstanceBand {
   }
 
   counters(): Record<string, number> {
+    const p = this.label;
     return {
-      'band.chunks.resident': this.resident.size,
-      'band.chunks.inflight': this.inflight.size,
-      'band.chunks.ready': this.ready.length,
-      'band.inst.resident': this.nResidentInst,
-      'band.blocks.used': this.d.reg.instancePoolBlockCount - this.d.reg.instancePoolFreeBlocks,
-      'band.blocks.free': this.d.reg.instancePoolFreeBlocks,
-      'band.loaded': this.nLoaded,
-      'band.evicted': this.nEvicted,
-      'band.dropped': this.nDropped,
+      [`${p}.chunks.resident`]: this.resident.size,
+      [`${p}.chunks.inflight`]: this.inflight.size,
+      [`${p}.chunks.ready`]: this.ready.length,
+      [`${p}.inst.resident`]: this.nResidentInst,
+      [`${p}.blocks.used`]: this.d.reg.instancePoolBlockCount - this.d.reg.instancePoolFreeBlocks,
+      [`${p}.blocks.free`]: this.d.reg.instancePoolFreeBlocks,
+      [`${p}.loaded`]: this.nLoaded,
+      [`${p}.evicted`]: this.nEvicted,
+      [`${p}.dropped`]: this.nDropped,
+      ...(this.d.plan.extra ? this.d.plan.extra() : {}),
     };
   }
+}
+
+/** the S7 tree/boulder plan: 2048 m data-chunk cells → buildChunkInstances (trees +
+ *  ETAK boulders). Estonia resolves species via SpeciesMap; boulder radii via lib. */
+export function treeBoulderPlan(
+  source: WorldSource,
+  manifest: WorldManifest,
+  opts: { idFOf: (species: number, variant: number) => number; boulderRadiusOf: (cls: number) => number; bandDist: number },
+): CellPlan {
+  return {
+    cellMeters: manifest.grid.chunkMeters,
+    bandDist: opts.bandDist,
+    originX: manifest.grid.originX,
+    originZ: manifest.grid.originZ,
+    label: 'band',
+    exists(cx: number, cz: number): boolean {
+      const key = { lod: 0, cx, cz };
+      return manifest.coverage('trees', key) !== null || manifest.coverage('boulders', key) !== null;
+    },
+    build(cx: number, cz: number): Promise<ChunkInstances> {
+      return buildChunkInstances(source, manifest, { lod: 0, cx, cz }, { idFOf: opts.idFOf, boulderRadiusOf: opts.boulderRadiusOf });
+    },
+  };
 }
