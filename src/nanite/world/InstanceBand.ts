@@ -48,9 +48,10 @@ export interface InstanceBandDeps {
   idFOf: (species: number, variant: number) => number;
   /** rock class → nominal radius (lib.clsRadius) — enables ETAK boulder ingest. */
   boulderRadiusOf: (cls: number) => number;
-  /** idF → EVERY head that renders on this instance (bark trunk + co-located leaf
-   *  crown for trees; the single rock head for boulders). Empty ⇒ instance dropped.
-   *  A tree therefore consumes 2 pool slots (trunk + crown), a boulder 1. */
+  /** idF → EVERY head that renders on this instance (bark trunk + near leaf crown +
+   *  mid/far voxel crown for trees; the single rock head for boulders). Empty ⇒
+   *  instance dropped. A tree therefore consumes 3 pool slots (trunk + leaf + voxel),
+   *  a boulder 1. */
   headsOf: (idF: number) => number[];
   reg: GeometryRegistry;
   /** near radius (m) a chunk must reach to load; exit = this + ½ chunk (hysteresis). */

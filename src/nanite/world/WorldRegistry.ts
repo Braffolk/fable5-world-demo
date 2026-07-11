@@ -156,6 +156,12 @@ export interface WorldRegistryResult {
   /** S7: idF → co-located leaf-crown head (trees only; renders on the SAME
    *  instance as the bark trunk within the near band). */
   leafHeads: Map<number, MeshHandle>;
+  /** S8: idF → voxel-crown sibling head (trees only; owns the mid/far crown band
+   *  transitionDist..TREE_GEO_FAR — the leaf MESH head is capped at transitionDist
+   *  once voxReg is on). The streamed instance band binds this on the SAME instance
+   *  so streamed trees carry a crown past the mesh handoff, exactly like the
+   *  generated world's boot-bound trees. Empty when voxReg is off. */
+  voxHeads: Map<number, MeshHandle>;
 }
 
 /** BufferGeometry → packed ExplicitSource (vdata vec4 → 4×u8 word) */
@@ -867,6 +873,10 @@ export async function buildWorldRegistry(input: {
   // the bark trunk). Populated only when leafOn; bound in a separate pass below
   // (a mesh's instance streams must be consecutive in the cursor).
   const leafHeads = new Map<number, MeshHandle>();
+  // S8: idF → voxel-crown sibling head, populated in the post-build append loop
+  // and returned so the streamed instance band binds it (the mid/far crown the
+  // leaf mesh no longer covers once it's capped at transitionDist).
+  const voxHeads = new Map<number, MeshHandle>();
   // N8-D1: heads whose class wants a DAG — built after registration, attached
   // after build(). The DAG comes off the head's FULL-detail source (rings[0]).
   const toDag: { handle: MeshHandle; source: ExplicitSource; label: string }[] = [];
@@ -1564,6 +1574,9 @@ export async function buildWorldRegistry(input: {
         label: v.label,
       });
       appended += r.brickCount;
+      // S8: expose the voxel head so the streamed instance band can bind it (the
+      // generated world binds it below via perId; Estonia's band via headsOf).
+      voxHeads.set(v.idF, r.head);
       // bind the voxel head to the SAME instances as its leaf sibling
       const s = perId.get(v.idF);
       if (s) reg.bindInstances(r.head, { a: s.a, b: s.b });
@@ -1655,5 +1668,6 @@ export async function buildWorldRegistry(input: {
     streamedTerrain: streamBrain !== null,
     heads,
     leafHeads,
+    voxHeads,
   };
 }

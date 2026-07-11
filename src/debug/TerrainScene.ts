@@ -145,11 +145,15 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // (~6.3 MB f32 mirror + equal VRAM). This is ABOVE §6's 40k/2 MB estimate — that
   // predated (a) the per-head trunk+crown split and (b) whole-2 km-chunk residency
   // (records are per-chunk; we load the whole chunk though only ~300 m is visible).
-  // Measured pilot: 4 dense LOD0 chunks in the band = ~18 blocks (133 k slots); 24
-  // gives a motion-churn margin (band.* HUD reports live usage). Still trivial vs the
-  // arc's −290 MB net.
+  // S8: a tree now consumes 3 slots (trunk + leaf mesh + voxel crown), so the band's
+  // wanted set grew ~1.5× — measured pilot 4 dense LOD0 chunks = ~190 k slots wanted,
+  // which SATURATED the 24-block pool ("full of wanted chunks" drops). 40 blocks
+  // (327 k slots) clears the wanted set with a motion-churn margin (band.* HUD reports
+  // live usage). Mirror/GPU A-B cost = 40·8192·32 B ≈ 10.5 MB — trivial vs the arc's
+  // −290 MB net. Streamed-only (generated keeps boot-bound instances) ⇒ no effect on
+  // the generated determinism gate.
   const INST_BLOCK_SIZE = 8192;
-  const INST_BLOCKS = 24;
+  const INST_BLOCKS = 40;
   const INST_BAND_DIST = 300;
   BootTrace.phase(streamed ? 'world source (estonia stream)' : 'world source (heightfield + scatter)');
   const worldSource: WorldSource = streamed
@@ -421,7 +425,13 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
           const bark = wr.heads.get(idF);
           if (bark !== undefined) out.push(bark);
           const leaf = wr.leafHeads.get(idF);
-          if (leaf !== undefined) out.push(leaf); // co-located crown (trees only)
+          if (leaf !== undefined) out.push(leaf); // co-located near crown (mesh, ≤ transitionDist)
+          // S8: the voxel-crown sibling owns the mid/far crown band (transitionDist..
+          // TREE_GEO_FAR). Without it, streamed trees go bare past the 60 m mesh handoff
+          // while generated (boot-bound) trees keep a crown — the reported "bare streamed
+          // trees" bug. Binding it on the SAME instance restores parity across the band.
+          const vox = wr.voxHeads.get(idF);
+          if (vox !== undefined) out.push(vox);
           return out;
         },
         reg: wr.registry,
