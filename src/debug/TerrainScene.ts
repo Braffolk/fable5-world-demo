@@ -169,9 +169,9 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     ? new RemoteWorldSource(params.dataUrl ?? undefined)
     : new GeneratedWorldSource(engine.renderer, seed);
   const worldManifest = await worldSource.open((p, m) => ctx.progress(p * 0.94, m));
-  // The live boot heightfield — after S4 it feeds ONLY boot-time consumers
+  // The live boot heightfield — after S4/S9 it feeds ONLY boot-time consumers
   // (scatter + classification inside source.open, the registry terrain build),
-  // the still-live waterY/flow buffers (water material + caustics — S9 ports),
+  // the still-live flow field (water ripples + caustics advection read it),
   // wind noise, and the ?profile=1 texture handoff. Every other runtime read
   // lives on the TerrainField planes + the S4 windows below; the boot-only GPU
   // set (incl. biome/fields textures since S4) is released right after the
@@ -179,8 +179,8 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // The generated source owns a live boot Heightfield; the streamed world has no
   // procedural terrain — a stub carries ONLY the still-live boot handles the
   // subsystems read off `hf` (real procedural noise for wind/froxels/resolve;
-  // placeholder dry water/flow for water+caustics until the S9 port). Terrain
-  // DATA lives on the TerrainField planes for BOTH.
+  // zero-flow placeholder hydrology for the water ripples/caustics advection).
+  // Terrain + water DATA live on the TerrainField planes for BOTH.
   const hf: Heightfield = streamed
     ? await Heightfield.forStreamedWorld(engine.renderer, seed)
     : (worldSource as GeneratedWorldSource).heightfield;
@@ -730,16 +730,16 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // (scatter/classification inside source.open; GI/far-shadow/canopy/froxels/
   // particles all live on the TerrainField planes + S4 windows) — free the
   // boot-only GPU set (height + hardness + erosion scratch buffers, normalTex,
-  // and since S4 biomeTex + fieldsTex). waterY/flow stay (water material +
-  // caustics read them live until their S9 ports). Under ?profile these are
-  // loading-device resources outside the swap handoff, so releasing early is
-  // safe (see Heightfield.releaseBootGpuSet).
+  // since S4 biomeTex + fieldsTex, and since S9 waterY — the water material now
+  // reads the TerrainField water plane). Only the flow field stays (ripple/foam
+  // advection + caustic drift). Under ?profile these are loading-device resources
+  // outside the swap handoff, so releasing early is safe (see releaseBootGpuSet).
   {
     const freedMb = hf.releaseBootGpuSet(engine.renderer);
     // eslint-disable-next-line no-console
     console.log(
       `[laas] heightfield boot GPU set released: ${freedMb.toFixed(1)} MB ` +
-        `(height/hardness/erosion-scratch buffers + normalTex + biomeTex + fieldsTex; ` +
+        `(height/hardness/erosion-scratch buffers + normalTex + biomeTex + fieldsTex + waterY; ` +
         `heightTex is excised — never allocated)`,
     );
   }

@@ -2,8 +2,8 @@
  * WaterSurface — camera-following water clipmap (Phase 6).
  *
  * Six concentric square grids (128×128 cells, cell 1.5 m → 48 m) share one
- * geometry; each level snaps to a 2-cell lattice and renders the hydrology
- * water surface (Heightfield.waterY) through WaterMaterial. A level discards
+ * geometry; each level snaps to a 2-cell lattice and renders the streamed
+ * water surface (the TerrainField water plane) through WaterMaterial. A level discards
  * fragments inside the next-finer level's exact world rect, so coverage is
  * seamless without geometric stitching: every level samples the SAME
  * bilinear field, so boundary mismatches are sub-millimeter.
@@ -123,8 +123,9 @@ export class WaterSurface {
 
   constructor(
     hf: Heightfield,
-    // S3a: terrain-height reads (wet guard, reflection horizon) come from the
-    // TerrainField planes; hf keeps only waterY/flow/noise until the water arc
+    // terrain-height reads (wet guard, reflection horizon) come from the
+    // TerrainField planes (S3a) and the water SURFACE from its water plane (S9);
+    // hf keeps only the flow field + baked noise (ripple/foam advection)
     field: TerrainField,
     atm: Atmosphere,
     canopyTex: StorageTexture | null,

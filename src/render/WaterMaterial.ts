@@ -72,7 +72,6 @@ import type { NF, NI, NV2, NV3, NV4 } from '../gpu/TSLTypes';
 import type { Atmosphere } from '../sky/Atmosphere';
 import type { TerrainField } from '../nanite/world/TerrainField';
 import type { Heightfield } from '../world/Heightfield';
-import { WORLD_HALF } from '../world/WorldConst';
 
 /** clear alpine water: absorption per meter (r dies first → teal depths) */
 const SIGMA = { r: 0.42, g: 0.135, b: 0.095 };
@@ -96,10 +95,11 @@ export interface WaterLevelHandles {
 }
 
 export function waterMaterial(
-  // hf carries ONLY the not-yet-windowed reads: waterY/waterYFar surface buffers,
-  // the hydrology flow field and the baked ripple noise (their TerrainField water
-  // plane migration is the S4/water-arc slice). Terrain HEIGHT reads live on the
-  // TerrainField planes since S3a.
+  // hf carries ONLY the hydrology flow field + baked ripple noise (ripple/foam
+  // advection, caustic drift). The water SURFACE (waterY/waterYFar) reads the
+  // TerrainField water plane since the S9 water port — the one path both sources
+  // ride, so Estonia's streamed water renders through this same material; terrain
+  // HEIGHT reads live on the TerrainField planes since S3a.
   hf: Heightfield,
   field: TerrainField,
   atm: Atmosphere,
@@ -126,13 +126,20 @@ export function waterMaterial(
   mat.metalness = 0;
 
   // ---- vertex: clipmap grid (cell units) → world water surface ----------------
-  const sampleY = (q: NV2): NF => (lvl.far ? hf.sampleWaterYFar(q) : hf.sampleWaterY(q));
+  // waterY from the TerrainField water plane (S9 port): generated fills it from
+  // hf.cpuWaterY (bit-identical addressing to the retired hf.sampleWaterY tap —
+  // same texel-centered sim-res lattice), Estonia from its streamed water layer.
+  const sampleY = (q: NV2): NF => (lvl.far ? field.fieldWaterYFar(q) : field.fieldWaterY(q));
   const wxz = lvl.origin.add(positionLocal.xz.mul(lvl.cell));
   mat.positionNode = vec3(wxz.x, sampleY(wxz), wxz.y);
 
   // ---- inner-level cutout + hard world bounds ----------------------------------
-  // Outside ±WORLD_HALF the field samples clamp to the border texel — a wet
-  // border cell would extend an infinite water band into the far shell.
+  // Outside the source's coverage box the field samples clamp to the border texel
+  // — a wet border cell would extend an infinite water band into the far shell. The
+  // box IS the world extent for BOTH sources: ±WORLD_HALF on the generated world
+  // (so this is bit-identical to the old WORLD_HALF clamp), the whole Estonia AOI on
+  // the streamed world (the old WORLD_HALF clamp masked ALL of Estonia's ~311 km
+  // coords → water never rendered; that was the second half of the S9 water bug).
   const p = positionWorld.xz;
   const r = lvl.innerRect;
   const insideInner = p.x
@@ -140,7 +147,12 @@ export function waterMaterial(
     .and(p.y.greaterThan(r.y))
     .and(p.x.lessThan(r.z))
     .and(p.y.lessThan(r.w));
-  const inWorld = p.x.abs().lessThan(WORLD_HALF - 4).and(p.y.abs().lessThan(WORLD_HALF - 4));
+  const cb = field.coverageBox;
+  const inWorld = p.x
+    .greaterThan(cb.minX + 4)
+    .and(p.x.lessThan(cb.maxX - 4))
+    .and(p.y.greaterThan(cb.minZ + 4))
+    .and(p.y.lessThan(cb.maxZ - 4));
   // WORLD-SPACE wetness guard (?watermask, default on). Dry cells encode the sheet
   // at neighbourhood-min bed − 2 m (buildWaterY); it normally loses the hardware
   // depth test / thick-based opacity to the terrain 2 m above. At long range the
@@ -391,8 +403,8 @@ export function waterMaterial(
     .sub(sampleY(positionWorld.xz.sub(vec2(0, eS))))
     .div(2 * eS);
   // near levels only: far levels carry the min-reduction's shore dip by
-  // design (see Heightfield.reduceWaterY) — fading it would expose the
-  // dark silt bed as a rim band instead
+  // design (the far water plane = PlaneFill.minReduce of the near plane) —
+  // fading it would expose the dark silt bed as a rim band instead
   const rampK = lvl.far
     ? float(1)
     : smoothstep(0.55, 0.3, vec2(gWx, gWz).length());

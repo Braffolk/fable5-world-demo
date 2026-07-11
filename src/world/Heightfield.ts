@@ -72,21 +72,20 @@ export class Heightfield {
   flow: FlowResult | null = null;
   /** renderable water surface (m) at sim res: carved bed + riverDepth at
    *  water cells; DRY cells hold simBed − 2 so bilinear shorelines cut
-   *  below the banks (f32 buffer — f16 textures quantize ~1 m up here) */
+   *  below the banks (f32 buffer). BOOT-ONLY since the S9 water port: read
+   *  back into cpuWaterY (which fills the generated source's TerrainField
+   *  water plane), then freed by releaseBootGpuSet — the runtime water
+   *  material samples that plane, not this buffer. */
   waterY: FloatBuffer | null = null;
-  /** min-reduced waterY (simRes/8) for FAR clipmap levels: coarse vertices
-   *  sampling the full field stretch one wet texel across a whole 48 m
-   *  cell — "mountains half covered in water" from afar. The min makes
-   *  distance conservative: narrow channels vanish, lakes survive. */
-  waterYFar: FloatBuffer | null = null;
-  waterFarRes = 0;
   /** rgba16f at sim res: moisture, flowStrength, riverDepth, waterSurface W */
   fieldsTex: StorageTexture | null = null;
   /** rgba8 at full res: biomeId/8, snow, vegDensity, rockExposure */
   biomeTex: StorageTexture | null = null;
   /** CPU height mirror for camera clamping / tools (filled by readback) */
   cpuHeights: Float32Array | null = null;
-  /** CPU waterY mirror (sim res) — underwater camera guard */
+  /** CPU waterY mirror (sim res) — the generated WorldSource bins it into the
+   *  TerrainField water plane fill (fetch('water')); runtime water/camera reads
+   *  live on that plane (field.waterAt / field.fieldWaterY). */
   cpuWaterY: Float32Array | null = null;
   private bootGpuReleased = false;
 
@@ -168,8 +167,6 @@ export class Heightfield {
       hf.flow.waterYRaw,
       cfg.simRes,
     );
-    hf.waterFarRes = Math.floor(cfg.simRes / 8);
-    hf.waterYFar = await Heightfield.reduceWaterY(renderer, hf.waterY, cfg.simRes, 8);
 
     progress(0.7, 'terrain: composing eroded field');
     await hf.composeEroded(renderer, synthSim.height, erosion.eroded);
@@ -228,8 +225,10 @@ export class Heightfield {
     hf.noiseA = noise.texA;
     hf.noiseB = noise.texB;
 
-    // placeholder hydrology at a small sim res — zero flow, dry water everywhere.
-    // Water + caustics run on these until S9 reads the streamed water plane.
+    // placeholder hydrology at a small sim res — ZERO flow for the water
+    // material's ripple/foam advection + the caustic drift. The water SURFACE
+    // reads the streamed TerrainField water plane (S9 port), where Estonia's
+    // real waterY lands — nothing here holds a water level.
     const simRes = 256;
     hf.simRes = simRes;
     const n = simRes * simRes;
@@ -243,10 +242,6 @@ export class Heightfield {
       moisture: zeroF(),
       waterYRaw: dryY,
     };
-    hf.waterY = await Heightfield.fillConst(renderer, n, WATER_DRY_M);
-    hf.waterFarRes = simRes >> 3;
-    hf.waterYFar = await Heightfield.fillConst(renderer, hf.waterFarRes * hf.waterFarRes, WATER_DRY_M);
-    hf.cpuWaterY = new Float32Array(n).fill(WATER_DRY_M);
     // non-null so the registry's boot-order guard passes; its CONTENTS are never
     // read in clip mode (terrain streams through the brain, not cpuHeights).
     hf.cpuHeights = new Float32Array(1);
@@ -395,61 +390,6 @@ export class Heightfield {
     return out;
   }
 
-  private static async reduceWaterY(
-    renderer: Renderer,
-    src: FloatBuffer,
-    res: number,
-    factor: number,
-  ): Promise<FloatBuffer> {
-    const farRes = Math.floor(res / factor);
-    const out = instancedArray(farRes * farRes, 'float');
-    const kernel = Fn(() => {
-      const i = instanceIndex;
-      If(i.greaterThanEqual(farRes * farRes), () => {
-        Return();
-      });
-      const bx = i.mod(farRes).mul(factor).toInt();
-      const by = i.div(farRes).mul(factor).toInt();
-      // Plain conservative MIN. Known limitation (diagnosed at the twin
-      // lake, 2026-06-12): shore-overlapping blocks dip toward the dry
-      // sentinel, so a low grazing view across a LARGE lake shows a thin
-      // dark band at its far rim. Alternatives tried and rejected:
-      // max-of-wet domes over river inlets; min-of-wet lenses where wide
-      // inlet rivers meet the lake (two legitimate wet levels bridge
-      // across 16 m far-texels). The real fix is a per-water-body far
-      // field or the planar-lake pass (logged in STATUS) — at ≥384 m the
-      // min's dip is the least-bad behavior and shore ramps fade out in
-      // the material on the NEAR levels where they would be obvious.
-      const mn = float(1e9).toVar();
-      for (let oy = 0; oy < factor; oy++) {
-        for (let ox = 0; ox < factor; ox++) {
-          const idx = by.add(oy).mul(res).add(bx.add(ox));
-          mn.assign(mn.min(src.element(idx)));
-        }
-      }
-      out.element(i).assign(mn);
-    })().compute(farRes * farRes);
-    kernel.setName('waterYFar');
-    await renderer.computeAsync(kernel);
-    return out;
-  }
-
-  /** bilinear water-surface sample (vertex/fragment safe — buffer reads) */
-  sampleWaterY(p: NV2): NF {
-    const wy = this.waterY;
-    if (!wy) throw new Error('waterY not built');
-    const uv = clamp(this.uvFromWorld(p), 0, 1);
-    return bilerpFloatBuffer(wy, this.simRes, uvToGrid(uv, this.simRes));
-  }
-
-  /** same, from the min-reduced far field (distant clipmap levels) */
-  sampleWaterYFar(p: NV2): NF {
-    const wy = this.waterYFar;
-    if (!wy) throw new Error('waterYFar not built');
-    const uv = clamp(this.uvFromWorld(p), 0, 1);
-    return bilerpFloatBuffer(wy, this.waterFarRes, uvToGrid(uv, this.waterFarRes));
-  }
-
   /** pack sim-res hydrology fields into a filterable rgba16f texture */
   private async buildFieldsTex(renderer: Renderer): Promise<void> {
     const flow = this.flow;
@@ -577,9 +517,11 @@ export class Heightfield {
    * the full-res height + hardness buffers, the sim-res erosion scratch, and
    * since S4 biomeTex + fieldsTex (their last runtime readers — ProbeGI albedo,
    * Particles snow, Froxels moisture — sample the streamed biome/fields planes;
-   * the remaining reads run inside source.open, before this call). The
-   * waterY/waterYFar/flow buffers STAY (water material + caustics read them at
-   * runtime until their S9 ports). Call strictly AFTER boot bakes complete.
+   * the remaining reads run inside source.open, before this call). Since the S9
+   * water port, waterY joins the set — its last reader was the water material,
+   * which now samples the TerrainField water plane (fed by cpuWaterY, already
+   * read back). The flow field STAYS (ripple/foam advection + caustic drift read
+   * it live). Call strictly AFTER boot bakes complete.
    * Safe under ?profile=1: these resources are not in the swap handoff and
    * nothing on the render device references them, so the loading-device copies
    * just die early. Idempotent; returns the MB freed for the boot ledger.
@@ -608,8 +550,10 @@ export class Heightfield {
     killBuf(this.hardness as unknown as { value: unknown }, r2 * 4);
     killBuf(this.simWater as unknown as { value: unknown } | null, s2 * 4);
     killBuf(this.simSediment as unknown as { value: unknown } | null, s2 * 4);
+    killBuf(this.waterY as unknown as { value: unknown } | null, s2 * 4);
     this.simWater = null;
     this.simSediment = null;
+    this.waterY = null;
     this.normalTex.dispose();
     bytes += r2 * 8; // rgba16f
     if (this.biomeTex) {
