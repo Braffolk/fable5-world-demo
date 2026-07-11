@@ -1,15 +1,17 @@
 /**
- * Terrain shading — shared by near tiles and the far vista shell.
+ * Terrain shading — near tiles AND the streamed far field (one path, distance-
+ * gated). Reconstructed-pixel shading (NaniteResolve) samples the TerrainField
+ * plane pyramid at any distance; the coarsest biome/height levels are country
+ * floors (PlaneFill.ensureFloorCoversBox), so far terrain reads real fields.
  *
  * Splat classes are derived from CONTINUOUS fields (slope, snow, moisture,
  * rock exposure, zone masks) so everything filters cleanly; the quantized
  * biome id channel is only for scatter passes (read with textureLoad there).
  *
  * Macro–meso–micro law: every class gets a 2–50 m macro variation layer, a
- * ~1.5 m meso albedo/normal band, and a ~0.2 m micro normal band (near only).
- * Snow edges are hash-dithered. Wet margins darken. Far mode swaps the micro
- * bands for far-detail synthesis: ridged noise re-amplified in the normal
- * domain so distant mountains stay serrated (Pillar D).
+ * ~1.5 m meso albedo/normal band, and a ~0.2 m micro normal band. Snow edges
+ * are hash-dithered. Wet margins darken. Distant tiles re-amplify ridged noise
+ * in the normal domain (distance-gated) so far mountains stay serrated (Pillar D).
  *
  * PERF: all repeated noise comes from the baked NoiseBake textures (was ~35
  * live noise evaluations per pixel ≈ 52 ms/frame; now ~14 filtered fetches).
@@ -40,7 +42,7 @@ import {
 } from '../gpu/passes/NoiseBake';
 import { sunU } from './VegMaterials';
 import { zoneMasks, type MacroParams } from '../world/MacroMap';
-import { LAKE_LEVEL, WORLD_HALF } from '../world/WorldConst';
+import { LAKE_LEVEL } from '../world/WorldConst';
 
 export interface TerrainShadingInputs {
   /** the TerrainField plane set — THE terrain data source. Normal+slope =
@@ -53,14 +55,10 @@ export interface TerrainShadingInputs {
   noiseA: StorageTexture;
   noiseB: StorageTexture;
   mp: MacroParams;
-  /** far shell: cheaper bands + far-detail synthesis */
-  far: boolean;
-  /**
-   * world-space normal override (xyz) + slope (w). The far shell passes its
-   * analytic per-vertex normal here — the baked normal texture does not exist
-   * beyond the world edge.
-   */
-  baseNormalSlope?: NV4;
+  /** the biome plane carries the merged far-forest canopy in channels 2/3
+   *  (Estonia) rather than snow/rockExposure (the generated world) — gates the
+   *  canopy tint so the generated look is bit-identical. */
+  hasCanopy: boolean;
   /**
    * surface context override (N4 nanite resolve): explicit world position +
    * camera position instead of the vertex-pipeline TSL singletons. The old
@@ -130,7 +128,7 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
 
   // terrain field context: the TerrainField planes (S3b).
   const field = inp.field;
-  const ns: NV4 = inp.baseNormalSlope ?? field.fieldNormalSlope(wxz);
+  const ns: NV4 = field.fieldNormalSlope(wxz);
   const fld = field.fieldsAt(wxz);
   const bio = field.biomeAt(wxz);
   const snowRaw = fld.z as unknown as NF;
@@ -157,25 +155,14 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
     .mul(smoothstep(0.02, 0.1, riverRaw)) as unknown as NF;
   const baseNormal = ns.xyz.normalize().toVar();
   const slope = ns.w.toVar();
-  // Beyond the world edge the baked maps clamp to their last texel row and
-  // SMEAR it radially across the vista shell (pale streaks). Cross-fade to
-  // procedural estimates outside the domain (far shell only).
-  const outsideK = inp.far
-    ? smoothstep(
-        WORLD_HALF * 0.96,
-        WORLD_HALF * 1.0,
-        wxz.abs().x.max(wxz.abs().y),
-      )
-    : float(0);
-  const snowProc = smoothstep(950, 1300, h.add(valS(620, 0.23, 0.57).mul(140)));
-  const vegProc = smoothstep(0.55, 0.28, slope).mul(smoothstep(1350, 900, h));
-  const rockProc = smoothstep(0.55, 0.95, slope);
-  const snowField = mix(snowRaw, snowProc, outsideK);
-  const vegDensity = mix(vegRaw, vegProc, outsideK);
-  const rockExposure = mix(rockRaw, rockProc, outsideK);
-  const moisture = mix(moistRaw, float(0.35), outsideK);
-  const flowStrength = mix(flowRaw, float(0), outsideK);
-  const riverDepth = mix(riverRaw, float(0), outsideK);
+  // the TerrainField plane taps ARE the field at any distance (the coarsest
+  // biome/height levels are country floors) — consumed directly, near and far.
+  const snowField = snowRaw;
+  const vegDensity = vegRaw;
+  const rockExposure = rockRaw;
+  const moisture = moistRaw;
+  const flowStrength = flowRaw;
+  const riverDepth = riverRaw;
   const zm = zoneMasks(wxz, inp.mp);
 
   // ---------- macro variation (2–50 m breakup — tiling killer) ----------------
@@ -185,8 +172,8 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
   const macroTint = macroMix.sub(0.5).mul(0.16); // ±8% value shift
 
   // ---------- meso/micro detail noise ------------------------------------------
-  const meso = inp.far ? float(0.5) : fbmV(1.45);
-  const micro = inp.far ? float(0.5) : val(0.19, 0.71, 0.13);
+  const meso = fbmV(1.45);
+  const micro = val(0.19, 0.71, 0.13);
 
   // ---------- class palettes ----------------------------------------------------
   // rock: subtle strata banding; warm rust in the alpine zone, pale gray in
@@ -274,7 +261,7 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
   // ---------- composite -----------------------------------------------------------
   // standing-water beds (kettle ponds, lake): fine dark silt, not gravel —
   // the real Phase-6 water surface + Beer–Lambert absorption sit above this
-  const pondK = smoothstep(1.1, 2.6, mix(pondDepth, float(0), outsideK)).mul(smoothstep(0.3, 0.12, slope));
+  const pondK = smoothstep(1.1, 2.6, pondDepth).mul(smoothstep(0.3, 0.12, slope));
   let col: NV3 = soil;
   col = mix(col, grassCol, grassW);
   col = mix(col, forestFloor, forestW);
@@ -331,16 +318,18 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
   ).mul(snowW.oneMinus());
   col = col.mul(wet.mul(0.55).oneMinus());
 
-  // far-forest canopy masses (far shell only): where the cooked canopy layer
-  // reports cover (CHM ≥ 2 m), the horizon shows treetops — not the ground
-  // material under them — as a darker, cooler, richer green than open field.
-  // cover drives the blend; canopy height deepens the shade (tall boreal
-  // spruce/pine read darkest). ETAK land-cover carries NO conifer/deciduous
-  // split (its filtered classId is scatter-only), so the tint leans on
-  // cover+height, not species. Gated to inp.far + cover ⇒ the generated world
-  // (no canopy layer ⇒ cover 0, heightM 0) is BIT-IDENTICAL. Water/sea never
-  // tint: the CHM has no canopy over water ⇒ cover 0 there.
-  if (inp.far) {
+  // far-forest canopy masses: where the cooked canopy layer reports cover (CHM
+  // ≥ 2 m), the terrain shows treetops — not the ground material under them — as
+  // a darker, cooler, richer green than open field. cover drives the blend;
+  // canopy height deepens the shade (tall boreal spruce/pine read darkest). ETAK
+  // land-cover carries NO conifer/deciduous split (its filtered classId is
+  // scatter-only), so the tint leans on cover+height, not species. Gated to
+  // hasCanopy (source carries canopy in biome ch 2/3) ⇒ the generated world
+  // (snow/rockExposure there instead) is BIT-IDENTICAL. Distance-selects itself:
+  // near Estonia reads biome L0 (no canopy lod ⇒ cover 0, no tint), the mid/far
+  // levels carry the merged canopy. Water/sea never tint: the CHM has no canopy
+  // over water ⇒ cover 0 there.
+  if (inp.hasCanopy) {
     const cover = bio.w as unknown as NF;
     const canopyH = (bio.z as unknown as NF).mul(255); // heightM, m
     const forestK = smoothstep(0.12, 0.62, cover).mul(smoothstep(1, 6, canopyH));
@@ -354,10 +343,9 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
 
   // ---------- normal perturbation ---------------------------------------------------
   // far-detail synthesis (Pillar D): serrated normal-domain detail keeps
-  // mid/far ridges craggy where geometric density has LOD'd out. Applied by
-  // DISTANCE on both near tiles and the far shell.
+  // mid/far ridges craggy where geometric density has LOD'd out. DISTANCE-gated.
   const camDist = wp.sub(camPos).length();
-  const farK = inp.far ? float(1) : smoothstep(900, 2600, camDist);
+  const farK = smoothstep(900, 2600, camDist);
   // pre-baked ridged gradient at 310 m features; ×44 ≈ the old ±22 m
   // finite-difference amplitude (×2: baked noise is [0,1], mx was [-1,1])
   const rg = ridG(310).mul(44 * 2);
@@ -371,7 +359,9 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
   const perturbed = baseNormal.add(vec3(rg.x, 0, rg.y).mul(farAmp));
   let nrm: NV3 = vec3(perturbed.x, perturbed.y.max(0.1), perturbed.z).normalize();
 
-  if (!inp.far) {
+  // near/mid detail (both terms self-fade to nothing with distance — far tiles pay
+  // no analytic bump/displacement): scoped block to keep its temporaries local.
+  {
     // meso + micro analytic bumps near camera, stronger on rock — baked fbm
     // gradients at two scales (×2e ≈ old FD amplitudes, ×2 range factor)
     const b1 = fbmG(1.45).mul(1.8 * 2);

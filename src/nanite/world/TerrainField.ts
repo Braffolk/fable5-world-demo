@@ -84,6 +84,10 @@ export class TerrainField {
   /** ×8 min-reduced far waterY (conservative: channels vanish, lakes survive) */
   readonly waterFar: HeightLevel | null;
   readonly coverageBox: CoverageBox;
+  /** biome plane channels 2/3 carry the merged far-forest canopy (heightM, cover)
+   *  — true iff the source has a canopy layer. The generated world packs snow/
+   *  rockExposure there instead, so its resolve canopy tint stays off (bit-identical). */
+  readonly biomeCarriesCanopy: boolean;
 
   private constructor(
     heightLevels: HeightLevel[],
@@ -92,6 +96,7 @@ export class TerrainField {
     water: HeightLevel | null,
     waterFar: HeightLevel | null,
     coverageBox: CoverageBox,
+    biomeCarriesCanopy: boolean,
   ) {
     if (heightLevels.length === 0) throw new Error('TerrainField: needs at least one height level');
     this.heightLevels = heightLevels;
@@ -100,6 +105,7 @@ export class TerrainField {
     this.water = water;
     this.waterFar = waterFar;
     this.coverageBox = coverageBox;
+    this.biomeCarriesCanopy = biomeCarriesCanopy;
     const mb = this.vramBytes() / 2 ** 20;
     // eslint-disable-next-line no-console
     console.log(
@@ -121,7 +127,7 @@ export class TerrainField {
     const fieldsLevels = plan.fields.map((p) => makeU8Level(`terrainFieldFieldsL${p.lod}`, p));
     const water = plan.water ? makeHeightLevel('terrainFieldWaterY', plan.water) : null;
     const waterFar = plan.waterFar ? makeHeightLevel('terrainFieldWaterYFar', plan.waterFar) : null;
-    return new TerrainField(heightLevels, biomeLevels, fieldsLevels, water, waterFar, plan.coverageBox);
+    return new TerrainField(heightLevels, biomeLevels, fieldsLevels, water, waterFar, plan.coverageBox, plan.biomeHasCanopy);
   }
 
   /** One-level field over a flat/explicit height array — forest/gallery-class
@@ -153,12 +159,20 @@ export class TerrainField {
       nMaxZ: opts.res - 1,
     };
     const lvl = makeHeightLevel('terrainFieldHeightL0', plan, data);
-    return new TerrainField([lvl], [], [], null, null, {
-      minX: opts.worldMinX,
-      minZ: opts.worldMinZ,
-      maxX: opts.worldMinX + opts.res * opts.texel,
-      maxZ: opts.worldMinZ + opts.res * opts.texel,
-    });
+    return new TerrainField(
+      [lvl],
+      [],
+      [],
+      null,
+      null,
+      {
+        minX: opts.worldMinX,
+        minZ: opts.worldMinZ,
+        maxX: opts.worldMinX + opts.res * opts.texel,
+        maxZ: opts.worldMinZ + opts.res * opts.texel,
+      },
+      false, // no biome/canopy planes on a single-level field
+    );
   }
 
   // ---- stream mailbox application (the ONLY mutation surface) ----------------------

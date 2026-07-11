@@ -581,7 +581,7 @@ export function buildNaniteResolve(
         noiseA: hf.noiseA as StorageTexture,
         noiseB: hf.noiseB as StorageTexture,
         mp: hf.mp,
-        far: false,
+        hasCanopy: world.field.biomeCarriesCanopy,
         surf: { wp, camPos },
       });
       let tc: NV3 = shading.colorNode;

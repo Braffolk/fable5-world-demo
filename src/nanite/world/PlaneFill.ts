@@ -71,6 +71,11 @@ export interface FieldPlan {
   water: PlanePlan | null;
   waterFar: PlanePlan | null;
   coverageBox: CoverageBox;
+  /** the biome plane's channels 2/3 carry the merged far-forest canopy
+   *  (heightM, cover) — true iff the source has a canopy layer. The generated
+   *  world instead packs snow/rockExposure there, so its canopy tint stays off
+   *  (bit-identical). Drives the resolve shading's canopy gate. */
+  biomeHasCanopy: boolean;
 }
 
 export const HEIGHT_PLANE_RES = 2048;
@@ -328,45 +333,58 @@ export function planLayer(
 }
 
 /**
- * Grow the COARSEST height level ("country floor") to span the tile-residency
- * coverage box, so every tile the tree can create has a resident REAL coarse
- * source — the S8c fix that makes "a frustum region with coarse data but flat/
- * absent terrain" unrepresentable. Before this, `levelRes` sized every level to
- * the FINEST-lod (pilot) footprint (~16 km), so the coarsest window reached only
- * ~33 km and every tile past it baked from the clamped window edge (a flat dead
- * plane that coarsen/eviction fell back onto — the one-direction "terrain
- * disappears on retreat" bug). The finer levels stay camera-windowed (mid-field
- * detail); only the coarsest becomes the whole-box floor. No-op when the coarsest
- * already spans the box (the generated world ⇒ bit-identical).
+ * Grow the COARSEST level of a layer's plane pyramid ("country floor") to span
+ * the tile-residency coverage box, so every tile the tree can create has a
+ * resident REAL coarse source — the S8c fix that makes "a frustum region with
+ * coarse data but flat/absent terrain" unrepresentable. Before this, `levelRes`
+ * sized every level to the layer's FINEST-lod (pilot) footprint (~16 km), so the
+ * coarsest window reached only a little past the pilot and every tile/sample past
+ * it fell back on the clamped window edge — for HEIGHT a flat dead plane (the
+ * one-direction "terrain disappears on retreat" bug); for BIOME the pilot rim's
+ * vegDensity clamped country-wide (the "far terrain is all dirt, no grass/forest"
+ * bug). The finer levels stay camera-windowed (mid-field detail); only the coarsest
+ * becomes the whole-box floor. No-op when the coarsest already spans the box (the
+ * generated world ⇒ bit-identical). Used for height (r32f) AND biome (u8) — the
+ * far-forest canopy rides the biome plane's channels 2/3, so flooring biome also
+ * floors the far forest.
+ *
+ * coverageExtentLattice returns the box in HEIGHT base-texel indices; a coarser
+ * raster (biome at texel > 1 m) rescales by the texel ratio so the SAME world
+ * region is spanned (height ⇒ ratio 1 ⇒ untouched).
  */
-function ensureFloorCoversBox(manifest: WorldManifest, height: PlanePlan[]): void {
-  const geo = layerGeom(manifest, 'height');
-  const { latMin, latMax } = coverageExtentLattice(manifest);
-  const c = height[height.length - 1] as PlanePlan;
+function ensureFloorCoversBox(manifest: WorldManifest, layer: LayerName, plans: PlanePlan[], resCap: number): void {
+  if (plans.length === 0) return;
+  const geo = layerGeom(manifest, layer);
+  const hGeo = layerGeom(manifest, 'height');
+  const { latMin: hMin, latMax: hMax } = coverageExtentLattice(manifest);
+  const ratio = hGeo.texel0 / geo.texel0;
+  const latMin = Math.floor(hMin * ratio);
+  const latMax = Math.ceil((hMax + 1) * ratio) - 1;
+  const c = plans[plans.length - 1] as PlanePlan;
   const S = c.stride;
   // does the existing (square) coarsest window already cover [latMin,latMax]²?
   const covers = c.n0x * S <= latMin && (c.n0x + c.res) * S > latMax && c.n0z * S <= latMin && (c.n0z + c.res) * S > latMax;
-  if (covers) return; // generated world (and any source whose floor already spans the box)
+  if (covers) return; // generated world (and any layer whose floor already spans the box)
   const n0 = Math.floor(latMin / S);
   let res = 256;
-  while ((n0 + res) * S <= latMax && res < HEIGHT_FLOOR_RES_CAP) res *= 2;
+  while ((n0 + res) * S <= latMax && res < resCap) res *= 2;
   if ((n0 + res) * S <= latMax) {
     // even at the res cap the coarsest LOD (texel c.texel m) can't STATICALLY span
     // the box: this source has no cookable country floor at this texel. Leave the
     // level as planned (it WRAPS — the far field rides the scrolling coarse window,
     // the pre-S8c behaviour) rather than allocate a giant fine plane. SURFACE it —
     // a real streamed world cooks coarse LODs so this never fires (Estonia's 256 m
-    // L4 floors the 419 km box in one 2048² level).
+    // height L4 / 512 m biome L4 floor the 419 km box in one 2048² / 1024² level).
     // eslint-disable-next-line no-console
     console.warn(
-      `[laas] PlaneFill: coarsest height LOD (texel ${c.texel} m) too fine to statically floor the ` +
-        `${Math.round(((latMax - latMin + 1) * geo.texel0) / 1000)} km box within res ${HEIGHT_FLOOR_RES_CAP} — ` +
-        `far terrain rides the scrolling window (cook coarser LODs for a static floor)`,
+      `[laas] PlaneFill: coarsest ${layer} LOD (texel ${c.texel} m) too fine to statically floor the ` +
+        `${Math.round(((latMax - latMin + 1) * geo.texel0) / 1000)} km box within res ${resCap} — ` +
+        `far ${layer} rides the scrolling window (cook coarser LODs for a static floor)`,
     );
     return;
   }
   const off = S >> 1;
-  height[height.length - 1] = {
+  plans[plans.length - 1] = {
     ...c,
     res,
     wraps: false, // spans the whole renderable domain ⇒ pinned (never scrolls)
@@ -381,8 +399,12 @@ function ensureFloorCoversBox(manifest: WorldManifest, height: PlanePlan[]): voi
 export function planField(manifest: WorldManifest): FieldPlan {
   const height = planLayer(manifest, 'height', HEIGHT_PLANE_RES, HEIGHT_PLANE_RES_CAP);
   if (height.length === 0) throw new Error('PlaneFill: source has no height layer');
-  ensureFloorCoversBox(manifest, height);
+  ensureFloorCoversBox(manifest, 'height', height, HEIGHT_FLOOR_RES_CAP);
   const biome = planLayer(manifest, 'biome', U8_PLANE_RES, U8_PLANE_RES_CAP);
+  // biome/canopy country floor (mirror of height): grow the coarsest biome level
+  // to span the residency box, PINNED, so far terrain samples real class/vegDensity
+  // (green) + the merged canopy tint instead of the pilot rim clamped to dirt.
+  ensureFloorCoversBox(manifest, 'biome', biome, U8_PLANE_RES_CAP);
   const fields = planLayer(manifest, 'fields', U8_PLANE_RES, U8_PLANE_RES_CAP);
   let water: PlanePlan | null = null;
   let waterFar: PlanePlan | null = null;
@@ -402,7 +424,7 @@ export function planField(manifest: WorldManifest): FieldPlan {
       };
     }
   }
-  return { height, biome, fields, water, waterFar, coverageBox: coverageBoxM(manifest) };
+  return { height, biome, fields, water, waterFar, coverageBox: coverageBoxM(manifest), biomeHasCanopy: !!manifest.layers.canopy };
 }
 
 // ---- region assembly (chunk payload → plane texels) -------------------------------
