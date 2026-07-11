@@ -758,15 +758,19 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   const alt = Number(q.get('alt') ?? NaN);
   if (params.cam === null) {
     if (streamed && !Number.isFinite(alt)) {
-      // Estonia default (S6): an elevated scenic fly over the pilot valley so the
-      // first frame shows the whole-country horizon + forested far shell. Walk
-      // mode (ground probe on streamed heights) is reachable via M / ?alt.
-      const c = coverageCenter(worldManifest);
-      const spawn = findWalkSpawn(field, c.cx, c.cz);
-      const y = field.heightAt(spawn.x, spawn.z) + 140;
-      ctx.hooks.initialPose = { p: [spawn.x, y, spawn.z], yaw: 2.4, pitch: -0.1 };
+      // Estonia default (S6→#107): spawn at the Taevaskoja sandstone cliffs on
+      // the Ahja river (GPS 58.107506 N, 27.050242 E ⇒ game 311123, 190723) — a
+      // low scenic overlook so the cliffs, river valley and near detail read on
+      // the first frame instead of a high fly that hides the ground. Walk mode
+      // (ground probe on streamed heights) is reachable via M / ?alt.
+      const tx = 311123, tz = 190723; // Taevaskoja cliffs, EPSG:3301 → game coords
+      const y = field.heightAt(tx, tz) + 40;
+      // face north (yaw 0 ⇒ −z) down the Ahja river gorge, so the first frame
+      // reads "you're at the Taevaskoja cliffs" — the sandstone wall itself is a
+      // short fly-down into the gorge.
+      ctx.hooks.initialPose = { p: [tx, y, tz], yaw: 0, pitch: -0.18 };
       ctx.hooks.initialPoseMode = 'fly';
-      engine.camera.position.set(spawn.x, y, spawn.z);
+      engine.camera.position.set(tx, y, tz);
     } else if (Number.isFinite(alt)) {
       const c = streamed ? coverageCenter(worldManifest) : { cx: 600, cz: 900 };
       const x = Number(q.get('x') ?? c.cx);
