@@ -17,6 +17,12 @@
  * evicted / re-graded mid-bake has no home and is dropped (illegal double-attach
  * unrepresentable). The brain owns the slot + granule free-lists (single residency
  * authority); a dry pool is a throw-loud provisioning bug, never backpressure.
+ *
+ * A bake is a TOTAL function to residency: it ALWAYS lands the cell in `resident`
+ * (0..N slots — a clearing / forest-edge cell bakes to 0 slots, a TERMINAL empty
+ * state) unless SUPERSEDED by a mid-flight re-grade eviction (rolled back). A cell
+ * that bakes forever — perpetually re-nominated because it never reached residency —
+ * is thus UNREPRESENTABLE (the pre-S8b-3 `baking=1` stuck-cell bug).
  */
 
 import type { ChunkKey, ChunkPayload, LayerName } from '../../world/source/WorldSource';
@@ -193,10 +199,14 @@ export class FartileBand {
 
   private evictCell(key: number, rc: ResidentCell): void {
     rc.gen = -1; // invalidate any in-flight re-bake token match
-    this.deps.emit({ kind: 'ftEvict', slots: rc.slots.slice() }, []);
-    for (const s of rc.slots) this.slotFree.push(s);
-    for (const g of rc.granules) this.granuleFree.push(g);
-    this.nHeads -= rc.slots.length;
+    if (rc.slots.length > 0) {
+      // an EMPTY resident cell (a clearing baked to 0 slots) holds no GPU records — skip
+      // the (empty) evict packet + free-list churn; still drop it from residency.
+      this.deps.emit({ kind: 'ftEvict', slots: rc.slots.slice() }, []);
+      for (const s of rc.slots) this.slotFree.push(s);
+      for (const g of rc.granules) this.granuleFree.push(g);
+      this.nHeads -= rc.slots.length;
+    }
     this.resident.delete(key);
     this.nEvicted++;
   }
@@ -213,7 +223,15 @@ export class FartileBand {
   }
 
   /** bake ONE cell: assemble its trees, plan at the ring grade, splat+emit+pack each
-   *  tile, reserve slot+granules, emit ftAttach. Interleaved so the brain stays live. */
+   *  tile, reserve slot+granules, emit ftAttach. Interleaved so the brain stays live.
+   *
+   *  A bake is a TOTAL function to residency (law 9 — no stranded-bake state): a cell
+   *  with no pooled-species trees (a clearing / forest edge) or no plannable content
+   *  bakes to an EMPTY resident cell (0 slots) — a TERMINAL state, so pose() never
+   *  re-nominates it (the pre-fix `flats.length===0 → return-without-resident` left the
+   *  cell forever re-baking, the `baking=1` stuck-cell bug). The ONLY non-commit outcome
+   *  is a bake SUPERSEDED by a mid-flight re-grade eviction (its predecessor's gen went
+   *  −1) — those attaches have no home and roll back. */
   private async bakeCell(fcx: number, fcz: number, grade: number, key: number): Promise<void> {
     const myGen = this.cellGen++;
     try {
@@ -224,20 +242,23 @@ export class FartileBand {
       const pcx = Math.floor((cellX0 + cm * 0.5 - this.grid.originX) / this.grid.chunkMeters);
       const pcz = Math.floor((cellZ0 + cm * 0.5 - this.grid.originZ) / this.grid.chunkMeters);
       const { trees, height } = await this.fetchChunkPair(pcx, pcz);
-      if (!trees || trees.kind !== 'records') { this.baking.delete(key); return; }
 
-      // group this cell's trees (+reach margin) by idF → flat splat pools
-      const flats = this.buildCellPools(trees, height, pcx, pcz, cellX0, cellZ0, cm, margin);
-      if (flats.length === 0) { this.baking.delete(key); return; }
-
+      // group this cell's trees (+reach margin) by idF → flat splat pools. No records /
+      // no pooled species in the box ⇒ NO pools ⇒ an empty (0-slot) bake below.
+      const flats =
+        trees && trees.kind === 'records'
+          ? this.buildCellPools(trees, height, pcx, pcz, cellX0, cellZ0, cm, margin)
+          : [];
       const cellSize = this.cfg.cellSizes[grade] as number;
-      const plan = planFarTilesFlat({
-        tileSize: this.cfg.tileSize,
-        cellSize,
-        pools: flats,
-        bounds: { mnX: cellX0, mnZ: cellZ0, mxX: cellX0 + cm - 1, mxZ: cellZ0 + cm - 1 },
-      });
-      if (!plan) { this.baking.delete(key); return; }
+      const plan =
+        flats.length > 0
+          ? planFarTilesFlat({
+              tileSize: this.cfg.tileSize,
+              cellSize,
+              pools: flats,
+              bounds: { mnX: cellX0, mnZ: cellZ0, mxX: cellX0 + cm - 1, mxZ: cellZ0 + cm - 1 },
+            })
+          : null;
 
       // an in-flight re-grade replaces an existing resident cell: evict the old set
       // ONLY once the new bake is ready to attach (no uncover). Snapshot the old here.
@@ -245,54 +266,55 @@ export class FartileBand {
 
       const slots: number[] = [];
       const granules: number[] = [];
-      for (let j = 0; j < plan.jobs.length; j++) {
-        const splatted = splatTiles(plan.grid, plan.poolsFlat, [plan.jobs[j] as TileSplatJob]);
-        const r = splatted[0];
-        if (!r) continue;
-        const built = emitTile(plan.grid, r);
-        if (!built) continue;
-        const packed = packFarTiles([built])[0];
-        if (!packed) continue;
-        const levels = packed.prep.vox.levels;
-        if (!levels || levels.length === 0) continue;
-        let nClusters = 0;
-        for (const l of levels) nClusters += l.blocks.length;
-        // reserve granules (== clusters) + one slot — throw-loud on a dry pool (§5)
-        if (this.slotFree.length === 0) throw new Error('fartile pool: out of SLOTS — raise reserveFartilePool slots (ring/grade arithmetic bug)');
-        if (this.granuleFree.length < nClusters) throw new Error(`fartile pool: out of GRANULES (${this.granuleFree.length} < ${nClusters}) — raise reserveFartilePool granules`);
-        const slot = this.slotFree.pop() as number;
-        const gids = new Uint32Array(nClusters);
-        for (let g = 0; g < nClusters; g++) gids[g] = this.granuleFree.pop() as number;
-        slots.push(slot);
-        for (const g of gids) granules.push(g);
-        this.deps.emit(
-          { kind: 'ftAttach', slot, granules: gids, center: packed.center, levels },
-          [gids.buffer, ...levels.flatMap((l) => [l.words.buffer, l.occupied.buffer])],
-        );
-        if ((j & 15) === 15) await this.deps.yield();
+      if (plan) {
+        for (let j = 0; j < plan.jobs.length; j++) {
+          const splatted = splatTiles(plan.grid, plan.poolsFlat, [plan.jobs[j] as TileSplatJob]);
+          const r = splatted[0];
+          if (!r) continue;
+          const built = emitTile(plan.grid, r);
+          if (!built) continue;
+          const packed = packFarTiles([built])[0];
+          if (!packed) continue;
+          const levels = packed.prep.vox.levels;
+          if (!levels || levels.length === 0) continue;
+          let nClusters = 0;
+          for (const l of levels) nClusters += l.blocks.length;
+          // reserve granules (== clusters) + one slot — throw-loud on a dry pool (§5)
+          if (this.slotFree.length === 0) throw new Error('fartile pool: out of SLOTS — raise reserveFartilePool slots (ring/grade arithmetic bug)');
+          if (this.granuleFree.length < nClusters) throw new Error(`fartile pool: out of GRANULES (${this.granuleFree.length} < ${nClusters}) — raise reserveFartilePool granules`);
+          const slot = this.slotFree.pop() as number;
+          const gids = new Uint32Array(nClusters);
+          for (let g = 0; g < nClusters; g++) gids[g] = this.granuleFree.pop() as number;
+          slots.push(slot);
+          for (const g of gids) granules.push(g);
+          this.deps.emit(
+            { kind: 'ftAttach', slot, granules: gids, center: packed.center, levels },
+            [gids.buffer, ...levels.flatMap((l) => [l.words.buffer, l.occupied.buffer])],
+          );
+          if ((j & 15) === 15) await this.deps.yield();
+        }
       }
 
-      // stale check (tx-owns-bake): the cell was evicted/re-graded away mid-bake —
-      // the attaches we just emitted have no home; roll them back (evict + free).
-      if (myGen < 0 || (old && old.gen === -1) || !this.baking.has(key)) {
+      // stale check (tx-owns-bake): a re-grade whose resident predecessor was evicted
+      // mid-bake (its gen went −1) has no home — roll back the attaches (evict + free).
+      if (old && old.gen === -1) {
         if (slots.length > 0) {
           this.deps.emit({ kind: 'ftEvict', slots: slots.slice() }, []);
           for (const s of slots) this.slotFree.push(s);
           for (const g of granules) this.granuleFree.push(g);
         }
-        this.baking.delete(key);
         return;
       }
 
-      // commit: replace the old resident set (re-grade) — its slots evict now that the
-      // new set is attached (never uncovered).
-      if (old) {
+      // commit: a resident cell (0..N slots) — TERMINAL. A re-grade evicts the old set
+      // now that the new one is attached (never uncovered).
+      if (old && old.slots.length > 0) {
         this.deps.emit({ kind: 'ftEvict', slots: old.slots.slice() }, []);
         for (const s of old.slots) this.slotFree.push(s);
         for (const g of old.granules) this.granuleFree.push(g);
         this.nHeads -= old.slots.length;
-        this.nRebaked++;
       }
+      if (old) this.nRebaked++;
       this.resident.set(key, { slots, granules, grade, gen: myGen });
       this.nHeads += slots.length;
       this.nBaked++;
