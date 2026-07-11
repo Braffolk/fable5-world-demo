@@ -26,7 +26,7 @@ import { unpackClusters } from '../build/DagCache';
 import type { ChunkKey, LayerName, WorldManifest, WorldSource } from '../../world/source/WorldSource';
 import { packChunkKey } from '../../world/source/Lac1';
 import type { GeometryRegistry } from './GeometryRegistry';
-import { planField, layerGeom, latticeWorld, chunkBox, type FieldPlan } from './PlaneFill';
+import { planField, layerGeom, latticeWorld, coverageExtentLattice, type FieldPlan } from './PlaneFill';
 import { TerrainField } from './TerrainField';
 import type {
   BootTile,
@@ -167,73 +167,13 @@ export class StreamBrainClient {
       layers[layer] = entry;
     }
     const geo = layerGeom(manifest, 'height');
-    const lods = manifest.layers.height?.lods ?? [0];
-    const finestLod = Math.min(...lods);
-    // S6g COVERAGE BOX — the domain the tile-residency PARTITION TREE tiles, hence
-    // the ONLY region terrain can render in. The pre-S6g box was the FINEST-LOD
-    // chunk footprint (the 1 m pilot) squared — a ~135 km box with the pilot in a
-    // CORNER, so the tree covered only that square and far terrain was ABSENT
-    // beyond it in whichever direction the off-centre spawn faced the near edge
-    // (the "large chunks of far terrain missing in one direction" bug). The finest
-    // LOD is the WRONG source: the coarse LODs cook the whole country, so a
-    // frustum-visible point far from the pilot has coarse data yet no tile. The box
-    // must instead span everywhere the camera FRUSTUM can reach (the far plane),
-    // clipped to where height data actually exists — then every renderable point is
-    // inside the partition ⇒ owned by exactly one fringe leaf ⇒ never absent.
-    //
-    // (a) full height-data extent = the union of EVERY LOD's chunk footprint. A
-    //     LOD-k chunk spans chunkRes·lodStep^k lattice texels; the country-wide
-    //     coarse LODs dwarf the finest, so the union is the whole cooked country.
-    // (b) view-far horizon (lattice units) = the SAME formula the scene derives the
-    //     camera far plane from (max LOD half-extent ·1.15, capped 150 km), so
-    //     residency and the far plane agree by construction.
-    // (c) box = the finest-LOD centre (= where the camera lives) ± view-far, clipped
-    //     to (a). Covering the whole ~500 km country instead would tile far tiles
-    //     the frustum always culls (pure pool-VRAM waste); covering less re-opens
-    //     the void. Squared (min/max across axes) because the tile clipmap lattice
-    //     is square — the generated world's box collapses to its old finest-only
-    //     value, bit-identical (its lone coarse LOD is padding, skipped below ⇒
-    //     union == finest, and view-far ≥ its half-extent ⇒ no clip).
-    let uMinX = Infinity;
-    let uMaxX = -Infinity;
-    let uMinZ = Infinity;
-    let uMaxZ = -Infinity;
-    let extentHalf = 0;
-    let fine: ReturnType<typeof chunkBox> = null;
-    for (const lod of lods) {
-      const keys = manifest.chunks('height', lod);
-      // a LONE coarse chunk is PADDING that merely contains the finer world (the
-      // generated world "sits inside ONE lod1 chunk" — its footprint overshoots the
-      // 4 km world by a full coarse chunk); it adds no REAL coverage, so skip it and
-      // let the box track real data, not chunk-footprint padding. The finest LOD is
-      // always kept; a genuinely large world's coarse LODs span many chunks (Estonia
-      // lod2-4 all do) and are kept. This is what holds the generated box at its old
-      // finest-only value ⇒ bit-identical.
-      if (lod !== finestLod && keys.length <= 1) continue;
-      const b = chunkBox(keys);
-      if (!b) continue;
-      const f = geo.chunkRes * geo.lodStep ** lod; // lattice texels per LOD-k chunk
-      uMinX = Math.min(uMinX, b.minX * f);
-      uMaxX = Math.max(uMaxX, (b.maxX + 1) * f);
-      uMinZ = Math.min(uMinZ, b.minZ * f);
-      uMaxZ = Math.max(uMaxZ, (b.maxZ + 1) * f);
-      extentHalf = Math.max(extentHalf, ((b.maxX - b.minX + 1) * f) / 2, ((b.maxZ - b.minZ + 1) * f) / 2);
-      if (lod === finestLod) fine = b;
-    }
-    if (!fine || !Number.isFinite(uMinX)) throw new Error('StreamBrainClient: height layer has no chunks');
-    const f0 = geo.chunkRes * geo.lodStep ** finestLod;
-    const ccx = ((fine.minX + fine.maxX + 1) / 2) * f0;
-    const ccz = ((fine.minZ + fine.maxZ + 1) / 2) * f0;
-    const viewFar = Math.min(150000 / geo.texel0, extentHalf * 1.15);
-    const bxMin = Math.max(uMinX, ccx - viewFar);
-    const bxMax = Math.min(uMaxX, ccx + viewFar);
-    const bzMin = Math.max(uMinZ, ccz - viewFar);
-    const bzMax = Math.min(uMaxZ, ccz + viewFar);
-    // round OUTWARD to integer lattice bounds (viewFar / odd chunk counts can land
-    // fractional) so coverage is never shaved; generated-world bounds are already
-    // integer ⇒ floor/ceil are identities ⇒ still bit-identical.
-    const latMin = Math.floor(Math.min(bxMin, bzMin));
-    const latMax = Math.ceil(Math.max(bxMax, bzMax)) - 1;
+    // COVERAGE BOX (S6g) — the domain the tile-residency PARTITION TREE tiles, hence
+    // the ONLY region terrain can render in. Derived from `coverageExtentLattice`,
+    // the SAME function planField sizes the coarsest "country floor" height level
+    // against (S8c), so the tree domain and its coarse bakeable source cannot drift:
+    // every fringe leaf the tree can create has a resident real coarse source ⇒ a
+    // "far region with data but flat/absent terrain" is unrepresentable, not policed.
+    const { latMin, latMax } = coverageExtentLattice(manifest);
     return {
       kind: 'init',
       grid: manifest.grid,

@@ -18,7 +18,7 @@
  */
 
 import type { ChunkKey, ChunkPayload, LayerName } from '../src/world/source/WorldSource';
-import { planField } from '../src/nanite/world/PlaneFill';
+import { planField, coverageExtentLattice } from '../src/nanite/world/PlaneFill';
 import { StreamBrainCore } from '../src/nanite/world/StreamBrainCore';
 import type { BrainToMain, StreamPacket } from '../src/nanite/world/StreamProtocol';
 import { packChunkKey } from '../src/world/source/Lac1';
@@ -188,8 +188,45 @@ core.pose(worldOf(back.x + Math.floor(res * 0.375)), worldOf(back.z), 0, 0);
 await new Promise((r) => setTimeout(r, 80));
 checkWindow('scroll with residency active');
 
+// ---- C: COARSE FLOOR spans the coverage box (S8c) — the far-terrain-absence /
+// "terrain disappears on retreat in one direction" fix. A source whose FINEST lod
+// is a small pilot but whose COARSE lod covers the whole country: the coarsest
+// height plane MUST span the tile-residency box, else far/coarse tiles (incl. the
+// parked parents coarsen falls back onto) bake from the CLAMPED window edge — a
+// flat dead plane. Asserts the invariant planField.ensureFloorCoversBox enforces:
+// the coarse source spans exactly the domain the tree tiles (they share
+// coverageExtentLattice), so absence-with-data is unrepresentable.
+{
+  const CR = 256; // chunkRes (samples/chunk)
+  const CM = 2048; // chunkMeters ⇒ finest texel 8 m
+  const t0 = CM / CR;
+  const pilot: ChunkKey[] = [];
+  for (let cz = 40; cz < 48; cz++) for (let cx = 40; cx < 48; cx++) pilot.push({ lod: 0, cx, cz }); // 8×8 pilot, off-corner
+  const country: ChunkKey[] = [];
+  for (let cz = 0; cz < 9; cz++) for (let cx = 0; cx < 13; cx++) country.push({ lod: 2, cx, cz }); // 13×9 country floor
+  const two = {
+    grid: { anchorE: 0, anchorN: 0, chunkMeters: CM, chunkRes: CR, lodStep: 4, originX: 0, originZ: 0 },
+    layers: { height: { enc: 1, lods: [0, 2], chunkCount: pilot.length + country.length, texelMeters: t0 } },
+    dictionaries: { species: new Map(), understory: new Map(), debris: new Map() },
+    coverage: () => null,
+    chunks: (layer: LayerName, lod: number) => (layer === 'height' ? (lod === 0 ? pilot : lod === 2 ? country : []) : []),
+  } as unknown as Parameters<typeof planField>[0];
+  const ext = coverageExtentLattice(two);
+  const fp = planField(two);
+  const cc = fp.height[fp.height.length - 1];
+  if (!cc) throw new Error('C: no coarsest height level');
+  const S = cc.stride;
+  const spansBox =
+    cc.n0x * S <= ext.latMin && (cc.n0x + cc.res) * S > ext.latMax && cc.n0z * S <= ext.latMin && (cc.n0z + cc.res) * S > ext.latMax;
+  // the box must reach the COUNTRY (far past the pilot) — proves the union-of-LODs,
+  // not the finest pilot footprint, sets the extent (the S6g/S8c source truth).
+  expect(ext.latMax - ext.latMin + 1 > 8 * CR * 2, 'C: coverage box collapsed to the pilot (union-of-LODs ignored)');
+  expect(spansBox, `C: coarsest height plane (res ${cc.res} @stride ${S}) does NOT span the box [${ext.latMin}..${ext.latMax}] — far tiles bake flat`);
+  expect(!cc.wraps, 'C: the country-floor level must be PINNED (it covers the whole renderable domain)');
+}
+
 if (failures > 0) {
   console.error(`[probe-streambrain] ${failures} FAILURE(S)`);
   process.exit(1);
 }
-console.log('[probe-streambrain] wrapping-window scroll: content-exact, FIFO, demand-only fetches, residency⊕scroll coherent');
+console.log('[probe-streambrain] wrapping-window scroll: content-exact, FIFO, demand-only fetches, residency⊕scroll coherent, coarse floor spans the box');

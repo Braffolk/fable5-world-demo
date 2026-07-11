@@ -875,7 +875,12 @@ export class StreamBrainCore {
     // content-addressed cache key: seed salt + grid + placement + source level +
     // the fold of the covering chunks' content hashes (source-agnostic —
     // generated hashes are zero and the seed carries identity; Estonia recuts
-    // invalidate). -sb2 retires keys the pre-gate TOCTOU bakes may have poisoned.
+    // invalidate). The fold identifies the tile's INTENDED source chunks, not the
+    // window state at bake time, so a far tile baked from a CLAMPED (pre-S8c,
+    // too-small) coarsest window cached its flat geometry under the SAME key its
+    // now-real bake computes — the version tag retires those stale flat entries
+    // (-sb2 → -sb3; the coarsest window now always spans the box ⇒ far tiles always
+    // bake real, so the fold is henceforth an honest identity).
     let fold = 0n;
     const geo = this.layerGeo('height');
     const plan = (this.hWin[j] as HeightWindow).plan;
@@ -886,7 +891,7 @@ export class StreamBrainCore {
     for (const key of chunksInWindow(geo, plan.lod, jx0, jz0, jres)) fold ^= this.chunkHash('height', key);
     const skirtLevel = cfg.skirt ? t.level : -1;
     const opts: HeightDagOpts = skirtLevel >= 0 ? { skirtLevel } : {};
-    const suffix = `-sb2-s${t.strideTexels}-j${j}-${t.tx0}x${t.tz0}-h${fold.toString(16)}${skirtLevel >= 0 ? `-sk${skirtLevel}` : ''}`;
+    const suffix = `-sb3-s${t.strideTexels}-j${j}-${t.tx0}x${t.tz0}-h${fold.toString(16)}${skirtLevel >= 0 ? `-sk${skirtLevel}` : ''}`;
     const cacheKey = heightDagCacheKey(cfg.seed >>> 0, gridN, suffix);
     let built: HeightDagResult | null = await getCachedHeightDag(cacheKey);
     if (built) {

@@ -195,6 +195,69 @@ export function coverageBoxM(manifest: WorldManifest): CoverageBox {
   };
 }
 
+/** aerial haze fully obscures terrain past ~50 km, so terrain (and the tile
+ *  clipmap that renders it) reaches at most this far — the camera far plane, the
+ *  tile-residency box, AND the coarsest height-plane floor all cap here so they
+ *  agree by construction. */
+export const VIEW_FAR_CAP_M = 150000;
+/** view-far margin over the coarsest LOD's world half-extent (a small overshoot
+ *  so the horizon is never shy of the data). */
+export const VIEW_FAR_MARGIN = 1.15;
+/** coarsest ("country floor") height-plane res ceiling — one r32f level spanning
+ *  the whole tile-residency box at the coarsest LOD texel. 4096² r32f = 64 MB is
+ *  the throw-loud wall (the TerrainField VRAM ceiling catches it too); Estonia's
+ *  418 km box at 256 m needs 2048² = 16 MB. A box that needs more than this is a
+ *  view-far / world-scale mistake to surface, not silently allocate. */
+export const HEIGHT_FLOOR_RES_CAP = 4096;
+
+/**
+ * The tile-residency COVERAGE BOX in finest-lattice texels (the domain the
+ * terrain tile clipmap partitions, hence the ONLY region terrain can render in) —
+ * the SINGLE source both StreamBrainClient (tree latMin/latMax) and planField (the
+ * coarsest floor level's extent) derive from, so the tree domain and its coarse
+ * source can never drift (S6g/S8c). Box = the finest-LOD centre (where the camera
+ * lives) ± the view-far horizon, clipped to the union of EVERY LOD's chunk
+ * footprint (the country-wide coarse LODs), squared. See buildInit's historic note
+ * for why the finest-LOD footprint alone was the wrong, void-opening source.
+ */
+export function coverageExtentLattice(manifest: WorldManifest): { latMin: number; latMax: number } {
+  const geo = layerGeom(manifest, 'height');
+  const lods = manifest.layers.height?.lods ?? [0];
+  const finestLod = Math.min(...lods);
+  let uMinX = Infinity;
+  let uMaxX = -Infinity;
+  let uMinZ = Infinity;
+  let uMaxZ = -Infinity;
+  let extentHalf = 0;
+  let fine: ReturnType<typeof chunkBox> = null;
+  for (const lod of lods) {
+    const keys = manifest.chunks('height', lod);
+    // a LONE coarse chunk is PADDING that merely contains the finer world (skip it
+    // so the box tracks real data, not chunk-footprint overshoot — keeps the
+    // generated world's box at its finest-only value ⇒ bit-identical).
+    if (lod !== finestLod && keys.length <= 1) continue;
+    const b = chunkBox(keys);
+    if (!b) continue;
+    const f = geo.chunkRes * geo.lodStep ** lod; // lattice texels per LOD-k chunk
+    uMinX = Math.min(uMinX, b.minX * f);
+    uMaxX = Math.max(uMaxX, (b.maxX + 1) * f);
+    uMinZ = Math.min(uMinZ, b.minZ * f);
+    uMaxZ = Math.max(uMaxZ, (b.maxZ + 1) * f);
+    extentHalf = Math.max(extentHalf, ((b.maxX - b.minX + 1) * f) / 2, ((b.maxZ - b.minZ + 1) * f) / 2);
+    if (lod === finestLod) fine = b;
+  }
+  if (!fine || !Number.isFinite(uMinX)) throw new Error('PlaneFill: height layer has no chunks');
+  const f0 = geo.chunkRes * geo.lodStep ** finestLod;
+  const ccx = ((fine.minX + fine.maxX + 1) / 2) * f0;
+  const ccz = ((fine.minZ + fine.maxZ + 1) / 2) * f0;
+  const viewFar = Math.min(VIEW_FAR_CAP_M / geo.texel0, extentHalf * VIEW_FAR_MARGIN);
+  // squared (min/max across axes) — the tile clipmap lattice is square. Round
+  // OUTWARD so coverage is never shaved (integer generated bounds are unchanged).
+  const latMin = Math.floor(Math.min(Math.max(uMinX, ccx - viewFar), Math.max(uMinZ, ccz - viewFar)));
+  const latMax = Math.ceil(Math.max(Math.min(uMaxX, ccx + viewFar), Math.min(uMaxZ, ccz + viewFar))) - 1;
+  return { latMin, latMax };
+}
+
 /** anchor a res² plane at `lod` on the source's payload lattice, centered as
  *  close to (centerX, centerZ) as the lattice allows. */
 export function placeLevel(
@@ -264,10 +327,61 @@ export function planLayer(
   return plans;
 }
 
+/**
+ * Grow the COARSEST height level ("country floor") to span the tile-residency
+ * coverage box, so every tile the tree can create has a resident REAL coarse
+ * source — the S8c fix that makes "a frustum region with coarse data but flat/
+ * absent terrain" unrepresentable. Before this, `levelRes` sized every level to
+ * the FINEST-lod (pilot) footprint (~16 km), so the coarsest window reached only
+ * ~33 km and every tile past it baked from the clamped window edge (a flat dead
+ * plane that coarsen/eviction fell back onto — the one-direction "terrain
+ * disappears on retreat" bug). The finer levels stay camera-windowed (mid-field
+ * detail); only the coarsest becomes the whole-box floor. No-op when the coarsest
+ * already spans the box (the generated world ⇒ bit-identical).
+ */
+function ensureFloorCoversBox(manifest: WorldManifest, height: PlanePlan[]): void {
+  const geo = layerGeom(manifest, 'height');
+  const { latMin, latMax } = coverageExtentLattice(manifest);
+  const c = height[height.length - 1] as PlanePlan;
+  const S = c.stride;
+  // does the existing (square) coarsest window already cover [latMin,latMax]²?
+  const covers = c.n0x * S <= latMin && (c.n0x + c.res) * S > latMax && c.n0z * S <= latMin && (c.n0z + c.res) * S > latMax;
+  if (covers) return; // generated world (and any source whose floor already spans the box)
+  const n0 = Math.floor(latMin / S);
+  let res = 256;
+  while ((n0 + res) * S <= latMax && res < HEIGHT_FLOOR_RES_CAP) res *= 2;
+  if ((n0 + res) * S <= latMax) {
+    // even at the res cap the coarsest LOD (texel c.texel m) can't STATICALLY span
+    // the box: this source has no cookable country floor at this texel. Leave the
+    // level as planned (it WRAPS — the far field rides the scrolling coarse window,
+    // the pre-S8c behaviour) rather than allocate a giant fine plane. SURFACE it —
+    // a real streamed world cooks coarse LODs so this never fires (Estonia's 256 m
+    // L4 floors the 419 km box in one 2048² level).
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[laas] PlaneFill: coarsest height LOD (texel ${c.texel} m) too fine to statically floor the ` +
+        `${Math.round(((latMax - latMin + 1) * geo.texel0) / 1000)} km box within res ${HEIGHT_FLOOR_RES_CAP} — ` +
+        `far terrain rides the scrolling window (cook coarser LODs for a static floor)`,
+    );
+    return;
+  }
+  const off = S >> 1;
+  height[height.length - 1] = {
+    ...c,
+    res,
+    wraps: false, // spans the whole renderable domain ⇒ pinned (never scrolls)
+    n0x: n0,
+    n0z: n0,
+    originX: geo.originX + (n0 * S + off + 0.5) * geo.texel0,
+    originZ: geo.originZ + (n0 * S + off + 0.5) * geo.texel0,
+  };
+}
+
 /** the whole field's plan — heights, biome, fields, water(+far). */
 export function planField(manifest: WorldManifest): FieldPlan {
   const height = planLayer(manifest, 'height', HEIGHT_PLANE_RES, HEIGHT_PLANE_RES_CAP);
   if (height.length === 0) throw new Error('PlaneFill: source has no height layer');
+  ensureFloorCoversBox(manifest, height);
   const biome = planLayer(manifest, 'biome', U8_PLANE_RES, U8_PLANE_RES_CAP);
   const fields = planLayer(manifest, 'fields', U8_PLANE_RES, U8_PLANE_RES_CAP);
   let water: PlanePlan | null = null;
