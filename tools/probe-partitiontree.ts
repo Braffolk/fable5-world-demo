@@ -147,6 +147,29 @@ function assertRenderMatchesFringe(host: Host, tree: PartitionTree, tag: string)
   expect(bad === '', `P ${tag}: field point ${bad} rendering tiles (want exactly 1 — no dual-LOD, no gap)`);
 }
 
+/** ANTI-ABSENCE (S6g) — the invariant the "far terrain missing in one direction"
+ *  bug violated: at EVERY step, every point of the coverage box is under ≥1
+ *  RENDERING slot, i.e. no fringe leaf is ever without a drawable payload and no
+ *  region is ever blank. (assertRenderMatchesFringe forbids >1; this asserts the
+ *  floor — coverage is never 0 — so absence is proven unrepresentable, not merely
+ *  policed. The real-world fix that made the field big enough lives one level up in
+ *  StreamBrainClient's coverage box; the tree GUARANTEES full coverage of whatever
+ *  box it is given, which this checks under 200 random poses + cancels + teleport.) */
+function assertNoAbsence(host: Host, tree: PartitionTree, tag: string): void {
+  const rendering = [...host.rendering.values()];
+  const step = CFG.gridN;
+  for (let pz = CFG.latMin; pz <= CFG.latMax; pz += step) {
+    for (let px = CFG.latMin; px <= CFG.latMax; px += step) {
+      let cover = 0;
+      for (const r of rendering) if (px >= r.tx0 && px < r.tx0 + r.size && pz >= r.tz0 && pz < r.tz0 + r.size) cover++;
+      if (cover < 1) {
+        fail(`ANTI-ABSENCE ${tag}: field point ${px},${pz} has NO rendering tile — a region is ABSENT (fringe ${tree.fringeSize})`);
+        return;
+      }
+    }
+  }
+}
+
 // ---- boot ----------------------------------------------------------------------
 // provision the pool at the ceiling and prove usage never reaches it.
 const PROBE_SLOTS = 4096;
@@ -185,6 +208,7 @@ function drive(camX: number, camZ: number, coarsestFirst: boolean, bakeOpts: { f
   maxFringe = Math.max(maxFringe, tree.fringeSize);
   tree.checkInvariants(host.used);
   assertRenderMatchesFringe(host, tree, `walk ${camX | 0},${camZ | 0}`);
+  assertNoAbsence(host, tree, `walk ${camX | 0},${camZ | 0}`);
 }
 
 let rng = 1234567;
@@ -245,6 +269,7 @@ for (let i = 0; i < CFG.levels + 4; i++) {
 }
 tree.checkInvariants(host.used);
 assertRenderMatchesFringe(host, tree, 'post-teleport');
+assertNoAbsence(host, tree, 'post-teleport');
 console.log(`  teleport: ${mergesAfter - mergesBefore} merges fired with 0 coarsen bakes (bakes pending pre-teleport ${bakesBeforeTeleport})`);
 
 // ---- O: overload-free — provisioned ceiling held --------------------------------
