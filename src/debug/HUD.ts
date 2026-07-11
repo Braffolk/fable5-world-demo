@@ -643,7 +643,7 @@ export class Hud {
       `brain RAM  ${this.fmt(c['stream.ram.mb'])} MB (lru ${this.fmt(c['stream.lru.mb'])} MB)`,
       `bucket     ${((c['stream.bucket.ms'] ?? 0)).toFixed(2)} ms · ${this.fmt(c['stream.bucket.kb'])} KB · ` +
         `${this.fmt(c['stream.bucket.packets'])} pkts · mailbox ${this.fmt(c['stream.mailbox.depth'])}`,
-      `scrolls    ${this.fmt(c['stream.scrolls'])} (${this.fmt(c['stream.scrolls.deferred'])} deferred) · ` +
+      `scrolls    ${this.fmt(c['stream.scrolls'])} · ` +
         `teleports ${this.fmt(c['stream.teleports'])}`,
       `origin     (${this.fmt(c['stream.origin.x'])}, ${this.fmt(c['stream.origin.z'])}) · ` +
         `rebases ${this.fmt(c['stream.origin.rebases'])}`,

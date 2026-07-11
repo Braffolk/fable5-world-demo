@@ -380,6 +380,11 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       ...(vegPrepPromise ? { pre: vegPrepPromise } : {}),
       // S5: clip terrain streams through the brain (boot tiles + runtime clipmap)
       brain,
+      // S6f: boot the residency cut AT the expected spawn (Estonia's default fly
+      // spawn orbits the coverage center; (0,0) IS the generated world's center),
+      // so frame 1 is fine-where-you-stand. A ?cam elsewhere is a teleport the
+      // tree absorbs at runtime (cancel + instant merges + re-refine).
+      ...(streamed ? { bootPose: coverageCenter(worldManifest) } : {}),
       // S7: streamed worlds reserve an instance pool (§5, A4) for the tree/boulder
       // band; the generated world keeps its boot-bound instances (no pool).
       ...(streamed ? { instancePool: { blockSize: INST_BLOCK_SIZE, blocks: INST_BLOCKS } } : {}),

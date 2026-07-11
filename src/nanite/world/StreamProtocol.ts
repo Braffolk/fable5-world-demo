@@ -14,14 +14,14 @@
  * Direction BRAIN → MAIN: fetch requests, one boot-tiles bundle (pre-registry,
  * NOT budget-drained — it sizes the pool caps), and the PACKET MAILBOX. The
  * mailbox is drained strictly FIFO under ONE token bucket (≤2 MB or ≤1.5 ms a
- * frame across ALL upload classes) — that ordering IS the demote-before-scroll
- * / promote-after-fill transaction (F-8): the brain emits tile evicts BEFORE
- * the plane fills that overwrite their source region, and promoted tile
- * attaches AFTER the fills their verts read.
+ * frame across ALL upload classes) — that ordering IS the promote-after-fill
+ * transaction (F-8): a scroll's fills precede its origin commit, and a tile
+ * transaction applies as one atomic drain step.
  */
 
 import type { ChunkKey, ChunkPayload, LayerName, WorldGrid } from '../../world/source/WorldSource';
 import type { FieldPlan } from './PlaneFill';
+import type { LevelGridEdit } from './PartitionTree';
 
 /** which GPU plane a fill/origin packet targets. */
 export type PlaneKind = 'height' | 'biome' | 'fields' | 'water' | 'waterFar';
@@ -94,13 +94,7 @@ export interface PoolInfoMsg {
   clusterCap: number;
 }
 
-export interface AttachAckMsg {
-  kind: 'attachAck';
-  key: string;
-  ok: boolean;
-}
-
-export type MainToBrain = BrainInitMsg | PoseMsg | FetchResMsg | BootTilesMsg | PoolInfoMsg | AttachAckMsg;
+export type MainToBrain = BrainInitMsg | PoseMsg | FetchResMsg | BootTilesMsg | PoolInfoMsg;
 
 // ---- brain → main -------------------------------------------------------------------
 
@@ -112,9 +106,13 @@ export interface FetchReqMsg {
 }
 
 /** one baked tile's transferable geometry (clusters in the DagCache packed
- *  Float64 form — deserializeClusters on the main side). */
+ *  Float64 form — deserializeClusters on the main side). The brain assigns the
+ *  `slot` (it owns the pool free-list — the single residency authority, S6f);
+ *  main is a pure applier. */
 export interface TileGeometry {
   key: string;
+  /** brain-assigned pool slot this tile loads into */
+  slot: number;
   /** tile-local packed grid verts (gx | code<<13 | gz<<16) */
   gridVerts: Uint32Array;
   indices: Uint32Array;
@@ -130,7 +128,10 @@ export interface TileGeometry {
   size: number;
 }
 
-/** MAILBOX packets — drained strictly FIFO under the ONE token bucket. */
+/** MAILBOX packets — drained strictly FIFO under the ONE token bucket. The tile
+ *  TRANSACTIONS (refine/merge) each apply as ONE atomic drain step (park+attach
+ *  or unpark+evict complete before the next frame's cull), so a region is never
+ *  seen at two LODs (S6f — the partition-tree residency rewrite). */
 export type StreamPacket =
   | {
       kind: 'fill';
@@ -156,8 +157,12 @@ export type StreamPacket =
       phaseX: number;
       phaseY: number;
     }
-  | { kind: 'attach'; tile: TileGeometry }
-  | { kind: 'evict'; key: string };
+  /** REFINE: park the parent's slot (clusterCount→0, geometry retained), attach
+   *  the ≤4 baked children into their brain-assigned slots, update the level grid. */
+  | { kind: 'tileRefine'; parkSlot: number; children: TileGeometry[]; levelGrid: LevelGridEdit[] }
+  /** MERGE: unpark the parent's retained slot (draw restored, instant — no bake),
+   *  evict the ≤4 child slots, update the level grid. */
+  | { kind: 'tileMerge'; unparkSlot: number; freeSlots: number[]; levelGrid: LevelGridEdit[] };
 
 export interface PacketsMsg {
   kind: 'packets';
@@ -172,11 +177,20 @@ export interface PlanesReadyMsg {
   ramBytes: number;
 }
 
+/** a boot node: its baked geometry (+ brain-assigned slot) and whether it is a
+ *  fringe LEAF (rendered) or a parked ancestor (attached then parked — the
+ *  ancestor-closed resident subtree, §4). */
+export interface BootTile {
+  tile: TileGeometry;
+  isLeaf: boolean;
+}
+
 export interface BootTilesDoneMsg {
   kind: 'bootTilesDone';
-  tiles: TileGeometry[];
+  tiles: BootTile[];
   poolMax: { v: number; t: number; c: number };
-  maxTiles: number;
+  /** total pool slots to reserve (resident subtree + refinement headroom) */
+  slots: number;
   levels: number;
   nCache: number;
   nBuilt: number;
@@ -215,6 +229,11 @@ export function payloadTransfers(p: ChunkPayload | null): Transferable[] {
   return [...new Set(t)];
 }
 
+/** transferable buffers of one baked tile. */
+function tileTransfers(t: TileGeometry): Transferable[] {
+  return [t.gridVerts.buffer, t.indices.buffer, t.clusterData.buffer];
+}
+
 /** transfer list for a mailbox packet batch. */
 export function packetTransfers(packets: StreamPacket[]): Transferable[] {
   const t: Transferable[] = [];
@@ -222,20 +241,27 @@ export function packetTransfers(packets: StreamPacket[]): Transferable[] {
     if (p.kind === 'fill') {
       if (p.f32) t.push(p.f32.buffer);
       if (p.u8) t.push(p.u8.buffer);
-    } else if (p.kind === 'attach') {
-      t.push(p.tile.gridVerts.buffer, p.tile.indices.buffer, p.tile.clusterData.buffer);
+    } else if (p.kind === 'tileRefine') {
+      for (const c of p.children) t.push(...tileTransfers(c));
     }
   }
   return [...new Set(t)];
 }
 
+/** upload-cost estimate (bytes) of one baked tile. */
+function tileBytes(t: TileGeometry): number {
+  // hf verts (1 w) + indices + cluster/DAG/link records (~22 w per cluster) + mesh record
+  return t.gridVerts.byteLength + t.indices.byteLength + t.clusterCount * 22 * 4 + 72;
+}
+
 /** upload-cost estimate (bytes) of one packet — the token bucket's currency. */
 export function packetBytes(p: StreamPacket): number {
   if (p.kind === 'fill') return p.f32 ? p.f32.byteLength : p.u8 ? p.u8.byteLength : 0;
-  if (p.kind === 'attach') {
-    const t = p.tile;
-    // hf verts (1 w) + indices + cluster/DAG/link records (~22 w per cluster) + mesh record
-    return t.gridVerts.byteLength + t.indices.byteLength + t.clusterCount * 22 * 4 + 72;
+  if (p.kind === 'tileRefine') {
+    let b = 72; // parent park + level-grid poke
+    for (const c of p.children) b += tileBytes(c);
+    return b;
   }
-  return 64; // origin commit / evict — uniform pokes + a mesh record
+  if (p.kind === 'tileMerge') return 72 + p.freeSlots.length * 8; // unpark + evicts + grid poke
+  return 64; // origin commit — uniform poke
 }

@@ -798,6 +798,9 @@ export async function buildWorldRegistry(input: {
    *  scene=world path): boot tiles bake brain-side from decoded chunks and the
    *  runtime clipmap streams through its mailbox. The scene owns + drives it. */
   brain?: StreamBrainClient;
+  /** S6f: world XZ the boot residency cut refines toward (the expected spawn).
+   *  Omit ⇒ (0,0) — the generated world's center. */
+  bootPose?: { cx: number; cz: number };
   /** S7: reserve a streamed-instance pool (§5, A4) sized blockSize·blocks. STREAMED
    *  world only — the generated world keeps its boot-bound instances (omit ⇒ no pool,
    *  instanceCount byte-identical). Reserved before build() so the frozen cull
@@ -820,6 +823,7 @@ export async function buildWorldRegistry(input: {
     leaf: leafOn,
     seed,
     brain,
+    bootPose,
   } = input;
   const inSet = (c: MaterialClassId): boolean => !classes || classes.has(c);
   const t0 = performance.now();
@@ -1160,17 +1164,18 @@ export async function buildWorldRegistry(input: {
         // the runtime clipmap then streams through the brain's mailbox under the
         // one token bucket (TerrainScene drives brain.update + brain.drain).
         if (!brain) throw new Error('WorldRegistry: clip terrain streams through the brain — pass input.brain (S5)');
-        const boot = await brain.bootTilesAt(0, 0); // world center = the old res/2 texel center
+        // S6f: boot the cut AT the expected spawn (streamed worlds pass it; the
+        // generated world's center is (0,0)) — frame 1 is fine-where-you-stand.
+        const boot = await brain.bootTilesAt(bootPose?.cx ?? 0, bootPose?.cz ?? 0);
         const pm = boot.poolMax;
-        // caps = boot-worst × generous margin; a reload hits arbitrary regions and
-        // an over-cap tile is SKIPPED (coarser ring backstops), never fatal.
+        // caps = boot-worst × generous margin (all tiles share gridN ⇒ near-uniform
+        // size; an over-cap tile aborts its refine, so the region stays coarse — never
+        // fatal). The SLOT count is the brain's provisioned ceiling (resident subtree +
+        // refinement headroom, §5): reserveSlots throws loud if it ever runs dry.
         const vCap = Math.ceil(pm.v * 1.5) + 256;
         const tCap = Math.ceil(pm.t * 1.5) + 256;
         const cCap = Math.ceil(pm.c * 1.5) + 32;
-        // headroom ABOVE clipmapMaxTiles so departed tiles can LINGER through the
-        // async bake window (lazy eviction — the old LOD stays until its replacement
-        // is resident; far stragglers are reclaimed first under pressure). ~1.5×.
-        const slots = boot.maxTiles + Math.ceil(boot.maxTiles / 2);
+        const slots = boot.slots;
         reg.reserveTilePool(
           'terrain',
           { originX: origin, originZ: origin, cellSize: cell },
@@ -1178,9 +1183,13 @@ export async function buildWorldRegistry(input: {
           { label: 'terrain' },
         );
         streamBrain = brain;
+        // §6 VRAM ledger: slot bytes = hfVerts(4 B) + indices(12 B/tri) +
+        // cluster(8 w) + DAG(12 w) + dagLinks(1 w) records per cluster.
+        const slotMb = (vCap * 4 + tCap * 12 + cCap * (8 + 12 + 1) * 4) / 2 ** 20;
         deferred.push(
-          `terrain DAG CLIPMAP ${boot.levels}L (stream brain): ${boot.count} boot / ${boot.maxTiles} max tiles, ` +
-            `${boot.nCache} cached/${boot.nBuilt} built, POOL ${slots}×(v${vCap}/t${tCap}/c${cCap}), ` +
+          `terrain DAG PARTITION-TREE ${boot.levels}L (stream brain): ${boot.count} boot subtree nodes, ` +
+            `${boot.nCache} cached/${boot.nBuilt} built, POOL ${slots}×(v${vCap}/t${tCap}/c${cCap}) = ` +
+            `${(slots * slotMb).toFixed(0)} MB (${slotMb.toFixed(2)} MB/slot), ` +
             `skirt ${dagTerrainSkirt ?? true ? 'on' : 'off'}, ${(performance.now() - tHd0).toFixed(0)} ms`,
         );
       } else {

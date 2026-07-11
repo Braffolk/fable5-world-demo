@@ -27,6 +27,14 @@ import type {
  *  the CDN caches latest.json longer than local recooks. */
 const DEFAULT_BASE_URL = 'https://braffolk.com/laas-data';
 const DECODE_WORKERS = 2;
+/** Max concurrent chunk fetches in flight across ALL consumers (brain window
+ *  scrolls + tile sources + the instance band). A cut swing or a StreamOrigin
+ *  rebase re-wants a whole new chunk set at once; without a bound the burst
+ *  stampedes the HTTP/1.1 per-host connection pool (~6) and fetches start failing
+ *  with `Failed to fetch`. Queueing behind a small semaphore turns the burst into
+ *  an orderly drain — the demand pool IS the queue, the pose tick's re-nomination
+ *  IS the retry, so there is no retry storm. ≤ the browser's per-host limit. */
+const MAX_INFLIGHT_FETCHES = 6;
 
 /** The manifest.json fields this client consumes (manifest.py build_release). */
 interface ManifestJson {
@@ -46,6 +54,8 @@ export class RemoteWorldSource implements WorldSource {
   private readonly indexes = new Map<LayerName, Map<number, ChunkRef>>();
   private layers: Partial<Record<LayerName, WorldLayerMeta>> = {};
   private pool: DecodePool | null = null;
+  /** burst-shaping semaphore — bounds concurrent HTTP fetches (see MAX_INFLIGHT_FETCHES) */
+  private readonly gate = new FetchGate(MAX_INFLIGHT_FETCHES);
 
   constructor(baseUrl: string = DEFAULT_BASE_URL) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
@@ -110,16 +120,21 @@ export class RemoteWorldSource implements WorldSource {
     const pool = this.pool;
     const meta = this.layers[layer];
     if (!pool || !meta) return Promise.reject(new Error('RemoteWorldSource: fetch before open()'));
-    return pool.decode(
-      {
-        url: `${this.baseUrl}/${chunkPath(layer, ref)}`,
-        layerId: LAC1_LAYER_IDS[layer as keyof typeof LAC1_LAYER_IDS],
-        lod: key.lod,
-        cx: key.cx,
-        cz: key.cz,
-        schema: { planes: meta.planes?.length, columns: meta.columns },
-      },
-      signal,
+    // burst-shaping: acquire an in-flight slot before dispatching (queued if the
+    // pool is saturated); a failed/aborted fetch just releases its slot and returns
+    // to the demand pool — the pose tick re-nominates it (no retry storm).
+    return this.gate.run(() =>
+      pool.decode(
+        {
+          url: `${this.baseUrl}/${chunkPath(layer, ref)}`,
+          layerId: LAC1_LAYER_IDS[layer as keyof typeof LAC1_LAYER_IDS],
+          lod: key.lod,
+          cx: key.cx,
+          cz: key.cz,
+          schema: { planes: meta.planes?.length, columns: meta.columns },
+        },
+        signal,
+      ),
     );
   }
 
@@ -128,6 +143,27 @@ export class RemoteWorldSource implements WorldSource {
     this.pool = null;
     this.indexes.clear();
     this.layers = {};
+  }
+}
+
+// --- fetch burst gate ----------------------------------------------------------------------
+
+/** A minimal async semaphore: `run` waits for a free slot, runs the task, and
+ *  releases on settle (success OR failure). Bounds concurrent fetches so a cut
+ *  swing / rebase burst queues instead of stampeding the connection pool. */
+class FetchGate {
+  private active = 0;
+  private readonly waiters: (() => void)[] = [];
+  constructor(private readonly max: number) {}
+  async run<T>(task: () => Promise<T>): Promise<T> {
+    if (this.active >= this.max) await new Promise<void>((r) => this.waiters.push(r));
+    this.active++;
+    try {
+      return await task();
+    } finally {
+      this.active--;
+      this.waiters.shift()?.();
+    }
   }
 }
 

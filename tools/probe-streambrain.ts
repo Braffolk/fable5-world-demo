@@ -172,29 +172,24 @@ core.pose(worldOf(CHUNKS * CHUNK_RES - res / 2 - 10), worldOf(CHUNKS * CHUNK_RES
 await new Promise((r) => setTimeout(r, 80));
 checkWindow('teleport refill');
 
-// ---- T: demote-before-scroll — pin a fake resident tile on the vacated region ------
-// (back at mid-lattice first: at the rim the clamp stops scrolls entirely)
+// ---- T: residency ⊕ scroll coexist — boot the partition tree so RESIDENT tiles
+// exist, then scroll the wrapping window; assert scrolls run FREELY (never
+// deferred behind residency — the S6f deadlock cure) and the window content
+// stays lattice-exact throughout.
 core.pose(worldOf(CHUNKS * CHUNK_RES * 0.5), worldOf(CHUNKS * CHUNK_RES * 0.5), 0, 0);
 await new Promise((r) => setTimeout(r, 80));
 checkWindow('re-center refill');
 const back = centerN();
-const resBefore = core.countersForProbe();
-// a tile at the WEST edge of the current window, baked from height level 0
-core.probeAddResident('T-test', { x0: curN0x + 4, z0: curN0z + 4, size: 64, level: 0, srcLevel: 0 });
+// boot the residency tree at mid-lattice (inline bakes; pool stays null ⇒ no
+// runtime refine churn — just resident tiles alongside the scrolling window).
+await core.bootTiles(worldOf(back.x), worldOf(back.z));
+expect(core.residentCountForProbe() > 0, 'T: partition-tree boot produced no resident tiles');
 core.pose(worldOf(back.x + Math.floor(res * 0.375)), worldOf(back.z), 0, 0);
-await new Promise((r) => setTimeout(r, 50));
-const resAfter = core.countersForProbe();
-expect(
-  resAfter.scrollsDeferred > resBefore.scrollsDeferred,
-  `T scroll over a resident tile's source must DEFER (deferred ${resBefore.scrollsDeferred}→${resAfter.scrollsDeferred})`,
-);
-core.probeRemoveResident('T-test');
-core.pose(worldOf(back.x + Math.floor(res * 0.375)), worldOf(back.z), 0, 0);
-await new Promise((r) => setTimeout(r, 50));
-checkWindow('post-demote scroll');
+await new Promise((r) => setTimeout(r, 80));
+checkWindow('scroll with residency active');
 
 if (failures > 0) {
   console.error(`[probe-streambrain] ${failures} FAILURE(S)`);
   process.exit(1);
 }
-console.log('[probe-streambrain] wrapping-window scroll: content-exact, FIFO, demand-only fetches, demote-before-scroll defers');
+console.log('[probe-streambrain] wrapping-window scroll: content-exact, FIFO, demand-only fetches, residency⊕scroll coherent');

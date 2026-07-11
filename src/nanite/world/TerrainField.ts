@@ -30,6 +30,7 @@ import { If, clamp, float, floor, fract, mix, texture, uniform, vec2, vec3, vec4
 import { texLoadR } from '../Tsl';
 import type { NB, NF, NU, NV2, NV4 } from '../../gpu/TSLTypes';
 import type { CoverageBox, FieldPlan, PlanePlan } from './PlaneFill';
+import type { LevelGridEdit } from './PartitionTree';
 import type { PlaneKind } from './StreamProtocol';
 
 export type { CoverageBox } from './PlaneFill';
@@ -189,6 +190,20 @@ export class TerrainField {
     for (let row = 0; row < h; row++) {
       backing.set(data.subarray(row * w * ch, (row + 1) * w * ch), ((y + row) * lvl.res + x) * ch);
     }
+  }
+
+  /** S6f SURFACE AUTHORITY (§7): the fringe-level grid, one entry per coarse root
+   *  cell, updated ATOMICALLY with the tile refine/merge that changed it — so a
+   *  height consumer clamped to it can never disagree with which LOD renders. Kept
+   *  coherent here (CPU store, keyed by packed root-cell coord); the GPU grass
+   *  sampler that reads it is the remaining wire-up (see the S6f report). */
+  private readonly fringeGrid = new Map<number, number>();
+  applyLevelGrid(edits: readonly LevelGridEdit[]): void {
+    for (const e of edits) this.fringeGrid.set(((e.cellX & 0xffff) << 16) | (e.cellZ & 0xffff), e.level);
+  }
+  /** the fringe level published for a root cell (levels-1 = coarsest, if unset). */
+  fringeLevelForCell(cellX: number, cellZ: number, fallback: number): number {
+    return this.fringeGrid.get(((cellX & 0xffff) << 16) | (cellZ & 0xffff)) ?? fallback;
   }
 
   /** re-point a wrapping level after its fills landed (F-8 packet order). */

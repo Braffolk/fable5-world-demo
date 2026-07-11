@@ -8,10 +8,10 @@
  *    a level-k chunk is fetched iff it overlaps level k's window (the demand
  *    law — no separate rings). Pinned levels (window covers the layer — every
  *    generated level) never scroll; wrapping levels scroll toroidally in
- *    SCROLL_STEP texel snaps with demote-before-scroll enforcement: a scroll
- *    that would overwrite texels a resident tile was baked against is DEFERRED
- *    (counted) until the tile diff demotes it — packet order then carries the
- *    promote-after-fill half (fills precede the origin commit precede attaches).
+ *    SCROLL_STEP texel snaps, freely: consumers live-sample the pyramid through
+ *    finest-containing level chains, so a scroll only re-levels the trailing
+ *    band (packet order still carries promote-after-fill: fills precede the
+ *    origin commit).
  *  - TILE clipmap residency (the plan is IDENTICAL to the pre-S5 main-thread
  *    streamer — same clipmapTiles geometry, same lazy-evict/backstop rules —
  *    so the generated world stays steady-state-identical): bakes read the
@@ -33,7 +33,8 @@ import { getCachedHeightDag, heightDagCacheKey, packClusters, putCachedHeightDag
 import type { DagBuilder, HeightDagResult } from '../build/DagWorkerClient';
 import { packChunkKey } from '../../world/source/Lac1';
 import type { ChunkKey, ChunkPayload, LayerName } from '../../world/source/WorldSource';
-import { clipmapMaxTiles, clipmapTiles, type ClipmapConfig, type ClipmapTile } from './TerrainClipmap';
+import type { ClipmapConfig, ClipmapTile } from './TerrainClipmap';
+import { PartitionTree, type BakeReq, type MergePacket, type QuadDesc, type RefinePacket, type TreeConfig } from './PartitionTree';
 import {
   BIOME_CHANNELS,
   CANOPY_CHANNELS,
@@ -51,6 +52,7 @@ import {
   type RasterGeom,
 } from './PlaneFill';
 import type {
+  BootTile,
   BrainInitMsg,
   BrainLayerMeta,
   BrainToMain,
@@ -69,9 +71,10 @@ const MAX_LOADS_PER_DIFF = 4;
 /** wrapping plane windows re-center in snaps of res/8 texels (bounded packet
  *  counts; hysteresis = half a snap). */
 const SCROLL_DIV = 8;
-/** prefetch horizon (s) along the velocity estimate at queue-idle. */
-const PREFETCH_S = 2.5;
-const PREFETCH_MAX = 2;
+/** S6f: the root tiling of the coverage box is held ≤ this many tiles per side
+ *  by adding coarser rungs — the always-resident country shell stays a small
+ *  constant (≤ ~144 tiles) for ANY world size. */
+const ROOT_SIDE_TARGET = 12;
 
 interface HeightWindow {
   plan: PlanePlan;
@@ -81,21 +84,6 @@ interface HeightWindow {
   n0z: number;
   phaseX: number;
   phaseY: number;
-}
-
-interface ResidentTile {
-  x0: number;
-  z0: number;
-  size: number;
-  /** clipmap level (probe) + the height-window level the bake sampled */
-  level: number;
-  srcLevel: number;
-}
-
-function footprintDist2(t: ResidentTile, px: number, pz: number): number {
-  const dx = px < t.x0 ? t.x0 - px : px > t.x0 + t.size ? px - (t.x0 + t.size) : 0;
-  const dz = pz < t.z0 ? t.z0 - pz : pz > t.z0 + t.size ? pz - (t.z0 + t.size) : 0;
-  return dx * dx + dz * dz;
 }
 
 export interface BrainDeps {
@@ -125,20 +113,22 @@ export class StreamBrainCore {
   private lruBytes = 0;
   private readonly inFlight = new Map<string, Promise<ChunkPayload | null>>();
 
-  // tile residency
-  private readonly resident = new Map<string, ResidentTile>();
-  private readonly pendingAttach = new Map<string, ResidentTile>();
-  private readonly skipped = new Set<string>();
-  private readonly stalled = new Set<string>();
-  private readonly prefetched = new Set<string>();
-  private lastWant = new Set<string>();
+  // tile residency — a PARTITION TREE (S6f). The tree owns the fringe + the pool
+  // free-list; double-loading / zombie payloads / dual-LOD are unrepresentable by
+  // its node types, not policed (see PartitionTree.ts).
+  private tree!: PartitionTree;
+  /** the pool free-list the tree reserves from (brain owns it — the single
+   *  residency authority). Seeded [bootSlots .. slots) once main reports the pool. */
+  private tileFree: number[] = [];
+  private bootSlotCount = 0;
   private pool: PoolInfoMsg | null = null;
   private busy = false;
   private pendingPose: { x: number; z: number; vx: number; vz: number } | null = null;
   private havePose = false;
   private lastX = 0;
   private lastZ = 0;
-  private bootPriority = false;
+  /** ticks remaining to prioritise coarsest-first refines (boot/teleport re-seed). */
+  private bootTicks = 0;
 
   // counters
   private nFetch = 0;
@@ -146,16 +136,8 @@ export class StreamBrainCore {
   private nBakeInFlight = 0;
   private nCache = 0;
   private nBuilt = 0;
-  private nLoaded = 0;
-  private nEvicted = 0;
-  private nSkipped = 0;
-  private nNacks = 0;
-  private nTeleports = 0;
-  private nScrollsDeferred = 0;
   private nScrolls = 0;
-  private nPrefetched = 0;
-  private capWarned = false;
-  private fullWarned = false;
+  private overCapWarned = false;
 
   constructor(deps: BrainDeps) {
     this.deps = deps;
@@ -186,26 +168,50 @@ export class StreamBrainCore {
     const t = msg.tiles;
     const span = t.latMax - t.latMin + 1;
     const M = t.tilesPerSide;
-    // coarsest ring spans the coverage (always-resident backstop) — the same
-    // level formula the pre-S5 streamer used, so the generated plan is identical
+    // enough rungs that one M-ring of coarsest tiles spans the coverage — the
+    // same level formula the pre-S5 streamer used (generated plan identical)
     const want = Math.max(1, Math.ceil(Math.log2((2 * span) / (M * t.gridN))) + 1);
-    // A tile vertex packs its LOCAL texel coord (gridN·stride) in a 13-bit field
-    // (mesh word0 bits 0-12; skirt code 13-15). The coarsest level's stride is
-    // 2^(levels-1), so gridN·2^(levels-1) must stay ≤ 0x1fff. Large streamed
-    // worlds (Estonia's pilot span) would exceed this; cap the base clipmap here
-    // — the coarser far country is served by fartiles (S8), not this pyramid.
-    // The generated 4 km world computes ≤5 levels ⇒ this cap never binds it.
-    const maxStride = Math.max(1, Math.floor(0x1fff / t.gridN));
-    const maxLevels = Math.max(1, Math.floor(Math.log2(maxStride)) + 1);
-    const levels = Math.min(want, maxLevels);
-    if (levels < want) {
-      this.deps.emit({ kind: 'log', level: 'warn', msg: `clipmap levels capped ${want}→${levels} (13-bit vert packing; far country = fartiles/S8)` });
-    }
+    // S6f: extend UPWARD with coarser rungs until the ROOT tiling of the
+    // coverage box is a small CONSTANT — the country-resident coarse shell stays
+    // O(1) tiles for any world size. Super-data rungs bake by DECIMATION of the
+    // same coarsest height window (stride 2^k — no new fetches, demand law
+    // intact), and their verts pack in coarser units (packUnit in bakeTile), so
+    // the 13-bit vert field no longer caps the pyramid. The generated world's
+    // tiny box already satisfies the target at `want` rungs ⇒ identical levels.
+    const rootsPerSide = (L: number): number => Math.ceil(span / (t.gridN << (L - 1)));
+    let levels = want;
+    while (rootsPerSide(levels) > ROOT_SIDE_TARGET) levels++;
     this.cfg = { res: t.latMax + 1, gridN: t.gridN, baseStride: 1, levels, tilesPerSide: M, latMin: t.latMin };
+    // the residency tree — roots tile the coverage box at the coarsest level, and
+    // refine toward the camera. The tree calls back into this core for slot
+    // reservation, bakes, and the mailbox refine/merge packets.
+    const treeCfg: TreeConfig = { gridN: t.gridN, levels, tilesPerSide: M, latMin: t.latMin, latMax: t.latMax };
+    this.tree = new PartitionTree(treeCfg, {
+      reserveSlots: (n) => this.reserveSlots(n),
+      releaseSlots: (slots) => this.releaseSlots(slots),
+      startBake: (req) => this.startBake(req),
+      emitRefine: (p) => this.emitRefine(p),
+      emitMerge: (p) => this.emitMerge(p),
+    });
   }
 
-  get maxTiles(): number {
-    return clipmapMaxTiles(this.cfg);
+  // ---- tree deps (§3/§5: slot free-list + async bakes + mailbox transactions) ------
+
+  private reserveSlots(n: number): number[] {
+    const out: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const s = this.tileFree.pop();
+      if (s === undefined) {
+        // §5: a dry pool is a provisioning/ring-arithmetic bug, NEVER backpressure.
+        throw new Error(`stream: tile pool dry reserving ${n} slots — raise the pool ceiling (ring arithmetic bug)`);
+      }
+      out.push(s);
+    }
+    return out;
+  }
+
+  private releaseSlots(slots: number[]): void {
+    for (const s of slots) this.tileFree.push(s);
   }
 
   // ---- chunk fetch (LRU + dedupe + authoritative absence) ---------------------------
@@ -419,72 +425,20 @@ export class StreamBrainCore {
     if (!this.busy) void this.tick();
   }
 
-  /** clear in-flight marks + re-seed coarsest-first (A13). */
+  /** cancel every in-flight refine (bakes abandoned, slots returned) so the
+   *  fringe can cascade back toward coarse (§4 — always ready) and re-refine
+   *  toward the new pose coarsest-first. */
   private teleport(): void {
-    this.nTeleports++;
-    this.bootPriority = true;
-    this.skipped.clear();
-    this.stalled.clear();
-    this.prefetched.clear();
+    this.tree.teleport();
+    this.bootTicks = 2 * this.cfg.levels;
   }
 
   poolInfo(msg: PoolInfoMsg): void {
     this.pool = msg;
-  }
-
-  attachAck(key: string, ok: boolean): void {
-    const t = this.pendingAttach.get(key);
-    if (!t) return;
-    this.pendingAttach.delete(key);
-    if (ok) {
-      this.resident.set(key, t);
-      this.nLoaded++;
-      return;
-    }
-    // NACK — pool dry. Pick the victim (farthest DEPARTED resident tile: least
-    // likely to hole; footprint distance 0 = the covering backstop, reclaimed
-    // last), evict it, and re-emit the attach (rebaked — DagCache-warm).
-    this.nNacks++;
-    const camX = this.latX(this.lastX);
-    const camZ = this.latZ(this.lastZ);
-    let worstKey: string | null = null;
-    let worstD = -1;
-    for (const [k, rt] of this.resident) {
-      if (this.lastWant.has(k)) continue; // never evict a tile we still want
-      const d = footprintDist2(rt, camX, camZ);
-      if (d > worstD) {
-        worstD = d;
-        worstKey = k;
-      }
-    }
-    if (worstKey === null) {
-      if (!this.fullWarned) {
-        this.fullWarned = true;
-        this.deps.emit({ kind: 'log', level: 'warn', msg: 'stream: tile pool full of DESIRED tiles — raise the pool slot count' });
-      }
-      this.stalled.add(key);
-      return;
-    }
-    this.deps.emit({ kind: 'packets', packets: [{ kind: 'evict', key: worstKey }] });
-    this.resident.delete(worstKey);
-    this.nEvicted++;
-    void this.reattach(key);
-  }
-
-  private async reattach(key: string): Promise<void> {
-    // the tile's arrays were transferred with the first attach — rebake (warm)
-    const t = this.tileByKey(key);
-    if (!t) return;
-    const baked = await this.bakeTile(t);
-    if (!baked || baked === 'overCap') return;
-    this.emitAttach(t, baked);
-  }
-
-  private tileByKey(key: string): ClipmapTile | null {
-    const camX = this.latX(this.lastX);
-    const camZ = this.latZ(this.lastZ);
-    for (const t of clipmapTiles(camX, camZ, this.cfg)) if (t.key === key) return t;
-    return null;
+    // the brain owns the free-list: boot claimed [0..bootSlotCount); the rest is
+    // the refinement pool. Provisioned so reserveSlots never runs dry (§5).
+    this.tileFree = [];
+    for (let s = msg.slots - 1; s >= this.bootSlotCount; s--) this.tileFree.push(s);
   }
 
   private latX(worldX: number): number {
@@ -505,7 +459,14 @@ export class StreamBrainCore {
         const p = this.pendingPose;
         this.pendingPose = null;
         await this.scrollPlanes(p.x, p.z);
-        if (this.pool) await this.runDiff(p.x, p.z, p.vx, p.vz);
+        if (this.pool) {
+          // iterate the FRINGE ONLY (§2): the tree decides split/hold/merge per
+          // leaf, fires instant merges, and starts refine txs under the bake
+          // budget. Committed txs emit refine/merge mailbox packets asynchronously
+          // as their bakes land.
+          this.tree.tick(this.latX(p.x), this.latZ(p.z), MAX_LOADS_PER_DIFF, this.bootTicks > 0);
+          if (this.bootTicks > 0) this.bootTicks--;
+        }
       }
     } catch (e) {
       this.deps.emit({ kind: 'log', level: 'error', msg: `stream brain tick: ${e instanceof Error ? e.message : String(e)}` });
@@ -551,13 +512,13 @@ export class StreamBrainCore {
       await this.refillWindow(plane, level, win, n0x, n0z, geo);
       return;
     }
-    // demote-before-scroll (§3 transaction): a resident tile baked against THIS
-    // height level must not have its source texels overwritten under it — defer
-    // the scroll (counted; the tile diff demotes it within a few poses).
-    if (plane === 'height' && this.tileOverlapsVacated(level, win, n0x, n0z)) {
-      this.nScrollsDeferred++;
-      return;
-    }
+    // S6f: scrolls never wait on tiles. Tile verts LIVE-SAMPLE the plane pyramid
+    // through the finest-CONTAINING level chain (the same chain grass reads), so a
+    // scroll only re-levels the trailing band — every sampler adapts at once, no
+    // demote transaction needed. (The old bag's demote-before-scroll deferral would
+    // DEADLOCK against the tree: the partition always keeps mid-level tiles inside
+    // the window, so a deferred scroll never unblocked — the window froze at spawn
+    // and everything streamed after it baked from coarse fallbacks.)
     const packets: StreamPacket[] = [];
     const transfers: Transferable[] = [];
     // toroidal invariant: a RETAINED sample keeps its physical address, so the
@@ -604,10 +565,6 @@ export class StreamBrainCore {
    *  full fill + the origin commit. */
   private async refillWindow(plane: PlaneKind, level: number, win: HeightWindow, n0x: number, n0z: number, geo: RasterGeom): Promise<void> {
     const plan = win.plan;
-    if (plane === 'height' && this.tileOverlapsVacated(level, win, n0x, n0z)) {
-      this.nScrollsDeferred++;
-      return;
-    }
     const layer: LayerName = plane === 'water' ? 'water' : 'height';
     const data = await this.assembleF32(layer, { ...plan, wraps: plan.wraps }, n0x, n0z, plane === 'water' ? WATER_DRY_SENTINEL : undefined);
     win.data.set(data);
@@ -657,35 +614,11 @@ export class StreamBrainCore {
     transfers.push(far.buffer);
   }
 
-  /** does any resident/pending tile baked against height level `level` overlap
-   *  the world region the scroll to (n0x,n0z) vacates? */
-  private tileOverlapsVacated(level: number, win: HeightWindow, n0x: number, n0z: number): boolean {
-    const plan = win.plan;
-    // conservative vacated box: the old window minus the new (both L-strips)
-    const rects: { x0: number; z0: number; x1: number; z1: number }[] = [];
-    const dx = n0x - win.n0x;
-    const dz = n0z - win.n0z;
-    if (dx > 0) rects.push({ x0: win.n0x, z0: win.n0z, x1: win.n0x + Math.min(dx, plan.res), z1: win.n0z + plan.res });
-    else if (dx < 0) rects.push({ x0: win.n0x + plan.res + Math.max(dx, -plan.res), z0: win.n0z, x1: win.n0x + plan.res, z1: win.n0z + plan.res });
-    if (dz > 0) rects.push({ x0: win.n0x, z0: win.n0z, x1: win.n0x + plan.res, z1: win.n0z + Math.min(dz, plan.res) });
-    else if (dz < 0) rects.push({ x0: win.n0x, z0: win.n0z + plan.res + Math.max(dz, -plan.res), x1: win.n0x + plan.res, z1: win.n0z + plan.res });
-    if (rects.length === 0) return false;
-    const t = this.tilesCfg;
-    // level-j sample n covers finest-lattice ≈ [n·stride, (n+1)·stride)
-    const s = plan.stride;
-    for (const set of [this.resident, this.pendingAttach]) {
-      for (const rt of set.values()) {
-        if (rt.srcLevel !== level) continue;
-        const tj0x = Math.floor(Math.max(rt.x0, t.latMin) / s);
-        const tj1x = Math.ceil(Math.min(rt.x0 + rt.size, t.latMax) / s);
-        const tj0z = Math.floor(Math.max(rt.z0, t.latMin) / s);
-        const tj1z = Math.ceil(Math.min(rt.z0 + rt.size, t.latMax) / s);
-        for (const r of rects) {
-          if (tj0x < r.x1 && tj1x > r.x0 && tj0z < r.z1 && tj1z > r.z0) return true;
-        }
-      }
-    }
-    return false;
+  /** a ClipmapTile view of a footprint — the bake/srcLevel helpers key off
+   *  tx0/tz0/tileTexels/strideTexels/level only. */
+  private synthTile(level: number, tx0: number, tz0: number, size: number): ClipmapTile {
+    const strideTexels = 1 << level;
+    return { level, strideTexels, tx0, tz0, tileTexels: size, key: `L${level}:${Math.round(tx0 / size)},${Math.round(tz0 / size)}` };
   }
 
   private async assembleRegionF32(plane: PlaneKind, plan: PlanePlan, rx0: number, rz0: number, rw: number, rh: number): Promise<Float32Array> {
@@ -703,35 +636,86 @@ export class StreamBrainCore {
     return out;
   }
 
-  // ---- tile clipmap ---------------------------------------------------------------------
+  // ---- tile residency: partition tree (§2-§6) -------------------------------------------
 
-  /** boot: bake the whole spawn-centered ring set (coarsest-first is irrelevant
-   *  here — ALL of it returns in one bundle for pool-cap sizing) and hand it to
-   *  main pre-registry-build. */
+  /** boot: bake the whole resident SUBTREE at the spawn pose (fringe leaves +
+   *  their parked ancestors — the ancestor-closed set, §4), assign each a slot,
+   *  seed the tree, and hand main the bundle (pre-registry — it sizes pool caps +
+   *  the provisioned slot ceiling). */
   async bootTiles(camX: number, camZ: number): Promise<void> {
-    const set = clipmapTiles(this.latX(camX), this.latZ(camZ), this.cfg);
+    // center the wrapping windows ON the boot pose before any bake — the plan's
+    // default placement is not the spawn, and a fine tile baked from a coarser
+    // window is the flat-terrain-at-spawn bug (the audit below throws loud).
+    await this.scrollPlanes(camX, camZ);
+    const descs = this.tree.bootDescs(this.latX(camX), this.latZ(camZ));
+    // boot readiness audit: the plan places the wrapping windows around the same
+    // coverage center the boot cut refines toward, so every boot bake should have
+    // its source resident — if not, say so LOUDLY (a silent coarse-content "fine"
+    // tile is the roamed-pose bug at frame 1).
+    let notReady = 0;
+    const nrByLevel: Record<number, number> = {};
+    const cxT = this.latX(camX);
+    const czT = this.latZ(camZ);
+    let nrMinDist = Infinity;
+    for (const d of descs) {
+      if (d.isLeaf && !this.bakeSourceReady(this.synthTile(d.desc.level, d.desc.tx0, d.desc.tz0, d.desc.size))) {
+        notReady++;
+        nrByLevel[d.desc.level] = (nrByLevel[d.desc.level] ?? 0) + 1;
+        const dx = cxT < d.desc.tx0 ? d.desc.tx0 - cxT : cxT > d.desc.tx0 + d.desc.size ? cxT - (d.desc.tx0 + d.desc.size) : 0;
+        const dz = czT < d.desc.tz0 ? d.desc.tz0 - czT : czT > d.desc.tz0 + d.desc.size ? czT - (d.desc.tz0 + d.desc.size) : 0;
+        nrMinDist = Math.min(nrMinDist, Math.max(dx, dz));
+      }
+    }
+    if (notReady > 0) {
+      this.deps.emit({ kind: 'log', level: 'warn', msg: `stream boot: ${notReady} boot leaves bake from coarser-than-own windows (byLevel ${JSON.stringify(nrByLevel)}, nearest ${nrMinDist}m)` });
+    }
+    const baked = await Promise.all(descs.map((d) => this.bakeTile(this.synthTile(d.desc.level, d.desc.tx0, d.desc.tz0, d.desc.size))));
     let pmV = 0;
     let pmT = 0;
     let pmC = 0;
-    const tiles: TileGeometry[] = [];
+    const tiles: BootTile[] = [];
     const transfers: Transferable[] = [];
-    const baked = await Promise.all(set.map((t) => this.bakeTile(t)));
-    set.forEach((t, i) => {
+    const slotOf = new Map<number, number>();
+    descs.forEach((d, i) => {
       const b = baked[i];
-      if (!b || b === 'overCap') return;
+      if (!b || b === 'overCap') throw new Error(`stream boot: tile ${d.desc.key} failed to bake`);
+      b.slot = i; // boot slots are assigned deterministically 0..bootSlotCount-1
       pmV = Math.max(pmV, b.gridVerts.length);
       pmT = Math.max(pmT, b.indices.length / 3);
       pmC = Math.max(pmC, b.clusterCount);
-      tiles.push(b);
+      tiles.push({ tile: b, isLeaf: d.isLeaf });
       transfers.push(b.gridVerts.buffer, b.indices.buffer, b.clusterData.buffer);
-      this.pendingAttach.set(t.key, { x0: t.tx0, z0: t.tz0, size: t.tileTexels, level: t.level, srcLevel: this.bakeSrcLevel(t) });
+      slotOf.set(d.nodeId, i);
+    });
+    this.tree.seedBoot(slotOf);
+    this.bootSlotCount = descs.length;
+    // §5 provisioning — PURE RING ARITHMETIC, world-size-independent: fringe ≤
+    // roots + per finer rung one hysteresis ring annulus ((M+2)² − (M/2)² leaves,
+    // clamped by that rung's world tiling); parked ancestors = the quadtree's
+    // internal nodes ≤ fringe/3 (the ×4/3); + in-flight tx reservations. A dry
+    // pool is therefore a bug (throw-loud in reserveSlots), never backpressure.
+    const M = this.cfg.tilesPerSide;
+    const span = this.tilesCfg.latMax - this.tilesCfg.latMin + 1;
+    let roots = 0;
+    for (const d of descs) if (d.desc.level === this.cfg.levels - 1) roots++;
+    let fringeBound = roots;
+    for (let k = 0; k < this.cfg.levels - 1; k++) {
+      const worldSide = Math.ceil(span / (this.cfg.gridN << k)) + 1;
+      fringeBound += Math.min((M + 2) * (M + 2) - (M / 2) * (M / 2), worldSide * worldSide);
+    }
+    const slots = Math.ceil((fringeBound * 4) / 3) + 4 * MAX_LOADS_PER_DIFF;
+    if (descs.length > slots) throw new Error(`stream boot: subtree ${descs.length} > provisioned ceiling ${slots} (ring arithmetic bug)`);
+    this.deps.emit({
+      kind: 'log',
+      level: 'log',
+      msg: `stream pool ceiling: ${slots} slots (${roots} roots + ${fringeBound - roots} ring leaves ×4/3 + inflight; ${this.cfg.levels} rungs)`,
     });
     this.deps.emit(
       {
         kind: 'bootTilesDone',
         tiles,
         poolMax: { v: pmV, t: pmT, c: pmC },
-        maxTiles: this.maxTiles,
+        slots,
         levels: this.cfg.levels,
         nCache: this.nCache,
         nBuilt: this.nBuilt,
@@ -740,108 +724,53 @@ export class StreamBrainCore {
     );
   }
 
-  private async runDiff(camWX: number, camWZ: number, vx: number, vz: number): Promise<void> {
-    const pool = this.pool as PoolInfoMsg;
-    const tx = this.latX(camWX);
-    const tz = this.latZ(camWZ);
-    const desired = clipmapTiles(tx, tz, this.cfg);
-    const want = new Set<string>();
-    for (const t of desired) want.add(t.key);
-    this.lastWant = want;
-    for (const key of this.skipped) if (!want.has(key)) this.skipped.delete(key);
-    for (const key of this.stalled) if (!want.has(key)) this.stalled.delete(key);
-
-    const batch: ClipmapTile[] = [];
-    const candidates = this.bootPriority ? [...desired].sort((a, b) => b.level - a.level) : desired;
-    for (const t of candidates) {
-      if (this.resident.has(t.key) || this.pendingAttach.has(t.key) || this.skipped.has(t.key) || this.stalled.has(t.key)) continue;
-      batch.push(t);
-      if (batch.length >= MAX_LOADS_PER_DIFF) break;
+  /** tree dep: bake the ≤4 children of a refine tx (nested pool / inline), and
+   *  deliver each to the tree keyed to (nodeId, txId) — a stale delivery (the tx
+   *  was cancelled) has no home and is dropped by onBake at one O(1) check (§3). */
+  private startBake(req: BakeReq): void {
+    // ready gate (see bakeSourceReady): every child's source window must have
+    // arrived, else abort — the pose tick re-nominates the leaf after the scroll.
+    for (const q of req.quads) {
+      if (!this.bakeSourceReady(this.synthTile(q.level, q.tx0, q.tz0, q.size))) {
+        this.tree.abortRefine(req.nodeId, req.txId);
+        return;
+      }
     }
-    if (batch.length > 0) {
-      const baked = await Promise.all(
-        batch.map((t) =>
-          this.bakeTile(t).then(
-            (r) => ({ t, r, err: null as unknown }),
-            (err: unknown) => ({ t, r: null, err }),
-          ),
-        ),
-      );
-      for (const { t, r, err } of baked) {
-        if (err) {
-          this.deps.emit({ kind: 'log', level: 'warn', msg: `stream tile ${t.key}: bake failed (${err instanceof Error ? err.message : String(err)})` });
-          continue;
-        }
-        if (!r) continue;
-        if (r === 'overCap') {
-          if (!this.capWarned) {
-            this.capWarned = true;
-            this.deps.emit({ kind: 'log', level: 'warn', msg: `stream: tile ${t.key} over slot cap (v/t/c ${pool.vertCap}/${pool.triCap}/${pool.clusterCap}) — SKIPPED, coarser ring backstops` });
+    req.quads.forEach((q: QuadDesc, i: number) => {
+      void this.bakeTile(this.synthTile(q.level, q.tx0, q.tz0, q.size)).then(
+        (r) => {
+          if (!r || r === 'overCap') {
+            if (r === 'overCap' && !this.overCapWarned) {
+              this.overCapWarned = true;
+              this.deps.emit({ kind: 'log', level: 'warn', msg: `stream: tile ${q.key} over slot cap — raise reserveTilePool caps (refine aborted)` });
+            }
+            this.tree.abortRefine(req.nodeId, req.txId);
+            return;
           }
-          this.skipped.add(t.key);
-          this.nSkipped++;
-          continue;
-        }
-        this.emitAttach(t, r);
-      }
-    } else if (this.bootPriority) {
-      // teleport/boot re-seed complete once nothing is left to arrive
-      let all = true;
-      for (const t of desired) {
-        if (!this.resident.has(t.key) && !this.skipped.has(t.key) && !this.stalled.has(t.key)) {
-          all = false;
-          break;
-        }
-      }
-      if (all) this.bootPriority = false;
-    }
-
-    // CLEANUP — the whole desired set resident (acked) ⇒ departed stragglers are
-    // redundant; drop them. During motion they stay as the backstop (lazy evict).
-    let allResident = true;
-    for (const t of desired) {
-      if (!this.resident.has(t.key) && !this.skipped.has(t.key) && !this.stalled.has(t.key)) {
-        allResident = false;
-        break;
-      }
-    }
-    if (allResident) {
-      const evicts: StreamPacket[] = [];
-      for (const [key] of this.resident) {
-        if (!want.has(key)) {
-          evicts.push({ kind: 'evict', key });
-          this.resident.delete(key);
-          this.nEvicted++;
-        }
-      }
-      if (evicts.length > 0) this.deps.emit({ kind: 'packets', packets: evicts });
-    }
-
-    // velocity prefetch at queue-idle: bake AHEAD along the heading into the
-    // DagCache (no residency mutation — pure warm-up)
-    const speed = Math.hypot(vx, vz);
-    if (batch.length === 0 && allResident && speed > 2) {
-      const px = this.latX(camWX + vx * PREFETCH_S);
-      const pz = this.latZ(camWZ + vz * PREFETCH_S);
-      let n = 0;
-      for (const t of clipmapTiles(px, pz, this.cfg)) {
-        if (n >= PREFETCH_MAX) break;
-        if (this.resident.has(t.key) || this.pendingAttach.has(t.key) || this.prefetched.has(t.key)) continue;
-        this.prefetched.add(t.key);
-        if (this.prefetched.size > 512) this.prefetched.clear();
-        this.nPrefetched++;
-        n++;
-        void this.bakeTile(t); // cache write inside; result discarded
-      }
-    }
+          r.slot = q.slot;
+          this.tree.onBake(req.nodeId, req.txId, i, r);
+        },
+        (err: unknown) => {
+          this.deps.emit({ kind: 'log', level: 'warn', msg: `stream tile ${q.key}: bake failed (${err instanceof Error ? err.message : String(err)})` });
+          this.tree.abortRefine(req.nodeId, req.txId);
+        },
+      );
+    });
   }
 
-  private emitAttach(t: ClipmapTile, g: TileGeometry): void {
-    this.pendingAttach.set(t.key, { x0: t.tx0, z0: t.tz0, size: t.tileTexels, level: t.level, srcLevel: this.bakeSrcLevel(t) });
-    this.deps.emit(
-      { kind: 'packets', packets: [{ kind: 'attach', tile: g }] },
-      [g.gridVerts.buffer, g.indices.buffer, g.clusterData.buffer],
-    );
+  /** tree dep: a committed refine — park the parent slot, attach the ≤4 baked
+   *  children, update the level grid. ONE atomic drain step on main (§6). */
+  private emitRefine(p: RefinePacket): void {
+    const children = p.children.map((c) => c.payload as TileGeometry);
+    const transfers: Transferable[] = [];
+    for (const c of children) transfers.push(c.gridVerts.buffer, c.indices.buffer, c.clusterData.buffer);
+    this.deps.emit({ kind: 'packets', packets: [{ kind: 'tileRefine', parkSlot: p.parkSlot, children, levelGrid: p.levelGrid }] }, transfers);
+  }
+
+  /** tree dep: a committed merge — unpark the retained parent slot, evict the ≤4
+   *  child slots, update the level grid (no bake — coarsen is always ready, §4). */
+  private emitMerge(p: MergePacket): void {
+    this.deps.emit({ kind: 'packets', packets: [{ kind: 'tileMerge', unparkSlot: p.unparkSlot, freeSlots: p.freeSlots, levelGrid: p.levelGrid }] });
   }
 
   // ---- tile bake (brain-side, from the retained height windows) ---------------------------
@@ -886,14 +815,41 @@ export class StreamBrainCore {
     return w.data[pz * plan.res + px] as number;
   }
 
+  /** S6f READY GATE: a level-k tile's bake needs a source window at stride ≤ its
+   *  own (else the "fine" tile would be a decimation of coarse data, committed
+   *  and cached as if it were the real content — the roamed-pose flat-tile bug).
+   *  Super-data rungs (stride ≥ the coarsest window's) are always ready. A not-
+   *  ready refine aborts; the pose tick re-nominates the leaf once the window's
+   *  scroll lands (the demand law's promote-after-fill, applied to tiles). */
+  private bakeSourceReady(t: ClipmapTile): boolean {
+    const j = this.bakeSrcLevel(t);
+    const stride = (this.hWin[j] as HeightWindow).plan.stride;
+    const coarsest = (this.hWin[this.hWin.length - 1] as HeightWindow).plan.stride;
+    return stride <= t.strideTexels || t.strideTexels >= coarsest;
+  }
+
   private async bakeTile(t: ClipmapTile): Promise<TileGeometry | 'overCap' | null> {
     const cfg = this.tilesCfg;
     const gridN = this.cfg.gridN;
     const vpa = gridN + 1;
+    // pick the source window AND extract the sub-grid SYNCHRONOUSLY (no await
+    // between them): a window scroll landing mid-bake must never let the
+    // extraction clamp into a stale placement — that baked flat garbage under a
+    // content-correct cache key (the poisoned-cache half of the roamed-pose bug).
     const j = this.bakeSrcLevel(t);
-    // content-addressed cache key: seed salt + grid + placement + the fold of
-    // the covering chunks' content hashes (source-agnostic — generated hashes
-    // are zero and the seed carries identity; Estonia recuts invalidate).
+    const sub = new Float32Array(vpa * vpa);
+    for (let gz = 0; gz <= gridN; gz++) {
+      const nz = Math.min(Math.max(t.tz0 + gz * t.strideTexels, cfg.latMin), cfg.latMax);
+      const srow = gz * vpa;
+      for (let gx = 0; gx <= gridN; gx++) {
+        const nx = Math.min(Math.max(t.tx0 + gx * t.strideTexels, cfg.latMin), cfg.latMax);
+        sub[srow + gx] = this.heightAtLattice(j, nx, nz);
+      }
+    }
+    // content-addressed cache key: seed salt + grid + placement + source level +
+    // the fold of the covering chunks' content hashes (source-agnostic —
+    // generated hashes are zero and the seed carries identity; Estonia recuts
+    // invalidate). -sb2 retires keys the pre-gate TOCTOU bakes may have poisoned.
     let fold = 0n;
     const geo = this.layerGeo('height');
     const plan = (this.hWin[j] as HeightWindow).plan;
@@ -904,7 +860,7 @@ export class StreamBrainCore {
     for (const key of chunksInWindow(geo, plan.lod, jx0, jz0, jres)) fold ^= this.chunkHash('height', key);
     const skirtLevel = cfg.skirt ? t.level : -1;
     const opts: HeightDagOpts = skirtLevel >= 0 ? { skirtLevel } : {};
-    const suffix = `-sb-s${t.strideTexels}-${t.tx0}x${t.tz0}-h${fold.toString(16)}${skirtLevel >= 0 ? `-sk${skirtLevel}` : ''}`;
+    const suffix = `-sb2-s${t.strideTexels}-j${j}-${t.tx0}x${t.tz0}-h${fold.toString(16)}${skirtLevel >= 0 ? `-sk${skirtLevel}` : ''}`;
     const cacheKey = heightDagCacheKey(cfg.seed >>> 0, gridN, suffix);
     let built: HeightDagResult | null = await getCachedHeightDag(cacheKey);
     if (built) {
@@ -912,15 +868,6 @@ export class StreamBrainCore {
     } else {
       this.nBakeInFlight++;
       try {
-        const sub = new Float32Array(vpa * vpa);
-        for (let gz = 0; gz <= gridN; gz++) {
-          const nz = Math.min(Math.max(t.tz0 + gz * t.strideTexels, cfg.latMin), cfg.latMax);
-          const srow = gz * vpa;
-          for (let gx = 0; gx <= gridN; gx++) {
-            const nx = Math.min(Math.max(t.tx0 + gx * t.strideTexels, cfg.latMin), cfg.latMax);
-            sub[srow + gx] = this.heightAtLattice(j, nx, nz);
-          }
-        }
         const hfArgs = {
           heights: sub,
           gridN,
@@ -951,27 +898,33 @@ export class StreamBrainCore {
         return 'overCap';
       }
     }
-    // remap tile-local grid coords → LOCAL texel coords (clamped to the lattice);
-    // word0 = gx(0-12) | skirt code(13-15) | gz(16-31), per-tile origin words map
-    // them to world. Identical world positions to the old global form (see header).
+    // remap tile-local grid coords → LOCAL coords in `packUnit`-texel units
+    // (clamped to the lattice); word0 = gx(0-12) | skirt code(13-15) | gz(16-31),
+    // per-tile origin/cellSize words map them to world. packUnit=1 on every data
+    // rung (identical world positions to the old global form); the S6f super
+    // rungs pack coarser units so gridN·stride at ANY level fits the 13-bit
+    // field — world pos is exact either way: origin + lx·(cell·packUnit).
+    let packUnit = 1;
+    while (gridN * t.strideTexels > 0x1fff * packUnit) packUnit *= 2;
     const gridVerts = new Uint32Array(built.gridVerts.length);
     for (let i = 0; i < built.gridVerts.length; i++) {
       const p = built.gridVerts[i] as number;
       const code = (p >>> 13) & 0x7;
-      const lx = Math.min(Math.max(t.tx0 + (p & 0x1fff) * t.strideTexels, cfg.latMin), cfg.latMax) - t.tx0;
-      const lz = Math.min(Math.max(t.tz0 + ((p >>> 16) & 0xffff) * t.strideTexels, cfg.latMin), cfg.latMax) - t.tz0;
+      const lx = Math.round((Math.min(Math.max(t.tx0 + (p & 0x1fff) * t.strideTexels, cfg.latMin), cfg.latMax) - t.tx0) / packUnit);
+      const lz = Math.round((Math.min(Math.max(t.tz0 + ((p >>> 16) & 0xffff) * t.strideTexels, cfg.latMin), cfg.latMax) - t.tz0) / packUnit);
       if (lx < 0 || lx > 0x1fff || lz < 0 || lz > 0xffff) throw new Error(`stream tile ${t.key}: local vert coord out of range (${lx},${lz})`);
       gridVerts[i] = ((lx & 0x1fff) | (code << 13) | ((lz & 0xffff) << 16)) >>> 0;
     }
     return {
       key: t.key,
+      slot: -1, // assigned by the caller (boot: index; refine: the reserved slot)
       gridVerts,
       indices: built.indices.slice(),
       clusterData: packClusters(built.clusters),
       clusterCount: built.clusters.length,
       originX: cfg.origin + t.tx0 * cfg.cell,
       originZ: cfg.origin + t.tz0 * cfg.cell,
-      cellSize: cfg.cell,
+      cellSize: cfg.cell * packUnit,
       x0: t.tx0,
       z0: t.tz0,
       size: t.tileTexels,
@@ -980,33 +933,23 @@ export class StreamBrainCore {
 
   // ---- node-probe surface (tools/probe-streambrain.ts) — test-only ------------------------
 
-  countersForProbe(): { scrolls: number; scrollsDeferred: number } {
-    return { scrolls: this.nScrolls, scrollsDeferred: this.nScrollsDeferred };
+  countersForProbe(): { scrolls: number } {
+    return { scrolls: this.nScrolls };
   }
-  probeAddResident(key: string, t: ResidentTile): void {
-    this.resident.set(key, t);
-  }
-  probeRemoveResident(key: string): void {
-    this.resident.delete(key);
+  residentCountForProbe(): number {
+    let n = 0;
+    this.tree.forEachResident(() => n++);
+    return n;
   }
 
   // ---- counters (F-9) ----------------------------------------------------------------------
 
   emitCounters(): void {
-    const perLevel: Record<string, number> = {};
-    for (const rt of this.resident.values()) {
-      const k = `stream.res.L${rt.level}`;
-      perLevel[k] = (perLevel[k] ?? 0) + 1;
-    }
     this.deps.emit({
       kind: 'counters',
       counters: {
-        'stream.tiles.resident': this.resident.size,
-        'stream.tiles.pending': this.pendingAttach.size,
-        'stream.tiles.loaded': this.nLoaded,
-        'stream.tiles.evicted': this.nEvicted,
-        'stream.tiles.skipped': this.nSkipped,
-        'stream.tiles.nacks': this.nNacks,
+        ...this.tree.counters(),
+        'stream.tiles.freeslots': this.tileFree.length,
         'stream.bake.cache': this.nCache,
         'stream.bake.built': this.nBuilt,
         'stream.bake.inflight': this.nBakeInFlight,
@@ -1015,10 +958,6 @@ export class StreamBrainCore {
         'stream.lru.mb': Math.round(this.lruBytes / 2 ** 20),
         'stream.ram.mb': Math.round(this.ramBytes() / 2 ** 20),
         'stream.scrolls': this.nScrolls,
-        'stream.scrolls.deferred': this.nScrollsDeferred,
-        'stream.teleports': this.nTeleports,
-        'stream.prefetched': this.nPrefetched,
-        ...perLevel,
       },
     });
   }

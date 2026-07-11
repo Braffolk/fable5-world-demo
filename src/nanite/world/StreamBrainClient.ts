@@ -8,8 +8,8 @@
  *    brain-side at S6 with NO behavior change beyond where the fetch runs);
  *  - drains the packet MAILBOX strictly FIFO under ONE token bucket (≤2 MB or
  *    ≤1.5 ms a frame across ALL upload classes — plane writeTexture fills,
- *    tile attaches, future instance/brick writes). FIFO IS the demote→scroll→
- *    promote transaction (F-8); the bucket always passes ≥1 packet a frame so
+ *    tile attaches, future instance/brick writes). FIFO IS the fill→origin→tile
+ *    transaction order (F-8); the bucket always passes ≥1 packet a frame so
  *    the stream can never stall.
  *  - allocates tile slots (registry state) and feeds attach acks/NACKs back —
  *    every POLICY decision (victim pick, retry, priorities) stays in the brain.
@@ -29,6 +29,7 @@ import type { GeometryRegistry } from './GeometryRegistry';
 import { planField, layerGeom, latticeWorld, chunkBox, type FieldPlan } from './PlaneFill';
 import { TerrainField } from './TerrainField';
 import type {
+  BootTile,
   BrainInitMsg,
   BrainLayerMeta,
   BrainToMain,
@@ -64,7 +65,8 @@ export interface BrainTileOpts {
 export interface BootTilesInfo {
   count: number;
   poolMax: { v: number; t: number; c: number };
-  maxTiles: number;
+  /** provisioned pool slot count (resident subtree + refinement headroom, §5) */
+  slots: number;
   levels: number;
   nCache: number;
   nBuilt: number;
@@ -82,11 +84,9 @@ export class StreamBrainClient {
   private band: InstanceBand | null = null;
   /** the FIFO mailbox — never reordered (F-8) */
   private readonly mailbox: StreamPacket[] = [];
-  /** tile key → pool slot (registry bookkeeping, not policy) */
-  private readonly slots = new Map<string, number>();
   private planesReadyResolve: ((ram: number) => void) | null = null;
   private bootTilesResolve: ((msg: BootTilesDoneMsg) => void) | null = null;
-  private bootTiles: TileGeometry[] = [];
+  private bootTiles: BootTile[] = [];
   private booting = true;
   private brainCounters: Record<string, number> = {};
   /** serial fetch service — the generated source's lazy GPU readbacks
@@ -247,7 +247,7 @@ export class StreamBrainClient {
         resolve({
           count: msg.tiles.length,
           poolMax: msg.poolMax,
-          maxTiles: msg.maxTiles,
+          slots: msg.slots,
           levels: msg.levels,
           nCache: msg.nCache,
           nBuilt: msg.nBuilt,
@@ -257,13 +257,14 @@ export class StreamBrainClient {
     });
   }
 
-  /** attach the boot ring into pool slots (post-registry-build, frame-1
-   *  terrain), ack each, then arm runtime streaming with the pool geometry. */
+  /** attach the boot resident subtree into its brain-assigned slots (post-
+   *  registry-build, frame-1 terrain): fringe leaves render, parked ancestors are
+   *  attached then PARKED (§4). Then arm runtime streaming with the pool geometry.  */
   attachBootTiles(reg: GeometryRegistry): void {
     this.reg = reg;
-    for (const tile of this.bootTiles) {
-      const ok = this.attachTile(tile);
-      this.post({ kind: 'attachAck', key: tile.key, ok });
+    for (const b of this.bootTiles) {
+      this.attachTile(b.tile);
+      if (!b.isLeaf) reg.parkTileSlot(b.tile.slot); // retained parent payload
     }
     this.bootTiles = [];
     const cap = reg.tilePoolCap;
@@ -330,37 +331,37 @@ export class StreamBrainClient {
       case 'planeOrigin':
         field.commitOrigin(p.plane, p.level, p.originX, p.originZ, p.phaseX, p.phaseY);
         break;
-      case 'attach': {
-        const ok = this.attachTile(p.tile);
-        this.post({ kind: 'attachAck', key: p.tile.key, ok });
+      // S6f tile TRANSACTIONS — each applies as ONE atomic drain step so a region
+      // is never seen at two LODs. The brain owns the slots; main is a pure applier.
+      case 'tileRefine': {
+        const reg = this.reg;
+        if (!reg) break;
+        reg.parkTileSlot(p.parkSlot); // retain the coarse parent payload (§4)
+        for (const child of p.children) this.attachTile(child); // ≤4 fine children
+        field.applyLevelGrid(p.levelGrid); // surface authority (§7)
         break;
       }
-      case 'evict': {
-        const slot = this.slots.get(p.key);
-        if (slot !== undefined && this.reg) {
-          this.reg.evictHeightDagTile(slot);
-          this.slots.delete(p.key);
-        }
+      case 'tileMerge': {
+        const reg = this.reg;
+        if (!reg) break;
+        reg.unparkTileSlot(p.unparkSlot); // restore the coarse parent (instant)
+        for (const slot of p.freeSlots) reg.evictHeightDagTile(slot); // drop the fine children
+        field.applyLevelGrid(p.levelGrid);
         break;
       }
     }
   }
 
-  /** alloc + attach one tile (per-tile origin words — F-3); false = pool dry
-   *  (the brain picks a victim and retries — policy stays brain-side). */
-  private attachTile(tile: TileGeometry): boolean {
+  /** attach one baked tile into its brain-assigned slot (per-tile origin words —
+   *  F-3; the brain owns slot allocation, so this never fails on a full pool). */
+  private attachTile(tile: TileGeometry): void {
     const reg = this.reg;
-    if (!reg) return false;
-    const existing = this.slots.get(tile.key);
-    const slot = existing ?? reg.allocTileSlot();
-    if (slot < 0) return false;
+    if (!reg) return;
     reg.attachHeightDagTile(
-      slot,
+      tile.slot,
       { gridVerts: tile.gridVerts, indices: tile.indices, clusters: unpackClusters(tile.clusterData, tile.clusterCount) },
       { originX: tile.originX, originZ: tile.originZ, cellSize: tile.cellSize },
     );
-    this.slots.set(tile.key, slot);
-    return true;
   }
 
   /** partial plane upload — writeTexture straight at the backing rect; if the

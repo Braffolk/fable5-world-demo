@@ -847,6 +847,12 @@ export class GeometryRegistry {
   private tileFreeSlots: number[] = [];
   /** handle resident in each slot, or -1 if free (parallel to the free-stack) */
   private tileSlotOccupant: Int32Array | null = null;
+  /** S6f: PARKED slots — the retained parent payload of a Split node. Draw is
+   *  killed (rootCount→0 ⇒ kSeedRoots skips it) but the slot + geometry stay
+   *  resident, so coarsening is an instant unpark. Maps slot → its true rootCount
+   *  (restored on unpark). Geometry/spheres stay truthful, so rebaseTilePoolOrigins
+   *  needs no special case. */
+  private tileSlotParkedRootCount = new Map<number, number>();
 
   /** S7 instance pool (SPEC-STREAMING-WORLD §5, A4): a FLAT reserved region of
    *  `capacity` instance slots pre-parked off-world at build() so the frozen cull
@@ -2142,10 +2148,19 @@ export class GeometryRegistry {
    * re-anchors both the transform and the cull in one write. Only CPU streams are
    * touched (GPU-scatter streams — generated veg — are written straight to the GPU
    * buffer and never rebase: the generated world holds StreamOrigin at (0,0)).
+   *
+   * EXCEPTION — heightfield tile instances are IDENTITY ANCHORS, not world-positioned:
+   * a terrain tile is placed by its mesh-record origin words (rebaseTilePoolOrigins
+   * shifts those) and its cluster/error spheres are stored world-space (the cull's
+   * isHF branch reads them directly, skipping instTransformPoint). Their A MUST stay
+   * (0,0,0,1). Shifting it makes the pOwn cut's ownC = instTransformPoint(A,ownSphere)
+   * land −StreamOrigin away (~366 km on Estonia) ⇒ denO huge ⇒ pOwn≈0 ⇒ the whole tile
+   * emits its ROOT and never descends (the 128 m single-cluster terrain bug). Skip them.
    */
   rebaseInstanceOrigins(dx: number, dz: number): void {
     if (dx === 0 && dz === 0 || !this.built) return;
     for (const s of this.cpuStreams) {
+      if (this.entries[s.meshId]?.hf) continue; // identity anchor — never origin-shift (see above)
       const count = s.a.length / 4;
       for (let i = 0; i < count; i++) {
         const d = (s.first + i) * 8;
@@ -2455,7 +2470,47 @@ export class GeometryRegistry {
     this.pushRange(this.meshAttr, handle * MESH_WORDS, MESH_WORDS);
     if (occ) occ[slot] = -1;
     this.tileFreeSlots.push(slot);
+    this.tileSlotParkedRootCount.delete(slot); // an evicted parked slot is no longer parked
     this._tileEpoch++; // S6d: terrain changed ⇒ shadow-clip levels re-raster (staggered)
+  }
+
+  /**
+   * S6f PARK: retain a slot's geometry but kill its draw — set rootCount→0 so
+   * kSeedRoots skips it (the same draw-kill evict uses, WITHOUT freeing the slot
+   * or clearing clusterCount/sphere). This is the parked parent payload of a
+   * Split node; `unparkTileSlot` restores the draw instantly (no bake). Cluster/
+   * mesh spheres stay truthful, so a StreamOrigin rebase shifts a parked slot
+   * exactly like a live one — no special case. Idempotent.
+   */
+  parkTileSlot(slot: number): void {
+    if (!this.built) throw new Error('GeometryRegistry: parkTileSlot before build()');
+    const pool = this.tilePool;
+    if (!pool) throw new Error('GeometryRegistry: no tile pool reserved');
+    if (slot < 0 || slot >= pool.slots) throw new Error(`GeometryRegistry: park tile slot ${slot} out of range`);
+    if (this.tileSlotParkedRootCount.has(slot)) return; // already parked
+    const entry = this.entries[this.tilePoolHandles[slot] as number] as MeshEntry;
+    this.tileSlotParkedRootCount.set(slot, entry.rootCount);
+    entry.rootCount = 0; // PERF-VB3: kSeedRoots skips rootCount==0 ⇒ emits nothing
+    this.writeMeshRecord(entry);
+    this.pushRange(this.meshAttr, (this.tilePoolHandles[slot] as number) * MESH_WORDS, MESH_WORDS);
+    this._tileEpoch++;
+  }
+
+  /** S6f UNPARK: restore a parked slot's draw (the retained parent payload) — an
+   *  O(1) rootCount rewrite, no bake. Idempotent on a non-parked slot. */
+  unparkTileSlot(slot: number): void {
+    if (!this.built) throw new Error('GeometryRegistry: unparkTileSlot before build()');
+    const pool = this.tilePool;
+    if (!pool) throw new Error('GeometryRegistry: no tile pool reserved');
+    if (slot < 0 || slot >= pool.slots) throw new Error(`GeometryRegistry: unpark tile slot ${slot} out of range`);
+    const saved = this.tileSlotParkedRootCount.get(slot);
+    if (saved === undefined) return; // not parked
+    const entry = this.entries[this.tilePoolHandles[slot] as number] as MeshEntry;
+    entry.rootCount = saved;
+    this.tileSlotParkedRootCount.delete(slot);
+    this.writeMeshRecord(entry);
+    this.pushRange(this.meshAttr, (this.tilePoolHandles[slot] as number) * MESH_WORDS, MESH_WORDS);
+    this._tileEpoch++;
   }
 
   /** post-build backing arrays + attributes (probe/validation use only) */
