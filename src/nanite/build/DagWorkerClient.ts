@@ -18,7 +18,7 @@ import type {
 } from './DagWorkerTypes';
 import type { HeightDagOpts } from './BuildHeightGrid';
 import type { DagBuild } from './BuildDag';
-import type { PackedPreparedCrown } from '../world/BootCache';
+import type { PackedPreparedCrown } from './CrownPack';
 import type { RockMesh } from '../../vegetation/RockGen';
 
 export interface HeightDagResult {

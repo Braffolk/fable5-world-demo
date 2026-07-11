@@ -39,13 +39,9 @@ import { type DagBuild, type DagCluster, buildDag, meshletizeDag } from '../buil
 import { setAggLodErrorK } from '../build/BuildAggregateDag';
 import { type CrownLodLevelMesh, buildCrownLodDag, crownLodOwnErrors } from '../build/BuildCrownLodDag';
 import { BootTrace, yieldIfDue } from '../../debug/BootTrace';
-import {
-  BootCache,
-  type PackedFarTile,
-  packFarTiles,
-  packPreparedCrown,
-  type PackedPreparedCrown,
-} from './BootCache';
+import { BootCache } from './BootCache';
+import { packPreparedCrown, type PackedPreparedCrown } from '../build/CrownPack';
+import { packFarTiles, type PackedFarTile } from './FarTilesCore';
 import { appendPackedFarTiles, buildFarTilesAsync, FT_TILE_SIZE, type FarTileSpecies } from './FarTiles';
 import { clusterFill, setClusterFill } from '../build/Clusterize';
 import { DagBuildWorker, DagWorkerPool, type DagBuilder, type HeightDagResult } from '../build/DagWorkerClient';

@@ -7,7 +7,7 @@
  */
 import type { DagBuild, DagCluster, DagOpts } from './BuildDag';
 import type { AggregateDagOpts } from './BuildAggregateDag';
-import type { PackedPreparedCrown } from '../world/BootCache';
+import type { PackedPreparedCrown } from './CrownPack';
 import type { HeightDagOpts, HeightDagStats } from './BuildHeightGrid';
 import type { RockArchetype, RockMesh, RockMod } from '../../vegetation/RockGen';
 

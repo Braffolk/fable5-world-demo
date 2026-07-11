@@ -18,15 +18,14 @@
  *  - `?nocache=1` bypasses (build path untouched); `?cacheclear=1` purges then rebuilds.
  *  - GATE for any change here: byte-identical first-frame shot cold vs warm.
  */
-import type { CrownVoxelization, PreparedVoxelCrown, VoxelLevel, VoxelBlock } from '../build/VoxelizeCrown';
-import type { FarTileBuild } from './FarTiles';
-import { BRICK_WORDS, readBrick, writeBrick } from '../voxel/VoxelBrickCore';
 // builder sources — hashed into the cache key (auto-invalidation on edit)
 import srcVoxelize from '../build/VoxelizeCrown.ts?raw';
 import srcBuildDag from '../build/BuildDag.ts?raw';
 import srcBuildAgg from '../build/BuildAggregateDag.ts?raw';
 import srcBuildCrownLod from '../build/BuildCrownLodDag.ts?raw';
+import srcCrownPack from '../build/CrownPack.ts?raw';
 import srcFarTiles from './FarTiles.ts?raw';
+import srcFarTilesCore from './FarTilesCore.ts?raw';
 import srcFarTilesSplat from './FarTilesSplat.ts?raw';
 import srcVoxelBrick from '../voxel/VoxelBrick.ts?raw';
 import srcVoxelBrickCore from '../voxel/VoxelBrickCore.ts?raw';
@@ -86,7 +85,7 @@ function fnv1a(s: string, h = 0x811c9dc5): number {
   return h >>> 0;
 }
 
-const SRC_HASH = [srcVoxelize, srcBuildDag, srcBuildAgg, srcBuildCrownLod, srcFarTiles, srcFarTilesSplat, srcVoxelBrick, srcVoxelBrickCore, srcClusterize, srcTreeBuilder, srcLeafMesh, srcRockGen]
+const SRC_HASH = [srcVoxelize, srcBuildDag, srcBuildAgg, srcBuildCrownLod, srcCrownPack, srcFarTiles, srcFarTilesCore, srcFarTilesSplat, srcVoxelBrick, srcVoxelBrickCore, srcClusterize, srcTreeBuilder, srcLeafMesh, srcRockGen]
   .reduce((h, s) => fnv1a(s, h), 0x811c9dc5)
   .toString(16);
 
@@ -233,150 +232,7 @@ export class BootCache {
   }
 }
 
-// ── CrownVoxelization compact pack ────────────────────────────────────────────
-// BrickCPU → BRICK_WORDS (9) × u32 GPU words per occupied brick (the SAME record the
-// append path copies straight into gpu.voxelBricks — writeBrick codec). Only OCCUPIED
-// bricks are stored; unpack leaves empty grid slots as holes (append paths never read
-// them). 36 B/brick vs the old 108 B (2×u32 + 12×f64) — cuts the fartile pack from
-// ~866 MB to ~288 MB and lets appendPackedCrown skip per-brick BrickCPU objects.
-// "Lossless enough": the words ARE what the GPU renders (byte-identical to a fresh
-// build's writeBrick output); only build-time intermediates (fartile splat INPUT)
-// see oct-normal / rgba8-albedo quantization — a cold-only, >280 m far-field effect.
-
-interface PackedGrid {
-  occupied: Uint32Array;
-  words: Uint32Array; // BRICK_WORDS per brick — gpu.voxelBricks record, occupied[] order
-  totalBricks: number;
-}
-
-export interface PackedLevel extends PackedGrid {
-  level: number;
-  brickGrid: { x: number; y: number; z: number };
-  cellSize: number;
-  geomError: number;
-  blocks: VoxelBlock[]; // plain data (Sphere = plain xyzr) — structured clone handles it
-}
-
-interface PackedVox {
-  grid: PackedGrid;
-  brickGrid: CrownVoxelization['brickGrid'];
-  cellGrid: CrownVoxelization['cellGrid'];
-  origin: CrownVoxelization['origin'];
-  cellSize: number;
-  stats: CrownVoxelization['stats'];
-  levels?: PackedLevel[];
-}
-
-export interface PackedPreparedCrown {
-  vox: PackedVox;
-  brickCount: number;
-  clusterCount: number;
-  dagLinkCount: number;
-}
-
-export interface PackedFarTile {
-  center: [number, number, number];
-  prep: PackedPreparedCrown;
-}
-
-type BrickList = CrownVoxelization['bricks'];
-
-function packGrid(bricks: BrickList, occupied: number[]): PackedGrid {
-  const n = occupied.length;
-  const occ = new Uint32Array(occupied);
-  const words = new Uint32Array(n * BRICK_WORDS);
-  for (let i = 0; i < n; i++) {
-    const b = bricks[occ[i] as number];
-    if (!b) throw new Error('bootcache: occupied index out of range');
-    writeBrick(words, i, b);
-  }
-  return { occupied: occ, words, totalBricks: bricks.length };
-}
-
-/** reconstruct a SPARSE BrickCPU grid from the packed words (holes for empty slots).
- *  Compat path — the world append reads `words` directly (appendPackedCrown); this is
- *  for ForestScene's BrickCPU appendVoxelCrown + probes. Values are word-precision
- *  (oct-normal / rgba8-albedo) = exactly what a fresh build's writeBrick emits. */
-function unpackGrid(p: PackedGrid): { bricks: BrickList; occupied: number[] } {
-  const bricks: BrickList = new Array(p.totalBricks);
-  const occupied: number[] = new Array(p.occupied.length);
-  for (let i = 0; i < p.occupied.length; i++) {
-    const bi = p.occupied[i] as number;
-    occupied[i] = bi;
-    bricks[bi] = readBrick(p.words, i);
-  }
-  return { bricks, occupied };
-}
-
-function packVox(vox: CrownVoxelization): PackedVox {
-  return {
-    grid: packGrid(vox.bricks, vox.occupied),
-    brickGrid: vox.brickGrid,
-    cellGrid: vox.cellGrid,
-    origin: vox.origin,
-    cellSize: vox.cellSize,
-    stats: vox.stats,
-    levels: vox.levels?.map((l) => ({
-      ...packGrid(l.bricks, l.occupied),
-      level: l.level,
-      brickGrid: l.brickGrid,
-      cellSize: l.cellSize,
-      geomError: l.geomError,
-      blocks: l.blocks,
-    })),
-  };
-}
-
-function unpackVox(p: PackedVox): CrownVoxelization {
-  const g = unpackGrid(p.grid);
-  const levels: VoxelLevel[] | undefined = p.levels?.map((l) => {
-    const lg = unpackGrid(l);
-    return {
-      level: l.level,
-      bricks: lg.bricks,
-      occupied: lg.occupied,
-      brickGrid: l.brickGrid,
-      cellSize: l.cellSize,
-      geomError: l.geomError,
-      blocks: l.blocks,
-    };
-  });
-  const out: CrownVoxelization = {
-    bricks: g.bricks,
-    occupied: g.occupied,
-    brickGrid: p.brickGrid,
-    cellGrid: p.cellGrid,
-    origin: p.origin,
-    cellSize: p.cellSize,
-    stats: p.stats,
-  };
-  if (levels) out.levels = levels;
-  return out;
-}
-
-export function packPreparedCrown(prep: PreparedVoxelCrown): PackedPreparedCrown {
-  return {
-    vox: packVox(prep.vox),
-    brickCount: prep.brickCount,
-    clusterCount: prep.clusterCount,
-    dagLinkCount: prep.dagLinkCount,
-  };
-}
-
-export function unpackPreparedCrown(p: PackedPreparedCrown): PreparedVoxelCrown {
-  return {
-    vox: unpackVox(p.vox),
-    brickCount: p.brickCount,
-    clusterCount: p.clusterCount,
-    dagLinkCount: p.dagLinkCount,
-  };
-}
-
-export function packFarTiles(tiles: FarTileBuild[]): PackedFarTile[] {
-  return tiles.map((t) => ({ center: t.center, prep: packPreparedCrown(t.prep) }));
-}
-
-export function unpackFarTiles(packed: PackedFarTile[]): FarTileBuild[] {
-  return packed.map((t) => ({ center: t.center, prep: unpackPreparedCrown(t.prep) }));
-}
+// The CrownVoxelization compact pack codec (PackedPreparedCrown / PackedFarTile)
+// moved to src/nanite/build/CrownPack.ts + FarTilesCore.packFarTiles (S8 — three-free,
+// worker-importable); BootCache stores those packed values opaquely.
 

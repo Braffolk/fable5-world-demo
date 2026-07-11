@@ -47,7 +47,7 @@ import {
   MAX_BRICKS_PER_CLUSTER,
   writeBrick,
 } from '../voxel/VoxelBrickCore';
-import type { PackedLevel, PackedPreparedCrown } from '../world/BootCache';
+import type { PackedLevel, PackedPreparedCrown } from './CrownPack';
 
 /** voxlod: number of MIP-pyramid levels (L0 finest … coarsest), each level 2x coarser (bricks 2x
  *  wider, the brick grid halved per axis). DEFAULT 7 = ceil(log2(maxDist/transitionDist))+1, the

@@ -21,7 +21,7 @@ import { buildHeightGrid } from './BuildHeightGrid';
 import { buildDag } from './BuildDag';
 import { buildAggregateDag, setAggLodErrorK } from './BuildAggregateDag';
 import { setClusterFill } from './Clusterize';
-import { packPreparedCrown } from '../world/BootCache';
+import { packPreparedCrown } from './CrownPack';
 import { prepareVoxelCrown, setVoxOccThreshold, setVoxlodConfig } from './VoxelizeCrown';
 import { generateRock } from '../../vegetation/RockGen';
 import type { ExplicitSource } from '../world/GeometryRegistry';

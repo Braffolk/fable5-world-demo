@@ -27,15 +27,13 @@ import {
   explicitToDagVerts,
 } from '../nanite/world/GeometryRegistry';
 import { type DagBuild, buildDag, meshletizeDag } from '../nanite/build/BuildDag';
+import { BootCache } from '../nanite/world/BootCache';
 import {
-  BootCache,
   type PackedPreparedCrown,
-  type PackedFarTile,
   packPreparedCrown,
   unpackPreparedCrown,
-  packFarTiles,
-  unpackFarTiles,
-} from '../nanite/world/BootCache';
+} from '../nanite/build/CrownPack';
+import { type PackedFarTile, packFarTiles, unpackFarTiles } from '../nanite/world/FarTilesCore';
 import { buildAggregateDag } from '../nanite/build/BuildAggregateDag';
 import {
   appendFarTiles,
