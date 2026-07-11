@@ -6,11 +6,13 @@ review of `?src=estonia` on :5180. Source specs (design, still valid): `SPEC-STR
 `docs/world/streaming-integration-plan.md`. This doc tracks the *current* task queue + status so the
 plan lives in the repo, not only in session memory.
 
-**Status snapshot (2026-07-12):** HEAD `fe6ae0b`; data manifest `m/843ed7c85cc1370b` (cook_rev 3,
+**Status snapshot (2026-07-12):** HEAD `cdc3146`; data manifest `m/843ed7c85cc1370b` (cook_rev 3,
 whole-country coarse biome). Canonical test URL (hard-reload after a manifest change):
 `http://localhost:5180/?scene=world&src=estonia&dataurl=http://localhost:8787`. Generated-world
-determinism baseline: scatter `veg.trees 188724 / under 495241 / extras 25131 / stones 453230`;
-`nanite.inst 1323569` (rebaselined from 1320241 at #109 — the fartile pool parks one instance/slot).
+determinism baseline: scatter `veg.trees 188724 / under 495241 / extras 25131 / stones 453230`
+(scatter is INVARIANT — always assert these); `nanite.inst 1611536` (rebaselined: 1320241 → 1323569
+at #109 fartile pool parks one inst/slot → 1611536 at #105 each shrub binds a co-located leaf inst);
+`nanite.meshes 11681`.
 
 Laws (binding on every slice; also `docs/tasks/2026-07-10/` specs + memory): never fake data
 (esp. water depth, landcover); geometric only — no billboards/noise/dither/systemic-knob tricks;
@@ -30,7 +32,8 @@ PASS before commit; go up a level on any negative result.
 | 107 | Default spawn → Taevaskoja river cliffs (game 311123, 190723) | ✅ DONE | `37b975b` (user-confirmed pos) |
 | 108 | Far terrain = dirt beyond pilot → whole-country coarse biome material | ✅ DONE | `c1b9538` (runtime) + asset-gen cook_rev 3. Runtime: biome/canopy country-floor (generalized `ensureFloorCoversBox`) + un-gate dead `inp.far`. Asset-gen: whole-country coarse vegDensity from ETAK landcover. Canopy HEIGHT stays honestly pilot-only (no whole-country CHM). |
 | 109 | Far voxel-tree fartiles have HOLES | ✅ DONE | `fe6ae0b`. Slot-pool exhaustion (grade never coarsens tileSize → far cells cost 64 slots each; ceiling 8000 < ring's ~10.8k) + slot leak. Fix: ring-arithmetic `ftSlots 11328` + `clusterCap 64→44` (peak 38) + reserve-whole-cell-or-defer. Net −0.76 MB. Steady-state holes gone (user-confirmed); **transient in-motion holes at fly-speed remain** → the deeper `tileSizes[grade]` ladder (surfaced, not scheduled). |
-| 105 | Understory shrubs/ferns render as leafless STEMS → real foliage meshes | 🔄 IN FLIGHT | give shrubs/ferns geometric leaf/frond crowns (missing-leaves TODO). Debris "sticks" are correct, not this. |
+| 105 | Understory SHRUBS render as leafless STEMS → real foliage meshes | ✅ DONE | `cdc3146`. `buildShrub` called `buildTree` without `foliageMode:'mesh'` → crown never built (specs existed, unconsumed; card layer deleted in S8). Fix: shrubs get the same co-located leaf head trees use (scoped to understory, voxel crown trees-only). Cost: nanite.inst +288k (co-located leaf per shrub), +14 MB (0.77%), ~-3% fps at dense-forest worst pose. Debris "sticks" are correct, not this. |
+| 113 | Understory FERNS + FLOWERS absent (no pool since S8) → restore | ⏳ QUEUED | surfaced at #105: ferns/flowers were 100% card geometry deleted in S8, have NO pool (invisible, not stems). Larger slice: new `VegClass.Fern` pool + frond mesh builder (pure-crown, no bark head → 'leaf'-class-only registration) + flowers. Understory completeness. |
 | 110 | Tree SIZING: uniform scale-multiply looks weird → age/height-dependent variants | ⏳ QUEUED (next) | replace raw scale multiply with age-stage variant forms (young slender/low-variance → old tall/high-variance) + bounded jitter; keep variant/instance count ~similar (slight increase, NOT a variant explosion). asset-gen already carries per-tree scale + variant. Visual-correctness bug → ahead of Phase R. **RESEARCH-FIRST (user law):** agent researches REAL reference (pics + forestry growth-form per species/age) and writes a reference spec BEFORE params — never guess silhouettes. |
 | 104 | Water bathymetry: bed coplanar w/ terrain (z-fight); needs REAL depth | ⏳ QUEUED | **USER DECISION = option C** (physics + real banks: ETAK width/type hydraulic-geometry + LiDAR bank wedge for ungauged rivers/lakes; real gridded bathymetry — Maa-amet HIS / EMODnet / BSBD sea, TLU/KAUR lakes — where it exists; NEVER fake). Research done. Pre-cook groundwork: confirm Maa-amet download packaging + datum offset, KAUR lake-raster download path, pin EE width→depth coefficients. Split: asset-gen depth-layer cook + runtime submerged-bed draw. |
 
