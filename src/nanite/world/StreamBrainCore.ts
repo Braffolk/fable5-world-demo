@@ -35,6 +35,7 @@ import { packChunkKey } from '../../world/source/Lac1';
 import type { ChunkKey, ChunkPayload, LayerName } from '../../world/source/WorldSource';
 import type { ClipmapConfig, ClipmapTile } from './TerrainClipmap';
 import { PartitionTree, type BakeReq, type MergePacket, type QuadDesc, type RefinePacket, type TreeConfig } from './PartitionTree';
+import { FartileBand } from './FartileBand';
 import {
   BIOME_CHANNELS,
   CANOPY_CHANNELS,
@@ -56,6 +57,7 @@ import type {
   BrainInitMsg,
   BrainLayerMeta,
   BrainToMain,
+  FtArmMsg,
   PlaneKind,
   PoolInfoMsg,
   StreamPacket,
@@ -123,6 +125,9 @@ export class StreamBrainCore {
   private bootSlotCount = 0;
   private pool: PoolInfoMsg | null = null;
   private busy = false;
+  /** S8: runtime far-tile residency (armed post-registry-build via ftArm). Null until
+   *  armed (and on a source with no tree layer / fartiles disabled). */
+  private ftBand: FartileBand | null = null;
   private pendingPose: { x: number; z: number; vx: number; vz: number } | null = null;
   private havePose = false;
   private lastX = 0;
@@ -433,6 +438,24 @@ export class StreamBrainCore {
     this.bootTicks = 2 * this.cfg.levels;
   }
 
+  /** S8: arm the runtime far-tile band with the library crown pools + pool geometry
+   *  (main sends ftArm post-registry-build). The band owns per-cell residency + the
+   *  splat/emit/pyramid (this worker thread) + slot/granule free-lists; it emits
+   *  ftAttach/ftEvict onto the SAME FIFO mailbox the tile transactions ride. */
+  armFartiles(msg: FtArmMsg): void {
+    const g = this.grid;
+    this.ftBand = new FartileBand({
+      fetch: (layer, key) => this.fetchChunk(layer, key),
+      emit: (packet, transfer) => this.deps.emit({ kind: 'packets', packets: [packet] }, transfer),
+      treesExist: (cx, cz) => this.chunkExists('trees', { lod: 0, cx, cz }),
+      grid: { originX: g.originX, originZ: g.originZ, chunkMeters: g.chunkMeters },
+      // macrotask yield so a long cell bake never starves incoming pose/teleport
+      // messages (the far forest streams in progressively — the demand law).
+      yield: () => new Promise((r) => setTimeout(r, 0)),
+    });
+    this.ftBand.arm(msg);
+  }
+
   poolInfo(msg: PoolInfoMsg): void {
     this.pool = msg;
     // the brain owns the free-list: boot claimed [0..bootSlotCount); the rest is
@@ -467,6 +490,9 @@ export class StreamBrainCore {
           this.tree.tick(this.latX(p.x), this.latZ(p.z), MAX_LOADS_PER_DIFF, this.bootTicks > 0);
           if (this.bootTicks > 0) this.bootTicks--;
         }
+        // S8: drive the far-tile ring residency off the SAME pose (world meters);
+        // its bakes are fire-and-forget, emitting ftAttach/ftEvict as they land.
+        this.ftBand?.pose(p.x, p.z);
       }
     } catch (e) {
       this.deps.emit({ kind: 'log', level: 'error', msg: `stream brain tick: ${e instanceof Error ? e.message : String(e)}` });
@@ -958,6 +984,7 @@ export class StreamBrainCore {
         'stream.lru.mb': Math.round(this.lruBytes / 2 ** 20),
         'stream.ram.mb': Math.round(this.ramBytes() / 2 ** 20),
         'stream.scrolls': this.nScrolls,
+        ...(this.ftBand ? this.ftBand.counters() : {}),
       },
     });
   }

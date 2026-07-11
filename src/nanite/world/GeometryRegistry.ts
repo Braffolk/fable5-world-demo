@@ -44,7 +44,7 @@ import { StorageBufferAttribute } from 'three/webgpu';
 import type { NF, NU, NV2, NV3, NV4 } from '../../gpu/TSLTypes';
 import type { DagBuild, DagCluster } from '../build/BuildDag';
 import { buildDagHierarchy, buildHeightGridHierarchy, maxChainDepth } from '../build/DagHierarchy';
-import { BRICK_WORDS, octDecode, octEncode } from '../voxel/VoxelBrickCore';
+import { BRICK_WORDS, brickCenterHalf, octDecode, octEncode } from '../voxel/VoxelBrickCore';
 import { type BuiltClusters, type ClusterStats, clusterize } from '../build/Clusterize';
 import {
   type BufOf,
@@ -1030,11 +1030,18 @@ export class GeometryRegistry {
    */
   appendBricks(count: number, fill: (bricks: Uint32Array, base: number) => void): number {
     if (!this.built) throw new Error('GeometryRegistry: appendBricks before build()');
+    // F-5: post-release, three's upload path for this buffer is dead BY DESIGN — the
+    // only legal writes are the fartile pool's writeBuffer-direct path. A late append
+    // here would silently write into a null mirror.
+    if (this.mirrorsReleased) throw new Error('GeometryRegistry: appendBricks after releaseImmutableMirrors — the library brick region is frozen');
     if (count <= 0) return this.brickCursor;
-    if (this.brickCursor + count > this.brickCap) {
+    // S8: the fartile brick pool is a TAIL region of this buffer — library appends
+    // grow upward and must never cross into it.
+    const libCap = this.ftPool ? this.ftPoolBase.brick : this.brickCap;
+    if (this.brickCursor + count > libCap) {
       throw new Error(
-        `GeometryRegistry: voxel brick capacity exceeded (${this.brickCursor}+${count}/${this.brickCap}) — ` +
-          `raise the late.bricks budget`,
+        `GeometryRegistry: voxel brick capacity exceeded (${this.brickCursor}+${count}/${libCap}` +
+          `${this.ftPool ? ` library region; fartile pool tail holds ${this.brickCap - libCap}` : ''}) — raise the late.bricks budget`,
       );
     }
     const base = this.brickCursor;
@@ -1491,6 +1498,28 @@ export class GeometryRegistry {
       this.tileFreeSlots = [];
       for (let s = this.tilePool.slots - 1; s >= 0; s--) this.tileFreeSlots.push(s);
       this.tileSlotOccupant = new Int32Array(this.tilePool.slots).fill(-1);
+    }
+
+    // S8: claim the FARTILE pool — cluster/dagLinks as one fixed region past the
+    // pre-build entries (like the tile pool), bricks as the TAIL of the brick buffer
+    // (library crowns append upward from brickCursor; appendBricks guards the floor).
+    // Per-slot bases are assigned here once; attachFartileSlot rewrites in place.
+    if (this.ftPool) {
+      const p = this.ftPool;
+      const totalCap = p.slots * p.clusterCap;
+      this.ftPoolBase = {
+        cluster: this.clusterCursor,
+        dagLinks: this.dagLinksCursor, // linkTotal == clusterCount exactly (roots + one parent link per non-root)
+        brick: this.brickCap - p.granules * 128,
+      };
+      this.clusterCursor += totalCap;
+      this.dagLinksCursor += totalCap;
+      if (this.ftPoolBase.brick < 0) throw new Error('GeometryRegistry: fartile granule pool exceeds the brick buffer');
+      for (let s = 0; s < p.slots; s++) {
+        const e = this.entries[this.ftPoolHandles[s] as number] as MeshEntry;
+        e.clusterBase = this.ftSlotClusterBase(s);
+        e.rootBase = this.ftPoolBase.dagLinks + (e.clusterBase - this.ftPoolBase.cluster);
+      }
     }
 
     for (const e of this.entries) this.copyEntry(e);
@@ -2511,6 +2540,282 @@ export class GeometryRegistry {
     this.writeMeshRecord(entry);
     this.pushRange(this.meshAttr, (this.tilePoolHandles[slot] as number) * MESH_WORDS, MESH_WORDS);
     this._tileEpoch++;
+  }
+
+  // ---- S8 FARTILE POOL (SPEC §5 A2/F-2) — streamed far-forest voxel heads --------------
+  //
+  // A fixed pool of parked 'voxel' mesh entries (one per 64 m tile slot, two calibrated
+  // classes: FINE near-band tiles / COARSE far tiles) + a granule pool of 128-brick
+  // blocks at the TAIL of the existing brick mega-buffer. Each voxel CLUSTER addresses
+  // its own contiguous ≤128-brick range (word6 brickBase is absolute), so a tile's
+  // bricks need NO cross-cluster contiguity: granules ≡ clusters, zero fragmentation.
+  // The BRAIN owns all free-lists (single residency authority; throw-loud dry) — main
+  // is a pure applier: attach writes the slot's cluster/DAG/dagLinks records through
+  // the LIVE mirrors (never released) and the brick words writeBuffer-DIRECT (the
+  // brick mirror IS released; F-5 guards appendBricks), then points the slot's
+  // identity instance at the tile center (StreamOrigin-relative; rebase shifts it
+  // through the normal non-hf cpuStream path).
+
+  private ftPool: { slots: number; clusterCap: number; granules: number } | null = null;
+  private ftPoolHandles: MeshHandle[] = [];
+  private ftPoolInstFirst: number[] = [];
+  private ftPoolBase = { cluster: 0, dagLinks: 0, brick: 0 };
+  private ftSlotLive: Uint8Array | null = null;
+
+  private ftSlotClusterBase(slot: number): number {
+    return this.ftPoolBase.cluster + slot * (this.ftPool as NonNullable<typeof this.ftPool>).clusterCap;
+  }
+
+  /** the pool geometry the brain arms its free-lists from. */
+  get fartilePoolInfo(): { slots: number; clusterCap: number; granules: number } {
+    const p = this.ftPool;
+    if (!p) throw new Error('GeometryRegistry: no fartile pool reserved');
+    return { slots: p.slots, clusterCap: p.clusterCap, granules: p.granules };
+  }
+
+  /**
+   * Reserve the fartile pool BEFORE build(): one parked voxel entry + one parked
+   * identity instance per slot; cluster/dagLinks regions + the brick-tail granule
+   * pool via addLate. Ceilings are logged by the caller (no-VRAM-hogs law).
+   */
+  reserveFartilePool(
+    cap: { slots: number; clusterCap: number; granules: number },
+    opts: { tint: number; nearDist: number },
+  ): void {
+    if (this.built) throw new Error('GeometryRegistry: reserveFartilePool after build()');
+    if (this.ftPool) throw new Error('GeometryRegistry: fartile pool already reserved');
+    const total = cap.slots;
+    if (total <= 0 || cap.clusterCap <= 0 || cap.granules <= 0) {
+      throw new Error('GeometryRegistry: reserveFartilePool caps must be positive');
+    }
+    this.ftPool = { ...cap };
+    this.ftSlotLive = new Uint8Array(total);
+    for (let s = 0; s < total; s++) {
+      const handle = this.entries.length;
+      if (handle >= 0xffff) throw new Error('GeometryRegistry: mesh id exceeds u16 (fartile pool too large)');
+      const entry = this.newEntry(handle, 'voxel', {
+        transformChannel: 'leaf',
+        castShadows: false,
+        twoSided: true,
+        aggregate: true,
+        matParam: opts.tint,
+        swayPad: 0,
+        label: `fartile/${s}`,
+      }, false, 0);
+      entry.flags |= MESH_FLAG_FARTILE;
+      entry.nearDist = opts.nearDist;
+      entry.lodDist = 100000; // maxDist — the tile head owns the far field outright
+      entry.sphere = [TILE_EVICTED_FAR, TILE_EVICTED_FAR, TILE_EVICTED_FAR, 0];
+      this.entries.push(entry);
+      this.ftPoolHandles.push(handle);
+      this.ftPoolInstFirst.push(this.instCursor);
+      this.bindInstances(handle, {
+        a: new Float32Array([0, GeometryRegistry.INST_PARK_Y, 0, 0]),
+        b: new Float32Array([0, 0, 0, 0]),
+      });
+    }
+    this.addLate({ clusters: cap.slots * cap.clusterCap, bricks: cap.granules * 128 });
+    // fartile pyramids chain ≤ the crown voxlod depth (7) — grow pre-freeze so a
+    // runtime attach can never out-deepen the frozen cull pass count (the attach
+    // still folds its REAL chain depth, throw-loud, as the architectural guard).
+    this.growDagDepth(7);
+  }
+
+  /**
+   * Attach one baked fartile into a pool slot (post-build; runtime path). `packed`
+   * = the tile's pyramid in CrownPack words form; `granules` = one granule id per
+   * BLOCK (brain-reserved; brickBase = poolBrickBase + gid·128). Overwrites the
+   * slot's cluster/DAG/dagLinks records + mesh record + identity instance in place.
+   */
+  attachFartileSlot(
+    slot: number,
+    packed: { vox: { levels?: { words: Uint32Array; occupied: Uint32Array; cellSize: number; blocks: { start: number; count: number; ownError: number; parentError: number; own: { x: number; y: number; z: number; r: number }; parent: { x: number; y: number; z: number; r: number } | null; childBlocks: number[] }[] }[] } },
+    center: [number, number, number],
+    granules: Uint32Array,
+    renderer: Renderer | null,
+  ): void {
+    if (!this.built) throw new Error('GeometryRegistry: attachFartileSlot before build()');
+    const pool = this.ftPool;
+    if (!pool || !this.ftSlotLive) throw new Error('GeometryRegistry: no fartile pool reserved');
+    if (slot < 0 || slot >= pool.slots) throw new Error(`GeometryRegistry: fartile slot ${slot} out of range`);
+    const levels = packed.vox.levels;
+    if (!levels || levels.length === 0) throw new Error('GeometryRegistry: fartile attach without pyramid levels');
+    const handle = this.ftPoolHandles[slot] as number;
+    const entry = this.entries[handle] as MeshEntry;
+    const cBase = this.ftSlotClusterBase(slot);
+    const dlBase = entry.rootBase; // slot's fixed dagLinks region (assigned at build)
+    const cap = pool.clusterCap;
+
+    // flatten blocks across levels → global block index; count clusters
+    let n = 0;
+    for (const l of levels) n += l.blocks.length;
+    if (n === 0) throw new Error('GeometryRegistry: fartile attach with zero blocks');
+    if (n > cap) throw new Error(`GeometryRegistry: fartile tile ${n} clusters > slot cap ${cap} (brain must pre-check)`);
+    if (granules.length !== n) throw new Error(`GeometryRegistry: fartile granules ${granules.length} != blocks ${n}`);
+
+    // brick words per block → granule bases (mirror pre-release, writeBuffer after)
+    const brickWrite = this.ftBrickWriter(renderer);
+    const globalOf: number[][] = levels.map(() => []);
+    let g = 0;
+    for (let L = 0; L < levels.length; L++) {
+      const bl = (levels[L] as { blocks: unknown[] }).blocks;
+      for (let bi = 0; bi < bl.length; bi++) globalOf[L]![bi] = g++;
+    }
+    const coarsest = levels.length - 1;
+    const cArr = this.clusterArr;
+    const dArr = this.dagArr;
+    const dl = this.dagLinksArr;
+    // roots = coarsest level's blocks; children flat-concat per block (same layout
+    // as registerVoxelHead: [roots…][children…], childBase absolute into dagLinks)
+    const rootIdx: number[] = [];
+    for (let bi = 0; bi < (levels[coarsest] as { blocks: unknown[] }).blocks.length; bi++) {
+      rootIdx.push(globalOf[coarsest]![bi] as number);
+    }
+    const rootCount = rootIdx.length;
+    let linkTotal = rootCount;
+    for (const l of levels) for (const blk of l.blocks) linkTotal += blk.childBlocks.length;
+    if (linkTotal > cap) throw new Error(`GeometryRegistry: fartile dagLinks ${linkTotal} > slot cap ${cap}`);
+    for (let i = 0; i < rootCount; i++) dl[dlBase + i] = cBase + (rootIdx[i] as number);
+    let childCursor = dlBase + rootCount;
+
+    let uMinX = Infinity, uMinY = Infinity, uMinZ = Infinity;
+    let uMaxX = -Infinity, uMaxY = -Infinity, uMaxZ = -Infinity;
+    // local hierarchy for the REAL chain-depth fold (throw-loud vs frozen hierDepth)
+    const lcStart = new Uint32Array(n);
+    const lcCount = new Uint32Array(n);
+    const lcIdx: number[] = [];
+    for (let L = 0; L < levels.length; L++) {
+      const lvl = levels[L] as NonNullable<typeof levels>[number];
+      for (let bi = 0; bi < lvl.blocks.length; bi++) {
+        const blk = lvl.blocks[bi] as (typeof lvl.blocks)[number];
+        const c = globalOf[L]![bi] as number;
+        const gid = granules[c] as number;
+        if (gid >= pool.granules) throw new Error(`GeometryRegistry: fartile granule ${gid} out of range`);
+        const brickBase = this.ftPoolBase.brick + gid * 128;
+        if (blk.count > 128) throw new Error(`GeometryRegistry: fartile block ${blk.count} bricks > granule 128`);
+        brickWrite(lvl.words.subarray(blk.start * BRICK_WORDS, (blk.start + blk.count) * BRICK_WORDS), brickBase);
+        // per-block AABB from the packed brick centers/halves (f32 — same as appendPackedCrown)
+        let mnX = Infinity, mnY = Infinity, mnZ = Infinity, mxX = -Infinity, mxY = -Infinity, mxZ = -Infinity;
+        for (let i = 0; i < blk.count; i++) {
+          const [bcx, bcy, bcz, bh] = brickCenterHalf(lvl.words, blk.start + i);
+          mnX = Math.min(mnX, bcx - bh); mxX = Math.max(mxX, bcx + bh);
+          mnY = Math.min(mnY, bcy - bh); mxY = Math.max(mxY, bcy + bh);
+          mnZ = Math.min(mnZ, bcz - bh); mxZ = Math.max(mxZ, bcz + bh);
+        }
+        uMinX = Math.min(uMinX, mnX); uMaxX = Math.max(uMaxX, mxX);
+        uMinY = Math.min(uMinY, mnY); uMaxY = Math.max(uMaxY, mxY);
+        uMinZ = Math.min(uMinZ, mnZ); uMaxZ = Math.max(uMaxZ, mxZ);
+        const ccx = (mnX + mxX) * 0.5, ccy = (mnY + mxY) * 0.5, ccz = (mnZ + mxZ) * 0.5;
+        const rr = Math.hypot((mxX - mnX) * 0.5, (mxY - mnY) * 0.5, (mxZ - mnZ) * 0.5);
+        const cb = (cBase + c) * CLUSTER_WORDS;
+        cArr[cb] = f32Bits(ccx);
+        cArr[cb + 1] = f32Bits(ccy);
+        cArr[cb + 2] = f32Bits(ccz);
+        cArr[cb + 3] = f32Bits(rr);
+        cArr[cb + 4] = octEncode(0, 1, 0);
+        cArr[cb + 5] = f32Bits(-1); // cone disabled (bricks two-sided)
+        cArr[cb + 6] = brickBase >>> 0; // word6 = brickBase (absolute)
+        cArr[cb + 7] = ((blk.count & 0xff) | ((L & 0x3f) << 10) | (handle << 16)) >>> 0;
+        // DAG cut record (same shape registerVoxelHead writes)
+        const db = (cBase + c) * DAG_WORDS;
+        const isRoot = L === coarsest;
+        dArr[db] = blk.ownError;
+        dArr[db + 1] = blk.own.x; dArr[db + 2] = blk.own.y; dArr[db + 3] = blk.own.z; dArr[db + 4] = blk.own.r;
+        if (isRoot || !blk.parent) {
+          dArr[db + 5] = DAG_ROOT_PARENT_ERR;
+          dArr[db + 6] = blk.own.x; dArr[db + 7] = blk.own.y; dArr[db + 8] = blk.own.z; dArr[db + 9] = blk.own.r;
+        } else {
+          dArr[db + 5] = blk.parentError;
+          dArr[db + 6] = blk.parent.x; dArr[db + 7] = blk.parent.y; dArr[db + 8] = blk.parent.z; dArr[db + 9] = blk.parent.r;
+        }
+        // children live one level FINER (L-1); ids resolve through globalOf
+        lcStart[c] = lcIdx.length;
+        lcCount[c] = blk.childBlocks.length;
+        dArr[db + 10] = bitsF32(childCursor);
+        dArr[db + 11] = bitsF32(blk.childBlocks.length);
+        for (const cbi of blk.childBlocks) {
+          const childGlobal = globalOf[L - 1]![cbi] as number;
+          dl[childCursor++] = cBase + childGlobal;
+          lcIdx.push(childGlobal);
+        }
+      }
+    }
+    this.growDagDepth(
+      maxChainDepth({
+        childStart: lcStart,
+        childCount: lcCount,
+        childIndices: Uint32Array.from(lcIdx),
+        rootIndices: Uint32Array.from(rootIdx),
+      }),
+    );
+
+    entry.clusterCount = n;
+    entry.rootCount = rootCount;
+    entry.flags |= MESH_FLAG_HASDAG;
+    entry.sphere = [
+      (uMinX + uMaxX) * 0.5,
+      (uMinY + uMaxY) * 0.5,
+      (uMinZ + uMaxZ) * 0.5,
+      Math.hypot((uMaxX - uMinX) * 0.5, (uMaxY - uMinY) * 0.5, (uMaxZ - uMinZ) * 0.5),
+    ];
+    this.writeMeshRecord(entry);
+    // identity instance at the tile center (StreamOrigin-relative pool frame)
+    const d = (this.ftPoolInstFirst[slot] as number) * 8;
+    this.instArr[d] = center[0] - this.poolOriginX;
+    this.instArr[d + 1] = center[1];
+    this.instArr[d + 2] = center[2] - this.poolOriginZ;
+    this.instArr[d + 3] = 1;
+    this.pushRange(this.clusterAttr, cBase * CLUSTER_WORDS, n * CLUSTER_WORDS);
+    this.pushRange(this.dagAttr, cBase * DAG_WORDS, n * DAG_WORDS);
+    this.pushRange(this.dagLinksAttr, dlBase, linkTotal);
+    this.pushRange(this.meshAttr, handle * MESH_WORDS, MESH_WORDS);
+    this.pushRange(this.instAttr, (this.ftPoolInstFirst[slot] as number) * 8, 8);
+    this.ftSlotLive[slot] = 1;
+  }
+
+  /** brick words → pool region: live mirror + pushRange before release (early boot
+   *  frames), queue.writeBuffer DIRECT after (the pool has no CPU mirror — F-5). */
+  private ftBrickWriter(renderer: Renderer | null): (words: Uint32Array, brickBase: number) => void {
+    if (!this.mirrorsReleased) {
+      return (words, brickBase) => {
+        this.voxelBricksArr.set(words, brickBase * BRICK_WORDS);
+        this.pushRange(this.voxelBricksAttr, brickBase * BRICK_WORDS, words.length);
+      };
+    }
+    if (!renderer) throw new Error('GeometryRegistry: fartile brick write after mirror release needs the renderer');
+    const backend = (renderer as unknown as { backend: { device?: GPUDevice; get(a: unknown): { buffer?: GPUBuffer } | undefined } }).backend;
+    const gpuBuf = backend.get(this.voxelBricksAttr)?.buffer;
+    const device = backend.device;
+    if (!gpuBuf || !device) throw new Error('GeometryRegistry: brick GPUBuffer missing post-release (backend accessor)');
+    return (words, brickBase) => {
+      device.queue.writeBuffer(gpuBuf, brickBase * BRICK_WORDS * 4, words.buffer, words.byteOffset, words.byteLength);
+    };
+  }
+
+  /** Park a fartile slot (evict): draw dies (clusterCount/rootCount 0 + parked
+   *  sphere + parked instance); records stay until the next attach overwrites.
+   *  Idempotent. The brain returns the slot + its granules to ITS free-lists. */
+  evictFartileSlot(slot: number): void {
+    if (!this.built) throw new Error('GeometryRegistry: evictFartileSlot before build()');
+    const pool = this.ftPool;
+    if (!pool || !this.ftSlotLive) throw new Error('GeometryRegistry: no fartile pool reserved');
+    if (slot < 0 || slot >= pool.slots) throw new Error(`GeometryRegistry: fartile slot ${slot} out of range`);
+    if (this.ftSlotLive[slot] === 0) return;
+    const handle = this.ftPoolHandles[slot] as number;
+    const entry = this.entries[handle] as MeshEntry;
+    entry.clusterCount = 0;
+    entry.rootCount = 0;
+    entry.flags &= ~MESH_FLAG_HASDAG;
+    entry.sphere = [TILE_EVICTED_FAR, TILE_EVICTED_FAR, TILE_EVICTED_FAR, 0];
+    this.writeMeshRecord(entry);
+    const d = (this.ftPoolInstFirst[slot] as number) * 8;
+    this.instArr[d] = 0;
+    this.instArr[d + 1] = GeometryRegistry.INST_PARK_Y;
+    this.instArr[d + 2] = 0;
+    this.instArr[d + 3] = 0;
+    this.pushRange(this.meshAttr, handle * MESH_WORDS, MESH_WORDS);
+    this.pushRange(this.instAttr, (this.ftPoolInstFirst[slot] as number) * 8, 8);
+    this.ftSlotLive[slot] = 0;
   }
 
   /** post-build backing arrays + attributes (probe/validation use only) */

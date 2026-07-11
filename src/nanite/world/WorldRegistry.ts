@@ -41,8 +41,8 @@ import { type CrownLodLevelMesh, buildCrownLodDag, crownLodOwnErrors } from '../
 import { BootTrace, yieldIfDue } from '../../debug/BootTrace';
 import { BootCache } from './BootCache';
 import { packPreparedCrown, type PackedPreparedCrown } from '../build/CrownPack';
-import { packFarTiles, type PackedFarTile } from './FarTilesCore';
-import { appendPackedFarTiles, buildFarTilesAsync, FT_TILE_SIZE, type FarTileSpecies } from './FarTiles';
+import { flattenFarTilePool, FT_TILE_SIZE, type FarTileSpecies } from './FarTilesCore';
+import type { FtArmMsg, FtSpeciesPool } from './StreamProtocol';
 import { clusterFill, setClusterFill } from '../build/Clusterize';
 import { DagBuildWorker, DagWorkerPool, type DagBuilder, type HeightDagResult } from '../build/DagWorkerClient';
 import { buildTerrainTile, type TileBuildDeps, type TileBuildStats } from './TerrainStreamer';
@@ -158,6 +158,11 @@ export interface WorldRegistryResult {
    *  so streamed trees carry a crown past the mesh handoff, exactly like the
    *  generated world's boot-bound trees. Empty when voxReg is off. */
   voxHeads: Map<number, MeshHandle>;
+  /** S8: the far-tile band ARM payload (per-species crown pools + ring-grade config),
+   *  minus the pieces the scene supplies (speciesToClass from the SpeciesMap; pool
+   *  geometry from reg.fartilePoolInfo). Null when fartiles are off / no brain / no
+   *  crowns. The scene completes it and posts it to the brain (both sources). */
+  fartileArm: Omit<FtArmMsg, 'kind' | 'speciesToClass' | 'slots' | 'clusterCap' | 'granules'> | null;
 }
 
 /** BufferGeometry → packed ExplicitSource (vdata vec4 → 4×u8 word) */
@@ -847,7 +852,6 @@ export async function buildWorldRegistry(input: {
     farTilesOn,
     aggDist,
     ftCell,
-    anchorH,
   } = knobs;
 
   // crown voxelizations + vegetation LOD DAGs: cache-or-worker-built, possibly
@@ -856,11 +860,7 @@ export async function buildWorldRegistry(input: {
   const prepPromise = input.pre ?? prepareWorldVeg({ renderer, lib, seed, classes, dag, leaf: leafOn });
 
   // ---- instance streams (ChunkContent — placements are boot-static) ----------
-  // idCounts (per-species totals) feed pool sizing AND the fartile boot-cache key;
-  // ChunkContent preserves exact per-id counts, so cache keys are undisturbed.
   const perId = streams.perId;
-  const idCounts = new Map<number, number>();
-  for (const [id, s] of perId) idCounts.set(id, s.fill);
 
   // ---- register pools --------------------------------------------------------
   const reg = new GeometryRegistry();
@@ -889,42 +889,9 @@ export async function buildWorldRegistry(input: {
   }[] = [];
   // (voxel-foliage / far-tile knob RESOLUTION moved to resolveVegKnobs — shared with
   // the early prepareWorldVeg overlap path; destructured into locals above.)
-  // ── boot cache (DDC — same store the forest path uses): the FARTILES splat is
-  // deterministic in (sources × these params, INCLUDING instance placement — hence
-  // `counts`); key = builder-source hash + RESOLVED values (a raw-null knob must never
-  // mask a code-default change — the 2026-07-02 ftcell hazard). The scene marker keeps
-  // world/forest disjoint. Crown voxelizations + veg DAGs moved to prepareWorldVeg's
-  // placement-independent 'world-veg' key (they are pure functions of lib geometry).
-  const bootCache = new BootCache({
-    params: {
-      scene: 'world',
-      seed: seed ?? 0,
-      // resolved heightfield grid config (quality tier low vs medium/high) — the
-      // FARTILES splat bakes the terrain, so a low-grid world must never hit a
-      // high-grid cache entry (counts usually differ too, but this is exact).
-      grid: hf.cfg,
-      counts: [...idCounts.entries()].sort((x, y) => x[0] - y[0]),
-      classes: classes ? [...classes].sort() : null,
-      dagClasses: dag ? [...dag].sort() : null,
-      leafOn: leafOn === true,
-      voxReg,
-      voxGridDim,
-      voxLod,
-      transitionDist,
-      farTilesOn,
-      aggDist,
-      ftCell,
-      voxOcc: voxOccThreshold(),
-      anchorH,
-      fov: APP_FOV_DEG,
-      stress: knobs.stressRaw,
-      leafDensity: knobs.leafDensityRaw,
-      // crown-LOD Phase 2 ladder params (parity with the world-veg key).
-      crownLod: CROWN_LOD_SCHEDULE,
-      crownLodErrorK: knobs.crownLodErrorK,
-      knobs: knobs.keyKnobs,
-    },
-  });
+  // (S8: the boot fartiles BootCache is gone — fartiles are streamed at runtime, not
+  // boot-built; the crown voxelizations + veg DAGs are cached under prepareWorldVeg's
+  // placement-independent 'world-veg' key, so no scene-level bootCache remains here.)
   // crown voxelizations + vegetation DAGs (cache-or-worker-built, possibly early-kicked
   // by TerrainScene — the pool walk below consumes crowns in place of prepareVoxelCrown).
   BootTrace.phase('registry: await veg prep (crowns+DAGs)');
@@ -1454,25 +1421,20 @@ export async function buildWorldRegistry(input: {
         `+${lateVoxInst} voxel instances, +${lateVoxHeads} voxel:7 heads`,
     );
   }
-  // far-tile aggregation (FarTiles.ts — the forest path's move, world-wired 2026-07-03):
-  // beyond aggDist whole 64 m tiles of trees render as ONE merged voxel head. Terrain-
-  // aware: each tile grid floors at its members' min ground y (per-tile baseY); trunk
-  // columns rise from each tree's own ground. Built pre-build for the exact reservation,
-  // appended post-build. Splat rides the FarTiles worker pool; boot-cached.
-  // PACKED end to end (2026-07-03): each tile is compacted to the bootcache form AS IT
-  // EMITS and unpacked one-at-a-time at append — the whole-map BrickCPU object graph
-  // (~250 B/brick × millions) OOM-crashed the tab twice before this.
-  let ftPacked: PackedFarTile[] = [];
-  if (farTilesOn && toVoxel.length > 0) {
-    BootTrace.phase('registry: fartiles (splat workers)');
-    const tFt0 = performance.now();
-    const ftPools: { a: Float32Array; b: Float32Array; species: FarTileSpecies }[] = [];
+  // S8 far-tile aggregation — RUNTIME, streamed (SPEC §5 A2/F-2). Beyond aggDist whole
+  // 64 m tiles of trees render as ONE merged voxel head; the boot all-resident build is
+  // EXCISED (both sources). Here we only build the per-species crown BRICK POOLS (the
+  // picked coarse pyramid level, flattened) + the RING-GRADE ladder + reserve the pool;
+  // the StreamBrain then bakes/attaches tiles per graded 512 m cell around the camera.
+  // The pool is a NET VRAM CUT: the graded far cells cost ~4× fewer bricks per distance
+  // doubling than the ungraded boot build (which was all-fine, all-resident).
+  let ftArm: Omit<FtArmMsg, 'kind' | 'speciesToClass' | 'slots' | 'clusterCap' | 'granules'> | null = null;
+  if (farTilesOn && toVoxel.length > 0 && streamBrain) {
+    const ftSpeciesPools: FtSpeciesPool[] = [];
     for (const v of toVoxel) {
-      await yieldIfDue();
-      const s = perId.get(v.idF);
       const levels = v.packed.vox.levels;
-      if (!s || !levels || levels.length === 0) continue;
-      // pick the crown pyramid level whose brick size best matches the tile cell size
+      if (!levels || levels.length === 0) continue;
+      // pick the crown pyramid level whose brick size best matches the near cell size
       let pick = 0;
       let bestD = Infinity;
       for (let L = 0; L < levels.length; L++) {
@@ -1483,43 +1445,57 @@ export async function buildWorldRegistry(input: {
           pick = L;
         }
       }
-      // decode ONLY the picked (coarse) level's occupied bricks from the packed words —
-      // a small transient (no whole-crown BrickCPU graph). Word-precision (oct-normal /
-      // rgba8-albedo) splat INPUT — a cold-only, >280 m far-field effect (see BootCache).
       const lvl = levels[pick] as { words: Uint32Array; occupied: Uint32Array };
       const bricks: BrickCPU[] = new Array(lvl.occupied.length);
       for (let i = 0; i < bricks.length; i++) bricks[i] = readBrick(lvl.words, i);
       let crownMinY = 2;
       for (const b of bricks) crownMinY = Math.min(crownMinY, b.center[1] - b.half);
-      ftPools.push({
-        a: s.a,
-        b: s.b,
-        species: { bricks, crownMinY: Math.max(0.5, crownMinY), bark: { r: 0.42, g: 0.33, b: 0.24 } },
+      const species: FarTileSpecies = { bricks, crownMinY: Math.max(0.5, crownMinY), bark: { r: 0.42, g: 0.33, b: 0.24 } };
+      // flatten to the worker wire form (stride-11) — no a/b (the brain splices in the
+      // per-cell tree instances at bake time)
+      const flat = flattenFarTilePool({ a: new Float32Array(0), b: new Float32Array(0), species });
+      ftSpeciesPools.push({
+        idF: v.idF,
+        bricks: flat.species.bricks,
+        crownMinY: flat.species.crownMinY,
+        barkR: flat.species.barkR,
+        barkG: flat.species.barkG,
+        barkB: flat.species.barkB,
       });
     }
-    const cachedFt = await bootCache.get<PackedFarTile[]>('fartiles');
-    if (cachedFt) {
-      // filter(Boolean): a 2026-07-03 bug stored nulls (the fire-and-forget put's
-      // structured clone ran AFTER the append loop released slots in place) — heal
-      // any poisoned entry; the append no longer mutates the stored array.
-      ftPacked = cachedFt.filter(Boolean);
-    } else {
-      ftPacked = await buildFarTilesAsync(
-        { tileSize: FT_TILE_SIZE, cellSize: ftCell, pools: ftPools },
-        (b) => packFarTiles([b])[0] as PackedFarTile,
-      );
-      void bootCache.put('fartiles', ftPacked);
-    }
-    let ftBricks = 0;
-    let ftClusters = 0;
-    for (const t of ftPacked) {
-      ftBricks += t.prep.brickCount;
-      ftClusters += t.prep.clusterCount;
-    }
-    reg.addLate({ bricks: ftBricks, meshes: ftPacked.length, instances: ftPacked.length, clusters: ftClusters });
+    // ring-grade ladder: near cell = the world ftCell (0.75, parity with the boot build);
+    // each ring doubles the cell (~4× fewer bricks). 512 m graded residency cells.
+    const FT_CELL_METERS = 512;
+    const FT_HORIZON = 3000;
+    ftArm = {
+      pools: ftSpeciesPools,
+      cellSizes: [ftCell, ftCell * 2, ftCell * 4],
+      gradeRadii: [768, 1536],
+      tileSize: FT_TILE_SIZE,
+      cellMeters: FT_CELL_METERS,
+      horizon: FT_HORIZON,
+      nearDist: Math.max(10, aggDist - 46),
+      reachMargin: 20,
+      tint: toVoxel[0]?.matParam ?? 0,
+    };
+    // CALIBRATED pool ceilings (logged at boot; measure ft.*.free peak → tighten). The
+    // boot pilot baked 3417 all-fine tiles / 94624 clusters / 274 MB over the 4 km world;
+    // ring-grading keeps a similar TILE (slot) count but coarsens far cells so the CLUSTER
+    // + BRICK totals fall well below that. Generous first cut, throw-loud on overflow (§7).
+    const ftSlots = 8000;
+    const ftClusterCap = 64;
+    const ftGranules = 48000;
+    reg.reserveFartilePool(
+      { slots: ftSlots, clusterCap: ftClusterCap, granules: ftGranules },
+      { tint: ftArm.tint, nearDist: ftArm.nearDist },
+    );
+    const brickMB = (ftGranules * 128 * BRICK_WORDS * 4) / 1048576;
+    // cluster-side reservation = slots·clusterCap × (CLUSTER_WORDS 8 + DAG_WORDS 12 + 1 link)
+    const clusterMB = (ftSlots * ftClusterCap * 21 * 4) / 1048576;
     console.log(
-      `[worldreg] fartiles: ${ftPacked.length} tiles, ${ftBricks} bricks (${((ftBricks * BRICK_WORDS * 4) / 1048576).toFixed(1)} MB), ` +
-        `${ftClusters} clusters, aggDist ${aggDist} m, built in ${(performance.now() - tFt0).toFixed(0)} ms`,
+      `[worldreg] fartile pool CEILING: ${ftSlots} slots × ${ftClusterCap} clusters + ${ftGranules} granules ` +
+        `(bricks ≤ ${brickMB.toFixed(1)} MB tail + clusters ≤ ${clusterMB.toFixed(1)} MB); ${ftSpeciesPools.length} species crown pools; ` +
+        `grades ${ftArm.cellSizes.map((c) => c.toFixed(2)).join('/')} m @ <${ftArm.gradeRadii.join('/')} m, horizon ${FT_HORIZON} m`,
     );
   }
 
@@ -1561,9 +1537,10 @@ export async function buildWorldRegistry(input: {
       const r = appendPackedCrown(reg, v.packed, {
         matParam: v.matParam,
         swayPad: LEAF_SWAY_PAD,
-        // fartiles: the per-tree voxel crown ENDS at aggDist — the merged tile head owns
-        // the far field beyond (ranges overlap by the tile radius, see FarTiles.ts).
-        maxDist: ftPacked.length > 0 ? aggDist : TREE_GEO_FAR,
+        // fartiles: the per-tree voxel crown ENDS at aggDist — the streamed merged tile
+        // heads own the far field beyond (overlap by the tile radius, hole-free). When
+        // fartiles are off the voxel crown runs to TREE_GEO_FAR (no far handoff).
+        maxDist: ftArm ? aggDist : TREE_GEO_FAR,
         // Stage-3a: the voxel head seeds only beyond transitionDist (the mesh→voxel
         // handoff); ?forcevox forces nearDist=0 (voxel everywhere, leaf suppressed below).
         nearDist: forceVoxOn && (forceVoxAll || forceVoxId === v.idF) ? 0 : transitionDist,
@@ -1576,28 +1553,12 @@ export async function buildWorldRegistry(input: {
       // bind the voxel head to the SAME instances as its leaf sibling
       const s = perId.get(v.idF);
       if (s) reg.bindInstances(r.head, { a: s.a, b: s.b });
-      // fartiles: the per-tree BARK trunk ends at aggDist too — the tile splat carries
-      // its own trunk columns beyond.
-      if (ftPacked.length > 0) {
+      // fartiles: the per-tree BARK trunk ends at aggDist too — the streamed tile splat
+      // carries its own trunk columns beyond.
+      if (ftArm) {
         const bark = heads.get(v.idF);
         if (bark !== undefined) reg.setMaxDistance(bark, aggDist);
       }
-    }
-    if (ftPacked.length > 0) {
-      const ftTint = toVoxel[0]?.matParam ?? 0;
-      const nTiles = ftPacked.length;
-      // append STRAIGHT from the packed words, one tile at a time (appendPackedFarTiles
-      // yields between tiles). No BrickCPU materialization at all — the whole-map object
-      // graph was heap-fatal. Do NOT release slots in place — the fire-and-forget
-      // bootCache.put still references THIS array (nulling slots stored a poisoned entry).
-      const ftBricks = await appendPackedFarTiles(
-        reg,
-        ftPacked,
-        { nearDist: Math.max(10, aggDist - 46), matParam: ftTint },
-        yieldIfDue,
-      );
-      console.log(`[worldreg] fartiles: appended ${ftBricks} bricks across ${nTiles} tile heads`);
-      ftPacked = []; // release
     }
     console.log(
       `[worldreg] voxel-foliage: appended ${appended} bricks (${reg.brickCount}/${reg.brickCapacity}) ` +
@@ -1665,5 +1626,6 @@ export async function buildWorldRegistry(input: {
     heads,
     leafHeads,
     voxHeads,
+    fartileArm: ftArm,
   };
 }

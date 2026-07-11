@@ -34,6 +34,7 @@ import type {
   BrainLayerMeta,
   BrainToMain,
   BootTilesDoneMsg,
+  FtArmMsg,
   MainToBrain,
   PlaneKind,
   StreamPacket,
@@ -126,12 +127,23 @@ export class StreamBrainClient {
     this.band = band;
   }
 
+  /** S8: ship the far-tile library pools + pool geometry to the brain (post-
+   *  registry-build; BOTH sources). The brain then owns per-cell fartile residency;
+   *  its ftAttach/ftEvict packets drain through the SAME token bucket as tiles. */
+  armFartiles(msg: FtArmMsg): void {
+    const transfer: Transferable[] = [msg.speciesToClass.buffer, ...msg.pools.map((p) => p.bricks.buffer)];
+    this.post(msg, transfer);
+  }
+
   /** manifest snapshot → transferable brain init (chunk key/hash tables per
    *  layer+lod — existence lookups become brain-local; hashes salt tile DAG
    *  cache keys). */
   private buildInit(manifest: WorldManifest): BrainInitMsg {
     const layers: BrainInitMsg['layers'] = {};
-    for (const layer of ['height', 'biome', 'fields', 'water', 'canopy'] as const) {
+    // S8: 'trees' joins the brain's layer set — the runtime fartile band (brain-side)
+    // needs the tree records' existence keys + fetches them through the RPC. (boulders
+    // stay main-side via the InstanceBand — fartiles are trees only.)
+    for (const layer of ['height', 'biome', 'fields', 'water', 'canopy', 'trees'] as const) {
       const meta = manifest.layers[layer];
       if (!meta) continue;
       const chunkKeys: Record<number, Float64Array> = {};
@@ -406,6 +418,21 @@ export class StreamBrainClient {
         reg.unparkTileSlot(p.unparkSlot); // restore the coarse parent (instant)
         for (const slot of p.freeSlots) reg.evictHeightDagTile(slot); // drop the fine children
         field.applyLevelGrid(p.levelGrid);
+        break;
+      }
+      // S8 far-tile attach/evict — one drain step each (brain owns slot/granule
+      // allocation; main is a pure applier). attachFartileSlot writes the brick words
+      // writeBuffer-DIRECT post-mirror-release (needs the renderer).
+      case 'ftAttach': {
+        const reg = this.reg;
+        if (!reg) break;
+        reg.attachFartileSlot(p.slot, { vox: { levels: p.levels } }, p.center, p.granules, renderer);
+        break;
+      }
+      case 'ftEvict': {
+        const reg = this.reg;
+        if (!reg) break;
+        for (const slot of p.slots) reg.evictFartileSlot(slot);
         break;
       }
     }

@@ -82,8 +82,58 @@ export interface FarTilePlan {
   poolsFlat: SplatPoolFlat[];
 }
 
+/** flatten one species brick set to the worker-transportable stream (splat uses ONLY
+ *  center/half/albedo/normal/density of the source bricks). */
+export function flattenFarTilePool(p: { a: Float32Array; b: Float32Array; species: FarTileSpecies }): SplatPoolFlat {
+  const src = p.species.bricks;
+  const flat = new Float32Array(src.length * SPECIES_BRICK_STRIDE);
+  for (let i = 0; i < src.length; i++) {
+    const b = src[i] as BrickCPU;
+    const o = i * SPECIES_BRICK_STRIDE;
+    flat[o] = b.center[0];
+    flat[o + 1] = b.center[1];
+    flat[o + 2] = b.center[2];
+    flat[o + 3] = b.half;
+    flat[o + 4] = b.albedo[0];
+    flat[o + 5] = b.albedo[1];
+    flat[o + 6] = b.albedo[2];
+    flat[o + 7] = b.normal[0];
+    flat[o + 8] = b.normal[1];
+    flat[o + 9] = b.normal[2];
+    flat[o + 10] = b.density;
+  }
+  return {
+    a: p.a,
+    b: p.b,
+    species: {
+      bricks: flat,
+      crownMinY: p.species.crownMinY,
+      barkR: p.species.bark.r,
+      barkG: p.species.bark.g,
+      barkB: p.species.bark.b,
+    },
+  };
+}
+
 export function planFarTiles(opts: FarTileOpts): FarTilePlan | null {
-  const { tileSize, pools } = opts;
+  const flat: FarTileFlatOpts = { tileSize: opts.tileSize, cellSize: opts.cellSize, pools: opts.pools.map(flattenFarTilePool) };
+  if (opts.bounds) flat.bounds = opts.bounds;
+  return planFarTilesFlat(flat);
+}
+
+export interface FarTileFlatOpts {
+  tileSize: number;
+  cellSize: number;
+  /** pre-flattened pools — the S8 wire form (the brain receives species brick sets as
+   *  flat streams in ftArm and splices per-chunk a/b member arrays in). */
+  pools: SplatPoolFlat[];
+  bounds?: { mnX: number; mnZ: number; mxX: number; mxZ: number };
+}
+
+/** the planner core over FLAT pools — behavior-identical to the pre-S8 in-place plan
+ *  (reach/extent read the same numbers from the flat stride). */
+export function planFarTilesFlat(opts: FarTileFlatOpts): FarTilePlan | null {
+  const { tileSize, pools: poolsFlat } = opts;
   let { cellSize } = opts;
   // world extent of the plantation (or the caller's pinned box — S8 chunk bakes)
   let mnX = Infinity;
@@ -96,7 +146,7 @@ export function planFarTiles(opts: FarTileOpts): FarTilePlan | null {
     mxX = opts.bounds.mxX;
     mxZ = opts.bounds.mxZ;
   } else {
-    for (const p of pools) {
+    for (const p of poolsFlat) {
       for (let i = 0; i < p.a.length; i += 4) {
         const x = p.a[i] as number;
         const z = p.a[i + 2] as number;
@@ -122,46 +172,14 @@ export function planFarTiles(opts: FarTileOpts): FarTilePlan | null {
   const cellsXZ = Math.ceil(tileSize / cellSize / BRICK_DIM) * BRICK_DIM;
   cellSize = tileSize / cellsXZ;
 
-  // flatten species brick sets to the worker-transportable stream (splat uses ONLY
-  // center/half/albedo/normal/density of the source bricks)
-  const poolsFlat: SplatPoolFlat[] = pools.map((p) => {
-    const src = p.species.bricks;
-    const flat = new Float32Array(src.length * SPECIES_BRICK_STRIDE);
-    for (let i = 0; i < src.length; i++) {
-      const b = src[i] as BrickCPU;
-      const o = i * SPECIES_BRICK_STRIDE;
-      flat[o] = b.center[0];
-      flat[o + 1] = b.center[1];
-      flat[o + 2] = b.center[2];
-      flat[o + 3] = b.half;
-      flat[o + 4] = b.albedo[0];
-      flat[o + 5] = b.albedo[1];
-      flat[o + 6] = b.albedo[2];
-      flat[o + 7] = b.normal[0];
-      flat[o + 8] = b.normal[1];
-      flat[o + 9] = b.normal[2];
-      flat[o + 10] = b.density;
-    }
-    return {
-      a: p.a,
-      b: p.b,
-      species: {
-        bricks: flat,
-        crownMinY: p.species.crownMinY,
-        barkR: p.species.bark.r,
-        barkG: p.species.bark.g,
-        barkB: p.species.bark.b,
-      },
-    };
-  });
-
   // bucket instances into EVERY tile their crown can reach (boundary-crossing crowns
   // were silently clipped when bucketed by trunk position only — the user-visible HOLES
   // and white slabs at tile borders). reach = per-species max XZ brick extent × max scale.
-  const reachOf = pools.map((p) => {
+  const reachOf = poolsFlat.map((p) => {
     let maxR = 0;
-    for (const b of p.species.bricks) {
-      const r = Math.max(Math.abs(b.center[0]), Math.abs(b.center[2])) + b.half;
+    const br = p.species.bricks;
+    for (let o = 0; o < br.length; o += SPECIES_BRICK_STRIDE) {
+      const r = Math.max(Math.abs(br[o] as number), Math.abs(br[o + 2] as number)) + (br[o + 3] as number);
       if (r > maxR) maxR = r;
     }
     let maxS = 0;
@@ -178,8 +196,8 @@ export function planFarTiles(opts: FarTileOpts): FarTilePlan | null {
   // cellsY = the legacy 48 m — bit-identical tiles.
   const tileMinY = new Map<number, number>();
   const tileMaxY = new Map<number, number>();
-  for (let pi = 0; pi < pools.length; pi++) {
-    const a = (pools[pi] as { a: Float32Array }).a;
+  for (let pi = 0; pi < poolsFlat.length; pi++) {
+    const a = (poolsFlat[pi] as { a: Float32Array }).a;
     const reach = reachOf[pi] as number;
     for (let ii = 0; ii * 4 < a.length; ii++) {
       const x = a[ii * 4] as number;
@@ -221,8 +239,8 @@ export function planFarTiles(opts: FarTileOpts): FarTilePlan | null {
   }
   // eslint-disable-next-line no-console
   console.log(
-    `[fartiles] plan: ${jobs.length} tiles (${tilesX}×${tilesZ} grid), cell ${cellSize.toFixed(3)} m, ` +
-      `cellsXZ ${cellsXZ}, cellsY ≤ ${maxCellsY} (worst relief ${worstRelief.toFixed(1)} m)`,
+    `[fartiles] plan: ${jobs.length} tiles (${tilesX}\u00d7${tilesZ} grid), cell ${cellSize.toFixed(3)} m, ` +
+      `cellsXZ ${cellsXZ}, cellsY \u2264 ${maxCellsY} (worst relief ${worstRelief.toFixed(1)} m)`,
   );
 
   return {

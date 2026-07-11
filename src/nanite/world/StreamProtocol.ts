@@ -22,6 +22,7 @@
 import type { ChunkKey, ChunkPayload, LayerName, WorldGrid } from '../../world/source/WorldSource';
 import type { FieldPlan } from './PlaneFill';
 import type { LevelGridEdit } from './PartitionTree';
+import type { PackedLevel } from '../build/CrownPack';
 
 /** which GPU plane a fill/origin packet targets. */
 export type PlaneKind = 'height' | 'biome' | 'fields' | 'water' | 'waterFar';
@@ -94,7 +95,47 @@ export interface PoolInfoMsg {
   clusterCap: number;
 }
 
-export type MainToBrain = BrainInitMsg | PoseMsg | FetchResMsg | BootTilesMsg | PoolInfoMsg;
+/** S8: arm the runtime FARTILE band (post-registry-build). Carries the library
+ *  knowledge the brain lacks — per-species crown brick pools (the picked coarse
+ *  pyramid level, flat stride-11 = FarTilesSplat SPECIES_BRICK_STRIDE) keyed by
+ *  idF, the species→VegClass table (idF = class·8 + variant&3), the ring-grade
+ *  cell ladder, and the pool geometry the brain seeds its slot/granule free-lists
+ *  from. Sent ONCE; the brain then owns per-cell residency + splat + emit + pack. */
+export interface FtSpeciesPool {
+  idF: number;
+  /** occupied bricks of the picked crown pyramid level, flat stride-11 (crown-local). */
+  bricks: Float32Array;
+  crownMinY: number;
+  barkR: number;
+  barkG: number;
+  barkB: number;
+}
+export interface FtArmMsg {
+  kind: 'ftArm';
+  pools: FtSpeciesPool[];
+  /** species id → VegClass (idF = class·8 + variant&3); -1 = no crown (skip). */
+  speciesToClass: Int32Array;
+  /** ring-grade cell ladder: cellSizes[i] applies at ring distance < gradeRadii[i] (m). */
+  cellSizes: number[];
+  gradeRadii: number[];
+  tileSize: number;
+  /** far-tile residency unit side (m) — the graded bake cell (512). */
+  cellMeters: number;
+  /** the far-tile ring outer radius (m) — cells within this get baked. */
+  horizon: number;
+  /** near cutoff: the tile head renders only beyond nearDist (the aggDist handoff). */
+  nearDist: number;
+  /** crown reach margin (m) — trees within this of a cell's box still splat into it. */
+  reachMargin: number;
+  /** packed leaf tint (matParam) for the tile heads. */
+  tint: number;
+  /** pool geometry (from reg.fartilePoolInfo) — seeds the brain's free-lists. */
+  slots: number;
+  clusterCap: number;
+  granules: number;
+}
+
+export type MainToBrain = BrainInitMsg | PoseMsg | FetchResMsg | BootTilesMsg | PoolInfoMsg | FtArmMsg;
 
 // ---- brain → main -------------------------------------------------------------------
 
@@ -162,7 +203,14 @@ export type StreamPacket =
   | { kind: 'tileRefine'; parkSlot: number; children: TileGeometry[]; levelGrid: LevelGridEdit[] }
   /** MERGE: unpark the parent's retained slot (draw restored, instant — no bake),
    *  evict the ≤4 child slots, update the level grid. */
-  | { kind: 'tileMerge'; unparkSlot: number; freeSlots: number[]; levelGrid: LevelGridEdit[] };
+  | { kind: 'tileMerge'; unparkSlot: number; freeSlots: number[]; levelGrid: LevelGridEdit[] }
+  /** S8 FARTILE ATTACH: one baked far-tile → its brain-assigned pool slot + granule
+   *  ids (brickBase = poolBrickBase + gid·128). `levels` = the tile's packed voxel
+   *  pyramid (CrownPack words). Applied as one drain step (reg.attachFartileSlot). */
+  | { kind: 'ftAttach'; slot: number; granules: Uint32Array; center: [number, number, number]; levels: PackedLevel[] }
+  /** S8 FARTILE EVICT: park these pool slots (draw dies; the brain returns the slots
+   *  + their granules to ITS free-lists). */
+  | { kind: 'ftEvict'; slots: number[] };
 
 export interface PacketsMsg {
   kind: 'packets';
@@ -243,6 +291,9 @@ export function packetTransfers(packets: StreamPacket[]): Transferable[] {
       if (p.u8) t.push(p.u8.buffer);
     } else if (p.kind === 'tileRefine') {
       for (const c of p.children) t.push(...tileTransfers(c));
+    } else if (p.kind === 'ftAttach') {
+      t.push(p.granules.buffer);
+      for (const l of p.levels) t.push(l.words.buffer, l.occupied.buffer);
     }
   }
   return [...new Set(t)];
@@ -263,5 +314,11 @@ export function packetBytes(p: StreamPacket): number {
     return b;
   }
   if (p.kind === 'tileMerge') return 72 + p.freeSlots.length * 8; // unpark + evicts + grid poke
+  if (p.kind === 'ftAttach') {
+    let b = 72;
+    for (const l of p.levels) b += l.words.byteLength; // the writeBuffer'd brick words dominate
+    return b;
+  }
+  if (p.kind === 'ftEvict') return 72 + p.slots.length * 8;
   return 64; // origin commit — uniform poke
 }

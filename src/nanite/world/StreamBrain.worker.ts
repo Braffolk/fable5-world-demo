@@ -74,6 +74,9 @@ self.onmessage = (e: MessageEvent<MainToBrain>): void => {
       case 'poolInfo':
         core.poolInfo(msg);
         break;
+      case 'ftArm':
+        core.armFartiles(msg);
+        break;
     }
   } catch (err) {
     post({ kind: 'log', level: 'error', msg: `stream brain: ${err instanceof Error ? err.message : String(err)}` });
