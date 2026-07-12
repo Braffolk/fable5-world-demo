@@ -9,7 +9,7 @@
 import type { Quaternion, Vector3 } from 'three';
 
 /** Crown envelope: scales child-branch length by position along the parent. */
-export type CrownShape = 'cone' | 'ellipsoid' | 'dome' | 'irregular' | 'column';
+export type CrownShape = 'cone' | 'ellipsoid' | 'dome' | 'irregular' | 'column' | 'round';
 
 /**
  * Per-level branching parameters. `levels[0]` is the trunk; `levels[i]`

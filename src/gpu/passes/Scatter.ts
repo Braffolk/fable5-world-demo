@@ -46,13 +46,16 @@ import type { NF, NI, NU, NV2, NV4 } from '../TSLTypes';
 
 /** geometry-pool class ids (variant index lives in the low 3 bits of idF) */
 export const enum VegClass {
-  // trees — order matches TREE_SPECIES
+  // trees — order matches TREE_SPECIES. Slots 6,7 are the free tree block before
+  // the understory (BushHazel = 8): distinct-species forms (#112) land here.
   Spruce = 0,
   Pine = 1,
   Beech = 2,
   Birch = 3,
   KarstGnarl = 4,
   Snag = 5,
+  Larch = 6, // deciduous conifer — open light needled cone, drooping branchlets
+  Oak = 7, // broad spreading rounded broadleaf, stout bole (Quercus robur)
   // understory
   BushHazel = 8,
   BushPink = 9,
@@ -341,9 +344,17 @@ export async function runScatter(
     const w4 = byBiome(s.bioId, [0, 0, 0, 0.2, 0, 0]) // karst gnarl
       .mul(s.rockExp.mul(1.6).add(0.4));
     const w5 = byBiome(s.bioId, [0, 0.15, 0.05, 0.05, 0.08, 0.28]); // snag
+    // #112 distinct species: larch mixes into the conifer stands (deciduous conifer,
+    // drier tolerance), oak into the rich broadleaf sites (moisture-loving). Purely a
+    // species RE-PICK — the accept gate above already fixed the count, so veg.trees is
+    // byte-identical; only which pool a tree routes to changes.
+    const w6 = byBiome(s.bioId, [0, 0.16, 0.13, 0.02, 0.05, 0.1]) // larch
+      .mul(float(1.2).sub(m.mul(0.5)));
+    const w7 = byBiome(s.bioId, [0, 0, 0.05, 0.22, 0.32, 0.03]) // oak
+      .mul(m.mul(0.7).add(0.55));
 
     const r = cellHash(cell, sT ^ 0x77e1).mul(
-      w0.add(w1).add(w2).add(w3).add(w4).add(w5),
+      w0.add(w1).add(w2).add(w3).add(w4).add(w5).add(w6).add(w7),
     );
     const sp = int(0).toVar();
     const acc = w0.toVar();
@@ -361,6 +372,14 @@ export async function runScatter(
             acc.addAssign(w4);
             If(r.greaterThan(acc), () => {
               sp.assign(5);
+              acc.addAssign(w5);
+              If(r.greaterThan(acc), () => {
+                sp.assign(6);
+                acc.addAssign(w6);
+                If(r.greaterThan(acc), () => {
+                  sp.assign(7);
+                });
+              });
             });
           });
         });

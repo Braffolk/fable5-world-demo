@@ -299,6 +299,142 @@ export const SNAG: SpeciesParams = {
   stubChance: 0.28,
 };
 
+// ---- #112 distinct species (research-grounded forms) -----------------------
+//
+// LARCH — European/Siberian larch (Larix, Estonian "lehis", planted-conifer stands).
+// Deciduous conifer: the crown reads NOTHING like spruce — a straight leader with
+// SPARSE, near-level primaries whose branchlets hang PENDULOUS, carrying soft LIGHT
+// yellow-green needle tufts (rosettes on short shoots) in an OPEN, airy cone. Taller
+// and slenderer than spruce. (Larix decidua: 25–45 m, greyish-pink fissured bark,
+// needles 2–4 cm in fascicles of 30–65, mid/upper branches down-swept with ascending
+// ends, side branches pendulous — Woodland Trust / Wikipedia / Morton Arboretum.)
+export const LARCH: SpeciesParams = {
+  id: 'larch',
+  label: 'Larch (deciduous conifer)',
+  kind: 'conifer',
+  height: [22, 32],
+  trunkRadiusK: 0.013,
+  crown: 'cone',
+  asym: 0.2,
+  levels: [
+    {
+      // straight persistent leader, gentle wander
+      density: 0, whorl: 0, childStart: 0, childEnd: 0,
+      angleBase: 0, angleTip: 0, lenRatio: 0, lenJitter: 0, radRatio: 0,
+      segs: 18, wander: 0.012, gravitropism: 0.06, droop: 0, tipCurl: 0, taper: 1.0,
+    },
+    {
+      // primaries: SPARSE (open crown), near-horizontal spokes, sag then ascending tips
+      density: 3.2, whorl: 0, childStart: 0.12, childEnd: 0.985,
+      angleBase: 1.62, angleTip: 0.7, lenRatio: 0.22, lenJitter: 0.28, radRatio: 0.3,
+      segs: 6, wander: 0.09, gravitropism: -0.02, droop: 0.34, tipCurl: 0.22, taper: 1.0,
+    },
+    {
+      // branchlets: PENDULOUS side twigs hanging off the boughs (the larch signature),
+      // carrying the needle tufts; strong negative gravitropism + droop. #112 VRAM
+      // right-size: density 4.0→3.2 — a gentle thin of the pendulous branchlets (kept
+      // dense enough to READ as the drooping larch signature); the crown-DAG cut is
+      // carried mostly by needleCount + spacing below so the silhouette holds.
+      density: 3.2, whorl: 0, childStart: 0.1, childEnd: 1.0,
+      angleBase: 1.15, angleTip: 0.9, lenRatio: 0.3, lenJitter: 0.4, radRatio: 0.42,
+      segs: 3, wander: 0.12, gravitropism: -0.16, droop: 0.62, tipCurl: 0.04, taper: 0.85,
+      planar: 0.4,
+    },
+  ],
+  foliage: {
+    kind: 'needleSpray',
+    anchorLevel: 2,
+    // #112 VRAM right-size: spacing 0.2→0.28 (fewer sprays along each twig) —
+    // reinforces the OPEN airy crown while cutting the per-crown spray count.
+    spacing: 0.28, // wider than spruce (0.16) → open, airy crown
+    tStart: 0.05,
+    scale: [0.16, 0.26], // small soft tufts
+    tilt: 0.6,
+    clusterSize: [1, 1],
+    normalBend: 0.6,
+    planarLeaves: false, // rosette-ish tufts around the twig, not a flat comb
+    // #112 VRAM right-size: needleCount 26→13 (hero ×3 = 39, vs spruce's 90). A larch
+    // short-shoot rosette is a SPARSE soft tuft, not a dense spray — halving the needles
+    // reads MORE correct (airy) and is the single biggest crown-DAG lever (each spray is
+    // 2·needle tris). The tuft SHAPE/scale is unchanged, so the silhouette holds.
+    leaf: { len: 0.075, width: 0.02, shapePow: 1, fold: 0, curl: 0, needleCount: 13, brush: 0.7 },
+  },
+  flare: { amp: 0.42, height: 0.9, lobes: 5 },
+  barkLayer: 0, // reuse spruce bark (grey-brown vertical fissures ≈ larch) — no new VRAM
+  barkRepeats: 5,
+  foliageColor: { r: 0.09, g: 0.175, b: 0.05, hueVar: 0.3 }, // light fresh yellow-green
+  brokenTop: 0,
+  stubChance: 0.03,
+};
+
+// OAK — pedunculate/English oak (Quercus robur, Estonian "tamm", native hemiboreal
+// broadleaf). The classic BROAD, spreading, rounded crown: a short STOUT bole, then
+// FEW HEAVY primaries at wide angles that run out into long low limbs, an unevenly
+// domed rounded crown of deep dull-green leaf clusters. Reads distinct from beech
+// (upright ellipsoid) and birch (slim column) by breadth + stoutness + heavy low
+// limbs. (Quercus robur: 20–40 m and ~equally wide, massive lower branches, greyish-
+// brown ridged/fissured bark — Woodland Trust / Wikipedia.)
+export const OAK: SpeciesParams = {
+  id: 'oak',
+  label: 'Oak (broad broadleaf)',
+  kind: 'broadleaf',
+  height: [14, 22],
+  trunkRadiusK: 0.032, // stout bole
+  crown: 'round',
+  asym: 0.34,
+  levels: [
+    {
+      // short, stout, strongly-tapered bole
+      density: 0, whorl: 0, childStart: 0, childEnd: 0,
+      angleBase: 0, angleTip: 0, lenRatio: 0, lenJitter: 0, radRatio: 0,
+      segs: 9, wander: 0.07, gravitropism: 0.03, droop: 0, tipCurl: 0, taper: 1.35,
+    },
+    {
+      // primaries: FEW, HEAVY, wide-angled, long — spreading limbs from low on the bole
+      density: 1.25, whorl: 0, childStart: 0.24, childEnd: 0.9,
+      angleBase: 1.24, angleTip: 0.72, lenRatio: 0.62, lenJitter: 0.34, radRatio: 0.6,
+      segs: 8, wander: 0.16, gravitropism: 0.02, droop: 0.2, tipCurl: 0.14, taper: 0.95,
+    },
+    {
+      // secondaries: sinuous, spreading, filling the broad dome
+      density: 2.2, whorl: 0, childStart: 0.2, childEnd: 0.98,
+      angleBase: 1.0, angleTip: 0.6, lenRatio: 0.5, lenJitter: 0.36, radRatio: 0.55,
+      segs: 5, wander: 0.2, gravitropism: 0.02, droop: 0.22, tipCurl: 0.08, taper: 0.9,
+    },
+    {
+      // twig plates carrying the leaf clusters. #112 VRAM right-size: density 7.0→4.8 —
+      // oak's measured BARK DAG was 2× beech's (dense twig tubes at barkK 0.7). Fewer
+      // twig plates cut the level-3 bark tubes hard; the broad DOME is carried by the
+      // 'round' crown envelope + the heavy primaries/secondaries, not the twig count.
+      density: 4.8, whorl: 0, childStart: 0.15, childEnd: 1.0,
+      angleBase: 0.95, angleTip: 0.62, lenRatio: 0.3, lenJitter: 0.38, radRatio: 0.55,
+      segs: 3, wander: 0.16, gravitropism: 0, droop: 0.16, tipCurl: 0.05, taper: 0.85,
+      planar: 0.3,
+    },
+  ],
+  foliage: {
+    kind: 'leafCluster',
+    anchorLevel: 3,
+    spacing: 0.15,
+    tStart: 0.1,
+    scale: [0.15, 0.22],
+    tilt: 0.95,
+    // #112 VRAM right-size: clusterSize [2,4]→[2,3] (avg leaves 3→2.5, matching beech).
+    // The crown mesh caps at ~4000 anchors, so this per-anchor leaf count is the crown-
+    // DAG lever; the broad rounded dome (envelope + big scale leaves) is unchanged.
+    clusterSize: [2, 3],
+    normalBend: 0.7,
+    planarLeaves: true,
+    leaf: { len: 1.0, width: 0.46, shapePow: 1.1, fold: 0.26, curl: 0.2, needleCount: 0, brush: 0 },
+  },
+  flare: { amp: 0.8, height: 1.3, lobes: 7 }, // buttressed stout base
+  barkLayer: 4, // reuse karst deep-ridged bark (≈ oak rugged fissures) — no new VRAM
+  barkRepeats: 4,
+  foliageColor: { r: 0.05, g: 0.12, b: 0.035, hueVar: 0.26 }, // deep dull green
+  brokenTop: 0,
+  stubChance: 0.03,
+};
+
 export const TREE_SPECIES: readonly SpeciesParams[] = [
   SPRUCE,
   PINE,
@@ -306,4 +442,6 @@ export const TREE_SPECIES: readonly SpeciesParams[] = [
   BIRCH,
   KARST_GNARL,
   SNAG,
+  LARCH, // cls 6 (VegClass.Larch)
+  OAK, // cls 7 (VegClass.Oak)
 ];

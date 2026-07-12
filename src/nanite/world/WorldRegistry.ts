@@ -113,7 +113,9 @@ export function packLeafTint(c: { r: number; g: number; b: number; hueVar: numbe
   return (u8(c.r) | (u8(c.g) << 8) | (u8(c.b) << 16) | (u8(c.hueVar) << 24)) >>> 0;
 }
 
-const TREE_MAX_CLS = 5;
+// canopy-tree class range is 0..TREE_MAX_CLS (Snag = 5 is special-cased below;
+// #112 added Larch = 6 / Oak = 7 into the free tree block before BushHazel = 8).
+const TREE_MAX_CLS = 7;
 const SHRUB_CLASSES: ReadonlySet<number> = new Set([
   VegClass.BushHazel,
   VegClass.BushPink,
@@ -238,7 +240,7 @@ export function migratedMatClass(cls: number): MaterialClassId | null {
  *  fetch reads it for the 'trunk' channel (rigid classes ignore it). */
 function windProfile(cls: number): number {
   if (cls === 5) return 1; // snag species
-  if (cls <= TREE_MAX_CLS) return 0; // canopy trees 0–4
+  if (cls <= TREE_MAX_CLS) return 0; // canopy trees 0–4, larch 6, oak 7
   if (SHRUB_CLASSES.has(cls)) return 2; // understory shrubs
   return 0; // rigid (deadwood/rock) — unused
 }

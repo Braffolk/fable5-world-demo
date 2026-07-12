@@ -33,6 +33,10 @@ function crownEnvelope(shape: CrownShape, t: number, rng: Rng): number {
       return Math.max(0.15, Math.sqrt(Math.max(0, 1 - t * t * 0.92)));
     case 'column':
       return 0.55 + 0.45 * Math.sin(Math.PI * Math.min(1, t * 1.15));
+    case 'round':
+      // oak: broad, spreading, rounded crown — long HEAVY low limbs (full at the
+      // crown base), widest through the low-mid crown, rounded (not tapered) top.
+      return 0.45 + 0.55 * Math.sin(Math.PI * (0.18 + 0.7 * t));
     case 'irregular':
       return 0.3 + 0.7 * Math.abs(Math.sin(t * 9.7 + rng.float() * 6.28)) * (1 - t * 0.4);
   }
@@ -67,6 +71,8 @@ function ontoRespFor(crown: CrownShape): OntoResp {
       return { crownBaseMax: 0.38, broadenMax: 0.3 }; // beech: clear bole → broad dome
     case 'column':
       return { crownBaseMax: 0.35, broadenMax: 0.14 }; // birch: lifts + opens, stays slim
+    case 'round':
+      return { crownBaseMax: 0.28, broadenMax: 0.42 }; // oak: broadens hard, keeps heavy low limbs
     case 'irregular':
       return { crownBaseMax: 0.22, broadenMax: 0.2 }; // karst gnarl: low, gnarled cliff form
   }

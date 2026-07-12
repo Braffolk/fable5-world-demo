@@ -22,6 +22,8 @@ const CLASS_NAME: Record<number, string> = {
   [VegClass.Birch]: 'Birch',
   [VegClass.KarstGnarl]: 'KarstGnarl',
   [VegClass.Snag]: 'Snag',
+  [VegClass.Larch]: 'Larch',
+  [VegClass.Oak]: 'Oak',
 };
 
 /** Estonian forestry codes → the specific library pool the pilot expects. Anything
@@ -31,6 +33,8 @@ const CODE_TO_CLASS: Record<string, VegClass> = {
   KU: VegClass.Spruce, // kuusk — Norway spruce
   KS: VegClass.Birch, // kask — birch
   HB: VegClass.Birch, // haab — aspen (broadleaf; birch crown is the closest library pool)
+  LH: VegClass.Larch, // lehis — larch (#112: own deciduous-conifer form, was folding to Spruce)
+  TA: VegClass.Oak, // tamm — pedunculate oak (#112: own broad crown, was folding to Beech)
 };
 
 /** one species entry → a tree VegClass, or null when nothing in the library fits

@@ -186,6 +186,10 @@ export const HERO_DIETS: Record<string, HeroDiet> = {
   birch: { meshAnchorTarget: 4000, barkK: 1 },
   karst: { meshAnchorTarget: 4000, barkK: 1.1 },
   snag: { barkK: 1.3 },
+  larch: { meshAnchorTarget: 550, barkK: 0.8 }, // open airy needle crown → fewer anchors
+  // #112 VRAM right-size: barkK 0.7→0.5 (match beech). Oak's measured bark DAG was 2×
+  // beech's; the trunk/limb tube radial resolution is the lever, silhouette-neutral.
+  oak: { meshAnchorTarget: 2400, barkK: 0.5 }, // broad leaf dome, beech-parity bark segs
 };
 
 export interface VegLib {
@@ -383,7 +387,7 @@ export async function buildVegLibrary(
     clsRadius[cls] = Math.max(clsRadius[cls] ?? 1, r);
   };
 
-  // ---- trees: 6 species × 4 variants × (R0 hero, R1, R2 LOD rings) ----------
+  // ---- trees: TREE_SPECIES × 4 variants × (R0 hero, R1, R2 LOD rings) --------
   progress(0.3, "veg: growing tree variant pools");
   const treeParts = (
     sp: SpeciesParams,
