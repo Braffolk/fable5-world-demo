@@ -129,9 +129,24 @@ export function waterMaterial(
   // waterY from the TerrainField water plane (S9 port): generated fills it from
   // hf.cpuWaterY (bit-identical addressing to the retired hf.sampleWaterY tap —
   // same texel-centered sim-res lattice), Estonia from its streamed water layer.
-  const sampleY = (q: NV2): NF => (lvl.far ? field.fieldWaterYFar(q) : field.fieldWaterY(q));
+  // coverOn = a watercover α plane exists (Estonia) and ?watercover != 0. false on
+  // the generated world (hasWaterCoverage=false) ⇒ every #GAP/coverage gate below
+  // compiles the pre-coverage graph VERBATIM (bit-identical generated water).
+  const coverOn = field.hasWaterCoverage && new URLSearchParams(window.location.search).get('watercover') !== '0';
+  // #GAP wetSurf = Estonia's NEAR water surface. Its dry cells hold the −1e4 dry
+  // sentinel, so a plain bilinear near a shore blends the real water level with −1e4
+  // and PLUNGES into a pit (the shore gap). Sample WET-PREFERRING (fieldWaterYWet
+  // masks the sentinel corners out of the 2×2 — the near analog of the #115 far
+  // maxReduce) so the surface stays FLAT at the true level up to the α shoreline,
+  // then clamp the degenerate all-dry vertex to just under the bed so a shore-
+  // crossing triangle MEETS the bank instead of diving. Generated ⇒ false ⇒ the
+  // exact old fieldWaterY tap + unclamped position.
+  const wetSurf = coverOn && !lvl.far;
+  const sampleY = (q: NV2): NF =>
+    lvl.far ? field.fieldWaterYFar(q) : wetSurf ? field.fieldWaterYWet(q) : field.fieldWaterY(q);
   const wxz = lvl.origin.add(positionLocal.xz.mul(lvl.cell));
-  mat.positionNode = vec3(wxz.x, sampleY(wxz), wxz.y);
+  const surfY = wetSurf ? sampleY(wxz).max(field.fieldHeightFinest(wxz).sub(0.5)) : sampleY(wxz);
+  mat.positionNode = vec3(wxz.x, surfY, wxz.y);
 
   // ---- inner-level cutout + hard world bounds ----------------------------------
   // Outside the source's coverage box the field samples clamp to the border texel
@@ -173,7 +188,7 @@ export function waterMaterial(
   // OLD binary dive guard + old opacity graph compile VERBATIM (bit-identical generated water).
   // ?watercover=0 forces the old binary edge (an A/B toggle beside ?watermask —
   // default on where a coverage plane exists). No-op on the generated world.
-  const coverOn = field.hasWaterCoverage && new URLSearchParams(window.location.search).get('watercover') !== '0';
+  // (coverOn is hoisted above the vertex block — the #GAP wetSurf gate needs it.)
   let wet: NB;
   let coverFeather: NF | null = null;
   if (coverOn && !lvl.far) {
@@ -430,9 +445,12 @@ export function waterMaterial(
   // dark silt bed as a rim band); the #115 Estonia far-coverage path instead
   // feathers the shore via coverFeather (from covFar) below. Near levels fade the
   // steep field dive.
-  const rampK = lvl.far
-    ? float(1)
-    : smoothstep(0.55, 0.3, vec2(gWx, gWz).length());
+  // #GAP Estonia near (wetSurf): DISABLE the dive-fade — the wet-preferring surface
+  // no longer dives at the shore, so fading on |∇surfaceY| would only erase the real
+  // shoreline; coverFeather (from the α) owns the shore opacity there. Far ⇒ 1
+  // (unchanged). Generated near ⇒ the exact old smoothstep dive-fade (bit-identical).
+  const rampK =
+    lvl.far || wetSurf ? float(1) : smoothstep(0.55, 0.3, vec2(gWx, gWz).length());
   // #114/#115: feather the very shore by the coverage fraction (near AND far coverage
   // levels). Null on the generated path ⇒ the EXACT old opacity graph (bit-identical
   // generated water).

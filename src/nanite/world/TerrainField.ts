@@ -369,6 +369,22 @@ export class TerrainField {
     return planeBilerp(w, wxz);
   }
 
+  /** #GAP wet-preferring bilinear waterY for the NEAR Estonia surface — the near
+   *  analog of PlaneFill.maxReduce (the #115 far surface). Estonia's dry cells hold
+   *  the −1e4 sentinel; a plain bilinear near a shore blends the ~40 m water level
+   *  with −1e4 and PLUNGES the surface into a pit (the shore GAP). This masks the
+   *  sentinel corners out of the 2×2 and re-normalizes over the WET corners, so the
+   *  surface stays FLAT at the true water level right up to the last wet texel
+   *  (dilating the wet surface outward, like maxReduce) instead of diving. Falls
+   *  back to the plain bilerp (≈ sentinel) only where all four corners are dry — the
+   *  caller clamps that degenerate vertex to the bed. Only compiled behind
+   *  field.hasWaterCoverage (the generated world never builds it). */
+  fieldWaterYWet(wxz: NV2): NF {
+    const w = this.water;
+    if (!w) throw new Error('TerrainField: no water plane');
+    return planeBilerpWet(w, wxz);
+  }
+
   /** #114 bilinear water coverage α ∈ [0,1] (channel 0 of the watercover rgba8
    *  plane). One filtered tap of the ANTI-ALIASED fraction — the sub-texel signal
    *  a bilinear of the BINARY water mask could never resolve, so the shore tracks
@@ -621,6 +637,42 @@ export function planeNearest(lvl: FieldLevel, wxz: NV2): NF {
   const g = clamp(gridCoords(lvl, wxz).add(0.5), 0, lvl.res - 1);
   const t = texelU(lvl, floor(g.x) as unknown as NF, floor(g.y) as unknown as NF);
   return texLoadR(lvl.tex, t.x, t.y);
+}
+
+/** #GAP wet-masked bilinear: planeBilerp with the 2×2 weights gated by a wetness
+ *  mask (texel above the dry sentinel) and re-normalized, so the −1e4 sentinel
+ *  corners never drag the interpolated surface down near a shore. All-dry ⇒ the
+ *  plain average (the sentinel), which the caller clamps to the bed. */
+function planeBilerpWet(lvl: HeightLevel, wxz: NV2): NF {
+  const g = clamp(gridCoords(lvl, wxz), 0, lvl.res - 1);
+  const i0 = floor(g);
+  const f = fract(g);
+  const x0i = i0.x as unknown as NF;
+  const y0i = i0.y as unknown as NF;
+  const x1i = clamp(i0.x.add(1), 0, lvl.res - 1) as unknown as NF;
+  const y1i = clamp(i0.y.add(1), 0, lvl.res - 1) as unknown as NF;
+  const t00 = texelU(lvl, x0i, y0i);
+  const t10 = texelU(lvl, x1i, y0i);
+  const t01 = texelU(lvl, x0i, y1i);
+  const t11 = texelU(lvl, x1i, y1i);
+  const s00 = texLoadR(lvl.tex, t00.x, t00.y);
+  const s10 = texLoadR(lvl.tex, t10.x, t10.y);
+  const s01 = texLoadR(lvl.tex, t01.x, t01.y);
+  const s11 = texLoadR(lvl.tex, t11.x, t11.y);
+  const w00 = f.x.oneMinus().mul(f.y.oneMinus());
+  const w10 = f.x.mul(f.y.oneMinus());
+  const w01 = f.x.oneMinus().mul(f.y);
+  const w11 = f.x.mul(f.y);
+  // wet = above the −1e4 dry sentinel (real Estonia water levels are ≫ −1000)
+  const wet = (s: NF): NF => s.greaterThan(-1000).select(float(1), float(0)) as unknown as NF;
+  const a00 = w00.mul(wet(s00));
+  const a10 = w10.mul(wet(s10));
+  const a01 = w01.mul(wet(s01));
+  const a11 = w11.mul(wet(s11));
+  const wsum = a00.add(a10).add(a01).add(a11);
+  const vsum = a00.mul(s00).add(a10.mul(s10)).add(a01.mul(s01)).add(a11.mul(s11));
+  const plain = mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
+  return wsum.greaterThan(1e-4).select(vsum.div(wsum.max(1e-4)), plain) as unknown as NF;
 }
 
 /** true where the point sits ≥1 texel inside the level's window (the rim texel is
