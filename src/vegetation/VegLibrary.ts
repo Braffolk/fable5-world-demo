@@ -225,9 +225,9 @@ export interface VegLib {
  *  Grounded in the Estonia herb palette (goutweed/yarrow umbels, may-lily/hepatica
  *  bells, oxeye-daisy/buttercup composites; understory-communities.toml). */
 const FLOWER_TINT: Record<FlowerKind, { r: number; g: number; b: number; hueVar: number }> = {
-  umbel: { r: 0.62, g: 0.66, b: 0.55, hueVar: 0.2 }, // pale sage-white florets
-  bell: { r: 0.42, g: 0.44, b: 0.55, hueVar: 0.35 }, // cool pale lilac
-  daisy: { r: 0.7, g: 0.66, b: 0.3, hueVar: 0.3 }, // warm cream-yellow radiate
+  umbel: { r: 0.82, g: 0.83, b: 0.75, hueVar: 0.22 }, // bright creamy-white florets (yarrow/goutweed)
+  bell: { r: 0.42, g: 0.46, b: 0.74, hueVar: 0.4 }, // saturated periwinkle blue-lilac (hepatica/harebell)
+  daisy: { r: 0.86, g: 0.80, b: 0.38, hueVar: 0.36 }, // vivid buttercup/oxeye warm-yellow radiate
 };
 /** understory fern frond tint — fresh mid forest-green with a HIGH hueVar so the
  *  per-pinnule vdata.x jitter (buildFern) spreads warm↔cool across the frond (a
