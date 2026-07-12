@@ -6,7 +6,7 @@ review of `?src=estonia` on :5180. Source specs (design, still valid): `SPEC-STR
 `docs/world/streaming-integration-plan.md`. This doc tracks the *current* task queue + status so the
 plan lives in the repo, not only in session memory.
 
-**Status snapshot (2026-07-12):** HEAD `2e12a41`; data manifest `m/fffd3771349f27c7` (cook_rev 4:
+**Status snapshot (2026-07-12):** HEAD `ca21e52`; data manifest `m/fffd3771349f27c7` (cook_rev 4:
 whole-country coarse biome + carved riverbed depth + α coverage). Canonical test URL (hard-reload after a manifest change):
 `http://localhost:5180/?scene=world&src=estonia&dataurl=http://localhost:8787`. Generated-world
 determinism baseline: scatter `veg.trees 188724 / under 495241 / extras 25131 / stones 453230`
@@ -52,7 +52,8 @@ The renderer currently expresses far less than asset-gen distinguishes. These la
 
 | # | Task | Status | Gap |
 |---|---|---|---|
-| 111 | Terrain MATERIALS → full palette + wire soil | ⏳ QUEUED | asset-gen has ~10 discrete ETAK landcover classes + a soil taxonomy (soilType/stoniness/boniteet); shader blends only ~6 materials from continuous fields, discrete classes collapse to grass/forest/soil, and the SOIL layer is UNWIRED (hardcoded constant). Map classes → distinct materials + wire soil. Near #106. |
+| 111 | Terrain MATERIALS → classId palette (soil deferred) | ✅ DONE (classId) | `ca21e52`. classId (already streamed) → distinct materials: peat/bog dark wet, arable field earthier, barren/sand dry — co-gated by real fields, compile-gated OFF for generated (Biome enum overlaps ETAK ids — landmine caught). Shader-only, 0 VRAM. SOIL taxonomy wiring deferred → #116. |
+| 116 | Wire cooked SOIL taxonomy (soilType/stoniness/boniteet) — follow-up to #111 | ⏳ QUEUED | soil layer cooked but not in any runtime plane; needs a soil TerrainField plane + TerrainMaterial modulation (tint/stoniness speckle/richness). |
 | 112 | Tree SPECIES meshes → distinct forms | ✅ DONE (larch+oak) | `44cf5bc`. Added Larch (VegClass 6) + Oak (7) in free tree slots, research-grounded (larch open airy drooping conifer / oak broad stout dome), one buildTree path (inherit #110 age-forms), routed both worlds (Scatter treeK + SpeciesMap LH/TA). Reuse existing bark → 0 new bark VRAM. Right-sized after an over-dense pass (nanite.mb 2070→1839, larch/oak at established per-species rate; ~+20 MB net session). REMAINING (surfaced): aspen/willow/alder/rowan/ash/maple/… still fold to beech/birch — needs an enum renumber (slots 6,7 full). |
 | 106 | Landcover + understory follow coarse multi-km polygons → fine granularity | ⏳ QUEUED | asset-gen R&D: species/density SMOOTH fields interpolated from granular data (noise MAY be a component of a real field, never a randomise-shit "solution"). |
 
