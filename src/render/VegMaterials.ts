@@ -7,13 +7,14 @@
  * Hue/AO are consumed here; sway feeds the Phase-6 wind field.
  */
 
-import { Color, DoubleSide, type DirectionalLight, type Texture, Vector3 } from 'three';
+import { Color, type DataArrayTexture, DoubleSide, type DirectionalLight, Vector3 } from 'three';
 import { MeshPhysicalNodeMaterial, MeshStandardNodeMaterial } from 'three/webgpu';
 import {
   attribute,
   cameraPosition,
   clamp,
   float,
+  int,
   mix,
   normalMap,
   normalWorld,
@@ -26,6 +27,7 @@ import {
 } from 'three/tsl';
 import { fbm3, valueNoise3 } from '../gpu/noise/NoiseTSL';
 import type { NF, NV3, NV4 } from '../gpu/TSLTypes';
+import { BARK_FIELDS } from '../vegetation/BarkField';
 import { applyCaustics } from './Caustics';
 import { runiform } from '../gpu/RenderUniform';
 
@@ -81,27 +83,44 @@ function hueShift(base: NV3, hue: NF, amount: number): NV3 {
 }
 
 /**
- * Synthesized bark material: tileable albedo/cavity + normal/rough/height.
- * Cavity feeds `aoNode` — AO on indirect light only (DEVIATIONS D-1 close).
+ * Bark material for a plain mesh (the gallery review surface): samples the single
+ * 6-layer BarkField array at a fixed layer. The MACRO furrows/ridges are real
+ * displaced geometry (TubeMesh); this only carries albedo tone (B), cavity AO (A),
+ * and the sub-triangle micro-grain normal map (RG). deep/high palette per layer.
+ * `dim` (deadwood) darkens toward dry wood + adds up-side moss / rot from vdata.z.
  */
-export function barkTexturedMaterial(tex: {
-  texA: Texture;
-  texB: Texture;
-}): MeshStandardNodeMaterial {
+export function barkArrayMaterial(
+  tex: DataArrayTexture,
+  layer: number,
+  opts?: { dim?: { r: number; g: number; b: number } },
+): MeshStandardNodeMaterial {
+  const f = BARK_FIELDS[layer] ?? BARK_FIELDS[0];
   const mat = new MeshPhysicalNodeMaterial();
-  mat.name = 'vegBarkTextured';
-  mat.specularIntensity = 0.45;
+  mat.name = 'vegBarkArray';
+  mat.specularIntensity = 0.42;
   const d = vdata();
-  const a = texture(tex.texA, uv() as never) as unknown as NV4;
-  const b = texture(tex.texB, uv() as never) as unknown as NV4;
-  const albedo = a.rgb.mul(a.rgb); // sqrt-encoded at bake
-  mat.colorNode = hueShift(albedo, d.x, 0.14).mul(d.w.mul(0.45).add(0.55));
-  mat.normalNode = normalMap(vec3(b.x, b.y, 1));
-  mat.aoNode = a.w;
-  mat.roughnessNode = b.z;
+  const s = (texture(tex, uv() as never) as unknown as { depth(n: NF): NV4 }).depth(
+    int(layer) as unknown as NF,
+  ) as unknown as NV4;
+  let albedo = mix(
+    vec3(f!.deep[0], f!.deep[1], f!.deep[2]),
+    vec3(f!.high[0], f!.high[1], f!.high[2]),
+    s.b,
+  ) as unknown as NV3;
+  if (opts?.dim) {
+    albedo = albedo.mul(vec3(opts.dim.r, opts.dim.g, opts.dim.b)) as unknown as NV3;
+    const mossN = smoothstep(0.24, 0.58, fbm3(positionWorld.mul(2.6), 3).mul(0.5).add(0.5));
+    const moss = smoothstep(0.05, 0.65, normalWorld.y).mul(d.z).mul(mossN).clamp(0, 1);
+    albedo = mix(albedo, vec3(0.05, 0.1, 0.032), moss) as unknown as NV3;
+    albedo = albedo.mul(float(1).sub(d.z.mul(0.25))) as unknown as NV3; // rot
+    applyCaustics(mat);
+  }
+  mat.colorNode = hueShift(albedo, d.x, 0.12).mul(d.w.mul(0.45).add(0.55));
+  mat.normalNode = normalMap(vec3(s.r, s.g, 1));
+  mat.aoNode = s.a;
+  mat.roughness = 0.92;
   mat.metalness = 0;
-  // tubes are closed — DoubleSide costs ~nothing and guarantees a trunk can
-  // never read hollow regardless of LOD/dither state ("inside-out" report)
+  // tubes are closed — DoubleSide guarantees a trunk never reads hollow.
   mat.side = DoubleSide;
   return mat;
 }
@@ -165,42 +184,6 @@ export function rockMaterial(opts?: {
   mat.metalness = 0;
   // submerged boulders / streambed cobbles dance with the water caustics
   applyCaustics(mat);
-  return mat;
-}
-
-/** deadfall wood: bark textures + moss carpet on the up-side by vdata.z */
-export function deadwoodMaterial(
-  tex: {
-    texA: Texture;
-    texB: Texture;
-  },
-  /** albedo multiplier — branches use the pale snag bark and blow out white
-   *  at noon without a dry-wood darkening */
-  dim?: { r: number; g: number; b: number },
-): MeshStandardNodeMaterial {
-  const mat = new MeshPhysicalNodeMaterial();
-  mat.name = 'vegDeadwood';
-  mat.specularIntensity = 0.45;
-  const d = vdata();
-  const a = texture(tex.texA, uv() as never) as unknown as NV4;
-  const b = texture(tex.texB, uv() as never) as unknown as NV4;
-  let albedo = a.rgb.mul(a.rgb) as unknown as NV3;
-  if (dim) albedo = albedo.mul(vec3(dim.r, dim.g, dim.b)) as unknown as NV3;
-  const mossN = smoothstep(0.24, 0.58, fbm3(positionWorld.mul(2.6), 3).mul(0.5).add(0.5));
-  const moss = smoothstep(0.05, 0.65, normalWorld.y).mul(d.z).mul(mossN).clamp(0, 1);
-  albedo = mix(albedo, vec3(0.05, 0.1, 0.032), moss) as unknown as NV3;
-  // rot darkening for heavily decayed wood
-  albedo = albedo.mul(float(1).sub(d.z.mul(0.25))) as unknown as NV3;
-  mat.colorNode = hueShift(albedo, d.x, 0.1);
-  // logs lying across streams sit in the caustic band
-  applyCaustics(mat);
-  mat.normalNode = normalMap(vec3(b.x, b.y, 1));
-  mat.aoNode = a.w;
-  mat.roughnessNode = mix(b.z, float(1), moss);
-  mat.metalness = 0;
-  // same crossfade insurance as bark: a dither hole in a FrontSide closed
-  // tube shows clean through (interior wall is a back face)
-  mat.side = DoubleSide;
   return mat;
 }
 

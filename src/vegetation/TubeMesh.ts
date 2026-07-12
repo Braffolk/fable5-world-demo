@@ -12,6 +12,7 @@
 
 import { BufferAttribute, BufferGeometry, Vector3 } from 'three';
 import type { Rng } from '../core/Seed';
+import { barkMacro, type BarkFieldParams } from './BarkField';
 import type { SkelBranch, Skeleton } from './VegTypes';
 
 export class MeshGrower {
@@ -365,9 +366,16 @@ function smoothDisc(
 }
 
 interface MeshBranchOpts {
+  /** ring vertex count for SMOOTH (undisplaced) branches (ringsForLevel). */
   ringSegs: number;
-  uRepeats: number;
-  vScale: number;
+  /** world metres per bark tile — sets uRepeats (integer, seam-safe) and
+   *  v = vAlong / tileW (world-proportional; replaces the old ~0.5 m barkRepeats
+   *  mapping). Per branch: uRepeats = max(1, round(2π·baseR / tileW)). */
+  tileW: number;
+  /** bark macro-relief field, or null (smooth ring). When present, thick rings
+   *  (r ≥ ~0.06 m) are displaced into real furrows/ridges + normals recomputed
+   *  from the displaced surface; thin/young bark (r < 0.05 m) stays smooth. */
+  relief: BarkFieldParams | null;
   flare?: { amp: number; height: number; lobes: number; phase: number };
   swayPhase: number;
   swayFlexBase: number;
@@ -375,11 +383,111 @@ interface MeshBranchOpts {
   hue: number;
 }
 
+interface RingSample {
+  p: Vector3;
+  r: number;
+  dir: Vector3;
+}
+
+/** length of a branch polyline (for the along-branch ring-insertion schedule). */
+function branchLength(br: SkelBranch): number {
+  let L = 0;
+  for (let i = 1; i < br.pts.length; i++) {
+    L += (br.pts[i] as Vector3).distanceTo(br.pts[i - 1] as Vector3);
+  }
+  return Math.max(1e-3, L);
+}
+
+/** resample a branch polyline to a target ring spacing (m) that tightens toward
+ *  the base (relief needs along-v resolution there); endpoints preserved so the
+ *  base disc and tip cap still connect. Undisplaced branches skip this. */
+function resampleBranch(br: SkelBranch): RingSample[] {
+  const n = br.pts.length;
+  const total = branchLength(br);
+  const out: RingSample[] = [
+    { p: (br.pts[0] as Vector3).clone(), r: br.radii[0] as number, dir: (br.dirs[0] as Vector3).clone() },
+  ];
+  let acc = 0;
+  const spacingAt = (frac: number): number => (frac < 0.25 ? 0.2 : frac < 0.6 ? 0.5 : 1.0);
+  for (let i = 1; i < n; i++) {
+    const a = br.pts[i - 1] as Vector3;
+    const b = br.pts[i] as Vector3;
+    const segLen = b.distanceTo(a);
+    const spacing = spacingAt(acc / total);
+    const subd = Math.max(1, Math.ceil(segLen / spacing));
+    const ra = br.radii[i - 1] as number;
+    const rb = br.radii[i] as number;
+    const da = br.dirs[i - 1] as Vector3;
+    const db = br.dirs[i] as Vector3;
+    for (let s = 1; s <= subd; s++) {
+      const t = s / subd;
+      out.push({
+        p: new Vector3().lerpVectors(a, b, t),
+        r: ra + (rb - ra) * t,
+        dir: new Vector3().lerpVectors(da, db, t).normalize(),
+      });
+    }
+    acc += segLen;
+  }
+  return out;
+}
+
+/** displacement amplitude ramp (m): 0 below ~0.05 m (young bark smooth), rising
+ *  to macroAmp for thick trunks (≥ 0.25 m). Smooth ramp ⇒ no step at the cutoff. */
+function reliefAmp(field: BarkFieldParams, r: number): number {
+  const gate = smoothstep01(0.05, 0.11, r);
+  return field.macroAmp * gate * Math.min(1, r / 0.25);
+}
+function smoothstep01(a: number, b: number, x: number): number {
+  const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+}
+
+/** vertex normals from the DISPLACED surface (neighbour finite differences over
+ *  the ring grid). Seam-consistent: k and k=seg read the same modular neighbours
+ *  ⇒ identical normals, preserving the welded seam. Oriented outward. */
+function computeSurfaceNormals(
+  posGrid: Vector3[][],
+  samples: RingSample[],
+  seg: number,
+): Vector3[][] {
+  const m = posGrid.length;
+  const out: Vector3[][] = [];
+  const around = new Vector3();
+  const axial = new Vector3();
+  const nrm = new Vector3();
+  const outward = new Vector3();
+  for (let i = 0; i < m; i++) {
+    const ring = posGrid[i] as Vector3[];
+    const ringPrev = posGrid[Math.max(0, i - 1)] as Vector3[];
+    const ringNext = posGrid[Math.min(m - 1, i + 1)] as Vector3[];
+    const center = (samples[i] as RingSample).p;
+    const rn: Vector3[] = [];
+    for (let k = 0; k <= seg; k++) {
+      const kp = (k + 1) % seg;
+      const km = (k - 1 + seg) % seg;
+      around.subVectors(ring[kp] as Vector3, ring[km] as Vector3);
+      axial.subVectors(ringNext[k] as Vector3, ringPrev[k] as Vector3);
+      nrm.crossVectors(axial, around);
+      if (nrm.lengthSq() < 1e-12) nrm.subVectors(ring[k] as Vector3, center);
+      nrm.normalize();
+      outward.subVectors(ring[k] as Vector3, center);
+      if (nrm.dot(outward) < 0) nrm.negate();
+      rn.push(nrm.clone());
+    }
+    out.push(rn);
+  }
+  return out;
+}
+
 /** Mesh one branch as a closed tube: full wall + tip cap + (when junctions on) a
  *  small buried disc closing the base ring so the open boundary loop is gone and
  *  the QEM simplifier can collapse the tree. The parent wall is left SOLID — the
  *  child just interpenetrates it (legacy poke-through), which is what is actually
- *  visible. */
+ *  visible. When `o.relief` is set and the branch is thick, the ring loop cuts the
+ *  bark macro field into the tube (real furrows) and recomputes vertex normals
+ *  from the displaced surface; the u-seam stays bit-identical (field periodic in
+ *  u, uRepeats integer) so the closed-manifold/QEM invariant holds. */
 function meshBranch(
   g: MeshGrower,
   br: SkelBranch,
@@ -391,38 +499,48 @@ function meshBranch(
 ): void {
   const n = br.pts.length;
   if (n < 2) return;
-  const seg = Math.max(4, o.ringSegs);
-  // CAP-ONLY junctions: every branch meshes its FULL tube from the base ring (i=0,
-  // buried on the parent centerline exactly like legacy) and CLOSES that base ring
-  // with a small buried disc. No hole is cut in the parent and no mouth/collar/
-  // zipper is welded. Rationale (root cause of the "blobs"): the parent wall grid
-  // is coarse — sized for a thick trunk (~0.2–1 m quads) — while children are thin
-  // (~0.02–0.1 m radius). A hole cut in that grid can never be smaller than ~one
-  // parent quad, so the welded mouth (sized to the hole rim, then lifted out) was
-  // always a giant faceted funnel many times wider than the tube → the angular
-  // cube/wedge blobs. Closing the buried base ring still yields 0 open edges, so
-  // the QEM simplifier collapses each tree identically (the perf win is preserved),
-  // and the visible result is the legacy clean poke-through tube.
-  const iStart = 0;
+  const baseR = Math.max(br.radii[0] as number, 1e-4);
+  // displace thick trunk + primary rings only (thin twigs stay smooth + cheap).
+  const displaced = o.relief !== null && baseR >= 0.06 && br.level <= 1;
+  const field = o.relief;
+  const seg = displaced
+    ? Math.max(14, Math.min(64, Math.round((2 * Math.PI * baseR) / 0.05)))
+    : Math.max(4, o.ringSegs);
+  // world-proportional tiling: integer repeats around (seam law) + v per metre.
+  const uRepeats = Math.max(1, Math.round((2 * Math.PI * baseR) / o.tileW));
+  const invTileW = 1 / o.tileW;
 
-  const T = new Vector3().copy(br.dirs[0] as Vector3);
+  const samples = displaced ? resampleBranch(br) : br.pts.map((p, i): RingSample => ({
+    p: p as Vector3,
+    r: br.radii[i] as number,
+    dir: br.dirs[i] as Vector3,
+  }));
+  const m = samples.length;
+
+  const T = new Vector3().copy(samples[0]!.dir);
   const N = new Vector3();
   const B = new Vector3();
   axisFrame(T, N, B);
 
+  const baseY = samples[0]!.p.y;
   let vAlong = 0;
-  const baseR = Math.max(br.radii[0] as number, 1e-4);
   const rings: EmittedRing[] = [];
+  // per-ring scratch for the displaced-surface normal recompute
+  const posGrid: Vector3[][] = [];
+  const smoothN: Vector3[][] = [];
+  const uvGrid: { u: number[]; v: number }[] = [];
+  const flexArr: number[] = [];
   let lastRingPos: number[] = [];
 
-  for (let i = 0; i < n; i++) {
-    const p = br.pts[i] as Vector3;
-    const r = br.radii[i] as number;
+  for (let i = 0; i < m; i++) {
+    const s = samples[i]!;
+    const p = s.p;
+    const r = s.r;
     if (i > 0) {
-      const prev = br.pts[i - 1] as Vector3;
+      const prev = samples[i - 1]!.p;
       vAlong += _v.subVectors(p, prev).length();
-      const tPrev = br.dirs[i - 1] as Vector3;
-      const tCur = br.dirs[i] as Vector3;
+      const tPrev = samples[i - 1]!.dir;
+      const tCur = s.dir;
       const axis = _v.crossVectors(tPrev, tCur);
       const sLen = axis.length();
       if (sLen > 1e-6) {
@@ -432,49 +550,76 @@ function meshBranch(
         B.applyAxisAngle(axis, ang).normalize();
       }
     }
-    if (i < iStart) continue;
-    const rNext = br.radii[Math.min(n - 1, i + 1)] as number;
-    const rPrev = br.radii[Math.max(0, i - 1)] as number;
-    const slope = ((rPrev - rNext) * (n - 1)) / Math.max(0.05, br.len) * 0.5;
-    const tt = i / (n - 1);
+    const rNext = samples[Math.min(m - 1, i + 1)]!.r;
+    const rPrev = samples[Math.max(0, i - 1)]!.r;
+    const slope = ((rPrev - rNext) * (m - 1)) / Math.max(0.05, br.len) * 0.5;
+    const tt = i / (m - 1);
     const flex = o.swayFlexBase + (o.swayFlexTip - o.swayFlexBase) * tt;
-    const ids: number[] = [];
+    const tan = s.dir;
+    const amp = displaced ? reliefAmp(field as BarkFieldParams, r) : 0;
+    const vv = vAlong * invTileW;
     const pos: Vector3[] = [];
+    const sn: Vector3[] = [];
+    const us: number[] = [];
     for (let k = 0; k <= seg; k++) {
       const a = (k / seg) * Math.PI * 2;
       const ca = Math.cos(a);
       const sa = Math.sin(a);
       let rr = r;
       if (o.flare && br.level === 0) {
-        const h = (br.pts[i] as Vector3).y - (br.pts[0] as Vector3).y;
+        const h = p.y - baseY;
         const lobe = Math.pow(Math.max(0, Math.cos(o.flare.lobes * a + o.flare.phase)), 1.6);
         rr *= 1 + o.flare.amp * Math.exp(-h / o.flare.height) * (0.45 + 0.9 * lobe);
       }
+      const uu = (k / seg) * uRepeats;
+      if (amp > 0) rr += amp * barkMacro(field as BarkFieldParams, uu, vv).d;
       const dx = N.x * ca + B.x * sa;
       const dy = N.y * ca + B.y * sa;
       const dz = N.z * ca + B.z * sa;
-      const tan = br.dirs[i] as Vector3;
+      pos.push(new Vector3(p.x + dx * rr, p.y + dy * rr, p.z + dz * rr));
+      // smooth analytic normal (used for undisplaced rings; unchanged behaviour)
       let nx = dx + tan.x * slope;
       let ny = dy + tan.y * slope;
       let nz = dz + tan.z * slope;
       const nl = Math.hypot(nx, ny, nz) || 1;
-      nx /= nl; ny /= nl; nz /= nl;
-      const wx = p.x + dx * rr;
-      const wy = p.y + dy * rr;
-      const wz = p.z + dz * rr;
-      pos.push(new Vector3(wx, wy, wz));
+      sn.push(new Vector3(nx / nl, ny / nl, nz / nl));
+      us.push(uu);
+    }
+    posGrid.push(pos);
+    smoothN.push(sn);
+    uvGrid.push({ u: us, v: vv });
+    flexArr.push(flex);
+  }
+
+  // normals: displaced rings recompute from the displaced surface (neighbour
+  // finite differences); undisplaced rings keep the analytic ring normal.
+  const nrmGrid: Vector3[][] = displaced
+    ? computeSurfaceNormals(posGrid, samples, seg)
+    : smoothN;
+
+  // emit vertices
+  for (let i = 0; i < m; i++) {
+    const pos = posGrid[i] as Vector3[];
+    const nrm = nrmGrid[i] as Vector3[];
+    const uvr = uvGrid[i] as { u: number[]; v: number };
+    const flex = flexArr[i] as number;
+    const ids: number[] = [];
+    for (let k = 0; k <= seg; k++) {
+      const pk = pos[k] as Vector3;
+      const nk = nrm[k] as Vector3;
       ids.push(
         g.vertex(
-          wx, wy, wz, nx, ny, nz,
-          (k / seg) * o.uRepeats,
-          (vAlong / (Math.PI * 2 * baseR)) * o.uRepeats * o.vScale,
+          pk.x, pk.y, pk.z, nk.x, nk.y, nk.z,
+          (uvr.u[k] as number), uvr.v,
           o.hue, flex, o.swayPhase, 1,
         ),
       );
     }
     rings.push({ ids, pos });
-    lastRingPos = [];
-    for (const v of pos) lastRingPos.push(v.x, v.y, v.z);
+    if (i === m - 1) {
+      lastRingPos = [];
+      for (const v of pos) lastRingPos.push(v.x, v.y, v.z);
+    }
   }
 
   const R = rings.length;
@@ -547,7 +692,7 @@ function meshBranch(
   } else {
     const tip = g.vertex(
       tipP.x + tipD.x * tipR * 2.0, tipP.y + tipD.y * tipR * 2.0, tipP.z + tipD.z * tipR * 2.0,
-      tipD.x, tipD.y, tipD.z, 0.5, vAlong / (Math.PI * 2 * baseR) + 0.2,
+      tipD.x, tipD.y, tipD.z, 0.5, vAlong * invTileW + 0.2,
       o.hue, o.swayFlexTip, o.swayPhase, 1,
     );
     for (let k = 0; k < seg; k++) {
@@ -563,7 +708,10 @@ export function tubesForSkeleton(
   rng: Rng,
   opts: {
     lodK: number;
-    uRepeats: number;
+    /** world metres per bark tile (species field.tileW) — world-proportional UV. */
+    tileW: number;
+    /** bark macro-relief field (lod-0 hero only); null ⇒ smooth rings (r1/r2). */
+    relief: BarkFieldParams | null;
     flare?: { amp: number; height: number; lobes: number; phase: number };
     /** skip branches at or above this level (LOD cut) */
     maxLevel?: number;
@@ -601,8 +749,8 @@ export function tubesForSkeleton(
       br,
       {
         ringSegs: ringsForLevel(br.level, opts.lodK),
-        uRepeats: br.level === 0 ? opts.uRepeats : Math.max(1, Math.round(opts.uRepeats * 0.4)),
-        vScale: 1,
+        tileW: opts.tileW,
+        relief: opts.relief,
         ...(br.level === 0 && opts.flare ? { flare: opts.flare } : {}),
         swayPhase: rng.float() * Math.PI * 2,
         swayFlexBase: flexB,

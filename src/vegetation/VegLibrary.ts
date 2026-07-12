@@ -6,29 +6,16 @@
  * variant derives from the SAME skeleton (seed.rng(label) is stateless per
  * label) — so a ring transition changes triangle cost, never the tree.
  *
- * Pools carry geometry + a material FACTORY (each indirect draw needs its own
- * material instance for its group-offset uniform); Forests wires instancing,
- * GI, and dither fades on top.
+ * Pools carry geometry + cull data; the nanite resolve shades every opaque part
+ * (bark/deadwood via the shared BarkField array, rock/leaf procedurally), so
+ * there are no per-pool material factories. Forests wires instancing/GI/fades.
  */
 
-import { BufferAttribute, BufferGeometry } from "three";
+import { BufferAttribute, BufferGeometry, type DataArrayTexture } from "three";
 import { BootTrace, yieldIfDue } from "../debug/BootTrace";
-import type { MeshStandardNodeMaterial, Renderer } from "three/webgpu";
 import type { WorldSeed } from "../core/Seed";
-import {
-  bakeBarkArray,
-  bakeBarkTextures,
-  BARK_TABLE,
-  type BarkArrayTextures,
-  type BarkTextures,
-} from "../gpu/passes/BarkSynth";
+import { bakeBarkArray } from "./BarkTexture";
 import { TREE_VARIANTS, VegClass } from "../gpu/passes/Scatter";
-import {
-  barkTexturedMaterial,
-  deadwoodMaterial,
-  foliageMaterial,
-  rockMaterial,
-} from "../render/VegMaterials";
 import { buildLog, buildStump, type DecayState } from "./Deadfall";
 import { twigGeometry } from "./GroundCover";
 import {
@@ -55,16 +42,15 @@ import type { GrowthInstance, SpeciesParams } from "./VegTypes";
 export interface PoolPart {
   geo: BufferGeometry;
   tris: number;
-  make: () => MeshStandardNodeMaterial;
   castShadow: boolean;
 }
 
 export interface VegPool {
   cls: number;
   variant: number;
-  /** BARK_TABLE layer the OPAQUE (parts[0]) bark/deadwood texture uses —
-   *  threaded to the nanite resolve as the texture-array slice (matParam).
-   *  Undefined for rock/leaf pools (no bark texture). */
+  /** BarkField layer the OPAQUE (parts[0]) bark/deadwood uses — threaded to the
+   *  nanite resolve as the texture-array slice (matParam low byte). Undefined for
+   *  rock/leaf pools (no bark). */
   barkLayer?: number;
   /** hero ring (trees only): full bark + real mesh leaves, ≤26 m */
   r0?: PoolPart[] | null;
@@ -179,33 +165,18 @@ export const CROWN_LOD_SCHEDULE = {
 } as const;
 
 export const HERO_DIETS: Record<string, HeroDiet> = {
-  // per-species real-leaf anchor budget + bark radial-seg multiplier for the hero ring.
-  spruce: { meshAnchorTarget: 850, barkK: 0.8 },
-  pine: { meshAnchorTarget: 350, barkK: 0.8 },
-  beech: { meshAnchorTarget: 2200, barkK: 0.5 },
-  birch: { meshAnchorTarget: 4000, barkK: 1 },
-  karst: { meshAnchorTarget: 4000, barkK: 1.1 },
-  snag: { barkK: 1.3 },
-  larch: { meshAnchorTarget: 550, barkK: 0.8 }, // open airy needle crown → fewer anchors
-  // #112 VRAM right-size: barkK 0.7→0.5 (match beech). Oak's measured bark DAG was 2×
-  // beech's; the trunk/limb tube radial resolution is the lever, silhouette-neutral.
-  oak: { meshAnchorTarget: 2400, barkK: 0.5 }, // broad leaf dome, beech-parity bark segs
-  // batch-1 broadleaves: crowns build at the shared global leafAnchorTarget (4000) with
-  // beech/oak-parity clusterSize [2,3] — full lush canopies (a species' airiness comes
-  // from twig DENSITY, not fewer anchors). barkK 0.42 keeps the trunk bark DAG a hair
-  // under beech's 0.5 — silhouette-neutral trunk detail, not a foliage cut.
-  aspen: { barkK: 0.42 },
-  greyAlder: { barkK: 0.42 },
-  blackAlder: { barkK: 0.42 },
-  // batch-2 accent broadleaves: crowns build at the shared global leafAnchorTarget (4000)
-  // with beech/oak-parity clusterSize [2,3] — full lush canopies (airiness is expressed by
-  // twig DENSITY per species, never fewer anchors). barkK 0.42 keeps the trunk bark DAG a
-  // hair under beech's 0.5 — silhouette-neutral trunk detail, not a foliage cut.
-  ash: { barkK: 0.42 },
-  maple: { barkK: 0.42 },
-  lime: { barkK: 0.42 },
-  willow: { barkK: 0.42 },
-  rowan: { barkK: 0.42 },
+  // per-species real-leaf anchor budget for the hero ring. (Trunk bark density is
+  // now radius/relief-driven inside TubeMesh — no per-species radial-seg diet.)
+  spruce: { meshAnchorTarget: 850 },
+  pine: { meshAnchorTarget: 350 },
+  beech: { meshAnchorTarget: 2200 },
+  birch: { meshAnchorTarget: 4000 },
+  karst: { meshAnchorTarget: 4000 },
+  larch: { meshAnchorTarget: 550 }, // open airy needle crown → fewer anchors
+  oak: { meshAnchorTarget: 2400 }, // broad leaf dome
+  // remaining broadleaves build crowns at the shared global leafAnchorTarget (4000)
+  // with beech/oak-parity clusterSize [2,3] — full lush canopies (airiness comes from
+  // twig DENSITY, not fewer anchors), so they need no HeroDiet entry.
 };
 
 export interface VegLib {
@@ -214,9 +185,9 @@ export interface VegLib {
   clsHeight: number[];
   clsRadius: number[];
   clsMaxDist: number[];
-  barks: Map<number, BarkTextures>;
-  /** bark texture-array (slice == BARK_TABLE layer) for the nanite resolve */
-  barkArray: BarkArrayTextures;
+  /** single 6-layer BarkField array (slice == barkLayer) — albedo tone + cavity
+   *  + micro-grain normal for the nanite resolve. Macro relief is real geometry. */
+  barkTex: DataArrayTexture;
 }
 
 /** per-kind leaf-class tint (packLeafTint) for the understory flower pools — the
@@ -354,7 +325,6 @@ function variantInstance(
 }
 
 export async function buildVegLibrary(
-  renderer: Renderer,
   seed: WorldSeed,
   progress: (p: number, msg: string) => void = () => {},
   /** N9-C0: per-crown real-leaf anchor budget for the nanite leaf head (`?naniteleafdensity=N`).
@@ -369,30 +339,12 @@ export async function buildVegLibrary(
   // — the density the user signed off on for spruce + pine; ?naniteleafdensity=N dials it.
   const leafAnchorTarget = opts?.leafAnchorTarget ?? 4000;
   // ---- shared captures -------------------------------------------------------
-  progress(0.2, "veg: baking bark textures");
-  const barks = new Map<number, BarkTextures>();
-  const layers = new Set<number>([
-    ...TREE_SPECIES.map((s) => s.barkLayer),
-    2,
-    5,
-  ]);
-  for (const layer of layers) {
-    barks.set(
-      layer,
-      await bakeBarkTextures(renderer, layer, seed.sub(`bark/${layer}`) % 977),
-    );
-  }
-  const barkOf = (layer: number): BarkTextures => {
-    const b = barks.get(layer);
-    if (!b) throw new Error(`bark layer ${layer} not baked`);
-    return b;
-  };
-  // nanite resolve sampled-array: every BARK_TABLE layer, same per-layer seedK
-  // as the 2D bake above (so the array is visually identical to the old path).
-  const barkArray = await bakeBarkArray(
-    renderer,
-    BARK_TABLE.map((_, layer) => seed.sub(`bark/${layer}`) % 977),
-  );
+  // ONE 6-layer BarkField array (albedo tone + cavity + micro-grain normal),
+  // CPU-baked deterministically. The MACRO furrows/ridges are real displaced
+  // geometry in the trunk tubes (TubeMesh), not a texture — so this replaces the
+  // old ~535 MB of 2048² GPU-baked bark maps with ≈ 8.4 MB.
+  progress(0.2, "veg: baking bark field");
+  const barkTex = await bakeBarkArray();
 
   const pools: VegPool[] = [];
   // sized to the VegClass reserved-block max (ETAK_ERRATIC_CLASS = 31) + 1.
@@ -406,20 +358,13 @@ export async function buildVegLibrary(
 
   // ---- trees: TREE_SPECIES × 4 variants × (R0 hero, R1, R2 LOD rings) --------
   progress(0.3, "veg: growing tree variant pools");
-  const treeParts = (
-    sp: SpeciesParams,
-    t: ReturnType<typeof buildTree>,
-  ): PoolPart[] => {
-    const parts: PoolPart[] = [
-      {
-        geo: t.bark,
-        tris: t.bark.index ? t.bark.index.count / 3 : 0,
-        make: () => barkTexturedMaterial(barkOf(sp.barkLayer)),
-        castShadow: true,
-      },
-    ];
-    return parts;
-  };
+  const treeParts = (t: ReturnType<typeof buildTree>): PoolPart[] => [
+    {
+      geo: t.bark,
+      tris: t.bark.index ? t.bark.index.count / 3 : 0,
+      castShadow: true,
+    },
+  ];
 
   // ?nojunctions — G5 A/B ablation: legacy independent open-tube bark (no welded
   // junctions). DEFAULT is the connected-junction rework (junctions on).
@@ -460,18 +405,17 @@ export async function buildVegLibrary(
       });
       const t1 = buildTree(sp, seed.rng(label), { lod: 1, inst, ageForm: true, junctions: junctionsOn });
       const t2 = buildTree(sp, seed.rng(label), { lod: 2, inst, ageForm: true, junctions: junctionsOn });
-      const r0 = treeParts(sp, t0);
+      const r0 = treeParts(t0);
       if (t0.foliageMesh) {
         r0.push({
           geo: t0.foliageMesh,
           tris: t0.foliageMesh.index ? t0.foliageMesh.index.count / 3 : 0,
-          make: () => foliageMaterial({ color: sp.foliageColor }),
           // mesh-leaf shadow casting would ~double the caster load for little gain
           castShadow: false,
         });
       }
-      const r1 = treeParts(sp, t1);
-      const r2 = treeParts(sp, t2);
+      const r1 = treeParts(t1);
+      const r2 = treeParts(t2);
       const b = bounds(r1.map((p) => p.geo));
       trackCls(ci, b.height, b.radius);
       pools.push({
@@ -537,7 +481,6 @@ export async function buildVegLibrary(
         {
           geo: shrub.bark,
           tris: shrub.barkTris,
-          make: () => barkTexturedMaterial(barkOf(2)),
           castShadow: true,
         },
       ];
@@ -547,7 +490,7 @@ export async function buildVegLibrary(
       pools.push({
         cls,
         variant: v,
-        barkLayer: 2, // shrub opaque part uses barkOf(2) above
+        barkLayer: 2, // shrub opaque part uses bark field layer 2
         r1: parts,
         r2: null,
         trisR1: shrub.barkTris,
@@ -619,10 +562,6 @@ export async function buildVegLibrary(
 
   // ---- extras: deadfall -------------------------------------------------------
   progress(0.86, "veg: deadfall pools");
-  const deadTex = barkOf(5);
-  // weathered-wood darkening: the snag bark bake is pale gray and logs read
-  // as glowing white slivers in noon sun without it
-  const logDim = { r: 0.6, g: 0.52, b: 0.44 };
   const decayOf: DecayState[] = ["fresh", "mossy", "rotten", "mossy"];
   for (let v = 0; v < 4; v++) {
     await yieldIfDue();
@@ -632,12 +571,11 @@ export async function buildVegLibrary(
     pools.push({
       cls: VegClass.Log,
       variant: v,
-      barkLayer: 5, // deadwood: snag bark (barkOf(5))
+      barkLayer: 5, // deadwood: snag bark (field layer 5)
       r1: [
         {
           geo: log.geometry,
           tris: log.tris,
-          make: () => deadwoodMaterial(deadTex, logDim),
           castShadow: true,
         },
       ],
@@ -657,12 +595,11 @@ export async function buildVegLibrary(
     pools.push({
       cls: VegClass.Stump,
       variant: v,
-      barkLayer: 5, // deadwood: snag bark (barkOf(5))
+      barkLayer: 5, // deadwood: snag bark (field layer 5)
       r1: [
         {
           geo: stump.geometry,
           tris: stump.tris,
-          make: () => deadwoodMaterial(deadTex, logDim),
           castShadow: true,
         },
       ],
@@ -683,16 +620,6 @@ export async function buildVegLibrary(
   // only the OLD-path rockMaterial; the nanite resolve is R2's rockShadeV2).
   progress(0.9, "veg: rock library (RockGen)");
   const rockMeshes = await buildRockMeshes(seed.seed);
-  const paleRock = { r: 0.34, g: 0.33, b: 0.3 };
-  const talusRock = { r: 0.35, g: 0.34, b: 0.31 };
-  const rockShadeOf = (cls: number, v: number): { moss: number; tone?: { r: number; g: number; b: number } } => {
-    if (cls === VegClass.Boulder) return v < 2 ? { moss: 0.08, tone: paleRock } : { moss: 0.3 };
-    if (cls === VegClass.Slab) return v < 2 ? { moss: 0.08, tone: paleRock } : { moss: 0.12 };
-    if (cls === VegClass.StoneL) return v < 2 ? { moss: 0.06, tone: talusRock } : { moss: 0.3 };
-    if (cls === VegClass.StoneM) return { moss: 0.12 };
-    if (cls === VegClass.StoneS) return { moss: 0.06 };
-    return { moss: 0.3 }; // EtakErratic heroes
-  };
   const rockMaxDist: Record<number, number> = {
     [VegClass.Boulder]: 700,
     [VegClass.Slab]: 700,
@@ -708,7 +635,6 @@ export async function buildVegLibrary(
       const mesh = rockMeshes.get(`${rockCls.name}/${v}`);
       if (!mesh) throw new Error(`VegLibrary: rock mesh ${rockCls.name}/${v} missing from bake`);
       const geo = rockGeometry(mesh);
-      const { moss, tone } = rockShadeOf(rockCls.classId, v);
       const b = bounds([geo]);
       trackCls(rockCls.classId, b.height, b.radius);
       pools.push({
@@ -718,7 +644,6 @@ export async function buildVegLibrary(
           {
             geo,
             tris: mesh.stats.tris,
-            make: () => rockMaterial({ moss, tone }),
             castShadow: rockCls.classId !== VegClass.StoneS,
           },
         ],
@@ -734,9 +659,7 @@ export async function buildVegLibrary(
 
   // ---- fallen branches (no-bare-ground layer) --------------------------------
   progress(0.93, "veg: branch pools");
-  // fallen branches: scaled twig tubes, deadwood-shaded. Dimmed hard: the
-  // snag-bark albedo is pale gray and read as glowing white sticks at noon.
-  const branchDim = { r: 0.5, g: 0.42, b: 0.34 };
+  // fallen branches: scaled twig tubes, deadwood-shaded (dim/moss in the resolve).
   for (let v = 0; v < 4; v++) {
     await yieldIfDue();
     const geo = twigGeometry(seed.rng(`veg/branch/${v}`));
@@ -747,12 +670,11 @@ export async function buildVegLibrary(
     pools.push({
       cls: VegClass.Branch,
       variant: v,
-      barkLayer: 5, // deadwood: snag bark (barkOf(5))
+      barkLayer: 5, // deadwood: snag bark (layer 5)
       r1: [
         {
           geo,
           tris,
-          make: () => deadwoodMaterial(deadTex, branchDim),
           castShadow: false,
         },
       ],
@@ -762,7 +684,6 @@ export async function buildVegLibrary(
         {
           geo: geo.clone(),
           tris,
-          make: () => deadwoodMaterial(deadTex, branchDim),
           castShadow: false,
         },
       ],
@@ -780,7 +701,6 @@ export async function buildVegLibrary(
     clsHeight,
     clsRadius,
     clsMaxDist,
-    barks,
-    barkArray,
+    barkTex,
   };
 }

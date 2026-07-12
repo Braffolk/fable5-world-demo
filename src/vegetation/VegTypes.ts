@@ -105,10 +105,9 @@ export interface SpeciesParams {
   foliage: FoliageParams | null;
   /** root flare: amplitude, height (m), buttress lobe count */
   flare: { amp: number; height: number; lobes: number };
-  /** bark texture array layer (TexSynth) */
+  /** bark field layer (BarkField.BARK_FIELDS index; drives displacement + UV
+   *  tiling via field.tileW). Multiple species may share a layer. */
   barkLayer: number;
-  /** around-trunk texture repeats at the base */
-  barkRepeats: number;
   /** base foliage albedo + per-instance hue swing */
   foliageColor: { r: number; g: number; b: number; hueVar: number };
   /** flowering: a fraction of capture leaves become blossom-colored */

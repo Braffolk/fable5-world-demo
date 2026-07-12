@@ -8,6 +8,7 @@
 import { Vector3 } from 'three';
 import type { BufferGeometry } from 'three';
 import type { Rng } from '../core/Seed';
+import { BARK_FIELDS, type BarkFieldParams } from './BarkField';
 import { buildLeafCluster, buildSprayAt } from './LeafMesh';
 import { growSkeleton } from './Skeleton';
 import { MeshGrower, tubesForSkeleton } from './TubeMesh';
@@ -130,8 +131,6 @@ function crownLodKeepMask(
 export interface HeroDiet {
   /** real-leaf anchor budget (stride over anchors, full leaf density each) */
   meshAnchorTarget?: number;
-  /** tube radial-segment multiplier (1 = gallery hero) */
-  barkK?: number;
 }
 
 export function buildTree(
@@ -173,12 +172,23 @@ export function buildTree(
   // crown visually owns that level, so its tubes are pure waste.
   const anchorLevel = sp.foliage?.anchorLevel ?? 2;
   const barkG = new MeshGrower();
-  const lodK = lod === 0 ? (opts?.hero?.barkK ?? 1) : lod === 1 ? 0.6 : 0.32;
+  // ring resolution: lod-0 hero trunks are DISPLACED (density is radius/relief-
+  // driven inside meshBranch), so lodK only shapes the smooth r1/r2 rings.
+  const lodK = lod === 0 ? 1 : lod === 1 ? 0.6 : 0.32;
   const maxLevel =
     lod === 0 ? 99 : lod === 1 ? Math.max(1, anchorLevel - 1) : Math.max(1, anchorLevel - 2);
+  // bark field for this species (macro displacement + world-proportional UV).
+  // Only the lod-0 hero gets real relief; r1/r2 own far distances where cm-scale
+  // furrows are sub-pixel, so they stay smooth (cheap). ?barkflat=1 (with
+  // ?nocache=1) forces the legacy smooth prism for A/B of the geometric relief.
+  const field = (BARK_FIELDS[sp.barkLayer] ?? BARK_FIELDS[0]) as BarkFieldParams;
+  const barkFlat =
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('barkflat') === '1';
   tubesForSkeleton(barkG, skel, rng.fork('tubes'), {
     lodK,
-    uRepeats: sp.barkRepeats,
+    tileW: field.tileW,
+    relief: lod === 0 && !barkFlat ? field : null,
     flare: { ...sp.flare, phase: rng.float() * Math.PI * 2 },
     maxLevel,
     branchStride: lod === 2 ? 2 : 1,

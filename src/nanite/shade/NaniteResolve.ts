@@ -20,10 +20,10 @@
  * Bisects (URL-gated): ?nandbg=flat (albedo, no shading) | albedo | normal |
  * cov (covered px red) | cls (matClass tint) | cluster (meshlet hash tint, like
  * the ?nanitedbg=cluster view but for the full-frame migrated set); ?nandepth=0
- * (depth write off); ?nanshadow=0; ?nanwind=0; ?nanbark=const|lN|grad.
+ * (depth write off); ?nanshadow=0; ?nanwind=0; ?nanbark=const|lN.
  */
 
-import { Mesh, Sphere, Vector3 } from 'three';
+import { Mesh, Sphere, Vector3, Vector4 } from 'three';
 import { BufferGeometry, Float32BufferAttribute } from 'three';
 import type { Texture } from 'three';
 import { NodeMaterial, type StorageTexture } from 'three/webgpu';
@@ -61,7 +61,7 @@ import { causticContext, causticDepth, causticTint } from '../../render/Caustics
 import { buildTerrainShading } from '../../render/TerrainMaterial';
 import { sunU } from '../../render/VegMaterials';
 import { canopyAt } from '../../gpu/passes/Scatter';
-import { BARK_RES } from '../../gpu/passes/BarkSynth';
+import { BARK_FIELDS, BARK_TEX_RES } from '../../vegetation/BarkField';
 import { fbm3, valueNoise3 } from '../../gpu/noise/NoiseTSL';
 import type { ProbeGI } from '../../gpu/passes/ProbeGI';
 import type { Heightfield } from '../../world/Heightfield';
@@ -74,7 +74,7 @@ import { GRASS_FAR_BASE } from '../grass/NaniteGrass';
 import { CLHW_MAX, hashColor, instRotateDir, instTransformPoint, instYaw, type NaniteCam } from '../NaniteCommon';
 import { clusterHwClass } from '../cull/NaniteHwClass';
 import type { NaniteVisBuffers } from '../raster/NaniteRaster';
-import { bcU2F, elemU, toF } from '../Tsl';
+import { bcU2F, elemU, toF, uniformArrV4 } from '../Tsl';
 import type { BufOf, UV2 } from '../Tsl';
 
 export interface NaniteResolveHandles {
@@ -120,10 +120,10 @@ export interface ResolveWorld {
   /** P4: baked heightfield sun-visibility (FarShadow, 1 bilinear tap) — the
    *  beyond-clipmap far-field term (mountains shade valleys at any distance). */
   farShadow?: ((wxz: NV2) => NF) | null;
-  /** bark/deadwood texture-array (texA albedo+cavity, texB normal+rough+height);
-   *  sampled at the per-mesh layer slice (mesh word 7). null = bark unported. */
-  barkTexA: Texture | null;
-  barkTexB: Texture | null;
+  /** bark/deadwood BarkField array (RG = micro-grain normal.xy, B = albedo tone,
+   *  A = cavity AO); sampled at the per-mesh layer slice (mesh word 7). The MACRO
+   *  furrows/ridges are real displaced geometry, not this texture. null = unported. */
+  barkTex: Texture | null;
   /** N5-R0 (D-N28): nanite's own depth-only shadow path. When present, the resolve
    *  takes the sun-shadow factor from shadowFactor() (PCSS over our r32 cascade
    *  textures). null = no sun-shadow receive. */
@@ -272,8 +272,7 @@ export function buildNaniteResolve(
   const nandbg = q.get('nandbg');
   // SW/HW crossover px for the ?nandbg=clhw split tint (matches the raster's CLHW_MAX).
   const clhwMax = CLHW_MAX;
-  // ?nanbark= bisect: const (flat brown) | lN (force mip N) | grad (anisotropic
-  // ray-plane derivatives — known NaN on near trunks, default is analytic LOD)
+  // ?nanbark= bisect: const (flat brown) | lN (force mip N). Default = analytic LOD.
   const nanbark = q.get('nanbark');
   // ?nanshadow=0 — master off for the whole nanite shadow system (this receive
   // term AND the per-cascade producer in NaniteFrame read the same flag). Default
@@ -640,19 +639,27 @@ export function buildNaniteResolve(
       ao.assign(rk.ao);
     });
 
-    // ---- BARK + DEADWOOD shading (N4-C3): textured trunks/snags. Same
-    // explicit-mesh fetch as rock, plus per-vertex UV interpolation, a tangent
-    // frame from the triangle edges for the normal map, analytic UV gradients
-    // (neighbour-pixel rays intersected with THIS triangle's plane → no
-    // silhouette mip spike), and the bark texture-ARRAY sampled at the per-mesh
-    // layer slice (mesh word 7). Diffuse-only (roughness unused, like terrain/
-    // rock). Trunk WIND rides in via fetchWorldVert at the C3 second commit.
+    // ---- BARK + DEADWOOD shading (N4-C3): the MACRO furrows/ridges are REAL
+    // displaced geometry (TubeMesh cuts the BarkField into the trunk tube), so
+    // this only reads the single BarkField array (RG = micro-grain normal.xy,
+    // B = albedo tone, A = cavity AO) at the per-mesh layer slice (mesh word 7).
+    // albedo = mix(deep, high, tone) from the per-layer palette. NO POM / NO
+    // parallax — the depth is honest geometry. Diffuse-only. Trunk WIND rides in
+    // via fetchWorldVert. Same explicit-mesh fetch as rock + a tangent frame for
+    // the micro-grain normal map (near only).
     const isB = matClass.equal(uint(2)).toVar();
     const isD = matClass.equal(uint(3)).toVar();
     const isBD = isB.or(isD).toVar();
-    if ((pass === 'mesh' || pass === 'both') && world.barkTexA && world.barkTexB && (hasClass(2) || hasClass(3))) {
-      const barkTexA = world.barkTexA;
-      const barkTexB = world.barkTexB;
+    if ((pass === 'mesh' || pass === 'both') && world.barkTex && (hasClass(2) || hasClass(3))) {
+      const barkTex = world.barkTex;
+      // per-layer palette (deep/high albedo + mottle in .w) — BarkField constants
+      // as a uniform array indexed by the mesh layer. albedo = mix(deep, high, tone).
+      const barkDeep = uniformArrV4(
+        BARK_FIELDS.map((f) => new Vector4(f.deep[0], f.deep[1], f.deep[2], f.mottle)),
+      );
+      const barkHigh = uniformArrV4(
+        BARK_FIELDS.map((f) => new Vector4(f.high[0], f.high[1], f.high[2], 0)),
+      );
       If(isBD, () => {
         const instId = item.x;
         const localTri = pRaw.bitAnd(uint(CLUSTER_TRI_MASK));
@@ -681,7 +688,7 @@ export function buildNaniteResolve(
         ) as unknown as NV3;
 
         // tangent frame (world-space): T along +U, Gram-Schmidt vs the normal,
-        // Bi = N×T. Edge/uv-delta solve (Lengyel) — bark texB.xy perturbs it.
+        // Bi = N×T. Edge/uv-delta solve (Lengyel) — the micro-grain normal xy perturbs it.
         const e1 = w1.sub(w0);
         const e2 = w2.sub(w0);
         const du1 = vb.uv.x.sub(va.uv.x);
@@ -694,33 +701,14 @@ export function buildNaniteResolve(
         const T = normalize(Traw.sub(gnrm.mul(dot(gnrm, Traw)))) as unknown as NV3;
         const Bi = normalize(cross(gnrm, T)) as unknown as NV3;
 
-        // analytic mip LOD (NaN-proof, isotropic): world size of one screen
-        // pixel at the surface vs world size of one bark texel. |Traw|/|Braw| =
-        // world metres per uv unit; bark tiles once per uv unit (BARK_RES texels/
-        // unit). Conservative axis (min world-per-texel) to anti-alias. The
-        // hardware auto-mip is unusable here (uv is computed in non-uniform
-        // control flow → undefined derivatives); anisotropic .grad() is future
-        // work (?nanbark=grad — the ray-plane neighbour path NaNs on near trunks).
-        const C = camPos; // S6d: absolute (matches the absolute cameraWorldMatrix rayDir below)
+        // analytic isotropic mip LOD (NaN-proof): uv is computed in non-uniform
+        // control flow ⇒ hardware derivatives are undefined. World size of one
+        // screen pixel vs one bark texel (BARK_TEX_RES texels per tile).
+        const C = camPos;
         const dist = wp.sub(C).length();
         const pixWorld = dist.mul(2).div(float(cam.cotHalfFov).mul(float(cam.uH)));
-        const wPerTexel = Traw.length().min(Braw.length()).div(BARK_RES).max(1e-6);
+        const wPerTexel = Traw.length().min(Braw.length()).div(BARK_TEX_RES).max(1e-6);
         const lod = pixWorld.div(wPerTexel).max(1e-4).log2().max(0);
-        const planeN = normalize(cross(e1, e2)) as unknown as NV3;
-        const rayDir = (suv: NV2): NV3 => {
-          const vpN = getViewPosition(suv, zDev, cameraProjectionMatrixInverse) as unknown as NV3;
-          const wd = (
-            (cameraWorldMatrix as unknown as { mul(v: NV4): NV4 }).mul(
-              (vec4 as unknown as (a: NV3, b: number) => NV4)(vpN, 0),
-            ) as unknown as NV4
-          ).xyz as unknown as NV3;
-          return normalize(wd) as unknown as NV3;
-        };
-        const uvAt = (dir: NV3): NV2 => {
-          const tt = dot(planeN, w0.sub(C)).div(dot(planeN, dir).add(1e-8));
-          const bh = baryWeights(C.add(dir.mul(tt)) as unknown as NV3, w0, w1, w2);
-          return va.uv.mul(bh.x).add(vb.uv.mul(bh.y)).add(vc.uv.mul(bh.z)) as unknown as NV2;
-        };
 
         const layer = int(fetch.meshWord(ctx.meshId, 7).bitAnd(uint(0xff)));
         // ?nanbark=const — flat brown, no texture (fetch/branch sanity)
@@ -732,38 +720,25 @@ export function buildNaniteResolve(
         }
         // ?nanbark=lN — force mip level N (inspect the generated chain)
         const lvlMatch = nanbark ? /^l(\d+)$/.exec(nanbark) : null;
-        const sample = (t: Texture): NV4 => {
-          const base = texture(t, uvv as never) as unknown as TexSample;
-          if (lvlMatch)
-            return (base.depth(layer) as unknown as { level(n: number): NV4 }).level(
-              Number(lvlMatch[1]),
-            );
-          if (nanbark === 'grad') {
-            const dUVdx = uvAt(
-              rayDir(screenUV.add(vec2(float(1).div(float(cam.uW)), 0)) as unknown as NV2),
-            ).sub(uvv) as unknown as NV2;
-            const dUVdy = uvAt(
-              rayDir(screenUV.add(vec2(0, float(1).div(float(cam.uH)))) as unknown as NV2),
-            ).sub(uvv) as unknown as NV2;
-            return base.depth(layer).grad(dUVdx, dUVdy) as unknown as NV4;
-          }
-          // DEFAULT: analytic isotropic mip LOD (NaN-proof)
-          return (base.depth(layer) as unknown as { level(n: unknown): NV4 }).level(lod);
-        };
-        const tA = sample(barkTexA);
+        const base = texture(barkTex, uvv as never) as unknown as TexSample;
+        const s = (
+          lvlMatch
+            ? (base.depth(layer) as unknown as { level(n: number): NV4 }).level(Number(lvlMatch[1]))
+            : (base.depth(layer) as unknown as { level(n: unknown): NV4 }).level(lod)
+        ) as unknown as NV4;
 
-        // albedo: sqrt-decoded texture, bark (hue+cavity) vs deadwood (dim+moss+rot)
-        const tex = tA.rgb.mul(tA.rgb) as unknown as NV3;
-        const barkAlb = hueShift(tex, dv.x, 0.14).mul(dv.w.mul(0.45).add(0.55)) as unknown as NV3;
-        // ?resfar (default 60 m, 0 = off): DISTANCE-GATED micro-detail. Beyond the gate the
-        // 3-octave fbm moss noise and the tangent-frame + normal-map perturbation are
-        // sub-texel (<1 px) — pure per-pixel ALU with no visible contribution. The pixel-
-        // scaling law (2026-07-02) makes per-pixel cost 60-73% of the frame, so far bark
-        // pixels take the cheap side: geometric normal + no moss. Branches are distance-
-        // coherent on screen (low divergence).
+        // albedo = mix(deep, high, tone). world-anchored value mottle kills tiling.
+        const deep = barkDeep.element(layer);
+        const high = barkHigh.element(layer);
+        const mott = valueNoise3(wp.mul(0.35)).sub(0.5).mul(deep.w.mul(2));
+        let barkAlb = mix(deep.xyz, high.xyz, s.b).mul(mott.add(1)) as unknown as NV3;
+        barkAlb = hueShift(barkAlb, dv.x, 0.14) as unknown as NV3;
+        // ?resfar (default 60 m, 0 = off): DISTANCE-GATED micro-detail. Beyond the
+        // gate the moss fbm + normal-map perturbation are sub-texel; far bark takes
+        // the cheap side (geometric normal, no moss). Distance-coherent on screen.
         const detailNear = resFarDist > 0 ? dist.lessThan(float(resFarDist)) : null;
-        // deadwood dim (logDim, representative — energy-correct, not per-pool)
-        let deadAlb = tex.mul(vec3(0.6, 0.52, 0.44)) as unknown as NV3;
+        // deadwood: dry-wood dim (representative logDim) + up-side moss + rot
+        let deadAlb = mix(deep.xyz, high.xyz, s.b).mul(vec3(0.6, 0.52, 0.44)) as unknown as NV3;
         const moss = float(0).toVar();
         const mossBody = (): void => {
           const mossN = smoothstep(0.24, 0.58, fbm3(wp.mul(2.6), 3).mul(0.5).add(0.5));
@@ -775,15 +750,12 @@ export function buildNaniteResolve(
         deadAlb = deadAlb.mul(float(1).sub(dv.z.mul(0.25))) as unknown as NV3; // rot
         deadAlb = hueShift(deadAlb, dv.x, 0.1) as unknown as NV3;
 
-        // tangent-space normal map (three normalMap: n = tex·2−1, z kept = 1) — near only
+        // micro-grain normal map (RG) — near only; macro relief is real geometry.
         const pert = (vec3(gnrm.x, gnrm.y, gnrm.z) as unknown as NV3).toVar();
         const pertBody = (): void => {
-          const tB = sample(barkTexB); // the normal-map sample is paid on the near side only
           pert.assign(
             normalize(
-              T.mul(tB.x.mul(2).sub(1))
-                .add(Bi.mul(tB.y.mul(2).sub(1)))
-                .add(gnrm),
+              T.mul(s.r.mul(2).sub(1)).add(Bi.mul(s.g.mul(2).sub(1))).add(gnrm),
             ) as unknown as NV3,
           );
         };
@@ -792,9 +764,8 @@ export function buildNaniteResolve(
 
         // AUDIT-1a: per-instance warm/cool + value jitter (slotHash 17/91) — the
         // variation law the old path applied via applyInstanceTint (tintK 0.12).
-        // Without it a mesh's ~4k instances share one colour (the original's
-        // "migration clones trees" — banned). Same math, keyed on the persistent
-        // scatter slot (instId), on TOP of the per-vertex hueShift above.
+        // Without it a mesh's ~4k instances share one colour (banned). Keyed on the
+        // persistent scatter slot (instId), on TOP of the per-vertex hueShift above.
         const tK = 0.12;
         const h1 = slotHash(instId, 17);
         const h2 = slotHash(instId, 91);
@@ -806,7 +777,7 @@ export function buildNaniteResolve(
         const tintVal = h2.mul(tK * 1.6).add(1 - tK * 0.8);
         albedo.assign((isD.select(deadAlb, barkAlb) as unknown as NV3).mul(warmCool).mul(tintVal));
         wNormal.assign(pert);
-        ao.assign(tA.w as unknown as NF);
+        ao.assign(s.a as unknown as NF);
       });
     }
 

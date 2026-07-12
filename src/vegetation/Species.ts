@@ -53,7 +53,6 @@ export const SPRUCE: SpeciesParams = {
   },
   flare: { amp: 0.5, height: 1.0, lobes: 5 },
   barkLayer: 0,
-  barkRepeats: 5,
   foliageColor: { r: 0.045, g: 0.10, b: 0.05, hueVar: 0.24 },
   brokenTop: 0,
   stubChance: 0.02,
@@ -103,7 +102,6 @@ export const PINE: SpeciesParams = {
   },
   flare: { amp: 0.42, height: 0.8, lobes: 4 },
   barkLayer: 1,
-  barkRepeats: 4,
   foliageColor: { r: 0.04, g: 0.092, b: 0.048, hueVar: 0.22 },
   brokenTop: 0,
   stubChance: 0.04,
@@ -155,7 +153,6 @@ export const BEECH: SpeciesParams = {
   },
   flare: { amp: 0.55, height: 1.2, lobes: 6 },
   barkLayer: 2,
-  barkRepeats: 4,
   foliageColor: { r: 0.06, g: 0.145, b: 0.035, hueVar: 0.3 },
   brokenTop: 0,
   stubChance: 0.02,
@@ -207,7 +204,6 @@ export const BIRCH: SpeciesParams = {
   },
   flare: { amp: 0.32, height: 0.7, lobes: 4 },
   barkLayer: 3,
-  barkRepeats: 3,
   foliageColor: { r: 0.075, g: 0.15, b: 0.03, hueVar: 0.34 },
   brokenTop: 0,
   stubChance: 0.03,
@@ -259,7 +255,6 @@ export const KARST_GNARL: SpeciesParams = {
   },
   flare: { amp: 0.9, height: 0.7, lobes: 6 },
   barkLayer: 4,
-  barkRepeats: 3,
   foliageColor: { r: 0.05, g: 0.12, b: 0.04, hueVar: 0.24 },
   brokenTop: 0,
   stubChance: 0.1,
@@ -293,7 +288,6 @@ export const SNAG: SpeciesParams = {
   foliage: null,
   flare: { amp: 0.6, height: 0.9, lobes: 5 },
   barkLayer: 5,
-  barkRepeats: 4,
   foliageColor: { r: 0.1, g: 0.09, b: 0.07, hueVar: 0.1 },
   brokenTop: 0.62,
   stubChance: 0.28,
@@ -361,7 +355,6 @@ export const LARCH: SpeciesParams = {
   },
   flare: { amp: 0.42, height: 0.9, lobes: 5 },
   barkLayer: 0, // reuse spruce bark (grey-brown vertical fissures ≈ larch) — no new VRAM
-  barkRepeats: 5,
   foliageColor: { r: 0.09, g: 0.175, b: 0.05, hueVar: 0.3 }, // light fresh yellow-green
   brokenTop: 0,
   stubChance: 0.03,
@@ -429,7 +422,6 @@ export const OAK: SpeciesParams = {
   },
   flare: { amp: 0.8, height: 1.3, lobes: 7 }, // buttressed stout base
   barkLayer: 4, // reuse karst deep-ridged bark (≈ oak rugged fissures) — no new VRAM
-  barkRepeats: 4,
   foliageColor: { r: 0.05, g: 0.12, b: 0.035, hueVar: 0.26 }, // deep dull green
   brokenTop: 0,
   stubChance: 0.03,
@@ -497,7 +489,6 @@ export const ASPEN: SpeciesParams = {
   },
   flare: { amp: 0.4, height: 0.9, lobes: 5 },
   barkLayer: 2, // beech smooth pale ≈ aspen greenish-grey — no new bark VRAM
-  barkRepeats: 4,
   foliageColor: { r: 0.07, g: 0.152, b: 0.042, hueVar: 0.34 }, // fresh mid green, high hueVar = flutter shimmer
   brokenTop: 0,
   stubChance: 0.03,
@@ -559,7 +550,6 @@ export const GREY_ALDER: SpeciesParams = {
   },
   flare: { amp: 0.4, height: 0.7, lobes: 4 }, // short suckering base
   barkLayer: 2, // smooth pale grey even in old age — beech layer, no new VRAM
-  barkRepeats: 4,
   foliageColor: { r: 0.082, g: 0.12, b: 0.062, hueVar: 0.26 }, // dull grey-green, low saturation
   brokenTop: 0,
   stubChance: 0.04,
@@ -623,7 +613,6 @@ export const BLACK_ALDER: SpeciesParams = {
   },
   flare: { amp: 0.5, height: 0.9, lobes: 5 }, // basal adventitious prop-root flare
   barkLayer: 0, // spruce narrow vertical grey-brown fissures ≈ dark fissured alder — no new VRAM
-  barkRepeats: 5,
   foliageColor: { r: 0.045, g: 0.105, b: 0.038, hueVar: 0.2 }, // dark leathery green
   brokenTop: 0,
   stubChance: 0.03,
@@ -690,7 +679,6 @@ export const ASH: SpeciesParams = {
   },
   flare: { amp: 0.45, height: 1.0, lobes: 5 },
   barkLayer: 0, // spruce grey-brown vertical fissures ≈ mature ash's fine vertical fissuring
-  barkRepeats: 4,
   foliageColor: { r: 0.07, g: 0.155, b: 0.045, hueVar: 0.28 }, // fresh light green
   brokenTop: 0,
   stubChance: 0.03,
@@ -753,7 +741,6 @@ export const MAPLE: SpeciesParams = {
   },
   flare: { amp: 0.55, height: 1.1, lobes: 6 },
   barkLayer: 0, // spruce grey-brown grooves ≈ Norway maple's shallowly grooved grey-brown bark
-  barkRepeats: 4,
   foliageColor: { r: 0.055, g: 0.14, b: 0.04, hueVar: 0.26 }, // rich mid green
   brokenTop: 0,
   stubChance: 0.03,
@@ -815,7 +802,6 @@ export const LIME: SpeciesParams = {
   },
   flare: { amp: 0.55, height: 1.1, lobes: 6 },
   barkLayer: 2, // beech smooth grey ≈ lime's smooth grey-brown young bark — no new VRAM
-  barkRepeats: 4,
   foliageColor: { r: 0.08, g: 0.16, b: 0.045, hueVar: 0.28 }, // bright fresh lime-green
   brokenTop: 0,
   stubChance: 0.03,
@@ -880,7 +866,6 @@ export const WILLOW: SpeciesParams = {
   },
   flare: { amp: 0.5, height: 0.8, lobes: 5 },
   barkLayer: 0, // spruce deep vertical fissures ≈ white willow's deeply fissured grey-brown bark
-  barkRepeats: 4,
   foliageColor: { r: 0.09, g: 0.135, b: 0.08, hueVar: 0.24 }, // silvery grey-green (pale undersides)
   brokenTop: 0,
   stubChance: 0.03,
@@ -940,7 +925,6 @@ export const ROWAN: SpeciesParams = {
   },
   flare: { amp: 0.35, height: 0.7, lobes: 4 },
   barkLayer: 2, // beech smooth pale grey ≈ rowan's smooth silvery-grey bark — no new VRAM
-  barkRepeats: 3,
   foliageColor: { r: 0.06, g: 0.135, b: 0.04, hueVar: 0.3 }, // mid green
   brokenTop: 0,
   stubChance: 0.03,

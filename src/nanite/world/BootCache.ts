@@ -36,6 +36,11 @@ import srcClusterize from '../build/Clusterize.ts?raw';
 // reshapes the ladder rungs and must invalidate the cached crown DAG.
 import srcTreeBuilder from '../../vegetation/TreeBuilder.ts?raw';
 import srcLeafMesh from '../../vegetation/LeafMesh.ts?raw';
+// bark GEOMETRY: TubeMesh cuts the BarkField macro relief into the trunk tubes at
+// TreeBuilder time, so BOTH must invalidate the cached DAG (a stale cache would
+// serve smooth un-displaced trunks). TubeMesh was previously ABSENT from the hash.
+import srcTubeMesh from '../../vegetation/TubeMesh.ts?raw';
+import srcBarkField from '../../vegetation/BarkField.ts?raw';
 // rock library generator (SPEC-ROCKS): the 'rocks' store caches its meshes and
 // the world-veg 'dags' store caches QEM DAGs built FROM them — an edit must
 // invalidate both.
@@ -90,7 +95,12 @@ import srcRockGen from '../../vegetation/RockGen.ts?raw';
  *  boot would neither build the new species' crowns nor re-key the remapped Estonia trees;
  *  the rev bump forces a clean cold rebuild. No renumber (slots 11–15 were reserved-empty),
  *  so all existing idFs 0–10 + understory/extras/stones are unchanged. */
-const CACHE_REV = 12;
+/*  rev 13 (bark rework): trunk bark is now REAL displaced geometry — TubeMesh cuts
+ *  the BarkField macro furrows/ridges into the lod-0 hero tubes (denser rings/segs,
+ *  recomputed normals) and the UV mapping went world-proportional. The tree bark
+ *  DAGs change shape; TubeMesh.ts + BarkField.ts join SRC_HASH (TubeMesh was absent),
+ *  and the rev forces a clean rebuild across both worlds (shared tree meshes). */
+const CACHE_REV = 13;
 
 const DB_NAME = 'laas-bootcache';
 const STORE = 'artifacts';
@@ -103,7 +113,7 @@ function fnv1a(s: string, h = 0x811c9dc5): number {
   return h >>> 0;
 }
 
-const SRC_HASH = [srcVoxelize, srcBuildDag, srcBuildAgg, srcBuildCrownLod, srcCrownPack, srcFarTiles, srcFarTilesCore, srcFarTilesSplat, srcVoxelBrick, srcVoxelBrickCore, srcClusterize, srcTreeBuilder, srcLeafMesh, srcRockGen]
+const SRC_HASH = [srcVoxelize, srcBuildDag, srcBuildAgg, srcBuildCrownLod, srcCrownPack, srcFarTiles, srcFarTilesCore, srcFarTilesSplat, srcVoxelBrick, srcVoxelBrickCore, srcClusterize, srcTreeBuilder, srcLeafMesh, srcRockGen, srcTubeMesh, srcBarkField]
   .reduce((h, s) => fnv1a(s, h), 0x811c9dc5)
   .toString(16);
 

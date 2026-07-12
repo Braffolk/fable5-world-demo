@@ -47,7 +47,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   let naniteClasses: ReadonlySet<string> | null = null;
   /** bark texture-array (from VegLib) for the nanite resolve — hoisted out of
    *  the veg block so the full-frame build below can thread it */
-  let naniteBark: { texA: import('three').Texture; texB: import('three').Texture } | null = null;
+  let naniteBark: import('three').Texture | null = null;
   const qNan = new URLSearchParams(window.location.search);
   /** nanite is THE renderer (unconditional since 2026-07-10); no debug view =
    *  full-frame mode (N4); `?naniteframe=0` keeps N1 build-only semantics (boot probes) */
@@ -103,7 +103,6 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     // no progress callback: the bar is owned by the serial phases; interleaved
     // updates would jump backwards
     vegLibPromise = buildVegLibrary(
-      engine.renderer,
       seed,
       () => {},
       // N9-C0: ?naniteleafdensity=N caps the nanite leaf head's per-crown anchor
@@ -343,7 +342,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     const lib = await vegLibPromise;
     // sun uniforms feed the nanite terrain shading
     updateSunUniforms(sunSky.sun);
-    naniteBark = lib.barkArray; // resolve bark/deadwood sampled-array (N4-C3)
+    naniteBark = lib.barkTex; // resolve bark/deadwood BarkField array (slice == layer)
 
     // N1-C4: build the GeometryRegistry from all opaque pools
     // (cluster tables + packed mega-buffers only).
@@ -633,8 +632,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
             ? (wxz: import('../gpu/TSLTypes').NV2) => clouds.shadowAt(wxz)
             : null,
         farShadow: farSh ? (wxz: import('../gpu/TSLTypes').NV2) => farSh.visAt(wxz) : null,
-        barkTexA: naniteBark?.texA ?? null,
-        barkTexB: naniteBark?.texB ?? null,
+        barkTex: naniteBark ?? null,
         // S6d KEYSTONE: on the streamed world feed the camera/reconstruct/shadow
         // chain the live StreamOrigin as its render anchor (rebase-rare, 8 km-
         // snapped) so the whole project chain is small-coordinate. Generated ⇒
@@ -707,8 +705,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
           // the ?profile device swap.
           hf.noiseA && { tex: hf.noiseA },
           hf.noiseB && { tex: hf.noiseB },
-          bark && { tex: bark.texA, mips: true },
-          bark && { tex: bark.texB, mips: true },
+          bark && { tex: bark, mips: true },
           canopyTex && { tex: canopyTex },
         ] as ({ tex: import('three').Texture; mips?: boolean } | null | false | undefined)[]
       ).filter(Boolean) as { tex: import('three').Texture; mips?: boolean }[],

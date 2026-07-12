@@ -133,7 +133,6 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
   BootTrace.phase('forest: veg library (trees + bark textures)');
   ctx.progress(0.1, 'forest: building veg library');
   const lib = await buildVegLibrary(
-    engine.renderer,
     seed,
     (p, m) => ctx.progress(0.1 + p * 0.4, m),
     { leafAnchorTarget: leafDensity },
@@ -520,8 +519,7 @@ export async function buildForestScene(ctx: WorldContext): Promise<void> {
     const frame = buildNaniteFrame(engine, reg, hf, field, post, {
       gi: null,
       canopyTex: null,
-      barkTexA: lib.barkArray?.texA ?? null,
-      barkTexB: lib.barkArray?.texB ?? null,
+      barkTex: lib.barkTex ?? null,
     });
     engine.post = frame as unknown as typeof engine.post;
     // S3b finale: the env heightfield now feeds only noise + macro params —

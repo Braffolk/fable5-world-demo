@@ -21,11 +21,10 @@ import { MeshStandardNodeMaterial } from 'three/webgpu';
 import { float, mix, positionWorld, smoothstep, vec3 } from 'three/tsl';
 import type { NF } from '../gpu/TSLTypes';
 import { hash12 } from '../gpu/noise/NoiseTSL';
-import { bakeBarkTextures, type BarkTextures } from '../gpu/passes/BarkSynth';
+import { bakeBarkArray } from '../vegetation/BarkTexture';
 import { PostStack } from '../render/PostStack';
 import {
-  barkTexturedMaterial,
-  deadwoodMaterial,
+  barkArrayMaterial,
   flowerMaterial,
   foliageMaterial,
   mushroomMaterial,
@@ -147,16 +146,9 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
     return { x, z };
   };
 
-  // ---- bark textures (synthesized per species layer) -------------------------
-  ctx.progress(0.09, 'gallery: synthesizing bark');
-  const barks = new Map<number, BarkTextures>();
-  for (const sp of TREE_SPECIES) {
-    if (barks.has(sp.barkLayer)) continue;
-    barks.set(
-      sp.barkLayer,
-      await bakeBarkTextures(engine.renderer, sp.barkLayer, seed.sub(`bark/${sp.barkLayer}`) % 977),
-    );
-  }
+  // ---- bark field (single 6-layer array; MACRO relief is real geometry) ------
+  ctx.progress(0.09, 'gallery: baking bark field');
+  const barkTex = await bakeBarkArray();
 
   // ---- tree row: 6 species × 3 seeds ------------------------------------------
   let totalTris = 0;
@@ -184,8 +176,7 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
         sp.label,
         `seed ${vi} · ${(built.stats.tris / 1000).toFixed(0)}k tris · ${built.stats.height.toFixed(1)} m`,
       );
-      const barkTex = barks.get(sp.barkLayer) as BarkTextures;
-      const barkMesh = new Mesh(built.bark, barkTexturedMaterial(barkTex));
+      const barkMesh = new Mesh(built.bark, barkArrayMaterial(barkTex, sp.barkLayer));
       barkMesh.position.set(at.x, 0.42, at.z);
       barkMesh.castShadow = true;
       barkMesh.receiveShadow = true;
@@ -270,7 +261,7 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
     engine.scene.add(m);
     const vineRng = seed.rng('cliff/vines');
     const vines = buildVines(vineRng, 5.2, 4.2, 9);
-    const stemMat = barkTexturedMaterial(barks.get(4) as BarkTextures);
+    const stemMat = barkArrayMaterial(barkTex, 4);
     const vs = new Mesh(vines.stems, stemMat);
     vs.position.set(71.8, 7.6, RZ + 1.7);
     vs.castShadow = true;
@@ -372,7 +363,7 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
     let sx = 26;
     for (const sp of UNDERSTORY_SPECIES) {
       const shrub = buildShrub(sp, seed.rng(`shrub/${sp.id}`));
-      const bm = new Mesh(shrub.bark, barkTexturedMaterial(barks.get(sp.barkLayer) as BarkTextures));
+      const bm = new Mesh(shrub.bark, barkArrayMaterial(barkTex, sp.barkLayer));
       bm.position.set(sx, 0, GZ);
       bm.castShadow = true;
       bm.receiveShadow = true;
@@ -391,11 +382,11 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
   // ---- dead row: logs (3 decay states), stumps --------------------------------
   ctx.progress(0.95, 'gallery: deadfall');
   const DZ = ROW_Z.dead;
-  const spruceBark = barks.get(0) as BarkTextures;
+  const deadDim = { r: 0.6, g: 0.52, b: 0.44 };
   const decays: DecayState[] = ['fresh', 'mossy', 'rotten'];
   for (let i = 0; i < decays.length; i++) {
     const log = buildLog(seed.rng(`log/${i}`), decays[i] as DecayState);
-    const m = new Mesh(log.geometry, deadwoodMaterial(spruceBark));
+    const m = new Mesh(log.geometry, barkArrayMaterial(barkTex, 5, { dim: deadDim }));
     m.position.set(-22 + i * 9, 0, DZ);
     // keep logs near-perpendicular to the row so they present their length
     m.rotation.y = (seed.rng(`logr/${i}`).float() - 0.5) * 0.8;
@@ -417,7 +408,7 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
   }
   for (let i = 0; i < 2; i++) {
     const st = buildStump(seed.rng(`stump/${i}`));
-    const m = new Mesh(st.geometry, deadwoodMaterial(spruceBark));
+    const m = new Mesh(st.geometry, barkArrayMaterial(barkTex, 5, { dim: deadDim }));
     m.position.set(8 + i * 6, 0, DZ);
     m.castShadow = true;
     m.receiveShadow = true;
@@ -436,7 +427,7 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
       if (!sp) continue;
       const built = buildTree(sp, seed.rng(`hero/${sp.id}`), { foliageMode: 'mesh', junctions: junctionsOn });
       const at = exhibit(hx, HZ, `HERO ${sp.label}`, `${(built.stats.tris / 1000).toFixed(0)}k tris (mesh foliage)`);
-      const bm = new Mesh(built.bark, barkTexturedMaterial(barks.get(sp.barkLayer) as BarkTextures));
+      const bm = new Mesh(built.bark, barkArrayMaterial(barkTex, sp.barkLayer));
       bm.position.set(at.x, 0.42, at.z);
       bm.castShadow = true;
       bm.receiveShadow = true;

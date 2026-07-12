@@ -91,8 +91,7 @@ export function buildNaniteFrame(
     /** P4: baked heightfield sun-visibility (FarShadow) — the beyond-clipmap term
      *  (mountains shade valleys at any distance). Multiplied like cloudShadow. */
     farShadow?: ((wxz: import('../../gpu/TSLTypes').NV2) => NF) | null;
-    barkTexA: import('three').Texture | null;
-    barkTexB: import('three').Texture | null;
+    barkTex: import('three').Texture | null;
     /** S6d PRECISION: the per-frame render anchor A (= StreamOrigin) for the
      *  streamed (Estonia) world — the camera VP / reconstruct / shadow chain is
      *  built RELATIVE to it so f32 stays sub-metre at ~311 km absolute coords.
@@ -356,8 +355,7 @@ export function buildNaniteFrame(
     sunShadows: world.sunShadows,
     cloudShadow: world.cloudShadow,
     farShadow: world.farShadow,
-    barkTexA: world.barkTexA,
-    barkTexB: world.barkTexB,
+    barkTex: world.barkTex,
     naniteShadow: shadow,
     shadowHalf,
     grassProc: grass
