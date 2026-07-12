@@ -59,6 +59,12 @@ export interface TerrainShadingInputs {
    *  (Estonia) rather than snow/rockExposure (the generated world) — gates the
    *  canopy tint so the generated look is bit-identical. */
   hasCanopy: boolean;
+  /** the biome plane's classId channel (channel 0) carries ETAK land-cover ids
+   *  (the cooked Estonia source) rather than the generated world's Biome enum —
+   *  gates the classId→material block so the generated graph is compile-time
+   *  BIT-IDENTICAL. Same cooked-source discriminator as hasCanopy (both ride the
+   *  canopy layer's presence), named for its own meaning at the use site. */
+  landcover: boolean;
   /**
    * surface context override (N4 nanite resolve): explicit world position +
    * camera position instead of the vertex-pipeline TSL singletons. The old
@@ -267,6 +273,62 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
   col = mix(col, forestFloor, forestW);
   col = mix(col, scree, screeW);
   col = mix(col, rockCol, rockW);
+
+  // ---------- land-cover classes (Estonia ETAK classId) -------------------------
+  // The streamed biome plane's channel 0 is the ETAK land-cover class id
+  // (landcover-classes.toml: forest 1, shrub 2, grassland 3, barren 4, sand 5,
+  // field 6, yard 7, bog 8, fen 9, peatfield 10, water 11–13). The continuous
+  // fields (vegDensity/slope) already carry forest/meadow; classId adds the
+  // CATEGORICAL reads those fields cannot infer — peat bog / sedge fen / cut
+  // peatfield (all dark & wet, not bright grass), tilled arable field, and bare
+  // barren/sand. Composited ON TOP of the field result, feathered by the bilinear
+  // class channel and CO-GATED by the real fields (slope/veg) so the intermediate
+  // ids a bilinear sweep crosses between two distant classes don't flash a wrong
+  // material. Estonia carries NO fields layer ⇒ moisture/snow/rock are 0 here, so
+  // classId is the ONLY signal that a flat green texel is a bog. Gated to
+  // `landcover` (the cooked ETAK source): the generated world packs the Biome enum
+  // in classId instead, so its graph is compile-time BIT-IDENTICAL.
+  if (inp.landcover) {
+    const cid = (bio.x as unknown as NF).mul(255);
+    const notRock = rockW.oneMinus();
+    // bare open ground — barren(4) → warm sand(5). Only where the veg field agrees
+    // (suppresses the barren/sand ids a forest↔field sweep crosses in the seam).
+    const bareW = smoothstep(3.55, 4.0, cid)
+      .mul(smoothstep(5.5, 5.05, cid))
+      .mul(smoothstep(0.45, 0.15, vegDensity))
+      .mul(notRock)
+      .mul(0.9);
+    const bareCol = mix(vec3(0.3, 0.27, 0.215), vec3(0.47, 0.41, 0.3), smoothstep(4.5, 5.0, cid))
+      .mul(meso.mul(0.24).add(0.86))
+      .mul(micro.mul(0.14).add(0.92));
+    // arable field(6): tilled earthy tone — warmer and more uniform than the
+    // natural meadow green. Flat ground only.
+    const fieldW = smoothstep(5.55, 6.0, cid)
+      .mul(smoothstep(6.65, 6.15, cid))
+      .mul(smoothstep(0.5, 0.2, slope))
+      .mul(notRock)
+      .mul(0.72);
+    const fieldCol = mix(vec3(0.185, 0.14, 0.09), vec3(0.15, 0.14, 0.078), macroB).mul(
+      meso.mul(0.2).add(0.88),
+    );
+    // peat wetland — bog(8)/fen(9)/peatfield(10): dark wet moss/peat, NOT grass —
+    // the highest-impact class (these otherwise read as generic meadow). bog rusty
+    // sphagnum → fen olive sedge → cut peatfield near-black bare peat. Flat only.
+    const peatW = smoothstep(7.55, 8.1, cid)
+      .mul(smoothstep(10.75, 10.3, cid))
+      .mul(smoothstep(0.4, 0.15, slope))
+      .mul(notRock)
+      .mul(snowW.oneMinus())
+      .mul(0.92);
+    const bogFen = mix(vec3(0.115, 0.086, 0.052), vec3(0.086, 0.1, 0.056), smoothstep(8.0, 9.2, cid));
+    const peatCol = mix(bogFen, vec3(0.046, 0.039, 0.031), smoothstep(9.4, 10.1, cid)).mul(
+      meso.mul(0.18).add(0.88),
+    );
+    col = mix(col, bareCol, bareW) as NV3;
+    col = mix(col, fieldCol, fieldW) as NV3;
+    col = mix(col, peatCol, peatW) as NV3;
+  }
+
   col = mix(col, gravel, riverW.mul(0.85).mul(pondK.oneMinus()));
   col = mix(col, vec3(0.055, 0.052, 0.038), pondK);
   col = mix(col, snowCol, snowW);
