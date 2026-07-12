@@ -79,6 +79,16 @@ const SIGMA = { r: 0.42, g: 0.135, b: 0.095 };
 /** flowmap cycles/s — shared by ripples, foam and the caustic advection */
 export const FLOW_CYC = 0.45;
 
+/** #114/#115 SHORELINE SMOOTHING — coverage-α as a SOFT edge, not a hard mask.
+ *  The geometric mask (discard, no AA) cuts only at these LOW coverage fractions —
+ *  a cheap far-out bound where the opacity ramp is already ≈ 0, so the discard
+ *  boundary is invisible — and the coverage fraction feeds the OPACITY as a
+ *  sub-texel gradient (see coverFeather). No single hard iso-contour survives, so
+ *  the shore stops faceting to the 2 m (near) / 16 m (far) texel grid. Full opacity
+ *  by half-coverage = the true shoreline; near uses a lower eps (finer 2 m texel). */
+const WET_EPS_NEAR = 0.08;
+const WET_EPS_FAR = 0.12;
+
 /** W2: composed sun visibility (clipmap PCSS × cloud × far-shadow) at a world pos */
 export type WaterSunVis = (wp: NV3, n: NV3) => NF;
 
@@ -178,27 +188,34 @@ export function waterMaterial(
   // absorbs neighbourhood-min vs local-bed at the ~2 m sim texel; shoreline crosses
   // 0 exactly at the wet→dry bilinear edge so the opacity feather still finishes it.
   const wetGuard = new URLSearchParams(window.location.search).get('watermask') !== '0';
-  // #114/#115 SHORELINE: the cooked anti-aliased coverage α (Estonia's watercover plane)
-  // makes the wet edge track α's 0.5 iso-contour — bilinear of a FRACTION resolves the
-  // sub-texel shore the binary water mask could only quantize to grid squares. The NEAR
-  // levels (cell < 12 m) read the LOD0 α (fieldWaterCoverage); the FAR levels (#115) read
-  // the ×8 mean-reduced α (fieldWaterCoverageFar) with a MAX-reduced wet surface, so the
-  // far shore stops quantizing to blocky 16 m squares (was: the min-reduced bed dive). A
-  // source with NO watercover plane (the generated world) has hasWaterCoverage=false ⇒ the
-  // OLD binary dive guard + old opacity graph compile VERBATIM (bit-identical generated water).
-  // ?watercover=0 forces the old binary edge (an A/B toggle beside ?watermask —
-  // default on where a coverage plane exists). No-op on the generated world.
-  // (coverOn is hoisted above the vertex block — the #GAP wetSurf gate needs it.)
+  // #114/#115 SHORELINE: the cooked anti-aliased coverage α (Estonia's watercover plane).
+  // The α is genuinely fractional (asset-gen supersamples the water polygons 8× and box-MEANs
+  // them) and is sampled bilinearly, so the SMOOTH sub-texel shore signal exists in the plane.
+  // The trap: a hard `cov > 0.5` MASK (mat.maskNode = a per-fragment discard) has NO anti-
+  // aliasing — it collapses that smooth field to the single 0.5 iso-contour, which runs straight
+  // along the 2 m (near) / 16 m (far) texel edges ⇒ a crisp FACETED "square" shore, and an
+  // opacity feather can't hide it because the mask culls everything below the feather's start.
+  // FIX: cut the mask only at a LOW coverage (WET_EPS — a cheap far-out bound where the ramp is
+  // already ≈ 0, so the discard is invisible) and let the coverage fraction drive the OPACITY as
+  // a soft ramp (coverFeather, applied below). No single hard iso-line survives ⇒ the shore reads
+  // as an organic sub-texel opacity gradient at EVERY distance (near AND far). Full opacity by
+  // half-coverage = the true shoreline. The NEAR levels (cell < 12 m) read the LOD0 α
+  // (fieldWaterCoverage); the FAR levels (#115) read the ×8 mean-reduced α (fieldWaterCoverageFar)
+  // with a MAX-reduced wet surface. A source with NO watercover plane (the generated world) has
+  // hasWaterCoverage=false ⇒ the OLD binary dive guard + old opacity graph compile VERBATIM
+  // (coverFeather stays null ⇒ bit-identical generated water). ?watercover=0 forces the old binary
+  // edge (an A/B toggle beside ?watermask). (coverOn is hoisted above the vertex block — the #GAP
+  // wetSurf gate needs it.)
   let wet: NB;
   let coverFeather: NF | null = null;
   if (coverOn && !lvl.far) {
     const cov = field.fieldWaterCoverage(p);
-    wet = cov.greaterThan(0.5) as unknown as NB;
-    coverFeather = smoothstep(0.35, 0.65, cov) as unknown as NF;
+    wet = cov.greaterThan(WET_EPS_NEAR) as unknown as NB;
+    coverFeather = smoothstep(WET_EPS_NEAR, 0.5, cov) as unknown as NF;
   } else if (coverOn && lvl.far) {
     const covFar = field.fieldWaterCoverageFar(p);
-    wet = covFar.greaterThan(0.5) as unknown as NB;
-    coverFeather = smoothstep(0.35, 0.65, covFar) as unknown as NF;
+    wet = covFar.greaterThan(WET_EPS_FAR) as unknown as NB;
+    coverFeather = smoothstep(WET_EPS_FAR, 0.5, covFar) as unknown as NF;
   } else {
     const bedH = lvl.far ? field.fieldHeightFinestNearest(p) : field.fieldHeightFinest(p);
     wet = positionWorld.y.greaterThan(bedH.sub(0.75)) as unknown as NB;
