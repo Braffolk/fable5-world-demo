@@ -1,10 +1,11 @@
 /**
  * SpeciesMap — the Estonia manifest species dictionary → VegLibrary tree pools
  * (SPEC-STREAMING-WORLD §7, S7). The cooked release enumerates ~21 species ids
- * (code + leaf class + ref height); the library has 6 tree pools (Spruce, Pine,
- * Beech, Birch, KarstGnarl, Snag). This resolver folds the many ids onto the few
- * pools by Estonian forestry code first, then by leaf class, and routes anything
- * it can't place to the LOUD checker placeholder (F15) — logged ONCE at boot.
+ * (code + leaf class + ref height); the library has 11 distinct tree pools (Spruce,
+ * Pine, Beech, Birch, KarstGnarl, Snag, Larch, Oak, Aspen, GreyAlder, BlackAlder).
+ * This resolver folds the many ids onto the pools by Estonian forestry code first,
+ * then by leaf class, and routes anything it can't place to the LOUD checker
+ * placeholder (F15) — logged ONCE at boot.
  *
  * Pure/node-testable (no GPU/DOM). idF = cls·8 + (variant & 3), the VegLibrary
  * pool identity (Scatter.ts TREE_VARIANTS = 4); the generated world never uses
@@ -24,6 +25,9 @@ const CLASS_NAME: Record<number, string> = {
   [VegClass.Snag]: 'Snag',
   [VegClass.Larch]: 'Larch',
   [VegClass.Oak]: 'Oak',
+  [VegClass.Aspen]: 'Aspen',
+  [VegClass.GreyAlder]: 'GreyAlder',
+  [VegClass.BlackAlder]: 'BlackAlder',
 };
 
 /** Estonian forestry codes → the specific library pool the pilot expects. Anything
@@ -32,7 +36,10 @@ const CODE_TO_CLASS: Record<string, VegClass> = {
   MA: VegClass.Pine, // mänd — Scots pine (the pilot's dominant)
   KU: VegClass.Spruce, // kuusk — Norway spruce
   KS: VegClass.Birch, // kask — birch
-  HB: VegClass.Birch, // haab — aspen (broadleaf; birch crown is the closest library pool)
+  HB: VegClass.Aspen, // haab — European aspen (own upright-oval form; was folding to Birch/weeping)
+  PP: VegClass.Aspen, // hybrid poplar — same genus (Populus), reads as aspen (was Beech-fallback)
+  LV: VegClass.GreyAlder, // hall lepp — grey alder (own short open ovoid; was Beech-fallback, 9.8%)
+  LM: VegClass.BlackAlder, // sanglepp — black alder (own conic spire; was Beech-fallback, 4.2%)
   LH: VegClass.Larch, // lehis — larch (#112: own deciduous-conifer form, was folding to Spruce)
   TA: VegClass.Oak, // tamm — pedunculate oak (#112: own broad crown, was folding to Beech)
 };

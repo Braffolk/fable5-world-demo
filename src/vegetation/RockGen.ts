@@ -867,16 +867,18 @@ export function generateRock(
 }
 
 // ---------------------------------------------------------------------------
-// §B library table. Slot-compatible VegClass ids 18-22 (Scatter.ts enum);
-// EtakErratic is the new ETAK-only hero head — class id 24, the first free
-// slot after Branch (23). It has NO scatter kernel: instances come from ETAK
-// boulder records at R3 (0 until then). Variant semantics preserved: v0/1 =
-// pale/talus context, v2/3 = dark/mossy context. domainScale is the per-entry
-// tri-target tuning lever (same archetype serves multiple classes at
-// different grid res).
+// §B library table. classId literals MUST mirror the Scatter.ts VegClass enum
+// (RockGen is a zero-three.js-imports worker module, so it can't import the enum;
+// the reserved-block layout keeps these stable): Boulder 25 / Slab 26 / StoneL 27 /
+// StoneM 28 / StoneS 29 (extras+stones tail). EtakErratic is the ETAK-only hero head
+// — class id 31 (the erratic slot after the reserved tree/understory/extras/stones
+// blocks). It has NO scatter kernel: instances come from ETAK boulder records at R3
+// (0 until then). Variant semantics preserved: v0/1 = pale/talus context, v2/3 =
+// dark/mossy context. domainScale is the per-entry tri-target tuning lever (same
+// archetype serves multiple classes at different grid res).
 
-/** VegClass id of the ETAK-only hero-erratic head (first free slot ≥ 24) */
-export const ETAK_ERRATIC_CLASS = 24;
+/** VegClass id of the ETAK-only hero-erratic head (Scatter.ts reserved-block erratic slot) */
+export const ETAK_ERRATIC_CLASS = 31;
 
 export interface RockVariantSpec {
   archetype: RockArchetype;
@@ -886,7 +888,8 @@ export interface RockVariantSpec {
 
 export interface RockClassSpec {
   name: string;
-  /** VegClass id (Scatter.ts enum for 18-22; ETAK_ERRATIC_CLASS for the hero head) */
+  /** VegClass id — mirrors the Scatter.ts enum (Boulder/Slab/StoneL/StoneM/StoneS =
+   *  25–29; ETAK_ERRATIC_CLASS = 31 for the hero head) */
   classId: number;
   gridRes: number;
   /** LOD0 tri target per variant (SPEC-ROCKS §B, gate ±25%) */
@@ -896,7 +899,7 @@ export interface RockClassSpec {
 
 export const ROCK_LIBRARY: RockClassSpec[] = [
   {
-    name: 'Boulder', classId: 18, gridRes: 64, targetTris: 14000,
+    name: 'Boulder', classId: 25, gridRes: 64, targetTris: 14000,
     variants: [
       { archetype: 'graniteErratic', domainScale: 0.93 },
       { archetype: 'graniteErratic', domainScale: 0.93 },
@@ -905,7 +908,7 @@ export const ROCK_LIBRARY: RockClassSpec[] = [
     ],
   },
   {
-    name: 'Slab', classId: 19, gridRes: 64, targetTris: 12000,
+    name: 'Slab', classId: 26, gridRes: 64, targetTris: 12000,
     variants: [
       { archetype: 'flatCobble', mod: 'large' },
       { archetype: 'flatCobble', mod: 'large' },
@@ -914,7 +917,7 @@ export const ROCK_LIBRARY: RockClassSpec[] = [
     ],
   },
   {
-    name: 'StoneL', classId: 20, gridRes: 48, targetTris: 7000,
+    name: 'StoneL', classId: 27, gridRes: 48, targetTris: 7000,
     variants: [
       { archetype: 'angularShard', domainScale: 1.15 },
       { archetype: 'angularShard', domainScale: 1.15 },
@@ -923,7 +926,7 @@ export const ROCK_LIBRARY: RockClassSpec[] = [
     ],
   },
   {
-    name: 'StoneM', classId: 21, gridRes: 32, targetTris: 2500,
+    name: 'StoneM', classId: 28, gridRes: 32, targetTris: 2500,
     variants: [
       { archetype: 'flatCobble' },
       { archetype: 'flatCobble' },
@@ -932,7 +935,7 @@ export const ROCK_LIBRARY: RockClassSpec[] = [
     ],
   },
   {
-    name: 'StoneS', classId: 22, gridRes: 24, targetTris: 1000,
+    name: 'StoneS', classId: 29, gridRes: 24, targetTris: 1000,
     variants: [
       { archetype: 'pebble', domainScale: 1.22 },
       { archetype: 'pebble', domainScale: 1.22 },

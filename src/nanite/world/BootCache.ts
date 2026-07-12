@@ -76,8 +76,14 @@ import srcRockGen from '../../vegetation/RockGen.ts?raw';
  *  crown — buildShrub now emits a foliage geometry attached as pool.leaf, so the world-veg
  *  'dags' store gains a leaf aggregate DAG per shrub pool. Understory.ts/VegLibrary.ts are
  *  not in the ?raw SRC_HASH list (the job-count change self-invalidates 'dags', but the rev
- *  is the sanctioned explicit invalidation for a geometry-gen change outside SRC_HASH). */
-const CACHE_REV = 10;
+ *  is the sanctioned explicit invalidation for a geometry-gen change outside SRC_HASH).
+ *  rev 11 (species batch-1): VegClass renumber (reserved 16-slot tree block; understory/
+ *  extras/stones/erratic shoved up) + 3 new tree species (Aspen/GreyAlder/BlackAlder). The
+ *  'crowns' store is keyed by idF = class·8+variant and Scatter.ts (home of VegClass) is NOT
+ *  in SRC_HASH, so neither the remapped understory/extras/stone idFs NOR the crown-count
+ *  growth (the 'crowns' get is NOT length-checked) auto-invalidate — a warm boot would else
+ *  serve stale crowns / skip the new species' crowns. Species.ts is also outside SRC_HASH. */
+const CACHE_REV = 11;
 
 const DB_NAME = 'laas-bootcache';
 const STORE = 'artifacts';

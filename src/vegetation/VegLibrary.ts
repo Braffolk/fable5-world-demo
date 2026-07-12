@@ -190,11 +190,24 @@ export const HERO_DIETS: Record<string, HeroDiet> = {
   // #112 VRAM right-size: barkK 0.7→0.5 (match beech). Oak's measured bark DAG was 2×
   // beech's; the trunk/limb tube radial resolution is the lever, silhouette-neutral.
   oak: { meshAnchorTarget: 2400, barkK: 0.5 }, // broad leaf dome, beech-parity bark segs
+  // batch-1 broadleaves: barkK at beech parity (0.5) keeps the trunk bark DAG cheap;
+  // black alder's persistent spire has more bole tube so a hair higher (0.6). Their
+  // crowns cap at the shared leafAnchorTarget with beech-parity clusterSize [2,3], so
+  // per-species crown cost tracks beech (grey/black alder cheaper — smaller/narrower).
+  // heroAnchorCap = the structural VRAM lever: these broadleaves build their crown at
+  // FEWER anchors than the global leafAnchorTarget (4000) — the leaf mesh, LOD ladder,
+  // and voxel crown all scale with anchor count, so this holds the batch under the VRAM
+  // ceiling WITHOUT thinning per-anchor foliage. Values ≈ the researched per-species
+  // budget. barkK 0.42 (under beech's 0.5) trims the bark-tube DAG; both are silhouette-
+  // neutral at range.
+  aspen: { heroAnchorCap: 2600, barkK: 0.42 },
+  greyAlder: { heroAnchorCap: 2300, barkK: 0.42 },
+  blackAlder: { heroAnchorCap: 2400, barkK: 0.42 },
 };
 
 export interface VegLib {
   pools: VegPool[];
-  /** per-class cull data, indexed by VegClass (covers ETAK_ERRATIC_CLASS 24) */
+  /** per-class cull data, indexed by VegClass (covers ETAK_ERRATIC_CLASS 31) */
   clsHeight: number[];
   clsRadius: number[];
   clsMaxDist: number[];
@@ -379,9 +392,10 @@ export async function buildVegLibrary(
   );
 
   const pools: VegPool[] = [];
-  const clsHeight = new Array<number>(25).fill(1);
-  const clsRadius = new Array<number>(25).fill(1);
-  const clsMaxDist = new Array<number>(25).fill(150);
+  // sized to the VegClass reserved-block max (ETAK_ERRATIC_CLASS = 31) + 1.
+  const clsHeight = new Array<number>(32).fill(1);
+  const clsRadius = new Array<number>(32).fill(1);
+  const clsMaxDist = new Array<number>(32).fill(150);
   const trackCls = (cls: number, h: number, r: number): void => {
     clsHeight[cls] = Math.max(clsHeight[cls] ?? 1, h);
     clsRadius[cls] = Math.max(clsRadius[cls] ?? 1, r);
@@ -420,6 +434,10 @@ export async function buildVegLibrary(
       await yieldIfDue();
       const label = `veg/${sp.id}/${v}`;
       const inst = variantInstance(seed, sp.id, v);
+      // per-species hero crown anchor budget: a diet may cap BELOW the global
+      // leafAnchorTarget (VRAM right-size — the crown mesh/ladder/voxel all scale
+      // with anchor count). Unset ⇒ the user-approved global density.
+      const heroAnchorTarget = HERO_DIETS[sp.id]?.heroAnchorCap ?? leafAnchorTarget;
       // hero ring: full tube hierarchy + REAL mesh leaves (the crown the nanite
       // leaf head renders as the WHOLE canopy — no cards in the SW raster, D-N3).
       const t0 = buildTree(sp, seed.rng(label), {
@@ -430,10 +448,11 @@ export async function buildVegLibrary(
         ageForm: true,
         junctions: junctionsOn,
         foliageMode: "mesh",
-        // build the real needle/leaf crown at FULL anchor density (the canopy fill).
+        // build the real needle/leaf crown at the hero anchor density (global default,
+        // or a per-species heroAnchorCap for VRAM right-sizing) — the canopy fill.
         hero: {
           ...(HERO_DIETS[sp.id] ?? {}),
-          meshAnchorTarget: leafAnchorTarget,
+          meshAnchorTarget: heroAnchorTarget,
         },
         // crown-LOD Phase 2: the ladder is NOT built here — regenerating 4 pruned
         // rungs per crown adds ~17 s to EVERY boot (measured; pine +2.5 s/variant),
@@ -489,7 +508,7 @@ export async function buildVegLibrary(
                   foliageMode: "mesh",
                   hero: {
                     ...(HERO_DIETS[spC.id] ?? {}),
-                    meshAnchorTarget: leafAnchorTarget,
+                    meshAnchorTarget: heroAnchorTarget,
                   },
                   crownLodLevels: crownLodScheduleFor(spC),
                 }).foliageLadder)(sp, label, inst),

@@ -4,19 +4,19 @@
  * is N2/N3); this wires the content contract end to end and measures it.
  *
  * Opaque-part policy (PATH UNIFICATION AUDIT):
- *  - tree pools (cls 0–5): bark part of r0/r1/r2 as a discrete LOD chain
- *    (switch at R0_FAR=26 m, R1_FAR=150 m — Forests ring radii); foliage
+ *  - tree pools (cls 0–15, reserved block): bark part of r0/r1/r2 as a discrete LOD
+ *    chain (switch at R0_FAR=26 m, R1_FAR=150 m — Forests ring radii); foliage
  *    CARDS + hero mesh leaves DEFERRED to N9 (alpha/leaf path).
- *  - shrubs (8–10): bark part, single ring, + a co-located MATERIAL_CLASS.leaf
+ *  - shrubs (16–18): bark part, single ring, + a co-located MATERIAL_CLASS.leaf
  *    crown (the tree hero-crown path, scoped to understory: capped at clsMaxDist,
  *    no far-field voxel sibling) so understory reads as leafy, not bare stems.
- *  - ferns/flowers (11–14): PURE-FOLIAGE — the whole plant is a leaf-class mesh
+ *  - ferns/flowers (19–22): PURE-FOLIAGE — the whole plant is a leaf-class mesh
  *    (frond rosette / small bloom), registered as a leaf-class PRIMARY head (the
  *    tree/shrub crown path, bound directly to instances). No opaque head, no voxel
  *    sibling — short-range dense cover capped at clsMaxDist.
- *  - logs/stumps (16–17), branches (23): deadwood, r1 (branch r2 is a clone
+ *  - logs/stumps (23–24), branches (30): deadwood, r1 (branch r2 is a clone
  *    that exists only for indirect-slot bookkeeping — one registration).
- *  - rocks (18–22 + EtakErratic 24): a single RockGen LOD0 ring — continuous
+ *  - rocks (25–29 + EtakErratic 31): a single RockGen LOD0 ring — continuous
  *    LOD rides the QEM DAG (dagClasses always has 'rock'); no discrete r2.
  *  - terrain: ONE heightfield source over the full field (winQuads 7,
  *    partial edge windows), single identity instance.
@@ -113,9 +113,12 @@ export function packLeafTint(c: { r: number; g: number; b: number; hueVar: numbe
   return (u8(c.r) | (u8(c.g) << 8) | (u8(c.b) << 16) | (u8(c.hueVar) << 24)) >>> 0;
 }
 
-// canopy-tree class range is 0..TREE_MAX_CLS (Snag = 5 is special-cased below;
-// #112 added Larch = 6 / Oak = 7 into the free tree block before BushHazel = 8).
-const TREE_MAX_CLS = 7;
+// canopy-tree class range is 0..TREE_MAX_CLS (Snag = 5 is special-cased below).
+// The tree block is a RESERVED 16-slot range (0–15): 0–7 the original set (#112
+// added Larch = 6 / Oak = 7), 8–10 the batch-1 broadleaves (Aspen/GreyAlder/
+// BlackAlder), 11–15 reserved-empty (classify as trees but have no pool — VegLibrary
+// builds pools only for actual TREE_SPECIES). Understory begins at 16, above the gate.
+const TREE_MAX_CLS = 15;
 const SHRUB_CLASSES: ReadonlySet<number> = new Set([
   VegClass.BushHazel,
   VegClass.BushPink,
@@ -240,7 +243,7 @@ export function migratedMatClass(cls: number): MaterialClassId | null {
  *  fetch reads it for the 'trunk' channel (rigid classes ignore it). */
 function windProfile(cls: number): number {
   if (cls === 5) return 1; // snag species
-  if (cls <= TREE_MAX_CLS) return 0; // canopy trees 0–4, larch 6, oak 7
+  if (cls <= TREE_MAX_CLS) return 0; // canopy trees (reserved 0–15 block)
   if (SHRUB_CLASSES.has(cls)) return 2; // understory shrubs
   return 0; // rigid (deadwood/rock) — unused
 }

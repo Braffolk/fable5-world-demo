@@ -435,6 +435,205 @@ export const OAK: SpeciesParams = {
   stubChance: 0.03,
 };
 
+// ---- species batch-1: three prevalent Estonian broadleaves (research-grounded) ----
+//
+// ASPEN — European aspen (Populus tremula, Estonian "haab"; 6.5% of forest area).
+// A large pioneer to ~25 m on a STRAIGHT slender bole, carrying a broad, rounded/oval
+// UPRIGHT crown of small ROUND leaves. Reads distinct from birch precisely because it
+// does NOT weep — branches ASCEND (positive gravitropism, low droop), where birch's
+// twigs stream down (droop 0.4–0.7, negative gravitropism). Smooth pale greenish-grey
+// bark (reuse beech layer). The famous flutter is a leaf-petiole trait, evoked here by a
+// HIGH foliage hueVar (shimmer/autumn-gold variance across the crown), not weeping twigs.
+// (Woodland Trust / Wikipedia / EUFORGEN Populus tremula.)
+export const ASPEN: SpeciesParams = {
+  id: 'aspen',
+  label: 'Aspen (broadleaf)',
+  kind: 'broadleaf',
+  height: [15, 24],
+  trunkRadiusK: 0.016, // slender straight bole
+  crown: 'ellipsoid',
+  asym: 0.26,
+  levels: [
+    {
+      // tall, straight, clean pale bole — minimal wander
+      density: 0, whorl: 0, childStart: 0, childEnd: 0,
+      angleBase: 0, angleTip: 0, lenRatio: 0, lenJitter: 0, radRatio: 0,
+      segs: 11, wander: 0.04, gravitropism: 0.05, droop: 0, tipCurl: 0, taper: 1.1,
+    },
+    {
+      // primaries: fewer + shorter than beech, ASCENDING (aspen does not weep)
+      density: 1.3, whorl: 0, childStart: 0.3, childEnd: 0.95,
+      angleBase: 1.0, angleTip: 0.5, lenRatio: 0.45, lenJitter: 0.28, radRatio: 0.46,
+      segs: 7, wander: 0.1, gravitropism: 0.09, droop: 0.16, tipCurl: 0.14, taper: 0.95,
+    },
+    {
+      // secondaries: sparse, ascending
+      density: 1.7, whorl: 0, childStart: 0.25, childEnd: 0.97,
+      angleBase: 0.9, angleTip: 0.55, lenRatio: 0.42, lenJitter: 0.32, radRatio: 0.5,
+      segs: 4, wander: 0.12, gravitropism: 0.06, droop: 0.14, tipCurl: 0.1, taper: 0.9,
+    },
+    {
+      // slender shiny twigs — airier than beech (density 4.2 vs 8); low droop + neutral
+      // gravitropism = NO weep (the birch contrast). Density is beech-under (VRAM parity
+      // right-size) AND botanically airier — an aspen crown is light and open.
+      density: 3.6, whorl: 0, childStart: 0.18, childEnd: 1.0,
+      angleBase: 0.85, angleTip: 0.55, lenRatio: 0.3, lenJitter: 0.35, radRatio: 0.52,
+      segs: 3, wander: 0.1, gravitropism: 0.0, droop: 0.1, tipCurl: 0.05, taper: 0.85,
+      planar: 0.6,
+    },
+  ],
+  foliage: {
+    kind: 'leafCluster',
+    anchorLevel: 3,
+    // spacing 0.17 (wider than beech 0.13) → fewer leaf anchors: the light open aspen
+    // canopy AND the batch's reliable VRAM lever (thins the leaf mesh + voxel crown).
+    spacing: 0.17,
+    tStart: 0.1,
+    scale: [0.1, 0.14],
+    tilt: 0.95,
+    // clusterSize [1,2] (airier than beech/oak [2,3]) — a light, see-through aspen crown
+    // (the fluttering pioneer canopy) + the batch's biggest VRAM lever
+    clusterSize: [1, 2],
+    normalBend: 0.7,
+    planarLeaves: true,
+    // ROUND blade: width ≈ len, shapePow 1 (rounded, not pointed) — the aspen leaf.
+    // width 0.76 is still clearly round (vs beech 0.42) but trims voxel-crown occupancy.
+    leaf: { len: 1.0, width: 0.76, shapePow: 1.0, fold: 0.14, curl: 0.12, needleCount: 0, brush: 0 },
+  },
+  flare: { amp: 0.4, height: 0.9, lobes: 5 },
+  barkLayer: 2, // beech smooth pale ≈ aspen greenish-grey — no new bark VRAM
+  barkRepeats: 4,
+  foliageColor: { r: 0.07, g: 0.152, b: 0.042, hueVar: 0.34 }, // fresh mid green, high hueVar = flutter shimmer
+  brokenTop: 0,
+  stubChance: 0.03,
+};
+
+// GREY ALDER — Alnus incana (Estonian "hall lepp"; 9.8% — the largest unmodeled species).
+// A fast wet-ground / abandoned-farmland pioneer, SMALL-to-MEDIUM (15–20 m, here 10–18 m),
+// often multi-stemmed/suckering ("scrappy"), with an OPEN, rounded-to-ovoid crown on a
+// relatively short bole; ascending branches. Bark stays SMOOTH GREY even old (beech layer).
+// Leaves ovate, dull, grey-green with a pale underside → a DULLER, greyer, lower-saturation
+// crown than aspen; airier (open) silhouette. Reads as low scrubby wet forest, NOT cathedral
+// beech. (Trees&Shrubs Online / Wikipedia / EUFORGEN Alnus incana.)
+export const GREY_ALDER: SpeciesParams = {
+  id: 'greyAlder',
+  label: 'Grey alder (broadleaf)',
+  kind: 'broadleaf',
+  height: [10, 18],
+  trunkRadiusK: 0.02,
+  crown: 'ellipsoid',
+  asym: 0.32, // open, slightly irregular multi-stem feel
+  levels: [
+    {
+      // short bole with a touch of scrappy wander
+      density: 0, whorl: 0, childStart: 0, childEnd: 0,
+      angleBase: 0, angleTip: 0, lenRatio: 0, lenJitter: 0, radRatio: 0,
+      segs: 8, wander: 0.07, gravitropism: 0.05, droop: 0, tipCurl: 0, taper: 1.1,
+    },
+    {
+      // open ascending primaries — fewer/shorter, scrappier than aspen
+      density: 1.2, whorl: 0, childStart: 0.24, childEnd: 0.95,
+      angleBase: 1.05, angleTip: 0.55, lenRatio: 0.5, lenJitter: 0.34, radRatio: 0.48,
+      segs: 6, wander: 0.14, gravitropism: 0.07, droop: 0.15, tipCurl: 0.1, taper: 0.9,
+    },
+    {
+      density: 1.6, whorl: 0, childStart: 0.2, childEnd: 0.98,
+      angleBase: 0.95, angleTip: 0.55, lenRatio: 0.44, lenJitter: 0.36, radRatio: 0.5,
+      segs: 4, wander: 0.16, gravitropism: 0.05, droop: 0.14, tipCurl: 0.08, taper: 0.88,
+    },
+    {
+      // airiest twig level of the three broadleaves (the open scrappy crown) — density
+      // 3.6 is the lowest of the batch (open wet-ground pioneer) + the deepest VRAM cut.
+      density: 3.1, whorl: 0, childStart: 0.2, childEnd: 1.0,
+      angleBase: 0.85, angleTip: 0.55, lenRatio: 0.3, lenJitter: 0.4, radRatio: 0.5,
+      segs: 3, wander: 0.14, gravitropism: 0.02, droop: 0.12, tipCurl: 0.05, taper: 0.85,
+      planar: 0.4,
+    },
+  ],
+  foliage: {
+    kind: 'leafCluster',
+    anchorLevel: 3,
+    spacing: 0.18, // widest of the batch — the open scrappy wet-ground crown + VRAM lever
+    tStart: 0.1,
+    scale: [0.11, 0.15],
+    tilt: 0.9,
+    clusterSize: [1, 2], // open scrappy wet-ground crown (the airiest of the batch) + VRAM right-size
+    normalBend: 0.66,
+    planarLeaves: true,
+    leaf: { len: 1.0, width: 0.54, shapePow: 1.1, fold: 0.2, curl: 0.15, needleCount: 0, brush: 0 },
+  },
+  flare: { amp: 0.4, height: 0.7, lobes: 4 }, // short suckering base
+  barkLayer: 2, // smooth pale grey even in old age — beech layer, no new VRAM
+  barkRepeats: 4,
+  foliageColor: { r: 0.082, g: 0.12, b: 0.062, hueVar: 0.26 }, // dull grey-green, low saturation
+  brokenTop: 0,
+  stubChance: 0.04,
+};
+
+// BLACK ALDER — Alnus glutinosa (Estonian "sanglepp"; 4.2%, the wet-site / riparian alder).
+// To 20–30 m. SIGNATURE: young trees hold an upright habit with a persistent axial stem —
+// a broad conical crown / narrow broadleaf SPIRE (older trees arch, but the young spire is
+// the read). It is the ONLY broadleaf modeled on a conifer-style 'cone' envelope, so it is
+// instantly distinct — massed in wet hollows near water. Bark dark grey and fissured old
+// (reuse spruce layer). Leaves obovate/racquet, blunt tip, dark leathery green.
+// (Woodland Trust / Wikipedia / NCSU Alnus glutinosa.)
+export const BLACK_ALDER: SpeciesParams = {
+  id: 'blackAlder',
+  label: 'Black alder (broadleaf)',
+  kind: 'broadleaf',
+  height: [16, 26],
+  trunkRadiusK: 0.022,
+  crown: 'cone', // the only broadleaf on a conic envelope — a narrow upright spire
+  asym: 0.28,
+  levels: [
+    {
+      // persistent straight central leader (spruce/larch-style bole → the spire)
+      density: 0, whorl: 0, childStart: 0, childEnd: 0,
+      angleBase: 0, angleTip: 0, lenRatio: 0, lenJitter: 0, radRatio: 0,
+      segs: 16, wander: 0.02, gravitropism: 0.06, droop: 0, tipCurl: 0, taper: 1.05,
+    },
+    {
+      // short ascending primaries — the cone envelope shortens them toward the leader
+      // so the crown reads as a narrow cone, not a broad dome
+      density: 2.0, whorl: 0, childStart: 0.12, childEnd: 0.97,
+      angleBase: 1.35, angleTip: 0.6, lenRatio: 0.32, lenJitter: 0.3, radRatio: 0.34,
+      segs: 6, wander: 0.1, gravitropism: 0.04, droop: 0.18, tipCurl: 0.15, taper: 0.92,
+    },
+    {
+      density: 2.0, whorl: 0, childStart: 0.15, childEnd: 1.0,
+      angleBase: 1.0, angleTip: 0.6, lenRatio: 0.36, lenJitter: 0.34, radRatio: 0.46,
+      segs: 4, wander: 0.12, gravitropism: 0.03, droop: 0.16, tipCurl: 0.1, taper: 0.88,
+    },
+    {
+      // narrow-spire twigs — density 4.0 (VRAM right-size; the cone envelope already
+      // keeps the crown tight so it reads as a spire with fewer twigs)
+      density: 3.4, whorl: 0, childStart: 0.15, childEnd: 1.0,
+      angleBase: 0.9, angleTip: 0.6, lenRatio: 0.3, lenJitter: 0.36, radRatio: 0.5,
+      segs: 3, wander: 0.11, gravitropism: 0.02, droop: 0.12, tipCurl: 0.05, taper: 0.85,
+      planar: 0.4,
+    },
+  ],
+  foliage: {
+    kind: 'leafCluster',
+    anchorLevel: 3,
+    spacing: 0.17, // wider than beech → fewer anchors on the tight spire + VRAM lever
+    tStart: 0.08,
+    scale: [0.11, 0.15],
+    tilt: 0.9,
+    clusterSize: [1, 2], // narrow dark spire (tight cone reads with fewer leaves) + VRAM right-size
+    normalBend: 0.66,
+    planarLeaves: true,
+    // obovate/racquet, blunt tip → rounded (shapePow 1), medium width
+    leaf: { len: 1.0, width: 0.56, shapePow: 1.0, fold: 0.18, curl: 0.12, needleCount: 0, brush: 0 },
+  },
+  flare: { amp: 0.5, height: 0.9, lobes: 5 }, // basal adventitious prop-root flare
+  barkLayer: 0, // spruce narrow vertical grey-brown fissures ≈ dark fissured alder — no new VRAM
+  barkRepeats: 5,
+  foliageColor: { r: 0.045, g: 0.105, b: 0.038, hueVar: 0.2 }, // dark leathery green
+  brokenTop: 0,
+  stubChance: 0.03,
+};
+
 export const TREE_SPECIES: readonly SpeciesParams[] = [
   SPRUCE,
   PINE,
@@ -444,4 +643,7 @@ export const TREE_SPECIES: readonly SpeciesParams[] = [
   SNAG,
   LARCH, // cls 6 (VegClass.Larch)
   OAK, // cls 7 (VegClass.Oak)
+  ASPEN, // cls 8 (VegClass.Aspen)
+  GREY_ALDER, // cls 9 (VegClass.GreyAlder)
+  BLACK_ALDER, // cls 10 (VegClass.BlackAlder)
 ];

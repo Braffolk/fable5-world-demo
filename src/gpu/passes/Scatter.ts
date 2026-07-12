@@ -46,8 +46,10 @@ import type { NF, NI, NU, NV2, NV4 } from '../TSLTypes';
 
 /** geometry-pool class ids (variant index lives in the low 3 bits of idF) */
 export const enum VegClass {
-  // trees — order matches TREE_SPECIES. Slots 6,7 are the free tree block before
-  // the understory (BushHazel = 8): distinct-species forms (#112) land here.
+  // trees (0–15) — order matches TREE_SPECIES. A RESERVED 16-slot block so future
+  // species batches insert without re-renumbering the tail: 0–7 the original set
+  // (#112 added Larch/Oak), 8–10 the batch-1 broadleaves, 11–15 reserved-empty (no
+  // TREE_SPECIES entry ⇒ no pool). Understory begins at 16, cleanly above the block.
   Spruce = 0,
   Pine = 1,
   Beech = 2,
@@ -56,26 +58,30 @@ export const enum VegClass {
   Snag = 5,
   Larch = 6, // deciduous conifer — open light needled cone, drooping branchlets
   Oak = 7, // broad spreading rounded broadleaf, stout bole (Quercus robur)
+  Aspen = 8, // upright rounded-oval broadleaf, does NOT weep (Populus tremula)
+  GreyAlder = 9, // short open ovoid wet-ground pioneer (Alnus incana)
+  BlackAlder = 10, // narrow broadleaf conic spire, wet hollows (Alnus glutinosa)
+  // 11–15 reserved tree slots (future species — no pool until a TREE_SPECIES entry)
   // understory
-  BushHazel = 8,
-  BushPink = 9,
-  Juniper = 10,
-  Fern = 11,
-  FlowerUmbel = 12,
-  FlowerBell = 13,
-  FlowerDaisy = 14,
+  BushHazel = 16,
+  BushPink = 17,
+  Juniper = 18,
+  Fern = 19,
+  FlowerUmbel = 20,
+  FlowerBell = 21,
+  FlowerDaisy = 22,
   // ground extras
-  Log = 16,
-  Stump = 17,
-  Boulder = 18,
-  Slab = 19,
+  Log = 23,
+  Stump = 24,
+  Boulder = 25,
+  Slab = 26,
   // size-stratified ground solids (the "no bare ground" layer): each class
   // draws to the range where it still covers >~2 px — constant screen-space
   // granularity, the aggregate equivalent of nanite cluster selection
-  StoneL = 20, // 0.6–2.2 m → 900 m
-  StoneM = 21, // 0.2–0.6 m → 280 m
-  StoneS = 22, // 6–20 cm → 90 m
-  Branch = 23, // fallen branches on forest floors → 230 m
+  StoneL = 27, // 0.6–2.2 m → 900 m
+  StoneM = 28, // 0.2–0.6 m → 280 m
+  StoneS = 29, // 6–20 cm → 90 m
+  Branch = 30, // fallen branches on forest floors → 230 m
 }
 
 /** structural variants baked per tree species (geometry reuse, D5) */
@@ -352,9 +358,19 @@ export async function runScatter(
       .mul(float(1.2).sub(m.mul(0.5)));
     const w7 = byBiome(s.bioId, [0, 0, 0.05, 0.22, 0.32, 0.03]) // oak
       .mul(m.mul(0.7).add(0.55));
+    // batch-1 broadleaves — same species RE-PICK (accept gate fixed the count, so
+    // veg.trees is byte-identical; only which pool a tree routes to changes). Aspen
+    // is a light-loving pioneer (~moisture-neutral); grey alder a very common wet
+    // pioneer; black alder the wettest (strongest moisture response of the three).
+    const w8 = byBiome(s.bioId, [0, 0.04, 0.1, 0.18, 0.28, 0.3]) // aspen
+      .mul(m.mul(0.3).add(0.8));
+    const w9 = byBiome(s.bioId, [0, 0.05, 0.06, 0.12, 0.22, 0.35]) // grey alder
+      .mul(m.mul(1.0).add(0.4));
+    const w10 = byBiome(s.bioId, [0, 0, 0.04, 0.1, 0.18, 0.3]) // black alder
+      .mul(m.mul(1.3).add(0.25));
 
     const r = cellHash(cell, sT ^ 0x77e1).mul(
-      w0.add(w1).add(w2).add(w3).add(w4).add(w5).add(w6).add(w7),
+      w0.add(w1).add(w2).add(w3).add(w4).add(w5).add(w6).add(w7).add(w8).add(w9).add(w10),
     );
     const sp = int(0).toVar();
     const acc = w0.toVar();
@@ -378,6 +394,18 @@ export async function runScatter(
                 acc.addAssign(w6);
                 If(r.greaterThan(acc), () => {
                   sp.assign(7);
+                  acc.addAssign(w7);
+                  If(r.greaterThan(acc), () => {
+                    sp.assign(8);
+                    acc.addAssign(w8);
+                    If(r.greaterThan(acc), () => {
+                      sp.assign(9);
+                      acc.addAssign(w9);
+                      If(r.greaterThan(acc), () => {
+                        sp.assign(10);
+                      });
+                    });
+                  });
                 });
               });
             });
