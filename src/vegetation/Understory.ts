@@ -227,12 +227,183 @@ function appendGeometry(g: MeshGrower, src: BufferGeometry, m: Matrix4): void {
 }
 
 // ---------------------------------------------------------------------------
-// Ferns — REMOVED (S8, card-pipeline deletion).
-// TODO(missing-leaves, CRITICAL): ferns were ENTIRELY foliage-card geometry
-// (buildFern → buildFoliageCards) and are gone — no fern pool, no fern rows.
-// Rebuild as real MESH fronds (LeafMesh needle-spray) to restore them; they
-// were already invisible in the shipped world (card class deferred to N9).
+// Ferns
 // ---------------------------------------------------------------------------
+
+/**
+ * Understory fern — a fully 3-D BIPINNATE shuttlecock (the canonical fern
+ * algorithm: a self-similar rachis → pinnae → pinnules hierarchy, cf. the
+ * Barnsley IFS / an L-system / Infinigen's 2-pinnate composition; asset-gen
+ * understory-communities.toml `ostrich_fern`/`lady_fern`). 6–8 fronds radiate
+ * from one crown; each frond is a rachis arcing up-and-out, bearing paired
+ * PINNAE, and each pinna is ITSELF a mini-frond bearing paired PINNULES (the
+ * recursion = the lacy detail). Both levels follow a lanceolate envelope (widest
+ * ~mid, tapering base+tip — Matteuccia/Athyrium; NCSU/RHS: twice-pinnate vase).
+ *
+ * VOLUME (NOT a flat billboard): the frond is NOT coplanar. A per-frond CUP lifts
+ * both pinna rows up out of the base plane into a shallow trough (the two sides
+ * face different ways), each pinnule adds its own out-of-plane tilt, and EVERY
+ * leaflet's normal is the true cross-product of its edges — so light catches the
+ * surface from many angles and no single plane dominates. Tall (~0.7–1.3 m pre
+ * scatter-scale) so it stands above the grass floor.
+ *
+ * COLOUR (NOT a flat tint): the leaf material tints per-mesh but modulates by
+ * per-vertex vdata.x (hue jitter × the high FERN hueVar → warm↔cool green) and
+ * vdata.w (AO → luminance). Every pinnule draws an independent hue jitter + graded
+ * AO (interior/base dark → tips bright); rachides carry a paler, warmer stem tone.
+ *
+ * vdata: x hue jitter · y sway flex · z phase · w AO. ~2–2.6 k tris/variant — a
+ * detailed near-field plant (short range, DAG-coarsened; on par with the shrub
+ * crowns already shipping).
+ */
+export function buildFern(rng: Rng): BufferGeometry {
+  const g = new MeshGrower();
+  const fronds = 6 + rng.int(3); // 6–8 → a full shuttlecock
+  const hueBase = (rng.float() - 0.5) * 0.35;
+  const sv = 0.9 + rng.float() * 0.4; // per-fern overall size (m, pre scatter scale)
+  const up = new Vector3(0, 1, 0);
+  // scratch
+  const T = new Vector3();
+  const S = new Vector3();
+  const Fn = new Vector3();
+  const base = new Vector3();
+  const paxis = new Vector3();
+  const pwid = new Vector3();
+  const pfaceN = new Vector3();
+  const lax = new Vector3();
+  const lwid = new Vector3();
+  const lnrm = new Vector3();
+  const lbase = new Vector3();
+  const ltip = new Vector3();
+  const a0p = new Vector3();
+  const a1p = new Vector3();
+  const c0p = new Vector3();
+  const c1p = new Vector3();
+
+  // tapered leaflet quad in 3-D: base b, unit axis ax (length len), unit width w,
+  // half-widths wb→we; true face normal ax×w; per-leaflet hue jitter + graded AO.
+  const leaflet = (
+    b: Vector3, ax: Vector3, w: Vector3, len: number, wb: number, we: number,
+    flex: number, hue: number, hueJit: number, phase: number, aoB: number, aoT: number,
+  ): void => {
+    ltip.copy(ax).multiplyScalar(len).add(b);
+    lnrm.copy(ax).cross(w).normalize();
+    a0p.copy(w).multiplyScalar(-wb).add(b);
+    a1p.copy(w).multiplyScalar(wb).add(b);
+    c1p.copy(w).multiplyScalar(we).add(ltip);
+    c0p.copy(w).multiplyScalar(-we).add(ltip);
+    const j = hue + hueJit;
+    const v0 = g.vertex(a0p.x, a0p.y, a0p.z, lnrm.x, lnrm.y, lnrm.z, 0, 0, j, flex, phase, aoB);
+    const v1 = g.vertex(a1p.x, a1p.y, a1p.z, lnrm.x, lnrm.y, lnrm.z, 1, 0, j, flex, phase, aoB);
+    const v2 = g.vertex(c1p.x, c1p.y, c1p.z, lnrm.x, lnrm.y, lnrm.z, 1, 1, j, flex, phase, aoT);
+    const v3 = g.vertex(c0p.x, c0p.y, c0p.z, lnrm.x, lnrm.y, lnrm.z, 0, 1, j, flex, phase, aoT);
+    g.quad(v0, v1, v2, v3);
+  };
+  // thin ribbon along an axis (rachis/sub-rachis stem), pale/warmer tone.
+  const ribbon = (b: Vector3, ax: Vector3, w: Vector3, len: number, hw: number, hue: number, phase: number): void => {
+    ltip.copy(ax).multiplyScalar(len).add(b);
+    lnrm.copy(ax).cross(w).normalize();
+    a0p.copy(w).multiplyScalar(-hw).add(b);
+    a1p.copy(w).multiplyScalar(hw).add(b);
+    c1p.copy(w).multiplyScalar(hw * 0.4).add(ltip);
+    c0p.copy(w).multiplyScalar(-hw * 0.4).add(ltip);
+    const v0 = g.vertex(a0p.x, a0p.y, a0p.z, lnrm.x, lnrm.y, lnrm.z, 0, 0, hue, 0.4, phase, 0.6);
+    const v1 = g.vertex(a1p.x, a1p.y, a1p.z, lnrm.x, lnrm.y, lnrm.z, 1, 0, hue, 0.4, phase, 0.6);
+    const v2 = g.vertex(c1p.x, c1p.y, c1p.z, lnrm.x, lnrm.y, lnrm.z, 1, 1, hue, 0.5, phase, 0.72);
+    const v3 = g.vertex(c0p.x, c0p.y, c0p.z, lnrm.x, lnrm.y, lnrm.z, 0, 1, hue, 0.5, phase, 0.72);
+    g.quad(v0, v1, v2, v3);
+  };
+
+  for (let f = 0; f < fronds; f++) {
+    const az = (f / fronds) * Math.PI * 2 + rng.float() * 0.4;
+    const outX = Math.cos(az);
+    const outZ = Math.sin(az);
+    const H = sv * (0.74 + rng.float() * 0.34); // frond height
+    const reach = sv * (0.34 + rng.float() * 0.2); // outward splay of the arching tip
+    const droop = 0.28 + rng.float() * 0.14; // tip arch-over
+    const phase = rng.float() * Math.PI * 2;
+    const frondHue = hueBase + (rng.float() - 0.5) * 0.3; // per-frond tonal offset
+    const blade = sv * (0.17 + rng.float() * 0.05); // peak pinna length
+    const cup = 0.5 + rng.float() * 0.22; // radians the pinna rows lift out of the base plane
+
+    // ---- 3-D rachis: rises near-vertical, then ARCHES up-and-over outward ----
+    const M = 12;
+    const R: Vector3[] = [];
+    for (let i = 0; i <= M; i++) {
+      const t = i / M;
+      const rad = reach * Math.pow(t, 1.25); // stays near-vertical at the base, splays at the tip
+      const y = H * Math.sin(t * 1.8) - droop * H * Math.pow(t, 2.4); // peak ~0.85, drooping tip
+      R.push(new Vector3(outX * rad, 0.03 + y, outZ * rad));
+    }
+    const frameAt = (i0: number): void => {
+      // tangent, horizontal side S, frond face normal Fn (up-ish)
+      T.copy(R[Math.min(M, i0 + 1)] as Vector3).sub(R[Math.max(0, i0 - 1)] as Vector3).normalize();
+      S.copy(up).cross(T);
+      if (S.lengthSq() < 1e-6) S.set(1, 0, 0);
+      S.normalize();
+      Fn.copy(T).cross(S).normalize();
+    };
+
+    // main rachis ribbon
+    for (let i = 0; i < M; i++) {
+      frameAt(i);
+      const t = i / M;
+      const w2 = 0.006 * sv * (1 - 0.5 * t);
+      const seg = (R[i + 1] as Vector3).distanceTo(R[i] as Vector3);
+      lax.copy(R[i + 1] as Vector3).sub(R[i] as Vector3).normalize();
+      ribbon(R[i] as Vector3, lax, S, seg, w2, frondHue + 0.55, phase);
+    }
+
+    // ---- pinnae; each is itself pinnate ----
+    const P = 7 + rng.int(3); // pinna pairs
+    for (let j = 1; j <= P; j++) {
+      const t = j / (P + 1);
+      const env = Math.pow(Math.sin(Math.PI * Math.min(1, t)), 0.7);
+      const lp = blade * (0.3 + 0.95 * env);
+      if (lp < 0.02) continue;
+      const fi = t * M;
+      const i0 = Math.min(M - 1, Math.floor(fi));
+      base.copy(R[i0] as Vector3).lerp(R[i0 + 1] as Vector3, fi - i0);
+      frameAt(i0);
+      const flexP = 0.3 + 0.6 * t;
+      const cs = Math.cos(cup);
+      const sn = Math.sin(cup);
+      for (const s of [1, -1]) {
+        // pinna axis: sideways (s) lifted toward the face by `cup` + angled to the tip
+        paxis.copy(S).multiplyScalar(s * cs).addScaledVector(Fn, sn).addScaledVector(T, 0.42).normalize();
+        // pinna width dir (perpendicular to the pinna axis, ~in the frond face)
+        pwid.copy(paxis).cross(Fn);
+        if (pwid.lengthSq() < 1e-5) pwid.copy(paxis).cross(up);
+        pwid.normalize();
+        pfaceN.copy(paxis).cross(pwid).normalize(); // pinna face normal
+        ribbon(base, paxis, pwid, lp, 0.004 * sv, frondHue + 0.5, phase);
+        // pinnules along the pinna, both sides, lanceolate + out-of-plane tilt.
+        // Spaced (lp/0.04) + narrow (0.2·pl) so the blade reads LACY, not a solid leaf.
+        const K = Math.max(3, Math.round(lp / 0.04));
+        for (let k = 1; k <= K; k++) {
+          const tp = k / (K + 0.5);
+          lbase.copy(paxis).multiplyScalar(lp * tp).add(base);
+          const penv = Math.pow(Math.sin(Math.PI * Math.min(1, tp)), 0.6);
+          const pl = lp * (0.2 + 0.44 * penv);
+          if (pl < 0.008) continue;
+          const aoB = 0.34 + 0.28 * tp;
+          const aoT = Math.min(1, 0.66 + 0.34 * tp);
+          for (const ss of [1, -1]) {
+            // pinnule axis: off the pinna (ss) toward its tip + a random out-of-plane tilt
+            const tilt = (rng.float() - 0.5) * 0.8;
+            lax.copy(pwid).multiplyScalar(ss * 0.86).addScaledVector(paxis, 0.5).addScaledVector(pfaceN, tilt).normalize();
+            lwid.copy(lax).cross(pfaceN);
+            if (lwid.lengthSq() < 1e-5) lwid.copy(lax).cross(up);
+            lwid.normalize();
+            const hueJit = rng.float() * 2 - 1; // per-pinnule tonal variation (−1..1)
+            leaflet(lbase, lax, lwid, pl, 0.2 * pl, 0.02 * pl, flexP + 0.15, frondHue, hueJit, phase, aoB, aoT);
+          }
+        }
+      }
+    }
+  }
+  return g.build();
+}
 
 // ---------------------------------------------------------------------------
 // Flowers

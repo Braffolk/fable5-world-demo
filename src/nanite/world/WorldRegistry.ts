@@ -10,7 +10,10 @@
  *  - shrubs (8–10): bark part, single ring, + a co-located MATERIAL_CLASS.leaf
  *    crown (the tree hero-crown path, scoped to understory: capped at clsMaxDist,
  *    no far-field voxel sibling) so understory reads as leafy, not bare stems.
- *  - ferns/flowers (11–14): leafy card geometry — DEFERRED to N9 entirely.
+ *  - ferns/flowers (11–14): PURE-FOLIAGE — the whole plant is a leaf-class mesh
+ *    (frond rosette / small bloom), registered as a leaf-class PRIMARY head (the
+ *    tree/shrub crown path, bound directly to instances). No opaque head, no voxel
+ *    sibling — short-range dense cover capped at clsMaxDist.
  *  - logs/stumps (16–17), branches (23): deadwood, r1 (branch r2 is a clone
  *    that exists only for indirect-slot bookkeeping — one registration).
  *  - rocks (18–22 + EtakErratic 24): a single RockGen LOD0 ring — continuous
@@ -129,6 +132,14 @@ const ROCK_CLASSES: ReadonlySet<number> = new Set([
   VegClass.StoneS,
   ETAK_ERRATIC_CLASS, // hero erratics — ETAK-record instanced (R3), 0 until then
 ]);
+/** pure-foliage understory (ferns + the 3 flower forms): NO opaque bark/rock head —
+ *  the whole plant is a leaf-class mesh, registered as a leaf-class PRIMARY head. */
+const FOLIAGE_CLASSES: ReadonlySet<number> = new Set([
+  VegClass.Fern,
+  VegClass.FlowerUmbel,
+  VegClass.FlowerBell,
+  VegClass.FlowerDaisy,
+]);
 
 export interface WorldRegistryResult {
   registry: GeometryRegistry;
@@ -245,7 +256,13 @@ function classPolicy(
   if (SHRUB_CLASSES.has(cls)) return { matClass: 'bark', channel: 'trunk', lodDist: 0, swayPad: 2.4 };
   if (DEADWOOD_CLASSES.has(cls)) return { matClass: 'deadwood', channel: 'rigid', lodDist: EX_R1_FAR, swayPad: 0 };
   if (ROCK_CLASSES.has(cls)) return { matClass: 'rock', channel: 'rigid', lodDist: EX_R1_FAR, swayPad: 0 };
-  return null; // ferns/flowers — leafy, N9
+  // ferns/flowers: PURE-FOLIAGE — the plant IS a leaf-class mesh (frond rosette /
+  // small bloom), no opaque head. Rendered on the SAME leaf crown path as the tree/
+  // shrub crown, but as the PRIMARY head bound directly to instances (pool walk).
+  // Short-range dense cover: lodDist unused (the aggregate DAG + clsMaxDist bound
+  // it), a small sway pad (0.1–0.6 m plants barely move).
+  if (FOLIAGE_CLASSES.has(cls)) return { matClass: 'leaf', channel: 'leaf', lodDist: 0, swayPad: 1.5 };
+  return null; // (no class currently falls through — kept as a guard)
 }
 
 /** cull projK FOV reference: no camera exists at build time, so the app FOV
@@ -475,7 +492,19 @@ function planVegJobs(
   const plan: VegJobPlan = { dagJobs: [], aggJobs: [], crownJobs: [] };
   for (const pool of lib.pools) {
     const policy = classPolicy(pool.cls);
-    if (!policy || !inSet(policy.matClass)) continue;
+    if (!policy) continue;
+    // FOLIAGE-PRIMARY (ferns/flowers): a single leaf-class aggregate job — MIRRORS the
+    // pool walk's toAggregate push (leaf-primary branch), so prep.dags stays index-
+    // aligned with [toDag..., toAggregate...]. No QEM dag, no voxel crown. Handled
+    // BEFORE the inSet gate (the leaf class is not in the migration set), in pool order.
+    if (policy.matClass === 'leaf') {
+      if (!leafOn || !pool.leaf) continue;
+      const leafGeo = pool.leaf.geo;
+      let leafSrc: ExplicitSource | null = null;
+      plan.aggJobs.push({ label: `c${pool.cls}v${pool.variant}/leaf`, source: () => (leafSrc ??= geometryToSource(leafGeo)) });
+      continue;
+    }
+    if (!inSet(policy.matClass)) continue;
     const idF = pool.cls * 8 + pool.variant;
     const label = `c${pool.cls}v${pool.variant}`;
     const rings = poolRings(pool, policy);
@@ -928,6 +957,33 @@ export async function buildWorldRegistry(input: {
     const label = `c${pool.cls}v${pool.variant}`;
     if (!policy) {
       notePart(label, pool.r1, 0);
+      continue;
+    }
+    // FOLIAGE-PRIMARY pools (ferns/flowers): no opaque head — the plant IS a leaf-
+    // class mesh. Register the frond/bloom as a 'leaf' head (the SAME crown path the
+    // tree/shrub leaves ride: two-sided, aggregate DAG, tint via packLeafTint) and
+    // bind it directly to instances (main bind pass, via `heads`). Gated by leafOn
+    // like every leaf head — the leaf class rides the leaf gate, not the inSet
+    // migration set. Capped at clsMaxDist (no voxel/fartile sibling — dense short range).
+    if (policy.matClass === 'leaf') {
+      const foliage = pool.leaf;
+      if (!leafOn || !foliage) {
+        if (!leafOn) deferred.push(`${label}: leaf class off (?naniteleaf=0)`);
+        continue;
+      }
+      const src = geometryToSource(foliage.geo);
+      const head = reg.registerMesh(src, 'leaf', {
+        transformChannel: 'leaf',
+        castShadows: false,
+        twoSided: true,
+        label,
+        swayPad: policy.swayPad,
+        matParam: packLeafTint(foliage.color),
+        aggregate: true,
+      });
+      reg.setMaxDistance(head, lib.clsMaxDist[pool.cls] ?? 120);
+      heads.set(idF, head);
+      toAggregate.push({ handle: head, source: src, label: `${label}/leaf`, buildLadder: foliage.buildLadder });
       continue;
     }
     if (!inSet(policy.matClass)) {

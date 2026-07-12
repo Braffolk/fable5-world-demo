@@ -26,7 +26,6 @@ import { TREE_VARIANTS, VegClass } from "../gpu/passes/Scatter";
 import {
   barkTexturedMaterial,
   deadwoodMaterial,
-  flowerMaterial,
   foliageMaterial,
   rockMaterial,
 } from "../render/VegMaterials";
@@ -45,6 +44,7 @@ import { TREE_SPECIES } from "./Species";
 import { ageForSlot } from "./AgeForm";
 import { buildTree, type CrownLodLevel, type CrownLodRung, type HeroDiet } from "./TreeBuilder";
 import {
+  buildFern,
   buildFlower,
   buildShrub,
   UNDERSTORY_SPECIES,
@@ -199,11 +199,21 @@ export interface VegLib {
   barkArray: BarkArrayTextures;
 }
 
-const FLOWER_COLOR: Record<FlowerKind, { r: number; g: number; b: number }> = {
-  umbel: { r: 0.75, g: 0.75, b: 0.7 },
-  bell: { r: 0.28, g: 0.14, b: 0.5 },
-  daisy: { r: 0.85, g: 0.72, b: 0.12 },
+/** per-kind leaf-class tint (packLeafTint) for the understory flower pools — the
+ *  whole small plant reads as ONE muted herb-layer tint at understory range (the
+ *  bloom SHAPE carries the read, not per-part colour; the leaf head has one tint).
+ *  Grounded in the Estonia herb palette (goutweed/yarrow umbels, may-lily/hepatica
+ *  bells, oxeye-daisy/buttercup composites; understory-communities.toml). */
+const FLOWER_TINT: Record<FlowerKind, { r: number; g: number; b: number; hueVar: number }> = {
+  umbel: { r: 0.62, g: 0.66, b: 0.55, hueVar: 0.2 }, // pale sage-white florets
+  bell: { r: 0.42, g: 0.44, b: 0.55, hueVar: 0.35 }, // cool pale lilac
+  daisy: { r: 0.7, g: 0.66, b: 0.3, hueVar: 0.3 }, // warm cream-yellow radiate
 };
+/** understory fern frond tint — fresh mid forest-green with a HIGH hueVar so the
+ *  per-pinnule vdata.x jitter (buildFern) spreads warm↔cool across the frond (a
+ *  many-toned green, not one flat colour); the leaf resolve mixes base×warm for
+ *  jitter>0 and base×cool for <0, then scales by AO. */
+const FERN_TINT = { r: 0.11, g: 0.24, b: 0.06, hueVar: 0.55 };
 
 function bounds(geos: BufferGeometry[]): { height: number; radius: number } {
   let height = 0.5;
@@ -490,7 +500,7 @@ export async function buildVegLibrary(
     );
   }
 
-  // ---- understory: shrubs / fern / flowers (R1 only) -------------------------
+  // ---- understory: shrubs (bark head + leaf crown), ferns / flowers (leaf-only)
   progress(0.76, "veg: understory pools");
   const underSpecies = [
     { cls: VegClass.BushHazel, sp: UNDERSTORY_SPECIES[0] as SpeciesParams },
@@ -532,12 +542,33 @@ export async function buildVegLibrary(
     }
     clsMaxDist[cls] = 170;
   }
-  // TODO(missing-leaves, CRITICAL): ferns (VegClass.Fern) were ENTIRELY card
-  // geometry (buildFern → buildFoliageCards) and are now UNBUILDABLE — the fern
-  // pool + buildFern were deleted with the card pipeline (S8). Ferns are absent
-  // from the world until rebuilt as real MESH fronds (LeafMesh needle-spray).
-  // Note: they were already invisible in the shipped world (card class deferred).
-  // flowers
+  // ferns: pure-foliage frond rosettes (VegClass.Fern). NO bark stem — the plant
+  // IS the crown, so it is registered as a leaf-class PRIMARY head (WorldRegistry),
+  // riding the SAME leaf-head path as the tree/shrub crown (two-sided, aggregate
+  // DAG, per-species tint via packLeafTint) but bound DIRECTLY to instances. Their
+  // instances were scattered all along (Scatter.ts underK / veg.under) and only
+  // DROPPED for lack of a pool + non-null classPolicy — this restores them.
+  for (let v = 0; v < 4; v++) {
+    await yieldIfDue();
+    const geo = buildFern(seed.rng(`veg/fern/${v}`));
+    const tris = geo.index ? geo.index.count / 3 : 0;
+    const b = bounds([geo]);
+    trackCls(VegClass.Fern, b.height, b.radius);
+    pools.push({
+      cls: VegClass.Fern,
+      variant: v,
+      r1: null,
+      r2: null,
+      trisR1: 0,
+      trisR2: 0,
+      height: b.height,
+      radius: b.radius,
+      leaf: { geo, tris, color: FERN_TINT },
+    });
+  }
+  clsMaxDist[VegClass.Fern] = 140;
+  // flowers: thin stalk + real petal geometry (buildFlower), also leaf-class
+  // primary (the bloom shape reads at understory range; one muted tint per kind).
   const flowerKinds: { cls: number; kind: FlowerKind }[] = [
     { cls: VegClass.FlowerUmbel, kind: "umbel" },
     { cls: VegClass.FlowerBell, kind: "bell" },
@@ -553,19 +584,13 @@ export async function buildVegLibrary(
       pools.push({
         cls,
         variant: v,
-        r1: [
-          {
-            geo,
-            tris,
-            make: () => flowerMaterial(FLOWER_COLOR[kind]),
-            castShadow: false,
-          },
-        ],
+        r1: null,
         r2: null,
-        trisR1: tris,
+        trisR1: 0,
         trisR2: 0,
         height: b.height,
         radius: b.radius,
+        leaf: { geo, tris, color: FLOWER_TINT[kind] },
       });
     }
     clsMaxDist[cls] = 90;

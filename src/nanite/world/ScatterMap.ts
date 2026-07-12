@@ -6,12 +6,12 @@
  * (categoryId, density) plus a dictionary of named communities/surfaces whose
  * `palette` lists "plant:weight" tokens (understoryMap, debrisMap). The library has
  * NO botanical species — it renders the SAME abstract ground pools on both sources:
- * shrubs (BushHazel/BushPink/Juniper), deadwood (Log/Stump/Branch) and stones
- * (Boulder/Slab/StoneL/M/S). This resolver folds each community's palette onto that
- * pool set by keyword, so Estonia ground cover MATCHES the generated world's — which
- * itself renders only the pools that have a head: ferns/flowers/moss/grass/litter are
- * groundcover with no mesh (deferred on BOTH sources), so they fall to the SKIP
- * bucket and are covered by the grass lane + biome tint, exactly as generated.
+ * shrubs (BushHazel/BushPink/Juniper), ferns (Fern), herb-layer flowers (Umbel/Bell/
+ * Daisy), deadwood (Log/Stump/Branch) and stones (Boulder/Slab/StoneL/M/S). This
+ * resolver folds each community's palette onto that pool set by keyword, so Estonia
+ * ground cover MATCHES the generated world's. Only the true groundcover with no mesh
+ * (moss/lichen/grass/sedge/reed/litter) falls to the SKIP bucket — covered by the
+ * grass lane + biome tint, exactly as generated.
  *
  * Pure/node-testable (no GPU/DOM). A community with an all-skip palette (moss/grass
  * only) resolves to the empty distribution — one boot summary line, never a throw
@@ -21,14 +21,21 @@
 import { VegClass } from '../../gpu/passes/Scatter';
 import type { CommunityEntry, WorldDictionaries } from '../../world/source/WorldSource';
 
-/** SKIP marker — a palette token with no library mesh (moss/grass/fern/flower/litter);
- *  the grass raymarch lane + biome tint cover these, matching the generated world. */
+/** SKIP marker — a palette token with no library mesh (moss/lichen/grass/sedge/reed/
+ *  litter); the grass raymarch lane + biome tint cover these, matching the generated
+ *  world. Ferns + herb-layer flowers NOW have real meshes (#113), so they map to pools. */
 const SKIP = -1;
 
-/** understory palette token → the shrub pool that renders it (the only understory
- *  pools with a head). Ericaceous dwarf shrubs → BushPink; tall scrub → BushHazel;
- *  juniper → Juniper. Everything else (herbs/ferns/flowers/grass/moss) → SKIP. */
+/** understory palette token → the library pool that renders it. Ferns → Fern; the
+ *  herb-layer flowers map to their nearest FORM archetype (umbel/bell/daisy compound);
+ *  ericaceous dwarf shrubs → BushPink; tall scrub → BushHazel; juniper → Juniper. Moss/
+ *  lichen/grass/sedge/reed/nettle/horsetail (no mesh) → SKIP. Grounded in the Estonia
+ *  community palettes (asset-gen/config/understory-communities.toml). */
 const UNDER_KEYWORDS: readonly (readonly [RegExp, VegClass])[] = [
+  [/fern|bracken/, VegClass.Fern],
+  [/goutweed|meadowsweet|yarrow|angelica|cow_parsley|hogweed|umbel/, VegClass.FlowerUmbel],
+  [/hepatica|anemone|may_lily|lily_of|harebell|bellflower|campanula|wintergreen/, VegClass.FlowerBell],
+  [/daisy|buttercup|knapweed|sorrel|oxalis|marigold|clover|dandelion|globeflower|hawkweed/, VegClass.FlowerDaisy],
   [/juniper/, VegClass.Juniper],
   [/heather|cowberry|lingonberry|labrador|cranberry|cloudberry|crowberry|bilberry|blueberry|whortle/, VegClass.BushPink],
   [/raspberry|hazel|willow|bramble|buckthorn|dogwood|spiraea|scrub|shrub|bush/, VegClass.BushHazel],
@@ -51,6 +58,10 @@ const CLASS_NAME: Record<number, string> = {
   [VegClass.BushHazel]: 'BushHazel',
   [VegClass.BushPink]: 'BushPink',
   [VegClass.Juniper]: 'Juniper',
+  [VegClass.Fern]: 'Fern',
+  [VegClass.FlowerUmbel]: 'FlowerUmbel',
+  [VegClass.FlowerBell]: 'FlowerBell',
+  [VegClass.FlowerDaisy]: 'FlowerDaisy',
   [VegClass.Log]: 'Log',
   [VegClass.Stump]: 'Stump',
   [VegClass.Branch]: 'Branch',

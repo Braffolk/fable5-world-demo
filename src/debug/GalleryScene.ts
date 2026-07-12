@@ -46,6 +46,7 @@ import { buildRock, type RockPreset } from '../vegetation/RockBuilder';
 import { TREE_SPECIES } from '../vegetation/Species';
 import { buildTree } from '../vegetation/TreeBuilder';
 import {
+  buildFern,
   buildFlower,
   buildShrub,
   type FlowerKind,
@@ -330,8 +331,22 @@ export async function buildGalleryScene(ctx: WorldContext): Promise<void> {
     // the card pipeline (S8) — the atlas capture it sampled is gone.
     exhibit(-26, GZ + 2, 'Ground square 2.4 m', 'cobbles+twigs+chips', { pedestal: false });
 
-    // TODO(missing-leaves, CRITICAL): fern row removed — ferns were entirely
-    // foliage cards (buildFern deleted, S8). Rebuild as real mesh fronds.
+    // fern patch — 3-D bipinnate frond rosettes (restored #113)
+    {
+      const rngFn = seed.rng('fern/patch');
+      for (let i = 0; i < 8; i++) {
+        const fn = new Mesh(
+          buildFern(rngFn.fork(String(i))),
+          foliageMaterial({ color: { r: 0.11, g: 0.24, b: 0.06, hueVar: 0.55 } }),
+        );
+        fn.position.set(-14 + i * 1.15 + (rngFn.float() - 0.5) * 0.5, 0, GZ + (rngFn.float() - 0.5) * 1.6);
+        fn.rotation.y = rngFn.float() * 6.28;
+        fn.castShadow = true;
+        fn.receiveShadow = true;
+        engine.scene.add(fn);
+      }
+      exhibit(-12, GZ + 2, 'Ferns', 'bipinnate ×8', { pedestal: false });
+    }
 
     // flower patches
     const flowerKinds: { kind: FlowerKind; color: { r: number; g: number; b: number }; n: number; label: string }[] = [
