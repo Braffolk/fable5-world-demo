@@ -46,10 +46,10 @@ import type { NF, NI, NU, NV2, NV4 } from '../TSLTypes';
 
 /** geometry-pool class ids (variant index lives in the low 3 bits of idF) */
 export const enum VegClass {
-  // trees (0–15) — order matches TREE_SPECIES. A RESERVED 16-slot block so future
-  // species batches insert without re-renumbering the tail: 0–7 the original set
-  // (#112 added Larch/Oak), 8–10 the batch-1 broadleaves, 11–15 reserved-empty (no
-  // TREE_SPECIES entry ⇒ no pool). Understory begins at 16, cleanly above the block.
+  // trees (0–15) — order matches TREE_SPECIES. A 16-slot block sized so species batches
+  // insert without re-renumbering the tail: 0–7 the original set (#112 added Larch/Oak),
+  // 8–10 the batch-1 broadleaves, 11–15 the batch-2 accent broadleaves. Understory begins
+  // at 16, cleanly above the block.
   Spruce = 0,
   Pine = 1,
   Beech = 2,
@@ -61,7 +61,11 @@ export const enum VegClass {
   Aspen = 8, // upright rounded-oval broadleaf, does NOT weep (Populus tremula)
   GreyAlder = 9, // short open ovoid wet-ground pioneer (Alnus incana)
   BlackAlder = 10, // narrow broadleaf conic spire, wet hollows (Alnus glutinosa)
-  // 11–15 reserved tree slots (future species — no pool until a TREE_SPECIES entry)
+  Ash = 11, // tall open airy crown, pinnate leaves (Fraxinus excelsior)
+  Maple = 12, // dense rounded symmetric dome, palmate leaves (Acer platanoides)
+  Lime = 13, // broad dense tall dome, heart-shaped leaves (Tilia cordata)
+  Willow = 14, // broad irregular drooping riparian crown (Salix, wet edge)
+  Rowan = 15, // small slender open tree, pinnate leaves (Sorbus aucuparia)
   // understory
   BushHazel = 16,
   BushPink = 17,
@@ -368,9 +372,25 @@ export async function runScatter(
       .mul(m.mul(1.0).add(0.4));
     const w10 = byBiome(s.bioId, [0, 0, 0.04, 0.1, 0.18, 0.3]) // black alder
       .mul(m.mul(1.3).add(0.25));
+    // batch-2 accent broadleaves — same species RE-PICK (accept gate fixed the count, so
+    // veg.trees is byte-identical; only which pool a tree routes to changes). Ash/maple/
+    // lime/rowan favour the rich MESIC broadleaf sites (biomes 3–4); willow the WET edges
+    // (strongest moisture response, riparian). Modest weights — an accent minority in the
+    // mixed/rich stands, visible but never dominant.
+    const w11 = byBiome(s.bioId, [0, 0.02, 0.06, 0.14, 0.2, 0.08]) // ash
+      .mul(m.mul(0.5).add(0.7));
+    const w12 = byBiome(s.bioId, [0, 0, 0.05, 0.16, 0.22, 0.04]) // maple
+      .mul(m.mul(0.6).add(0.6));
+    const w13 = byBiome(s.bioId, [0, 0, 0.04, 0.15, 0.2, 0.03]) // lime
+      .mul(m.mul(0.6).add(0.6));
+    const w14 = byBiome(s.bioId, [0, 0.03, 0.04, 0.08, 0.14, 0.28]) // willow
+      .mul(m.mul(1.2).add(0.3));
+    const w15 = byBiome(s.bioId, [0, 0.06, 0.05, 0.08, 0.12, 0.16]) // rowan
+      .mul(m.mul(0.4).add(0.7));
 
     const r = cellHash(cell, sT ^ 0x77e1).mul(
-      w0.add(w1).add(w2).add(w3).add(w4).add(w5).add(w6).add(w7).add(w8).add(w9).add(w10),
+      w0.add(w1).add(w2).add(w3).add(w4).add(w5).add(w6).add(w7).add(w8).add(w9).add(w10)
+        .add(w11).add(w12).add(w13).add(w14).add(w15),
     );
     const sp = int(0).toVar();
     const acc = w0.toVar();
@@ -403,6 +423,26 @@ export async function runScatter(
                       acc.addAssign(w9);
                       If(r.greaterThan(acc), () => {
                         sp.assign(10);
+                        acc.addAssign(w10);
+                        If(r.greaterThan(acc), () => {
+                          sp.assign(11);
+                          acc.addAssign(w11);
+                          If(r.greaterThan(acc), () => {
+                            sp.assign(12);
+                            acc.addAssign(w12);
+                            If(r.greaterThan(acc), () => {
+                              sp.assign(13);
+                              acc.addAssign(w13);
+                              If(r.greaterThan(acc), () => {
+                                sp.assign(14);
+                                acc.addAssign(w14);
+                                If(r.greaterThan(acc), () => {
+                                  sp.assign(15);
+                                });
+                              });
+                            });
+                          });
+                        });
                       });
                     });
                   });

@@ -1,8 +1,9 @@
 /**
  * SpeciesMap — the Estonia manifest species dictionary → VegLibrary tree pools
  * (SPEC-STREAMING-WORLD §7, S7). The cooked release enumerates ~21 species ids
- * (code + leaf class + ref height); the library has 11 distinct tree pools (Spruce,
- * Pine, Beech, Birch, KarstGnarl, Snag, Larch, Oak, Aspen, GreyAlder, BlackAlder).
+ * (code + leaf class + ref height); the library has 16 distinct tree pools (Spruce,
+ * Pine, Beech, Birch, KarstGnarl, Snag, Larch, Oak, Aspen, GreyAlder, BlackAlder, Ash,
+ * Maple, Lime, Willow, Rowan).
  * This resolver folds the many ids onto the pools by Estonian forestry code first,
  * then by leaf class, and routes anything it can't place to the LOUD checker
  * placeholder (F15) — logged ONCE at boot.
@@ -28,6 +29,11 @@ const CLASS_NAME: Record<number, string> = {
   [VegClass.Aspen]: 'Aspen',
   [VegClass.GreyAlder]: 'GreyAlder',
   [VegClass.BlackAlder]: 'BlackAlder',
+  [VegClass.Ash]: 'Ash',
+  [VegClass.Maple]: 'Maple',
+  [VegClass.Lime]: 'Lime',
+  [VegClass.Willow]: 'Willow',
+  [VegClass.Rowan]: 'Rowan',
 };
 
 /** Estonian forestry codes → the specific library pool the pilot expects. Anything
@@ -42,6 +48,11 @@ const CODE_TO_CLASS: Record<string, VegClass> = {
   LM: VegClass.BlackAlder, // sanglepp — black alder (own conic spire; was Beech-fallback, 4.2%)
   LH: VegClass.Larch, // lehis — larch (#112: own deciduous-conifer form, was folding to Spruce)
   TA: VegClass.Oak, // tamm — pedunculate oak (#112: own broad crown, was folding to Beech)
+  SA: VegClass.Ash, // saar — European ash (batch-2: own tall airy crown; was Beech-fallback)
+  VA: VegClass.Maple, // vaher — Norway maple (batch-2: own dense symmetric dome; was Beech-fallback)
+  PN: VegClass.Lime, // pärn — small-leaved lime (batch-2: own broad dense dome; was Beech-fallback)
+  RE: VegClass.Willow, // remmelgas — willow (batch-2: own broad drooping riparian crown; was Beech-fallback)
+  PI: VegClass.Rowan, // pihlakas — rowan (batch-2: own small slender form; was Beech-fallback)
 };
 
 /** one species entry → a tree VegClass, or null when nothing in the library fits

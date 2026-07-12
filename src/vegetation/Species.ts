@@ -629,6 +629,323 @@ export const BLACK_ALDER: SpeciesParams = {
   stubChance: 0.03,
 };
 
+// ---- species batch-2: five Estonian accent broadleaves (research-grounded) --------
+//
+// ASH — European ash (Fraxinus excelsior, Estonian "saar", code SA). A TALL tree
+// (typically 18–28 m, to 43 m) with a distinctly OPEN, AIRY, light-passing crown —
+// stout greenish-grey shoots carrying UPSWEPT primaries with hooked (up-curled) tips,
+// and PINNATE compound leaves (7–13 narrow serrated leaflets) that read as feathery.
+// The signature vs its lush neighbours is AIRINESS by twig DENSITY (5.0 — airier than
+// beech's 8, below birch's 6), NOT thinned foliage: each twig is still fully clustered.
+// Bark: smooth pale grey when young → finely VERTICALLY fissured old (reuse spruce
+// grey-brown vertical-fissure layer). (Woodland Trust / Wikipedia Fraxinus excelsior.)
+export const ASH: SpeciesParams = {
+  id: 'ash',
+  label: 'Ash (broadleaf)',
+  kind: 'broadleaf',
+  height: [15, 24], // tall for the batch, within the engine's compressed broadleaf band
+  trunkRadiusK: 0.018, // straight, moderately slender bole
+  crown: 'ellipsoid', // tall airy — narrowed via short primaries + low twig density
+  asym: 0.24,
+  levels: [
+    {
+      // tall straight bole
+      density: 0, whorl: 0, childStart: 0, childEnd: 0,
+      angleBase: 0, angleTip: 0, lenRatio: 0, lenJitter: 0, radRatio: 0,
+      segs: 11, wander: 0.04, gravitropism: 0.05, droop: 0, tipCurl: 0, taper: 1.1,
+    },
+    {
+      // primaries: UPSWEPT with hooked tips (the ash signature) — ascending, open
+      density: 1.3, whorl: 0, childStart: 0.28, childEnd: 0.95,
+      angleBase: 0.95, angleTip: 0.5, lenRatio: 0.5, lenJitter: 0.28, radRatio: 0.44,
+      segs: 7, wander: 0.1, gravitropism: 0.09, droop: 0.14, tipCurl: 0.2, taper: 0.95,
+    },
+    {
+      // secondaries: sparse, ascending, hook-tipped
+      density: 1.6, whorl: 0, childStart: 0.22, childEnd: 0.97,
+      angleBase: 0.9, angleTip: 0.55, lenRatio: 0.44, lenJitter: 0.32, radRatio: 0.48,
+      segs: 4, wander: 0.12, gravitropism: 0.07, droop: 0.12, tipCurl: 0.14, taper: 0.9,
+    },
+    {
+      // airiest twig level of the batch — an OPEN light-passing crown, but still FULL
+      // (density 5.0, below birch's 6; airiness is twig SPACING not thinned clusters).
+      density: 5.0, whorl: 0, childStart: 0.18, childEnd: 1.0,
+      angleBase: 0.85, angleTip: 0.55, lenRatio: 0.3, lenJitter: 0.35, radRatio: 0.5,
+      segs: 3, wander: 0.1, gravitropism: 0.03, droop: 0.1, tipCurl: 0.08, taper: 0.85,
+      planar: 0.5,
+    },
+  ],
+  foliage: {
+    kind: 'leafCluster',
+    anchorLevel: 3,
+    spacing: 0.13, // beech-parity anchor density → a full (if airy) ash canopy
+    tStart: 0.1,
+    scale: [0.14, 0.2],
+    tilt: 0.95,
+    clusterSize: [2, 3], // lush clusters; the open read comes from twig density, not thinning
+    normalBend: 0.7,
+    planarLeaves: true,
+    // narrow pointed leaflet blade (pinnate leaf read): shapePow 1.2 pointier than beech
+    leaf: { len: 1.0, width: 0.4, shapePow: 1.2, fold: 0.2, curl: 0.15, needleCount: 0, brush: 0 },
+  },
+  flare: { amp: 0.45, height: 1.0, lobes: 5 },
+  barkLayer: 0, // spruce grey-brown vertical fissures ≈ mature ash's fine vertical fissuring
+  barkRepeats: 4,
+  foliageColor: { r: 0.07, g: 0.155, b: 0.045, hueVar: 0.28 }, // fresh light green
+  brokenTop: 0,
+  stubChance: 0.03,
+};
+
+// MAPLE — Norway maple (Acer platanoides, Estonian "vaher", code VA). A medium-tall
+// tree (16–26 m; wild to 30 m) with a DENSE, ROUNDED, SYMMETRICAL crown — the fuller,
+// more regular dome the reference calls out. MANY regular ascending-then-spreading
+// primaries + a DENSE twig level (7.0, near beech's 8) fill a tight symmetric dome of
+// big palmate 5-lobe leaves. Reads distinct from OAK (also 'round') by LOW asym (0.18
+// vs oak 0.34), denser regular branching, and a slenderer bole — a neat symmetric dome
+// vs oak's gnarled heavy-low-limb spread. Bark grey-brown, shallowly grooved (reuse
+// spruce grooved layer). (Wikipedia Acer platanoides.)
+export const MAPLE: SpeciesParams = {
+  id: 'maple',
+  label: 'Maple (broadleaf)',
+  kind: 'broadleaf',
+  height: [15, 24], // within the engine's compressed broadleaf band (voxel-crown volume)
+  trunkRadiusK: 0.026,
+  crown: 'round', // broad rounded — a DENSE symmetric dome (distinct from oak via grammar)
+  asym: 0.18, // symmetric (the diagnostic vs oak's asymmetric spread)
+  levels: [
+    {
+      density: 0, whorl: 0, childStart: 0, childEnd: 0,
+      angleBase: 0, angleTip: 0, lenRatio: 0, lenJitter: 0, radRatio: 0,
+      segs: 9, wander: 0.05, gravitropism: 0.04, droop: 0, tipCurl: 0, taper: 1.2,
+    },
+    {
+      // MANY regular ascending-then-spreading primaries (denser than oak's few heavy
+      // limbs) → the fuller, more even dome
+      density: 1.6, whorl: 0, childStart: 0.24, childEnd: 0.92,
+      angleBase: 1.1, angleTip: 0.6, lenRatio: 0.55, lenJitter: 0.28, radRatio: 0.5,
+      segs: 8, wander: 0.1, gravitropism: 0.05, droop: 0.2, tipCurl: 0.12, taper: 0.95,
+    },
+    {
+      density: 2.4, whorl: 0, childStart: 0.2, childEnd: 0.98,
+      angleBase: 0.95, angleTip: 0.58, lenRatio: 0.46, lenJitter: 0.3, radRatio: 0.52,
+      segs: 5, wander: 0.12, gravitropism: 0.04, droop: 0.2, tipCurl: 0.08, taper: 0.9,
+    },
+    {
+      // DENSE twig level (7.0, near beech's 8) → the fullest crown of the batch
+      density: 7.0, whorl: 0, childStart: 0.15, childEnd: 1.0,
+      angleBase: 0.9, angleTip: 0.6, lenRatio: 0.28, lenJitter: 0.35, radRatio: 0.55,
+      segs: 3, wander: 0.1, gravitropism: 0.0, droop: 0.14, tipCurl: 0.05, taper: 0.85,
+      planar: 0.35,
+    },
+  ],
+  foliage: {
+    kind: 'leafCluster',
+    anchorLevel: 3,
+    spacing: 0.12, // beech-parity anchor density → a dense maple dome
+    tStart: 0.1,
+    scale: [0.17, 0.24], // large palmate leaves
+    tilt: 0.95,
+    clusterSize: [2, 3],
+    normalBend: 0.7,
+    planarLeaves: true,
+    // broad palmate blade: width ~0.62 (wide), shapePow 1.0 (rounded lobed outline)
+    leaf: { len: 1.0, width: 0.62, shapePow: 1.0, fold: 0.15, curl: 0.12, needleCount: 0, brush: 0 },
+  },
+  flare: { amp: 0.55, height: 1.1, lobes: 6 },
+  barkLayer: 0, // spruce grey-brown grooves ≈ Norway maple's shallowly grooved grey-brown bark
+  barkRepeats: 4,
+  foliageColor: { r: 0.055, g: 0.14, b: 0.04, hueVar: 0.26 }, // rich mid green
+  brokenTop: 0,
+  stubChance: 0.03,
+};
+
+// LIME — small-leaved lime (Tilia cordata, Estonian "pärn", code PN). A TALL tree
+// (18–28 m; to 40 m) with a BROAD, DENSE, rounded/oval-to-domed crown — upright
+// branching that "increases in density with age" (Wikipedia) over a clear bole, so it
+// reads as a big dense shade dome. DENSE twigs (7.0) carry heart-shaped (cordate) leaves.
+// Distinct from MAPLE by envelope ('dome' — a tall high dome that clears a bole with age
+// vs maple's broad-round low-full crown) and greater height, and from ASH by density
+// (dense vs airy). Bark smooth grey-brown young (reuse beech smooth-grey layer).
+// (Wikipedia / Woodland Trust Tilia cordata.)
+export const LIME: SpeciesParams = {
+  id: 'lime',
+  label: 'Lime (broadleaf)',
+  kind: 'broadleaf',
+  height: [16, 25], // the batch's tallest, just under blackAlder's 26 (compressed band)
+  trunkRadiusK: 0.024,
+  crown: 'dome', // broad domed — a tall dense dome over a clear bole (dome ontogeny)
+  asym: 0.22,
+  levels: [
+    {
+      density: 0, whorl: 0, childStart: 0, childEnd: 0,
+      angleBase: 0, angleTip: 0, lenRatio: 0, lenJitter: 0, radRatio: 0,
+      segs: 10, wander: 0.045, gravitropism: 0.05, droop: 0, tipCurl: 0, taper: 1.15,
+    },
+    {
+      // upright ascending primaries — lime's dense upright branching
+      density: 1.5, whorl: 0, childStart: 0.26, childEnd: 0.95,
+      angleBase: 1.0, angleTip: 0.55, lenRatio: 0.52, lenJitter: 0.28, radRatio: 0.48,
+      segs: 8, wander: 0.1, gravitropism: 0.07, droop: 0.18, tipCurl: 0.12, taper: 0.95,
+    },
+    {
+      density: 2.3, whorl: 0, childStart: 0.2, childEnd: 0.98,
+      angleBase: 0.92, angleTip: 0.56, lenRatio: 0.46, lenJitter: 0.3, radRatio: 0.5,
+      segs: 5, wander: 0.12, gravitropism: 0.05, droop: 0.18, tipCurl: 0.08, taper: 0.9,
+    },
+    {
+      // DENSE twig level (7.0) → a full lime dome
+      density: 7.0, whorl: 0, childStart: 0.15, childEnd: 1.0,
+      angleBase: 0.9, angleTip: 0.6, lenRatio: 0.28, lenJitter: 0.35, radRatio: 0.55,
+      segs: 3, wander: 0.1, gravitropism: 0.02, droop: 0.12, tipCurl: 0.05, taper: 0.85,
+      planar: 0.35,
+    },
+  ],
+  foliage: {
+    kind: 'leafCluster',
+    anchorLevel: 3,
+    spacing: 0.12, // beech-parity anchor density → a dense lime canopy
+    tStart: 0.1,
+    scale: [0.15, 0.22],
+    tilt: 0.95,
+    clusterSize: [2, 3],
+    normalBend: 0.7,
+    planarLeaves: true,
+    // heart-shaped (cordate) blade: width ~0.66 (broad), shapePow 1.0 (rounded, pointed tip)
+    leaf: { len: 1.0, width: 0.66, shapePow: 1.0, fold: 0.16, curl: 0.12, needleCount: 0, brush: 0 },
+  },
+  flare: { amp: 0.55, height: 1.1, lobes: 6 },
+  barkLayer: 2, // beech smooth grey ≈ lime's smooth grey-brown young bark — no new VRAM
+  barkRepeats: 4,
+  foliageColor: { r: 0.08, g: 0.16, b: 0.045, hueVar: 0.28 }, // bright fresh lime-green
+  brokenTop: 0,
+  stubChance: 0.03,
+};
+
+// WILLOW — willow (Salix, Estonian "remmelgas", code RE; goat/white willow, wet edge).
+// A riparian small-to-medium tree (10–18 m) of lake/stream margins with a BROAD,
+// IRREGULAR, often-leaning crown and DROOPING/pendulous shoots — a GENTLE weep, quite
+// unlike birch: birch is a slim WEEPING COLUMN (crown 'column', strong negative
+// gravitropism −0.3, droop 0.7); willow is a BROAD 'irregular' crown with a mild droop
+// (gravitropism −0.08, droop 0.52) over NARROW lanceolate SILVERY leaves (silky pale
+// undersides). Bark grey-brown, deeply/diamond fissured (reuse spruce fissured layer).
+// (Wikipedia Salix alba/caprea; Woodland Trust goat willow — wet woodland/lakes/streams.)
+export const WILLOW: SpeciesParams = {
+  id: 'willow',
+  label: 'Willow (broadleaf)',
+  kind: 'broadleaf',
+  height: [10, 18],
+  trunkRadiusK: 0.02,
+  crown: 'irregular', // broad, asymmetric, leaning riparian crown
+  asym: 0.42, // strongly irregular
+  levels: [
+    {
+      // short sinuous/leaning bole
+      density: 0, whorl: 0, childStart: 0, childEnd: 0,
+      angleBase: 0, angleTip: 0, lenRatio: 0, lenJitter: 0, radRatio: 0,
+      segs: 10, wander: 0.09, gravitropism: 0.03, droop: 0, tipCurl: 0, taper: 1.05,
+    },
+    {
+      // spreading primaries, wide-angled, beginning to arch
+      density: 1.4, whorl: 0, childStart: 0.18, childEnd: 0.95,
+      angleBase: 1.2, angleTip: 0.65, lenRatio: 0.55, lenJitter: 0.4, radRatio: 0.5,
+      segs: 7, wander: 0.18, gravitropism: 0.0, droop: 0.3, tipCurl: 0.05, taper: 0.9,
+    },
+    {
+      density: 1.9, whorl: 0, childStart: 0.2, childEnd: 0.98,
+      angleBase: 1.0, angleTip: 0.6, lenRatio: 0.46, lenJitter: 0.42, radRatio: 0.5,
+      segs: 4, wander: 0.2, gravitropism: -0.04, droop: 0.4, tipCurl: -0.02, taper: 0.88,
+    },
+    {
+      // DROOPING shoots — a GENTLE weep (mild negative gravitropism, NOT birch's −0.3),
+      // FULL (density 5.5, birch-parity). The broad irregular crown + gentle droop +
+      // narrow silvery leaves reads as willow, not the slim weeping birch column.
+      density: 5.5, whorl: 0, childStart: 0.2, childEnd: 1.0,
+      angleBase: 0.8, angleTip: 0.5, lenRatio: 0.38, lenJitter: 0.4, radRatio: 0.5,
+      segs: 3, wander: 0.16, gravitropism: -0.08, droop: 0.52, tipCurl: -0.03, taper: 0.85,
+      planar: 0.4,
+    },
+  ],
+  foliage: {
+    kind: 'leafCluster',
+    anchorLevel: 3,
+    spacing: 0.12, // beech/birch-parity anchor density → a full drooping willow crown
+    tStart: 0.12,
+    scale: [0.1, 0.16], // small narrow leaves, densely borne
+    tilt: 0.9,
+    clusterSize: [2, 3],
+    normalBend: 0.66,
+    planarLeaves: true,
+    // NARROW lanceolate blade: width 0.28 (narrow), shapePow 1.4 (pointed) — the willow leaf
+    leaf: { len: 1.0, width: 0.28, shapePow: 1.4, fold: 0.15, curl: 0.2, needleCount: 0, brush: 0 },
+  },
+  flare: { amp: 0.5, height: 0.8, lobes: 5 },
+  barkLayer: 0, // spruce deep vertical fissures ≈ white willow's deeply fissured grey-brown bark
+  barkRepeats: 4,
+  foliageColor: { r: 0.09, g: 0.135, b: 0.08, hueVar: 0.24 }, // silvery grey-green (pale undersides)
+  brokenTop: 0,
+  stubChance: 0.03,
+};
+
+// ROWAN — rowan / mountain-ash (Sorbus aucuparia, Estonian "pihlakas", code PI). A SMALL
+// tree (6–12 m; to 15 m) — the shortest of the batch by far, its stature alone reads
+// distinct. Slender smooth SILVERY-GREY bole; an OPEN, fine-textured crown, narrow when
+// young → broad ovoid with age, on UPSWEPT branches; PINNATE leaves (5–8 leaflet pairs +
+// terminal) give a light feathery texture. Airier twig level (5.0) keeps it open but FULL.
+// Bark smooth silvery-grey (reuse beech smooth-grey layer). (Woodland Trust Sorbus aucuparia.)
+export const ROWAN: SpeciesParams = {
+  id: 'rowan',
+  label: 'Rowan (broadleaf)',
+  kind: 'broadleaf',
+  height: [6, 12], // small tree — the batch's shortest
+  trunkRadiusK: 0.017, // slender bole
+  crown: 'ellipsoid', // narrow-young → broad-ovoid-old (ellipsoid ontogeny)
+  asym: 0.3,
+  levels: [
+    {
+      density: 0, whorl: 0, childStart: 0, childEnd: 0,
+      angleBase: 0, angleTip: 0, lenRatio: 0, lenJitter: 0, radRatio: 0,
+      segs: 9, wander: 0.06, gravitropism: 0.05, droop: 0, tipCurl: 0, taper: 1.05,
+    },
+    {
+      // UPSWEPT open primaries
+      density: 1.3, whorl: 0, childStart: 0.22, childEnd: 0.95,
+      angleBase: 0.9, angleTip: 0.5, lenRatio: 0.48, lenJitter: 0.3, radRatio: 0.44,
+      segs: 6, wander: 0.12, gravitropism: 0.1, droop: 0.12, tipCurl: 0.18, taper: 0.92,
+    },
+    {
+      density: 1.6, whorl: 0, childStart: 0.2, childEnd: 0.97,
+      angleBase: 0.85, angleTip: 0.55, lenRatio: 0.42, lenJitter: 0.34, radRatio: 0.48,
+      segs: 4, wander: 0.14, gravitropism: 0.07, droop: 0.12, tipCurl: 0.12, taper: 0.9,
+    },
+    {
+      // open fine twig level — FULL (density 5.0) but airy, for the fine-textured read
+      density: 5.0, whorl: 0, childStart: 0.2, childEnd: 1.0,
+      angleBase: 0.8, angleTip: 0.55, lenRatio: 0.3, lenJitter: 0.38, radRatio: 0.5,
+      segs: 3, wander: 0.12, gravitropism: 0.03, droop: 0.1, tipCurl: 0.06, taper: 0.85,
+      planar: 0.45,
+    },
+  ],
+  foliage: {
+    kind: 'leafCluster',
+    anchorLevel: 3,
+    spacing: 0.12, // beech-parity anchor density → a full (if small/fine) rowan crown
+    tStart: 0.1,
+    scale: [0.12, 0.18], // small fine leaves
+    tilt: 0.9,
+    clusterSize: [2, 3],
+    normalBend: 0.68,
+    planarLeaves: true,
+    // narrow-oval leaflet blade (pinnate leaf read): shapePow 1.15
+    leaf: { len: 1.0, width: 0.42, shapePow: 1.15, fold: 0.2, curl: 0.15, needleCount: 0, brush: 0 },
+  },
+  flare: { amp: 0.35, height: 0.7, lobes: 4 },
+  barkLayer: 2, // beech smooth pale grey ≈ rowan's smooth silvery-grey bark — no new VRAM
+  barkRepeats: 3,
+  foliageColor: { r: 0.06, g: 0.135, b: 0.04, hueVar: 0.3 }, // mid green
+  brokenTop: 0,
+  stubChance: 0.03,
+};
+
 export const TREE_SPECIES: readonly SpeciesParams[] = [
   SPRUCE,
   PINE,
@@ -641,4 +958,9 @@ export const TREE_SPECIES: readonly SpeciesParams[] = [
   ASPEN, // cls 8 (VegClass.Aspen)
   GREY_ALDER, // cls 9 (VegClass.GreyAlder)
   BLACK_ALDER, // cls 10 (VegClass.BlackAlder)
+  ASH, // cls 11 (VegClass.Ash)
+  MAPLE, // cls 12 (VegClass.Maple)
+  LIME, // cls 13 (VegClass.Lime)
+  WILLOW, // cls 14 (VegClass.Willow)
+  ROWAN, // cls 15 (VegClass.Rowan)
 ];

@@ -82,8 +82,15 @@ import srcRockGen from '../../vegetation/RockGen.ts?raw';
  *  'crowns' store is keyed by idF = class·8+variant and Scatter.ts (home of VegClass) is NOT
  *  in SRC_HASH, so neither the remapped understory/extras/stone idFs NOR the crown-count
  *  growth (the 'crowns' get is NOT length-checked) auto-invalidate — a warm boot would else
- *  serve stale crowns / skip the new species' crowns. Species.ts is also outside SRC_HASH. */
-const CACHE_REV = 11;
+ *  serve stale crowns / skip the new species' crowns. Species.ts is also outside SRC_HASH.
+ *  rev 12 (species batch-2): 5 new tree species (Ash/Maple/Lime/Willow/Rowan) in the
+ *  reserved tree slots 11–15 — new idFs (class·8+variant, 88–123) + the Estonia manifest
+ *  remap (SA/VA/PN/RE/PI now route to 11–15 instead of folding to Beech). Scatter.ts/
+ *  Species.ts stay outside SRC_HASH and the 'crowns' get is NOT length-checked, so a warm
+ *  boot would neither build the new species' crowns nor re-key the remapped Estonia trees;
+ *  the rev bump forces a clean cold rebuild. No renumber (slots 11–15 were reserved-empty),
+ *  so all existing idFs 0–10 + understory/extras/stones are unchanged. */
+const CACHE_REV = 12;
 
 const DB_NAME = 'laas-bootcache';
 const STORE = 'artifacts';

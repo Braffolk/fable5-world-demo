@@ -197,6 +197,15 @@ export const HERO_DIETS: Record<string, HeroDiet> = {
   aspen: { barkK: 0.42 },
   greyAlder: { barkK: 0.42 },
   blackAlder: { barkK: 0.42 },
+  // batch-2 accent broadleaves: crowns build at the shared global leafAnchorTarget (4000)
+  // with beech/oak-parity clusterSize [2,3] — full lush canopies (airiness is expressed by
+  // twig DENSITY per species, never fewer anchors). barkK 0.42 keeps the trunk bark DAG a
+  // hair under beech's 0.5 — silhouette-neutral trunk detail, not a foliage cut.
+  ash: { barkK: 0.42 },
+  maple: { barkK: 0.42 },
+  lime: { barkK: 0.42 },
+  willow: { barkK: 0.42 },
+  rowan: { barkK: 0.42 },
 };
 
 export interface VegLib {
