@@ -146,7 +146,7 @@ def country_floor_biome(workers: int, min_lod: int) -> None:
 @main.command()
 @click.option("--aoi", required=True)
 @click.option("--layer", "layers_opt", multiple=True,
-              type=click.Choice(["height", "biome", "water", "canopy", "soil", "trees",
+              type=click.Choice(["height", "biome", "water", "waterbed", "canopy", "soil", "trees",
                                   "understory", "debris", "boulders"]),
               help="Cook only these layers (default: all the AOI enables)")
 @click.option("--workers", default=6, show_default=True)
@@ -172,6 +172,13 @@ def cook(aoi: str, layers_opt: tuple[str, ...], workers: int) -> None:
         from .cook.layers_cook import cook_water
 
         cook_water(base, bbox, log=click.echo)
+    # waterbed is a POST-PASS over cooked height+water: carve the submerged bed (#104) and
+    # emit the anti-aliased shore-coverage layer (#114). Not a default layer — request it
+    # explicitly with `--layer waterbed` after height + water are cooked.
+    if "waterbed" in wanted:
+        from .cook.layers_cook import cook_waterbed
+
+        cook_waterbed(base, bbox, log=click.echo)
     if "canopy" in wanted:
         from .cook.layers_cook import cook_canopy
 
@@ -197,7 +204,7 @@ def cook(aoi: str, layers_opt: tuple[str, ...], workers: int) -> None:
         from .cook.layers_cook import cook_boulders
 
         cook_boulders(base, bbox, log=click.echo)
-    known = {"height", "biome", "water", "canopy", "soil", "trees", "understory", "debris", "boulders"}
+    known = {"height", "biome", "water", "waterbed", "canopy", "soil", "trees", "understory", "debris", "boulders"}
     for name in sorted(wanted - known):
         click.echo(f"(layer {name}: cooker lands in a later phase)")
     click.echo("cook complete.")

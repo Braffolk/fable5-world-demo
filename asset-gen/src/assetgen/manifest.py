@@ -41,7 +41,9 @@ def _debris_dictionary() -> dict[int, dict]:
     return load_debris().dictionary
 
 LAYER_DOC = {
-    "height": {"enc": 1, "semantics": "u16 heights, meters EH2000; texel(i,j) center at origin+(i+0.5)*t"},
+    "height": {"enc": 1, "semantics": "u16 heights, meters EH2000; texel(i,j) center at origin+(i+0.5)*t. "
+                "chunk header flags bit 0 (=1) means the submerged bed is carved under the water mask "
+                "(#104): wet texels store height − depth so streamed water gets real depth, not z-fight"},
     "biome": {"enc": 2, "texelMeters": 2, "planes": ["classId", "vegDensity"],
                "semantics": "land-cover class (see config/landcover-classes.toml palette) + canopy fraction; "
                "texel = texelMeters * lodStep^lod m. LOD >= 1 reduces the finer rung per 4x4 block: "
@@ -52,6 +54,15 @@ LAYER_DOC = {
                "client substitutes (own bed height - 2.0 m); absent chunk = all dry; "
                "texel = texelMeters * lodStep^lod m. LOD1 texel is wet iff >= 8 of its 16 finer "
                "texels are wet (ties lean wet), level = mean of the wet levels"},
+    "watercover": {"enc": 2, "texelMeters": 2, "planes": ["coverage"],
+                    "semantics": "anti-aliased water-area fraction * 255 (#114 smooth shoreline). "
+                    "8x-supersampled rasterization of the SAME ETAK polygons as the water layer "
+                    "(rivers E_203_a + lakes E_202 + sea E_201), box-downsampled to the texel. "
+                    "255 = fully wet, 0 = fully dry, mid = sub-texel shore coverage; sample it "
+                    "bilinearly and threshold/feather the water edge instead of the binary water "
+                    "mask. texel = texelMeters * lodStep^lod m; LOD1 = mean of the 4x4 finer "
+                    "coverage. absent chunk = no water. The submerged bed (#104) is carved into "
+                    "the height layer under this same extent (height chunk flags bit 0 = carved)"},
     "canopy": {"enc": 2, "texelMeters": 2, "planes": ["heightM", "cover"],
                 "semantics": "far-forest canopy from the summer CHM; LODs 1-4 ONLY (no LOD0 - near "
                 "canopy derives from tree records); texel = texelMeters * lodStep^lod m. heightM = mean "

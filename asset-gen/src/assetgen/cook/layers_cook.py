@@ -11,7 +11,7 @@ from ..grid import ChunkId, chunk_bounds_en, chunks_covering_bbox_en, lod_footpr
 from ..process.landcover import BIOME_TEXEL, load_rules, rasterize_classes, veg_density
 from ..process.mosaic import RasterStack, dem_sources
 from ..process.soil import check_unknown_budget, rasterize_soil, unmapped_textures, unmapped_types
-from ..process.water import rasterize_water
+from ..process.water import bed_depth_field, rasterize_water
 from .chunkio import ChunkMeta, read_chunk, write_chunk
 from .encode import (
     decode_quant16,
@@ -246,6 +246,79 @@ def cook_water(base: BaseConfig, bbox_en, log=print) -> None:
         )
         n_wet1 += 1
     log(f"  water lod1: {n_wet1} wet chunks")
+
+
+WATERBED_FLAG = 1  # ChunkMeta.flags bit: this height chunk has its bed carved under water
+
+
+def cook_waterbed(base: BaseConfig, bbox_en, log=print) -> None:
+    """POST-PASS (#104 depth + #114 shoreline): carve a submerged bed into the LOD0 height
+    chunks under the water mask (height − depth) and emit the anti-aliased shore-coverage
+    layer `watercover`.
+
+    Run AFTER height + water are cooked. Touches ONLY under-water texels — so generated
+    scatter (trees from nDSM, understory/debris/boulders from landcover; none read the DTM
+    bed for COUNTS) is unaffected, and dry texels keep their DECODED height bit-for-bit
+    (a shifted qoffset re-quantizes them to the identical value). Idempotent: carved chunks
+    are tagged in the header (flags bit) and skipped on re-run, so the output is
+    byte-deterministic. Pilot LOD0 only — near-camera water is where the flat surface
+    z-fights the terrain; coarse far water is sub-pixel and its height stays pure DTM.
+    """
+    stack = RasterStack(dem_sources(DATA_IN))
+    chunks = chunks_covering_bbox_en(base.grid, bbox_en, 0)
+    n_carved = n_cov = 0
+    for i, c in enumerate(chunks):
+        hp = chunk_path("height", c)
+        if not hp.exists():
+            continue
+        hmeta, hpayload = read_chunk(hp)
+        if hmeta.flags & WATERBED_FLAG:
+            n_carved += 1
+            continue  # already carved — idempotent re-run
+        depth2, cov2 = bed_depth_field(_window_2m(base, c), stack)
+
+        if cov2.any():  # coverage (#114): emit wherever any water polygon touches the chunk
+            cov = np.rint(np.clip(cov2, 0.0, 1.0) * 255.0).astype(np.uint8)
+            write_chunk(chunk_path("watercover", c), _meta(base, "watercover", c, enc=2),
+                        encode_u8_planes(base.encode, [cov]))
+            n_cov += 1
+
+        if float(depth2.max()) <= 0.0:
+            continue  # coverage-only (e.g. sea, deferred) — nothing to carve
+
+        # carve: subtract the 2 m depth (nearest-upsampled to the 1 m height grid) under water
+        h = decode_quant16(base.encode, hpayload, hmeta.res, hmeta.qoffset, hmeta.qscale)
+        d1 = np.repeat(np.repeat(depth2, 2, axis=0), 2, axis=1)[: hmeta.res, : hmeta.res]
+        carved = (h - d1).astype(np.float64)
+        qscale = hmeta.qscale
+        payload, qoffset = encode_quant16(base.encode, carved, qscale)
+        out = decode_quant16(base.encode, payload, hmeta.res, qoffset, qscale)
+        err = float(np.max(np.abs(out - carved)))
+        if err > qscale * 0.5 + 1e-3:
+            raise AssertionError(f"waterbed round-trip {err} m on {c}")
+        b = chunk_bounds_en(base.grid, c)
+        write_chunk(hp, ChunkMeta(
+            layer="height", lod=0, enc=1, cx=c.cx, cz=c.cz, res=hmeta.res, count=0,
+            origin_e=b[0], origin_n=b[3], qoffset=qoffset, qscale=qscale, flags=WATERBED_FLAG,
+        ), payload)
+        n_carved += 1
+        if (i + 1) % 16 == 0 or i + 1 == len(chunks):
+            log(f"  waterbed [{i + 1}/{len(chunks)}] ({n_carved} carved, {n_cov} coverage)")
+
+    # coverage LOD1: mean fraction per 4×4 block (mirrors biome's coarse-rung reduction)
+    n = _res_2m(base) - 1
+    done = 0
+    for c in chunks_covering_bbox_en(base.grid, bbox_en, 1):
+        big = assemble_finer(lambda f: _read_planes(base, "watercover", f, 1), c, n, fills=[0])
+        if big is None:
+            continue
+        cov = mean_u8(blocks16(big[0]))
+        if not cov.any():
+            continue
+        write_chunk(chunk_path("watercover", c), _meta(base, "watercover", c, enc=2),
+                    encode_u8_planes(base.encode, [cov]))
+        done += 1
+    log(f"  waterbed: {n_carved} height chunks carved, {n_cov} coverage LOD0 + {done} LOD1")
 
 
 def cook_canopy(base: BaseConfig, bbox_en, log=print) -> None:
