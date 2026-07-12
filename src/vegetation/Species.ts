@@ -473,10 +473,9 @@ export const ASPEN: SpeciesParams = {
       segs: 4, wander: 0.12, gravitropism: 0.06, droop: 0.14, tipCurl: 0.1, taper: 0.9,
     },
     {
-      // slender shiny twigs — airier than beech (density 4.2 vs 8); low droop + neutral
-      // gravitropism = NO weep (the birch contrast). Density is beech-under (VRAM parity
-      // right-size) AND botanically airier — an aspen crown is light and open.
-      density: 3.6, whorl: 0, childStart: 0.18, childEnd: 1.0,
+      // slender shiny twigs — airier than beech (density 5.5 vs 8) but FULL; low droop +
+      // neutral gravitropism = NO weep (the birch contrast). A light, open aspen crown.
+      density: 5.5, whorl: 0, childStart: 0.18, childEnd: 1.0,
       angleBase: 0.85, angleTip: 0.55, lenRatio: 0.3, lenJitter: 0.35, radRatio: 0.52,
       segs: 3, wander: 0.1, gravitropism: 0.0, droop: 0.1, tipCurl: 0.05, taper: 0.85,
       planar: 0.6,
@@ -485,15 +484,11 @@ export const ASPEN: SpeciesParams = {
   foliage: {
     kind: 'leafCluster',
     anchorLevel: 3,
-    // spacing 0.17 (wider than beech 0.13) → fewer leaf anchors: the light open aspen
-    // canopy AND the batch's reliable VRAM lever (thins the leaf mesh + voxel crown).
-    spacing: 0.17,
+    spacing: 0.12, // beech-parity anchor density → a full aspen canopy
     tStart: 0.1,
-    scale: [0.1, 0.14],
+    scale: [0.12, 0.18],
     tilt: 0.95,
-    // clusterSize [1,2] (airier than beech/oak [2,3]) — a light, see-through aspen crown
-    // (the fluttering pioneer canopy) + the batch's biggest VRAM lever
-    clusterSize: [1, 2],
+    clusterSize: [2, 3], // beech/oak-parity lush clusters (airiness = twig density, not thinning)
     normalBend: 0.7,
     planarLeaves: true,
     // ROUND blade: width ≈ len, shapePow 1 (rounded, not pointed) — the aspen leaf.
@@ -542,9 +537,9 @@ export const GREY_ALDER: SpeciesParams = {
       segs: 4, wander: 0.16, gravitropism: 0.05, droop: 0.14, tipCurl: 0.08, taper: 0.88,
     },
     {
-      // airiest twig level of the three broadleaves (the open scrappy crown) — density
-      // 3.6 is the lowest of the batch (open wet-ground pioneer) + the deepest VRAM cut.
-      density: 3.1, whorl: 0, childStart: 0.2, childEnd: 1.0,
+      // airiest of the three broadleaves — the open scrappy wet-ground pioneer crown,
+      // but still FULL (density 5.0, botanically airier than beech's 8, not thinned).
+      density: 5.0, whorl: 0, childStart: 0.2, childEnd: 1.0,
       angleBase: 0.85, angleTip: 0.55, lenRatio: 0.3, lenJitter: 0.4, radRatio: 0.5,
       segs: 3, wander: 0.14, gravitropism: 0.02, droop: 0.12, tipCurl: 0.05, taper: 0.85,
       planar: 0.4,
@@ -553,11 +548,11 @@ export const GREY_ALDER: SpeciesParams = {
   foliage: {
     kind: 'leafCluster',
     anchorLevel: 3,
-    spacing: 0.18, // widest of the batch — the open scrappy wet-ground crown + VRAM lever
+    spacing: 0.13, // beech-parity anchor density → a full (if scrappy) alder crown
     tStart: 0.1,
-    scale: [0.11, 0.15],
+    scale: [0.12, 0.17],
     tilt: 0.9,
-    clusterSize: [1, 2], // open scrappy wet-ground crown (the airiest of the batch) + VRAM right-size
+    clusterSize: [2, 3], // lush clusters; the open scrappy read comes from twig density + asym, not thinning
     normalBend: 0.66,
     planarLeaves: true,
     leaf: { len: 1.0, width: 0.54, shapePow: 1.1, fold: 0.2, curl: 0.15, needleCount: 0, brush: 0 },
@@ -605,9 +600,9 @@ export const BLACK_ALDER: SpeciesParams = {
       segs: 4, wander: 0.12, gravitropism: 0.03, droop: 0.16, tipCurl: 0.1, taper: 0.88,
     },
     {
-      // narrow-spire twigs — density 4.0 (VRAM right-size; the cone envelope already
-      // keeps the crown tight so it reads as a spire with fewer twigs)
-      density: 3.4, whorl: 0, childStart: 0.15, childEnd: 1.0,
+      // narrow-spire twigs — FULL within the tight cone envelope (density 5.5); the cone
+      // shape reads as a spire, the crown itself is leafy.
+      density: 5.5, whorl: 0, childStart: 0.15, childEnd: 1.0,
       angleBase: 0.9, angleTip: 0.6, lenRatio: 0.3, lenJitter: 0.36, radRatio: 0.5,
       segs: 3, wander: 0.11, gravitropism: 0.02, droop: 0.12, tipCurl: 0.05, taper: 0.85,
       planar: 0.4,
@@ -616,11 +611,11 @@ export const BLACK_ALDER: SpeciesParams = {
   foliage: {
     kind: 'leafCluster',
     anchorLevel: 3,
-    spacing: 0.17, // wider than beech → fewer anchors on the tight spire + VRAM lever
+    spacing: 0.13, // beech-parity anchor density → a leafy spire (the cone shape, not sparse leaves)
     tStart: 0.08,
-    scale: [0.11, 0.15],
+    scale: [0.13, 0.18],
     tilt: 0.9,
-    clusterSize: [1, 2], // narrow dark spire (tight cone reads with fewer leaves) + VRAM right-size
+    clusterSize: [2, 3], // lush clusters; the narrow spire read comes from the cone envelope, not thinning
     normalBend: 0.66,
     planarLeaves: true,
     // obovate/racquet, blunt tip → rounded (shapePow 1), medium width

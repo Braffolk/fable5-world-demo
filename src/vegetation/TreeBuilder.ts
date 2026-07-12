@@ -132,11 +132,6 @@ export interface HeroDiet {
   meshAnchorTarget?: number;
   /** tube radial-segment multiplier (1 = gallery hero) */
   barkK?: number;
-  /** per-species OVERRIDE of the global leafAnchorTarget for the hero crown build
-   *  (VegLibrary). Opt-in VRAM right-size: species that set it build their crown at
-   *  FEWER anchors (smaller leaf mesh + LOD ladder + voxel crown — all anchor-count-
-   *  bound). Unset ⇒ the user-approved global density (existing species unchanged). */
-  heroAnchorCap?: number;
 }
 
 export function buildTree(
