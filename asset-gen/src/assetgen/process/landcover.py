@@ -103,3 +103,31 @@ def veg_density(window_en: tuple[float, float, float, float, float]) -> np.ndarr
     chm = stack.read_window(e_min, n_min, e_max, n_max, t)
     canopy = (np.nan_to_num(chm, nan=0.0) >= 2.0).astype(np.uint8)
     return _box_mean_u8(canopy, radius=3)  # 7 texels * 2 m = 14 m window
+
+
+# Total ground-vegetation cover per land-cover class (u8 fraction), the "is this ground
+# vegetated?" signal that the biome vegDensity plane carries for the far vista + terrain
+# material (#106). DISTINCT from CANOPY cover (veg_density, above): open grassland / meadow
+# / arable field / yard / fen carry a continuous herbaceous sward and must read GREEN, not
+# fall through to the bare-soil default. Genuinely bare classes (barren, sand, cut peatfield,
+# water) stay ~0 so they still render as ground/rock. Real ETAK land-cover semantics — never
+# noise, never fabricated: the class IS the honest herbaceous-cover signal, country-wide.
+HERB_COVER = {
+    "grassland": 255,  # Rohumaa / Haljasala — continuous sward
+    "yard": 217,       # õu renders as mown grass (nature-only world)
+    "fen": 217,        # madalsoo — sedge/grass mire, mostly vegetated
+    "field": 204,      # arable — vegetated most of the year (the tilled tone is layered on top)
+    "shrub": 191,      # põõsastik — shrub + grass understory
+    "forest": 178,     # herb/moss ground layer under canopy (canopy cover usually wins the max)
+    "bog": 140,        # raba — sphagnum + dwarf shrubs, partly open peat
+    "peatfield": 51,   # turbaväli — cut/extracted peat, largely bare
+    # barren, sand, water_still, water_flow, sea, none -> 0 (absent from the map)
+}
+
+
+def herb_cover(rules: LandcoverRules, class_plane: np.ndarray) -> np.ndarray:
+    """Per-texel herbaceous ground-cover fraction (u8) from the land-cover class raster."""
+    lut = np.zeros(256, dtype=np.uint8)
+    for name, weight in HERB_COVER.items():
+        lut[rules.palette[name]] = weight
+    return lut[class_plane]

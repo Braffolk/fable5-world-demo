@@ -8,7 +8,14 @@ import numpy as np
 
 from ..config import DATA_IN, BaseConfig
 from ..grid import ChunkId, chunk_bounds_en, chunks_covering_bbox_en, lod_footprint
-from ..process.landcover import BIOME_TEXEL, load_rules, rasterize_classes, veg_density
+from ..process.landcover import (
+    BIOME_TEXEL,
+    HERB_COVER,
+    herb_cover,
+    load_rules,
+    rasterize_classes,
+    veg_density,
+)
 from ..process.mosaic import RasterStack, dem_sources
 from ..process.soil import check_unknown_budget, rasterize_soil, unmapped_textures, unmapped_types
 from ..process.water import bed_depth_field, rasterize_water
@@ -52,7 +59,10 @@ def cook_biome(base: BaseConfig, bbox_en, log=print) -> None:
             continue
         window = _window_2m(base, c)
         class_plane = rasterize_classes(rules, window)
-        density_plane = veg_density(window)
+        # vegDensity = TOTAL vegetation cover (#106): CHM canopy fraction OR herbaceous
+        # ground cover, whichever is greater — so open grassland/meadow/field read as
+        # vegetated (green), not the bare-soil default. Canopy still wins under forest.
+        density_plane = np.maximum(veg_density(window), herb_cover(rules, class_plane))
         payload = encode_u8_planes(base.encode, [class_plane, density_plane])
         write_chunk(dest, _meta(base, "biome", c, enc=2), payload)
         if (i + 1) % 16 == 0 or i + 1 == len(chunks):
@@ -86,14 +96,21 @@ def cook_biome(base: BaseConfig, bbox_en, log=print) -> None:
 # mirrors the height country-floor: rasterize the whole-country ETAK landcover DIRECTLY at
 # the coarse texel for the finest floor rung, then reduce the coarser rungs from it.
 #
-# vegDensity (biome plane 1 = bio.y) is the load-bearing far-colour plane — grassW/forestW
-# scale by it, so "far = dirt" is really "far vegDensity = 0". The honest whole-country
-# analog of the pilot's CHM canopy-cover fraction is the ETAK forest/shrub coverage
-# fraction (forest = full canopy, shrub = half): both mean "share of ground under tree
-# canopy", so near (CHM) and far (ETAK) stay consistent. Canopy HEIGHT has no whole-country
-# source (CHM is pilot-only), so the canopy layer (treetop tint) stays pilot-only.
+# vegDensity (biome plane 1 = bio.y) is the load-bearing far-colour plane — grassW/grass
+# density scale by it, so "far = dirt" is really "far vegDensity = 0". vegDensity is TOTAL
+# vegetation cover (#106): the whole-country analog of the pilot's max(CHM canopy, herb) is
+# max(ETAK forest/shrub canopy fraction, ETAK herbaceous ground cover) — so far OPEN land
+# (grassland/field/meadow/yard/fen) reads green like near, not dirt, while forest keeps its
+# canopy weight. HERB_COVER (landcover) is shared with the pilot so near/far stay consistent.
+# Canopy HEIGHT has no whole-country source (CHM is pilot-only), so the canopy layer (treetop
+# tint) stays pilot-only.
 _BIOME_SUPERSAMPLE = 4  # sub-texels per coarse texel — MUST be 4 for blocks16's 4x4 blocks
-_CANOPY_COVER = {"forest": 255, "shrub": 128}  # class -> vegDensity weight (canopy fraction)
+_CANOPY_COVER = {"forest": 255, "shrub": 128}  # class -> canopy-cover fraction (no CHM far)
+# per-class total-veg cover = max(canopy cover, herbaceous ground cover)
+_VEG_COVER = {
+    name: max(_CANOPY_COVER.get(name, 0), HERB_COVER.get(name, 0))
+    for name in _CANOPY_COVER.keys() | HERB_COVER.keys()
+}
 
 _floor_base: BaseConfig | None = None
 _floor_rules = None
@@ -116,10 +133,10 @@ def _biome_coarse_planes(base: BaseConfig, rules, c: ChunkId):
     if not class_sub.any():
         return None
     veg_sub = np.zeros_like(class_sub)
-    for name, weight in _CANOPY_COVER.items():
+    for name, weight in _VEG_COVER.items():
         veg_sub[class_sub == rules.palette[name]] = weight
     cls = majority_u8(blocks16(class_sub))      # dominant land-cover class per coarse texel
-    dens = mean_u8(blocks16(veg_sub))           # canopy-cover fraction * 255 per coarse texel
+    dens = mean_u8(blocks16(veg_sub))           # total-veg-cover fraction * 255 per coarse texel
     return cls, dens
 
 
@@ -433,7 +450,10 @@ def cook_understory(base: BaseConfig, bbox_en, log=print) -> None:
         if biome is None or soil is None:
             raise FileNotFoundError("understory needs biome + soil cooked first")
         window = _window_2m(base, c)
-        community, density = rasterize_understory(window, biome[0], biome[1], soil[4])
+        # density's canopy-shade trim wants CANOPY cover, not the biome plane's vegDensity
+        # (now TOTAL veg cover incl. open grass — #106); read the CHM canopy fraction directly
+        # so open meadows keep their ground flora (byte-identical to the pre-#106 cook).
+        community, density = rasterize_understory(window, biome[0], veg_density(window), soil[4])
         # ecological suitability: cut density by slope + soil wetness/richness + stoniness
         slope = _slope_2m(base, c, res2)
         wet = cell_wetness(soil[0], soil[1])

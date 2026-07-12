@@ -45,10 +45,14 @@ LAYER_DOC = {
                 "chunk header flags bit 0 (=1) means the submerged bed is carved under the water mask "
                 "(#104): wet texels store height − depth so streamed water gets real depth, not z-fight"},
     "biome": {"enc": 2, "texelMeters": 2, "planes": ["classId", "vegDensity"],
-               "semantics": "land-cover class (see config/landcover-classes.toml palette) + canopy fraction; "
-               "texel = texelMeters * lodStep^lod m. LOD >= 1 reduces the finer rung per 4x4 block: "
-               "classId = MAJORITY (ties -> higher classId, so water/sea/wetland win mixed coast texels), "
-               "vegDensity = mean; texels beyond cooked coverage count as none(0)"},
+               "semantics": "land-cover class (see config/landcover-classes.toml palette) + TOTAL "
+               "vegetation cover (#106): max(canopy cover, herbaceous ground cover) so open "
+               "grassland/meadow/field/yard/fen read as vegetated, not bare soil (pilot = max(CHM "
+               ">=2 m canopy fraction, per-class herb cover); far floor = max(ETAK forest/shrub "
+               "canopy fraction, per-class herb cover)); texel = texelMeters * lodStep^lod m. "
+               "LOD >= 1 reduces the finer rung per 4x4 block: classId = MAJORITY (ties -> higher "
+               "classId, so water/sea/wetland win mixed coast texels), vegDensity = mean; texels "
+               "beyond cooked coverage count as none(0)"},
     "water": {"enc": 1, "texelMeters": 2,
                "semantics": "waterY surface elevation on wet texels; quantized value 0 = DRY - "
                "client substitutes (own bed height - 2.0 m); absent chunk = all dry; "
