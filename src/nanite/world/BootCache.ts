@@ -100,7 +100,13 @@ import srcRockGen from '../../vegetation/RockGen.ts?raw';
  *  recomputed normals) and the UV mapping went world-proportional. The tree bark
  *  DAGs change shape; TubeMesh.ts + BarkField.ts join SRC_HASH (TubeMesh was absent),
  *  and the rev forces a clean rebuild across both worlds (shared tree meshes). */
-const CACHE_REV = 13;
+/*  rev 14 (bark RETUNE): BARK_FIELDS cell frequency cut ~2.7–6× toward real furrow
+ *  scale (macroAmp dropped to match — finer furrows are shallower), + fine-flake
+ *  mesoH worley, bright-paper tone lift + birch lenticel dashes, softer cavity.
+ *  The macro furrow field changes ⇒ trunk displacement geometry changes on BOTH
+ *  worlds; BarkField.ts is already in SRC_HASH but macroAmp/cells alter the baked
+ *  vertex positions, so bump forces a clean cold rebuild. Scatter counts invariant. */
+const CACHE_REV = 14;
 
 const DB_NAME = 'laas-bootcache';
 const STORE = 'artifacts';

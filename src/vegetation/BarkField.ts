@@ -158,48 +158,64 @@ export interface BarkFieldParams {
   mottle: number;
 }
 
-/** index == barkLayer (Species.barkLayer, Understory, deadwood share 2 & 5).
- *  deep/high/mottle carried over from the old BARK_TABLE — the palette was never
- *  the problem. tileW/cells/aspect/amp per the bark spec (§3), tuned for real
- *  furrow topology: spruce narrow vertical ridges, pine deep-crevice plate
- *  mosaic, beech near-smooth muscle, birch horizontal peel + lenticels, karst
- *  twisted deep ridges, snag long spiral splits. */
+/** index == barkLayer (Species.barkLayer, Understory, deadwood share 2 & 5;
+ *  OAK reuses layer 4 = karst).
+ *  RETUNE (close-up feedback): the shipped bark read ~4× oversized — a cobweb of
+ *  a few MASSIVE plates instead of many small furrows. Cell frequency is cut
+ *  ~2.7–6× per species toward REAL furrow/scale sizes (Scots pine reddish flaky
+ *  scale-plates not palm diamonds; Norway spruce fine grey flakes not long
+ *  winding lines; silver birch white paper + horizontal lenticel dashes; beech
+ *  near-smooth elephant hide; oak/karst deep vertical ridges). Finer furrows are
+ *  also SHALLOWER, so macroAmp drops 2.5–4× (physically sane — no 5–7 cm spikes
+ *  on ~4 cm features, which would alias on the ~5 cm ring-vertex spacing). The
+ *  crisp sub-furrow "many scales" detail lives in the 512² baked albedo+normal
+ *  (mesoH fine-flake worley), which is mesh-independent; the displaced macro band
+ *  carries gentle real relief only. deep/high = per-layer palette (unchanged
+ *  intent); mottle cut where it read as jarring random dark spots (spruce). */
 export const BARK_FIELDS: readonly BarkFieldParams[] = [
-  { // 0 spruce — narrow vertical fissured ridges
-    id: 'spruce', seed: 17, tileW: 1.4, cellsU: 10, cellsV: 2, aspect: 5.0,
-    warp: 0.35, fissureW: 0.26, macroAmp: 0.044, plateRound: 0.25, ridge: 0.3,
+  { // 0 spruce — fine grey-brown flaky scales (kill winding lines: aspect 5→2.0,
+    //   cellsV 2→11 so cracks no longer chain into long vertical lines; ~3.5× finer).
+    //   plateRound low + amp low ⇒ FLAT scales with fissures, not puffy pebbles.
+    id: 'spruce', seed: 17, tileW: 1.1, cellsU: 14, cellsV: 11, aspect: 2.0,
+    warp: 0.22, fissureW: 0.14, macroAmp: 0.011, plateRound: 0.14, ridge: 0.28,
     micro: 0.30, lenticels: 0, twist: 0.0, smooth: 0.0,
-    deep: [0.045, 0.032, 0.026], high: [0.21, 0.155, 0.115], mottle: 0.25,
+    deep: [0.045, 0.032, 0.026], high: [0.21, 0.155, 0.115], mottle: 0.10,
   },
-  { // 1 pine — big flaky plates, deep crevices, orange
-    id: 'pine', seed: 149, tileW: 1.8, cellsU: 5, cellsV: 3, aspect: 1.6,
-    warp: 0.45, fissureW: 0.38, macroAmp: 0.055, plateRound: 0.42, ridge: 0.35,
-    micro: 0.22, lenticels: 0, twist: 0.0, smooth: 0.0,
-    deep: [0.05, 0.027, 0.016], high: [0.30, 0.155, 0.075], mottle: 0.35,
+  { // 1 pine — reddish flaky scale-plates (not palm diamonds: aspect 1.6→1.4
+    //   slight vertical grain, cell 0.36 m→0.06 m ≈6× finer, FLAT plates, warm
+    //   orange-red upper-trunk tone so it reads Scots pine not brown cobblestone)
+    id: 'pine', seed: 149, tileW: 1.2, cellsU: 20, cellsV: 17, aspect: 1.4,
+    warp: 0.26, fissureW: 0.20, macroAmp: 0.013, plateRound: 0.18, ridge: 0.30,
+    micro: 0.24, lenticels: 0, twist: 0.0, smooth: 0.0,
+    deep: [0.08, 0.04, 0.022], high: [0.40, 0.185, 0.078], mottle: 0.18,
   },
-  { // 2 beech — near-smooth pale grey "muscle" undulation, no fissure net
-    id: 'beech', seed: 281, tileW: 2.0, cellsU: 3, cellsV: 3, aspect: 1.0,
-    warp: 0.30, fissureW: 0.85, macroAmp: 0.006, plateRound: 0.1, ridge: 0.08,
-    micro: 0.12, lenticels: 0, twist: 0.0, smooth: 0.85,
-    deep: [0.16, 0.15, 0.135], high: [0.30, 0.285, 0.25], mottle: 0.5,
+  { // 2 beech — near-smooth pale grey "elephant hide", no fissure net
+    id: 'beech', seed: 281, tileW: 1.7, cellsU: 6, cellsV: 6, aspect: 1.0,
+    warp: 0.26, fissureW: 0.88, macroAmp: 0.005, plateRound: 0.09, ridge: 0.07,
+    micro: 0.11, lenticels: 0, twist: 0.0, smooth: 0.88,
+    deep: [0.16, 0.15, 0.135], high: [0.30, 0.285, 0.25], mottle: 0.28,
   },
-  { // 3 birch — smooth white paper + horizontal peel bands + dark lenticels
-    id: 'birch', seed: 397, tileW: 1.6, cellsU: 3, cellsV: 6, aspect: 0.25,
-    warp: 0.25, fissureW: 0.55, macroAmp: 0.008, plateRound: 0.05, ridge: 0.06,
-    micro: 0.10, lenticels: 1, twist: 0.0, smooth: 0.7,
-    deep: [0.46, 0.44, 0.42], high: [0.80, 0.79, 0.76], mottle: 0.22,
+  { // 3 birch — white papery bark + horizontal black lenticel dashes + subtle
+    //   relief (character = albedo, not furrows; smooth macro, bright base tone)
+    id: 'birch', seed: 397, tileW: 1.4, cellsU: 5, cellsV: 8, aspect: 0.3,
+    warp: 0.20, fissureW: 0.6, macroAmp: 0.006, plateRound: 0.05, ridge: 0.06,
+    micro: 0.09, lenticels: 1, twist: 0.0, smooth: 0.80,
+    deep: [0.11, 0.10, 0.095], high: [0.90, 0.89, 0.85], mottle: 0.12,
   },
-  { // 4 karst gnarl — twisted deep ridges
-    id: 'karst', seed: 523, tileW: 1.2, cellsU: 8, cellsV: 2, aspect: 4.0,
-    warp: 0.90, fissureW: 0.32, macroAmp: 0.072, plateRound: 0.3, ridge: 0.34,
-    micro: 0.34, lenticels: 0, twist: 0.15, smooth: 0.0,
-    deep: [0.05, 0.043, 0.036], high: [0.205, 0.18, 0.15], mottle: 0.3,
+  { // 4 karst / OAK — deep vertical ridged furrows + some gnarl (ridge 0.15 m→
+    //   0.055 m ≈2.7× finer, aspect 4→2.6 so ridges read as many blocky furrows;
+    //   amp trimmed to curb ring-vertex staircase aliasing on the deep furrows)
+    id: 'karst', seed: 523, tileW: 1.1, cellsU: 20, cellsV: 6, aspect: 2.6,
+    warp: 0.50, fissureW: 0.24, macroAmp: 0.022, plateRound: 0.20, ridge: 0.32,
+    micro: 0.32, lenticels: 0, twist: 0.08, smooth: 0.0,
+    deep: [0.05, 0.043, 0.036], high: [0.205, 0.18, 0.15], mottle: 0.18,
   },
-  { // 5 snag — weathered silver-grey, long spiral splits
-    id: 'snag', seed: 661, tileW: 1.5, cellsU: 9, cellsV: 1, aspect: 8.0,
-    warp: 0.30, fissureW: 0.23, macroAmp: 0.052, plateRound: 0.15, ridge: 0.26,
-    micro: 0.26, lenticels: 0, twist: 0.20, smooth: 0.0,
-    deep: [0.07, 0.065, 0.06], high: [0.26, 0.25, 0.23], mottle: 0.2,
+  { // 5 snag — weathered silver-grey, long spiral splits (finer: 0.17 m→0.08 m,
+    //   aspect 8→4 so splits are shorter, amp 5.2→1.5 cm, flatter)
+    id: 'snag', seed: 661, tileW: 1.3, cellsU: 16, cellsV: 3, aspect: 4.0,
+    warp: 0.28, fissureW: 0.20, macroAmp: 0.015, plateRound: 0.11, ridge: 0.26,
+    micro: 0.26, lenticels: 0, twist: 0.14, smooth: 0.0,
+    deep: [0.07, 0.065, 0.06], high: [0.26, 0.25, 0.23], mottle: 0.15,
   },
 ];
 
@@ -227,13 +243,19 @@ function macroH(p: BarkFieldParams, u: number, v: number): number {
   const crack = 1 - plate;
   const bulge = (1 - clamp01(w.f1)) * p.plateRound; // gentle dome toward the plate centre
   const net = 1 - p.smooth; // fracture-network strength (0 for beech/birch-smooth)
-  let H = 0.5 + low * 0.12;
+  // buttress-scale undulation: weight cut 0.12→0.06 — at the old weight the
+  // ~0.5 m mound read as the "MASSIVE pieces" of the cobweb; the fracture net is
+  // now the dominant (finer) structure.
+  let H = 0.5 + low * 0.06;
   H -= crack * 0.5 * net; // furrows cut in
   H += plate * bulge * 0.25 * net; // ridges dome out slightly
   return clamp01(H);
 }
 
-/** meso+micro fine height at (u,v) — the NORMAL-MAP band only (never displaced). */
+/** meso+micro fine height at (u,v) — the NORMAL-MAP band only (never displaced).
+ *  This is where the crisp "many small scales/furrows" detail lives: it is baked
+ *  into the 512² texture (mesh-independent), so it resolves the sub-furrow scale
+ *  the ~5 cm ring-vertex spacing cannot displace. */
 function mesoH(p: BarkFieldParams, u: number, v: number): number {
   const [uu, vv] = warpedCoords(p, u, v);
   const w = worley(uu, vv, p.cellsU, p.cellsV, p.aspect, p.seed);
@@ -242,9 +264,19 @@ function mesoH(p: BarkFieldParams, u: number, v: number): number {
   const cu2 = Math.max(2, Math.round(p.cellsU * 2));
   const cv2 = Math.max(2, Math.round(p.cellsV * 2));
   const ridge = (fbm2(uu * cu2, vv * cv2, cu2, p.seed + 41, 2) - 0.5) * plate * p.ridge;
+  // fine-flake network: a second worley at ~2× the macro frequency whose crack
+  // lines carve small flake edges into the normal map (the sub-6 cm "many scales"
+  // band). Gated by (1−smooth) so papery/near-smooth barks (birch, beech) stay
+  // unbroken. A REAL bark pattern at the real scale — not noise.
+  const fcu = Math.max(3, Math.round(p.cellsU * 2));
+  const fcv = Math.max(3, Math.round(p.cellsV * 2));
+  const fw = worley(uu, vv, fcu, fcv, p.aspect, p.seed + 257);
+  const fineCrack = (1 - smoothstep(0, p.fissureW * 0.8, fw.edge)) * (1 - p.smooth);
   // micro grain: fine high-freq, everywhere
   const grain = (fbm2(uu * 24, vv * 24, 24, p.seed + 91, 2) - 0.5) * p.micro;
-  return ridge + grain;
+  // weight 0.32 (was 0.5): the fine network subtly subdivides plates into scales
+  // rather than competing with the macro net as a busy second Voronoi (cobweb).
+  return ridge + grain - fineCrack * 0.32;
 }
 
 export interface BarkMacro {
@@ -290,25 +322,36 @@ export function barkSample(p: BarkFieldParams, u: number, v: number): BarkTexel 
   let nx = clamp01(-dMu * K * 0.5 + 0.5) * 2 - 1;
   let ny = clamp01(-dMv * K * 0.5 + 0.5) * 2 - 1;
 
-  // albedo tone: high on ridges (H high), dark in furrows; meso adds fine variation
-  let tone = clamp01(H * 0.85 + meso * 0.6 + 0.05);
+  // albedo tone: high on ridges (H high), dark in furrows; meso adds fine
+  // variation. Smooth/papery species (birch smooth 0.80, beech 0.88) lift toward
+  // a bright unbroken base so birch reads WHITE paper (was mid-grey → "just looks
+  // white"/dull); fine cracks in meso still modulate it.
+  const baseTone = clamp01(H * 0.85 + meso * 0.6 + 0.05);
+  let tone = mix(baseTone, clamp01(0.9 + meso * 0.4), p.smooth);
 
-  // cavity AO: base darkening by depth + a small horizon term over the macro field
+  // cavity AO: base darkening by depth + a SOFTENED horizon term over the macro
+  // field (0.5→0.35 — the hard junction darkening read as jarring random dark
+  // spots breaking up the spruce pattern).
   const ao =
     Math.max(0, macroH(p, u + 2 * eu, v) - H) +
     Math.max(0, macroH(p, u - 2 * eu, v) - H) +
     Math.max(0, macroH(p, u, v + 2 * ev) - H) +
     Math.max(0, macroH(p, u, v - 2 * ev) - H);
-  let cavity = clamp01((0.4 + H * 0.6) * (1 - ao * 0.5));
+  let cavity = clamp01((0.45 + H * 0.55) * (1 - ao * 0.35));
 
-  // birch lenticels: dark horizontal dashes (physically motivated cavity + tone drop)
+  // birch lenticels: dark horizontal dashes — an ALBEDO feature, the reader that
+  // makes white bark identify AS birch. Short, scattered, strongly horizontal
+  // (aspect 0.18 elongates the low-f1 band across u), ~half the lattice kept so
+  // they sit in irregular rows rather than a uniform dot grid.
   if (p.lenticels) {
     const [uu, vv] = warpedCoords(p, u, v);
-    const lw = worley(uu, vv, 5, 22, 0.35, p.seed + 77);
-    const dash = 1 - smoothstep(0.16, 0.42, lw.f1);
-    tone = mix(tone, 0.1, dash * 0.85);
-    cavity = mix(cavity, 0.45, dash * 0.7);
-    ny += dash * 0.25; // slight lip on the dash
+    const lw = worley(uu, vv, 11, 34, 0.18, p.seed + 77);
+    let dash = 1 - smoothstep(0.08, 0.26, lw.f1);
+    const scatter = vnoise(uu * 6, vv * 17, 6, 17, p.seed + 201);
+    dash *= smoothstep(0.4, 0.52, scatter);
+    tone = mix(tone, 0.02, dash * 0.92); // near-black dash (deep≈0.11 ⇒ dark)
+    cavity = mix(cavity, 0.5, dash * 0.6);
+    ny += dash * 0.2; // slight lip on the dash edge
   }
 
   return { nx: clamp01(nx * 0.5 + 0.5) * 2 - 1, ny: clamp01(ny * 0.5 + 0.5) * 2 - 1, tone, cavity };
