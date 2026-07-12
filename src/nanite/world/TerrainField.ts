@@ -94,6 +94,13 @@ export class TerrainField {
   /** true iff a watercover plane exists — the flag/absence that keeps the shoreline
    *  coverage path a NO-OP on the generated world (the #108 biomeCarriesCanopy pattern). */
   readonly hasWaterCoverage: boolean;
+  /** #116 soil pedology (rgba8 [texCore, stoniness, boniteet, texSkeleton]) — a pilot-
+   *  only (LOD0) camera window on the 2 m soil lattice. null when the source has no soil
+   *  layer (the generated world), which drives hasSoil and the TerrainMaterial gate. */
+  readonly soil: FieldLevel | null;
+  /** true iff a soil plane exists — the flag/absence that keeps the soil-modulation path
+   *  a NO-OP on the generated world (the #108 biomeCarriesCanopy / hasWaterCoverage pattern). */
+  readonly hasSoil: boolean;
   readonly coverageBox: CoverageBox;
   /** biome plane channels 2/3 carry the merged far-forest canopy (heightM, cover)
    *  — true iff the source has a canopy layer. The generated world packs snow/
@@ -108,6 +115,7 @@ export class TerrainField {
     waterFar: HeightLevel | null,
     waterCover: FieldLevel | null,
     waterCoverFar: FieldLevel | null,
+    soil: FieldLevel | null,
     coverageBox: CoverageBox,
     biomeCarriesCanopy: boolean,
   ) {
@@ -120,6 +128,8 @@ export class TerrainField {
     this.waterCover = waterCover;
     this.waterCoverFar = waterCoverFar;
     this.hasWaterCoverage = waterCover !== null;
+    this.soil = soil;
+    this.hasSoil = soil !== null;
     this.coverageBox = coverageBox;
     this.biomeCarriesCanopy = biomeCarriesCanopy;
     const mb = this.vramBytes() / 2 ** 20;
@@ -128,7 +138,8 @@ export class TerrainField {
       `[laas] terrain field: height [${heightLevels.map((l) => `${l.res}²@${l.texel}m${l.wraps ? '~' : ''}`).join(' ')}] r32f + ` +
         `biome [${biomeLevels.map((l) => `${l.res}²`).join(' ')}] + fields [${fieldsLevels.map((l) => `${l.res}²`).join(' ')}] rgba8 + ` +
         `water ${water ? `${water.res}² r32f (+far ${waterFar?.res ?? 0}²)` : 'none'} + ` +
-        `watercover ${waterCover ? `${waterCover.res}² rgba8${waterCover.wraps ? '~' : ''} (+far ${waterCoverFar?.res ?? 0}²)` : 'none'} = ` +
+        `watercover ${waterCover ? `${waterCover.res}² rgba8${waterCover.wraps ? '~' : ''} (+far ${waterCoverFar?.res ?? 0}²)` : 'none'} + ` +
+        `soil ${soil ? `${soil.res}² rgba8${soil.wraps ? '~' : ''}` : 'none'} = ` +
         `${mb.toFixed(1)} MB VRAM (CPU mirrors share the backing; ~ = camera-window level)`,
     );
     if (mb > VRAM_CEILING_MB) {
@@ -146,7 +157,8 @@ export class TerrainField {
     const waterFar = plan.waterFar ? makeHeightLevel('terrainFieldWaterYFar', plan.waterFar) : null;
     const waterCover = plan.waterCover ? makeU8Level('terrainFieldWaterCover', plan.waterCover) : null;
     const waterCoverFar = plan.waterCoverFar ? makeU8Level('terrainFieldWaterCoverFar', plan.waterCoverFar) : null;
-    return new TerrainField(heightLevels, biomeLevels, fieldsLevels, water, waterFar, waterCover, waterCoverFar, plan.coverageBox, plan.biomeHasCanopy);
+    const soil = plan.soil ? makeU8Level('terrainFieldSoil', plan.soil) : null;
+    return new TerrainField(heightLevels, biomeLevels, fieldsLevels, water, waterFar, waterCover, waterCoverFar, soil, plan.coverageBox, plan.biomeHasCanopy);
   }
 
   /** One-level field over a flat/explicit height array — forest/gallery-class
@@ -186,6 +198,7 @@ export class TerrainField {
       null,
       null,
       null,
+      null, // no soil plane on a single-level field
       {
         minX: opts.worldMinX,
         minZ: opts.worldMinZ,
@@ -213,7 +226,9 @@ export class TerrainField {
                 ? this.waterFar
                 : plane === 'watercover'
                   ? this.waterCover
-                  : this.waterCoverFar;
+                  : plane === 'waterCoverFar'
+                    ? this.waterCoverFar
+                    : this.soil;
     if (!lvl) throw new Error(`TerrainField: no ${plane} level ${level}`);
     return lvl;
   }
@@ -286,6 +301,7 @@ export class TerrainField {
       ...(this.waterFar ? [this.waterFar] : []),
       ...(this.waterCover ? [this.waterCover] : []),
       ...(this.waterCoverFar ? [this.waterCoverFar] : []),
+      ...(this.soil ? [this.soil] : []),
     ];
   }
 
@@ -430,6 +446,17 @@ export class TerrainField {
     const out = vec4(0).toVar();
     hotLevelChain(this.biomeLevels, wxz, (lvl) => out.assign(planeLinear(lvl, wxz)));
     return out as unknown as NV4;
+  }
+
+  /** #116 soil sample [texCore, stoniness, boniteet, texSkeleton] (raw byte /255 — the
+   *  material decodes per channel: ×255 for the id/score channels). ONE filtered rgba8
+   *  tap of the single soil level (LOD0 only — soil is pilot-near); the level wraps on
+   *  Estonia so this takes planeLinear's toroidal 4-tap path. vec4(0) when the source
+   *  has no soil layer (the generated world — the caller compile-gates on hasSoil, so
+   *  this branch is never constructed there). */
+  soilAt(wxz: NV2): NV4 {
+    if (!this.soil) return vec4(0) as unknown as NV4;
+    return planeLinear(this.soil, wxz) as unknown as NV4;
   }
 
   /** nearest-texel waterY — hot gates (raster riverDepth, grass water gate).

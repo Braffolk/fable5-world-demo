@@ -80,6 +80,12 @@ export interface FieldPlan {
    *  of the min-reduce bed dive that quantized the far shore to blocky squares.
    *  null with waterCover (generated world ⇒ the far coverage path never compiles). */
   waterCoverFar: PlanePlan | null;
+  /** #116 soil pedology (u8) — a pilot-only (LOD0) camera window on the 2 m soil
+   *  lattice packing 4 of the 5 cooked Mullastikukaart channels (texCore/stoniness/
+   *  boniteet/texSkeleton; soilType dropped — its rendered signal is covered by the
+   *  classId land-cover block + texCore). null when the source has no soil layer (the
+   *  generated world ⇒ the TerrainMaterial soil-modulation path never compiles). */
+  soil: PlanePlan | null;
   coverageBox: CoverageBox;
   /** the biome plane's channels 2/3 carry the merged far-forest canopy
    *  (heightM, cover) — true iff the source has a canopy layer. The generated
@@ -121,6 +127,16 @@ export const FIELDS_CHANNELS: readonly (readonly [string, number])[] = [
  *  0 dry → 255 fully wet). Stored rgba8 like every other u8 plane so it rides the
  *  identical copyChunkU8 / assembleU8 / writeRegion path (4-bytes-per-texel invariant). */
 export const WATERCOVER_CHANNELS: readonly (readonly [string, number])[] = [['coverage', 0]];
+/** #116 soil plane: 4 of the cooked soil layer's 5 u8 planes → rgba8 channels. Referenced
+ *  by NAME (copyChunkU8 resolves each against the manifest plane order), so `soilType`
+ *  simply never gets copied — it is not in this map. texCore→R (mineral tint), stoniness→G
+ *  (speckle amplitude), boniteet→B (ground-flora richness), texSkeleton→A (speckle hue). */
+export const SOIL_CHANNELS: readonly (readonly [string, number])[] = [
+  ['texCore', 0],
+  ['stoniness', 1],
+  ['boniteet', 2],
+  ['texSkeleton', 3],
+];
 /** Estonia dry water texels decode to NaN (§9a) — mapped to the dry sentinel
  *  the generated field uses downstream of its bed−2 encoding. */
 export const WATER_DRY_SENTINEL = -1e4;
@@ -462,7 +478,17 @@ export function planField(manifest: WorldManifest): FieldPlan {
       };
     }
   }
-  return { height, biome, fields, water, waterFar, waterCover, waterCoverFar, coverageBox: coverageBoxM(manifest), biomeHasCanopy: !!manifest.layers.canopy };
+  // #116 soil pedology: a u8 camera window on the SAME 2 m lattice as the cooked soil
+  // layer (pilot-only, LOD0). No far reduce, no country floor — soil texture is an
+  // inherently near/mid signal (you cannot see it at 50 km), and there is no cooked
+  // whole-country soil to floor with. Absent layer (generated) ⇒ null ⇒ the material's
+  // soil-modulation path never compiles.
+  let soil: PlanePlan | null = null;
+  const soilMeta = manifest.layers.soil;
+  if (soilMeta && soilMeta.lods.includes(0)) {
+    soil = planLayer(manifest, 'soil', U8_PLANE_RES, U8_PLANE_RES).find((p) => p.lod === 0) ?? null;
+  }
+  return { height, biome, fields, water, waterFar, waterCover, waterCoverFar, soil, coverageBox: coverageBoxM(manifest), biomeHasCanopy: !!manifest.layers.canopy };
 }
 
 // ---- region assembly (chunk payload → plane texels) -------------------------------

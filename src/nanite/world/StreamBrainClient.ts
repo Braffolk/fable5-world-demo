@@ -145,7 +145,10 @@ export class StreamBrainClient {
     // S8: 'trees' joins the brain's layer set — the runtime fartile band (brain-side)
     // needs the tree records' existence keys + fetches them through the RPC. (boulders
     // stay main-side via the InstanceBand — fartiles are trees only.)
-    for (const layer of ['height', 'biome', 'fields', 'water', 'watercover', 'canopy', 'trees'] as const) {
+    // #116: 'soil' too — the brain fills/scrolls the soil plane, so it needs soil's chunk
+    // existence keys (else fetchChunk returns null and the plane fills all-zero). No-op on
+    // the generated world (no soil layer ⇒ `!meta` skip).
+    for (const layer of ['height', 'biome', 'fields', 'water', 'watercover', 'canopy', 'trees', 'soil'] as const) {
       const meta = manifest.layers[layer];
       if (!meta) continue;
       const chunkKeys: Record<number, Float64Array> = {};

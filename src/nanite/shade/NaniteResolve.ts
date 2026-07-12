@@ -583,6 +583,10 @@ export function buildNaniteResolve(
         mp: hf.mp,
         hasCanopy: world.field.biomeCarriesCanopy,
         landcover: world.field.biomeCarriesCanopy,
+        // #116 soil modulation — gated to a cooked soil layer (Estonia). ?soil=0 forces
+        // it off (an A/B toggle beside ?watercover; default on where a soil plane exists).
+        // No-op on the generated world (hasSoil already false ⇒ compile-time bit-identical).
+        hasSoil: world.field.hasSoil && new URLSearchParams(window.location.search).get('soil') !== '0',
         surf: { wp, camPos },
       });
       let tc: NV3 = shading.colorNode;

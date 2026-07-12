@@ -50,6 +50,7 @@ import {
   maxReduce,
   meanReduceU8,
   minReduce,
+  SOIL_CHANNELS,
   wrapRects,
   type FilledBox,
   type PlanePlan,
@@ -127,6 +128,9 @@ export class StreamBrainCore {
   /** #114 watercover window (retained so scrolls emit only the exposed L-shape,
    *  toroidally — the same graceful promote-after-fill as the water window). */
   private wcWin: U8Window | null = null;
+  /** #116 soil window — the u8 twin of wcWin (no far level); retained for the same
+   *  toroidal scroll. Null on the generated world (no soil layer). */
+  private sWin: U8Window | null = null;
 
   // decoded-chunk LRU
   private readonly lru = new Map<string, { payload: ChunkPayload; bytes: number }>();
@@ -383,6 +387,17 @@ export class StreamBrainCore {
         transfers.push(far.buffer);
       }
     }
+    // #116 soil pedology — a u8 window (4 packed channels), retained for the toroidal
+    // scroll exactly like watercover but WITHOUT a far level (soil is pilot-near only).
+    // Absent layer (generated) ⇒ skipped ⇒ no soil plane ever fills.
+    if (this.plan.soil) {
+      const plan = this.plan.soil;
+      const data = await this.assembleU8('soil', plan, plan.n0x, plan.n0z, SOIL_CHANNELS);
+      this.sWin = { plan, data, n0x: plan.n0x, n0z: plan.n0z, phaseX: 0, phaseY: 0 };
+      const copy = data.slice();
+      packets.push({ kind: 'fill', plane: 'soil', level: 0, x: 0, y: 0, w: plan.res, h: plan.res, u8: copy });
+      transfers.push(copy.buffer);
+    }
     this.deps.emit({ kind: 'packets', packets }, transfers);
     this.dropLru(); // consumed — the retained windows are the persistent store
     this.deps.emit({ kind: 'planesReady', ramBytes: this.ramBytes() });
@@ -393,6 +408,7 @@ export class StreamBrainCore {
     for (const w of this.hWin) b += w.data.byteLength;
     if (this.wWin) b += this.wWin.data.byteLength;
     if (this.wcWin) b += this.wcWin.data.byteLength;
+    if (this.sWin) b += this.sWin.data.byteLength;
     return b;
   }
 
@@ -552,7 +568,8 @@ export class StreamBrainCore {
       await this.scrollLevel('height', i, this.hWin[i] as HeightWindow, camX, camZ);
     }
     if (this.wWin) await this.scrollLevel('water', 0, this.wWin, camX, camZ);
-    if (this.wcWin) await this.scrollCoverage(camX, camZ);
+    if (this.wcWin) await this.scrollU8('watercover', WATERCOVER_CHANNELS, this.wcWin, camX, camZ, (p, t) => this.pushFarCover(p, t));
+    if (this.sWin) await this.scrollU8('soil', SOIL_CHANNELS, this.sWin, camX, camZ);
     // biome/fields planes scroll with the SAME rule but hold no brain window —
     // regions assemble straight from LRU'd chunks. (Their consumers are filtered
     // rgba8 taps; sub-texel placement is uncritical.) They ride height's snap
@@ -729,14 +746,21 @@ export class StreamBrainCore {
     return out;
   }
 
-  // ---- watercover window scroll (#114 — u8 twin of scrollLevel: toroidal L-shape,
-  // no far reduce; the far water levels keep their min-reduced bed dive) -----------------
+  // ---- u8 camera-window scroll (#114 watercover / #116 soil — the u8 twin of
+  // scrollLevel: toroidal L-shape). watercover passes an afterScroll hook that rides its
+  // far-coverage reduce onto the same packet batch; soil has no far level ⇒ no hook. ----
 
-  private async scrollCoverage(camX: number, camZ: number): Promise<void> {
-    const win = this.wcWin as U8Window;
+  private async scrollU8(
+    kind: 'watercover' | 'soil',
+    channels: readonly (readonly [string, number])[],
+    win: U8Window,
+    camX: number,
+    camZ: number,
+    afterScroll?: (packets: StreamPacket[], transfers: Transferable[]) => void,
+  ): Promise<void> {
     const plan = win.plan;
     if (!plan.wraps) return;
-    const geo = this.layerGeo('watercover');
+    const geo = this.layerGeo(kind);
     const step = Math.max(1, Math.floor(plan.res / SCROLL_DIV));
     const wantX = Math.round((camX - (plan.res / 2) * plan.texel - geo.originX) / plan.texel / step) * step;
     const wantZ = Math.round((camZ - (plan.res / 2) * plan.texel - geo.originZ) / plan.texel / step) * step;
@@ -746,7 +770,7 @@ export class StreamBrainCore {
     const dz = n0z - win.n0z;
     if (dx === 0 && dz === 0) return;
     if (Math.abs(dx) >= plan.res || Math.abs(dz) >= plan.res) {
-      await this.refillCoverage(win, n0x, n0z, geo);
+      await this.refillU8(kind, channels, win, n0x, n0z, geo, afterScroll);
       return;
     }
     const packets: StreamPacket[] = [];
@@ -755,7 +779,7 @@ export class StreamBrainCore {
     const phaseY = (((win.phaseY + dz) % plan.res) + plan.res) % plan.res;
     const emitRegion = async (rx0: number, rz0: number, rw: number, rh: number): Promise<void> => {
       if (rw <= 0 || rh <= 0) return;
-      const sub = await this.assembleRegionU8(plan, rx0, rz0, rw, rh);
+      const sub = await this.assembleRegionU8(kind, channels, plan, rx0, rz0, rw, rh);
       for (const r of wrapRects(rx0 - n0x, rz0 - n0z, rw, rh, phaseX, phaseY, plan.res)) {
         const lz0 = ((((r.y - phaseY) % plan.res) + plan.res) % plan.res) + n0z - rz0;
         const lx0 = ((((r.x - phaseX) % plan.res) + plan.res) % plan.res) + n0x - rx0;
@@ -765,7 +789,7 @@ export class StreamBrainCore {
           part.set(sub.subarray(src, src + r.w * 4), y * r.w * 4);
           win.data.set(part.subarray(y * r.w * 4, (y + 1) * r.w * 4), ((r.y + y) * plan.res + r.x) * 4);
         }
-        packets.push({ kind: 'fill', plane: 'watercover', level: 0, x: r.x, y: r.y, w: r.w, h: r.h, u8: part });
+        packets.push({ kind: 'fill', plane: kind, level: 0, x: r.x, y: r.y, w: r.w, h: r.h, u8: part });
         transfers.push(part.buffer);
       }
     };
@@ -779,43 +803,59 @@ export class StreamBrainCore {
     win.n0z = n0z;
     win.phaseX = phaseX;
     win.phaseY = phaseY;
-    packets.push(this.originPacket('watercover', 0, plan, geo, win));
-    this.pushFarCover(packets, transfers);
+    packets.push(this.originPacket(kind, 0, plan, geo, win));
+    afterScroll?.(packets, transfers);
     this.nScrolls++;
     this.deps.emit({ kind: 'packets', packets }, transfers);
   }
 
   /** whole-window refill (teleport-scale jump): reassemble at the new placement. */
-  private async refillCoverage(win: U8Window, n0x: number, n0z: number, geo: RasterGeom): Promise<void> {
+  private async refillU8(
+    kind: 'watercover' | 'soil',
+    channels: readonly (readonly [string, number])[],
+    win: U8Window,
+    n0x: number,
+    n0z: number,
+    geo: RasterGeom,
+    afterScroll?: (packets: StreamPacket[], transfers: Transferable[]) => void,
+  ): Promise<void> {
     const plan = win.plan;
-    const data = await this.assembleU8('watercover', plan, n0x, n0z, WATERCOVER_CHANNELS);
+    const data = await this.assembleU8(kind, plan, n0x, n0z, channels);
     win.data.set(data);
     win.n0x = n0x;
     win.n0z = n0z;
     win.phaseX = 0;
     win.phaseY = 0;
     const packets: StreamPacket[] = [
-      { kind: 'fill', plane: 'watercover', level: 0, x: 0, y: 0, w: plan.res, h: plan.res, u8: data },
-      this.originPacket('watercover', 0, plan, geo, win),
+      { kind: 'fill', plane: kind, level: 0, x: 0, y: 0, w: plan.res, h: plan.res, u8: data },
+      this.originPacket(kind, 0, plan, geo, win),
     ];
     const transfers: Transferable[] = [data.buffer];
-    this.pushFarCover(packets, transfers);
+    afterScroll?.(packets, transfers);
     this.nScrolls++;
     this.deps.emit({ kind: 'packets', packets }, transfers);
   }
 
-  /** assemble one rgba8 sub-region (α in channel 0) from every overlapping watercover
-   *  chunk — the u8 twin of assembleRegionF32. */
-  private async assembleRegionU8(plan: PlanePlan, rx0: number, rz0: number, rw: number, rh: number): Promise<Uint8Array> {
-    const geo = this.layerGeo('watercover');
-    const names = this.layers.watercover?.planes ?? [];
+  /** assemble one rgba8 sub-region from every overlapping chunk of a u8 layer
+   *  (watercover α / soil channels) — the u8 twin of assembleRegionF32. */
+  private async assembleRegionU8(
+    layer: LayerName,
+    channels: readonly (readonly [string, number])[],
+    plan: PlanePlan,
+    rx0: number,
+    rz0: number,
+    rw: number,
+    rh: number,
+  ): Promise<Uint8Array> {
+    const geo = this.layerGeo(layer);
+    const names = this.layers[layer]?.planes ?? [];
     const out = new Uint8Array(rw * rh * 4);
     const place = { ...plan, n0x: rx0, n0z: rz0 };
     let box: FilledBox | null = null;
     for (const key of chunksInWindow(geo, plan.lod, rx0, rz0, rw, rh)) {
-      const payload = await this.fetchChunk('watercover', key);
+      const payload = await this.fetchChunk(layer, key);
       if (!payload || payload.kind !== 'planes') continue;
-      box = copyChunkU8(out, rw, rh, place, geo, key.cx, key.cz, payload.planes, payload.res, names, WATERCOVER_CHANNELS, box);
+      box = copyChunkU8(out, rw, rh, place, geo, key.cx, key.cz, payload.planes, payload.res, names, channels, box);
     }
     if (box) clampExtend(out, rw, rh, 4, box);
     return out;

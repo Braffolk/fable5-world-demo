@@ -65,6 +65,12 @@ export interface TerrainShadingInputs {
    *  BIT-IDENTICAL. Same cooked-source discriminator as hasCanopy (both ride the
    *  canopy layer's presence), named for its own meaning at the use site. */
   landcover: boolean;
+  /** the soil plane (#116) carries the cooked Mullastikukaart substrate
+   *  [texCore, stoniness, boniteet, texSkeleton] — true iff the source has a soil
+   *  layer (Estonia). The generated world has no soil layer, so its graph compiles
+   *  WITHOUT any soil node ⇒ BIT-IDENTICAL. Same cooked-source discriminator family
+   *  as `landcover`/`hasCanopy`. */
+  hasSoil: boolean;
   /**
    * surface context override (N4 nanite resolve): explicit world position +
    * camera position instead of the vertex-pipeline TSL singletons. The old
@@ -273,6 +279,52 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
   col = mix(col, forestFloor, forestW);
   col = mix(col, scree, screeW);
   col = mix(col, rockCol, rockW);
+
+  // ---------- soil pedology (Estonia Mullastikukaart, #116) ---------------------
+  // The cooked soil plane [texCore, stoniness, boniteet, texSkeleton] modulates the
+  // MINERAL SUBSTRATE that land-cover (classId, below) is blind to — a forest / grass /
+  // field texel each sit on some soil texture. DATA-DRIVEN and geometric: texCore sets a
+  // mineral tint (sand pale-warm → loam neutral → clay red-brown → peat dark), stoniness
+  // sets the AMPLITUDE of a value-noise pebble speckle (the noise is the carrier, the
+  // stoniness class is the field — never a stand-in for missing data), boniteet enriches
+  // the ground flora, texSkeleton tints the speckle by lithology. Applied to the base
+  // composite BEFORE the classId overrides (which mix() fully on top ⇒ near-zero
+  // double-count). Everything sits INSIDE `if (inp.hasSoil)` so the generated world (no
+  // soil layer ⇒ hasSoil=false) never constructs a single soil node ⇒ BIT-IDENTICAL.
+  if (inp.hasSoil) {
+    const soilS = field.soilAt(wxz); // [texCore, stoniness, boniteet, texSkeleton] byte/255
+    const texCore = (soilS.x as unknown as NF).mul(255); // 0..14 (255 unparseable, 0 no-data)
+    const stony = (soilS.y as unknown as NF).mul(255).div(6).clamp(0, 1); // 0..6 → [0,1]
+    const boni = (soilS.z as unknown as NF).mul(255).div(100).clamp(0, 1); // 0..100 → [0,1]
+    const texSkel = (soilS.w as unknown as NF).mul(255); // 0..30 (255 unparseable)
+    // valid mineral texel: id in [1,14]; the descending knee fades it to 0 across the
+    // 255-unparseable bilinear blur (a blend toward 255 leaves the window fast) and 0
+    // no-data reads as invalid too ⇒ neither sentinel tints.
+    const texValid = smoothstep(0.5, 1.0, texCore).mul(smoothstep(15.5, 14.0, texCore));
+    // exposed bare ground — low veg, not rock, gentle slope: soil texture only reads where
+    // the grass/forest carpet doesn't hide it (so meadows/woods aren't speckled or tinted).
+    const exposed = smoothstep(0.55, 0.2, vegDensity).mul(rockW.oneMinus()).mul(smoothstep(0.6, 0.25, slope));
+
+    // texCore → mineral tint ramp. The id ordering IS a physical gradient (§2), so a
+    // bilinear tap stays within-family — treated as a near-continuous mineral index.
+    const mineral = mix(vec3(1.14, 1.06, 0.9), vec3(0.86, 0.72, 0.58), smoothstep(3.0, 8.0, texCore)); // sand→clay
+    const mineralP = mix(mineral, vec3(0.52, 0.44, 0.34), smoothstep(8.5, 12.0, texCore)); // →peat dark-brown
+    col = col.mul(mix(vec3(1), mineralP, texValid.mul(exposed))) as NV3;
+
+    // boniteet → ground-flora richness: fertile soil greens/darkens the vegetated ground,
+    // poor soil pales it. Continuous (bilinear-safe), gated to the veg coverage it drives.
+    const vegK = grassW.max(forestW);
+    const rich = mix(vec3(0.9, 0.95, 0.82), vec3(0.72, 1.05, 0.66), smoothstep(0.15, 0.7, boni));
+    col = col.mul(mix(vec3(1), rich, vegK.mul(0.5))) as NV3;
+
+    // stoniness → geometric micro-speckle: value noise is the CARRIER, stoniness sets the
+    // amplitude; scattered pebbles/gravel on exposed soil only. texSkeleton shifts the hue
+    // toward pale carbonate gray on rähk (6-10) — low-weight, tolerant of categorical blur.
+    const speck = val(0.13, 0.29, 0.83).sub(0.5); // signed micro speckle
+    const speckAmp = stony.mul(exposed).mul(0.4);
+    const speckHue = mix(vec3(1), vec3(0.92, 0.92, 0.97), smoothstep(5.5, 10.5, texSkel));
+    col = col.mul(speck.mul(speckAmp).add(1)).mul(mix(vec3(1), speckHue, speckAmp)) as NV3;
+  }
 
   // ---------- land-cover classes (Estonia ETAK classId) -------------------------
   // The streamed biome plane's channel 0 is the ETAK land-cover class id
