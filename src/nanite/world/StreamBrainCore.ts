@@ -47,6 +47,8 @@ import {
   clampExtend,
   copyChunkF32,
   copyChunkU8,
+  maxReduce,
+  meanReduceU8,
   minReduce,
   wrapRects,
   type FilledBox,
@@ -352,7 +354,12 @@ export class StreamBrainCore {
       packets.push({ kind: 'fill', plane: 'water', level: 0, x: 0, y: 0, w: plan.res, h: plan.res, f32: copy });
       transfers.push(copy.buffer);
       if (this.plan.waterFar) {
-        const far = minReduce(data, plan.res, WATER_FAR_FACTOR);
+        // #115: with a coverage plane (Estonia) the far surface MAX-reduces to the WET
+        // level (the α-gate hides off-shore water); without one (generated) it keeps the
+        // MIN-reduce bed dive verbatim ⇒ bit-identical generated far water.
+        const far = this.plan.waterCover
+          ? maxReduce(data, plan.res, WATER_FAR_FACTOR)
+          : minReduce(data, plan.res, WATER_FAR_FACTOR);
         const farRes = this.plan.waterFar.res;
         packets.push({ kind: 'fill', plane: 'waterFar', level: 0, x: 0, y: 0, w: farRes, h: farRes, f32: far });
         transfers.push(far.buffer);
@@ -367,6 +374,14 @@ export class StreamBrainCore {
       const copy = data.slice();
       packets.push({ kind: 'fill', plane: 'watercover', level: 0, x: 0, y: 0, w: plan.res, h: plan.res, u8: copy });
       transfers.push(copy.buffer);
+      // #115 far coverage α — the ×8 mean-reduce of the watercover window (the far
+      // mirror of waterFar's min-reduce). Data is logical (phase 0) at boot.
+      if (this.plan.waterCoverFar) {
+        const far = meanReduceU8(data, plan.res, WATER_FAR_FACTOR);
+        const farRes = this.plan.waterCoverFar.res;
+        packets.push({ kind: 'fill', plane: 'waterCoverFar', level: 0, x: 0, y: 0, w: farRes, h: farRes, u8: far });
+        transfers.push(far.buffer);
+      }
     }
     this.deps.emit({ kind: 'packets', packets }, transfers);
     this.dropLru(); // consumed — the retained windows are the persistent store
@@ -659,7 +674,8 @@ export class StreamBrainCore {
   }
 
   /** far water rides its parent's scroll: rebuild the logical view (scrolls are
-   *  rare, res ≤ 2048) and re-reduce the whole far level. */
+   *  rare, res ≤ 2048) and re-reduce the whole far level. MAX-reduce with a coverage
+   *  plane (Estonia — wet level under the α-gate), MIN-reduce without one (generated). */
   private pushFarWater(plane: PlaneKind, win: HeightWindow, packets: StreamPacket[], transfers: Transferable[]): void {
     if (plane !== 'water' || !this.plan.waterFar) return;
     const res = win.plan.res;
@@ -668,9 +684,26 @@ export class StreamBrainCore {
       const pz = (z + win.phaseY) % res;
       for (let x = 0; x < res; x++) logical[z * res + x] = win.data[pz * res + ((x + win.phaseX) % res)] as number;
     }
-    const far = minReduce(logical, res, WATER_FAR_FACTOR);
+    const far = this.plan.waterCover ? maxReduce(logical, res, WATER_FAR_FACTOR) : minReduce(logical, res, WATER_FAR_FACTOR);
     const farRes = this.plan.waterFar.res;
     packets.push({ kind: 'fill', plane: 'waterFar', level: 0, x: 0, y: 0, w: farRes, h: farRes, f32: far });
+    transfers.push(far.buffer);
+  }
+
+  /** #115 far COVERAGE rides the watercover scroll (the u8 mirror of pushFarWater):
+   *  rebuild the logical view + mean-reduce the whole far coverage level. */
+  private pushFarCover(packets: StreamPacket[], transfers: Transferable[]): void {
+    if (!this.plan.waterCoverFar || !this.wcWin) return;
+    const win = this.wcWin;
+    const res = win.plan.res;
+    const logical = new Uint8Array(res * res * 4);
+    for (let z = 0; z < res; z++) {
+      const pz = (z + win.phaseY) % res;
+      for (let x = 0; x < res; x++) logical[(z * res + x) * 4] = win.data[(pz * res + ((x + win.phaseX) % res)) * 4] as number;
+    }
+    const far = meanReduceU8(logical, res, WATER_FAR_FACTOR);
+    const farRes = this.plan.waterCoverFar.res;
+    packets.push({ kind: 'fill', plane: 'waterCoverFar', level: 0, x: 0, y: 0, w: farRes, h: farRes, u8: far });
     transfers.push(far.buffer);
   }
 
@@ -747,6 +780,7 @@ export class StreamBrainCore {
     win.phaseX = phaseX;
     win.phaseY = phaseY;
     packets.push(this.originPacket('watercover', 0, plan, geo, win));
+    this.pushFarCover(packets, transfers);
     this.nScrolls++;
     this.deps.emit({ kind: 'packets', packets }, transfers);
   }
@@ -760,17 +794,14 @@ export class StreamBrainCore {
     win.n0z = n0z;
     win.phaseX = 0;
     win.phaseY = 0;
+    const packets: StreamPacket[] = [
+      { kind: 'fill', plane: 'watercover', level: 0, x: 0, y: 0, w: plan.res, h: plan.res, u8: data },
+      this.originPacket('watercover', 0, plan, geo, win),
+    ];
+    const transfers: Transferable[] = [data.buffer];
+    this.pushFarCover(packets, transfers);
     this.nScrolls++;
-    this.deps.emit(
-      {
-        kind: 'packets',
-        packets: [
-          { kind: 'fill', plane: 'watercover', level: 0, x: 0, y: 0, w: plan.res, h: plan.res, u8: data },
-          this.originPacket('watercover', 0, plan, geo, win),
-        ],
-      },
-      [data.buffer],
-    );
+    this.deps.emit({ kind: 'packets', packets }, transfers);
   }
 
   /** assemble one rgba8 sub-region (α in channel 0) from every overlapping watercover

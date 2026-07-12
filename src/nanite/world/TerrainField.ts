@@ -87,6 +87,10 @@ export class TerrainField {
    *  window on water's 2 m lattice. null when the source has no watercover layer
    *  (the generated world), which drives hasWaterCoverage and the WaterMaterial gate. */
   readonly waterCover: FieldLevel | null;
+  /** #115 ×8 mean-reduced far coverage α (rgba8, α in channel 0) — the FAR water
+   *  levels gate their shore on this instead of the min-reduced bed dive. null with
+   *  waterCover (⇒ the far coverage path stays a NO-OP on the generated world). */
+  readonly waterCoverFar: FieldLevel | null;
   /** true iff a watercover plane exists — the flag/absence that keeps the shoreline
    *  coverage path a NO-OP on the generated world (the #108 biomeCarriesCanopy pattern). */
   readonly hasWaterCoverage: boolean;
@@ -103,6 +107,7 @@ export class TerrainField {
     water: HeightLevel | null,
     waterFar: HeightLevel | null,
     waterCover: FieldLevel | null,
+    waterCoverFar: FieldLevel | null,
     coverageBox: CoverageBox,
     biomeCarriesCanopy: boolean,
   ) {
@@ -113,6 +118,7 @@ export class TerrainField {
     this.water = water;
     this.waterFar = waterFar;
     this.waterCover = waterCover;
+    this.waterCoverFar = waterCoverFar;
     this.hasWaterCoverage = waterCover !== null;
     this.coverageBox = coverageBox;
     this.biomeCarriesCanopy = biomeCarriesCanopy;
@@ -122,7 +128,7 @@ export class TerrainField {
       `[laas] terrain field: height [${heightLevels.map((l) => `${l.res}²@${l.texel}m${l.wraps ? '~' : ''}`).join(' ')}] r32f + ` +
         `biome [${biomeLevels.map((l) => `${l.res}²`).join(' ')}] + fields [${fieldsLevels.map((l) => `${l.res}²`).join(' ')}] rgba8 + ` +
         `water ${water ? `${water.res}² r32f (+far ${waterFar?.res ?? 0}²)` : 'none'} + ` +
-        `watercover ${waterCover ? `${waterCover.res}² rgba8${waterCover.wraps ? '~' : ''}` : 'none'} = ` +
+        `watercover ${waterCover ? `${waterCover.res}² rgba8${waterCover.wraps ? '~' : ''} (+far ${waterCoverFar?.res ?? 0}²)` : 'none'} = ` +
         `${mb.toFixed(1)} MB VRAM (CPU mirrors share the backing; ~ = camera-window level)`,
     );
     if (mb > VRAM_CEILING_MB) {
@@ -139,7 +145,8 @@ export class TerrainField {
     const water = plan.water ? makeHeightLevel('terrainFieldWaterY', plan.water) : null;
     const waterFar = plan.waterFar ? makeHeightLevel('terrainFieldWaterYFar', plan.waterFar) : null;
     const waterCover = plan.waterCover ? makeU8Level('terrainFieldWaterCover', plan.waterCover) : null;
-    return new TerrainField(heightLevels, biomeLevels, fieldsLevels, water, waterFar, waterCover, plan.coverageBox, plan.biomeHasCanopy);
+    const waterCoverFar = plan.waterCoverFar ? makeU8Level('terrainFieldWaterCoverFar', plan.waterCoverFar) : null;
+    return new TerrainField(heightLevels, biomeLevels, fieldsLevels, water, waterFar, waterCover, waterCoverFar, plan.coverageBox, plan.biomeHasCanopy);
   }
 
   /** One-level field over a flat/explicit height array — forest/gallery-class
@@ -178,6 +185,7 @@ export class TerrainField {
       null,
       null,
       null,
+      null,
       {
         minX: opts.worldMinX,
         minZ: opts.worldMinZ,
@@ -203,7 +211,9 @@ export class TerrainField {
               ? this.water
               : plane === 'waterFar'
                 ? this.waterFar
-                : this.waterCover;
+                : plane === 'watercover'
+                  ? this.waterCover
+                  : this.waterCoverFar;
     if (!lvl) throw new Error(`TerrainField: no ${plane} level ${level}`);
     return lvl;
   }
@@ -275,6 +285,7 @@ export class TerrainField {
       ...(this.water ? [this.water] : []),
       ...(this.waterFar ? [this.waterFar] : []),
       ...(this.waterCover ? [this.waterCover] : []),
+      ...(this.waterCoverFar ? [this.waterCoverFar] : []),
     ];
   }
 
@@ -350,6 +361,17 @@ export class TerrainField {
   fieldWaterCoverage(wxz: NV2): NF {
     const wc = this.waterCover;
     if (!wc) throw new Error('TerrainField: no water coverage plane');
+    return planeLinear(wc, wxz).x as unknown as NF;
+  }
+
+  /** #115 bilinear far water coverage α ∈ [0,1] (channel 0 of the ×8 mean-reduced
+   *  waterCoverFar plane) — the FAR-level shore gate. One filtered tap of the far-
+   *  scale coverage fraction; its 0.5 iso-contour tracks the shoreline at the 16 m
+   *  far texel scale, so the far shore stops quantizing to blocky squares. Only
+   *  compiled behind field.hasWaterCoverage (WaterMaterial's far-level path). */
+  fieldWaterCoverageFar(wxz: NV2): NF {
+    const wc = this.waterCoverFar;
+    if (!wc) throw new Error('TerrainField: no far water coverage plane');
     return planeLinear(wc, wxz).x as unknown as NF;
   }
 

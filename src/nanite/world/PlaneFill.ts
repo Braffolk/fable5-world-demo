@@ -74,6 +74,12 @@ export interface FieldPlan {
    *  water's LOD0 lattice — null when the source has no watercover layer (the
    *  generated world ⇒ the WaterMaterial coverage path stays a NO-OP). */
   waterCover: PlanePlan | null;
+  /** #115 ×8 mean-reduced far coverage α (u8) — the far mirror of waterFar: the
+   *  FAR water levels gate their shore on this (area-average of the 8×8 fine α, so
+   *  its 0.5 iso-contour tracks the shoreline at the 16 m far texel scale) instead
+   *  of the min-reduce bed dive that quantized the far shore to blocky squares.
+   *  null with waterCover (generated world ⇒ the far coverage path never compiles). */
+  waterCoverFar: PlanePlan | null;
   coverageBox: CoverageBox;
   /** the biome plane's channels 2/3 carry the merged far-forest canopy
    *  (heightM, cover) — true iff the source has a canopy layer. The generated
@@ -438,11 +444,25 @@ export function planField(manifest: WorldManifest): FieldPlan {
   // levels consume it; the far levels keep their min-reduced bed dive. Absent layer
   // (generated world) ⇒ null ⇒ the material's coverage path never compiles.
   let waterCover: PlanePlan | null = null;
+  let waterCoverFar: PlanePlan | null = null;
   const wcMeta = manifest.layers.watercover;
   if (wcMeta && wcMeta.lods.includes(0)) {
     waterCover = planLayer(manifest, 'watercover', U8_PLANE_RES, U8_PLANE_RES).find((p) => p.lod === 0) ?? null;
+    // #115 far coverage: derived from waterCover the SAME way waterFar is derived
+    // from water (res/8, texel×8, block-center origin shift) so the far shore gate
+    // co-registers with the far surface. Mean-reduced at fill time (StreamBrainCore).
+    if (waterCover) {
+      const farRes = waterCover.res / WATER_FAR_FACTOR;
+      waterCoverFar = {
+        ...waterCover,
+        res: farRes,
+        texel: waterCover.texel * WATER_FAR_FACTOR,
+        originX: waterCover.originX + (waterCover.texel * (WATER_FAR_FACTOR - 1)) / 2,
+        originZ: waterCover.originZ + (waterCover.texel * (WATER_FAR_FACTOR - 1)) / 2,
+      };
+    }
   }
-  return { height, biome, fields, water, waterFar, waterCover, coverageBox: coverageBoxM(manifest), biomeHasCanopy: !!manifest.layers.canopy };
+  return { height, biome, fields, water, waterFar, waterCover, waterCoverFar, coverageBox: coverageBoxM(manifest), biomeHasCanopy: !!manifest.layers.canopy };
 }
 
 // ---- region assembly (chunk payload → plane texels) -------------------------------
@@ -548,7 +568,9 @@ export function clampExtend(
   for (let z = box.z1 + 1; z < h; z++) data.copyWithin(z * row, box.z1 * row, box.z1 * row + row);
 }
 
-/** ×factor min-reduce (far water: channels vanish, lakes survive). */
+/** ×factor min-reduce (far water: channels vanish, lakes survive). The generated
+ *  world's far water surface — a dry sample (bed−2 m) dives the whole far texel
+ *  under the terrain, hiding water off the shore via the depth test / dive gate. */
 export function minReduce(src: Float32Array, res: number, factor: number): Float32Array {
   const farRes = Math.floor(res / factor);
   const out = new Float32Array(farRes * farRes);
@@ -560,6 +582,50 @@ export function minReduce(src: Float32Array, res: number, factor: number): Float
         for (let ox = 0; ox < factor; ox++) mn = Math.min(mn, src[r + ox] as number);
       }
       out[z * farRes + x] = mn;
+    }
+  }
+  return out;
+}
+
+/** #115 ×factor MAX-reduce — the far water SURFACE when a coverage plane gates the
+ *  shore (Estonia). Estonia dry texels are the sentinel (−1e4, the block minimum),
+ *  so max keeps the WET surface level for any partially-wet block (dilating the
+ *  valid surface outward by ≤factor texels) and dives to the sentinel only where
+ *  the whole block is dry. The mean-coverage α-gate — not this surface dive — hides
+ *  water off the far shore, so the far shore stops quantizing to blocky far texels. */
+export function maxReduce(src: Float32Array, res: number, factor: number): Float32Array {
+  const farRes = Math.floor(res / factor);
+  const out = new Float32Array(farRes * farRes);
+  for (let z = 0; z < farRes; z++) {
+    for (let x = 0; x < farRes; x++) {
+      let mx = -Infinity;
+      for (let oz = 0; oz < factor; oz++) {
+        const r = (z * factor + oz) * res + x * factor;
+        for (let ox = 0; ox < factor; ox++) mx = Math.max(mx, src[r + ox] as number);
+      }
+      out[z * farRes + x] = mx;
+    }
+  }
+  return out;
+}
+
+/** #115 ×factor MEAN-reduce of an interleaved rgba8 window's channel 0 (far water
+ *  COVERAGE α). Coverage is a fraction, so the far-scale coverage is the AREA-AVERAGE
+ *  of the factor² fine α — its 0.5 iso-contour tracks the shoreline at the far texel
+ *  scale and its bilinear resolves the sub-texel edge. Reduces in float, re-quantizes
+ *  to u8; output rgba8 with α in channel 0 (other channels 0, matching the source). */
+export function meanReduceU8(src: Uint8Array, res: number, factor: number): Uint8Array {
+  const farRes = Math.floor(res / factor);
+  const out = new Uint8Array(farRes * farRes * 4);
+  const inv = 1 / (factor * factor);
+  for (let z = 0; z < farRes; z++) {
+    for (let x = 0; x < farRes; x++) {
+      let sum = 0;
+      for (let oz = 0; oz < factor; oz++) {
+        const r = ((z * factor + oz) * res + x * factor) * 4;
+        for (let ox = 0; ox < factor; ox++) sum += src[r + ox * 4] as number;
+      }
+      out[(z * farRes + x) * 4] = Math.round(sum * inv);
     }
   }
   return out;

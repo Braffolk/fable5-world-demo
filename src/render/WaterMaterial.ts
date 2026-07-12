@@ -163,14 +163,14 @@ export function waterMaterial(
   // absorbs neighbourhood-min vs local-bed at the ~2 m sim texel; shoreline crosses
   // 0 exactly at the wet→dry bilinear edge so the opacity feather still finishes it.
   const wetGuard = new URLSearchParams(window.location.search).get('watermask') !== '0';
-  // #114 SHORELINE: the cooked anti-aliased coverage α (Estonia's watercover plane)
+  // #114/#115 SHORELINE: the cooked anti-aliased coverage α (Estonia's watercover plane)
   // makes the wet edge track α's 0.5 iso-contour — bilinear of a FRACTION resolves the
-  // sub-texel shore the binary water mask could only quantize to 2 m grid squares. The
-  // NEAR levels (cell < 12 m) render the visible bank and read it; the FAR levels keep
-  // the min-reduced bed dive (their surface Y is the ×8 min-reduce, so a smooth mask
-  // alone can't unblock that edge — a separate waterFar fix). A source with NO watercover
-  // plane (the generated world) has hasWaterCoverage=false ⇒ the OLD binary guard + old
-  // opacity graph compile VERBATIM (bit-identical generated water).
+  // sub-texel shore the binary water mask could only quantize to grid squares. The NEAR
+  // levels (cell < 12 m) read the LOD0 α (fieldWaterCoverage); the FAR levels (#115) read
+  // the ×8 mean-reduced α (fieldWaterCoverageFar) with a MAX-reduced wet surface, so the
+  // far shore stops quantizing to blocky 16 m squares (was: the min-reduced bed dive). A
+  // source with NO watercover plane (the generated world) has hasWaterCoverage=false ⇒ the
+  // OLD binary dive guard + old opacity graph compile VERBATIM (bit-identical generated water).
   // ?watercover=0 forces the old binary edge (an A/B toggle beside ?watermask —
   // default on where a coverage plane exists). No-op on the generated world.
   const coverOn = field.hasWaterCoverage && new URLSearchParams(window.location.search).get('watercover') !== '0';
@@ -180,6 +180,10 @@ export function waterMaterial(
     const cov = field.fieldWaterCoverage(p);
     wet = cov.greaterThan(0.5) as unknown as NB;
     coverFeather = smoothstep(0.35, 0.65, cov) as unknown as NF;
+  } else if (coverOn && lvl.far) {
+    const covFar = field.fieldWaterCoverageFar(p);
+    wet = covFar.greaterThan(0.5) as unknown as NB;
+    coverFeather = smoothstep(0.35, 0.65, covFar) as unknown as NF;
   } else {
     const bedH = lvl.far ? field.fieldHeightFinestNearest(p) : field.fieldHeightFinest(p);
     wet = positionWorld.y.greaterThan(bedH.sub(0.75)) as unknown as NB;
@@ -421,14 +425,17 @@ export function waterMaterial(
   const gWz = sampleY(positionWorld.xz.add(vec2(0, eS)))
     .sub(sampleY(positionWorld.xz.sub(vec2(0, eS))))
     .div(2 * eS);
-  // near levels only: far levels carry the min-reduction's shore dip by
-  // design (the far water plane = PlaneFill.minReduce of the near plane) —
-  // fading it would expose the dark silt bed as a rim band instead
+  // far levels: rampK=1. The generated world's far surface = PlaneFill.minReduce
+  // of the near plane, whose shore dip IS the wet gate (fading it would expose the
+  // dark silt bed as a rim band); the #115 Estonia far-coverage path instead
+  // feathers the shore via coverFeather (from covFar) below. Near levels fade the
+  // steep field dive.
   const rampK = lvl.far
     ? float(1)
     : smoothstep(0.55, 0.3, vec2(gWx, gWz).length());
-  // #114: feather the very shore by the coverage fraction (near levels only). Null on
-  // the far/generated path ⇒ the EXACT old opacity graph (bit-identical generated water).
+  // #114/#115: feather the very shore by the coverage fraction (near AND far coverage
+  // levels). Null on the generated path ⇒ the EXACT old opacity graph (bit-identical
+  // generated water).
   const opacityBase = smoothstep(0.004, 0.05, vDepth).mul(rampK);
   mat.opacityNode = (coverFeather ? opacityBase.mul(coverFeather) : opacityBase).mul(0.985);
 
