@@ -145,7 +145,7 @@ export class StreamBrainClient {
     // S8: 'trees' joins the brain's layer set — the runtime fartile band (brain-side)
     // needs the tree records' existence keys + fetches them through the RPC. (boulders
     // stay main-side via the InstanceBand — fartiles are trees only.)
-    for (const layer of ['height', 'biome', 'fields', 'water', 'canopy', 'trees'] as const) {
+    for (const layer of ['height', 'biome', 'fields', 'water', 'watercover', 'canopy', 'trees'] as const) {
       const meta = manifest.layers[layer];
       if (!meta) continue;
       const chunkKeys: Record<number, Float64Array> = {};

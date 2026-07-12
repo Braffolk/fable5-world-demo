@@ -25,7 +25,7 @@ import type { LevelGridEdit } from './PartitionTree';
 import type { PackedLevel } from '../build/CrownPack';
 
 /** which GPU plane a fill/origin packet targets. */
-export type PlaneKind = 'height' | 'biome' | 'fields' | 'water' | 'waterFar';
+export type PlaneKind = 'height' | 'biome' | 'fields' | 'water' | 'waterFar' | 'watercover';
 
 /** serialized layer meta the brain needs (subset of WorldLayerMeta + the chunk
  *  key enumeration per lod — coverage() point queries become set lookups). */

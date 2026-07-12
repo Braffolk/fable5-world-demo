@@ -70,6 +70,10 @@ export interface FieldPlan {
   fields: PlanePlan[];
   water: PlanePlan | null;
   waterFar: PlanePlan | null;
+  /** #114 anti-aliased water coverage α (u8), a camera-window plane mirroring
+   *  water's LOD0 lattice — null when the source has no watercover layer (the
+   *  generated world ⇒ the WaterMaterial coverage path stays a NO-OP). */
+  waterCover: PlanePlan | null;
   coverageBox: CoverageBox;
   /** the biome plane's channels 2/3 carry the merged far-forest canopy
    *  (heightM, cover) — true iff the source has a canopy layer. The generated
@@ -107,6 +111,10 @@ export const FIELDS_CHANNELS: readonly (readonly [string, number])[] = [
   ['snow', 2],
   ['rockExposure', 3],
 ];
+/** #114 water coverage plane: the single 'coverage' plane → rgba8 channel 0 (α×255,
+ *  0 dry → 255 fully wet). Stored rgba8 like every other u8 plane so it rides the
+ *  identical copyChunkU8 / assembleU8 / writeRegion path (4-bytes-per-texel invariant). */
+export const WATERCOVER_CHANNELS: readonly (readonly [string, number])[] = [['coverage', 0]];
 /** Estonia dry water texels decode to NaN (§9a) — mapped to the dry sentinel
  *  the generated field uses downstream of its bed−2 encoding. */
 export const WATER_DRY_SENTINEL = -1e4;
@@ -424,7 +432,17 @@ export function planField(manifest: WorldManifest): FieldPlan {
       };
     }
   }
-  return { height, biome, fields, water, waterFar, coverageBox: coverageBoxM(manifest), biomeHasCanopy: !!manifest.layers.canopy };
+  // #114 coverage α: a u8 camera window on the SAME 2 m lattice as water's LOD0 (its
+  // ETAK source polygons are identical), sized at U8_PLANE_RES so the near band (the
+  // visible shoreline) is resident and bilinear-smooth. Only LOD0 — the NEAR water
+  // levels consume it; the far levels keep their min-reduced bed dive. Absent layer
+  // (generated world) ⇒ null ⇒ the material's coverage path never compiles.
+  let waterCover: PlanePlan | null = null;
+  const wcMeta = manifest.layers.watercover;
+  if (wcMeta && wcMeta.lods.includes(0)) {
+    waterCover = planLayer(manifest, 'watercover', U8_PLANE_RES, U8_PLANE_RES).find((p) => p.lod === 0) ?? null;
+  }
+  return { height, biome, fields, water, waterFar, waterCover, coverageBox: coverageBoxM(manifest), biomeHasCanopy: !!manifest.layers.canopy };
 }
 
 // ---- region assembly (chunk payload → plane texels) -------------------------------

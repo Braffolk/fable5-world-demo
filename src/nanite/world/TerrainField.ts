@@ -83,6 +83,13 @@ export class TerrainField {
   readonly water: HeightLevel | null;
   /** ×8 min-reduced far waterY (conservative: channels vanish, lakes survive) */
   readonly waterFar: HeightLevel | null;
+  /** #114 anti-aliased water coverage α (rgba8, α×255 in channel 0) — a camera
+   *  window on water's 2 m lattice. null when the source has no watercover layer
+   *  (the generated world), which drives hasWaterCoverage and the WaterMaterial gate. */
+  readonly waterCover: FieldLevel | null;
+  /** true iff a watercover plane exists — the flag/absence that keeps the shoreline
+   *  coverage path a NO-OP on the generated world (the #108 biomeCarriesCanopy pattern). */
+  readonly hasWaterCoverage: boolean;
   readonly coverageBox: CoverageBox;
   /** biome plane channels 2/3 carry the merged far-forest canopy (heightM, cover)
    *  — true iff the source has a canopy layer. The generated world packs snow/
@@ -95,6 +102,7 @@ export class TerrainField {
     fieldsLevels: FieldLevel[],
     water: HeightLevel | null,
     waterFar: HeightLevel | null,
+    waterCover: FieldLevel | null,
     coverageBox: CoverageBox,
     biomeCarriesCanopy: boolean,
   ) {
@@ -104,6 +112,8 @@ export class TerrainField {
     this.fieldsLevels = fieldsLevels;
     this.water = water;
     this.waterFar = waterFar;
+    this.waterCover = waterCover;
+    this.hasWaterCoverage = waterCover !== null;
     this.coverageBox = coverageBox;
     this.biomeCarriesCanopy = biomeCarriesCanopy;
     const mb = this.vramBytes() / 2 ** 20;
@@ -111,7 +121,8 @@ export class TerrainField {
     console.log(
       `[laas] terrain field: height [${heightLevels.map((l) => `${l.res}²@${l.texel}m${l.wraps ? '~' : ''}`).join(' ')}] r32f + ` +
         `biome [${biomeLevels.map((l) => `${l.res}²`).join(' ')}] + fields [${fieldsLevels.map((l) => `${l.res}²`).join(' ')}] rgba8 + ` +
-        `water ${water ? `${water.res}² r32f (+far ${waterFar?.res ?? 0}²)` : 'none'} = ` +
+        `water ${water ? `${water.res}² r32f (+far ${waterFar?.res ?? 0}²)` : 'none'} + ` +
+        `watercover ${waterCover ? `${waterCover.res}² rgba8${waterCover.wraps ? '~' : ''}` : 'none'} = ` +
         `${mb.toFixed(1)} MB VRAM (CPU mirrors share the backing; ~ = camera-window level)`,
     );
     if (mb > VRAM_CEILING_MB) {
@@ -127,7 +138,8 @@ export class TerrainField {
     const fieldsLevels = plan.fields.map((p) => makeU8Level(`terrainFieldFieldsL${p.lod}`, p));
     const water = plan.water ? makeHeightLevel('terrainFieldWaterY', plan.water) : null;
     const waterFar = plan.waterFar ? makeHeightLevel('terrainFieldWaterYFar', plan.waterFar) : null;
-    return new TerrainField(heightLevels, biomeLevels, fieldsLevels, water, waterFar, plan.coverageBox, plan.biomeHasCanopy);
+    const waterCover = plan.waterCover ? makeU8Level('terrainFieldWaterCover', plan.waterCover) : null;
+    return new TerrainField(heightLevels, biomeLevels, fieldsLevels, water, waterFar, waterCover, plan.coverageBox, plan.biomeHasCanopy);
   }
 
   /** One-level field over a flat/explicit height array — forest/gallery-class
@@ -165,6 +177,7 @@ export class TerrainField {
       [],
       null,
       null,
+      null,
       {
         minX: opts.worldMinX,
         minZ: opts.worldMinZ,
@@ -188,7 +201,9 @@ export class TerrainField {
             ? this.fieldsLevels[level]
             : plane === 'water'
               ? this.water
-              : this.waterFar;
+              : plane === 'waterFar'
+                ? this.waterFar
+                : this.waterCover;
     if (!lvl) throw new Error(`TerrainField: no ${plane} level ${level}`);
     return lvl;
   }
@@ -253,7 +268,14 @@ export class TerrainField {
   }
 
   private allLevels(): FieldLevel[] {
-    return [...this.heightLevels, ...this.biomeLevels, ...this.fieldsLevels, ...(this.water ? [this.water] : []), ...(this.waterFar ? [this.waterFar] : [])];
+    return [
+      ...this.heightLevels,
+      ...this.biomeLevels,
+      ...this.fieldsLevels,
+      ...(this.water ? [this.water] : []),
+      ...(this.waterFar ? [this.waterFar] : []),
+      ...(this.waterCover ? [this.waterCover] : []),
+    ];
   }
 
   // ---- CPU sampling (walk probe, spawn, bookmarks) --------------------------------
@@ -318,6 +340,17 @@ export class TerrainField {
     const w = this.waterFar;
     if (!w) throw new Error('TerrainField: no far water plane');
     return planeBilerp(w, wxz);
+  }
+
+  /** #114 bilinear water coverage α ∈ [0,1] (channel 0 of the watercover rgba8
+   *  plane). One filtered tap of the ANTI-ALIASED fraction — the sub-texel signal
+   *  a bilinear of the BINARY water mask could never resolve, so the shore tracks
+   *  α's 0.5 iso-contour instead of quantizing to 2 m grid squares. Only compiled
+   *  behind field.hasWaterCoverage (WaterMaterial's near-level path). */
+  fieldWaterCoverage(wxz: NV2): NF {
+    const wc = this.waterCover;
+    if (!wc) throw new Error('TerrainField: no water coverage plane');
+    return planeLinear(wc, wxz).x as unknown as NF;
   }
 
   // ---- HOT samplers (S3b) — Fn-stack only (If/ElseIf level chains: exactly ONE

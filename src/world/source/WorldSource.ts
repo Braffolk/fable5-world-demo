@@ -16,6 +16,9 @@ export type LayerName =
   | 'debris'
   | 'boulders'
   | 'canopy'
+  // #114 anti-aliased water-area coverage α (u8, one 'coverage' plane; Estonia
+  // only) — the smooth-shoreline signal the binary water mask cannot carry
+  | 'watercover'
   // generated-source record layers (F2: first-class streams; Estonia derives
   // equivalents from its understory/debris guidance planes at S9)
   | 'extras'
