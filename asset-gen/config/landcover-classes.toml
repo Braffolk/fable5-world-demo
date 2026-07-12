@@ -36,6 +36,7 @@ name = "E_304_lage_a"
 10 = "grassland"   # Rohumaa
 20 = "sand"        # Liivane ala
 30 = "barren"      # Muu lage
+40 = "barren"      # Klibune ala (shingle/gravel — bare, non-vegetated; only seen country-wide)
 
 [[layer]]
 name = "E_303_haritav_maa_a"

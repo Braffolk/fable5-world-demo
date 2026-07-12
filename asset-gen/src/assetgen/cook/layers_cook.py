@@ -2,6 +2,8 @@
 plus their coarse rungs (and the CHM-derived canopy layer) reduced via cook.pyramid."""
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor
+
 import numpy as np
 
 from ..config import DATA_IN, BaseConfig
@@ -76,6 +78,112 @@ def cook_biome(base: BaseConfig, bbox_en, log=print) -> None:
             write_chunk(dest, _meta(base, "biome", c, enc=2), payload)
             done += 1
         log(f"  biome lod{lod}: {done} chunks")
+
+
+# --- country-wide coarse biome floor ---------------------------------------------------
+# cook_biome REDUCES its coarse rungs from a fine LOD0 cooked only over the 16 km pilot,
+# so beyond the pilot the far terrain has NO biome and renders as bare soil (#108). This
+# mirrors the height country-floor: rasterize the whole-country ETAK landcover DIRECTLY at
+# the coarse texel for the finest floor rung, then reduce the coarser rungs from it.
+#
+# vegDensity (biome plane 1 = bio.y) is the load-bearing far-colour plane — grassW/forestW
+# scale by it, so "far = dirt" is really "far vegDensity = 0". The honest whole-country
+# analog of the pilot's CHM canopy-cover fraction is the ETAK forest/shrub coverage
+# fraction (forest = full canopy, shrub = half): both mean "share of ground under tree
+# canopy", so near (CHM) and far (ETAK) stay consistent. Canopy HEIGHT has no whole-country
+# source (CHM is pilot-only), so the canopy layer (treetop tint) stays pilot-only.
+_BIOME_SUPERSAMPLE = 4  # sub-texels per coarse texel — MUST be 4 for blocks16's 4x4 blocks
+_CANOPY_COVER = {"forest": 255, "shrub": 128}  # class -> vegDensity weight (canopy fraction)
+
+_floor_base: BaseConfig | None = None
+_floor_rules = None
+
+
+def _biome_coarse_window(base: BaseConfig, c: ChunkId, sub: int):
+    """Super-sampled ETAK window for a coarse biome chunk: `sub` sub-texels per coarse
+    texel, one-coarse-texel east/south apron (mirrors _window_2m). Rasterizing at sub of
+    the coarse texel and 4x4-block-reducing gives a smooth cover fraction, not a binary."""
+    t = BIOME_TEXEL * base.grid.lod_step ** c.lod  # coarse biome texel (m)
+    e_min, n_min, e_max, n_max = chunk_bounds_en(base.grid, c)
+    return e_min, n_min - t, e_max + t, n_max, t / sub
+
+
+def _biome_coarse_planes(base: BaseConfig, rules, c: ChunkId):
+    """Rasterize one coarse biome chunk straight from ETAK -> (classId, vegDensity) 1025²
+    u8 planes, or None where no ETAK polygon covers the chunk (open Baltic / off-country)."""
+    window = _biome_coarse_window(base, c, _BIOME_SUPERSAMPLE)
+    class_sub = rasterize_classes(rules, window)
+    if not class_sub.any():
+        return None
+    veg_sub = np.zeros_like(class_sub)
+    for name, weight in _CANOPY_COVER.items():
+        veg_sub[class_sub == rules.palette[name]] = weight
+    cls = majority_u8(blocks16(class_sub))      # dominant land-cover class per coarse texel
+    dens = mean_u8(blocks16(veg_sub))           # canopy-cover fraction * 255 per coarse texel
+    return cls, dens
+
+
+def _init_floor_worker(base: BaseConfig, rules) -> None:
+    global _floor_base, _floor_rules
+    _floor_base, _floor_rules = base, rules
+
+
+def _cook_biome_floor_one(c: ChunkId) -> int:
+    """Worker: cook one coarse chunk straight from ETAK, OVERWRITING any existing chunk.
+    Returns 0 where the chunk carries no ETAK land-cover (open Baltic / off-country).
+
+    Overwrite, NOT gap-fill: the pilot's coarse rungs are REDUCED from a 16 km fine cook
+    that fills only ~1/4 of a 32 km lod2 chunk, so the pilot's own lod2/3/4 are ~80% none
+    (bare soil) over their footprint — preserving them would keep the dirt bug right around
+    the pilot. The complete ETAK-direct rasterize replaces them; the near view is unaffected
+    (it streams the finer, untouched lod0/lod1)."""
+    base, rules = _floor_base, _floor_rules
+    assert base is not None and rules is not None
+    planes = _biome_coarse_planes(base, rules, c)
+    if planes is None:
+        return 0
+    dest = chunk_path("biome", c)
+    write_chunk(dest, _meta(base, "biome", c, enc=2), encode_u8_planes(base.encode, list(planes)))
+    return dest.stat().st_size
+
+
+def cook_biome_floor(base: BaseConfig, bbox_en, lods, workers: int = 6, log=print) -> None:
+    """Whole-country coarse biome floor. Finest floor rung = direct ETAK rasterize over the
+    whole country (overwriting the pilot's incomplete reduced rungs); coarser rungs reduce
+    from it. Run AFTER the pilot cook — it leaves lod0/lod1 alone and completes lod2+."""
+    rules = load_rules()
+    n = _res_2m(base) - 1
+    lods = sorted(lods)
+    base_lod = lods[0]
+
+    chunks = chunks_covering_bbox_en(base.grid, bbox_en, base_lod)
+    log(f"  biome floor lod{base_lod}: {len(chunks)} chunks direct from ETAK ({workers} workers)")
+    cooked = total = 0
+    with ProcessPoolExecutor(
+        max_workers=workers, initializer=_init_floor_worker, initargs=(base, rules)
+    ) as ex:
+        for i, size in enumerate(ex.map(_cook_biome_floor_one, chunks, chunksize=2)):
+            if size:
+                cooked += 1
+                total += size
+            if (i + 1) % 8 == 0 or i + 1 == len(chunks):
+                log(f"    [{i + 1}/{len(chunks)}] {cooked} cooked ({total / 1e6:.1f} MB)")
+    log(f"  biome floor lod{base_lod}: {cooked}/{len(chunks)} chunks carry land-cover")
+
+    for lod in lods[1:]:  # coarser rungs: majority classId + mean vegDensity, OVERWRITE
+        done = 0
+        for c in chunks_covering_bbox_en(base.grid, bbox_en, lod):
+            big = assemble_finer(lambda f: _read_planes(base, "biome", f, 2), c, n, fills=[0, 0])
+            if big is None:
+                continue
+            cls = majority_u8(blocks16(big[0]))
+            dens = mean_u8(blocks16(big[1]))
+            write_chunk(
+                chunk_path("biome", c), _meta(base, "biome", c, enc=2),
+                encode_u8_planes(base.encode, [cls, dens]),
+            )
+            done += 1
+        log(f"  biome floor lod{lod}: {done} chunks reduced")
 
 
 def cook_water(base: BaseConfig, bbox_en, log=print) -> None:

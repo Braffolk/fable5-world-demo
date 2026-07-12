@@ -117,6 +117,32 @@ def country_floor(workers: int, min_lod: int) -> None:
     click.echo("country floor complete.")
 
 
+@main.command("country-floor-biome")
+@click.option("--workers", default=6, show_default=True)
+@click.option("--min-lod", default=2, show_default=True,
+              help="Coarsest-to-finest floor: cook this LOD and coarser over ALL Estonia")
+def country_floor_biome(workers: int, min_lod: int) -> None:
+    """Cook the always-resident coarse biome floor for the whole country from ETAK landcover.
+
+    Mirrors `country-floor` (height): beyond the 16 km pilot the reduced coarse biome rungs
+    are absent, so far terrain renders as bare soil. This rasterizes the whole-country ETAK
+    landcover directly at the coarse texel so far forests carry vegDensity (green up), not
+    dirt. Fetch ETAK first (`assetgen fetch --aoi estonia --only etak`); matches height's
+    country pyramid extent. Run AFTER the pilot cook so its finer rungs are gap-filled.
+    """
+    base = load_base()
+    session = PoliteSession(base.fetch)
+    from .cook.layers_cook import cook_biome_floor
+    from .fetch.maaamet import ensure_sheet_grids
+
+    grids_dir = ensure_sheet_grids(session)
+    bbox = _resolve_bbox(session, load_aoi("estonia"), grids_dir)
+    lods = tuple(lod for lod in base.grid.lods if lod >= min_lod)
+    click.echo(f"country biome floor: LODs {list(lods)} over E {bbox[0]}..{bbox[2]}, N {bbox[1]}..{bbox[3]}")
+    cook_biome_floor(base, bbox, lods=lods, workers=workers, log=click.echo)
+    click.echo("country biome floor complete.")
+
+
 @main.command()
 @click.option("--aoi", required=True)
 @click.option("--layer", "layers_opt", multiple=True,
