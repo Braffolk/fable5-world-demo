@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-13
 **Purpose:** requirements trace for a from-scratch replacement of
-`docs/tasks/2026-07-13/SPEC-MICROTOPOGRAPHY.md`
+`docs/specs/terrain/MICROTOPOGRAPHY.md`
 **Scope:** specification review only. This document does not authorize synthesis,
 source-repair, format, runtime, shader, or asset implementation.
 

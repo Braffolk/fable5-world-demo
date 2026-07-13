@@ -8,13 +8,29 @@ Last updated: 2026-07-13
 
 The LUKE-derived residual bank, patch quilt, masks, hierarchy projection, and immutable preview demonstrated that measured data can be cooked, packed, streamed, decoded, and rendered through LOD -1/-2. User-visible review rejected the resulting geometry as a synthesis solution: added relief is weak and noise-like, water and other invalid regions can still become bumpy, shorelines retain the source 1 m grid character, known DTM defects are preserved, and the method has no defensible model of Estonia's substrate-, soil-, hydrology-, land-use-, or process-dependent variance. Internal seam, mean, quantization, and distribution gates do not repair that quality failure.
 
-The replacement work is intentionally back at research/specification. Independent learned and deterministic/process proposals and independent adversarial critiques are complete. Neither track establishes a universal winning generator; the evidence instead requires typed source repair and a per-regime contest among process, exemplar, conditional simulation, regressor, GAN, diffusion, and hybrid specialists. Three final integrated audits closed the remaining critical/high science, cook/release/runtime, coverage, and evidence-contract defects. They also rejected the first Stage 1 Moore owner test: the archive is now explicitly `target_evidence_insufficient`, and the cheapest proof is structural repair plus acquisition closure. No replacement synthesis implementation is authorized before user approval.
+The replacement work is intentionally back at research/specification. Independent learned and deterministic/process proposals and independent adversarial critiques are complete. Neither track establishes a universal winning generator; the evidence instead requires typed source repair and a per-regime contest among process, exemplar, conditional simulation, regressor, GAN, diffusion, and hybrid specialists. Three final integrated audits closed the remaining critical/high science, cook/release/runtime, coverage, and evidence-contract defects. They also rejected the first Stage 1 Moore owner test: the archive is now explicitly `target_evidence_insufficient`, and the cheapest proof is structural repair plus public-evidence qualification. No replacement morphology implementation is authorized before a target-specific preregistration passes the reviewed spec.
 
-### There is no production-ready Estonia target corpus
+### Public dense observations exist, but no production-ready target corpus exists
 
-The target-data audit found zero production-paired Estonia sites and zero open target-scale Estonia height surfaces. Only one of ten audited non-water regime families has a ready high-resolution exemplar at all: the foreign Moore peat archive, totaling `309.1387 m2` in 68 disconnected plots, about `1.89%` of one `128 m x 128 m` LOD -2 chunk. It cannot teach national context, transitions, or non-peat morphology.
+The original target-data audit found no production-paired Estonia sites and no
+ready open target-scale Estonia height surfaces. The completed zero-budget hunts
+correct one overstatement: dense public raw observations do exist. Hovi 2024
+includes 13 Jarvselja and 28 Hyytiala TLS plots under one protocol; Evo 2024 adds
+55 leaf-off Finnish forest plots; Swedish FORWARD provides very dense rough
+till/forest observations; and Poland's Biala Gora release provides ten raw
+UAV-LiDAR coastal-cliff epochs. The exact Taevaskoda public ALS tile has eight
+epochs, while the known high-detail Taevaskoda photogrammetry/TLS models remain
+view-only or unavailable under reusable rights. None is yet a qualified
+bare-earth target surface, and none alone establishes Estonia-wide transfer.
 
-The 0.0625 m output requires measured support finer than its approximately 0.125 m minimum wavelength, with vertical error, per-cell support, surface semantics, visibility, interpolation masks, pairing, and site-level holdouts. Export pixel size or raw point density alone does not qualify. Every unsupported regime must retain corrected structural terrain with no invented residual; credible detail across all Estonia therefore makes a stratified Estonia acquisition program a release dependency.
+The 0.0625 m output requires measured support finer than its approximately 0.125 m minimum wavelength, with vertical error, per-cell support, surface semantics, visibility, interpolation masks, pairing, and site-level holdouts. Export pixel size or raw point density alone does not qualify. Every unsupported regime must retain corrected structural terrain with no invented residual. The active dependency is therefore selective public-data conversion and qualification, not a paid Estonia acquisition program.
+
+The user rejected paid acquisition and separately funded side projects. The
+public-data hunt is complete; the active closure path is selective conversion,
+ground-surface QA, physical-analogue qualification, campaign-held-out testing,
+and Estonia out-of-distribution sentinels. Any remaining unsupported regime must
+abstain; the spec may not quietly restore paid acquisition as a next step unless
+the user explicitly reopens budget.
 
 ### Corrected fine terrain cannot remain pinned to raw LOD0
 

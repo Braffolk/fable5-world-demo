@@ -4,7 +4,7 @@
 
 **Date:** 2026-07-13
 
-**Status:** specification for user review; no replacement synthesis implementation is authorized by this document
+**Status:** reviewed architecture with zero-external-budget evidence amendment; replacement morphology remains gated by public-data qualification
 
 **Decision:** implement one evidence-gated typed hybrid surface pipeline in `asset-gen`. Deterministic evidence fusion owns source repair and mapped structure. A deterministic regime graph owns eligibility, transitions, and abstention. Unresolved morphology is produced only by a per-regime specialist that wins a preregistered target-scale bakeoff. A deterministic composer produces one canonical absolute finest surface, and the existing packed-height cook derives and publishes the hierarchy. The browser performs no synthesis.
 
@@ -44,7 +44,10 @@ The final terrain remains synthesized below the reliable source support. Metadat
 13. **A heightfield claim is single-valued.** Vertical faces, undercuts, caves, overhangs, detached blocks, and root plates are not solved by finer sampling. This spec marks them unsupported; a separate structural representation requires a separate specification.
 14. **All surface consumers agree.** Terrain mesh, grass roots, trees/plants, materials, normals, probes, collision, and water boundaries must follow the accepted packed surface and transition policy. Fine terrain may not disable or strand inherited content.
 15. **No scene-specific fixes.** Suur Taevaskoda is a fixed generalization review site, not a coordinate special case, hand-authored patch, or training/tuning site.
-16. **No implementation before review.** The user must approve this rewritten spec before replacement synthesis code begins.
+16. **No unsupported implementation.** The user reviewed the architecture on
+    2026-07-13 and rejected paid acquisition plus a separately funded cliff
+    project. Implementation may proceed only through the zero-budget public-data
+    and staged gates in this document; review does not authorize invented evidence.
 
 ## 3. Premise Audit
 
@@ -207,7 +210,8 @@ Consequently:
 - no universal dictionary/process backbone is approved;
 - pixel-space conditional diffusion remains the highest-ceiling learned specialist challenger;
 - per-regime owner selection must be empirical and target-supported;
-- data acquisition is a release dependency, not optional polish.
+- public raw-data conversion and target/analogue qualification are release
+  dependencies, not optional polish; paid acquisition is out of scope.
 
 ### 5.1 Architecture evidence trace
 
@@ -227,6 +231,24 @@ by an Estonia target-scale paper.
 | Paul A. Moore, Maxwell C. Lukenbach, Dan K. Thompson, Nick Kettridge, Gustaf Granath, James M. Waddington (2019), *Assessing the Peatland Hummock-Hollow Classification Framework Using High-Resolution Elevation Models* | 68 foreign clipped-moss plots, `3.2-10.1 m2`; `0.01 m` grid with `0.03 m` mean filter; lab RMSE below `0.01 m`, field median absolute difference `0.018 m`; plot/site morphology statistics | Full CC BY 4.0 paper and data local; archive SHA-256 `044413bb87171776b409172d29fbde16341b228dc43b694cffe9f02a88640a67`; no generative checkpoint | Real peat microforms are multi-class and measurable | Only `309.1387 m2`, disconnected, foreign, with vascular vegetation clipped; transfer only plot-local foreign method validation under Section 12.7 |
 | Philip Marzahn, Moritz Seidel, Ralf Ludwig (2012), *Decomposing Dual Scale Soil Surface Roughness for Microwave Remote Sensing Applications* | Photogrammetric `2 mm` grids over `6-22 m2` worked fields; geostatistical decomposition separates seedbed-row and wheel-track scales | Full CC BY 3.0 paper local; no production geometry dataset/checkpoint in the ledger | Agricultural roughness has distinct operation-caused scales, directions, and states | Not Estonia synthesis evidence; transfer causal decomposition, descriptors, and acquisition requirements for agriculture challengers |
 | Alexander Goslin (2026), *InfiniteDiffusion: Bridging Learned Fidelity and Procedural Utility for Open-World Terrain Generation* | MERIT/ETOPO/climate near `90 m`; `512 x 512` 90 m patches; hierarchical diffusion and overlap fusion; FID/latency/visual evaluation; roughly two weeks on RTX 3090 Ti | Full preprint local; linked terrain repository snapshot revision `82a0431281f21a6ec3d691a12ee61525de5b0790`, officialness not yet verified and code not yet read line-by-line; data/checkpoint/license state must be normalized | Coordinate/seed-stable overlapping diffusion is a credible unbounded-generation mechanism | Demonstrated geometry is tens-of-metres scale and runtime generation violates this project law; transfer only deterministic cook-side domain/tiling concepts, not weights or a quality claim |
+
+The zero-budget public-data amendment adds these primary-source-audited raw
+observation candidates; `R+` means high-priority conversion input, never ready
+target truth:
+
+| Public source | Verified value | Status and limit |
+|---|---|---|
+| Hovi et al. 2024 forest TLS, DOI `10.23729/9a8d90cd-73e2-438d-9230-94e10e61adc9` | 13 Järvselja Estonia plus 28 Hyytiälä Finland plots under one Leica P40 protocol; full scans/transforms and 2 cm-thinned LAZ; CC BY 4.0 | `R+`; strongest Estonia/neighbor paired forest source, but surface semantics/support/error still require conversion |
+| Evo 2024 TLS, DOI `10.23729/fd-5a800660-8bd8-35ef-ac9f-ac5c45f7fa77` | 55 leaf-off, nine-station 32 m plots; 39.3 GiB; CC BY 4.0 | `R+`; compact boreal conversion corpus, not a pure ground class |
+| FORWARD Sweden, DOI `10.71540/89rs-s553` | rough boulder/till forest, high-density helicopter LiDAR, UAV and machine-operation records; 1.07 TiB; CC BY 4.0 | `R+`; selectively download strata; total-return density is not ground support |
+| Biała Góra, DOI `10.18150/BHH1RC` | ten raw UAV-LiDAR southern-Baltic cliff epochs, 27.402 GB; CC BY 4.0 | raw coastal/till/process corpus; unclassified and no published independent target error |
+| Taevaskoda tile `444679` | eight official ALS epochs; audited 2023 file has 5,234,018 points over 1 km2 and broad derivative rights | immediate structural-repair evidence only; far too sparse for 6.25 cm morphology |
+
+The verified 2015/2024 Taevaskoda, nearby outcrop, and Selisoo survey archives are
+permission leads rather than public dependencies. Full findings and canonical
+links are in `review/NORDIC-PUBLIC-TARGET-DATA-HUNT.md`,
+`review/BALTIC-PUBLIC-TARGET-DATA-HUNT.md`, and
+`review/TAEVASKODA-ESTONIA-PUBLIC-SCAN-HUNT.md`.
 
 No table row authorizes a national owner. Full-paper and official-code review is
 mandatory before a consequential method change; difficult synthesis and
@@ -475,20 +497,31 @@ filename.
 - Compatible events may overlap only when scale and ownership are distinct.
 - A condition with no target-supported expert yields abstention.
 
-## 9. Target Data And Acquisition
+## 9. Public Target Data And Qualification
 
 ### 9.1 Current readiness
 
-The audited corpus contains:
+No audited source yet supplies a ready production target height surface. The
+zero-purchase hunt nevertheless found substantial open raw observations that the
+earlier inventory missed:
 
-- zero production-paired Estonia target sites;
-- zero open target-scale Estonia height surfaces;
-- one foreign peat research grid family whose effective target bands remain to be qualified;
-- `309.1387 m2` of Moore peat surfaces in 68 disconnected plots;
-- about 79,140 cells at 0.0625 m, `1.89%` of one LOD -2 chunk.
+- Hovi 2024: 13 Järvselja, Estonia and 28 Hyytiälä, Finland forest TLS plots under
+  one protocol, with full scans/transforms and selectable 2 cm-thinned LAZ;
+- Evo 2024: 55 leaf-off nine-station Finnish TLS plots, 39.3 GiB total;
+- FORWARD: Swedish high-density boulder/till forest and machine-disturbance data,
+  selectively downloadable from a 1.07 TiB release;
+- Biała Góra: ten open UAV-LiDAR Baltic coastal-cliff epochs, 27.402 GB compressed;
+- ForestSemantic-MS: six manually annotated Finnish boreal clouds;
+- Stordalen: one 5 cm subarctic peat DSM exemplar;
+- eight open ALS epochs at exact Taevaskoda tile `444679`, including audited 2023
+  LAZ SHA-256 `9c50c123f14841c717d0d123d2d08061b87a51baf6d806ef269fabf1036a9fb7`.
 
-The corpus can support pipeline and algorithm-screen research. It cannot qualify a
-production peat owner or support national Stage-B morphology.
+The exact 2015/2024 Suur Taevaskoda true-3D campaigns, Väike Taevaskoda/Härma
+models, and Selisoo bog SfM campaigns are verified but not currently downloadable
+with usable geometry rights. A no-cost permission request is allowed; planning may
+not depend on success. Public raw observations eliminate paid acquisition as the
+active path, but they still require surface extraction, support/error measurement,
+semantics, and transfer qualification before becoming targets.
 
 ### 9.2 Target truth gate
 
@@ -511,41 +544,48 @@ Nominal export pixel size and total point density are insufficient.
 
 ### 9.3 Minimum release gate per regime
 
-Before a regime emits finest-band geometry, require at least three geographically independent Estonia sites:
+Before a regime emits finest-band geometry, require at least three geographically
+independent qualified sites across at least two campaigns, with two development
+sites and one untouched site-level holdout. Sites may be in Estonia or a physically
+analogous neighboring Baltic/Nordic region. Geographic proximity alone is not
+evidence: a checked `physical-analogue-v1` dossier must compare substrate and soil
+profile, climate/freeze-thaw, hydrology, vegetation/organic surface, land use and
+disturbance, forming process, morphology scale, source observation process, and
+the Estonia condition envelope. Any unmatched factor becomes OOD and abstains.
 
-- two development sites;
-- one untouched site-level holdout.
+When a qualified Estonia target exists, keep it as the blind holdout. When none
+exists, an all-foreign owner is limited to `pilot` with transfer ceiling
+`neighbor_analogue_only`; it requires
+at least two independently acquired neighboring-region sites, a held-out campaign,
+condition-stratified OOD bounds over the claimed Estonia extent, fixed Estonia
+visual/structural sentinels, and explicit user acceptance. It cannot silently
+become national. Patches from one site are never independent sites. Hold out sensor
+and campaign when feasible. Taevaskoda remains outside training, hyperparameter
+selection, and candidate selection.
 
-This is a minimum go/no-go rule, not a claim of statistical sufficiency. Add sites until held-out morphology distributions and blind visual results stop improving materially. Patches from one site do not count as independent sites. Hold out sensor/campaign when feasible.
+Before downloading/training, check in a zero-budget
+`PUBLIC-TARGET-QUALIFICATION-PROTOCOL.md` plus machine-readable condition and
+target schemas. It freezes exact public artifact/file selections, regime IDs and
+condition strata, physical-analogue dossiers, context/microplot counts, conversion
+and semantic policy, target transfer/error threshold, power/stopping rule, OOD
+bound, campaign holdouts, licenses, QA, storage ceiling, and selective-download
+order. Paid capture, proprietary data, new hardware, contractors, and cloud-scale
+services are excluded unless the user explicitly changes the project budget.
 
-Taevaskoda remains outside training, hyperparameter selection, and candidate selection.
+### 9.4 Nested observation requirements
 
-The three-site floor is not a procurement specification. Before commissioning or
-capturing a production target, write and obtain user approval for a separate
-`TARGET-ACQUISITION-PROTOCOL.md` plus machine-readable condition and target schemas.
-That protocol must freeze the first exact regime IDs and condition strata,
-prevalence rationale, site/context/microplot counts, context dimensions, nested
-plot geometry, sensor and control layout, repeated-date requirements, semantic
-label policy, target transfer/error threshold, statistical power/stopping rule,
-OOD risk bound, campaign holdouts, deliverable formats, licenses, QA acceptance,
-and budget. Until it exists, the broad regime guidance below is a research agenda,
-not a procureable statement of work, and no production morphology training may
-begin.
-
-### 9.4 Nested acquisition
-
-Each site combines:
+Each qualifying public site must contain or permit derivation of:
 
 - a contiguous context survey covering physical organization, transitions, drainage, and the real inference halo;
 - nested target-scale microplots or dense ground returns for the 0.25-0.0625 m band.
 
-Use:
+Acceptable source modalities include:
 
 - close-range/low-altitude SfM for visible bare soil, fields, peat, rock, and beaches with metric control;
 - multi-position TLS or validated MLS for forest/scrub;
 - oblique TLS/SfM plus nadir context for cliffs/talus, preserving true 3D invalid-heightfield masks;
 - LiDAR plus ground checks for wetland and shore;
-- repeated dated acquisition for agriculture and recent disturbance.
+- repeated dated observations for agriculture and recent disturbance.
 
 Lowest-point filtering alone is forbidden as target creation.
 
@@ -564,7 +604,10 @@ Create a versioned machine-readable registry. Every record includes:
 - train/development/blind-test assignment;
 - transfer restrictions.
 
-Foreign data may pretrain representations or initialize a matching expert. It can never be the only Estonia holdout.
+Foreign data may pretrain, provide exemplars, and qualify a `pilot` with transfer
+ceiling `neighbor_analogue_only` under Section 9.3. It may not fill unmatched Estonia
+conditions, erase OOD/abstention, or claim national transfer from geographic
+similarity alone.
 
 ## 10. Typed Structural Reconstruction
 
@@ -885,11 +928,11 @@ phenomenon/band ownership.
 The normative checked-in artifacts are:
 
 - `review/contracts/regime-release-registry.schema.json`, SHA-256
-  `07a9e6a2486c22e70918392194eea897d9e7810aa12499fad596d67b4629268b`;
+  `a46d86c0a2960d0a9b58ae05bef3794bf055efb113fd21e8d4adfcdbdeaad495`;
 - `review/contracts/regime-release-rows.initial.json`, SHA-256
   `74257a057d7aeaf196d0fdccff374cbcafd1a902efcc7723eea4c81fabac7b48`;
 - `review/contracts/regime-initial-status.json`, SHA-256
-  `3fa08bfa5d290d72378afcd02904e33c53c8db991b3c98da757a40b7a8d33cda`.
+  `f4ad9903077a736f254d378b5fc0e14c68c1be7dbdb3aeb43f03138db1f258d9`.
 
 Paths are relative to
 `docs/deep-research/microtopography-generation/`. The initial registry contains
@@ -900,9 +943,11 @@ claims. Validate it before use with the command in
 schema `$defs` but may not weaken required fields, enums, cross-field gates, or
 `additionalProperties=false`. Cross-field gates are:
 
-- `pilot` requires two independent Estonia development sites, one untouched
-  Estonia blind site, passed target qualification and leakage audit, measurable
-  band evidence, a `pilot_owner`, measured cost, bounded extent, and user approval;
+- `pilot` requires two independent development sites, one untouched blind site,
+  passed target qualification and leakage audit, measurable band evidence, a
+  `pilot_owner`, measured cost, bounded extent, and user approval. A
+  `neighbor_analogue_only` pilot additionally requires Section 9.3's two-campaign
+  physical-analogue/OOD/Estonia-sentinel contract and may not promote to national;
 - `national` additionally requires an `estonia_national` transfer ceiling,
   `national_owner`, national coverage audit, national extent, and explicit user
   approval; the three-site minimum is a go/no-go floor, not sufficiency;
@@ -1585,7 +1630,7 @@ Before national download:
 For each enabled regime:
 
 - target support and error pass Section 9;
-- at least the minimum independent Estonia sites exist;
+- at least the Section 9.3 independent-site and physical-analogue requirements exist;
 - train/development/blind-test are geographically disjoint;
 - surface semantics and licenses are valid;
 - signal energy exceeds measurement/interpolation error in every claimed band;
@@ -1921,12 +1966,16 @@ No morphology quality claim is made.
 Run Tracks A and B. Track C is optional research and is not part of the cheapest
 acceptance path.
 
-**Track A: evidence closure and acquisition specification**
+**Track A: public evidence closure and qualification specification**
 
 - complete the Moore byte-level validation audit under Section 12.7 and record the
   known `target_evidence_insufficient` ownership result without training a model;
-- write the separate user-reviewed Estonia `TARGET-ACQUISITION-PROTOCOL.md` and its
-  condition/target schemas; do not guess the first regimes from convenience;
+- write `PUBLIC-TARGET-QUALIFICATION-PROTOCOL.md` and its condition/target/
+  physical-analogue schemas; freeze selective files rather than downloading whole
+  terabyte releases;
+- register and audit all eight exact-site Taevaskoda ALS epochs for Track B, then
+  qualify the Hovi Järvselja/Hyytiälä subset as the first raw-surface conversion
+  candidate;
 - freeze a qualified repair-calibration manifest for Track B or abstain on every
   unsupported correction class.
 
@@ -1948,16 +1997,22 @@ acceptance path.
 - make no morphology non-inferiority, owner, Estonia-transfer, or production claim.
 
 Stage 1's decisive deliverable is Track B's visible structural repair plus the
-evidence/acquisition closure. Track C is optional and cannot delay or inflate that
+public-evidence closure. Track C is optional and cannot delay or inflate that
 proof. No morphology specialist implementation begins until qualified Estonia
-targets and a user-approved target-specific preregistration exist.
+or Section 9.3 analogue targets and a user-approved target-specific
+preregistration exist.
 
-### Stage 2: Estonia acquisition and first production regime
+### Stage 2: public-corpus conversion and first production regime
 
-- acquire/process the three-regime pilot;
+- convert/qualify the selective Hovi Järvselja/Hyytiälä forest subset first;
+- qualify a small Evo 2024 holdout next, then selective FORWARD/Biała files only
+  where their exact physical regime is required;
+- send one no-cost, non-blocking permission request for the Kohv/Shlykova
+  Taevaskoda/Väike/Härma/Selisoo archives; refusal or silence preserves abstention;
 - pair every site to the full condition fabric;
 - leave Taevaskoda untouched;
-- rerun owner selection using Estonia holdouts;
+- rerun owner selection using Estonia targets or Section 9.3's explicit
+  neighboring-analogue transfer contract;
 - activate only the first regime that passes all gates.
 
 ### Stage 3: parent-closed Estonia visual pilot
@@ -1974,7 +2029,9 @@ General improvements derived from the reference must apply to the same physical 
 
 ### Stage 4: regime expansion
 
-Expand by national prevalence and visible value, not algorithm convenience. Each new row repeats acquisition, bakeoff, blind holdout, packed cost, and user-visible review.
+Expand by national prevalence and visible value, not algorithm convenience. Each
+new row repeats public-data qualification, bakeoff, blind holdout, packed cost,
+and user-visible review.
 
 ### Stage 5: wide/national publication
 
@@ -2097,23 +2154,28 @@ Defaults recommended by this spec:
 - orthophoto: fetch dated RGB/CIR for research and likely production;
 - corrected authority: publish through ordinary corrected LOD0 and ancestors;
 - finest geometry: stored LOD -2/-1, no runtime synthesis;
-- first morphology proof: whichever exact Estonia regime the approved acquisition
-  protocol qualifies first; the Moore peat archive does not preselect peat or an
-  owner;
+- first morphology proof: whichever exact regime the zero-budget public-target
+  protocol qualifies first; Hovi Järvselja/Hyytiälä forest is the first conversion
+  candidate, not a preselected owner;
 - first visible source proof: Taevaskoda shore/bank/river correction;
-- vertical cliff face: separate future project, not a false heightfield claim.
+- vertical cliff face: explicitly rejected/out of scope, not a false heightfield claim.
 
-The remaining product decisions are:
+The 2026-07-13 user review closed these decisions:
 
-1. approve and fund the Estonia target-acquisition program required for quality across all regimes;
-2. choose wide/national fine-coverage and retained-build storage policy after measured pilot entropy;
-3. decide whether to commission a separate non-heightfield structural-cliff project.
+- paid acquisition, proprietary data, new hardware, vendors, and separately funded
+  projects are rejected unless the user explicitly reopens budget;
+- neighboring Baltic/Nordic and Estonia public data must be exhausted and may
+  qualify regime-specific transfer under Section 9.3;
+- no separate non-heightfield cliff project is commissioned.
+
+The remaining product decision is wide/national fine-coverage and retained-build
+storage policy after measured pilot entropy.
 
 Required checkpoints:
 
-1. user approves this spec before implementation;
+1. architecture review completed 2026-07-13;
 2. user reviews the Stage 1 corrected-source live URL;
-3. user reviews the first Estonia-trained morphology regime;
+3. user reviews the first public-target-qualified morphology regime;
 4. user explicitly approves any multi-parent/national cook.
 
 ## 22. Definition Of Done
@@ -2206,6 +2268,9 @@ The implementer must read these before code:
 - `docs/deep-research/microtopography-generation/review/REGIME-EVIDENCE-EXECUTABLE-CONTRACT.md`;
 - `docs/deep-research/microtopography-generation/review/HIERARCHY-VISUAL-COST-EXECUTABLE-CONTRACT.md`;
 - `docs/deep-research/microtopography-generation/review/STAGE1-EXECUTABLE-METHOD-CONTRACT.md` (superseded negative-design record; do not implement);
+- `docs/deep-research/microtopography-generation/review/BALTIC-PUBLIC-TARGET-DATA-HUNT.md`;
+- `docs/deep-research/microtopography-generation/review/NORDIC-PUBLIC-TARGET-DATA-HUNT.md`;
+- `docs/deep-research/microtopography-generation/review/TAEVASKODA-ESTONIA-PUBLIC-SCAN-HUNT.md`;
 - `docs/deep-research/microtopography-generation/review/contracts/regime-release-registry.schema.json`;
 - `docs/deep-research/microtopography-generation/review/contracts/regime-release-rows.initial.json`;
 - `docs/deep-research/microtopography-generation/review/contracts/regime-initial-status.json`;
@@ -2229,4 +2294,10 @@ Key primary sources and boundaries:
 - [Panangian and Bittner 2024](https://doi.org/10.5194/isprs-annals-X-2-2024-185-2024): real low-resolution elevation differs from ideal synthetic degradation.
 - [Paris et al. 2019](https://doi.org/10.1145/3342765): implicit 3D terrain shows the heightfield topology limit.
 
-These sources constrain architecture and evaluation. None waives the need for real Estonia target surfaces and visible acceptance.
+These sources constrain architecture and evaluation. The three public-data hunt
+reports are a reviewed zero-budget amendment to the Stage 0 ledger. Before any
+candidate artifact can authorize a specialist owner, add its machine-readable
+record, license, hashes, conversion provenance, and qualification result to the
+source ledger. Public foreign targets may support only the bounded analogue
+transfer in Section 9.3; none waives Estonia out-of-distribution checks, regime
+abstention, or visible acceptance.

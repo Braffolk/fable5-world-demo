@@ -1,7 +1,7 @@
 # Stage 1 Executable Microtopography Method Contract
 
 **Date:** 2026-07-13
-**Status:** superseded by the final integrated audit and `docs/tasks/2026-07-13/SPEC-MICROTOPOGRAPHY.md`; retained as a rejected-contract record, not implementation authority
+**Status:** superseded by the final integrated audit and `docs/specs/terrain/MICROTOPOGRAPHY.md`; retained as a rejected-contract record, not implementation authority
 **Historical intent:** attempted to close `FINAL-SPEC-CRITIQUE.md` C1-C3 and method-facing H1-H3; final audit rejected that closure
 **Does not claim:** a national morphology method, Estonia peat validity, real bathymetry without survey, or a solution for non-single-valued cliff faces
 

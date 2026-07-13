@@ -224,7 +224,7 @@ required fields or `additionalProperties: false`.
         "human_qa_masks": {"type": "array", "items": {"type": "string"}},
         "licenses": {"type": "array", "items": {"type": "string"}},
         "artifact_sha256": {"type": "array", "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "uniqueItems": true},
-        "transfer_ceiling": {"enum": ["none", "foreign_method_only", "estonia_pilot", "estonia_national"]},
+        "transfer_ceiling": {"enum": ["none", "foreign_method_only", "neighbor_analogue_only", "estonia_pilot", "estonia_national"]},
         "qualification_status": {"enum": ["not_started", "failed", "insufficient", "passed"]}
       }
     },
@@ -379,9 +379,9 @@ to reconstruct files by hand:
 
 | Artifact | Purpose | SHA-256 |
 |---|---|---|
-| `contracts/regime-release-registry.schema.json` | Draft 2020-12 schema for the complete 26-row registry; every row retains the 13 strict groups and `additionalProperties: false` | `07a9e6a2486c22e70918392194eea897d9e7810aa12499fad596d67b4629268b` |
+| `contracts/regime-release-registry.schema.json` | Draft 2020-12 schema for the complete 26-row registry; every row retains the 13 strict groups and `additionalProperties: false` | `a46d86c0a2960d0a9b58ae05bef3794bf055efb113fd21e8d4adfcdbdeaad495` |
 | `contracts/regime-release-rows.initial.json` | 26 resolved initial rows with physical eligibility, transition, evidence, bakeoff, band, cost, and release state | `74257a057d7aeaf196d0fdccff374cbcafd1a902efcc7723eea4c81fabac7b48` |
-| `contracts/regime-initial-status.json` | compact one-to-one status/band/abstention manifest | `3fa08bfa5d290d72378afcd02904e33c53c8db991b3c98da757a40b7a8d33cda` |
+| `contracts/regime-initial-status.json` | compact one-to-one status/band/abstention manifest | `f4ad9903077a736f254d378b5fc0e14c68c1be7dbdb3aeb43f03138db1f258d9` |
 
 Validate the resolved registry with:
 
@@ -400,9 +400,12 @@ facts creates a new row revision and new artifact hashes.
 
 Schema-level validation is necessary, not sufficient. Cross-field gates are:
 
-- `pilot` requires at least two Estonia development sites, one untouched Estonia
-  blind site, a passed qualification and leakage audit, measured band evidence,
-  a `pilot_owner` decision, measured cost, a bounded extent and user approval.
+- `pilot` requires at least two independent development sites, one untouched blind
+  site, a passed qualification and leakage audit, measured band evidence, a
+  `pilot_owner` decision, measured cost, a bounded extent and user approval. When
+  no qualified Estonia target exists, `neighbor_analogue_only` additionally binds
+  two independent neighboring-region campaigns, a physical-analogue dossier,
+  Estonia OOD coverage/sentinels, and prohibits national promotion.
 - `national` requires the same plus `estonia_national` transfer, a
   `national_owner` decision, national extent, national coverage audit, and
   approval. More sites are required until held-out results stabilize; three is a

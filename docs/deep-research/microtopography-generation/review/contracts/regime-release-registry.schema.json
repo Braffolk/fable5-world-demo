@@ -112,7 +112,7 @@
             "human_qa_masks": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
             "licenses": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
             "artifact_sha256": {"type": "array", "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "uniqueItems": true},
-            "transfer_ceiling": {"enum": ["none", "foreign_method_only", "estonia_pilot", "estonia_national"]},
+            "transfer_ceiling": {"enum": ["none", "foreign_method_only", "neighbor_analogue_only", "estonia_pilot", "estonia_national"]},
             "qualification_status": {"enum": ["not_started", "failed", "insufficient", "passed"]}
           }
         },

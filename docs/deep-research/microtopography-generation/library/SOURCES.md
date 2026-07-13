@@ -6,10 +6,19 @@ This directory is the source and artifact ledger for the papers, repositories, d
 
 - `../r1.md`
 - `../r2.md`
-- `../../../tasks/2026-07-13/SPEC-MICROTOPOGRAPHY.md`
+- `../../../specs/terrain/MICROTOPOGRAPHY.md`
 - the follow-up bibliography requests made on 2026-07-13
 
 This document is an audit, not an architecture proposal. The exhaustive machine-readable record is [`sources.json`](sources.json). SHA-256 hashes for local PDFs, repository snapshots, and the downloaded dataset are in [`metadata/SHA256SUMS`](metadata/SHA256SUMS).
+
+Three zero-budget public-data audits postdate the closed v2 machine-ledger
+snapshot: [`NORDIC-PUBLIC-TARGET-DATA-HUNT.md`](../review/NORDIC-PUBLIC-TARGET-DATA-HUNT.md),
+[`BALTIC-PUBLIC-TARGET-DATA-HUNT.md`](../review/BALTIC-PUBLIC-TARGET-DATA-HUNT.md),
+and [`TAEVASKODA-ESTONIA-PUBLIC-SCAN-HUNT.md`](../review/TAEVASKODA-ESTONIA-PUBLIC-SCAN-HUNT.md).
+They identify raw candidates, not qualified target surfaces. Before any selected
+artifact is retained, converted, or used to authorize a specialist, add its
+full machine record, license scope, immutable hashes, provenance, and
+qualification result to `sources.json` and the checksum manifest.
 
 Status terms are deliberately conservative:
 

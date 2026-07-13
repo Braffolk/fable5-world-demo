@@ -20,6 +20,12 @@
 - Decomposition does not authorize isolated local perfection that breaks the whole. Reassemble the researched constituents into a coherent system and judge the final user-visible result at its intended scale, density, variance, and context.
 - Harnesses, formats, ingestion, and tests may use pragmatic engineering, but they must not silently lower the quality ceiling of the difficult synthesis or rendering algorithm they support.
 
+## Project Budget
+
+- Assume the project has no external budget beyond token usage unless the user explicitly states otherwise. Paid surveys, contractors, vendors, proprietary datasets, cloud-scale services, new hardware, and separately funded side projects are not active implementation paths.
+- Before concluding that evidence is unavailable or proposing acquisition spend, exhaust legally usable public/open sources, including official portals, research repositories, raw data, and physically comparable regions in Estonia's neighboring countries. Similarity must be justified by substrate, soil, climate, hydrology, land use, vegetation, process, scale, and acquisition semantics rather than geographic proximity alone.
+- Costly alternatives may be documented as deferred context only when materially necessary. Do not present them as open decisions or next steps unless the user explicitly reopens budget.
+
 ## Real Runtime Acceptance
 
 - A typecheck, unit test, static inspection, HTTP response, or successful asset cook is not a runtime acceptance test.

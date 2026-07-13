@@ -60,9 +60,14 @@ Ship beautiful, physically credible, materially and geomorphologically condition
 - [x] Add executable regime/evidence, hierarchy/quantization, visual-review, and storage/cost contracts; independently critique the first spec rewrite and correct its water, authority, hierarchy, visual, and staging contradictions.
 - [x] Normalize the source ledger to schema v2 and retain the first Stage 1 method contract as an explicitly superseded negative-design record after final audit disproved its Moore ownership test (`library/sources.schema.json`, `review/STAGE1-EXECUTABLE-METHOD-CONTRACT.md`).
 - [x] Materialize the strict 26-row regime schema, initial registry, and status manifest; final audit leaves all production morphology unsupported and Moore target evidence insufficient rather than inventing an owner.
-- [x] Rewrite `SPEC-MICROTOPOGRAPHY.md` from the audited evidence, with one decisive replacement architecture and executable structural, evidence, release, runtime, and visual gates.
+- [x] Rewrite `docs/specs/terrain/MICROTOPOGRAPHY.md` from the audited evidence, with one decisive replacement architecture and executable structural, evidence, release, runtime, and visual gates.
 - [x] Run independent science/beauty, repository/cook, and standalone-evidence audits of the integrated spec and close every critical/high finding without hiding introduced runtime/release/data dependencies.
-- [ ] Implement the replacement asset-gen synthesis only after user review of the rewritten spec.
+- [x] Record the user's zero-external-budget decision: paid Estonia acquisition and a separately funded non-heightfield cliff project are rejected unless explicitly reopened.
+- [x] Audit public equivalent target data in Latvia/Lithuania, Finland/Sweden, and Estonia/Taevaskoda through separate primary-source evidence hunts; classify actual qualification rather than nominal resolution.
+- [x] Fold qualifying public-data findings and the closed product decisions into the durable spec, move it to `docs/specs/terrain/MICROTOPOGRAPHY.md`, and update every authority reference. Candidate binaries enter the machine ledger only when selected for conversion.
+- [ ] Check in `PUBLIC-TARGET-QUALIFICATION-PROTOCOL.md` and machine ledger records for the exact selective Hovi Järvselja/Hyytiälä files and exact Taevaskoda ALS epochs before retaining or converting them.
+- [ ] Implement Stage 1 Taevaskoda typed structural repair and corrected parent hierarchy, run the bounded real-WebGPU boot, and provide the immutable live URL for visual review.
+- [ ] Implement a morphology specialist only after its public target subset passes conversion, support/error/semantics QA, analogue/OOD qualification, and a target-specific preregistration.
 
 ## Deliberately Deferred Until The Research Review
 

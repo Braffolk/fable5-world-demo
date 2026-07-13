@@ -1,7 +1,7 @@
 # Final Integrated Spec Audit Closure
 
 **Date:** 2026-07-13
-**Scope:** final independent science/beauty, repository/cook, and standalone-evidence audits of `docs/tasks/2026-07-13/SPEC-MICROTOPOGRAPHY.md`
+**Scope:** final independent science/beauty, repository/cook, and standalone-evidence audits of `docs/specs/terrain/MICROTOPOGRAPHY.md`
 **Status:** all reported critical/high findings are closed in the rewritten spec; no implementation is authorized before user approval
 
 ## 1. Scientific And Beauty Closure

@@ -3,7 +3,7 @@
   "catalog_id": "estonia-microtopography-phenomena/2026-07-13.1",
   "catalog_sha256": "6ca03d5bb552f6ad83e818da1d16d3fddf7d4006241990a90f6ffc21ab13ee4d",
   "release_registry_schema": "./regime-release-registry.schema.json",
-  "release_registry_schema_sha256": "07a9e6a2486c22e70918392194eea897d9e7810aa12499fad596d67b4629268b",
+  "release_registry_schema_sha256": "a46d86c0a2960d0a9b58ae05bef3794bf055efb113fd21e8d4adfcdbdeaad495",
   "release_rows": "./regime-release-rows.initial.json",
   "release_rows_sha256": "74257a057d7aeaf196d0fdccff374cbcafd1a902efcc7723eea4c81fabac7b48",
   "no_default_row": true,
