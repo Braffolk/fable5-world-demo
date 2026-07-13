@@ -216,6 +216,6 @@ On 2026-07-13:
 - the two known HTML masquerades failed and are explicitly quarantined by documentation;
 - every pinned repository tarball passed `tar -tzf`;
 - the Moore Zenodo archive passed `unzip -t`;
-- the SHA-256 manifest contains 127 local artifacts, including six EGT source packages, all currently downloaded primary PDFs, nested reference archives, and 21 pinned repository tarballs;
-- `sources.json` contains 125 source records and exactly represents all 127 manifest paths and hashes: 23 duplicate copies, three support artifacts, two quarantined HTML masquerades, one newly normalized canonical repository snapshot, and 98 pre-existing canonical artifacts;
-- `sources.json` SHA-256 is `40521f07146e7cb87176886cf2845cbd24f604b5b84c441da9652a6265b7d460`, `sources.schema.json` SHA-256 is `8d6911d62602d087839f8aa5eb05cc392cb1b91df8df74ff661e9e1b41604e39`, and `metadata/SHA256SUMS` SHA-256 remains `e0c6dc1d7f67502c9675a12db8fadeb4694744132e1bcaa28ef21d305f35aa77`.
+- the SHA-256 manifest contains 141 local artifacts, including 14 bound Taevaskoda evidence-cache artifacts (ten raw ALS files, two retained manifests, and two deterministic inventories), six EGT source packages, all currently downloaded primary PDFs, nested reference archives, and 21 pinned repository tarballs;
+- `sources.json` contains 129 source records and represents all 141 manifest paths and hashes with a one-to-one artifact mapping;
+- `sources.json` SHA-256 is `812988e5605daf15c4e0ace3f0615ee97741637450b12f072797a005f4fb17b6`, `sources.schema.json` SHA-256 is `8d6911d62602d087839f8aa5eb05cc392cb1b91df8df74ff661e9e1b41604e39`, and `metadata/SHA256SUMS` SHA-256 is `30bd0c0ee4d0aa4a4f4f8a03a28844a982df4f44f62fdd29feeca6d6f1ab4aac`.

@@ -2235,15 +2235,15 @@ fact. Preserve the v1 ledger hash as migration provenance. The uncited Burren
 clint/grike dimensions remain excluded; the two Argudo HTML masquerades remain
 quarantined invalid artifacts rather than evidence.
 
-The audited Stage 0 snapshot contains 125 unified records including 21 pinned
-repositories. All 127 checksum-manifest artifacts are linked exactly once as
+The audited source-evidence snapshot contains 129 unified records including 21 pinned
+repositories. All 141 checksum-manifest artifacts are linked exactly once as
 canonical, duplicate, support, or quarantined evidence. Ledger SHA-256 is
-`40521f07146e7cb87176886cf2845cbd24f604b5b84c441da9652a6265b7d460`;
+`812988e5605daf15c4e0ace3f0615ee97741637450b12f072797a005f4fb17b6`;
 `sources.schema.json` SHA-256 is
 `8d6911d62602d087839f8aa5eb05cc392cb1b91df8df74ff661e9e1b41604e39`;
-the 127-artifact integrity-manifest SHA-256 is
-`e0c6dc1d7f67502c9675a12db8fadeb4694744132e1bcaa28ef21d305f35aa77`.
-Only eight records currently allow consequential judgment; the other 117 do not.
+the 141-artifact integrity-manifest SHA-256 is
+`30bd0c0ee4d0aa4a4f4f8a03a28844a982df4f44f62fdd29feeca6d6f1ab4aac`.
+Only ten records currently allow consequential judgment; the other 119 do not.
 Unknown authors/licenses/officialness/code-review/checkpoints/scales remain
 blocking, not inferred success.
 

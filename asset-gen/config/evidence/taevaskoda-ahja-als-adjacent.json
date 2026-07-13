@@ -1,0 +1,72 @@
+{
+  "schema_version": "taevaskoda-ahja-als-adjacent-selection/1.0.0",
+  "id": "taevaskoda-ahja-als-adjacent-2019-stage1",
+  "stage": "stage1-structural-repair",
+  "morphology_target": false,
+  "purpose": "close the selected Ahja profile across primary-tile boundaries without treating ALS storage tiles as hydrologic endpoints",
+  "primary_selection_id": "taevaskoda-als-444679-stage1",
+  "principal_centerline_etak_id": 2356024,
+  "repair_collar_m": 8.0,
+  "corroborating_epoch_required": false,
+  "qualification_after_retention": "apply the existing class-9 support, continuity, orientation, bank-consistency, and abstention gates to the extended 2019 profile",
+  "license": {
+    "url": "https://geoportaal.maaruum.ee/avaandmete-litsents",
+    "effective_date": "2025-01-01"
+  },
+  "required_attribution": {
+    "provider": "Maa- ja Ruumiamet",
+    "dataset": "Airborne laser scanning height points, tiles 445679 and 444680",
+    "include_data_age_or_extraction_date": true,
+    "include_license_text_or_url": true
+  },
+  "files": [
+    {
+      "tile": {
+        "id": "445679",
+        "crs": "EPSG:3301",
+        "bounds": {
+          "min_x": 679000.0,
+          "min_y": 6445000.0,
+          "max_x_exclusive": 680000.0,
+          "max_y_exclusive": 6446000.0
+        }
+      },
+      "source_index_url": "https://geoportaal.maaamet.ee/index.php?lang_id=1&plugin_act=otsing&page_id=614&kaardiruut=445679&andmetyyp=lidar_laz_tava",
+      "year": 2019,
+      "type": "lidar_laz_tava",
+      "filename": "445679_2019_tava.laz",
+      "role": "primary_profile_spatial_closure",
+      "canonical_url": "https://geoportaal.maaamet.ee/index.php?lang_id=1&plugin_act=otsing&kaardiruut=445679&andmetyyp=lidar_laz_tava&dl=1&f=445679_2019_tava.laz&page_id=614",
+      "index_reported_size": "39.6 MB",
+      "bytes": null,
+      "sha256": null
+    },
+    {
+      "tile": {
+        "id": "444680",
+        "crs": "EPSG:3301",
+        "bounds": {
+          "min_x": 680000.0,
+          "min_y": 6444000.0,
+          "max_x_exclusive": 681000.0,
+          "max_y_exclusive": 6445000.0
+        }
+      },
+      "source_index_url": "https://geoportaal.maaamet.ee/index.php?lang_id=1&plugin_act=otsing&page_id=614&kaardiruut=444680&andmetyyp=lidar_laz_tava",
+      "year": 2019,
+      "type": "lidar_laz_tava",
+      "filename": "444680_2019_tava.laz",
+      "role": "primary_profile_spatial_closure",
+      "canonical_url": "https://geoportaal.maaamet.ee/index.php?lang_id=1&plugin_act=otsing&kaardiruut=444680&andmetyyp=lidar_laz_tava&dl=1&f=444680_2019_tava.laz&page_id=614",
+      "index_reported_size": "44.3 MB",
+      "bytes": null,
+      "sha256": null
+    }
+  ],
+  "excluded_tiles": [
+    {
+      "id": "445680",
+      "reason": "the selected principal centerline has zero length in this tile and its ETAK water area is outside the publication and 8 m repair-support domain"
+    }
+  ]
+}

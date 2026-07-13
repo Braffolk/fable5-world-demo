@@ -11,7 +11,7 @@
     "v1_sources_sha256": "e60b9cd80386f61b83192dbd1595bb256b757aad944e19a049be68c7a3ae667f",
     "v1_status_note": "full_text_review_status is deliberately conservative; downloaded does not mean fully read.",
     "integrity_manifest": "metadata/SHA256SUMS",
-    "integrity_manifest_sha256": "e0c6dc1d7f67502c9675a12db8fadeb4694744132e1bcaa28ef21d305f35aa77",
+    "integrity_manifest_sha256": "30bd0c0ee4d0aa4a4f4f8a03a28844a982df4f44f62fdd29feeca6d6f1ab4aac",
     "metadata_queries": {
       "crossref": {
         "checked_at": "2026-07-13",
@@ -15657,7 +15657,7 @@
         "year": 2024,
         "venue": "Maa- ja Ruumiamet Geoportal",
         "doi": null,
-        "metadata_source": "official_download_service_and_2023_header_audit"
+        "metadata_source": "official_download_service_complete_retention_and_deterministic_inventory"
       },
       "identifiers": {
         "canonical_url": "https://geoportaal.maaruum.ee/est/ruumiandmed/korgusandmed/laadi-korgusandmed-alla-p614.html",
@@ -15667,25 +15667,128 @@
         ]
       },
       "access": {
-        "status": "metadata_only",
+        "status": "local_artifact",
         "checked_at": "2026-07-13",
-        "result": "eight exact open LAZ endpoints verified; files not yet retained in the project evidence library",
-        "full_text_basis": "none",
+        "result": "all eight exact LAZ epochs retained content-addressed with a complete retention manifest and deterministic byte/header/class/flag inventory",
+        "full_text_basis": "local_artifact",
         "flags": []
       },
       "review": {
-        "status": "primary_metadata",
+        "status": "artifact_and_metadata",
         "scope": [
           "official_tile_and_epoch_inventory",
           "exact_download_endpoints",
-          "2023_byte_and_LAS_header_audit",
+          "eight_epoch_byte_retention",
+          "deterministic_LAS_header_class_flag_inventory",
           "classification_and_overlap_risks",
+          "malformed_quoted_WKT_and_vertical_CRS_transition",
           "structural_repair_role"
         ],
         "reviewer_record": "docs/deep-research/microtopography-generation/review/TAEVASKODA-ALS-SELECTION.md",
         "consequential_judgment_allowed": true
       },
-      "artifacts": [],
+      "artifacts": [
+        {
+          "path": "asset-gen/data/in/public/als/taevaskoda-als-444679-stage1/raw/sha256/73cd7645b44b53f014c7f334abe6365fd8de6f98256f8d6bc90e066c8cf053b8/444679_2011_tava.laz",
+          "sha256": "73cd7645b44b53f014c7f334abe6365fd8de6f98256f8d6bc90e066c8cf053b8",
+          "media_type": "application/vnd.laszip",
+          "validation": "hash_verified_untyped",
+          "hash_source": "metadata/SHA256SUMS",
+          "hash_verified_on": "2026-07-13",
+          "ledger_role": "canonical",
+          "notes": "3,756,671 bytes; immutable content-addressed 2011 normal-mapping corroboration epoch. Calibration-only structural-repair evidence, never a morphology target."
+        },
+        {
+          "path": "asset-gen/data/in/public/als/taevaskoda-als-444679-stage1/raw/sha256/7bfa5a6454e4c08bb39357c891175c8a7c4e077126659a8306632d2839fbfc88/444679_2015_tava.laz",
+          "sha256": "7bfa5a6454e4c08bb39357c891175c8a7c4e077126659a8306632d2839fbfc88",
+          "media_type": "application/vnd.laszip",
+          "validation": "hash_verified_untyped",
+          "hash_source": "metadata/SHA256SUMS",
+          "hash_verified_on": "2026-07-13",
+          "ledger_role": "canonical",
+          "notes": "3,419,408 bytes; immutable content-addressed 2015 normal-mapping corroboration epoch. Calibration-only structural-repair evidence, never a morphology target."
+        },
+        {
+          "path": "asset-gen/data/in/public/als/taevaskoda-als-444679-stage1/raw/sha256/9f5dc05e615087f91428d604f027cc608e0f9aaf3bbffaf80dbbe4316649832f/444679_2016_madal.laz",
+          "sha256": "9f5dc05e615087f91428d604f027cc608e0f9aaf3bbffaf80dbbe4316649832f",
+          "media_type": "application/vnd.laszip",
+          "validation": "hash_verified_untyped",
+          "hash_source": "metadata/SHA256SUMS",
+          "hash_verified_on": "2026-07-13",
+          "ledger_role": "canonical",
+          "notes": "16,120,145 bytes; immutable content-addressed 2016 low-flight conditional-corroboration epoch. Calibration-only structural-repair evidence, never a morphology target."
+        },
+        {
+          "path": "asset-gen/data/in/public/als/taevaskoda-als-444679-stage1/raw/sha256/59a5c1f79ac485a60dfcb2f1c2ac884b0c6cd5a8dbcc33ee96344837bd31d442/444679_2017_mets.laz",
+          "sha256": "59a5c1f79ac485a60dfcb2f1c2ac884b0c6cd5a8dbcc33ee96344837bd31d442",
+          "media_type": "application/vnd.laszip",
+          "validation": "hash_verified_untyped",
+          "hash_source": "metadata/SHA256SUMS",
+          "hash_verified_on": "2026-07-13",
+          "ledger_role": "canonical",
+          "notes": "12,242,358 bytes; immutable content-addressed 2017 forestry complementary epoch. Calibration-only structural-repair evidence, never a morphology target."
+        },
+        {
+          "path": "asset-gen/data/in/public/als/taevaskoda-als-444679-stage1/raw/sha256/d927ac75d56ac66c90eb17cf7d8bbcd382da641b56feaefdd94bc6cdb66c3fcd/444679_2019_tava.laz",
+          "sha256": "d927ac75d56ac66c90eb17cf7d8bbcd382da641b56feaefdd94bc6cdb66c3fcd",
+          "media_type": "application/vnd.laszip",
+          "validation": "hash_verified_untyped",
+          "hash_source": "metadata/SHA256SUMS",
+          "hash_verified_on": "2026-07-13",
+          "ledger_role": "canonical",
+          "notes": "41,979,068 bytes; immutable content-addressed 2019 normal-mapping corroboration epoch. Calibration-only structural-repair evidence, never a morphology target."
+        },
+        {
+          "path": "asset-gen/data/in/public/als/taevaskoda-als-444679-stage1/raw/sha256/7997b7f1fbca2367ef7bd6627fe568cc4d24cc4dd872ed5c23f24c4138f220e3/444679_2021_mets.laz",
+          "sha256": "7997b7f1fbca2367ef7bd6627fe568cc4d24cc4dd872ed5c23f24c4138f220e3",
+          "media_type": "application/vnd.laszip",
+          "validation": "hash_verified_untyped",
+          "hash_source": "metadata/SHA256SUMS",
+          "hash_verified_on": "2026-07-13",
+          "ledger_role": "canonical",
+          "notes": "20,618,192 bytes; immutable content-addressed 2021 forestry complementary epoch. Calibration-only structural-repair evidence, never a morphology target."
+        },
+        {
+          "path": "asset-gen/data/in/public/als/taevaskoda-als-444679-stage1/raw/sha256/9c50c123f14841c717d0d123d2d08061b87a51baf6d806ef269fabf1036a9fb7/444679_2023_tava.laz",
+          "sha256": "9c50c123f14841c717d0d123d2d08061b87a51baf6d806ef269fabf1036a9fb7",
+          "media_type": "application/vnd.laszip",
+          "validation": "hash_verified_untyped",
+          "hash_source": "metadata/SHA256SUMS",
+          "hash_verified_on": "2026-07-13",
+          "ledger_role": "canonical",
+          "notes": "68,066,160 bytes; immutable content-addressed 2023 normal-mapping primary candidate. Calibration-only structural-repair evidence, never a morphology target."
+        },
+        {
+          "path": "asset-gen/data/in/public/als/taevaskoda-als-444679-stage1/raw/sha256/cfc156b246933c079221c2ec16d29ed7634a14e3b770a035eb7eedf719b49770/444679_2024_mets.laz",
+          "sha256": "cfc156b246933c079221c2ec16d29ed7634a14e3b770a035eb7eedf719b49770",
+          "media_type": "application/vnd.laszip",
+          "validation": "hash_verified_untyped",
+          "hash_source": "metadata/SHA256SUMS",
+          "hash_verified_on": "2026-07-13",
+          "ledger_role": "canonical",
+          "notes": "24,243,549 bytes; immutable content-addressed 2024 forestry complementary/change epoch. Calibration-only structural-repair evidence, never a morphology target."
+        },
+        {
+          "path": "asset-gen/data/in/public/als/taevaskoda-als-444679-stage1/retained.json",
+          "sha256": "255efbc76461303f8d68eee1707ecca8f8c2a0b7a7f15d8ce6dc2f6da1a75097",
+          "media_type": "application/json",
+          "validation": "hash_verified_untyped",
+          "hash_source": "metadata/SHA256SUMS",
+          "hash_verified_on": "2026-07-13",
+          "ledger_role": "support",
+          "notes": "6,354 bytes; complete=true retention manifest binding the frozen selection, all eight byte identities, HTTP provenance, source/license snapshots, and morphologyTarget=false."
+        },
+        {
+          "path": "asset-gen/data/in/public/als/taevaskoda-als-444679-stage1/inventory/255efbc76461303f8d68eee1707ecca8f8c2a0b7a7f15d8ce6dc2f6da1a75097/inventory.json",
+          "sha256": "5304331ae4f10d1b108ed7bd8ff76076d25b61f6f450f5a0820e245e28bcc8fc",
+          "media_type": "application/json",
+          "validation": "hash_verified_untyped",
+          "hash_source": "metadata/SHA256SUMS",
+          "hash_verified_on": "2026-07-13",
+          "ledger_role": "support",
+          "notes": "55,263 bytes; deterministic laspy 2.7.0/lazrs 0.8.1 inventory keyed by the retained-manifest SHA-256, with scientificRole=calibration_only_structural_repair and morphologyTarget=false."
+        }
+      ],
       "licensing": {
         "status": "verified",
         "name": "Maa- ja Ruumiamet open-data license dated 2025-01-01",
@@ -15708,7 +15811,7 @@
         "official_status": "not_applicable"
       },
       "data_and_checkpoints": {
-        "data_status": "open_not_downloaded",
+        "data_status": "open_downloaded",
         "data_record_ids": [],
         "checkpoint_status": "none",
         "checkpoint_artifact_ids": []
@@ -15721,7 +15824,7 @@
           "sample_pitch_m": 0.437,
           "support_m": null,
           "extent_m": 1000,
-          "text": "The 2023 tile-average total density is 5.234 points/m2, equivalent to 0.437 m mean spacing before class, overlap, visibility, or support filtering. Other epochs require audit."
+        "text": "The 2023 tile-average total density is 5.234 points/m2, equivalent to 0.437 m mean spacing before class, overlap, visibility, or support filtering. All eight raw epochs are retained and deterministically inventoried; per-cell support and scientific qualification remain separate gates."
         },
         "output_scale": {
           "sample_pitch_m": null,
@@ -15735,8 +15838,8 @@
       },
       "evidence": {
         "status": "normalized_from_full_primary_audit",
-        "direct_finding": "Eight open raw ALS epochs cover exact tile 444679. The audited 2023 file has 5,234,018 points, LAS 1.4 point format 8, 68,066,160 bytes, and SHA-256 9c50c123f14841c717d0d123d2d08061b87a51baf6d806ef269fabf1036a9fb7.",
-        "limitation": "Total density is sparse relative to 6.25 cm output; ground support is nonuniform; water, canopy, overlap, classifier, steep-face visibility, temporal change, and correlated DTM provenance remain unresolved until file-level conversion and QA.",
+      "direct_finding": "All eight official raw ALS epochs for exact tile 444679 are retained content-addressed: 2011, 2015, 2016 low-flight, 2017 forestry, 2019, 2021 forestry, 2023, and 2024 forestry total 190,445,551 bytes. Complete retained-manifest SHA-256 is 255efbc76461303f8d68eee1707ecca8f8c2a0b7a7f15d8ce6dc2f6da1a75097; deterministic inventory SHA-256 is 5304331ae4f10d1b108ed7bd8ff76076d25b61f6f450f5a0820e245e28bcc8fc. The 2023 file has 5,234,018 points in LAS 1.4 point format 8.",
+      "limitation": "Total density is sparse relative to 6.25 cm output; ground support is nonuniform; water, canopy, overlap, classifier, steep-face visibility, temporal change, and correlated DTM provenance require per-cell QA. The 2023 and 2024 compound-WKT VLR payloads are wrapped in literal outer quotes and fail laspy/PROJ parsing; their GeoKey directories still declare horizontal EPSG:3301 and vertical EPSG:9663/EH2000. Earlier retained epochs declare EVRF2007/EPSG:5621, so vertical-datum reconciliation must be explicit and must not mutate the immutable originals.",
         "permitted_project_transfer": "Use qualified non-overlap points and multi-epoch disagreement to diagnose and support typed structural repair of the 1 m DTM, water surface, bank, shore, cliff top, and shoulder.",
         "prohibited_inference": "Do not use the cloud as 6.25 cm morphology truth, average epochs into a static surface, interpret class 9 as bed, or treat every class-2 point as valid ground.",
         "legacy_applicability": null
@@ -15744,6 +15847,158 @@
       "mentioned_in": [
         "public-data-amendment",
         "stage1-structural-repair"
+      ],
+      "legacy_v1": {}
+    },
+    {
+      "id": "maaruumiamet-als-taevaskoda-ahja-adjacent-2019",
+      "kind": "official_dataset",
+      "citation": {
+        "author_status": "verified_local_primary",
+        "authors": [
+          {
+            "display_name": "Maa- ja Ruumiamet",
+            "given": null,
+            "family": null,
+            "orcid": null
+          }
+        ],
+        "title": "Airborne Laser Scanning Height Points, Taevaskoda-Ahja Adjacent Tiles 445679 and 444680, 2019",
+        "year": 2019,
+        "venue": "Maa- ja Ruumiamet Geoportal",
+        "doi": null,
+        "metadata_source": "official_selection_complete_retention_and_deterministic_inventory"
+      },
+      "identifiers": {
+        "canonical_url": "https://geoportaal.maaruum.ee/est/ruumiandmed/korgusandmed/laadi-korgusandmed-alla-p614.html",
+        "related_record_ids": [
+          "maaruumiamet-als-tile-444679-epochs",
+          "maaruumiamet-als-iii-2016-2020",
+          "maaruumiamet-open-data-license-2025"
+        ]
+      },
+      "access": {
+        "status": "local_artifact",
+        "checked_at": "2026-07-13",
+        "result": "both exact 2019 normal-mapping LAZ tiles retained content-addressed with a complete retention manifest and deterministic byte/header/class/flag inventory",
+        "full_text_basis": "local_artifact",
+        "flags": []
+      },
+      "review": {
+        "status": "artifact_and_metadata",
+        "scope": [
+          "official_adjacent_tile_selection",
+          "exact_download_endpoints",
+          "two_tile_byte_retention",
+          "deterministic_LAS_header_class_flag_inventory",
+          "same_snapshot_spatial_closure_role",
+          "post_retention_qualification_pending",
+          "structural_repair_only_role"
+        ],
+        "reviewer_record": "asset-gen/config/evidence/taevaskoda-ahja-als-adjacent.json",
+        "consequential_judgment_allowed": false
+      },
+      "artifacts": [
+        {
+          "path": "asset-gen/data/in/public/als/taevaskoda-ahja-als-adjacent-2019-stage1/raw/sha256/02b98066adfe1247c0cc4c2ce59e7ec1711063f094e7a1cd29229e66d5cd6bf6/445679_2019_tava.laz",
+          "sha256": "02b98066adfe1247c0cc4c2ce59e7ec1711063f094e7a1cd29229e66d5cd6bf6",
+          "media_type": "application/vnd.laszip",
+          "validation": "hash_verified_untyped",
+          "hash_source": "metadata/SHA256SUMS",
+          "hash_verified_on": "2026-07-13",
+          "ledger_role": "canonical",
+          "notes": "41,525,973 bytes; immutable content-addressed tile 445679 from the 2019 normal-mapping snapshot. Calibration-only structural-repair spatial closure, never a morphology target."
+        },
+        {
+          "path": "asset-gen/data/in/public/als/taevaskoda-ahja-als-adjacent-2019-stage1/raw/sha256/672a337dd9da433225cbc580cdda94e9b44ec0db9bdc662f212cc95fe95f6204/444680_2019_tava.laz",
+          "sha256": "672a337dd9da433225cbc580cdda94e9b44ec0db9bdc662f212cc95fe95f6204",
+          "media_type": "application/vnd.laszip",
+          "validation": "hash_verified_untyped",
+          "hash_source": "metadata/SHA256SUMS",
+          "hash_verified_on": "2026-07-13",
+          "ledger_role": "canonical",
+          "notes": "46,466,173 bytes; immutable content-addressed tile 444680 from the 2019 normal-mapping snapshot. Calibration-only structural-repair spatial closure, never a morphology target."
+        },
+        {
+          "path": "asset-gen/data/in/public/als/taevaskoda-ahja-als-adjacent-2019-stage1/retained.json",
+          "sha256": "6f5db5f9ee2408d8e531f9f7d1e587c99dd47f82a8d33c448ea5528562f1581a",
+          "media_type": "application/json",
+          "validation": "hash_verified_untyped",
+          "hash_source": "metadata/SHA256SUMS",
+          "hash_verified_on": "2026-07-13",
+          "ledger_role": "support",
+          "notes": "4,605 bytes; complete=true retention manifest for selection taevaskoda-ahja-als-adjacent-2019-stage1, binding both spatial-closure files, official provenance, and morphologyTarget=false."
+        },
+        {
+          "path": "asset-gen/data/in/public/als/taevaskoda-ahja-als-adjacent-2019-stage1/inventory/6f5db5f9ee2408d8e531f9f7d1e587c99dd47f82a8d33c448ea5528562f1581a/inventory.json",
+          "sha256": "43137ef46ce7d7c951230182cae11eafdb6655ad7e752ae165549ab8a8fe04c3",
+          "media_type": "application/json",
+          "validation": "hash_verified_untyped",
+          "hash_source": "metadata/SHA256SUMS",
+          "hash_verified_on": "2026-07-13",
+          "ledger_role": "support",
+          "notes": "14,697 bytes; deterministic laspy 2.7.0/lazrs 0.8.1 inventory keyed by the retained-manifest SHA-256, with scientificRole=calibration_only_structural_repair and morphologyTarget=false."
+        }
+      ],
+      "licensing": {
+        "status": "verified",
+        "name": "Maa- ja Ruumiamet open-data license dated 2025-01-01",
+        "spdx": null,
+        "url": "https://geoportaal.maaruum.ee/avaandmete-litsents",
+        "applies_to": "data",
+        "training_use": "allowed",
+        "derivative_distribution": "allowed",
+        "restrictions": [
+          "identify Maa- ja Ruumiamet as provider",
+          "identify raw airborne-laser-scanning height points for tiles 445679 and 444680",
+          "record data age or extraction date",
+          "include the official license text or link"
+        ],
+        "notes": "Legal reuse is allowed; the project evidence contract independently forbids morphology-target use and requires post-retention qualification before structural repair."
+      },
+      "software": {
+        "availability": "not_applicable",
+        "repository_record_ids": [],
+        "official_status": "not_applicable"
+      },
+      "data_and_checkpoints": {
+        "data_status": "open_downloaded",
+        "data_record_ids": [],
+        "checkpoint_status": "none",
+        "checkpoint_artifact_ids": []
+      },
+      "demonstration": {
+        "status": "normalized_from_full_primary_audit",
+        "task": "same-snapshot spatial closure for the selected Ahja River structural-repair profile",
+        "geography_and_regime": "Tiles 445679 and 444680 adjoining the primary Suur Taevaskoda tile 444679; forested Ahja River valley, banks, water, and terrain adjacent to the selected repair profile",
+        "input_scale": {
+          "sample_pitch_m": 0.462,
+          "support_m": null,
+          "extent_m": null,
+          "text": "The two 1 km by 1 km tiles contain 9,385,726 total points over 2 km2, equivalent to 4.693 points/m2 or 0.462 m mean spacing before class, overlap, visibility, water, or support filtering."
+        },
+        "output_scale": {
+          "sample_pitch_m": null,
+          "support_m": null,
+          "extent_m": null,
+          "text": "Raw point observations only; no cells from the adjacent tiles are accepted as a repaired raster surface until post-retention qualification passes."
+        },
+        "degradation_or_observation": "two spatially adjacent storage tiles from the same 2019 normal-mapping ALS snapshot; LAS 1.4 point format 8 with EPSG:3301 horizontal and EVRF2007/EPSG:5621 vertical CRS",
+        "training_data": "not microtopography training or morphology-target data; the exact site remains outside morphology training and tuning",
+        "evaluation": "post-retention class-9 support, continuity, orientation, bank-consistency, overlap, protected-feature, and abstention gates remain pending for the extended 2019 profile"
+      },
+      "evidence": {
+        "status": "normalized_from_full_primary_audit",
+        "direct_finding": "Selection taevaskoda-ahja-als-adjacent-2019-stage1 retains the two official 2019 normal-mapping LAZ tiles needed to prevent the selected Ahja profile from terminating at primary-tile storage boundaries. Tile 445679 has 4,473,016 points and tile 444680 has 4,912,710 points; their 87,992,146 raw bytes are bound by retained-manifest SHA-256 6f5db5f9ee2408d8e531f9f7d1e587c99dd47f82a8d33c448ea5528562f1581a and deterministic-inventory SHA-256 43137ef46ce7d7c951230182cae11eafdb6655ad7e752ae165549ab8a8fe04c3.",
+        "limitation": "Both files are from the same 2019 acquisition snapshot, so they provide spatial closure rather than independent temporal corroboration. Total density is sparse relative to 6.25 cm output, water and steep-face support remain nonuniform, tile 445679 contains substantial overlap-flagged support, and post-retention scientific qualification has not yet accepted any repair cell.",
+        "permitted_project_transfer": "After the pending gates pass, use qualified non-overlap observations to continue the selected Ahja water-surface, shore, bank, and terrain structural-repair evidence across primary tile 444679 boundaries. Treat ALS tile edges only as storage boundaries, never hydrologic endpoints.",
+        "prohibited_inference": "Never use either cloud as morphology truth or a 6.25 cm synthesis target; never treat same-snapshot adjacency as independent corroboration; never infer the river bed from class 9; never accept raw class-2 points or any structural-repair cell before support, continuity, orientation, bank-consistency, overlap, protected-feature, and abstention qualification passes.",
+        "legacy_applicability": null
+      },
+      "mentioned_in": [
+        "public-data-amendment",
+        "stage1-structural-repair",
+        "adjacent-spatial-closure"
       ],
       "legacy_v1": {}
     },

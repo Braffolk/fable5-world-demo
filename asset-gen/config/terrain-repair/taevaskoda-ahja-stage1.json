@@ -1,0 +1,73 @@
+{
+  "format": 1,
+  "pilotId": "taevaskoda-ahja-stage1",
+  "etak": {
+    "path": "data/in/etak/ETAK_EESTI_GPKG.gpkg",
+    "sourceSha256": "e19084c4bff0a6096a7dd38cefa12402bdce98d59c73d5b35c30dda60682f5f9",
+    "centerline": {
+      "layer": "E_203_vooluveekogu_j",
+      "etakId": 2356024,
+      "kkrCode": "VEE1047200",
+      "name": "Ahja jõgi"
+    },
+    "waterPolygon": {
+      "layer": "E_203_vooluveekogu_a",
+      "etakId": 1962675,
+      "kkrCode": "VEE1047200",
+      "name": "Ahja jõgi"
+    }
+  },
+  "reach": {
+    "reachId": "etak-2356024-downstream-from-full-station-71m",
+    "downstreamStartFullStationM": 71.0,
+    "discontinuityFree": true,
+    "coverageSnapUlps": 16
+  },
+  "expectedGeometrySha256": {
+    "forced2dCenterline": "277bc3e0e4da0dc0d7d6600e343c247d7fcde48ff999343500cc05fa15889544",
+    "forced2dWaterPolygon": "74d904766cda08413d7a22c1e81e3c31e5b92bd4e091ac9d654140e9e29bfaa1",
+    "fullAuditedCap": "0e44e8389e17c87c46886248a6220c5d9d150329e159bc393e6f1a8d587ff458",
+    "downstreamCenterline": "61abe3076afffe2231f745596bf23ccd2ddb5aef65340d69861153fb96d92b99",
+    "downstreamCapBeforeUlpSnap": "549f92b52c0abbbfadf2c25e26e0efa25f0e267535592b45fb588f19f071bd1f",
+    "downstreamCap": "c03025763b47d7ed155eb7054a527eecb3f60cc031227b0898adc4104007d466"
+  },
+  "sourceCampaign": {
+    "campaignId": "maaruum-2019-taevaskoda-ahja-tava",
+    "year": 2019,
+    "artifactType": "lidar_laz_tava",
+    "horizontalCrs": "EPSG:3301",
+    "heightSemantics": {
+      "authoritativeHeightSystem": "EH2000",
+      "authoritativeVerticalCrs": "EPSG:9663",
+      "observedSourceHeaderVerticalCrs": "EPSG:5621",
+      "relationshipPolicy": "provider_declared_closest_epsg_encoding_no_numeric_transform"
+    },
+    "officialSemanticSources": [
+      "https://geoportaal.maaruum.ee/eng/spatial-data/elevation-data-p308.html",
+      "https://geoportaal.maaruum.ee/est/ruumiandmed/geodeetilised-andmed/eesti-geodeetiline-susteem-p223.html"
+    ],
+    "classificationAuthorityUrl": "https://geoportaal.maaruum.ee/est/ruumiandmed/korgusandmed/aerolaserskaneerimise-korguspunktid/als-iii-ring-2016-20172020-p625.html",
+    "visibleWaterClass": 9,
+    "groundClassNotWater": 2,
+    "noiseClasses": [7, 18],
+    "allowedPointSourceIds": [19317],
+    "orderedSourceArtifactSha256s": [
+      "d927ac75d56ac66c90eb17cf7d8bbcd382da641b56feaefdd94bc6cdb66c3fcd",
+      "02b98066adfe1247c0cc4c2ce59e7ec1711063f094e7a1cd29229e66d5cd6bf6",
+      "672a337dd9da433225cbc580cdda94e9b44ec0db9bdc662f212cc95fe95f6204"
+    ],
+    "bundles": [
+      {
+        "retainedPath": "data/in/public/als/taevaskoda-als-444679-stage1/retained.json",
+        "inventoryPath": "data/in/public/als/taevaskoda-als-444679-stage1/inventory/255efbc76461303f8d68eee1707ecca8f8c2a0b7a7f15d8ce6dc2f6da1a75097/inventory.json"
+      },
+      {
+        "retainedPath": "data/in/public/als/taevaskoda-ahja-als-adjacent-2019-stage1/retained.json",
+        "inventoryPath": "data/in/public/als/taevaskoda-ahja-als-adjacent-2019-stage1/inventory/6f5db5f9ee2408d8e531f9f7d1e587c99dd47f82a8d33c448ea5528562f1581a/inventory.json"
+      }
+    ]
+  },
+  "limitations": {
+    "bridgeObservationMask": "ETAK identifies the footbridge crossing, but no defensible deck-width footprint is available; this campaign supplies no observation-exclusion geometry and does not invent one."
+  }
+}

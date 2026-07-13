@@ -36,8 +36,11 @@ The first exact zero-cost selections are now frozen rather than left as dataset
 names: 43 Hovi files (`6.7445 GiB`) across Hyytiälä development/stress and sealed
 Järvselja transfer, all eight official Taevaskoda ALS epochs for structural repair,
 and one `334.90 MiB` Biała Góra epoch for a later calibration-only audit. No Hovi or
-Biała geometry has been downloaded. The Taevaskoda retention path is independently
-audited, but the eight ALS files still require acquisition and file-level inventory.
+Biała geometry has been downloaded. All eight Taevaskoda ALS epochs are now retained
+content-addressed and inventoried (`190,445,551` raw bytes). The 2023 and 2024 files
+carry a compound WKT wrapped in literal quotes that PROJ rejects; the raw VLR and
+parse error are preserved, while the official tile contract and GeoKeys identify
+EPSG:3301 plus EH2000. This metadata defect must not be silently normalized.
 
 ### Corrected fine terrain cannot remain pinned to raw LOD0
 
@@ -113,7 +116,19 @@ The measured pilot cook rasterizes ETAK open water, buildings, paved roads, fore
 
 The user observed two anomalous tall bumps in the existing Estonia 1 m height source beside the main Suur Taevaskoda cliff, apparently where river should be. Audit of pinned base manifest `708478a57c2118ea`, raw Maa-amet `54472_dtm_1m.tif`, ETAK water geometry, and nDSM confirms a coherent LiDAR ground-model/TIN bridge across missing/occluded water returns beside the steep sandstone cliff. It is not DSM, quantization, micro synthesis, or mainly canopy. The main false interior component is about `225 m2`, centered near `E 679788.35, N 6444811.45`, reaches `52.22 m`, and extends `13.45 m` into the mapped channel. The current waterbed pass neither creates nor amplifies it, but preserves the corrupt absolute ramp and subtracts only normal hydraulic depth. The cliff-top anchor itself is dry and unchanged at about `60.02 m`.
 
-The general upstream fix belongs in shared water cooking, not micro synthesis or runtime: estimate a robust longitudinal river surface from low/central transverse samples, reject coherent steep planar water-interior outliers, use that surface for both waterY and bed carving, and taper terrain correction to zero through a `2-3 m` uncertain shore strip so legitimate banks/cliffs remain untouched. The current immutable pilot base does not contain this correction; changing its LOD0 authority requires a separately verified base release rather than silently patching negative LODs.
+The general upstream fix belongs in typed structural reconstruction, not morphology synthesis or runtime: qualify raw returns as visible-water evidence, fit a robust reach profile only where support and topology pass, reject unsupported water-interior TIN bridges, and preserve the shoreline uncertainty corridor plus real banks/cliffs. The current immutable pilot base does not contain this correction; changing its LOD0 authority requires a separately verified base release rather than silently patching negative LODs.
+
+The retained-tile qualification authorizes the 2019 class-9 profile over tile `444679`: `485/493` accepted one-metre stations, 3 m maximum missing span, and a final `37.585156 m` profile at the anomaly versus the invalid DTM's `45.591937 m` accepted station. The smallest adjacent 2019 closure is now retained and inventoried: north tile `445679` and east tile `444680`, 87,992,146 raw bytes total. Replaying all three tiles exposes a separate 31 m unsupported span at full-line stations 40-70. Topology contains no mapped internal hydraulic jump, but observation continuity still fails there. Stage 1 may fit the supported downstream segment beginning at station 71; it must abstain wherever publication depends on stations 40-70 rather than extrapolating, bridging, or splicing raw DTM.
+
+### Flowing-water repair must not erase hydraulic discontinuities
+
+A single smooth or isotonic profile across a waterfall, dam, weir, rapid, or escarpment crossing would turn real structure into an artificial ramp. Accepted discontinuity evidence must split the water graph into independently solved reaches with a protected jump; ambiguous topology or unsupported jump geometry abstains. Jägala waterfall is a blind national protected-feature regression case, not a coordinate-specific rule, and national flowing-water activation is blocked until it remains intact.
+
+The Ahja topology audit closes that question locally: ETAK centreline `2356024` is one simple, unbranched confluence-to-confluence reach with no internal mapped dam, culvert, tributary, or owned level jump. The full water polygon is not a legal qualification polygon because off-reach returns clamp to the finite centreline endpoints. A deterministic local bank-to-bank cross-section cut produces the bound `43,494.601729 m2` reach polygon; the downstream evidence segment begins at full-line station 71 because stations 40-70 fail observation continuity.
+
+ETAK footbridge `4477659` crosses at station `386.497 m`, but its path width is missing and source record 216 has categorical accuracy code 40 with no established metric mapping. The topology sensitivity audit nulled six station bins but did not use a justified 2D footprint; that is not production evidence. Stage 1 must not invent or claim a bridge buffer. The robust unmasked class-9 profile may support the bounded visual proof with this limitation disclosed, but national activation requires an executable occlusion footprint or independent evidence that the bridge cannot contaminate water labels.
+
+The executable three-tile campaign now reproduces content address `c84d0b59e0deb54fb087f0cf0235fd3f66510b651b67b801f6035afa1c067571` from the frozen config, exact ETAK geometries, and retained ALS bytes. It qualifies the downstream profile in forward orientation with a 15 m longest unsupported span and records no observation-exclusion geometry. This closes evidence materialization only; it does not yet authorize the corrected base release or national flowing-water activation.
 
 ### Existing fixture detail is diagnostic only
 

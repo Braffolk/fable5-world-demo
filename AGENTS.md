@@ -70,11 +70,18 @@
 - Keep tests lean while architecture and algorithms are changing. Add focused tests for stable contracts, release safety, and reproduced regressions; do not build broad brittle suites around provisional internals.
 - Tests never replace the mandatory real WebGPU boot.
 - Visual acceptance is user-observable ground-level output, not internal metrics alone.
+- When a quality-defining asset algorithm has meaningful intermediate geometry, emit a small set of clearly numbered and labeled PNG diagnostics under a content-addressed `data/work/<domain>/<build>/qa/` directory. Include a machine index binding image hashes, source/recipe hashes, dimensions, and interpretations; do not generate screenshots for routine internals merely to satisfy this rule.
 
 ## Python Tooling
 
 - Use `uv` for Python execution, environments, and package management. Run scripts and modules through `uv run`, for example `uv run myscript.py` or `uv run python -m package.module`; do not invoke `.venv/bin/python`, `pip`, or another package manager directly.
 - Run dependency changes through the appropriate `uv add`, `uv remove`, `uv sync`, or lock workflow so `pyproject.toml` and `uv.lock` remain the reproducible authority.
+
+## Code Organization
+
+- Do not use `process/` or another generic directory as a catch-all. New code belongs to a domain-owned package with a narrow responsibility and explicit dependency direction.
+- Keep source acquisition in `fetch/`, evidence inventory/qualification in `evidence/`, terrain interpretation and reconstruction in `terrain/`, packed serialization/hierarchy materialization in `cook/`, and immutable transaction/publish policy in the release layer.
+- For substantial terrain work, prefer cohesive subpackages such as `terrain/repair/` over adding unrelated top-level modules. Keep scientific evidence interpretation separate from encoding and runtime delivery.
 
 ## Task Records And Git
 

@@ -14,7 +14,10 @@ from ..config import CONFIG_DIR, DATA_IN, BaseConfig
 from .http import PoliteSession
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-_SELECTION_ID = "taevaskoda-als-444679-stage1"
+_PRIMARY_SCHEMA = "taevaskoda-als-selection/1.0.0"
+_PRIMARY_SELECTION_ID = "taevaskoda-als-444679-stage1"
+_ADJACENT_SCHEMA = "taevaskoda-ahja-als-adjacent-selection/1.0.0"
+_ADJACENT_SELECTION_ID = "taevaskoda-ahja-als-adjacent-2019-stage1"
 _SOURCE_INDEX_URL = (
     "https://geoportaal.maaamet.ee/index.php?lang_id=1&plugin_act=otsing&page_id=614"
     "&kaardiruut=444679&andmetyyp=lidar_laz_tava"
@@ -61,12 +64,54 @@ _FROZEN_FILES = (
         None,
     ),
 )
+_ADJACENT_PURPOSE = (
+    "close the selected Ahja profile across primary-tile boundaries without treating ALS "
+    "storage tiles as hydrologic endpoints"
+)
+_ADJACENT_QUALIFICATION = (
+    "apply the existing class-9 support, continuity, orientation, bank-consistency, and "
+    "abstention gates to the extended 2019 profile"
+)
+_ADJACENT_ATTRIBUTION = {
+    **_ATTRIBUTION,
+    "dataset": "Airborne laser scanning height points, tiles 445679 and 444680",
+}
+_ADJACENT_FILES = (
+    (
+        "445679",
+        (679000.0, 6445000.0, 680000.0, 6446000.0),
+        "39.6 MB",
+        "445679_2019_tava.laz",
+    ),
+    (
+        "444680",
+        (680000.0, 6444000.0, 681000.0, 6445000.0),
+        "44.3 MB",
+        "444680_2019_tava.laz",
+    ),
+)
+_ADJACENT_EXCLUDED_TILES = [
+    {
+        "id": "445680",
+        "reason": (
+            "the selected principal centerline has zero length in this tile and its ETAK water "
+            "area is outside the publication and 8 m repair-support domain"
+        ),
+    }
+]
 
 
-def _artifact_url(source_type: str, filename: str) -> str:
+def _source_index_url(tile_id: str, source_type: str) -> str:
+    return (
+        "https://geoportaal.maaamet.ee/index.php?lang_id=1&plugin_act=otsing&page_id=614"
+        f"&kaardiruut={tile_id}&andmetyyp={source_type}"
+    )
+
+
+def _artifact_url(source_type: str, filename: str, tile_id: str = "444679") -> str:
     return (
         "https://geoportaal.maaamet.ee/index.php?lang_id=1&plugin_act=otsing"
-        f"&kaardiruut=444679&andmetyyp={source_type}&dl=1&f={filename}&page_id=614"
+        f"&kaardiruut={tile_id}&andmetyyp={source_type}&dl=1&f={filename}&page_id=614"
     )
 
 
@@ -79,6 +124,13 @@ class AlsArtifact:
     url: str
     expected_bytes: int | None
     expected_sha256: str | None
+    manifest_metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class AlsSourceIndex:
+    snapshot_name: str
+    url: str
 
 
 @dataclass(frozen=True)
@@ -86,10 +138,11 @@ class AlsSelection:
     selection_id: str
     tile_id: str
     epsg: int
-    source_index_url: str
+    source_indexes: tuple[AlsSourceIndex, ...]
     license_url: str
     raw: dict[str, Any]
     files: tuple[AlsArtifact, ...]
+    manifest_metadata: dict[str, Any]
 
 
 def _sha256_file(path: Path) -> str:
@@ -100,9 +153,43 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def load_als_selection(path: Path | None = None, *, content: bytes | None = None) -> AlsSelection:
-    path = path or CONFIG_DIR / "taevaskoda-als.json"
-    raw = json.loads(content if content is not None else path.read_bytes())
+def _validate_bounds(
+    tile: dict[str, Any], tile_id: str, expected: tuple[float, ...]
+) -> None:
+    if (
+        set(tile) != {"id", "crs", "bounds"}
+        or tile["id"] != tile_id
+        or tile["crs"] != "EPSG:3301"
+    ):
+        raise ValueError(f"ALS selection requires the exact EPSG:3301 tile {tile_id} contract")
+    bounds = tile["bounds"]
+    keys = ("min_x", "min_y", "max_x_exclusive", "max_y_exclusive")
+    if set(bounds) != set(keys) or tuple(float(bounds[key]) for key in keys) != expected:
+        raise ValueError(f"ALS selection moved away from official tile {tile_id}")
+
+
+def _validate_artifact_url(item: dict[str, Any], tile_id: str) -> None:
+    parsed = urlsplit(item["canonical_url"])
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != "geoportaal.maaamet.ee"
+        or item["canonical_url"] != _artifact_url(item["type"], item["filename"], tile_id)
+    ):
+        raise ValueError(f"non-official ALS endpoint {item['canonical_url']}")
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    if query != {
+        "lang_id": ["1"],
+        "plugin_act": ["otsing"],
+        "kaardiruut": [tile_id],
+        "andmetyyp": [item["type"]],
+        "dl": ["1"],
+        "f": [item["filename"]],
+        "page_id": ["614"],
+    }:
+        raise ValueError(f"ALS artifact URL is not the frozen official query: {item['filename']}")
+
+
+def _load_primary_selection(raw: dict[str, Any]) -> AlsSelection:
     required = {
         "schema_version",
         "id",
@@ -114,34 +201,16 @@ def load_als_selection(path: Path | None = None, *, content: bytes | None = None
         "required_attribution",
         "files",
     }
-    if set(raw) != required or raw["schema_version"] != "taevaskoda-als-selection/1.0.0":
+    if set(raw) != required or raw["schema_version"] != _PRIMARY_SCHEMA:
         raise ValueError("unsupported or non-strict ALS selection config")
     if (
-        raw["id"] != _SELECTION_ID
+        raw["id"] != _PRIMARY_SELECTION_ID
         or raw["stage"] != "stage1-structural-repair"
         or raw["morphology_target"] is not False
     ):
         raise ValueError("Taevaskoda ALS must remain structural-repair evidence only")
     tile = raw["tile"]
-    if (
-        set(tile) != {"id", "crs", "bounds"}
-        or tile["id"] != "444679"
-        or tile["crs"] != "EPSG:3301"
-    ):
-        raise ValueError("ALS selection requires the exact EPSG:3301 tile contract")
-    bounds = tile["bounds"]
-    if set(bounds) != {"min_x", "min_y", "max_x_exclusive", "max_y_exclusive"}:
-        raise ValueError("ALS selection has a non-strict tile bounds object")
-    if tuple(
-        float(bounds[key])
-        for key in ("min_x", "min_y", "max_x_exclusive", "max_y_exclusive")
-    ) != (
-        679000.0,
-        6444000.0,
-        680000.0,
-        6445000.0,
-    ):
-        raise ValueError("ALS selection moved away from official tile 444679")
+    _validate_bounds(tile, "444679", (679000.0, 6444000.0, 680000.0, 6445000.0))
     if raw["source_index_url"] != _SOURCE_INDEX_URL:
         raise ValueError("ALS selection source index is not the frozen official query")
     if raw["license"] != _LICENSE or raw["required_attribution"] != _ATTRIBUTION:
@@ -164,24 +233,7 @@ def load_als_selection(path: Path | None = None, *, content: bytes | None = None
         )
         if actual != expected:
             raise ValueError(f"ALS file decision changed for {item['filename']}")
-        parsed = urlsplit(item["canonical_url"])
-        if (
-            parsed.scheme != "https"
-            or parsed.netloc != "geoportaal.maaamet.ee"
-            or item["canonical_url"] != _artifact_url(item["type"], item["filename"])
-        ):
-            raise ValueError(f"non-official ALS endpoint {item['canonical_url']}")
-        query = parse_qs(parsed.query, keep_blank_values=True)
-        if query != {
-            "lang_id": ["1"],
-            "plugin_act": ["otsing"],
-            "kaardiruut": ["444679"],
-            "andmetyyp": [item["type"]],
-            "dl": ["1"],
-            "f": [item["filename"]],
-            "page_id": ["614"],
-        }:
-            raise ValueError(f"ALS artifact URL is not the frozen official query: {item['filename']}")
+        _validate_artifact_url(item, "444679")
         expected_sha = item["sha256"]
         if expected_sha is not None and not _SHA256_RE.fullmatch(expected_sha):
             raise ValueError(f"invalid expected SHA-256 for {item['filename']}")
@@ -194,17 +246,126 @@ def load_als_selection(path: Path | None = None, *, content: bytes | None = None
                 url=str(item["canonical_url"]),
                 expected_bytes=item["bytes"],
                 expected_sha256=expected_sha,
+                manifest_metadata={},
             )
         )
     return AlsSelection(
         selection_id=str(raw["id"]),
         tile_id=str(tile["id"]),
         epsg=3301,
-        source_index_url=str(raw["source_index_url"]),
+        source_indexes=(AlsSourceIndex("source-index.html", str(raw["source_index_url"])),),
         license_url=str(raw["license"]["url"]),
         raw=raw,
         files=tuple(records),
+        manifest_metadata={"tile": raw["tile"]},
     )
+
+
+def _load_adjacent_selection(raw: dict[str, Any]) -> AlsSelection:
+    required = {
+        "schema_version",
+        "id",
+        "stage",
+        "morphology_target",
+        "purpose",
+        "primary_selection_id",
+        "principal_centerline_etak_id",
+        "repair_collar_m",
+        "corroborating_epoch_required",
+        "qualification_after_retention",
+        "license",
+        "required_attribution",
+        "files",
+        "excluded_tiles",
+    }
+    if set(raw) != required or raw["schema_version"] != _ADJACENT_SCHEMA:
+        raise ValueError("unsupported or non-strict ALS selection config")
+    if (
+        raw["id"] != _ADJACENT_SELECTION_ID
+        or raw["stage"] != "stage1-structural-repair"
+        or raw["morphology_target"] is not False
+        or raw["purpose"] != _ADJACENT_PURPOSE
+        or raw["primary_selection_id"] != _PRIMARY_SELECTION_ID
+        or raw["principal_centerline_etak_id"] != 2356024
+        or raw["repair_collar_m"] != 8.0
+        or raw["corroborating_epoch_required"] is not False
+        or raw["qualification_after_retention"] != _ADJACENT_QUALIFICATION
+        or raw["license"] != _LICENSE
+        or raw["required_attribution"] != _ADJACENT_ATTRIBUTION
+        or raw["excluded_tiles"] != _ADJACENT_EXCLUDED_TILES
+        or len(raw["files"]) != 2
+    ):
+        raise ValueError("adjacent ALS closure decision changed")
+
+    records: list[AlsArtifact] = []
+    indexes: list[AlsSourceIndex] = []
+    for item, (tile_id, bounds, reported_size, filename) in zip(
+        raw["files"], _ADJACENT_FILES, strict=True
+    ):
+        if set(item) != {
+            "tile",
+            "source_index_url",
+            "year",
+            "type",
+            "filename",
+            "role",
+            "canonical_url",
+            "index_reported_size",
+            "bytes",
+            "sha256",
+        }:
+            raise ValueError("adjacent ALS file selection contains unknown or missing fields")
+        _validate_bounds(item["tile"], tile_id, bounds)
+        expected_index = _source_index_url(tile_id, "lidar_laz_tava")
+        if (
+            item["source_index_url"] != expected_index
+            or item["year"] != 2019
+            or item["type"] != "lidar_laz_tava"
+            or item["filename"] != filename
+            or item["role"] != "primary_profile_spatial_closure"
+            or item["index_reported_size"] != reported_size
+            or item["bytes"] is not None
+            or item["sha256"] is not None
+        ):
+            raise ValueError(f"adjacent ALS file decision changed for tile {tile_id}")
+        _validate_artifact_url(item, tile_id)
+        indexes.append(AlsSourceIndex(f"source-index-{tile_id}.html", expected_index))
+        records.append(
+            AlsArtifact(
+                year=2019,
+                source_type="lidar_laz_tava",
+                filename=filename,
+                role="primary_profile_spatial_closure",
+                url=str(item["canonical_url"]),
+                expected_bytes=None,
+                expected_sha256=None,
+                manifest_metadata={"tile": item["tile"]},
+            )
+        )
+    return AlsSelection(
+        selection_id=_ADJACENT_SELECTION_ID,
+        tile_id="multi",
+        epsg=3301,
+        source_indexes=tuple(indexes),
+        license_url=str(raw["license"]["url"]),
+        raw=raw,
+        files=tuple(records),
+        manifest_metadata={
+            "tiles": [item["tile"] for item in raw["files"]],
+            "primarySelectionId": raw["primary_selection_id"],
+        },
+    )
+
+
+def load_als_selection(path: Path | None = None, *, content: bytes | None = None) -> AlsSelection:
+    path = path or CONFIG_DIR / "taevaskoda-als.json"
+    raw = json.loads(content if content is not None else path.read_bytes())
+    schema = raw.get("schema_version") if isinstance(raw, dict) else None
+    if schema == _PRIMARY_SCHEMA:
+        return _load_primary_selection(raw)
+    if schema == _ADJACENT_SCHEMA:
+        return _load_adjacent_selection(raw)
+    raise ValueError("unsupported or non-strict ALS selection config")
 
 
 def _safe_relative(path: Path, root: Path) -> str:
@@ -275,6 +436,7 @@ def _verify_retained_entry(
         or entry.get("type") != item.source_type
         or entry.get("filename") != item.filename
         or entry.get("role") != item.role
+        or any(entry.get(key) != value for key, value in item.manifest_metadata.items())
     ):
         raise ValueError(f"retained ALS artifact failed provenance verification: {item.filename}")
     if item.expected_bytes is not None and entry["bytes"] != item.expected_bytes:
@@ -314,6 +476,7 @@ def _recover_content_addressed(
         "type": item.source_type,
         "filename": item.filename,
         "role": item.role,
+        **item.manifest_metadata,
     }
     return _verify_retained_entry(root, item, entry)
 
@@ -365,10 +528,9 @@ def fetch_als_selection(
     selection_snapshot = _snapshot_bytes(root, selection_path, selection_bytes, selection_sha256)
     provenance_root = root / "provenance" / "http"
     session = PoliteSession(base.fetch)
-    snapshots = (
-        ("source-index.html", selection.source_index_url),
-        ("license.html", selection.license_url),
-    )
+    snapshots = tuple(
+        (source.snapshot_name, source.url) for source in selection.source_indexes
+    ) + (("license.html", selection.license_url),)
     snapshot_entries: list[dict[str, Any]] = []
     for filename, url in snapshots:
         path = root / "snapshots" / filename
@@ -381,7 +543,9 @@ def fetch_als_selection(
             allowed_final_hosts=_OFFICIAL_HOSTS,
             allow_html=True,
         )
-        snapshot_entries.append({"name": filename, "url": url, **_provenance_entry(root, path, provenance)})
+        snapshot_entries.append(
+            {"name": filename, "url": url, **_provenance_entry(root, path, provenance)}
+        )
 
     output = root / "retained.json"
     existing_by_name: dict[str, dict[str, Any]] = {}
@@ -427,6 +591,7 @@ def fetch_als_selection(
             "type": item.source_type,
             "filename": item.filename,
             "role": item.role,
+            **item.manifest_metadata,
         }
         log(
             f"[{index}/{len(selected)}] {'fetched' if downloaded else 'verified'} "
@@ -456,12 +621,12 @@ def fetch_als_selection(
         "requestedYears": [item.year for item in selected],
         "complete": not missing_files,
         "missingFiles": missing_files,
-        "tile": selection.raw["tile"],
         "morphologyTarget": False,
         "license": selection.raw["license"],
         "requiredAttribution": selection.raw["required_attribution"],
         "sourceSnapshots": snapshot_entries,
         "artifacts": artifacts,
+        **selection.manifest_metadata,
     }
     temporary = output.with_suffix(".json.part")
     temporary.write_text(json.dumps(retained, indent=2, sort_keys=True) + "\n", encoding="utf-8")

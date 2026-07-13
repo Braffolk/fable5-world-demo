@@ -268,6 +268,21 @@ def evidence_fetch_als_cmd(selection: Path | None, years: tuple[int, ...]) -> No
     click.echo(f"retention manifest: {path}")
 
 
+@main.command("evidence-inventory-als")
+@click.option(
+    "--retained",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Complete Taevaskoda retained.json; defaults to the frozen public evidence path",
+)
+def evidence_inventory_als_cmd(retained: Path | None) -> None:
+    """Inventory retained ALS schemas and point semantics without raster conversion."""
+    from .evidence.als_inventory import inventory_taevaskoda_als
+
+    path = inventory_taevaskoda_als(retained, log=click.echo)
+    click.echo(f"inventory: {path}")
+
+
 @main.command("micro-recipe")
 @click.option("--parent-cx", required=True, type=int)
 @click.option("--parent-cz", required=True, type=int)

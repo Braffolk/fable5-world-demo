@@ -68,7 +68,11 @@ Ship beautiful, physically credible, materially and geomorphologically condition
 - [x] Check in `PUBLIC-TARGET-QUALIFICATION-PROTOCOL.md` and machine ledger records for the exact selective Hovi Järvselja/Hyytiälä files and exact Taevaskoda ALS epochs before retaining or converting them.
 - [x] Freeze the bounded zero-cost conversion inputs: 43 Hovi files totaling 7,241,800,875 bytes, eight official Taevaskoda ALS epochs, and one 351,166,481-byte Biała Góra calibration epoch; do not authorize bulk Biała acquisition.
 - [x] Add an independently audited, content-addressed Taevaskoda ALS retention path that binds the frozen selection, source/license snapshots, response provenance, actual bytes, and partial/complete state.
-- [ ] Retain and inventory the eight Taevaskoda ALS epochs; keep them `calibration_only` for typed structural repair and never treat them as 6.25 cm morphology truth.
+- [x] Retain and inventory the eight Taevaskoda ALS epochs (190,445,551 bytes total); keep them `calibration_only` for typed structural repair and never treat them as 6.25 cm morphology truth.
+- [x] Qualify the retained-tile multi-epoch Ahja water/shore observations: authorize the 2019 class-9 profile, reject DTM-only/class-2 authority and every unsupported epoch, and preserve bank/cliff abstention (`review/TAEVASKODA-ALS-WATER-QUALIFICATION.md`).
+- [x] Retain and inventory the smallest verified adjacent 2019 ALS selection needed by the exact fine publication/support domain: north tile `445679` and east tile `444680`, 87,992,146 raw bytes total, independently hash-bound from the primary eight-epoch selection.
+- [x] Close Ahja topology qualification: `2356024` is one unbranched confluence-to-confluence reach with no internal mapped hydraulic jump; bind the local cross-section-capped water polygon and reject full-polygon endpoint clamping (`review/AHJA-HYDRAULIC-TOPOLOGY-QUALIFICATION.md`).
+- [x] Materialize and independently replay the provenance-bound three-tile 2019 campaign evidence (`c84d0b59e0de...`) without inventing continuity: the downstream segment from full-line station 71 is qualified with a 15 m longest unsupported span, mapped wet outside qualified support remains explicit morphology-forbidden abstention, and no bridge observation mask is fabricated.
 - [ ] Implement Stage 1 Taevaskoda typed structural repair and corrected parent hierarchy, run the bounded real-WebGPU boot, and provide the immutable live URL for visual review.
 - [ ] Implement a morphology specialist only after its public target subset passes conversion, support/error/semantics QA, analogue/OOD qualification, and a target-specific preregistration.
 
@@ -78,4 +82,5 @@ Ship beautiful, physically credible, materially and geomorphologically condition
 - Peat, agriculture, carbonate/alvar, sandstone, shore/coast, fluvial, wetland, forest-event, engineered-ground, and other regime synthesis without matching evidence and exemplars.
 - National orthophoto bulk acquisition until the full official manifest is scanned for size and the research ablation proves useful geometric conditioning rather than albedo-to-height leakage.
 - Broad test expansion while extractor, generator, and release contracts remain in active change.
+- National flowing-water activation until Jägala waterfall and other mapped hydraulic discontinuities pass blind protected-feature regression without smoothing, ramping, or moving the jump.
 - Any non-heightfield cliff representation; it is a separate future research/spec task, not a hidden extension of this heightfield pass.
