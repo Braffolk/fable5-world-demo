@@ -1,0 +1,384 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://laas.invalid/schema/microtopography-source-ledger-2.0.0.json",
+  "title": "LAAS microtopography primary-source ledger",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schema_version",
+    "generated_on",
+    "scope",
+    "status_note",
+    "provenance",
+    "records",
+    "unresolved_mentions"
+  ],
+  "properties": {
+    "$schema": {"const": "./sources.schema.json"},
+    "schema_version": {"const": "microtopography-source-ledger/2.0.0"},
+    "generated_on": {"type": "string", "format": "date"},
+    "scope": {"type": "string", "minLength": 1},
+    "status_note": {"type": "string", "minLength": 1},
+    "provenance": {"$ref": "#/$defs/provenance"},
+    "records": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/record"}
+    },
+    "unresolved_mentions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mention", "source", "status"],
+        "properties": {
+          "mention": {"type": "string", "minLength": 1},
+          "source": {"type": "string", "minLength": 1},
+          "status": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "nullableString": {"type": ["string", "null"]},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "migration",
+        "v1_schema_version",
+        "v1_generated_on",
+        "v1_sources_sha256",
+        "v1_status_note",
+        "integrity_manifest",
+        "integrity_manifest_sha256",
+        "metadata_queries",
+        "v1_record_count",
+        "v1_repository_count"
+      ],
+      "properties": {
+        "migration": {"type": "string", "minLength": 1},
+        "v1_schema_version": {"type": ["integer", "string"]},
+        "v1_generated_on": {"type": "string"},
+        "v1_sources_sha256": {"$ref": "#/$defs/sha256"},
+        "v1_status_note": {"type": "string"},
+        "integrity_manifest": {"type": "string", "minLength": 1},
+        "integrity_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "metadata_queries": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["crossref", "arxiv"],
+          "properties": {
+            "crossref": {"$ref": "#/$defs/queryResult"},
+            "arxiv": {"$ref": "#/$defs/queryResult"}
+          }
+        },
+        "v1_record_count": {"type": "integer", "minimum": 0},
+        "v1_repository_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "queryResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checked_at", "verified_records", "failed_records"],
+      "properties": {
+        "checked_at": {"type": "string", "format": "date"},
+        "verified_records": {"type": "integer", "minimum": 0},
+        "failed_records": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      }
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "citation",
+        "identifiers",
+        "access",
+        "review",
+        "artifacts",
+        "licensing",
+        "software",
+        "data_and_checkpoints",
+        "demonstration",
+        "evidence",
+        "mentioned_in",
+        "legacy_v1"
+      ],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]*$"},
+        "kind": {
+          "enum": [
+            "paper",
+            "dataset",
+            "repository",
+            "official_dataset",
+            "official_data_service",
+            "official_license",
+            "data_description",
+            "vendor_announcement"
+          ]
+        },
+        "citation": {"$ref": "#/$defs/citation"},
+        "identifiers": {"$ref": "#/$defs/identifiers"},
+        "access": {"$ref": "#/$defs/access"},
+        "review": {"$ref": "#/$defs/review"},
+        "artifacts": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/artifact"}
+        },
+        "licensing": {"$ref": "#/$defs/licensing"},
+        "software": {"$ref": "#/$defs/software"},
+        "data_and_checkpoints": {"$ref": "#/$defs/dataAndCheckpoints"},
+        "demonstration": {"$ref": "#/$defs/demonstration"},
+        "evidence": {"$ref": "#/$defs/evidence"},
+        "mentioned_in": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "legacy_v1": {"type": "object"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "citation": {
+                "properties": {
+                  "author_status": {
+                    "enum": ["verified_crossref", "verified_arxiv", "verified_local_primary"]
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "citation": {"properties": {"authors": {"minItems": 1}}}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"kind": {"const": "repository"}}},
+          "then": {
+            "properties": {
+              "software": {
+                "required": ["repository_url", "revision", "snapshot_path", "snapshot_sha256", "legacy_status"]
+              },
+              "artifacts": {"minItems": 1, "maxItems": 1}
+            }
+          }
+        }
+      ]
+    },
+    "citation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["author_status", "authors", "title", "year", "venue", "doi", "metadata_source"],
+      "properties": {
+        "author_status": {
+          "enum": ["verified_crossref", "verified_arxiv", "verified_local_primary", "unknown", "not_applicable"]
+        },
+        "authors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["display_name", "given", "family", "orcid"],
+            "properties": {
+              "display_name": {"type": "string", "minLength": 1},
+              "given": {"$ref": "#/$defs/nullableString"},
+              "family": {"$ref": "#/$defs/nullableString"},
+              "orcid": {"$ref": "#/$defs/nullableString"}
+            }
+          }
+        },
+        "title": {"type": "string", "minLength": 1},
+        "year": {"type": ["integer", "null"], "minimum": 1900, "maximum": 2100},
+        "venue": {"$ref": "#/$defs/nullableString"},
+        "doi": {"$ref": "#/$defs/nullableString"},
+        "metadata_source": {"type": "string", "minLength": 1}
+      }
+    },
+    "identifiers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["canonical_url", "related_record_ids"],
+      "properties": {
+        "canonical_url": {"type": "string", "minLength": 1},
+        "related_record_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      }
+    },
+    "access": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "checked_at", "result", "full_text_basis", "flags"],
+      "properties": {
+        "status": {
+          "enum": [
+            "local_artifact",
+            "open_full_text_online",
+            "paywalled",
+            "request_only",
+            "metadata_only",
+            "unavailable",
+            "unresolved",
+            "unknown"
+          ]
+        },
+        "checked_at": {"type": "string", "format": "date"},
+        "result": {"type": "string", "minLength": 1},
+        "full_text_basis": {"enum": ["local_artifact", "official_online", "none"]},
+        "flags": {
+          "type": "array",
+          "items": {"enum": ["invalid_html", "code_only", "analogue", "unresolved", "retracted"]},
+          "uniqueItems": true
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "scope", "reviewer_record", "consequential_judgment_allowed"],
+      "properties": {
+        "status": {
+          "enum": [
+            "unknown",
+            "abstract_only",
+            "methods_only",
+            "methods_results",
+            "artifact_and_metadata",
+            "primary_metadata",
+            "conflated_source"
+          ]
+        },
+        "scope": {"type": "array", "items": {"type": "string"}},
+        "reviewer_record": {"type": "string", "minLength": 1},
+        "consequential_judgment_allowed": {"type": "boolean"}
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "media_type", "validation", "hash_source", "hash_verified_on"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "media_type": {"type": "string", "minLength": 1},
+        "validation": {
+          "enum": ["valid_pdf", "valid_archive", "valid_spreadsheet", "invalid_html", "hash_verified_untyped"]
+        },
+        "hash_source": {"const": "metadata/SHA256SUMS"},
+        "hash_verified_on": {"type": "string", "format": "date"},
+        "ledger_role": {"enum": ["canonical", "duplicate", "support", "quarantined"]},
+        "notes": {"type": "string", "minLength": 1}
+      }
+    },
+    "licensing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "name",
+        "spdx",
+        "url",
+        "applies_to",
+        "training_use",
+        "derivative_distribution",
+        "restrictions",
+        "notes"
+      ],
+      "properties": {
+        "status": {"enum": ["verified", "absent", "unknown", "unclear", "not_applicable"]},
+        "name": {"$ref": "#/$defs/nullableString"},
+        "spdx": {"$ref": "#/$defs/nullableString"},
+        "url": {"$ref": "#/$defs/nullableString"},
+        "applies_to": {"enum": ["paper", "data", "code", "metadata", "unknown", "not_applicable"]},
+        "training_use": {"enum": ["allowed", "forbidden", "legal_review", "unknown", "not_applicable"]},
+        "derivative_distribution": {"enum": ["allowed", "forbidden", "legal_review", "unknown", "not_applicable"]},
+        "restrictions": {"type": "array", "items": {"type": "string"}},
+        "notes": {"type": "string"}
+      }
+    },
+    "software": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["availability", "official_status"],
+      "properties": {
+        "availability": {"enum": ["repository_snapshot", "external_unpinned", "none_found", "not_applicable"]},
+        "repository_record_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "repository_url": {"type": "string"},
+        "official_status": {"enum": ["official", "community", "unknown", "not_applicable"]},
+        "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "snapshot_path": {"type": "string", "minLength": 1},
+        "snapshot_sha256": {"$ref": "#/$defs/sha256"},
+        "legacy_status": {"type": "string", "minLength": 1}
+      }
+    },
+    "dataAndCheckpoints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["data_status", "data_record_ids", "checkpoint_status", "checkpoint_artifact_ids"],
+      "properties": {
+        "data_status": {"enum": ["open_downloaded", "open_not_downloaded", "request_only", "unavailable", "none", "unknown", "not_applicable"]},
+        "data_record_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "checkpoint_status": {"enum": ["open_downloaded", "open_not_downloaded", "unavailable", "none", "unknown", "not_applicable"]},
+        "checkpoint_artifact_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      }
+    },
+    "scale": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sample_pitch_m", "support_m", "extent_m", "text"],
+      "properties": {
+        "sample_pitch_m": {"type": ["number", "null"], "exclusiveMinimum": 0},
+        "support_m": {"type": ["number", "null"], "exclusiveMinimum": 0},
+        "extent_m": {"type": ["number", "null"], "exclusiveMinimum": 0},
+        "text": {"$ref": "#/$defs/nullableString"}
+      }
+    },
+    "demonstration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "task",
+        "geography_and_regime",
+        "input_scale",
+        "output_scale",
+        "degradation_or_observation",
+        "training_data",
+        "evaluation"
+      ],
+      "properties": {
+        "status": {"enum": ["normalized_from_full_primary_audit", "not_normalized", "not_applicable"]},
+        "task": {"$ref": "#/$defs/nullableString"},
+        "geography_and_regime": {"$ref": "#/$defs/nullableString"},
+        "input_scale": {"$ref": "#/$defs/scale"},
+        "output_scale": {"$ref": "#/$defs/scale"},
+        "degradation_or_observation": {"$ref": "#/$defs/nullableString"},
+        "training_data": {"$ref": "#/$defs/nullableString"},
+        "evaluation": {"$ref": "#/$defs/nullableString"}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "direct_finding",
+        "limitation",
+        "permitted_project_transfer",
+        "prohibited_inference",
+        "legacy_applicability"
+      ],
+      "properties": {
+        "status": {"enum": ["normalized_from_full_primary_audit", "legacy_summary_not_split", "not_applicable"]},
+        "direct_finding": {"$ref": "#/$defs/nullableString"},
+        "limitation": {"$ref": "#/$defs/nullableString"},
+        "permitted_project_transfer": {"$ref": "#/$defs/nullableString"},
+        "prohibited_inference": {"$ref": "#/$defs/nullableString"},
+        "legacy_applicability": {"$ref": "#/$defs/nullableString"}
+      }
+    }
+  }
+}

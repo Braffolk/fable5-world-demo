@@ -1,0 +1,246 @@
+{
+  "schema_version": "microtopography-regime-initial-status/1.0.0",
+  "catalog_id": "estonia-microtopography-phenomena/2026-07-13.1",
+  "catalog_sha256": "6ca03d5bb552f6ad83e818da1d16d3fddf7d4006241990a90f6ffc21ab13ee4d",
+  "release_registry_schema": "./regime-release-registry.schema.json",
+  "release_registry_schema_sha256": "07a9e6a2486c22e70918392194eea897d9e7810aa12499fad596d67b4629268b",
+  "release_rows": "./regime-release-rows.initial.json",
+  "release_rows_sha256": "74257a057d7aeaf196d0fdccff374cbcafd1a902efcc7723eea4c81fabac7b48",
+  "no_default_row": true,
+  "rows": [
+    {
+      "regime_id": "peat.raised_bog",
+      "status": "research",
+      "bands": [
+        "research_only",
+        "research_only"
+      ],
+      "reason": "moore_foreign_plot_local_moss_only"
+    },
+    {
+      "regime_id": "peat.fen_transitional",
+      "status": "unsupported",
+      "bands": [
+        "unsupported",
+        "unsupported"
+      ],
+      "reason": "no_qualified_estonia_targets_and_moore_does_not_span_fen_states"
+    },
+    {
+      "regime_id": "peat.drained_cut",
+      "status": "unsupported",
+      "bands": [
+        "unsupported",
+        "unsupported"
+      ],
+      "reason": "no_qualified_dated_target_sites"
+    },
+    {
+      "regime_id": "forest.pit_mound",
+      "status": "unsupported",
+      "bands": [
+        "unsupported",
+        "unsupported"
+      ],
+      "reason": "no_qualified_estonia_ground_targets"
+    },
+    {
+      "regime_id": "forest.floor_ordinary",
+      "status": "unsupported",
+      "bands": [
+        "unsupported",
+        "unsupported"
+      ],
+      "reason": "no_qualified_estonia_ground_targets"
+    },
+    {
+      "regime_id": "forest.managed_clearcut",
+      "status": "unsupported",
+      "bands": [
+        "unsupported",
+        "unsupported"
+      ],
+      "reason": "no_qualified_dated_operation_targets"
+    },
+    {
+      "regime_id": "agriculture.ploughed",
+      "status": "unsupported",
+      "bands": [
+        "unsupported",
+        "unsupported"
+      ],
+      "reason": "foreign_measurement_evidence_only"
+    },
+    {
+      "regime_id": "agriculture.seedbed_harrowed_rolled",
+      "status": "unsupported",
+      "bands": [
+        "unsupported",
+        "unsupported"
+      ],
+      "reason": "foreign_measurement_evidence_only"
+    },
+    {
+      "regime_id": "grassland.pasture_meadow",
+      "status": "unsupported",
+      "bands": [
+        "unsupported",
+        "unsupported"
+      ],
+      "reason": "no_qualified_target_sites"
+    },
+    {
+      "regime_id": "grassland.yard_turf",
+      "status": "unsupported",
+      "bands": [
+        "unsupported",
+        "unsupported"
+      ],
+      "reason": "no_qualified_subtype_targets"
+    },
+    {
+      "regime_id": "sand.exposed",
+      "status": "unsupported",
+      "bands": [
+        "unsupported",
+        "unsupported"
+      ],
+      "reason": "no_estonia_material_state_targets"
+    },
+    {
+      "regime_id": "sand.dune_aeolian",
+      "status": "unsupported",
+      "bands": [
+        "unsupported",
+        "unsupported"
+      ],
+      "reason": "no_estonia_context_and_target_pairs"
+    },
+    {
+      "regime_id": "shore.beach_sand",
+      "status": "unsupported",
+      "bands": [
+        "unsupported",
+        "unsupported"
+      ],
+      "reason": "no_dated_estonia_target_series"
+    },
+    {
+      "regime_id": "shore.shingle_gravel_cobble",
+      "status": "unsupported",
+      "bands": [
+        "unsupported",
+        "unsupported"
+      ],
+      "reason": "no_material_matched_targets_and_heightfield_limits"
+    },
+    {
+      "regime_id": "glacial.till_plain",
+      "status": "unsupported",
+      "bands": [
+        "unsupported",
+        "unsupported"
+      ],
+      "reason": "no_estonia_target_scale_surfaces"
+    },
+    {
+      "regime_id": "glacial.gravel_esker_outwash",
+      "status": "unsupported",
+      "bands": [
+        "unsupported",
+        "unsupported"
+      ],
+      "reason": "no_estonia_target_scale_surfaces"
+    },
+    {
+      "regime_id": "carbonate.alvar_thin_soil",
+      "status": "unsupported",
+      "bands": [
+        "unsupported",
+        "unsupported"
+      ],
+      "reason": "no_estonia_alvar_height_targets"
+    },
+    {
+      "regime_id": "carbonate.pavement_karst",
+      "status": "unsupported",
+      "bands": [
+        "unsupported",
+        "unsupported"
+      ],
+      "reason": "unresolved_measurements_and_heightfield_limits"
+    },
+    {
+      "regime_id": "outcrop.sandstone",
+      "status": "unsupported",
+      "bands": [
+        "unsupported",
+        "unsupported"
+      ],
+      "reason": "no_lithology_matched_estonia_targets_and_wall_is_non_heightfield"
+    },
+    {
+      "regime_id": "outcrop.carbonate",
+      "status": "unsupported",
+      "bands": [
+        "unsupported",
+        "unsupported"
+      ],
+      "reason": "no_lithology_matched_estonia_height_targets"
+    },
+    {
+      "regime_id": "slope.colluvium_talus",
+      "status": "unsupported",
+      "bands": [
+        "unsupported",
+        "unsupported"
+      ],
+      "reason": "no_source_to_toe_context_targets_and_non_heightfield_blocks"
+    },
+    {
+      "regime_id": "fluvial.floodplain",
+      "status": "unsupported",
+      "bands": [
+        "unsupported",
+        "unsupported"
+      ],
+      "reason": "no_dated_estonia_flood_target_series"
+    },
+    {
+      "regime_id": "fluvial.active_bar_bed",
+      "status": "unsupported",
+      "bands": [
+        "unsupported",
+        "unsupported"
+      ],
+      "reason": "no_flow_and_bathymetry_conditioned_targets"
+    },
+    {
+      "regime_id": "fluvial.rill_gully_seep_spring",
+      "status": "unsupported",
+      "bands": [
+        "unsupported",
+        "unsupported"
+      ],
+      "reason": "no_connected_network_target_sites"
+    },
+    {
+      "regime_id": "coast.wetland",
+      "status": "unsupported",
+      "bands": [
+        "unsupported",
+        "unsupported"
+      ],
+      "reason": "no_baltic_inundation_conditioned_targets"
+    },
+    {
+      "regime_id": "technogenic.disturbed",
+      "status": "unsupported",
+      "bands": [
+        "unsupported",
+        "unsupported"
+      ],
+      "reason": "no_subtype_specific_dated_targets"
+    }
+  ]
+}

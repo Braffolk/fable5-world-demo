@@ -4,9 +4,11 @@ Last updated: 2026-07-13
 
 ## Objective
 
-Ship a visually credible, deterministic, cook-side microtopography pilot at Suur Taevaskoda. The browser only streams and renders packed height data; it never synthesizes terrain detail.
+Ship beautiful, physically credible, materially and geomorphologically conditioned cook-side microtopography across Estonia. The browser only streams and renders packed height data; it never synthesizes terrain detail. Suur Taevaskoda is a fixed visual reference for generalizable improvements, not a scene-specific target.
 
 ## Current State
+
+### Accepted infrastructure
 
 - [x] Re-audit the dirty, unpushed implementation and isolate new work in a clean worktree based on `258ddef`.
 - [x] Restore the canonical shared grid: height LOD0 remains 1 m with 2048 m chunks; negative height-only rungs provide 0.25 m and 0.0625 m samples.
@@ -30,20 +32,42 @@ Ship a visually credible, deterministic, cook-side microtopography pilot at Suur
 - [x] Replace hard finest-level switching with a format-2-only packed-level geomorph shared by terrain, grass, material normals/slopes, and CPU ground probes. The former `14.96 cm` (-2/-1) and `34.89 cm` (-1/0) ownership steps now fade through bounded quintic transition rings.
 - [x] Replace the eager raster prepass allocation with a compact projected-record pool and a shared 96 Ki cluster domain. Project/context allocation drops from about `716 MiB` to `133.5 MiB`, with fail-closed observable overflow.
 - [x] Add a strict real-Chromium WebGPU boot gate and fix every exposed validation failure: redundant texture uniforms, non-uniform workgroup barriers, writable storage aliases, and mixed access modes in a single synchronization scope.
-- [ ] Inspect the supplied Suur Taevaskoda reference viewpoint and categorize generalizable geometry mismatches.
-- [x] Correct the premise audit: the main vertical/undercut sandstone wall is not representable by a heightfield. Specify a separate cook-packed structural terrain cluster path with no runtime synthesis.
-- [ ] Map the structural terrain contract onto the repository's actual Nanite cluster, manifest, streaming, material, collision, and vegetation systems; implement only after the codebase audit and user-visible height pilot are stable.
+- [x] Inspect the supplied Suur Taevaskoda reference and categorize the representable shore/bank/top-surface failures separately from the vertical/undercut wall.
+- [x] Correct the premise audit: the main vertical/undercut sandstone wall is not representable by a heightfield and is excluded from this pass. Any non-heightfield structural solution requires its own future research and user-reviewed spec.
 - [x] Confirm and locate anomalous pinned-base height returns inside the mapped Ahja river near the reference anchor.
 - [ ] Implement and validate a general robust river-surface/base-DTM conditioning pass in the upstream water cook, then decide whether to approve a new pinned base release. Do not patch only the hero coordinates or silently change negative LOD authority.
-- [x] Correct the durable spec so raw TLS extraction, diagnostic-only LUKE scope, matrix/event separation, conditional orthophoto use, global projection, non-heightfield structural terrain, executable conditioning requirements, and fixed Taevaskoda review are explicit.
+- [x] Supersede the earlier spec's false raw-DTM consistency objective and record diagnostic-only LUKE scope, source-repair authority, heightfield limits, executable conditioning, and fixed Taevaskoda review requirements.
 - [x] Materialize and independently verify immutable recipe `090747d74911...`, manifest `eaa0444646b47de1`. All coverage, header, apron, hierarchy, determinism, and decoded hard-mask gates pass; `latest` remains untouched.
 - [x] Complete the initial user visual checkpoint at the centered live preview on `:5180` / immutable data endpoint `:8791`; terrain, material, grass, trees, and fine Nanite clusters are present.
 - [x] Pass three clean exact-URL WebGPU boots after removing diagnostics, including cloud bake, settled frames, and zero page/console/TSL/WebGPU errors.
 - [x] Integrate clean work into the main `estonia-asset-gen` worktree as local commit `0ef75cf` without pushing; superseded root edits remain preserved in a safety stash and were not reapplied.
 
-## Deliberately Deferred
+### Rejected synthesis and current research phase
 
-- National or multi-landform rollout.
-- Peat, agricultural, carbonate, and pit-mound event synthesis without matching measured exemplars.
-- Orthophoto-conditioned morphology until the packed measured pilot is visibly sound.
+- [x] Reject the LUKE quilt / mean-null residual synthesizer as a production or beauty method after user-visible review. It adds sparse noise-like bumpiness, does not repair 1 m grid shorelines or source defects, lacks Estonia substrate/process grounding, and is not capable evidence for national 6.25 cm detail.
+- [x] Retain the proven negative-LOD cook, packing, serving, streaming, decoding, rendering, masks, terrain/grass grounding, and strict real-WebGPU boot infrastructure; disclose the remaining generic tree/boulder/understory/debris packed-surface sampling gap without redesigning the format or adding runtime synthesis.
+- [x] Record the repository-wide research and feature-decomposition standard in root `AGENTS.md`.
+- [x] Inventory every paper, repository, dataset, and consequential claim cited by `r1.md`, `r2.md`, and the superseded spec; correct citation conflations and report overclaims. The closed v2 ledger has 125 unified records including 21 repositories and exact one-to-one classification of all 127 checksum-manifest artifacts; the uncited Burren dimensions remain explicitly excluded.
+- [x] Download every legally accessible full paper and identified repository artifact; record canonical URLs, licenses, hashes, access failures, demonstrated scales, officialness, and review depth without equating a valid tarball with code review. All 127 recorded local artifacts pass the checksum ledger.
+- [x] Produce independent learned-model and deterministic/process/exemplar proposals grounded in full primary sources and the explicitly bounded repository evidence; consequential reuse still requires officialness/license/code-review closure.
+- [x] Commission separate adversarial critics for each proposal; proposal authors did not critique their own work.
+- [x] Expand the synthesis problem into Estonia's actual surface-forming regimes, observation-error correction, covariates, representation limits, and sub-decimeter training/validation requirements (`review/REGIME-PHENOMENON-MATRIX.md`, `review/TARGET-SCALE-DATA-AND-REGIME-AUDIT.md`).
+- [x] Audit current and official Estonia-wide conditioning inputs, including source fidelity loss, EGT coverage, and Taevaskoda's mapped ETAK/soil constraints (`review/ESTONIA-CONDITIONING-DATA-AUDIT.md`).
+- [x] Audit the actual cook, hierarchy, correction-authority, coverage, verifier, storage, and unchanged-runtime contract (`review/COOK-CONTRACT-AND-HIERARCHY-AUDIT.md`).
+- [x] Decide orthophoto acquisition: fetch/version dated RGB/CIR as masked research and likely production conditioning, never as metric height truth; complete the national manifest-size scan before bulk acquisition.
+- [x] Write the comparative architecture dossier and source/claim ledger (`review/COMPARATIVE-ARCHITECTURE-DOSSIER.md`, `library/SOURCES.md`, `library/sources.json`).
+- [x] Choose one decisive evidence-gated typed-hybrid architecture: deterministic evidence fusion and regime graph, per-regime target-supported specialist bakeoff with valid no-winner, deterministic absolute-surface composition, and unchanged packed-height delivery.
+- [x] Add executable regime/evidence, hierarchy/quantization, visual-review, and storage/cost contracts; independently critique the first spec rewrite and correct its water, authority, hierarchy, visual, and staging contradictions.
+- [x] Normalize the source ledger to schema v2 and retain the first Stage 1 method contract as an explicitly superseded negative-design record after final audit disproved its Moore ownership test (`library/sources.schema.json`, `review/STAGE1-EXECUTABLE-METHOD-CONTRACT.md`).
+- [x] Materialize the strict 26-row regime schema, initial registry, and status manifest; final audit leaves all production morphology unsupported and Moore target evidence insufficient rather than inventing an owner.
+- [x] Rewrite `SPEC-MICROTOPOGRAPHY.md` from the audited evidence, with one decisive replacement architecture and executable structural, evidence, release, runtime, and visual gates.
+- [x] Run independent science/beauty, repository/cook, and standalone-evidence audits of the integrated spec and close every critical/high finding without hiding introduced runtime/release/data dependencies.
+- [ ] Implement the replacement asset-gen synthesis only after user review of the rewritten spec.
+
+## Deliberately Deferred Until The Research Review
+
+- Any further beauty claim or national rollout of the rejected LUKE synthesizer.
+- Peat, agriculture, carbonate/alvar, sandstone, shore/coast, fluvial, wetland, forest-event, engineered-ground, and other regime synthesis without matching evidence and exemplars.
+- National orthophoto bulk acquisition until the full official manifest is scanned for size and the research ablation proves useful geometric conditioning rather than albedo-to-height leakage.
 - Broad test expansion while extractor, generator, and release contracts remain in active change.
+- Any non-heightfield cliff representation; it is a separate future research/spec task, not a hidden extension of this heightfield pass.

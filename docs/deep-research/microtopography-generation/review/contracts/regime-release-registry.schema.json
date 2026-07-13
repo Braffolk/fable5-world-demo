@@ -1,0 +1,278 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://laas.invalid/schema/microtopography-regime-release-registry-1.0.0.json",
+  "title": "LAAS initial microtopography regime release registry",
+  "type": "array",
+  "minItems": 26,
+  "maxItems": 26,
+  "uniqueItems": true,
+  "items": {"$ref": "#/$defs/releaseRow"},
+  "$defs": {
+    "releaseRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "identity", "physical_definition", "eligibility",
+        "transition", "structural_and_representation_constraints", "conditions",
+        "target_evidence", "geographic_splits", "candidate_bakeoff",
+        "band_evidence", "morphology_and_visual_result",
+        "packing_cook_and_serving_cost", "failure_abstention_and_release"
+      ],
+      "properties": {
+        "schema_version": {"const": "microtopography-regime-release/1.0.0"},
+        "identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["regime_id", "display_name", "catalog_id", "catalog_sha256", "row_revision"],
+          "properties": {
+            "regime_id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]+$"},
+            "display_name": {"type": "string", "minLength": 1},
+            "catalog_id": {"const": "estonia-microtopography-phenomena/2026-07-13.1"},
+            "catalog_sha256": {"const": "6ca03d5bb552f6ad83e818da1d16d3fddf7d4006241990a90f6ffc21ab13ee4d"},
+            "row_revision": {"type": "integer", "minimum": 1}
+          }
+        },
+        "physical_definition": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["surface_semantics", "phenomena", "claimed_wavelength_m", "excluded_features", "transfer_claim"],
+          "properties": {
+            "surface_semantics": {"type": "array", "minItems": 1, "items": {"type": "string"}, "uniqueItems": true},
+            "phenomena": {"type": "array", "minItems": 1, "items": {"type": "string"}, "uniqueItems": true},
+            "claimed_wavelength_m": {"$ref": "#/$defs/range"},
+            "excluded_features": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "transfer_claim": {"type": "string", "minLength": 1}
+          }
+        },
+        "eligibility": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["predicate_language", "predicate", "required_evidence", "mutually_exclusive_with", "unknown_result"],
+          "properties": {
+            "predicate_language": {"const": "laas-condition-ast/1"},
+            "predicate": {"$ref": "#/$defs/predicate"},
+            "required_evidence": {"type": "array", "minItems": 1, "items": {"type": "string"}, "uniqueItems": true},
+            "mutually_exclusive_with": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "unknown_result": {"const": "abstain"}
+          }
+        },
+        "transition": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["physical_domain", "support_geometry", "signed_distance_field", "inner_m", "outer_m", "kernel", "compatible_mixture_group", "boundary_policy"],
+          "properties": {
+            "physical_domain": {"enum": ["watershed", "mire_unit", "stand", "managed_parcel", "shore_reach", "outcrop", "corridor", "disturbance_event", "other_explicit"]},
+            "support_geometry": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "signed_distance_field": {"type": ["string", "null"]},
+            "inner_m": {"type": "number", "minimum": 0},
+            "outer_m": {"type": "number", "minimum": 0},
+            "kernel": {"enum": ["hard_when_physically_discontinuous", "linear", "smoothstep", "measured"]},
+            "compatible_mixture_group": {"type": ["string", "null"]},
+            "boundary_policy": {"enum": ["explicit_weighted_mixture", "mutually_exclusive", "abstain"]}
+          }
+        },
+        "structural_and_representation_constraints": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["direct_authorities", "protected_features", "forbidden_residual_masks", "non_heightfield_masks", "reapply_after_each_stage"],
+          "properties": {
+            "direct_authorities": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "protected_features": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "forbidden_residual_masks": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "non_heightfield_masks": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "reapply_after_each_stage": {"const": true}
+          }
+        },
+        "conditions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["required_fields", "optional_fields", "support_radii_m", "confidence_fields", "missingness_channels", "snapshot_ids"],
+          "properties": {
+            "required_fields": {"type": "array", "minItems": 1, "items": {"type": "string"}, "uniqueItems": true},
+            "optional_fields": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "support_radii_m": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "number", "minimum": 0}, "uniqueItems": true}},
+            "confidence_fields": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "missingness_channels": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "snapshot_ids": {"type": "object", "additionalProperties": {"type": "string"}}
+          }
+        },
+        "target_evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["target_record_ids", "estonia_site_ids", "foreign_site_ids", "surface_semantics", "effective_resolution_m", "measurement_error_m", "mtf_or_transfer_function", "support_masks", "human_qa_masks", "licenses", "artifact_sha256", "transfer_ceiling", "qualification_status"],
+          "properties": {
+            "target_record_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "estonia_site_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "foreign_site_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "surface_semantics": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "effective_resolution_m": {"type": ["number", "null"], "exclusiveMinimum": 0},
+            "measurement_error_m": {"$ref": "#/$defs/error"},
+            "mtf_or_transfer_function": {"type": ["string", "null"]},
+            "support_masks": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "human_qa_masks": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "licenses": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "artifact_sha256": {"type": "array", "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "uniqueItems": true},
+            "transfer_ceiling": {"enum": ["none", "foreign_method_only", "estonia_pilot", "estonia_national"]},
+            "qualification_status": {"enum": ["not_started", "failed", "insufficient", "passed"]}
+          }
+        },
+        "geographic_splits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["grouping_unit", "train", "development", "blind_test", "sensor_holdout", "taevaskoda_excluded", "leakage_audit"],
+          "properties": {
+            "grouping_unit": {"enum": ["site", "peatland", "campaign"]},
+            "train": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "development": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "blind_test": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "sensor_holdout": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "taevaskoda_excluded": {"const": true},
+            "leakage_audit": {"enum": ["not_run", "failed", "passed"]}
+          }
+        },
+        "candidate_bakeoff": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["preregistration_id", "corrected_only_baseline", "candidate_ids", "frozen_budget_ids", "required_families", "omission_justifications", "allow_no_winner"],
+          "properties": {
+            "preregistration_id": {"type": ["string", "null"]},
+            "corrected_only_baseline": {"const": true},
+            "candidate_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "frozen_budget_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "required_families": {"type": "array", "items": {"enum": ["contextual_exemplar", "conditional_simulation", "process_event", "deterministic_regressor", "conditional_gan", "pixel_diffusion", "hybrid"]}, "uniqueItems": true},
+            "omission_justifications": {"type": "object", "additionalProperties": {"type": "string", "minLength": 1}},
+            "allow_no_winner": {"const": true}
+          }
+        },
+        "band_evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["wavelength_0_25_to_1_m", "wavelength_0_125_to_0_25_m"],
+          "properties": {
+            "wavelength_0_25_to_1_m": {"$ref": "#/$defs/band"},
+            "wavelength_0_125_to_0_25_m": {"$ref": "#/$defs/band"}
+          }
+        },
+        "morphology_and_visual_result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["preregistered_gate_id", "measured_result_ids", "blind_render_result_ids", "real_vs_real_reference_id", "failure_classes", "decision", "decision_rationale"],
+          "properties": {
+            "preregistered_gate_id": {"type": ["string", "null"]},
+            "measured_result_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "blind_render_result_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "real_vs_real_reference_id": {"type": ["string", "null"]},
+            "failure_classes": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "decision": {"enum": ["not_run", "target_evidence_insufficient", "no_candidate_survives", "tie_no_owner", "research_owner", "pilot_owner", "national_owner"]},
+            "decision_rationale": {"type": "string", "minLength": 1}
+          }
+        },
+        "packing_cook_and_serving_cost": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["measurement_status", "packed_bytes_per_km2", "entropy_bytes_per_chunk", "cook", "training", "inference", "scratch_bytes_per_km2", "retry_rate", "egress_bytes_per_km2", "recook_cadence"],
+          "properties": {
+            "measurement_status": {"enum": ["not_measured", "measured"]},
+            "packed_bytes_per_km2": {"type": ["number", "null"], "minimum": 0},
+            "entropy_bytes_per_chunk": {"$ref": "#/$defs/percentiles"},
+            "cook": {"$ref": "#/$defs/cost"},
+            "training": {"$ref": "#/$defs/cost"},
+            "inference": {"$ref": "#/$defs/cost"},
+            "scratch_bytes_per_km2": {"type": ["number", "null"], "minimum": 0},
+            "retry_rate": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+            "egress_bytes_per_km2": {"type": ["number", "null"], "minimum": 0},
+            "recook_cadence": {"type": ["string", "null"]}
+          }
+        },
+        "failure_abstention_and_release": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "band_disposition", "selected_owner_id", "frozen_evidence_ids", "failure_action", "abstention_codes", "representation_limit_action", "release_extent_id", "approval_id"],
+          "properties": {
+            "status": {"enum": ["unsupported", "research", "pilot", "national"]},
+            "band_disposition": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["wavelength_0_25_to_1_m", "wavelength_0_125_to_0_25_m"],
+              "properties": {
+                "wavelength_0_25_to_1_m": {"enum": ["unsupported", "research_only", "released", "target_evidenced_effectively_smooth", "forbidden"]},
+                "wavelength_0_125_to_0_25_m": {"enum": ["unsupported", "research_only", "released", "target_evidenced_effectively_smooth", "forbidden"]}
+              }
+            },
+            "selected_owner_id": {"type": ["string", "null"]},
+            "frozen_evidence_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "failure_action": {"const": "retain_corrected_structure_and_fail_claimed_morphology_coverage"},
+            "abstention_codes": {"type": "array", "minItems": 1, "items": {"type": "string"}, "uniqueItems": true},
+            "representation_limit_action": {"enum": ["mask_and_report", "not_applicable"]},
+            "release_extent_id": {"type": ["string", "null"]},
+            "approval_id": {"type": ["string", "null"]}
+          }
+        }
+      }
+    },
+    "range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimum", "maximum"],
+      "properties": {
+        "minimum": {"type": "number", "minimum": 0},
+        "maximum": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["horizontal_p95", "vertical_p50", "vertical_p95", "method"],
+      "properties": {
+        "horizontal_p95": {"type": ["number", "null"], "minimum": 0},
+        "vertical_p50": {"type": ["number", "null"], "minimum": 0},
+        "vertical_p95": {"type": ["number", "null"], "minimum": 0},
+        "method": {"type": ["string", "null"]}
+      }
+    },
+    "predicate": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["all"], "properties": {"all": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/predicate"}}}},
+        {"type": "object", "additionalProperties": false, "required": ["any"], "properties": {"any": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/predicate"}}}},
+        {"type": "object", "additionalProperties": false, "required": ["not"], "properties": {"not": {"$ref": "#/$defs/predicate"}}},
+        {"type": "object", "additionalProperties": false, "required": ["field", "op", "value"], "properties": {"field": {"type": "string", "minLength": 1}, "op": {"enum": ["eq", "ne", "in", "not_in", "lt", "lte", "gt", "gte", "contains", "intersects", "confidence_gte"]}, "value": {}}}
+      ]
+    },
+    "band": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "signal_rms_m", "measurement_error_rms_m", "signal_to_error_ratio", "confidence_interval", "evidence_ids", "supports_claim"],
+      "properties": {
+        "status": {"enum": ["not_measured", "indistinguishable", "measurable"]},
+        "signal_rms_m": {"type": ["number", "null"], "minimum": 0},
+        "measurement_error_rms_m": {"type": ["number", "null"], "minimum": 0},
+        "signal_to_error_ratio": {"type": ["number", "null"], "minimum": 0},
+        "confidence_interval": {"type": ["string", "null"]},
+        "evidence_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "supports_claim": {"type": "boolean"}
+      }
+    },
+    "percentiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["p50", "p95", "p99"],
+      "properties": {
+        "p50": {"type": ["number", "null"], "minimum": 0},
+        "p95": {"type": ["number", "null"], "minimum": 0},
+        "p99": {"type": ["number", "null"], "minimum": 0}
+      }
+    },
+    "cost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hardware", "wall_seconds_per_km2", "accelerator_seconds_per_km2", "peak_memory_bytes", "support_overlap_multiplier"],
+      "properties": {
+        "hardware": {"type": ["string", "null"]},
+        "wall_seconds_per_km2": {"type": ["number", "null"], "minimum": 0},
+        "accelerator_seconds_per_km2": {"type": ["number", "null"], "minimum": 0},
+        "peak_memory_bytes": {"type": ["number", "null"], "minimum": 0},
+        "support_overlap_multiplier": {"type": ["number", "null"], "minimum": 1}
+      }
+    }
+  }
+}

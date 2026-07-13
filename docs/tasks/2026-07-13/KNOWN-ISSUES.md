@@ -4,6 +4,42 @@ Last updated: 2026-07-13
 
 ## Active Blockers
 
+### The current synthesizer is rejected; only its infrastructure is accepted
+
+The LUKE-derived residual bank, patch quilt, masks, hierarchy projection, and immutable preview demonstrated that measured data can be cooked, packed, streamed, decoded, and rendered through LOD -1/-2. User-visible review rejected the resulting geometry as a synthesis solution: added relief is weak and noise-like, water and other invalid regions can still become bumpy, shorelines retain the source 1 m grid character, known DTM defects are preserved, and the method has no defensible model of Estonia's substrate-, soil-, hydrology-, land-use-, or process-dependent variance. Internal seam, mean, quantization, and distribution gates do not repair that quality failure.
+
+The replacement work is intentionally back at research/specification. Independent learned and deterministic/process proposals and independent adversarial critiques are complete. Neither track establishes a universal winning generator; the evidence instead requires typed source repair and a per-regime contest among process, exemplar, conditional simulation, regressor, GAN, diffusion, and hybrid specialists. Three final integrated audits closed the remaining critical/high science, cook/release/runtime, coverage, and evidence-contract defects. They also rejected the first Stage 1 Moore owner test: the archive is now explicitly `target_evidence_insufficient`, and the cheapest proof is structural repair plus acquisition closure. No replacement synthesis implementation is authorized before user approval.
+
+### There is no production-ready Estonia target corpus
+
+The target-data audit found zero production-paired Estonia sites and zero open target-scale Estonia height surfaces. Only one of ten audited non-water regime families has a ready high-resolution exemplar at all: the foreign Moore peat archive, totaling `309.1387 m2` in 68 disconnected plots, about `1.89%` of one `128 m x 128 m` LOD -2 chunk. It cannot teach national context, transitions, or non-peat morphology.
+
+The 0.0625 m output requires measured support finer than its approximately 0.125 m minimum wavelength, with vertical error, per-cell support, surface semantics, visibility, interpolation masks, pairing, and site-level holdouts. Export pixel size or raw point density alone does not qualify. Every unsupported regime must retain corrected structural terrain with no invented residual; credible detail across all Estonia therefore makes a stratified Estonia acquisition program a release dependency.
+
+### Corrected fine terrain cannot remain pinned to raw LOD0
+
+The current pilot's residual-only hook, mean-null projection, verifier, and format-2 overlay explicitly preserve the pinned raw LOD0. That makes it structurally incapable of repairing a grid shoreline, river bump, scan seam, or other one-meter source error without the defect returning during LOD -1 to LOD0 fallback.
+
+The next proof must publish a corrected ordinary format-1 base first: generate a corrected structural surface, derive canonical fine children, derive corrected LOD0 and every affected LOD1-L4 ancestor from browser-decoded children, and pin the existing format-2 negative overlay to that corrected base. This changes cooked content and release/verifier logic, not LAC payload bytes, the asset server, shaders, or synthesis ownership. A separate minimal generic sampling repair is required because trees/boulders/understory/debris still ground at LOD0 rather than the packed fine/morph surface. National multi-parent fine coverage also requires generalizing the currently one-parent release metadata/tooling even though the runtime plane/index code is rectangle-capable.
+
+### National fine-height volume remains a product constraint
+
+The rejected LUKE one-parent diagnostic is `47.18 MB` for 17 published chunks. At that rejected smooth-output ratio, an aligned 16 km pilot is approximately `48.3 GB`; the current full Estonia sheet-grid rectangle projects to approximately `18.25 TB` compressed and `55.23 TB` raw. This is not a forecast: accepted morphology may compress worse. The zero-browser-synthesis law accepts stored geometry, but it does not waive mandatory budgeting for cook GPU-hours, chunk count, packed entropy, object count, upload, cache, replication, and recook cadence before national activation.
+
+### The inherited research reports contain overclaims and at least one citation conflation
+
+`r1.md` over-centers exact block-average consistency and transfers natural-image inverse-problem results to fallible real DTM observations without establishing the measurement operator or a terrain microgeometry prior. Full-paper checks show DDNM guarantees consistency only for an explicit degradation operator and delegates realism to its pretrained prior; MultiDiffusion provides overlapping image-window consensus, not height/slope/normal continuity or geomorphological correctness; Guérin 2017 cGAN delegates its final amplification to the 2016 sparse method.
+
+`r2.md` recommends Guérin 2016 more broadly than the paper supports: the authors state that geomorphological consistency and small-scale coherence are not guaranteed and rely on similar exemplar/target terrains. It also misidentifies Argudo et al. 2017, *The Visual Computer* 33(6), DOI `10.1007/s00371-017-1393-6`, as the orthophoto FCN. That source is *Coherent Multi-Layer Landscape Synthesis*, a multilayer dictionary method; the orthophoto FCN is Argudo, Chica, and Andujar 2018, *Computer Graphics Forum* 37(2), DOI `10.1111/cgf.13345`. The source ledger must expose such corrections rather than silently inheriting either report.
+
+### Current conditioning discards real soil structure and ignores mapped cliff/shore constraints
+
+`process/soil.py` keeps only the first soil component, simplified surface texture, stoniness, and fertility. The national source also contains component shares, layered texture, and humus/peat-horizon thickness. At the supplied Taevaskoda point, ETAK maps a natural shoreline escarpment within 5.32 m and the Ahja shoreline within 1.85 m, yet the rejected synthesis did not use those structures to correct the visible 1 m grid boundary. The replacement specification must treat full soil profiles and mapped structural constraints as first-class cook inputs.
+
+### EGT 1:50,000 geology is not national coverage
+
+Official 1:50,000 bedrock, surficial, and geomorphology packages leave the supplied Taevaskoda point unmapped; the nearest polygon begins roughly 7.05 km away. Any implementation must preserve a coverage/confidence mask and fall back to the 1:200,000 national geology prior. Missing 1:50,000 data must never become an implicit class.
+
 ### LUKE extraction is approved only as a foreign-analogue infrastructure diagnostic
 
 The first real-data pass admitted tree, trunk, deadwood, or crown returns as isolated terrain several metres above ground and remains rejected/archived. The corrected lowest-connected multiview extractor was rerun and visually approved on k11/k32/k36 plus k19 holdout; the calibration bank contains 149 direct measured patches and no elevated islands. LUKE supplies no validated substrate, texture, or geology labels, and unclassified TLS extraction lacks manually labeled ground checkpoints/repeat-scan calibration. It therefore proves ingest, packing, and low-confidence morphology diagnostics only; it cannot validate Estonia soil/geology-conditioned beauty or production amplitude.
@@ -42,7 +78,7 @@ The prior fixed reservation allocated about `576 MiB` for projected vertices and
 
 ### A heightfield cannot represent the Taevaskoda sandstone wall
 
-The supplied reference contains vertical and undercut faces. A single-valued heightfield can only turn these into a steep ramp, regardless of `0.0625 m` spacing. The durable spec now requires a separate cook-produced, packed structural terrain cluster path for such outcrops, with a heightfield stitch collar, collision/material/vegetation ownership, proxy transition, and no runtime synthesis. Until that path has a 3D lithology-specific corpus, the cliff face is not a valid acceptance target for the height generator.
+The supplied reference contains vertical and undercut faces. A single-valued heightfield can only turn these into a steep ramp, regardless of `0.0625 m` spacing. The current spec marks the wall, caves, undercuts, and overlapping geometry out of scope and does not design or authorize another runtime/binary path. A future non-heightfield representation requires its own research corpus, architecture audit, and user-reviewed spec; the wall is not a valid acceptance target for this height generator.
 
 ### Hard masks and morphology selector pass decoded verification
 
@@ -72,4 +108,4 @@ The accepted checkpoint removes the `TerrainField` ceiling failure, CPU `ArrayBu
 
 - The root `estonia-asset-gen` worktree contains unrelated dirty and old-agent changes. Integration must preserve user work and must not copy the obsolete 128 m global-grid rewrite or hash/noise synthesizer.
 - A production pilot preview may be materialized locally, but it must not update `latest.json` until realism, masks, and user-visible acceptance pass.
-- The main spec now contains raw TLS extraction gates, executable factor-conditioning requirements, pilot-only scope, event/matrix separation, and reproducible Taevaskoda visual acceptance. Implementation of the broader factor model remains deferred until the measured mineral-forest pilot is sound.
+- The rewritten replacement spec has completed final adversarial audit and awaits user approval. Its decision is a target-evidence-gated per-regime specialist architecture, not a continuation of the measured mineral-forest quilt. One minimal generic packed-surface grounding correction for trees/boulders/understory/debris is disclosed as an infrastructure dependency; it does not synthesize geometry or change the wire format. Implementation remains deferred until user approval.

@@ -6,6 +6,20 @@
 - Every subagent prompt must explicitly say: **Do not spawn subagents.** Subagents may never delegate further.
 - When model selection is available, use `sol` with high effort only for genuinely difficult synthesis algorithms and consequential scientific/visual judgment. Use normal effort for generation, ingestion, harnesses, routine fixes, and tests.
 
+## Research Standard And Feature Decomposition
+
+- The project target is the best achievable result, not an average implementation, common-case approximation, conventional game shortcut, or minimally working feature. Default engineering instincts toward simplification, familiar patterns, and early implementation are a known risk here and must be actively countered.
+- Treat the requested real-world fidelity literally. Do not silently reduce scope to what fits one ordinary implementation pass, the current familiar toolchain, or the cheapest method; surface actual evidence, data, compute, representation, and schedule requirements instead. If the full target needs staged delivery, every stage must preserve the final quality ceiling and be labeled honestly rather than presented as the feature itself.
+- A feature name is never its specification. Before proposing or implementing it, expand it maximally into the real constituent phenomena, structures, scales, data dependencies, algorithms, and observable quality criteria that make the real thing convincing.
+- Research every consequential constituent independently. If a realistic tree is requested, separately investigate trunk architecture, branch hierarchy, twigs, phyllotaxis and leaf geometry/count/distribution, roots, species and age variation, growth/environment response, bark macrostructure, bark microgeometry, wind behavior, and their representations. Bark or leaves may each require their own substantial multi-paper review.
+- Begin difficult or quality-defining work with a broad primary-source literature and implementation audit. Read full papers, supplements, theses when relevant, official repositories, issue discussions, datasets, licenses, and strong competing methods. Do not design from abstracts, secondary summaries, a single paper, remembered techniques, or the first plausible search result.
+- Explicitly search for prior work whose authors have already spent years on the exact or adjacent problem. Reuse its validated insights and understand its limitations before inventing a local substitute.
+- For major method choices, commission independent evidence-backed proposals and separate adversarial critiques. Critics must check claims against the full primary sources and official code, identify unsupported transfer assumptions, and compare quality ceilings rather than implementation convenience.
+- Record the background reasoning, source ledger, rejected alternatives, evidence boundaries, and remaining unknowns in repository task/research documents before implementation. An implementer must be able to reconstruct why the chosen method is capable of the target quality.
+- Do not collapse a high-fidelity requirement into a toy proxy: a tree is not a pole and sphere, bark is not generic noise, terrain microtopography is not random bumpiness, and realism is not merely "less triangulated."
+- Decomposition does not authorize isolated local perfection that breaks the whole. Reassemble the researched constituents into a coherent system and judge the final user-visible result at its intended scale, density, variance, and context.
+- Harnesses, formats, ingestion, and tests may use pragmatic engineering, but they must not silently lower the quality ceiling of the difficult synthesis or rendering algorithm they support.
+
 ## Real Runtime Acceptance
 
 - A typecheck, unit test, static inspection, HTTP response, or successful asset cook is not a runtime acceptance test.
@@ -33,7 +47,7 @@
 - Runtime abstractions must describe representation and capability, not provenance. Ordinary packed height rungs should flow through the ordinary terrain path; avoid `micro*`/`synthetic*` special handling in `TerrainField` unless the packed format is structurally different and the distinction is justified.
 - The canonical base remains LOD 0 at 1 m texels in 2048 m chunks. Fine rungs are LOD -1 at 0.25 m/512 m and LOD -2 at 0.0625 m/128 m. Do not redefine global LOD 0 as 128 m or create two conflicting base grids.
 - Fine coverage must retain valid parent closure and terrain mesh coverage. A region may not publish fine rungs while losing the terrain parents needed to render it.
-- Maa-amet 1 m DTM is authoritative ground elevation. DSM includes canopy/buildings and must not replace the DTM.
+- Maa-amet 1 m DTM is the preferred ground measurement over DSM, which includes canopy/buildings and must not replace it. The DTM is still a fallible observation: interpolation grids, missing returns, water surfaces, vegetation leakage, and other source defects may require evidence-backed cook-side correction. Do not preserve known errors merely to achieve exact up/downsampling.
 - Downsampling consistency, quantization, seams, and determinism are necessary constraints, not the visual objective. The objective is beautiful, credible, non-repeating geometric variance conditioned by landform, soil, substrate, and geology.
 - Reject decorative hash noise, random per-chunk sine fields, generic FBM, and scene-specific Taevaskoda hacks. Improvements derived from the Taevaskoda reference must generalize to the same physical terrain class elsewhere.
 - Read and verify cited papers themselves before making literature-backed method decisions; do not rely only on research-report summaries.
