@@ -2,7 +2,7 @@
   "$schema": "./sources.schema.json",
   "schema_version": "microtopography-source-ledger/2.0.0",
   "generated_on": "2026-07-13",
-  "scope": "Bibliographic and artifact ledger for r1.md, r2.md, SPEC-MICROTOPOGRAPHY.md, and parent-requested additions. This is not an architecture recommendation.",
+  "scope": "Bibliographic and artifact ledger for r1.md, r2.md, docs/specs/terrain/MICROTOPOGRAPHY.md, and user-requested additions. This is not an architecture recommendation.",
   "status_note": "Normalized evidence ledger. Explicit unknown or not_normalized fields block claims; they are not empty successes.",
   "provenance": {
     "migration": "v1 records and repositories normalized without deleting a source; Crossref/arXiv used only for publication metadata",
@@ -15532,6 +15532,369 @@
         "applicability": "Terrain-feature-line-constrained filling of macro-scale ASTER GDEMv3 and TanDEM-X voids. Reported errors are tens of metres (MAE 28.91 +/- 9.45 m; RMSE 38.16 +/- 13.00 m); it is not fine-detail amplification. No official code or legal full text was identified, and it must not be conflated with the different RSAGAN paper/repository.",
         "code_repo": null,
         "packages": null
+      }
+    },
+    {
+      "id": "maaruumiamet-open-data-license-2025",
+      "kind": "official_license",
+      "citation": {
+        "author_status": "verified_local_primary",
+        "authors": [
+          {
+            "display_name": "Maa- ja Ruumiamet",
+            "given": null,
+            "family": null,
+            "orcid": null
+          }
+        ],
+        "title": "Maa- ja Ruumiamet Open Data License",
+        "year": 2025,
+        "venue": "Maa- ja Ruumiamet Geoportal",
+        "doi": null,
+        "metadata_source": "official_license_page_reviewed_2026-07-13"
+      },
+      "identifiers": {
+        "canonical_url": "https://geoportaal.maaruum.ee/avaandmete-litsents",
+        "related_record_ids": [
+          "maaruumiamet-als-tile-444679-epochs"
+        ]
+      },
+      "access": {
+        "status": "open_full_text_online",
+        "checked_at": "2026-07-13",
+        "result": "official_license_text_reviewed_online; local immutable snapshot required before retained data use",
+        "full_text_basis": "official_online",
+        "flags": []
+      },
+      "review": {
+        "status": "primary_metadata",
+        "scope": [
+          "commercial_and_noncommercial_use",
+          "modification_and_combination",
+          "derivative_and_redistribution_rights",
+          "attribution_requirements"
+        ],
+        "reviewer_record": "docs/deep-research/microtopography-generation/review/TAEVASKODA-ALS-SELECTION.md",
+        "consequential_judgment_allowed": true
+      },
+      "artifacts": [],
+      "licensing": {
+        "status": "verified",
+        "name": "Maa- ja Ruumiamet open-data license dated 2025-01-01",
+        "spdx": null,
+        "url": "https://geoportaal.maaruum.ee/avaandmete-litsents",
+        "applies_to": "data",
+        "training_use": "allowed",
+        "derivative_distribution": "allowed",
+        "restrictions": [
+          "identify Maa- ja Ruumiamet as provider",
+          "identify the dataset and data age or extraction date",
+          "include the license text or link when publishing or redistributing"
+        ],
+        "notes": "No SPDX identifier is inferred. Snapshot and hash the controlling official text before retaining selected source data."
+      },
+      "software": {
+        "availability": "not_applicable",
+        "repository_record_ids": [],
+        "official_status": "not_applicable"
+      },
+      "data_and_checkpoints": {
+        "data_status": "not_applicable",
+        "data_record_ids": [
+          "maaruumiamet-als-tile-444679-epochs"
+        ],
+        "checkpoint_status": "not_applicable",
+        "checkpoint_artifact_ids": []
+      },
+      "demonstration": {
+        "status": "not_applicable",
+        "task": null,
+        "geography_and_regime": null,
+        "input_scale": {
+          "sample_pitch_m": null,
+          "support_m": null,
+          "extent_m": null,
+          "text": null
+        },
+        "output_scale": {
+          "sample_pitch_m": null,
+          "support_m": null,
+          "extent_m": null,
+          "text": null
+        },
+        "degradation_or_observation": null,
+        "training_data": null,
+        "evaluation": null
+      },
+      "evidence": {
+        "status": "not_applicable",
+        "direct_finding": "The official terms permit use, modification, derivatives, combination, and redistribution subject to attribution and age/extract-date requirements.",
+        "limitation": "The license grants rights; it does not establish geometric accuracy, surface semantics, or suitability as target truth.",
+        "permitted_project_transfer": "Retain, analyze, convert, train on, and redistribute compliant derivatives of covered Maa- ja Ruumiamet data with required attribution.",
+        "prohibited_inference": "Do not infer an SPDX identity or scientific qualification from open-data status.",
+        "legacy_applicability": null
+      },
+      "mentioned_in": [
+        "public-data-amendment",
+        "stage1-structural-repair"
+      ],
+      "legacy_v1": {}
+    },
+    {
+      "id": "maaruumiamet-als-tile-444679-epochs",
+      "kind": "official_dataset",
+      "citation": {
+        "author_status": "verified_local_primary",
+        "authors": [
+          {
+            "display_name": "Maa- ja Ruumiamet",
+            "given": null,
+            "family": null,
+            "orcid": null
+          }
+        ],
+        "title": "Airborne Laser Scanning Height Points, Tile 444679, Eight Epochs",
+        "year": 2024,
+        "venue": "Maa- ja Ruumiamet Geoportal",
+        "doi": null,
+        "metadata_source": "official_download_service_and_2023_header_audit"
+      },
+      "identifiers": {
+        "canonical_url": "https://geoportaal.maaruum.ee/est/ruumiandmed/korgusandmed/laadi-korgusandmed-alla-p614.html",
+        "related_record_ids": [
+          "maaruumiamet-als-iii-2016-2020",
+          "maaruumiamet-open-data-license-2025"
+        ]
+      },
+      "access": {
+        "status": "metadata_only",
+        "checked_at": "2026-07-13",
+        "result": "eight exact open LAZ endpoints verified; files not yet retained in the project evidence library",
+        "full_text_basis": "none",
+        "flags": []
+      },
+      "review": {
+        "status": "primary_metadata",
+        "scope": [
+          "official_tile_and_epoch_inventory",
+          "exact_download_endpoints",
+          "2023_byte_and_LAS_header_audit",
+          "classification_and_overlap_risks",
+          "structural_repair_role"
+        ],
+        "reviewer_record": "docs/deep-research/microtopography-generation/review/TAEVASKODA-ALS-SELECTION.md",
+        "consequential_judgment_allowed": true
+      },
+      "artifacts": [],
+      "licensing": {
+        "status": "verified",
+        "name": "Maa- ja Ruumiamet open-data license dated 2025-01-01",
+        "spdx": null,
+        "url": "https://geoportaal.maaruum.ee/avaandmete-litsents",
+        "applies_to": "data",
+        "training_use": "allowed",
+        "derivative_distribution": "allowed",
+        "restrictions": [
+          "identify Maa- ja Ruumiamet as provider",
+          "identify raw airborne-laser-scanning height points for tile 444679",
+          "record data age or extraction date",
+          "include the official license text or link"
+        ],
+        "notes": "Rights permit use; per-cell surface qualification remains mandatory."
+      },
+      "software": {
+        "availability": "not_applicable",
+        "repository_record_ids": [],
+        "official_status": "not_applicable"
+      },
+      "data_and_checkpoints": {
+        "data_status": "open_not_downloaded",
+        "data_record_ids": [],
+        "checkpoint_status": "none",
+        "checkpoint_artifact_ids": []
+      },
+      "demonstration": {
+        "status": "normalized_from_full_primary_audit",
+        "task": "multi-epoch raw ALS evidence for typed source repair",
+        "geography_and_regime": "Suur Taevaskoda and Ahja River valley, Estonia; forested banks, river, escarpment, cliff top and shoulder",
+        "input_scale": {
+          "sample_pitch_m": 0.437,
+          "support_m": null,
+          "extent_m": 1000,
+          "text": "The 2023 tile-average total density is 5.234 points/m2, equivalent to 0.437 m mean spacing before class, overlap, visibility, or support filtering. Other epochs require audit."
+        },
+        "output_scale": {
+          "sample_pitch_m": null,
+          "support_m": null,
+          "extent_m": 1000,
+          "text": "Raw point observations only; no accepted raster target surface exists."
+        },
+        "degradation_or_observation": "airborne laser scanning across 2011, 2015, 2016 low-flight, 2017 forestry, 2019, 2021 forestry, 2023, and 2024 forestry campaigns",
+        "training_data": "not a microtopography training target; exact site remains outside morphology training and tuning",
+        "evaluation": "point classes, overlap/strip support, temporal agreement, water and vegetation risk, and protected-feature checks must qualify each accepted correction cell"
+      },
+      "evidence": {
+        "status": "normalized_from_full_primary_audit",
+        "direct_finding": "Eight open raw ALS epochs cover exact tile 444679. The audited 2023 file has 5,234,018 points, LAS 1.4 point format 8, 68,066,160 bytes, and SHA-256 9c50c123f14841c717d0d123d2d08061b87a51baf6d806ef269fabf1036a9fb7.",
+        "limitation": "Total density is sparse relative to 6.25 cm output; ground support is nonuniform; water, canopy, overlap, classifier, steep-face visibility, temporal change, and correlated DTM provenance remain unresolved until file-level conversion and QA.",
+        "permitted_project_transfer": "Use qualified non-overlap points and multi-epoch disagreement to diagnose and support typed structural repair of the 1 m DTM, water surface, bank, shore, cliff top, and shoulder.",
+        "prohibited_inference": "Do not use the cloud as 6.25 cm morphology truth, average epochs into a static surface, interpret class 9 as bed, or treat every class-2 point as valid ground.",
+        "legacy_applicability": null
+      },
+      "mentioned_in": [
+        "public-data-amendment",
+        "stage1-structural-repair"
+      ],
+      "legacy_v1": {}
+    },
+    {
+      "id": "dataset.hovi-2024-forest-field",
+      "kind": "dataset",
+      "citation": {
+        "author_status": "verified_local_primary",
+        "authors": [
+          {
+            "display_name": "Aarne Hovi",
+            "given": "Aarne",
+            "family": "Hovi",
+            "orcid": null
+          },
+          {
+            "display_name": "Daniel Schraik",
+            "given": "Daniel",
+            "family": "Schraik",
+            "orcid": null
+          },
+          {
+            "display_name": "Jan Hanuš",
+            "given": "Jan",
+            "family": "Hanuš",
+            "orcid": null
+          },
+          {
+            "display_name": "Petr Lukeš",
+            "given": "Petr",
+            "family": "Lukeš",
+            "orcid": null
+          },
+          {
+            "display_name": "Zuzana Lhotáková",
+            "given": "Zuzana",
+            "family": "Lhotáková",
+            "orcid": null
+          },
+          {
+            "display_name": "Lucie Homolová",
+            "given": "Lucie",
+            "family": "Homolová",
+            "orcid": null
+          },
+          {
+            "display_name": "Miina Rautiainen",
+            "given": "Miina",
+            "family": "Rautiainen",
+            "orcid": null
+          }
+        ],
+        "title": "A spectral-structural characterization of European temperate, hemiboreal and boreal forests: Laboratory and field data",
+        "year": 2024,
+        "venue": "Fairdata",
+        "doi": "10.23729/9a8d90cd-73e2-438d-9230-94e10e61adc9",
+        "metadata_source": "official_fairdata_record_dataset_readme_and_essd_data_paper"
+      },
+      "identifiers": {
+        "canonical_url": "https://doi.org/10.23729/9a8d90cd-73e2-438d-9230-94e10e61adc9",
+        "related_record_ids": []
+      },
+      "access": {
+        "status": "open_full_text_online",
+        "checked_at": "2026-07-13",
+        "result": "Official Fairdata dataset and exact Metax inventory are open; the frozen 43-file selection is recorded but its point-cloud and image binaries have not been downloaded.",
+        "full_text_basis": "official_online",
+        "flags": []
+      },
+      "review": {
+        "status": "primary_metadata",
+        "scope": [
+          "official_dataset_record_and_license",
+          "official_4502_file_metax_inventory",
+          "dataset_readme_and_methods",
+          "exact_43_file_zero_purchase_selection",
+          "campaign_split_and_target_qualification_limits"
+        ],
+        "reviewer_record": "docs/deep-research/microtopography-generation/review/HOVI-PUBLIC-TARGET-SELECTION.md",
+        "consequential_judgment_allowed": false
+      },
+      "artifacts": [],
+      "licensing": {
+        "status": "verified",
+        "name": "Creative Commons Attribution 4.0 International",
+        "spdx": "CC-BY-4.0",
+        "url": "https://creativecommons.org/licenses/by/4.0/legalcode",
+        "applies_to": "data",
+        "training_use": "allowed",
+        "derivative_distribution": "allowed",
+        "restrictions": [
+          "attribute the dataset and creators",
+          "include the CC BY 4.0 license link",
+          "indicate conversion, classification, rasterization, and other changes"
+        ],
+        "notes": "Data and cooked data derivatives may be used and distributed with attribution and change notice. Public model or checkpoint treatment remains subject to legal review."
+      },
+      "software": {
+        "availability": "not_applicable",
+        "repository_record_ids": [],
+        "official_status": "not_applicable"
+      },
+      "data_and_checkpoints": {
+        "data_status": "open_not_downloaded",
+        "data_record_ids": [],
+        "checkpoint_status": "not_applicable",
+        "checkpoint_artifact_ids": []
+      },
+      "demonstration": {
+        "status": "normalized_from_full_primary_audit",
+        "task": "multi-position forest terrestrial-laser-scanning observations and sparse forest-floor/context measurements for raw candidate-surface qualification",
+        "geography_and_regime": "The frozen subset contains Hyytiälä boreal forest plots HY_SPRUCE4 and HY_PINE2 in Finland plus the sealed Järvselja hemiboreal forest plot JS_SPRUCE1 in Estonia.",
+        "input_scale": {
+          "sample_pitch_m": 0.02,
+          "support_m": null,
+          "extent_m": 35,
+          "text": "Each selected preview LAZ merges 16 Leica P40 scans and was thinned to an average 0.02 m point spacing over an approximately 35 x 35 m crop; this is nominal preview sampling, not terrain accuracy or uniform ground support."
+        },
+        "output_scale": {
+          "sample_pitch_m": null,
+          "support_m": null,
+          "extent_m": null,
+          "text": "No accepted raster target or synthesized height output exists."
+        },
+        "degradation_or_observation": "Leica P40 TLS at approximately 0.23 mrad angular pitch; 16 views were registered, merged, and thinned for preview, removing per-view identity from the selected LAZ files.",
+        "training_data": "The license permits training, but this unqualified selection is not authorized as morphology target truth or production supervision.",
+        "evaluation": "Qualification requires surface semantics, unique-view and angular support, spacing and interpolation bounds, independent horizontal and vertical error, wavelength transfer, full-scan comparison, and a frozen blind Estonia evaluation."
+      },
+      "evidence": {
+        "status": "normalized_from_full_primary_audit",
+        "direct_finding": "The official Fairdata/Metax release contains 4,502 files. The exact zero-purchase first-conversion selection in asset-gen/config/hovi-public-targets.json freezes 43 official file tuples totaling 7,241,800,875 bytes: seven shared metadata files and 12 files for each of HY_SPRUCE4, HY_PINE2, and JS_SPRUCE1. The associated data paper is DOI 10.5194/essd-16-5069-2024; the related airborne dataset is DOI 10.23729/c6da63dd-f527-4ec9-8401-57c14f77d19f.",
+        "limitation": "The three plots represent only two independent sites and two campaigns. The preview clouds are merged and 2 cm-thinned, lack per-view identity, have no accepted terrain-surface semantics or vertical datum tie, and do not establish error or recoverable geometry by wavelength.",
+        "permitted_project_transfer": "Use the selected files for parser, coordinate-transform, semantic-mask, support-map, candidate-surface, and conditional full-scan qualification work. HY_SPRUCE4 and HY_PINE2 are development plots; JS_SPRUCE1 remains sealed for the frozen blind transfer check.",
+        "prohibited_inference": "Do not treat nominal 2 cm point spacing, sub-centimeter registration tolerance, or visual smoothness as 6.25 cm terrain truth. Do not authorize synthesis, release a regime owner, tune on JS_SPRUCE1, count plots as independent sites, or generalize these forest plots to other Estonia terrain classes.",
+        "legacy_applicability": null
+      },
+      "mentioned_in": [
+        "nordic-public-target-data-hunt",
+        "hovi-public-target-selection"
+      ],
+      "legacy_v1": {
+        "selection_config": "asset-gen/config/hovi-public-targets.json",
+        "selection_id": "hovi-2024-jarvselja-hyytiala-first-conversion-v1",
+        "dataset_uuid": "ace2a123-00ff-4944-951e-eddbe209b70c",
+        "data_paper_doi": "10.5194/essd-16-5069-2024",
+        "related_airborne_dataset_doi": "10.23729/c6da63dd-f527-4ec9-8401-57c14f77d19f",
+        "selected_file_count": 43,
+        "selected_bytes": 7241800875,
+        "role": "raw_candidate",
+        "qualification_status": "unqualified",
+        "transfer_ceiling": "none"
       }
     },
     {

@@ -252,6 +252,22 @@ def micro_plan_cmd(
     click.echo("published: 16 LOD -2 + 1 LOD -1; transient support: 9 LOD -2")
 
 
+@main.command("evidence-fetch-als")
+@click.option(
+    "--selection",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Strict ALS selection JSON; defaults to config/taevaskoda-als.json",
+)
+@click.option("--year", "years", multiple=True, type=int, help="Fetch only selected years")
+def evidence_fetch_als_cmd(selection: Path | None, years: tuple[int, ...]) -> None:
+    """Retain preregistered public ALS bytes with HTTP and license provenance."""
+    from .fetch.als import fetch_als_selection
+
+    path = fetch_als_selection(load_base(), selection, years=years, log=click.echo)
+    click.echo(f"retention manifest: {path}")
+
+
 @main.command("micro-recipe")
 @click.option("--parent-cx", required=True, type=int)
 @click.option("--parent-cz", required=True, type=int)

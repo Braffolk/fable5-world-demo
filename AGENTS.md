@@ -71,6 +71,11 @@
 - Tests never replace the mandatory real WebGPU boot.
 - Visual acceptance is user-observable ground-level output, not internal metrics alone.
 
+## Python Tooling
+
+- Use `uv` for Python execution, environments, and package management. Run scripts and modules through `uv run`, for example `uv run myscript.py` or `uv run python -m package.module`; do not invoke `.venv/bin/python`, `pip`, or another package manager directly.
+- Run dependency changes through the appropriate `uv add`, `uv remove`, `uv sync`, or lock workflow so `pyproject.toml` and `uv.lock` remain the reproducible authority.
+
 ## Task Records And Git
 
 - Maintain the current microtopography task records at `docs/tasks/2026-07-13/TASKLIST.md` and `docs/tasks/2026-07-13/KNOWN-ISSUES.md`. The year is **2026**, never 2025.

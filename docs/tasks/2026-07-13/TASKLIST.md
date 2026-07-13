@@ -65,7 +65,10 @@ Ship beautiful, physically credible, materially and geomorphologically condition
 - [x] Record the user's zero-external-budget decision: paid Estonia acquisition and a separately funded non-heightfield cliff project are rejected unless explicitly reopened.
 - [x] Audit public equivalent target data in Latvia/Lithuania, Finland/Sweden, and Estonia/Taevaskoda through separate primary-source evidence hunts; classify actual qualification rather than nominal resolution.
 - [x] Fold qualifying public-data findings and the closed product decisions into the durable spec, move it to `docs/specs/terrain/MICROTOPOGRAPHY.md`, and update every authority reference. Candidate binaries enter the machine ledger only when selected for conversion.
-- [ ] Check in `PUBLIC-TARGET-QUALIFICATION-PROTOCOL.md` and machine ledger records for the exact selective Hovi Järvselja/Hyytiälä files and exact Taevaskoda ALS epochs before retaining or converting them.
+- [x] Check in `PUBLIC-TARGET-QUALIFICATION-PROTOCOL.md` and machine ledger records for the exact selective Hovi Järvselja/Hyytiälä files and exact Taevaskoda ALS epochs before retaining or converting them.
+- [x] Freeze the bounded zero-cost conversion inputs: 43 Hovi files totaling 7,241,800,875 bytes, eight official Taevaskoda ALS epochs, and one 351,166,481-byte Biała Góra calibration epoch; do not authorize bulk Biała acquisition.
+- [x] Add an independently audited, content-addressed Taevaskoda ALS retention path that binds the frozen selection, source/license snapshots, response provenance, actual bytes, and partial/complete state.
+- [ ] Retain and inventory the eight Taevaskoda ALS epochs; keep them `calibration_only` for typed structural repair and never treat them as 6.25 cm morphology truth.
 - [ ] Implement Stage 1 Taevaskoda typed structural repair and corrected parent hierarchy, run the bounded real-WebGPU boot, and provide the immutable live URL for visual review.
 - [ ] Implement a morphology specialist only after its public target subset passes conversion, support/error/semantics QA, analogue/OOD qualification, and a target-specific preregistration.
 

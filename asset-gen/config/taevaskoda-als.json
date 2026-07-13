@@ -1,0 +1,101 @@
+{
+  "schema_version": "taevaskoda-als-selection/1.0.0",
+  "id": "taevaskoda-als-444679-stage1",
+  "stage": "stage1-structural-repair",
+  "morphology_target": false,
+  "tile": {
+    "id": "444679",
+    "crs": "EPSG:3301",
+    "bounds": {
+      "min_x": 679000.0,
+      "min_y": 6444000.0,
+      "max_x_exclusive": 680000.0,
+      "max_y_exclusive": 6445000.0
+    }
+  },
+  "source_index_url": "https://geoportaal.maaamet.ee/index.php?lang_id=1&plugin_act=otsing&page_id=614&kaardiruut=444679&andmetyyp=lidar_laz_tava",
+  "license": {
+    "url": "https://geoportaal.maaruum.ee/avaandmete-litsents",
+    "effective_date": "2025-01-01"
+  },
+  "required_attribution": {
+    "provider": "Maa- ja Ruumiamet",
+    "dataset": "Airborne laser scanning height points, tile 444679",
+    "include_data_age_or_extraction_date": true,
+    "include_license_text_or_url": true
+  },
+  "files": [
+    {
+      "year": 2011,
+      "type": "lidar_laz_tava",
+      "filename": "444679_2011_tava.laz",
+      "role": "corroboration",
+      "canonical_url": "https://geoportaal.maaamet.ee/index.php?lang_id=1&plugin_act=otsing&kaardiruut=444679&andmetyyp=lidar_laz_tava&dl=1&f=444679_2011_tava.laz&page_id=614",
+      "bytes": null,
+      "sha256": null
+    },
+    {
+      "year": 2015,
+      "type": "lidar_laz_tava",
+      "filename": "444679_2015_tava.laz",
+      "role": "corroboration",
+      "canonical_url": "https://geoportaal.maaamet.ee/index.php?lang_id=1&plugin_act=otsing&kaardiruut=444679&andmetyyp=lidar_laz_tava&dl=1&f=444679_2015_tava.laz&page_id=614",
+      "bytes": null,
+      "sha256": null
+    },
+    {
+      "year": 2016,
+      "type": "lidar_laz_madal",
+      "filename": "444679_2016_madal.laz",
+      "role": "conditional_corroboration",
+      "canonical_url": "https://geoportaal.maaamet.ee/index.php?lang_id=1&plugin_act=otsing&kaardiruut=444679&andmetyyp=lidar_laz_madal&dl=1&f=444679_2016_madal.laz&page_id=614",
+      "bytes": null,
+      "sha256": null
+    },
+    {
+      "year": 2017,
+      "type": "lidar_laz_mets",
+      "filename": "444679_2017_mets.laz",
+      "role": "complementary",
+      "canonical_url": "https://geoportaal.maaamet.ee/index.php?lang_id=1&plugin_act=otsing&kaardiruut=444679&andmetyyp=lidar_laz_mets&dl=1&f=444679_2017_mets.laz&page_id=614",
+      "bytes": null,
+      "sha256": null
+    },
+    {
+      "year": 2019,
+      "type": "lidar_laz_tava",
+      "filename": "444679_2019_tava.laz",
+      "role": "corroboration",
+      "canonical_url": "https://geoportaal.maaamet.ee/index.php?lang_id=1&plugin_act=otsing&kaardiruut=444679&andmetyyp=lidar_laz_tava&dl=1&f=444679_2019_tava.laz&page_id=614",
+      "bytes": null,
+      "sha256": null
+    },
+    {
+      "year": 2021,
+      "type": "lidar_laz_mets",
+      "filename": "444679_2021_mets.laz",
+      "role": "complementary",
+      "canonical_url": "https://geoportaal.maaamet.ee/index.php?lang_id=1&plugin_act=otsing&kaardiruut=444679&andmetyyp=lidar_laz_mets&dl=1&f=444679_2021_mets.laz&page_id=614",
+      "bytes": null,
+      "sha256": null
+    },
+    {
+      "year": 2023,
+      "type": "lidar_laz_tava",
+      "filename": "444679_2023_tava.laz",
+      "role": "primary_candidate",
+      "canonical_url": "https://geoportaal.maaamet.ee/index.php?lang_id=1&plugin_act=otsing&kaardiruut=444679&andmetyyp=lidar_laz_tava&dl=1&f=444679_2023_tava.laz&page_id=614",
+      "bytes": 68066160,
+      "sha256": "9c50c123f14841c717d0d123d2d08061b87a51baf6d806ef269fabf1036a9fb7"
+    },
+    {
+      "year": 2024,
+      "type": "lidar_laz_mets",
+      "filename": "444679_2024_mets.laz",
+      "role": "complementary_change",
+      "canonical_url": "https://geoportaal.maaamet.ee/index.php?lang_id=1&plugin_act=otsing&kaardiruut=444679&andmetyyp=lidar_laz_mets&dl=1&f=444679_2024_mets.laz&page_id=614",
+      "bytes": null,
+      "sha256": null
+    }
+  ]
+}

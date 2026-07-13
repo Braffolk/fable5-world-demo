@@ -32,6 +32,13 @@ and Estonia out-of-distribution sentinels. Any remaining unsupported regime must
 abstain; the spec may not quietly restore paid acquisition as a next step unless
 the user explicitly reopens budget.
 
+The first exact zero-cost selections are now frozen rather than left as dataset
+names: 43 Hovi files (`6.7445 GiB`) across Hyytiälä development/stress and sealed
+Järvselja transfer, all eight official Taevaskoda ALS epochs for structural repair,
+and one `334.90 MiB` Biała Góra epoch for a later calibration-only audit. No Hovi or
+Biała geometry has been downloaded. The Taevaskoda retention path is independently
+audited, but the eight ALS files still require acquisition and file-level inventory.
+
 ### Corrected fine terrain cannot remain pinned to raw LOD0
 
 The current pilot's residual-only hook, mean-null projection, verifier, and format-2 overlay explicitly preserve the pinned raw LOD0. That makes it structurally incapable of repairing a grid shoreline, river bump, scan seam, or other one-meter source error without the defect returning during LOD -1 to LOD0 fallback.

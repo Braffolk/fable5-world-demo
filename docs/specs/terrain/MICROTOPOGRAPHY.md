@@ -2271,6 +2271,7 @@ The implementer must read these before code:
 - `docs/deep-research/microtopography-generation/review/BALTIC-PUBLIC-TARGET-DATA-HUNT.md`;
 - `docs/deep-research/microtopography-generation/review/NORDIC-PUBLIC-TARGET-DATA-HUNT.md`;
 - `docs/deep-research/microtopography-generation/review/TAEVASKODA-ESTONIA-PUBLIC-SCAN-HUNT.md`;
+- `docs/specs/terrain/PUBLIC-TARGET-QUALIFICATION-PROTOCOL.md`;
 - `docs/deep-research/microtopography-generation/review/contracts/regime-release-registry.schema.json`;
 - `docs/deep-research/microtopography-generation/review/contracts/regime-release-rows.initial.json`;
 - `docs/deep-research/microtopography-generation/review/contracts/regime-initial-status.json`;
