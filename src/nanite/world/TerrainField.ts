@@ -569,6 +569,18 @@ export class TerrainField {
     return out as unknown as NV4;
   }
 
+  /** Discrete biome/land-cover class at the nearest source texel. The remaining
+   *  biome channels stay linearly filtered through biomeAt(); class ids must not
+   *  interpolate through unrelated numeric categories at polygon boundaries. */
+  biomeClassAt(wxz: NV2): NF {
+    if (this.biomeLevels.length === 0) return float(0) as unknown as NF;
+    const out = float(0).toVar();
+    hotLevelChain(this.biomeLevels, wxz, (lvl) => {
+      out.assign(planeNearest(lvl, wxz));
+    });
+    return out as unknown as NF;
+  }
+
   /** #116 soil sample [texCore, stoniness, boniteet, texSkeleton] (raw byte /255 — the
    *  material decodes per channel: ×255 for the id/score channels). ONE filtered rgba8
    *  tap of the single soil level (LOD0 only — soil is pilot-near); the level wraps on

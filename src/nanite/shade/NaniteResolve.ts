@@ -50,6 +50,7 @@ import {
   smoothstep,
   texture,
   uint,
+  uniform,
   vec2,
   vec3,
   vec4,
@@ -575,6 +576,33 @@ export function buildNaniteResolve(
     if ((pass === 'terr' || pass === 'both') && hasClass(0)) If(isT, () => {
       // TerrainField planes: normal/slope = in-shader height-plane CD,
       // fields/biome plane taps, riverDepth derived (spec §3).
+      // Preserve StreamOrigin-relative precision for centimetre-scale material
+      // carriers. Each baked channel/scale has its own mirrored-repeat period,
+      // so cache a CPU-f64 anchor phase for that normalized denominator. The
+      // phase changes only on a rare StreamOrigin rebase; texture count and
+      // bindings are unchanged.
+      const noisePhases = new Map<number, ReturnType<typeof uniform>>();
+      const noiseCoord = streamed
+        ? (periodM: number): NV3 => {
+            let phase = noisePhases.get(periodM);
+            if (!phase) {
+              const mod2 = (v: number): number => ((v % 2) + 2) % 2;
+              const nextPhase = uniform(new Vector3());
+              nextPhase.onRenderUpdate(function (this: typeof nextPhase): void {
+                this.value.set(
+                  mod2(cam.anchorX / periodM),
+                  0,
+                  mod2(cam.anchorZ / periodM),
+                );
+              });
+              phase = nextPhase;
+              noisePhases.set(periodM, phase);
+            }
+            return vec3(wpRel)
+              .div(periodM)
+              .add(vec3(phase as unknown as NV3)) as unknown as NV3;
+          }
+        : undefined;
       const shading = buildTerrainShading({
         field: world.field,
         noiseA: hf.noiseA as StorageTexture,
@@ -586,7 +614,7 @@ export function buildNaniteResolve(
         // it off (an A/B toggle beside ?watercover; default on where a soil plane exists).
         // No-op on the generated world (hasSoil already false ⇒ compile-time bit-identical).
         hasSoil: world.field.hasSoil && new URLSearchParams(window.location.search).get('soil') !== '0',
-        surf: { wp, camPos },
+        surf: { wp, camPos, noiseCoord },
       });
       let tc: NV3 = shading.colorNode;
       const cctx = causticContext();

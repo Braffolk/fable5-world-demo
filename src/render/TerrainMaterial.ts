@@ -78,7 +78,14 @@ export interface TerrainShadingInputs {
    * bit-identical graphs by construction. Every other input above is already
    * world-space-parametric (textures fetched by world uv derived from wp).
    */
-  surf?: { wp: NV3; camPos: NV3 };
+  surf?: {
+    wp: NV3;
+    camPos: NV3;
+    /** Precision-safe normalized world coordinate for baked material noise.
+     *  Streamed resolve supplies anchor-relative position plus a CPU-f64 world
+     *  phase; forward/generated materials omit it and retain the old path. */
+    noiseCoord?: (periodM: number) => NV3;
+  };
 }
 
 export interface TerrainShading {
@@ -119,21 +126,6 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
   const wxz = wp.xz;
   const h = wp.y;
 
-  // --- baked-noise helpers (uv = world / (scale · channel period)) -----------
-  /** value noise [0,1] at world feature scale `s` m */
-  const val = (s: number, ox = 0, oz = 0): NF =>
-    texture(inp.noiseA, wxz.div(s * PERIOD_VAL).add(vec2(ox, oz))).x;
-  /** signed value noise [-1,1] */
-  const valS = (s: number, ox = 0, oz = 0): NF => val(s, ox, oz).mul(2).sub(1);
-  /** fbm-3 [0,1] */
-  const fbmV = (s: number, ox = 0, oz = 0): NF =>
-    texture(inp.noiseA, wxz.div(s * PERIOD_FBM).add(vec2(ox, oz))).y;
-  /** fbm-3 gradient (d/dx, d/dz in world units at feature scale s) */
-  const fbmG = (s: number, ox = 0, oz = 0): NV2 =>
-    texture(inp.noiseA, wxz.div(s * PERIOD_FBM).add(vec2(ox, oz))).zw.div(s);
-  /** ridged-3 gradient (world units at feature scale s) */
-  const ridG = (s: number): NV2 =>
-    texture(inp.noiseB, wxz.div(s * PERIOD_RID)).xy.div(s);
   /** 1D band noise [0,1] along an arbitrary phase axis */
   const band = (phase: NF, lane: NF): NF =>
     texture(inp.noiseA, vec2(phase, lane).div(PERIOD_VAL)).x;
@@ -167,6 +159,49 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
     .mul(smoothstep(0.02, 0.1, riverRaw)) as unknown as NF;
   const baseNormal = ns.xyz.normalize().toVar();
   const slope = ns.w.toVar();
+
+  // --- baked-noise helpers ---------------------------------------------------
+  // Streamed scalar carriers use one continuous oblique projection. XZ remains
+  // unchanged on a level surface (Y contributes only a constant translation),
+  // while the unit-length Y shear gives vertical faces real surface variation.
+  // Unlike dominant-axis box projection this has no orientation-switch seams;
+  // unlike triplanar it retains exactly one texture fetch. Generated/forward
+  // materials omit noiseCoord and compile their original XZ graph unchanged.
+  const shearX = 0.754877666;
+  const shearZ = 0.655865425;
+  const noise3 = (periodM: number): NV3 =>
+    inp.surf?.noiseCoord?.(periodM) ?? (wp.div(periodM) as unknown as NV3);
+  const noiseUv = (periodM: number): NV2 => {
+    const p = noise3(periodM);
+    if (!inp.surf?.noiseCoord) return p.xz;
+    return vec2(p.x.add(p.y.mul(shearX)), p.z.add(p.y.mul(shearZ))) as unknown as NV2;
+  };
+  const liftNoiseGradient = (g: NV2): NV3 => {
+    if (!inp.surf?.noiseCoord) return vec3(g.x, 0, g.y) as unknown as NV3;
+    return vec3(g.x, g.x.mul(shearX).add(g.y.mul(shearZ)), g.y) as unknown as NV3;
+  };
+  const tangentNoiseGradient = (g: NV3): NV3 => {
+    if (!inp.surf?.noiseCoord) return g;
+    return g.sub(baseNormal.mul(baseNormal.dot(g))) as unknown as NV3;
+  };
+  /** value noise [0,1] at world feature scale `s` m */
+  const val = (s: number, ox = 0, oz = 0): NF =>
+    texture(inp.noiseA, noiseUv(s * PERIOD_VAL).add(vec2(ox, oz))).x;
+  /** signed value noise [-1,1] */
+  const valS = (s: number, ox = 0, oz = 0): NF => val(s, ox, oz).mul(2).sub(1);
+  /** fbm-3 [0,1] */
+  const fbmV = (s: number, ox = 0, oz = 0): NF =>
+    texture(inp.noiseA, noiseUv(s * PERIOD_FBM).add(vec2(ox, oz))).y;
+  /** projected fbm/ridged gradients for cosmetic normal detail */
+  const fbmGW = (s: number, ox = 0, oz = 0): NV3 =>
+    liftNoiseGradient(texture(inp.noiseA, noiseUv(s * PERIOD_FBM).add(vec2(ox, oz))).zw.div(s));
+  const ridGW = (s: number): NV3 =>
+    liftNoiseGradient(texture(inp.noiseB, noiseUv(s * PERIOD_RID)).xy.div(s));
+  /** XZ gradients remain paired with the actual heightfield displacement. */
+  const fbmGXz = (s: number): NV2 =>
+    texture(inp.noiseA, noise3(s * PERIOD_FBM).xz).zw.div(s) as unknown as NV2;
+  const ridGXz = (s: number): NV2 =>
+    texture(inp.noiseB, noise3(s * PERIOD_RID).xz).xy.div(s) as unknown as NV2;
   // the TerrainField plane taps ARE the field at any distance (the coarsest
   // biome/height levels are country floors) — consumed directly, near and far.
   const snowField = snowRaw;
@@ -341,7 +376,13 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
   // `landcover` (the cooked ETAK source): the generated world packs the Biome enum
   // in classId instead, so its graph is compile-time BIT-IDENTICAL.
   if (inp.landcover) {
-    const cid = (bio.x as unknown as NF).mul(255);
+    const cid = field.biomeClassAt(wxz).mul(255);
+    // Identity comes from a real nearest source texel; the filtered channel is
+    // used only as an edge-confidence signal. Every categorical overlay fades
+    // to zero before the nearest id changes, preventing both false intermediate
+    // materials and a hard 2 m square step at the class boundary.
+    const cidLinear = (bio.x as unknown as NF).mul(255);
+    const classInterior = smoothstep(0.55, 0.12, cidLinear.sub(cid).abs());
     const notRock = rockW.oneMinus();
     // bare open ground — barren(4) → warm sand(5). Only where the veg field agrees
     // (suppresses the barren/sand ids a forest↔field sweep crosses in the seam).
@@ -349,6 +390,7 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
       .mul(smoothstep(5.5, 5.05, cid))
       .mul(smoothstep(0.45, 0.15, vegDensity))
       .mul(notRock)
+      .mul(classInterior)
       .mul(0.9);
     const bareCol = mix(vec3(0.3, 0.27, 0.215), vec3(0.47, 0.41, 0.3), smoothstep(4.5, 5.0, cid))
       .mul(meso.mul(0.24).add(0.86))
@@ -359,6 +401,7 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
       .mul(smoothstep(6.65, 6.15, cid))
       .mul(smoothstep(0.5, 0.2, slope))
       .mul(notRock)
+      .mul(classInterior)
       .mul(0.72);
     const fieldCol = mix(vec3(0.185, 0.14, 0.09), vec3(0.15, 0.14, 0.078), macroB).mul(
       meso.mul(0.2).add(0.88),
@@ -371,6 +414,7 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
       .mul(smoothstep(0.4, 0.15, slope))
       .mul(notRock)
       .mul(snowW.oneMinus())
+      .mul(classInterior)
       .mul(0.92);
     const bogFen = mix(vec3(0.115, 0.086, 0.052), vec3(0.086, 0.1, 0.056), smoothstep(8.0, 9.2, cid));
     const peatCol = mix(bogFen, vec3(0.046, 0.039, 0.031), smoothstep(9.4, 10.1, cid)).mul(
@@ -462,7 +506,7 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
   const farK = smoothstep(900, 2600, camDist);
   // pre-baked ridged gradient at 310 m features; ×44 ≈ the old ±22 m
   // finite-difference amplitude (×2: baked noise is [0,1], mx was [-1,1])
-  const rg = ridG(310).mul(44 * 2);
+  const rg = ridGW(310).mul(44 * 2);
   // crag synthesis belongs to ROCK faces — on smooth vegetated hills the
   // ridged gradient field printed parallel pale corrugation streaks
   const farAmp = smoothstep(0.5, 1.1, slope)
@@ -470,7 +514,7 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
     .add(smoothstep(0.32, 0.7, slope).mul(0.08))
     .mul(farK);
   // never let detail flip the surface away from the sky
-  const perturbed = baseNormal.add(vec3(rg.x, 0, rg.y).mul(farAmp));
+  const perturbed = baseNormal.add(tangentNoiseGradient(rg).mul(farAmp));
   let nrm: NV3 = vec3(perturbed.x, perturbed.y.max(0.1), perturbed.z).normalize();
 
   // near/mid detail (both terms self-fade to nothing with distance — far tiles pay
@@ -478,18 +522,14 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
   {
     // meso + micro analytic bumps near camera, stronger on rock — baked fbm
     // gradients at two scales (×2e ≈ old FD amplitudes, ×2 range factor)
-    const b1 = fbmG(1.45).mul(1.8 * 2);
-    const b2 = fbmG(0.19, 0.31, 0.77).mul(0.24 * 2);
+    const b1 = fbmGW(1.45).mul(1.8 * 2);
+    const b2 = fbmGW(0.19, 0.31, 0.77).mul(0.24 * 2);
     const bumpAmp = mix(float(0.25), float(0.85), rockW)
       .mul(snowW.mul(0.7).oneMinus())
       .mul(farK.oneMinus());
     nrm = nrm
       .add(
-        vec3(
-          b1.x.mul(0.7).add(b2.x.mul(0.45)),
-          0,
-          b1.y.mul(0.7).add(b2.y.mul(0.45)),
-        ).mul(bumpAmp),
+        tangentNoiseGradient(b1.mul(0.7).add(b2.mul(0.45)) as unknown as NV3).mul(bumpAmp),
       )
       .normalize();
 
@@ -511,8 +551,8 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
       .mul(
         clamp(float(DISP.fade1).sub(camDist).div(DISP.fade1 - DISP.fade0), 0, 1),
       );
-    const gF = fbmG(DISP.sF1).mul(2 * DISP.wF1);
-    const gR = ridG(DISP.sRid).mul(
+    const gF = fbmGXz(DISP.sF1).mul(2 * DISP.wF1);
+    const gR = ridGXz(DISP.sRid).mul(
       rockKd.mul(1 - DISP.ridBase).add(DISP.ridBase).mul(DISP.wRid),
     );
     const gSum = gF.add(gR).mul(dispAmpF);
