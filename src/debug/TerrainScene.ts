@@ -521,6 +521,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     // generated world leaves the anchor at (0,0) ⇒ every sampler is IEEE-identical.
     if (streamed) {
       field.setRenderAnchor(Math.round(c.x / 512) * 512, Math.round(c.z / 512) * 512);
+      if (field.cookedMicroHeight) field.setSurfaceCenter(c.x, c.z);
     }
     Object.assign(engine.stats.counters, brain.counters(), streamOrigin.counters());
   });
@@ -633,6 +634,9 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
             : null,
         farShadow: farSh ? (wxz: import('../gpu/TSLTypes').NV2) => farSh.visAt(wxz) : null,
         barkTex: naniteBark ?? null,
+        // Format 2 stores the complete geometric terrain surface. Keep material
+        // noise in shading, but never add procedural vertex/root displacement.
+        cookedTerrainGeometry: streamed && worldManifest.format === 2,
         // S6d KEYSTONE: on the streamed world feed the camera/reconstruct/shadow
         // chain the live StreamOrigin as its render anchor (rebase-rare, 8 km-
         // snapped) so the whole project chain is small-coordinate. Generated ⇒
@@ -761,6 +765,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       // the first frame instead of a high fly that hides the ground. Walk mode
       // (ground probe on streamed heights) is reachable via M / ?alt.
       const tx = 311123, tz = 190723; // Taevaskoja cliffs, EPSG:3301 → game coords
+      field.setSurfaceCenter(tx, tz);
       const y = field.heightAt(tx, tz) + 40;
       // face north (yaw 0 ⇒ −z) down the Ahja river gorge, so the first frame
       // reads "you're at the Taevaskoja cliffs" — the sandstone wall itself is a
@@ -774,6 +779,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       const z = Number(q.get('z') ?? c.cz);
       const yaw = Number(q.get('yaw') ?? 2.4); // rad; 0 = looking −z (north)
       const pitch = Number(q.get('pitch') ?? -0.04); // rad; negative = down
+      if (field.cookedMicroHeight) field.setSurfaceCenter(x, z);
       const y = field.heightAt(x, z) + alt;
       // the fly camera doesn't exist yet — main applies this after rigging
       ctx.hooks.initialPose = { p: [x, y, z], yaw, pitch };

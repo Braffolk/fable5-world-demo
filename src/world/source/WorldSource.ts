@@ -73,6 +73,9 @@ export interface ChunkRef {
 }
 
 export type RecordDtype = 'u8' | 'u16' | 'u32' | 'f32';
+export type ManifestFormat = 1 | 2;
+export type LacContainer = 'LAC1' | 'LAC2';
+export type WireCodec = 'deflate';
 
 /** Frozen grid contract (manifest `anchor`/`chunkMeters`/`chunkRes`/`lodStep`).
  *  gameX = E - anchorE; gameZ = anchorN - N; LOD k texel = lodStep^k m,
@@ -99,6 +102,10 @@ export interface WorldLayerMeta {
   texelMeters?: number; // raster layers whose texel differs from the height grid
   planes?: readonly string[]; // enc 2
   columns?: readonly (readonly [string, RecordDtype])[]; // enc 3
+  baseTexelMeters?: number; // format-2 height physical LOD base unit
+  finestLod?: number;
+  authorityLod?: number;
+  synthesis?: string;
 }
 
 export interface SpeciesEntry {
@@ -123,6 +130,9 @@ export interface WorldDictionaries {
 }
 
 export interface WorldManifest {
+  format: ManifestFormat;
+  containers: readonly LacContainer[];
+  codec: WireCodec;
   grid: WorldGrid;
   layers: Partial<Record<LayerName, WorldLayerMeta>>;
   dictionaries: WorldDictionaries;

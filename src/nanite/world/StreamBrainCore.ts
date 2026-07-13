@@ -32,6 +32,7 @@ import { buildHeightGrid, type HeightDagOpts } from '../build/BuildHeightGrid';
 import { getCachedHeightDag, heightDagCacheKey, packClusters, putCachedHeightDag } from '../build/DagCache';
 import type { DagBuilder, HeightDagResult } from '../build/DagWorkerClient';
 import { packChunkKey } from '../../world/source/Lac1';
+import { packChunkKeyV2 } from '../../world/source/Lac2';
 import type { ChunkKey, ChunkPayload, LayerName } from '../../world/source/WorldSource';
 import type { ClipmapConfig, ClipmapTile } from './TerrainClipmap';
 import { PartitionTree, type BakeReq, type MergePacket, type QuadDesc, type RefinePacket, type TreeConfig } from './PartitionTree';
@@ -49,6 +50,7 @@ import {
   copyChunkU8,
   maxReduce,
   meanReduceU8,
+  latticeWorld,
   minReduce,
   SOIL_CHANNELS,
   wrapRects,
@@ -117,6 +119,8 @@ export class StreamBrainCore {
   private layers!: BrainInitMsg['layers'];
   private plan!: BrainInitMsg['plan'];
   private tilesCfg!: BrainInitMsg['tiles'];
+  private packKey: (lod: number, cx: number, cz: number) => number = packChunkKey;
+  private manifestFormat: BrainInitMsg['manifestFormat'] = 1;
   private cfg!: ClipmapConfig;
   /** packed-key existence sets + content hashes per layer+lod */
   private readonly keySets = new Map<string, Set<number>>();
@@ -177,6 +181,8 @@ export class StreamBrainCore {
     this.layers = msg.layers;
     this.plan = msg.plan;
     this.tilesCfg = msg.tiles;
+    this.packKey = msg.manifestFormat === 2 ? packChunkKeyV2 : packChunkKey;
+    this.manifestFormat = msg.manifestFormat;
     for (const [layer, meta] of Object.entries(msg.layers) as [LayerName, BrainLayerMeta][]) {
       for (const lodStr of Object.keys(meta.chunkKeys)) {
         const lod = Number(lodStr);
@@ -248,8 +254,26 @@ export class StreamBrainCore {
     const t0 = meta?.texelMeters;
     if (!meta || !t0) throw new Error(`StreamBrain: layer '${layer}' missing texelMeters`);
     const g = this.grid;
+    if (this.manifestFormat === 2 && layer === 'height') {
+      const baseTexel = meta.baseTexelMeters;
+      const finestLod = meta.finestLod;
+      if (!baseTexel || finestLod === undefined) throw new Error('StreamBrain: format-2 height lacks physical geometry');
+      return {
+        mode: 'physical-level',
+        texel0: baseTexel * g.lodStep ** finestLod,
+        baseTexel,
+        finestLod,
+        chunkRes: g.chunkRes,
+        originX: g.originX,
+        originZ: g.originZ,
+        lodStep: g.lodStep,
+      };
+    }
     return {
+      mode: 'legacy-offset',
       texel0: t0,
+      baseTexel: t0,
+      finestLod: 0,
       chunkRes: Math.round(g.chunkMeters / t0),
       originX: g.originX,
       originZ: g.originZ,
@@ -258,11 +282,11 @@ export class StreamBrainCore {
   }
 
   private chunkExists(layer: LayerName, key: ChunkKey): boolean {
-    return this.keySets.get(`${layer}:${key.lod}`)?.has(packChunkKey(key.lod, key.cx, key.cz)) ?? false;
+    return this.keySets.get(`${layer}:${key.lod}`)?.has(this.packKey(key.lod, key.cx, key.cz)) ?? false;
   }
 
   private chunkHash(layer: LayerName, key: ChunkKey): bigint {
-    return this.keyHashes.get(`${layer}:${key.lod}`)?.get(packChunkKey(key.lod, key.cx, key.cz)) ?? 0n;
+    return this.keyHashes.get(`${layer}:${key.lod}`)?.get(this.packKey(key.lod, key.cx, key.cz)) ?? 0n;
   }
 
   private payloadBytes(p: ChunkPayload): number {
@@ -676,13 +700,12 @@ export class StreamBrainCore {
     geo: RasterGeom,
     win: { n0x: number; n0z: number; phaseX: number; phaseY: number },
   ): StreamPacket {
-    const off = plan.stride >> 1;
     return {
       kind: 'planeOrigin',
       plane,
       level,
-      originX: geo.originX + (win.n0x * plan.stride + off + 0.5) * geo.texel0,
-      originZ: geo.originZ + (win.n0z * plan.stride + off + 0.5) * geo.texel0,
+      originX: latticeWorld(geo, plan.lod, win.n0x, 'x'),
+      originZ: latticeWorld(geo, plan.lod, win.n0z, 'z'),
       n0x: win.n0x,
       n0z: win.n0z,
       phaseX: win.phaseX,
@@ -1009,6 +1032,27 @@ export class StreamBrainCore {
     const nx1 = Math.min(Math.max(t.tx0 + t.tileTexels, cfg.latMin), cfg.latMax);
     const nz0 = Math.min(Math.max(t.tz0, cfg.latMin), cfg.latMax);
     const nz1 = Math.min(Math.max(t.tz0 + t.tileTexels, cfg.latMin), cfg.latMax);
+    if (this.manifestFormat === 2) {
+      // Coarsest resident source no coarser than the tile. Coordinates below are
+      // in normalized finest samples; each plane window is in its own lattice.
+      for (let i = this.hWin.length - 1; i >= 0; i--) {
+        const w = this.hWin[i] as HeightWindow;
+        const plan = w.plan;
+        const s = plan.stride;
+        if (s > t.strideTexels) continue;
+        const x0 = Math.floor((nx0 + 0.5) / s - 0.5);
+        const x1 = Math.ceil((nx1 + 0.5) / s - 0.5);
+        const z0 = Math.floor((nz0 + 0.5) / s - 0.5);
+        const z1 = Math.ceil((nz1 + 0.5) / s - 0.5);
+        if (
+          x0 >= w.n0x && x1 <= w.n0x + plan.res - 1
+          && z0 >= w.n0z && z1 <= w.n0z + plan.res - 1
+          && x0 >= plan.nMinX && x1 <= plan.nMaxX
+          && z0 >= plan.nMinZ && z1 <= plan.nMaxZ
+        ) return i;
+      }
+      return this.hWin.length - 1;
+    }
     for (let i = 0; i < this.hWin.length; i++) {
       const w = this.hWin[i] as HeightWindow;
       const plan = w.plan;
@@ -1030,6 +1074,24 @@ export class StreamBrainCore {
     const w = this.hWin[j] as HeightWindow;
     const plan = w.plan;
     const s = plan.stride;
+    if (this.manifestFormat === 2) {
+      const gx = (nx + 0.5) / s - 0.5;
+      const gz = (nz + 0.5) / s - 0.5;
+      const x0 = Math.floor(gx);
+      const z0 = Math.floor(gz);
+      const fx = gx - x0;
+      const fz = gz - z0;
+      const sample = (x: number, z: number): number => {
+        const sx = Math.min(Math.max(x, w.n0x), w.n0x + plan.res - 1);
+        const sz = Math.min(Math.max(z, w.n0z), w.n0z + plan.res - 1);
+        const px = (sx - w.n0x + w.phaseX) % plan.res;
+        const pz = (sz - w.n0z + w.phaseY) % plan.res;
+        return w.data[pz * plan.res + px] as number;
+      };
+      const a = sample(x0, z0) * (1 - fx) + sample(x0 + 1, z0) * fx;
+      const b = sample(x0, z0 + 1) * (1 - fx) + sample(x0 + 1, z0 + 1) * fx;
+      return a * (1 - fz) + b * fz;
+    }
     const off = s >> 1;
     let jx = s === 1 ? nx : Math.round((nx - off) / s);
     let jz = s === 1 ? nz : Math.round((nz - off) / s);
@@ -1084,9 +1146,11 @@ export class StreamBrainCore {
     const geo = this.layerGeo('height');
     const plan = (this.hWin[j] as HeightWindow).plan;
     const s = plan.stride;
-    const jx0 = Math.floor(t.tx0 / s);
-    const jz0 = Math.floor(t.tz0 / s);
-    const jres = Math.ceil(t.tileTexels / s) + 1;
+    const jx0 = this.manifestFormat === 2 ? Math.floor((t.tx0 + 0.5) / s - 0.5) : Math.floor(t.tx0 / s);
+    const jz0 = this.manifestFormat === 2 ? Math.floor((t.tz0 + 0.5) / s - 0.5) : Math.floor(t.tz0 / s);
+    const jres = this.manifestFormat === 2
+      ? Math.ceil((t.tx0 + t.tileTexels + 0.5) / s - 0.5) - jx0 + 1
+      : Math.ceil(t.tileTexels / s) + 1;
     for (const key of chunksInWindow(geo, plan.lod, jx0, jz0, jres)) fold ^= this.chunkHash('height', key);
     const skirtLevel = cfg.skirt ? t.level : -1;
     const opts: HeightDagOpts = skirtLevel >= 0 ? { skirtLevel } : {};

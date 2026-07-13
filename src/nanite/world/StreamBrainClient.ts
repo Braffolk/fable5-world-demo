@@ -25,6 +25,7 @@ import type { Texture } from 'three';
 import { unpackClusters } from '../build/DagCache';
 import type { ChunkKey, LayerName, WorldManifest, WorldSource } from '../../world/source/WorldSource';
 import { packChunkKey } from '../../world/source/Lac1';
+import { packChunkKeyV2 } from '../../world/source/Lac2';
 import type { GeometryRegistry } from './GeometryRegistry';
 import { planField, layerGeom, latticeWorld, coverageExtentLattice, type FieldPlan } from './PlaneFill';
 import { TerrainField } from './TerrainField';
@@ -141,6 +142,7 @@ export class StreamBrainClient {
    *  layer+lod — existence lookups become brain-local; hashes salt tile DAG
    *  cache keys). */
   private buildInit(manifest: WorldManifest): BrainInitMsg {
+    const packKey = manifest.format === 2 ? packChunkKeyV2 : packChunkKey;
     const layers: BrainInitMsg['layers'] = {};
     // S8: 'trees' joins the brain's layer set — the runtime fartile band (brain-side)
     // needs the tree records' existence keys + fetches them through the RPC. (boulders
@@ -158,7 +160,7 @@ export class StreamBrainClient {
         const packed = new Float64Array(keys.length);
         const hashes = new BigUint64Array(keys.length);
         keys.forEach((k, i) => {
-          packed[i] = packChunkKey(k.lod, k.cx, k.cz);
+          packed[i] = packKey(k.lod, k.cx, k.cz);
           hashes[i] = manifest.coverage(layer, k)?.hash64 ?? 0n;
         });
         chunkKeys[lod] = packed;
@@ -166,6 +168,9 @@ export class StreamBrainClient {
       }
       const entry: BrainLayerMeta = { lods: [...meta.lods], chunkKeys, chunkHashes };
       if (meta.texelMeters !== undefined) entry.texelMeters = meta.texelMeters;
+      if (meta.baseTexelMeters !== undefined) entry.baseTexelMeters = meta.baseTexelMeters;
+      if (meta.finestLod !== undefined) entry.finestLod = meta.finestLod;
+      if (meta.authorityLod !== undefined) entry.authorityLod = meta.authorityLod;
       if (meta.planes !== undefined) entry.planes = meta.planes;
       layers[layer] = entry;
     }
@@ -179,6 +184,7 @@ export class StreamBrainClient {
     const { latMin, latMax } = coverageExtentLattice(manifest);
     return {
       kind: 'init',
+      manifestFormat: manifest.format,
       grid: manifest.grid,
       layers,
       plan: this.plan,
@@ -188,7 +194,7 @@ export class StreamBrainClient {
         skirt: this.tileOpts.skirt,
         seed: this.tileOpts.seed,
         cell: geo.texel0,
-        origin: latticeWorld(geo, 0, 0, 'x'),
+        origin: latticeWorld(geo, geo.finestLod, 0, 'x'),
         latMin,
         latMax,
       },

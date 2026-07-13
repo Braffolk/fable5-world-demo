@@ -8,6 +8,7 @@
  * outside-Estonia are one mechanism).
  */
 import { chunkPath, LAC1_LAYER_IDS, packChunkKey, parseLayerIndex } from './Lac1';
+import { packChunkKeyV2, parseLayerIndexV2 } from './Lac2';
 import type { Lac1DecodeJob, Lac1DecodeReq, Lac1DecodeRes } from './Lac1Decode.worker';
 import type {
   ChunkKey,
@@ -15,11 +16,14 @@ import type {
   ChunkRef,
   CommunityEntry,
   LayerName,
+  LacContainer,
+  ManifestFormat,
   SpeciesEntry,
   WorldDictionaries,
   WorldLayerMeta,
   WorldManifest,
   WorldSource,
+  WireCodec,
 } from './WorldSource';
 
 /** braffolk.com serves the synced bucket at `laas-data/` (live-verified: CloudFront,
@@ -37,23 +41,57 @@ const DECODE_WORKERS = 2;
 const MAX_INFLIGHT_FETCHES = 6;
 
 /** The manifest.json fields this client consumes (manifest.py build_release). */
-interface ManifestJson {
-  format: number;
+interface ManifestLayerJson {
+  enc: number;
+  lods: number[];
+  count: number;
+  bytes: number;
+  index: string;
+  texelMeters?: number;
+  planes?: string[];
+  columns?: [string, string][];
+  baseTexelMeters?: number;
+  finestLod?: number;
+  authorityLod?: number;
+  synthesis?: string;
+}
+
+interface ManifestJsonShared {
+  format: ManifestFormat;
+  codec: string;
+  containers?: string[];
+  speciesMap?: Record<string, SpeciesEntry>;
+  understoryMap?: Record<string, CommunityEntry>;
+  debrisMap?: Record<string, CommunityEntry>;
+  layers: Record<string, ManifestLayerJson>;
+}
+
+interface ManifestJsonV1 extends ManifestJsonShared {
+  format: 1;
   anchor: { e: number; n: number };
   chunkMeters: number;
   chunkRes: number;
   lodStep: number;
-  speciesMap?: Record<string, SpeciesEntry>;
-  understoryMap?: Record<string, CommunityEntry>;
-  debrisMap?: Record<string, CommunityEntry>;
-  layers: Record<string, { enc: number; lods: number[]; count: number; bytes: number; index: string; texelMeters?: number; planes?: string[]; columns?: [string, string][] }>;
 }
+
+interface ManifestJsonV2 extends ManifestJsonShared {
+  format: 2;
+  containers: string[];
+  grid: { anchorE: number; anchorN: number; chunkMeters: number; chunkRes: number; lodStep: number };
+}
+
+type ManifestJson = ManifestJsonV1 | ManifestJsonV2;
 
 export class RemoteWorldSource implements WorldSource {
   private readonly baseUrl: string;
   private readonly indexes = new Map<LayerName, Map<number, ChunkRef>>();
   private layers: Partial<Record<LayerName, WorldLayerMeta>> = {};
   private pool: DecodePool | null = null;
+  private format: ManifestFormat = 1;
+  private containers: readonly LacContainer[] = ['LAC1'];
+  private codec: WireCodec = 'deflate';
+  private packKey: (lod: number, cx: number, cz: number) => number = packChunkKey;
+  private manifestGrid: { anchorE: number; anchorN: number; chunkMeters: number; chunkRes: number; lodStep: number } | null = null;
   /** burst-shaping semaphore — bounds concurrent HTTP fetches (see MAX_INFLIGHT_FETCHES) */
   private readonly gate = new FetchGate(MAX_INFLIGHT_FETCHES);
 
@@ -62,10 +100,40 @@ export class RemoteWorldSource implements WorldSource {
   }
 
   async open(progress?: (frac: number, msg: string) => void): Promise<WorldManifest> {
+    this.close();
     const latest = (await getJson(`${this.baseUrl}/latest.json`, 'no-cache')) as { manifest: string };
     progress?.(0, `manifest ${latest.manifest}`);
     const m = (await getJson(`${this.baseUrl}/${latest.manifest}`, 'default')) as ManifestJson;
-    if (m.format !== 1) throw new Error(`RemoteWorldSource: unsupported manifest format ${m.format}`);
+    if (m.format !== 1 && m.format !== 2) throw new Error(`RemoteWorldSource: unsupported manifest format ${(m as { format: number }).format}`);
+    if (m.codec !== 'deflate') throw new Error(`RemoteWorldSource: unsupported codec ${m.codec}`);
+    if (m.format === 1) {
+      if (m.containers !== undefined && (m.containers.length !== 1 || m.containers[0] !== 'LAC1')) {
+        throw new Error('RemoteWorldSource: format 1 may declare only LAC1');
+      }
+      this.format = 1;
+      this.containers = ['LAC1'];
+      this.packKey = packChunkKey;
+    } else {
+      if (m.containers.length !== 2 || m.containers[0] !== 'LAC1' || m.containers[1] !== 'LAC2') {
+        throw new Error('RemoteWorldSource: format 2 must declare [LAC1,LAC2]');
+      }
+      this.format = 2;
+      this.containers = ['LAC1', 'LAC2'];
+      this.packKey = packChunkKeyV2;
+    }
+    this.codec = 'deflate';
+    const grid = m.format === 1
+      ? { anchorE: m.anchor.e, anchorN: m.anchor.n, chunkMeters: m.chunkMeters, chunkRes: m.chunkRes, lodStep: m.lodStep }
+      : m.grid;
+    if (![grid.anchorE, grid.anchorN].every(Number.isFinite)
+      || ![grid.chunkMeters, grid.chunkRes, grid.lodStep].every(Number.isInteger)
+      || grid.chunkMeters <= 0 || grid.chunkRes <= 0 || grid.lodStep <= 1) {
+      throw new Error('RemoteWorldSource: invalid manifest grid');
+    }
+    if (m.format === 2 && (grid.chunkMeters !== 2048 || grid.chunkRes !== 2048 || grid.lodStep !== 4)) {
+      throw new Error('RemoteWorldSource: format-2 micro v1 requires the frozen (2048,2048,4) grid');
+    }
+    this.manifestGrid = grid;
     const manifestDir = latest.manifest.slice(0, latest.manifest.lastIndexOf('/'));
 
     const entries = Object.entries(m.layers);
@@ -73,10 +141,39 @@ export class RemoteWorldSource implements WorldSource {
       const [name, meta] = entries[li] as (typeof entries)[number];
       if (!(name in LAC1_LAYER_IDS)) continue; // future layers (e.g. canopy) until the codec knows them
       const layer = name as LayerName;
+      if (
+        !Number.isInteger(meta.enc)
+        || !meta.lods.every(Number.isInteger)
+        || meta.lods.some((lod, i) => i > 0 && lod <= (meta.lods[i - 1] as number))
+      ) {
+        throw new Error(`RemoteWorldSource: ${layer} has invalid encoding/LOD metadata`);
+      }
+      if (m.format === 2) {
+        if (layer !== 'height' && meta.lods.some((lod) => lod < 0)) {
+          throw new Error(`RemoteWorldSource: negative LOD is height-only (${layer})`);
+        }
+        if (layer === 'height' && (
+          meta.baseTexelMeters !== 1
+          || meta.finestLod !== Math.min(...meta.lods)
+          || meta.authorityLod !== 0
+          || meta.lods.some((lod) => lod < -2 || lod > 4)
+        )) {
+          throw new Error('RemoteWorldSource: invalid format-2 height geometry metadata');
+        }
+      }
       const bin = await getBytes(`${this.baseUrl}/${manifestDir}/${meta.index}`);
       const map = new Map<number, ChunkRef>();
-      for (const ref of parseLayerIndex(bin)) map.set(packChunkKey(ref.lod, ref.cx, ref.cz), ref);
+      const refs = m.format === 1 ? parseLayerIndex(bin) : parseLayerIndexV2(bin);
+      for (const ref of refs) {
+        const packed = this.packKey(ref.lod, ref.cx, ref.cz);
+        if (map.has(packed)) throw new Error(`RemoteWorldSource: duplicate ${layer} chunk key`);
+        map.set(packed, ref);
+      }
       if (map.size !== meta.count) throw new Error(`RemoteWorldSource: ${layer} index has ${map.size} != ${meta.count} chunks`);
+      const indexedLods = [...new Set(refs.map((ref) => ref.lod))].sort((a, b) => a - b);
+      if (indexedLods.length !== meta.lods.length || indexedLods.some((lod, i) => lod !== meta.lods[i])) {
+        throw new Error(`RemoteWorldSource: ${layer} index LODs differ from manifest`);
+      }
       this.indexes.set(layer, map);
       this.layers[layer] = {
         enc: meta.enc,
@@ -86,23 +183,31 @@ export class RemoteWorldSource implements WorldSource {
         // lattice (chunkMeters/chunkRes); coarser rasters (biome/water/…) declare
         // their own (e.g. water = 2 m). Fill the implied default so every raster
         // layer carries an explicit texel for PlaneFill.layerGeom.
-        texelMeters: meta.texelMeters ?? (meta.enc !== 3 ? m.chunkMeters / m.chunkRes : undefined),
+        texelMeters: meta.texelMeters ?? (meta.enc !== 3 ? grid.chunkMeters / grid.chunkRes : undefined),
         planes: meta.planes,
         columns: meta.columns as WorldLayerMeta['columns'],
+        baseTexelMeters: meta.baseTexelMeters,
+        finestLod: meta.finestLod,
+        authorityLod: meta.authorityLod,
+        synthesis: meta.synthesis,
       };
       progress?.((li + 1) / entries.length, `index ${layer}: ${map.size} chunks`);
     }
 
     this.pool = new DecodePool(DECODE_WORKERS);
     const indexes = this.indexes;
+    const packKey = this.packKey;
     return {
+      format: this.format,
+      containers: this.containers,
+      codec: this.codec,
       // Estonia game coords are anchored to the manifest anchor, so chunks tile from
       // game (0,0): originX/Z = 0.
-      grid: { anchorE: m.anchor.e, anchorN: m.anchor.n, chunkMeters: m.chunkMeters, chunkRes: m.chunkRes, lodStep: m.lodStep, originX: 0, originZ: 0 },
+      grid: { ...grid, originX: 0, originZ: 0 },
       layers: this.layers,
       dictionaries: parseDictionaries(m),
       coverage(layer: LayerName, key: ChunkKey): ChunkRef | null {
-        return indexes.get(layer)?.get(packChunkKey(key.lod, key.cx, key.cz)) ?? null;
+        return indexes.get(layer)?.get(packKey(key.lod, key.cx, key.cz)) ?? null;
       },
       chunks(layer: LayerName, lod: number): ChunkKey[] {
         const out: ChunkKey[] = [];
@@ -115,11 +220,12 @@ export class RemoteWorldSource implements WorldSource {
   }
 
   fetch(layer: LayerName, key: ChunkKey, signal?: AbortSignal): Promise<ChunkPayload | null> {
-    const ref = this.indexes.get(layer)?.get(packChunkKey(key.lod, key.cx, key.cz));
+    const ref = this.indexes.get(layer)?.get(this.packKey(key.lod, key.cx, key.cz));
     if (!ref) return Promise.resolve(null); // authoritative absence — no request
     const pool = this.pool;
     const meta = this.layers[layer];
-    if (!pool || !meta) return Promise.reject(new Error('RemoteWorldSource: fetch before open()'));
+    const grid = this.manifestGrid;
+    if (!pool || !meta || !grid) return Promise.reject(new Error('RemoteWorldSource: fetch before open()'));
     // burst-shaping: acquire an in-flight slot before dispatching (queued if the
     // pool is saturated); a failed/aborted fetch just releases its slot and returns
     // to the demand pool — the pose tick re-nominates it (no retry storm).
@@ -131,6 +237,15 @@ export class RemoteWorldSource implements WorldSource {
           lod: key.lod,
           cx: key.cx,
           cz: key.cz,
+          expectedEnc: meta.enc,
+          allowedContainers: this.containers,
+          codec: this.codec,
+          expectedFileSize: ref.size,
+          expectedRes: meta.enc === 3
+            ? 0
+            : Math.round(grid.chunkMeters / (meta.texelMeters ?? 1)) + 1,
+          expectedOriginE: grid.anchorE + key.cx * grid.chunkMeters * grid.lodStep ** key.lod,
+          expectedOriginN: grid.anchorN - key.cz * grid.chunkMeters * grid.lodStep ** key.lod,
           schema: { planes: meta.planes?.length, columns: meta.columns },
         },
         signal,
@@ -143,6 +258,11 @@ export class RemoteWorldSource implements WorldSource {
     this.pool = null;
     this.indexes.clear();
     this.layers = {};
+    this.format = 1;
+    this.containers = ['LAC1'];
+    this.codec = 'deflate';
+    this.packKey = packChunkKey;
+    this.manifestGrid = null;
   }
 }
 

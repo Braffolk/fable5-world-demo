@@ -137,7 +137,7 @@ export class Particles {
       p.addAssign(vec3(vx, vy, vz).mul(this.uDt as unknown as NF));
 
       // --- respawn: out of box / under ground / expired ----------------------------
-      const ground = field.fieldHeightFinestNearest(p.xz);
+      const ground = field.fieldHeightFinestNearestHot(p.xz);
       const out = p.x
         .sub(cam.x)
         .abs()
@@ -156,7 +156,7 @@ export class Particles {
           cam.z.add(r3.sub(0.5).mul(2 * BOX_R)),
         ).toVar();
         // never spawn under the terrain
-        const g2 = field.fieldHeightFinestNearest(np.xz);
+        const g2 = field.fieldHeightFinestNearestHot(np.xz);
         np.y.assign(np.y.max(g2.add(0.6)));
         p.assign(np);
         // altitude band 0..1 of the box → type environment roll

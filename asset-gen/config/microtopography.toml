@@ -1,0 +1,38 @@
+[format]
+recipe_version = 1
+seed = 0x4c414153
+fine_lod = -2
+parent_lod = -1
+fine_texel_m = 0.0625
+supertile_m = 256
+halo_m = 32
+
+[base]
+manifest = "data/out/m/708478a57c2118ea/manifest.json"
+manifest_sha256 = "708478a57c2118eaa618867e87cc74a35e20c615999b60d7e4177b595ef5495a"
+
+[projection]
+authority_lod = 0
+reducer = "box_mean_16"
+base = "conservative_cubic_bspline_v1"
+
+[encoding]
+qscale_candidates_m = [0.001, 0.002, 0.005, 0.010]
+selected_fine_qscale_m = 0.002
+parent_qscale_m = 0.005
+codec = "deflate"
+
+[exemplars]
+manifest = "data/in/microtopo-exemplars/manifest.json"
+top_k = 12
+placement_accumulator = "float64"
+
+[coverage]
+require_child_parent = true
+require_rectangular_lod_minus2 = true
+require_rectangular_lod_minus1 = true
+require_complete_children_inside_minus2_rect = true
+source_coverage_min_fraction = 0.95
+
+[publish]
+allow_latest = false

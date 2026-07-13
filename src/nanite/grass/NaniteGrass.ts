@@ -250,10 +250,11 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
   // verbatim absolute expressions (byte-identical shader ⇒ A/A gate holds).
   const streamed = new URLSearchParams(window.location.search).get('src') === 'estonia';
 
-  // ground height for the guide bake: the height plane's bilerp, HOISTED to
-  // L0 — the guide ring (±161 m around the camera) always sits inside the
-  // finest window, so the level select costs nothing (A15 idiom).
-  const heightAt = (p: NV2): NF => field.fieldHeight(p, 0);
+  // Format-1's finest window contains the whole guide ring, so retain its hoisted
+  // level-0 path. Format-2 LOD -2 is only a 96 m window while the guide spans
+  // ±161 m; streamed grass must fall through -2 -> -1 -> 0 exactly like terrain.
+  const heightAt = (p: NV2): NF =>
+    streamed ? field.fieldHeightFinestHot(p) : field.fieldHeight(p, 0);
 
   /** ground height a blade roots on = heightfield + terrain micro-displacement */
   const groundAt = (p: NV2): NF => {
@@ -303,7 +304,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
     const rockExposure = fld.w as unknown as NF;
     const snow = fld.z as unknown as NF;
     const moisture = fld.x as unknown as NF;
-    const slope = field.fieldSlope(wpos, 0);
+    const slope = streamed ? field.fieldSlopeHot(wpos) : field.fieldSlope(wpos, 0);
     const waterY = field.fieldWaterYNearest(wpos);
     const above = h.sub(waterY) as unknown as NF;
     const riverDepth = waterY.sub(h).max(0) as unknown as NF;

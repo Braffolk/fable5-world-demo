@@ -1,0 +1,10 @@
+# Stage-1 proof area: the signed height LOD -1 parent containing the main
+# Suur Taevaskoda cliff top at 58.107506 N, 27.050242 E.
+# Bounds are E 679424..679936, N 6444544..6445056 on the frozen global lattice.
+name = "micro-hero-taevaskoja"
+center_e = 679680
+center_n = 6444800
+half_m = 256
+
+[layers]
+height = true

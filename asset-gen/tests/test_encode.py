@@ -1,17 +1,32 @@
+import struct
+import zlib
+
 import numpy as np
 import pytest
 
 from assetgen.config import load_base
-from assetgen.cook.chunkio import ChunkMeta, read_chunk, write_chunk
+from assetgen.cook.chunkio import (
+    FMT,
+    MAGIC,
+    ChunkMeta,
+    read_chunk,
+    read_chunk_any,
+    read_chunk_v2,
+    write_chunk,
+    write_chunk_v2,
+)
 from assetgen.cook.encode import (
     decode_quant16,
     decode_records,
     decode_u8_planes,
     delta2d,
     encode_quant16,
+    encode_quant16_checked,
+    encode_quantized16,
     encode_records,
     encode_u8_planes,
     undelta2d,
+    quantize16_checked,
 )
 
 CFG = load_base().encode
@@ -105,3 +120,75 @@ def test_chunkio_detects_corruption(tmp_path):
     p.write_bytes(blob)
     with pytest.raises(ValueError):
         read_chunk(p)
+
+
+def test_lac1_wire_bytes_remain_unchanged(tmp_path):
+    payload = b"lac1-golden-payload"
+    meta = ChunkMeta("height", 0, 1, -2, 3, 17, 0, 364544.0, 6629376.0, -1.0, 0.01)
+    path = tmp_path / "golden.lac"
+    write_chunk(path, meta, payload)
+    expected_header = struct.pack(
+        FMT, MAGIC, 0, 0, 1, 0, -2, 3, 17, 0,
+        364544.0, 6629376.0, -1.0, 0.01, len(payload), zlib.crc32(payload),
+    )
+    assert path.read_bytes() == expected_header + payload
+
+
+def test_lac2_signed_lod_round_trip(tmp_path):
+    payload = b"lac2-payload"
+    meta = ChunkMeta("height", -2, 1, -7, 11, 2049, 0, 367744.0, 6634112.0, 72.0, 0.002)
+    path = tmp_path / "fine.lac"
+    write_chunk_v2(path, meta, payload)
+
+    decoded, decoded_payload = read_chunk_v2(path)
+    version, any_meta, any_payload = read_chunk_any(path)
+    assert version == 2
+    assert decoded_payload == any_payload == payload
+    assert (decoded.layer, decoded.lod, decoded.cx, decoded.cz) == ("height", -2, -7, 11)
+    assert any_meta == decoded
+    with pytest.raises(ValueError, match="bad magic"):
+        read_chunk(path)
+
+
+def test_lac2_detects_crc_and_trailing_bytes(tmp_path):
+    path = tmp_path / "fine.lac"
+    write_chunk_v2(path, ChunkMeta("height", -1, 1, 0, 0, 17, 0, 0, 0, 0, 0.005), b"payload")
+    blob = bytearray(path.read_bytes())
+    blob[-1] ^= 1
+    path.write_bytes(blob)
+    with pytest.raises(ValueError, match="length/crc"):
+        read_chunk_v2(path)
+
+
+def test_checked_quant16_uses_wire_float32_qscale():
+    arr = np.linspace(10.0, 70.0, 257 * 257, dtype=np.float64).reshape(257, 257)
+    payload, qoffset, effective = encode_quant16_checked(CFG, arr, 0.001)
+    assert effective == float(np.float32(0.001))
+    assert effective != 0.001
+    decoded = decode_quant16(CFG, payload, arr.shape[0], qoffset, effective)
+    assert np.max(np.abs(decoded - arr)) <= effective * 0.5 + 1e-5
+
+
+def test_checked_quantization_split_is_byte_identical():
+    arr = synth_terrain(65)
+    payload, qoffset, qscale = encode_quant16_checked(CFG, arr, 0.002)
+    q, qoffset2, qscale2 = quantize16_checked(arr, 0.002)
+    assert (qoffset2, qscale2) == (qoffset, qscale)
+    assert encode_quantized16(CFG, q) == payload
+
+
+def test_checked_quantization_shared_qoffset_preserves_shared_sample():
+    a = np.array([[10.0, 10.126], [10.0, 10.126]], dtype=np.float64)
+    b = np.array([[10.126, 10.25], [10.126, 10.25]], dtype=np.float64)
+    pa, oa, qa = encode_quant16_checked(CFG, a, 0.002, qoffset=8.0)
+    pb, ob, qb = encode_quant16_checked(CFG, b, 0.002, qoffset=8.0)
+    da = decode_quant16(CFG, pa, 2, oa, qa)
+    db = decode_quant16(CFG, pb, 2, ob, qb)
+    assert da[0, 1] == db[0, 0]
+
+
+def test_checked_quant16_rejects_overflow_and_nonfinite():
+    with pytest.raises(OverflowError):
+        encode_quant16_checked(CFG, np.array([[0.0, 70.0]]), 0.001)
+    with pytest.raises(ValueError, match="finite"):
+        encode_quant16_checked(CFG, np.array([[0.0, np.nan]]), 0.002)

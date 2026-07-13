@@ -1,0 +1,29 @@
+[format]
+version = 1
+
+[[site]]
+id = "suur-taevaskoda-main-cliff"
+status = "anchor-pinned-camera-pending-first-synthesis-render"
+latitude = 58.107506
+longitude = 27.050242
+epsg3301_e = 679763.082
+epsg3301_n = 6444796.565
+game_x = 311123.082
+game_z = 190723.435
+reference_path = "reference/suur-taevaskoda1.jpg"
+reference_sha256 = "f031ef585dd82779c8e3c8a8059d15aacce11d2e6c886364bee3eb7c2eac382e"
+reference_width_px = 1920
+reference_height_px = 1278
+review_categories = [
+  "base-dtm-artifact",
+  "missing-large-form",
+  "matrix-character",
+  "event-shape",
+  "amplitude",
+  "wavelength",
+  "orientation",
+  "mask-leak",
+  "repetition",
+  "material-obscures-geometry",
+  "grounding",
+]

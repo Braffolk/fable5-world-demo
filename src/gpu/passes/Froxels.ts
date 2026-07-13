@@ -123,7 +123,7 @@ export class Froxels {
       const dist = sliceDist(float(z).add(jit.mul(0.8).add(0.1)).div(FZ));
       const p = camPos.add(dirW.mul(dist)).toVar();
 
-      const groundY = field.fieldHeightFinestNearest(p.xz);
+      const groundY = field.fieldHeightFinestNearestHot(p.xz);
       const hAbove = p.y.sub(groundY).max(0);
       const sunDirN = vec3(sunU.dir as unknown as NV3).normalize().toVar();
 
@@ -160,7 +160,7 @@ export class Froxels {
       // terrain horizon: log-spaced probes along the sun ray
       for (const dSun of [12, 30, 75, 180, 420]) {
         const q = p.add(sunDirN.mul(dSun));
-        vis.mulAssign(smoothstep(-10, 2, q.y.sub(field.fieldHeightFinestNearest(q.xz))));
+        vis.mulAssign(smoothstep(-10, 2, q.y.sub(field.fieldHeightFinestNearestHot(q.xz))));
       }
       if (canopy) {
         // crown slab pierce point: gaps in the canopy window become shafts

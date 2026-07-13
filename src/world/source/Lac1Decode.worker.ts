@@ -7,10 +7,11 @@
  * cancels its own fetch via a per-job AbortController.
  */
 /// <reference lib="webworker" />
-import { crc32, decodeChunkPayload, LAC1_HEADER_SIZE, parseLac1Header, type Lac1LayerSchema } from './Lac1';
+import type { Lac1LayerSchema } from './Lac1';
+import { decodeLacBytes, type LacDecodeSpec } from './LacDecode';
 import type { ChunkPayload } from './WorldSource';
 
-export interface Lac1DecodeJob {
+export interface Lac1DecodeJob extends LacDecodeSpec {
   kind: 'decode';
   id: number;
   url: string;
@@ -31,11 +32,6 @@ export type Lac1DecodeRes =
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 const inflight = new Map<number, AbortController>();
 
-async function inflate(bytes: Uint8Array<ArrayBuffer>): Promise<Uint8Array> {
-  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
-}
-
 function transferables(payload: ChunkPayload): ArrayBuffer[] {
   const buffers = new Set<ArrayBuffer>();
   if (payload.kind === 'height') buffers.add(payload.heights.buffer as ArrayBuffer);
@@ -48,14 +44,7 @@ async function decode(job: Lac1DecodeJob, ac: AbortController): Promise<ChunkPay
   const resp = await fetch(job.url, { signal: ac.signal });
   if (!resp.ok) throw new Error(`HTTP ${resp.status} ${job.url}`);
   const blob = new Uint8Array(await resp.arrayBuffer());
-  const h = parseLac1Header(blob);
-  if (h.layer !== job.layerId || h.lod !== job.lod || h.cx !== job.cx || h.cz !== job.cz) {
-    throw new Error(`header (${h.layer},${h.lod},${h.cx},${h.cz}) != expected (${job.layerId},${job.lod},${job.cx},${job.cz})`);
-  }
-  if (blob.length < LAC1_HEADER_SIZE + h.payloadLen) throw new Error(`truncated: ${blob.length} B < 56+${h.payloadLen}`);
-  const compressed = blob.subarray(LAC1_HEADER_SIZE, LAC1_HEADER_SIZE + h.payloadLen);
-  if (crc32(compressed) !== h.payloadCrc) throw new Error('payload crc mismatch');
-  return decodeChunkPayload(h, await inflate(compressed), job.schema);
+  return decodeLacBytes(blob, job);
 }
 
 ctx.onmessage = (e: MessageEvent<Lac1DecodeReq>): void => {

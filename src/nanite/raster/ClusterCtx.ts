@@ -5,11 +5,11 @@
  * metadata unpack + up-to-six gust/disp samples + wind setup + the clhw classify,
  * behind a workgroupBarrier — a divergence + barrier the raster occupancy cannot hide.
  * This moves it OUT to a ONE-THREAD-PER-CLUSTER pre-pass (`nanClusterCtxPrepass`) that
- * computes makeCtx once and writes the 35-word ctx (12 u32 + 23 f32-as-bits) to a global
+ * computes makeCtx once and writes the 36-word ctx (13 u32 + 23 f32-as-bits) to a global
  * buffer; the raster then reads it with cache-coherent loads (itemIdx is UNIFORM per
  * workgroup ⇒ one L1 line for all 128 lanes). BONUS: makeCtx leaving the raster SHEDS
  * gpu.clusters/instances/meshes from its bindings ⇒ 9 storage buffers, under the ceiling.
- * WORLD1 (singlePass) only. Buffer = QRASTER_CAP × 35 u32 (world QRASTER_CAP = 1M ⇒ 140 MB);
+ * WORLD1 only. Buffer = RASTER_PREPASS_CLUSTER_CAP × 36 u32 (96 Ki ⇒ 13.5 MiB);
  * every visible cluster is rewritten each frame so the initial contents are irrelevant.
  */
 
@@ -18,21 +18,24 @@ import { StorageBufferAttribute } from 'three/webgpu';
 import type { NB, NF, NU } from '../../gpu/TSLTypes';
 import { MESH_WORDS } from '../world/GeometryRegistry';
 import type { RegistryGpu } from '../world/GeometryRegistry';
-import { QRASTER_CAP, type NaniteCam } from '../NaniteCommon';
+import type { NaniteCam } from '../NaniteCommon';
 import type { TrunkWindOpt, VertCtx } from './NaniteFetch';
 import { clusterHwClass } from '../cull/NaniteHwClass';
 import { bcF2U, elemU, returnIf, sU32Views } from '../Tsl';
 import type { BufOf, UV2 } from '../Tsl';
+import { RASTER_PREPASS_CLUSTER_CAP } from './RasterCapacity';
 
 interface ComputeKernel {
   setName(name: string): unknown;
 }
 
-// uint slots: isHF,isDAG,triStart,triCount,meshId,channel,gx,gz,qxw,twoSided,matClass,clhw
-export const CTX_U = 12;
+// uint slots: isHF,isDAG,triStart,triCount,meshId,channel,gx,gz,qxw,twoSided,matClass,clhw,
+// projBase. Project.ts overwrites projBase after reserving this cluster's compact record range.
+export const CTX_PROJ_BASE = 12;
+export const CTX_U = 13;
 // float slots: A.xyzw,B.xyzw,oX,oZ,cell,wind[11..20],yawSc.cy,yawSc.sy
 const CTX_F = 23;
-export const CTX_STRIDE = CTX_U + CTX_F; // 35 u32 / cluster
+export const CTX_STRIDE = CTX_U + CTX_F; // 36 u32 / cluster
 
 type U32Views = ReturnType<typeof sU32Views>;
 
@@ -58,17 +61,20 @@ export function buildClusterCtx(p: {
   const { ctxPrepass, gpu, cam, qRasterRO, makeCtx, projK, clhwMax, wind, b2u } = p;
 
   const clusterCtxAttr = ctxPrepass
-    ? new StorageBufferAttribute(new Uint32Array(QRASTER_CAP * CTX_STRIDE), 1)
+    ? new StorageBufferAttribute(
+        new Uint32Array(RASTER_PREPASS_CLUSTER_CAP * CTX_STRIDE),
+        1,
+      )
     : null;
   if (clusterCtxAttr) clusterCtxAttr.name = 'nanClusterCtx';
   const clusterCtxV = clusterCtxAttr
-    ? sU32Views(clusterCtxAttr, QRASTER_CAP * CTX_STRIDE)
+    ? sU32Views(clusterCtxAttr, RASTER_PREPASS_CLUSTER_CAP * CTX_STRIDE)
     : null;
 
   // ONE thread per visible cluster via a DIRECT fixed grid (instanceIndex) + early-out —
   // no indirect-arg-in-batch hazard, and launch of the ~15625 idle-tail workgroups is <
   // the makeCtx it replaces. Computes the UNIFIED makeCtx (variant 'both') and writes the
-  // 35-word ctx the world1 raster reads.
+  // 36-word ctx the world1 raster reads.
   const kClusterCtx =
     ctxPrepass && clusterCtxV
       ? (() => {
@@ -76,6 +82,7 @@ export function buildClusterCtx(p: {
             const tid = instanceIndex;
             const count = qRasterRO.element(0).x;
             returnIf(tid.greaterThanEqual(count));
+            returnIf(tid.greaterThanEqual(uint(RASTER_PREPASS_CLUSTER_CAP)));
             const item = qRasterRO.element(tid.add(uint(1)));
             const instId = item.x.toVar();
             const ci = item.y.toVar();
@@ -117,6 +124,9 @@ export function buildClusterCtx(p: {
               11,
               b2u(clusterHwClass(gpu, cam, projK, instId, ci, clhwMax)),
             );
+            // Project.ts owns this slot. Initialize fail-closed so a skipped/overflowed
+            // cluster can never consume stale projected records from the prior frame.
+            wU(CTX_PROJ_BASE, uint(0xffffffff));
             wF(0, c.A.x as unknown as NF);
             wF(1, c.A.y as unknown as NF);
             wF(2, c.A.z as unknown as NF);
@@ -143,7 +153,7 @@ export function buildClusterCtx(p: {
             }
             wF(21, c.yawSc.cy);
             wF(22, c.yawSc.sy);
-          })().compute(QRASTER_CAP, [64]);
+          })().compute(RASTER_PREPASS_CLUSTER_CAP, [64]);
           (kn as unknown as ComputeKernel).setName('nanClusterCtxPrepass');
           return kn;
         })()

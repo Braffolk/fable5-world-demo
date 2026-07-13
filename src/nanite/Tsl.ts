@@ -23,7 +23,7 @@ import {
   max,
   min,
   storage,
-  texture,
+  textureLoad,
   uint,
   packHalf2x16,
   uniform,
@@ -385,8 +385,12 @@ export function wgLinearDyn(): NU {
 
 /** textureLoad .r at an integer texel coord (TextureNode.load is untyped) */
 export function texLoadR(tex: Texture, x: NU, y: NU): NF {
-  const t = texture(tex) as unknown as { load(c: unknown): { r: NF } };
-  return t.load(uv2(x, y)).r;
+  // Pass the integer UV at TextureNode construction time. `texture(tex).load(uv)`
+  // first constructs a no-UV base with updateMatrix=true, then clones it; Three r184's
+  // clone does not preserve a disabled updateMatrix flag, so every tap materializes a
+  // redundant mat3 uniform. Direct textureLoad has sampler=false and updateMatrix=false
+  // from birth: identical identity-matrix texel fetch, without one uniform per tap.
+  return (textureLoad(tex, uv2(x, y) as never) as unknown as { r: NF }).r;
 }
 
 /** mat4 uniform handle: TSL node with .mul(vec4) plus the CPU-side .value */

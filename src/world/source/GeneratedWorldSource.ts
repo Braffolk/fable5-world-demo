@@ -157,6 +157,9 @@ export class GeneratedWorldSource implements WorldSource {
       return { ...key, size: resW * resW * (meta.enc === 2 ? meta.planes?.length ?? 1 : 4), hash64: 0n };
     };
     return {
+      format: 1,
+      containers: ['LAC1'],
+      codec: 'deflate',
       grid: {
         anchorE: 0,
         anchorN: 0,

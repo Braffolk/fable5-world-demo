@@ -7,15 +7,15 @@
  * instead of projecting them — that deletion is the register win (world1's 64-reg
  * projection floor goes).
  *
- * BIT-IDENTITY (the #1 requirement): the pass decodes the SAME 35-word per-cluster ctx the
+ * BIT-IDENTITY (the #1 requirement): the pass decodes the SAME per-cluster ctx the
  * world1 raster reads (ClusterCtx layout), fetches the SAME world vertex via the SAME
  * `nfetch.fetchWorldVert(ctx, localTri, v)`, and runs `projectVert()` — the VERBATIM copy of
  * world1's inline projection (`cam.vp` clip → w-guard → NDC → +1·0.5·(W,H) → ×256 round →
  * i32). So the snapped `xi/yi/dz` written here are the byte-identical values world1 computed;
  * Classify reads them back and produces the identical winding / route / queue records.
  *
- * GRANULARITY — DEDUP (task #76): each cluster reserves MAX_CLUSTER_VERTS UNIQUE-vertex slots
- * (not 765 tri-CORNER slots), addressed by `canonVertSlot`:
+ * GRANULARITY — DEDUP (task #76): each cluster reserves only the projected records it needs,
+ * addressed by `canonVertSlot`:
  *   • mesh: `vi − vBase` (dense per-cluster key). This is universal now because BuildDag.
  *     meshletizeDag re-emits each cluster's verts CONTIGUOUSLY at build time (the leaf DAGs
  *     were scattered across a 1.4M-vertex pool — measured — which is what blocked this before);
@@ -42,6 +42,8 @@
  */
 
 import {
+  atomicAdd,
+  atomicStore,
   Fn,
   If,
   float,
@@ -71,8 +73,9 @@ import {
   wgLinear,
 } from '../Tsl';
 import type { BufOf, UV2 } from '../Tsl';
-import { CTX_STRIDE, CTX_U } from './ClusterCtx';
+import { CTX_PROJ_BASE, CTX_STRIDE, CTX_U } from './ClusterCtx';
 import { HWPROJ } from '../cull/NaniteHwClass';
+import { RASTER_PREPASS_CLUSTER_CAP } from './RasterCapacity';
 
 type U32Views = ReturnType<typeof sU32Views>;
 
@@ -80,16 +83,13 @@ interface ComputeKernel {
   setName(name: string): unknown;
 }
 
-// DEDUPED per-cluster reservation (task #76). Each visible cluster reserves MAX_CLUSTER_VERTS
-// UNIQUE-vertex slots (not the 765 tri-CORNER slots). Sized to cover the measured max unique
-// verts/cluster across every cluster type in the render set:
+// Maximum guarded reservation for mesh clusters without vcompact coverage. Sized to cover the
+// measured max unique verts/cluster across every cluster type in the render set:
 //   • mesh (leaf/trunk/aggregate DAGs, meshletized ⇒ contiguous per cluster): ≤ 494 unique;
 //   • terrain-DAG (isHF): kept per-CORNER (localTri*3+corner) — its blocks are ≤128 tris ⇒
 //     ≤ 384 corner slots, already < the stride, so no grid-index math is needed.
-// 512 covers both with margin (an overflow guard clamps + the runtime check reports any
-// cluster that would exceed it). projVertBuf stride shrinks 765 → 512 (~⅓ smaller).
+// 512 covers both with margin; compact reservations use the actual count whenever available.
 const MAX_CLUSTER_VERTS = 512;
-export const projVertsPerCluster = (): number => MAX_CLUSTER_VERTS;
 // projected-vert record = xi(i32 bits) | yi(i32 bits) | dz(f32 bits, or NEAR_SENTINEL).
 const PROJ_VERT_STRIDE = 3;
 
@@ -102,9 +102,9 @@ const PROJ_VERT_STRIDE = 3;
  *     = indices[triStart*3]. After MESHLETIZE (BuildDag.meshletizeDag) each cluster's verts
  *     are CONTIGUOUS and the first corner is the min index, so vBase is the cluster base and
  *     vi−vBase ∈ [0, uniqueCount) is a dense bijection — shared verts collapse to one slot.
- *  `recCluster` = itemIdx·MAX_CLUSTER_VERTS (the flat per-cluster base; the caller hoists it
- *  once). The minU clamp uses the fixed MAX_CLUSTER_VERTS-1 moat so a rogue canonLocal can
- *  never spill into the next cluster's fixed region. `corner` may be a compile-time 0|1|2
+ *  `recCluster` is the compact record base reserved for this cluster. The minU clamp keeps a
+ *  rogue canonical local inside the cluster's guarded 512-record fallback. `corner` may be a
+ *  compile-time 0|1|2
  *  (the compute consumers unroll corners) or a runtime NU (the HW `_clE` vertex stage derives
  *  it from vertexIndex) — identical math either way. */
 export const canonVertSlot = (
@@ -132,27 +132,28 @@ export const canonVertSlot = (
 // near-crossing (pv.w ≤ NEAR_EPS) corner marker in the dz word — a signaling-NaN bit pattern
 // no finite dz can equal; compared as a raw u32 (no float NaN semantics) ⇒ robust.
 export const NEAR_SENTINEL = 0x7f800001;
-// Cluster-indexed reservation: the buffer holds PROJ_CLUSTER_CAP cluster slots ×
-// MAX_CLUSTER_VERTS unique-vert slots × 3 u32. Sized to the MEASURED dense-forest
-// visible-cluster peak with headroom (a cluster past the cap gets no projected verts —
-// ProjectVerts + Classify guard the same bound ⇒ it simply doesn't render; surfaced
-// overflow, not corruption).
+export const PROJ_INVALID_BASE = 0xffffffff;
+// Compact projected-record pool. Each live cluster reserves exactly the records it writes:
+// vcompact unique verts for mesh, triCount*3 corners for terrain, or the 512-record guarded
+// fallback. This replaces the old itemIdx*512 sparse address space.
+// 10 Mi records * 3 u32 * 4 B = 120 MiB, below the common 128 MiB storage-binding floor.
+// Exhaustion stores PROJ_INVALID_BASE in the cluster ctx; every consumer skips that cluster,
+// preserving the existing fail-closed overflow contract without OOB access.
+export const PROJ_RECORD_CAP = 10 * 1024 * 1024;
+// Visible cluster count remains independently bounded to keep ctx/item indexing finite.
 // CENSUS 2026-07-09 POST crown-LOD ladder (docs/tasks/2026-07-09/census-post-ladder.json,
 // 898-sample flythrough): peak nanite.visClusters = 66,827 at the dense-forest look-across
 // (t=0.373, ?cam=-582.1,302.4,1006.1,2.5692,-0.0077) — the stale "≈150K" that forced the
 // old 192K cap was the PRE-ladder number; the crown 4→6-rung ladder more than halved the
-// visible-cluster count. 128Ki = 131,072 = 1.96× the fresh peak.
-// projVertBuf = cap × 512 × 3 u32 × 4 B = cap × 6144 B: 192Ki → 1.18 GB, 128Ki → 0.805 GB
-// (−384 MiB / −402.7 MB, the single biggest memory item in the pipeline). Alloc stays far
-// under the ~4.29 GB maxBufferSize. QRASTER_CAP (world = 1M) still caps visClusters upstream.
-export const PROJ_CLUSTER_CAP = Math.min(QRASTER_CAP, 128 * 1024);
+// visible-cluster count. 96Ki = 98,304 = 1.47× the measured 66,827 peak.
+export const PROJ_CLUSTER_CAP = RASTER_PREPASS_CLUSTER_CAP;
 
 export interface ProjectBundle {
   projVertAttr: StorageBufferAttribute | null;
+  projAllocAttr: StorageBufferAttribute | null;
   projVertV: U32Views | null;
+  kProjectClear: unknown | null;
   kProjectVerts: unknown | null;
-  /** = MAX_CLUSTER_VERTS, the per-cluster unique-vert slot stride (Classify + Mid reuse it). */
-  vertsPerCluster: number;
 }
 
 /** Build `projVertBuf` + `nanProjectVerts`. Only the world1 (singlePass = ctxPrepass) path
@@ -162,7 +163,7 @@ export function buildProject(p: {
   ctxPrepass: boolean;
   cam: NaniteCam;
   qRasterRO: BufOf<UV2>;
-  /** the 35-word per-cluster ctx the ClusterCtx pre-pass wrote (READ here). */
+  /** the per-cluster ctx the ClusterCtx pre-pass wrote (READ/WRITE here). */
   clusterCtxV: U32Views | null;
   /** the SAME fetch world1 used (variant 'both', bound to disp+wind) ⇒ identical world pos. */
   nfetch: NaniteFetch;
@@ -193,23 +194,30 @@ export function buildProject(p: {
     vcompact,
   } = p;
 
-  const vertsPerCluster = projVertsPerCluster(); // MAX_CLUSTER_TRIS*3
-
   if (!(ctxPrepass && clusterCtxV)) {
     return {
       projVertAttr: null,
+      projAllocAttr: null,
       projVertV: null,
+      kProjectClear: null,
       kProjectVerts: null,
-      vertsPerCluster,
     };
   }
 
-  // FLAT layout: PROJ_CLUSTER_CAP cluster slots × MAX_CLUSTER_VERTS unique-vert slots × 3 u32.
-  // 128Ki × 512 × 3 u32 = 0.805 GB — each cluster owns a fixed itemIdx·512 region (no compaction).
-  const count = PROJ_CLUSTER_CAP * vertsPerCluster * PROJ_VERT_STRIDE;
+  // Keep the atomic allocator and record pool in distinct GPU buffers. WebGPU forbids
+  // binding one writable storage range through both atomic and read-write views in the
+  // same dispatch, even when the source-level accesses target disjoint words.
+  const projAllocAttr = new StorageBufferAttribute(new Uint32Array(1), 1);
+  projAllocAttr.name = 'nanProjAlloc';
+  const projAllocV = sU32Views(projAllocAttr, 1);
+  const count = PROJ_RECORD_CAP * PROJ_VERT_STRIDE;
   const projVertAttr = new StorageBufferAttribute(new Uint32Array(count), 1);
   projVertAttr.name = 'nanProjVert';
   const projVertV = sU32Views(projVertAttr, count);
+  const kProjectClear = Fn(() => {
+    atomicStore(projAllocV.atomic.element(0), uint(0));
+  })().compute(1, [1]);
+  (kProjectClear as unknown as ComputeKernel).setName('nanProjectPoolClear');
 
   const { fetchWorldVert, fetchWorldVertByIndex } = nfetch;
   const W = float(cam.uW);
@@ -265,20 +273,17 @@ export function buildProject(p: {
     // (Classify guards the same slot ⇒ they simply do not render — an overflow parity hole,
     // surfaced; the cap must exceed the frame's visible-cluster count).
     returnIf(itemIdx.greaterThanEqual(uint(PROJ_CLUSTER_CAP)));
-    // FLAT per-cluster base: this cluster owns the fixed region [itemIdx·MAX_CLUSTER_VERTS, +512)
-    // (vertsPerCluster == MAX_CLUSTER_VERTS). The slot is recCluster + local — no reservation read.
-    const recCluster = itemIdx.mul(uint(vertsPerCluster)).toVar();
     const localTri = localX().toVar();
     const base = itemIdx.mul(uint(CTX_STRIDE)).toVar();
 
     // ── Lever A (always-on): cooperative WORKGROUP-SHARED per-cluster ctx / vcompact ───────
     // This pass is dispatched ONE workgroup / cluster, MAX_CLUSTER_TRIS threads. The per-cluster
-    // ctx (35 words), plus ci and vcompact's (vMin, uniqueCount), are WORKGROUP-UNIFORM — yet the
+    // ctx (36 words), plus ci and vcompact's (vMin, uniqueCount), are WORKGROUP-UNIFORM — yet the
     // per-corner dispatch had ALL threads re-issue the IDENTICAL global loads (broadcast reads),
     // the measured buffer-READ-limiter(92%) / LLC(96%) wall (~94% of load-issues redundant). Load
     // them ONCE per workgroup into threadgroup memory, barrier, then decode from shared. Exact
     // idiom already shipping in the wgcache path (NaniteRaster ~866-961).
-    // ≈148 B/workgroup on-chip (37 u32); zero VRAM; the values — hence the written xi/yi/dz
+    // 152 B/workgroup on-chip (38 u32); zero VRAM; the values — hence the written xi/yi/dz
     // records — are BYTE-IDENTICAL (a plain u32 copy → same bitcasts → same projectVert()).
     const shCtx = workgroupArray('uint', CTX_STRIDE) as unknown as {
       element(i: NU): unknown;
@@ -294,14 +299,14 @@ export function buildProject(p: {
       void (arr.element(i) as unknown as { assign(x: NU): unknown }).assign(v);
     // Cooperative fill in WORKGROUP-UNIFORM control flow — the per-lane If-stores CLOSE before
     // the barrier, so the barrier itself sits at uniform top-level scope. Lanes 0..CTX_STRIDE-1
-    // each store one ctx word to a DISTINCT cell (no races); CTX_STRIDE(35) ≤ MAX_CLUSTER_TRIS
+    // each store one ctx word to a DISTINCT cell (no races); CTX_STRIDE(36) ≤ MAX_CLUSTER_TRIS
     // (128/255) ⇒ one stride, but the ceil-loop keeps it correct if that ever changes.
     for (let k = 0; k < Math.ceil(CTX_STRIDE / MAX_CLUSTER_TRIS); k++) {
       const w = (
         k === 0 ? localTri : localTri.add(uint(k * MAX_CLUSTER_TRIS))
       ).toVar();
       If(w.lessThan(uint(CTX_STRIDE)), () => {
-        shSet(shCtx, w, elemU(clusterCtxV.ro, base.add(w)) as unknown as NU);
+        shSet(shCtx, w, elemU(clusterCtxV.rw, base.add(w)) as unknown as NU);
       });
     }
     // lane 0 loads the broadcast scalars. ci = qRaster[itemIdx+1].y — the SAME item world1
@@ -319,17 +324,16 @@ export function buildProject(p: {
     // UNCONDITIONAL, at uniform top-level scope ⇒ every survivor reaches it together.
     workgroupBarrier();
 
-    // decode the per-cluster ctx from SHARED memory (was clusterCtxV.ro global broadcast reads)
-    // — SAME 35-word layout (CTX_U u32 + CTX_F f32-as-bits), same bits ⇒ byte-identical records.
+    // Decode from shared after loading through the batch's single read-write clusterCtx
+    // binding. These operations remain plain reads; the unified binding avoids an invalid
+    // read-only/read-write alias in one WebGPU compute-pass synchronization scope.
     const rU = (i: number): NU =>
       (shCtx.element(uint(i)) as unknown as NU).toVar() as unknown as NU;
     const rF = (i: number): NF =>
       bcU2F(shCtx.element(uint(CTX_U + i)) as unknown as NU).toVar() as unknown as NF;
 
     // voxel(7) clusters do NO triangle work — world1 bails before projecting; match it so
-    // their corner slots stay untouched (and Classify skips them too ⇒ never read). Reads
-    // SHARED (post-barrier); the value is workgroup-uniform ⇒ all threads return together.
-    returnIf(rU(10).equal(uint(7)));
+    // their corner slots stay untouched (and Classify skips them too ⇒ never read).
     // skip TERRAIN (isHF) HW clusters only (slot 11 AND slot 0) — the `_clT` draw keeps the
     // full compute-fetch vertex path and never reads projVertBuf. MESH HW clusters DO flow
     // through (the `_clE` vertex now reads their pre-projected verts). The Phase-2 retry
@@ -346,13 +350,48 @@ export function buildProject(p: {
     // With the flagship OFF (HWPROJ, default — see NaniteHwClass) nobody reads projected
     // verts for HW clusters ⇒ skip ALL of them (the pre-flagship rule); narrowed to
     // terrain-only when the ?hwproj=1 opt-in compiles the `_clE` reader.
-    if (HWPROJ) {
-      returnIf(rU(11).equal(uint(1)).and(rU(0).equal(uint(1))));
-    } else {
-      returnIf(rU(11).equal(uint(1)));
-    }
+    // WGSL uniformity analysis cannot prove that a workgroup-memory read is dynamically
+    // uniform. Therefore no return based on these shared values may occur before the second
+    // barrier below, even though every lane reads the same slots. Gate only lane 0's
+    // reservation here; all lanes cross the barrier, then skipped clusters may return.
+    const skip = rU(10).equal(uint(7)).or(
+      HWPROJ
+        ? rU(11).equal(uint(1)).and(rU(0).equal(uint(1)))
+        : rU(11).equal(uint(1)),
+    ) as unknown as NB;
 
     const triCount = rU(3);
+    const vcCount = (shScl.element(uint(1)) as unknown as NU).toVar();
+    const meshRecords = (vcCount.greaterThan(uint(0)) as unknown as {
+      select(a: NU, b: NU): NU;
+    }).select(vcCount, uint(MAX_CLUSTER_VERTS));
+    const recordsNeeded = (rU(0).equal(uint(1)) as unknown as {
+      select(a: NU, b: NU): NU;
+    }).select(triCount.mul(uint(3)) as unknown as NU, meshRecords).toVar();
+    // One lane reserves this cluster's exact record count and publishes the base through
+    // the ctx buffer that every downstream consumer already reads. A second workgroup
+    // barrier makes the base visible to all projection lanes before any record write.
+    If(localTri.equal(uint(0)).and(skip.not()), () => {
+      const recordBase = atomicAdd(
+        projAllocV.atomic.element(0),
+        recordsNeeded,
+      ) as unknown as NU;
+      const valid = recordBase.add(recordsNeeded).lessThanEqual(uint(PROJ_RECORD_CAP));
+      const published = (valid as unknown as { select(a: NU, b: NU): NU }).select(
+        recordBase,
+        uint(PROJ_INVALID_BASE),
+      );
+      shSet(shCtx, uint(CTX_PROJ_BASE), published);
+      void (
+        clusterCtxV.rw.element(base.add(uint(CTX_PROJ_BASE))) as unknown as {
+          assign(x: NU): unknown;
+        }
+      ).assign(published);
+    });
+    workgroupBarrier();
+    returnIf(skip);
+    const recCluster = rU(CTX_PROJ_BASE).toVar();
+    returnIf(recCluster.equal(uint(PROJ_INVALID_BASE)));
     // NB: the per-thread `localTri < triCount` gate is NOT a global early-out anymore — the
     // mesh per-unique-vert path (below) gives a thread with localTri ≥ triCount real vert work
     // (s = localTri stride). It is re-applied inside the terrain + mesh-fallback branches only.
@@ -443,7 +482,6 @@ export function buildProject(p: {
       // (shScl[0..1], Lever A above); read from shared here instead of re-issuing the global
       // load per thread. Same value ⇒ byte-identical records (terrain never reaches this Else).
       const vcMin = (shScl.element(uint(0)) as unknown as NU).toVar();
-      const vcCount = (shScl.element(uint(1)) as unknown as NU).toVar();
       If(vcCount.greaterThan(uint(0)), () => {
         // MESH, vcompact-covered — project each unique vert ONCE. Threads STRIDE over the unique
         // range [0, uniqueCount): a thread with localTri ≥ triCount may still own vert s=localTri,
@@ -487,5 +525,5 @@ export function buildProject(p: {
   // tight indirect size (itemCount workgroups) — same override the world1 raster uses.
   setIndirectDispatch(kn, rasterDispatchFullAttr);
 
-  return { projVertAttr, projVertV, kProjectVerts: kn, vertsPerCluster };
+  return { projVertAttr, projAllocAttr, projVertV, kProjectClear, kProjectVerts: kn };
 }

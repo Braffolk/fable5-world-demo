@@ -1,0 +1,74 @@
+{
+  "format": 1,
+  "bankId": "mineral-mesic-forest-lapinjarvi-pilot-v1",
+  "license": "CC-BY-4.0",
+  "citation": "Pitkanen, Raumonen and Kangas (2019), ISPRS Journal of Photogrammetry and Remote Sensing 151, 1-14, doi:10.1016/j.isprsjprs.2018.11.027",
+  "datasetDescription": "https://boileri.nic.funet.fi/index/geodata/luke/tls/2016/lapinjarvi/Lapinjarvi_2016_data_description.pdf",
+  "plotMetadata": "https://boileri.nic.funet.fi/index/geodata/luke/tls/2016/lapinjarvi/TLS_plot_data.csv",
+  "analogueStatus": "foreign-analogue-pilot-not-national-validation",
+  "surfaceFamily": "southern-boreal-mineral-mesic-pine-forest",
+  "rawRoot": "data/in/microtopo-exemplars/lapinjarvi-2016/raw",
+  "derivedRoot": "data/in/microtopo-exemplars/lapinjarvi-2016/derived-v1",
+  "plots": [
+    {
+      "id": "k11",
+      "role": "calibration",
+      "url": "https://boileri.nic.funet.fi/index/geodata/luke/tls/2016/lapinjarvi/laz_coreg_12.5m/k11.laz",
+      "expectedBytes": 622414857,
+      "sha256": "804665dc6744c4f56cf1236cf1ef446b243be1895d37e97e9368651e847cc25a",
+      "site": "productive-nondrained-mineral",
+      "fertility": "mesic",
+      "structure": "pine-dominated",
+      "qa": {
+        "status": "approved",
+        "reviewer": "Codex root visual QA 2026-07-13",
+        "notes": "Approved for calibration patch extraction only. Final elevation/evidence/confidence/slope composite shows connected ground-like relief, explicit voids, no metre-scale elevated vegetation islands, 75.62% direct multi-view evidence, 0.1687 m maximum fine step, and 42 usable 4 m windows. Foreign mesic mineral-forest analogue; not Estonian or national truth."
+      }
+    },
+    {
+      "id": "k32",
+      "role": "calibration",
+      "url": "https://boileri.nic.funet.fi/index/geodata/luke/tls/2016/lapinjarvi/laz_coreg_12.5m/k32.laz",
+      "expectedBytes": 608115247,
+      "sha256": "1624699d9f2122717e5e332248d28d679e7a67ad93e0f202ea8e548b99743136",
+      "site": "productive-nondrained-mineral",
+      "fertility": "mesic",
+      "structure": "pine-dominated",
+      "qa": {
+        "status": "approved",
+        "reviewer": "Codex root visual QA 2026-07-13",
+        "notes": "Approved for calibration patch extraction only after a clean provenance-verified rerun reproduced the reviewed arrays and metrics exactly. Composite shows coherent connected ground, explicit unsupported voids, no elevated object islands, 79.90% direct evidence, 0.163575 m maximum fine step, and 49 usable windows. Foreign mesic mineral-forest analogue only."
+      }
+    },
+    {
+      "id": "k36",
+      "role": "calibration",
+      "url": "https://boileri.nic.funet.fi/index/geodata/luke/tls/2016/lapinjarvi/laz_coreg_12.5m/k36.laz",
+      "expectedBytes": 646512062,
+      "sha256": "9bd762aae671fb5a0a7a1f4f98c8c4c517d80eea4b188b802da1bc89eb03bd87",
+      "site": "productive-nondrained-mineral",
+      "fertility": "mesic",
+      "structure": "pine-dominated",
+      "qa": {
+        "status": "approved",
+        "reviewer": "Codex root visual QA 2026-07-13",
+        "notes": "Approved for calibration patch extraction only. Composite shows connected rolling ground-like relief, explicit voids, no disconnected elevated object islands, 86.18% direct evidence, 0.145325 m maximum fine step, and 59 usable windows. Bright compact forms remain measured supported terrain contacts, not procedural fill. Foreign mesic mineral-forest analogue only."
+      }
+    },
+    {
+      "id": "k19",
+      "role": "holdout",
+      "url": "https://boileri.nic.funet.fi/index/geodata/luke/tls/2016/lapinjarvi/laz_coreg_12.5m/k19.laz",
+      "expectedBytes": 586625911,
+      "sha256": "b7d8c110c77ed7182cb6d36b0b5e51f7b68d42b79247f83a140e5960a0e34194",
+      "site": "productive-nondrained-mineral",
+      "fertility": "mesic",
+      "structure": "pine-dominated",
+      "qa": {
+        "status": "approved",
+        "reviewer": "Codex root visual QA 2026-07-13",
+        "notes": "Approved as extraction-valid holdout only and categorically excluded from bank construction. It is visibly rougher but coherent, with no disconnected elevated islands, 67.56% direct evidence, 0.245875 m maximum fine step, p99 slope 1.4228, and seven usable windows. Report as a single-site out-of-sample diagnostic; do not tune calibration to force a match."
+      }
+    }
+  ]
+}

@@ -21,6 +21,7 @@ import { IndirectStorageBufferAttribute } from 'three/webgpu';
 import type { NB, NF, NI, NU } from '../../gpu/TSLTypes';
 import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK } from '../world/GeometryRegistry';
 import {
+  aLoadU,
   bcU2F,
   bcU2I,
   elemU,
@@ -37,7 +38,7 @@ import {
 } from '../Tsl';
 import { depthKey24 } from './VisBuffer';
 import { canonVertSlot } from './Project';
-import { CTX_STRIDE } from './ClusterCtx';
+import { CTX_PROJ_BASE, CTX_STRIDE } from './ClusterCtx';
 import { MID_CAP, MID_STRIDE } from './Queues';
 import type { SwScanline } from './Scanline';
 
@@ -53,12 +54,10 @@ export function buildMid(p: {
   midDrawAttr: IndirectStorageBufferAttribute | null;
   /** the projected-vert buffer nanProjectVerts filled + world1 read (READ here too). */
   projVertV: U32Views | null;
-  /** the 35-word per-cluster ctx (READ for triStart+isHF, which canonVertSlot needs). */
+  /** per-cluster ctx (READ for projection base + triStart + isHF). */
   clusterCtxV: U32Views | null;
   /** gpu.indices — canonVertSlot reads it to dedup mesh corners (vi−vBase). */
   indices: Parameters<typeof canonVertSlot>[5];
-  /** = MAX_CLUSTER_VERTS — the per-cluster unique-vert slot stride. */
-  vertsPerCluster: number;
   swScanline: SwScanline;
   /** the shipped depth-keyed election bound to the vis buffers (VisBuffer.makeElect). */
   elect: (px: NU, cand: NU, idStore: NU) => void;
@@ -71,7 +70,6 @@ export function buildMid(p: {
     projVertV,
     clusterCtxV,
     indices,
-    vertsPerCluster,
     swScanline,
     elect,
     width,
@@ -81,11 +79,11 @@ export function buildMid(p: {
   const kn = Fn(() => {
     // 2-D dispatch (nanMidArgs balanced split): linear record index uses the LIVE grid
     // width from the indirect args (wgLinearDyn), matching kMidArgs' x=ceil(wg/y) grid.
-    // Queue reads are non-atomic: appends happened in world1 (a prior pass — RAW across a
-    // pass boundary), this consumer never writes midQueue, so bind the read-only view only.
+    // Producer and consumer share one compute pass. Keep the queue on its single atomic
+    // binding; a second read-only alias is invalid in the same WebGPU synchronization scope.
     const i = wgLinearDyn().mul(uint(64)).add(localX()).toVar();
     returnIf(
-      i.greaterThanEqual(minU(elemU(midQueueV.ro, uint(0)), uint(MID_CAP))),
+      i.greaterThanEqual(minU(aLoadU(midQueueV.atomic.element(0)), uint(MID_CAP))),
     );
     // 1-u32 record = the tri id (payload). Decode (itemIdx, localTri) — the SAME split the
     // resolve + world1 use — then read the 3 pre-projected corners from projVertBuf via
@@ -93,15 +91,18 @@ export function buildMid(p: {
     // MID_STRIDE===1 ⇒ the record index is just `i`; emit it directly so the hot index
     // path carries no dead `*1u` (a general fallback keeps other strides correct).
     const recOff = (MID_STRIDE === 1 ? i : i.mul(uint(MID_STRIDE))) as unknown as NU;
-    const pay = elemU(midQueueV.ro, uint(1).add(recOff)).toVar();
+    const pay = aLoadU(midQueueV.atomic.element(uint(1).add(recOff))).toVar();
     const itemIdx = pay.shiftRight(uint(CLUSTER_TRI_BITS)).toVar();
     const localTri = pay.bitAnd(uint(CLUSTER_TRI_MASK)).toVar();
-    const recCluster = itemIdx.mul(uint(vertsPerCluster)).toVar();
+    const cBase = itemIdx.mul(uint(CTX_STRIDE)).toVar();
+    const recCluster = elemU(
+      clusterCtxV.rw,
+      cBase.add(uint(CTX_PROJ_BASE)),
+    ).toVar();
     // canonVertSlot needs the cluster's triStart + isHF (mesh vi−vBase vs terrain per-corner);
     // read from the SAME clusterCtx the projection + classifier used — CTX_U slots 0=isHF, 2=triStart.
-    const cBase = itemIdx.mul(uint(CTX_STRIDE)).toVar();
-    const triStart = elemU(clusterCtxV.ro, cBase.add(uint(2))).toVar();
-    const isHF = elemU(clusterCtxV.ro, cBase).equal(uint(1));
+    const triStart = elemU(clusterCtxV.rw, cBase.add(uint(2))).toVar();
+    const isHF = elemU(clusterCtxV.rw, cBase).equal(uint(1));
     const rxi: NI[] = [];
     const ryi: NI[] = [];
     const rdz: NF[] = [];
@@ -114,12 +115,12 @@ export function buildMid(p: {
         v,
         indices,
       ).toVar();
-      rxi[v] = bcU2I(elemU(projVertV.ro, rb)).toVar() as unknown as NI;
+      rxi[v] = bcU2I(elemU(projVertV.rw, rb)).toVar() as unknown as NI;
       ryi[v] = bcU2I(
-        elemU(projVertV.ro, rb.add(uint(1))),
+        elemU(projVertV.rw, rb.add(uint(1))),
       ).toVar() as unknown as NI;
       rdz[v] = bcU2F(
-        elemU(projVertV.ro, rb.add(uint(2))),
+        elemU(projVertV.rw, rb.add(uint(2))),
       ).toVar() as unknown as NF;
     }
     // reproduce world1's winding: the integer twice-area sign decides the 1↔2 swap so the

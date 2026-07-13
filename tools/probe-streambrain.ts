@@ -123,6 +123,7 @@ const core = new StreamBrainCore({
 const packed = new Float64Array(keys.map((k) => packChunkKey(k.lod, k.cx, k.cz)));
 core.init({
   kind: 'init',
+  manifestFormat: 1,
   grid: manifest.grid,
   layers: {
     height: {

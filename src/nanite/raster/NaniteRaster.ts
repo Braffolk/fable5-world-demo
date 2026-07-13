@@ -102,12 +102,13 @@ import {
 } from '../Tsl';
 import type { BufOf, UniformV3, UV2 } from '../Tsl';
 // ─── extracted raster/ modules (task #76 vis-buffer rewrite, Step 1) ──────────────
-import { CTX_STRIDE, CTX_U, buildClusterCtx } from './ClusterCtx';
+import { CTX_PROJ_BASE, CTX_STRIDE, CTX_U, buildClusterCtx } from './ClusterCtx';
 import { buildHw } from './Hw';
 import { buildMid } from './Mid';
 import {
   NEAR_SENTINEL,
   PROJ_CLUSTER_CAP,
+  PROJ_INVALID_BASE,
   buildProject,
   canonVertSlot,
 } from './Project';
@@ -176,6 +177,9 @@ export interface NaniteRasterHandles {
    *  null when the queues don't exist (single-pass world1 only). */
   readSplatCount(renderer: Renderer): Promise<number | null>;
   readMidCount(renderer: Renderer): Promise<number | null>;
+  /** Raw compact projected-record demand. Values above PROJ_RECORD_CAP mean clusters
+   *  were deliberately dropped fail-closed rather than indexing outside the pool. */
+  readProjectRecordCount(renderer: Renderer): Promise<number | null>;
   /** count covered/orphan pixels (NaniteView ?audit=1) */
   audit(renderer: Renderer): void;
   readAudit(renderer: Renderer): Promise<{ orphans: number; covered: number }>;
@@ -410,21 +414,21 @@ export function buildNaniteRaster(
   // metadata unpack + up-to-six gust/disp samples + wind setup + the clhw classify,
   // behind a workgroupBarrier — a divergence + barrier stall the raster occupancy cannot
   // hide, and the counter bills every masked lane. Move it OUT to a ONE-THREAD-PER-CLUSTER
-  // pre-pass (kClusterCtx, built below) that computes makeCtx once and writes the 35-word
-  // ctx (12 u32 + 23 f32-as-bits) to a global buffer; the raster then reads it with
+  // pre-pass (kClusterCtx, built below) that computes makeCtx once and writes the 36-word
+  // ctx (13 u32 + 23 f32-as-bits) to a global buffer; the raster then reads it with
   // cache-coherent loads (itemIdx is UNIFORM per workgroup ⇒ one L1 line for all 128
   // lanes) — no thread-0 block, no barrier. BONUS: makeCtx leaving the raster SHEDS
   // gpu.clusters/instances/meshes from its bindings (the fetch only needs verts/indices/
   // height) ⇒ 9 storage buffers, under the 10 ceiling. WORLD1 (singlePass) only — depth/
-  // combined/view keep the broadcast and never allocate the buffer. Buffer = QRASTER_CAP ×
-  // 35 u32 (world QRASTER_CAP = 1M ⇒ 140 MB); every visible cluster is rewritten each frame
+  // combined/view keep the broadcast and never allocate the buffer. Buffer = 96 Ki clusters ×
+  // 36 u32 = 13.5 MiB; every visible cluster is rewritten each frame
   // so the initial contents are irrelevant.
   const ctxPrepass = singlePass;
   // ?wgcache bool→uint for packing isHF/isDAG into the shared-memory uint array (shared by
   // the world1 broadcast AND the ClusterCtx pre-pass, kept identical so both pack the same).
   const b2u = (b: NB): NU =>
     (b as unknown as { select(a: NU, c: NU): NU }).select(uint(1), uint(0));
-  // per-cluster ctx PRE-PASS (./raster/ClusterCtx): CTX_U/CTX_STRIDE (imported) + the 35-word
+  // per-cluster ctx PRE-PASS (./raster/ClusterCtx): CTX_U/CTX_STRIDE (imported) + the
   // buffer + nanClusterCtxPrepass. WORLD1 (singlePass) only; the world1 raster reads
   // clusterCtxV with cache-coherent loads (no thread-0 makeCtx, no barrier).
   const { clusterCtxV, kClusterCtx } = buildClusterCtx({
@@ -443,13 +447,15 @@ export function buildNaniteRaster(
   // Runs the SAME transform + wind + clip → NDC → 1/256-px snap world1 did inline per tri-
   // corner, ONCE per corner, into projVertBuf; the world1 raster below READS the 3 pre-
   // projected corners by slot instead of projecting (its 64-reg projection floor deleted).
-  // Bit-identical: same 35-word ctx (from clusterCtxV), same nfetch.fetchWorldVert, VERBATIM
+  // Bit-identical: same ctx (from clusterCtxV), same nfetch.fetchWorldVert, VERBATIM
   // projectVert(). WORLD1 (singlePass = ctxPrepass) only; null everywhere else. See the file
   // header for the per-CORNER slotting rationale (terrain has no universal dedup key).
   const {
+    projVertAttr,
+    projAllocAttr,
     projVertV,
+    kProjectClear,
     kProjectVerts,
-    vertsPerCluster: projVertsPerCluster,
   } = buildProject({
     ctxPrepass,
     cam,
@@ -523,10 +529,9 @@ export function buildNaniteRaster(
       const localTri = localX().toVar();
       const itemCount = qRasterRO.element(0).x;
       returnIf(itemIdx.greaterThanEqual(itemCount));
-      // Step 2 (vis-buffer rewrite): the projVertBuf reserves PROJ_CLUSTER_CAP cluster slots
-      // (< QRASTER_CAP so the buffer stays bindable). A cluster past the cap has no pre-
-      // projected verts (nanProjectVerts guards the same bound) ⇒ skip it here too so its
-      // corner slots are never read — a uniform per-workgroup early-out (before any barrier).
+      // The compact ctx/projection chain owns only PROJ_CLUSTER_CAP cluster entries. A cluster
+      // past the cap has neither ctx nor projected records, so skip it before either is read —
+      // a uniform per-workgroup early-out (before any barrier).
       // Parity requires the frame's visible-cluster count ≤ PROJ_CLUSTER_CAP (see Project.ts).
       if (mode === 'world1' && ctxPrepass) {
         returnIf(itemIdx.greaterThanEqual(uint(PROJ_CLUSTER_CAP)));
@@ -577,6 +582,7 @@ export function buildNaniteRaster(
         returnIf(itemCount.greaterThanEqual(uint(0)));
       }
       let ctx: VertCtx;
+      let projectedBase: NU | null = null;
       // matClass (F): broadcast from the wgcache thread-0 decode; null when wgcache
       // is off, so the voxel-skip below falls back to its per-thread mesh reload.
       // Bit-identical — the broadcast is the SAME mesh word6 extract, computed once.
@@ -584,15 +590,17 @@ export function buildNaniteRaster(
       if (ctxPrepass && mode === 'world1' && clusterCtxV) {
         // Task 1: read the per-cluster ctx the PRE-PASS (kClusterCtx) wrote to global
         // memory — cache-coherent loads (itemIdx uniform per workgroup ⇒ one L1 line for
-        // all 128 lanes), NO thread-0 makeCtx, NO workgroup barrier. Same 35-word layout as
+        // all 128 lanes), NO thread-0 makeCtx, NO workgroup barrier. Same layout as
         // the old broadcast; makeCtx no longer runs here so gpu.clusters/instances/meshes
         // are not bound to this kernel.
         const base = itemIdx.mul(uint(CTX_STRIDE)).toVar();
         const rU = (i: number): NU =>
-          elemU(clusterCtxV.ro, base.add(uint(i))).toVar() as unknown as NU;
+          elemU(clusterCtxV.rw, base.add(uint(i))).toVar() as unknown as NU;
         const rF = (i: number): NF =>
-          bcU2F(elemU(clusterCtxV.ro, base.add(uint(CTX_U + i)))).toVar() as unknown as NF;
+          bcU2F(elemU(clusterCtxV.rw, base.add(uint(CTX_U + i)))).toVar() as unknown as NF;
         const iHF = rU(0);
+        projectedBase = rU(CTX_PROJ_BASE);
+        returnIf(projectedBase.equal(uint(PROJ_INVALID_BASE)));
         matClassBroadcast = rU(10);
         // ?clhw skip (slot 11) — uniform per cluster ⇒ all lanes return together.
         if (clhw && mode === 'world1') {
@@ -903,12 +911,12 @@ export function buildNaniteRaster(
           // floor (the register win). Slot = canonVertSlot (DEDUPED: mesh reads gpu.indices for
           // vi−vBase, terrain per-corner); record = xi(i32) | yi(i32) | dz(f32). Bit-identical:
           // nanProjectVerts ran the VERBATIM projectVert() on the SAME fetchWorldVert(ctx,
-          // localTri,v) world (same 35-word ctx) into the SAME canonical slot, so these xi/yi/dz
+          // localTri,v) world (same ctx) into the SAME canonical slot, so these xi/yi/dz
           // equal world1's old inline values exactly. A near-crossing corner carries NEAR_SENTINEL
           // in its dz word ⇒ nearOK = AND(dz ≠ sentinel) reproduces the old w>NEAR_EPS gate EXACTLY
           // (raw-u32 compare; the garbage dz is unread when nearOK is false — the tri routes HW).
           // world1 re-binds gpu.indices ONLY (for the mesh dedup key) ⇒ 7 → 8 storage buffers.
-          const recCluster = itemIdx.mul(uint(projVertsPerCluster)).toVar();
+          const recCluster = (projectedBase as NU).toVar();
           for (const v of [0, 1, 2] as const) {
             const rb = canonVertSlot(
               recCluster,
@@ -918,12 +926,12 @@ export function buildNaniteRaster(
               v,
               gpu.indices,
             ).toVar();
-            const zw = elemU(projVertV.ro, rb.add(uint(2))).toVar();
+            const zw = elemU(projVertV.rw, rb.add(uint(2))).toVar();
             xiA[v] = bcU2I(
-              elemU(projVertV.ro, rb),
+              elemU(projVertV.rw, rb),
             ).toVar() as unknown as NI;
             yiA[v] = bcU2I(
-              elemU(projVertV.ro, rb.add(uint(1))),
+              elemU(projVertV.rw, rb.add(uint(1))),
             ).toVar() as unknown as NI;
             dzA[v] = bcU2F(zw).toVar() as unknown as NF;
             const okv = zw.notEqual(uint(NEAR_SENTINEL)) as unknown as NB;
@@ -1415,7 +1423,6 @@ export function buildNaniteRaster(
     projVertV,
     clusterCtxV,
     indices: gpu.indices,
-    vertsPerCluster: projVertsPerCluster,
     swScanline: swScanlineMid,
     elect,
     width,
@@ -1468,8 +1475,8 @@ export function buildNaniteRaster(
     // HW vertex-prepass: the `_clE` mesh draw reads the SAME projected-vert records the SW
     // classifier + Mid consume (non-null only on the world1 / ctxPrepass path, like clusterCtxV).
     projVertV,
+    projBaseSlot: CTX_PROJ_BASE,
     indices: gpu.indices,
-    vertsPerCluster: projVertsPerCluster,
     hwproj,
   });
   const {
@@ -1714,6 +1721,7 @@ export function buildNaniteRaster(
       // in-pass storage sync that carries kVisClear→raster. Removes the raster's thread-0
       // makeCtx divergence + barrier. Only present on the world1 (singlePass) instance.
       ...(kClusterCtx ? [kClusterCtx as unknown] : []),
+      ...(kProjectClear ? [kProjectClear as unknown] : []),
       // Step 2 (vis-buffer rewrite): the per-VERTEX projection PRE-PASS runs after the ctx
       // pre-pass, BEFORE the raster/classifier — project → classify order. Its projVertBuf
       // writes are visible to the raster's reads via the same in-pass storage sync the batch
@@ -1775,6 +1783,13 @@ export function buildNaniteRaster(
     const buf = await readBuffer(renderer, midQueueAttr, 0, 4);
     return new Uint32Array(buf)[0] ?? 0;
   };
+  const readProjectRecordCount = async (
+    renderer: Renderer,
+  ): Promise<number | null> => {
+    if (!projVertAttr || !projAllocAttr) return null;
+    const buf = await readBuffer(renderer, projAllocAttr, 0, 4);
+    return new Uint32Array(buf)[0] ?? 0;
+  };
   const audit = (renderer: Renderer): void => {
     dispatch(renderer, kAudit);
   };
@@ -1801,6 +1816,7 @@ export function buildNaniteRaster(
     readHwCount,
     readSplatCount,
     readMidCount,
+    readProjectRecordCount,
     audit,
     readAudit,
     readVoxWrites,

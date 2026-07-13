@@ -54,7 +54,7 @@ export function queueCapParam(name: string, def: number, lo: number, hi: number)
 const WORLD_SCENE = (() => {
   try {
     const search = (globalThis as { location?: { search?: string } }).location?.search ?? '';
-    return new URLSearchParams(search).get('scene') === 'world';
+    return (new URLSearchParams(search).get('scene') ?? 'world') === 'world';
   } catch {
     return false;
   }

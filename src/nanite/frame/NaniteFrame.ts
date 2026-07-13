@@ -37,6 +37,7 @@ import { buildNaniteHzb } from '../cull/NaniteHzb';
 import { buildGrassField } from '../grass/NaniteGrass';
 import { makeFetch } from '../raster/NaniteFetch';
 import { buildNaniteRaster, makeVisBuffers } from '../raster/NaniteRaster';
+import { PROJ_CLUSTER_CAP, PROJ_RECORD_CAP } from '../raster/Project';
 import { buildNaniteResolve } from '../shade/NaniteResolve';
 import { buildNaniteShadowClip, type NaniteShadow } from '../shade/NaniteShadowClip';
 import { buildShadowHalf, type ShadowHalf } from '../shade/NaniteShadowHalf';
@@ -92,6 +93,9 @@ export function buildNaniteFrame(
      *  (mountains shade valleys at any distance). Multiplied like cloudShadow. */
     farShadow?: ((wxz: import('../../gpu/TSLTypes').NV2) => NF) | null;
     barkTex: import('three').Texture | null;
+    /** Format-2 terrain geometry is fully cooked. Runtime material displacement would
+     * synthesize a second geometric surface and is therefore compiled out. */
+    cookedTerrainGeometry?: boolean;
     /** S6d PRECISION: the per-frame render anchor A (= StreamOrigin) for the
      *  streamed (Estonia) world — the camera VP / reconstruct / shadow chain is
      *  built RELATIVE to it so f32 stays sub-metre at ~311 km absolute coords.
@@ -228,7 +232,7 @@ export function buildNaniteFrame(
   }
   // ?nanodisp=1 — disable terrain micro-displacement (root-cause bisect for
   // near-camera transparency: the disp branch only runs within 85 m)
-  const dispOff = params.get('nanodisp') === '1';
+  const dispOff = params.get('nanodisp') === '1' || world.cookedTerrainGeometry === true;
   // S6e: the render-anchor uniform for terrain FIELD sampling (NaniteFetch hfWorld /
   // terrainDispAt) — the S6d anchor-relative vert positions must be re-absoluted to
   // hit the world-anchored field planes. Streamed only; undefined ⇒ generated compiles
@@ -508,6 +512,7 @@ export function buildNaniteFrame(
   let frame = 0;
   let reading = false;
   let warned = '';
+  let warnedPrepassOverflow = '';
   let frozen = false;
 
   const render = (): void => {
@@ -644,6 +649,7 @@ export function buildNaniteFrame(
       raster.readHwCount(r),
       raster.readSplatCount(r),
       raster.readMidCount(r),
+      raster.readProjectRecordCount(r),
       shadow ? shadow.readCounts(r) : Promise.resolve(null),
       grass ? grass.readCounts(r) : Promise.resolve(null),
       voxActive ? cull.readVoxCount(r) : Promise.resolve(null),
@@ -652,7 +658,7 @@ export function buildNaniteFrame(
       // partition classifier is degenerate — no perf verdict may be read while so.
       voxActive && cull.voxPrevEnabled ? cull.readVoxBuckets(r) : Promise.resolve(null),
     ])
-      .then(([c, hw, splatFrags, midTris, sh, grassCounts, voxCount, voxWrites, voxBuckets]) => {
+      .then(([c, hw, splatFrags, midTris, projectRecords, sh, grassCounts, voxCount, voxWrites, voxBuckets]) => {
         if (grassCounts) {
           out['nanite.grassClumps'] = grassCounts.clumps;
           out['nanite.grassHwTris'] = grassCounts.hwTris;
@@ -693,6 +699,23 @@ export function buildNaniteFrame(
         // single-pass world1 path (null otherwise → omitted so the HUD shows n/a).
         if (splatFrags !== null) out['nanite.splatFrags'] = splatFrags;
         if (midTris !== null) out['nanite.midTris'] = midTris;
+        if (projectRecords !== null) out['nanite.projectRecords'] = projectRecords;
+        const prepassOverflowKind = c.visClusters > PROJ_CLUSTER_CAP
+          ? 'clusters'
+          : projectRecords !== null && projectRecords > PROJ_RECORD_CAP
+            ? 'records'
+            : '';
+        if (
+          prepassOverflowKind &&
+          warnedPrepassOverflow !== prepassOverflowKind
+        ) {
+          warnedPrepassOverflow = prepassOverflowKind;
+          const detail = prepassOverflowKind === 'clusters'
+            ? `prepass clusters ${c.visClusters} > ${PROJ_CLUSTER_CAP}`
+            : `project records ${projectRecords} > ${PROJ_RECORD_CAP}`;
+          // eslint-disable-next-line no-console
+          console.warn(`[nanite] QUEUE OVERFLOW (geometry dropped): ${detail}`);
+        }
         if (c.overflow && warned !== c.overflow) {
           warned = c.overflow;
           // eslint-disable-next-line no-console

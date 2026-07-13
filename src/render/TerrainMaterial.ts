@@ -140,7 +140,7 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
 
   // terrain field context: the TerrainField planes (S3b).
   const field = inp.field;
-  const ns: NV4 = field.fieldNormalSlope(wxz);
+  const ns: NV4 = field.fieldNormalSlopeHot(wxz);
   const fld = field.fieldsAt(wxz);
   const bio = field.biomeAt(wxz);
   const snowRaw = fld.z as unknown as NF;

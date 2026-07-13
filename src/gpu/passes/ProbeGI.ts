@@ -160,7 +160,8 @@ export class ProbeGI {
   async init(renderer: Renderer): Promise<void> {
     const field = this.field;
 
-    const heightAt = (p: NV2): NF => field.fieldHeightFinest(p);
+    // Used only from the gather Fn bodies below: keep packed child taps lazy.
+    const heightAt = (p: NV2): NF => field.fieldHeightFinestHot(p);
 
     // canopy coverage 0..1 at a world xz (0 when no canopy window is wired)
     const canopy = this.canopy;
@@ -203,7 +204,7 @@ export class ProbeGI {
       // (S4: the boot biomeTex is released — these are the streamed planes)
       const veg = (field.biomeAt(hp.xz as unknown as NV2) as unknown as { y: NF }).y;
       const snowK = (field.fieldsAt(hp.xz as unknown as NV2) as unknown as { z: NF }).z;
-      const nrm = field.fieldNormalSlope(hp.xz as unknown as NV2).xyz as unknown as NV3;
+      const nrm = field.fieldNormalSlopeHot(hp.xz as unknown as NV2).xyz as unknown as NV3;
       const grass = vec3(0.16, 0.2, 0.09);
       const rock = vec3(0.3, 0.28, 0.25);
       const snow = vec3(0.8, 0.82, 0.88);

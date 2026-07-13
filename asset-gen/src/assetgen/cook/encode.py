@@ -67,6 +67,55 @@ def encode_quant16(cfg: EncodeConfig, arr: np.ndarray, qscale: float) -> tuple[b
     return _compress(cfg, delta2d(q).tobytes()), qoffset
 
 
+def encode_quant16_checked(
+    cfg: EncodeConfig,
+    arr: np.ndarray,
+    requested_qscale: float,
+    qoffset: float | None = None,
+) -> tuple[bytes, float, float]:
+    """Quantize without clipping using the exact float32 qscale stored on wire.
+
+    Fine-height hierarchy checks must use the surface a browser decodes, not the
+    nearby decimal value from TOML. Any nonfinite sample or u16 overflow is a cook
+    failure rather than silent geometry corruption.
+    """
+    q, selected_qoffset, qscale = quantize16_checked(arr, requested_qscale, qoffset)
+    return encode_quantized16(cfg, q), selected_qoffset, qscale
+
+
+def quantize16_checked(
+    arr: np.ndarray,
+    requested_qscale: float,
+    qoffset: float | None = None,
+) -> tuple[np.ndarray, float, float]:
+    """Return canonical u16 codes using the exact float32 wire qscale."""
+    qscale = float(np.float32(requested_qscale))
+    if not np.isfinite(qscale) or qscale <= 0:
+        raise ValueError(f"invalid qscale {requested_qscale!r}")
+    values = np.asarray(arr, dtype=np.float64)
+    if not np.isfinite(values).all():
+        raise ValueError("checked height quantization requires finite samples")
+    qoffset = float(np.floor(values.min() - 1.0)) if qoffset is None else float(qoffset)
+    if not np.isfinite(qoffset) or float(np.float32(qoffset)) != qoffset:
+        raise ValueError("checked qoffset must be finite and exactly representable as float32")
+    q_float = np.round((values - qoffset) / qscale)
+    q_min = float(q_float.min())
+    q_max = float(q_float.max())
+    if q_min < 0 or q_max > 65535:
+        raise OverflowError(
+            f"quant16 range overflow at qscale {qscale}: codes {q_min:.0f}..{q_max:.0f}"
+        )
+    return q_float.astype(np.uint16), qoffset, qscale
+
+
+def encode_quantized16(cfg: EncodeConfig, q: np.ndarray) -> bytes:
+    """Compress already-validated canonical u16 height codes."""
+    values = np.asarray(q)
+    if values.dtype != np.uint16 or values.ndim != 2:
+        raise ValueError("quantized height codes must be a 2D uint16 array")
+    return _compress(cfg, delta2d(values).tobytes())
+
+
 def decode_quant16(
     cfg: EncodeConfig, payload: bytes, res: int, qoffset: float, qscale: float
 ) -> np.ndarray:

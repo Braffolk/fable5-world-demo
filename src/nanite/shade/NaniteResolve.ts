@@ -942,7 +942,7 @@ export function buildNaniteResolve(
       // two-sided: flip camera-ward, then pull toward the terrain normal
       const toCamG = normalize(camPos.sub(wp)) as unknown as NV3;
       const nF = dot(nG, toCamG).lessThan(0).select(nG.negate(), nG) as unknown as NV3;
-      const tNrm = world.field.fieldNormalSlope(wp.xz as unknown as NV2).xyz as unknown as NV3;
+      const tNrm = world.field.fieldNormalSlopeHot(wp.xz as unknown as NV2).xyz as unknown as NV3;
       const upK = smoothstep(8, 70, distG).mul(0.35).add(0.5) as unknown as NF;
       wNormal.assign(normalize(mix(nF, tNrm, upK)) as unknown as NV3);
       const fresh = mix(
@@ -1178,7 +1178,7 @@ export function buildNaniteResolve(
         const distG = wp.sub(vec3(camPos) as unknown as NV3).length();
         const toCamG = normalize(camPos.sub(wp)) as unknown as NV3;
         const nF = dot(g.nrm, toCamG).lessThan(0).select(g.nrm.negate(), g.nrm) as unknown as NV3;
-        const tNrm = world.field.fieldNormalSlope(wp.xz as unknown as NV2).xyz as unknown as NV3;
+        const tNrm = world.field.fieldNormalSlopeHot(wp.xz as unknown as NV2).xyz as unknown as NV3;
         // far super-tufts (body ≥ GRASS_FAR_BASE): full terrain-normal pull (ring far mode)
         const isFarG = body.greaterThanEqual(uint(GRASS_FAR_BASE));
         const upK = isFarG.select(

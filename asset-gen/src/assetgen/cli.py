@@ -8,9 +8,11 @@ Quickstart (fresh clone):
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import click
 
-from .config import DATA_IN, load_aoi, load_base
+from .config import DATA_IN, DATA_WORK, load_aoi, load_base
 from .fetch.http import PoliteSession
 from .grid import chunks_covering_bbox_en, snap_bbox_to_chunks_en
 from .sheets import grid_union_bbox, load_sheet_grid
@@ -213,11 +215,213 @@ def cook(aoi: str, layers_opt: tuple[str, ...], workers: int) -> None:
 @main.command("manifest")
 @click.option("--cook-rev", default=1, show_default=True)
 def manifest_cmd(cook_rev: int) -> None:
-    """Build the content-addressed release tree (data/out) from cooked chunks."""
-    from .manifest import build_release
+    """Disabled legacy publisher; use the recipe-addressed release transaction."""
+    del cook_rev
+    raise click.ClickException(
+        "legacy manifest publication is disabled because it globs shared data/work/chunks; "
+        "use release-plan, build --no-latest, then publish"
+    )
 
-    path = build_release(load_base(), cook_rev, log=click.echo)
-    click.echo(f"manifest: {path}")
+
+@main.command("micro-plan")
+@click.option("--build", "build_digest", required=True, help="64-hex recipe digest")
+@click.option("--parent-cx", required=True, type=int, help="Signed height LOD -1 parent X")
+@click.option("--parent-cz", required=True, type=int, help="Signed height LOD -1 parent Z")
+@click.option("--base-manifest", required=True, type=click.Path(path_type=Path))
+@click.option("--base-sha256", required=True, help="Full SHA-256 of --base-manifest")
+@click.option("--base-out-root", required=True, type=click.Path(path_type=Path))
+@click.option("--exemplar-manifest", type=click.Path(path_type=Path), default=None)
+def micro_plan_cmd(
+    build_digest: str,
+    parent_cx: int,
+    parent_cz: int,
+    base_manifest: Path,
+    base_sha256: str,
+    base_out_root: Path,
+    exemplar_manifest: Path | None,
+) -> None:
+    """Freeze the complete 16+1 Stage-1 coverage before any chunk is cooked."""
+    from .release import create_micro_expectation
+
+    path = create_micro_expectation(
+        load_base(), build_digest, parent_cx, parent_cz,
+        base_manifest, base_sha256, base_out_root=base_out_root,
+        exemplar_manifest_path=exemplar_manifest,
+    )
+    click.echo(f"expectation: {path}")
+    click.echo("published: 16 LOD -2 + 1 LOD -1; transient support: 9 LOD -2")
+
+
+@main.command("micro-recipe")
+@click.option("--parent-cx", required=True, type=int)
+@click.option("--parent-cz", required=True, type=int)
+@click.option("--base-manifest", required=True, type=click.Path(path_type=Path))
+@click.option("--exemplar-manifest", type=click.Path(path_type=Path), default=None)
+def micro_recipe_cmd(
+    parent_cx: int,
+    parent_cz: int,
+    base_manifest: Path,
+    exemplar_manifest: Path | None,
+) -> None:
+    """Print a content-derived fixture or measured-synthesis recipe digest."""
+    from .micro_recipe import derive_micro_fixture_recipe, derive_micro_synthesis_recipe
+
+    if exemplar_manifest is None:
+        digest, _ = derive_micro_fixture_recipe(parent_cx, parent_cz, base_manifest)
+    else:
+        digest, _ = derive_micro_synthesis_recipe(
+            parent_cx, parent_cz, base_manifest, exemplar_manifest
+        )
+    click.echo(digest)
+
+
+@main.command("micro-exemplars-prepare")
+@click.option("--source-config", required=True, type=click.Path(path_type=Path))
+@click.option("--output-root", required=True, type=click.Path(path_type=Path))
+def micro_exemplars_prepare_cmd(source_config: Path, output_root: Path) -> None:
+    """Prepare the reviewed TLS surfaces and their content-bound patch bank."""
+    from .process.microtopo import prepare_lapinjarvi_bank
+
+    path = prepare_lapinjarvi_bank(source_config, output_root)
+    click.echo(f"exemplar manifest: {path}")
+
+
+@main.command("micro-fixture-cook")
+@click.option("--build", "build_digest", required=True, help="64-hex recipe digest")
+@click.option("--base-manifest", required=True, type=click.Path(path_type=Path))
+@click.option("--base-out-root", required=True, type=click.Path(path_type=Path))
+def micro_fixture_cook_cmd(
+    build_digest: str,
+    base_manifest: Path,
+    base_out_root: Path,
+) -> None:
+    """Cook the calibrated Stage-1 retention fixture, not production morphology."""
+    from .cook.micro_fixture_cook import cook_micro_fixture
+    from .micro_config import load_micro_config
+
+    base = load_base()
+    path = cook_micro_fixture(
+        base,
+        load_micro_config(base),
+        build_digest,
+        base_manifest,
+        base_out_root,
+        DATA_WORK,
+        log=click.echo,
+    )
+    click.echo(f"fixture evidence: {path}")
+
+
+@main.command("micro-synthesis-cook")
+@click.option("--build", "build_digest", required=True, help="64-hex recipe digest")
+@click.option("--base-manifest", required=True, type=click.Path(path_type=Path))
+@click.option("--base-out-root", required=True, type=click.Path(path_type=Path))
+@click.option("--exemplar-manifest", required=True, type=click.Path(path_type=Path))
+def micro_synthesis_cook_cmd(
+    build_digest: str,
+    base_manifest: Path,
+    base_out_root: Path,
+    exemplar_manifest: Path,
+) -> None:
+    """Cook the measured-exemplar pilot into immutable preview artifacts."""
+    from .cook.micro_synth_cook import cook_micro_synthesis
+    from .micro_config import load_micro_config
+
+    base = load_base()
+    path = cook_micro_synthesis(
+        base,
+        load_micro_config(base),
+        build_digest,
+        base_manifest,
+        base_out_root,
+        DATA_WORK,
+        exemplar_manifest,
+        log=click.echo,
+    )
+    click.echo(f"synthesis evidence: {path}")
+
+
+@main.command("micro-fixture-verify")
+@click.option("--build", "build_digest", required=True, help="64-hex recipe digest")
+@click.option("--base-manifest", required=True, type=click.Path(path_type=Path))
+@click.option("--base-out-root", required=True, type=click.Path(path_type=Path))
+def micro_fixture_verify_cmd(
+    build_digest: str,
+    base_manifest: Path,
+    base_out_root: Path,
+) -> None:
+    """Independently reopen and verify the complete Stage-1 fixture closure."""
+    from .micro_verify import verify_micro_fixture
+
+    path = verify_micro_fixture(
+        build_digest, base_manifest, base_out_root, DATA_WORK
+    )
+    click.echo(f"micro verification: {path}")
+
+
+@main.command("release-plan")
+@click.option("--build", "build_digest", required=True, help="64-hex recipe digest")
+@click.option("--cook-rev", default=1, show_default=True)
+@click.option("--format", "manifest_format", type=click.Choice(["1", "2"]), default="1",
+              show_default=True, help="Release manifest/index format")
+@click.option("--micro-parent-cx", type=int, default=None, help="Declared LOD -1 proof parent X")
+@click.option("--micro-parent-cz", type=int, default=None, help="Declared LOD -1 proof parent Z")
+@click.option("--base-manifest", type=click.Path(path_type=Path), default=None)
+@click.option("--base-sha256", default=None, help="Full SHA-256 of --base-manifest")
+@click.option("--base-out-root", type=click.Path(path_type=Path), default=None,
+              help="Release root containing the base manifest's c/ objects")
+def release_plan_cmd(
+    build_digest: str,
+    cook_rev: int,
+    manifest_format: str,
+    micro_parent_cx: int | None,
+    micro_parent_cz: int | None,
+    base_manifest: Path | None,
+    base_sha256: str | None,
+    base_out_root: Path | None,
+) -> None:
+    """Freeze the exact chunks under data/work/builds/<digest>/chunks."""
+    from .release import create_build_plan
+
+    kwargs = {}
+    if base_out_root is not None:
+        kwargs["base_out_root"] = base_out_root
+    if (micro_parent_cx is None) != (micro_parent_cz is None):
+        raise click.ClickException("--micro-parent-cx and --micro-parent-cz must be provided together")
+    micro_parent = (
+        (micro_parent_cx, micro_parent_cz)
+        if micro_parent_cx is not None and micro_parent_cz is not None
+        else None
+    )
+    path = create_build_plan(
+        load_base(), build_digest, cook_rev,
+        base_manifest_path=base_manifest, base_manifest_sha256=base_sha256,
+        manifest_format=int(manifest_format), micro_parent=micro_parent, **kwargs,
+    )
+    click.echo(f"plan: {path}")
+
+
+@main.command("build")
+@click.option("--build", "build_digest", required=True, help="64-hex recipe digest")
+@click.option("--no-latest", is_flag=True, help="Required: build an immutable preview only")
+def build_cmd(build_digest: str, no_latest: bool) -> None:
+    """Verify one frozen build and materialize a non-latest preview release."""
+    if not no_latest:
+        raise click.ClickException("--no-latest is required; only publish may update latest.json")
+    from .release import materialize_preview
+
+    path = materialize_preview(build_digest)
+    click.echo(f"preview manifest: {path}")
+
+
+@main.command("publish")
+@click.option("--build", "build_digest", required=True, help="64-hex recipe digest")
+def publish_cmd(build_digest: str) -> None:
+    """Publish a COMPLETE verified build, updating latest.json as the final write."""
+    from .release import publish_build
+
+    path = publish_build(build_digest)
+    click.echo(f"published manifest: {path}")
 
 
 @main.command()

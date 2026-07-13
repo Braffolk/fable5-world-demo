@@ -130,7 +130,7 @@ export class FarShadow {
       const wx = wtx.add(0.5).mul(this.texel).add(this.latMinX);
       const wz = wtz.add(0.5).mul(this.texel).add(this.latMinZ);
       const p0 = vec2(wx, wz) as unknown as NV2;
-      const h0 = field.fieldHeightFinest(p0).add(BASE_LIFT).toVar();
+      const h0 = field.fieldHeightFinestHot(p0).add(BASE_LIFT).toVar();
       const sunXZ = vec2(sunDir.x, sunDir.z) as unknown as NV2;
       const dy = (sunDir.y as unknown as NF).max(0.08);
       // worst occluder EXCESS (m above the sun ray) across the march
@@ -140,7 +140,7 @@ export class FarShadow {
           (sunXZ as unknown as { mul(o: number): NV2 }).mul(t),
         );
         const rayY = h0.add(dy.mul(t)).add(SLOPE_SLACK * t);
-        const excess = field.fieldHeightFinest(sp).sub(rayY);
+        const excess = field.fieldHeightFinestHot(sp).sub(rayY);
         worst.assign(worst.max(excess));
       }
       const vis = float(1).sub(smoothstep(float(0), float(SOFT_M), worst));

@@ -19,7 +19,7 @@
  * transaction applies as one atomic drain step.
  */
 
-import type { ChunkKey, ChunkPayload, LayerName, WorldGrid } from '../../world/source/WorldSource';
+import type { ChunkKey, ChunkPayload, LayerName, ManifestFormat, WorldGrid } from '../../world/source/WorldSource';
 import type { FieldPlan } from './PlaneFill';
 import type { LevelGridEdit } from './PartitionTree';
 import type { PackedLevel } from '../build/CrownPack';
@@ -32,6 +32,9 @@ export type PlaneKind = 'height' | 'biome' | 'fields' | 'water' | 'waterFar' | '
 export interface BrainLayerMeta {
   lods: number[];
   texelMeters?: number;
+  baseTexelMeters?: number;
+  finestLod?: number;
+  authorityLod?: number;
   planes?: readonly string[];
   /** packed keys per lod (packChunkKey) — existence = authoritative presence */
   chunkKeys: Record<number, Float64Array>;
@@ -56,6 +59,7 @@ export interface BrainTileConfig {
 
 export interface BrainInitMsg {
   kind: 'init';
+  manifestFormat: ManifestFormat;
   grid: WorldGrid;
   layers: Partial<Record<LayerName, BrainLayerMeta>>;
   plan: FieldPlan;

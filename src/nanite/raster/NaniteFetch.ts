@@ -124,7 +124,7 @@ export function terrainDispAt(disp: TerrainDisp, wpos: NV2, groundH: NF): NF {
     // ground (spec §3: not stored, derived — every caller holds the ground
     // height it displaces: vert fetch / grass root).
     const fld = disp.field.fieldsAt(wpos);
-    const slope = disp.field.fieldSlope(wpos);
+    const slope = disp.field.fieldSlopeHot(wpos);
     const riverDepth = disp.field.fieldWaterYNearest(wpos).sub(groundH).max(0);
     const rockK = smoothstep(DISP.slopeKnee0, DISP.slopeKnee1, slope).max(fld.w.mul(0.85)) as unknown as NF;
     const gravelK = smoothstep(0.32, 0.7, fld.y)

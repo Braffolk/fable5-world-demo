@@ -28,17 +28,18 @@
 import { DataTexture, FloatType, LinearFilter, NearestFilter, RGBAFormat, RedFormat, UnsignedByteType, Vector2 } from 'three';
 import { If, clamp, float, floor, fract, mix, texture, uniform, vec2, vec3, vec4 } from 'three/tsl';
 import { texLoadR } from '../Tsl';
-import type { NB, NF, NU, NV2, NV4 } from '../../gpu/TSLTypes';
+import type { NB, NF, NU, NV2, NV3, NV4 } from '../../gpu/TSLTypes';
 import type { CoverageBox, FieldPlan, PlanePlan } from './PlaneFill';
 import type { LevelGridEdit } from './PartitionTree';
 import type { PlaneKind } from './StreamProtocol';
+import { availabilityMorphWeight, cameraMorphWeight, MICRO_MORPH_BANDS } from './TerrainMorph';
 
 export type { CoverageBox } from './PlaneFill';
 
-/** full 5-level Estonia set ≈ 84 (height) + 17 (biome) + ~40 (fields+water) MB;
- *  the generated full-coverage set ≈ 130 MB — anything past this is a leak, not
- *  a config (throw-loud VRAM law). */
-const VRAM_CEILING_MB = 160;
+/** Format-2 Estonia with the two near-only physical height rungs plans 195.6 MB;
+ *  keep finite fail-loud headroom above that measured set. The generated world
+ *  remains ~130 MB, and an accidental unbounded coverage plan still trips. */
+export const TERRAIN_FIELD_VRAM_CEILING_MB = 256;
 
 export interface FieldLevel {
   /** data LOD — texel = layer base texel · lodStep^lod */
@@ -62,6 +63,14 @@ export interface FieldLevel {
   uAnchor: { value: Vector2 };
   /** toroidal phase (n0 mod res) — only wrapping levels compile reads of it */
   uPhase: { value: Vector2 };
+  /** Published sample bounds expressed in the current logical window grid. */
+  uCoverageMin: { value: Vector2 };
+  uCoverageMax: { value: Vector2 };
+  /** Immutable published sample bounds in world coordinates (CPU sampler). */
+  coverageMinX: number;
+  coverageMinZ: number;
+  coverageMaxX: number;
+  coverageMaxZ: number;
   /** frozen at plan time: window < coverage ⇒ the level scrolls toroidally.
    *  Pinned levels (all generated ones) compile the exact pre-S5 samplers. */
   wraps: boolean;
@@ -73,6 +82,8 @@ interface HeightLevel extends FieldLevel {
 }
 
 export class TerrainField {
+  /** True only for format-2 fields carrying packed negative height levels. */
+  readonly cookedMicroHeight: boolean;
   /** finest → coarsest; index = the `level` arg of fieldHeight */
   readonly heightLevels: readonly HeightLevel[];
   /** rgba8 [classId, vegDensity, canopyHeight, cover] */
@@ -106,6 +117,10 @@ export class TerrainField {
    *  — true iff the source has a canopy layer. The generated world packs snow/
    *  rockExposure there instead, so its resolve canopy tint stays off (bit-identical). */
   readonly biomeCarriesCanopy: boolean;
+  private morphCenterX = 0;
+  private morphCenterZ = 0;
+  /** Morph centre relative to the same precision anchor used by field levels. */
+  private readonly uMorphCenterRel = uniform(new Vector2(0, 0));
 
   private constructor(
     heightLevels: HeightLevel[],
@@ -118,6 +133,7 @@ export class TerrainField {
     soil: FieldLevel | null,
     coverageBox: CoverageBox,
     biomeCarriesCanopy: boolean,
+    cookedMicroHeight: boolean,
   ) {
     if (heightLevels.length === 0) throw new Error('TerrainField: needs at least one height level');
     this.heightLevels = heightLevels;
@@ -132,6 +148,12 @@ export class TerrainField {
     this.hasSoil = soil !== null;
     this.coverageBox = coverageBox;
     this.biomeCarriesCanopy = biomeCarriesCanopy;
+    this.cookedMicroHeight = cookedMicroHeight;
+    const finest = heightLevels[0] as HeightLevel;
+    this.setSurfaceCenter(
+      finest.originX + ((finest.res - 1) * finest.texel) / 2,
+      finest.originZ + ((finest.res - 1) * finest.texel) / 2,
+    );
     const mb = this.vramBytes() / 2 ** 20;
     // eslint-disable-next-line no-console
     console.log(
@@ -142,8 +164,8 @@ export class TerrainField {
         `soil ${soil ? `${soil.res}² rgba8${soil.wraps ? '~' : ''}` : 'none'} = ` +
         `${mb.toFixed(1)} MB VRAM (CPU mirrors share the backing; ~ = camera-window level)`,
     );
-    if (mb > VRAM_CEILING_MB) {
-      throw new Error(`TerrainField: ${mb.toFixed(1)} MB exceeds the ${VRAM_CEILING_MB} MB ceiling`);
+    if (mb > TERRAIN_FIELD_VRAM_CEILING_MB) {
+      throw new Error(`TerrainField: ${mb.toFixed(1)} MB exceeds the ${TERRAIN_FIELD_VRAM_CEILING_MB} MB ceiling`);
     }
   }
 
@@ -158,7 +180,19 @@ export class TerrainField {
     const waterCover = plan.waterCover ? makeU8Level('terrainFieldWaterCover', plan.waterCover) : null;
     const waterCoverFar = plan.waterCoverFar ? makeU8Level('terrainFieldWaterCoverFar', plan.waterCoverFar) : null;
     const soil = plan.soil ? makeU8Level('terrainFieldSoil', plan.soil) : null;
-    return new TerrainField(heightLevels, biomeLevels, fieldsLevels, water, waterFar, waterCover, waterCoverFar, soil, plan.coverageBox, plan.biomeHasCanopy);
+    return new TerrainField(
+      heightLevels,
+      biomeLevels,
+      fieldsLevels,
+      water,
+      waterFar,
+      waterCover,
+      waterCoverFar,
+      soil,
+      plan.coverageBox,
+      plan.biomeHasCanopy,
+      plan.cookedMicroHeight,
+    );
   }
 
   /** One-level field over a flat/explicit height array — forest/gallery-class
@@ -206,6 +240,7 @@ export class TerrainField {
         maxZ: opts.worldMinZ + opts.res * opts.texel,
       },
       false, // no biome/canopy planes on a single-level field
+      false, // no packed negative height levels
     );
   }
 
@@ -269,6 +304,14 @@ export class TerrainField {
     lvl.uOrigin.value.set(originX, originZ);
     // S6c: keep the anchor-relative origin coherent with the new window origin.
     lvl.uOriginRel.value.set(originX - lvl.uAnchor.value.x, originZ - lvl.uAnchor.value.y);
+    lvl.uCoverageMin.value.set(
+      (lvl.coverageMinX - originX) / lvl.texel,
+      (lvl.coverageMinZ - originZ) / lvl.texel,
+    );
+    lvl.uCoverageMax.value.set(
+      (lvl.coverageMaxX - originX) / lvl.texel,
+      (lvl.coverageMaxZ - originZ) / lvl.texel,
+    );
     lvl.uPhase.value.set(phaseX, phaseY);
   }
 
@@ -284,6 +327,16 @@ export class TerrainField {
       lvl.uAnchor.value.set(ax, az);
       lvl.uOriginRel.value.set(lvl.originX - ax, lvl.originZ - az);
     }
+    this.uMorphCenterRel.value.set(this.morphCenterX - ax, this.morphCenterZ - az);
+  }
+
+  /** Continuous camera centre for packed-level geomorphing. This is deliberately
+   *  independent of the 512 m precision-anchor snap and plane scroll cadence. */
+  setSurfaceCenter(x: number, z: number): void {
+    this.morphCenterX = x;
+    this.morphCenterZ = z;
+    const anchor = this.heightLevels[0]?.uAnchor.value ?? new Vector2(0, 0);
+    this.uMorphCenterRel.value.set(x - anchor.x, z - anchor.y);
   }
 
   /** flip every plane's full backing to the GPU (boot: after the unbudgeted
@@ -309,6 +362,7 @@ export class TerrainField {
 
   /** bilinear height (m) — finest level whose window contains the point */
   heightAt(x: number, z: number): number {
+    if (this.cookedMicroHeight) return this.microHeightAtCpu(x, z);
     const L = this.heightLevels;
     for (let i = 0; i < L.length - 1; i++) {
       const lvl = L[i] as HeightLevel;
@@ -345,13 +399,35 @@ export class TerrainField {
     return planeNearest(this.heightLevels[level] as HeightLevel, wxz);
   }
 
-  /** bilinear height, finest resident level selected per sample */
+  /** Bilinear height, finest resident level selected per sample. This is the
+   *  cold/expression form: it is legal while constructing a material node
+   *  outside a TSL Fn stack. Format-2 eagerly builds each possible texture tap
+   *  and combines them with select/mix expressions; hot kernels should use
+   *  fieldHeightFinestHot so inactive packed levels are not sampled. */
   fieldHeightFinest(wxz: NV2): NF {
+    if (this.cookedMicroHeight) return this.microHeightSelect(wxz, false);
     return this.finestSelect(wxz, planeBilerp);
   }
 
-  /** nearest-texel height, finest resident level selected per sample */
+  /** Cold/expression counterpart of fieldHeightFinestNearestHot. */
   fieldHeightFinestNearest(wxz: NV2): NF {
+    if (this.cookedMicroHeight) return this.microHeightSelect(wxz, true);
+    return this.finestSelect(wxz, planeNearest);
+  }
+
+  /** Fn-stack-only bilinear sampler. Exactly one containing authority level is
+   *  read, and packed child reads stay behind their morph branches. */
+  fieldHeightFinestHot(wxz: NV2): NF {
+    if (this.cookedMicroHeight) return this.microHeightHot(wxz, false);
+    // Preserve the exact generated/format-1 expression tree. Only format-2
+    // needs the branch form to avoid eagerly sampling its packed child rungs.
+    return this.finestSelect(wxz, planeBilerp);
+  }
+
+  /** Fn-stack-only nearest sampler. Packed parent/authority reads remain
+   *  bilinear while morphing so the stored parent-child continuity is kept. */
+  fieldHeightFinestNearestHot(wxz: NV2): NF {
+    if (this.cookedMicroHeight) return this.microHeightHot(wxz, true);
     return this.finestSelect(wxz, planeNearest);
   }
 
@@ -416,6 +492,7 @@ export class TerrainField {
    *  lattice, so this is bit-identical to the retired global heightTex tap —
    *  and coarser levels bilerp (their lattice is coarser than the verts'). */
   fieldHeightHot(wxz: NV2): NF {
+    if (this.cookedMicroHeight) return this.microHeightHot(wxz, true);
     const out = float(0).toVar();
     hotLevelChain(this.heightLevels, wxz, (lvl, finest) => {
       out.assign(finest ? planeNearest(lvl, wxz) : planeBilerp(lvl, wxz));
@@ -423,24 +500,48 @@ export class TerrainField {
     return out as unknown as NF;
   }
 
-  /** central-difference slope (rise/run) from the height planes — the in-shader
-   *  replacement for the retired normalTex.w: the SAME ±1-texel stencil the old
-   *  bake ran (Heightfield derived-maps kernel), evaluated at the nearest texel
-   *  of the finest containing level. `level` HOISTS the select for consumers
-   *  whose window containment is guaranteed (grass guide ring ≪ the L0 window). */
+  /** One-level hoisted slope, or the legacy alias of the Fn-stack-only hot
+   *  selector. Every unhoisted caller is explicitly migrated to fieldSlopeHot. */
   fieldSlope(wxz: NV2, level?: number): NF {
     if (level !== undefined) return slope4(this.heightLevels[level] as HeightLevel, wxz);
+    return this.fieldSlopeHot(wxz);
+  }
+
+  /** Fn-stack-only central-difference slope (rise/run) from the height planes — the in-shader
+   *  replacement for the retired normalTex.w: the SAME ±1-texel stencil the old
+   *  bake ran (Heightfield derived-maps kernel), evaluated at the nearest texel
+   *  of the finest containing level. */
+  fieldSlopeHot(wxz: NV2): NF {
+    if (this.cookedMicroHeight) {
+      const hg = this.microHeightGradientHot(wxz);
+      return vec2(hg.y, hg.z).length() as unknown as NF;
+    }
     const out = float(0).toVar();
-    hotLevelChain(this.heightLevels, wxz, (lvl) => out.assign(slope4(lvl, wxz)));
+    hotLevelChain(this.heightLevels, wxz, (lvl) => {
+      out.assign(slope4(lvl, wxz));
+    });
     return out as unknown as NF;
   }
 
-  /** central-difference world normal (xyz) + slope (w) — the retired normalTex's
+  /** Legacy alias; normal/slope selection is Fn-stack-only because preserving
+   *  exact parent derivatives at a zero morph endpoint requires branching. */
+  fieldNormalSlope(wxz: NV2): NV4 {
+    return this.fieldNormalSlopeHot(wxz);
+  }
+
+  /** Fn-stack-only central-difference world normal (xyz) + slope (w) — the retired normalTex's
    *  EXACT bake stencil (n = normalize(hl−hr, 2·texel, hd−hu); slope = |∇h|/2texel)
    *  evaluated in-shader at the finest containing level (S3b resolve). */
-  fieldNormalSlope(wxz: NV2): NV4 {
+  fieldNormalSlopeHot(wxz: NV2): NV4 {
+    if (this.cookedMicroHeight) {
+      const hg = this.microHeightGradientHot(wxz);
+      const slope = vec2(hg.y, hg.z).length();
+      return vec4(vec3(hg.y.negate(), 1, hg.z.negate()).normalize(), slope) as unknown as NV4;
+    }
     const out = vec4(0, 1, 0, 0).toVar();
-    hotLevelChain(this.heightLevels, wxz, (lvl) => out.assign(normalSlope4(lvl, wxz)));
+    hotLevelChain(this.heightLevels, wxz, (lvl) => {
+      out.assign(normalSlope4(lvl, wxz));
+    });
     return out as unknown as NV4;
   }
 
@@ -450,7 +551,9 @@ export class TerrainField {
   fieldsAt(wxz: NV2): NV4 {
     if (this.fieldsLevels.length === 0) return vec4(0) as unknown as NV4;
     const out = vec4(0).toVar();
-    hotLevelChain(this.fieldsLevels, wxz, (lvl) => out.assign(planeLinear(lvl, wxz)));
+    hotLevelChain(this.fieldsLevels, wxz, (lvl) => {
+      out.assign(planeLinear(lvl, wxz));
+    });
     return out as unknown as NV4;
   }
 
@@ -460,7 +563,9 @@ export class TerrainField {
   biomeAt(wxz: NV2): NV4 {
     if (this.biomeLevels.length === 0) return vec4(0) as unknown as NV4;
     const out = vec4(0).toVar();
-    hotLevelChain(this.biomeLevels, wxz, (lvl) => out.assign(planeLinear(lvl, wxz)));
+    hotLevelChain(this.biomeLevels, wxz, (lvl) => {
+      out.assign(planeLinear(lvl, wxz));
+    });
     return out as unknown as NV4;
   }
 
@@ -504,6 +609,252 @@ export class TerrainField {
     }
     return h;
   }
+
+  private microHeightAtCpu(x: number, z: number): number {
+    const fine = this.heightLevels.find((level) => level.lod === -2);
+    if (!fine) return this.microParentHeightAtCpu(x, z);
+    const weight = this.microMorphWeightCpu(fine, x, z);
+    if (weight <= 0) return this.microParentHeightAtCpu(x, z);
+    const child = this.levelHeightAtCpu(fine, x, z);
+    if (weight >= 1) return child;
+    const parent = this.microParentHeightAtCpu(x, z);
+    return parent + (child - parent) * weight;
+  }
+
+  private microParentHeightAtCpu(x: number, z: number): number {
+    const parent = this.heightLevels.find((level) => level.lod === -1);
+    if (!parent) return this.authorityHeightAtCpu(x, z);
+    const weight = this.microMorphWeightCpu(parent, x, z);
+    if (weight <= 0) return this.authorityHeightAtCpu(x, z);
+    const child = this.levelHeightAtCpu(parent, x, z);
+    if (weight >= 1) return child;
+    const authority = this.authorityHeightAtCpu(x, z);
+    return authority + (child - authority) * weight;
+  }
+
+  private authorityHeightAtCpu(x: number, z: number): number {
+    const authority = this.heightLevels.findIndex((level) => level.lod >= 0);
+    if (authority < 0) throw new Error('TerrainField: packed micro field lacks authority level');
+    return this.heightAtCpuFrom(authority, x, z);
+  }
+
+  private levelHeightAtCpu(level: HeightLevel, x: number, z: number): number {
+    return bilerpCpu(level, (x - level.originX) / level.texel, (z - level.originZ) / level.texel);
+  }
+
+  private microMorphWeightCpu(level: HeightLevel, x: number, z: number): number {
+    const lod = level.lod as -2 | -1;
+    return cameraMorphWeight(lod, x, z, this.morphCenterX, this.morphCenterZ)
+      * availabilityMorphWeight(
+        lod,
+        x,
+        z,
+        level.originX,
+        level.originZ,
+        level.texel,
+        level.res,
+        level.coverageMinX,
+        level.coverageMinZ,
+        level.coverageMaxX,
+        level.coverageMaxZ,
+      );
+  }
+
+  private heightAtCpuFrom(first: number, x: number, z: number): number {
+    const levels = this.heightLevels;
+    for (let i = first; i < levels.length - 1; i++) {
+      const level = levels[i] as HeightLevel;
+      const gx = (x - level.originX) / level.texel;
+      const gz = (z - level.originZ) / level.texel;
+      if (gx >= 1 && gx <= level.res - 2 && gz >= 1 && gz <= level.res - 2) {
+        return bilerpCpu(level, gx, gz);
+      }
+    }
+    const level = levels[levels.length - 1] as HeightLevel;
+    return bilerpCpu(level, (x - level.originX) / level.texel, (z - level.originZ) / level.texel);
+  }
+
+  /** Pure-expression packed geomorph. Safe outside a TSL Fn stack; unlike the
+   *  hot twin this necessarily constructs taps for both sides of each mix. */
+  private microHeightSelect(wxz: NV2, exactFineLattice: boolean): NF {
+    const parent = this.microParentHeightSelect(wxz);
+    const fine = this.heightLevels.find((level) => level.lod === -2);
+    if (!fine) return parent;
+    const child = exactFineLattice ? planeNearest(fine, wxz) : planeBilerp(fine, wxz);
+    return mix(parent, child, this.microMorphWeightGpu(fine, wxz)) as unknown as NF;
+  }
+
+  private microParentHeightSelect(wxz: NV2): NF {
+    const authority = this.authorityHeightSelect(wxz);
+    const parent = this.heightLevels.find((level) => level.lod === -1);
+    if (!parent) return authority;
+    return mix(authority, planeBilerp(parent, wxz), this.microMorphWeightGpu(parent, wxz)) as unknown as NF;
+  }
+
+  private authorityHeightSelect(wxz: NV2): NF {
+    const authority = this.heightLevels.findIndex((level) => level.lod >= 0);
+    if (authority < 0) throw new Error('TerrainField: packed micro field lacks authority level');
+    const levels = this.heightLevels.slice(authority);
+    let h = planeBilerp(levels[levels.length - 1] as HeightLevel, wxz);
+    for (let i = levels.length - 2; i >= 0; i--) {
+      const level = levels[i] as HeightLevel;
+      h = insideLevel(level, wxz).select(planeBilerp(level, wxz), h) as NF;
+    }
+    return h;
+  }
+
+  /** Statement/branch packed geomorph. Fn-stack only: inactive child levels
+   *  are not sampled outside their camera/availability band. */
+  private microHeightHot(wxz: NV2, exactFineLattice: boolean): NF {
+    const fine = this.heightLevels.find((level) => level.lod === -2);
+    if (!fine) return this.microParentHeightHot(wxz);
+    const weight = this.microMorphWeightGpu(fine, wxz);
+    const out = float(0).toVar();
+    const branch = If(weight.greaterThanEqual(1), () => {
+      out.assign(exactFineLattice ? planeNearest(fine, wxz) : planeBilerp(fine, wxz));
+    });
+    branch.ElseIf(weight.greaterThan(0), () => {
+      const parent = this.microParentHeightHot(wxz);
+      const child = exactFineLattice ? planeNearest(fine, wxz) : planeBilerp(fine, wxz);
+      out.assign(mix(parent, child, weight));
+    }).Else(() => {
+      out.assign(this.microParentHeightHot(wxz));
+    });
+    return out as unknown as NF;
+  }
+
+  private microParentHeightHot(wxz: NV2): NF {
+    const parent = this.heightLevels.find((level) => level.lod === -1);
+    if (!parent) return this.authorityHeightHot(wxz);
+    const weight = this.microMorphWeightGpu(parent, wxz);
+    const out = float(0).toVar();
+    const branch = If(weight.greaterThanEqual(1), () => {
+      out.assign(planeBilerp(parent, wxz));
+    });
+    branch.ElseIf(weight.greaterThan(0), () => {
+      out.assign(mix(this.authorityHeightHot(wxz), planeBilerp(parent, wxz), weight));
+    }).Else(() => {
+      out.assign(this.authorityHeightHot(wxz));
+    });
+    return out as unknown as NF;
+  }
+
+  private authorityHeightHot(wxz: NV2): NF {
+    const authority = this.heightLevels.findIndex((level) => level.lod >= 0);
+    if (authority < 0) throw new Error('TerrainField: packed micro field lacks authority level');
+    const out = float(0).toVar();
+    hotLevelChain(this.heightLevels.slice(authority), wxz, (level) => {
+      out.assign(planeBilerp(level as HeightLevel, wxz));
+    });
+    return out as unknown as NF;
+  }
+
+  /** vec3(height, dh/dx, dh/dz), including the derivative of both morph weights. */
+  private microHeightGradientHot(wxz: NV2): NV3 {
+    const fine = this.heightLevels.find((level) => level.lod === -2);
+    if (!fine) return this.microParentHeightGradientHot(wxz);
+    const weight = this.microMorphWeightGpu(fine, wxz);
+    const out = vec3(0).toVar();
+    const branch = If(weight.greaterThanEqual(1), () => {
+      out.assign(planeHeightGradient(fine, wxz));
+    });
+    branch.ElseIf(weight.greaterThan(0), () => {
+      out.assign(this.blendHeightGradient(
+        this.microParentHeightGradientHot(wxz),
+        planeHeightGradient(fine, wxz),
+        fine,
+        wxz,
+        weight,
+      ));
+    }).Else(() => {
+      out.assign(this.microParentHeightGradientHot(wxz));
+    });
+    return out as unknown as NV3;
+  }
+
+  private microParentHeightGradientHot(wxz: NV2): NV3 {
+    const parent = this.heightLevels.find((level) => level.lod === -1);
+    if (!parent) return this.authorityHeightGradientHot(wxz);
+    const weight = this.microMorphWeightGpu(parent, wxz);
+    const out = vec3(0).toVar();
+    const branch = If(weight.greaterThanEqual(1), () => {
+      out.assign(planeHeightGradient(parent, wxz));
+    });
+    branch.ElseIf(weight.greaterThan(0), () => {
+      out.assign(this.blendHeightGradient(
+        this.authorityHeightGradientHot(wxz),
+        planeHeightGradient(parent, wxz),
+        parent,
+        wxz,
+        weight,
+      ));
+    }).Else(() => {
+      out.assign(this.authorityHeightGradientHot(wxz));
+    });
+    return out as unknown as NV3;
+  }
+
+  private authorityHeightGradientHot(wxz: NV2): NV3 {
+    const authority = this.heightLevels.findIndex((level) => level.lod >= 0);
+    if (authority < 0) throw new Error('TerrainField: packed micro field lacks authority level');
+    const out = vec3(0).toVar();
+    hotLevelChain(this.heightLevels.slice(authority), wxz, (level) => {
+      out.assign(planeHeightGradient(level as HeightLevel, wxz));
+    });
+    return out as unknown as NV3;
+  }
+
+  private blendHeightGradient(
+    parent: NV3,
+    child: NV3,
+    level: HeightLevel,
+    wxz: NV2,
+    weight: NF,
+  ): NV3 {
+    const eps = level.texel;
+    const dwdx = this.microMorphWeightGpu(level, wxz.add(vec2(eps, 0)) as unknown as NV2)
+      .sub(this.microMorphWeightGpu(level, wxz.sub(vec2(eps, 0)) as unknown as NV2))
+      .div(2 * eps);
+    const dwdz = this.microMorphWeightGpu(level, wxz.add(vec2(0, eps)) as unknown as NV2)
+      .sub(this.microMorphWeightGpu(level, wxz.sub(vec2(0, eps)) as unknown as NV2))
+      .div(2 * eps);
+    const delta = child.x.sub(parent.x);
+    return vec3(
+      mix(parent.x, child.x, weight),
+      mix(parent.y, child.y, weight).add(delta.mul(dwdx)),
+      mix(parent.z, child.z, weight).add(delta.mul(dwdz)),
+    ) as unknown as NV3;
+  }
+
+  private microMorphWeightGpu(level: HeightLevel, wxz: NV2): NF {
+    const lod = level.lod as -2 | -1;
+    const band = MICRO_MORPH_BANDS[lod];
+    const local = wxz
+      .sub(vec2(level.uAnchor as unknown as NV2))
+      .sub(vec2(this.uMorphCenterRel as unknown as NV2));
+    const radius = local.x.abs().max(local.y.abs());
+    const camera = smootherStep01Tsl(radius.sub(band.innerM).div(band.outerM - band.innerM)).oneMinus();
+    const grid = gridCoords(level, wxz);
+    const coverageMin = vec2(level.uCoverageMin as unknown as NV2);
+    const coverageMax = vec2(level.uCoverageMax as unknown as NV2);
+    const edgeSamples = grid.x
+      .sub(1)
+      .min(grid.y.sub(1))
+      .min(float(level.res - 2).sub(grid.x))
+      .min(float(level.res - 2).sub(grid.y))
+      .min(grid.x.sub(coverageMin.x).sub(1))
+      .min(grid.y.sub(coverageMin.y).sub(1))
+      .min(coverageMax.x.sub(grid.x).sub(1))
+      .min(coverageMax.y.sub(grid.y).sub(1));
+    const edgeM = edgeSamples.mul(level.texel);
+    const available = smootherStep01Tsl(edgeM.div(band.availabilityM));
+    return camera.mul(available) as unknown as NF;
+  }
+}
+
+function smootherStep01Tsl(value: NF): NF {
+  const t = value.clamp(0, 1);
+  return t.mul(t).mul(t).mul(t.mul(t.mul(6).sub(15)).add(10)) as unknown as NF;
 }
 
 // ---- plane sampling helpers (TSL) ----------------------------------------------------
@@ -553,12 +904,18 @@ export function hotLevelChain(
     arm(levels[0] as FieldLevel, true);
     return;
   }
-  let chain = If(insideLevel(levels[0] as FieldLevel, wxz), () => arm(levels[0] as FieldLevel, true));
+  let chain = If(insideLevel(levels[0] as FieldLevel, wxz), () => {
+    arm(levels[0] as FieldLevel, true);
+  });
   for (let i = 1; i < n - 1; i++) {
     const lvl = levels[i] as FieldLevel;
-    chain = chain.ElseIf(insideLevel(lvl, wxz), () => arm(lvl, false));
+    chain = chain.ElseIf(insideLevel(lvl, wxz), () => {
+      arm(lvl, false);
+    });
   }
-  chain.Else(() => arm(levels[n - 1] as FieldLevel, false));
+  chain.Else(() => {
+    arm(levels[n - 1] as FieldLevel, false);
+  });
 }
 
 /** one hardware-filtered tap (LinearFilter rgba8 planes) at a level. Wrapping
@@ -631,6 +988,29 @@ export function planeBilerp(lvl: FieldLevel, wxz: NV2): NF {
   const s01 = texLoadR(lvl.tex, t01.x, t01.y);
   const s11 = texLoadR(lvl.tex, t11.x, t11.y);
   return mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
+}
+
+/** Bilinear value and its exact within-cell world gradient from the same 4 taps. */
+function planeHeightGradient(lvl: HeightLevel, wxz: NV2): NV3 {
+  const g = clamp(gridCoords(lvl, wxz), 0, lvl.res - 1);
+  const i0 = floor(g);
+  const f = fract(g);
+  const x0i = i0.x as unknown as NF;
+  const y0i = i0.y as unknown as NF;
+  const x1i = clamp(i0.x.add(1), 0, lvl.res - 1) as unknown as NF;
+  const y1i = clamp(i0.y.add(1), 0, lvl.res - 1) as unknown as NF;
+  const t00 = texelU(lvl, x0i, y0i);
+  const t10 = texelU(lvl, x1i, y0i);
+  const t01 = texelU(lvl, x0i, y1i);
+  const t11 = texelU(lvl, x1i, y1i);
+  const s00 = texLoadR(lvl.tex, t00.x, t00.y);
+  const s10 = texLoadR(lvl.tex, t10.x, t10.y);
+  const s01 = texLoadR(lvl.tex, t01.x, t01.y);
+  const s11 = texLoadR(lvl.tex, t11.x, t11.y);
+  const height = mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
+  const dx = mix(s10.sub(s00), s11.sub(s01), f.y).div(lvl.texel);
+  const dz = mix(s01.sub(s00), s11.sub(s10), f.x).div(lvl.texel);
+  return vec3(height, dx, dz) as unknown as NV3;
 }
 
 export function planeNearest(lvl: FieldLevel, wxz: NV2): NF {
@@ -726,6 +1106,10 @@ function makeU8Level(name: string, plan: PlanePlan): FieldLevel {
 }
 
 function levelCommon(plan: PlanePlan): Omit<FieldLevel, 'tex'> {
+  const coverageMinX = plan.originX + (plan.nMinX - plan.n0x) * plan.texel;
+  const coverageMinZ = plan.originZ + (plan.nMinZ - plan.n0z) * plan.texel;
+  const coverageMaxX = plan.originX + (plan.nMaxX - plan.n0x) * plan.texel;
+  const coverageMaxZ = plan.originZ + (plan.nMaxZ - plan.n0z) * plan.texel;
   return {
     lod: plan.lod,
     res: plan.res,
@@ -737,6 +1121,18 @@ function levelCommon(plan: PlanePlan): Omit<FieldLevel, 'tex'> {
     uOriginRel: uniform(new Vector2(plan.originX, plan.originZ)) as unknown as FieldLevel['uOriginRel'],
     uAnchor: uniform(new Vector2(0, 0)) as unknown as FieldLevel['uAnchor'],
     uPhase: uniform(new Vector2(0, 0)) as unknown as FieldLevel['uPhase'],
+    uCoverageMin: uniform(new Vector2(
+      (coverageMinX - plan.originX) / plan.texel,
+      (coverageMinZ - plan.originZ) / plan.texel,
+    )) as unknown as FieldLevel['uCoverageMin'],
+    uCoverageMax: uniform(new Vector2(
+      (coverageMaxX - plan.originX) / plan.texel,
+      (coverageMaxZ - plan.originZ) / plan.texel,
+    )) as unknown as FieldLevel['uCoverageMax'],
+    coverageMinX,
+    coverageMinZ,
+    coverageMaxX,
+    coverageMaxZ,
     wraps: plan.wraps,
   };
 }

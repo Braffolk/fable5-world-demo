@@ -26,7 +26,10 @@ export interface LatticePlacement {
 }
 
 export interface RasterGeom {
+  mode: 'legacy-offset' | 'physical-level';
   texel0: number;
+  baseTexel: number;
+  finestLod: number;
   chunkRes: number;
   originX: number;
   originZ: number;
@@ -65,6 +68,9 @@ export interface PlanePlan extends LatticePlacement {
 }
 
 export interface FieldPlan {
+  /** Format-2 packed negative height levels require camera-centred geomorphing.
+   *  False keeps the generated/format-1 sampler construction byte-identical. */
+  cookedMicroHeight: boolean;
   height: PlanePlan[];
   biome: PlanePlan[];
   fields: PlanePlan[];
@@ -95,6 +101,7 @@ export interface FieldPlan {
 }
 
 export const HEIGHT_PLANE_RES = 2048;
+export const MICRO_HEIGHT_PLANE_RES = 1536;
 export const U8_PLANE_RES = 1024;
 /** cover-or-window rule (S3b): a level's plane res grows past the default
  *  window res up to the cap when that makes it cover the source's WHOLE layer
@@ -146,13 +153,39 @@ export function layerGeom(manifest: WorldManifest, layer: LayerName): RasterGeom
   const t0 = meta?.texelMeters;
   if (!meta || !t0) throw new Error(`PlaneFill: layer '${layer}' missing texelMeters`);
   const g = manifest.grid;
+  if (manifest.format === 2 && layer === 'height') {
+    const baseTexel = meta.baseTexelMeters;
+    const finestLod = meta.finestLod;
+    if (!baseTexel || finestLod === undefined) throw new Error("PlaneFill: format-2 height lacks physical geometry");
+    return {
+      mode: 'physical-level',
+      texel0: baseTexel * g.lodStep ** finestLod,
+      baseTexel,
+      finestLod,
+      chunkRes: g.chunkRes,
+      originX: g.originX,
+      originZ: g.originZ,
+      lodStep: g.lodStep,
+    };
+  }
   return {
+    mode: 'legacy-offset',
     texel0: t0,
+    baseTexel: t0,
+    finestLod: 0,
     chunkRes: Math.round(g.chunkMeters / t0),
     originX: g.originX,
     originZ: g.originZ,
     lodStep: g.lodStep,
   };
+}
+
+export function normalizedStride(geo: RasterGeom, lod: number): number {
+  return geo.lodStep ** (lod - geo.finestLod);
+}
+
+export function levelTexel(geo: RasterGeom, lod: number): number {
+  return geo.mode === 'physical-level' ? geo.baseTexel * geo.lodStep ** lod : geo.texel0 * geo.lodStep ** lod;
 }
 
 /** chunk box (indices) of a layer's chunk set at one lod. */
@@ -193,7 +226,7 @@ export function levelRes(spanM: number, texel: number, windowRes: number, cap: n
   return r >= cov ? r : windowRes;
 }
 
-function heightChunkBoxOf(manifest: WorldManifest): {
+function heightChunkBoxOf(manifest: WorldManifest, selectedLod?: number): {
   minX: number;
   maxX: number;
   minZ: number;
@@ -202,10 +235,10 @@ function heightChunkBoxOf(manifest: WorldManifest): {
 } {
   const meta = manifest.layers.height;
   if (!meta) throw new Error('PlaneFill: source has no height layer');
-  const finest = Math.min(...meta.lods);
-  const box = chunkBox(manifest.chunks('height', finest));
+  const lod = selectedLod ?? Math.min(...meta.lods);
+  const box = chunkBox(manifest.chunks('height', lod));
   if (!box) throw new Error('PlaneFill: height layer has no chunks');
-  return { ...box, span: manifest.grid.chunkMeters * manifest.grid.lodStep ** finest };
+  return { ...box, span: manifest.grid.chunkMeters * manifest.grid.lodStep ** lod };
 }
 
 /** coverage centroid from the FINEST height lod's chunk set (F-7 anchoring). */
@@ -220,7 +253,8 @@ export function coverageCenter(manifest: WorldManifest): { cx: number; cz: numbe
 
 /** chunk-aligned world box of the height coverage (generated: ±WORLD_HALF). */
 export function coverageBoxM(manifest: WorldManifest): CoverageBox {
-  const b = heightChunkBoxOf(manifest);
+  const authority = manifest.format === 2 ? manifest.layers.height?.authorityLod : undefined;
+  const b = heightChunkBoxOf(manifest, authority);
   const g = manifest.grid;
   return {
     minX: g.originX + b.minX * b.span,
@@ -259,13 +293,15 @@ export function coverageExtentLattice(manifest: WorldManifest): { latMin: number
   const geo = layerGeom(manifest, 'height');
   const lods = manifest.layers.height?.lods ?? [0];
   const finestLod = Math.min(...lods);
+  const authorityLod = manifest.format === 2 ? (manifest.layers.height?.authorityLod ?? 0) : finestLod;
   let uMinX = Infinity;
   let uMaxX = -Infinity;
   let uMinZ = Infinity;
   let uMaxZ = -Infinity;
   let extentHalf = 0;
-  let fine: ReturnType<typeof chunkBox> = null;
+  const fine = chunkBox(manifest.chunks('height', finestLod));
   for (const lod of lods) {
+    if (lod < authorityLod) continue; // fine rectangles affect eligibility, never the global domain
     const keys = manifest.chunks('height', lod);
     // a LONE coarse chunk is PADDING that merely contains the finer world (skip it
     // so the box tracks real data, not chunk-footprint overshoot — keeps the
@@ -273,16 +309,15 @@ export function coverageExtentLattice(manifest: WorldManifest): { latMin: number
     if (lod !== finestLod && keys.length <= 1) continue;
     const b = chunkBox(keys);
     if (!b) continue;
-    const f = geo.chunkRes * geo.lodStep ** lod; // lattice texels per LOD-k chunk
+    const f = geo.chunkRes * normalizedStride(geo, lod); // normalized finest texels per chunk
     uMinX = Math.min(uMinX, b.minX * f);
     uMaxX = Math.max(uMaxX, (b.maxX + 1) * f);
     uMinZ = Math.min(uMinZ, b.minZ * f);
     uMaxZ = Math.max(uMaxZ, (b.maxZ + 1) * f);
     extentHalf = Math.max(extentHalf, ((b.maxX - b.minX + 1) * f) / 2, ((b.maxZ - b.minZ + 1) * f) / 2);
-    if (lod === finestLod) fine = b;
   }
   if (!fine || !Number.isFinite(uMinX)) throw new Error('PlaneFill: height layer has no chunks');
-  const f0 = geo.chunkRes * geo.lodStep ** finestLod;
+  const f0 = geo.chunkRes * normalizedStride(geo, finestLod);
   const ccx = ((fine.minX + fine.maxX + 1) / 2) * f0;
   const ccz = ((fine.minZ + fine.maxZ + 1) / 2) * f0;
   const viewFar = Math.min(VIEW_FAR_CAP_M / geo.texel0, extentHalf * VIEW_FAR_MARGIN);
@@ -302,8 +337,20 @@ export function placeLevel(
   centerX: number,
   centerZ: number,
 ): LatticePlacement {
-  const stride = geo.lodStep ** lod;
-  const texel = geo.texel0 * stride;
+  const stride = normalizedStride(geo, lod);
+  const texel = levelTexel(geo, lod);
+  if (geo.mode === 'physical-level') {
+    const n0x = Math.round((centerX - (res / 2) * texel - geo.originX) / texel);
+    const n0z = Math.round((centerZ - (res / 2) * texel - geo.originZ) / texel);
+    return {
+      n0x,
+      n0z,
+      stride,
+      texel,
+      originX: geo.originX + (n0x + 0.5) * texel,
+      originZ: geo.originZ + (n0z + 0.5) * texel,
+    };
+  }
   const off = stride >> 1;
   const n0x = Math.round((centerX - (res / 2) * texel - geo.originX) / texel);
   const n0z = Math.round((centerZ - (res / 2) * texel - geo.originZ) / texel);
@@ -319,9 +366,11 @@ export function placeLevel(
 
 /** world coord of lattice sample n at a level (same formula as placeLevel). */
 export function latticeWorld(geo: RasterGeom, lod: number, n: number, axis: 'x' | 'z'): number {
-  const stride = geo.lodStep ** lod;
-  const off = stride >> 1;
+  const stride = normalizedStride(geo, lod);
+  const texel = levelTexel(geo, lod);
   const o = axis === 'x' ? geo.originX : geo.originZ;
+  if (geo.mode === 'physical-level') return o + (n + 0.5) * texel;
+  const off = stride >> 1;
   return o + (n * stride + off + 0.5) * geo.texel0;
 }
 
@@ -341,10 +390,17 @@ export function planLayer(
   const { cx, cz } = coverageCenter(manifest);
   const plans: PlanePlan[] = [];
   for (const lod of meta.lods) {
-    const texel = geo.texel0 * geo.lodStep ** lod;
-    const res = levelRes(span, texel, windowRes, cap);
+    const texel = levelTexel(geo, lod);
+    const lodBox = chunkBox(manifest.chunks(layer, lod));
+    const levelSpan = geo.mode === 'physical-level' && lod >= 0 && lodBox
+      ? Math.max(lodBox.maxX - lodBox.minX + 1, lodBox.maxZ - lodBox.minZ + 1)
+        * manifest.grid.chunkMeters * manifest.grid.lodStep ** lod
+      : span;
+    const res = geo.mode === 'physical-level' && lod < 0
+      ? MICRO_HEIGHT_PLANE_RES
+      : levelRes(levelSpan, texel, windowRes, cap);
     const place = placeLevel(geo, lod, res, cx, cz);
-    const box = chunkBox(manifest.chunks(layer, lod));
+    const box = lodBox;
     // lattice sample bounds of the chunk coverage at this lod (apron sample
     // (c+1)·chunkRes belongs to the east/south neighbor; the rim keeps it)
     const nMinX = box ? box.minX * geo.chunkRes : 0;
@@ -356,7 +412,7 @@ export function planLayer(
     // (the generated lod1 chunk spans 8192 m of a 4096 m world) and must not
     // demote a covering level to a scrolling one (pinned ⇒ the samplers
     // compile the exact pre-S5 form — the parity + register gates).
-    const wraps = res < Math.round(span / texel);
+    const wraps = res < Math.round(levelSpan / texel);
     plans.push({ ...place, lod, res, wraps, nMinX, nMaxX, nMinZ, nMaxZ });
   }
   return plans;
@@ -413,15 +469,14 @@ function ensureFloorCoversBox(manifest: WorldManifest, layer: LayerName, plans: 
     );
     return;
   }
-  const off = S >> 1;
   plans[plans.length - 1] = {
     ...c,
     res,
     wraps: false, // spans the whole renderable domain ⇒ pinned (never scrolls)
     n0x: n0,
     n0z: n0,
-    originX: geo.originX + (n0 * S + off + 0.5) * geo.texel0,
-    originZ: geo.originZ + (n0 * S + off + 0.5) * geo.texel0,
+    originX: latticeWorld(geo, c.lod, n0, 'x'),
+    originZ: latticeWorld(geo, c.lod, n0, 'z'),
   };
 }
 
@@ -488,7 +543,19 @@ export function planField(manifest: WorldManifest): FieldPlan {
   if (soilMeta && soilMeta.lods.includes(0)) {
     soil = planLayer(manifest, 'soil', U8_PLANE_RES, U8_PLANE_RES).find((p) => p.lod === 0) ?? null;
   }
-  return { height, biome, fields, water, waterFar, waterCover, waterCoverFar, soil, coverageBox: coverageBoxM(manifest), biomeHasCanopy: !!manifest.layers.canopy };
+  return {
+    cookedMicroHeight: manifest.format === 2 && height.some((level) => level.lod < 0),
+    height,
+    biome,
+    fields,
+    water,
+    waterFar,
+    waterCover,
+    waterCoverFar,
+    soil,
+    coverageBox: coverageBoxM(manifest),
+    biomeHasCanopy: !!manifest.layers.canopy,
+  };
 }
 
 // ---- region assembly (chunk payload → plane texels) -------------------------------
