@@ -246,12 +246,26 @@ erosion diagnostic. Resume this source only with publisher camera-to-epoch
 contribution identities plus machine-usable exclusion masks, or independently
 reconstruct two precisely bound view groups with frozen audited masks.
 
-The active work is a capped parallel activation pass over neighboring/similar
-Baltic-Nordic sources for peat/rock and cultivated-soil regimes. This is not an
-unbounded dataset search: each branch stops at metadata feasibility, retains at
-most two ranked candidates, and performs no converter work or large payload fetch
-until one source clears immediate access, surface semantics, reconstructable
-support, masking, and independent control/error.
+The capped parallel neighboring-country activation pass is complete. No source
+clears production or R1 target gates. Getaberget is imagery-only. Kotkanoja has
+excellent Finnish heavy-clay management states but no public geometry, license,
+controls, or masks. SITES Robacksdalen has a 5 cm CC BY 4.0 point cloud but no
+published exposed-soil state, raw view identity, masks, or independent error; it
+remains one cheap metadata-resume lead, not an active download.
+
+Stordalen Mire is the active bounded source checkpoint because it is the first
+neighboring-country route with a plausible true sub-decimeter observation ceiling:
+the exact 2019 SITES point cloud and DSM are nominally 5 cm, CC BY 4.0, and cover a
+large mire extent, while later SITES acquisitions may provide separate epochs.
+They are photogrammetric visible-surface products, not peat-ground truth. Persistent
+vegetation and systematic SfM texture can persist between epochs, so persistence
+alone is insufficient. Before any spec amendment, converter, or synthesis, the
+checkpoint must bind at least three paired acquisitions, external-control
+registration, raw-point support/exclusion masks, positive B1/B2 covariance above
+inter-epoch disagreement, four-phase stability, artifact non-correlation, and
+sufficient stable non-palsa/non-thermokarst moss/lawn/hummock support. Failure is
+terminal `NO_GO_as_B1_B2_process_hypothesis`; do not average DSMs or invent B2
+from the 0.25 m Marrviken product.
 
 The durable end-to-end requirement comparison is recorded in
 `MICROTOPOGRAPHY-CONFORMANCE-AUDIT.md`. It also freezes the historical preregistration
