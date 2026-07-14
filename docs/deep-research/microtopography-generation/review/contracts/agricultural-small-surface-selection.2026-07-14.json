@@ -1,0 +1,126 @@
+{
+  "schema_version": "microtopography-agricultural-small-surface-selection/1.0.0",
+  "checked_at": "2026-07-14",
+  "scope": {
+    "claim": "small field or laboratory agricultural-soil microrelief calibration",
+    "bands": {
+      "B1_wavelength_m": [0.25, 1.0],
+      "B2_wavelength_m": [0.125, 0.25]
+    },
+    "maximum_new_official_datasets": 3,
+    "stop_on_first_pass": true,
+    "geometry_downloaded": false
+  },
+  "hard_gates": [
+    "downloadable measured 3D surface geometry or raw observations sufficient to reconstruct it",
+    "explicit tillage, soil, and moisture or surface-state semantics",
+    "independent dimensional metrology, checkpoints, or numeric error contract",
+    "reusable public license covering derived and training use",
+    "measured support sufficient to evaluate B1, preferably B2",
+    "not a raster-only or figure-only release"
+  ],
+  "decision": {
+    "status": "no_candidate_selected",
+    "reason": "The capped tranche contains no public release combining agricultural-soil semantics with downloadable 3D geometry and an independent error contract.",
+    "fallback": "Do not download these releases. Continue only with a source whose repository manifest proves geometry, labels, rights, and metrology before acquisition.",
+    "not_authorized": [
+      "B1 or B2 target calibration",
+      "training supervision",
+      "spatial morphology exemplars",
+      "substituting rendered images or aggregate roughness values for measured geometry"
+    ]
+  },
+  "candidates": [
+    {
+      "id": "helios_surface_roughness_2025",
+      "order": 1,
+      "status": "no_go",
+      "dataset": {
+        "title": "Surface roughness dataset",
+        "doi": "10.5281/zenodo.15807697",
+        "official_record": "https://zenodo.org/records/15807697",
+        "publisher": "Zenodo",
+        "license": "CC-BY-4.0",
+        "published": "2025-07-04",
+        "declared_total_bytes": 434200000,
+        "description": "Profilometer raw data and morphology images for ceramic and steel microsphere-based radiative-cooling coatings."
+      },
+      "gate_results": {
+        "downloadable_3d_geometry": false,
+        "agricultural_soil_tillage_moisture_semantics": false,
+        "independent_error_contract": false,
+        "reusable_license": true,
+        "B1_support": false,
+        "B2_support": false
+      },
+      "blocking_reasons": [
+        "The measured materials are engineered ceramic and steel coatings, not soil.",
+        "The official manifest exposes rendered 3D and surface PNGs, one-dimensional section text, and summary CSVs rather than an agricultural-soil height field or point cloud.",
+        "No tillage, soil texture, moisture, or independent soil-surface error contract exists."
+      ]
+    },
+    {
+      "id": "zalf_muencheberg_sfm_2018",
+      "order": 2,
+      "status": "no_go",
+      "dataset": {
+        "title": "Soil Surface Micro-Topography by Structure-from-Motion Photogrammetry for Monitoring Density and Erosion Dynamics",
+        "doi": "10.3389/fenvs.2021.737702",
+        "official_record": "https://www.frontiersin.org/journals/environmental-science/articles/10.3389/fenvs.2021.737702/full",
+        "publisher": "Frontiers",
+        "article_license": "CC-BY",
+        "site": "three 1.0 m by 1.5 m plots on a maize-cultivated hillslope at ZALF Muencheberg, northeastern Germany",
+        "campaign": "2018-05-02 through 2018-05-16",
+        "semantics": "coarse-textured Luvisol topsoil after uniform tillage and sowing, including tractor lane, seed rows, unconsolidated soil, rainfall history, and measured bulk density"
+      },
+      "published_measurement_contract": {
+        "source": "close-range SfM from repeated 5 MP-equivalent images",
+        "control": "four reconstructed control points assigned measured local coordinates",
+        "reference_hillslope_dem_grid_m": 0.012,
+        "error_reporting": "per-date level of detection discussed in the article, but no independent checkpoint coordinate set or reusable numeric XY/Z error artifact is released"
+      },
+      "gate_results": {
+        "downloadable_3d_geometry": false,
+        "agricultural_soil_tillage_moisture_semantics": true,
+        "independent_error_contract": false,
+        "reusable_license": "article_and_supplement_only",
+        "B1_support": "not_auditable",
+        "B2_support": "not_auditable"
+      },
+      "blocking_reasons": [
+        "The data-availability statement points only to the article and supplementary material; it does not publish raw photographs, reconstructed point clouds, or machine-readable height fields.",
+        "The supplementary appendices contain workflow and DEM figures, not reconstructable metric geometry.",
+        "Control relocation and interpolation are acknowledged uncertainty sources, but no reusable independent checkpoint distribution with numeric horizontal and vertical errors is released."
+      ],
+      "resume_condition": "A public repository release of the original images or point clouds, control and checkpoint coordinates, per-epoch error logs, and explicit reuse license."
+    },
+    {
+      "id": "hashimoto_sheet_erosion_processed_2026",
+      "order": 3,
+      "status": "no_go",
+      "dataset": {
+        "title": "Processed data for event-scale sheet erosion monitoring using time-lapse camera Structure-from-Motion and a colored surface-soil tracer",
+        "doi": "10.17632/23pt7h8c5n.1",
+        "official_record": "https://data.mendeley.com/datasets/23pt7h8c5n/1",
+        "publisher": "Mendeley Data",
+        "license": "CC-BY-4.0",
+        "published": "2026-04-20",
+        "site": "artificial landslide slope in northern Japan",
+        "declared_contents": "rainfall time series and event data, sheet-erosion indices, environmental and topographic variables, and shapefiles for analysis points and plot layout"
+      },
+      "gate_results": {
+        "downloadable_3d_geometry": false,
+        "agricultural_soil_tillage_moisture_semantics": false,
+        "independent_error_contract": false,
+        "reusable_license": true,
+        "B1_support": false,
+        "B2_support": false
+      },
+      "blocking_reasons": [
+        "The release explicitly contains processed figure-support data rather than raw camera observations, point clouds, or metric surface grids.",
+        "Its surface is an artificial landslide slope with colored tracer, not a documented agricultural tillage and soil-state treatment.",
+        "No independent dimensional control or band-resolved measurement error contract accompanies reusable geometry because reusable geometry is absent."
+      ]
+    }
+  ]
+}
