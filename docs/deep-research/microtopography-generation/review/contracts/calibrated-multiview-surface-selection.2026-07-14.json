@@ -1,0 +1,142 @@
+{
+  "schema_version": "microtopography-replacement-target-selection/1.0.0",
+  "checked_at": "2026-07-14",
+  "selection_scope": "calibrated_multiview_or_tls_benchmark_with_natural_bare_surface_patches",
+  "selection_policy": {
+    "maximum_new_candidates": 3,
+    "evaluated_new_candidates": 3,
+    "stop_on_first_pass": true,
+    "required_before_geometry_download": [
+      "natural_exposed_rock_gravel_sand_or_bare_soil",
+      "downloadable_raw_or_reference_geometry_and_calibrated_views",
+      "explicit_surface_semantics_and_exclusion_masks",
+      "independent_accuracy_control_or_documented_benchmark_reference_construction",
+      "reusable_dataset_license_for_derivatives_and_training",
+      "documented_native_support_for_b1_0.25_to_1m"
+    ],
+    "excluded": [
+      "synthetic_scenes",
+      "urban_only_objects",
+      "vegetation_dominated_scans",
+      "HovoPhoto40",
+      "EuroSDR_Wards_Hill",
+      "Point_Beach",
+      "Mrzezyno"
+    ],
+    "bulk_geometry_downloaded": false
+  },
+  "decision": {
+    "status": "no_pass",
+    "selected_candidate_id": null,
+    "authorized_role": null,
+    "next_action": "Do not download these corpora. Retain the exact resume conditions; continue with a disjoint source family rather than weakening surface, rights, or reference gates.",
+    "not_authorized": [
+      "target_evidence",
+      "training_evidence",
+      "Estonia_transfer",
+      "synthesis_owner_selection",
+      "bulk_geometry_download"
+    ]
+  },
+  "candidates": [
+    {
+      "id": "eth3d_stereo_benchmark_natural_surface_scenes",
+      "order": 1,
+      "status": "no_go",
+      "official_records": [
+        "https://eth3d.ethz.ch/",
+        "https://eth3d.ethz.ch/datasets",
+        "https://eth3d.ethz.ch/documentation"
+      ],
+      "primary_paper": "https://doi.org/10.1109/CVPR.2017.272",
+      "dataset_license": "CC-BY-NC-SA-4.0",
+      "available_evidence": {
+        "calibrated_views_and_reference": "Training scenes publish DSLR or camera-rig images, camera calibration, raw and cleaned laser scans, evaluation clouds, occlusion files, and pre-rendered depth products.",
+        "candidate_scenes": {
+          "meadow": "15-image outdoor training scene with raw and cleaned laser ground truth plus occlusion products.",
+          "boulders": "26-image outdoor test scene; the public dataset page releases images but no test ground truth.",
+          "sand_box": "Low-resolution outdoor test scene; the public dataset page releases rig images but no test ground truth.",
+          "terrains": "42-image indoor training scene and therefore not a natural field surface."
+        },
+        "mask_semantics": "Occlusion products encode scanner/view visibility for benchmark evaluation, not material classes or exclusions for rock, soil, sand, vegetation, water, and constructed objects."
+      },
+      "blocking_reasons": [
+        "The only natural-looking training candidate is a vegetation-dominated meadow and has no bare-surface material mask.",
+        "The boulders and sand-box scenes are test sets without downloadable laser/reference ground truth, while the terrains scene is indoors and artificial.",
+        "The dataset-wide NonCommercial and ShareAlike restrictions do not provide an unrestricted project-wide license for derived training evidence or generated assets."
+      ],
+      "resume_condition": "A publisher-released natural bare-surface training scene with material/exclusion masks and project-compatible dataset rights, or public reference geometry and masks for an existing natural test scene."
+    },
+    {
+      "id": "h3d_hessigheim_soil_gravel_class",
+      "order": 2,
+      "status": "no_go",
+      "official_records": [
+        "https://ifpwww.ifp.uni-stuttgart.de/benchmark/hessigheim/default.aspx",
+        "https://ifpwww.ifp.uni-stuttgart.de/benchmark/hessigheim/details.aspx",
+        "https://ifpwww.ifp.uni-stuttgart.de/benchmark/hessigheim/participate.aspx",
+        "https://ifpwww.ifp.uni-stuttgart.de/benchmark/hessigheim/subscribe.aspx"
+      ],
+      "primary_paper": "https://doi.org/10.1016/j.ophoto.2021.100001",
+      "available_evidence": {
+        "geometry": "Three same-configuration UAV epochs pair Riegl VUX-1LR laser point clouds with hybrid LiDAR and multi-view-stereo textured meshes.",
+        "surface_semantics": "Manual point labels include C08 Soil/Gravel and distinct Low Vegetation, Impervious Surface, Vehicle, Urban Furniture, Roof, Facade, Shrub, Tree, Vertical Surface, and Chimney classes. Mesh faces without valid transferred support are labeled -1.",
+        "native_support": {
+          "mean_laser_points_per_m2": 800,
+          "laser_footprint_upper_bound_m": 0.03,
+          "image_gsd_range_m": [
+            0.015,
+            0.03
+          ],
+          "b1_supported": true,
+          "b2_sampling_potential": true
+        },
+        "reference_construction": "LiDAR and imagery were jointly georeferenced by hybrid adjustment; labels were manually segmented with two-stage human quality control and transferred geometrically to the mesh.",
+        "intended_use": "The official site explicitly permits training and validation labels to be used for training and describes the corpus as a machine-learning benchmark."
+      },
+      "blocking_reasons": [
+        "The official download is registration-gated and the public benchmark pages state no dataset license for reuse, redistribution, derivatives, or generated training assets. The article's CC BY license applies to the publication and cannot be imputed to the payload.",
+        "The published benchmark modalities are labeled laser point clouds and derived textured meshes. The public pages do not identify raw calibrated images, camera intrinsics/extrinsics, or a downloadable image manifest as payloads.",
+        "Soil/Gravel is a combined urban-scene semantic class with documented boundary ambiguity against low vegetation; it does not identify bare soil versus gravel process, substrate, management, moisture, or natural-versus-constructed provenance."
+      ],
+      "resume_condition": "A formal project-compatible dataset license, an exact downloadable manifest containing calibrated source images and camera solutions, and a bounded subclass mask that separates bare soil or gravel from vegetation and constructed surfaces."
+    },
+    {
+      "id": "drumheller_high_relief_sedimentary_rock_slope",
+      "order": 3,
+      "status": "no_go",
+      "primary_record": "https://doi.org/10.3390/rs14030490",
+      "available_evidence": {
+        "natural_surface": "A 125 by 55 m, approximately 70-degree natural Horseshoe Canyon and Bearpaw Formation sedimentary outcrop near Drumheller, Alberta, with rills and drainage morphology.",
+        "calibrated_multiview": {
+          "maximum_combined_images": 513,
+          "image_angles_degrees": [-90, -60, -45],
+          "best_image_gsd_m": 0.007,
+          "combined_image_gsd_m": 0.014,
+          "reported_average_xy_precision_m": 0.01,
+          "reported_average_z_precision_m": 0.023
+        },
+        "reference_geometry": "Four overlapping FARO Focus3D S120 scans were merged, georeferenced through seven survey-grade GCPs, and filtered with CANUPO to remove obvious vegetation and noise.",
+        "reference_metrics": {
+          "final_tls_points": 10400000,
+          "registration_error_m": 0.014,
+          "scanner_precision_at_25m_m": 0.002,
+          "m3c2_projection_diameter_m": 0.1
+        },
+        "license_boundary": "The article is open under CC BY, but its data-availability statement says supporting data are available only from the corresponding author upon reasonable request."
+      },
+      "blocking_reasons": [
+        "No public downloadable image, camera, GCP, vegetation-mask, or TLS-reference archive is bound to the paper.",
+        "No reusable dataset license is stated; the article license does not license requested private data.",
+        "An on-request corpus cannot satisfy the zero-budget public-source gate or be frozen by publisher manifest and checksum before acquisition."
+      ],
+      "resume_condition": "A public immutable deposit of exact images, calibrated cameras, GCP/control, vegetation exclusions, and TLS reference geometry under a project-compatible derivative/training license."
+    }
+  ],
+  "verification": {
+    "geometry_bytes_downloaded": 0,
+    "small_document_bytes_downloaded": 0,
+    "official_public_datasets_evaluated": 3,
+    "result": "All three candidates fail a hard pre-download gate; no fourth candidate was inspected."
+  }
+}
