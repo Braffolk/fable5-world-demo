@@ -58,8 +58,11 @@ are fingerprinted separately from on-disk source snapshots. Inventories
 history and must not be used. The selected artifact remains publisher metadata, not
 independently verified geometry, and does not authorize a terrain target, analogue
 qualification, point conversion, or synthesis.
-The HY_PINE2 development-stress plot remains unfetched, and the sealed Järvselja
-(`JS_SPRUCE1`) blind plot remains untouched. The exact Biała Góra first epoch is now
+The exact HY_PINE2 downsampled LAZ is retained and converted as a same-site
+development-stress condition. Its frozen candidate sheet correctly abstains at `49.61%`
+direct support and `20.03%` largest-component coverage, with no authorized surface; the
+46.7 GB full archive remains deliberately unfetched. The sealed Järvselja (`JS_SPRUCE1`)
+blind plot remains untouched. The exact Biała Góra first epoch is now
 retained under `510f1dcf1daa...`; its sole LAS member is bound by extraction
 `680fdadf28e8...`, and unqualified process-candidate build `4fdbaa3f0a9c...` contains
 0.5 m raw support, RGB, return multiplicity, vendor class-2 elevations/ranges, and
@@ -105,12 +108,11 @@ records `3,680,759,265` AOI records in 1,907 artifacts totaling `103,061,259,420
 bytes. The manifest evidence boundary remains exact: unqualified, not ground-filtered,
 no surface claim, no target truth, no analogue qualification, and no synthesis.
 
-One transaction-state issue remains. The manifest status is
-`verified_staging_ready_for_atomic_publication`, and its bound native report says
-`atomicPublication:false` and `stagingOnly:true`. Therefore the full decode and verified
-spatial materialization are complete, but the task's promised atomic publication is not
-yet evidenced and must not be marked complete by filesystem presence alone. Atomic
-publication cannot change the artifact's scientific status.
+The publication boundary is deliberately split. The bound native report says
+`atomicPublication:false` and `stagingOnly:true` because the native child owns only the
+verified staging tree. The Python publisher then atomically moved that verified tree to
+the final content-addressed materialization path. This closes publication without
+changing the artifact's scientific status.
 
 The accepted full-read spatial-materialization contract uses exact integer support-AOI
 ticks rather than reinterpreted floating bounds, one fixed 28-byte record ABI, per-scan
@@ -124,8 +126,8 @@ RSS/descriptors, and fail-closed verification. The successful selection supersed
 padding-defective selections for materialization evidence. It does not supersede the
 scientific gates: raw shards are not a terrain surface and authorize no synthesis.
 
-The ordered closure after the completed spatial materialization is: atomic publication
-of the verified staging result; view-aware candidate conversion with support, visibility, error,
+The ordered closure after the completed spatial materialization and publication is:
+view-aware candidate conversion with support, visibility, error,
 semantic, and full-versus-thinned evidence; human semantic and physical-analogue/OOD
 qualification with campaign/site holdouts; target-specific preregistration; per-regime
 specialist bakeoff with a valid no-winner; then ordinary packed-height cook, hierarchy,
@@ -365,7 +367,7 @@ The historical accepted infrastructure checkpoint removed the `TerrainField` cei
 
 ## Integration Risks
 
-- Dataset conversion previously became inefficiently serialized behind HY_SPRUCE4 full-E57 handling, with two failed full attempts and repeated implementation/review micro-cycles before a morphology input existed. Native codec-word padding commit `ba92ab4` has now completed the verified full materialization; atomic publication remains. Evo 1086/1065 are parked after sparse-surface diagnosis, and HY_PINE2 remains unfetched unless its unique same-site stress role justifies the cost. A blocked track is parked without deleting its code or provenance; it resumes only if quicker alternatives fail or its scientific role is unique.
+- Dataset conversion previously became inefficiently serialized behind HY_SPRUCE4 full-E57 handling, with two failed full attempts and repeated implementation/review micro-cycles before a morphology input existed. Native codec-word padding commit `ba92ab4` completed the verified full materialization and the Python publisher completed its atomic move. Evo 1086/1065 are parked after sparse-surface diagnosis; the downsampled HY_PINE2 stress condition is also parked after its candidate sheet correctly abstained, and its full archive remains unfetched. A blocked track is parked without deleting its code or provenance; it resumes only if quicker alternatives fail or its scientific role is unique.
 - The root `estonia-asset-gen` worktree contains unrelated dirty and old-agent changes. Integration must preserve user work and must not copy the obsolete 128 m global-grid rewrite or hash/noise synthesizer.
 - A production pilot preview may be materialized locally, but it must not update `latest.json` until realism, masks, and user-visible acceptance pass.
 - The accepted replacement spec requires a target-evidence-gated per-regime specialist architecture, not a continuation of the measured mineral-forest quilt. Stage 1 structural repair is complete, `releaseReady:true`, and user-accepted through transaction `009fd...`; superseded `7a2d...` artifacts remain history, not current authority. Morphology implementation remains gated by qualified target evidence. One minimal generic packed-surface grounding correction for trees/boulders/understory/debris remains an infrastructure dependency; it does not synthesize geometry or change the wire format.
