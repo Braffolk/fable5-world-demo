@@ -20,10 +20,6 @@
       "sha256": "43210c64cd12a8dc51260f80303e80e7c9b723391b2185bf6ebe9406c245e2dd"
     },
     {
-      "path": "docs/tasks/2026-07-13/MICROTOPOGRAPHY-CONFORMANCE-AUDIT.md",
-      "sha256": "20313fb5b3620e94e39df07b36258e2f32962601d82879264166efd05ffc3437"
-    },
-    {
       "path": "asset-gen/config/hovi-public-targets.json",
       "sha256": "724f4d6712c9e5bec494c6d2f1a13941adfe93a22f48165c4f5d25cf6c1a6e84"
     },
@@ -66,6 +62,13 @@
     {
       "path": "asset-gen/data/work/microtopography/hovi/surface/73a9a7d52c6ddd8b7193694d74e42a00b97ab0015e494a13149fc54122de3686/manifest.json",
       "sha256": "a7b701f9ee8846fad4d2e64f6b0b0c7056732691b999c86061262345a05a8b37"
+    }
+  ],
+  "tracking_inputs": [
+    {
+      "path": "docs/tasks/2026-07-13/MICROTOPOGRAPHY-CONFORMANCE-AUDIT.md",
+      "sha256_at_contract_revision": "70f0ca33841e4f720aaebd585eeaba7c63a9729a69a4d4914e769e17c8497e76",
+      "authority": "nonnormative_mutable_progress_record"
     }
   ],
   "claim_domain": {
