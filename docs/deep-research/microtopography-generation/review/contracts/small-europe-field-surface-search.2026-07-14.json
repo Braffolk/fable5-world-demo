@@ -1,0 +1,132 @@
+{
+  "schema_version": "small-europe-field-surface-search/1.0.0",
+  "checked_at": "2026-07-14",
+  "policy": {
+    "scope": [
+      "small European field TLS deposits",
+      "small European ground or close-range SfM deposits",
+      "exposed natural peat, sand, rock, gravel, or eroded-soil surfaces"
+    ],
+    "maximum_new_candidates": 3,
+    "evaluated_new_candidates": 2,
+    "previously_screened_sources_excluded": true,
+    "monolithic_archives_without_member_manifests_excluded": true,
+    "geometry_downloaded_bytes": 0,
+    "required_gates": [
+      "raw_points_or_images",
+      "exact_surface_masks_or_clearly_vegetation_free_aoi",
+      "independent_numeric_checkpoint_or_control_evidence",
+      "reusable_derivative_and_training_rights"
+    ]
+  },
+  "candidates": [
+    {
+      "id": "zenodo-16633317-isar-riverbed-tls",
+      "title": "Terrestrial laser scanning point clouds of the Isar river bed near Wallgau acquired in August and November 2024",
+      "country": "Germany",
+      "surface": "exposed gravel riverbed",
+      "doi": "10.5281/zenodo.16633317",
+      "official_record": "https://zenodo.org/records/16633317",
+      "license": "CC-BY-4.0",
+      "published_members": [
+        {
+          "name": "20240812_Isar_TLS_aligned.laz",
+          "bytes": 1258668230,
+          "checksum": "md5:fdfcf0f9afb15d6fba773716c27ad9b7"
+        },
+        {
+          "name": "20241105_Isar_TLS_aligned.laz",
+          "bytes": 654274643,
+          "checksum": "md5:c736422b6d46c04e668d0d1fd137b9d5"
+        },
+        {
+          "name": "m3c2_Isar_TLS_20240812_20241105.laz",
+          "bytes": 56070031,
+          "checksum": "md5:963baa2bc193be6084b0975587693dae"
+        },
+        {
+          "name": "m3c2_params.txt",
+          "bytes": 560,
+          "checksum": "md5:436b756e0bdd7a5bba1495a498a3d447"
+        }
+      ],
+      "gates": {
+        "raw_points_or_images": {
+          "status": "fail",
+          "reason": "The manifest exposes co-aligned LAZ products, not original scan positions or another raw acquisition product."
+        },
+        "surface_masks_or_vegetation_free_aoi": {
+          "status": "fail",
+          "reason": "No water, vegetation, object, occlusion, interpolation, or exact usable-surface mask is published or promised."
+        },
+        "independent_numeric_control": {
+          "status": "fail",
+          "reason": "M3C2 change output and its parameter file compare the two aligned surfaces; they are not independent checkpoint or control evidence, and the record gives no numeric registration error."
+        },
+        "reusable_rights": {
+          "status": "pass",
+          "reason": "CC-BY-4.0 permits reuse and adaptation with attribution."
+        }
+      },
+      "decision": "no_go"
+    },
+    {
+      "id": "eidc-756d3a73-iron-tongue-hill-sfm",
+      "title": "Structure-from-Motion photogrammetry data of topographic changes from seven erosion plots on Iron Tongue Hill, Tameside, UK, 2018-2019",
+      "country": "United Kingdom",
+      "surface": "post-wildfire moorland erosion plots",
+      "doi": "10.5285/756d3a73-ca93-456f-8c0a-e767fb9f82a8",
+      "official_record": "https://catalogue.ceh.ac.uk/id/756d3a73-ca93-456f-8c0a-e767fb9f82a8",
+      "license": "Open Government Licence",
+      "published_distribution_formats": [
+        "TIFF"
+      ],
+      "gates": {
+        "raw_points_or_images": {
+          "status": "fail",
+          "reason": "The lineage describes 40-60 photographs and a dense cloud per survey, but the official distribution promises only exported DEM and orthomosaic TIFF products."
+        },
+        "surface_masks_or_vegetation_free_aoi": {
+          "status": "fail",
+          "reason": "The record neither declares the plots vegetation-free nor publishes an exact soil, vegetation, object, occlusion, or interpolation mask."
+        },
+        "independent_numeric_control": {
+          "status": "fail",
+          "reason": "Field dGPS GCPs are described only as scale and georeference inputs; no held-out checkpoint roles, coordinates, residuals, or independent reference surface are promised."
+        },
+        "reusable_rights": {
+          "status": "pass",
+          "reason": "The official record distributes the resource under the Open Government Licence."
+        }
+      },
+      "decision": "no_go"
+    }
+  ],
+  "excluded_before_evaluation": [
+    {
+      "id": "pangaea-945655-hundsalm-cave-tls",
+      "reason": "The official deposit is a monolithic processed point-cloud download without a member manifest, so it violates the search entry policy."
+    }
+  ],
+  "source_ledger": [
+    {
+      "role": "live_official_zenodo_metadata_and_member_manifest",
+      "url": "https://zenodo.org/api/records/16633317",
+      "response_bytes": 5585,
+      "response_sha256": "d4c3ee9333057dc187f2c0b7124ab631f701afd8c930887877e2b0142f341ee5"
+    },
+    {
+      "role": "live_official_eidc_metadata",
+      "url": "https://catalogue.ceh.ac.uk/id/756d3a73-ca93-456f-8c0a-e767fb9f82a8?format=json",
+      "response_bytes": 7894,
+      "response_sha256": "2756365edfccd9e1c798b8f84a24722df4d3482e34e625dc644b1eed09d7d657"
+    }
+  ],
+  "decision": {
+    "status": "no_pass",
+    "selected_candidate_id": null,
+    "download_authorized": false,
+    "reason": "Neither admissible candidate jointly publishes acquisition-level geometry, exact usable-surface semantics, and independent numeric control. Reusable licensing alone cannot qualify morphology evidence.",
+    "resume_condition": "Resume only for a new small, individually manifested official field deposit that explicitly binds raw points or images, an exact vegetation-free usable surface or machine mask, independent numeric control evidence, and reusable rights to the same acquisition."
+  }
+}
