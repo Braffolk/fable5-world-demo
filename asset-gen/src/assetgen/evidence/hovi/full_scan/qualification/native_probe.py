@@ -52,6 +52,15 @@ _PROTOTYPE = [
 ]
 _PROC_PIDTASKINFO = 4
 _MEMORY_SAMPLE_SECONDS = 0.01
+_EXIT_CONFIRM_SECONDS = 0.1
+
+
+def _confirm_child_exit(process: subprocess.Popen[bytes]) -> bool:
+    try:
+        process.wait(timeout=_EXIT_CONFIRM_SECONDS)
+    except subprocess.TimeoutExpired:
+        return False
+    return True
 
 
 class _ProcTaskInfo(ctypes.Structure):
@@ -110,7 +119,7 @@ class _DarwinResidentMemoryGuard:
         )
         if returned != ctypes.sizeof(task):
             observed_errno = ctypes.get_errno()
-            if observed_errno == errno.ESRCH and process.poll() is not None:
+            if observed_errno == errno.ESRCH and _confirm_child_exit(process):
                 return
             raise RuntimeError(
                 "macOS could not supervise native Hovi point-probe RSS "
@@ -192,8 +201,12 @@ def _terminate_group(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is None:
         try:
             os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        except OSError as error:
+            if error.errno in (errno.ESRCH, errno.EPERM) and _confirm_child_exit(
+                process
+            ):
+                return
+            raise
     process.wait()
 
 
