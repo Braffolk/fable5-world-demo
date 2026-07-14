@@ -176,6 +176,28 @@ label, and source `z-h` is not independent floor truth. Plot 1065 is therefore a
 better fallback input for the separate surface-inference audit, not an accepted
 surface, target, transfer proof, or synthesis source.
 
+The frozen Evo surface-inference pass uses only returns that simultaneously carry
+source `h=0`, `treeid=0`, and last-return status. It fits a cell-local plane, refits
+the observations within 2 cm, requires three distinct source-ID groups as a
+redundancy gate, requires all four center quadrants, and never interpolates a hole.
+The ID-to-station map is not preserved and is not guessed: plot 1065 has 19 non-empty
+IDs despite the documented nine-position upright/tilted acquisition, so independent
+physical-view count remains unknown. Plot 1086 build `bba7a00ad160...` retains
+`23,126,051` robust direct returns, but estimates only `55.0%` of 6.25 cm cells and
+passes the geometric gate on `28.2%`; nearest-support p95 is `1.98 cm` and
+plane-residual RMS p95 is
+`9.3 mm`. Exact unchanged plot-1065 build `674116851f1f...` retains `42,527,971`
+robust direct returns and improves direct/geometric coverage only to
+`59.7%`/`34.0%`, with `1.79 cm` nearest-support p95 and `11.1 mm` residual-RMS p95.
+The required height, hillshade, support, and ambiguity PNGs expose the remaining
+occlusion rather than filling it. The source-normalized sheet is useful sparse
+morphology evidence, but source `h=0` is not independent truth and the fields cannot
+separate stable organics, embedded roots, low living vegetation, or detached
+deadwood. Scan origins, effective physical-view count, footprints, registration
+error, and semantic confidence are also unavailable. Both artifacts therefore remain
+`surface_semantics_and_error_unresolved`, are parked as incomplete converted
+candidates, and do not authorize target truth, transfer, or synthesis.
+
 For FORWARD, the exact official Marrviken harvest-area DTM is retained selectively
 without crawling or downloading the 1.07 TiB release. Source SHA-256 is
 `592ce462120fd2958e365fd6923bd389e0e282602eb05705fdcf68fc4ecb9e86`; unqualified
