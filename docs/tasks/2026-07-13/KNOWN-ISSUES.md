@@ -139,14 +139,19 @@ immutable preview, independent verification, real-WebGPU boot, and user visual r
 Hovi must not be collapsed into a generic national forest prior: it can support only
 the explicitly matched forest-floor conditions and phenomena that survive those gates.
 
-For Evo, only the exact 5,773-byte version-2 stand-selector CSV is retained under
-content address `1584bd396efe...`; the 889 MB plot-1086 LAZ remains unfetched. The
-corrected condition/selection artifact is `73b39fd621fa...`. It proves the retained
-CSV row and numeric stand checks, while substrate, scan protocol, qualifying-set
-membership, and minimum-LAZ selection remain explicitly frozen-config assertions or
-unrecomputed assertions. Soil, hydrology, organic-floor, management, and disturbance
-conditions remain unknown. Plot 1086 is still an unqualified raw candidate with no
-target-truth, analogue-transfer, or synthesis authorization.
+For Evo, the exact 5,773-byte version-2 stand-selector CSV remains retained under
+content address `1584bd396efe...`, and the exact `889,454,592`-byte plot-1086 LAZ is
+now retained under `ee5767e0133...`. The published LAZ has a malformed LAS 1.4 header:
+its extended point count is zero, its bounds are placeholders, and its chunk-table
+pointer equals the point-data offset. Build `9a5598c601d2...` therefore decodes the
+fixed-size chunks sequentially without changing source bytes and recomputes an actual
+`302,050,000` points and bounds from decoded records. The build contains directly
+inspectable 6.25 cm all-return and `treeid=0` observation support, raw unassigned
+vertical envelopes, the source-provided `z-h` reference, and three labeled PNGs.
+Neither `treeid=0` nor lowest returns are a ground class, and `z-h` is not independent
+floor truth. Soil, hydrology, organic-floor, management, disturbance, visibility,
+and stable floor semantics remain unknown; plot 1086 remains an unqualified raw
+candidate with no target-truth, analogue-transfer, or synthesis authorization.
 
 All eight Taevaskoda ALS epochs are retained content-addressed and inventoried
 (`190,445,551` raw bytes). The 2023 and 2024 files carry a compound WKT wrapped in
