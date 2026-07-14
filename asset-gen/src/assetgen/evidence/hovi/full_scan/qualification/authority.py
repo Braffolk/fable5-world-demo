@@ -533,9 +533,9 @@ def load_probe_execution_selection(
         or raw["status"] != "execution_authorized"
         or raw["authorityConfigSha256"] != authority.config_sha256
         or repository.get("readerCommit")
-        != "7f520b90c39ca256716db401fcf29980e583eeb1"
+        != "2344e36b3e0d75934239408410538b93b7bc81cf"
         or repository.get("nativeSourceTreeSha256")
-        != "15b07c7fb01f0156fafd433919c5cbf559ea86b0f5c10c1a3b335d672456094f"
+        != "656df72722fd767192de761535da3e51368a8562bb43e9ad3b6a1715c294c801"
         or native.get("cargoLockSha256")
         != "4e172cb2f049a23395f487df481e4902794c699a86c36d10a08930418ee16feb"
         or native.get("rustToolchain") != "1.94.1"
