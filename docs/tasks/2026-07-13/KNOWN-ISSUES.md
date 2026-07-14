@@ -226,6 +226,19 @@ Even a source pass leaves D/R/E training blocked until a hash-bound supplement
 freezes candidate distances/normalization and input-only M0 boundary context.
 Failure parks Moore for the decimeter preview; B1-only output is not a substitute.
 
+Moore build `5bdc602d32bc...` fired that failure exactly. Six groups retain
+phase-stable B2 energy (median RMS `0.0220573 m`), but honest filter support leaves
+zero strict B1 cells, zero accepted `2 m/1 m` windows, zero complete spectral
+cores, and no persistent form families. Independent review closed all 78 hashes
+and reproduced the inventory. The implementation is preserved, but Moore cannot
+train or preview decimeter morphology without inventing boundary support.
+
+The next bounded check uses only the already-retained OPARA later epoch
+`dense_438` and its matching precision/change companions. It does not reinterpret
+the absent pre-rain epoch 0. The decisive question is whether actual RGB/geometry
+can fail-closed exclude the documented joint 10% vegetation/rock plus plot frame,
+targets, water, and occlusion; otherwise this route stops before synthesis too.
+
 The durable end-to-end requirement comparison is recorded in
 `MICROTOPOGRAPHY-CONFORMANCE-AUDIT.md`. It also freezes the historical preregistration
 boundary: LUKE can never be grandfathered into owner selection; inspected Hovi/Evo
