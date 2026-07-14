@@ -727,9 +727,9 @@ def run_native_probe(
             or binding.object_bytes != OBJECT_BYTES
         ):
             raise ValueError("native Hovi point-probe execution binding drifted")
-        executable_fd_path = f"/dev/fd/{executable_descriptor}"
+        executable_path = os.fspath(native.executable_path)
         argv = [
-            executable_fd_path,
+            executable_path,
             "probe",
             "--input-fd",
             str(held.object_descriptor),
@@ -753,7 +753,7 @@ def run_native_probe(
         started = time.monotonic()
         process = subprocess.Popen(
             argv,
-            executable=executable_fd_path,
+            executable=executable_path,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
