@@ -2,18 +2,16 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.metadata
 import json
 import os
 from pathlib import Path
-
-import numpy as np
 
 from ....config import ASSET_GEN_ROOT, DATA_WORK
 from .bundle import canonical_json, load_frozen_bundle, sha256_file
 from .contracts import SemanticMethod
 from .hovi import reconstruct_hovi_surface
 from .qa import render_qa
+from .provenance import numerical_environment_identity
 from .semantics import fit_and_audit_semantics
 from .surfaces import adapt_evo, failed_hovi_surface, save_surface
 
@@ -31,12 +29,7 @@ def _implementation_identity() -> dict:
     root = Path(__file__).parent
     return {
         "modules": {path.name: sha256_file(path) for path in sorted(root.glob("*.py"))},
-        "environment": {
-            "numpy": np.__version__,
-            "scikit_learn": importlib.metadata.version("scikit-learn"),
-            "laspy": importlib.metadata.version("laspy"),
-            "pillow": importlib.metadata.version("pillow"),
-        },
+        "environment": numerical_environment_identity(ASSET_GEN_ROOT.parent),
     }
 
 

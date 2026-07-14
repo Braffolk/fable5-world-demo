@@ -61,6 +61,7 @@ class ResearchSurfaceEvidence:
     view_count: np.ndarray
     interpolation_distance_m: np.ndarray
     semantic_probabilities: np.ndarray
+    semantic_probability_available: np.ndarray
     p_semantic_subclass_unknown: np.ndarray
     heightfield_valid_probability: np.ndarray
     provisional_surface_probability: np.ndarray
@@ -69,6 +70,9 @@ class ResearchSurfaceEvidence:
     forbidden: np.ndarray
     group_a_support: np.ndarray
     group_b_support: np.ndarray
+    physical_view_count_available: np.ndarray
+    redundancy_group_count: np.ndarray
+    redundancy_group_count_available: np.ndarray
     disagreement_m: np.ndarray
     effective_support_radius_m: np.ndarray
     epistemic_uncertainty_m: np.ndarray
@@ -107,6 +111,9 @@ class ResearchSurfaceEvidence:
             self.forbidden,
             self.group_a_support,
             self.group_b_support,
+            self.physical_view_count_available,
+            self.redundancy_group_count,
+            self.redundancy_group_count_available,
             self.disagreement_m,
             self.effective_support_radius_m,
             self.epistemic_uncertainty_m,
@@ -128,6 +135,17 @@ class ResearchSurfaceEvidence:
             raise ValueError(f"research surface fields disagree for {self.source_id}")
         if self.semantic_probabilities.shape != (*shape, 6):
             raise ValueError("research surface requires six separate semantic probabilities")
+        if self.semantic_probability_available.shape != (*shape, 6):
+            raise ValueError("semantic availability must accompany every probability channel")
+        if np.any(~self.semantic_probability_available & np.isfinite(self.semantic_probabilities)):
+            raise ValueError("unavailable semantic probabilities must be explicit NaN")
+        if np.any(~self.physical_view_count_available & np.isfinite(self.view_count)):
+            raise ValueError("unknown physical view counts must be explicit NaN")
+        if np.any(
+            ~self.physical_view_count_available
+            & (np.isfinite(self.group_a_support) | np.isfinite(self.group_b_support))
+        ):
+            raise ValueError("unknown physical view-group support must be explicit NaN")
         finite_height = np.isfinite(self.height_m)
         if np.any(finite_height != self.direct_observed):
             raise ValueError("finite weak-surface height must equal direct support")
