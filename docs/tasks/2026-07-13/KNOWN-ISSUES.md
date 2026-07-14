@@ -88,11 +88,29 @@ authorize synthesis.
 
 Native commit `e9eb37a` correctly bounds integer unpacking by the declared remaining
 record count, but its terminal residual rule is too strict for legal byte-alignment
-padding. The first full attempt failed closed after scan 0 with 5.3 GiB staged because a
-narrow field retained enough zero padding bits to resemble another complete code. That
-tree is rejected staging, not published evidence. The correction must preserve the hard
-record budget, accept only the format's bounded zero padding, reject nonzero trailing
-data, receive independent audit, and bind a new build/selection before restart.
+padding. The first full attempt, selection `5e8373c88196d539f614a65215e7a594aabc6297c636fe8946b2ac6b8288c91f`,
+failed closed after scan 0 with 5.3 GiB staged because a narrow field retained enough
+zero padding bits to resemble another complete code. Native correction `1e6989d` then
+predicted exact residual length from total record count and field width. Restart
+selection `4676c9df1c5fbd6b2cc0e05e21b7469d6025aa16cb11649ad591a98c8e0847b3`
+proved that correction on scan 0 but failed closed after scan 1 with
+`Compressed vector has an invalid terminal byte-alignment padding length`; its
+approximately 11 GiB tree is also rejected staging, not published evidence. The
+second failure shows that total-record byte alignment alone is not the complete
+general E57 bytestream rule. The next correction must derive and independently audit
+the packet/bytestream semantics, preserve the hard declared-record budget, and bind a
+new build/selection before restart. Direct scan-1 packet traversal supplies the missing
+rule: its 15-bit column field contains exactly nine terminal zero bits because the
+E57Ref bitPack encoder flushes its final partial 16-bit codec word. In the supported
+profile, integer widths use the smallest 8/16/32/64-bit word that contains one code and
+must retain exactly `(-recordCount * bitWidth) mod codecWordBits` zero bits after the
+declared records. Packet fragmentation does not reset that stream; compression restarts
+remain unsupported. The validator must reject a short or long residual, any nonzero
+residual bit, an extra decoded record, packets after declared completion, section drift,
+or a restart. A legal residual may be at least one field code wide, because XML
+`recordCount` owns termination; treating decodability of zero word padding as another
+record caused the first false rejection. No current execution is publishable until the
+implementation and newly bound selection pass independent audit.
 
 The accepted full-read spatial-materialization contract uses exact integer support-AOI
 ticks rather than reinterpreted floating bounds, one fixed 28-byte record ABI, per-scan
@@ -106,9 +124,11 @@ exact immutable selection
 Its runner covers `4,248,797,321` declared records with one absolute 24-hour
 decode/verification/publication deadline, realized NumPy-distribution identity,
 bounded per-scan cross-artifact ordinal-disjointness bitmaps, a 2 GiB child RSS cap,
-24 native descriptors, and fail-closed publication, but the selection is superseded for
-future execution by the discovered padding-validator defect. Until a restarted pass
-publishes an independently accepted final manifest, no surface or synthesis is authorized.
+24 native descriptors, and fail-closed publication. Both that selection and corrected
+selection `4676c9df1c5fbd6b2cc0e05e21b7469d6025aa16cb11649ad591a98c8e0847b3`
+are superseded for future execution by their respective padding-validator defects.
+Until a newly bound pass publishes an independently accepted final manifest, no surface
+or synthesis is authorized.
 
 The ordered closure after reader validation is: one-pass scan-preserving spatial
 materialization under that contract; view-aware candidate conversion with support, visibility, error,
@@ -282,6 +302,7 @@ The historical accepted infrastructure checkpoint removed the `TerrainField` cei
 
 ## Integration Risks
 
+- Dataset conversion previously became inefficiently serialized behind HY_SPRUCE4 full-E57 handling, with two failed full attempts and repeated implementation/review micro-cycles before a morphology input existed. Native codec-word padding commit `ba92ab4` preserves the reusable correction and receives one final real run, but Hovi no longer monopolizes the critical path. Evo 1086 and HY_PINE2 downsampled LAZ now run as independent end-to-end tracks. A blocked track is parked without deleting its code or provenance; it resumes only if quicker alternatives fail or its scientific role is unique.
 - The root `estonia-asset-gen` worktree contains unrelated dirty and old-agent changes. Integration must preserve user work and must not copy the obsolete 128 m global-grid rewrite or hash/noise synthesizer.
 - A production pilot preview may be materialized locally, but it must not update `latest.json` until realism, masks, and user-visible acceptance pass.
 - The accepted replacement spec requires a target-evidence-gated per-regime specialist architecture, not a continuation of the measured mineral-forest quilt. Stage 1 structural repair is complete, `releaseReady:true`, and user-accepted through transaction `009fd...`; superseded `7a2d...` artifacts remain history, not current authority. Morphology implementation remains gated by qualified target evidence. One minimal generic packed-surface grounding correction for trees/boulders/understory/debris remains an infrastructure dependency; it does not synthesize geometry or change the wire format.

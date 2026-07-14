@@ -6,6 +6,21 @@
 - Every subagent prompt must explicitly say: **Do not spawn subagents.** Subagents may never delegate further.
 - When model selection is available, use `sol` with high effort only for genuinely difficult synthesis algorithms and consequential scientific/visual judgment. Use normal effort for generation, ingestion, harnesses, routine fixes, and tests.
 
+## Work Efficiency And Dataset Triage
+
+- For evidence acquisition and conversion, run independent candidate datasets in parallel. Give one agent ownership of one dataset from source binding through conversion and a directly usable artifact; do not serialize the whole project behind the hardest corpus.
+- Prefer the first dataset that satisfies the scientific role and produces usable evidence. If a dataset becomes disproportionately difficult, preserve its code, provenance, partial artifacts, and exact blocker, then drop active focus and advance another candidate. Return only if faster candidates fail or the difficult dataset supplies a unique required role.
+- Dropping focus never means deleting or reverting the converter. Avoid future reimplementation by committing reusable work at a clean checkpoint and recording the resume condition.
+- Do not alternate implementation and independent review after every small checkpoint. One owner should complete a coherent end-to-end dataset track and exercise it on real data; perform one independent review at the complete boundary. Add an earlier review only for destructive publication, security, irreversible schema/format changes, or another genuinely high-cost safety boundary.
+- Put explicit go/no-go limits on uncertain data tracks before starting: maximum focused engineering time, maximum failed full attempts, scientific acceptance requirement, and the fallback dataset. A new failure mode after that limit normally parks the track rather than expanding its local infrastructure.
+- Track effort by user-visible or scientifically usable outcomes, not commits, tests, schemas, or audits. At every status report distinguish infrastructure complete, data usable, evidence qualified, synthesis accepted, and visually accepted.
+- Keep a short waste/resume record for every parked path in the current task's `KNOWN-ISSUES.md`: effort already spent, reusable result, exact blocker, why focus moved, fallback now active, and objective condition for resuming.
+
+### Recorded Efficiency Failures
+
+- The microtopography work over-invested in repeated Hovi E57 decoder micro-fixes, per-commit reviews, evidence scaffolding, and test/audit loops before producing a morphology input. Two full attempts failed on successive terminal-padding interpretations. The reusable decoder work must be preserved, but Hovi may not monopolize the critical path: run Hovi, Evo, and other scientifically eligible targets as separate tracks and advance whichever yields qualified evidence first.
+- The project previously expanded test architecture around provisional synthesis and ingestion internals faster than the visual algorithm matured. Keep only focused stable-contract and reproduced-regression tests until the synthesis method survives real-data and visual evaluation.
+
 ## Research Standard And Feature Decomposition
 
 - The project target is the best achievable result, not an average implementation, common-case approximation, conventional game shortcut, or minimally working feature. Default engineering instincts toward simplification, familiar patterns, and early implementation are a known risk here and must be actively countered.
