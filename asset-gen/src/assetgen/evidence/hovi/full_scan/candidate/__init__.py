@@ -16,17 +16,29 @@ from .manifest import (
     VerifiedSpatialManifest,
     load_verified_spatial_manifest,
 )
+from .hypotheses import (
+    CandidateSurfaceHypothesisGenerator,
+    CellHypothesisSet,
+    HypothesisConfig,
+    ScanSheetSupport,
+    SheetHypothesis,
+)
 from .records import ObservationBatch, SpatialObservationReader
 
 __all__ = [
     "CellEvidenceLevel",
+    "CellHypothesisSet",
+    "CandidateSurfaceHypothesisGenerator",
     "ContinuityEvidence",
+    "HypothesisConfig",
     "MultiscaleShardAccumulator",
     "MultiscaleShardEvidence",
     "ObservationBatch",
     "PointShard",
     "RESOLUTIONS_M",
     "ScanTransform",
+    "ScanSheetSupport",
+    "SheetHypothesis",
     "SpatialObservationReader",
     "StratumCounts",
     "VerifiedSpatialManifest",

@@ -60,7 +60,13 @@ class VerticalSampleBatch:
     scan: np.ndarray
     source_ordinal: np.ndarray
     raw_z: np.ndarray
+    file_xyz_m: np.ndarray
     file_z_m: np.ndarray
+    range_m: np.ndarray
+    beam_direction_xyz: np.ndarray
+    beam_direction_valid: np.ndarray
+    row: np.ndarray
+    column: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -593,12 +599,21 @@ class CellEvidenceLevel:
         for offset in range(start, stop, max_records):
             selected = np.asarray(index[offset : min(offset + max_records, stop)])
             part = records[selected]
-            file_xyz, _, _, _ = _derive_geometry(part, self.evidence.manifest)
+            file_xyz, range_m, beam, beam_valid = _derive_geometry(
+                part,
+                self.evidence.manifest,
+            )
             yield VerticalSampleBatch(
                 scan=part["scan_ordinal"].copy(),
                 source_ordinal=part["source_ordinal"].copy(),
                 raw_z=part["raw_z"].copy(),
+                file_xyz_m=file_xyz,
                 file_z_m=file_xyz[:, 2],
+                range_m=range_m,
+                beam_direction_xyz=beam,
+                beam_direction_valid=beam_valid,
+                row=part["row"].copy(),
+                column=part["column"].copy(),
             )
         del records
         del index
