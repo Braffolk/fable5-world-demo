@@ -1,6 +1,8 @@
 """Inherited-descriptor execution seam for the bounded Hovi reader probe."""
 from __future__ import annotations
 
+import ctypes
+import errno
 import hashlib
 import json
 import math
@@ -10,6 +12,7 @@ import selectors
 import signal
 import struct
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +50,77 @@ _PROTOTYPE = [
     {"index": 5, "name": "columnIndex", "kind": "Integer"},
     {"index": 6, "name": "cartesianInvalidState", "kind": "Integer"},
 ]
+_PROC_PIDTASKINFO = 4
+_MEMORY_SAMPLE_SECONDS = 0.01
+
+
+class _ProcTaskInfo(ctypes.Structure):
+    _fields_ = [
+        ("virtual_size", ctypes.c_uint64),
+        ("resident_size", ctypes.c_uint64),
+        ("total_user", ctypes.c_uint64),
+        ("total_system", ctypes.c_uint64),
+        ("threads_user", ctypes.c_uint64),
+        ("threads_system", ctypes.c_uint64),
+        ("policy", ctypes.c_int32),
+        ("faults", ctypes.c_int32),
+        ("pageins", ctypes.c_int32),
+        ("cow_faults", ctypes.c_int32),
+        ("messages_sent", ctypes.c_int32),
+        ("messages_received", ctypes.c_int32),
+        ("syscalls_mach", ctypes.c_int32),
+        ("syscalls_unix", ctypes.c_int32),
+        ("context_switches", ctypes.c_int32),
+        ("thread_count", ctypes.c_int32),
+        ("running_thread_count", ctypes.c_int32),
+        ("priority", ctypes.c_int32),
+    ]
+
+
+class _DarwinResidentMemoryGuard:
+    """Fail-closed RSS supervision for a single audited native reader process."""
+
+    def __init__(self, limit_bytes: int) -> None:
+        if sys.platform != "darwin":
+            raise RuntimeError("Hovi native point-probe RSS guard requires macOS libproc")
+        if ctypes.sizeof(_ProcTaskInfo) != 96:
+            raise RuntimeError("macOS proc_taskinfo ABI size changed")
+        self._limit_bytes = limit_bytes
+        self._libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        self._libproc.proc_pidinfo.argtypes = [
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_uint64,
+            ctypes.c_void_p,
+            ctypes.c_int,
+        ]
+        self._libproc.proc_pidinfo.restype = ctypes.c_int
+
+    def enforce(self, process: subprocess.Popen[bytes]) -> None:
+        if process.poll() is not None:
+            return
+        task = _ProcTaskInfo()
+        ctypes.set_errno(0)
+        returned = self._libproc.proc_pidinfo(
+            process.pid,
+            _PROC_PIDTASKINFO,
+            0,
+            ctypes.byref(task),
+            ctypes.sizeof(task),
+        )
+        if returned != ctypes.sizeof(task):
+            observed_errno = ctypes.get_errno()
+            if observed_errno == errno.ESRCH and process.poll() is not None:
+                return
+            raise RuntimeError(
+                "macOS could not supervise native Hovi point-probe RSS "
+                f"(proc_pidinfo returned {returned}, errno {observed_errno})"
+            )
+        if task.resident_size > self._limit_bytes:
+            raise MemoryError(
+                "native Hovi point probe exceeded its resident-memory limit: "
+                f"{task.resident_size} > {self._limit_bytes} bytes"
+            )
 
 
 @dataclass(frozen=True)
@@ -106,9 +180,9 @@ def _limit_child(authority: PointProbeAuthority) -> None:
 
     limits = authority.resources
     apply(resource.RLIMIT_CPU, limits.cpu_seconds)
-    # macOS rejects lowering RLIMIT_RSS below inherited process state and does not
-    # enforce it as a hard resident-memory ceiling. RLIMIT_AS is the hard boundary.
-    apply(resource.RLIMIT_AS, limits.address_space_bytes)
+    # macOS rejects a useful RLIMIT_AS because ordinary processes inherit hundreds
+    # of GiB of sparse/shared mappings. The parent enforces the RSS ceiling through
+    # PROC_PIDTASKINFO instead; RLIMIT_RSS itself is advisory on macOS.
     apply(resource.RLIMIT_FSIZE, limits.record_output_bytes)
     apply(resource.RLIMIT_NOFILE, limits.open_files)
     apply(resource.RLIMIT_CORE, 0)
@@ -137,15 +211,19 @@ def _capture_bounded(
     captured = {"stdout": bytearray(), "stderr": bytearray()}
     selector = selectors.DefaultSelector()
     try:
+        memory_guard = _DarwinResidentMemoryGuard(authority.resources.rss_bytes)
         for descriptor in streams:
             os.set_blocking(descriptor, False)
             selector.register(descriptor, selectors.EVENT_READ)
         while selector.get_map():
+            memory_guard.enforce(process)
             remaining = authority.resources.wall_seconds - (time.monotonic() - started)
             if remaining <= 0:
                 _terminate_group(process)
                 raise TimeoutError("native Hovi point probe exceeded its hard wall limit")
-            for key, _ in selector.select(min(remaining, 0.1)):
+            for key, _ in selector.select(
+                min(remaining, _MEMORY_SAMPLE_SECONDS)
+            ):
                 descriptor = int(key.fd)
                 label, cap = streams[descriptor]
                 try:
