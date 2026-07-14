@@ -1,7 +1,9 @@
 # Microtopography Delivery Conformance Audit
 
-Date: 2026-07-14  
-Normative authority: `docs/specs/terrain/MICROTOPOGRAPHY.md`  
+Date: 2026-07-14
+
+Normative authority: `docs/specs/terrain/MICROTOPOGRAPHY.md`
+
 Audit scope: repository task records, retained public evidence, materialized candidate artifacts, accepted structural release, and the remaining morphology release path.
 
 ## Terminal Verdict
