@@ -1,0 +1,92 @@
+{
+  "schema_version": "forward-marrviken-dtm-selection/1.0.0",
+  "id": "forward-v2-marrviken-harvest-dtm-first-conversion",
+  "dataset": {
+    "title": "FORWARD: Dataset of a forwarder operating in rough terrain",
+    "doi": "10.71540/89rs-s553",
+    "catalogue_id": "2025-283",
+    "version": 2,
+    "published": "2026-03-17",
+    "license": "CC BY 4.0",
+    "catalogue_url": "https://researchdata.se/en/catalogue/dataset/2025-283/2"
+  },
+  "selected_artifact": {
+    "manifest_path": "2023_Marrviken/Geodata/Helicopter_LiDAR/Terrain_models/MRV_DTM_harvest_area.tif",
+    "download_path": "Digital Physics - FORWARD_dataset/2023_Marrviken/Geodata/Helicopter_LiDAR/Terrain_models/MRV_DTM_harvest_area.tif",
+    "download_url": "https://api.researchdata.se/dataset/2025-283/2/file/data?filePath=Digital%20Physics%20-%20FORWARD_dataset%2F2023_Marrviken%2FGeodata%2FHelicopter_LiDAR%2FTerrain_models%2FMRV_DTM_harvest_area.tif",
+    "bytes": 48058366,
+    "manifest_md5": "421586d02cceda5ed4096ddaddd9d95a",
+    "sha256": "592ce462120fd2958e365fd6923bd389e0e282602eb05705fdcf68fc4ecb9e86"
+  },
+  "expected_raster": {
+    "driver": "GTiff",
+    "crs": "EPSG:3006",
+    "dtype": "float64",
+    "shape_yx": [
+      3001,
+      2001
+    ],
+    "pixel_xy_m": [
+      0.25,
+      -0.25
+    ],
+    "bounds_xy_m": [
+      503402.165,
+      6905351.775,
+      503902.415,
+      6906102.025
+    ],
+    "band_count": 1,
+    "nodata": null
+  },
+  "site_and_campaign": {
+    "site": "Marrviken",
+    "catalogue_site_center_wgs84": [
+      15.0683888889,
+      62.2836111111
+    ],
+    "catalogue_description": "very rough terrain with large boulders",
+    "helicopter_lidar_acquisition": "2022-07-25/2022-07-29",
+    "field_campaign": "2023-10",
+    "sensor": "Riegl VUX-120",
+    "catalogue_total_return_density_points_m2": 1500
+  },
+  "provider_dtm_processing": {
+    "analysis_code_url": "https://api.researchdata.se/dataset/2025-283/2/file/data?filePath=analysis_code.zip",
+    "observed_analysis_code_bytes": 8086041,
+    "observed_analysis_code_sha256": "d8f1e67518876049263fd7b890ab2e928fe7d5d93d6678fd5e7b776286b8c699",
+    "pdal_version": "2.9.1",
+    "cloudcompare_commit": "6e6e3f1",
+    "filters": [
+      "ELM",
+      "outlier",
+      "CSF ground classification"
+    ],
+    "csf": {
+      "smooth": true,
+      "resolution_m": 0.3,
+      "threshold_m": 0.5,
+      "rigidness": 2
+    },
+    "rasterization": {
+      "grid_step_m": 0.25,
+      "projection": "minimum_z",
+      "empty_fill": "kriging",
+      "maximum_edge_length_m": 10
+    }
+  },
+  "qualification": {
+    "role": "raw_candidate",
+    "status": "unqualified",
+    "target_truth": false,
+    "synthesis_authorized": false,
+    "supports": "single-site processed boulder/rough-forest morphology inspection",
+    "does_not_support": [
+      "post-operation rut morphology because helicopter LiDAR predates the field campaign",
+      "per-cell measured-ground support because the released DTM has no observation or kriging mask",
+      "independent ground truth",
+      "two-site validation or a blind third site",
+      "transfer to Estonia without substrate, soil, climate, and acquisition-semantics qualification"
+    ]
+  }
+}

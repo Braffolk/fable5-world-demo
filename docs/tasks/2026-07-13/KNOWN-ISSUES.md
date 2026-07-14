@@ -161,6 +161,26 @@ floor truth. Soil, hydrology, organic-floor, management, disturbance, visibility
 and stable floor semantics remain unknown; plot 1086 remains an unqualified raw
 candidate with no target-truth, analogue-transfer, or synthesis authorization.
 
+For FORWARD, the exact official Marrviken harvest-area DTM is retained selectively
+without crawling or downloading the 1.07 TiB release. Source SHA-256 is
+`592ce462120fd2958e365fd6923bd389e0e282602eb05705fdcf68fc4ecb9e86`; unqualified
+candidate build `d33ae4bbc1229193979dd8b0a5e80b927f79f29df327c0cd7f03b13f4baf6196`
+preserves four 32 m native-grid patches selected at fixed roughness quantiles from
+273 non-overlapping interior candidates and emits three labeled PNGs. The released
+DTM has 0.25 m cells over approximately 500 x 750 m and is documented as a
+minimum-Z CloudCompare raster after ELM/outlier filtering and CSF classification
+(`0.3 m` cloth resolution, `0.5 m` threshold, rigidness 2), with kriging used for
+empty cells up to a 10 m maximum edge. It contains no observation/kriging support
+mask, and visual QA exposes obvious interpolation fans at raster edges; candidate
+selection therefore uses a declared 32 m edge guard rather than treating those
+artifacts as roughness. The helicopter scan dates (25-29 July 2022) predate the
+October 2023 machine campaign, so this artifact cannot test post-operation ruts.
+It is one-site processed boulder/rough-forest evidence, not independent ground truth,
+not a two-site validation, not qualified for Estonia transfer, and not
+synthesis-authorized. A later raw-ground-cloud comparison is required before any
+claim that its repeated small-scale forms are physical rather than CSF/min-Z/kriging
+effects.
+
 All eight Taevaskoda ALS epochs are retained content-addressed and inventoried
 (`190,445,551` raw bytes). The 2023 and 2024 files carry a compound WKT wrapped in
 literal quotes that PROJ rejects; the raw VLR and parse error are preserved, while
