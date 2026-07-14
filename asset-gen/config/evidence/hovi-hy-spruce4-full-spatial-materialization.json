@@ -1,0 +1,212 @@
+{
+  "schema_version": "hovi-hy-spruce4-full-spatial-materialization-authorization/1.0.0",
+  "id": "hovi-hy-spruce4-full-spatial-raw-candidate-v1",
+  "status": "authorized_pending_native_command_and_build_binding",
+  "mandate_provenance": {
+    "date": "2026-07-14",
+    "source": "explicit_user_instruction_in_active_session",
+    "instruction": "continue autonomously",
+    "narrow_interpretation": "prepare one exact full-scan spatial materialization boundary",
+    "does_not_authorize": [
+      "ground_filtering",
+      "surface_reconstruction",
+      "analogue_qualification",
+      "target_truth",
+      "synthesis"
+    ]
+  },
+  "authorization": {
+    "decision": "FULL_SCAN_SPATIAL_MATERIALIZATION_PREPARE",
+    "full_scan_decode_authorized_after_native_binding": true,
+    "spatial_materialization_authorized_after_native_binding": true,
+    "execution_authorized_now": false,
+    "point_conversion_authorized": false,
+    "ground_filtering_authorized": false,
+    "surface_reconstruction_authorized": false,
+    "analogue_qualification_authorized": false,
+    "target_truth": false,
+    "synthesis_authorized": false
+  },
+  "dataset_and_license": {
+    "title": "A spectral-structural characterization of European temperate, hemiboreal and boreal forests: Laboratory and field data",
+    "dataset_authors": "Hovi et al.",
+    "dataset_uuid": "ace2a123-00ff-4944-951e-eddbe209b70c",
+    "dataset_doi": "10.23729/9a8d90cd-73e2-438d-9230-94e10e61adc9",
+    "dataset_version": 1,
+    "published_revision": 1,
+    "publisher": "Aalto University",
+    "data_paper": "Rautiainen et al. 2024, Earth System Science Data 16, 5069-5097",
+    "data_paper_doi": "10.5194/essd-16-5069-2024",
+    "license_spdx": "CC-BY-4.0",
+    "license_url": "https://creativecommons.org/licenses/by/4.0/legalcode",
+    "attribution_required": true,
+    "license_link_required": true,
+    "changes_must_be_indicated": true,
+    "change_notice": "LAAS decoded and spatially sharded raw scan records within a bounded support AOI; it did not ground-filter, reconstruct, or qualify a surface."
+  },
+  "retained_e57": {
+    "metadata_inspection_authorization": {
+      "path": "config/evidence/hovi-hy-spruce4-full-metadata-inspection.json",
+      "bytes": 3188,
+      "sha256": "fe44c5c05c4ccd50cda2c9a662d3c171e3a281f823691d674010ee908c4480b9"
+    },
+    "extraction_receipt": {
+      "path": "data/in/evidence/hovi-full-metadata/transactions/fe44c5c05c4ccd50cda2c9a662d3c171e3a281f823691d674010ee908c4480b9/extraction.json",
+      "bytes": 812,
+      "sha256": "6b59fad031e4b96898827b40c31fb435b4c22c638a28b2f7c6efde496b5dca53",
+      "status": "complete"
+    },
+    "object": {
+      "path": "data/in/evidence/hovi-full-metadata/objects/sha256/78/7889a9cfef69d57a50eaa5a9f8d224d28486d5901163e08cbdc827f92f409da2.e57",
+      "relative_path": "objects/sha256/78/7889a9cfef69d57a50eaa5a9f8d224d28486d5901163e08cbdc827f92f409da2.e57",
+      "bytes": 84817645568,
+      "sha256": "7889a9cfef69d57a50eaa5a9f8d224d28486d5901163e08cbdc827f92f409da2",
+      "mode": "0400",
+      "link_count": 1
+    }
+  },
+  "selected_metadata_inventory": {
+    "path": "data/in/evidence/hovi-full-metadata/inventories/sha256/54/54e21049ac09c7d3f69ac7ab5990c982d12a7bd04da0618de032c8311cd3cfad.json",
+    "bytes": 806369,
+    "sha256": "54e21049ac09c7d3f69ac7ab5990c982d12a7bd04da0618de032c8311cd3cfad",
+    "schema_version": "hovi-hy-spruce4-full-metadata-inventory/2.0.0",
+    "implementation_fingerprint_sha256": "acf5654acdebab6b35ce5d2bc237cc99edcb8d768fa855eda5ef600c63241962",
+    "records_decoded": 0
+  },
+  "scan_contract": {
+    "scan_count": 16,
+    "publisher_record_count_total": 4248797321,
+    "pose_direction": "scan_local_to_file_frame",
+    "pose_formula": "p_file = R(q) * p_scan_local + t",
+    "pose_f64_bit_order": [
+      "rotation_w",
+      "rotation_x",
+      "rotation_y",
+      "rotation_z",
+      "translation_x",
+      "translation_y",
+      "translation_z"
+    ],
+    "scans": [
+      {"ordinal": 0, "guid": "0000000000000001", "publisher_records": 245788993, "pose_f64_bits": ["3fefffdb1494d92a", "0000000000000000", "0000000000000000", "bf784df35c98ab0c", "0000000000000000", "0000000000000000", "3ff8a3d70a3d70a6"]},
+      {"ordinal": 1, "guid": "0000000000000002", "publisher_records": 266939657, "pose_f64_bits": ["bfdc09d7dccbe104", "0000000000000000", "0000000000000000", "3fecc4002b2d0900", "4023af2f1143d586", "bfe7a0cd88faadae", "4000f615d188ee8a"]},
+      {"ordinal": 2, "guid": "0000000000000003", "publisher_records": 265134729, "pose_f64_bits": ["3febcf05e9fbc59f", "0000000000000000", "0000000000000000", "3fdfaa62da57df67", "4033fce7b70e0592", "c0034e360f4ca42e", "3ffb1f5a5faa6edb"]},
+      {"ordinal": 3, "guid": "0000000000000004", "publisher_records": 262355367, "pose_f64_bits": ["3fe5ca54ae52d59f", "0000000000000000", "0000000000000000", "bfe76f41e69dbb56", "403e240c16a6a9da", "bfedee2d93bf39c5", "3fe9ef2a1c76f573"]},
+      {"ordinal": 4, "guid": "0000000000000005", "publisher_records": 271090672, "pose_f64_bits": ["3fa71ebab44b8b1f", "0000000000000000", "0000000000000000", "3feff7a4c3bc1f71", "403e8b9508ba5f4e", "40207c6e16dadbf9", "3fe96b6da732e6aa"]},
+      {"ordinal": 5, "guid": "0000000000000006", "publisher_records": 271783669, "pose_f64_bits": ["3fe4be042e3a8a25", "0000000000000000", "0000000000000000", "bfe85dfee756c5f5", "4033bc2eef11e3ed", "402194a6f5d47156", "3ffce6acc6833f13"]},
+      {"ordinal": 6, "guid": "0000000000000007", "publisher_records": 269210517, "pose_f64_bits": ["3fe400627fed8d49", "0000000000000000", "0000000000000000", "3fe8fa91e335bdd1", "40234b1b959ef225", "402386a5ae577dda", "400365d5c51cdc46"]},
+      {"ordinal": 7, "guid": "0000000000000008", "publisher_records": 256875317, "pose_f64_bits": ["3fee867bc36da6cb", "0000000000000000", "0000000000000000", "bfd33462c5811f9a", "3fe41606a542de1c", "4022c0ccb7228e0b", "3ffe10a8eee5f1db"]},
+      {"ordinal": 8, "guid": "0000000000000009", "publisher_records": 258486083, "pose_f64_bits": ["3fe15f0d275ba171", "0000000000000000", "0000000000000000", "bfeadfde7967d7c6", "3ff8e226726952a3", "403501adbc8c9e97", "3ffc2c893df909b8"]},
+      {"ordinal": 9, "guid": "000000000000000a", "publisher_records": 265325952, "pose_f64_bits": ["3fecf8a70cfcdaf4", "0000000000000000", "0000000000000000", "3fdb2d9f75c3f95d", "402697b372c952fa", "4033605b791c926d", "40014b7e5fbbdad6"]},
+      {"ordinal": 10, "guid": "000000000000000b", "publisher_records": 271817243, "pose_f64_bits": ["bfccc43ab2a3bd46", "0000000000000000", "0000000000000000", "3fef2e7104a63a0e", "4034ea12abc88994", "4031ee27e516bfec", "3ff8ba3bbf1f03e9"]},
+      {"ordinal": 11, "guid": "000000000000000c", "publisher_records": 273796683, "pose_f64_bits": ["3fef584b3869feac", "0000000000000000", "0000000000000000", "3fc9c4735ae10130", "403ef54dcaa97b48", "4030d7db444a212e", "3fec99ea5746e10b"]},
+      {"ordinal": 12, "guid": "000000000000000d", "publisher_records": 269993554, "pose_f64_bits": ["3fec3cf885fc1920", "0000000000000000", "0000000000000000", "3fde1b5be003ddea", "40403ad138d84d52", "403c197a4b7cb843", "3fe32dc50a4aee56"]},
+      {"ordinal": 13, "guid": "000000000000000e", "publisher_records": 255020027, "pose_f64_bits": ["bfd46626576242a0", "0000000000000000", "0000000000000000", "3fee54bcdb90a712", "4035c46891b454f2", "403c9e85c02634e1", "3ffe56c977517fc8"]},
+      {"ordinal": 14, "guid": "000000000000000f", "publisher_records": 273897266, "pose_f64_bits": ["3fe95f0d4389842d", "0000000000000000", "0000000000000000", "3fe3804f88f6eec1", "4027c8aee8cbee8b", "403d4404685571fd", "3ff3094701b9a4b8"]},
+      {"ordinal": 15, "guid": "0000000000000010", "publisher_records": 271281592, "pose_f64_bits": ["3fecb4b3ec87e731", "0000000000000000", "0000000000000000", "3fdc4848e4232cf6", "3ffa4e4760469079", "403cfc24e3b0b710", "3ff31ba7d7ee3170"]}
+    ]
+  },
+  "spatial_contract": {
+    "assignment_coordinate_frame": "publisher_file_frame",
+    "stored_coordinate_frame": "raw_scan_local_scaled_integers",
+    "tick_metres": 0.025,
+    "tick_metres_ratio": [1, 40],
+    "aoi_ticks": {
+      "x_min_inclusive": -271,
+      "x_max_exclusive": 1491,
+      "y_min_inclusive": -244,
+      "y_max_exclusive": 1351
+    },
+    "shard_metres": 4,
+    "shard_ticks": 160,
+    "shard_indexing": "aoi_local_euclidean_floor",
+    "point_shard_x_indices_inclusive": [0, 11],
+    "point_shard_y_indices_inclusive": [0, 9],
+    "valid_outside_aoi_policy": "count_then_drop",
+    "invalid_and_direction_policy": "retain_per_scan_nonpoint_stream"
+  },
+  "record_abi": {
+    "byte_order": "little_endian",
+    "bytes_per_record": 28,
+    "fields": [
+      "sourceOrdinal:u32@0",
+      "rawX:i32@4",
+      "rawY:i32@8",
+      "rawZ:i32@12",
+      "rawIntensitySingleBits:u32@16",
+      "row:u16@20",
+      "column:u16@22",
+      "scanOrdinal:u8@24",
+      "cartesianInvalidState:u8@25",
+      "flags:u16@26"
+    ],
+    "flags": {
+      "bit0": "intensity_finite",
+      "all_other_bits": "zero"
+    }
+  },
+  "resource_gate": {
+    "materialized_tree_ceiling_bytes": 128849018880,
+    "materialized_tree_ceiling_label": "120 GiB",
+    "launch_free_bytes_required": 231928233984,
+    "launch_free_space_label": "216 GiB",
+    "free_bytes_reserve": 103079215104,
+    "free_space_reserve_label": "96 GiB",
+    "maximum_native_open_files_argument": 24,
+    "maximum_native_open_output_files_reported": 20,
+    "stdout_bytes": 1048576,
+    "stderr_bytes": 1048576
+  },
+  "native_reader": {
+    "command": "materialize",
+    "reviewed_contract_commit": "7dfed50bf333880646f0c8a3222569d360e75c64",
+    "report_schema": "laas-hovi-e57-spatial-materialization/1.0.0",
+    "profile": "hy-spruce4",
+    "max_file_bytes": 84817645568,
+    "max_xml_bytes": 65536,
+    "max_scans": 16,
+    "max_prototype_fields": 7,
+    "max_declared_records": 4248797321,
+    "max_json_bytes": 1048576,
+    "max_output_bytes": 128849018880,
+    "max_open_files": 24,
+    "shard_sink_buffer_bytes": 1048576,
+    "build_status": "awaiting_frozen_native_command_and_build_identity",
+    "execution_authorized": false,
+    "executable_path": null,
+    "executable_bytes": null,
+    "executable_sha256": null,
+    "required_frozen_build_identity": [
+      "repository_base_commit",
+      "reader_commit",
+      "source_tree_sha256",
+      "cargo_lock_sha256",
+      "rust_toolchain",
+      "target_triple",
+      "release_profile",
+      "executable_bytes",
+      "executable_sha256",
+      "vendored_upstream_identity",
+      "vendor_patch_set_sha256"
+    ]
+  },
+  "artifact_policy": {
+    "native_output_is_staging_only": true,
+    "native_report_atomic_publication": false,
+    "independent_artifact_size_count_sha256_verification_required": true,
+    "independent_scan_count_partition_verification_required": true,
+    "reject_unreported_files": true,
+    "manifest_is_acceptance_commit": true,
+    "publish": "atomic_noreplace_directory_rename_after_manifest_fsync",
+    "content_address": "materializations/sha256/<manifest-sha256-prefix>/<manifest-sha256>"
+  },
+  "evidence_boundary": {
+    "scientific_role": "raw_candidate_spatial_materialization",
+    "qualification_status": "unqualified",
+    "ground_filtered": false,
+    "surface_claim": false,
+    "analogue_qualification_authorized": false,
+    "target_truth": false,
+    "synthesis_authorized": false
+  }
+}
