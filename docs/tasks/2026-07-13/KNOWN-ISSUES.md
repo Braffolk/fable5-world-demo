@@ -164,8 +164,12 @@ scan-preserving 103 GB materialization, full/thinned comparator, five raw-hypoth
 views, scoped publisher-semantic binding, and a machine-readable B1/B2 failure decision.
 The exact blocker is absence of a registered accepted surface plus independent XY/Z and
 held-out acquisition evidence; more points from the same publisher protocol do not fix
-that. Focus moves first to the protocol's small ForestSemantic-MS semantic-audit step,
-then to a replacement zero-budget target claim pre-screened for the missing capabilities.
+that. ForestSemantic-MS build `aab4b9b6812d...` now closes the small semantic-audit
+step with all six publisher-labeled clouds and a bounded development-only `GO`; it has
+no absolute surface/error contract and does not reopen Hovi. Replacement contract
+`replacement-target-selection.2026-07-14.json` rejects StREAM and Point Beach, while
+authorizing exact Mrzezyno `2022-02.zip` only for a dry Baltic dune/beach/scarp B1
+support/error probe. That one site cannot authorize B2, Estonia transfer, or synthesis.
 Resume this Hovi claim only when new primary evidence supplies registered cell semantics
 and independent control/repeat data, not merely another converter.
 
