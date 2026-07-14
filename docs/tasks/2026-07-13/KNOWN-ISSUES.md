@@ -86,10 +86,13 @@ This closes only the bounded reader-validation probe: it did not reach EOF, vali
 publisher counts, convert all scans, qualify target truth, authorize a surface, or
 authorize synthesis.
 
-The final-byte codec risk is closed in native commit `e9eb37a`: integer unpacking is
-bounded by the declared remaining record count, and terminal residual bits are rejected
-when they can still encode a complete code. Focused native validation passes, but the
-active full pass remains the first real EOF/count proof over all 16 scans.
+Native commit `e9eb37a` correctly bounds integer unpacking by the declared remaining
+record count, but its terminal residual rule is too strict for legal byte-alignment
+padding. The first full attempt failed closed after scan 0 with 5.3 GiB staged because a
+narrow field retained enough zero padding bits to resemble another complete code. That
+tree is rejected staging, not published evidence. The correction must preserve the hard
+record budget, accept only the format's bounded zero padding, reject nonzero trailing
+data, receive independent audit, and bind a new build/selection before restart.
 
 The accepted full-read spatial-materialization contract uses exact integer support-AOI
 ticks rather than reinterpreted floating bounds, one fixed 28-byte record ABI, per-scan
@@ -97,14 +100,15 @@ ticks rather than reinterpreted floating bounds, one fixed 28-byte record ABI, p
 with at least 216 GiB free and must preserve a 96 GiB reserve. These are authorization
 constraints, not estimates to relax during extraction.
 
-The independently audited execution boundary is enabled by local commit `b37e865` and
+The first independently audited execution boundary was enabled by local commit `b37e865` and
 exact immutable selection
 `5e8373c88196d539f614a65215e7a594aabc6297c636fe8946b2ac6b8288c91f`.
-The active pass covers `4,248,797,321` declared records with one absolute 24-hour
+Its runner covers `4,248,797,321` declared records with one absolute 24-hour
 decode/verification/publication deadline, realized NumPy-distribution identity,
 bounded per-scan cross-artifact ordinal-disjointness bitmaps, a 2 GiB child RSS cap,
-24 native descriptors, and fail-closed publication. Until the final manifest is
-independently accepted, this is staging only and authorizes no surface or synthesis.
+24 native descriptors, and fail-closed publication, but the selection is superseded for
+future execution by the discovered padding-validator defect. Until a restarted pass
+publishes an independently accepted final manifest, no surface or synthesis is authorized.
 
 The ordered closure after reader validation is: one-pass scan-preserving spatial
 materialization under that contract; view-aware candidate conversion with support, visibility, error,
