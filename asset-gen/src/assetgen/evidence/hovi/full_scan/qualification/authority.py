@@ -533,9 +533,9 @@ def load_probe_execution_selection(
         or raw["status"] != "execution_authorized"
         or raw["authorityConfigSha256"] != authority.config_sha256
         or repository.get("readerCommit")
-        != "2344e36b3e0d75934239408410538b93b7bc81cf"
+        != "4c6e5582a077093bbdaa90fd0839ff7a516dacb8"
         or repository.get("nativeSourceTreeSha256")
-        != "656df72722fd767192de761535da3e51368a8562bb43e9ad3b6a1715c294c801"
+        != "747c05a91f3ea9e197beba5f194b1020fbd21e28cd8a9b25a89353859ebe4775"
         or native.get("cargoLockSha256")
         != "4e172cb2f049a23395f487df481e4902794c699a86c36d10a08930418ee16feb"
         or native.get("rustToolchain") != "1.94.1"
@@ -546,7 +546,7 @@ def load_probe_execution_selection(
         or native.get("upstreamManifestSha256")
         != "1b2b48d97f564d6dbc9d07197d624f57e247f2d4d05d8d0eb78e4ec9ace90fe0"
         or native.get("vendorPatchSetSha256")
-        != "266cf419581580ef4198d109cbcb83f84a45ab6235d7aed5fa400631ad092dd8"
+        != "64428fb355fb3c36cdc25271dd42ea0e95f853dbc4a5d7c9c60455463344ab08"
         or python.get("implementation") != "cpython"
         or python.get("version") != platform.python_version()
         or python.get("platform") != sys.platform
