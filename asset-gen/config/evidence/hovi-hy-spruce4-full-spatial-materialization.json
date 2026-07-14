@@ -155,7 +155,11 @@
     "maximum_native_open_files_argument": 24,
     "maximum_native_open_output_files_reported": 20,
     "stdout_bytes": 1048576,
-    "stderr_bytes": 1048576
+    "stderr_bytes": 1048576,
+    "wall_seconds": 86400,
+    "cpu_seconds": 86400,
+    "rss_bytes": 2147483648,
+    "supervision_sample_seconds": 1
   },
   "native_reader": {
     "command": "materialize",

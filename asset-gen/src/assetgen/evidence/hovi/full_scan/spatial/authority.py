@@ -29,9 +29,9 @@ DEFAULT_AUTHORITY = (
     / "evidence"
     / "hovi-hy-spruce4-full-spatial-materialization.json"
 )
-EXPECTED_AUTHORITY_BYTES = 11_296
+EXPECTED_AUTHORITY_BYTES = 11_415
 EXPECTED_AUTHORITY_SHA256 = (
-    "2e38cd7cf89bd8cbd084ab3adec315559951b4a785e7f6ad22feac83dd8dbfa2"
+    "bd3b39e6acf1de33658b7bdb63cbf7bf169478bad184f653f49093b6fcbc312a"
 )
 INVENTORY_BYTES = 806_369
 INVENTORY_SHA256 = (
@@ -67,6 +67,10 @@ class SpatialResources:
     native_max_open_output_files: int
     stdout_bytes: int
     stderr_bytes: int
+    wall_seconds: int
+    cpu_seconds: int
+    rss_bytes: int
+    supervision_sample_seconds: float
 
 
 @dataclass(frozen=True)
@@ -91,6 +95,10 @@ class SpatialMaterializationAuthority:
     native: NativeBinding
     mandate_provenance: bytes
     dataset_and_license: bytes
+    publication_root: Path | None = None
+    execution_selection_sha256: str | None = None
+    execution_identity: bytes | None = None
+    implementation_files: tuple[tuple[Path, str], ...] = ()
 
 
 def _absolute(path: Path) -> Path:
@@ -521,6 +529,10 @@ def load_spatial_authority(
         "maximum_native_open_output_files_reported": 20,
         "stdout_bytes": 1 << 20,
         "stderr_bytes": 1 << 20,
+        "wall_seconds": 86_400,
+        "cpu_seconds": 86_400,
+        "rss_bytes": 2 << 30,
+        "supervision_sample_seconds": 1,
     }
     expected_native = {
         "command": "materialize",
@@ -603,6 +615,10 @@ def load_spatial_authority(
             native_max_open_output_files=20,
             stdout_bytes=1 << 20,
             stderr_bytes=1 << 20,
+            wall_seconds=86_400,
+            cpu_seconds=86_400,
+            rss_bytes=2 << 30,
+            supervision_sample_seconds=1.0,
         ),
         native=NativeBinding(
             command="materialize",
