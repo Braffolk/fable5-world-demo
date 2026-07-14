@@ -6,15 +6,17 @@
 - Every subagent prompt must explicitly say: **Do not spawn subagents.** Subagents may never delegate further.
 - When model selection is available, use `sol` with high effort only for genuinely difficult synthesis algorithms and consequential scientific/visual judgment. Use normal effort for generation, ingestion, harnesses, routine fixes, and tests.
 
-## Work Efficiency And Dataset Triage
+## Work Efficiency And Track Triage
 
-- For evidence acquisition and conversion, run independent candidate datasets in parallel. Give one agent ownership of one dataset from source binding through conversion and a directly usable artifact; do not serialize the whole project behind the hardest corpus.
-- Prefer the first dataset that satisfies the scientific role and produces usable evidence. If a dataset becomes disproportionately difficult, preserve its code, provenance, partial artifacts, and exact blocker, then drop active focus and advance another candidate. Return only if faster candidates fail or the difficult dataset supplies a unique required role.
-- Dropping focus never means deleting or reverting the converter. Avoid future reimplementation by committing reusable work at a clean checkpoint and recording the resume condition.
-- Do not alternate implementation and independent review after every small checkpoint. One owner should complete a coherent end-to-end dataset track and exercise it on real data; perform one independent review at the complete boundary. Add an earlier review only for destructive publication, security, irreversible schema/format changes, or another genuinely high-cost safety boundary.
-- Put explicit go/no-go limits on uncertain data tracks before starting: maximum focused engineering time, maximum failed full attempts, scientific acceptance requirement, and the fallback dataset. A new failure mode after that limit normally parks the track rather than expanding its local infrastructure.
-- Track effort by user-visible or scientifically usable outcomes, not commits, tests, schemas, or audits. At every status report distinguish infrastructure complete, data usable, evidence qualified, synthesis accepted, and visually accepted.
+- When several approaches, dependencies, data sources, integrations, or implementations could satisfy a requirement, advance the strongest independent candidates in parallel instead of serializing the project behind the most difficult one.
+- Give one agent ownership of one coherent track through a real end-to-end outcome. Optimize the split around independently usable results, not tiny implementation/review fragments or maximum agent activity.
+- Prefer the first track that meets the actual quality and correctness requirement. If a track becomes disproportionately difficult, preserve its code, provenance, partial artifacts, measurements, and exact blocker, then drop active focus and advance another candidate. Return only if faster candidates fail or the difficult track supplies a unique required capability.
+- Dropping focus never means deleting or reverting reusable work. Avoid future reimplementation by committing a clean checkpoint and recording the objective resume condition.
+- Do not alternate implementation and independent review after every small checkpoint. One owner should complete a coherent end-to-end track and exercise it in its real environment; perform one independent review at the complete boundary. Add an earlier review only for destructive publication, security, irreversible schema/format changes, or another genuinely high-cost safety boundary.
+- Put explicit go/no-go limits on uncertain tracks before starting: maximum focused engineering time, maximum failed real attempts, acceptance requirement, and fallback path. A new failure mode after that limit normally parks the track rather than expanding its local infrastructure.
+- Track effort by user-visible, scientifically usable, or operationally deployable outcomes, not commits, tests, schemas, analyses, or audits. Status reports must separate supporting infrastructure from the requested outcome and state what is actually usable now.
 - Keep a short waste/resume record for every parked path in the current task's `KNOWN-ISSUES.md`: effort already spent, reusable result, exact blocker, why focus moved, fallback now active, and objective condition for resuming.
+- For evidence acquisition specifically, run candidate datasets as independent tracks from source binding through conversion and directly usable artifacts; never let the hardest corpus monopolize the critical path.
 
 ### Recorded Efficiency Failures
 
