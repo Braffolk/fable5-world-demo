@@ -218,10 +218,13 @@ The next bounded route is Moore M0 under contract
 `moore-m0-research-design.2026-07-15.json`. It has explicit vegetation-clipped
 visible-moss semantics, 68 grids/eight geographic groups, and a frozen four-phase
 source gate. Its B2 is a `derived_B2_hypothesis` from an interpolated, 3 cm-filtered
-publisher surface, not truth or MTF evidence. Moore may proceed to D/R/E training
-only if source B1/B2 support, phase stability, PSD, persistent-form, capacity, and
-packing prerequisites pass. Failure parks Moore for the decimeter preview; B1-only
-output is not an acceptable substitute.
+publisher surface, not truth or MTF evidence. Moore materialization may establish
+source eligibility only if phase stability, PSD, persistent-form, capacity, and
+support prerequisites pass. Strict measured-only two-stage F4/R4 B1 support is
+currently expected to be zero on the small plots and must be reported, not padded.
+Even a source pass leaves D/R/E training blocked until a hash-bound supplement
+freezes candidate distances/normalization and input-only M0 boundary context.
+Failure parks Moore for the decimeter preview; B1-only output is not a substitute.
 
 The durable end-to-end requirement comparison is recorded in
 `MICROTOPOGRAPHY-CONFORMANCE-AUDIT.md`. It also freezes the historical preregistration
