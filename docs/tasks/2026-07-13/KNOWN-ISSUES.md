@@ -173,6 +173,13 @@ Final build `101d71b16d90...` rejects it as a target site: all provider-valid ce
 remain IDW/support-unknown, descriptive B1 relief cannot be separated from a
 band-resolved error distribution, and zero cells are authorized. The next metadata
 screen must require raw/reconstructable support before another conversion probe.
+Second selection contract `replacement-target-selection-2.2026-07-14.json` applies
+that rule: AHN4+BGT fails B1 support/error, while TU Dresden OPARA-1038 advances to
+one exact bare cultivated-loess probe. Only the 3.31 GB sample-plot archive is
+eligible; separate held-out XY/Z error, event semantics, precision/support masks,
+and control independence must be reproduced before accepting geometry. The 1.14 TB
+and 2.67 TB parent archives remain forbidden, and one foreign site cannot authorize
+Estonia transfer or synthesis.
 Resume this Hovi claim only when new primary evidence supplies registered cell semantics
 and independent control/repeat data, not merely another converter.
 
