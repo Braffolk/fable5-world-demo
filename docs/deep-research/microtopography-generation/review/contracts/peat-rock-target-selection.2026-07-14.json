@@ -1,0 +1,149 @@
+{
+  "schema_version": "microtopography-replacement-target-selection/1.0.0",
+  "checked_at": "2026-07-14",
+  "selection_scope": "one_exposed_peat_or_exposed_rock_pavement_b1_target",
+  "selection_policy": {
+    "maximum_new_candidates": 2,
+    "evaluated_new_candidates": 2,
+    "stop_on_first_pass": true,
+    "required_before_geometry_download": [
+      "public_raw_point_cloud_or_raw_reconstructable_imagery",
+      "explicit_visible_surface_semantics_and_machine_usable_masks",
+      "reusable_license_for_derivatives_and_training",
+      "independent_control_with_numeric_horizontal_and_vertical_error",
+      "documented_native_support_for_b1_0.25_to_1m"
+    ],
+    "bulk_geometry_downloaded": false,
+    "metadata_bytes_downloaded": 444,
+    "archive_directory_bytes_downloaded": 22346
+  },
+  "decision": {
+    "status": "no_pass",
+    "selected_candidate_id": null,
+    "authorized_role": null,
+    "next_action": "Do not download either geometry corpus. Resume a record only if the publisher releases a machine-usable exposed-surface mask and numeric independent per-axis control evidence bound to the released geometry.",
+    "not_authorized": [
+      "target_evidence",
+      "training_evidence",
+      "Estonia_transfer",
+      "synthesis_owner_selection",
+      "bulk_geometry_download"
+    ]
+  },
+  "candidates": [
+    {
+      "id": "hovophoto40_hochvogel_alpine_rock_slope",
+      "order": 1,
+      "status": "no_go",
+      "dataset": {
+        "title": "HovoPhoto40 - high-resolution multi-epoch photogrammetry for Mt. Hochvogel",
+        "doi": "10.5281/zenodo.16631844",
+        "official_record": "https://zenodo.org/records/16631844",
+        "official_api_record": "https://zenodo.org/api/records/16631844",
+        "method_paper": "https://doi.org/10.1016/j.ophoto.2026.100120",
+        "license": "CC-BY-4.0",
+        "publisher_total_bytes": 32943230627,
+        "publisher_file_count": 27
+      },
+      "available_evidence": {
+        "geometry": "Five epochs each provide 40 original images, undistorted images, camera parameters, measured object points, and dense LAS/PLY point clouds.",
+        "native_support": "The publisher reports approximately 2 mm image GSD at a 10 m object distance, well inside B1 sampling needs.",
+        "control": "Hybrid tachymetric and GNSS control/reference points are provided; the publisher assumes approximately 4 mm accuracy per coordinate.",
+        "surface_description": "The record identifies an alpine limestone rock slope and summit crevice as the scene.",
+        "smallest_parameter_artifact": {
+          "name": "2023_param.zip",
+          "bytes": 14921,
+          "publisher_md5": "5e7bed819f47e7994a441234375bf92f"
+        },
+        "smallest_raw_image_epoch": {
+          "name": "2023_images.zip",
+          "bytes": 575925095,
+          "publisher_md5": "aeca5c47e0c809a30c577c97bf119ff4"
+        },
+        "smallest_dense_las_epoch": {
+          "name": "2023_HV40_point_cloud.las",
+          "bytes": 2464252615,
+          "publisher_md5": "8d488ef40b7e2ab09f9c671dc251ecec"
+        }
+      },
+      "blocking_reasons": [
+        "The release contains no per-point or per-pixel rock-surface mask and no explicit mask for snow, vegetation, people, occlusion, or reconstruction artifacts.",
+        "The stated 4 mm value is an assumed control/reference coordinate accuracy, not published independent horizontal and vertical checkpoint residuals for each released dense cloud.",
+        "A steep, deforming high-alpine limestone wall is not an established analogue for Estonia exposed carbonate pavement or Devonian sandstone; it cannot gain target status by visual subject name alone."
+      ],
+      "resume_condition": "Publisher-supplied surface masks plus held-out per-axis checkpoint residuals for an exact epoch, followed by a separate physical-analogue decision."
+    },
+    {
+      "id": "eurosdr_wards_hill_quarry_bare_rock_area",
+      "order": 2,
+      "status": "no_go",
+      "dataset": {
+        "title": "EuroSDR RPAS benchmark datasets",
+        "doi": "10.5281/zenodo.10059050",
+        "official_record": "https://zenodo.org/records/10059050",
+        "official_api_record": "https://zenodo.org/api/records/10059050",
+        "official_project": "https://geospatialncl.github.io/eurosdr-rpas-benchmark/",
+        "primary_paper": "https://doi.org/10.5194/isprs-archives-XLVIII-1-W3-2023-107-2023",
+        "license": "CC-BY-4.0",
+        "publisher_total_bytes": 43149725375
+      },
+      "publisher_artifacts": [
+        {
+          "name": "GCPsandCPs_coords.xlsx",
+          "bytes": 30227,
+          "publisher_md5": "d4ebb714dae5a910019e7fb1828fd35c"
+        },
+        {
+          "name": "Phase1.7z",
+          "bytes": 33244808754,
+          "publisher_md5": "9009e2bd4e028e13961ba182d6ae1187"
+        },
+        {
+          "name": "Phase2.7z",
+          "bytes": 9904885993,
+          "publisher_md5": "f15e72a0640a756fa57b5f7bc4e21b95"
+        },
+        {
+          "name": "Phase3.7z",
+          "bytes": 401,
+          "publisher_md5": "563a264cc189d40094d93eb6e72e04f0"
+        }
+      ],
+      "available_evidence": {
+        "geometry": "Phase 1 exposes reconstructable DJI P4/P1 images and raw DJI L1, Routescene, and Riegl MiniVUX survey data over a 350 by 250 m quarry.",
+        "native_support": "Published photogrammetric GSD is approximately 7 mm for DJI P1 and 20 mm for DJI P4 RTK, well inside B1 sampling needs.",
+        "surface_description": "The paper defines five evaluation areas spanning road, bare rock, low grass, flat ground, and inclined slopes.",
+        "independent_control_mm": {
+          "gnss_repeat_standard_deviation_easting": 5.3,
+          "gnss_repeat_standard_deviation_northing": 6.1,
+          "gnss_repeat_standard_deviation_height": 3.4,
+          "tls_absolute_mean_error": 9.0,
+          "tls_absolute_minimum_error": 1.0,
+          "tls_absolute_maximum_error": 21.0,
+          "tls_vs_gnss_standard_deviation_easting": 15.0,
+          "tls_vs_gnss_standard_deviation_northing": 8.0,
+          "tls_vs_gnss_standard_deviation_height": 12.0
+        },
+        "phase1_directory_audit": {
+          "entries": 1862,
+          "bytes_fetched_for_sparse_directory_audit": 22346,
+          "surface_mask_or_area_vector_count": 0,
+          "unrelated_flight_track_vectors": 1,
+          "unrelated_flight_track": "Phase1/240821_Routescene_LidarPod_Matrice600_RTKdisabled/EuroSDR_No_RTK/GoogleEarthTrack.kml"
+        }
+      },
+      "blocking_reasons": [
+        "The site is mainly coarse grass with shrubs and small trees plus an asphalt road; a paper figure labels a bare-rock evaluation area, but the publisher manifest and exact Phase 1 archive directory release no machine-usable area or visible-surface mask.",
+        "Raw reconstruction support and excellent independent control cannot disambiguate rock from vegetation, road, targets, stakes, and other site contents without that mask.",
+        "The exposed surface is a disused, formerly quarried limestone site. Even a later masked subset would require a separate analogue decision before it could represent natural Estonian carbonate pavement."
+      ],
+      "resume_condition": "A publisher-bound vector/raster mask for the bare-rock evaluation area and its exclusion classes, or an independently licensed authoritative mask co-registered to the exact raw survey."
+    }
+  ],
+  "verification": {
+    "geometry_bytes_downloaded": 0,
+    "official_metadata_records_fetched": 2,
+    "eurosdr_phase1_archive_directory_method": "Fetched the 32-byte 7z start header, 40-byte terminal header, and 22,274-byte compressed directory stream by HTTP range; reconstructed a sparse local archive and listed its directory without fetching packed survey payloads.",
+    "temporary_files_retained_in_repository": false
+  }
+}
