@@ -1,0 +1,421 @@
+{
+  "schema_version": "microtopography-forest-floor-research-design/1.0.0",
+  "contract_id": "forest-floor-hovi-evo-forestsemantic-2026-07-14",
+  "frozen_date": "2026-07-14",
+  "status": {
+    "state": "target_evidence_insufficient",
+    "research_only": true,
+    "synthesis_authorized": false,
+    "production_owner_authorized": false,
+    "publication_authorized": false,
+    "reason": "No retained forest source has production-qualified B1/B2 truth. This contract first determines whether Hovi can become an R1 research-trainable weak surface, then permits one bounded weak-evidence model experiment without pretending that research output is truth, transfer, or a production owner."
+  },
+  "normative_inputs": [
+    {
+      "path": "docs/specs/terrain/MICROTOPOGRAPHY.md",
+      "sha256": "2877c0442b3b105e20ff7948e3ad93c6ef141dbb9db492fec4d01808ee4afeff"
+    },
+    {
+      "path": "docs/specs/terrain/PUBLIC-TARGET-QUALIFICATION-PROTOCOL.md",
+      "sha256": "43210c64cd12a8dc51260f80303e80e7c9b723391b2185bf6ebe9406c245e2dd"
+    },
+    {
+      "path": "docs/tasks/2026-07-13/MICROTOPOGRAPHY-CONFORMANCE-AUDIT.md",
+      "sha256": "20313fb5b3620e94e39df07b36258e2f32962601d82879264166efd05ffc3437"
+    },
+    {
+      "path": "asset-gen/config/hovi-public-targets.json",
+      "sha256": "724f4d6712c9e5bec494c6d2f1a13941adfe93a22f48165c4f5d25cf6c1a6e84"
+    },
+    {
+      "path": "asset-gen/data/work/microtopography/forest-floor/support-error/sha256/13bb3582f22512a436792480ec09b94ab9271dadf66f456022115cb96f8aefbc/support-error-decision.json",
+      "sha256": "13bb3582f22512a436792480ec09b94ab9271dadf66f456022115cb96f8aefbc"
+    },
+    {
+      "path": "asset-gen/data/work/microtopography/hovi/conditions/sha256/22841590061fb60238ee370220c58a635d669a6e3e620549283e788d986fdc8e/HY_SPRUCE4-condition-evidence.json",
+      "sha256": "22841590061fb60238ee370220c58a635d669a6e3e620549283e788d986fdc8e"
+    },
+    {
+      "path": "asset-gen/data/work/hovi-full-scan-spatial-materialization/materializations/sha256/ed/ed02d20970b5d9eedf5b36406c947d3cea87c59682bc8853f1a23fac23f35d18/manifest.json",
+      "sha256": "ed02d20970b5d9eedf5b36406c947d3cea87c59682bc8853f1a23fac23f35d18"
+    },
+    {
+      "path": "asset-gen/data/work/hovi-full-scan-candidate-evidence/261e2e9999aecf270c262b64118775bcf21bcae5f7d462589685e6063fcf48f4/qa/index.json",
+      "sha256": "261e2e9999aecf270c262b64118775bcf21bcae5f7d462589685e6063fcf48f4"
+    },
+    {
+      "path": "asset-gen/data/work/microtopography/hovi/semantic-binding/39a6ba366015c2509cebaeffbee7986054371b2827c67e29a45c49ecee194d30/manifest.json",
+      "sha256": "16bce3d53fd6f0a6577cead0e42f5d17386159ded7d5002bfe73e2aa2d2893bb"
+    },
+    {
+      "path": "asset-gen/data/work/microtopography/evo/surface/sha256/bba7a00ad160cbbdb1193fb50d89f629283eb48a31f005f0fa0e7168263fdb3d/manifest.json",
+      "sha256": "8d899409ca98f806492da2f85fd8bd509c78c298856c63ba7b0bdef086bcfabc"
+    },
+    {
+      "path": "asset-gen/data/work/microtopography/evo/surface/sha256/674116851f1f22acc5143ed0cec0ed0eac7c8d764458cfd562f4a6b5d5835f3c/manifest.json",
+      "sha256": "b8afbfa463061e03a4c8485d58173da306f8f3908fe2bb88ba64fecdd49ee28d"
+    },
+    {
+      "path": "asset-gen/data/work/microtopography/forestsemantic_ms/semantic/sha256/aab4b9b6812d0230b6a6b9d06d1349f89fbb45d82aed7b8c329e39131b515c36/manifest.json",
+      "sha256": "1e177edbc18b3a87f94020522502a8304a957d5f46605c216c74fe05bb6c163c"
+    },
+    {
+      "path": "asset-gen/data/work/microtopography/hovi/conditions/sha256/f42f4f5d7402cac4cbd5ae747eeb22986d9498b28b97d66a28ba114b13173f4c/HY_PINE2-condition-evidence.json",
+      "sha256": "f42f4f5d7402cac4cbd5ae747eeb22986d9498b28b97d66a28ba114b13173f4c"
+    },
+    {
+      "path": "asset-gen/data/work/microtopography/hovi/surface/73a9a7d52c6ddd8b7193694d74e42a00b97ab0015e494a13149fc54122de3686/manifest.json",
+      "sha256": "a7b701f9ee8846fad4d2e64f6b0b0c7056732691b999c86061262345a05a8b37"
+    }
+  ],
+  "claim_domain": {
+    "name": "single_valued_hemiboreal_forest_floor",
+    "destination": "Estonia cells that later satisfy a physical-analogue dossier and an exact condition predicate",
+    "current_transfer_ceiling": "none",
+    "forbidden_generalization": [
+      "all forest",
+      "all spruce forest",
+      "all boreal or hemiboreal terrain",
+      "nearest supported forest class",
+      "Taevaskoda-specific morphology"
+    ]
+  },
+  "evidence_units": [
+    {
+      "id": "hovi.hyytiala.2019.HY_SPRUCE4",
+      "role": "primary_development_weak_geometry",
+      "site_id": "hovi.hyytiala",
+      "campaign_id": "hovi.hyytiala.2019",
+      "country": "Finland",
+      "geometry_identity": "ed02d20970b5d9eedf5b36406c947d3cea87c59682bc8853f1a23fac23f35d18",
+      "physical_scan_ids": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+      "condition_identity": "22841590061fb60238ee370220c58a635d669a6e3e620549283e788d986fdc8e",
+      "allowed_uses": [
+        "develop semantic-gated surface hypotheses",
+        "construct disjoint physical-view reconstructions",
+        "measure direct support and observation disagreement",
+        "fit research-only B1 exemplars only after B1 qualification"
+      ],
+      "forbidden_uses": [
+        "target truth",
+        "dense semantic labels",
+        "independent XY or Z control",
+        "Estonia transfer",
+        "B1 or B2 owner selection"
+      ],
+      "known_failure": "The 4096-cell full-scan central shard has 234 sole candidates, 2550 competing candidates, 1312 unresolved or overflow cells, and no accepted surface semantics."
+    },
+    {
+      "id": "evo.2024.1086",
+      "role": "external_sensor_campaign_weak_geometry",
+      "site_id": "evo.plot.1086",
+      "campaign_id": "evo.2024",
+      "country": "Finland",
+      "source_sha256": "113d5d062240361e005f4e434e1d834d445ba7f72d9d0162e25a644a06ce23f7",
+      "surface_build_id": "bba7a00ad160cbbdb1193fb50d89f629283eb48a31f005f0fa0e7168263fdb3d",
+      "direct_observed_fraction": 0.5498619079589844,
+      "geometrically_valid_fraction": 0.28180694580078125,
+      "allowed_uses": ["frozen external geometry diagnostic", "sensor/campaign drift measurement"],
+      "forbidden_uses": ["target truth", "physical-view count", "surface semantics", "model or threshold tuning", "independent release site"]
+    },
+    {
+      "id": "evo.2024.1065",
+      "role": "external_sensor_campaign_weak_geometry",
+      "site_id": "evo.plot.1065",
+      "campaign_id": "evo.2024",
+      "country": "Finland",
+      "source_sha256": "7fc725b48a0010bd67ef9e3d6d7b8083674e418d04df7a3b015b519c1bf4c002",
+      "surface_build_id": "674116851f1f22acc5143ed0cec0ed0eac7c8d764458cfd562f4a6b5d5835f3c",
+      "direct_observed_fraction": 0.5966873168945312,
+      "geometrically_valid_fraction": 0.339569091796875,
+      "allowed_uses": ["frozen external geometry diagnostic", "sensor/campaign drift measurement"],
+      "forbidden_uses": ["target truth", "physical-view count", "surface semantics", "model or threshold tuning", "independent campaign from evo.2024.1086"]
+    },
+    {
+      "id": "forestsemantic_ms.Espoonlahti",
+      "role": "bounded_semantic_development_and_frozen_audit",
+      "site_id": "forestsemantic_ms.espoonlahti",
+      "campaign_id": "forestsemantic_ms.heliALS",
+      "evidence_id": "aab4b9b6812d0230b6a6b9d06d1349f89fbb45d82aed7b8c329e39131b515c36",
+      "fit_files": [
+        {"name": "train1.laz", "sha256": "e847485729564573804c78d58d49e585a6f71684433882c7f3d90df58fa6da78"},
+        {"name": "train2.laz", "sha256": "e14b5de59f8cf95d00711ffb37f6216142d89a55276119bb4ebc880e024f8179"},
+        {"name": "train3.laz", "sha256": "968c7d033ff7e254899a506be04eb645a243ca0227b238a9f6d585100ce8570f"}
+      ],
+      "development_calibration_files": [
+        {"name": "train4.laz", "sha256": "eaddf8f182d8f577529d01c83b473c524ea1779e04d64d69f410258de0e0bdd2"}
+      ],
+      "frozen_audit_files": [
+        {"name": "test1.laz", "sha256": "e7edeeec581bcf81714472451244406b01e7d7fdbd2e6418b33be854eead619b"},
+        {"name": "test2.laz", "sha256": "2809d0c41141b12f4f3ffcb42ad0abdc3bd5c2ad8066d60ff287a853d013837d"}
+      ],
+      "allowed_uses": ["develop and calibrate a geometry-only semantic exclusion model on train1-4", "one frozen semantic audit on test1-2"],
+      "forbidden_uses": ["absolute height", "B1 or B2 error", "Hovi validation", "Estonia transfer", "surface-contract truth", "audit-driven retuning"]
+    },
+    {
+      "id": "hovi.hyytiala.2019.HY_PINE2",
+      "role": "frozen_condition_stress_only",
+      "site_id": "hovi.hyytiala",
+      "campaign_id": "hovi.hyytiala.2019",
+      "condition_identity": "f42f4f5d7402cac4cbd5ae747eeb22986d9498b28b97d66a28ba114b13173f4c",
+      "surface_build_id": "73a9a7d52c6ddd8b7193694d74e42a00b97ab0015e494a13149fc54122de3686",
+      "allowed_uses": ["post-freeze condition-shift stress report"],
+      "forbidden_uses": ["training", "threshold selection", "validation site", "full-archive fetch", "target truth", "synthesis"]
+    },
+    {
+      "id": "hovi.jarvselja.2020.JS_SPRUCE1",
+      "role": "sealed_estonia_blind",
+      "site_id": "hovi.jarvselja",
+      "campaign_id": "hovi.jarvselja.2020",
+      "selection_record_sha256": "724f4d6712c9e5bec494c6d2f1a13941adfe93a22f48165c4f5d25cf6c1a6e84",
+      "state": "sealed_until_converter_surface_contract_thresholds_candidate_family_and_review_rule_are_frozen",
+      "allowed_uses": [],
+      "forbidden_uses": ["read geometry", "read photos", "conversion debugging", "training", "threshold selection", "candidate selection", "retuning after blind inspection"]
+    },
+    {
+      "id": "historical.LUKE",
+      "role": "excluded_historical_diagnostic",
+      "allowed_uses": ["provenance and negative-design history"],
+      "forbidden_uses": ["training", "baseline morphology", "candidate selection", "threshold setting", "owner evidence", "release evidence"]
+    },
+    {
+      "id": "estonia.Taevaskoda",
+      "role": "fixed_visual_and_ood_sentinel_only",
+      "allowed_uses": ["post-freeze visual sentinel", "typed structural-regression check"],
+      "forbidden_uses": ["training", "semantic development", "converter tuning", "hyperparameter selection", "candidate selection", "morphology threshold setting", "scene-specific correction"]
+    }
+  ],
+  "surface_contract": {
+    "heightfield_meaning": "top of the persistent, ground-connected, single-valued walking surface at observation time",
+    "heightfield_owned_when_directly_labeled_and_single_valued": [
+      "mineral soil",
+      "peat or persistent organic horizon top",
+      "continuous ground-attached moss or nonvascular mat",
+      "continuous settled litter mat",
+      "ground-bonded exposed root upper surface",
+      "embedded clast upper surface"
+    ],
+    "object_or_exclusion_owned": [
+      "standing stem",
+      "living vascular vegetation",
+      "detached branch or woody debris",
+      "loose non-ground-connected litter",
+      "water or wet reflection",
+      "built object",
+      "overhang or multi-valued surface"
+    ],
+    "unknown": [
+      "unregistered photo semantics",
+      "unlabeled Hovi or Evo candidate sheet",
+      "ForestSemantic-MS ground points whose moss/litter/root/clast ownership is unresolved",
+      "occluded or interpolated surface",
+      "semantic disagreement"
+    ],
+    "unknown_policy": "invalidate_and_abstain",
+    "prohibitions": [
+      "Do not redefine all publisher ground labels as canonical terrain.",
+      "Do not erase roots, embedded clasts, stable moss, stable litter, or peat with a generic ground classifier.",
+      "Do not bake detached woody debris or living vegetation into the terrain heightfield.",
+      "Do not use the lowest return as a semantic decision."
+    ]
+  },
+  "semantic_exclusion_experiment": {
+    "purpose": "Determine whether a conservative geometry-only model can reject clearly non-surface points without claiming the remaining points are canonical surface truth.",
+    "common_features_only": [
+      "local covariance eigenvalue ratios at radii 0.0625, 0.125, 0.25, 0.5, and 1.0 m",
+      "normal verticality and planarity at the same radii",
+      "height above a robust 1.0 m lower-envelope plane",
+      "point support count and nearest-neighbor spacing at the same radii"
+    ],
+    "forbidden_features": ["SWIR", "NIR", "RGB", "VI", "scanner intensity", "treeid", "source z-h", "absolute XYZ", "file or site identity"],
+    "labels": {
+      "provisional_surface_candidate": ["ground"],
+      "forbidden": ["low_vegetation", "trunk", "branches", "foliage", "woody_debris"]
+    },
+    "model": "sklearn HistGradientBoostingClassifier with learning_rate=0.05, max_iter=300, max_leaf_nodes=31, min_samples_leaf=64, l2_regularization=1.0, early_stopping=false, random_state=20260714, and inverse-fit-class-frequency sample weights",
+    "fit": "Fit once on complete train1-3 files. No random point split and no patch split.",
+    "calibration": "Partition train4 into fixed non-overlapping 8 m XY blocks. Over unique predicted-score thresholds, use 10000 deterministic block-bootstrap resamples with seed 20260714 and choose the largest accepted area whose 95th-percentile forbidden-class false-acceptance ratio is at most 0.02. If no non-empty set passes, stop.",
+    "audit": "Run test1 and test2 once after model, features, calibration, and output schema are content-addressed. Partition and bootstrap each file independently by the same rule and seed. The 0.02 upper-bound gate must pass on both; woody-debris results remain separate because the frozen audit contains only 1021 such points.",
+    "cross_sensor_use": "Apply the frozen model to Hovi and Evo only as a domain-drift and exclusion-prior diagnostic. It may remove high-confidence forbidden points, but it may not positively label canonical surface cells or lower the unknown mask.",
+    "cross_sensor_drift": "For each feature and each radius, require Hovi/Evo accepted candidates to lie inside the train1-4 empirical 0.5th-99.5th percentile envelope. Any out-of-envelope feature invalidates that point. Report retained fraction by context; do not retune the envelope.",
+    "terminal": "semantic_filter_research_usable_only_if_both_frozen_audit_files_pass; otherwise target_evidence_insufficient"
+  },
+  "confidence_and_unknown_policy": {
+    "confidence_unit": "non-overlapping 8 m physical context, then site and campaign; points and overlapping windows are never confidence replicates",
+    "interval": "one-sided 95% bounds unless a two-sided interval is explicitly required by the normative qualification protocol",
+    "semantic_acceptance": "Only the frozen calibrated threshold may exclude points. Passing it means provisional_surface_candidate, never canonical-surface truth.",
+    "missing_measurement": "null and blocking; never zero, smooth, average, nearest class, or inherited confidence",
+    "ambiguous_measurement": "invalid and propagated through all estimator and F4 support",
+    "interpolation": "record its distance and error separately; it never creates direct support",
+    "small_sample": "add contexts only in preregistered groups of six; no patch pooling to narrow intervals",
+    "terminal_on_unknown": "abstain"
+  },
+  "support_and_transfer_operators": {
+    "grid_m": 0.0625,
+    "cell_acceptance": "A cell is accepted only when the frozen surface contract, direct observation, semantic exclusion, physical-view, and invalid-mask rules all pass. No interpolated cell counts as direct support.",
+    "effective_support_radius": "max(horizontal_distance_to_accepted_observations, projected_beam_or_footprint, surface_estimator_kernel_radius, interpolation_distance)",
+    "view_groups": {
+      "hovi": "Decode the 16 scanner-origin translations from the retained pose records, compute their median XY center, sort by (atan2(y-center_y,x-center_x), radial_distance, ordinal), and assign alternating sorted positions to groups A and B. Freeze that mapping before reconstruction. Both groups must directly support every audited context.",
+      "evo": "Source IDs are redundancy groups, not physical views. effective_view_count remains unknown and cannot satisfy the view gate."
+    },
+    "invalid_propagation": "Dilate semantic, support, occlusion, plot-boundary, interpolation, water, and non-heightfield invalidity through the exact F4 footprint before any band loss.",
+    "F4": {
+      "kernel": [0.015625, 0.046875, 0.09375, 0.15625, 0.1875, 0.1875, 0.15625, 0.09375, 0.046875, 0.015625],
+      "definition": "separable east then north float64 factor-four filter using input indices 4*p-3 through 4*p+6"
+    },
+    "R4": "separable Keys cubic reconstruction with a=-0.5 and fine phases -3/8,-1/8,+1/8,+3/8",
+    "bands": {
+      "B1": {
+        "wavelength_m": [0.25, 1.0],
+        "support_ucb95_m_max": 0.05,
+        "transfer_gain_lcb95_min": 0.707,
+        "error_signal_ratio_ucb95_max": 0.5,
+        "error_signal_ratio_ci_halfwidth_max": 0.15,
+        "current_eligibility": "target_evidence_insufficient"
+      },
+      "B2": {
+        "wavelength_m": [0.125, 0.25],
+        "support_ucb95_m_max": 0.03,
+        "transfer_gain_lcb95_min": 0.707,
+        "error_signal_ratio_ucb95_max": 0.5,
+        "error_signal_ratio_ci_halfwidth_max": 0.15,
+        "current_eligibility": "target_evidence_insufficient"
+      }
+    },
+    "required_error_terms": [
+      "held-out-view measurement repeatability",
+      "independent checkpoint XY error",
+      "independent checkpoint Z error",
+      "registration error",
+      "slope-propagated XY-to-height error",
+      "held-out conversion error",
+      "semantic-choice error",
+      "interpolation error"
+    ],
+    "current_blockers": [
+      "metric semantic surface absent",
+      "independent XY and Z control absent",
+      "held-out same-surface reconstruction absent",
+      "acquisition response unbounded"
+    ]
+  },
+  "split_and_leakage_rules": [
+    "All windows, augmentations, derivatives, and nearby plots inherit their whole site's strictest role.",
+    "For HY_SPRUCE4 synthesis, snap 8 m blocks to the retained plot-local origin, hash (contract_id,block_x,block_y) with BLAKE2b-256, assign digest_byte0 modulo 10 values 0-5 to train, 6-7 to development, and 8-9 to untouched internal audit, then invalidate every target whose complete analysis or model halo crosses a block boundary.",
+    "HY_SPRUCE4 and HY_PINE2 are one site and one campaign; HY_PINE2 is never an independent holdout.",
+    "Evo 1086 and 1065 share evo.2024; they are not two independent campaigns and neither may tune the Hovi converter.",
+    "ForestSemantic-MS train1-3 fit, train4 calibrates, and test1-2 are opened once for frozen audit only.",
+    "No ForestSemantic-MS test statistic may change features, model, threshold, surface semantics, or stopping rules.",
+    "JS_SPRUCE1 bytes remain uninspected until the complete preregistration is frozen; after opening, no method change is allowed.",
+    "Taevaskoda and LUKE never enter fitting, tuning, thresholding, candidate selection, or ownership.",
+    "Duplicate or overlapping geometry is detected by bounds, timestamps, point fingerprints, and nearest-surface hashes before split assignment.",
+    "Spatial patches are not independent samples for confidence intervals; context, site, and campaign are the reporting units."
+  ],
+  "first_algorithmic_experiment": {
+    "name": "semantic_gated_disjoint_view_surface_reconstruction",
+    "sequence": [
+      "Freeze and audit the ForestSemantic-MS geometry-only exclusion model.",
+      "On HY_SPRUCE4 only, reconstruct the candidate walking surface independently from preregistered disjoint scanner-pose groups; unknown semantics remain invalid.",
+      "Forward-sample each reconstruction through the other groups' measured support and reconvert with the same operator.",
+      "Measure direct support, cross-view coherence, phase bias, weak-surface transfer gain, cross-signal, and within-campaign disagreement separately for B1 and B2; keep total survey error unknown.",
+      "Freeze the surface recipe and research synthesis preregistration before applying diagnostics to Evo 1086 and 1065; report both separately and as one campaign, never as truth.",
+      "Promote a band only to research_trainable when direct non-interpolated support, both view groups, positive cross-view coherence, cross-signal above disagreement, frozen semantic confidence, and enough disjoint windows all pass. Production qualification remains target_evidence_insufficient."
+    ],
+    "primary_estimator": {
+      "name": "semantic_gated_multiview_mode_consensus",
+      "reference": "Fit a Huber tangent plane in each 1 m cell from provisional surface candidates, then evaluate 6.25 cm cells in tangent residual coordinates. A missing 1 m reference invalidates its descendants.",
+      "per_view_modes": "For each physical scan and 6.25 cm cell, histogram tangent residuals in 0.01 m bins, convolve once with [0.25,0.5,0.25], retain local peaks with at least six points occupying at least three of four XY quadrants, and record the unsmoothed median height of each retained peak.",
+      "cross_view_consensus": "Cluster per-scan peak heights by complete linkage at 0.03 m. A candidate requires at least two scans from group A and two from group B. Accept only when exactly one cluster satisfies that rule and every competing cluster has less than half its scan support; otherwise emit unknown.",
+      "output": "Emit the median of contributing unsmoothed per-scan peak heights, contributing scan IDs, r_eff terms, semantic exclusion counts, competitor counts, and unknown reason. Do not interpolate holes.",
+      "scope": "Research reconstruction only; even a stable candidate remains non-truth until direct surface labels and independent XY/Z control exist."
+    },
+    "cheapest_useful_comparison": "Run the already-retained lowest-connected multiview candidate estimator under the identical accepted-observation and invalid masks. Compare support, forbidden-class acceptance, cross-view coherence, and B1/B2 transfer; corrected-only is the later synthesis control, not a substitute for this measurement comparison.",
+    "max_focused_engineering_hours": 16,
+    "max_failed_full_attempts": 2,
+    "fallback_after_limit": "Park this evidence bundle with all artifacts and resume the independent public-target tracks; do not expand Hovi decoder or test infrastructure."
+  },
+  "research_only_synthesis_bakeoff": {
+    "activation": "Only after the first algorithmic experiment marks a band research_trainable under the normative spec. Production use still requires qualified_target_B1/B2 and a passing physical-analogue dossier.",
+    "first_candidate": {
+      "family": "pixel_space_conditional_diffusion_D",
+      "reason": "Forest-floor residuals are one-to-many and structurally multimodal. Canonical family D tests the highest-ceiling learned prior directly; a deterministic regressor averages variance, while exemplar transfer from one inspected site has an unacceptable copying ceiling.",
+      "target": "canonical B1 residual from the accepted R1 weak surface; B2 loss and output are identically absent",
+      "conditioning": "separate channels for reconstructed 1 m authority, R4 parent, gradient, Laplacian, direct support, semantic confidence, p_unknown, and available frozen Hovi condition evidence; absent mandatory channels are explicit masks",
+      "architecture": "Use normative family D exactly: metric pixel-space v-prediction U-Net, no natural-image VAE or pretrained weights, 1000-step cosine schedule, 50 deterministic DDIM steps, and locked PRF/window fusion.",
+      "training": "Use only research-trainable HY_SPRUCE4 B1 cells. Weight loss by the frozen confidence combiner, zero every unknown/forbidden/interpolated target, and train normative seeds 17,31,47 for 50000 updates without selecting by audit data.",
+      "geometry": "Generate one absolute world-aligned master over model support, then crop packed LOD -2/-1; never synthesize per chunk.",
+      "bands": "B1 research preview only. B2 remains structural-only until separately research-trainable or production-qualified."
+    },
+    "cheapest_useful_comparison": {
+      "family": "deterministic_regressor_R",
+      "reason": "It reuses the same accepted windows, conditioning, U-Net capacity, optimizer, and metric losses without timestep/noise machinery, isolating whether stochastic generation adds conditional variance rather than merely changing the backbone.",
+      "budget": "One normative seed, 50000 updates; no architecture or threshold search."
+    },
+    "required_control": {
+      "family": "corrected_only",
+      "definition": "The same corrected structural authority with unresolved forest morphology set to zero."
+    },
+    "parked_families": [
+      {"family": "contextual_multiscale_exemplar", "resume": "only if multiple independent source sites make anti-copy and attribution envelopes meaningful"},
+      {"family": "conditional_simulation", "resume": "only if qualified per-class covariance, tails, and local-stationarity evidence exist"},
+      {"family": "conditional_GAN", "resume": "only after the diffusion ceiling is measured and target volume supports adversarial audit"},
+      {"family": "process_diffusion_hybrid", "resume": "only after an independently calibrated process/form owner exists"}
+    ],
+    "no_owner_rule": "The selected frozen recipe may become research_preview_candidate, never research_owner or production owner. production_owner remains null, release rows remain unchanged, and no survivor, tie, or production win may be claimed."
+  },
+  "seam_and_composition_rules": {
+    "global_identity": "Use the canonical coordinate-keyed BLAKE2b-256 PRF and world-aligned inference lattice from the normative spec. Storage chunk coordinates never seed or select morphology.",
+    "support_domain": "Generate over the complete physical/process/model-support domain before cropping publication chunks.",
+    "regime_transition": "Each physical phenomenon has one owner. Blend only confidence for the same owner's applicability; never average two specialists claiming the same scale/phenomenon. Unknown on either side remains unknown unless a separately qualified smooth terminal applies.",
+    "window_fusion": "Enumerate every complete world-aligned support window influencing a sample, sort canonically, and fuse metric deltas in float64 before one absolute-master composition.",
+    "required_invariance": [
+      "identical overlap bytes independent of worker count and task order",
+      "identical overlap bytes independent of requested AOI and enclosing chunk",
+      "no parent, apron, chunk, or regime-boundary discontinuity in height, gradient, or normal",
+      "no visible transition caused by expert identity"
+    ]
+  },
+  "anti_copy_and_repetition_tests": {
+    "exact_copy": "Fail any D4-transformed generated 0.5 m or larger patch that is float-identical to a training patch outside corrected structural authority.",
+    "nearest_training_attribution": "For every generated patch, report the nearest training patch and normalized gradient-domain correlation. Fail if the generated-to-training upper tail exceeds the untouched-HY_SPRUCE4-block-to-training upper envelope; label this a block-level weak-surface test, never site validation.",
+    "source_concentration": "Report area and amplitude attribution by training block and patch. Fail if concentration exceeds the untouched-HY_SPRUCE4 block retrieval envelope or if a single patch is reused outside that envelope.",
+    "periodicity": "Compute 2D autocorrelation and radial/oriented PSD over the uncropped master. Any nonzero peak or line outside the untouched-HY_SPRUCE4 weak-surface 95% envelope fails.",
+    "translation_collision": "Generate two disjoint same-condition world domains. Repeated forms at identical relative offsets, repeated patch hashes, or chunk-periodic phases fail.",
+    "null_comparison": "A phase-scrambled descriptor-matched field may be rendered as a research null only. It can never become a production candidate or fill unsupported cells."
+  },
+  "stopping_rules": [
+    "If either frozen ForestSemantic-MS audit file violates the 0.02 forbidden-class upper-bound gate, stop semantic transfer and do not inspect JS_SPRUCE1.",
+    "If Hovi/Evo common-feature drift invalidates all useful direct support, stop rather than adding sensor-specific hidden features.",
+    "If direct metric surface labels, independent XY/Z control, or acquisition response remain absent, retain target_evidence_insufficient regardless of visual plausibility.",
+    "Qualify B1 and B2 independently; a B1 pass never implies B2.",
+    "Start with six non-overlapping 8 m contexts; add six only for confidence width and stop at 24. Inconclusive at 24 abstains.",
+    "Stop a candidate on forbidden semantics, copying, repetition, seams, invalid water/object ownership, or missing condition support before aesthetic ranking.",
+    "Two failed full real attempts or 16 focused engineering hours parks this track; preserve code and artifacts and advance another qualified target source.",
+    "No amount of internal metric success authorizes release without held-out user-visible ground-level acceptance."
+  ],
+  "immutable_preview_boundary": {
+    "current_preview_allowed": false,
+    "when_allowed": "Only after a target-specific research artifact passes its frozen research gates; it remains explicitly non-production.",
+    "requirements": [
+      "content-addressed recipe, inputs, model, outputs, and QA index",
+      "ordinary cook-side packed geometry only; zero browser synthesis",
+      "complete parent/apron/ancestor closure",
+      "exact immutable manifest selection",
+      "real WebGPU clean boot of the exact URL before user review",
+      "terrain, materials, grass, trees, plants, water, and probes sample the same packed surface"
+    ],
+    "forbidden": [
+      "latest.json",
+      "mutable latest aliases",
+      "publication to latest",
+      "production owner or release-row claim",
+      "runtime synthesis",
+      "binary-format or shader changes for this experiment"
+    ]
+  },
+  "expected_terminal_after_first_experiment": {
+    "success": "B1 becomes research_trainable; then run pixel_space_conditional_diffusion_D against deterministic_regressor_R and corrected_only, freeze one recipe before final audits, and permit at most one immutable research preview candidate.",
+    "failure": "target_evidence_insufficient; park Hovi/Evo/FSM without model proliferation and continue independent public target acquisition.",
+    "current": "failure_until_new_measurements_exist"
+  }
+}
