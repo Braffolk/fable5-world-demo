@@ -5,4 +5,4 @@ pub const UPSTREAM_E57_CRATE_SHA256: &str =
     "fcfee41a50fbd70278c70cc477b8671ffe03951cba028cc2c057777a9ee6a3cc";
 pub const UPSTREAM_E57_VCS_COMMIT: &str = "a803a29fbad81d135d31f1de0187c263bb81a111";
 pub const VENDOR_PATCH_SET_SHA256: &str =
-    "e5f691c7cfac1ee336acb97a6c156d60d3b52f71d726fd7b8a44f5243db77f32";
+    "961da42e0d5e8f4a511f8b2eece60fdf9656056068dedd97fff1168f8427ef21";

@@ -363,10 +363,24 @@ fn validate_terminal_residuals(
     }
     for (record, stream) in point_cloud.prototype.iter().zip(streams) {
         let bit_size = record.data_type.bit_size();
-        if bit_size != 0 && stream.available() >= bit_size {
+        let used_bits_in_final_byte =
+            (point_cloud.records % 8) as usize * (bit_size % 8) % 8;
+        let expected_padding = (8 - used_bits_in_final_byte) % 8;
+        let available = stream.available();
+        if available != expected_padding {
             Error::invalid(
-                "Compressed vector retains a complete field code after its declared records",
+                "Compressed vector has an invalid terminal byte-alignment padding length",
             )?
+        }
+        if available != 0 {
+            let mut padding = stream.clone();
+            let value = padding
+                .extract(available)
+                .internal_err("Cannot inspect compressed-vector terminal padding")?;
+            let mask = (1_u64 << available) - 1;
+            if value & mask != 0 {
+                Error::invalid("Compressed vector has nonzero terminal byte-alignment padding")?
+            }
         }
     }
     Ok(())
@@ -394,35 +408,96 @@ mod tests {
     use super::*;
     use crate::{Record, RecordName};
 
+    fn stream_with_remaining_bits(consumed: usize, byte: u8) -> ByteStreamReadBuffer {
+        let mut stream = ByteStreamReadBuffer::new();
+        stream.append(&[byte]);
+        stream.extract(consumed).unwrap();
+        stream
+    }
+
     #[test]
-    fn terminal_residuals_allow_only_sub_code_padding() {
+    fn terminal_residuals_accept_exact_zero_byte_alignment_padding() {
         let point_cloud = PointCloud {
+            records: 245_788_993,
             prototype: vec![
                 Record {
+                    name: RecordName::CartesianX,
+                    data_type: RecordDataType::Single {
+                        min: None,
+                        max: None,
+                    },
+                },
+                Record {
                     name: RecordName::RowIndex,
-                    data_type: RecordDataType::Integer { min: 0, max: 5 },
+                    data_type: RecordDataType::Integer {
+                        min: 0,
+                        max: 16_383,
+                    },
                 },
                 Record {
                     name: RecordName::ColumnIndex,
+                    data_type: RecordDataType::Integer {
+                        min: 0,
+                        max: 32_767,
+                    },
+                },
+                Record {
+                    name: RecordName::CartesianInvalidState,
+                    data_type: RecordDataType::Integer { min: 0, max: 3 },
+                },
+                Record {
+                    name: RecordName::ReturnIndex,
                     data_type: RecordDataType::Integer { min: 7, max: 7 },
                 },
             ],
             ..PointCloud::default()
         };
-        let mut sub_code = ByteStreamReadBuffer::new();
-        sub_code.append(&[0]);
-        let _ = sub_code.extract(6);
-        let mut zero_bit = ByteStreamReadBuffer::new();
-        zero_bit.append(&[u8::MAX]);
-        assert!(validate_terminal_residuals(&point_cloud, &[sub_code, zero_bit]).is_ok());
+        let streams = [
+            ByteStreamReadBuffer::new(),
+            stream_with_remaining_bits(6, 0b0011_1111),
+            stream_with_remaining_bits(7, 0b0111_1111),
+            stream_with_remaining_bits(2, 0b0000_0011),
+            ByteStreamReadBuffer::new(),
+        ];
+        assert!(validate_terminal_residuals(&point_cloud, &streams).is_ok());
+    }
 
-        let mut complete_code = ByteStreamReadBuffer::new();
-        complete_code.append(&[0]);
-        let _ = complete_code.extract(5);
+    #[test]
+    fn terminal_residuals_reject_wrong_length_nonzero_and_zero_width_data() {
+        let point_cloud = PointCloud {
+            records: 1,
+            prototype: vec![Record {
+                name: RecordName::CartesianInvalidState,
+                data_type: RecordDataType::Integer { min: 0, max: 3 },
+            }],
+            ..PointCloud::default()
+        };
+
+        let wrong_length = stream_with_remaining_bits(3, 0);
         assert!(validate_terminal_residuals(
             &point_cloud,
-            &[complete_code, ByteStreamReadBuffer::new()],
+            &[wrong_length],
         )
         .is_err());
+
+        let mut extra_zero_byte = ByteStreamReadBuffer::new();
+        extra_zero_byte.append(&[0, 0]);
+        extra_zero_byte.extract(2).unwrap();
+        assert!(validate_terminal_residuals(&point_cloud, &[extra_zero_byte]).is_err());
+
+        let nonzero = stream_with_remaining_bits(2, 0b0000_0100);
+        assert!(validate_terminal_residuals(&point_cloud, &[nonzero]).is_err());
+
+        let zero_width = PointCloud {
+            records: 1,
+            prototype: vec![Record {
+                name: RecordName::ReturnIndex,
+                data_type: RecordDataType::Integer { min: 7, max: 7 },
+            }],
+            ..PointCloud::default()
+        };
+        let mut unexpected_data = ByteStreamReadBuffer::new();
+        unexpected_data.append(&[0]);
+        assert!(validate_terminal_residuals(&zero_width, &[unexpected_data]).is_err());
     }
 }
