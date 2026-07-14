@@ -14,7 +14,7 @@
   "patchSet": {
     "manifestPath": "PATCH-MANIFEST.txt",
     "manifestFormat": "sorted UTF-8 lines: <relative-path> <upstream-sha256> <vendored-sha256> followed by LF",
-    "manifestSha256": "961da42e0d5e8f4a511f8b2eece60fdf9656056068dedd97fff1168f8427ef21"
+    "manifestSha256": "7ea3abf5c71d8a942489fc2e5dd991fe857fc5e03ed48fdcdfedaf7f638d0a72"
   },
   "crc": {
     "implementation": "vendored e57 pure-Rust CRC",

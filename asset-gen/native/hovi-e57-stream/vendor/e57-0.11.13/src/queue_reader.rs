@@ -362,15 +362,13 @@ fn validate_terminal_residuals(
         Error::internal("Terminal bytestream count does not match prototype size")?
     }
     for (record, stream) in point_cloud.prototype.iter().zip(streams) {
-        let bit_size = record.data_type.bit_size();
-        let used_bits_in_final_byte =
-            (point_cloud.records % 8) as usize * (bit_size % 8) % 8;
-        let expected_padding = (8 - used_bits_in_final_byte) % 8;
+        let expected_padding = terminal_padding_bits(point_cloud.records, &record.data_type);
         let available = stream.available();
         if available != expected_padding {
-            Error::invalid(
-                "Compressed vector has an invalid terminal byte-alignment padding length",
-            )?
+            Error::invalid(format!(
+                "Compressed vector field {:?} has {available} terminal padding bits; expected {expected_padding}",
+                record.name,
+            ))?
         }
         if available != 0 {
             let mut padding = stream.clone();
@@ -379,11 +377,29 @@ fn validate_terminal_residuals(
                 .internal_err("Cannot inspect compressed-vector terminal padding")?;
             let mask = (1_u64 << available) - 1;
             if value & mask != 0 {
-                Error::invalid("Compressed vector has nonzero terminal byte-alignment padding")?
+                Error::invalid("Compressed vector has nonzero terminal codec-word padding")?
             }
         }
     }
     Ok(())
+}
+
+fn terminal_padding_bits(records: u64, data_type: &RecordDataType) -> usize {
+    let bit_size = data_type.bit_size();
+    let word_bits = match data_type {
+        RecordDataType::Integer { .. } | RecordDataType::ScaledInteger { .. } if bit_size > 0 => {
+            match bit_size {
+                1..=8 => 8,
+                9..=16 => 16,
+                17..=32 => 32,
+                33..=64 => 64,
+                _ => unreachable!("E57 integer fields cannot exceed 64 bits"),
+            }
+        }
+        _ => return 0,
+    };
+    let used_bits = (records % word_bits as u64) as usize * bit_size % word_bits;
+    (word_bits - used_bits) % word_bits
 }
 
 fn skip_exact<T: Read + Seek>(
@@ -408,15 +424,42 @@ mod tests {
     use super::*;
     use crate::{Record, RecordName};
 
-    fn stream_with_remaining_bits(consumed: usize, byte: u8) -> ByteStreamReadBuffer {
+    fn stream_with_remaining_bits(available: usize, nonzero: bool) -> ByteStreamReadBuffer {
+        if available == 0 {
+            return ByteStreamReadBuffer::new();
+        }
+        let consumed = (8 - available % 8) % 8;
+        let mut bytes = vec![0_u8; (consumed + available).div_ceil(8)];
+        if nonzero {
+            bytes[consumed / 8] |= 1 << (consumed % 8);
+        }
         let mut stream = ByteStreamReadBuffer::new();
-        stream.append(&[byte]);
+        stream.append(&bytes);
         stream.extract(consumed).unwrap();
         stream
     }
 
+    fn integer_data_type(bit_size: usize, scaled: bool) -> RecordDataType {
+        let (min, max) = match bit_size {
+            1..=62 => (0, (1_i64 << bit_size) - 1),
+            63 => (0, i64::MAX),
+            64 => (i64::MIN, i64::MAX),
+            _ => panic!("invalid integer fixture width"),
+        };
+        if scaled {
+            RecordDataType::ScaledInteger {
+                min,
+                max,
+                scale: 0.001,
+                offset: 0.0,
+            }
+        } else {
+            RecordDataType::Integer { min, max }
+        }
+    }
+
     #[test]
-    fn terminal_residuals_accept_exact_zero_byte_alignment_padding() {
+    fn terminal_residuals_accept_scan_zero_codec_word_alignment() {
         let point_cloud = PointCloud {
             records: 245_788_993,
             prototype: vec![
@@ -454,12 +497,105 @@ mod tests {
         };
         let streams = [
             ByteStreamReadBuffer::new(),
-            stream_with_remaining_bits(6, 0b0011_1111),
-            stream_with_remaining_bits(7, 0b0111_1111),
-            stream_with_remaining_bits(2, 0b0000_0011),
+            stream_with_remaining_bits(2, false),
+            stream_with_remaining_bits(1, false),
+            stream_with_remaining_bits(6, false),
             ByteStreamReadBuffer::new(),
         ];
         assert!(validate_terminal_residuals(&point_cloud, &streams).is_ok());
+    }
+
+    #[test]
+    fn terminal_residuals_accept_scan_one_codec_word_alignment() {
+        let point_cloud = PointCloud {
+            records: 266_939_657,
+            prototype: vec![
+                Record {
+                    name: RecordName::RowIndex,
+                    data_type: RecordDataType::Integer {
+                        min: 0,
+                        max: 16_383,
+                    },
+                },
+                Record {
+                    name: RecordName::ColumnIndex,
+                    data_type: RecordDataType::Integer {
+                        min: 0,
+                        max: 32_767,
+                    },
+                },
+                Record {
+                    name: RecordName::CartesianInvalidState,
+                    data_type: RecordDataType::Integer { min: 0, max: 3 },
+                },
+            ],
+            ..PointCloud::default()
+        };
+        let streams = [
+            stream_with_remaining_bits(2, false),
+            stream_with_remaining_bits(9, false),
+            stream_with_remaining_bits(6, false),
+        ];
+        assert!(validate_terminal_residuals(&point_cloud, &streams).is_ok());
+
+        let byte_aligned_column = [
+            stream_with_remaining_bits(2, false),
+            stream_with_remaining_bits(1, false),
+            stream_with_remaining_bits(6, false),
+        ];
+        assert!(validate_terminal_residuals(&point_cloud, &byte_aligned_column).is_err());
+    }
+
+    #[test]
+    fn terminal_residuals_cover_all_integer_widths_and_word_residues() {
+        for scaled in [false, true] {
+            for bit_size in 1..=64 {
+                let data_type = integer_data_type(bit_size, scaled);
+                let word_bits = match bit_size {
+                    1..=8 => 8,
+                    9..=16 => 16,
+                    17..=32 => 32,
+                    _ => 64,
+                };
+                for record_residue in 0..word_bits {
+                    let point_cloud = PointCloud {
+                        records: record_residue as u64,
+                        prototype: vec![Record {
+                            name: RecordName::RowIndex,
+                            data_type: data_type.clone(),
+                        }],
+                        ..PointCloud::default()
+                    };
+                    let expected = (word_bits - record_residue * bit_size % word_bits) % word_bits;
+                    assert_eq!(
+                        terminal_padding_bits(point_cloud.records, &data_type),
+                        expected
+                    );
+                    assert!(validate_terminal_residuals(
+                        &point_cloud,
+                        &[stream_with_remaining_bits(expected, false)],
+                    )
+                    .is_ok());
+                    assert!(validate_terminal_residuals(
+                        &point_cloud,
+                        &[stream_with_remaining_bits(expected + 1, false)],
+                    )
+                    .is_err());
+                    if expected > 0 {
+                        assert!(validate_terminal_residuals(
+                            &point_cloud,
+                            &[stream_with_remaining_bits(expected - 1, false)],
+                        )
+                        .is_err());
+                        assert!(validate_terminal_residuals(
+                            &point_cloud,
+                            &[stream_with_remaining_bits(expected, true)],
+                        )
+                        .is_err());
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -473,19 +609,15 @@ mod tests {
             ..PointCloud::default()
         };
 
-        let wrong_length = stream_with_remaining_bits(3, 0);
-        assert!(validate_terminal_residuals(
-            &point_cloud,
-            &[wrong_length],
-        )
-        .is_err());
+        let wrong_length = stream_with_remaining_bits(5, false);
+        assert!(validate_terminal_residuals(&point_cloud, &[wrong_length]).is_err());
 
         let mut extra_zero_byte = ByteStreamReadBuffer::new();
         extra_zero_byte.append(&[0, 0]);
         extra_zero_byte.extract(2).unwrap();
         assert!(validate_terminal_residuals(&point_cloud, &[extra_zero_byte]).is_err());
 
-        let nonzero = stream_with_remaining_bits(2, 0b0000_0100);
+        let nonzero = stream_with_remaining_bits(6, true);
         assert!(validate_terminal_residuals(&point_cloud, &[nonzero]).is_err());
 
         let zero_width = PointCloud {
