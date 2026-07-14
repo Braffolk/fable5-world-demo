@@ -1,4 +1,4 @@
-"""Retain only the frozen Evo plot-1086 selector CSV from Fairdata."""
+"""Retain frozen Evo selector and explicitly authorized plot-1086 source bytes."""
 from __future__ import annotations
 
 import argparse
@@ -18,6 +18,8 @@ from ..evidence.evo.selection import EvoArtifact, EvoSelection, load_evo_selecti
 
 _PLAN_SCHEMA = "evo-selector-retention-plan/1.0.0"
 _MANIFEST_SCHEMA = "evo-selector-retention/1.0.0"
+_PLOT_PLAN_SCHEMA = "evo-plot-retention-plan/1.0.0"
+_PLOT_MANIFEST_SCHEMA = "evo-plot-retention/1.0.0"
 _DATASET_RECORD_URL = (
     "https://metax.fairdata.fi/v3/datasets/"
     "b1dac2b9-93cb-407e-91f1-eeb79c8cdd92"
@@ -31,6 +33,7 @@ _SIGNED_URL_HOST = "download.fairdata.fi"
 _DATASET_UUID = "b1dac2b9-93cb-407e-91f1-eeb79c8cdd92"
 _DATASET_DOI = "10.23729/fd-5a800660-8bd8-35ef-ac9f-ac5c45f7fa77"
 _SELECTOR_PATH = "/Evo_TLS_2024_stand_attributes_v2.csv"
+_PLOT_PATH = "/Evo_TLS_2024_treeanal_pointclouds/1086_pointcloud_georef.laz"
 _RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 
 
@@ -82,6 +85,42 @@ def build_evo_retention_plan(selection_path: Path | None = None) -> EvoRetention
         "authorized_scope": "stand_attribute_selector_index_only",
         "artifact": _artifact_identity(artifact),
         "point_cloud_fetch_authorized": False,
+        "signed_url_policy": "generate_in_memory_never_persist",
+    }
+    retention_id = hashlib.sha256(_canonical_json(identity)).hexdigest()
+    return EvoRetentionPlan(selection, artifact, identity, retention_id)
+
+
+def build_evo_plot_retention_plan(
+    selection_path: Path | None = None,
+    *,
+    authorize_exact_plot: bool = False,
+) -> EvoRetentionPlan:
+    """Build the exact one-file LAZ plan only after an explicit caller authorization."""
+    if not authorize_exact_plot:
+        raise ValueError("Evo plot retention requires --authorize-exact-plot")
+    selection = load_evo_selection(selection_path)
+    matches = tuple(
+        artifact for artifact in selection.artifacts if artifact.source_path == _PLOT_PATH
+    )
+    if len(matches) != 1:
+        raise ValueError("frozen Evo plot-1086 artifact is absent or ambiguous")
+    artifact = matches[0]
+    if artifact.retention_authorized:
+        raise ValueError("frozen selector config unexpectedly authorizes point-cloud retention")
+    identity = {
+        "schema_version": _PLOT_PLAN_SCHEMA,
+        "selection_config_sha256": selection.config_sha256,
+        "dataset": {
+            "dataset_uuid": selection.dataset_uuid,
+            "dataset_doi": selection.dataset_doi,
+            "dataset_version": 2,
+            "published_revision": 2,
+        },
+        "authorized_scope": "exact_plot_1086_point_cloud_only",
+        "authorization_basis": "explicit_operator_request_2026-07-14",
+        "artifact": _artifact_identity(artifact),
+        "selector_config_retention_authorized": False,
         "signed_url_policy": "generate_in_memory_never_persist",
     }
     retention_id = hashlib.sha256(_canonical_json(identity)).hexdigest()
@@ -269,6 +308,69 @@ class _FairdataClient:
                 time.sleep(min(8.0, 2.0 ** (attempt - 1)))
         raise RuntimeError("Fairdata selector download exhausted retries")
 
+    def fetch_verified_artifact_to(
+        self,
+        plan: EvoRetentionPlan,
+        destination: Path,
+        *,
+        log: Callable[[str], None] = print,
+    ) -> None:
+        """Stream one frozen artifact, then atomically publish only verified bytes."""
+        temporary = destination.with_name(destination.name + ".part")
+        if temporary.exists():
+            raise ValueError("stale Evo artifact staging file requires manual inspection")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        for attempt in range(1, self.cfg.max_retries + 1):
+            signed_url = self._authorize(plan)
+            digest = hashlib.sha256()
+            byte_count = 0
+            try:
+                self._pace(signed_url)
+                with self.session.get(
+                    signed_url,
+                    headers={"Accept-Encoding": "identity"},
+                    timeout=(30, 300),
+                    stream=True,
+                ) as response:
+                    if response.status_code in _RETRYABLE_STATUS:
+                        response = None
+                    elif response.status_code != 200:
+                        raise RuntimeError(
+                            f"Fairdata artifact download HTTP {response.status_code}"
+                        )
+                    elif urlsplit(response.url).hostname != _SIGNED_URL_HOST:
+                        raise RuntimeError("Fairdata artifact download left the allowed host")
+                    elif "text/html" in response.headers.get("Content-Type", "").lower():
+                        raise RuntimeError("Fairdata artifact endpoint returned HTML")
+                    else:
+                        with temporary.open("xb") as target:
+                            for block in response.iter_content(chunk_size=8 << 20):
+                                if not block:
+                                    continue
+                                target.write(block)
+                                digest.update(block)
+                                byte_count += len(block)
+                            target.flush()
+                            os.fsync(target.fileno())
+                        if (
+                            byte_count != plan.artifact.bytes
+                            or digest.hexdigest() != plan.artifact.sha256
+                        ):
+                            raise ValueError(
+                                "Fairdata artifact bytes differ from the frozen tuple"
+                            )
+                        temporary.replace(destination)
+                        log(f"verified Evo artifact retained: {destination}")
+                        return
+            except requests.RequestException:
+                pass
+            finally:
+                if temporary.exists():
+                    temporary.unlink()
+            if attempt < self.cfg.max_retries:
+                time.sleep(min(8.0, 2.0 ** (attempt - 1)))
+        raise RuntimeError("Fairdata artifact download exhausted retries")
+
 
 def _manifest(plan: EvoRetentionPlan, destination: Path, root: Path) -> dict[str, Any]:
     return {
@@ -340,6 +442,72 @@ def retain_evo_selector(
     return manifest_path
 
 
+def retain_evo_plot(
+    selection_path: Path | None = None,
+    output_root: Path | None = None,
+    *,
+    authorize_exact_plot: bool = False,
+    log: Callable[[str], None] = print,
+) -> Path:
+    plan = build_evo_plot_retention_plan(
+        selection_path,
+        authorize_exact_plot=authorize_exact_plot,
+    )
+    root = (output_root or DATA_IN / "evidence" / "evo") / plan.retention_id
+    destination = _safe_destination(root / "files", plan.artifact.source_path)
+    manifest_path = root / "retained.json"
+    client = _FairdataClient(load_base().fetch)
+
+    client.verify_frozen_remote(plan)
+    if destination.exists():
+        if (
+            not destination.is_file()
+            or destination.stat().st_size != plan.artifact.bytes
+            or _sha256_file(destination) != plan.artifact.sha256
+        ):
+            raise ValueError("retained Evo plot failed frozen byte verification")
+    else:
+        client.fetch_verified_artifact_to(plan, destination, log=log)
+
+    manifest = {
+        "schema_version": _PLOT_MANIFEST_SCHEMA,
+        "status": "complete",
+        "retention_id": plan.retention_id,
+        "plan_sha256": plan.retention_id,
+        "plan_identity": plan.identity,
+        "selection": {
+            "config_name": plan.selection.path.name,
+            "config_sha256": plan.selection.config_sha256,
+        },
+        "remote_preflight": {
+            "dataset_version_verified": 2,
+            "published_revision_verified": 2,
+            "file_inventory_count_verified": 57,
+            "all_frozen_artifact_tuples_verified": True,
+        },
+        "authorized_scope": "exact_plot_1086_point_cloud_only",
+        "operator_authorization_required": True,
+        "selector_config_retention_authorized": False,
+        "signed_url_persisted": False,
+        "artifact": {
+            **_artifact_identity(plan.artifact),
+            "relative_path": destination.relative_to(root).as_posix(),
+            "retained_bytes": destination.stat().st_size,
+            "verified": True,
+        },
+        "qualification": {
+            "role": "raw_candidate",
+            "status": "unqualified",
+            "target_truth": False,
+            "synthesis_authorized": False,
+        },
+    }
+    _atomic_json(manifest_path, manifest)
+    log(f"Evo plot retention id: {plan.retention_id}")
+    log(f"Evo plot manifest SHA-256: {_sha256_file(manifest_path)}")
+    return manifest_path
+
+
 def _main() -> None:
     parser = argparse.ArgumentParser(
         description="Retain only the frozen Evo plot-1086 selector CSV."
@@ -354,9 +522,29 @@ def _main() -> None:
         type=Path,
         default=DATA_IN / "evidence" / "evo",
     )
+    parser.add_argument(
+        "--plot",
+        action="store_true",
+        help="retain the exact frozen plot-1086 LAZ instead of the selector CSV",
+    )
+    parser.add_argument(
+        "--authorize-exact-plot",
+        action="store_true",
+        help="explicitly authorize only the frozen plot-1086 LAZ tuple",
+    )
     args = parser.parse_args()
-    manifest = retain_evo_selector(args.selection, args.output_root)
-    print(f"Evo selector retention manifest: {manifest}")
+    if args.authorize_exact_plot and not args.plot:
+        parser.error("--authorize-exact-plot requires --plot")
+    if args.plot:
+        manifest = retain_evo_plot(
+            args.selection,
+            args.output_root,
+            authorize_exact_plot=args.authorize_exact_plot,
+        )
+        print(f"Evo plot retention manifest: {manifest}")
+    else:
+        manifest = retain_evo_selector(args.selection, args.output_root)
+        print(f"Evo selector retention manifest: {manifest}")
 
 
 if __name__ == "__main__":
