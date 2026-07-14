@@ -1,0 +1,114 @@
+{
+  "schema_version": "opara-1038-sample-slope-metadata-audit/1.0.0",
+  "checked_at": "2026-07-14",
+  "scope": {
+    "mode": "metadata_only_reauthorization_after_plot_sample_no_go",
+    "predecessor_commit": "e13b895",
+    "archive_downloaded_bytes": 0,
+    "archive_or_geometry_opened": false,
+    "stop_on_first_missing_required_promise": true
+  },
+  "dataset": {
+    "doi": "10.25532/OPARA-1038",
+    "item_uuid": "fba06620-4280-41b3-9f16-cc183c135f08",
+    "license": "CC-BY-4.0",
+    "item_withdrawn": false,
+    "item_discoverable": true,
+    "item_last_modified": "2026-02-05T09:25:21.516+00:00"
+  },
+  "exact_bitstream": {
+    "uuid": "9242ec90-3798-47a7-bcfc-bfa149221523",
+    "name": "00_A_sample_slope.7z",
+    "bytes": 4597207850,
+    "publisher_checksum": {
+      "algorithm": "MD5",
+      "value": "f1ee962f8a8a83fcd73959c6fb62734d"
+    },
+    "bundle": "ORIGINAL",
+    "publisher_description": null,
+    "metadata_url": "https://opara.zih.tu-dresden.de/server/api/core/bitstreams/9242ec90-3798-47a7-bcfc-bfa149221523",
+    "content_url_not_fetched": "https://opara.zih.tu-dresden.de/server/api/core/bitstreams/9242ec90-3798-47a7-bcfc-bfa149221523/content"
+  },
+  "source_ledger": [
+    {
+      "role": "live_official_bitstream_metadata",
+      "url": "https://opara.zih.tu-dresden.de/server/api/core/bitstreams/9242ec90-3798-47a7-bcfc-bfa149221523",
+      "response_sha256": "f0c09a47c63ca9580e01f5620b495069a37046c8fd4da4abe78c445acbfa3f35"
+    },
+    {
+      "role": "live_official_item_and_license_metadata",
+      "url": "https://opara.zih.tu-dresden.de/server/api/core/items/fba06620-4280-41b3-9f16-cc183c135f08",
+      "response_sha256": "77d736104439effa5775ace84b444231dd55b47418b62c97fb13d0afdfaf1830"
+    },
+    {
+      "role": "publisher_data_description",
+      "path": "asset-gen/data/in/evidence/opara_1038/db8163ca878efc5ff98c0f68474724678f524c7b18ac03422d93005e7be0502e/records/Data-description-template.pdf",
+      "sha256": "3c31f02b8d1acbb8859642a3d26d4bafcba8599f1eb2069723621cfe860193b6",
+      "relevant_sections": [
+        "3.3 Data processing",
+        "4.1 File inventory - Slope scale",
+        "4.2 File naming convention - slope"
+      ]
+    },
+    {
+      "role": "primary_dataset_paper",
+      "doi": "10.5194/essd-18-1275-2026",
+      "path": "asset-gen/data/in/evidence/opara_1038/db8163ca878efc5ff98c0f68474724678f524c7b18ac03422d93005e7be0502e/records/essd-18-1275-2026.pdf",
+      "sha256": "00734e92d869f10518a10f8bcfc228abc4f68c172a6b270e8bdfd80a4bea277b"
+    },
+    {
+      "role": "slope_method_and_accuracy_paper",
+      "doi": "10.5194/soil-11-1007-2025",
+      "path": "asset-gen/data/in/evidence/opara_1038/db8163ca878efc5ff98c0f68474724678f524c7b18ac03422d93005e7be0502e/records/soil-11-1007-2025.pdf",
+      "sha256": "0535e10619332a33bdf1d77f41d4f80bc35b8d4249b4a12cd401d9661255de5c",
+      "relevant_sections": [
+        "2.1 System setup",
+        "2.4 Reference data for the accuracy assessment",
+        "3.3 Ground control point tracking",
+        "3.4 Soil reconstruction",
+        "3.5 Accuracy assessment",
+        "4.1 Absolute accuracy"
+      ]
+    }
+  ],
+  "required_promises": [
+    {
+      "requirement": "exact_vegetation_free_cultivated_slope_epoch_or_event",
+      "status": "not_promised_for_exact_bitstream",
+      "evidence": "The method paper documents a slope maintained by grubbing and named freshly tilled epochs, including an immediately post-tillage reference on 2021-08-24. The exact sample bitstream has no publisher description, member inventory, event list, or selector binding any such epoch to this archive.",
+      "gate": "fail"
+    },
+    {
+      "requirement": "processed_and_raw_geometry_support_for_same_event",
+      "status": "generic_dataset_structure_only",
+      "evidence": "The data description says the general II_slope hierarchy has raw SLR/UAV imagery and processed dense clouds, precision maps and M3C2. It does not document which of those members or matching epochs are retained in 00_A_sample_slope.7z.",
+      "gate": "fail"
+    },
+    {
+      "requirement": "per_model_held_out_control_roles_and_separate_horizontal_vertical_residuals",
+      "status": "not_promised",
+      "evidence": "The method paper says at least one GCP was excluded as a CP, and the generic file description lists log/RMSE files. Neither source promises that this sample retains per-model GCP/CP role assignments or reproducible separate X/Y and Z CP residuals. Published aggregate or propagated point precision is not a substitute.",
+      "gate": "fail"
+    },
+    {
+      "requirement": "independent_tls_and_uav_reference_surface_identities",
+      "status": "not_promised_for_exact_bitstream_and_event",
+      "evidence": "The method paper identifies TLS and UAV acquisitions on 2020-08-11, but the sample bitstream has no member description binding those surfaces to retained files or to a same-day time-lapse model. The generic slope inventory mentions processed UAV dense clouds but does not list a TLS product.",
+      "gate": "fail"
+    },
+    {
+      "requirement": "machine_usable_surface_object_and_visibility_masks",
+      "status": "not_promised",
+      "evidence": "The data description promises filtered and unfiltered point clouds and describes removal of vegetation/non-soil elements, but no vegetation, object, water, snow, GCP, boundary, occlusion, interpolation, or visibility mask artifact. The method paper documents shadowing and contamination failure modes rather than a published mask product.",
+      "gate": "fail"
+    }
+  ],
+  "decision": {
+    "status": "metadata_no_go",
+    "download_authorized": false,
+    "download_ceiling_bytes": 0,
+    "reason": "The exact 4.60 GB sample is not documented to contain the event binding, external-control artifacts, independent-reference identities, and masks required to justify a geometry download.",
+    "supersedes": "Any interpretation of replacement-target-selection-2.2026-07-14.json that treated generic full-dataset statements as promises about 00_A_sample_slope.7z.",
+    "resume_condition": "A publisher-side member manifest or updated official description must bind one named vegetation-free cultivated epoch to matching raw and processed geometry, per-model held-out CP roles with separate horizontal and vertical residuals, named same-epoch TLS/UAV references, and machine-usable exclusion and visibility masks. Only then may a new metadata audit consider a one-archive download ceiling."
+  }
+}
