@@ -5,6 +5,7 @@ mod error;
 mod input;
 mod inspect;
 mod json;
+mod materialize;
 mod probe;
 mod provenance;
 mod schema;
@@ -29,8 +30,9 @@ fn run() -> AppResult<()> {
         Command::Version => write_stdout(&version_json()),
         Command::DryRun(arguments) => write_stdout(&inspect::dry_run(&arguments)?),
         Command::Probe(arguments) => write_stdout(&probe::probe(&arguments)?),
+        Command::Materialize(arguments) => write_stdout(&materialize::materialize(&arguments)?),
         Command::Extract => Err(AppError::unavailable(
-            "full point extraction is intentionally unavailable; only the authority-fixed bounded probe is implemented",
+            "generic extraction is unavailable; use the authority-fixed materialize command",
         )),
     }
 }
@@ -48,7 +50,7 @@ fn version_json() -> String {
     push_string(&mut output, VENDOR_PATCH_SET_SHA256);
     output.push_str(",\"errorSchema\":");
     push_string(&mut output, ERROR_SCHEMA);
-    output.push_str(",\"boundedProbeImplemented\":true,\"fullExtractionImplemented\":false}\n");
+    output.push_str(",\"boundedProbeImplemented\":true,\"spatialMaterializationImplemented\":true,\"fullExtractionImplemented\":false}\n");
     output
 }
 

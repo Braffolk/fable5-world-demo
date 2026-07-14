@@ -7,12 +7,15 @@ const HARD_MAX_XML_BYTES: u64 = 8 * 1024 * 1024;
 const HARD_MAX_SCANS: usize = 4096;
 const HARD_MAX_PROTOTYPE_FIELDS: usize = 1024;
 const HARD_MAX_JSON_BYTES: usize = 32 * 1024 * 1024;
+const HARD_MAX_MATERIALIZED_BYTES: u64 = 120 * 1024 * 1024 * 1024;
+const HARD_MAX_OPEN_FILES: usize = 24;
 
 #[derive(Debug)]
 pub enum Command {
     Version,
     DryRun(DryRunArgs),
     Probe(ProbeArgs),
+    Materialize(MaterializeArgs),
     Extract,
 }
 
@@ -39,12 +42,20 @@ pub struct ProbeArgs {
     pub output_fd: u32,
 }
 
+#[derive(Debug)]
+pub struct MaterializeArgs {
+    pub reader: DryRunArgs,
+    pub output_dir: PathBuf,
+    pub max_output_bytes: u64,
+    pub max_open_files: usize,
+}
+
 pub fn parse() -> AppResult<Command> {
     let mut arguments = std::env::args_os();
     let _program = arguments.next();
-    let command = arguments
-        .next()
-        .ok_or_else(|| AppError::usage("expected one of: version, dry-run, probe, extract"))?;
+    let command = arguments.next().ok_or_else(|| {
+        AppError::usage("expected one of: version, dry-run, probe, materialize, extract")
+    })?;
     let command = command
         .to_str()
         .ok_or_else(|| AppError::usage("command must be valid UTF-8"))?;
@@ -55,6 +66,7 @@ pub fn parse() -> AppResult<Command> {
             Ok(Command::Version)
         }
         "probe" => Ok(Command::Probe(parse_probe(remaining)?)),
+        "materialize" => Ok(Command::Materialize(parse_materialize(remaining)?)),
         "extract" => {
             require_empty(&remaining, "extract")?;
             Ok(Command::Extract)
@@ -62,6 +74,55 @@ pub fn parse() -> AppResult<Command> {
         "dry-run" => Ok(Command::DryRun(parse_dry_run(remaining)?)),
         _ => Err(AppError::usage(format!("unknown command: {command}"))),
     }
+}
+
+fn parse_materialize(arguments: Vec<OsString>) -> AppResult<MaterializeArgs> {
+    let mut output_dir = None;
+    let mut max_output_bytes = None;
+    let mut max_open_files = None;
+    let mut reader_arguments = Vec::with_capacity(arguments.len());
+    let mut index = 0;
+    while index < arguments.len() {
+        let option = utf8(&arguments[index], "option")?;
+        let value = arguments
+            .get(index + 1)
+            .ok_or_else(|| AppError::usage(format!("missing value for {option}")))?;
+        match option {
+            "--output-dir" => set_once(&mut output_dir, PathBuf::from(value), "output-dir")?,
+            "--max-output-bytes" => set_once(
+                &mut max_output_bytes,
+                parse_u64(value, option)?,
+                "max-output-bytes",
+            )?,
+            "--max-open-files" => set_once(
+                &mut max_open_files,
+                parse_usize(value, option)?,
+                "max-open-files",
+            )?,
+            _ => {
+                reader_arguments.push(arguments[index].clone());
+                reader_arguments.push(value.clone());
+            }
+        }
+        index += 2;
+    }
+    let parsed = MaterializeArgs {
+        reader: parse_dry_run(reader_arguments)?,
+        output_dir: required(output_dir, "--output-dir")?,
+        max_output_bytes: required(max_output_bytes, "--max-output-bytes")?,
+        max_open_files: required(max_open_files, "--max-open-files")?,
+    };
+    if parsed.max_output_bytes == 0 || parsed.max_output_bytes > HARD_MAX_MATERIALIZED_BYTES {
+        return Err(AppError::usage(format!(
+            "--max-output-bytes must be within 1..={HARD_MAX_MATERIALIZED_BYTES}"
+        )));
+    }
+    if !(5..=HARD_MAX_OPEN_FILES).contains(&parsed.max_open_files) {
+        return Err(AppError::usage(format!(
+            "--max-open-files must be within 5..={HARD_MAX_OPEN_FILES}"
+        )));
+    }
+    Ok(parsed)
 }
 
 fn parse_probe(arguments: Vec<OsString>) -> AppResult<ProbeArgs> {

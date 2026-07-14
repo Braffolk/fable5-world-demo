@@ -19,7 +19,7 @@ const START_ORDINAL: u64 = 0;
 const STOP_ORDINAL_EXCLUSIVE: u64 = 65_536;
 const CANONICAL_RECORD_BYTES: usize = 96;
 const EXPECTED_FILE_GUID: &str = "{C70845D7-08E0-4185-974C-EF84E9EDEA55}";
-const EXPECTED_SCANS: [(&str, u64, u64); 16] = [
+pub(crate) const EXPECTED_SCANS: [(&str, u64, u64); 16] = [
     ("0000000000000001", 245_788_993, 48),
     ("0000000000000002", 266_939_657, 4_906_634_044),
     ("0000000000000003", 265_134_729, 10_235_477_052),
@@ -147,7 +147,7 @@ pub fn probe(arguments: &ProbeArgs) -> AppResult<String> {
     )
 }
 
-fn validate_authorized_source(
+pub(crate) fn validate_authorized_source(
     reader: &E57Reader<BufReader<File>>,
     scans: &[PointCloud],
 ) -> AppResult<()> {
@@ -303,7 +303,7 @@ fn open_output(descriptor: u32, input_device: u64, input_inode: u64) -> AppResul
     Ok(file)
 }
 
-fn validate_scan_set(
+pub(crate) fn validate_scan_set(
     scans: &[PointCloud],
     arguments: &DryRunArgs,
     file_bytes: u64,

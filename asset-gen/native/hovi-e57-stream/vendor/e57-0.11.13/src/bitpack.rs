@@ -10,8 +10,12 @@ impl BitPack {
     pub fn unpack_doubles(
         stream: &mut ByteStreamReadBuffer,
         output: &mut VecDeque<RecordValue>,
+        max_items: usize,
     ) -> Result<()> {
-        while let Some(data) = stream.extract(64) {
+        for _ in 0..max_items {
+            let Some(data) = stream.extract(64) else {
+                break;
+            };
             let bytes = data.to_le_bytes();
             let value = f64::from_le_bytes(bytes);
             output.push_back(RecordValue::Double(value));
@@ -22,8 +26,12 @@ impl BitPack {
     pub fn unpack_singles(
         stream: &mut ByteStreamReadBuffer,
         output: &mut VecDeque<RecordValue>,
+        max_items: usize,
     ) -> Result<()> {
-        while let Some(data) = stream.extract(32) {
+        for _ in 0..max_items {
+            let Some(data) = stream.extract(32) else {
+                break;
+            };
             let bytes = (data as u32).to_le_bytes();
             let value = f32::from_le_bytes(bytes);
             output.push_back(RecordValue::Single(value));
@@ -36,12 +44,16 @@ impl BitPack {
         min: i64,
         max: i64,
         output: &mut VecDeque<RecordValue>,
+        max_items: usize,
     ) -> Result<()> {
         let (range, bits, mask) = integer_layout(min, max)?;
         if bits == 0 {
             return Ok(());
         }
-        while let Some(uint) = stream.extract(bits) {
+        for _ in 0..max_items {
+            let Some(uint) = stream.extract(bits) else {
+                break;
+            };
             let code = uint & mask;
             if i128::from(code) > range {
                 Error::invalid("Integer bit code exceeds the prototype's declared maximum")?
@@ -57,12 +69,16 @@ impl BitPack {
         min: i64,
         max: i64,
         output: &mut VecDeque<RecordValue>,
+        max_items: usize,
     ) -> Result<()> {
         let (range, bits, mask) = integer_layout(min, max)?;
         if bits == 0 {
             return Ok(());
         }
-        while let Some(uint) = stream.extract(bits) {
+        for _ in 0..max_items {
+            let Some(uint) = stream.extract(bits) else {
+                break;
+            };
             let code = uint & mask;
             if i128::from(code) > range {
                 Error::invalid("Scaled-integer bit code exceeds the prototype's declared maximum")?
@@ -102,7 +118,7 @@ mod tests {
         stream.append(&[0b1101_0001]);
         let mut output = VecDeque::new();
 
-        BitPack::unpack_ints(&mut stream, -2, 3, &mut output).unwrap();
+        BitPack::unpack_ints(&mut stream, -2, 3, &mut output, usize::MAX).unwrap();
 
         assert_eq!(
             output,
@@ -117,7 +133,7 @@ mod tests {
         stream.append(&[0b1101_0001]);
         let mut output = VecDeque::new();
 
-        BitPack::unpack_scaled_ints(&mut stream, -2, 3, &mut output).unwrap();
+        BitPack::unpack_scaled_ints(&mut stream, -2, 3, &mut output, usize::MAX).unwrap();
 
         assert_eq!(
             output,
@@ -136,7 +152,7 @@ mod tests {
         stream.append(&[0b0000_0110]);
         let mut output = VecDeque::new();
 
-        assert!(BitPack::unpack_ints(&mut stream, 0, 5, &mut output).is_err());
+        assert!(BitPack::unpack_ints(&mut stream, 0, 5, &mut output, 1).is_err());
         assert!(output.is_empty());
     }
 
@@ -145,7 +161,7 @@ mod tests {
         let mut constant_stream = ByteStreamReadBuffer::new();
         constant_stream.append(&[u8::MAX]);
         let mut constant_output = VecDeque::new();
-        BitPack::unpack_ints(&mut constant_stream, 7, 7, &mut constant_output).unwrap();
+        BitPack::unpack_ints(&mut constant_stream, 7, 7, &mut constant_output, usize::MAX).unwrap();
         assert!(constant_output.is_empty());
         assert_eq!(constant_stream.available(), 8);
 
@@ -157,6 +173,7 @@ mod tests {
             i64::MIN,
             i64::MAX,
             &mut full_width_output,
+            usize::MAX,
         )
         .unwrap();
         assert_eq!(
@@ -164,5 +181,30 @@ mod tests {
             VecDeque::from([RecordValue::Integer(i64::MAX)])
         );
         assert_eq!(full_width_stream.available(), 0);
+    }
+
+    #[test]
+    fn record_budget_leaves_final_integer_padding_unconsumed() {
+        let mut stream = ByteStreamReadBuffer::new();
+        // Two 3-bit records followed by an otherwise-invalid 2-bit suffix.
+        stream.append(&[0b1101_0001]);
+        let mut output = VecDeque::new();
+
+        BitPack::unpack_ints(&mut stream, -2, 3, &mut output, 2).unwrap();
+
+        assert_eq!(output.len(), 2);
+        assert_eq!(stream.available(), 2);
+    }
+
+    #[test]
+    fn record_budget_applies_to_fixed_width_streams() {
+        let mut stream = ByteStreamReadBuffer::new();
+        stream.append(&[0_u8; 8]);
+        let mut output = VecDeque::new();
+
+        BitPack::unpack_singles(&mut stream, &mut output, 1).unwrap();
+
+        assert_eq!(output, VecDeque::from([RecordValue::Single(0.0)]));
+        assert_eq!(stream.available(), 32);
     }
 }

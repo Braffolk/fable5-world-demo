@@ -56,6 +56,20 @@ impl<'a, T: Read + Seek> PointCloudReaderRaw<'a, T> {
             }
         }
     }
+
+    /// Validate that the iterator consumed exactly the publisher-declared
+    /// records and that the compressed-vector section has no further records.
+    pub fn finish(mut self) -> Result<()> {
+        if self.failed {
+            return crate::Error::invalid("Cannot finish a failed raw point reader");
+        }
+        if self.read != self.records {
+            return crate::Error::invalid(
+                "Raw point reader did not consume its declared record count",
+            );
+        }
+        self.queue_reader.finish()
+    }
 }
 
 impl<T: Read + Seek> Iterator for PointCloudReaderRaw<'_, T> {

@@ -23,6 +23,7 @@ pub struct QueueReader<'a, T: Read + Seek> {
     queues: Vec<VecDeque<RecordValue>>,
     section_end: u64,
     records_popped: u64,
+    data_packets_read: u64,
 }
 
 impl<'a, T: Read + Seek> QueueReader<'a, T> {
@@ -83,6 +84,7 @@ impl<'a, T: Read + Seek> QueueReader<'a, T> {
             queues: vec![VecDeque::new(); pc.prototype.len()],
             section_end,
             records_popped: 0,
+            data_packets_read: 0,
         })
     }
 
@@ -154,6 +156,10 @@ impl<'a, T: Read + Seek> QueueReader<'a, T> {
                 skip_exact(self.reader, remaining, "ignored packet")?
             }
             PacketHeader::Data(header) => {
+                self.data_packets_read = self
+                    .data_packets_read
+                    .checked_add(1)
+                    .internal_err("Data packet counter overflow")?;
                 if header.bytestream_count as usize != self.byte_streams.len() {
                     Error::invalid("Bytestream count does not match prototype size")?
                 }
@@ -256,16 +262,46 @@ impl<'a, T: Read + Seek> QueueReader<'a, T> {
         Ok(())
     }
 
+    /// Consume the rest of the section after the declared records were popped.
+    /// Index and ignored packets are allowed; any additional complete record is not.
+    pub fn finish(&mut self) -> Result<()> {
+        if self.records_popped != self.pc.records {
+            Error::invalid("Compressed vector ended before its declared record count")?
+        }
+        if self.available() != 0 {
+            Error::invalid("Decoded queues contain records beyond the declared record count")?
+        }
+        while self.reader.logical_position() < self.section_end {
+            let data_packets_before = self.data_packets_read;
+            self.advance()?;
+            if self.data_packets_read != data_packets_before {
+                Error::invalid("Compressed vector has a data packet after its declared records")?
+            }
+            if self.available() != 0 {
+                Error::invalid("Compressed vector contains records beyond its declared count")?
+            }
+        }
+        if self.reader.logical_position() != self.section_end {
+            Error::invalid("Compressed vector reader did not finish at the section boundary")?
+        }
+        Ok(())
+    }
+
     /// Extracts raw values from byte streams into queues.
-    fn parse_byte_streams(&mut self, min_queue_size: usize) -> Result<()> {
+    fn parse_byte_streams(&mut self, target_queue_size: usize) -> Result<()> {
         for (i, r) in self.pc.prototype.iter().enumerate() {
+            let max_items = target_queue_size.saturating_sub(self.queues[i].len());
             match r.data_type {
-                RecordDataType::Single { .. } => {
-                    BitPack::unpack_singles(&mut self.byte_streams[i], &mut self.queues[i])?
-                }
-                RecordDataType::Double { .. } => {
-                    BitPack::unpack_doubles(&mut self.byte_streams[i], &mut self.queues[i])?
-                }
+                RecordDataType::Single { .. } => BitPack::unpack_singles(
+                    &mut self.byte_streams[i],
+                    &mut self.queues[i],
+                    max_items,
+                )?,
+                RecordDataType::Double { .. } => BitPack::unpack_doubles(
+                    &mut self.byte_streams[i],
+                    &mut self.queues[i],
+                    max_items,
+                )?,
                 RecordDataType::ScaledInteger { min, max, .. } => {
                     if r.data_type.bit_size() == 0 {
                         // If the bit size of an record is zero, we don't know how many items to unpack.
@@ -273,7 +309,7 @@ impl<'a, T: Read + Seek> QueueReader<'a, T> {
                         // Since this can only happen when min=max we know that min is the expected value.
                         // We use the supplied minimal size to ensure that we create enough items
                         // to fill the queue enough to not be the limiting queue.
-                        while self.queues[i].len() < min_queue_size {
+                        while self.queues[i].len() < target_queue_size {
                             self.queues[i].push_back(RecordValue::ScaledInteger(min));
                         }
                     } else {
@@ -282,13 +318,14 @@ impl<'a, T: Read + Seek> QueueReader<'a, T> {
                             min,
                             max,
                             &mut self.queues[i],
+                            max_items,
                         )?
                     }
                 }
                 RecordDataType::Integer { min, max } => {
                     if r.data_type.bit_size() == 0 {
                         // See comment above for scaled integers!
-                        while self.queues[i].len() < min_queue_size {
+                        while self.queues[i].len() < target_queue_size {
                             self.queues[i].push_back(RecordValue::Integer(min));
                         }
                     } else {
@@ -297,10 +334,19 @@ impl<'a, T: Read + Seek> QueueReader<'a, T> {
                             min,
                             max,
                             &mut self.queues[i],
+                            max_items,
                         )?
                     }
                 }
             };
+        }
+
+        if self
+            .queues
+            .iter()
+            .any(|queue| queue.len() != target_queue_size)
+        {
+            Error::invalid("Compressed-vector bytestreams did not produce aligned record queues")?
         }
 
         Ok(())
