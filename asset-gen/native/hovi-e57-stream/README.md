@@ -26,12 +26,13 @@ once through section EOF, and writes fixed 28-byte raw records. Valid records
 inside the fixed 0.025 m-tick AOI are partitioned by scan and AOI-local 4 m shard;
 direction-only and invalid records go to one stream per scan. Publisher poses are
 used only for file-frame AOI assignment. Stored XYZ remain raw scan-local scaled
-integers. The command caps all output at 120 GiB and reserves four descriptors,
-so `--max-open-files 24` permits at most 20 simultaneous output files. Its stdout
+integers. The command caps all output at 120 GiB and reserves six descriptors for
+stdio, the inherited executable/source, and the duplicated source, so
+`--max-open-files 24` permits at most 18 simultaneous output files. Its stdout
 report binds counts, paths, sizes, and SHA-256 digests, but the directory is
 staging-only and is not an atomic publication transaction.
-Open shard sinks use bounded 1 MiB buffers; the 20-output-file maximum therefore
-reserves at most 20 MiB for write buffering.
+Open shard sinks use bounded 1 MiB buffers; the 18-output-file maximum therefore
+reserves at most 18 MiB for write buffering.
 
 The optional `e57/crc32c` feature is deliberately disabled. This boundary uses
 the vendored crate's pure-Rust CRC implementation rather than adding an unsafe

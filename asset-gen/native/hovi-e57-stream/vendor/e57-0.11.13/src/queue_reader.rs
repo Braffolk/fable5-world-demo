@@ -284,6 +284,7 @@ impl<'a, T: Read + Seek> QueueReader<'a, T> {
         if self.reader.logical_position() != self.section_end {
             Error::invalid("Compressed vector reader did not finish at the section boundary")?
         }
+        validate_terminal_residuals(&self.pc, &self.byte_streams)?;
         Ok(())
     }
 
@@ -353,6 +354,24 @@ impl<'a, T: Read + Seek> QueueReader<'a, T> {
     }
 }
 
+fn validate_terminal_residuals(
+    point_cloud: &PointCloud,
+    streams: &[ByteStreamReadBuffer],
+) -> Result<()> {
+    if streams.len() != point_cloud.prototype.len() {
+        Error::internal("Terminal bytestream count does not match prototype size")?
+    }
+    for (record, stream) in point_cloud.prototype.iter().zip(streams) {
+        let bit_size = record.data_type.bit_size();
+        if bit_size != 0 && stream.available() >= bit_size {
+            Error::invalid(
+                "Compressed vector retains a complete field code after its declared records",
+            )?
+        }
+    }
+    Ok(())
+}
+
 fn skip_exact<T: Read + Seek>(
     reader: &mut PagedReader<T>,
     mut bytes: u64,
@@ -368,4 +387,42 @@ fn skip_exact<T: Read + Seek>(
         bytes -= count as u64;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Record, RecordName};
+
+    #[test]
+    fn terminal_residuals_allow_only_sub_code_padding() {
+        let point_cloud = PointCloud {
+            prototype: vec![
+                Record {
+                    name: RecordName::RowIndex,
+                    data_type: RecordDataType::Integer { min: 0, max: 5 },
+                },
+                Record {
+                    name: RecordName::ColumnIndex,
+                    data_type: RecordDataType::Integer { min: 7, max: 7 },
+                },
+            ],
+            ..PointCloud::default()
+        };
+        let mut sub_code = ByteStreamReadBuffer::new();
+        sub_code.append(&[0]);
+        let _ = sub_code.extract(6);
+        let mut zero_bit = ByteStreamReadBuffer::new();
+        zero_bit.append(&[u8::MAX]);
+        assert!(validate_terminal_residuals(&point_cloud, &[sub_code, zero_bit]).is_ok());
+
+        let mut complete_code = ByteStreamReadBuffer::new();
+        complete_code.append(&[0]);
+        let _ = complete_code.extract(5);
+        assert!(validate_terminal_residuals(
+            &point_cloud,
+            &[complete_code, ByteStreamReadBuffer::new()],
+        )
+        .is_err());
+    }
 }

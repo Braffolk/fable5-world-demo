@@ -117,9 +117,9 @@ fn parse_materialize(arguments: Vec<OsString>) -> AppResult<MaterializeArgs> {
             "--max-output-bytes must be within 1..={HARD_MAX_MATERIALIZED_BYTES}"
         )));
     }
-    if !(5..=HARD_MAX_OPEN_FILES).contains(&parsed.max_open_files) {
+    if !(7..=HARD_MAX_OPEN_FILES).contains(&parsed.max_open_files) {
         return Err(AppError::usage(format!(
-            "--max-open-files must be within 5..={HARD_MAX_OPEN_FILES}"
+            "--max-open-files must be within 7..={HARD_MAX_OPEN_FILES}"
         )));
     }
     Ok(parsed)

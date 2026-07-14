@@ -21,7 +21,7 @@ const AOI_X_MIN: i64 = -271;
 const AOI_X_MAX_EXCLUSIVE: i64 = 1491;
 const AOI_Y_MIN: i64 = -244;
 const AOI_Y_MAX_EXCLUSIVE: i64 = 1351;
-const PROCESS_RESERVED_FILES: usize = 4;
+const PROCESS_RESERVED_FILES: usize = 6;
 const SHARD_BUFFER_BYTES: usize = 1 << 20;
 
 const EXPECTED_POSE_BITS: [[u64; 7]; 16] = [
@@ -872,7 +872,7 @@ fn render_report(
     }
     writeln!(
         json,
-        "]}},\"limits\":{{\"maxFileBytes\":\"{}\",\"maxXmlBytes\":\"{}\",\"maxScans\":{},\"maxPrototypeFields\":{},\"maxDeclaredRecords\":\"{}\",\"maxJsonBytes\":{},\"maxOutputBytes\":\"{}\",\"maxOpenFiles\":{},\"maxOpenOutputFiles\":{}}},\"result\":{{\"allScansDecodedOnce\":true,\"scanCount\":{},\"publisherRecordCount\":\"{}\",\"recordsOutsideAoiDropped\":true,\"invalidAndDirectionRetained\":true,\"groundFiltered\":false,\"surfaceClaim\":false,\"targetTruth\":false,\"synthesisAuthorized\":false}}}}",
+        "]}},\"limits\":{{\"maxFileBytes\":\"{}\",\"maxXmlBytes\":\"{}\",\"maxScans\":{},\"maxPrototypeFields\":{},\"maxDeclaredRecords\":\"{}\",\"maxJsonBytes\":{},\"maxOutputBytes\":\"{}\",\"maxOpenFiles\":{},\"reservedFiles\":{},\"maxOpenOutputFiles\":{}}},\"result\":{{\"allScansDecodedOnce\":true,\"scanCount\":{},\"publisherRecordCount\":\"{}\",\"recordsOutsideAoiDropped\":true,\"invalidAndDirectionRetained\":true,\"groundFiltered\":false,\"surfaceClaim\":false,\"targetTruth\":false,\"synthesisAuthorized\":false}}}}",
         arguments.reader.max_file_bytes,
         arguments.reader.max_xml_bytes,
         arguments.reader.max_scans,
@@ -881,6 +881,7 @@ fn render_report(
         arguments.reader.max_json_bytes,
         arguments.max_output_bytes,
         arguments.max_open_files,
+        PROCESS_RESERVED_FILES,
         arguments.max_open_files - PROCESS_RESERVED_FILES,
         scans.len(),
         EXPECTED_SCANS.iter().map(|scan| scan.1).sum::<u64>(),
