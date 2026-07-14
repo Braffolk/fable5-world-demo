@@ -1,0 +1,510 @@
+{
+  "schema_version": "moore-m0-research-design/1.0.0",
+  "design_id": "moore-m0-joint-b1-derived-b2.2026-07-15",
+  "frozen_at": "2026-07-15",
+  "status": "authorized_research_only",
+  "decision": {
+    "route": "Moore M0 joint 1 m to 0.0625 m absolute-height research screen",
+    "maximum_result": "one plot-local research_preview_candidate",
+    "production_owner_selection": false,
+    "source_b2_failure_action": "terminal_no_decimeter_moore_preview",
+    "candidate_b2_failure_action": "reject_candidate",
+    "b1_only_fallback_allowed": false
+  },
+  "normative_bindings": {
+    "spec_after_activation": {
+      "path": "docs/specs/terrain/MICROTOPOGRAPHY.md",
+      "sha256": "9ed07d7bb798af97600378db428065221a0df2d1ad4e00e0d2c034e0e30c8fec",
+      "sections": [
+        "9.6",
+        "9.8",
+        "12.6",
+        "12.7",
+        "13.2",
+        "13.3",
+        "14.6",
+        "16.3"
+      ]
+    },
+    "stable_protocols": [
+      {
+        "path": "docs/deep-research/microtopography-generation/review/REGIME-EVIDENCE-EXECUTABLE-CONTRACT.md",
+        "sha256": "ed6b699e4ef6a530825bcbb73f4afd7e3181c617978e0a5a7131a5f8228b7e30"
+      },
+      {
+        "path": "docs/deep-research/microtopography-generation/review/TARGET-SCALE-DATA-AND-REGIME-AUDIT.md",
+        "sha256": "4cbae303fd06cdddd134e8b8b1ec7abd13c91cad2313255cb5eb021263b2d1aa"
+      }
+    ],
+    "mutable_task_documents_bound": false,
+    "binding_mismatch_action": "fail_closed_before_materialization"
+  },
+  "source": {
+    "dataset": "Moore et al. peatland SfM surfaces",
+    "doi": "10.5281/zenodo.2545675",
+    "license": "CC-BY-4.0",
+    "archive": {
+      "path": "docs/deep-research/microtopography-generation/library/datasets/zenodo-2545675-moore-peatland-sfm-v1.zip",
+      "bytes": 95777652,
+      "sha256": "044413bb87171776b409172d29fbde16341b228dc43b694cffe9f02a88640a67",
+      "member_count": 64
+    },
+    "surface_semantics": "publisher-prepared visible peatland moss surface after vascular vegetation clipping",
+    "publisher_observation_operator": {
+      "export_grid_m": 0.01,
+      "interpolation": "natural_neighbor",
+      "mean_filter_m": 0.03,
+      "treatment": "immutable_derived_observation_operator_not_direct_support"
+    },
+    "frozen_inventory": {
+      "grid_count": 68,
+      "finite_cell_count": 3091387,
+      "finite_area_m2": 309.1387,
+      "individual_rec_mat_count": 50,
+      "named_grids_in_dems_mat_count": 18,
+      "grid_spacing_m": 0.01
+    },
+    "known_evidence_limits": [
+      "most grids lack original per-cell point support",
+      "publisher interpolation and filtering have no transferable acquisition MTF",
+      "Puslinch and laboratory validation errors do not transfer across campaigns",
+      "the archive is foreign, disconnected, and not Estonia condition coverage",
+      "the archive remains target_evidence_insufficient for owner selection"
+    ]
+  },
+  "geographic_groups": [
+    {
+      "id": "red_earth_creek",
+      "display_name": "Red Earth Creek",
+      "members": [
+        "REC_001_DEM.mat",
+        "REC_002_DEM.mat",
+        "REC_003_DEM.mat",
+        "REC_004_DEM.mat",
+        "REC_005_DEM.mat",
+        "REC_006_DEM.mat",
+        "REC_007_DEM.mat",
+        "REC_008_DEM.mat",
+        "REC_009_DEM.mat",
+        "REC_020_DEM.mat",
+        "REC_021_DEM.mat",
+        "REC_022_DEM.mat",
+        "REC_023_DEM.mat",
+        "REC_030_DEM.mat",
+        "REC_031_DEM.mat",
+        "REC_032_DEM.mat",
+        "REC_033_DEM.mat",
+        "REC_034_DEM.mat",
+        "REC_035_DEM.mat",
+        "REC_036_DEM.mat",
+        "REC_037_DEM.mat",
+        "REC_038_DEM.mat",
+        "REC_050_DEM.mat",
+        "REC_051_DEM.mat",
+        "REC_052_DEM.mat",
+        "REC_053_DEM.mat",
+        "REC_054_2models_DEM.mat",
+        "REC_055_DEM.mat",
+        "REC_056_DEM.mat",
+        "REC_057_DEM.mat",
+        "REC_058_DEM.mat",
+        "REC_059_DEM.mat",
+        "REC_060_DEM.mat",
+        "REC_061_DEM.mat",
+        "REC_062_DEM.mat",
+        "REC_063_DEM.mat",
+        "REC_064_DEM.mat",
+        "REC_071_DEM.mat",
+        "REC_072_DEM.mat",
+        "REC_073_DEM.mat",
+        "REC_074_DEM.mat",
+        "REC_075_DEM.mat",
+        "REC_076_DEM.mat",
+        "REC_077_DEM.mat",
+        "REC_078_DEM.mat",
+        "REC_079_DEM.mat",
+        "REC_080_DEM.mat",
+        "REC_081_DEM.mat",
+        "REC_082_DEM.mat",
+        "REC_083_DEM.mat"
+      ]
+    },
+    {
+      "id": "nobel",
+      "display_name": "Nobel",
+      "dems_mat_fields": [
+        "Alpha",
+        "Beta",
+        "Gamma",
+        "Epsilon",
+        "Zeta",
+        "Eta",
+        "Iota",
+        "Kappa",
+        "Theta",
+        "Lambda"
+      ]
+    },
+    {
+      "id": "seney",
+      "display_name": "Seney",
+      "dems_mat_fields": [
+        "WET",
+        "INT",
+        "DRY"
+      ]
+    },
+    {
+      "id": "maine",
+      "display_name": "Maine / Caribou Bog",
+      "dems_mat_fields": [
+        "Maine"
+      ]
+    },
+    {
+      "id": "james_bay",
+      "display_name": "James Bay",
+      "dems_mat_fields": [
+        "JamesBay"
+      ]
+    },
+    {
+      "id": "limerick",
+      "display_name": "Limerick",
+      "dems_mat_fields": [
+        "Limerick"
+      ]
+    },
+    {
+      "id": "puslinch",
+      "display_name": "Puslinch",
+      "dems_mat_fields": [
+        "Puslinch"
+      ]
+    },
+    {
+      "id": "rodmossen",
+      "display_name": "Sweden / Rodmossen",
+      "dems_mat_fields": [
+        "Sweden"
+      ]
+    }
+  ],
+  "task": {
+    "id": "M0",
+    "target_surface": "H at 0.0625 m",
+    "observation": "O0=Q4(Q4(H)) at 1 m",
+    "q4": "fixed-order exact area mean over aligned 4x4 cells",
+    "candidate_output": "one absolute Hhat at 0.0625 m",
+    "parent_constraint": "Q4(Q4(Hhat))=O0 after complete world-aligned fusion",
+    "production_dtm_modelled": false,
+    "output_components": {
+      "B1": "A1-R4(A0), A1=F4(Hhat), A0=F4(A1)",
+      "derived_B2_hypothesis": "Hhat-R4(F4(Hhat))"
+    },
+    "joint_output_required": true,
+    "independent_band_stamping_forbidden": true,
+    "input_channels": [
+      "structural_prolongation_of_O0",
+      "gradient_of_O0",
+      "laplacian_of_O0",
+      "0.5_m_relief",
+      "1_m_relief",
+      "validity"
+    ]
+  },
+  "phases": {
+    "origin": "source_cell_boundary_origin",
+    "offsets_m": [
+      [0.0, 0.0],
+      [0.005, 0.0],
+      [0.0, 0.005],
+      [0.005, 0.005]
+    ],
+    "resampling": "exact_source_output_cell_polygon_overlap",
+    "source_cell_model": "finite 0.01 m value constant over explicit half-open cell",
+    "minimum_finite_overlap_fraction": 0.95,
+    "favorable_phase_selection_forbidden": true
+  },
+  "masks": {
+    "source_finite_required": true,
+    "publisher_interpolation_role": "derived_surface_hypothesis_only",
+    "new_hole_fill_allowed": false,
+    "output_invalid_dilation_cells": 1,
+    "complete_f4_r4_support_required": true,
+    "reflected_context_may_enter_loss": false,
+    "plot_boundary_may_enter_loss": false,
+    "nan_or_incomplete_overlap_weight": 0.0,
+    "tangent_plane_context_weight": 0.0,
+    "unknown_or_outside_measured_crop_weight": 0.0
+  },
+  "windows": {
+    "support_m": [2.0, 2.0],
+    "support_samples_at_0_0625_m": [32, 32],
+    "valid_core_m": [1.0, 1.0],
+    "valid_core_samples_at_0_0625_m": [16, 16],
+    "center_stride_m": 0.5,
+    "center_stride_samples_at_0_0625_m": 8,
+    "anchor": "domain_local_origin_snapped_down_to_1_over_32_m",
+    "fusion": "Section 13.3 fixed cosine-squared world-aligned fusion",
+    "output_rule": "only where every required support and analysis sample is target-valid"
+  },
+  "splits": {
+    "independent_unit": "geographic_group",
+    "outer_analysis": "leave_one_geographic_group_out_over_all_eight_groups",
+    "inner_selection": "leave_one_remaining_geographic_group_out",
+    "random_plot_or_window_split_forbidden": true,
+    "overlapping_receptive_fields_share_group": true,
+    "final_frozen_audit_group": "nobel",
+    "final_preview_plot": "Lambda",
+    "preview_plot_training_or_selection_use": false,
+    "minimum_groups_with_common_b2_support": 6,
+    "group_imbalance_weighting": "each geographic group contributes equal aggregate weight"
+  },
+  "source_b2_gate": {
+    "evaluation_time": "after_materialization_before_any_model_training",
+    "candidate_independent": true,
+    "definition": "B2_p=H_p-R4(F4(H_p))",
+    "common_support": "intersection of complete valid footprints across all four phases",
+    "phase_comparison": "exact polygon-overlap integration of half-open piecewise-constant B2 cells",
+    "phase_interpolation_forbidden": true,
+    "per_group_quantities": {
+      "E_p": "mean_area(B2_p^2)",
+      "D_pq": "mean_area((B2_p-B2_q)^2)",
+      "normalized_phase_disagreement": "max_pq sqrt(D_pq/(0.5*(E_p+E_q)))"
+    },
+    "spectral_operator": {
+      "unit": "each complete 1 m by 1 m valid core",
+      "preprocess": "subtract core mean then apply separable periodic Hann window",
+      "transform": "float64 2D FFT at 0.0625 m sample spacing",
+      "radial_bin_assignment": "bin by Euclidean frequency magnitude in cycles/m",
+      "group_aggregation": "equal-weight mean of complete cores"
+    },
+    "morphology_operator": {
+      "connectivity": 8,
+      "forms": "signed watershed basins rooted at local extrema",
+      "prominence_reference": "spill saddle in the same signed watershed",
+      "prominence_scale": "MAD of B2 over the plot-phase common valid support",
+      "equivalent_diameter": "2*sqrt(basin_area/pi)",
+      "relief_volume": "exact cell-area integral of absolute form relief above or below its spill saddle",
+      "phase_matching": "same sign and centroid distance threshold; deterministic minimum total centroid distance with plot field order then row-major extremum index as tie break"
+    },
+    "thresholds": {
+      "minimum_usable_geographic_groups": 6,
+      "normalized_phase_disagreement_group_median_max": 0.35,
+      "normalized_phase_disagreement_every_used_group_max": 0.5,
+      "four_phase_energy_cv_group_median_max": 0.15,
+      "four_phase_energy_cv_every_used_group_max": 0.25,
+      "b2_rms_group_median_min_m": 0.01,
+      "phase_disagreement_to_signal_energy_max": 0.25,
+      "nyquist_edge_band_cycles_per_m": [7.0, 8.0],
+      "registered_b2_band_cycles_per_m": [4.0, 8.0],
+      "nyquist_edge_energy_fraction_group_median_max": 0.15,
+      "nyquist_edge_energy_fraction_every_used_group_max": 0.25,
+      "form_prominence_plot_phase_mad_multiplier_min": 2.0,
+      "form_equivalent_diameter_m": [0.125, 0.5],
+      "form_match_centroid_distance_max_m": 0.125,
+      "form_required_phase_count": 3,
+      "persistent_absolute_relief_volume_fraction_min": 0.7
+    },
+    "all_thresholds_conjunctive": true,
+    "failure_state": "target_evidence_insufficient_for_moore_decimeter_research_preview"
+  },
+  "candidates": {
+    "corrected_only": {
+      "role": "mandatory_control",
+      "output": "structural prolongation of O0 with zero unresolved residual",
+      "selectable_as_decimeter_preview": false
+    },
+    "active": [
+      {
+        "id": "D",
+        "family": "pixel_diffusion",
+        "recipe_authority": "MICROTOPOGRAPHY.md Section 12.7 D",
+        "output": "joint absolute Hhat",
+        "realizations_per_held_out_group": 8
+      },
+      {
+        "id": "R",
+        "family": "deterministic_regressor",
+        "recipe_authority": "MICROTOPOGRAPHY.md Section 12.7 R",
+        "output": "joint absolute Hhat",
+        "realizations_per_held_out_group": 1
+      },
+      {
+        "id": "E",
+        "family": "contextual_exemplar",
+        "recipe_authority": "MICROTOPOGRAPHY.md Section 12.7 E",
+        "output": "joint absolute Hhat",
+        "realizations_per_held_out_group": 8
+      }
+    ],
+    "inactive": [
+      "S",
+      "P",
+      "G",
+      "H"
+    ],
+    "shared_ml_budget": {
+      "applies_to": [
+        "D",
+        "R"
+      ],
+      "dtype_training": "float32",
+      "dtype_metrics": "float64",
+      "optimizer": "AdamW",
+      "learning_rate": 0.0002,
+      "betas": [0.9, 0.999],
+      "weight_decay": 0.0001,
+      "batch_size": 32,
+      "gradient_clip": 1.0,
+      "updates_per_outer_fold_seed": 50000,
+      "seeds": [17, 31, 47],
+      "maximum_parameters": 3500000,
+      "pretrained_weights_allowed": false
+    },
+    "selection": {
+      "selection_groups": "seven non-Nobel groups only",
+      "hard_failures_first": true,
+      "required_candidate_gates": [
+        "joint B1 and derived B2 output",
+        "held-out four-phase B2 gate",
+        "exact M0 parent preservation",
+        "mask and partition safety",
+        "anti-copy gate",
+        "packing survival gate",
+        "no generic noise, repetition, or seams"
+      ],
+      "descriptor_families": [
+        "height_gradient_normal_curvature",
+        "B1_and_B2_energy_and_radial_PSD",
+        "variogram",
+        "signed_form_size_spacing_orientation_connectivity_and_relief_volume",
+        "phase_stability",
+        "packing_survival"
+      ],
+      "corrected_only_improvement_required": "candidate must improve both B1 and derived B2 descriptive distance by at least 0.10 relative without worsening any registered group-family distance by more than 0.20",
+      "ranking": "minimum worst group-family normalized descriptive distance",
+      "indistinguishable_margin": 0.02,
+      "indistinguishable_action": "no_research_preview_candidate",
+      "cost_tiebreak_allowed": false,
+      "candidate_freeze_before_nobel": true,
+      "post_nobel_tuning_allowed": false
+    }
+  },
+  "anti_copy": {
+    "absolute_plot_ids_as_input": false,
+    "absolute_or_local_coordinates_as_input": false,
+    "training_audit_duplicate_hashes_allowed": false,
+    "d4_registered_nearest_training_core_report_required": true,
+    "near_copy_rejection": {
+      "normalized_cross_correlation_min": 0.995,
+      "rms_difference_max_m": 0.002,
+      "action": "reject_when_both_hold_for_any_held_out_output_core"
+    },
+    "repeated_output_rejection": {
+      "normalized_cross_correlation_min": 0.995,
+      "rms_difference_max_m": 0.002,
+      "maximum_repeated_relief_volume_fraction": 0.01
+    },
+    "exemplar_attribution": {
+      "minimum_distinct_geographic_groups": 4,
+      "maximum_relief_volume_fraction_from_one_training_plot": 0.25
+    },
+    "required_outputs": [
+      "nearest_training surface and feature patch",
+      "exact and near-duplicate hashes",
+      "exemplar attribution",
+      "effective training-window count",
+      "spatial reuse heatmap",
+      "periodicity diagnostics"
+    ]
+  },
+  "packing_gate": {
+    "path": "existing ordinary negative-rung height cook, cluster, DAG, stream, decode, and render path",
+    "runtime_synthesis_allowed": false,
+    "new_binary_format_allowed": false,
+    "parent_closure_required": true,
+    "roundtrip_max_abs_height_error_m": 0.005,
+    "decoded_to_prepack_b2_energy_ratio": [0.9, 1.1],
+    "persistent_form_relief_volume_retention_min": 0.9,
+    "parent_failures_allowed": 0,
+    "seam_failures_allowed": 0,
+    "cluster_or_dag_discard_in_registered_crop_allowed": false,
+    "exact_real_webgpu_boot_required": true,
+    "surface_agreement_required": [
+      "terrain",
+      "materials",
+      "grass",
+      "trees",
+      "plants",
+      "normals",
+      "collision_and_probes"
+    ]
+  },
+  "preview_authority": {
+    "plot": "Lambda",
+    "placement": "place once at center of one structural 128 m master",
+    "outside_measured_mask": "robust tangent plane marked context_only",
+    "morphology_score_mask": "measured valid crop only",
+    "plot_repetition_allowed": false,
+    "boundary_feather_allowed": false,
+    "estonia_or_taevaskoda_application_allowed": false,
+    "publication": "immutable research-only manifest",
+    "latest_pointer_update_allowed": false,
+    "production_release_allowed": false
+  },
+  "first_executable_checkpoint": {
+    "id": "moore-m0-materialization-v1",
+    "model_training_allowed": false,
+    "output_root": "asset-gen/data/work/microtopography/moore/m0-materialization/sha256/<build_id>/",
+    "required_actions": [
+      "verify every normative binding and archive hash",
+      "enumerate all 50 REC MAT members and all 18 named DEMs.mat fields",
+      "verify units, orientation, 0.01 m spacing, finite masks, and group identities",
+      "reproduce 3,091,387 finite cells and 309.1387 m2 within 0.01 m2",
+      "materialize all four exact-overlap 0.0625 m phases and their 1 m O0 observations",
+      "materialize B1, derived B2, common-support, boundary, and analysis masks",
+      "enumerate the fixed windows and leakage-safe folds",
+      "evaluate the complete source B2 gate",
+      "emit the content-addressed manifest, machine QA index, and five PNG diagnostics"
+    ],
+    "qa_pngs": [
+      "01_source_height_and_validity.png",
+      "02_b1_height_band.png",
+      "03_derived_b2_hypothesis.png",
+      "04_four_phase_b2_stability.png",
+      "05_valid_windows_and_groups.png"
+    ],
+    "qa_index_required_fields": [
+      "image_sha256",
+      "source_and_recipe_sha256",
+      "dimensions",
+      "units",
+      "plot_and_group_ids",
+      "phase",
+      "interpretation",
+      "claim_boundary"
+    ],
+    "pass_conditions": [
+      "inventory and finite-area identities match exactly",
+      "all four phases and masks materialize deterministically",
+      "at least six geographic groups have common valid B2 support",
+      "every conjunct of source_b2_gate passes",
+      "window and split leakage checks pass"
+    ],
+    "failure_action": "record exact failed conjunct and park Moore decimeter preview without training or B1-only substitution"
+  },
+  "forbidden_claims": [
+    "target truth",
+    "directly measured B2",
+    "known acquisition MTF",
+    "known total surface error",
+    "real-vs-real non-inferiority",
+    "production winner or owner",
+    "Estonia or national transfer",
+    "Taevaskoda morphology validity",
+    "production release",
+    "latest manifest publication"
+  ]
+}

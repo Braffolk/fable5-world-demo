@@ -1409,10 +1409,10 @@ larger than roughly `0.37-0.90 m`. A true-0.25 m-parent `B2` experiment therefor
 tests an oracle tail, not the project's `1 m -> 0.0625 m` problem or most visible
 peat morphology.
 
-Accordingly Stage 1 does **not** select a research owner from this archive. It has
-two possible outputs: `target_evidence_insufficient` from the mandatory evidence
-audit, and an optional exploratory method screen that may compare engineering
-behavior but cannot rank/authorize a winner. The screen distinguishes:
+Accordingly Stage 1 does **not** select a research owner from this archive. Its
+historical evidence result remains `target_evidence_insufficient`, and the archive
+still cannot rank or authorize a production winner. The exploratory screen
+distinguishes:
 
 - `M0`, a declared ideal synthetic `1 m -> 0.0625 m` task that includes both
   analysis bands but does not model real Maa-amet degradation; and
@@ -1421,6 +1421,63 @@ behavior but cannot rank/authorize a winner. The screen distinguishes:
 
 Neither tests 0.25-10 m mire organization, 128 m context, Estonia covariates,
 source correction, sensor error, or Estonia/production ownership.
+
+#### 12.7.1 Narrow M0 research activation
+
+The 2026-07-15 machine design at
+`review/contracts/moore-m0-research-design.2026-07-15.json` authorizes one bounded
+exception to the historical no-training screen: train and select at most one
+plot-local M0 `research_preview_candidate` from `D`, `R`, and `E`, always against
+the corrected-only/structural-prolongation control. The selected candidate emits
+one joint absolute `Hhat` at `0.0625 m`; it is not a B1 model plus an independently
+stamped B2 model. Its registered outputs are B1 and a
+`derived_B2_hypothesis`. The latter name is mandatory because it describes only
+repeatable behavior in the publisher's natural-neighbor-interpolated, 0.03 m
+mean-filtered product. It is not direct support, recovered truth, an acquisition
+MTF claim, total-error evidence, or a transferable peat prior.
+
+Before any candidate trains, and again on every held-out candidate output, B2
+must pass the frozen four-phase gate below. Compute
+`B2_p=H_p-R4(F4(H_p))` for each Section 12.7 output phase on the common complete
+valid footprint. Treat each B2 value as constant over its explicit half-open cell
+and compare phases by exact polygon-overlap integration; interpolating one phase
+onto another or selecting a favorable phase is forbidden. Geographic group is
+the independent unit. At least six of the eight frozen groups must have usable
+common support. For group `g` and phases `p,q`, define
+`E_p=mean_area(B2_p^2)` and `D_pq=mean_area((B2_p-B2_q)^2)`. Every following
+conjunct is mandatory:
+
+- phase stability: the across-group median of
+  `max_pq sqrt(D_pq/(0.5*(E_p+E_q)))` is at most `0.35`, every used group is at
+  most `0.50`, and the four-phase B2-energy coefficient of variation is at most
+  `0.15` at the group median and `0.25` in every used group;
+- signal and anti-alias behavior: median group B2 RMS is at least `0.01 m`, phase
+  disagreement energy is at most `0.25` of signal energy, and radial PSD energy
+  in `7-8 cycles/m` is at most `0.15` at the group median and `0.25` in every
+  used group relative to energy in `4-8 cycles/m`;
+- morphology stability: signed watershed extrema/forms with prominence at least
+  two times the plot-phase B2 MAD on common valid support and area-equivalent
+  diameter `0.125-0.5 m` match within `0.125 m`, and at least `0.70` of their
+  absolute relief volume persists in at least three phases;
+- browser-equivalent packing survival: decoded maximum height error is at most
+  `0.005 m`, decoded B2 energy is `0.90-1.10` of the pre-pack value, at least
+  `0.90` of persistent-form relief volume remains, parent/seam failures are zero,
+  and the registered measured crop loses no detail to cluster or DAG discard.
+
+The source-derived B2 gate is evaluated before training and is immutable
+candidate-independent evidence. Its failure terminates Moore as a `<=0.1 m`
+research-preview route. A later candidate's failure rejects that candidate. A
+B1-only pack is not a substitute for either failure and may not be presented as
+the requested preview.
+
+The first executable checkpoint is the no-model materialization in the machine
+design. It must hash and enumerate all 68 grids, bind the eight geographic groups,
+reproduce exactly `3,091,387` finite 0.01 m cells and `309.1387 m2`, materialize
+all four exact-overlap M0 phases and masks, enumerate the frozen
+`2 m` support/`1 m` valid-core/`0.5 m` stride windows and splits, compute the
+source-derived B1/B2 gate inputs, and emit the declared content-addressed manifest
+and diagnostic PNG set. No model work starts unless this checkpoint and the
+source B2 gate pass.
 
 Use eight outer leave-one-geographic-group-out folds: all 50 `REC_*` plots as Red
 Earth Creek; Alpha/Beta/Gamma/Epsilon/Zeta/Eta/Iota/Kappa/Theta/Lambda as Nobel;
@@ -1460,13 +1517,18 @@ deltas with Section 13.2's overlapping-filter bands
 Shared inputs are the named synthetic observation's structural prolongation,
 gradient, Laplacian, 0.5/1 m relief, and validity. Loss/metrics use only measured
 support with invalid/filter-boundary dilation. D4 transforms are permitted because
-reliable north is absent. These screens report failure modes, parent preservation,
-band behavior, tiling, packing survival, and compute only; no candidate wins.
+reliable north is absent. The historical M1 and any M0 configuration outside the
+narrow machine design report failure modes, parent preservation, band behavior,
+tiling, packing survival, and compute only; no candidate wins. The narrow M0
+activation may name only a research-preview candidate under Section 12.6, never a
+winner or owner.
 
-The following seven families are the required lower-bound comparison set for a
-later target-specific preregistration; the prose recipes are not complete machine
-configs and do not authorize training. In the optional Moore engineering screen,
-write `Delta=Hhat-prolong(observation)` for the metric candidate delta:
+The following seven families remain the required lower-bound comparison set for a
+later target-specific preregistration; the prose recipes alone are not complete
+machine configs and do not authorize training. The narrow M0 machine design
+authorizes only `D`, `R`, and `E` plus corrected-only; `S`, `P`, `G`, and `H`
+remain inactive. In a Moore engineering screen, write
+`Delta=Hhat-prolong(observation)` for the metric candidate delta:
 
 | ID | Executable recipe |
 |---|---|
@@ -1493,9 +1555,10 @@ periodicity, nearest-copy/train attribution; p50/p95/p99 bytes and cost; and fix
 geometric render gates. Target-scale noise, generic bumpiness, copying, repetition,
 seams, forbidden water, barely visible/shading-only/DAG-discarded detail, or missing
 cost is an engineering failure. Because the archive lacks replicated comparable
-condition strata, no real-vs-real non-inferiority envelope, owner, survivor, or
-tie is declared. Report every geographic group equally, expose the imbalance, and
-label all aggregate distances descriptive only.
+condition strata, no real-vs-real non-inferiority envelope, production survivor,
+owner, or tie is declared. The narrow M0 activation may declare only the Section
+12.6 research states frozen in its machine design. Report every geographic group
+equally, expose the imbalance, and label all aggregate distances descriptive only.
 
 Do not translate the Estonia camera rig to these tiny plots and do not repeat a
 plot to fill a chunk. A hashed `moore-plot-screen-v1.json` must identify the valid
@@ -2397,8 +2460,10 @@ acceptance path.
 
 **Track C: optional Moore engineering screen**
 
-- only after Track A's audit and a user-reviewed machine preregistration, optionally
-  exercise M0/M1 across the seven Section 12.7 families;
+- materialize and gate the exact 2026-07-15 narrow M0 machine design before model
+  work; if its source-derived B2 fails, produce no `<=0.1 m` Moore preview;
+- exercise only `D`, `R`, and `E` against corrected-only for that activation;
+  M1 and the other Section 12.7 families remain non-authorizing diagnostics;
 - report parent preservation, subphase sensitivity, tiling, packing/DAG survival,
   compute, and qualitative failure modes through the plot-scaled protocol;
 - make no morphology non-inferiority, owner, Estonia-transfer, or production claim.
