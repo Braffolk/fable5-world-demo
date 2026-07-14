@@ -4,7 +4,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from dataclasses import dataclass
+import platform
+import stat
+import sys
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
@@ -122,6 +125,9 @@ class PointProbeAuthority:
     dataset_and_license: bytes
     resources: ProbeResources
     native: NativeReaderBinding
+    execution_selection_sha256: str | None = None
+    execution_identity: bytes | None = None
+    implementation_files: tuple[tuple[Path, str], ...] = ()
 
 
 def _absolute(path: Path) -> Path:
@@ -483,4 +489,140 @@ def load_point_probe_authority(
             executable_bytes=None,
             executable_sha256=None,
         ),
+    )
+
+
+def load_probe_execution_selection(
+    path: Path,
+    *,
+    authority: PointProbeAuthority | None = None,
+) -> PointProbeAuthority:
+    """Elevate the pending authority only through a content-addressed build selection."""
+    authority = load_point_probe_authority() if authority is None else authority
+    path = _absolute(path)
+    descriptor = open_regular_nofollow(path, "point-probe execution selection")
+    try:
+        chunks = []
+        while block := os.read(descriptor, 1 << 20):
+            chunks.append(block)
+        encoded = b"".join(chunks)
+    finally:
+        os.close(descriptor)
+    digest = hashlib.sha256(encoded).hexdigest()
+    if path.name != f"{digest}.json" or canonical_json_bytes(json.loads(encoded)) != encoded:
+        raise ValueError("Hovi point-probe execution selection is not content-addressed JSON")
+    raw = json.loads(encoded)
+    if not isinstance(raw, dict) or set(raw) != {
+        "schemaVersion",
+        "status",
+        "authorityConfigSha256",
+        "repository",
+        "nativeBuild",
+        "pythonExecution",
+        "publicationRoot",
+        "evidenceBoundary",
+    }:
+        raise ValueError("unsupported Hovi point-probe execution selection")
+    repository = _require_mapping(raw["repository"], "execution repository")
+    native = _require_mapping(raw["nativeBuild"], "execution native build")
+    python = _require_mapping(raw["pythonExecution"], "execution Python binding")
+    boundary = _require_mapping(raw["evidenceBoundary"], "execution evidence boundary")
+    files = _require_mapping(python.get("files"), "execution implementation files")
+    if (
+        raw["schemaVersion"] != "hovi-hy-spruce4-full-point-probe-execution/1.0.0"
+        or raw["status"] != "execution_authorized"
+        or raw["authorityConfigSha256"] != authority.config_sha256
+        or repository.get("readerCommit")
+        != "7f520b90c39ca256716db401fcf29980e583eeb1"
+        or repository.get("nativeSourceTreeSha256")
+        != "15b07c7fb01f0156fafd433919c5cbf559ea86b0f5c10c1a3b335d672456094f"
+        or native.get("cargoLockSha256")
+        != "4e172cb2f049a23395f487df481e4902794c699a86c36d10a08930418ee16feb"
+        or native.get("rustToolchain") != "1.94.1"
+        or native.get("rustcCommit") != "e408947bfd200af42db322daf0fadfe7e26d3bd1"
+        or native.get("targetTriple") != "aarch64-apple-darwin"
+        or native.get("releaseProfile")
+        != {"codegenUnits": 1, "lto": "thin", "panic": "abort", "strip": "symbols"}
+        or native.get("upstreamManifestSha256")
+        != "1b2b48d97f564d6dbc9d07197d624f57e247f2d4d05d8d0eb78e4ec9ace90fe0"
+        or native.get("vendorPatchSetSha256")
+        != "266cf419581580ef4198d109cbcb83f84a45ab6235d7aed5fa400631ad092dd8"
+        or python.get("implementation") != "cpython"
+        or python.get("version") != platform.python_version()
+        or python.get("platform") != sys.platform
+        or python.get("machine") != platform.machine()
+        or raw["publicationRoot"]
+        != "data/work/hovi-full-scan-point-probe"
+        or boundary
+        != {
+            "readerValidationOnly": True,
+            "surfaceClaim": False,
+            "analogueQualificationAuthorized": False,
+            "targetTruth": False,
+            "synthesisAuthorized": False,
+        }
+    ):
+        raise ValueError("Hovi point-probe execution selection crossed its authority")
+
+    executable_path = _bound_asset_path(native.get("executablePath"), "native executable")
+    executable_bytes = native.get("executableBytes")
+    executable_sha256 = native.get("executableSha256")
+    if (
+        not isinstance(executable_bytes, int)
+        or executable_bytes <= 0
+        or not isinstance(executable_sha256, str)
+        or len(executable_sha256) != 64
+    ):
+        raise ValueError("Hovi point-probe executable identity is invalid")
+    descriptor = open_regular_nofollow(executable_path, "native point-probe executable")
+    try:
+        executable_stat = os.fstat(descriptor)
+        executable_digest = hashlib.sha256()
+        offset = 0
+        while offset < executable_bytes:
+            block = os.pread(descriptor, min(1 << 20, executable_bytes - offset), offset)
+            if not block:
+                break
+            executable_digest.update(block)
+            offset += len(block)
+        if (
+            offset != executable_bytes
+            or executable_stat.st_size != executable_bytes
+            or executable_digest.hexdigest() != executable_sha256
+            or executable_stat.st_uid != os.getuid()
+            or stat.S_IMODE(executable_stat.st_mode) != 0o500
+            or executable_stat.st_nlink != 1
+        ):
+            raise ValueError("Hovi point-probe executable artifact drifted")
+    finally:
+        os.close(descriptor)
+
+    implementation_files: list[tuple[Path, str]] = []
+    for relative, expected_sha256 in sorted(files.items()):
+        source_path = _bound_asset_path(relative, "Python implementation file")
+        if not isinstance(expected_sha256, str) or len(expected_sha256) != 64:
+            raise ValueError("Hovi point-probe implementation hash is invalid")
+        descriptor = open_regular_nofollow(source_path, "Python implementation file")
+        try:
+            source_digest = hashlib.sha256()
+            while block := os.read(descriptor, 1 << 20):
+                source_digest.update(block)
+        finally:
+            os.close(descriptor)
+        if source_digest.hexdigest() != expected_sha256:
+            raise ValueError(f"Hovi point-probe implementation drifted: {relative}")
+        implementation_files.append((source_path, expected_sha256))
+
+    return replace(
+        authority,
+        native=NativeReaderBinding(
+            report_schema=authority.native.report_schema,
+            execution_authorized=True,
+            executable_path=executable_path,
+            executable_bytes=executable_bytes,
+            executable_sha256=executable_sha256,
+        ),
+        execution_selection_sha256=digest,
+        execution_identity=encoded,
+        implementation_files=tuple(implementation_files),
     )

@@ -58,6 +58,21 @@ class NativeProbeResult:
     elapsed_seconds: float
 
 
+def _verify_execution_implementation(authority: PointProbeAuthority) -> None:
+    if authority.execution_selection_sha256 is None or authority.execution_identity is None:
+        raise RuntimeError("native Hovi point probe has no frozen execution selection")
+    for path, expected_sha256 in authority.implementation_files:
+        descriptor = open_regular_nofollow(path, "point-probe implementation file")
+        try:
+            digest = hashlib.sha256()
+            while block := os.read(descriptor, 1 << 20):
+                digest.update(block)
+        finally:
+            os.close(descriptor)
+        if digest.hexdigest() != expected_sha256:
+            raise ValueError(f"point-probe implementation changed: {path.name}")
+
+
 def _descriptor_sha256(descriptor: int) -> str:
     before = os.fstat(descriptor)
     digest = hashlib.sha256()
@@ -593,6 +608,7 @@ def run_native_probe(
         raise RuntimeError(
             "native Hovi point-probe execution awaits a frozen project build identity"
         )
+    _verify_execution_implementation(authority)
 
     executable_descriptor = open_regular_nofollow(
         native.executable_path,
@@ -744,6 +760,7 @@ def run_native_probe(
                     ).as_posix(),
                     "configSha256": authority.config_sha256,
                     "mandateProvenance": json.loads(authority.mandate_provenance),
+                    "executionSelectionSha256": authority.execution_selection_sha256,
                 },
                 "datasetAndLicense": json.loads(authority.dataset_and_license),
                 "source": {
@@ -793,6 +810,7 @@ def run_native_probe(
             result_root,
             publication_report,
         )
+        _verify_execution_implementation(authority)
         return NativeProbeResult(
             record_path=record_path,
             record_sha256=published_record_sha256,
