@@ -187,6 +187,12 @@ contract. HovoPhoto40 and Wards Hill have high-resolution rock evidence but no
 machine-usable surface/exclusion mask joined to the necessary independent residuals.
 Their contracts preserve exact resume conditions; none should distract from the
 single active OPARA probe.
+The OPARA sample-plot probe is now also parked. Exact archive/inventory evidence is
+retained, but candidate `f6714a2f98a0...` rejects the frozen 2021-07-21 pre-rain
+event before geometry: its dense epoch 0, checkpoint roles, event adjustment logs,
+axis-specific CP residuals, and vegetation/rock masks are absent. Only a metadata
+audit of the already-listed 4.60 GB sample-slope archive is active; it may download
+only if official records explicitly promise those missing contracts.
 Resume this Hovi claim only when new primary evidence supplies registered cell semantics
 and independent control/repeat data, not merely another converter.
 
