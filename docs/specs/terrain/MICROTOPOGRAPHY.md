@@ -4,9 +4,9 @@
 
 **Date:** 2026-07-13
 
-**Status:** reviewed architecture with zero-external-budget evidence amendment; replacement morphology remains gated by public-data qualification
+**Status:** reviewed architecture with zero-external-budget evidence amendment; a bounded weak-evidence research-preview path is authorized, while production morphology remains gated by public-data qualification
 
-**Decision:** implement one evidence-gated typed hybrid surface pipeline in `asset-gen`. Deterministic evidence fusion owns source repair and mapped structure. A deterministic regime graph owns eligibility, transitions, and abstention. Unresolved morphology is produced only by a per-regime specialist that wins a preregistered target-scale bakeoff. A deterministic composer produces one canonical absolute finest surface, and the existing packed-height cook derives and publishes the hierarchy. The browser performs no synthesis.
+**Decision:** implement one evidence-gated typed hybrid surface pipeline in `asset-gen`. Deterministic evidence fusion owns source repair and mapped structure. A deterministic regime graph owns eligibility, transitions, and abstention. Production unresolved morphology is produced only by a per-regime specialist that wins a preregistered target-scale bakeoff. Before such targets exist, evidence-tiered research specialists may be trained and packed only into immutable, explicitly non-production browser previews under Sections 9.6-9.8. A deterministic composer produces one canonical absolute finest surface, and the existing packed-height cook derives and publishes the hierarchy. The browser performs no synthesis.
 
 **Quality target:** beautiful, realistic, non-repeating geometric variance whose forms and distributions change for defensible physical reasons: substrate, surficial material, soil profile, hydrology, slope position, vegetation and disturbance history, land use, management state, and direct local evidence.
 
@@ -22,7 +22,7 @@ The requested result is not smoother interpolation, fewer visible triangles, a n
 2. retain real measured and mapped structure;
 3. add unresolved geometry whose morphology and variance match real target-scale surfaces from the same physical regime;
 4. remain deterministic, seamless, parent-consistent, packed, and streamable;
-5. fail closed where the target prior or representation is unsupported;
+5. fail closed in production where the target prior or representation is unsupported, while permitting explicitly labeled research-only previews to expose bounded weak-evidence hypotheses without claiming truth or transfer;
 6. pass a ground-level rendered beauty review, not only internal numerical gates.
 
 The final terrain remains synthesized below the reliable source support. Metadata and product descriptions must not call it recovered survey truth or 1:1 centimeter reconstruction.
@@ -40,7 +40,7 @@ The final terrain remains synthesized below the reliable source support. Metadat
 9. **No broad-class style lookup.** `forest`, `field`, `bog`, `sand`, or a soil code alone may not select final geometry. Physical factors remain separate until a supported regime and event state are established.
 10. **One canonical finest surface.** LOD -2 is generated once in world coordinates. LOD -1, corrected LOD 0, and affected ancestors derive from the accepted decoded child hierarchy; rungs are never synthesized independently.
 11. **Storage chunks are not physical domains.** Feature ownership, phase, conditions, and stochastic state depend on stable world coordinates and physical domains, never final chunk identity, cook order, worker, request sequence, or AOI enclosure.
-12. **Unsupported means no invented residual.** It does not mean generic detail, a foreign analogue, or the visually nearest class.
+12. **Unsupported means no invented production residual.** It does not mean generic detail, a foreign analogue, or the visually nearest class in any production, `pilot`, `national`, or `latest` asset. A research specialist may emit only inside an explicit research-preview domain that passes Sections 9.6-9.8 and 14.6; that geometry remains non-authoritative and cannot substitute for an unsupported production row.
 13. **A heightfield claim is single-valued.** Vertical faces, undercuts, caves, overhangs, detached blocks, and root plates are not solved by finer sampling. This spec marks them unsupported; a separate structural representation requires a separate specification.
 14. **All surface consumers agree.** Terrain mesh, grass roots, trees/plants, materials, normals, probes, collision, and water boundaries must follow the accepted packed surface and transition policy. Fine terrain may not disable or strand inherited content.
 15. **No scene-specific fixes.** Suur Taevaskoda is a fixed generalization review site, not a coordinate special case, hand-authored patch, or training/tuning site.
@@ -48,6 +48,12 @@ The final terrain remains synthesized below the reliable source support. Metadat
     2026-07-13 and rejected paid acquisition plus a separately funded cliff
     project. Implementation may proceed only through the zero-budget public-data
     and staged gates in this document; review does not authorize invented evidence.
+17. **Research preview is not release authority.** On 2026-07-14 the user
+    explicitly authorized relaxing survey-truth gates for bounded visual/model
+    research. This permits weak, probabilistic surface supervision and immutable
+    browser previews only. It does not qualify a target, select a production owner,
+    establish Estonia transfer, change a regime release row to `pilot` or
+    `national`, or authorize publication to `latest`.
 
 ## 3. Premise Audit
 
@@ -210,6 +216,9 @@ Consequently:
 - no universal dictionary/process backbone is approved;
 - pixel-space conditional diffusion remains the highest-ceiling learned specialist challenger;
 - per-regime owner selection must be empirical and target-supported;
+- a bounded weak-evidence research screen may now train and visually inspect
+  research specialists without declaring a target, winner, production owner, or
+  Estonia transfer, under the separate state machine in Section 12.6;
 - public raw-data conversion and target/analogue qualification are release
   dependencies, not optional polish; paid acquisition is out of scope.
 
@@ -325,7 +334,28 @@ suspected-error fields; correction confidence; protected-feature counterevidence
 explicit unknown state; and per-field source provenance. Repair consumes this
 artifact. `RawObservation` is never mutated to hide an accepted correction.
 
-### 7.4 `StructuralAuthority`
+### 7.4 `ResearchSurfaceEvidence`
+
+This artifact is permitted only for the research branch in Sections 9.6-9.8. It
+contains metric surface hypotheses derived from immutable raw observations, never
+target truth. Every sample records:
+
+- source point/view identities or a reconstructable index;
+- `height_m_f64` where a single-valued hypothesis exists;
+- direct-support distance, footprint, view count, cross-view disagreement, and
+  interpolation distance;
+- calibrated semantic probabilities, `p_unknown`, heightfield-valid probability,
+  dynamic/water probability, and explicit forbidden state;
+- separate epistemic and repeatability uncertainty; neither is called total error;
+- per-band research eligibility and its evidence;
+- train/development/audit role and leakage group;
+- evidence tier, recipe, code, environment, raw-artifact, and license hashes.
+
+Unknown or forbidden samples carry no training/evaluation weight. Missing total
+survey error is explicit and is the reason this artifact cannot become a
+`production_target`, regardless of visual quality.
+
+### 7.5 `StructuralAuthority`
 
 Contains:
 
@@ -340,7 +370,7 @@ Contains:
 
 It is a deterministic recipe artifact.
 
-### 7.5 `RegimeState`
+### 7.6 `RegimeState`
 
 Contains overlapping factors, not one label:
 
@@ -354,7 +384,7 @@ Contains overlapping factors, not one label:
 - transition support and confidence;
 - per-band release status: `unsupported`, `research`, `pilot`, or `national`.
 
-### 7.6 `SpecialistOutput`
+### 7.7 `SpecialistOutput`
 
 Every specialist returns:
 
@@ -369,10 +399,13 @@ Every specialist returns:
 - explicit abstention/rejection reason, correction confidence where applicable,
   and protected-feature check result;
 - diagnostics for morphology coverage, repetition, and boundary behavior.
+- authority class `research_only` or `production_candidate`; research output also
+  names its research-candidate state, weak-evidence bundle, eligible bands, and
+  immutable preview restriction.
 
 An unnamed residual or a delta against the raw DTM is invalid.
 
-### 7.7 `FinalMaster`
+### 7.8 `FinalMaster`
 
 Contains:
 
@@ -381,6 +414,8 @@ Contains:
 - deterministic provenance;
 - protected/forbidden constraint audit;
 - expert ownership map used only as cook evidence;
+- authority class and, for research, a null production-owner field plus explicit
+  `target_truth=false`, `estonia_transfer=none`, and `latest_eligible=false`;
 - no runtime parameters.
 
 The cook crops storage chunks from this reconciled master. It never asks each storage chunk to generate itself.
@@ -523,7 +558,7 @@ not depend on success. Public raw observations eliminate paid acquisition as the
 active path, but they still require surface extraction, support/error measurement,
 semantics, and transfer qualification before becoming targets.
 
-### 9.2 Target truth gate
+### 9.2 Production target truth gate
 
 A production target must provide:
 
@@ -608,6 +643,131 @@ Foreign data may pretrain, provide exemplars, and qualify a `pilot` with transfe
 ceiling `neighbor_analogue_only` under Section 9.3. It may not fill unmatched Estonia
 conditions, erase OOD/abstention, or claim national transfer from geographic
 similarity alone.
+
+The production gate in Sections 9.2-9.5 is unchanged by the research authorization
+below. Research evidence never upgrades a target-registry role, satisfies an
+independent-error field, or supplies one of Section 9.3's qualified sites.
+
+### 9.6 Research evidence and surface tiers
+
+Research may proceed without production-grade survey truth only through these
+explicit tiers. A record carries one tier per role and band; evidence does not
+inherit the strongest tier of another artifact from the same dataset.
+
+| Tier | Meaning | Permitted use | Forbidden claim |
+|---|---|---|---|
+| `R0_raw` | immutable licensed observations with known site/campaign identity but no accepted surface | converter development, support diagnosis, unsupervised representation learning | height supervision, model comparison as truth |
+| `R1_weak_surface` | a single-valued probabilistic surface hypothesis with reconstructable raw support and explicit unknown/forbidden masks, but incomplete semantics and/or total error | confidence-weighted research training and development diagnostics in an eligible band | target truth, real-vs-real non-inferiority, production owner, Estonia transfer |
+| `R2_research_audit` | an artifact held out from the component it audits, such as semantic labels or an independent sensor/campaign surface hypothesis | frozen research audit after the relevant recipe/threshold freeze | independent metric truth unless it separately passes Sections 9.2-9.5 |
+| `qualified_target_B1/B2` | a band-qualified target from the public-target protocol | production bakeoff for the exact qualified band and stratum | broader bands, regimes, or geography than its checked claim |
+
+`R1` and `R2` are evidence tiers, not accuracy ranks. Cross-view agreement,
+repeatability, or a second sensor can expose instability without bounding total
+surface error. An `R2` failure rejects or narrows a research candidate; an `R2`
+pass does not promote it to `qualified_target_B1/B2`.
+
+Every weak surface validates as `microtopography-research-surface/1.0.0` and binds
+the `ResearchSurfaceEvidence` fields in Section 7.4. It carries separate
+probabilities for each included/excluded semantic class, static attachment,
+heightfield validity, dynamic/water contamination, and observation support. It
+also carries `p_unknown`, which absorbs unrepresented classes, distribution shift,
+missing views, classifier disagreement, and uncalibrated regions. Probabilities
+must be calibrated on the named development source and checked on its frozen audit
+split; they are not assumed calibrated after transfer to Hovi/Evo. A fired
+transfer-shift detector or missing required feature sets `p_unknown=1` unless a
+frozen cross-source calibration supports a narrower value.
+
+Do not multiply probabilities as though they were independent. Before training,
+freeze one monotone confidence combiner and thresholds from development data. A
+sample has zero research weight when it is interpolated, water/dynamic,
+heightfield-invalid, forbidden by the surface contract, outside direct support, or
+unknown above the frozen threshold. Remaining weight is capped in `[0,1]` and may
+scale a robust weak-supervision loss; it never becomes inverse survey variance.
+Publisher plot cover fractions describe composition only and may not label cells.
+No classifier may force an unrepresented or ambiguous class to its nearest known
+class.
+
+Each band receives exactly one research eligibility state:
+
+- `research_ineligible`: no directly supported, heightfield-valid surface or no
+  semantically admissible cells for that band; it supplies no geometry loss;
+- `research_diagnostic`: supported cells exist, but view independence, band
+  coherence, semantic transfer, valid-area coverage, or repeatability is
+  insufficient for supervision; diagnostics and abstention tests only;
+- `research_trainable`: a frozen manifest demonstrates direct non-interpolated
+  support, at least two contributing view groups where available, positive
+  cross-view band coherence and signal above within-campaign disagreement, calibrated
+  semantic thresholds, and enough disjoint valid windows for its preregistered
+  training/evaluation split;
+- `production_qualified`: only the `qualified_target_B1/B2` result from Sections 9.2-9.5.
+
+The manifest reports eligibility independently for `B1` and `B2`, including valid
+area, window count, source groups, coherence, disagreement, confidence calibration,
+and every exclusion. The research threshold is a feasibility screen, not the
+production transfer/error test. Missing independent XY/Z error, acquisition MTF,
+or total-error bounds remains prominently `unknown` even when a band is
+`research_trainable`.
+
+### 9.7 First forest research bundle
+
+The first and only authorized bundle for the initial weak-evidence specialist
+screen is `forest-weak-research-bundle/1`. Its roles are fixed:
+
+| Artifact | Fixed role | Explicit limit |
+|---|---|---|
+| Hovi `HY_SPRUCE4` full scans | primary `R1_weak_surface` geometry supervisor | only directly supported probabilistic surface cells may train; no target truth or site independence claim |
+| Evo plots `1086` and `1065` | `R2_research_audit` independent-sensor/campaign geometry evidence | evaluate frozen cross-campaign geometry behavior; existing converter inspection means they are not blind metric targets |
+| ForestSemantic-MS `train1`-`train4` | semantic model development | semantics only; no height, absolute registration, or Hovi-truth claim |
+| ForestSemantic-MS `test1`-`test2` | frozen `R2_research_audit` of semantic behavior | never train, select thresholds, or tune after inspection; its sparse classes and source shift remain reported |
+| Hovi `HY_PINE2` | stress-only OOD/abstention case | no training, target, owner-selection, or positive-transfer credit; correct abstention is a pass |
+| Hovi Järvselja `JS_SPRUCE1` | sealed Estonia research generalization audit | no byte/geometry inspection until the complete research recipe is frozen; opening it consumes its untouched status for any later changed recipe |
+| historical LUKE artifacts | excluded | no training, validation, exemplar bank, morphology baseline, or accepted-owner comparison |
+| Suur Taevaskoda | fixed visual/structural sentinel | excluded from training, thresholds, hyperparameters, candidate selection, and scene-specific repair; never metric morphology truth |
+
+No other Hovi, Evo, FORWARD, Biała Góra, Moore, OPARA, or replacement-search
+artifact may silently enter this bundle. Adding or changing an artifact, role,
+surface contract, semantic class, split, or band creates a new bundle and recipe.
+
+Before model training, freeze a research preregistration containing the exact raw
+and derived hashes, surface contract, included/excluded semantics, ForestSemantic
+feature/label mapping, probability calibration, unknown policy, B1/B2 eligibility,
+spatial blocks, input tensors, candidate families/configurations, budgets, seeds,
+metrics, candidate state transitions, pack extent, cameras, and rejection rules.
+Development may use only ForestSemantic `train1`-`train4` and spatially separated
+`HY_SPRUCE4` training/development blocks. Scan/view-derived samples from one block
+remain one leakage group; overlapping receptive fields, augmentations, thinned
+clouds, and full scans inherit that group.
+
+Freeze semantic thresholds before opening ForestSemantic `test1`-`test2`. Freeze
+the complete synthesis recipe, checkpoint, seed, candidate choice, and visual rule
+before opening `JS_SPRUCE1` or evaluating the final Evo/HY_PINE2 audits. After any
+frozen audit result is viewed, no tuning is allowed. A changed candidate requires
+a genuinely uninspected audit group; reusing the same data with a new seed or
+threshold is leakage. If no such group remains, the result stays development-only.
+
+### 9.8 Research anti-memorization and generalization gate
+
+Every learned, exemplar, or dictionary research specialist must:
+
+- hold out contiguous physical blocks larger than its complete receptive and
+  fusion halo; random point/window splits are forbidden;
+- exclude absolute plot IDs and local coordinates unless a preregistered ablation
+  proves they do not encode site identity; world coordinates are never available
+  in these local foreign plots as a shortcut;
+- report nearest training surface/feature patch, exact/near duplicate hashes,
+  exemplar/atom attribution, effective sample count, and spatial reuse heatmaps;
+- compare training-block, held-out `HY_SPRUCE4`, Evo cross-campaign, HY_PINE2
+  stress, and sealed-Järvselja behavior without pooling them into one score;
+- pass coordinate, condition, semantic-confidence, and stochastic-seed ablations;
+- reject copied relief, repeated stamps, phase locking, texture leakage, or
+  confidence that remains high on HY_PINE2/other declared OOD evidence;
+- preserve a corrected-only control and show that any visible addition survives
+  the actual packing and cluster/DAG path.
+
+Järvselja and Taevaskoda are generalization sentinels, not optimization data. A
+candidate that fails after either is viewed is `research_rejected`; the scene may
+not be patched and the same sentinel may not be used to tune a replacement. A
+candidate that abstains on unsupported cells is preferable to generic coverage.
 
 ## 10. Typed Structural Reconstruction
 
@@ -950,8 +1110,11 @@ schema `$defs` but may not weaken required fields, enums, cross-field gates, or
 - `national` additionally requires an `estonia_national` transfer ceiling,
   `national_owner`, national coverage audit, national extent, and explicit user
   approval; the three-site minimum is a go/no-go floor, not sufficiency;
-- `research` may use foreign data and name `research_owner`, but its bands remain
-  `research_only`/`unsupported` and cannot enter release assets;
+- `research` may use foreign data and name a `research_owner` for registry
+  bookkeeping, but that name is never a production owner. Its bands remain
+  `research_only`/`unsupported` and cannot enter production release assets. A
+  Section 9.6 research specialist may enter only the separately typed immutable
+  non-`latest` preview in Section 14.6;
 - `target_evidenced_effectively_smooth` requires Estonia target evidence for the
   exact condition stratum whose measured transfer function and error can resolve a
   preregistered physically/perceptually meaningful residual threshold. A one-sided
@@ -963,9 +1126,12 @@ schema `$defs` but may not weaken required fields, enums, cross-field gates, or
 
 ### 11.2 Initial Estonia registry
 
-This is the exhaustive initial status for the pinned catalog. `research` does not
-authorize packing. Every ID must join one-to-one to a complete 13-group row; an
-unknown, missing, duplicate, or newly discovered phenomenon fails the build.
+This is the exhaustive initial production status for the pinned catalog.
+`research` does not authorize production packing. It authorizes research-preview
+packing only through Sections 9.6-9.8 and 14.6, without changing the row's bands,
+owner, extent, approval, or production status. Every ID must join one-to-one to a
+complete 13-group row; an unknown, missing, duplicate, or newly discovered
+phenomenon fails the build.
 
 | Regime ID | Initial state | Both bands | Reason |
 |---|---|---|---|
@@ -1035,11 +1201,21 @@ an explicitly structural claim while its morphology coverage remains failed.
 
 No implicit default or nearest-regime fallback exists.
 
+Research previews are never inputs to this production coverage audit. For every
+production claim, a cell covered only by research geometry remains `U`; browser
+visibility does not convert it to `R`. A separate
+`microtopography-research-preview-domain/1.0.0` manifest records exact bounds and,
+per band, `research_generated`, `structural_only`, `forbidden`, or `unknown`.
+`research_generated` means only that a frozen research candidate supplied the
+preview sample. It is not a production terminal, coverage credit, or smoothness
+claim.
+
 ## 12. Specialist Framework
 
 ### 12.1 Required challengers
 
-For each data-supported regime, compare on the same train/development/blind-test sites:
+For each production-data-supported regime, compare on the same
+train/development/blind-test sites:
 
 - corrected structural surface with no unresolved residual;
 - contextual/multilayer exemplar transfer;
@@ -1052,20 +1228,31 @@ For each data-supported regime, compare on the same train/development/blind-test
 
 The rejected LUKE quilt is not the quality bar. A family may be omitted only when a written pre-registration shows that its assumptions cannot represent the regime.
 
+A Section 9.6 research screen may run a smaller, preregistered subset chosen for
+maximum information under the existing-machine budget. That is method research,
+not the required production bakeoff: omitted families remain untested, no
+real-vs-real ranking exists, and a research preview cannot receive production
+credit. Corrected-only is mandatory in both branches.
+
 ### 12.2 Learned-model rules
 
 If GAN or diffusion is tested:
 
 - generate metric height/residual in pixel space; do not use a natural-image RGB VAE;
-- train on physically defined analysis bands from measured targets;
+- train on physically defined analysis bands from qualified measured targets for
+  production, or on explicitly `research_trainable` weak surfaces with the
+  Section 9.6 confidence/unknown weighting for research only;
 - keep original/corrected height, derivatives, optical evidence, categorical factors, confidence, and missingness in separate encoders before fusion;
 - do not initialize the height prior from Stable Diffusion;
 - optical encoder pretraining requires ablation and leakage checks;
 - condition on absolute coordinates only through non-memorizing large-scale context; hold out geography and test coordinate ablation;
 - train with real fitted degradation, not only bicubic/box synthetic pairs;
-- mask every target loss by measured support and semantics;
+- mask every target loss by measured support and semantics; weak research losses
+  additionally preserve their evidence tier and may not be reported as target loss;
 - report multiple samples during research, then freeze one recipe-bound realization for production;
-- calibrate uncertainty on held-out sites; a predicted confidence channel is not self-validating.
+- calibrate uncertainty on held-out sites for production. Research must instead
+  distinguish model uncertainty, weak-supervisor disagreement, and unknown total
+  survey error; a predicted confidence channel is not self-validating.
 
 Pixel-space conditional diffusion is the default high-ceiling learned challenger, not the default production owner.
 
@@ -1086,19 +1273,60 @@ One ideal hummock, pit/mound, furrow, fracture, or rut primitive repeated with j
 ### 12.4 Exemplar rules
 
 - Match physical regime and acquisition semantics, not only local slope.
-- Hold out whole sites and exemplar groups.
+- Hold out whole sites and exemplar groups for production. The first research
+  bundle additionally uses the contiguous-block and cross-campaign restrictions
+  in Section 9.8 and may not describe them as site-level target validation.
 - Measure atom/patch reuse, nearest-training similarity, repetition, and transition behavior.
 - Reject coverage outside the exemplar state space.
 - Do not hide attenuation or variance loss through overlap blending.
 
 ### 12.5 Statistical simulation rules
 
-- Fit variograms/cross-covariance/anisotropy by regime and state from target surfaces.
+- Fit production variograms/cross-covariance/anisotropy by regime and state from
+  target surfaces. A research fit from `R1_weak_surface` is labeled weak-evidence
+  and reports sensitivity to confidence thresholds and unknown-mask erosion.
 - Use only for residual phenomena whose target diagnostics support local stationarity.
 - Do not use Gaussian roughness as a substitute for typed events, channels, furrows, cracks, pits/mounds, or shores.
 - A spectral match without recognizable morphology fails.
 
-### 12.6 Owner-selection rule
+### 12.6 Research-candidate and production-owner state machines
+
+Research candidates use this exact non-owner state machine:
+
+```text
+research_declared
+  -> research_trained
+  -> development_survivor
+  -> research_recipe_frozen
+  -> research_audit_pass
+  -> research_preview_candidate
+  -> research_preview_investigated | research_rejected
+
+any pre-preview state -> research_rejected
+```
+
+`research_declared` requires the bundle and preregistration in Sections 9.7-9.8.
+`research_trained` means only that the frozen training run completed.
+`development_survivor` passes hard surface-safety, forbidden-domain, weak-evidence
+fit, anti-copy, partition, and cost ceilings on development evidence.
+`research_recipe_frozen` binds code, environment, checkpoint, seed, inference
+windows, composer, pack extent, metrics, and visual rule before any frozen audit.
+`research_audit_pass` requires the ForestSemantic test split, Evo evidence,
+HY_PINE2 stress behavior, and, when opened, sealed Järvselja result to pass their
+preregistered role-specific gates. A pass permits one
+`research_preview_candidate`; it does not declare a winner or owner. Any audit
+failure, post-audit tuning, prohibited data access, copied/repeated relief,
+unbounded confident OOD output, or failed hierarchy/runtime gate is terminal
+`research_rejected` for that frozen recipe.
+
+Research comparison may report descriptive weak-surface fit, cross-view
+coherence, band energy, morphology descriptors, packing survival, and fixed visual
+preference against corrected-only. It may not report real-vs-real
+non-inferiority, target RMSE, recoverable truth, production success, or Estonia
+transfer. Candidate selection for preview is by the preregistered research rule;
+cost may not rescue a visibly or geometrically failed candidate.
+
+Production owner selection remains separate and unchanged:
 
 Before any candidate training, check in and obtain user approval for a
 target-specific scientific preregistration artifact and machine-readable candidate
@@ -1124,7 +1352,9 @@ The state machine is exact: failed target qualification yields
 `target_evidence_insufficient`; qualified data but all candidates hard-failing
 yields `no_candidate_survives`; indistinguishable survivors yield `tie_no_owner`;
 only a preregistered quality win yields an owner. The first three states leave the
-regime unsupported for packing.
+regime unsupported for production packing. They do not prevent a separately
+labeled research-preview pack when the research state machine above passes, but
+that preview supplies no evidence toward a later owner decision.
 
 ### 12.7 Stage 1 Moore evidence and method screen
 
@@ -1251,6 +1481,14 @@ The composer resolves:
 6. protected, water, hard-structure, and representation constraints.
 
 Two specialists claiming the same phenomenon and scale is a configuration error. Do not average them.
+
+For a research preview, `validated` in items 2-4 means only
+`research_preview_candidate` under Section 12.6 and is recorded as provisional
+research claimancy, never production ownership. Exactly one frozen candidate may
+claim a preview sample/band. The composer still reapplies protected, water,
+hard-structure, heightfield, and unknown masks after the candidate. Production
+composition ignores every research claim and resolves the same cell as unsupported
+until a qualified owner exists.
 
 ### 13.2 Analysis bands
 
@@ -1426,6 +1664,12 @@ for a morphology prior. Fine publication requires:
 
 Before multi-parent or national fine publication, generalize the current one-parent `HeroCoverage`, release expectation, coverage metadata, auditor, and verifier. The LAC payload, v2 index, server, and runtime plane logic need not change.
 
+A research preview may use the same one-parent publication core or another
+preregistered parent-closed bounded extent. Its model and hierarchy support may be
+larger, but every published negative chunk still requires complete parent, terrain
+mesh, apron, corrected-base, and inherited-layer closure. Research status waives
+no representation or consumer-agreement requirement.
+
 ### 14.4 Quantization
 
 Retain initial qscales:
@@ -1513,6 +1757,8 @@ Hash:
 
 - raw and condition sources, dates, licenses, and masks;
 - target registry;
+- research bundle, evidence-tier, research-surface, confidence calibration,
+  unknown-mask, split, leakage, audit, and candidate-state manifests when present;
 - correction algorithm/configuration;
 - regime graph and release rows;
 - specialist code/checkpoint/exemplar/process configuration;
@@ -1530,7 +1776,8 @@ Current `release.py` cannot authorize this release: it pins the old base SHA,
 accepts only `retention-fixture` and `measured-synthesis-pilot`, expects exactly the
 old 17 negative keys, dispatches only the old verifiers, and refuses pilot
 publication to `latest`. The implementation must replace those assumptions with
-the following two-artifact transaction; bypassing an old check is forbidden.
+the following production two-artifact transaction and separately typed
+research-preview transaction; bypassing an old check is forbidden.
 
 The first recipe kind is `corrected-structural-base-v1`. It stages an ordinary
 format-1 base manifest without changing `latest`. Its schema requires
@@ -1566,6 +1813,49 @@ Publication order is normative:
 Any failed phase leaves `latest` unchanged. The expectation-bound corrected-base
 SHA replaces every fixed old-base SHA. Diagnostic/research builds are immutable
 and addressable but never publish to `latest`.
+
+The only research recipe kind is `research-microtopography-preview-v1`. It binds:
+
+- one already accepted immutable `corrected_base_manifest_sha256`;
+- `research_bundle_id`, all raw/derived artifact hashes, evidence tiers, surface
+  contract, per-band eligibility, confidence calibration, unknown/forbidden masks,
+  and train/development/audit splits;
+- research preregistration, code/environment/checkpoint/seed, candidate state, and
+  all frozen-audit results;
+- `microtopography-research-preview-domain/1.0.0`, exact published/transient keys,
+  corrected-only control, cameras, cost ceiling, and dependency identities;
+- literal metadata `authority=research_only`, `target_truth=false`,
+  `production_owner=null`, `estonia_transfer=none`, `release_row_unchanged=true`,
+  and `latest_eligible=false`.
+
+Its verifier rejects any missing literal, any candidate not in
+`research_preview_candidate`, any unbound/changed audit result, output outside
+`research_generated` cells/bands, residual in forbidden/unknown cells, target or
+owner wording, or production claim-domain/row mutation. It also runs the ordinary
+absolute-master, quantization, decoded-child hierarchy, seam, parent closure,
+inherited-layer, cost, and runtime-consumer checks. Weak evidence changes only
+scientific authority, never packing correctness.
+
+Research-preview materialization order is exact:
+
+1. bind the previously frozen ForestSemantic semantic recipe and test audit, then
+   freeze the complete synthesis recipe and expectation before final Evo,
+   HY_PINE2, or Järvselja model evaluation;
+2. run and bind those final audits; a failure terminates the recipe rather than retuning;
+3. compose one absolute finest master against the accepted corrected base;
+4. stage and independently verify `research-microtopography-preview-v1`;
+5. materialize a content-addressed merged format-2 manifest without modifying the
+   repository's canonical `latest.json` or any production release row;
+6. serve that exact manifest through an explicit preview-server override, run the
+   complete Section 16.7 real-WebGPU gate and research visual gate, and retain the
+   evidence under the recipe hash;
+7. provide the manifest-bound URL for visual investigation only.
+
+No user preference, clean boot, or attractive screenshot can promote this manifest
+or model. Promotion requires a future `qualified_target_B1/B2` bakeoff from the beginning;
+research metrics and sentinel views may inform hypotheses but supply zero target,
+owner, release, or Estonia-transfer credit. Release tooling must hard-reject any
+attempt to pass a research manifest to the atomic `latest` update path.
 
 ## 15. Orthophoto Acquisition Decision
 
@@ -1635,7 +1925,7 @@ Before national download:
 
 ## 16. Verification And Acceptance
 
-### 16.1 Data gates
+### 16.1 Production data gates
 
 For each enabled regime:
 
@@ -1645,6 +1935,30 @@ For each enabled regime:
 - surface semantics and licenses are valid;
 - signal energy exceeds measurement/interpolation error in every claimed band;
 - unsupported factor combinations abstain.
+
+These gates are unchanged and are required before production owner selection.
+
+#### 16.1.1 Research-only data gates
+
+A research specialist instead requires all of the following, without claiming a
+production pass:
+
+- exact `forest-weak-research-bundle/1` artifacts, roles, licenses, hashes, site/
+  campaign identities, and no prohibited-data access;
+- a validated `ResearchSurfaceEvidence` artifact with `R0/R1/R2` tier, separate
+  B1/B2 eligibility, probabilistic semantics, explicit unknown/forbidden masks,
+  and no fabricated total-error estimate;
+- no geometry loss outside `research_trainable` cells and no positive credit from
+  `research_diagnostic` or stress-only evidence;
+- frozen contiguous spatial leakage groups and the semantic, sensor/campaign,
+  stress, Järvselja, and Taevaskoda roles in Sections 9.7-9.8;
+- candidate state `research_preview_candidate` before packing;
+- literal non-production authority metadata and an immutable non-`latest` extent.
+
+Unresolved license/provenance, forbidden-class leakage, confident output on OOD,
+opening sealed inputs early, post-audit tuning, or missing unknown masks is a hard
+research failure. Missing independent survey error is not a research failure; it
+is mandatory evidence that production target/owner gates remain failed.
 
 ### 16.2 Source-repair gates
 
@@ -1676,6 +1990,14 @@ Evaluate per regime and site:
 - multiple research seeds for diversity; one frozen production seed for delivery.
 
 Set numerical thresholds from held-out real-vs-real variability before final candidate review. A low RMSE flat surface and a spectrally correct noise surface both fail.
+
+For research-only candidates, report the same descriptors wherever weak evidence
+supports them, but label every result by evidence tier and confidence/unknown-mask
+threshold. Replace real-vs-real acceptance with preregistered descriptive ranges,
+cross-view stability, Evo cross-campaign behavior, anti-copy checks, and visible
+comparison against corrected-only. These can reject a candidate or authorize a
+research preview; they cannot establish non-inferiority, production quality, or a
+release owner.
 
 ### 16.4 One-meter grid leakage
 
@@ -1802,6 +2124,30 @@ Metrics cannot waive a visible hard failure.
 Barely visible detail, shading-only detail, static water roughness, or detail
 discarded by the actual terrain cluster/DAG is a hard failure.
 
+#### 16.6.1 Research-preview visual gate
+
+The production nine-reviewer/non-inferiority rule above remains mandatory for a
+production owner and is not weakened. A research preview uses the same fixed
+Taevaskoda cameras, paths, corrected-only control, normal/cluster views, materials,
+water, trees, plants, understory, debris, grass, and hard visible-failure list, but
+its question is narrower: does this frozen hypothesis add clearly geometric,
+non-noise-like, non-repeating, materially plausible forest-floor detail worth
+further research without damaging the accepted structural scene?
+
+Taevaskoda is viewed only after candidate and recipe freeze. It is never used to
+choose training patches, thresholds, amplitudes, conditions, masks, checkpoint, or
+seed. If the preview exposes scene-specific failure, record and reject or park the
+recipe; do not tune against Taevaskoda and resubmit it as an untouched test. The
+same applies to opened Järvselja audit geometry.
+
+Research visual acceptance requires the objective runtime/layer/continuity gates
+and explicit user confirmation that the result is useful to investigate. It may
+not use the words `truth`, `target`, `qualified`, `owner`, `pilot`, `national`, or
+`accepted morphology` in its decision. A positive result changes only the
+candidate to `research_preview_investigated`; a negative result changes it to
+`research_rejected` or parks the track with its immutable evidence. Neither result
+changes any production regime row or supplies credit to a future bakeoff.
+
 ### 16.7 Real runtime gate
 
 For every materialized proof/release, freeze `PREVIEW_REL`,
@@ -1834,6 +2180,13 @@ git commit, browser/version/adapter identity, preview relative path, expected an
 loaded manifest SHA-256, latest response, viewport/DPR, settle frames, final frame,
 canvas sizes, screenshot path/hash, all console/page/request/response/WebGPU/TSL
 diagnostics including empty arrays, and `pass`. Missing evidence is failure.
+
+For `research-microtopography-preview-v1`, the preview server's `latest.json`
+response is an explicit process-local selection shim only. Record the canonical
+repository `latest.json` bytes/hash before and after the boot and require them to
+remain identical; also require the materialized manifest's
+`latest_eligible=false`. The URL and evidence must say `research_only`. A passing
+server override is not publication.
 
 Boot through readiness, cloud bake, and settled frames. Fail on page errors, TSL
 invalid code, uncaptured WebGPU errors, shader/pipeline/bind errors, asset failures,
@@ -2010,11 +2363,44 @@ acceptance path.
 
 Stage 1's decisive deliverable is Track B's visible structural repair plus the
 public-evidence closure. Track C is optional and cannot delay or inflate that
-proof. No morphology specialist implementation begins until qualified Estonia
+proof. No **production** morphology owner selection begins until qualified Estonia
 or Section 9.3 analogue targets and a user-approved target-specific
-preregistration exist.
+preregistration exist. The 2026-07-14 research authorization permits only Stage
+2R below; it does not retroactively change Stage 1 evidence results.
 
-### Stage 2: public-corpus conversion and first production regime
+### Stage 2R: first weak-evidence forest research specialist
+
+This is the active bounded visual/model research path:
+
+1. freeze `forest-weak-research-bundle/1` and one machine preregistration with the
+   exact Section 9.7 roles, surface contract, bands, splits, candidates, budgets,
+   seeds, metrics, failure rules, preview extent, and corrected-only control;
+2. develop semantic probabilities and `p_unknown` using only ForestSemantic-MS
+   `train1`-`train4`; freeze the classifier/thresholds, then run `test1`-`test2`
+   once as the semantic audit;
+3. construct `HY_SPRUCE4` `ResearchSurfaceEvidence` from its full scans with direct
+   support, view/disagreement, semantic, unknown, forbidden, and B1/B2 eligibility
+   fields; no filled or interpolated cell becomes supervision;
+4. train the preregistered high-information candidate subset on only eligible
+   `HY_SPRUCE4` blocks, preserving corrected-only and all anti-memorization gates;
+5. select a development survivor by the frozen research rule, then freeze its
+   complete recipe/checkpoint/seed before final Evo `1086`/`1065`, HY_PINE2, or
+   Järvselja evaluation;
+6. run Evo as independent-sensor/campaign geometry evidence, HY_PINE2 as OOD/
+   abstention stress, and open `JS_SPRUCE1` exactly once as the sealed Estonia
+   generalization audit. Any later changed recipe needs a new untouched site;
+7. if and only if every role-specific audit passes, compose and pack one
+   `research-microtopography-preview-v1` candidate over a bounded parent-closed
+   Taevaskoda review extent, retaining accepted structure and all inherited layers;
+8. independently verify, boot the exact immutable non-`latest` manifest in real
+   WebGPU, emit relevant height/band/confidence/unknown/nearest-copy PNG evidence,
+   and provide the research-only URL for user visual investigation.
+
+Failure parks the exact recipe and evidence; it does not trigger scene tuning,
+generic filler, another broad dataset hunt, or relaxation of production gates.
+Success proves only that the hypothesis is worth investigating visually.
+
+### Stage 2P: public qualification and first production regime
 
 - convert/qualify the selective Hovi Järvselja/Hyytiälä forest subset first;
 - qualify a small Evo 2024 holdout next, then selective FORWARD/Biała files only
@@ -2022,12 +2408,17 @@ preregistration exist.
 - send one no-cost, non-blocking permission request for the Kohv/Shlykova
   Taevaskoda/Väike/Härma/Selisoo archives; refusal or silence preserves abstention;
 - pair every site to the full condition fabric;
-- leave Taevaskoda untouched;
+- leave Taevaskoda outside production training, tuning, and candidate selection;
 - rerun owner selection using Estonia targets or Section 9.3's explicit
   neighboring-analogue transfer contract;
 - activate only the first regime that passes all gates.
 
-### Stage 3: parent-closed Estonia visual pilot
+If `JS_SPRUCE1` is opened in Stage 2R, it is no longer an untouched site for a
+later changed production recipe. Stage 2P must either preregister it before that
+opening without subsequent tuning or acquire another genuinely untouched Estonia
+site. This cost does not waive Section 9.3's independent-site/campaign minimum.
+
+### Stage 3: parent-closed Estonia production visual pilot
 
 - replace the Stage 1 structural-only fine master with a morphology-bearing master
   only after a matching Estonia-supported regime exists;
@@ -2065,13 +2456,17 @@ This is a map, not implementation authorization.
 Under `asset-gen/src/assetgen/process/microtopo/`:
 
 - replace the exemplar-bank/residual facade in `api.py` with typed
-  `ObservationEvidence`, `StructuralAuthority`, `SpecialistOutput`, and
-  `FinalMaster` absolute-surface contracts; no implicit raw-parent projection may
-  remain;
+  `ObservationEvidence`, `ResearchSurfaceEvidence`, `StructuralAuthority`,
+  `SpecialistOutput`, and `FinalMaster` absolute-surface contracts; no implicit
+  raw-parent projection may remain;
 - replace the rejected quilt implementation in `synthesis.py`;
 - add condition, target-registry, repair, regime-graph, composer, and stochastic-field modules;
 - add `experts/` adapters for exemplar, conditional simulation, process/event, regressor, GAN, diffusion, and hybrid candidates;
-- keep research-only candidates unavailable to production unless a signed regime row selects them.
+- add cohesive research-surface, confidence-calibration, leakage, audit, and
+  candidate-state modules; keep them separate from production target qualification;
+- keep research-only candidates unavailable to production. Even the same model
+  code/checkpoint must pass a future qualified-target bakeoff and signed production
+  row before it can become a production owner.
 
 Do not retain `asset-gen/src/assetgen/process/micro_synth.py` as a fallback.
 
@@ -2101,6 +2496,9 @@ Do not retain `asset-gen/src/assetgen/process/micro_synth.py` as a fallback.
 - make soil acquisition a real CLI option or remove the false advertised command;
 - add full-fidelity cook-only soil/condition parsing without changing runtime layer formats;
 - replace the current exemplar-only micro configuration with versioned source, regime, target, expert, and proof configuration;
+- add a separately typed `forest-weak-research-bundle/1` configuration and
+  `microtopography-research-surface/1.0.0` validation; do not overload the target
+  registry with weak evidence;
 - keep physical thresholds per regime/evidence; do not add one national roughness knob.
 
 ### 19.4 Recipe, verification, and release
@@ -2108,12 +2506,16 @@ Do not retain `asset-gen/src/assetgen/process/micro_synth.py` as a fallback.
 - update `micro_recipe.py` to bind every new source/model/registry/environment artifact;
 - replace raw-DTM and rejected-generator gates in `micro_verify.py`;
 - replace the old recipe-kind/fixed-base/fixed-17 dispatch in `release.py` with the
-  exact Section 14.6 schemas and two-artifact transaction;
+  exact Section 14.6 production schemas, two-artifact transaction, and hard-isolated
+  `research-microtopography-preview-v1` non-`latest` path;
 - update `assetgen/manifest.py` and expectation parsing for claim-domain,
   corrected-core/support/apron/affected-ancestor masks, windows, outside proofs,
   and dependency identities;
 - update `tools/serve-data.mjs` and `tools/boot-smoke.ts` only for immutable
   manifest selection/assertion and evidence output described in Section 16.7;
+- require release publication code to reject `latest_eligible=false` manifests,
+  and test that the canonical `latest.json` bytes remain unchanged around a
+  research preview boot;
 - later generalize one-parent coverage metadata/tooling before wide coverage;
 - leave LAC payload bytes, v2 index bytes, data server, and runtime decoding unchanged.
 
@@ -2168,8 +2570,11 @@ Defaults recommended by this spec:
 - orthophoto: fetch dated RGB/CIR for research and likely production;
 - corrected authority: publish through ordinary corrected LOD0 and ancestors;
 - finest geometry: stored LOD -2/-1, no runtime synthesis;
-- first morphology proof: whichever exact regime the zero-budget public-target
-  protocol qualifies first; Hovi Järvselja/Hyytiälä forest is the first conversion
+- first research morphology investigation: the exact
+  `forest-weak-research-bundle/1` path in Stage 2R, with no truth, owner, transfer,
+  or release claim;
+- first production morphology proof: whichever exact regime the zero-budget
+  public-target protocol qualifies first; Hovi forest remains a conversion
   candidate, not a preselected owner;
 - first visible source proof: Taevaskoda shore/bank/river correction;
 - vertical cliff face: explicitly rejected/out of scope, not a false heightfield claim.
@@ -2182,6 +2587,15 @@ The 2026-07-13 user review closed these decisions:
   qualify regime-specific transfer under Section 9.3;
 - no separate non-heightfield cliff project is commissioned.
 
+The 2026-07-14 user review additionally closed these decisions:
+
+- incomplete survey-truth/error evidence may be used for evidence-tiered,
+  probabilistic research supervision and visual/model investigation;
+- the exact first research bundle and roles are frozen by Section 9.7;
+- research output may be packed only as an immutable, explicitly non-`latest`
+  browser preview and cannot become target truth, a production owner, or evidence
+  of Estonia transfer.
+
 The remaining product decision is wide/national fine-coverage and retained-build
 storage policy after measured pilot entropy.
 
@@ -2189,8 +2603,10 @@ Required checkpoints:
 
 1. architecture review completed 2026-07-13;
 2. user reviews the Stage 1 corrected-source live URL;
-3. user reviews the first public-target-qualified morphology regime;
-4. user explicitly approves any multi-parent/national cook.
+3. user reviews the first verified Stage 2R research-only live URL without that
+   review changing production status;
+4. user reviews the first public-target-qualified production morphology regime;
+5. user explicitly approves any multi-parent/national cook.
 
 ## 22. Definition Of Done
 
@@ -2213,6 +2629,17 @@ The task is complete only when:
 - the user accepts the rendered result.
 
 A cook that passes numerical gates but looks like noise, random bumpiness, a quilt, or a smoother triangulation is not done.
+
+### 22.1 Research checkpoint completion
+
+Stage 2R is complete only when the exact bundle, probabilistic surfaces, band
+eligibility, preregistration, leakage audit, frozen candidate state, semantic and
+cross-campaign/stress/Järvselja audits, anti-copy evidence, relevant labeled PNG
+diagnostics, immutable pack, exact real-WebGPU boot, and user visual investigation
+exist under one recipe hash. Its terminal is
+`research_preview_investigated` or `research_rejected`, never project Definition
+of Done. It leaves all production claim cells `U`, all production owner fields
+null, all release rows unchanged, and canonical `latest.json` unchanged.
 
 ## 23. Normative Research Record
 
