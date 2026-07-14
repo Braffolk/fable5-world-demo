@@ -287,6 +287,17 @@ parcel, soil, slope, and orthophoto evidence, and expose labeled PNGs. Generic
 noise, source patch transfer, a production claim, Estonia transfer, and browser
 packing remain forbidden until the development geometry is worth freezing.
 
+The development domain is fixed to LOD -2 tile `(2426,1498)`, EPSG:3301
+`E 679168..679296, N 6443648..6443776`, game center `x=310592,z=191808`.
+It is fully inside ETAK cultivated polygon `3477279`, has no intersecting water,
+building, paved-road, or forest hard mask, and remains 63.52 m inside the parcel
+boundary. RGB/CIR show coherent tracks about 9 degrees east of grid north, but
+their dates differ and neither establishes the current operation. The prototype
+therefore carries `orientation_observed_state_unknown`, preserves LP/E2I soil and
+raw low-authority substrate states, and may not claim a current ploughed, seedbed,
+harrowed, or rolled surface. Its absolute 0.0625 m master may legitimately change
+derived parent means; the historical per-1 m mean-null projection is forbidden.
+
 The durable end-to-end requirement comparison is recorded in
 `MICROTOPOGRAPHY-CONFORMANCE-AUDIT.md`. It also freezes the historical preregistration
 boundary: LUKE can never be grandfathered into owner selection; inspected Hovi/Evo
