@@ -190,7 +190,7 @@ def _capture_bounded(
         for descriptor in streams:
             os.set_blocking(descriptor, False)
             selector.register(descriptor, selectors.EVENT_READ)
-        while selector.get_map():
+        while selector.get_map() or process.poll() is None:
             memory_guard.enforce(process)
             free_bytes = shutil.disk_usage(output_root).free
             minimum_free = min(minimum_free, free_bytes)
@@ -199,9 +199,11 @@ def _capture_bounded(
             remaining = resources.wall_seconds - (time.monotonic() - started)
             if remaining <= 0:
                 raise TimeoutError("Hovi spatial materialization exceeded 24h wall time")
-            for key, _ in selector.select(
-                min(remaining, resources.supervision_sample_seconds)
-            ):
+            wait_seconds = min(remaining, resources.supervision_sample_seconds)
+            events = selector.select(wait_seconds) if selector.get_map() else ()
+            if not selector.get_map() and process.poll() is None:
+                time.sleep(wait_seconds)
+            for key, _ in events:
                 descriptor = int(key.fd)
                 label, cap = streams[descriptor]
                 try:
