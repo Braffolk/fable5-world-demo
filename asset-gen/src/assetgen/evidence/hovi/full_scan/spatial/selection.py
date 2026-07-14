@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import importlib
+import importlib.metadata
 import json
 import os
 import platform
@@ -33,34 +35,37 @@ from .authority import (
 )
 
 
-EXECUTION_SCHEMA = "hovi-hy-spruce4-full-spatial-materialization-execution/1.0.0"
+EXECUTION_SCHEMA = "hovi-hy-spruce4-full-spatial-materialization-execution/1.1.0"
 DEFAULT_SPATIAL_OUTPUT_ROOT = DATA_WORK / "hovi-full-scan-spatial-materialization"
 DEFAULT_EXECUTION_SELECTION_ROOT = (
     DEFAULT_SPATIAL_OUTPUT_ROOT / "execution-selections" / "sha256"
 )
-_READER_COMMIT = "7dfed50bf333880646f0c8a3222569d360e75c64"
-_ORCHESTRATOR_COMMIT = "dcef7be4836effc1b2b2f7359214f9948bb3094b"
+_READER_COMMIT = "e9eb37acd31084fa4a5ef6559db829de0c334301"
+_ORCHESTRATOR_COMMIT = "e77bbc941e2a568b435d527efe140382bb0a5fab"
 _EXECUTION_SELECTION_ENABLED = False
 _NATIVE_SOURCE_TREE_SHA256 = (
-    "ebb237dc3d9b5c83711d03e6265fc22859f57b5e069825355e084053e7e241bc"
+    "3763dad65b8a6ea61c46bd11859ec4ac4c6ebbf10d6068b26a38008be8d1b9ca"
 )
 _CARGO_LOCK_SHA256 = (
     "4e172cb2f049a23395f487df481e4902794c699a86c36d10a08930418ee16feb"
 )
 _UPSTREAM_MANIFEST_SHA256 = (
-    "8f66ab8018697acf1edcc4b1a5d2a5182f5356eb22eb792c16c165e9a80a5b3a"
+    "0fee5bddad61489630e560947a64c637ba03a483d13a545af066de57efc2186a"
 )
 _VENDOR_PATCH_SET_SHA256 = (
-    "ffc04d45d78a00c0c04cbb929cf0f64bb9173b57925c5c192138c76ade648e08"
+    "e5f691c7cfac1ee336acb97a6c156d60d3b52f71d726fd7b8a44f5243db77f32"
 )
 _EXECUTABLE_RELATIVE = (
-    "data/work/hovi-full-scan-spatial-materialization/readers/sha256/8a/"
-    "8ae0882d2e68bfada93e6d83cb5b6a3588b5a9b4fe7d0458bfca20c3fd84e7a7"
+    "data/work/hovi-full-scan-spatial-materialization/readers/sha256/ce/"
+    "ce0e26e36c7f7ffd1f8ccda7316367947e3448a045bbb07d22167f59a0279d32"
 )
-_EXECUTABLE_BYTES = 653_744
+_EXECUTABLE_BYTES = 653_824
 _EXECUTABLE_SHA256 = (
-    "8ae0882d2e68bfada93e6d83cb5b6a3588b5a9b4fe7d0458bfca20c3fd84e7a7"
+    "ce0e26e36c7f7ffd1f8ccda7316367947e3448a045bbb07d22167f59a0279d32"
 )
+_NUMPY_DISTRIBUTION = "numpy"
+_NUMPY_VERSION = "2.4.6"
+_NUMPY_ENVIRONMENT_ROOT = ASSET_GEN_ROOT / ".venv"
 _IMPLEMENTATION_PATHS = frozenset(
     {
         "pyproject.toml",
@@ -180,6 +185,121 @@ def _verify_implementation_file(path: Path, expected_sha256: str) -> None:
         os.close(descriptor)
 
 
+def _runtime_file_identity(path: Path, label: str) -> tuple[int, str]:
+    descriptor = open_regular_nofollow(path, label)
+    try:
+        result = os.fstat(descriptor)
+        return result.st_size, _descriptor_sha256(descriptor, label)
+    finally:
+        os.close(descriptor)
+
+
+def _runtime_relative(path: Path, label: str) -> str:
+    absolute = _absolute(path)
+    try:
+        return absolute.relative_to(ASSET_GEN_ROOT).as_posix()
+    except ValueError as error:
+        raise ValueError(f"Hovi spatial {label} is outside asset-gen") from error
+
+
+def _numpy_runtime_identity() -> dict[str, Any]:
+    """Fingerprint the imported distribution's declared files, not only the lock."""
+    numpy = importlib.import_module(_NUMPY_DISTRIBUTION)
+    distribution = importlib.metadata.distribution(_NUMPY_DISTRIBUTION)
+    distribution_name = distribution.metadata.get("Name")
+    imported_path_value = getattr(numpy, "__file__", None)
+    imported_version = getattr(numpy, "__version__", None)
+    declared_files = distribution.files
+    if (
+        distribution_name != _NUMPY_DISTRIBUTION
+        or distribution.version != _NUMPY_VERSION
+        or imported_version != _NUMPY_VERSION
+        or not isinstance(imported_path_value, str)
+        or not declared_files
+    ):
+        raise ValueError("Hovi spatial imported NumPy distribution identity drifted")
+
+    environment_root = _absolute(_NUMPY_ENVIRONMENT_ROOT)
+    distribution_root = _absolute(Path(distribution.locate_file("")))
+    if distribution_root == environment_root:
+        raise ValueError("Hovi spatial NumPy distribution root is not site-packages")
+    try:
+        distribution_root.relative_to(environment_root)
+    except ValueError as error:
+        raise ValueError(
+            "Hovi spatial NumPy is outside the asset-gen uv environment"
+        ) from error
+
+    manifest: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for declared in declared_files:
+        path = _absolute(Path(distribution.locate_file(declared)))
+        try:
+            path.relative_to(environment_root)
+        except ValueError as error:
+            raise ValueError(
+                "Hovi spatial NumPy declares a file outside its uv environment"
+            ) from error
+        relative = _runtime_relative(path, "NumPy distribution file")
+        if relative in seen:
+            raise ValueError("Hovi spatial NumPy distribution repeats a file")
+        seen.add(relative)
+        size, sha256 = _runtime_file_identity(
+            path,
+            "NumPy distribution file",
+        )
+        manifest.append({"path": relative, "bytes": size, "sha256": sha256})
+    manifest.sort(key=lambda item: item["path"])
+
+    imported_path = _absolute(Path(imported_path_value))
+    imported_relative = _runtime_relative(imported_path, "imported NumPy module")
+    imported_size, imported_sha256 = _runtime_file_identity(
+        imported_path,
+        "imported NumPy module",
+    )
+    imported_entries = [item for item in manifest if item["path"] == imported_relative]
+    if imported_entries != [
+        {
+            "path": imported_relative,
+            "bytes": imported_size,
+            "sha256": imported_sha256,
+        }
+    ]:
+        raise ValueError("Hovi spatial imported NumPy module is not distribution-bound")
+
+    return {
+        "distribution": _NUMPY_DISTRIBUTION,
+        "version": _NUMPY_VERSION,
+        "environmentRoot": _runtime_relative(environment_root, "NumPy environment root"),
+        "distributionRoot": _runtime_relative(
+            distribution_root,
+            "NumPy distribution root",
+        ),
+        "importedModule": _NUMPY_DISTRIBUTION,
+        "importedModulePath": imported_relative,
+        "importedModuleBytes": imported_size,
+        "importedModuleSha256": imported_sha256,
+        "declaredFiles": {
+            "manifestSchema": "path-bytes-sha256-canonical-json/1.0.0",
+            "count": len(manifest),
+            "bytes": sum(int(item["bytes"]) for item in manifest),
+            "manifestSha256": hashlib.sha256(canonical_json_bytes(manifest)).hexdigest(),
+        },
+    }
+
+
+def _selected_numpy_identity(
+    authority: SpatialMaterializationAuthority,
+) -> Mapping[str, Any]:
+    if authority.execution_identity is None:
+        raise RuntimeError("Hovi spatial execution has no frozen selection identity")
+    parsed = json.loads(authority.execution_identity)
+    if not isinstance(parsed, Mapping):
+        raise ValueError("Hovi spatial execution selection identity is not an object")
+    python = _mapping(parsed.get("pythonExecution"), "Python binding")
+    return _mapping(python.get("numpy"), "NumPy runtime binding")
+
+
 def verify_execution_implementation(
     authority: SpatialMaterializationAuthority,
 ) -> None:
@@ -188,6 +308,8 @@ def verify_execution_implementation(
         raise RuntimeError("Hovi spatial execution has no frozen selection")
     for path, expected_sha256 in authority.implementation_files:
         _verify_implementation_file(path, expected_sha256)
+    if dict(_selected_numpy_identity(authority)) != _numpy_runtime_identity():
+        raise ValueError("Hovi spatial imported NumPy runtime changed")
 
 
 def load_spatial_execution_selection(
@@ -253,7 +375,9 @@ def load_spatial_execution_selection(
     native = _mapping(parsed["nativeBuild"], "native build")
     python = _mapping(parsed["pythonExecution"], "Python binding")
     files = _mapping(python.get("files"), "implementation files")
+    numpy = _mapping(python.get("numpy"), "NumPy runtime binding")
     boundary = _mapping(parsed["evidenceBoundary"], "evidence boundary")
+    realized_numpy = _numpy_runtime_identity()
     if (
         parsed["schemaVersion"] != EXECUTION_SCHEMA
         or parsed["status"] != "execution_authorized"
@@ -288,7 +412,10 @@ def load_spatial_execution_selection(
         or python.get("version") != platform.python_version()
         or python.get("platform") != sys.platform
         or python.get("machine") != platform.machine()
+        or set(python)
+        != {"implementation", "version", "platform", "machine", "files", "numpy"}
         or set(files) != _IMPLEMENTATION_PATHS
+        or dict(numpy) != realized_numpy
         or parsed["publicationRoot"]
         != "data/work/hovi-full-scan-spatial-materialization"
         or dict(boundary)
