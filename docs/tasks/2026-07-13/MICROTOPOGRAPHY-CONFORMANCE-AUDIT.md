@@ -1,6 +1,6 @@
 # Microtopography Delivery Conformance Audit
 
-Date: 2026-07-14
+Date: 2026-07-15
 
 Normative authority: `docs/specs/terrain/MICROTOPOGRAPHY.md`
 
@@ -18,7 +18,9 @@ Three subsequent capped, disjoint searches also found no public zero-budget sour
 
 Forest contract `forest-floor-research-design.2026-07-14.json`, SHA-256 `b2f040d096aa...`, and its consumed test1/test2 audit are immutable. The next active research contract is `moore-m0-research-design.2026-07-15.json`, SHA-256 `99290f3ac260...`. It permits one joint M0 `1 m -> 0.0625 m` research screen over 68 visible-moss grids/eight groups. The explicitly non-truth `derived_B2_hypothesis` must pass the frozen source and held-out synthesis gates; strict measured-only B1 support is reported separately and may not be invented by padding. No B1-only preview, production owner, Estonia transfer, or `latest` publication is authorized.
 
-Moore materialization build `5bdc602d32bc...` (manifest SHA-256 `13b7a18304ae...`) is terminal and valid. It closes 78/78 artifacts and reproduces the frozen inventory, but yields zero strict B1 cells, zero accepted windows, zero spectral cores, and no persistent form families. It therefore authorizes no D/R/E execution and no preview. The next bounded feasibility check is OPARA later epoch `dense_438`; the rejected missing epoch-0 claim remains closed.
+Moore materialization build `5bdc602d32bc...` (manifest SHA-256 `13b7a18304ae...`) is terminal and valid. It closes 78/78 artifacts and reproduces the frozen inventory, but yields zero strict B1 cells, zero accepted windows, zero spectral cores, and no persistent form families. It therefore authorizes no D/R/E execution and no preview.
+
+The bounded OPARA later-epoch check is also terminal. Exact `dense_438` is dense but covers only about `3.050 x 2.351 m`; it has no semantic/view identity and cannot supply the frozen disjoint-view consensus or fail-closed vegetation/rock, wet-surface, frame/target, occlusion, and interpolation masks. Its propagated precision is not truth, and its M3C2 companion references absent epoch 0. It remains an R0 cultivated-loess erosion diagnostic, not R1 weak supervision. The next active step is one capped, parallel metadata-feasibility pass over neighboring/similar Baltic-Nordic peat/rock and cultivated-soil sources; no converter or large-payload work begins without a source-level pass.
 
 ## Conformance Matrix
 
@@ -77,7 +79,7 @@ No current candidate artifact has entered a production release, so the preregist
 4. Preserve rejected OPARA sample-plot candidate `f6714a2f98a0...` and slope metadata audit `opara-1038-sample-slope-metadata-audit.2026-07-14.json`. The slope archive remains unfetched because its official record does not promise the missing event, control-log, reference-identity, and mask evidence.
 5. Keep forest artifact `315579b48189...` and its consumed semantic audits immutable. Resume that route only with materially new semantics and a new untouched audit; do not tune against test1/test2 or open Järvselja for exploratory repair.
 6. Preserve Moore build `5bdc602d32bc...` as a terminal source no-go. Do not pad plots, shrink registered gates post hoc, or run D/R/E from its zero-window handoff.
-7. Audit exact OPARA later epoch `dense_438` as an R1 weak-surface candidate. Stop if RGB/geometry cannot fail-closed exclude vegetation/rock ambiguity, frame/targets, water, and occlusion; never reuse the absent epoch-0 claim.
+7. Preserve exact OPARA later epoch `dense_438` as R0 diagnostic evidence only. Resume R1 consideration only with publisher camera-to-epoch contribution identities and machine-usable exclusion masks, or independently reconstructed disjoint view groups with frozen audited masks; never reuse the absent epoch-0 claim.
 8. After the three-site/two-campaign split passes, complete the physical-analogue dossier, Estonia condition/OOD/sentinel bounds, and full-fidelity condition fabric. Foreign-only evidence may authorize at most a user-accepted `neighbor_analogue_only` pilot, never national coverage.
 9. Freeze the target registry, geographic/campaign split, leakage audit, condition strata, exact tensors/operators/windows, training configuration, seeds, metrics, real-vs-real margins, render protocol, cost ceiling, and valid no-owner outcomes in a user-approved target-specific preregistration. Keep Järvselja sealed until this point.
 10. Run the required corrected-only, exemplar, conditional-simulation, process where applicable, deterministic-regressor, GAN, diffusion, and justified-hybrid challengers. Omit a family only through a preregistered evidence-based justification. Quality determines survival; cost only breaks a quality-equivalent tie.

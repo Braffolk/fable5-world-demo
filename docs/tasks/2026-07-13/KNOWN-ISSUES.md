@@ -1,6 +1,6 @@
 # Microtopography Known Issues
 
-Last updated: 2026-07-14
+Last updated: 2026-07-15
 
 ## Active Blockers
 
@@ -233,11 +233,25 @@ cores, and no persistent form families. Independent review closed all 78 hashes
 and reproduced the inventory. The implementation is preserved, but Moore cannot
 train or preview decimeter morphology without inventing boundary support.
 
-The next bounded check uses only the already-retained OPARA later epoch
-`dense_438` and its matching precision/change companions. It does not reinterpret
-the absent pre-rain epoch 0. The decisive question is whether actual RGB/geometry
-can fail-closed exclude the documented joint 10% vegetation/rock plus plot frame,
-targets, water, and occlusion; otherwise this route stops before synthesis too.
+The bounded OPARA later-epoch check is complete and terminal for R1 weak
+supervision. Exact `dense_438` contains `2,260,817` vertices over about
+`3.050 x 2.351 m`, shrinking to `2.050 x 1.351 m` after a 0.5 m boundary
+exclusion. Its class field is constant zero; its confidence values are SfM
+reconstruction confidence, not semantic or camera identity. The bitstream cannot
+recover disjoint-view consensus or calibrated masks for the documented combined
+10% vegetation/rock, wet sheen/water, plot frame/targets, occlusion, and
+interpolation. Matching propagated precision is not truth, while the M3C2 product
+references absent epoch 0. Preserve the cloud only as an R0 cultivated-loess
+erosion diagnostic. Resume this source only with publisher camera-to-epoch
+contribution identities plus machine-usable exclusion masks, or independently
+reconstruct two precisely bound view groups with frozen audited masks.
+
+The active work is a capped parallel activation pass over neighboring/similar
+Baltic-Nordic sources for peat/rock and cultivated-soil regimes. This is not an
+unbounded dataset search: each branch stops at metadata feasibility, retains at
+most two ranked candidates, and performs no converter work or large payload fetch
+until one source clears immediate access, surface semantics, reconstructable
+support, masking, and independent control/error.
 
 The durable end-to-end requirement comparison is recorded in
 `MICROTOPOGRAPHY-CONFORMANCE-AUDIT.md`. It also freezes the historical preregistration
