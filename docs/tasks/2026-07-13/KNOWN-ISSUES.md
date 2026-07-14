@@ -8,7 +8,7 @@ Last updated: 2026-07-14
 
 The LUKE-derived residual bank, patch quilt, masks, hierarchy projection, and immutable preview demonstrated that measured data can be cooked, packed, streamed, decoded, and rendered through LOD -1/-2. User-visible review rejected the resulting geometry as a synthesis solution: added relief is weak and noise-like, water and other invalid regions can still become bumpy, shorelines retain the source 1 m grid character, known DTM defects are preserved, and the method has no defensible model of Estonia's substrate-, soil-, hydrology-, land-use-, or process-dependent variance. Internal seam, mean, quantization, and distribution gates do not repair that quality failure.
 
-The replacement work is intentionally back at research/specification. Independent learned and deterministic/process proposals and independent adversarial critiques are complete. Neither track establishes a universal winning generator; the evidence instead requires typed source repair and a per-regime contest among process, exemplar, conditional simulation, regressor, GAN, diffusion, and hybrid specialists. Three final integrated audits closed the remaining critical/high science, cook/release/runtime, coverage, and evidence-contract defects. They also rejected the first Stage 1 Moore owner test: the archive is now explicitly `target_evidence_insufficient`, and the cheapest proof is structural repair plus public-evidence qualification. No replacement morphology implementation is authorized before a target-specific preregistration passes the reviewed spec.
+The replacement work is now in Stage 2 public-corpus conversion and evidence qualification under the accepted spec. Independent learned and deterministic/process proposals and independent adversarial critiques are complete. Neither track establishes a universal winning generator; the evidence instead requires typed source repair and a per-regime contest among process, exemplar, conditional simulation, regressor, GAN, diffusion, and hybrid specialists. Three final integrated audits closed the remaining critical/high science, cook/release/runtime, coverage, and evidence-contract defects. They also rejected the first Stage 1 Moore owner test: the archive is now explicitly `target_evidence_insufficient`, and the cheapest proof is structural repair plus public-evidence qualification. No replacement morphology implementation is authorized before a target-specific preregistration passes the reviewed spec.
 
 ### Public dense observations exist, but no production-ready target corpus exists
 
@@ -94,31 +94,23 @@ This closes only the bounded reader-validation probe: it did not reach EOF, vali
 publisher counts, convert all scans, qualify target truth, authorize a surface, or
 authorize synthesis.
 
-Native commit `e9eb37a` correctly bounds integer unpacking by the declared remaining
-record count, but its terminal residual rule is too strict for legal byte-alignment
-padding. The first full attempt, selection `5e8373c88196d539f614a65215e7a594aabc6297c636fe8946b2ac6b8288c91f`,
-failed closed after scan 0 with 5.3 GiB staged because a narrow field retained enough
-zero padding bits to resemble another complete code. Native correction `1e6989d` then
-predicted exact residual length from total record count and field width. Restart
-selection `4676c9df1c5fbd6b2cc0e05e21b7469d6025aa16cb11649ad591a98c8e0847b3`
-proved that correction on scan 0 but failed closed after scan 1 with
-`Compressed vector has an invalid terminal byte-alignment padding length`; its
-approximately 11 GiB tree is also rejected staging, not published evidence. The
-second failure shows that total-record byte alignment alone is not the complete
-general E57 bytestream rule. The next correction must derive and independently audit
-the packet/bytestream semantics, preserve the hard declared-record budget, and bind a
-new build/selection before restart. Direct scan-1 packet traversal supplies the missing
-rule: its 15-bit column field contains exactly nine terminal zero bits because the
-E57Ref bitPack encoder flushes its final partial 16-bit codec word. In the supported
-profile, integer widths use the smallest 8/16/32/64-bit word that contains one code and
-must retain exactly `(-recordCount * bitWidth) mod codecWordBits` zero bits after the
-declared records. Packet fragmentation does not reset that stream; compression restarts
-remain unsupported. The validator must reject a short or long residual, any nonzero
-residual bit, an extra decoded record, packets after declared completion, section drift,
-or a restart. A legal residual may be at least one field code wide, because XML
-`recordCount` owns termination; treating decodability of zero word padding as another
-record caused the first false rejection. No current execution is publishable until the
-implementation and newly bound selection pass independent audit.
+The two earlier full attempts remain rejected history: selection `5e8373c...` rejected
+legal scan-0 padding, while `4676c9d...` accepted scan 0 but rejected scan 1 after about
+11 GiB. The general correction is now native codec-word padding commit `ba92ab4`, bound
+by execution selection
+`1b62c825a75d7092b61bef6be8dcfdd98f55023178ac45fb2d6938cb995bf4ab`.
+It completed every scan and decoded all `4,248,797,321` publisher records. Content-addressed
+manifest `ed02d20970b5d9eedf5b36406c947d3cea87c59682bc8853f1a23fac23f35d18`
+records `3,680,759,265` AOI records in 1,907 artifacts totaling `103,061,259,420`
+bytes. The manifest evidence boundary remains exact: unqualified, not ground-filtered,
+no surface claim, no target truth, no analogue qualification, and no synthesis.
+
+One transaction-state issue remains. The manifest status is
+`verified_staging_ready_for_atomic_publication`, and its bound native report says
+`atomicPublication:false` and `stagingOnly:true`. Therefore the full decode and verified
+spatial materialization are complete, but the task's promised atomic publication is not
+yet evidenced and must not be marked complete by filesystem presence alone. Atomic
+publication cannot change the artifact's scientific status.
 
 The accepted full-read spatial-materialization contract uses exact integer support-AOI
 ticks rather than reinterpreted floating bounds, one fixed 28-byte record ABI, per-scan
@@ -126,26 +118,26 @@ ticks rather than reinterpreted floating bounds, one fixed 28-byte record ABI, p
 with at least 216 GiB free and must preserve a 96 GiB reserve. These are authorization
 constraints, not estimates to relax during extraction.
 
-The first independently audited execution boundary was enabled by local commit `b37e865` and
-exact immutable selection
-`5e8373c88196d539f614a65215e7a594aabc6297c636fe8946b2ac6b8288c91f`.
-Its runner covers `4,248,797,321` declared records with one absolute 24-hour
-decode/verification/publication deadline, realized NumPy-distribution identity,
-bounded per-scan cross-artifact ordinal-disjointness bitmaps, a 2 GiB child RSS cap,
-24 native descriptors, and fail-closed publication. Both that selection and corrected
-selection `4676c9df1c5fbd6b2cc0e05e21b7469d6025aa16cb11649ad591a98c8e0847b3`
-are superseded for future execution by their respective padding-validator defects.
-Until a newly bound pass publishes an independently accepted final manifest, no surface
-or synthesis is authorized.
+The audited execution contract still owns the hard `4,248,797,321` record budget,
+absolute deadline, realized NumPy identity, per-scan ordinal-disjointness, bounded child
+RSS/descriptors, and fail-closed verification. The successful selection supersedes both
+padding-defective selections for materialization evidence. It does not supersede the
+scientific gates: raw shards are not a terrain surface and authorize no synthesis.
 
-The ordered closure after reader validation is: one-pass scan-preserving spatial
-materialization under that contract; view-aware candidate conversion with support, visibility, error,
+The ordered closure after the completed spatial materialization is: atomic publication
+of the verified staging result; view-aware candidate conversion with support, visibility, error,
 semantic, and full-versus-thinned evidence; human semantic and physical-analogue/OOD
 qualification with campaign/site holdouts; target-specific preregistration; per-regime
 specialist bakeoff with a valid no-winner; then ordinary packed-height cook, hierarchy,
 immutable preview, independent verification, real-WebGPU boot, and user visual review.
 Hovi must not be collapsed into a generic national forest prior: it can support only
 the explicitly matched forest-floor conditions and phenomena that survive those gates.
+
+The durable end-to-end requirement comparison is recorded in
+`MICROTOPOGRAPHY-CONFORMANCE-AUDIT.md`. It also freezes the historical preregistration
+boundary: LUKE can never be grandfathered into owner selection; inspected Hovi/Evo
+screens are development evidence, not blind evidence; and sealed `JS_SPRUCE1` remains
+untouched until the target-specific preregistration is approved.
 
 For Evo, the exact 5,773-byte version-2 stand-selector CSV remains retained under
 content address `1584bd396efe...`, and the exact `889,454,592`-byte plot-1086 LAZ is
@@ -273,8 +265,9 @@ result looks correct. This accepts Stage 1 structural repair at the exact URL, r
 and manifest above; it does not establish morphology beauty or authorize a specialist.
 `releaseReady:true` and a clean boot establish release/runtime correctness, not beauty.
 The verifier's repeated large-artifact decoding/hashing remains a scalability issue for
-future transactions. Hovi full-archive extraction and the selected metadata-only
-inventory are complete; point conversion and target qualification remain separately gated tasks.
+future transactions. Hovi full-archive extraction, metadata inventory, and verified raw
+spatial materialization are complete; the materialization's own manifest remains
+staging-only, while atomic publication and target qualification remain separate gates.
 
 ### National fine-height volume remains a product constraint
 
@@ -344,7 +337,7 @@ The measured pilot cook rasterizes ETAK open water, buildings, paved roads, fore
 
 The user observed two anomalous tall bumps in the existing Estonia 1 m height source beside the main Suur Taevaskoda cliff, apparently where river should be. Audit of pinned base manifest `708478a57c2118ea`, raw Maa-amet `54472_dtm_1m.tif`, ETAK water geometry, and nDSM confirms a coherent LiDAR ground-model/TIN bridge across missing/occluded water returns beside the steep sandstone cliff. It is not DSM, quantization, micro synthesis, or mainly canopy. The main false interior component is about `225 m2`, centered near `E 679788.35, N 6444811.45`, reaches `52.22 m`, and extends `13.45 m` into the mapped channel. The current waterbed pass neither creates nor amplifies it, but preserves the corrupt absolute ramp and subtracts only normal hydraulic depth. The cliff-top anchor itself is dry and unchanged at about `60.02 m`.
 
-The general upstream fix belongs in typed structural reconstruction, not morphology synthesis or runtime: qualify raw returns as visible-water evidence, fit a robust reach profile only where support and topology pass, reject unsupported water-interior TIN bridges, and preserve the shoreline uncertainty corridor plus real banks/cliffs. The current immutable pilot base does not contain this correction; changing its LOD0 authority requires a separately verified base release rather than silently patching negative LODs.
+The general upstream fix belongs in typed structural reconstruction, not morphology synthesis or runtime: qualify raw returns as visible-water evidence, fit a robust reach profile only where support and topology pass, reject unsupported water-interior TIN bridges, and preserve the shoreline uncertainty corridor plus real banks/cliffs. The accepted `009fd...` structural base now contains the bounded qualified correction. Any expansion still requires a separately verified corrected-base release rather than silently patching negative LODs.
 
 The retained-tile qualification authorizes the 2019 class-9 profile over tile `444679`: `485/493` accepted one-metre stations, 3 m maximum missing span, and a final `37.585156 m` profile at the anomaly versus the invalid DTM's `45.591937 m` accepted station. The smallest adjacent 2019 closure is now retained and inventoried: north tile `445679` and east tile `444680`, 87,992,146 raw bytes total. Replaying all three tiles exposes a separate 31 m unsupported span at full-line stations 40-70. Topology contains no mapped internal hydraulic jump, but observation continuity still fails there. Stage 1 may fit the supported downstream segment beginning at station 71; it must abstain wherever publication depends on stations 40-70 rather than extrapolating, bridging, or splicing raw DTM.
 
@@ -356,7 +349,7 @@ The Ahja topology audit closes that question locally: ETAK centreline `2356024` 
 
 ETAK footbridge `4477659` crosses at station `386.497 m`, but its path width is missing and source record 216 has categorical accuracy code 40 with no established metric mapping. The topology sensitivity audit nulled six station bins but did not use a justified 2D footprint; that is not production evidence. Stage 1 must not invent or claim a bridge buffer. The robust unmasked class-9 profile may support the bounded visual proof with this limitation disclosed, but national activation requires an executable occlusion footprint or independent evidence that the bridge cannot contaminate water labels.
 
-The executable three-tile campaign now reproduces content address `c84d0b59e0deb54fb087f0cf0235fd3f66510b651b67b801f6035afa1c067571` from the frozen config, exact ETAK geometries, and retained ALS bytes. It qualifies the downstream profile in forward orientation with a 15 m longest unsupported span and records no observation-exclusion geometry. This closes evidence materialization only; it does not yet authorize the corrected base release or national flowing-water activation.
+The executable three-tile campaign now reproduces content address `c84d0b59e0deb54fb087f0cf0235fd3f66510b651b67b801f6035afa1c067571` from the frozen config, exact ETAK geometries, and retained ALS bytes. It qualifies the downstream profile in forward orientation with a 15 m longest unsupported span and records no observation-exclusion geometry. This campaign record closed evidence materialization only. The later `009fd...` transaction separately authorized and published the bounded corrected base; national flowing-water activation remains blocked.
 
 ### Existing fixture detail is diagnostic only
 
@@ -364,7 +357,7 @@ The sine/checkerboard-looking local fixture proves packed fine-height retention 
 
 ### Fine surface alignment previously diverged by consumer
 
-Grass previously sampled a flatter/coarser height than terrain, trees, and plants. The clean branch now uses the finest valid packed height for grass. The historical rejected-LUKE hero preview confirmed grass, terrain, trees, plants, and materials were enabled; active `009fd...` has passed preview verification and its exact-URL boot, while user visual inspection remains pending.
+Grass previously sampled a flatter/coarser height than terrain, trees, and plants. The clean branch now uses the finest valid packed height for grass. The historical rejected-LUKE hero preview confirmed grass, terrain, trees, plants, and materials were enabled; active `009fd...` has passed preview verification, its exact-URL boot, and user visual acceptance for structural repair.
 
 ### Runtime boot blockers are fixed
 
@@ -372,7 +365,7 @@ The historical accepted infrastructure checkpoint removed the `TerrainField` cei
 
 ## Integration Risks
 
-- Dataset conversion previously became inefficiently serialized behind HY_SPRUCE4 full-E57 handling, with two failed full attempts and repeated implementation/review micro-cycles before a morphology input existed. Native codec-word padding commit `ba92ab4` preserves the reusable correction and receives one final real run, but Hovi no longer monopolizes the critical path. Evo 1086 and HY_PINE2 downsampled LAZ now run as independent end-to-end tracks. A blocked track is parked without deleting its code or provenance; it resumes only if quicker alternatives fail or its scientific role is unique.
+- Dataset conversion previously became inefficiently serialized behind HY_SPRUCE4 full-E57 handling, with two failed full attempts and repeated implementation/review micro-cycles before a morphology input existed. Native codec-word padding commit `ba92ab4` has now completed the verified full materialization; atomic publication remains. Evo 1086/1065 are parked after sparse-surface diagnosis, and HY_PINE2 remains unfetched unless its unique same-site stress role justifies the cost. A blocked track is parked without deleting its code or provenance; it resumes only if quicker alternatives fail or its scientific role is unique.
 - The root `estonia-asset-gen` worktree contains unrelated dirty and old-agent changes. Integration must preserve user work and must not copy the obsolete 128 m global-grid rewrite or hash/noise synthesizer.
 - A production pilot preview may be materialized locally, but it must not update `latest.json` until realism, masks, and user-visible acceptance pass.
 - The accepted replacement spec requires a target-evidence-gated per-regime specialist architecture, not a continuation of the measured mineral-forest quilt. Stage 1 structural repair is complete, `releaseReady:true`, and user-accepted through transaction `009fd...`; superseded `7a2d...` artifacts remain history, not current authority. Morphology implementation remains gated by qualified target evidence. One minimal generic packed-surface grounding correction for trees/boulders/understory/debris remains an infrastructure dependency; it does not synthesize geometry or change the wire format.
