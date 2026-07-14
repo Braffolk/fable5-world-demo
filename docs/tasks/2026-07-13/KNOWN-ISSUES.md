@@ -1,6 +1,6 @@
 # Microtopography Known Issues
 
-Last updated: 2026-07-13
+Last updated: 2026-07-14
 
 ## Active Blockers
 
@@ -32,21 +32,109 @@ and Estonia out-of-distribution sentinels. Any remaining unsupported regime must
 abstain; the spec may not quietly restore paid acquisition as a next step unless
 the user explicitly reopens budget.
 
-The first exact zero-cost selections are now frozen rather than left as dataset
-names: 43 Hovi files (`6.7445 GiB`) across Hyytiälä development/stress and sealed
-Järvselja transfer, all eight official Taevaskoda ALS epochs for structural repair,
-and one `334.90 MiB` Biała Góra epoch for a later calibration-only audit. No Hovi or
-Biała geometry has been downloaded. All eight Taevaskoda ALS epochs are now retained
-content-addressed and inventoried (`190,445,551` raw bytes). The 2023 and 2024 files
-carry a compound WKT wrapped in literal quotes that PROJ rejects; the raw VLR and
-parse error are preserved, while the official tile contract and GeoKeys identify
-EPSG:3301 plus EH2000. This metadata defect must not be silently normalized.
+The exact zero-cost selections remain frozen rather than treated as dataset names.
+For Hovi, the selected shared records, ten HY_SPRUCE4 photographs, and merged geometry
+are retained; condition evidence, raw-support QA, semantic-photo QA, and the final
+code-bound Q1 candidate `1e5f674af3fc...` are complete. Independent review returned
+Q1 `GO` only for full-scan retention and audit. The candidate remains a `raw_candidate`:
+unqualified, unusable as target truth, not synthesis-authorized, and with no authorized
+surface. Only `HY_SPRUCE4-full.zip` (`47,345,435,519` bytes) has been retained and
+exact-verified under `cabb67ce94a2...`; its safe archive inventory contains exactly one
+member. The bounded extraction completed after Stage 1 verification under transaction
+`fe44c5c05c4...`. Its immutable E57 object is exactly `84,817,645,568` bytes with
+SHA-256 `7889a9cfef69d57a50eaa5a9f8d224d28486d5901163e08cbdc827f92f409da2`;
+the restart-only partial is gone and the extraction receipt is complete. Metadata-only
+inventory `54e21049ac09c7d3f69ac7ab5990c982d12a7bd04da0618de032c8311cd3cfad`
+is selected by frozen authority
+`config/evidence/hovi-hy-spruce4-full-metadata-selection.json` (SHA-256
+`bc47f334c71cf26bd9fd090301d8848ca7b6c37bb4efedc430c3cb2fbd59d360`). It records 16 publisher
+scan declarations and `4,248,797,321` publisher-declared points from `54,492` XML bytes
+while decoding zero point, group, or other compressed-vector records. Present-empty
+numeric terminals retain lexical absence and expose effective zero; the pinned reader is
+descriptor-bound, inventory performs no redundant full-payload digest, immutable records
+and publication use held private directory descriptors, and loaded callable/code objects
+are fingerprinted separately from on-disk source snapshots. Inventories
+`f446b813e4d5...`, `3a93b4db69c3...`, and `456be8611194...` are immutable superseded
+history and must not be used. The selected artifact remains publisher metadata, not
+independently verified geometry, and does not authorize a terrain target, analogue
+qualification, point conversion, or synthesis.
+The HY_PINE2 development-stress plot remains unfetched, and the sealed Järvselja
+(`JS_SPRUCE1`) blind plot remains untouched. Biała Góra remains calibration-only and
+unretained.
+
+The pinned `e57==0.2.3` Python API is safe for the bounded XML inventory but is not a
+viable point-conversion reader. Its only point API materializes every scan into three
+process-wide arrays, collapses scan identity and poses, discards row/column, invalid
+state, range, and source ordinal, and synthesizes grayscale color from intensity. At
+`4,248,797,321` declared records, result arrays alone would approach `158 GiB` before
+growth peaks and decoder state. Any authorized conversion therefore requires a separate,
+audited bounded native adapter over the embedded Rust per-scan raw iterator, or another
+bounded reader dependency; calling Python `read_points()` is forbidden.
+
+For Evo, only the exact 5,773-byte version-2 stand-selector CSV is retained under
+content address `1584bd396efe...`; the 889 MB plot-1086 LAZ remains unfetched. The
+corrected condition/selection artifact is `73b39fd621fa...`. It proves the retained
+CSV row and numeric stand checks, while substrate, scan protocol, qualifying-set
+membership, and minimum-LAZ selection remain explicitly frozen-config assertions or
+unrecomputed assertions. Soil, hydrology, organic-floor, management, and disturbance
+conditions remain unknown. Plot 1086 is still an unqualified raw candidate with no
+target-truth, analogue-transfer, or synthesis authorization.
+
+All eight Taevaskoda ALS epochs are retained content-addressed and inventoried
+(`190,445,551` raw bytes). The 2023 and 2024 files carry a compound WKT wrapped in
+literal quotes that PROJ rejects; the raw VLR and parse error are preserved, while
+the official tile contract and GeoKeys identify EPSG:3301 plus EH2000. This metadata
+defect must not be silently normalized.
 
 ### Corrected fine terrain cannot remain pinned to raw LOD0
 
 The current pilot's residual-only hook, mean-null projection, verifier, and format-2 overlay explicitly preserve the pinned raw LOD0. That makes it structurally incapable of repairing a grid shoreline, river bump, scan seam, or other one-meter source error without the defect returning during LOD -1 to LOD0 fallback.
 
-The next proof must publish a corrected ordinary format-1 base first: generate a corrected structural surface, derive canonical fine children, derive corrected LOD0 and every affected LOD1-L4 ancestor from browser-decoded children, and pin the existing format-2 negative overlay to that corrected base. This changes cooked content and release/verifier logic, not LAC payload bytes, the asset server, shaders, or synthesis ownership. A separate minimal generic sampling repair is required because trees/boulders/understory/debris still ground at LOD0 rather than the packed fine/morph surface. National multi-parent fine coverage also requires generalizing the currently one-parent release metadata/tooling even though the runtime plane/index code is rectangle-capable.
+Stage 1 now publishes a corrected ordinary format-1 base first: it generates the
+corrected structural surface and LOD0 cores, then splices decoded-child reductions
+only into affected LOD1-L4 windows before pinning the format-2 negative overlay to
+that base. Existing LOD1-L4 remain independent DTM cooks rather than a child pyramid,
+so unrelated decoded samples are preserved. This changes cooked content and
+release/verifier logic, not LAC payload bytes, the asset server, shaders, or synthesis
+ownership. A separate minimal generic sampling repair remains required because
+trees/boulders/understory/debris still ground at LOD0 rather than the packed fine/morph
+surface. National multi-parent fine coverage also still requires generalizing the
+currently one-parent release metadata/tooling even though the runtime plane/index code
+is rectangle-capable.
+
+The qualified downstream Ahja geometry crosses the east edge of authority chunk `(0,151,93)` at `E=679936`, so `(0,152,93)` is a corrected core rather than a raw support read. The evidence-derived working closure is therefore 45 LOD -1 reducer chunks, 777 transient LOD -2 fine chunks, and 897 paired 0.25 m authority/baseline source tiles including the Keys halo; only the selected 16 LOD -2 chunks plus parent `(-1,607,372)` remain published negative coverage. Any smaller closure would either clip a real reach at a storage boundary or leave a corrected apron against a raw neighboring core.
+
+The unmodified 0.25 m baseline must be prolonged from the explicitly pinned browser-decoded LOD0 release with exact aligned 4x4 mean preservation. Direct bilinear reconstruction from the raw GeoTIFF changes dry one-metre means across the whole closure without repair evidence and is rejected as canonical authority. The four raw DTM sheets remain hash-bound repair evidence; only qualified structural overrides may change the pinned dry baseline.
+
+The pinned-baseline reader, full `897/777/45/2` disk-backed materializer, halo-aware
+coarse/fine authority closure, masked LOD0-L4 corrected-base transaction, and
+content-addressed authority/abstention and corrected-water inventories are implemented.
+Active immutable transaction
+`009fd3d2be07d465199e6330ac9d2fc5a8fc7a16bbb5df0f55e5030ce962d3d1`
+has completed structural steps 01-07: authority, scientific closure, materialization,
+corrected base, corrected water, staging, and corrected format-1 release. Prior
+transaction `7a2d765354c362bbe15fd0c7eac2c27425123dc3f6c76692d1902618936c1a2b`
+is retained as superseded immutable history, not treated as the current preview build.
+The staged-plan LAC1/header defect and later quantization and snapshot-comparison defects
+were verifier-only and are fixed without replacing the completed `009fd...` artifacts.
+The final transaction record reports completion status `verified-preview-release` and
+`releaseReady:true`.
+
+### Preview verification and the real-WebGPU boot pass; visual acceptance is pending
+
+The independent verifier completed the `009fd...` structural closure after the
+verifier-only quantization and snapshot-comparison fixes. The accepted preview recipe is
+`74fdccda596b124342a8cb956968fdc3339bf56a2bfb8791f58c73cb0f5d0488`; its exact
+manifest SHA-256 is
+`6c7c108fe119990fe8518c81f79294e9b33b73a8723e4f7d92e1efd9f37a6986`.
+The manifest is served from the fresh `http://localhost:8788` data endpoint. A fresh
+real-Chromium WebGPU run passed through frame 106 at the exact centered URL
+`http://localhost:5173/?scene=world&src=estonia&dataurl=http%3A%2F%2Flocalhost%3A8788&alt=40&x=311123.082&z=190723.435&yaw=0&pitch=-0.18&shadowclipres=896`.
+That live URL has been supplied for review. User visual acceptance remains pending;
+`releaseReady:true` and a clean boot establish release/runtime correctness, not beauty.
+The verifier's repeated large-artifact decoding/hashing remains a scalability issue for
+future transactions. Hovi full-archive extraction and the selected metadata-only
+inventory are complete; point conversion and target qualification remain separately gated tasks.
 
 ### National fine-height volume remains a product constraint
 
@@ -78,7 +166,7 @@ The production CLI, recipe-kind enforcement, content-addressed transaction, meas
 
 The currently selected corpus supports only a low-confidence foreign-analogue mesic mineral pine-forest matrix. It does not justify peat, exposed carbonate, agriculture, sandstone-cliff, or forest-event morphology. The first measured cook applied this matrix to every allowed dry sample; decoded diagnostics exposed that as causally wrong even though packing/masks passed. That immutable preview remains diagnostic-only. A context-restricted recook must enable it only for matching forest plus known mineral/non-peat soil and emit zero elsewhere.
 
-The fail-closed selector is implemented and independently verified. It allows `53.3685%` of published hero samples and zeroes four complete chunks; texture is exclusion-only and no geology match is claimed. Corrected immutable recipe `090747d74911...` is now cooked and live for visual review.
+The fail-closed selector was implemented and independently verified for the historical rejected-LUKE preview. It allowed `53.3685%` of published hero samples and zeroed four complete chunks; texture was exclusion-only and no geology match was claimed. Immutable recipe `090747d74911...` remains historical diagnostic evidence, not the current Stage 1 build or a currently offered live URL.
 
 ### Measured quilting attenuation is fixed for the pilot
 
@@ -96,11 +184,11 @@ The first runtime selected the finest containing plane without a transition. At 
 
 ### Raster prepass allocation is compacted
 
-The prior fixed reservation allocated about `576 MiB` for projected vertices and `140 MiB` for cluster context, directly causing browser `ArrayBuffer allocation failed` errors. The clean implementation uses exact per-cluster reservations in a `120 MiB` projected-record pool and a `13.5 MiB` context domain. All projection consumers share the same cap and invalid-base sentinel; overflow is fail-closed and surfaced through counters/warnings. The exact Estonia URL now passes repeated clean WebGPU boots.
+The prior fixed reservation allocated about `576 MiB` for projected vertices and `140 MiB` for cluster context, directly causing browser `ArrayBuffer allocation failed` errors. The clean implementation uses exact per-cluster reservations in a `120 MiB` projected-record pool and a `13.5 MiB` context domain. All projection consumers share the same cap and invalid-base sentinel; overflow is fail-closed and surfaced through counters/warnings. The historical rejected-LUKE Estonia URL passed repeated clean WebGPU boots, and active `009fd...` now independently passes the mandatory gate through frame 106.
 
 ### Format-2 runtime displacement violated packed-geometry ownership
 
-`NaniteFetch.terrainDispAt` previously added up to `0.55 m` of camera-faded procedural vertex displacement, and grass roots repeated it. The clean implementation compiles `TerrainDisp` out when `worldManifest.format === 2`, retaining the legacy path for generated/format-1 worlds. The centered live checkpoint boots with the packed format-2 surface, vegetation, and materials present; broader motion/viewpoint inspection remains part of synthesis review rather than a boot blocker.
+`NaniteFetch.terrainDispAt` previously added up to `0.55 m` of camera-faded procedural vertex displacement, and grass roots repeated it. The clean implementation compiles `TerrainDisp` out when `worldManifest.format === 2`, retaining the legacy path for generated/format-1 worlds. The historical rejected-LUKE checkpoint booted with the packed format-2 surface, vegetation, and materials present; that observation is retained as infrastructure evidence, not current `009fd...` preview acceptance.
 
 ### A heightfield cannot represent the Taevaskoda sandstone wall
 
@@ -136,14 +224,14 @@ The sine/checkerboard-looking local fixture proves packed fine-height retention 
 
 ### Fine surface alignment previously diverged by consumer
 
-Grass previously sampled a flatter/coarser height than terrain, trees, and plants. The clean branch now uses the finest valid packed height for grass. The centered hero preview confirms grass, terrain, trees, plants, and materials are all enabled; detailed grounding quality remains a visual synthesis-review item.
+Grass previously sampled a flatter/coarser height than terrain, trees, and plants. The clean branch now uses the finest valid packed height for grass. The historical rejected-LUKE hero preview confirmed grass, terrain, trees, plants, and materials were enabled; active `009fd...` has passed preview verification and its exact-URL boot, while user visual inspection remains pending.
 
 ### Runtime boot blockers are fixed
 
-The accepted checkpoint removes the `TerrainField` ceiling failure, CPU `ArrayBuffer` allocation failure, invalid TSL `If`, oversized 64 KiB uniform bindings, non-uniform `workgroupBarrier`, writable storage alias, and mixed read-only/read-write synchronization-scope failures seen during integration. `tools/boot-smoke.ts` now fails on page errors, local asset/API failures, TSL invalid-code messages, uncaptured WebGPU errors, hook failures, or missing rendered frames. Three clean exact-URL runs passed after temporary diagnostics were removed.
+The historical accepted infrastructure checkpoint removed the `TerrainField` ceiling failure, CPU `ArrayBuffer` allocation failure, invalid TSL `If`, oversized 64 KiB uniform bindings, non-uniform `workgroupBarrier`, writable storage alias, and mixed read-only/read-write synchronization-scope failures seen during integration. `tools/boot-smoke.ts` now fails on page errors, local asset/API failures, TSL invalid-code messages, uncaptured WebGPU errors, hook failures, or missing rendered frames. Three clean exact-URL runs passed for the rejected-LUKE checkpoint after temporary diagnostics were removed; active transaction `009fd...` now also has a fresh real-Chromium pass through frame 106 against data endpoint `:8788`.
 
 ## Integration Risks
 
 - The root `estonia-asset-gen` worktree contains unrelated dirty and old-agent changes. Integration must preserve user work and must not copy the obsolete 128 m global-grid rewrite or hash/noise synthesizer.
 - A production pilot preview may be materialized locally, but it must not update `latest.json` until realism, masks, and user-visible acceptance pass.
-- The rewritten replacement spec has completed final adversarial audit and awaits user approval. Its decision is a target-evidence-gated per-regime specialist architecture, not a continuation of the measured mineral-forest quilt. One minimal generic packed-surface grounding correction for trees/boulders/understory/debris is disclosed as an infrastructure dependency; it does not synthesize geometry or change the wire format. Implementation remains deferred until user approval.
+- The accepted replacement spec requires a target-evidence-gated per-regime specialist architecture, not a continuation of the measured mineral-forest quilt. Stage 1 structural repair is complete and `releaseReady:true` through transaction `009fd...`; superseded `7a2d...` artifacts remain history, not current authority. User visual acceptance of the supplied live URL remains pending. Morphology implementation remains gated by qualified target evidence. One minimal generic packed-surface grounding correction for trees/boulders/understory/debris remains an infrastructure dependency; it does not synthesize geometry or change the wire format.

@@ -1,0 +1,60 @@
+{
+  "schema_version": "hovi-hy-spruce4-full-q1-authorization/1.0.0",
+  "id": "hovi-hy-spruce4-full-after-q1-go-v1",
+  "status": "retention_only_authorized",
+  "authorization": {
+    "decision": "Q1_GO",
+    "scope": "retain_exact_archive_only",
+    "extract_authorized": false,
+    "target_truth": false,
+    "synthesis_authorized": false,
+    "usable_surface": false,
+    "q1_manifest": {
+      "path": "data/work/microtopography/hovi/surface/1e5f674af3fc4d09fdf619ef154f425df22d148a0c619cdc2f93253a32e6440e/manifest.json",
+      "bytes": 960,
+      "sha256": "db3f0c4f5ba38fa6a057ec3820cbbf2e127c719c4f100d69ab3b110870ef6cd0",
+      "build_id": "1e5f674af3fc4d09fdf619ef154f425df22d148a0c619cdc2f93253a32e6440e",
+      "disposition": "preview_geometry_plausible_for_q1"
+    }
+  },
+  "source_retention": {
+    "path": "data/in/evidence/hovi/45f35e2b747b404f0f7b0e594852c43f6493c6368bab738e8f914dffb4297f7e/retained.json",
+    "bytes": 27139,
+    "sha256": "b7e44c906e2baf021d4f027a92acfa749855c3ddbc60717aebaf9f1b41d91f2c",
+    "retention_id": "45f35e2b747b404f0f7b0e594852c43f6493c6368bab738e8f914dffb4297f7e",
+    "selection_config_sha256": "724f4d6712c9e5bec494c6d2f1a13941adfe93a22f48165c4f5d25cf6c1a6e84"
+  },
+  "dataset_identity": {
+    "dataset_uuid": "ace2a123-00ff-4944-951e-eddbe209b70c",
+    "dataset_doi": "10.23729/9a8d90cd-73e2-438d-9230-94e10e61adc9",
+    "dataset_version": 1,
+    "published_revision": 1
+  },
+  "license_identity": {
+    "spdx": "CC-BY-4.0",
+    "url": "https://creativecommons.org/licenses/by/4.0/legalcode",
+    "attribution_required": true,
+    "changes_must_be_indicated": true
+  },
+  "access_identity": {
+    "access_type": "open",
+    "authorization_url": "https://etsin.fairdata.fi/api/v3/download/authorize",
+    "authorization_method": "POST",
+    "signed_url_host": "download.fairdata.fi",
+    "signed_url_policy": "generate_at_fetch_time_never_persist",
+    "download_policy": "resume_part_verify_bytes_sha256_atomic_rename"
+  },
+  "artifact": {
+    "plot_id": "HY_SPRUCE4",
+    "file_id": "83b09928-c296-4719-982d-0bbd9451405a",
+    "path": "/Laboratory_and_field_data/Terrestrial_laser_scanning/Point_clouds_full/HY_SPRUCE4-full.zip",
+    "bytes": 47345435519,
+    "sha256": "008540c96bcbea1eb98128d92df844ee6346c11e1ec99ad626ba3c2e6a0caa1e",
+    "kind": "individual_full_scan_archive"
+  },
+  "exclusions": {
+    "fetch_hy_pine2": false,
+    "fetch_js_spruce1": false,
+    "extract_archive": false
+  }
+}

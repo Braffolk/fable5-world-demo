@@ -1,12 +1,29 @@
 # Microtopography Task List
 
-Last updated: 2026-07-13
+Last updated: 2026-07-14
 
 ## Objective
 
 Ship beautiful, physically credible, materially and geomorphologically conditioned cook-side microtopography across Estonia. The browser only streams and renders packed height data; it never synthesizes terrain detail. Suur Taevaskoda is a fixed visual reference for generalizable improvements, not a scene-specific target.
 
 ## Current State
+
+### Active 2026-07-14 checkpoint
+
+- [x] Complete immutable Taevaskoda structural transaction `009fd3d2be07d465199e6330ac9d2fc5a8fc7a16bbb5df0f55e5030ce962d3d1` steps 01-07: authority, scientific closure, bounded structural materialization, corrected base and water transactions, staging, and corrected format-1 base release.
+- [x] Preserve prior transaction `7a2d765354c362bbe15fd0c7eac2c27425123dc3f6c76692d1902618936c1a2b` as superseded immutable history; it is not the active preview transaction.
+- [x] Fix the staged-plan LAC1/format-2 validator defect and the later verifier-only quantization and snapshot-comparison defects. These fixes do not replace the completed `009fd...` structural artifacts or step markers.
+- [x] Complete independent preview verification for exact transaction `009fd...`: `releaseReady:true`, preview recipe `74fdccda596b124342a8cb956968fdc3339bf56a2bfb8791f58c73cb0f5d0488`, exact manifest SHA-256 `6c7c108fe119990fe8518c81f79294e9b33b73a8723e4f7d92e1efd9f37a6986`.
+- [x] Serve the verified manifest from the fresh `http://localhost:8788` endpoint and pass the mandatory real-Chromium WebGPU boot through frame 106 at the exact centered Estonia URL: `http://localhost:5173/?scene=world&src=estonia&dataurl=http%3A%2F%2Flocalhost%3A8788&alt=40&x=311123.082&z=190723.435&yaw=0&pitch=-0.18&shadowclipres=896`.
+- [ ] Obtain user visual acceptance of the supplied Stage 1 live URL; release verification and the boot gate pass, but those do not decide visual quality.
+- [x] Complete the content-addressed Taevaskoda RGB/CIR/ETAK orthophoto QA artifact; it remains conditioning/review evidence, never metric height truth.
+- [x] Retain the selected Hovi shared records, ten HY_SPRUCE4 photos, and merged geometry; complete condition evidence, raw-support QA, semantic-photo QA, and final code-bound Q1 candidate `1e5f674af3fc...`.
+- [x] Record the independent Q1 `GO` verdict narrowly: it authorizes retention and audit of the HY_SPRUCE4 full scans, not a terrain surface or synthesis. The candidate remains `raw_candidate`, unqualified, unusable as target truth, and has an empty authorized-surface set.
+- [x] Retain and exact-verify only `HY_SPRUCE4-full.zip` (`47,345,435,519` bytes) under transaction `cabb67ce94a2...`; its safe archive inventory contains exactly one member. HY_PINE2 remains unfetched.
+- [x] Authorize and implement the bounded HY_SPRUCE4 full-archive metadata-extraction path without authorizing a terrain surface, analogue transfer, or synthesis.
+- [x] Complete the authorized restart-only HY_SPRUCE4 extraction after Stage 1 verification: immutable object `7889a9cfef69d57a50eaa5a9f8d224d28486d5901163e08cbdc827f92f409da2.e57` is exactly `84,817,645,568` bytes and is bound by transaction `fe44c5c05c4...`; synthesis remains unauthorized.
+- [x] Select the corrected receipt-gated HY_SPRUCE4 metadata inventory `54e21049ac09c7d3f69ac7ab5990c982d12a7bd04da0618de032c8311cd3cfad` through frozen authority `config/evidence/hovi-hy-spruce4-full-metadata-selection.json` (SHA-256 `bc47f334c71cf26bd9fd090301d8848ca7b6c37bb4efedc430c3cb2fbd59d360`). It preserves present-empty numeric lexemes with effective zero, reads only the header and descriptor-bound XML, decodes zero records, binds the loaded Python implementation separately from source snapshots, and supersedes `f446b813e4d5...`, `3a93b4db69c3...`, and `456be8611194...`; no artifact authorizes point conversion, a target surface, or synthesis.
+- [x] Retain the exact 5,773-byte Evo 2024 plot-selector CSV under retention `1584bd396efe...` and materialize corrected plot-1086 condition evidence `73b39fd621fa...`; it remains unqualified, abstaining, and not synthesis-authorized.
 
 ### Accepted infrastructure
 
@@ -25,7 +42,7 @@ Ship beautiful, physically credible, materially and geomorphologically condition
 - [x] Wire the measured synthesis cook CLI and recipe-kind checks.
 - [x] Add bounded production-preview verification and prohibit pilot publication to `latest`.
 - [x] Apply direct fine-grid ETAK masks for open water, buildings, and paved roads; deliberately retain unpaved trails.
-- [x] Cook the centered 512 m hero closure and materialize an immutable local preview (`5f845ae2...`, manifest `b1c7c44bad667fd7`) with all independent packing/mask gates passing.
+- [x] Cook the historical rejected-LUKE 512 m hero closure and materialize immutable diagnostic preview `5f845ae2...`, manifest `b1c7c44bad667fd7`, with its independent packing/mask gates passing.
 - [x] Restrict the Lapinjarvi matrix to exact ETAK forest plus fail-closed unmodified mineral/mesic soil context. Published hero allowance is `53.3685%`; four chunks correctly receive zero residual and unsupported samples remain base-only.
 - [x] Replace the fixed 3 m normalized-crossfade quilt with crop-stable equal-power overlap, normalized edge-shape cost, and balanced `top_k=12`; focused calibration diagnostics restore bank RMS/tails and effective use to `140.3/149` patches.
 - [x] Replace the inherited per-1 m bubble projection with one AOI-wide smooth mean-null solve plus fail-closed boundary taper. The real 5x5 closure has exact 1 m means (`8.83e-17 m`), zero hard-mask residual, zero shared-overlap error, no `0.747 m` support spike, and stays inside the measured bank amplitude/slope envelope.
@@ -35,11 +52,11 @@ Ship beautiful, physically credible, materially and geomorphologically condition
 - [x] Inspect the supplied Suur Taevaskoda reference and categorize the representable shore/bank/top-surface failures separately from the vertical/undercut wall.
 - [x] Correct the premise audit: the main vertical/undercut sandstone wall is not representable by a heightfield and is excluded from this pass. Any non-heightfield structural solution requires its own future research and user-reviewed spec.
 - [x] Confirm and locate anomalous pinned-base height returns inside the mapped Ahja river near the reference anchor.
-- [ ] Implement and validate a general robust river-surface/base-DTM conditioning pass in the upstream water cook, then decide whether to approve a new pinned base release. Do not patch only the hero coordinates or silently change negative LOD authority.
+- [x] Implement the general evidence-bounded river-surface/base-DTM conditioning pass and materialize the corrected Stage 1 base release through transaction `009fd...`; independent verification and the exact-URL WebGPU boot pass, with user visual acceptance still pending.
 - [x] Supersede the earlier spec's false raw-DTM consistency objective and record diagnostic-only LUKE scope, source-repair authority, heightfield limits, executable conditioning, and fixed Taevaskoda review requirements.
-- [x] Materialize and independently verify immutable recipe `090747d74911...`, manifest `eaa0444646b47de1`. All coverage, header, apron, hierarchy, determinism, and decoded hard-mask gates pass; `latest` remains untouched.
-- [x] Complete the initial user visual checkpoint at the centered live preview on `:5180` / immutable data endpoint `:8791`; terrain, material, grass, trees, and fine Nanite clusters are present.
-- [x] Pass three clean exact-URL WebGPU boots after removing diagnostics, including cloud bake, settled frames, and zero page/console/TSL/WebGPU errors.
+- [x] Materialize and independently verify historical rejected-LUKE recipe `090747d74911...`, manifest `eaa0444646b47de1`. Its coverage, header, apron, hierarchy, determinism, and decoded hard-mask gates passed; `latest` remained untouched.
+- [x] Complete the historical rejected-LUKE user visual checkpoint on `:5180` / immutable data endpoint `:8791`; this does not constitute a live URL for the current `009fd...` Stage 1 transaction.
+- [x] Pass three clean exact-URL WebGPU boots for that historical rejected-LUKE checkpoint after removing diagnostics, including cloud bake, settled frames, and zero page/console/TSL/WebGPU errors; active `009fd...` now has its own independent frame-106 pass.
 - [x] Integrate clean work into the main `estonia-asset-gen` worktree as local commit `0ef75cf` without pushing; superseded root edits remain preserved in a safety stash and were not reapplied.
 
 ### Rejected synthesis and current research phase
@@ -54,7 +71,7 @@ Ship beautiful, physically credible, materially and geomorphologically condition
 - [x] Expand the synthesis problem into Estonia's actual surface-forming regimes, observation-error correction, covariates, representation limits, and sub-decimeter training/validation requirements (`review/REGIME-PHENOMENON-MATRIX.md`, `review/TARGET-SCALE-DATA-AND-REGIME-AUDIT.md`).
 - [x] Audit current and official Estonia-wide conditioning inputs, including source fidelity loss, EGT coverage, and Taevaskoda's mapped ETAK/soil constraints (`review/ESTONIA-CONDITIONING-DATA-AUDIT.md`).
 - [x] Audit the actual cook, hierarchy, correction-authority, coverage, verifier, storage, and unchanged-runtime contract (`review/COOK-CONTRACT-AND-HIERARCHY-AUDIT.md`).
-- [x] Decide orthophoto acquisition: fetch/version dated RGB/CIR as masked research and likely production conditioning, never as metric height truth; complete the national manifest-size scan before bulk acquisition.
+- [x] Decide orthophoto acquisition: fetch/version dated RGB/CIR as masked research and likely production conditioning, never as metric height truth; complete the national manifest-size scan and the content-addressed RGB/CIR/ETAK Stage-1 QA artifact before bulk acquisition.
 - [x] Write the comparative architecture dossier and source/claim ledger (`review/COMPARATIVE-ARCHITECTURE-DOSSIER.md`, `library/SOURCES.md`, `library/sources.json`).
 - [x] Choose one decisive evidence-gated typed-hybrid architecture: deterministic evidence fusion and regime graph, per-regime target-supported specialist bakeoff with valid no-winner, deterministic absolute-surface composition, and unchanged packed-height delivery.
 - [x] Add executable regime/evidence, hierarchy/quantization, visual-review, and storage/cost contracts; independently critique the first spec rewrite and correct its water, authority, hierarchy, visual, and staging contradictions.
@@ -73,7 +90,15 @@ Ship beautiful, physically credible, materially and geomorphologically condition
 - [x] Retain and inventory the smallest verified adjacent 2019 ALS selection needed by the exact fine publication/support domain: north tile `445679` and east tile `444680`, 87,992,146 raw bytes total, independently hash-bound from the primary eight-epoch selection.
 - [x] Close Ahja topology qualification: `2356024` is one unbranched confluence-to-confluence reach with no internal mapped hydraulic jump; bind the local cross-section-capped water polygon and reject full-polygon endpoint clamping (`review/AHJA-HYDRAULIC-TOPOLOGY-QUALIFICATION.md`).
 - [x] Materialize and independently replay the provenance-bound three-tile 2019 campaign evidence (`c84d0b59e0de...`) without inventing continuity: the downstream segment from full-line station 71 is qualified with a 15 m longest unsupported span, mapped wet outside qualified support remains explicit morphology-forbidden abstention, and no bridge observation mask is fabricated.
-- [ ] Implement Stage 1 Taevaskoda typed structural repair and corrected parent hierarchy, run the bounded real-WebGPU boot, and provide the immutable live URL for visual review.
+- [x] Resolve the evidence-driven structural closure before cooking: promote adjacent LOD0 core `(152,93)`, retain 45 LOD -1 and 777 LOD -2 transient reducers, and bind the separate 897-tile paired authority/baseline input halo while publishing only the selected 16+1 negative review chunks.
+- [x] Replace raw-GeoTIFF bilinear baseline ownership with exact-mean prolongation of the pinned browser-decoded LOD0 base; retain the raw DTM only as hash-bound repair evidence.
+- [x] Implement bounded disk-backed structural materialization for 897 paired inputs, 777 LOD -2 reducers, 45 LOD -1 reducers, and two corrected LOD0 cores without changing runtime formats.
+- [x] Replace whole-core LOD1-L4 rederivation with exact masked decoded-child window splicing into the independent inherited DTM rungs; preserve all unrelated decoded samples bit-identically, including apron-only neighbors, and fail closed if a required qoffset retune cannot prove this.
+- [x] Unify coarse and fine flowing-water closure on one halo-aware iterative rule: conservative bed is the full-weight target, terrain remains below the qualified water surface, and fine authority cannot silently reauthorize a coarse abstention.
+- [x] Persist content-addressed fine authority/abstention masks and corrected-water transaction inventories for independent dry/abstained restoration verification.
+- [x] Complete Stage 1 Taevaskoda typed structural repair, corrected parent hierarchy, staging, and corrected format-1 release through immutable transaction `009fd...` step 07; retain `7a2d...` only as superseded build history.
+- [x] Complete `009fd...` independent preview verification after the verifier-only quantization/snapshot fixes, mark the transaction `releaseReady:true`, pass the exact-URL real-WebGPU boot at frame 106, and provide the immutable live URL for visual review.
+- [ ] Complete user visual review of the `009fd...` Stage 1 corrected-source result; no morphology-specialist claim is part of this release.
 - [ ] Implement a morphology specialist only after its public target subset passes conversion, support/error/semantics QA, analogue/OOD qualification, and a target-specific preregistration.
 
 ## Deliberately Deferred Until The Research Review

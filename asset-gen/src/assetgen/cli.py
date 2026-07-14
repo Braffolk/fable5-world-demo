@@ -12,7 +12,7 @@ from pathlib import Path
 
 import click
 
-from .config import DATA_IN, DATA_WORK, load_aoi, load_base
+from .config import CONFIG_DIR, DATA_IN, DATA_WORK, load_aoi, load_base
 from .fetch.http import PoliteSession
 from .grid import chunks_covering_bbox_en, snap_bbox_to_chunks_en
 from .sheets import grid_union_bbox, load_sheet_grid
@@ -268,6 +268,52 @@ def evidence_fetch_als_cmd(selection: Path | None, years: tuple[int, ...]) -> No
     click.echo(f"retention manifest: {path}")
 
 
+@main.command("evidence-fetch-orthophoto-stage1")
+def evidence_fetch_orthophoto_stage1_cmd() -> None:
+    """Retain the exact Taevaskoda Stage-1 RGB/CIR orthophoto snapshot."""
+    from .fetch.orthophoto import fetch_taevaskoda_stage1_orthophoto
+
+    path = fetch_taevaskoda_stage1_orthophoto(load_base(), log=click.echo)
+    click.echo(f"retention manifest: {path}")
+
+
+@main.command("evidence-fetch-hovi")
+@click.option(
+    "--through",
+    type=click.Choice(("shared", "hy-spruce4-photos", "hy-spruce4-geometry")),
+    default="hy-spruce4-geometry",
+    show_default=True,
+)
+def evidence_fetch_hovi_cmd(through: str) -> None:
+    """Retain the frozen shared and HY_SPRUCE4 Hovi evidence tranches."""
+    from .fetch.hovi import fetch_hovi_selection
+
+    path = fetch_hovi_selection(load_base(), through=through, log=click.echo)
+    click.echo(f"retention manifest: {path}")
+
+
+@main.command("evidence-condition-hovi")
+@click.option("--retained", required=True, type=click.Path(path_type=Path))
+@click.option("--plot", default="HY_SPRUCE4", show_default=True)
+def evidence_condition_hovi_cmd(retained: Path, plot: str) -> None:
+    """Materialize condition evidence for an unsealed Hovi development plot."""
+    from .evidence.hovi.conditions import emit_hovi_conditions
+
+    path = emit_hovi_conditions(retained, plot)
+    click.echo(f"condition evidence: {path}")
+
+
+@main.command("evidence-convert-hovi")
+@click.option("--retained", required=True, type=click.Path(path_type=Path))
+@click.option("--plot", default="HY_SPRUCE4", show_default=True)
+def evidence_convert_hovi_cmd(retained: Path, plot: str) -> None:
+    """Inventory multiscale raw observation support for a Hovi development plot."""
+    from .evidence.hovi.convert import convert_hovi_plot
+
+    path = convert_hovi_plot(retained, plot, log=click.echo)
+    click.echo(f"artifact manifest: {path}")
+
+
 @main.command("evidence-inventory-als")
 @click.option(
     "--retained",
@@ -281,6 +327,25 @@ def evidence_inventory_als_cmd(retained: Path | None) -> None:
 
     path = inventory_taevaskoda_als(retained, log=click.echo)
     click.echo(f"inventory: {path}")
+
+
+@main.command("structural-stage1")
+@click.option(
+    "--config",
+    type=click.Path(path_type=Path),
+    default=CONFIG_DIR / "terrain-repair/taevaskoda-ahja-authority-stage1.json",
+    show_default=True,
+)
+@click.option("--work-root", type=click.Path(path_type=Path), default=DATA_WORK,
+              show_default=True)
+def structural_stage1_cmd(config: Path, work_root: Path) -> None:
+    """Resume the immutable Ahja structural-repair transaction through preview."""
+    from .terrain.repair.stage1_transaction import run_stage1_transaction
+
+    result = run_stage1_transaction(config, work_root=work_root)
+    click.echo(f"verified preview transaction: {result.manifest_path}")
+    click.echo(f"transaction sha256: {result.transaction_sha256}")
+    click.echo(f"release ready: {'yes' if result.release_ready else 'no'}")
 
 
 @main.command("micro-recipe")

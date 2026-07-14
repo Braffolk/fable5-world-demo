@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .config import DATA_OUT, DATA_WORK, BaseConfig
+from .config import DATA_OUT, DATA_WORK, BaseConfig, EncodeConfig
 from .cook.chunkio import ChunkMeta, read_chunk, read_chunk_any
 from .height_geom import HeightChunkId, children_of, parent_of, plan_hero
 from .manifest import (
@@ -72,6 +72,14 @@ class VerifiedBaseRelease:
     manifest_sha256: str
     chunk_count: int
     total_bytes: int
+
+
+@dataclass(frozen=True)
+class CorrectedFormat1BaseRelease:
+    manifest_path: Path
+    manifest_sha256: str
+    verification_path: Path
+    verification_sha256: str
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -209,6 +217,23 @@ def _validate_format2_height_header(meta: ChunkMeta, container_version: int) -> 
         )
 
 
+def _validate_format2_overlay_header(
+    meta: ChunkMeta, container_version: int, recipe_kind: str | None
+) -> None:
+    if meta.layer == "height":
+        _validate_format2_height_header(meta, container_version)
+        return
+    if (
+        recipe_kind != "structural-repair-overlay-v1"
+        or meta.layer != "water"
+        or meta.lod not in (0, 1)
+        or container_version != 1
+        or meta.enc != 1
+        or meta.count != 0
+    ):
+        raise ValueError(f"unsupported format-2 overlay header: {meta}")
+
+
 def _manifest_grid(manifest: dict[str, Any]) -> dict[str, int]:
     if manifest.get("format") == 1:
         return {
@@ -328,6 +353,115 @@ def audit_base_release(
     if (grid["chunkMeters"], grid["chunkRes"], grid["lodStep"]) != (2048, 2048, 4):
         raise ValueError(f"base release uses a noncanonical grid: {grid}")
     return audit_release(manifest_path, expected_sha256, out_root)
+
+
+def materialize_corrected_format1_base(
+    *,
+    base: BaseConfig,
+    recipe_sha256: str,
+    pinned_manifest_path: Path,
+    pinned_manifest_sha256: str,
+    content_root: Path,
+    release_root: Path,
+    replacements: dict[tuple[str, int, int, int], Path],
+    tombstones: tuple[tuple[str, int, int, int], ...] = (),
+) -> CorrectedFormat1BaseRelease:
+    """Merge sparse LAC1 replacements into a pinned format-1 base, fail closed."""
+    _validate_digest(recipe_sha256)
+    audit_base_release(pinned_manifest_path, pinned_manifest_sha256, content_root)
+    grid = {
+        "anchorE": base.grid.anchor_e,
+        "anchorN": base.grid.anchor_n,
+        "chunkMeters": base.grid.chunk_m,
+        "chunkRes": base.grid.chunk_res,
+        "lodStep": base.grid.lod_step,
+    }
+    base_release = _snapshot_base_release(
+        release_root,
+        pinned_manifest_path,
+        pinned_manifest_sha256,
+        content_root,
+        grid,
+    )
+    entries: list[dict[str, Any]] = []
+    for key, path in sorted(replacements.items()):
+        layer, lod, cx, cz = key
+        container_version, meta, _ = read_chunk_any(path)
+        if container_version != 1 or lod < 0:
+            raise ValueError(f"corrected format-1 replacement is not LAC1: {path}")
+        _validate_header(meta, layer, lod, cx, cz, grid)
+        digest = _sha256_file(path)
+        entries.append(
+            {
+                "layer": layer,
+                "lod": lod,
+                "cx": cx,
+                "cz": cz,
+                "relativePath": path.as_posix(),
+                "size": path.stat().st_size,
+                "sha256": digest,
+                "enc": meta.enc,
+                "res": meta.res,
+                "count": meta.count,
+                "flags": meta.flags,
+                "qoffset": meta.qoffset,
+                "qscale": meta.qscale,
+                "containerVersion": container_version,
+                "source": "corrected-format1",
+            }
+        )
+        destination = content_root / "c" / layer / str(lod) / f"{cx}_{cz}.{digest[:8]}.bin"
+        _install_content(path, destination, digest)
+    if not entries:
+        raise ValueError("corrected format-1 base has no replacements")
+    normalized_tombstones = [list(key) for key in sorted(tombstones)]
+    if set(replacements).intersection(tombstones):
+        raise ValueError("corrected format-1 key is both replacement and tombstone")
+    plan = {
+        "manifestFormat": 1,
+        "cookRev": int(json.loads(pinned_manifest_path.read_bytes())["cookRev"]) + 1,
+        "grid": grid,
+        "codec": base_release["codec"],
+        "attribution": base_release["attribution"],
+        "dictionaries": base_release["dictionaries"],
+        "layerSchemas": base_release["layerSchemas"],
+        "baseRelease": base_release,
+        "recipeSha256": recipe_sha256,
+        "microRecipeKind": None,
+        "chunks": entries,
+        "tombstones": normalized_tombstones,
+    }
+    manifest, indexes = _manifest_from_plan(plan)
+    manifest_blob = _json_bytes(manifest)
+    manifest_sha = _sha256_bytes(manifest_blob)
+    destination = release_root / "m" / manifest_sha[:16]
+    manifest_path = destination / "manifest.json"
+    _atomic_create_or_verify(manifest_path, manifest_blob)
+    for layer, payload in indexes.items():
+        _atomic_create_or_verify(destination / "index" / f"{layer}.bin", payload)
+    audit = audit_base_release(manifest_path, manifest_sha, content_root)
+    _validate_overlay_content(plan, content_root)
+    verification = {
+        "format": 1,
+        "role": "corrected-format1-base-verification",
+        "recipeSha256": recipe_sha256,
+        "pinnedManifestSha256": pinned_manifest_sha256,
+        "manifestSha256": manifest_sha,
+        "replacementCount": len(entries),
+        "tombstoneCount": len(normalized_tombstones),
+        "chunkCount": audit.chunk_count,
+        "totalBytes": audit.total_bytes,
+        "passed": True,
+    }
+    verification_blob = _json_bytes(verification)
+    verification_path = release_root / "verification.json"
+    _atomic_create_or_verify(verification_path, verification_blob)
+    return CorrectedFormat1BaseRelease(
+        manifest_path,
+        manifest_sha,
+        verification_path,
+        _sha256_bytes(verification_blob),
+    )
 
 
 def _snapshot_base_release(
@@ -591,26 +725,68 @@ def create_build_plan(
         raise ValueError("manifest format 1 may contain only LAC1 chunks")
     micro_coverage = None
     micro_recipe_kind = None
+    structural_verifier_inputs_sha256 = None
+    planned_tombstones: list[list[Any]] = []
     effective_cook_rev = cook_rev
     if manifest_format == 2:
         if base_manifest_path is None or base_manifest_sha256 is None:
             raise ValueError("manifest format 2 requires an explicitly pinned base release")
-        if base_manifest_sha256 != MICRO_V1_BASE_SHA256:
-            raise ValueError("manifest format 2 base is not the approved micro v1 release")
         if base.encode.codec != "deflate":
             raise ValueError("manifest format 2 requires the deflate codec")
         expectation = _load_micro_expectation(build_root, build_digest)
         micro_recipe_kind = expectation.get("recipeKind")
-        if micro_recipe_kind not in ("retention-fixture", "measured-synthesis-pilot"):
+        if micro_recipe_kind not in (
+            "retention-fixture",
+            "measured-synthesis-pilot",
+            "structural-repair-overlay-v1",
+        ):
             raise ValueError(f"unsupported micro recipe kind {micro_recipe_kind!r}")
+        if (
+            micro_recipe_kind != "structural-repair-overlay-v1"
+            and base_manifest_sha256 != MICRO_V1_BASE_SHA256
+        ):
+            raise ValueError("manifest format 2 base is not the approved micro v1 release")
         if expectation["baseManifestSha256"] != base_manifest_sha256 or expectation["grid"] != grid:
             raise ValueError("micro expectation does not match the pinned base/grid")
-        if expectation.get("verifier") != {
-            "id": VERIFIER_ID,
-            "sourceSha256": verifier_source_sha256(),
-        }:
-            raise ValueError("micro expectation names a different verifier implementation")
+        if micro_recipe_kind == "structural-repair-overlay-v1":
+            from .terrain.repair.verify import (
+                VERIFIER_ID as STRUCTURAL_VERIFIER_ID,
+                load_verifier_inputs,
+                verifier_source_sha256 as structural_verifier_source_sha256,
+            )
+
+            verifier_inputs, structural_verifier_inputs_sha256 = load_verifier_inputs(
+                build_root, build_digest
+            )
+            water_entry = verifier_inputs["artifacts"]["waterTransaction"]
+            water_path = _safe_child(build_root, water_entry["path"])
+            water_transaction = json.loads(water_path.read_bytes())
+            if _sha256_file(water_path) != water_entry["sha256"]:
+                raise ValueError("corrected-water transaction changed before planning")
+            for row in water_transaction.get("artifacts", []):
+                key = ["water", *row.get("key", [])]
+                if row.get("disposition") == "remove-inherited":
+                    planned_tombstones.append(key)
+                elif row.get("disposition") != "replacement":
+                    raise ValueError("corrected-water transaction contains an invalid state")
+            planned_verifier = {
+                "id": STRUCTURAL_VERIFIER_ID,
+                "sourceSha256": structural_verifier_source_sha256(),
+            }
+        else:
+            planned_verifier = {
+                "id": VERIFIER_ID,
+                "sourceSha256": verifier_source_sha256(),
+            }
+            if expectation.get("verifier") != planned_verifier:
+                raise ValueError("micro expectation names a different verifier implementation")
         expected = {tuple(key) for key in expectation["expectedPublished"]}
+        if micro_recipe_kind == "structural-repair-overlay-v1":
+            expected.update(
+                ("water", *row["key"])
+                for row in water_transaction["artifacts"]
+                if row.get("disposition") == "replacement"
+            )
         actual = {(e["layer"], e["lod"], e["cx"], e["cz"]) for e in entries}
         if actual != expected:
             raise ValueError(
@@ -618,13 +794,14 @@ def create_build_plan(
                 f"unexpected={sorted(actual - expected)}"
             )
         for entry in entries:
-            _validate_format2_height_header(
+            _validate_format2_overlay_header(
                 ChunkMeta(
                     entry["layer"], entry["lod"], entry["enc"], entry["cx"], entry["cz"],
                     entry["res"], entry["count"], 0.0, 0.0, entry["qoffset"],
                     entry["qscale"], entry["flags"],
                 ),
                 entry["containerVersion"],
+                micro_recipe_kind,
             )
         if micro_parent is not None and expectation["parent"][1:] != list(micro_parent):
             raise ValueError("requested micro parent differs from the frozen expectation")
@@ -678,7 +855,15 @@ def create_build_plan(
         "baseRelease": base_release,
         "microCoverage": micro_coverage,
         "microRecipeKind": micro_recipe_kind,
-        "microVerifier": expectation.get("verifier") if manifest_format == 2 else None,
+        "microVerifier": planned_verifier if manifest_format == 2 else None,
+        **(
+            {
+                "structuralVerifierInputsSha256": structural_verifier_inputs_sha256,
+                "tombstones": sorted(planned_tombstones),
+            }
+            if micro_recipe_kind == "structural-repair-overlay-v1"
+            else {}
+        ),
         "chunks": entries,
     }
     plan_blob = _json_bytes(plan)
@@ -739,13 +924,66 @@ def _require_micro_verification(
 ) -> tuple[dict[str, Any], str] | None:
     if plan["manifestFormat"] != 2:
         return None
+    recipe_kind = plan.get("microRecipeKind")
+    if recipe_kind == "structural-repair-overlay-v1":
+        from .terrain.repair.verify import (
+            GATES as STRUCTURAL_VERIFY_GATES,
+            VERIFIER_ID as STRUCTURAL_VERIFIER_ID,
+            verify_structural_repair,
+        )
+
+        base_release = plan.get("baseRelease") or {}
+        try:
+            report = verify_structural_repair(
+                plan["recipeSha256"],
+                build_root / "inputs" / "base" / "manifest.json",
+                Path(base_release["sourceRoot"]),
+                build_root.parent.parent,
+                encode=EncodeConfig(plan["codec"], 0.01, 0.01, 19, 1),
+            )
+        except Exception as exc:
+            raise ValueError(f"independent structural repair verification failed: {exc}") from exc
+        path = build_root / "structural-verify.json"
+        blob = path.read_bytes()
+        expected = {
+            "format": 1,
+            "recipeKind": recipe_kind,
+            "recipeSha256": plan["recipeSha256"],
+            "releaseDisposition": "preview-only",
+            "planSha256": _sha256_bytes(plan_blob),
+            "overlaySetSha256": _overlay_set_sha256(plan),
+            "verifier": STRUCTURAL_VERIFIER_ID,
+        }
+        for key, value in expected.items():
+            if report.get(key) != value:
+                raise ValueError(f"structural verification {key} does not match the frozen plan")
+        planned_verifier = plan.get("microVerifier") or {}
+        if (
+            report.get("verifier") != planned_verifier.get("id")
+            or report.get("verifierSourceSha256") != planned_verifier.get("sourceSha256")
+        ):
+            raise ValueError("structural verification was not produced by the planned verifier")
+        gates = report.get("gates")
+        if not isinstance(gates, dict) or set(gates) != set(STRUCTURAL_VERIFY_GATES):
+            raise ValueError("structural verification does not contain every hard gate")
+        for gate in STRUCTURAL_VERIFY_GATES:
+            result = gates[gate]
+            if (
+                not isinstance(result, dict)
+                or result.get("passed") is not True
+                or "evidence" not in result
+                or result.get("evidenceSha256") != evidence_sha256(result["evidence"])
+            ):
+                raise ValueError(f"structural verification gate lacks valid evidence: {gate}")
+        if report.get("passed") is not True:
+            raise ValueError("structural verification has not passed")
+        return report, _sha256_bytes(blob)
     if not VERIFIER_CAN_AUTHORIZE_RELEASE:
         raise ValueError(
             "micro release authorization is closed until the verifier recomputes "
             "hierarchy, apron, mask, determinism, and transient-parent evidence"
         )
     base_release = plan.get("baseRelease") or {}
-    recipe_kind = plan.get("microRecipeKind")
     verifier = {
         "retention-fixture": verify_micro_fixture,
         "measured-synthesis-pilot": verify_micro_synthesis,
@@ -840,7 +1078,9 @@ def _validate_staged_plan(build_root: Path, plan: dict[str, Any]) -> list[Path]:
             raise ValueError(f"staged container version changed after planning: {path}")
         _validate_header(meta, entry["layer"], entry["lod"], entry["cx"], entry["cz"], plan["grid"])
         if plan["manifestFormat"] == 2:
-            _validate_format2_height_header(meta, container_version)
+            _validate_format2_overlay_header(
+                meta, container_version, plan.get("microRecipeKind")
+            )
         paths.append(path)
     return paths
 
@@ -906,12 +1146,25 @@ def _manifest_from_plan(
 ) -> tuple[dict[str, Any], dict[str, bytes]]:
     fixture_only = fixture_only or plan.get("microRecipeKind") == "retention-fixture"
     pilot_only = plan.get("microRecipeKind") == "measured-synthesis-pilot"
+    structural_only = plan.get("microRecipeKind") == "structural-repair-overlay-v1"
     manifest_format = int(plan["manifestFormat"])
     if manifest_format not in (1, 2):
         raise ValueError(f"unsupported planned manifest format {manifest_format}")
     combined: dict[tuple[str, int, int, int], dict[str, Any]] = {}
     for entry in (plan.get("baseRelease") or {}).get("chunks", []):
         combined[(entry["layer"], entry["lod"], entry["cx"], entry["cz"])] = entry
+    for raw_key in plan.get("tombstones", []):
+        if (
+            not isinstance(raw_key, list)
+            or len(raw_key) != 4
+            or raw_key[0] != "water"
+            or raw_key[1] not in (0, 1)
+        ):
+            raise ValueError(f"invalid structural water tombstone: {raw_key!r}")
+        key = tuple(raw_key)
+        if key not in combined:
+            raise ValueError(f"structural water tombstone does not remove an inherited key: {raw_key}")
+        del combined[key]
     for entry in plan["chunks"]:
         combined[(entry["layer"], entry["lod"], entry["cx"], entry["cz"])] = entry
     by_layer: dict[str, list[dict[str, Any]]] = {}
@@ -987,6 +1240,8 @@ def _manifest_from_plan(
                     if fixture_only
                     else "measured-synthesis-pilot-v1"
                     if pilot_only
+                    else "structural-repair-overlay-v1"
+                    if structural_only
                     else "microtopography-v1"
                 ),
             }
@@ -1134,6 +1389,8 @@ def publish_build(
     _, plan, _ = _load_plan(build_digest, work_root)
     if plan.get("microRecipeKind") == "measured-synthesis-pilot":
         raise ValueError("measured-synthesis pilot is immutable-preview-only and cannot update latest")
+    if plan.get("microRecipeKind") == "structural-repair-overlay-v1":
+        raise ValueError("structural repair overlay is preview-only and cannot update latest")
     complete, preview_manifest = _load_complete(build_digest, work_root, out_root)
     source_dir = preview_manifest.parent
     manifest_hash = complete["manifestSha256"][:16]

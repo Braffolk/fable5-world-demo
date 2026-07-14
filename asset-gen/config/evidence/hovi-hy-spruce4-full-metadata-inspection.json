@@ -1,0 +1,80 @@
+{
+  "schema_version": "hovi-hy-spruce4-full-metadata-inspection-authorization/1.0.0",
+  "id": "hovi-hy-spruce4-full-metadata-inspection-after-retention-v1",
+  "status": "metadata_inspection_authorized",
+  "authorization": {
+    "decision": "METADATA_INSPECTION_GO",
+    "scope": "extract_exact_retained_e57_for_metadata_inspection_only",
+    "archive_extraction_authorized": true,
+    "e57_metadata_inspection_authorized": true,
+    "point_conversion_authorized": false,
+    "surface_reconstruction_authorized": false,
+    "target_truth": false,
+    "usable_surface": false,
+    "synthesis_authorized": false
+  },
+  "retained_manifest": {
+    "path": "data/in/evidence/hovi-full-q1/cabb67ce94a2c55ee49d0f09b2a000348eb45974b26560f7e8b8d5c6cf543e63/retained.json",
+    "bytes": 3394,
+    "sha256": "add8c65111e2fbb28ea617802294452a6b4fdc2b9473e40deafd3c08e630da3f",
+    "retention_id": "cabb67ce94a2c55ee49d0f09b2a000348eb45974b26560f7e8b8d5c6cf543e63",
+    "status": "complete",
+    "verified": true
+  },
+  "archive": {
+    "relative_path": "files/Laboratory_and_field_data/Terrestrial_laser_scanning/Point_clouds_full/HY_SPRUCE4-full.zip",
+    "bytes": 47345435519,
+    "sha256": "008540c96bcbea1eb98128d92df844ee6346c11e1ec99ad626ba3c2e6a0caa1e"
+  },
+  "zip_inventory": {
+    "member_count": 1,
+    "archive_comment_bytes": 0,
+    "member": {
+      "name": "HY_SPRUCE4-full.e57",
+      "uncompressed_bytes": 84817645568,
+      "compressed_bytes": 47345435231,
+      "compression_method": 8,
+      "flag_bits": 0,
+      "crc32": "d76a5d89",
+      "local_header_offset": 0,
+      "create_system": 0,
+      "external_attr": 32
+    }
+  },
+  "resource_gate": {
+    "minimum_free_bytes": 107374182400,
+    "minimum_free_space_label": "100 GiB",
+    "evaluate_on_output_filesystem_before_archive_hash": true
+  },
+  "extraction_policy": {
+    "stream_only": true,
+    "block_bytes": 8388608,
+    "partial_address": "authorization_config_sha256",
+    "partial_suffix": ".e57.part",
+    "resume": "restart_only",
+    "resume_reason": "A raw deflate ZIP member cannot resume at an arbitrary output byte without persisted bit-exact decompressor state.",
+    "interrupted_partial_disposition": "discard_and_restart_from_zero",
+    "verification_before_publish": [
+      "uncompressed_size",
+      "zip_crc32",
+      "stream_sha256",
+      "independent_part_sha256"
+    ],
+    "prepared_record": "transactions/<authorization-sha256>/prepared.json",
+    "receipt_record": "transactions/<authorization-sha256>/extraction.json",
+    "recovery": "idempotent_prepared_object_receipt_state_machine",
+    "transaction_lock": "exclusive_advisory_lock_held_through_receipt",
+    "writable_directory_policy": "current_user_owned_0700",
+    "prepared_without_payload": "clear_intent_and_restart_from_zero",
+    "object_collision": "accept_only_after_full_digest_equality",
+    "publish": "atomic_noreplace_rename",
+    "immutable_output": "objects/sha256/<sha256-prefix>/<sha256>.e57"
+  },
+  "evidence_boundary": {
+    "role": "raw_candidate",
+    "qualification_status": "unqualified",
+    "transfer_ceiling": "none",
+    "metadata_inventory_is_not_surface_truth": true,
+    "synthesis_authorized": false
+  }
+}

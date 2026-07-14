@@ -1,0 +1,125 @@
+{
+  "format": 2,
+  "authorityId": "taevaskoda-ahja-structural-authority-stage1",
+  "role": "structural_authority_0.25m_no_morphology",
+  "pinnedBase": {
+    "manifest": "data/out/m/708478a57c2118ea/manifest.json",
+    "manifestBytes": 13256,
+    "manifestSha256": "708478a57c2118eaa618867e87cc74a35e20c615999b60d7e4177b595ef5495a",
+    "heightIndex": "data/out/m/708478a57c2118ea/index/height.bin",
+    "heightIndexBytes": 4221,
+    "heightIndexSha256": "7fd5987a4414e260056e189e754a2b7bc653d9ff86e2fa05414d49ac458492a3",
+    "contentRoot": "data/out",
+    "cacheChunks": 4
+  },
+  "campaign": {
+    "root": "data/work/terrain-repair/taevaskoda-ahja-stage1/c84d0b59e0deb54fb087f0cf0235fd3f66510b651b67b801f6035afa1c067571",
+    "buildSha256": "c84d0b59e0deb54fb087f0cf0235fd3f66510b651b67b801f6035afa1c067571",
+    "contentSha256": "0594e5183e905065c3fa05a8fce9377a27c8751ef71fa8e3a5ab7d9260bf83ec",
+    "files": {
+      "pilot.json": {
+        "bytes": 2025,
+        "sha256": "8536cb630437a58a403c590d0577386f990b1144866b1b2d90121d27693cce76"
+      },
+      "campaign.json": {
+        "bytes": 4590,
+        "sha256": "6058d4ab7e28d85a92f822d7c89782cbdfccc1b21f197ddcfb84570dca31f229"
+      },
+      "campaign.npz": {
+        "bytes": 65592,
+        "sha256": "5ebac193fde9578ec3a5daa381843aca64d81724f92131760dd064803537c7c8"
+      }
+    }
+  },
+  "geometry": {
+    "mappedWater": {
+      "path": "full-water-cap.wkb",
+      "bytes": 7165,
+      "sha256": "0e44e8389e17c87c46886248a6220c5d9d150329e159bc393e6f1a8d587ff458",
+      "closureOperation": "normalized_union_with_qualified_water",
+      "effectiveSha256": "78db1e46ba1a7fa55006f619cfd670971c3d006699096565750c3846b8f27f1e"
+    },
+    "qualifiedWater": {
+      "path": "downstream-water-cap.wkb",
+      "bytes": 6925,
+      "sha256": "c03025763b47d7ed155eb7054a527eecb3f60cc031227b0898adc4104007d466"
+    },
+    "qualifiedCenterline": {
+      "path": "downstream-centerline.wkb",
+      "bytes": 2409,
+      "sha256": "61abe3076afffe2231f745596bf23ccd2ddb5aef65340d69861153fb96d92b99"
+    }
+  },
+  "dtm": {
+    "provider": "Eesti Maa- ja Ruumiamet",
+    "product": "Maapinna kõrgusmudel DTM 1 m GeoTIFF",
+    "horizontalCrs": "EPSG:3301",
+    "verticalHeightSystem": "EH2000",
+    "resolutionM": 1.0,
+    "orderedSheets": [
+      {
+        "sheet": "54472",
+        "path": "data/in/dem_1m/54472_dtm_1m.tif",
+        "bytes": 81545553,
+        "sha256": "a70ddfeeec08f278201c6479205ca661e247b1ec6b0151597390aa1c726d5239",
+        "boundsEn": [675000, 6440000, 680000, 6445000],
+        "sourceUrl": "https://geoportaal.maaamet.ee/index.php?lang_id=1&plugin_act=otsing&kaardiruut=54472&andmetyyp=dem_1m_geotiff&dl=1&f=54472_dtm_1m.tif&page_id=614"
+      },
+      {
+        "sheet": "54474",
+        "path": "data/in/dem_1m/54474_dtm_1m.tif",
+        "bytes": 79799401,
+        "sha256": "1fe09120274f86b8879a498ec56cb86c3d0727251696b701cd4a68000cc06504",
+        "boundsEn": [675000, 6445000, 680000, 6450000],
+        "sourceUrl": "https://geoportaal.maaamet.ee/index.php?lang_id=1&plugin_act=otsing&kaardiruut=54474&andmetyyp=dem_1m_geotiff&dl=1&f=54474_dtm_1m.tif&page_id=614"
+      },
+      {
+        "sheet": "54481",
+        "path": "data/in/dem_1m/54481_dtm_1m.tif",
+        "bytes": 80991904,
+        "sha256": "c12779d3b35ddc0498ea5176ee364aa38217a9c5386e8574b78814420a4e2118",
+        "boundsEn": [680000, 6440000, 685000, 6445000],
+        "sourceUrl": "https://geoportaal.maaamet.ee/index.php?lang_id=1&plugin_act=otsing&kaardiruut=54481&andmetyyp=dem_1m_geotiff&dl=1&f=54481_dtm_1m.tif&page_id=614"
+      },
+      {
+        "sheet": "54483",
+        "path": "data/in/dem_1m/54483_dtm_1m.tif",
+        "bytes": 79082347,
+        "sha256": "14e571d68204c5e8ecd2d33bdc232b7dfe17d56ff7a72f81383e866af488fe72",
+        "boundsEn": [680000, 6445000, 685000, 6450000],
+        "sourceUrl": "https://geoportaal.maaamet.ee/index.php?lang_id=1&plugin_act=otsing&kaardiruut=54483&andmetyyp=dem_1m_geotiff&dl=1&f=54483_dtm_1m.tif&page_id=614"
+      }
+    ]
+  },
+  "closure": {
+    "authorityLod0": [0, 151, 93],
+    "correctedLod0": [[0, 151, 93], [0, 152, 93]],
+    "reviewParent": [-1, 607, 372],
+    "lod1Reducer": {
+      "lod": -1,
+      "cx": [604, 612],
+      "cz": [372, 376],
+      "count": 45
+    },
+    "lod2Reducer": {
+      "lod": -2,
+      "cx": [2416, 2452],
+      "cz": [1488, 1508],
+      "count": 777,
+      "boundsEn": [677888, 6442368, 682624, 6445056]
+    },
+    "authoritySupport": {
+      "lod": -2,
+      "cx": [2415, 2453],
+      "cz": [1487, 1509],
+      "count": 897,
+      "boundsEn": [677760, 6442240, 682752, 6445184]
+    },
+    "publishedReview": {
+      "lod": -2,
+      "cx": [2428, 2431],
+      "cz": [1488, 1491],
+      "count": 16
+    }
+  }
+}

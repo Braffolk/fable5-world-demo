@@ -800,7 +800,7 @@ Unresolved morphology specialists emit no residual on open-water forbidden domai
 Compose the accepted bed into structural height before canonical LOD -2
 composition and before any parent reduction. Then cook matching `waterY` and
 `watercover` from the same snapshot. Any later change to bed, shore, or occupancy
-invalidates and rederives every affected height artifact, parent, and apron.
+invalidates every mask-affected height artifact, parent window, and apron.
 
 The known Ahja artifact near `E 679788.35, N 6444811.45` is a review case, not a coordinate patch.
 
@@ -821,29 +821,28 @@ Every automatic correction class requires protected-feature counterexamples. A s
 ### 10.4 Corrected authority extent
 
 The Stage 1 anchor lies in fine parent `(-1,607,372)` and ordinary authority chunk
-`(0,151,93)`. Reconstruct the complete `2,048 m` authority footprint, not a mixed
-corrected/raw subrectangle. To derive its entire payload and apron from the
-canonical fine structural master, the initial transient sets are exact:
+`(0,151,93)`, but the qualified downstream reach crosses the latter's east edge at
+`E=679936` into `(0,152,93)`. Reconstruct both complete corrected LOD0 cores from
+the canonical fine structural master. The evidence-driven transient sets are exact:
 
-- LOD -1 reducer set `D(0,151,93)`: `cx=604..608`, `cz=372..376` (25 chunks);
-- union LOD -2 reducer support for those chunks: `cx=2416..2436`,
-  `cz=1488..1508` (441 chunks);
+- LOD -1 reducer set: `cx=604..612`, `cz=372..376` (45 chunks);
+- union LOD -2 reducer set: `cx=2416..2452`, `cz=1488..1508` (777 chunks);
+- paired 0.25 m authority/baseline input support including the Keys halo:
+  `cx=2415..2453`, `cz=1487..1509` (897 chunks);
 - review publication core: LOD -1 `(607,372)` and its 16 LOD -2 cores
   `cx=2428..2431`, `cz=1488..1491`;
 - review negative support: the east/south/southeast LOD -2 row/column through
   `cx=2432`, `cz=1492`, retained as transient unless the expectation publishes it;
-- ordinary changed core initially `(0,151,93)`; `(0,152,93)` is a support read, not
-  automatically a changed core.
+- ordinary corrected LOD0 cores: `(0,151,93)` and `(0,152,93)`.
 
-Then compute the apron/qoffset fixed point in Section 14.4. The planning artifact
-must freeze separate canonical sets for corrected cores, support reads, transient
-fine support, apron-only replacements, changed-core promotions, and ancestors
-before staging. Initial apron replacement candidates are the west, north, and
-northwest published neighbors of every changed core. A qoffset failure promotes a
-candidate and recursively expands the frozen sets. The final expectation may be
-larger than the initial lists but never smaller or inferred from produced files.
-A smaller mixed corrected/raw LOD0 payload is forbidden unless a later reviewed
-design proves a transition guard and complete hierarchy closure.
+Then apply the masked hierarchy policy in Section 14.4. The planning artifact must
+freeze separate canonical sets for corrected cores, support reads, transient fine
+support, exact affected core and payload masks, apron-only replacements, and
+affected ancestor windows before staging. The initial replacement candidates are
+the west, north, and northwest published neighbors of every changed core, but only
+their mask-induced apron samples may change. A qoffset failure is fail-closed and
+cannot promote an unrelated core or recursively expand authority. The final
+expectation is frozen independently rather than inferred from produced files.
 
 ### 10.5 Structural-only finest reconstruction
 
@@ -1400,12 +1399,16 @@ For every proof/release:
 10. quantize/decode LOD -1;
 11. combine decoded-child-derived LOD -1 where fine exists with canonical structural LOD -1 elsewhere;
 12. derive, quantize, decode, and publish corrected LOD0;
-13. rederive every affected LOD1-L4 ancestor and apron dependency from decoded children;
+13. for LOD1-L4, splice decoded-child reductions only into transitively affected
+    4x4 windows of the independently cooked inherited DTM chunks, then repair only
+    the east/south/southeast apron samples made stale by those masks;
 14. cook matching `waterY`/`watercover` and recook slope/height-dependent vegetation/debris from the same accepted snapshot;
 15. publish a corrected ordinary format-1 base;
 16. pin the existing format-2 negative-rung overlay to that corrected base.
 
-Never reread raw DTM independently for an affected ancestor. Never project accepted fine geometry back to a known raw error.
+Never replace an entire inherited LOD1-L4 core with a child-derived pyramid: those
+rungs are independent DTM cooks, and doing so changes unrelated terrain that merely
+shares an ancestor. Never project accepted fine geometry back to a known raw error.
 
 ### 14.3 Fine coverage
 
@@ -1448,7 +1451,7 @@ corresponding `640 x 640` LOD0 authority and use
 `qoffset_fine=float(floor(min(domain_authority)-2.0))`; the checked encoder must
 still prove fit. This is a local proof policy, not a national solution.
 
-For parent `q=(l+1,qx,qz)`, the complete decoded immediate-child read set is:
+For a complete fine parent `q=(l+1,qx,qz)`, the decoded immediate-child read set is:
 
 ```text
 D(q) = {(l,4*qx+i,4*qz+j) | i,j in {0,1,2,3,4}}
@@ -1458,30 +1461,36 @@ parent[r,c] = mean_float64(child_mosaic[4*r:4*r+4,4*c:4*c+4])
 The north-west `4 x 4` children supply cores; the fifth column/row/corner are the
 nine real east/south/southeast apron dependencies. Never duplicate a last core
 sample. Use the existing fixed reshape and `mean(axis=(1,3),dtype=float64)` order.
+This complete `D(q)` rule applies to ordinary fine-parent derivation. It does not
+authorize replacing a legacy LOD1-L4 core, because those source rungs were cooked
+independently rather than derived as this pyramid.
 
-Hierarchy dependency closure is sample-based. For changed cores `C_l`, replace or
-repack `R_l = C_l union west(C_l) union north(C_l) union northwest(C_l)` so inherited
-neighbors cannot retain stale east/south aprons. Propagate only changed cores as
-`C_l+1=parent(C_l)` and repeat through LOD4. Materialize `D(q)` for every
-`q in C_l+1`; if an apron repack is promoted and causes another whole-file
-rederive, materialize that file's complete immediate-child `D(q)` too. Apron-only
-repacks do not create changed parent cores only if they pass the qoffset/core rule
-below. Intersect `R_l` with published, inherited, or transaction-support chunks
-that actually exist. Do not invent an absent runtime neighbor, but materialize any
-transient neighbor required by `D(q)` and replace any inherited published neighbor
-whose apron became stale. Every whole-file rederive records its complete decoded
-dependency hashes. The transaction records every set
-and fails closed on a missing member.
+Corrected-base hierarchy closure is mask-based. At LOD0 initialize each corrected
+core from its inherited browser-decoded values and splice the qualified target only
+under exact mask `M_0`. For each affected child 4x4 sample window, reduce all 16
+final decoded child values in the fixed order, set only the corresponding parent
+sample, and define `M_l+1` by `any(M_l)` over that window. Initialize every LOD1-L4
+parent from its independently cooked inherited decoded core; samples outside
+`M_l+1` remain bit-identical. No full-core parent derivation or promotion is legal.
 
-Qoffset closure is recursive. A changed-core artifact at LOD -1 through 4 uses
-`qoffset=float(floor(min(final_full_payload)-1.0))` unless it belongs to the bounded
-shared-fine domain above. For an inherited apron-only repack, first preserve the
-artifact's existing qoffset/qscale and require all new apron codes to fit plus the
-entire decoded core to remain bit-identical to the old decoded core. If either test
-fails, promote that file to `C_l`, select its changed-core qoffset, propagate its
-parent, and recompute closure. Iterate in canonical rung/z/x order until a complete
-pass creates no promotion. A maximum-iteration guard is a failure, not permission
-to publish partial closure.
+For each rung, the affected payload mask is the core mask plus east, south, and
+southeast apron positions induced by the corresponding boundary samples of the
+neighbor core masks. Stage only existing members of
+`R_l = C_l union west(C_l) union north(C_l) union northwest(C_l)` whose affected
+payload mask is nonempty. Apron-only files preserve their entire core. Persist a
+packed exact affected mask and canonical row-run windows for every artifact, plus
+their paths, sizes, SHA-256 identities, and sample counts. The plan also binds the
+inherited decoded-core hash and every decoded-child window dependency.
+
+Quantizer policy is
+`preserve-inherited-or-retune-full-payload-outside-bitexact/1`. First preserve the
+inherited qoffset/qscale and every code outside the affected payload mask; this is
+mandatory whenever all changed core and apron values fit. On overflow only, choose
+a qoffset from the final full payload, quantize the complete payload, and require
+every unmasked decoded float32 value to remain bit-identical to the inherited
+payload. Persist both outside-selection hashes and sample count. If that proof
+fails, fail closed; never broaden the mask, promote an apron-only core, or propagate
+an unrelated change to make quantization convenient.
 
 At every changed rung, verify decoded east/south/corner value identity; reconstruct
 the same `3 x 3` world stencil independently from both sides and require identical
@@ -1527,11 +1536,12 @@ The first recipe kind is `corrected-structural-base-v1`. It stages an ordinary
 format-1 base manifest without changing `latest`. Its schema requires
 `raw_base_manifest_sha256`, `observation_snapshot_sha256`,
 `claim_domain_manifest_sha256`, `corrected_core_keys`, `support_read_keys`,
-`apron_only_replacement_keys`, `changed_core_promotion_keys`, `ancestor_keys`,
+`apron_only_replacement_keys`, `affected_ancestor_keys`,
 `water_snapshot_sha256`, expected qscale/flag per key, and the complete decoded
 dependency map. Its verifier must enforce source-repair gates, `WATERBED_FLAG`,
-decoded-child/apron/qoffset fixed point, exact expected-versus-produced key sets,
-and unchanged inherited artifacts. Success materializes an immutable corrected
+masked decoded-child/apron closure, the versioned qoffset outside proof, exact
+expected-versus-produced key sets, and unchanged inherited artifacts and decoded
+samples outside each mask. Success materializes an immutable corrected
 base and returns its manifest SHA; it does not publish.
 
 The second recipe kind is `evidence-microtopography-v1`. It binds that exact
@@ -1683,8 +1693,9 @@ Independently recompute:
 - headers, CRC, hashes, index and content closure;
 - finite/range/non-clipping quantization;
 - decoded shared aprons;
-- byte-exact decoded-child parent derivation;
-- corrected LOD0 and affected ancestor dependency closure;
+- byte-exact decoded-child parent derivation under every affected 4x4 window;
+- bit-exact inherited decoded values outside every corrected-base core/apron mask;
+- corrected LOD0 mask and affected ancestor-window dependency closure;
 - partition/AOI/worker/order deterministic bytes;
 - water/bed/shore compatibility;
 - inherited layer presence.
@@ -1883,12 +1894,13 @@ rejected-output ratio:
 
 The corrected Stage 1 structural plan is larger than the old one-parent negative
 diagnostic even though it publishes the same review core. Section 10.4's initial
-canonical derivation set alone contains 441 transient LOD -2 payloads
-(`3,703,014,378` raw bytes) and 25 transient LOD -1 payloads
-(`209,921,450` raw bytes), before LOD0-4 replacements, qoffset promotions, source
-rasters, masters, solver memory, compression scratch, and retained immutable
-objects. Measure deduplicated peak disk/RSS and final unique object bytes; do not
-reuse the old nine-support/17-file diagnostic as Stage 1 working-set evidence.
+canonical derivation set alone contains 777 transient LOD -2 payloads
+(`6,524,315,154` raw bytes) and 45 transient LOD -1 payloads
+(`377,856,090` raw bytes), plus 897 paired authority/baseline inputs, before masked
+LOD0-4 replacements, source rasters, masters, solver memory, compression scratch,
+and retained immutable objects. Measure deduplicated peak disk/RSS and final unique
+object bytes; do not reuse the old nine-support/17-file diagnostic as Stage 1
+working-set evidence.
 
 The aligned pilot exact raw total is `146,172,504,064` bytes plus a 365,568-byte
 **negative-rung index increment**. Its unique outer LOD -2 hierarchy support is
@@ -2019,7 +2031,7 @@ preregistration exist.
 
 - replace the Stage 1 structural-only fine master with a morphology-bearing master
   only after a matching Estonia-supported regime exists;
-- derive corrected LOD0 and ancestors;
+- derive corrected LOD0 and splice only affected ancestor windows;
 - recook dependent water/vegetation content;
 - materialize immutable preview;
 - boot and provide the verified live URL;
@@ -2066,7 +2078,8 @@ Do not retain `asset-gen/src/assetgen/process/micro_synth.py` as a fallback.
 ### 19.2 Cook and hierarchy
 
 - change `cook/micro_synth_cook.py` from residual-only/raw-parent projection to absolute master orchestration;
-- generalize `cook/micro_hierarchy.py` for decoded-child `-2 -> -1 -> 0 -> 1..4` closure;
+- generalize `cook/micro_hierarchy.py` for complete decoded-child `-2 -> -1 -> 0`
+  closure and masked affected-window splicing into independent inherited LOD1-L4;
 - reuse `cook/encode.py` checked quantization and browser-equivalent decode;
 - reuse `cook/pinned_height.py` against the newly corrected base;
 - extend `cook/height_cook.py` or add a corrected-base cook without changing payload encoding;
@@ -2097,7 +2110,8 @@ Do not retain `asset-gen/src/assetgen/process/micro_synth.py` as a fallback.
 - replace the old recipe-kind/fixed-base/fixed-17 dispatch in `release.py` with the
   exact Section 14.6 schemas and two-artifact transaction;
 - update `assetgen/manifest.py` and expectation parsing for claim-domain,
-  corrected-core/support/apron/promotion/ancestor sets and dependency identities;
+  corrected-core/support/apron/affected-ancestor masks, windows, outside proofs,
+  and dependency identities;
 - update `tools/serve-data.mjs` and `tools/boot-smoke.ts` only for immutable
   manifest selection/assertion and evidence output described in Section 16.7;
 - later generalize one-parent coverage metadata/tooling before wide coverage;

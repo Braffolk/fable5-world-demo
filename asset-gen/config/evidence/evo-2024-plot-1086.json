@@ -1,0 +1,218 @@
+{
+  "schema_version": "evo-public-target-selection/1.0.0",
+  "id": "evo-2024-plot-1086-first-conversion-v1",
+  "status": "raw_candidate_unqualified",
+  "purpose": "Freeze the smallest defensible Evo 2024 stand/substrate-matched raw candidate and its selector index without authorizing point-cloud download or synthesis use.",
+  "source": {
+    "title": "Terrestrial Laser Scanning Point Clouds and Tree Attributes from 55 Sample Plots at the Evo Test Site (Spring 2024)",
+    "dataset_doi": "10.23729/fd-5a800660-8bd8-35ef-ac9f-ac5c45f7fa77",
+    "dataset_uuid": "b1dac2b9-93cb-407e-91f1-eeb79c8cdd92",
+    "dataset_version": 2,
+    "published_revision": 2,
+    "issued": "2024-11-21",
+    "created": "2025-04-14T12:24:28Z",
+    "metadata_modified": "2025-05-03T15:59:41Z",
+    "release_file_count": 57,
+    "release_bytes": 42192878905,
+    "human_record_url": "https://etsin.fairdata.fi/dataset/b1dac2b9-93cb-407e-91f1-eeb79c8cdd92",
+    "dataset_record_url": "https://metax.fairdata.fi/v3/datasets/b1dac2b9-93cb-407e-91f1-eeb79c8cdd92",
+    "file_inventory_url": "https://metax.fairdata.fi/v3/files?dataset=b1dac2b9-93cb-407e-91f1-eeb79c8cdd92&limit=100",
+    "data_paper_doi": "10.14214/sf.24066",
+    "excluded_versions": [
+      {
+        "dataset_uuid": "9e6fdb19-e580-424f-b097-99151794e9a3",
+        "dataset_doi": "10.23729/c79e6546-756a-46a8-81a7-9520b8852056",
+        "dataset_version": 1
+      },
+      {
+        "dataset_uuid": "7d883d79-6d2b-476d-a164-60df24e5218a",
+        "dataset_doi": "10.23729/fd-6b182047-3c89-3d24-b13c-10625c2799cc",
+        "dataset_version": 3
+      }
+    ]
+  },
+  "metadata_discrepancy": {
+    "catalog_prose_selector_filename": "Evo_TLS_2024_stand_attributes_v3.csv",
+    "version_2_inventory_selector_path": "/Evo_TLS_2024_stand_attributes_v2.csv",
+    "authority": "published_version_2_file_inventory",
+    "policy": "fail_if_catalog_prose_filename_is_used_or_inventory_tuple_differs"
+  },
+  "license": {
+    "spdx": "CC-BY-4.0",
+    "url": "https://creativecommons.org/licenses/by/4.0/legalcode",
+    "access_type": "open",
+    "attribution_required": true,
+    "changes_must_be_indicated": true
+  },
+  "access": {
+    "authorization_url": "https://etsin.fairdata.fi/api/v3/download/authorize",
+    "authorization_method": "POST",
+    "authorization_json_template": {
+      "cr_id": "b1dac2b9-93cb-407e-91f1-eeb79c8cdd92",
+      "file": "<full pathname>"
+    },
+    "signed_url_host": "download.fairdata.fi",
+    "signed_url_policy": "generate_at_fetch_time_never_persist",
+    "retention_policy": "only artifacts with retention_authorized=true may enter a download plan"
+  },
+  "selection": {
+    "regime_id": "forest.floor_ordinary",
+    "plot_id": "1086",
+    "role": "development_held_out_sensor_campaign_raw_candidate",
+    "site_id": "evo.evo",
+    "campaign_id": "evo.evo.2024",
+    "country": "Finland",
+    "source_site_name": "Evo study site",
+    "center": {
+      "epsg3067": {
+        "easting_m": 396418.849,
+        "northing_m": 6787320.651
+      },
+      "epsg4326": {
+        "longitude": 25.072150851607013,
+        "latitude": 61.20654191141056
+      }
+    },
+    "plot_size_m": [
+      32,
+      32
+    ],
+    "stand_attributes": {
+      "trees_per_ha": 615.2203102,
+      "basal_area_m2_per_ha": 30.69832831,
+      "stem_volume_m3_per_ha": 353.0095501,
+      "basal_area_weighted_mean_diameter_cm": 26.52618342,
+      "basal_area_weighted_mean_height_m": 23.06359816,
+      "pine_basal_area_pct": 0.0,
+      "spruce_basal_area_pct": 84.21,
+      "deciduous_basal_area_pct": 15.79
+    },
+    "coarse_substrate_match": {
+      "source": "GTK maapera_200k_maalajit layer 49",
+      "source_url": "https://gtkdata.gtk.fi/arcgis/rest/services/Rajapinnat/GTK_Maapera_WFS/MapServer/49",
+      "map_scale": 200000,
+      "surface_material_code": 195210,
+      "subsurface_material_code": 195210,
+      "english_description": "mixed-grained material, principal fraction unclassified",
+      "hy_spruce4_surface_material_code": 195210,
+      "hy_spruce4_subsurface_material_code": 195210,
+      "interpretation_limit": "coarse mapped sanity check only; not a plot soil profile, organic-layer measurement, or hydrology observation"
+    },
+    "frozen_selector": {
+      "same_coarse_surface_and_subsurface_code_as_hy_spruce4": true,
+      "spruce_basal_area_min_pct": 80.0,
+      "tree_density_min_fraction_of_hy_spruce4": 0.5,
+      "basal_area_ratio_to_hy_spruce4": [
+        0.5,
+        2.0
+      ],
+      "mean_diameter_ratio_to_hy_spruce4": [
+        1.0,
+        2.0
+      ],
+      "require_standard_nine_position_protocol": true,
+      "qualifying_plot_ids": [
+        "1086",
+        "1065"
+      ],
+      "selected_rule": "smallest published LAZ byte count among qualifying plots"
+    },
+    "hy_spruce4_reference": {
+      "trees_per_ha": 1022.2222222222223,
+      "basal_area_m2_per_ha": 25.173974632296716,
+      "basal_area_weighted_mean_diameter_cm": 20.57342120999402,
+      "spruce_basal_area_pct": 93.92836405549922,
+      "derivation": "derived from the retained official 30 m by 30 m HY_SPRUCE4 tree inventory; not a source-published stand-summary row"
+    }
+  },
+  "acquisition": {
+    "start_date": "2024-04-22",
+    "end_date": "2024-05-14",
+    "conditions": "leaf-off",
+    "scanner": "Riegl VZ-400i",
+    "measurement_principle": "time-of-flight",
+    "wavelength_nm": 1550,
+    "beam_diameter_at_exit_mm": 7,
+    "beam_divergence_mrad": 0.35,
+    "beam_diameter_mm_at_10_20_30m": [
+      10,
+      14,
+      18
+    ],
+    "pulse_repetition_rate_khz": 600,
+    "maximum_returns_per_pulse": 8,
+    "scan_pattern": "Panorama 40",
+    "angular_resolution_deg": 0.04,
+    "point_spacing_mm_at_10m": 3.5,
+    "standard_scan_positions": 9,
+    "upright_scan_at_every_position": true,
+    "tilted_scan_at_alternating_positions": true,
+    "plot_1086_extra_positions": 0,
+    "registration": "integrated GNSS/IMU onboard co-registration followed by plot georeferencing to 2014 RTK-GNSS tree maps",
+    "processing_software": "RiSCAN PRO 2.19.3",
+    "merged_cloud_voxel_mm": 1,
+    "horizontal_crs": "EPSG:3067",
+    "vertical_datum": "N2000",
+    "reported_absolute_localization_less_than_m": 0.03,
+    "reported_relative_positioning_mm_at_50m": 3,
+    "error_limit": "reported localization and manufacturer relative positioning are not independent terrain target-error distributions",
+    "point_attributes": [
+      "x",
+      "y",
+      "z",
+      "reflectance",
+      "return_number",
+      "return_count",
+      "scan_position_id",
+      "height_above_ground",
+      "tree_id"
+    ],
+    "surface_semantics_limit": "tree_id=0 mixes ground with understory and other non-tree returns; it is not a ground class"
+  },
+  "artifacts": [
+    {
+      "file_id": "c95265eb-b7ec-43d0-93d4-147f5a8d74e5",
+      "path": "/Evo_TLS_2024_stand_attributes_v2.csv",
+      "bytes": 5773,
+      "sha256": "b124bc20f6816c08812fdc7f061ec7e0d9e444802d3b1b67907420c97812db44",
+      "kind": "stand_attribute_selector_index",
+      "retention_authorized": true,
+      "downloaded_during_selection_audit": true,
+      "retained_in_workspace": false
+    },
+    {
+      "file_id": "55a904fb-d582-42d0-90ac-c20bddde0a3d",
+      "path": "/Evo_TLS_2024_treeanal_pointclouds/1086_pointcloud_georef.laz",
+      "bytes": 889454592,
+      "sha256": "113d5d062240361e005f4e434e1d834d445ba7f72d9d0162e25a644a06ce23f7",
+      "kind": "tree_segmented_point_cloud_raw_candidate",
+      "retention_authorized": false,
+      "downloaded_during_selection_audit": false,
+      "retained_in_workspace": false
+    }
+  ],
+  "qualification": {
+    "role": "raw_candidate",
+    "qualification_status": "unqualified",
+    "target_truth": false,
+    "synthesis_authorized": false,
+    "transfer_ceiling": "none",
+    "independence_claim": "independent Evo site and spring-2024 Riegl campaign relative to Hovi Hyytiälä 2019 Leica P40",
+    "physical_match_limit": "stand structure and a coarse substrate code are matched; soil horizons, organic thickness, hydrology, moisture, management, floor semantics, and an Estonia condition envelope remain unresolved"
+  },
+  "validation": {
+    "validated_on": "2026-07-14",
+    "tuple_identity": [
+      "dataset_uuid",
+      "dataset_doi",
+      "dataset_version",
+      "published_revision",
+      "file_id",
+      "path",
+      "bytes",
+      "sha256"
+    ],
+    "version_policy": "exact_version_2_only",
+    "selector_filename_policy": "exact_inventory_v2_path_only"
+  }
+}

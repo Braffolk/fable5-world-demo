@@ -19,6 +19,7 @@ from ..height_geom import HeightChunkId, HeroCoverage
 _MERKLE_LEAF = b"laas.micro.dependencies.leaf.v1\0"
 _MERKLE_NODE = b"laas.micro.dependencies.node.v1\0"
 _MERKLE_EMPTY = b"laas.micro.dependencies.empty.v1\0"
+BOX_MEAN_REDUCER_VERSION = "reshape-mean-float64/1"
 
 
 def dependency_merkle_root(
@@ -137,6 +138,19 @@ def assemble_parent_source_memmap(
     return mosaic
 
 
+def box_mean_fixed(source: np.ndarray, *, factor: int = 4) -> np.ndarray:
+    """Apply the versioned reshape/mean reducer to a factor-divisible raster."""
+    values = np.asarray(source)
+    if values.ndim != 2 or factor < 1:
+        raise ValueError("box-mean source must be 2D and factor must be positive")
+    rows, cols = values.shape
+    if rows % factor or cols % factor:
+        raise ValueError("box-mean source dimensions must be divisible by factor")
+    return values.reshape(rows // factor, factor, cols // factor, factor).mean(
+        axis=(1, 3), dtype=np.float64
+    )
+
+
 def box_mean4_striped(
     source: np.ndarray,
     *,
@@ -162,8 +176,5 @@ def box_mean4_striped(
     for row0 in range(0, parent_res, stripe_rows):
         row1 = min(row0 + stripe_rows, parent_res)
         block = values[row0 * factor : row1 * factor, :]
-        means = block.reshape(row1 - row0, factor, parent_res, factor).mean(
-            axis=(1, 3), dtype=np.float64
-        )
-        result[row0:row1] = means
+        result[row0:row1] = box_mean_fixed(block, factor=factor)
     return result

@@ -15,6 +15,7 @@ dependencies = [
     "zstandard>=0.22",
     "scipy>=1.17.1",
     "laspy[lazrs]>=2.5.4",
+    "e57==0.2.3",
 ]
 
 [project.scripts]
