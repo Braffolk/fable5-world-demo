@@ -59,8 +59,16 @@ history and must not be used. The selected artifact remains publisher metadata, 
 independently verified geometry, and does not authorize a terrain target, analogue
 qualification, point conversion, or synthesis.
 The HY_PINE2 development-stress plot remains unfetched, and the sealed Järvselja
-(`JS_SPRUCE1`) blind plot remains untouched. Biała Góra remains calibration-only and
-unretained.
+(`JS_SPRUCE1`) blind plot remains untouched. The exact Biała Góra first epoch is now
+retained under `510f1dcf1daa...`; its sole LAS member is bound by extraction
+`680fdadf28e8...`, and unqualified process-candidate build `4fdbaa3f0a9c...` contains
+0.5 m raw support, RGB, return multiplicity, vendor class-2 elevations/ranges, and
+three labeled PNGs. The views demonstrate valuable coastal-cliff, gully, scarp,
+beach-transition, and mass-wasting morphology, but also extensive vegetation and
+steep/vertical multiplicity. Vendor class 2 is not authoritative ground, and the
+single epoch supplies no independent error distribution or generic till/Estonia
+transfer evidence. It remains `calibration_only`, not fine-band target truth and not
+synthesis-authorized; the other nine archives remain unselected and unfetched.
 
 The pinned `e57==0.2.3` Python API is safe for the bounded XML inventory but is not a
 viable point-conversion reader. Its only point API materializes every scan into three
