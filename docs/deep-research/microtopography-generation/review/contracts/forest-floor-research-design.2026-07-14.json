@@ -13,7 +13,7 @@
   "normative_inputs": [
     {
       "path": "docs/specs/terrain/MICROTOPOGRAPHY.md",
-      "sha256": "2877c0442b3b105e20ff7948e3ad93c6ef141dbb9db492fec4d01808ee4afeff"
+      "sha256": "334737f864b6240ad0027539dcf7c9ddb64b3c83348c0581d3e7da6a52543346"
     },
     {
       "path": "docs/specs/terrain/PUBLIC-TARGET-QUALIFICATION-PROTOCOL.md",
@@ -207,14 +207,22 @@
       "built object",
       "overhang or multi-valued surface"
     ],
-    "unknown": [
-      "unregistered photo semantics",
-      "unlabeled Hovi or Evo candidate sheet",
-      "ForestSemantic-MS ground points whose moss/litter/root/clast ownership is unresolved",
+    "hard_ownership_unknown": [
+      "positive forbidden, water, dynamic, object, or non-heightfield evidence",
+      "unlabeled Hovi or Evo sheet without unique connected disjoint-view consensus",
       "occluded or interpolated surface",
-      "semantic disagreement"
+      "multi-sheet or ownership-crossing semantic disagreement",
+      "missing common feature or fired transfer-shift detector"
     ],
-    "unknown_policy": "invalidate_and_abstain",
+    "included_subclass_unknown": [
+      "unregistered photo identity on a unique disjoint-view-consensus Hovi sheet",
+      "unresolved mineral-soil, moss, settled-litter, ground-bonded-root, or embedded-clast identity"
+    ],
+    "unknown_policy": {
+      "hard_ownership_unknown": "w_i=0,p_unknown=1,invalidate_and_abstain",
+      "included_subclass_unknown": "R1_only_p_semantic_subclass_unknown=1_total_surface_error=null_and_weight_by_frozen_consensus_operator",
+      "production": "invalidate_and_abstain"
+    },
     "prohibitions": [
       "Do not redefine all publisher ground labels as canonical terrain.",
       "Do not erase roots, embedded clasts, stable moss, stable litter, or peat with a generic ground classifier.",
@@ -239,23 +247,57 @@
     "fit": "Fit once on complete train1-3 files. No random point split and no patch split.",
     "calibration": "Partition train4 into fixed non-overlapping 8 m XY blocks. Over unique predicted-score thresholds, use 10000 deterministic block-bootstrap resamples with seed 20260714 and choose the largest accepted area whose 95th-percentile forbidden-class false-acceptance ratio is at most 0.02. If no non-empty set passes, stop.",
     "audit": "Run test1 and test2 once after model, features, calibration, and output schema are content-addressed. Partition and bootstrap each file independently by the same rule and seed. The 0.02 upper-bound gate must pass on both; woody-debris results remain separate because the frozen audit contains only 1021 such points.",
-    "cross_sensor_use": "Apply the frozen model to Hovi and Evo only as a domain-drift and exclusion-prior diagnostic. It may remove high-confidence forbidden points, but it may not positively label canonical surface cells or lower the unknown mask.",
+    "cross_sensor_use": "Apply the frozen model to Hovi and Evo only as a domain-drift and negative exclusion prior. It may hard-reject calibrated forbidden candidates but contributes zero positive confidence and never labels a canonical surface subclass. Nonzero Hovi R1 weight comes only from the frozen disjoint-view weak-geometry operator.",
     "cross_sensor_drift": "For each feature and each radius, require Hovi/Evo accepted candidates to lie inside the train1-4 empirical 0.5th-99.5th percentile envelope. Any out-of-envelope feature invalidates that point. Report retained fraction by context; do not retune the envelope.",
-    "terminal": "semantic_filter_research_usable_only_if_both_frozen_audit_files_pass; otherwise target_evidence_insufficient"
+    "terminal": "semantic_filter_research_usable_only_if_both_frozen_audit_files_pass; otherwise R1_research_ineligible. Production remains target_evidence_insufficient in either case."
   },
   "confidence_and_unknown_policy": {
     "confidence_unit": "non-overlapping 8 m physical context, then site and campaign; points and overlapping windows are never confidence replicates",
-    "interval": "one-sided 95% bounds unless a two-sided interval is explicitly required by the normative qualification protocol",
-    "semantic_acceptance": "Only the frozen calibrated threshold may exclude points. Passing it means provisional_surface_candidate, never canonical-surface truth.",
+    "semantic_acceptance": "The frozen calibrated threshold supplies negative forbidden evidence only. Passing it supplies no positive confidence or subclass label.",
+    "M_C": "cells directly observed by both frozen view groups after only external water/dynamic/non-heightfield masks and before sheet selection",
+    "G_C": "subset of M_C with one connected unique sheet, no interpolation, complete F4 support, common-feature in-domain, and no positive forbidden/object/multi-sheet evidence",
+    "c_area": "area(G_C)/area(M_C), or 0 when area(M_C)=0",
+    "band_terms": {
+      "b_A_b_B": "independent F4 band residuals on the common eroded support of G_C",
+      "S_C": "max(0,mean(b_A*b_B))",
+      "N_C": "0.5*mean((b_A-b_B)^2)",
+      "c_band": "S_C/(S_C+N_C), or 0 when S_C+N_C=0"
+    },
+    "cell_terms": {
+      "d_i": "0.5*(b_A[i]-b_B[i])^2",
+      "c_local_i": "N_C/(N_C+d_i), with (N_C,d_i)=(0,0) defined as 1 and any other zero denominator as 0",
+      "c_view_i": "min(n_A[i],n_B[i])/max(n_A[i],n_B[i]), or 0 when both counts are 0",
+      "w_i": "min(c_area,c_band,c_local_i,c_view_i)",
+      "p_unknown_i": "1-w_i"
+    },
+    "combination_semantics": "Observed evidence fractions combined by a conservative minimum bottleneck, not multiplied independent probabilities.",
+    "hard_zero": "Any interpolation, positive forbidden, water/dynamic, non-heightfield, multi-sheet, missing-feature, transfer-shift, or hard ownership-unknown state sets w_i=0 and p_unknown=1.",
+    "loss_weight": "For other R1 cells the robust weak-geometry loss weight is exactly w_i; there is no p_unknown threshold.",
+    "mandatory_epistemic_fields": {
+      "p_semantic_subclass_unknown": 1,
+      "total_surface_error": null
+    },
+    "capacity_gate": {
+      "input_support_window_m": [4, 4],
+      "central_valid_target_m": [2, 2],
+      "batch_size": 8,
+      "two_stage_F4_analysis_halo_m": 1.875,
+      "model_input_to_valid_halo_m": 1,
+      "complete_partition_halo_m": 1.875,
+      "minimum_weighted_effective_train_area_m2": 32,
+      "minimum_kish_effective_nonoverlapping_train_windows": 8,
+      "minimum_complete_nonzero_weight_windows_development": 1,
+      "minimum_complete_nonzero_weight_windows_internal_audit": 1
+    },
     "missing_measurement": "null and blocking; never zero, smooth, average, nearest class, or inherited confidence",
-    "ambiguous_measurement": "invalid and propagated through all estimator and F4 support",
+    "ambiguous_measurement": "Hard ownership ambiguity is invalid and propagated through all estimator and F4 support; included-subclass identity remains explicitly unknown for R1 only.",
     "interpolation": "record its distance and error separately; it never creates direct support",
-    "small_sample": "add contexts only in preregistered groups of six; no patch pooling to narrow intervals",
-    "terminal_on_unknown": "abstain"
+    "persist": ["M_C", "G_C", "c_area", "b_A", "b_B", "S_C", "N_C", "c_band", "d_i", "c_local_i", "c_view_i", "w_i", "p_unknown_i", "all reason bits"],
+    "production_terminal_on_unknown": "abstain"
   },
   "support_and_transfer_operators": {
     "grid_m": 0.0625,
-    "cell_acceptance": "A cell is accepted only when the frozen surface contract, direct observation, semantic exclusion, physical-view, and invalid-mask rules all pass. No interpolated cell counts as direct support.",
+    "cell_acceptance": "Hard ownership-unknown, forbidden, non-heightfield, multi-sheet, OOD, or interpolated cells have zero weight. A unique directly observed disjoint-view-consensus Hovi sheet may carry R1 weak-geometry weight w_i while p_semantic_subclass_unknown=1 and total_surface_error=null; it is never target truth or production support.",
     "effective_support_radius": "max(horizontal_distance_to_accepted_observations, projected_beam_or_footprint, surface_estimator_kernel_radius, interpolation_distance)",
     "view_groups": {
       "hovi": "Decode the 16 scanner-origin translations from the retained pose records, compute their median XY center, sort by (atan2(y-center_y,x-center_x), radial_distance, ordinal), and assign alternating sorted positions to groups A and B. Freeze that mapping before reconstruction. Both groups must directly support every audited context.",
@@ -282,7 +324,9 @@
         "transfer_gain_lcb95_min": 0.707,
         "error_signal_ratio_ucb95_max": 0.5,
         "error_signal_ratio_ci_halfwidth_max": 0.15,
-        "current_eligibility": "target_evidence_insufficient"
+        "current_eligibility": "target_evidence_insufficient",
+        "research_eligibility": "research_ineligible_by_this_contract",
+        "allowed_action": "structural_only"
       }
     },
     "required_error_terms": [
@@ -304,7 +348,7 @@
   },
   "split_and_leakage_rules": [
     "All windows, augmentations, derivatives, and nearby plots inherit their whole site's strictest role.",
-    "For HY_SPRUCE4 synthesis, snap 8 m blocks to the retained plot-local origin, hash (contract_id,block_x,block_y) with BLAKE2b-256, assign digest_byte0 modulo 10 values 0-5 to train, 6-7 to development, and 8-9 to untouched internal audit, then invalidate every target whose complete analysis or model halo crosses a block boundary.",
+    "For HY_SPRUCE4 synthesis, snap 8 m blocks to the retained plot-local origin, hash (contract_id,block_x,block_y) with BLAKE2b-256, assign digest_byte0 modulo 10 values 0-5 to train, 6-7 to development, and 8-9 to untouched internal audit, then invalidate every target whose exact 1.875 m complete partition halo crosses a block boundary.",
     "HY_SPRUCE4 and HY_PINE2 are one site and one campaign; HY_PINE2 is never an independent holdout.",
     "Evo 1086 and 1065 share evo.2024; they are not two independent campaigns and neither may tune the Hovi converter.",
     "ForestSemantic-MS train1-3 fit, train4 calibrates, and test1-2 are opened once for frozen audit only.",
@@ -318,11 +362,11 @@
     "name": "semantic_gated_disjoint_view_surface_reconstruction",
     "sequence": [
       "Freeze and audit the ForestSemantic-MS geometry-only exclusion model.",
-      "On HY_SPRUCE4 only, reconstruct the candidate walking surface independently from preregistered disjoint scanner-pose groups; unknown semantics remain invalid.",
+      "On HY_SPRUCE4 only, reconstruct the candidate walking surface independently from preregistered disjoint scanner-pose groups; hard ownership unknown remains invalid while included-subclass identity remains explicitly unknown and receives only the frozen R1 weak-geometry weight.",
       "Forward-sample each reconstruction through the other groups' measured support and reconvert with the same operator.",
       "Measure direct support, cross-view coherence, phase bias, weak-surface transfer gain, cross-signal, and within-campaign disagreement separately for B1 and B2; keep total survey error unknown.",
       "Freeze the surface recipe and research synthesis preregistration before applying diagnostics to Evo 1086 and 1065; report both separately and as one campaign, never as truth.",
-      "Promote a band only to research_trainable when direct non-interpolated support, both view groups, positive cross-view coherence, cross-signal above disagreement, frozen semantic confidence, and enough disjoint windows all pass. Production qualification remains target_evidence_insufficient."
+      "Promote B1 only to research_trainable when direct non-interpolated support, both view groups, positive cross-view coherence, cross-signal above disagreement, the frozen M/G/S/N/min operator, at least 32 m2 weighted train area, Kish effective count at least 8 non-overlapping valid train windows, and at least one complete nonzero-weight valid window in each development and internal-audit split all pass. B2 remains research-ineligible and production qualification remains target_evidence_insufficient."
     ],
     "primary_estimator": {
       "name": "semantic_gated_multiview_mode_consensus",
@@ -345,9 +389,9 @@
       "target": "canonical B1 residual from the accepted R1 weak surface; B2 loss and output are identically absent",
       "conditioning": "separate channels for reconstructed 1 m authority, R4 parent, gradient, Laplacian, direct support, semantic confidence, p_unknown, and available frozen Hovi condition evidence; absent mandatory channels are explicit masks",
       "architecture": "Use normative family D exactly: metric pixel-space v-prediction U-Net, no natural-image VAE or pretrained weights, 1000-step cosine schedule, 50 deterministic DDIM steps, and locked PRF/window fusion.",
-      "training": "Use only research-trainable HY_SPRUCE4 B1 cells. Weight loss by the frozen confidence combiner, zero every unknown/forbidden/interpolated target, and train normative seeds 17,31,47 for 50000 updates without selecting by audit data.",
+      "training": "Use only research-trainable HY_SPRUCE4 B1 cells with 4 m x 4 m input/support windows, central 2 m x 2 m valid targets, batch size 8, and 1.875 m complete partition halo. Weight each valid target exactly by w_i; hard ownership-unknown, forbidden, non-heightfield, multi-sheet, OOD, and interpolated targets are zero. Preserve p_semantic_subclass_unknown=1 and total_surface_error=null. Train normative seeds 17,31,47 for 50000 updates without selecting by audit data.",
       "geometry": "Generate one absolute world-aligned master over model support, then crop packed LOD -2/-1; never synthesize per chunk.",
-      "bands": "B1 research preview only. B2 remains structural-only until separately research-trainable or production-qualified."
+      "bands": "B1 research preview only. B2 is research-ineligible and structural-only under this contract; enabling it requires a new preregistration."
     },
     "cheapest_useful_comparison": {
       "family": "deterministic_regressor_R",
@@ -390,7 +434,7 @@
     "If either frozen ForestSemantic-MS audit file violates the 0.02 forbidden-class upper-bound gate, stop semantic transfer and do not inspect JS_SPRUCE1.",
     "If Hovi/Evo common-feature drift invalidates all useful direct support, stop rather than adding sensor-specific hidden features.",
     "If direct metric surface labels, independent XY/Z control, or acquisition response remain absent, retain target_evidence_insufficient regardless of visual plausibility.",
-    "Qualify B1 and B2 independently; a B1 pass never implies B2.",
+    "Evaluate B2 diagnostics separately but never promote or synthesize B2 under this contract; a B1 pass never implies B2.",
     "Start with six non-overlapping 8 m contexts; add six only for confidence width and stop at 24. Inconclusive at 24 abstains.",
     "Stop a candidate on forbidden semantics, copying, repetition, seams, invalid water/object ownership, or missing condition support before aesthetic ranking.",
     "Two failed full real attempts or 16 focused engineering hours parks this track; preserve code and artifacts and advance another qualified target source.",

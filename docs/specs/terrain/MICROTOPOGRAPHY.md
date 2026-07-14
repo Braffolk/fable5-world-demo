@@ -344,16 +344,23 @@ target truth. Every sample records:
 - `height_m_f64` where a single-valued hypothesis exists;
 - direct-support distance, footprint, view count, cross-view disagreement, and
   interpolation distance;
-- calibrated semantic probabilities, `p_unknown`, heightfield-valid probability,
-  dynamic/water probability, and explicit forbidden state;
+- source-calibrated semantic probabilities, `p_unknown`,
+  `p_semantic_subclass_unknown`, heightfield-valid probability, dynamic/water
+  probability, and explicit forbidden state;
 - separate epistemic and repeatability uncertainty; neither is called total error;
+- `total_surface_error`, which is `null` for weak geometry without independent
+  total-error evidence;
 - per-band research eligibility and its evidence;
 - train/development/audit role and leakage group;
 - evidence tier, recipe, code, environment, raw-artifact, and license hashes.
 
-Unknown or forbidden samples carry no training/evaluation weight. Missing total
-survey error is explicit and is the reason this artifact cannot become a
-`production_target`, regardless of visual quality.
+Forbidden, non-heightfield, interpolated, or hard ownership-unknown samples carry
+no training/evaluation weight. For `R1_weak_surface` only, a directly observed
+disjoint-view-consensus sheet may carry bounded weak-geometry weight while its
+semantic subclass remains unknown, provided Section 9.6's hard exclusions and
+confidence operator pass. It records `p_semantic_subclass_unknown=1` and
+`total_surface_error=null`; neither field becomes evidence of ground, target
+truth, total error, or transfer.
 
 ### 7.5 `StructuralAuthority`
 
@@ -669,23 +676,50 @@ pass does not promote it to `qualified_target_B1/B2`.
 Every weak surface validates as `microtopography-research-surface/1.0.0` and binds
 the `ResearchSurfaceEvidence` fields in Section 7.4. It carries separate
 probabilities for each included/excluded semantic class, static attachment,
-heightfield validity, dynamic/water contamination, and observation support. It
-also carries `p_unknown`, which absorbs unrepresented classes, distribution shift,
-missing views, classifier disagreement, and uncalibrated regions. Probabilities
-must be calibrated on the named development source and checked on its frozen audit
-split; they are not assumed calibrated after transfer to Hovi/Evo. A fired
-transfer-shift detector or missing required feature sets `p_unknown=1` unless a
-frozen cross-source calibration supports a narrower value.
+heightfield validity, dynamic/water contamination, and observation support.
+Source semantic probabilities must be calibrated on the named development source
+and checked on its frozen audit split; they are not assumed calibrated after
+transfer to Hovi/Evo. Cross-source semantic output is negative evidence only: a
+calibrated forbidden detection may reject a cell, but absence of a detection never
+positively labels it or contributes confidence. A fired transfer-shift detector or
+missing required feature is a hard ownership unknown and sets `p_unknown=1`.
 
-Do not multiply probabilities as though they were independent. Before training,
-freeze one monotone confidence combiner and thresholds from development data. A
-sample has zero research weight when it is interpolated, water/dynamic,
-heightfield-invalid, forbidden by the surface contract, outside direct support, or
-unknown above the frozen threshold. Remaining weight is capped in `[0,1]` and may
-scale a robust weak-supervision loss; it never becomes inverse survey variance.
-Publisher plot cover fractions describe composition only and may not label cells.
-No classifier may force an unrepresented or ambiguous class to its nearest known
-class.
+For `R1_weak_surface` only, uncertainty among mineral soil, persistent organic
+surface, ground-attached moss, settled litter, ground-bonded root, and embedded
+clast does not itself hard-reject a repeatable observed sheet. Such a sample keeps
+`p_semantic_subclass_unknown=1`; `p_unknown` instead records uncertainty that the
+sheet is usable weak geometry after hard exclusions. Compute it without a tuned
+cutoff, separately for each fixed 8 m context `C` and analysis band:
+
+```text
+M_C = cells directly observed by both frozen view groups after only external
+      water/dynamic/non-heightfield masks, before sheet selection
+G_C = subset of M_C with one connected unique sheet, no interpolation, complete
+      F4 support, common-feature in-domain, and no positive forbidden/object/
+      multi-sheet evidence
+c_area = area(G_C)/area(M_C), or 0 when area(M_C)=0
+
+b_A,b_B = independent F4 band residuals on the common eroded support of G_C
+S_C = max(0, mean(b_A*b_B))
+N_C = 0.5*mean((b_A-b_B)^2)
+c_band = S_C/(S_C+N_C), or 0 when S_C+N_C=0
+
+d_i = 0.5*(b_A[i]-b_B[i])^2
+c_local[i] = N_C/(N_C+d_i), with (N_C,d_i)=(0,0) defined as 1
+c_view[i] = min(n_A[i],n_B[i])/max(n_A[i],n_B[i]), or 0 when both are 0
+w_i = min(c_area,c_band,c_local[i],c_view[i])
+p_unknown[i] = 1-w_i
+```
+
+These are observed evidence fractions combined by a conservative bottleneck, not
+multiplied independent probabilities. Any interpolation, positive forbidden,
+water/dynamic, non-heightfield, multi-sheet, missing-feature, transfer-shift, or
+hard ownership-unknown state sets `w_i=0` and `p_unknown=1`. Otherwise the robust
+weak-supervision loss weight is exactly `w_i`; there is no `p_unknown` threshold.
+Persist `M_C`, `G_C`, every factor and reason bit, `p_semantic_subclass_unknown=1`,
+and `total_surface_error=null`. Publisher plot cover fractions describe
+composition only and may not label cells. No classifier may force an unrepresented
+or ambiguous class to its nearest known class.
 
 Each band receives exactly one research eligibility state:
 
@@ -696,9 +730,17 @@ Each band receives exactly one research eligibility state:
   insufficient for supervision; diagnostics and abstention tests only;
 - `research_trainable`: a frozen manifest demonstrates direct non-interpolated
   support, at least two contributing view groups where available, positive
-  cross-view band coherence and signal above within-campaign disagreement, calibrated
-  semantic thresholds, and enough disjoint valid windows for its preregistered
-  training/evaluation split;
+  cross-view band coherence and signal above within-campaign disagreement,
+  calibrated forbidden-class rejection, and the frozen operator above. Its
+  first-forest-bundle gate uses a 4 m x 4 m input/support window, central 2 m x
+  2 m valid target, batch size 8, and complete partition halo
+  `max(1.875 m two-stage F4 analysis halo,1.0 m model input-to-valid halo)=1.875 m`.
+  It requires at least 32 m2 weighted effective train area, Kish effective count
+  `(sum(w)^2/sum(w^2)) >= 8` over non-overlapping valid windows, and at least one
+  complete nonzero-weight valid window in each development and internal-audit
+  split. This first-forest-bundle amendment authorizes only B1 research
+  trainability; B2 remains `research_ineligible` and structural-only until a new
+  preregistration explicitly qualifies it;
 - `production_qualified`: only the `qualified_target_B1/B2` result from Sections 9.2-9.5.
 
 The manifest reports eligibility independently for `B1` and `B2`, including valid
