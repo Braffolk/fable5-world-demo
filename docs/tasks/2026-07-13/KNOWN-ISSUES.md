@@ -200,20 +200,28 @@ agricultural surfaces lack reusable 3D geometry/control, calibrated multiview/TL
 benchmarks lack usable natural-surface masks, payload rights, or public references,
 and small European field surfaces lack raw support, explicit semantics, or
 independent control. This closes the reviewed zero-budget hunt until new primary
-evidence appears. Under the current accepted spec, no morphology specialist may be
+evidence appears. At that checkpoint, no morphology specialist could be
 implemented. The recommended product-level escape was a narrow user-approved
 research-only amendment with zero production-target, Estonia-transfer, owner, or
 canonical-publication authority; immutable non-`latest` preview packing is allowed.
 Production gates remain unchanged.
-The user approved that escape on 2026-07-14. Spec commit `46c0b8e` and forest
-contract `forest-floor-research-design.2026-07-14.json` authorize only weak-evidence
-research candidates and immutable non-`latest` previews. The selected bundle is
-HY_SPRUCE4 + Evo 1086/1065 + ForestSemantic-MS, with HY_PINE2 stress, JS_SPRUCE1
-sealed, LUKE excluded, and Taevaskoda visual-only. A geometry-semantic/disjoint-view
-surface gate must pass B1 before any diffusion/regressor training; B2 and every
-production/transfer/release claim remain closed.
-Resume this Hovi claim only when new primary evidence supplies registered cell semantics
-and independent control/repeat data, not merely another converter.
+The user approved that escape on 2026-07-14. The first exact forest recipe is now
+parked, not the forest regime. Repaired artifact `315579b48189...` preserves its
+frozen semantic result without reopening either holdout: train4 and test2 passed,
+but test1's forbidden accepted-area UCB95 was `0.2023217` against `0.02`. Because
+the transferred mask cannot identify which Hovi cells contain vegetation/debris,
+diffusion cannot safely mask the bad targets. No Hovi scan or model training ran.
+Resume this recipe only with materially new semantics and a new untouched audit;
+never retune against consumed ForestSemantic test1/test2.
+
+The next bounded route is Moore M0 under contract
+`moore-m0-research-design.2026-07-15.json`. It has explicit vegetation-clipped
+visible-moss semantics, 68 grids/eight geographic groups, and a frozen four-phase
+source gate. Its B2 is a `derived_B2_hypothesis` from an interpolated, 3 cm-filtered
+publisher surface, not truth or MTF evidence. Moore may proceed to D/R/E training
+only if source B1/B2 support, phase stability, PSD, persistent-form, capacity, and
+packing prerequisites pass. Failure parks Moore for the decimeter preview; B1-only
+output is not an acceptable substitute.
 
 The durable end-to-end requirement comparison is recorded in
 `MICROTOPOGRAPHY-CONFORMANCE-AUDIT.md`. It also freezes the historical preregistration
