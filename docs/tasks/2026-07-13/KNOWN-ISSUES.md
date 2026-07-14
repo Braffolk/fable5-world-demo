@@ -201,9 +201,17 @@ benchmarks lack usable natural-surface masks, payload rights, or public referenc
 and small European field surfaces lack raw support, explicit semantics, or
 independent control. This closes the reviewed zero-budget hunt until new primary
 evidence appears. Under the current accepted spec, no morphology specialist may be
-implemented. The recommended product-level escape is a narrow user-approved
-research-only amendment with zero target, Estonia-transfer, owner, packing, or
-release authority; production gates remain unchanged.
+implemented. The recommended product-level escape was a narrow user-approved
+research-only amendment with zero production-target, Estonia-transfer, owner, or
+canonical-publication authority; immutable non-`latest` preview packing is allowed.
+Production gates remain unchanged.
+The user approved that escape on 2026-07-14. Spec commit `46c0b8e` and forest
+contract `forest-floor-research-design.2026-07-14.json` authorize only weak-evidence
+research candidates and immutable non-`latest` previews. The selected bundle is
+HY_SPRUCE4 + Evo 1086/1065 + ForestSemantic-MS, with HY_PINE2 stress, JS_SPRUCE1
+sealed, LUKE excluded, and Taevaskoda visual-only. A geometry-semantic/disjoint-view
+surface gate must pass B1 before any diffusion/regressor training; B2 and every
+production/transfer/release claim remain closed.
 Resume this Hovi claim only when new primary evidence supplies registered cell semantics
 and independent control/repeat data, not merely another converter.
 
