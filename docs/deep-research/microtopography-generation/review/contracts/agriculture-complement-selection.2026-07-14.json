@@ -1,0 +1,145 @@
+{
+  "schema_version": "microtopography-agriculture-complement-selection/1.0.0",
+  "checked_at": "2026-07-14",
+  "scope": {
+    "claim": "exposed cultivated-soil B1 morphology complementary to OPARA-1038",
+    "wavelength_m": [
+      0.25,
+      1.0
+    ],
+    "maximum_new_official_sources": 2,
+    "geometry_downloaded": false,
+    "stop_policy": "Stop on the first pass; otherwise retain exact metadata no-go reasons and do not expand the tranche."
+  },
+  "hard_gates": [
+    "raw point observations or raw imagery sufficient to reconstruct metric geometry",
+    "explicit bare-soil and tillage semantics with acquisition date",
+    "reusable public license covering derived and training use",
+    "independent checkpoint or control evidence with numeric horizontal and vertical error",
+    "documented measured support sufficient to evaluate B1 wavelengths"
+  ],
+  "decision": {
+    "status": "no_complement_selected",
+    "reason": "Neither capped candidate exposes the combination of raw reconstructable geometry, cultivated bare-soil semantics, independent numeric control, and B1 support required before a geometry download.",
+    "fallback": "Continue the already-selected OPARA-1038 bounded probe; do not download either rejected candidate for target qualification.",
+    "not_authorized": [
+      "B1 target qualification",
+      "training or synthesis supervision",
+      "Estonia transfer",
+      "substituting roughness indices for geometry",
+      "treating provider-interpolated DTMs as raw support"
+    ]
+  },
+  "candidates": [
+    {
+      "id": "poznan_tillage_roughness_2017_2018",
+      "order": 1,
+      "status": "no_go",
+      "dataset": {
+        "title": "Estimating soil surface roughness with models based on the information about tillage practises and soil parameters - dataset",
+        "doi": "10.5281/zenodo.4936484",
+        "official_record": "https://zenodo.org/records/4936484",
+        "publisher": "Zenodo",
+        "license": "CC-BY-4.0",
+        "geography": "18 arable fields in five settlements near Poznan, western Poland",
+        "campaigns": [
+          "early spring 2017",
+          "late summer or early autumn 2017",
+          "early spring 2018",
+          "late summer or early autumn 2018"
+        ],
+        "semantics": "Each record binds a field and subfield to the tillage tool used before roughness measurement, soil texture and chemistry, moisture, HSD, and T3D."
+      },
+      "official_file_manifest": [
+        {
+          "name": "roughness-tillage-herodowicz-2021.pdf",
+          "bytes": 39000,
+          "publisher_md5": "bab70bd55fc98ce054195dd20799000a"
+        },
+        {
+          "name": "roughness-tillage-herodowicz-2021.xlsx",
+          "bytes": 38100,
+          "publisher_md5": "ecb4818084e66250d13c540eb925be5a"
+        }
+      ],
+      "gate_results": {
+        "raw_or_reconstructable_geometry": false,
+        "explicit_bare_soil_tillage_semantics_and_dates": true,
+        "reusable_license": true,
+        "independent_numeric_xy_z_control": false,
+        "b1_measured_support_documented": false
+      },
+      "blocking_reasons": [
+        "The official release contains only a 39.0 kB PDF and 38.1 kB XLSX; it publishes roughness indices and covariates, not source photographs, point clouds, or per-cell heights.",
+        "The release publishes no independent checkpoint coordinates or numeric horizontal and vertical error for the omitted geometry.",
+        "HSD and T3D can condition or validate aggregate regime statistics, but they cannot supervise spatial B1 morphology."
+      ],
+      "reusable_role": "Aggregate process-prior metadata only; reuse requires a separately qualified geometry source with matching tillage, soil texture, moisture, and season."
+    },
+    {
+      "id": "evora_orchard_erosion_2024_2025",
+      "order": 2,
+      "status": "no_go",
+      "dataset": {
+        "title": "Dataset - Evora 2024-2025 - UAV Surveys - Soil Erosion",
+        "doi": "10.5281/zenodo.18599366",
+        "concept_doi": "10.5281/zenodo.18599365",
+        "official_record": "https://zenodo.org/records/18599366",
+        "official_api_record": "https://zenodo.org/api/records/18599366",
+        "publisher": "Zenodo",
+        "license": "CC-BY-4.0",
+        "geography": "vineyards and olive orchards in the Alentejo region near Evora, Portugal",
+        "campaigns": [
+          "2024 UAV survey",
+          "2025 UAV and independent GPS-transect survey"
+        ],
+        "semantics": "Plot treatments are control, mulch, or mulch plus biochar; vegetation and canopy cover are measured rather than the release defining an exposed tilled-soil surface."
+      },
+      "official_file_manifest": [
+        {
+          "name": "Data - UAV.zip",
+          "bytes": 4444941255,
+          "publisher_md5": "61a4726a995350bd0309659e2e9c2a7a",
+          "contents_declared_by_publisher": "derived DTMs, orthomosaics, accuracy tables, erosion, precipitation, soil roughness, and vegetation-cover data"
+        }
+      ],
+      "published_control": {
+        "sensor": "Trimble Catalyst GPS",
+        "average_reported_checkpoint_accuracy_m": 0.02,
+        "independent_2025_transects": 12,
+        "dtm_cell_size_range_m": [
+          0.0135,
+          0.019
+        ],
+        "vertical_rmse_range_m": [
+          0.042,
+          1.683
+        ],
+        "best_site": {
+          "id": "FEA1",
+          "vertical_rmse_m": 0.042,
+          "lod95_m": 0.117
+        }
+      },
+      "gate_results": {
+        "raw_or_reconstructable_geometry": false,
+        "explicit_bare_soil_tillage_semantics_and_dates": false,
+        "reusable_license": true,
+        "independent_numeric_xy_z_control": "partial_vertical_only",
+        "b1_measured_support_documented": false
+      },
+      "blocking_reasons": [
+        "The official 4,444,941,255-byte archive declares derived DTMs and orthomosaics, not raw images or point observations, so provider interpolation and measured support cannot be audited.",
+        "The physical regime is Mediterranean vineyard and olive-orchard erosion under mulch and biochar treatments, not exposed Baltic or northern-European tilled soil.",
+        "The paper reports vertical DTM-versus-GPS RMSE but no separate numeric horizontal checkpoint error distribution for the released products.",
+        "Even the best FEA1 product has 0.042 m vertical RMSE and 0.117 m 95% level of detection; the release cannot identify which B1 relief survives its total measurement and interpolation response."
+      ],
+      "reusable_role": "No target-qualification role. The GPS-transect design is a useful protocol example, but its derived surfaces and Mediterranean orchard semantics do not complement OPARA-1038 for the frozen claim."
+    }
+  ],
+  "primary_records": [
+    "https://zenodo.org/records/4936484",
+    "https://zenodo.org/api/records/18599366",
+    "https://doi.org/10.3390/agronomy16060645"
+  ]
+}
