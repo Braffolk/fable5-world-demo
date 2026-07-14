@@ -191,8 +191,10 @@ The OPARA sample-plot probe is now also parked. Exact archive/inventory evidence
 retained, but candidate `f6714a2f98a0...` rejects the frozen 2021-07-21 pre-rain
 event before geometry: its dense epoch 0, checkpoint roles, event adjustment logs,
 axis-specific CP residuals, and vegetation/rock masks are absent. Only a metadata
-audit of the already-listed 4.60 GB sample-slope archive is active; it may download
-only if official records explicitly promise those missing contracts.
+audit of the already-listed 4.60 GB sample-slope archive is also closed. Its exact
+official bitstream is retained as metadata only; the record promises none of the
+missing event, axis-residual, TLS/UAV identity, or mask contracts, so the archive
+was not downloaded and has a zero-byte authorization ceiling.
 Resume this Hovi claim only when new primary evidence supplies registered cell semantics
 and independent control/repeat data, not merely another converter.
 
