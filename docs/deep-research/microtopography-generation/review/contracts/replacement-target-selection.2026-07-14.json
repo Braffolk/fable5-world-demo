@@ -1,0 +1,232 @@
+{
+  "schema_version": "microtopography-replacement-target-selection/1.0.0",
+  "checked_at": "2026-07-14",
+  "selection_policy": {
+    "maximum_candidates": 3,
+    "stop_on_first_pass": true,
+    "required_gates": [
+      "downloadable_metric_geometry_now",
+      "explicit_surface_semantics_sufficient_for_heightfield_use",
+      "reusable_rights_covering_derived_and_training_use",
+      "independent_horizontal_or_vertical_control_or_error_evidence_capable_of_supporting_b1"
+    ],
+    "preferred_geography": "Estonia, Baltic, then Nordic",
+    "bulk_geometry_download_forbidden": true
+  },
+  "decision": {
+    "status": "bounded_pass",
+    "selected_candidate_id": "mrzezyno_baltic_dune_2022_02",
+    "authorized_role": "foreign_baltic_b1_dune_beach_morphology_candidate",
+    "authorized_band": {
+      "id": "B1",
+      "wavelength_m": [
+        0.25,
+        1.0
+      ],
+      "qualification": "candidate_only",
+      "restriction": "Only morphology whose relief is separable from the published campaign error may enter a later support/error probe. The source does not by itself qualify all B1 wavelengths or amplitudes."
+    },
+    "next_action": "Freeze a sand.dune_aeolian or shore.beach_sand claim around the exact 2022-02 artifact, then run the existing target-specific semantics, support, interpolation, error, analogue, and site-split gates before training or synthesis.",
+    "not_authorized": [
+      "B2 supervision",
+      "fine sand-ripple truth",
+      "water or bathymetry",
+      "generic terrain transfer",
+      "Estonia production ownership",
+      "release qualification",
+      "using the 0.10 m export grid as evidence of a 0.10 m transfer function",
+      "using interpolated cells without a measured support mask"
+    ]
+  },
+  "candidates": [
+    {
+      "id": "virginia_stream_lab_spring_2026",
+      "order": 1,
+      "status": "no_go",
+      "dataset": {
+        "title": "Virginia Tech StREAM Lab Spring 2026 Drone Lidar Survey",
+        "doi": "10.5069/G9NZ85W7",
+        "official_record": "https://portal.opentopography.org/dataspace/dataset?opentopoID=OTDS.062026.6346.2",
+        "license": "CC-BY-4.0",
+        "survey_date": "2026-04-23",
+        "platform": "DJI Matrice 350 RTK with Zenmuse L1",
+        "point_cloud": {
+          "points": 361938046,
+          "ground_class_points": 100300331,
+          "total_density_points_per_m2": 1294.86,
+          "format": "LAZ"
+        },
+        "dtm": {
+          "file": "SL_Spring2026_DTM_final.tif",
+          "bytes_reported": 65550000,
+          "grid_m": 0.1,
+          "semantics": "Minimum elevation from provider ground plus unassigned classes; voids and stream surface were linearly interpolated."
+        }
+      },
+      "primary_documents": [
+        "https://opentopography.s3.sdsc.edu/dataspace/OTDS.062026.6346.2/docs/OT%20Data%20Description%20Worksheet%20SL%20Spring%202026%20Dataset%20Final.pdf",
+        "https://opentopography.s3.sdsc.edu/dataspace/OTDS.062026.6346.2/docs/MetaData_StREAMLabSpring2026_final.pdf"
+      ],
+      "control_and_error": {
+        "provider_stated_absolute_accuracy_m": {
+          "horizontal_at_50m": 0.1,
+          "vertical_at_50m": 0.05
+        },
+        "independent_campaign_control": null,
+        "alignment": "Spring 2026 was aligned to Winter 2021 by ICP on three bridges; no alignment residual distribution is reported."
+      },
+      "blocking_reasons": [
+        "No independent Spring 2026 terrain check-point distribution is published.",
+        "The report explicitly leaves known ground/vegetation streambank misclassifications unverified and uncorrected.",
+        "The DTM includes low-return unassigned points and linearly interpolated stream bathymetry, so its surface semantics and support are insufficient for target truth."
+      ]
+    },
+    {
+      "id": "point_beach_wisconsin_2020_08",
+      "order": 2,
+      "status": "no_go",
+      "dataset": {
+        "title": "Survey of Point Beach, Wisconsin, August 2020",
+        "doi": "10.5069/G9X63K4B",
+        "official_record": "https://portal.opentopography.org/dataspace/dataset?opentopoID=OTDS.062021.32616.2",
+        "license": "CC-BY-4.0",
+        "survey_date": "2020-08-12",
+        "platform": "DJI Phantom 4 RTK structure-from-motion photogrammetry",
+        "point_cloud": {
+          "file": "PBSF_08122020.laz",
+          "bytes_reported": 1060000000,
+          "points": 117319408,
+          "density_points_per_m2": 697.96,
+          "classification": "unclassified"
+        },
+        "dem": {
+          "grid_m": 0.1,
+          "source_processing_grid_m": 0.0411
+        }
+      },
+      "primary_documents": [
+        "https://opentopography.s3.sdsc.edu/dataspace/OTDS.062021.32616.2/docs/PBSF_08122020_procreport.pdf",
+        "https://opentopography.s3.sdsc.edu/dataspace/OTDS.062021.32616.2/docs/MetaData08122020.pdf"
+      ],
+      "control_and_error": {
+        "ground_control_point_count": 4,
+        "rmse_m": {
+          "x": 0.241667,
+          "y": 0.137542,
+          "z": 0.719944,
+          "total": 0.771777
+        }
+      },
+      "blocking_reasons": [
+        "The published 0.72 m vertical and 0.77 m total control-point RMSE cannot support B1 geometry.",
+        "The cloud is unclassified and does not provide a terrain-semantic or support mask."
+      ]
+    },
+    {
+      "id": "mrzezyno_baltic_dune_2022_02",
+      "order": 3,
+      "status": "bounded_pass",
+      "dataset": {
+        "title": "Set of DEM models from a section of the dune coast in Mrzezyno (Poland) - demo data for testing in the CMORPH application.",
+        "doi": "10.5281/zenodo.15476933",
+        "official_record": "https://zenodo.org/records/15476933",
+        "official_api_record": "https://zenodo.org/api/records/15476933",
+        "license": "CC-BY-4.0",
+        "geography": "Southern Baltic coast, Poland",
+        "regimes": [
+          "sand.dune_aeolian",
+          "shore.beach_sand"
+        ],
+        "campaign_date": "2022-02-28",
+        "sensor": "DJI Zenmuse L1 UAV LiDAR",
+        "processing": "Flight strips were boresight-corrected and merged; adaptive-TIN ground classification was visually checked on dense cross-shore profiles; ground points were inverse-distance interpolated to a 0.10 m DEM."
+      },
+      "exact_artifact": {
+        "file": "2022-02.zip",
+        "download_url": "https://zenodo.org/api/records/15476933/files/2022-02.zip/content",
+        "bytes": 22575152,
+        "publisher_md5": "4d3ac450101e46eb67efde2458f37ca4",
+        "verified_md5": "4d3ac450101e46eb67efde2458f37ca4",
+        "verified_sha256": "7e1ad058ca4f951603780f2798681cea7c3ad91b1be9b0bdfac1a81a23092f18",
+        "geometry_member": {
+          "path": "2022-02/input/dem/2022-02-28.tif",
+          "bytes": 192715409,
+          "verified_sha256": "717e92d7875f02177b7a8608014e92c82c0d28874b7afff2e70f5bac75207f44",
+          "driver": "GTiff",
+          "dtype": "float32",
+          "crs": "EPSG:2180",
+          "shape_yx": [
+            4621,
+            10423
+          ],
+          "pixel_xy_m": [
+            0.1,
+            -0.1
+          ],
+          "bounds_xy_m": [
+            255021.84751,
+            703255.8242,
+            256064.14751,
+            703717.9242
+          ],
+          "nodata": -3.4028234663852886e+38,
+          "valid_cells_by_declared_nodata": 7799608,
+          "valid_fraction_by_declared_nodata": 0.16193624693844658,
+          "observed_non_nodata_extreme_cells": 3,
+          "required_ingest_policy": "Mask the declared nodata value and fail closed or explicitly mask the three non-nodata extreme cells; never treat them as terrain."
+        }
+      },
+      "primary_paper": {
+        "title": "Multi-temporal UAV analysis of beach-dune morphodynamics in Mrzezyno on the southern Baltic coast (Poland)",
+        "doi": "10.12657/landfana-044-003",
+        "url": "https://sgp.web.amu.edu.pl/LA44/landfana.044.003.pdf",
+        "relationship": "The paper covers the 2022-02-28 campaign date and states that 2022 campaigns used Zenmuse L1 LiDAR."
+      },
+      "control_and_error": {
+        "independent_rtk_profile_and_gcp_comparison": {
+          "median_vertical_deviation_upper_bound_m": 0.05,
+          "vertical_deviation_p95_upper_bound_m": 0.1
+        },
+        "sfm_checkpoint_context_not_used_as_lidar_truth": {
+          "planimetric_rmse_upper_bound_m": 0.03,
+          "vertical_rmse_upper_bound_m": 0.04
+        },
+        "simultaneous_lidar_sfm_morphometric_comparison": {
+          "elevation_mean_bias_range_m": [
+            -0.03,
+            0.0
+          ],
+          "elevation_mean_absolute_error_range_m": [
+            0.24,
+            0.28
+          ],
+          "horizontal_offsets_typically_below_m": 1.0,
+          "interpretation": "Extracted shoreline, dune-toe, and dune-crest locations are substantially less certain than direct raster elevation comparisons and may not label fine morphology."
+        }
+      },
+      "surface_semantics": {
+        "included": "Provider-classified terrain ground across a Baltic beach-dune section, including vegetated dune ground where LiDAR returns survived classification.",
+        "excluded_or_unresolved": [
+          "water and bathymetry",
+          "per-cell measured support",
+          "interpolation distance and transfer function",
+          "vegetation-class confusion at fine scales",
+          "material labels separating dry beach, wet beach, and dune sand"
+        ]
+      },
+      "pass_reason": "This is downloadable metric geometry under CC-BY-4.0 from a physically relevant Baltic sand regime, with explicit terrain-ground processing and campaign-level independent RTK error evidence. It is therefore eligible for a bounded B1 support/error probe, but not accepted target truth.",
+      "resume_or_reject_gate": "Reject or narrow the claim if a frozen probe cannot construct per-cell support/interpolation masks or cannot show that the claimed B1 signal exceeds total error. Do not compensate by tuning synthesis thresholds."
+    }
+  ],
+  "download_record": {
+    "bulk_geometry_downloaded": false,
+    "temporary_verification_downloads": [
+      {
+        "candidate_id": "mrzezyno_baltic_dune_2022_02",
+        "file": "2022-02.zip",
+        "bytes": 22575152,
+        "retention": "temporary_only"
+      }
+    ]
+  }
+}
