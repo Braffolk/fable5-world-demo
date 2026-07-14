@@ -188,9 +188,10 @@ def convert_hovi_plot(
     selected_artifact = plot.geometry_artifact()
     retained = RetainedSelection.load(retained_path, selection=selection)
     retained_artifact = retained.artifact_for(selected_artifact)
+    plot_slug = plot.plot_id.lower().replace("_", "-")
     if (
         retained_artifact.plot_id != plot.plot_id
-        or retained_artifact.tranche != "hy-spruce4-geometry"
+        or retained_artifact.tranche != f"{plot_slug}-geometry"
     ):
         raise ValueError("Hovi retained geometry does not belong to the requested plot")
 

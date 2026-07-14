@@ -17,9 +17,7 @@ _SCHEMA = "hovi-condition-semantics-evidence/1.0.0"
 _SELECTION_SCHEMA = "hovi-public-target-selection/1.0.0"
 _SELECTION_ID = "hovi-2024-jarvselja-hyytiala-first-conversion-v1"
 _RETAINED_SCHEMA = "hovi-retained-evidence/1.0.0"
-_PLOT_ID = "HY_SPRUCE4"
-_AUTHORIZED_SCOPE = "shared-and-hy-spruce4-only"
-_REQUIRED_TRANCHES = ("shared", "hy-spruce4-photos")
+_DEVELOPMENT_PLOTS = ("HY_SPRUCE4", "HY_PINE2")
 
 _OVERVIEW_HEADER = (
     "plot_ID", "lon", "lat", "x_UTM", "y_UTM", "zone_UTM", "elevation",
@@ -224,10 +222,12 @@ def _read_csv(path: Path, header: tuple[str, ...], label: str) -> list[dict[str,
     return rows
 
 
-def _one_plot_row(rows: list[dict[str, str]], label: str) -> dict[str, str]:
-    matches = [row for row in rows if row["plot_ID"] == _PLOT_ID]
+def _one_plot_row(
+    rows: list[dict[str, str]], label: str, plot_id: str
+) -> dict[str, str]:
+    matches = [row for row in rows if row["plot_ID"] == plot_id]
     if len(matches) != 1:
-        raise ValueError(f"Hovi {label} must contain exactly one {_PLOT_ID} row")
+        raise ValueError(f"Hovi {label} must contain exactly one {plot_id} row")
     return matches[0]
 
 
@@ -236,6 +236,7 @@ def _strict_retained_artifacts(
     selection_raw: Mapping[str, Any],
     selection_sha256: str,
     plot_raw: Mapping[str, Any],
+    plot_id: str,
 ) -> tuple[str, dict[str, dict[str, Any]]]:
     retained_path = retained_path.resolve()
     if retained_path.name != "retained.json" or not retained_path.is_file():
@@ -244,6 +245,9 @@ def _strict_retained_artifacts(
     retained_selection = _require_mapping(retained.get("selection"), "retained selection")
     plan_identity = _require_mapping(retained.get("plan_identity"), "retained plan_identity")
     retention_id = _required_string(retained.get("retention_id"), "retention_id")
+    plot_slug = plot_id.lower().replace("_", "-")
+    authorized_scope = f"shared-and-{plot_slug}-only"
+    required_tranches = ("shared", f"{plot_slug}-photos")
     if (
         len(retention_id) != 64
         or any(character not in "0123456789abcdef" for character in retention_id)
@@ -253,15 +257,17 @@ def _strict_retained_artifacts(
         or sha256_bytes(canonical_json_bytes(plan_identity).rstrip(b"\n")) != retention_id
         or retained_selection.get("id") != selection_raw["id"]
         or retained_selection.get("config_sha256") != selection_sha256
-        or retained.get("authorized_scope") != _AUTHORIZED_SCOPE
+        or retained.get("authorized_scope") != authorized_scope
     ):
         raise ValueError("Hovi retained manifest identity changed")
     completed_tranches = retained.get("completed_tranches")
     if (
         not isinstance(completed_tranches, list)
-        or completed_tranches[: len(_REQUIRED_TRANCHES)] != list(_REQUIRED_TRANCHES)
+        or completed_tranches[: len(required_tranches)] != list(required_tranches)
     ):
-        raise ValueError("Hovi conditions require verified shared and HY_SPRUCE4 photo tranches")
+        raise ValueError(
+            f"Hovi conditions require verified shared and {plot_id} photo tranches"
+        )
 
     expected_raw = list(selection_raw["shared_files"]) + [
         item for item in plot_raw["files"] if item["kind"] in _PHOTO_KINDS
@@ -281,8 +287,8 @@ def _strict_retained_artifacts(
         expected = expected_by_id.get(file_id)
         if expected is None:
             continue
-        expected_plot = None if expected in selection_raw["shared_files"] else _PLOT_ID
-        expected_tranche = "shared" if expected_plot is None else "hy-spruce4-photos"
+        expected_plot = None if expected in selection_raw["shared_files"] else plot_id
+        expected_tranche = "shared" if expected_plot is None else f"{plot_slug}-photos"
         if (
             item.get("dataset_uuid") != selection_raw["source"]["dataset_uuid"]
             or any(
@@ -353,10 +359,12 @@ def _parse_overview(row: dict[str, str]) -> dict[str, Any]:
     }
 
 
-def _parse_tree_rows(rows: list[dict[str, str]]) -> list[dict[str, Any]]:
-    selected = [row for row in rows if row["plot_ID"] == _PLOT_ID]
+def _parse_tree_rows(
+    rows: list[dict[str, str]], plot_id: str
+) -> list[dict[str, Any]]:
+    selected = [row for row in rows if row["plot_ID"] == plot_id]
     if not selected:
-        raise ValueError(f"Hovi tree inventory contains no {_PLOT_ID} records")
+        raise ValueError(f"Hovi tree inventory contains no {plot_id} records")
     parsed: list[dict[str, Any]] = []
     for row in selected:
         record: dict[str, Any] = {"plot_ID": row["plot_ID"]}
@@ -456,7 +464,7 @@ def _photo_inventory(
         key=lambda item: item["path"],
     )
     if len(photos) != 10:
-        raise ValueError("Hovi conditions require exactly ten HY_SPRUCE4 photos")
+        raise ValueError("Hovi conditions require exactly ten selected-plot photos")
     result: list[dict[str, Any]] = []
     for item in photos:
         if item["kind"] == "semantic_quadrat_photo":
@@ -487,15 +495,20 @@ def _photo_inventory(
 
 
 def _cross_check_selection(
-    plot: Mapping[str, Any], overview: Mapping[str, Any], floor: Mapping[str, Any], tls: Mapping[str, Any]
+    plot: Mapping[str, Any],
+    overview: Mapping[str, Any],
+    floor: Mapping[str, Any],
+    tls: Mapping[str, Any],
+    plot_id: str,
 ) -> None:
     center = _require_mapping(plot.get("center"), "plot center")
     epsg4326 = _require_mapping(center.get("epsg4326"), "EPSG:4326 center")
     epsg25835 = _require_mapping(center.get("epsg25835"), "EPSG:25835 center")
     scan_protocol = _require_mapping(plot.get("scan_protocol"), "scan protocol")
     if (
-        plot.get("plot_id") != _PLOT_ID
-        or plot.get("role") != "development_primary"
+        plot.get("plot_id") != plot_id
+        or plot.get("role")
+        not in {"development_primary", "development_condition_stress"}
         or plot.get("sealed_until_converter_freeze") is not False
         or plot.get("site_id") != "hovi.hyytiala"
         or plot.get("campaign_id") != "hovi.hyytiala.2019"
@@ -529,9 +542,9 @@ def emit_hovi_conditions(
     selection_path: Path = CONFIG_DIR / "hovi-public-targets.json",
     work_root: Path = DATA_WORK,
 ) -> Path:
-    """Emit immutable condition evidence for HY_SPRUCE4 without inferring missing state."""
-    if plot_id != _PLOT_ID:
-        raise ValueError("this slice supports HY_SPRUCE4 only; blind plots must remain uninspected")
+    """Emit immutable condition evidence for one unsealed development plot."""
+    if plot_id not in _DEVELOPMENT_PLOTS:
+        raise ValueError("Hovi condition evidence cannot inspect a sealed or unknown plot")
     selection_bytes = selection_path.read_bytes()
     selection = _require_mapping(json.loads(selection_bytes), "selection")
     selection_sha256 = sha256_bytes(selection_bytes)
@@ -558,29 +571,41 @@ def emit_hovi_conditions(
     plots = selection.get("plots")
     if not isinstance(plots, list):
         raise ValueError("Hovi selection plots must be an array")
-    matches = [plot for plot in plots if isinstance(plot, Mapping) and plot.get("plot_id") == _PLOT_ID]
+    matches = [
+        plot
+        for plot in plots
+        if isinstance(plot, Mapping) and plot.get("plot_id") == plot_id
+    ]
     if len(matches) != 1:
-        raise ValueError("Hovi selection must contain exactly one HY_SPRUCE4 plot")
+        raise ValueError(f"Hovi selection must contain exactly one {plot_id} plot")
     plot = matches[0]
 
     retention_id, artifacts = _strict_retained_artifacts(
-        retained_path, selection, selection_sha256, plot
+        retained_path, selection, selection_sha256, plot, plot_id
     )
     csv_rows = {
         kind: _read_csv(item["local_path"], header, kind)
         for kind, header in _CSV_KINDS.items()
         for item in [_artifact_by_kind(artifacts, kind)]
     }
-    overview = _parse_overview(_one_plot_row(csv_rows["dataset_overview"], "overview"))
-    trees = _parse_tree_rows(csv_rows["forest_inventory_plot_data"])
+    overview = _parse_overview(
+        _one_plot_row(csv_rows["dataset_overview"], "overview", plot_id)
+    )
+    trees = _parse_tree_rows(csv_rows["forest_inventory_plot_data"], plot_id)
     summary = _parse_summary(
-        _one_plot_row(csv_rows["forest_inventory_summary"], "forest inventory summary")
+        _one_plot_row(
+            csv_rows["forest_inventory_summary"], "forest inventory summary", plot_id
+        )
     )
     floor = _parse_floor(
-        _one_plot_row(csv_rows["forest_floor_fractional_cover"], "fractional cover")
+        _one_plot_row(
+            csv_rows["forest_floor_fractional_cover"], "fractional cover", plot_id
+        )
     )
-    tls = _parse_tls(_one_plot_row(csv_rows["tls_campaign_metadata"], "TLS metadata"))
-    _cross_check_selection(plot, overview, floor, tls)
+    tls = _parse_tls(
+        _one_plot_row(csv_rows["tls_campaign_metadata"], "TLS metadata", plot_id)
+    )
+    _cross_check_selection(plot, overview, floor, tls, plot_id)
 
     scan_protocol = _require_mapping(plot.get("scan_protocol"), "scan protocol")
     unknowns = {
@@ -600,7 +625,10 @@ def emit_hovi_conditions(
         },
         "retention": {
             "retention_id": retention_id,
-            "required_completed_tranches": list(_REQUIRED_TRANCHES),
+            "required_completed_tranches": [
+                "shared",
+                f"{plot_id.lower().replace('_', '-')}-photos",
+            ],
         },
         "dataset": {
             "title": source["title"],
@@ -620,7 +648,7 @@ def emit_hovi_conditions(
             "eligibility_result": "abstain",
         },
         "plot_identity": {
-            "plot_id": _PLOT_ID,
+            "plot_id": plot_id,
             "selection_role": plot["role"],
             "site_id": plot["site_id"],
             "campaign_id": plot["campaign_id"],
@@ -699,7 +727,7 @@ def emit_hovi_conditions(
         / "conditions"
         / "sha256"
         / content_sha256
-        / f"{_PLOT_ID}-condition-evidence.json"
+        / f"{plot_id}-condition-evidence.json"
     )
     if destination.exists():
         if destination.read_bytes() != encoded:
@@ -717,10 +745,10 @@ def emit_hovi_conditions(
 
 def _main() -> None:
     parser = argparse.ArgumentParser(
-        description="Emit fail-closed HY_SPRUCE4 condition and semantics evidence."
+        description="Emit fail-closed Hovi development condition and semantics evidence."
     )
     parser.add_argument("--retained", type=Path, required=True)
-    parser.add_argument("--plot", choices=[_PLOT_ID], default=_PLOT_ID)
+    parser.add_argument("--plot", choices=_DEVELOPMENT_PLOTS, default="HY_SPRUCE4")
     parser.add_argument(
         "--selection", type=Path, default=CONFIG_DIR / "hovi-public-targets.json"
     )

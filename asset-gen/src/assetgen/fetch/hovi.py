@@ -25,7 +25,7 @@ _SIGNED_URL_HOST = "download.fairdata.fi"
 _PLAN_SCHEMA = "hovi-retention-plan/1.0.0"
 _MANIFEST_SCHEMA = "hovi-retained-evidence/1.0.0"
 _PRIMARY_PLOT = "HY_SPRUCE4"
-_TRANCHE_ORDER = ("shared", "hy-spruce4-photos", "hy-spruce4-geometry")
+_DEVELOPMENT_PLOTS = ("HY_SPRUCE4", "HY_PINE2")
 _PHOTO_KINDS = frozenset(
     {"semantic_quadrat_photo", "context_overview_photo", "semantic_transect_photo"}
 )
@@ -90,6 +90,9 @@ class HoviRetentionPlan:
     selection_sha256: str
     raw: dict[str, Any]
     artifacts: tuple[HoviArtifact, ...]
+    plot_id: str
+    authorized_scope: str
+    ordered_tranches: tuple[str, ...]
     plan_identity: dict[str, Any]
     plan_sha256: str
 
@@ -148,7 +151,15 @@ def _artifact_from_raw(
     )
 
 
-def _validate_selection(raw: dict[str, Any]) -> tuple[HoviArtifact, ...]:
+def _plot_slug(plot_id: str) -> str:
+    if plot_id not in _DEVELOPMENT_PLOTS:
+        raise ValueError(f"Hovi retention does not authorize plot {plot_id!r}")
+    return plot_id.lower().replace("_", "-")
+
+
+def _validate_selection(
+    raw: dict[str, Any], *, plot_id: str
+) -> tuple[HoviArtifact, ...]:
     if set(raw) != _TOP_LEVEL_KEYS:
         raise ValueError("unsupported or non-strict Hovi selection config")
     if raw["schema_version"] != _SELECTION_SCHEMA or raw["id"] != _SELECTION_ID:
@@ -219,17 +230,17 @@ def _validate_selection(raw: dict[str, Any]) -> tuple[HoviArtifact, ...]:
     all_records.extend(shared)
     plot_records: dict[str, list[HoviArtifact]] = {}
     for plot in plots:
-        plot_id = plot["plot_id"]
+        plot_record_id = plot["plot_id"]
         files = [
-            _artifact_from_raw(item, tranche="validation-only", plot_id=plot_id)
+            _artifact_from_raw(item, tranche="validation-only", plot_id=plot_record_id)
             for item in plot["files"]
         ]
         if (
             len(files) != plot.get("expected_file_count")
             or sum(item.expected_bytes for item in files) != plot.get("expected_bytes")
         ):
-            raise ValueError(f"Hovi file accounting changed for {plot_id}")
-        plot_records[plot_id] = files
+            raise ValueError(f"Hovi file accounting changed for {plot_record_id}")
+        plot_records[plot_record_id] = files
         all_records.extend(files)
 
     if (
@@ -250,6 +261,14 @@ def _validate_selection(raw: dict[str, Any]) -> tuple[HoviArtifact, ...]:
         or primary_plot.get("sealed_until_converter_freeze") is not False
     ):
         raise ValueError("HY_SPRUCE4 is no longer the unsealed primary development plot")
+    stress_plot = plots[1]
+    if (
+        stress_plot.get("plot_id") != "HY_PINE2"
+        or stress_plot.get("role") != "development_condition_stress"
+        or stress_plot.get("site_id") != "hovi.hyytiala"
+        or stress_plot.get("sealed_until_converter_freeze") is not False
+    ):
+        raise ValueError("HY_PINE2 is no longer the unsealed development stress plot")
     blind_plot = plots[2]
     if (
         blind_plot.get("role") != "blind_estonia_transfer"
@@ -258,31 +277,43 @@ def _validate_selection(raw: dict[str, Any]) -> tuple[HoviArtifact, ...]:
     ):
         raise ValueError("JS_SPRUCE1 blind seal changed")
 
-    primary_files = plot_records[_PRIMARY_PLOT]
-    photo_files = [item for item in primary_files if item.kind in _PHOTO_KINDS]
-    geometry_files = [item for item in primary_files if item.kind in _GEOMETRY_KINDS]
+    if plot_id not in _DEVELOPMENT_PLOTS:
+        raise ValueError(f"Hovi retention does not authorize plot {plot_id!r}")
+    selected_files = plot_records[plot_id]
+    photo_files = [item for item in selected_files if item.kind in _PHOTO_KINDS]
+    geometry_files = [item for item in selected_files if item.kind in _GEOMETRY_KINDS]
     unexpected = [
-        item.kind for item in primary_files if item.kind not in _PHOTO_KINDS | _GEOMETRY_KINDS
+        item.kind
+        for item in selected_files
+        if item.kind not in _PHOTO_KINDS | _GEOMETRY_KINDS
     ]
     if len(photo_files) != 10 or len(geometry_files) != 2 or unexpected:
-        raise ValueError("HY_SPRUCE4 does not contain the frozen 10-photo + 2-geometry split")
+        raise ValueError(
+            f"{plot_id} does not contain the frozen 10-photo + 2-geometry split"
+        )
 
-    # Only this explicit allow-list is returned to the network path. The remaining
-    # development plot and sealed blind plot are validated above but never authorized.
+    slug = _plot_slug(plot_id)
+    # Only this explicit allow-list reaches the network path. The other development
+    # plot and the sealed blind plot are validated above but never included.
     return tuple(
         shared
-        + [replace(item, tranche="hy-spruce4-photos") for item in photo_files]
-        + [replace(item, tranche="hy-spruce4-geometry") for item in geometry_files]
+        + [replace(item, tranche=f"{slug}-photos") for item in photo_files]
+        + [replace(item, tranche=f"{slug}-geometry") for item in geometry_files]
     )
 
 
-def load_hovi_retention_plan(selection_path: Path | None = None) -> HoviRetentionPlan:
+def load_hovi_retention_plan(
+    selection_path: Path | None = None, *, plot_id: str = _PRIMARY_PLOT
+) -> HoviRetentionPlan:
     path = selection_path or CONFIG_DIR / "hovi-public-targets.json"
     selection_bytes = path.read_bytes()
     raw = json.loads(selection_bytes)
     if not isinstance(raw, dict):
         raise ValueError("Hovi selection root must be a JSON object")
-    artifacts = _validate_selection(raw)
+    artifacts = _validate_selection(raw, plot_id=plot_id)
+    slug = _plot_slug(plot_id)
+    ordered_tranches = ("shared", f"{slug}-photos", f"{slug}-geometry")
+    authorized_scope = f"shared-and-{slug}-only"
     selection_sha256 = hashlib.sha256(selection_bytes).hexdigest()
     plan_identity = {
         "schema_version": _PLAN_SCHEMA,
@@ -295,8 +326,8 @@ def load_hovi_retention_plan(selection_path: Path | None = None) -> HoviRetentio
         "dataset": raw["source"],
         "license": raw["license"],
         "access": raw["access"],
-        "ordered_tranches": list(_TRANCHE_ORDER),
-        "authorized_scope": "shared-and-hy-spruce4-only",
+        "ordered_tranches": list(ordered_tranches),
+        "authorized_scope": authorized_scope,
         "files": [item.identity() for item in artifacts],
     }
     plan_sha256 = hashlib.sha256(_canonical_json(plan_identity)).hexdigest()
@@ -305,6 +336,9 @@ def load_hovi_retention_plan(selection_path: Path | None = None) -> HoviRetentio
         selection_sha256=selection_sha256,
         raw=raw,
         artifacts=artifacts,
+        plot_id=plot_id,
+        authorized_scope=authorized_scope,
+        ordered_tranches=ordered_tranches,
         plan_identity=plan_identity,
         plan_sha256=plan_sha256,
     )
@@ -531,8 +565,8 @@ def _manifest(
     through: str,
     completed: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    through_index = _TRANCHE_ORDER.index(through)
-    requested_tranches = list(_TRANCHE_ORDER[: through_index + 1])
+    through_index = plan.ordered_tranches.index(through)
+    requested_tranches = list(plan.ordered_tranches[: through_index + 1])
     requested = [item for item in plan.artifacts if item.tranche in requested_tranches]
     rows: list[dict[str, Any]] = []
     for artifact in plan.artifacts:
@@ -549,7 +583,7 @@ def _manifest(
         rows.append(row)
     completed_ids = set(completed)
     completed_tranches: list[str] = []
-    for tranche in _TRANCHE_ORDER:
+    for tranche in plan.ordered_tranches:
         if all(
             item.file_id in completed_ids
             for item in plan.artifacts
@@ -581,8 +615,8 @@ def _manifest(
             "authorization_method": plan.raw["access"]["authorization_method"],
             "signed_url_persisted": False,
         },
-        "authorized_scope": "shared-and-hy-spruce4-only",
-        "ordered_tranches": list(_TRANCHE_ORDER),
+        "authorized_scope": plan.authorized_scope,
+        "ordered_tranches": list(plan.ordered_tranches),
         "requested_through": through,
         "requested_tranches": requested_tranches,
         "completed_tranches": completed_tranches,
@@ -601,14 +635,18 @@ def fetch_hovi_selection(
     base: BaseConfig,
     selection_path: Path | None = None,
     *,
-    through: str = "hy-spruce4-geometry",
+    plot_id: str = _PRIMARY_PLOT,
+    through: str | None = None,
     output_root: Path | None = None,
     log: Callable[[str], None] = print,
 ) -> Path:
     """Retain the cumulative frozen Hovi tranche through ``through``."""
-    if through not in _TRANCHE_ORDER:
-        raise ValueError(f"unknown Hovi tranche {through!r}; expected one of {_TRANCHE_ORDER}")
-    plan = load_hovi_retention_plan(selection_path)
+    plan = load_hovi_retention_plan(selection_path, plot_id=plot_id)
+    through = through or plan.ordered_tranches[-1]
+    if through not in plan.ordered_tranches:
+        raise ValueError(
+            f"unknown Hovi tranche {through!r}; expected one of {plan.ordered_tranches}"
+        )
     root = (output_root or DATA_IN / "evidence" / "hovi") / plan.plan_sha256
     files_root = root / "files"
     manifest_path = root / "retained.json"
@@ -632,7 +670,9 @@ def fetch_hovi_selection(
                         "verified_utc": row["verified_utc"],
                     }
 
-    requested_tranches = set(_TRANCHE_ORDER[: _TRANCHE_ORDER.index(through) + 1])
+    requested_tranches = set(
+        plan.ordered_tranches[: plan.ordered_tranches.index(through) + 1]
+    )
     requested = [item for item in plan.artifacts if item.tranche in requested_tranches]
     log(
         f"Hovi retention {plan.plan_sha256}: {len(requested)} files, "
@@ -661,19 +701,15 @@ def fetch_hovi_selection(
 
 def _main() -> None:
     parser = argparse.ArgumentParser(
-        description="Retain the frozen shared + HY_SPRUCE4 Hovi evidence tranches."
+        description="Retain one frozen unsealed Hovi development evidence tranche."
     )
     parser.add_argument(
         "--selection",
         type=Path,
         default=CONFIG_DIR / "hovi-public-targets.json",
     )
-    parser.add_argument(
-        "--through",
-        choices=_TRANCHE_ORDER,
-        default="hy-spruce4-geometry",
-        help="Cumulative terminal tranche (default: %(default)s)",
-    )
+    parser.add_argument("--plot", choices=_DEVELOPMENT_PLOTS, default=_PRIMARY_PLOT)
+    parser.add_argument("--through", default=None, help="Cumulative terminal tranche")
     parser.add_argument(
         "--output-root",
         type=Path,
@@ -683,6 +719,7 @@ def _main() -> None:
     path = fetch_hovi_selection(
         load_base(),
         args.selection,
+        plot_id=args.plot,
         through=args.through,
         output_root=args.output_root,
     )

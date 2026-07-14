@@ -18,7 +18,7 @@ from .records import canonical_json_bytes, sha256_bytes, sha256_file
 _CONDITION_SCHEMA = "hovi-condition-semantics-evidence/1.0.0"
 _RECIPE_SCHEMA = "hovi-semantic-photo-qa-recipe/1.0.0"
 _INDEX_SCHEMA = "hovi-semantic-photo-qa-index/1.0.0"
-_PLOT_ID = "HY_SPRUCE4"
+_DEVELOPMENT_PLOTS = ("HY_SPRUCE4", "HY_PINE2")
 _PHOTO_KINDS = {
     "context_overview_photo",
     "semantic_transect_photo",
@@ -93,20 +93,23 @@ def _sha256(value: Any, label: str) -> str:
     return digest
 
 
-def _position(source_path: str, kind: str) -> tuple[str, str, int, str]:
+def _position(
+    source_path: str, kind: str, plot_id: str
+) -> tuple[str, str, int, str]:
     name = PurePosixPath(source_path).name
+    escaped_plot = re.escape(plot_id)
     if kind == "context_overview_photo":
-        match = re.fullmatch(r"HY_SPRUCE4-corner_(NE|NW|SE|SW)\.JPG", name)
+        match = re.fullmatch(rf"{escaped_plot}-corner_(NE|NW|SE|SW)\.JPG", name)
         order = {"NW": 0, "NE": 1, "SW": 2, "SE": 3}
         group = "overview"
         prefix = "corner"
     elif kind == "semantic_transect_photo":
-        match = re.fullmatch(r"HY_SPRUCE4-transect_from_(E|W)\.JPG", name)
+        match = re.fullmatch(rf"{escaped_plot}-transect_from_(E|W)\.JPG", name)
         order = {"E": 0, "W": 1}
         group = "transect"
         prefix = "view from"
     elif kind == "semantic_quadrat_photo":
-        match = re.fullmatch(r"HY_SPRUCE4_quadrat([1-4])\.JPG", name)
+        match = re.fullmatch(rf"{escaped_plot}_quadrat([1-4])\.JPG", name)
         order = {str(index): index - 1 for index in range(1, 5)}
         group = "quadrat"
         prefix = "quadrat"
@@ -134,7 +137,7 @@ def _capture_date(raw: Any) -> tuple[str, str, str | None]:
 
 def _load_sources(
     condition_path: Path, retained_path: Path | None
-) -> tuple[dict[str, Any], str, str, tuple[PhotoSource, ...]]:
+) -> tuple[dict[str, Any], str, str, str, tuple[PhotoSource, ...]]:
     condition_path = condition_path.resolve()
     condition_bytes = condition_path.read_bytes()
     condition_sha256 = sha256_bytes(condition_bytes)
@@ -143,10 +146,13 @@ def _load_sources(
     qualification = _require_mapping(condition.get("qualification"), "qualification")
     semantic_policy = _require_mapping(condition.get("semantic_policy"), "semantic policy")
     retention = _require_mapping(condition.get("retention"), "retention identity")
+    plot_id = plot.get("plot_id")
+    if plot_id not in _DEVELOPMENT_PLOTS:
+        raise ValueError("Hovi photo QA cannot inspect a sealed or unknown plot")
+    plot_slug = plot_id.lower().replace("_", "-")
     if (
         condition.get("schema_version") != _CONDITION_SCHEMA
         or condition.get("evidence_kind") != "condition_and_semantics_raw_candidate"
-        or plot.get("plot_id") != _PLOT_ID
         or qualification.get("role") != "raw_candidate"
         or qualification.get("qualification_status") != "unqualified"
         or qualification.get("target_truth") is not False
@@ -169,8 +175,8 @@ def _load_sources(
     if (
         retained.get("schema_version") != "hovi-retained-evidence/1.0.0"
         or retained.get("retention_id") != retention_id
-        or retained.get("authorized_scope") != "shared-and-hy-spruce4-only"
-        or "hy-spruce4-photos" not in retained.get("completed_tranches", ())
+        or retained.get("authorized_scope") != f"shared-and-{plot_slug}-only"
+        or f"{plot_slug}-photos" not in retained.get("completed_tranches", ())
     ):
         raise ValueError("Hovi photo QA retained manifest identity or tranche changed")
 
@@ -178,7 +184,7 @@ def _load_sources(
         row.get("file_id"): row
         for row in retained.get("files", ())
         if isinstance(row, Mapping)
-        and row.get("plot_id") == _PLOT_ID
+        and row.get("plot_id") == plot_id
         and row.get("kind") in _PHOTO_KINDS
     }
     inventory = condition.get("photo_inventory")
@@ -200,7 +206,7 @@ def _load_sources(
         row = _require_mapping(retained_rows.get(file_id), "retained photo row")
         if (
             row.get("status") != "verified"
-            or row.get("tranche") != "hy-spruce4-photos"
+            or row.get("tranche") != f"{plot_slug}-photos"
             or any(
                 row.get(key) != value
                 for key, value in (
@@ -225,7 +231,9 @@ def _load_sources(
             or sha256_file(local_path) != sha256
         ):
             raise ValueError(f"Hovi retained photograph failed verification: {source_path}")
-        group, position_label, sort_order, position_evidence = _position(source_path, kind)
+        group, position_label, sort_order, position_evidence = _position(
+            source_path, kind, plot_id
+        )
         date_label, date_status, date_source = _capture_date(item.get("capture_date"))
         sources.append(
             PhotoSource(
@@ -251,7 +259,7 @@ def _load_sources(
         actual = sum(source.group == group for source in sources)
         if actual != expected:
             raise ValueError(f"Hovi {group} group contains {actual}, expected {expected}")
-    return dict(condition), condition_sha256, retention_id, tuple(sources)
+    return dict(condition), condition_sha256, retention_id, plot_id, tuple(sources)
 
 
 def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -259,7 +267,7 @@ def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
 
 
 def _render_sheet(
-    sources: tuple[PhotoSource, ...], destination: Path, *, title: str
+    sources: tuple[PhotoSource, ...], destination: Path, *, plot_id: str, title: str
 ) -> tuple[dict[str, Any], ...]:
     rows = math.ceil(len(sources) / _COLUMNS)
     panel_h = _IMAGE_H + _LABEL_H
@@ -267,7 +275,7 @@ def _render_sheet(
     height = _HEADER_H + _MARGIN + rows * panel_h + _MARGIN
     canvas = Image.new("RGB", (width, height), (244, 241, 234))
     draw = ImageDraw.Draw(canvas)
-    draw.text((_MARGIN, 16), f"{_PLOT_ID} | {title}", fill=(24, 38, 34), font=_font(27))
+    draw.text((_MARGIN, 16), f"{plot_id} | {title}", fill=(24, 38, 34), font=_font(27))
     draw.text(
         (_MARGIN, 54),
         "HUMAN QA ONLY: observed appearance; no invented labels, metric surface, or ground-height claim.",
@@ -395,12 +403,12 @@ def render_hovi_semantic_photo_evidence(
     work_root: Path = DATA_WORK,
 ) -> Path:
     """Render immutable semantic-observation contact sheets; never classify pixels."""
-    condition, condition_sha256, retention_id, sources = _load_sources(
+    condition, condition_sha256, retention_id, plot_id, sources = _load_sources(
         condition_path, retained_path
     )
     recipe = {
         "schema_version": _RECIPE_SCHEMA,
-        "plot_id": _PLOT_ID,
+        "plot_id": plot_id,
         "condition_evidence": {
             "schema_version": condition["schema_version"],
             "sha256": condition_sha256,
@@ -452,7 +460,7 @@ def render_hovi_semantic_photo_evidence(
             )
         )
         temporary = qa_dir / (filename + ".part")
-        panels = _render_sheet(grouped, temporary, title=title)
+        panels = _render_sheet(grouped, temporary, plot_id=plot_id, title=title)
         destination = qa_dir / filename
         temporary.replace(destination)
         with Image.open(destination) as rendered:
@@ -476,7 +484,7 @@ def render_hovi_semantic_photo_evidence(
         "status": "complete",
         "build_id": build_id,
         "recipe_sha256": build_id,
-        "plot_id": _PLOT_ID,
+        "plot_id": plot_id,
         "condition_evidence_sha256": condition_sha256,
         "retention_id": retention_id,
         "qualification": condition["qualification"],
@@ -499,7 +507,7 @@ def render_hovi_semantic_photo_evidence(
 
 def _main() -> None:
     parser = argparse.ArgumentParser(
-        description="Render HY_SPRUCE4 semantic-photo evidence contact sheets."
+        description="Render Hovi development semantic-photo evidence contact sheets."
     )
     parser.add_argument("--conditions", required=True, type=Path)
     parser.add_argument("--retained", type=Path, default=None)

@@ -12,6 +12,10 @@ _GEOMETRY_KIND = "merged_thinned_geometry_preview"
 _SELECTION_SCHEMA = "hovi-public-target-selection/1.0.0"
 _SELECTION_ID = "hovi-2024-jarvselja-hyytiala-first-conversion-v1"
 _DATASET_UUID = "ace2a123-00ff-4944-951e-eddbe209b70c"
+_UNSEALED_RETENTION_SCOPES = {
+    "shared-and-hy-spruce4-only": ("HY_SPRUCE4", "hy-spruce4"),
+    "shared-and-hy-pine2-only": ("HY_PINE2", "hy-pine2"),
+}
 
 
 def canonical_json_bytes(value: Any) -> bytes:
@@ -269,6 +273,11 @@ class RetainedSelection:
         if not isinstance(plan_identity, Mapping):
             raise ValueError("Hovi retained manifest lacks its stable plan identity")
         retention_id = _sha256(raw.get("retention_id"), "retention_id")
+        scope = raw.get("authorized_scope")
+        scope_record = _UNSEALED_RETENTION_SCOPES.get(scope)
+        if scope_record is None:
+            raise ValueError("Hovi retained manifest is not an unsealed development scope")
+        retained_plot_id, retained_slug = scope_record
         if (
             raw.get("schema_version") != "hovi-retained-evidence/1.0.0"
             or raw.get("plan_sha256") != retention_id
@@ -276,18 +285,20 @@ class RetainedSelection:
             or sha256_bytes(canonical_json_bytes(plan_identity).rstrip(b"\n")) != retention_id
             or retained_selection.get("id") != selection.selection_id
             or retained_selection.get("config_sha256") != selection.sha256
-            or raw.get("authorized_scope") != "shared-and-hy-spruce4-only"
+            or plan_identity.get("authorized_scope") != scope
         ):
             raise ValueError("Hovi retained manifest does not match the frozen selection")
         completed_tranches = raw.get("completed_tranches")
         if (
             raw.get("complete") is not True
             or raw.get("requested_complete") is not True
-            or raw.get("requested_through") != "hy-spruce4-geometry"
+            or raw.get("requested_through") != f"{retained_slug}-geometry"
             or not isinstance(completed_tranches, list)
-            or "hy-spruce4-geometry" not in completed_tranches
+            or f"{retained_slug}-geometry" not in completed_tranches
         ):
-            raise ValueError("Hovi retained manifest is incomplete through HY_SPRUCE4 geometry")
+            raise ValueError(
+                f"Hovi retained manifest is incomplete through {retained_plot_id} geometry"
+            )
         files = raw.get("files")
         if not isinstance(files, list) or not files:
             raise ValueError("Hovi retained manifest files must be a non-empty list")
