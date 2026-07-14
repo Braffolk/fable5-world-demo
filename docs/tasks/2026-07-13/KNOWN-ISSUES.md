@@ -180,6 +180,13 @@ eligible; separate held-out XY/Z error, event semantics, precision/support masks
 and control independence must be reproduced before accepting geometry. The 1.14 TB
 and 2.67 TB parent archives remain forbidden, and one foreign site cannot authorize
 Estonia transfer or synthesis.
+Two capped complement searches are also closed. Poznan supplies useful aggregate
+tillage/soil process metadata but no geometry or controls; Evora supplies a derived
+Mediterranean orchard product without raw support or a complete independent error
+contract. HovoPhoto40 and Wards Hill have high-resolution rock evidence but no
+machine-usable surface/exclusion mask joined to the necessary independent residuals.
+Their contracts preserve exact resume conditions; none should distract from the
+single active OPARA probe.
 Resume this Hovi claim only when new primary evidence supplies registered cell semantics
 and independent control/repeat data, not merely another converter.
 
