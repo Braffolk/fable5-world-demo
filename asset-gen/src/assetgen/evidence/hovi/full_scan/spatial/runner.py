@@ -70,13 +70,18 @@ class SpatialMaterializationResult:
     elapsed_seconds: float
 
 
-def _identity(result: os.stat_result) -> tuple[int, int, int, int, int]:
+def _identity(result: os.stat_result) -> tuple[int, ...]:
     return (
         result.st_dev,
         result.st_ino,
+        result.st_mode,
+        result.st_uid,
+        result.st_gid,
+        result.st_nlink,
         result.st_size,
         result.st_mtime_ns,
         result.st_ctime_ns,
+        int(getattr(result, "st_flags", 0)),
     )
 
 

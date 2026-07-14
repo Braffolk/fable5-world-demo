@@ -29,9 +29,9 @@ DEFAULT_AUTHORITY = (
     / "evidence"
     / "hovi-hy-spruce4-full-spatial-materialization.json"
 )
-EXPECTED_AUTHORITY_BYTES = 11_415
+EXPECTED_AUTHORITY_BYTES = 11_464
 EXPECTED_AUTHORITY_SHA256 = (
-    "bd3b39e6acf1de33658b7bdb63cbf7bf169478bad184f653f49093b6fcbc312a"
+    "be35996327cf9b3d2ee51f3ba2dd7d5de966458f041f69b55b98d9000adb4b26"
 )
 INVENTORY_BYTES = 806_369
 INVENTORY_SHA256 = (
@@ -64,6 +64,7 @@ class SpatialResources:
     launch_free_bytes: int
     free_reserve_bytes: int
     native_max_open_files: int
+    native_reserved_files: int
     native_max_open_output_files: int
     stdout_bytes: int
     stderr_bytes: int
@@ -526,7 +527,8 @@ def load_spatial_authority(
         "free_bytes_reserve": FREE_RESERVE_BYTES,
         "free_space_reserve_label": "96 GiB",
         "maximum_native_open_files_argument": 24,
-        "maximum_native_open_output_files_reported": 20,
+        "maximum_native_reserved_files_reported": 6,
+        "maximum_native_open_output_files_reported": 18,
         "stdout_bytes": 1 << 20,
         "stderr_bytes": 1 << 20,
         "wall_seconds": 86_400,
@@ -612,7 +614,8 @@ def load_spatial_authority(
             launch_free_bytes=LAUNCH_FREE_BYTES,
             free_reserve_bytes=FREE_RESERVE_BYTES,
             native_max_open_files=24,
-            native_max_open_output_files=20,
+            native_reserved_files=6,
+            native_max_open_output_files=18,
             stdout_bytes=1 << 20,
             stderr_bytes=1 << 20,
             wall_seconds=86_400,

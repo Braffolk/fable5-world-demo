@@ -40,6 +40,7 @@ DEFAULT_EXECUTION_SELECTION_ROOT = (
 )
 _READER_COMMIT = "7dfed50bf333880646f0c8a3222569d360e75c64"
 _ORCHESTRATOR_COMMIT = "dcef7be4836effc1b2b2f7359214f9948bb3094b"
+_EXECUTION_SELECTION_ENABLED = False
 _NATIVE_SOURCE_TREE_SHA256 = (
     "ebb237dc3d9b5c83711d03e6265fc22859f57b5e069825355e084053e7e241bc"
 )
@@ -89,8 +90,8 @@ class SpatialExecutionSelection:
     cwd: Path
     environment: dict[str, str]
     child_umask: int
-    source_identity: tuple[int, int, int, int, int]
-    executable_identity: tuple[int, int, int, int, int]
+    source_identity: tuple[int, ...]
+    executable_identity: tuple[int, ...]
     free_bytes_at_selection: int
 
 
@@ -113,18 +114,36 @@ def _asset_path(value: Any, label: str) -> Path:
     return _absolute(ASSET_GEN_ROOT.joinpath(*parts.parts))
 
 
-def _identity(result: os.stat_result) -> tuple[int, int, int, int, int]:
+def _identity(result: os.stat_result) -> tuple[int, ...]:
     return (
         result.st_dev,
         result.st_ino,
+        result.st_mode,
+        result.st_uid,
+        result.st_gid,
+        result.st_nlink,
         result.st_size,
         result.st_mtime_ns,
         result.st_ctime_ns,
+        int(getattr(result, "st_flags", 0)),
     )
 
 
-def _descriptor_sha256(descriptor: int, label: str) -> str:
+def _descriptor_sha256(
+    descriptor: int,
+    label: str,
+    *,
+    executable: bool = False,
+) -> str:
     before = os.fstat(descriptor)
+    if executable and (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_uid != os.getuid()
+        or before.st_nlink != 1
+        or before.st_mode & 0o222
+        or not before.st_mode & 0o111
+    ):
+        raise PermissionError("Hovi spatial executable is mutable or non-executable")
     digest = hashlib.sha256()
     offset = 0
     while offset < before.st_size:
@@ -134,7 +153,20 @@ def _descriptor_sha256(descriptor: int, label: str) -> str:
         digest.update(block)
         offset += len(block)
     after = os.fstat(descriptor)
-    if offset != before.st_size or _identity(before) != _identity(after):
+    if (
+        offset != before.st_size
+        or _identity(before) != _identity(after)
+        or (
+            executable
+            and (
+                not stat.S_ISREG(after.st_mode)
+                or after.st_uid != os.getuid()
+                or after.st_nlink != 1
+                or after.st_mode & 0o222
+                or not after.st_mode & 0o111
+            )
+        )
+    ):
         raise ValueError(f"Hovi spatial {label} changed while being hashed")
     return digest.hexdigest()
 
@@ -165,6 +197,10 @@ def load_spatial_execution_selection(
 ) -> SpatialMaterializationAuthority:
     """Elevate the pending base authority through one exact committed selection."""
     authority = load_spatial_authority() if authority is None else authority
+    if not _EXECUTION_SELECTION_ENABLED:
+        raise RuntimeError(
+            "Hovi spatial execution selection awaits the reviewed native audit build"
+        )
     if authority.native.execution_authorized:
         raise ValueError("Hovi spatial base authority is already execution-enabled")
     path = _absolute(path)
@@ -276,7 +312,11 @@ def load_spatial_execution_selection(
             or stat.S_IMODE(executable_stat.st_mode) != 0o500
             or executable_stat.st_nlink != 1
             or executable_stat.st_size != _EXECUTABLE_BYTES
-            or _descriptor_sha256(executable, "native executable")
+            or _descriptor_sha256(
+                executable,
+                "native executable",
+                executable=True,
+            )
             != _EXECUTABLE_SHA256
         ):
             raise ValueError("Hovi spatial native executable artifact drifted")
@@ -407,7 +447,11 @@ def select_spatial_execution(
             or stat.S_IMODE(executable_stat.st_mode) != 0o500
             or executable_stat.st_nlink != 1
             or executable_stat.st_size != native.executable_bytes
-            or _descriptor_sha256(executable, "native executable")
+            or _descriptor_sha256(
+                executable,
+                "native executable",
+                executable=True,
+            )
             != native.executable_sha256
         ):
             raise ValueError("Hovi spatial executable binding drifted")
