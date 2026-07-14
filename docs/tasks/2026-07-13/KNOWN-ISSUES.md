@@ -253,19 +253,39 @@ controls, or masks. SITES Robacksdalen has a 5 cm CC BY 4.0 point cloud but no
 published exposed-soil state, raw view identity, masks, or independent error; it
 remains one cheap metadata-resume lead, not an active download.
 
-Stordalen Mire is the active bounded source checkpoint because it is the first
+Stordalen Mire received a bounded source checkpoint because it was the first
 neighboring-country route with a plausible true sub-decimeter observation ceiling:
 the exact 2019 SITES point cloud and DSM are nominally 5 cm, CC BY 4.0, and cover a
 large mire extent, while later SITES acquisitions may provide separate epochs.
 They are photogrammetric visible-surface products, not peat-ground truth. Persistent
 vegetation and systematic SfM texture can persist between epochs, so persistence
 alone is insufficient. Before any spec amendment, converter, or synthesis, the
-checkpoint must bind at least three paired acquisitions, external-control
+the checkpoint required at least three paired acquisitions, external-control
 registration, raw-point support/exclusion masks, positive B1/B2 covariance above
 inter-epoch disagreement, four-phase stability, artifact non-correlation, and
 sufficient stable non-palsa/non-thermokarst moss/lawn/hummock support. Failure is
 terminal `NO_GO_as_B1_B2_process_hypothesis`; do not average DSMs or invent B2
 from the 0.25 m Marrviken product.
+
+That checkpoint has now failed before acquisition. The official SITES metadata
+graph contains only one paired PC+DSM epoch (2019), plus unpaired 2018 and 2024
+DSMs. The public land-cover products are station-scale classifications rather than
+aligned 5 cm support/water/tall-vegetation masks, and neither the same-flight
+orthomosaic nor location vectors provide independent surveyed control. Anonymous
+ZIP inventories confirm that a format-only 2019 PC+DSM probe would cost
+`1,058,256,396` compressed bytes without closing any decisive gate. No payload was
+downloaded. Resume only if SITES publishes at least three paired point-cloud/DSM
+acquisitions with the recorded masks and external control.
+
+The active fallback is not another dataset search. It is one bounded R0
+`agriculture.cultivated` process-hypothesis development prototype. Retained OPARA
+may supply only conservative connected negative-form/rill diagnostics, never
+height truth. Audited tillage and multiscale-erosion research supplies the causal
+form decomposition. The prototype must create typed parcel-global row/track/clod/
+runoff/incision/deposition geometry jointly at 0.0625 m, condition it on actual
+parcel, soil, slope, and orthophoto evidence, and expose labeled PNGs. Generic
+noise, source patch transfer, a production claim, Estonia transfer, and browser
+packing remain forbidden until the development geometry is worth freezing.
 
 The durable end-to-end requirement comparison is recorded in
 `MICROTOPOGRAPHY-CONFORMANCE-AUDIT.md`. It also freezes the historical preregistration
