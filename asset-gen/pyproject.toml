@@ -16,6 +16,7 @@ dependencies = [
     "scipy>=1.17.1",
     "laspy[lazrs]>=2.5.4",
     "e57==0.2.3",
+    "scikit-learn>=1.9.0",
 ]
 
 [project.scripts]
