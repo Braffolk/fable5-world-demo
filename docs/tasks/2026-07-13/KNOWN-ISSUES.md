@@ -71,6 +71,50 @@ growth peaks and decoder state. Any authorized conversion therefore requires a s
 audited bounded native adapter over the embedded Rust per-scan raw iterator, or another
 bounded reader dependency; calling Python `read_points()` is forbidden.
 
+The bounded native reader boundary is implemented and frozen through local commits
+`7f520b9`, `191dc74`, `50afde3`, `ae23e46`, `2344e36`, `4c6e558`, and `87ac239`.
+The last three accept mathematically equivalent `q`/`-q` quaternion signs, restore
+masking of low-bit E57 integer codes before domain validation, and bind the corrected
+codec build. Exact execution selection
+`183f0466548173c9053e120b1df72465648536cbf3bfadfb20dc22f8dc4709f1`
+successfully decoded `65,536` scan-0 records into exactly `6,291,456` canonical bytes in
+`0.863 s`. The independently published record SHA-256 is
+`434b584e90575eecfbba5431be95f07e222fb78468ffe0a579d641229ea9015f`; the publication
+report SHA-256 is
+`70bcc1555fb74683a6caa9e67eec35e5535ccfe4a47dec0e8210523f7a244cbf`.
+This closes only the bounded reader-validation probe: it did not reach EOF, validate
+publisher counts, convert all scans, qualify target truth, authorize a surface, or
+authorize synthesis.
+
+The final-byte codec risk is closed in native commit `e9eb37a`: integer unpacking is
+bounded by the declared remaining record count, and terminal residual bits are rejected
+when they can still encode a complete code. Focused native validation passes, but the
+active full pass remains the first real EOF/count proof over all 16 scans.
+
+The accepted full-read spatial-materialization contract uses exact integer support-AOI
+ticks rather than reinterpreted floating bounds, one fixed 28-byte record ABI, per-scan
+4 m spatial shards, and a hard 120 GiB materialized-output ceiling. It may start only
+with at least 216 GiB free and must preserve a 96 GiB reserve. These are authorization
+constraints, not estimates to relax during extraction.
+
+The independently audited execution boundary is enabled by local commit `b37e865` and
+exact immutable selection
+`5e8373c88196d539f614a65215e7a594aabc6297c636fe8946b2ac6b8288c91f`.
+The active pass covers `4,248,797,321` declared records with one absolute 24-hour
+decode/verification/publication deadline, realized NumPy-distribution identity,
+bounded per-scan cross-artifact ordinal-disjointness bitmaps, a 2 GiB child RSS cap,
+24 native descriptors, and fail-closed publication. Until the final manifest is
+independently accepted, this is staging only and authorizes no surface or synthesis.
+
+The ordered closure after reader validation is: one-pass scan-preserving spatial
+materialization under that contract; view-aware candidate conversion with support, visibility, error,
+semantic, and full-versus-thinned evidence; human semantic and physical-analogue/OOD
+qualification with campaign/site holdouts; target-specific preregistration; per-regime
+specialist bakeoff with a valid no-winner; then ordinary packed-height cook, hierarchy,
+immutable preview, independent verification, real-WebGPU boot, and user visual review.
+Hovi must not be collapsed into a generic national forest prior: it can support only
+the explicitly matched forest-floor conditions and phenomena that survive those gates.
+
 For Evo, only the exact 5,773-byte version-2 stand-selector CSV is retained under
 content address `1584bd396efe...`; the 889 MB plot-1086 LAZ remains unfetched. The
 corrected condition/selection artifact is `73b39fd621fa...`. It proves the retained
@@ -120,7 +164,7 @@ were verifier-only and are fixed without replacing the completed `009fd...` arti
 The final transaction record reports completion status `verified-preview-release` and
 `releaseReady:true`.
 
-### Preview verification and the real-WebGPU boot pass; visual acceptance is pending
+### Preview verification, the real-WebGPU boot, and user structural acceptance pass
 
 The independent verifier completed the `009fd...` structural closure after the
 verifier-only quantization and snapshot-comparison fixes. The accepted preview recipe is
@@ -130,7 +174,9 @@ manifest SHA-256 is
 The manifest is served from the fresh `http://localhost:8788` data endpoint. A fresh
 real-Chromium WebGPU run passed through frame 106 at the exact centered URL
 `http://localhost:5173/?scene=world&src=estonia&dataurl=http%3A%2F%2Flocalhost%3A8788&alt=40&x=311123.082&z=190723.435&yaw=0&pitch=-0.18&shadowclipres=896`.
-That live URL has been supplied for review. User visual acceptance remains pending;
+The user has confirmed at that exact live URL that the river anomalies are gone and the corrected-source
+result looks correct. This accepts Stage 1 structural repair at the exact URL, recipe,
+and manifest above; it does not establish morphology beauty or authorize a specialist.
 `releaseReady:true` and a clean boot establish release/runtime correctness, not beauty.
 The verifier's repeated large-artifact decoding/hashing remains a scalability issue for
 future transactions. Hovi full-archive extraction and the selected metadata-only
@@ -234,4 +280,4 @@ The historical accepted infrastructure checkpoint removed the `TerrainField` cei
 
 - The root `estonia-asset-gen` worktree contains unrelated dirty and old-agent changes. Integration must preserve user work and must not copy the obsolete 128 m global-grid rewrite or hash/noise synthesizer.
 - A production pilot preview may be materialized locally, but it must not update `latest.json` until realism, masks, and user-visible acceptance pass.
-- The accepted replacement spec requires a target-evidence-gated per-regime specialist architecture, not a continuation of the measured mineral-forest quilt. Stage 1 structural repair is complete and `releaseReady:true` through transaction `009fd...`; superseded `7a2d...` artifacts remain history, not current authority. User visual acceptance of the supplied live URL remains pending. Morphology implementation remains gated by qualified target evidence. One minimal generic packed-surface grounding correction for trees/boulders/understory/debris remains an infrastructure dependency; it does not synthesize geometry or change the wire format.
+- The accepted replacement spec requires a target-evidence-gated per-regime specialist architecture, not a continuation of the measured mineral-forest quilt. Stage 1 structural repair is complete, `releaseReady:true`, and user-accepted through transaction `009fd...`; superseded `7a2d...` artifacts remain history, not current authority. Morphology implementation remains gated by qualified target evidence. One minimal generic packed-surface grounding correction for trees/boulders/understory/debris remains an infrastructure dependency; it does not synthesize geometry or change the wire format.
