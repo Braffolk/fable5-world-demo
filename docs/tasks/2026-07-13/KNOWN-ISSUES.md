@@ -168,8 +168,11 @@ that. ForestSemantic-MS build `aab4b9b6812d...` now closes the small semantic-au
 step with all six publisher-labeled clouds and a bounded development-only `GO`; it has
 no absolute surface/error contract and does not reopen Hovi. Replacement contract
 `replacement-target-selection.2026-07-14.json` rejects StREAM and Point Beach, while
-authorizing exact Mrzezyno `2022-02.zip` only for a dry Baltic dune/beach/scarp B1
-support/error probe. That one site cannot authorize B2, Estonia transfer, or synthesis.
+advancing exact Mrzezyno `2022-02.zip` to one dry Baltic dune/beach/scarp B1 probe.
+Final build `101d71b16d90...` rejects it as a target site: all provider-valid cells
+remain IDW/support-unknown, descriptive B1 relief cannot be separated from a
+band-resolved error distribution, and zero cells are authorized. The next metadata
+screen must require raw/reconstructable support before another conversion probe.
 Resume this Hovi claim only when new primary evidence supplies registered cell semantics
 and independent control/repeat data, not merely another converter.
 
