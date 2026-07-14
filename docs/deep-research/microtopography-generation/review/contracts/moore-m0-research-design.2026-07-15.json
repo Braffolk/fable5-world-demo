@@ -2,19 +2,21 @@
   "schema_version": "moore-m0-research-design/1.0.0",
   "design_id": "moore-m0-joint-b1-derived-b2.2026-07-15",
   "frozen_at": "2026-07-15",
-  "status": "authorized_research_only",
+  "status": "materialization_authorized_training_blocked",
   "decision": {
     "route": "Moore M0 joint 1 m to 0.0625 m absolute-height research screen",
-    "maximum_result": "one plot-local research_preview_candidate",
+    "maximum_current_result": "source_decimeter_eligibility_decision",
+    "eventual_maximum_result_after_separate_supplement": "one plot-local research_preview_candidate",
     "production_owner_selection": false,
     "source_b2_failure_action": "terminal_no_decimeter_moore_preview",
     "candidate_b2_failure_action": "reject_candidate",
-    "b1_only_fallback_allowed": false
+    "b1_only_fallback_allowed": false,
+    "candidate_training_currently_authorized": false
   },
   "normative_bindings": {
     "spec_after_activation": {
       "path": "docs/specs/terrain/MICROTOPOGRAPHY.md",
-      "sha256": "9ed07d7bb798af97600378db428065221a0df2d1ad4e00e0d2c034e0e30c8fec",
+      "sha256": "bbdf34b222f257512e59b780c38c50bba5b0d075a991033a22891a63e4539538",
       "sections": [
         "9.6",
         "9.8",
@@ -53,8 +55,23 @@
     "publisher_observation_operator": {
       "export_grid_m": 0.01,
       "interpolation": "natural_neighbor",
-      "mean_filter_m": 0.03,
-      "treatment": "immutable_derived_observation_operator_not_direct_support"
+      "treatment": "immutable_derived_observation_operator_not_direct_support",
+      "demsmooth": {
+        "archive_member": "demsmooth.m",
+        "sha256": "729f54883e52360e57fdecee7a88aed4084973d40e0b31215f3612e28eaebddf",
+        "application_count_per_grid": 1,
+        "dtype": "float64",
+        "window": [3, 3],
+        "window_m": [0.03, 0.03],
+        "padding_cells": 2,
+        "nan_fill": "minimum squared Euclidean distance to a finite source cell in the padded array",
+        "nan_fill_tie_break": "lowest MATLAB column-major linear index in the padded array",
+        "no_nan_padding": "two-cell replicate pad",
+        "convolution": "one conv2 same operation with a float64 3x3 kernel whose nine weights are 1/9",
+        "finalize": "crop the two-cell pad then restore the original NaN mask",
+        "support_authority": "filled and padded cells are context only and never create measured support"
+      },
+      "cell_boundary_origin": "after audited orientation, source x/y are cell centers and origin=(min(x)-0.005 m,min(y)-0.005 m)"
     },
     "frozen_inventory": {
       "grid_count": 68,
@@ -148,10 +165,34 @@
     {
       "id": "seney",
       "display_name": "Seney",
+      "leakage_policy": "one conservative group; no member may cross a split",
       "dems_mat_fields": [
         "WET",
         "INT",
         "DRY"
+      ],
+      "member_metadata": [
+        {
+          "plot_id": "WET",
+          "archive_field": "DEMs.mat:DEM.WET",
+          "campaign_id": "Seney",
+          "publisher_state_label": "WET",
+          "acquisition_date": "unknown_not_present_in_archive"
+        },
+        {
+          "plot_id": "INT",
+          "archive_field": "DEMs.mat:DEM.INT",
+          "campaign_id": "Seney",
+          "publisher_state_label": "INT",
+          "acquisition_date": "unknown_not_present_in_archive"
+        },
+        {
+          "plot_id": "DRY",
+          "archive_field": "DEMs.mat:DEM.DRY",
+          "campaign_id": "Seney",
+          "publisher_state_label": "DRY",
+          "acquisition_date": "unknown_not_present_in_archive"
+        }
       ]
     },
     {
@@ -214,7 +255,7 @@
     ]
   },
   "phases": {
-    "origin": "source_cell_boundary_origin",
+    "origin": "per-grid source cell-boundary origin (min(x)-0.005 m,min(y)-0.005 m) after audited orientation",
     "offsets_m": [
       [0.0, 0.0],
       [0.005, 0.0],
@@ -232,6 +273,10 @@
     "new_hole_fill_allowed": false,
     "output_invalid_dilation_cells": 1,
     "complete_f4_r4_support_required": true,
+    "strict_measured_only_b1_support": "complete two-stage F4/R4 footprint over original finite source support",
+    "demsmooth_fill_or_padding_creates_support": false,
+    "known_zero_b1_support_example": "REC_001_DEM.mat",
+    "zero_support_reporting": "report exact plot and group zero counts; padding, reflection, interpolation, or relaxed halo may not invent support",
     "reflected_context_may_enter_loss": false,
     "plot_boundary_may_enter_loss": false,
     "nan_or_incomplete_overlap_weight": 0.0,
@@ -269,9 +314,11 @@
     "phase_comparison": "exact polygon-overlap integration of half-open piecewise-constant B2 cells",
     "phase_interpolation_forbidden": true,
     "per_group_quantities": {
-      "E_p": "mean_area(B2_p^2)",
-      "D_pq": "mean_area((B2_p-B2_q)^2)",
-      "normalized_phase_disagreement": "max_pq sqrt(D_pq/(0.5*(E_p+E_q)))"
+      "E_gp": "mean_area(B2_gp^2) for phase p",
+      "E_g": "(1/4)*sum_p(E_gp)",
+      "D_g": "(1/6)*sum_(p<q)(mean_area((B2_gp-B2_gq)^2))",
+      "R_g": "D_g/E_g; E_g=0 is an automatic failure",
+      "population_energy_cv_g": "sqrt((1/4)*sum_p((E_gp-E_g)^2))/E_g"
     },
     "spectral_operator": {
       "unit": "each complete 1 m by 1 m valid core",
@@ -287,16 +334,18 @@
       "prominence_scale": "MAD of B2 over the plot-phase common valid support",
       "equivalent_diameter": "2*sqrt(basin_area/pi)",
       "relief_volume": "exact cell-area integral of absolute form relief above or below its spill saddle",
-      "phase_matching": "same sign and centroid distance threshold; deterministic minimum total centroid distance with plot field order then row-major extremum index as tie break"
+      "canonical_form_id": "(group_order,plot_field_order,phase_order,sign,row_major_extremum_index)",
+      "candidate_family": "same plot and sign, at most one form per phase, at least three phases, and every member pair within the centroid-distance threshold",
+      "global_disjoint_selection": "within each geographic group, choose the set of candidate families with no reused form that maximizes summed member relief volume over all plots",
+      "global_selection_tie_break": "lexicographically lowest sorted list of canonical family-ID tuples",
+      "per_group_persistence_fraction": "selected-family member relief volume divided by total relief volume of all eligible forms across all four phases in that group; zero denominator fails"
     },
     "thresholds": {
       "minimum_usable_geographic_groups": 6,
-      "normalized_phase_disagreement_group_median_max": 0.35,
-      "normalized_phase_disagreement_every_used_group_max": 0.5,
-      "four_phase_energy_cv_group_median_max": 0.15,
-      "four_phase_energy_cv_every_used_group_max": 0.25,
+      "R_g_every_used_group_max": 0.25,
+      "population_energy_cv_group_median_max": 0.15,
+      "population_energy_cv_every_used_group_max": 0.25,
       "b2_rms_group_median_min_m": 0.01,
-      "phase_disagreement_to_signal_energy_max": 0.25,
       "nyquist_edge_band_cycles_per_m": [7.0, 8.0],
       "registered_b2_band_cycles_per_m": [4.0, 8.0],
       "nyquist_edge_energy_fraction_group_median_max": 0.15,
@@ -305,7 +354,7 @@
       "form_equivalent_diameter_m": [0.125, 0.5],
       "form_match_centroid_distance_max_m": 0.125,
       "form_required_phase_count": 3,
-      "persistent_absolute_relief_volume_fraction_min": 0.7
+      "persistent_absolute_relief_volume_fraction_every_used_group_min": 0.7
     },
     "all_thresholds_conjunctive": true,
     "failure_state": "target_evidence_insufficient_for_moore_decimeter_research_preview"
@@ -316,7 +365,7 @@
       "output": "structural prolongation of O0 with zero unresolved residual",
       "selectable_as_decimeter_preview": false
     },
-    "active": [
+    "reserved": [
       {
         "id": "D",
         "family": "pixel_diffusion",
@@ -335,6 +384,8 @@
         "id": "E",
         "family": "contextual_exemplar",
         "recipe_authority": "MICROTOPOGRAPHY.md Section 12.7 E",
+        "moore_descriptor_height": "8x8 samples at 0.25 m produced by exact area pooling over the named 2 m structural prolongation; never 8x8 1 m O0 cells",
+        "moore_descriptor_companions": "co-registered gradient, relief, and Laplacian fields; exact stencils, distances, and normalization remain blocked on the separate supplement",
         "output": "joint absolute Hhat",
         "realizations_per_held_out_group": 8
       }
@@ -363,33 +414,27 @@
       "maximum_parameters": 3500000,
       "pretrained_weights_allowed": false
     },
-    "selection": {
-      "selection_groups": "seven non-Nobel groups only",
-      "hard_failures_first": true,
-      "required_candidate_gates": [
-        "joint B1 and derived B2 output",
-        "held-out four-phase B2 gate",
-        "exact M0 parent preservation",
-        "mask and partition safety",
-        "anti-copy gate",
-        "packing survival gate",
-        "no generic noise, repetition, or seams"
+    "candidate_selection_supplement": {
+      "status": "required_not_designed",
+      "training_authorized_before_supplement": false,
+      "must_be_separately_reviewed": true,
+      "must_be_hash_bound_to_this_design_and_current_spec": true,
+      "must_freeze_before_training": [
+        "exact descriptor stencils",
+        "exact descriptor distances",
+        "exact descriptor normalization",
+        "exact candidate selection and indistinguishability rule",
+        "input-only boundary and context operator for joint M0 B1 training"
       ],
-      "descriptor_families": [
-        "height_gradient_normal_curvature",
-        "B1_and_B2_energy_and_radial_PSD",
-        "variogram",
-        "signed_form_size_spacing_orientation_connectivity_and_relief_volume",
-        "phase_stability",
-        "packing_survival"
+      "boundary_rule_scope": "input context only; it may not manufacture target, B1, B2, measured support, or loss weight",
+      "candidate_subset_change_allowed": false,
+      "candidate_subset": [
+        "corrected_only",
+        "D",
+        "R",
+        "E"
       ],
-      "corrected_only_improvement_required": "candidate must improve both B1 and derived B2 descriptive distance by at least 0.10 relative without worsening any registered group-family distance by more than 0.20",
-      "ranking": "minimum worst group-family normalized descriptive distance",
-      "indistinguishable_margin": 0.02,
-      "indistinguishable_action": "no_research_preview_candidate",
-      "cost_tiebreak_allowed": false,
-      "candidate_freeze_before_nobel": true,
-      "post_nobel_tuning_allowed": false
+      "values_defined_in_this_contract": false
     }
   },
   "anti_copy": {
@@ -457,14 +502,17 @@
   "first_executable_checkpoint": {
     "id": "moore-m0-materialization-v1",
     "model_training_allowed": false,
+    "decision_scope": "source decimeter eligibility only; never D, R, or E authorization",
     "output_root": "asset-gen/data/work/microtopography/moore/m0-materialization/sha256/<build_id>/",
     "required_actions": [
       "verify every normative binding and archive hash",
       "enumerate all 50 REC MAT members and all 18 named DEMs.mat fields",
       "verify units, orientation, 0.01 m spacing, finite masks, and group identities",
       "reproduce 3,091,387 finite cells and 309.1387 m2 within 0.01 m2",
+      "verify archived demsmooth.m SHA-256 and apply its frozen float64 operator exactly once per grid",
       "materialize all four exact-overlap 0.0625 m phases and their 1 m O0 observations",
       "materialize B1, derived B2, common-support, boundary, and analysis masks",
+      "report strict measured-only two-stage F4/R4 B1-valid counts by plot and group, including the known zero for REC_001_DEM.mat",
       "enumerate the fixed windows and leakage-safe folds",
       "evaluate the complete source B2 gate",
       "emit the content-addressed manifest, machine QA index, and five PNG diagnostics"
@@ -493,7 +541,15 @@
       "every conjunct of source_b2_gate passes",
       "window and split leakage checks pass"
     ],
-    "failure_action": "record exact failed conjunct and park Moore decimeter preview without training or B1-only substitution"
+    "pass_outcome": "source_decimeter_eligible_research_only_pending_hash_bound_candidate_selection_supplement",
+    "pass_does_not_authorize": [
+      "D training",
+      "R training",
+      "E execution",
+      "candidate selection",
+      "packing or preview publication"
+    ],
+    "failure_outcome": "record exact failed conjunct and terminate Moore decimeter preview eligibility without training or B1-only substitution"
   },
   "forbidden_claims": [
     "target truth",

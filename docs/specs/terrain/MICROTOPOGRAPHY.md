@@ -1400,8 +1400,9 @@ that preview supplies no evidence toward a later owner decision.
 
 ### 12.7 Stage 1 Moore evidence and method screen
 
-The Moore archive is a `0.01 m` exported grid after natural-neighbor interpolation
-and a `0.03 m` mean filter, not demonstrated 1 cm effective truth. Most rasters
+The Moore archive is a `0.01 m` natural-neighbor-interpolated exported grid; its
+published analysis then applies the archived `demsmooth.m` 0.03 m mean filter. It
+is not demonstrated 1 cm effective truth. Most rasters
 lack original point support; the two validation cases use special datum alignment
 or custom 3D registration and do not provide a transferable per-cell error/MTF for
 all campaigns. Moore also reports that 95% of plot variance is captured at scales
@@ -1425,12 +1426,15 @@ source correction, sensor error, or Estonia/production ownership.
 #### 12.7.1 Narrow M0 research activation
 
 The 2026-07-15 machine design at
-`review/contracts/moore-m0-research-design.2026-07-15.json` authorizes one bounded
-exception to the historical no-training screen: train and select at most one
-plot-local M0 `research_preview_candidate` from `D`, `R`, and `E`, always against
-the corrected-only/structural-prolongation control. The selected candidate emits
-one joint absolute `Hhat` at `0.0625 m`; it is not a B1 model plus an independently
-stamped B2 model. Its registered outputs are B1 and a
+`review/contracts/moore-m0-research-design.2026-07-15.json` authorizes only the
+bounded source materialization and source-decimeter eligibility decision below.
+It reserves `D`, `R`, and `E` plus corrected-only as the complete candidate subset,
+but does not authorize any candidate training. A separately reviewed, hash-bound
+candidate-selection supplement must first freeze the exact descriptor stencils,
+distances, normalization, and input-only boundary/context operator for joint M0
+B1 training. That supplement is not defined here. Any later selected candidate
+must emit one joint absolute `Hhat` at `0.0625 m`; it is not a B1 model plus an
+independently stamped B2 model. Its registered outputs are B1 and a
 `derived_B2_hypothesis`. The latter name is mandatory because it describes only
 repeatable behavior in the publisher's natural-neighbor-interpolated, 0.03 m
 mean-filtered product. It is not direct support, recovered truth, an acquisition
@@ -1444,21 +1448,26 @@ and compare phases by exact polygon-overlap integration; interpolating one phase
 onto another or selecting a favorable phase is forbidden. Geographic group is
 the independent unit. At least six of the eight frozen groups must have usable
 common support. For group `g` and phases `p,q`, define
-`E_p=mean_area(B2_p^2)` and `D_pq=mean_area((B2_p-B2_q)^2)`. Every following
-conjunct is mandatory:
+`E_gp=mean_area(B2_gp^2)`, `E_g=(1/4) sum_p E_gp`,
+`D_g=(1/6) sum_(p<q) mean_area((B2_gp-B2_gq)^2)`, and `R_g=D_g/E_g`.
+Zero `E_g` fails. Define the population energy coefficient of variation as
+`CV_g=sqrt((1/4) sum_p (E_gp-E_g)^2)/E_g`. Every following conjunct is mandatory:
 
-- phase stability: the across-group median of
-  `max_pq sqrt(D_pq/(0.5*(E_p+E_q)))` is at most `0.35`, every used group is at
-  most `0.50`, and the four-phase B2-energy coefficient of variation is at most
-  `0.15` at the group median and `0.25` in every used group;
+- phase stability: `max_g R_g` is at most `0.25`, and population `CV_g` is at
+  most `0.15` at the group median and `0.25` in every used group;
 - signal and anti-alias behavior: median group B2 RMS is at least `0.01 m`, phase
-  disagreement energy is at most `0.25` of signal energy, and radial PSD energy
-  in `7-8 cycles/m` is at most `0.15` at the group median and `0.25` in every
-  used group relative to energy in `4-8 cycles/m`;
-- morphology stability: signed watershed extrema/forms with prominence at least
-  two times the plot-phase B2 MAD on common valid support and area-equivalent
-  diameter `0.125-0.5 m` match within `0.125 m`, and at least `0.70` of their
-  absolute relief volume persists in at least three phases;
+  disagreement ratio is therefore bounded by `R_g`, and radial PSD energy in
+  `7-8 cycles/m` is at most `0.15` at the group median and `0.25` in every used
+  group relative to energy in `4-8 cycles/m`;
+- morphology stability: enumerate every same-plot, same-sign family containing
+  one signed watershed form from at least three phases, with prominence at least
+  two times the plot-phase B2 MAD on common valid support, area-equivalent diameter
+  `0.125-0.5 m`, and pairwise centroid distance at most `0.125 m`. Select a
+  maximum-total-relief-volume set of globally disjoint families, breaking equal
+  optima by the lexicographically lowest sorted canonical family-ID list. For each
+  group separately, selected member relief volume divided by all eligible form
+  relief volume across its four phases must be at least `0.70`; a zero denominator
+  fails;
 - browser-equivalent packing survival: decoded maximum height error is at most
   `0.005 m`, decoded B2 energy is `0.90-1.10` of the pre-pack value, at least
   `0.90` of persistent-form relief volume remains, parent/seam failures are zero,
@@ -1476,14 +1485,18 @@ reproduce exactly `3,091,387` finite 0.01 m cells and `309.1387 m2`, materialize
 all four exact-overlap M0 phases and masks, enumerate the frozen
 `2 m` support/`1 m` valid-core/`0.5 m` stride windows and splits, compute the
 source-derived B1/B2 gate inputs, and emit the declared content-addressed manifest
-and diagnostic PNG set. No model work starts unless this checkpoint and the
-source B2 gate pass.
+and diagnostic PNG set. It decides only whether Moore's derived source is eligible
+for a decimeter research attempt. Passing does not authorize `D`, `R`, or `E`;
+training remains blocked until the separate hash-bound candidate-selection
+supplement exists and passes review.
 
 Use eight outer leave-one-geographic-group-out folds: all 50 `REC_*` plots as Red
 Earth Creek; Alpha/Beta/Gamma/Epsilon/Zeta/Eta/Iota/Kappa/Theta/Lambda as Nobel;
 WET/INT/DRY as Seney; Maine/Caribou Bog; James Bay; Limerick; Puslinch; and
 Sweden/Rodmossen. Inner model selection is leave-one-remaining-group-out. The outer
-group is untouched until configuration and seed are frozen.
+group is untouched until configuration and seed are frozen. WET, INT, and DRY
+retain their individual publisher plot labels and campaign metadata in every
+artifact, but remain one conservative Seney leakage group and never cross a split.
 
 The mandatory evidence audit must verify archive/per-record hashes, units,
 orientation, exported-grid spacing, interpolation/filter code and boundary fill,
@@ -1499,7 +1512,19 @@ selection. This result is known before candidate output and forbids an ownership
 or non-inferiority claim.
 
 For optional M0/M1 engineering screens, treat every finite source value as constant
-over its explicit half-open 0.01 m source cell. Test output-boundary offsets
+over its explicit half-open 0.01 m source cell after applying archived
+`demsmooth.m` (SHA-256
+`729f54883e52360e57fdecee7a88aed4084973d40e0b31215f3612e28eaebddf`)
+exactly once. Its exact emulation converts `z` to float64, records the original NaN
+mask, pads two cells, fills padded NaNs by minimum squared Euclidean distance with
+ties resolved to the lowest MATLAB column-major index in the padded array (or
+replicate-pads when the source contains no NaNs), convolves once with a 3x3
+float64 kernel whose nine weights are `1/9`, crops the two-cell pad, and restores
+the original NaNs.
+Nearest-filled or padded cells never become measured support. The source x/y
+values are 0.01 m cell centers; the explicit cell-boundary origin is
+`(min(x)-0.005 m,min(y)-0.005 m)` after the audited orientation is applied. Test
+output-boundary offsets
 `(dE,dN)={(0,0),(0.005,0),(0,0.005),(0.005,0.005)} m` relative to the source
 cell-boundary origin; the corresponding 0.25/1 m synthetic observation grid shares
 that output phase. Resample by exact polygon/cell overlap and require at least 95%
@@ -1514,25 +1539,34 @@ projection to fallible production DTM. Analyze, but never conflate, packed-null
 deltas with Section 13.2's overlapping-filter bands
 `B1=A1-R4(A0)` and `B2=H-R4(A1)` where `A1=F4(H)` and `A0=F4(A1)`.
 
+Strict measured-only B1 support requires the complete two-stage F4/R4 footprint;
+neither `demsmooth.m` padding/fill nor filter reflection supplies support. Small
+plots can therefore have zero B1-valid output (known examples include
+`REC_001_DEM.mat`). Materialization must report strict valid counts by plot and
+group and preserve zero rather than manufacture support through padding,
+reflection, interpolation, or a relaxed halo.
+
 Shared inputs are the named synthetic observation's structural prolongation,
 gradient, Laplacian, 0.5/1 m relief, and validity. Loss/metrics use only measured
 support with invalid/filter-boundary dilation. D4 transforms are permitted because
 reliable north is absent. The historical M1 and any M0 configuration outside the
 narrow machine design report failure modes, parent preservation, band behavior,
 tiling, packing survival, and compute only; no candidate wins. The narrow M0
-activation may name only a research-preview candidate under Section 12.6, never a
-winner or owner.
+materialization names no candidate. A later hash-bound supplement may authorize
+selection of only a research-preview candidate under Section 12.6, never a winner
+or owner.
 
 The following seven families remain the required lower-bound comparison set for a
 later target-specific preregistration; the prose recipes alone are not complete
 machine configs and do not authorize training. The narrow M0 machine design
-authorizes only `D`, `R`, and `E` plus corrected-only; `S`, `P`, `G`, and `H`
-remain inactive. In a Moore engineering screen, write
+reserves only `D`, `R`, and `E` plus corrected-only; `S`, `P`, `G`, and `H` remain
+inactive. Reservation is not training authorization; the hash-bound supplement
+above remains mandatory. In a Moore engineering screen, write
 `Delta=Hhat-prolong(observation)` for the metric candidate delta:
 
 | ID | Executable recipe |
 |---|---|
-| `E` contextual exemplar | Store training support windows and `Delta`; descriptor is 8x8 parent plus gradients/relief/Laplacian, standardized then 32-component training-only PCA; retrieve eight Euclidean nearest from other sites; PRF-select proportional to `exp(-(d-dmin)/max(median(d-dmin),1e-6))`; return metric residual after registered D4 transform |
+| `E` contextual exemplar | Store training support windows and `Delta`; Moore M0 descriptor height is an 8x8 array of exact 0.25 m area-pooled samples over the named 2 m structural prolongation, not an 8x8 array of 1 m `O0` cells, plus co-registered gradients/relief/Laplacian; standardize then use 32-component training-only PCA; retrieve eight Euclidean nearest from other sites; PRF-select proportional to `exp(-(d-dmin)/max(median(d-dmin),1e-6))`; return metric residual after registered D4 transform |
 | `S` conditional simulation | 5x5 reflected-neighborhood pointwise ridge mean with alpha inner-selected from `{1e-4,1e-3,1e-2}`; fit remaining isotropic Matern variogram at 0.0625 m lags to 1 m, `nu in {0.5,1.5,2.5}`; coordinate-PRF circulant embedding over expanded plot; condition aligned 4x4 residual means to zero by Cholesky with jitter `1e-8*sill`; abstain if embedding remains non-positive after two dimension doublings |
 | `P` marked forms | On `R4(F4(Delta))`, keep positive/negative extrema above a preregistered qualified-error prominence; watershed basins; fit signed elliptical Wendland C2 `A*(1-r)^4*(4r+1)` for `0<=r<1`; empirical sign-specific marks plus Matern-II hard-core at fifth-percentile same-sign spacing; PRF candidates on 0.125 m owner lattice, deterministic priority, orientation only from parent gradient; one inner-training least-squares global amplitude; ineligible below 200 forms/six groups; no generic remainder |
 | `R` deterministic regressor | Three-level residual U-Net `(48,96,192)`, two 3x3 residual blocks/level, GroupNorm 8, SiLU, stride-2 down, nearest+3x3 up, reflected one-pixel padding, no attention/no noise, one metric output; `Huber(delta=.01m)+.25 L1 gradient+.10 L1 five-point Laplacian` |
@@ -2462,8 +2496,9 @@ acceptance path.
 
 - materialize and gate the exact 2026-07-15 narrow M0 machine design before model
   work; if its source-derived B2 fails, produce no `<=0.1 m` Moore preview;
-- exercise only `D`, `R`, and `E` against corrected-only for that activation;
-  M1 and the other Section 12.7 families remain non-authorizing diagnostics;
+- after a separate reviewed hash-bound candidate-selection supplement authorizes
+  training, exercise only `D`, `R`, and `E` against corrected-only; M1 and the
+  other Section 12.7 families remain non-authorizing diagnostics;
 - report parent preservation, subphase sensitivity, tiling, packing/DAG survival,
   compute, and qualitative failure modes through the plot-scaled protocol;
 - make no morphology non-inferiority, owner, Estonia-transfer, or production claim.
