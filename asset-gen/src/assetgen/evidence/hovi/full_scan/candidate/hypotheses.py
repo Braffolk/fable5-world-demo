@@ -428,6 +428,30 @@ class CandidateSurfaceHypothesisGenerator:
                 raw_mode_count=detected_mode_count,
                 reason="mode_basin_assignment_unresolved",
             )
+        pooled_counts = histogram.sum(axis=0)
+        basin_starts = np.concatenate(
+            (np.asarray([0], dtype=np.int64), basin_edges)
+        )
+        basin_stops = np.concatenate(
+            (basin_edges, np.asarray([histogram.shape[1]], dtype=np.int64))
+        )
+        if any(
+            not np.any(pooled_counts[start:stop])
+            for start, stop in zip(basin_starts, basin_stops, strict=True)
+        ):
+            return self._overflow_cell(
+                evidence,
+                level,
+                group,
+                sample_count,
+                scan_mask,
+                minimum,
+                maximum,
+                cell_center_distance,
+                peak_live_bound,
+                raw_mode_count=detected_mode_count,
+                reason="empty_mode_basin_unresolved",
+            )
         hypotheses = self._measure_hypotheses(
             evidence,
             group,

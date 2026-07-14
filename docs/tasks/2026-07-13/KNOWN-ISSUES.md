@@ -126,14 +126,26 @@ RSS/descriptors, and fail-closed verification. The successful selection supersed
 padding-defective selections for materialization evidence. It does not supersede the
 scientific gates: raw shards are not a terrain surface and authorize no synthesis.
 
-The ordered closure after the completed spatial materialization and publication is:
-view-aware candidate conversion with support, visibility, error,
-semantic, and full-versus-thinned evidence; human semantic and physical-analogue/OOD
-qualification with campaign/site holdouts; target-specific preregistration; per-regime
-specialist bakeoff with a valid no-winner; then ordinary packed-height cook, hierarchy,
-immutable preview, independent verification, real-WebGPU boot, and user visual review.
-Hovi must not be collapsed into a generic national forest prior: it can support only
-the explicitly matched forest-floor conditions and phenomena that survive those gates.
+The final full-scan candidate checkpoint is preserved under decision
+`hovi-hy-spruce4-full-candidate-no-go-v1`. Its central 4 m shard was selected from the
+nominal plot center before result inspection and includes all 16 scans at 6.25 cm. All
+4,096 cells are observed, but only 234 retain one raw sheet; 2,550 retain competing
+sheets and 1,312 abstain on unresolved or overflow structure. The five labeled PNGs and
+machine index are content-addressed by `261e2e9999aecf...`. The independent full-versus-
+thinned product `2a221fde27ed...` conserves `3,680,759,265` and `714,456,347` points.
+At 6.25 cm, numeric XY occupancy is nearly unchanged (448,858 versus 448,850 cells),
+while the median thinned/full per-cell point ratio is only `0.2820`. This does not show
+that vertical sheets or morphology survived thinning; the comparator explicitly lacks
+frame equivalence, correspondence, semantics, and error claims.
+
+This is a scientific `NO-GO`, not a conversion failure. Dense support does not establish
+a unique forest-floor sheet, and threshold tuning would hide rather than resolve roots,
+deadwood, stems, understory, litter, moss, and true terrain competition. The valid raw
+materialization and QA remain reusable, but HY_SPRUCE4 is parked from surface, target-
+truth, analogue-transfer, and synthesis use. Resume only with a preregistered general
+assignment method plus registered semantics, visibility/error evidence, and valid
+physical-analogue/Estonia OOD gates. Hovi must not be collapsed into a generic national
+forest prior.
 
 The durable end-to-end requirement comparison is recorded in
 `MICROTOPOGRAPHY-CONFORMANCE-AUDIT.md`. It also freezes the historical preregistration
@@ -367,7 +379,7 @@ The historical accepted infrastructure checkpoint removed the `TerrainField` cei
 
 ## Integration Risks
 
-- Dataset conversion previously became inefficiently serialized behind HY_SPRUCE4 full-E57 handling, with two failed full attempts and repeated implementation/review micro-cycles before a morphology input existed. Native codec-word padding commit `ba92ab4` completed the verified full materialization and the Python publisher completed its atomic move. Evo 1086/1065 are parked after sparse-surface diagnosis; the downsampled HY_PINE2 stress condition is also parked after its candidate sheet correctly abstained, and its full archive remains unfetched. A blocked track is parked without deleting its code or provenance; it resumes only if quicker alternatives fail or its scientific role is unique.
+- Dataset conversion previously became inefficiently serialized behind HY_SPRUCE4 full-E57 handling, with two failed full attempts and repeated implementation/review micro-cycles before a morphology input existed. Native codec-word padding commit `ba92ab4` completed the verified full materialization and the Python publisher completed its atomic move. The full-scan Hovi track is now parked after its fully observed central 6.25 cm QA remained dominated by competing/unresolved sheets; no threshold-tuning loop is authorized. Evo 1086/1065 are parked after sparse-surface diagnosis; the downsampled HY_PINE2 stress condition is also parked after its candidate sheet correctly abstained, and its full archive remains unfetched. A blocked track is parked without deleting its code or provenance; it resumes only if quicker alternatives fail or its scientific role is unique.
 - The root `estonia-asset-gen` worktree contains unrelated dirty and old-agent changes. Integration must preserve user work and must not copy the obsolete 128 m global-grid rewrite or hash/noise synthesizer.
 - A production pilot preview may be materialized locally, but it must not update `latest.json` until realism, masks, and user-visible acceptance pass.
 - The accepted replacement spec requires a target-evidence-gated per-regime specialist architecture, not a continuation of the measured mineral-forest quilt. Stage 1 structural repair is complete, `releaseReady:true`, and user-accepted through transaction `009fd...`; superseded `7a2d...` artifacts remain history, not current authority. Morphology implementation remains gated by qualified target evidence. One minimal generic packed-surface grounding correction for trees/boulders/understory/debris remains an infrastructure dependency; it does not synthesize geometry or change the wire format.

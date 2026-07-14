@@ -1,0 +1,96 @@
+{
+  "schema_version": "hovi-hy-spruce4-full-candidate-decision/1.0.0",
+  "id": "hovi-hy-spruce4-full-candidate-no-go-v1",
+  "status": "complete_parked_scientific_no_go",
+  "decision": {
+    "value": "FULL_SCAN_CANDIDATE_SURFACE_NO_GO",
+    "scope": "promote_hy_spruce4_full_scan_observations_to_surface_or_synthesis_target",
+    "reason": "The verified central 6.25 cm diagnostic is fully observed but dominated by competing or unresolved vertical sheets. Dense raw support and multi-view coverage therefore do not establish a unique forest-floor surface, while semantics, occlusion, independent error, and Estonia transfer remain unresolved.",
+    "conversion_failed": false,
+    "materialization_valid": true,
+    "raw_candidate_evidence_retained": true,
+    "surface_claim": false,
+    "target_truth": false,
+    "analogue_transfer_authorized": false,
+    "synthesis_authorized": false,
+    "threshold_iteration_authorized": false,
+    "track_state": "parked"
+  },
+  "materialization": {
+    "path": "data/work/hovi-full-scan-spatial-materialization/materializations/sha256/ed/ed02d20970b5d9eedf5b36406c947d3cea87c59682bc8853f1a23fac23f35d18/manifest.json",
+    "sha256": "ed02d20970b5d9eedf5b36406c947d3cea87c59682bc8853f1a23fac23f35d18",
+    "publisher_records": 4248797321,
+    "aoi_records": 3680759265,
+    "artifact_count": 1907,
+    "artifact_bytes": 103061259420,
+    "scan_count": 16,
+    "publication": "python_verified_atomic_content_addressed_directory_move"
+  },
+  "candidate_qa": {
+    "index_path": "data/work/hovi-full-scan-candidate-evidence/261e2e9999aecf270c262b64118775bcf21bcae5f7d462589685e6063fcf48f4/qa/index.json",
+    "index_sha256": "261e2e9999aecf270c262b64118775bcf21bcae5f7d462589685e6063fcf48f4",
+    "recipe_sha256": "9d9896b8c002cf4aa05af6209ea9c2a2c05a0a6bcd644c4d917005ce47d3af4d",
+    "selection": {
+      "basis": "nominal_plot_center_before_result_inspection",
+      "shard_x": 5,
+      "shard_y": 4,
+      "extent_m": 4.0,
+      "resolution_m": 0.0625,
+      "cells": 4096,
+      "selected_scan_count": 16
+    },
+    "method": {
+      "vertical_bin_m": 0.005,
+      "smoothing_sigma_m": 0.01,
+      "mode_union_resolution_m": 0.02,
+      "max_vertical_bins": 8192,
+      "max_hypotheses_per_cell": 32,
+      "interpolation_performed": false,
+      "empty_mapped_basin_policy": "whole_cell_abstention"
+    },
+    "result": {
+      "observed_cells": 4096,
+      "unobserved_cells": 0,
+      "sole_raw_candidate_cells": 234,
+      "ambiguous_candidate_cells": 2550,
+      "overflow_or_unresolved_cells": 1312,
+      "empty_mode_basin_unresolved_cells": 8
+    },
+    "artifact_count": 5,
+    "artifact_role": "labeled_diagnostic_pngs_not_surface_or_truth"
+  },
+  "full_vs_thinned": {
+    "manifest_path": "data/work/hovi-full-vs-thinned-transfer/ed02d20970b5d9eedf5b36406c947d3cea87c59682bc8853f1a23fac23f35d18/manifest.json",
+    "manifest_sha256": "2a221fde27ed693fc3931116d65953f9db4e9272c07e2cfb03d9edb53ce9fb7a",
+    "metrics_sha256": "f3cf233082f6e3a2bac98b18c44119b05f5df969600aab2522dbce698e8e7762",
+    "observables_sha256": "05a6c97da535517f02a805f25644913bed25fa736647122b51ff6693e1bff274",
+    "full_points": 3680759265,
+    "thinned_points": 714456347,
+    "six_centimetre_level": {
+      "resolution_m": 0.0625,
+      "full_occupied_cells": 448858,
+      "thinned_occupied_cells": 448850,
+      "full_only_occupied_cells": 16,
+      "thinned_only_occupied_cells": 8,
+      "median_thinned_over_full_point_count": 0.28202277480808186,
+      "median_thinned_minus_full_center_distance_m": 0.0003712250563694397
+    },
+    "interpretation": "The merged 2 cm product largely preserves numeric XY occupancy at the 6.25 cm rung while discarding most raw observations. This comparison does not measure vertical-sheet preservation, thinning morphology, frame equivalence, point correspondence, semantics, or surface error."
+  },
+  "evidence_boundary": {
+    "scientific_role": "raw_candidate_diagnostic",
+    "qualification_status": "unqualified_parked",
+    "semantic_state": "unknown_unlabeled",
+    "occlusion_state": "unknown",
+    "independent_error_state": "unknown_not_estimated",
+    "surface_claim": false,
+    "target_truth": false,
+    "synthesis_authorized": false
+  },
+  "resume_only_if": [
+    "a preregistered non-threshold-tuning method can resolve competing sheets without erasing real structures",
+    "registered semantic evidence can distinguish stable forest floor from roots, deadwood, stems, understory, litter, and moss at the claimed cells",
+    "independent or defensibly redundant observations establish error and visibility support for the claimed band",
+    "the physical-analogue and Estonia out-of-distribution transfer gates can be satisfied"
+  ]
+}
