@@ -128,11 +128,8 @@ fn validate_pose(scan: &PointCloud, ordinal: usize, guid: &str) -> AppResult<()>
             "scan {ordinal} ({guid}) pose contains a non-finite component"
         )));
     }
-    if quaternion.w < 0.0 {
-        return Err(AppError::validation(format!(
-            "scan {ordinal} ({guid}) quaternion scalar is negative"
-        )));
-    }
+    // q and -q encode the same rotation. Keep the publisher's exact component
+    // bits rather than rewriting a valid negative-scalar representation.
     let norm = (quaternion.w * quaternion.w
         + quaternion.x * quaternion.x
         + quaternion.y * quaternion.y
