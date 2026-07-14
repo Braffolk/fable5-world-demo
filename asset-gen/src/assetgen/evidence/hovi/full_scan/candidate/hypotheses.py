@@ -93,6 +93,8 @@ class SheetHypothesis:
     maximum_pairwise_view_angle_deg: float | None
     incidence_state: Literal["unknown_requires_candidate_normal"]
     pooled_mode_contributed: bool
+    mode_cluster_span_m: float
+    mode_union_resolution_m: float
     contributing_scan_modes: tuple[tuple[int, float], ...]
     scan_support: tuple[ScanSheetSupport, ...]
 
@@ -136,8 +138,23 @@ class CellHypothesisSet:
 @dataclass(frozen=True)
 class _ModeCluster:
     peak_bin: int
-    pooled_mode_contributed: bool
-    scan_modes: tuple[tuple[int, int], ...]
+    source_modes: tuple[tuple[int, int], ...]
+
+    @property
+    def pooled_mode_contributed(self) -> bool:
+        return any(source < 0 for source, _ in self.source_modes)
+
+    @property
+    def scan_modes(self) -> tuple[tuple[int, int], ...]:
+        return tuple(value for value in self.source_modes if value[0] >= 0)
+
+    @property
+    def minimum_bin(self) -> int:
+        return min(mode_bin for _, mode_bin in self.source_modes)
+
+    @property
+    def maximum_bin(self) -> int:
+        return max(mode_bin for _, mode_bin in self.source_modes)
 
 
 class CandidateSurfaceHypothesisGenerator:
@@ -336,7 +353,7 @@ class CandidateSurfaceHypothesisGenerator:
         detected_mode_count = int(pooled_peaks.size) + sum(
             int(scan_peaks.size) for _, scan_peaks in per_scan_peaks
         )
-        if not _scan_mode_mapping_is_complete(per_scan_peaks, clusters):
+        if not _mode_mapping_is_complete(pooled_peaks, per_scan_peaks, clusters):
             return self._overflow_cell(
                 evidence,
                 level,
@@ -349,6 +366,20 @@ class CandidateSurfaceHypothesisGenerator:
                 peak_live_bound,
                 raw_mode_count=detected_mode_count,
                 reason="per_scan_mode_mapping_unresolved",
+            )
+        if not _mode_clusters_are_source_unique(clusters):
+            return self._overflow_cell(
+                evidence,
+                level,
+                group,
+                sample_count,
+                scan_mask,
+                minimum,
+                maximum,
+                cell_center_distance,
+                peak_live_bound,
+                raw_mode_count=detected_mode_count,
+                reason="same_source_mode_collision_unresolved",
             )
         if len(clusters) > self.config.max_hypotheses_per_cell:
             return self._overflow_cell(
@@ -379,7 +410,24 @@ class CandidateSurfaceHypothesisGenerator:
                 raw_mode_count=detected_mode_count,
                 reason="candidate_mode_order_unresolved",
             )
-        basin_edges = _watershed_edges(pooled_smoothed, peaks)
+        basin_edges = _constrained_basin_edges(pooled_smoothed, clusters)
+        if basin_edges is None or not _mode_basin_mapping_is_complete(
+            clusters,
+            basin_edges,
+        ):
+            return self._overflow_cell(
+                evidence,
+                level,
+                group,
+                sample_count,
+                scan_mask,
+                minimum,
+                maximum,
+                cell_center_distance,
+                peak_live_bound,
+                raw_mode_count=detected_mode_count,
+                reason="mode_basin_assignment_unresolved",
+            )
         hypotheses = self._measure_hypotheses(
             evidence,
             group,
@@ -609,6 +657,12 @@ class CandidateSurfaceHypothesisGenerator:
                     pooled_mode_contributed=clusters[
                         hypothesis_index
                     ].pooled_mode_contributed,
+                    mode_cluster_span_m=(
+                        clusters[hypothesis_index].maximum_bin
+                        - clusters[hypothesis_index].minimum_bin
+                    )
+                    * self.config.vertical_bin_m,
+                    mode_union_resolution_m=self.config.mode_union_resolution_m,
                     contributing_scan_modes=tuple(
                         (
                             scan,
@@ -752,22 +806,25 @@ def _union_mode_clusters(
     for start, stop in zip(starts, stops, strict=True):
         cluster_bins = bins[start:stop]
         cluster_scans = scans[start:stop]
-        representative = int(math.floor(float(np.mean(cluster_bins)) + 0.5))
+        center = float(np.mean(cluster_bins))
+        actual_bins = np.unique(cluster_bins)
+        representative = min(
+            (int(value) for value in actual_bins),
+            key=lambda value: (
+                abs(value - center),
+                not np.any((cluster_bins == value) & (cluster_scans < 0)),
+                value,
+            ),
+        )
         result.append(
             _ModeCluster(
                 peak_bin=representative,
-                pooled_mode_contributed=bool(np.any(cluster_scans < 0)),
-                scan_modes=tuple(
-                    sorted(
-                        (
-                            (int(scan), int(mode_bin))
-                            for scan, mode_bin in zip(
-                                cluster_scans,
-                                cluster_bins,
-                                strict=True,
-                            )
-                            if scan >= 0
-                        ),
+                source_modes=tuple(
+                    (int(source), int(mode_bin))
+                    for source, mode_bin in zip(
+                        cluster_scans,
+                        cluster_bins,
+                        strict=True,
                     )
                 ),
             )
@@ -775,19 +832,29 @@ def _union_mode_clusters(
     return tuple(result)
 
 
-def _scan_mode_mapping_is_complete(
+def _mode_mapping_is_complete(
+    pooled_modes: np.ndarray,
     per_scan_modes: tuple[tuple[int, np.ndarray], ...],
     clusters: tuple[_ModeCluster, ...],
 ) -> bool:
-    expected = sorted(
+    expected = [(-1, int(mode_bin)) for mode_bin in pooled_modes]
+    expected.extend(
         (scan, int(mode_bin))
         for scan, modes in per_scan_modes
         for mode_bin in modes
     )
     mapped = sorted(
-        scan_mode for cluster in clusters for scan_mode in cluster.scan_modes
+        source_mode for cluster in clusters for source_mode in cluster.source_modes
     )
-    return bool(clusters) and mapped == expected
+    return bool(clusters) and mapped == sorted(expected)
+
+
+def _mode_clusters_are_source_unique(clusters: tuple[_ModeCluster, ...]) -> bool:
+    return all(
+        len({source for source, _ in cluster.source_modes})
+        == len(cluster.source_modes)
+        for cluster in clusters
+    )
 
 
 def _all_plateau_peaks(values: np.ndarray) -> np.ndarray:
@@ -805,17 +872,45 @@ def _all_plateau_peaks(values: np.ndarray) -> np.ndarray:
     return np.asarray(peaks, dtype=np.int64)
 
 
-def _watershed_edges(values: np.ndarray, peaks: np.ndarray) -> np.ndarray:
+def _constrained_basin_edges(
+    values: np.ndarray,
+    clusters: tuple[_ModeCluster, ...],
+) -> np.ndarray | None:
     edges: list[int] = []
-    for left, right in zip(peaks[:-1], peaks[1:], strict=True):
-        left_index = int(left)
-        right_index = int(right)
-        if right_index - left_index <= 1:
-            edges.append(right_index)
-            continue
-        segment = values[left_index + 1 : right_index]
-        edges.append(left_index + 1 + int(np.argmin(segment)))
+    for left, right in zip(clusters[:-1], clusters[1:], strict=True):
+        first_cut = left.maximum_bin + 1
+        last_cut = right.minimum_bin
+        if first_cut > last_cut:
+            return None
+        cuts = np.arange(first_cut, last_cut + 1, dtype=np.int64)
+        cut_density = values[cuts - 1] + values[cuts]
+        edges.append(int(cuts[int(np.argmin(cut_density))]))
     return np.asarray(edges, dtype=np.int64)
+
+
+def _mode_basin_mapping_is_complete(
+    clusters: tuple[_ModeCluster, ...],
+    basin_edges: np.ndarray,
+) -> bool:
+    if basin_edges.shape != (max(0, len(clusters) - 1),):
+        return False
+    if np.any(basin_edges[1:] <= basin_edges[:-1]):
+        return False
+    for index, cluster in enumerate(clusters):
+        if cluster.peak_bin not in {mode_bin for _, mode_bin in cluster.source_modes}:
+            return False
+        if index > 0 and cluster.minimum_bin < int(basin_edges[index - 1]):
+            return False
+        if index < len(basin_edges) and cluster.maximum_bin >= int(basin_edges[index]):
+            return False
+        member_bins = np.asarray(
+            [mode_bin for _, mode_bin in cluster.source_modes],
+            dtype=np.int64,
+        )
+        assigned = np.searchsorted(basin_edges, member_bins, side="right")
+        if np.any(assigned != index):
+            return False
+    return True
 
 
 def _weighted_median_bin(counts: np.ndarray) -> int:
