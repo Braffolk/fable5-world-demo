@@ -1,4 +1,4 @@
-"""Retain frozen Evo selector and explicitly authorized plot-1086 source bytes."""
+"""Retain the frozen Evo selector and explicitly authorized exact plot bytes."""
 from __future__ import annotations
 
 import argparse
@@ -13,7 +13,8 @@ from urllib.parse import urlsplit
 
 import requests
 
-from ..config import CONFIG_DIR, DATA_IN, FetchConfig, load_base
+from ..config import DATA_IN, FetchConfig, load_base
+from ..evidence.evo.fallback_1065 import load_evo_1065_selection
 from ..evidence.evo.selection import EvoArtifact, EvoSelection, load_evo_selection
 
 _PLAN_SCHEMA = "evo-selector-retention-plan/1.0.0"
@@ -33,7 +34,6 @@ _SIGNED_URL_HOST = "download.fairdata.fi"
 _DATASET_UUID = "b1dac2b9-93cb-407e-91f1-eeb79c8cdd92"
 _DATASET_DOI = "10.23729/fd-5a800660-8bd8-35ef-ac9f-ac5c45f7fa77"
 _SELECTOR_PATH = "/Evo_TLS_2024_stand_attributes_v2.csv"
-_PLOT_PATH = "/Evo_TLS_2024_treeanal_pointclouds/1086_pointcloud_georef.laz"
 _RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 
 
@@ -95,16 +95,23 @@ def build_evo_plot_retention_plan(
     selection_path: Path | None = None,
     *,
     authorize_exact_plot: bool = False,
+    plot_id: str = "1086",
 ) -> EvoRetentionPlan:
     """Build the exact one-file LAZ plan only after an explicit caller authorization."""
     if not authorize_exact_plot:
         raise ValueError("Evo plot retention requires --authorize-exact-plot")
-    selection = load_evo_selection(selection_path)
+    if plot_id == "1086":
+        selection = load_evo_selection(selection_path)
+    elif plot_id == "1065":
+        selection = load_evo_1065_selection(selection_path)
+    else:
+        raise ValueError(f"unsupported Evo plot {plot_id!r}")
+    plot_path = f"/Evo_TLS_2024_treeanal_pointclouds/{plot_id}_pointcloud_georef.laz"
     matches = tuple(
-        artifact for artifact in selection.artifacts if artifact.source_path == _PLOT_PATH
+        artifact for artifact in selection.artifacts if artifact.source_path == plot_path
     )
     if len(matches) != 1:
-        raise ValueError("frozen Evo plot-1086 artifact is absent or ambiguous")
+        raise ValueError(f"frozen Evo plot-{plot_id} artifact is absent or ambiguous")
     artifact = matches[0]
     if artifact.retention_authorized:
         raise ValueError("frozen selector config unexpectedly authorizes point-cloud retention")
@@ -117,7 +124,7 @@ def build_evo_plot_retention_plan(
             "dataset_version": 2,
             "published_revision": 2,
         },
-        "authorized_scope": "exact_plot_1086_point_cloud_only",
+        "authorized_scope": f"exact_plot_{plot_id}_point_cloud_only",
         "authorization_basis": "explicit_operator_request_2026-07-14",
         "artifact": _artifact_identity(artifact),
         "selector_config_retention_authorized": False,
@@ -447,11 +454,13 @@ def retain_evo_plot(
     output_root: Path | None = None,
     *,
     authorize_exact_plot: bool = False,
+    plot_id: str = "1086",
     log: Callable[[str], None] = print,
 ) -> Path:
     plan = build_evo_plot_retention_plan(
         selection_path,
         authorize_exact_plot=authorize_exact_plot,
+        plot_id=plot_id,
     )
     root = (output_root or DATA_IN / "evidence" / "evo") / plan.retention_id
     destination = _safe_destination(root / "files", plan.artifact.source_path)
@@ -485,7 +494,7 @@ def retain_evo_plot(
             "file_inventory_count_verified": 57,
             "all_frozen_artifact_tuples_verified": True,
         },
-        "authorized_scope": "exact_plot_1086_point_cloud_only",
+        "authorized_scope": f"exact_plot_{plot_id}_point_cloud_only",
         "operator_authorization_required": True,
         "selector_config_retention_authorized": False,
         "signed_url_persisted": False,
@@ -510,12 +519,17 @@ def retain_evo_plot(
 
 def _main() -> None:
     parser = argparse.ArgumentParser(
-        description="Retain only the frozen Evo plot-1086 selector CSV."
+        description="Retain the frozen Evo selector or one explicitly authorized exact plot."
     )
     parser.add_argument(
         "--selection",
         type=Path,
-        default=CONFIG_DIR / "evidence" / "evo-2024-plot-1086.json",
+        help="override the exact selection authority for the chosen operation",
+    )
+    parser.add_argument(
+        "--plot-id",
+        choices=("1086", "1065"),
+        default="1086",
     )
     parser.add_argument(
         "--output-root",
@@ -525,12 +539,12 @@ def _main() -> None:
     parser.add_argument(
         "--plot",
         action="store_true",
-        help="retain the exact frozen plot-1086 LAZ instead of the selector CSV",
+        help="retain the exact frozen --plot-id LAZ instead of the selector CSV",
     )
     parser.add_argument(
         "--authorize-exact-plot",
         action="store_true",
-        help="explicitly authorize only the frozen plot-1086 LAZ tuple",
+        help="explicitly authorize only the frozen --plot-id LAZ tuple",
     )
     args = parser.parse_args()
     if args.authorize_exact_plot and not args.plot:
@@ -540,6 +554,7 @@ def _main() -> None:
             args.selection,
             args.output_root,
             authorize_exact_plot=args.authorize_exact_plot,
+            plot_id=args.plot_id,
         )
         print(f"Evo plot retention manifest: {manifest}")
     else:

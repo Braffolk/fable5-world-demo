@@ -16,6 +16,7 @@ from PIL import Image
 
 from ...config import DATA_IN, DATA_WORK
 from ...fetch.evo import build_evo_plot_retention_plan
+from .fallback_1065 import load_evo_1065_selection
 from .qa import render_candidate_qa
 from .selection import load_evo_selection
 from .source import inspect_evo_source, iter_evo_points
@@ -55,8 +56,12 @@ def _mapping(value: Any, label: str) -> Mapping[str, Any]:
     return value
 
 
-def _retained_source(manifest_path: Path) -> tuple[Path, dict[str, Any], str]:
-    plan = build_evo_plot_retention_plan(authorize_exact_plot=True)
+def _retained_source(
+    manifest_path: Path, plot_id: str
+) -> tuple[Path, dict[str, Any], str]:
+    plan = build_evo_plot_retention_plan(
+        authorize_exact_plot=True, plot_id=plot_id
+    )
     encoded = manifest_path.read_bytes()
     retained = _mapping(json.loads(encoded), "retained plot manifest")
     artifact = _mapping(retained.get("artifact"), "retained plot artifact")
@@ -66,7 +71,7 @@ def _retained_source(manifest_path: Path) -> tuple[Path, dict[str, Any], str]:
         or retained.get("status") != "complete"
         or retained.get("retention_id") != plan.retention_id
         or retained.get("plan_sha256") != plan.retention_id
-        or retained.get("authorized_scope") != "exact_plot_1086_point_cloud_only"
+        or retained.get("authorized_scope") != f"exact_plot_{plot_id}_point_cloud_only"
         or retained.get("selector_config_retention_authorized") is not False
         or retained.get("signed_url_persisted") is not False
         or any(artifact.get(key) != value for key, value in expected.items())
@@ -102,10 +107,15 @@ def build_evo_raw_candidate(
     retained_manifest: Path,
     output_root: Path | None = None,
     *,
+    plot_id: str = "1086",
     log=print,
 ) -> Path:
-    source_path, retained, retained_sha256 = _retained_source(retained_manifest.resolve())
-    selection = load_evo_selection()
+    source_path, retained, retained_sha256 = _retained_source(
+        retained_manifest.resolve(), plot_id
+    )
+    selection = (
+        load_evo_selection() if plot_id == "1086" else load_evo_1065_selection()
+    )
     center = json.loads(selection.path.read_bytes())["selection"]["center"]["epsg3067"]
     center_x = float(center["easting_m"])
     center_y = float(center["northing_m"])
@@ -126,7 +136,7 @@ def build_evo_raw_candidate(
             "selection_config_sha256": selection.config_sha256,
         },
         "plot": {
-            "plot_id": "1086",
+            "plot_id": plot_id,
             "crs": "EPSG:3067",
             "vertical_datum": "N2000",
             "center_xy_m": [center_x, center_y],
@@ -268,7 +278,7 @@ def build_evo_raw_candidate(
         "source_ground_reference_z_mean_m": _finite(reference_mean),
         "source_ground_reference_z_range_m": _finite(reference_range),
     }
-    artifact_path = build_root / "1086-raw-candidate.npz"
+    artifact_path = build_root / f"{plot_id}-raw-candidate.npz"
     temporary = artifact_path.with_name(artifact_path.name + ".part")
     with temporary.open("wb") as target:
         np.savez_compressed(target, **arrays)
@@ -376,16 +386,23 @@ def build_evo_raw_candidate(
 
 
 def _main() -> None:
-    plan = build_evo_plot_retention_plan(authorize_exact_plot=True)
-    parser = argparse.ArgumentParser(description="Build Evo plot-1086 raw candidate evidence.")
+    parser = argparse.ArgumentParser(description="Build an exact Evo plot raw candidate.")
+    parser.add_argument("--plot-id", choices=("1086", "1065"), default="1086")
     parser.add_argument(
         "--retained",
         type=Path,
-        default=DATA_IN / "evidence" / "evo" / plan.retention_id / "retained.json",
     )
     parser.add_argument("--output-root", type=Path)
     args = parser.parse_args()
-    build_evo_raw_candidate(args.retained, args.output_root)
+    plan = build_evo_plot_retention_plan(
+        authorize_exact_plot=True, plot_id=args.plot_id
+    )
+    retained = args.retained or (
+        DATA_IN / "evidence" / "evo" / plan.retention_id / "retained.json"
+    )
+    build_evo_raw_candidate(
+        retained, args.output_root, plot_id=args.plot_id
+    )
 
 
 if __name__ == "__main__":

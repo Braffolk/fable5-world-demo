@@ -161,6 +161,21 @@ floor truth. Soil, hydrology, organic-floor, management, disturbance, visibility
 and stable floor semantics remain unknown; plot 1086 remains an unqualified raw
 candidate with no target-truth, analogue-transfer, or synthesis authorization.
 
+The only other plot admitted by the frozen Evo selector, plot 1065, is now retained
+as the exact `1,148,190,720`-byte version-2 LAZ under `c4cb8659e522...` (SHA-256
+`7fc725b48a0010bd67ef9e3d6d7b8083674e418d04df7a3b015b519c1bf4c002`). It shares
+the zero-count, placeholder-bounds, and invalid chunk-table-pointer publication
+defects, so raw build `4d41d72a7c19...` uses the existing fixed-chunk sequential
+recovery without changing source bytes. The recovered `394,450,000` records include
+`296,803,717` observations inside the official plot square. At 6.25 cm, all-return
+occupancy is `99.7467%` and `treeid=0` occupancy is `97.6994%`, materially better
+than plot 1086's `98.2819%` and `93.2961%`; the three labeled PNGs also show a more
+complete raw support pattern. This does not resolve the semantic blocker: `treeid=0`
+still mixes floor and non-tree vegetation/objects, its lower envelope is not a ground
+label, and source `z-h` is not independent floor truth. Plot 1065 is therefore a
+better fallback input for the separate surface-inference audit, not an accepted
+surface, target, transfer proof, or synthesis source.
+
 For FORWARD, the exact official Marrviken harvest-area DTM is retained selectively
 without crawling or downloading the 1.07 TiB release. Source SHA-256 is
 `592ce462120fd2958e365fd6923bd389e0e282602eb05705fdcf68fc4ecb9e86`; unqualified

@@ -1,0 +1,68 @@
+{
+  "schema_version": "evo-fallback-plot-selection/1.0.0",
+  "id": "evo-2024-plot-1065-fallback-v1",
+  "parent_selection_config_sha256": "50865b41135eed0a587b12546649f075c18390aa3cc89a95158d7543ed909fdb",
+  "source": {
+    "dataset_uuid": "b1dac2b9-93cb-407e-91f1-eeb79c8cdd92",
+    "dataset_doi": "10.23729/fd-5a800660-8bd8-35ef-ac9f-ac5c45f7fa77",
+    "dataset_version": 2,
+    "published_revision": 2,
+    "file_inventory_count": 57,
+    "release_bytes": 42192878905,
+    "license": "CC-BY-4.0"
+  },
+  "selection": {
+    "plot_id": "1065",
+    "role": "development_fallback_raw_candidate",
+    "site_id": "evo.evo",
+    "campaign_id": "evo.evo.2024",
+    "center": {
+      "epsg3067": {
+        "easting_m": 401746.829,
+        "northing_m": 6786780.246
+      }
+    },
+    "plot_size_m": [32, 32],
+    "stand_attributes_from_retained_selector": {
+      "trees_per_ha": 517.585353,
+      "basal_area_m2_per_ha": 41.37794367,
+      "stem_volume_m3_per_ha": 511.4800001,
+      "basal_area_weighted_mean_diameter_cm": 36.93467891,
+      "basal_area_weighted_mean_height_m": 27.81819206,
+      "pine_basal_area_pct": 0.0,
+      "spruce_basal_area_pct": 98.44,
+      "deciduous_basal_area_pct": 1.56
+    },
+    "authority": "the other qualifying_plot_id in the frozen plot-1086 selector; no selector rule changed"
+  },
+  "artifacts": [
+    {
+      "file_id": "c95265eb-b7ec-43d0-93d4-147f5a8d74e5",
+      "path": "/Evo_TLS_2024_stand_attributes_v2.csv",
+      "bytes": 5773,
+      "sha256": "b124bc20f6816c08812fdc7f061ec7e0d9e444802d3b1b67907420c97812db44",
+      "kind": "stand_attribute_selector_index",
+      "retention_authorized": true,
+      "downloaded_during_selection_audit": true,
+      "retained_in_workspace": false
+    },
+    {
+      "file_id": "769b85b7-5e79-4575-89a2-e46c919922e8",
+      "path": "/Evo_TLS_2024_treeanal_pointclouds/1065_pointcloud_georef.laz",
+      "bytes": 1148190720,
+      "sha256": "7fc725b48a0010bd67ef9e3d6d7b8083674e418d04df7a3b015b519c1bf4c002",
+      "kind": "tree_segmented_point_cloud_raw_candidate",
+      "retention_authorized": false,
+      "downloaded_during_selection_audit": false,
+      "retained_in_workspace": false
+    }
+  ],
+  "qualification": {
+    "role": "raw_candidate",
+    "status": "unqualified",
+    "target_truth": false,
+    "synthesis_authorized": false,
+    "transfer_ceiling": "none",
+    "purpose": "compare real raw observation support with plot 1086 after plot 1086 surface inference abstained"
+  }
+}
