@@ -308,6 +308,56 @@ depths, patches, and coordinates cannot be widened, rescaled, copied, or used as
 production geometry parameters; representable agricultural incisions must be
 generated from the explicit hydrologic/process hypothesis and remain labeled R0.
 
+The exact preview hierarchy closure is larger than the negative rungs. A changed
+LOD0 `(151,93)` affects ancestors LOD1 `(37,23)`, LOD2 `(9,5)`, LOD3 `(2,1)`,
+and LOD4 `(0,0)`. These coarser rungs were independently cooked from the DTM and
+do not form a complete child pyramid, so whole-parent `reduce_decoded_children`
+is wrong above LOD0. The cook must masked-splice newly decoded child means into
+only the affected windows and preserve inherited values elsewhere. The current
+release auditor checks ancestor presence rather than decoded consistency; stale
+ancestors could therefore pass that shallow gate yet pop at field/clipmap level
+changes. No existing runtime transition makes omission safe when LOD0 changes.
+
+The full 2026-07-15 spec reread found that the current immutable weak-evidence
+preview contract is forest-only. The selected agriculture tile is authorized now
+only as an R0 `development_only` process-hypothesis prototype. Even a convincing
+PNG result cannot be packed as `research-microtopography-preview-v1` until a
+separately reviewed agriculture bundle and machine preregistration bind its
+operation-state-unknown premise, evidence roles, audits/OOD cases, recipe, pack
+extent, visual rule, and non-production state transitions. This is a governance
+and scientific-claim boundary, not a reason to redesign the accepted transport.
+
+Agriculture is no longer the first intended browser showcase. Its bounded
+prototype should finish as a reusable asset-gen process-geometry checkpoint, but
+its repetitive operation pattern offers less visual value than richer natural
+regimes. Do not let sunk work trigger an agriculture preregistration/cook by
+default. The next publication cycle must choose a more visibly consequential,
+generalizable Estonia regime from existing audited evidence, while retaining the
+accepted transport and avoiding a Taevaskoda coordinate special case.
+
+The selected next browser morphology regime is a narrow single-valued erodible
+bank/slope specialist: `fluvial.rill_gully_seep_spring`, with substrate and
+colluvial context as conditions. It is not an `outcrop.sandstone` generator.
+Connected incision, shallow headcuts, seep relief, and depositional toes are
+heightfield-compatible and visibly consequential; the iconic vertical sandstone
+wall, caves, undercuts, detached blocks, non-single-valued talus, and water are
+hard exclusions. Before implementation, its dedicated bundle must close the full
+soil/surficial-geology/typed-structure/drainage/optical-mask condition fabric and
+freeze non-Taevaskoda development plus untouched audit AOIs. Taevaskoda supplies
+no parameter, threshold, or candidate-selection input.
+
+Agriculture artifact `de1f0d4adb49...` is terminal failed development evidence,
+not a completed morphology prototype. Independent shared-edge evaluation found
+per-tile hydrology differences at 291/2049 east-edge samples, with maximum
+incision mismatch `0.0112528 m` and deposition mismatch `0.00532556 m`. Rows own
+94.998% of samples through one fixed repeated 0.30 m profile; the clod layer is a
+low-discrepancy lattice of repeated analytic caps; and the output visibly reads
+as corduroy/stamps. ETAK parcel, mask, and soil assertions are not bound to their
+source geometries in the recipe. Its B1/B2 QA also uses storage-style box means
+and bilinear zoom rather than normative F4/R4. Preserve the code/artifact so the
+working lattice/base/typed-form scaffolding is not reimplemented, but do not
+repair, pack, parameter-transfer, or claim this exact recipe.
+
 The durable end-to-end requirement comparison is recorded in
 `MICROTOPOGRAPHY-CONFORMANCE-AUDIT.md`. It also freezes the historical preregistration
 boundary: LUKE can never be grandfathered into owner selection; inspected Hovi/Evo

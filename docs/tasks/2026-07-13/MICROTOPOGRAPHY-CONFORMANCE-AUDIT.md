@@ -26,6 +26,10 @@ The permitted R0 diagnostic is now closed as artifact `441eaf9194cd...`. Its thr
 
 The capped neighboring-country activation pass found no new production or R1 target. Stordalen Mire advanced only to a bounded source checkpoint and failed before acquisition: the official graph contains one paired PC+DSM epoch rather than three, and lacks aligned fine exclusion masks plus independent control. Its 2019 payloads were not downloaded. The next development step is a bounded R0 cultivated-soil process hypothesis using OPARA only for negative-form diagnostics and audited tillage/erosion mechanisms for causal form generation. It is not yet a spec-authorized research preview, target, owner, or transfer claim; only a visually and geometrically inspectable development prototype is authorized.
 
+A complete 2026-07-15 reread confirms that the existing immutable weak-evidence preview authorization is specific to `forest-weak-research-bundle/1`. Agriculture may advance beyond the current development-only PNG checkpoint only after a dedicated research bundle and machine preregistration define its evidence tiers, operation-state-unknown policy, conditions, candidate, independent audit/OOD roles, recipe, extent, visual rule, and rejection terminal. It may then reuse the accepted height transport and exact masked hierarchy closure; it may not borrow forest evidence roles or silently promote R0 to R1.
+
+Agriculture development artifact `de1f0d4adb49...` has now reached that rejection terminal before authorization. Its per-tile priority-flood hydrology is not partition invariant (up to 11.3 mm shared-edge incision mismatch), its fixed row primitive dominates 94.998% of the surface as visible corduroy, its clods are repeated analytic lattice stamps, and its scalar parcel/mask/soil assertions are not bound to reconstructable source artifacts. Non-normative B1/B2 QA adds no band evidence. Preserve the implementation as failed engineering evidence and reusable scaffolding only; no agriculture bundle, cook, preview, target, owner, or transfer follows from it.
+
 ## Conformance Matrix
 
 | Normative requirement | Delivered evidence | Status |

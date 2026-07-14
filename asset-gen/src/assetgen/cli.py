@@ -437,6 +437,28 @@ def micro_synthesis_cook_cmd(
     click.echo(f"synthesis evidence: {path}")
 
 
+@main.command("micro-agriculture-r0")
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(path_type=Path),
+    default=CONFIG_DIR / "microtopography/agriculture-cultivated-r0.json",
+    show_default=True,
+)
+@click.option(
+    "--output-root",
+    type=click.Path(path_type=Path),
+    default=DATA_WORK / "microtopography/agriculture/sha256",
+    show_default=True,
+)
+def micro_agriculture_r0_cmd(config_path: Path, output_root: Path) -> None:
+    """Materialize one research-only cultivated 128 m development surface."""
+    from .terrain.microtopography.agriculture import build_cultivated_r0
+
+    path = build_cultivated_r0(config_path, output_root=output_root)
+    click.echo(f"agriculture R0 manifest: {path}")
+
+
 @main.command("micro-fixture-verify")
 @click.option("--build", "build_digest", required=True, help="64-hex recipe digest")
 @click.option("--base-manifest", required=True, type=click.Path(path_type=Path))
