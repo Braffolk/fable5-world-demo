@@ -1,0 +1,38 @@
+[package]
+name = "e57"
+version = "0.11.13"
+edition = "2021"
+readme = "README.md"
+repository = "https://github.com/cry-inc/e57"
+documentation = "https://docs.rs/e57"
+license = "MIT"
+keywords = ["e57", "lidar", "pointclouds", "laserscanning", "geospatial"]
+categories = ["parser-implementations", "science::geo"]
+description = "A pure Rust library for reading and writing E57 files with point clouds and related image data."
+include = [
+    "/src/**/*.rs",
+    "/Cargo.toml",
+    "/LICENSE",
+    "/README.md",
+    "/CHANGELOG.md",
+]
+
+[features]
+crc32c = ["dep:crc32c"]
+
+[dependencies]
+roxmltree = "0.21"
+crc32c = { version = "0.6", optional = true }
+
+[workspace]
+members = [
+    "tools/e57-check-crc",
+    "tools/e57-extract-scan-info",
+    "tools/e57-extract-xml",
+    "tools/e57-from-xyz",
+    "tools/e57-to-image",
+    "tools/e57-to-laz",
+    "tools/e57-to-pano",
+    "tools/e57-to-xyz",
+    "tools/e57-unpack",
+]

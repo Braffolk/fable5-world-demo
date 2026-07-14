@@ -1,0 +1,16 @@
+[package]
+name = "hovi-e57-stream"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+e57 = { path = "vendor/e57-0.11.13" }
+sha2 = "=0.10.9"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+panic = "abort"
+strip = "symbols"

@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "laas-vendored-rust-source/1.0.0",
+  "crate": {
+    "name": "e57",
+    "version": "0.11.13",
+    "registryDownloadUrl": "https://crates.io/api/v1/crates/e57/0.11.13/download",
+    "archiveBytes": 55387,
+    "archiveSha256": "fcfee41a50fbd70278c70cc477b8671ffe03951cba028cc2c057777a9ee6a3cc",
+    "vcsCommit": "a803a29fbad81d135d31f1de0187c263bb81a111",
+    "licenseExpression": "MIT",
+    "bundledLicensePath": "e57-0.11.13/LICENSE",
+    "bundledLicenseSha256": "6f8de334cb664a24899d6c111e6dcbfd32deb49946ceb37e52c9f885eddf02e5"
+  },
+  "patchSet": {
+    "manifestPath": "PATCH-MANIFEST.txt",
+    "manifestFormat": "sorted UTF-8 lines: <relative-path> <upstream-sha256> <vendored-sha256> followed by LF",
+    "manifestSha256": "266cf419581580ef4198d109cbcb83f84a45ab6235d7aed5fa400631ad092dd8"
+  },
+  "crc": {
+    "implementation": "vendored e57 pure-Rust CRC",
+    "optionalCrc32cFeatureEnabled": false,
+    "decision": "Avoid the extra unsafe SIMD/build-code and licensing audit surface; bounded-probe throughput does not justify it."
+  }
+}
