@@ -13,6 +13,9 @@ HOVI_RESOLUTIONS_M = (0.025, 0.05, 0.0625, 0.125, 0.25, 1.0)
 _HOVI_TICK_M = Fraction(1, 40)
 _HOVI_X_TICKS = (-271, 1491)
 _HOVI_Y_TICKS = (-244, 1351)
+_FIXED_PHASE_OVERHEAD_BYTES = 8 << 20
+_ARTIFACT_SERIALIZATION_WORK_BYTES = 32 << 20
+_EXPANDED_BATCH_BYTES_PER_POINT = 256
 
 
 def _ceil_fraction(value: Fraction) -> int:
@@ -81,6 +84,10 @@ class CommonGridPlan:
     def largest_level_cells(self) -> int:
         return max(level.cells for level in self.levels)
 
+    @property
+    def total_level_cells(self) -> int:
+        return sum(level.cells for level in self.levels)
+
     def document(self) -> dict[str, Any]:
         return {
             "coordinate_role": "numeric_source_coordinates_only",
@@ -111,6 +118,65 @@ def frozen_hovi_grid_plan() -> CommonGridPlan:
     )
 
 
+@dataclass(frozen=True)
+class ComparisonMemoryBound:
+    accumulation_bytes: int
+    phased_metrics_bytes: int
+    array_transfer_bytes: int
+    artifact_serialization_bytes: int
+
+    @property
+    def peak_bytes(self) -> int:
+        return max(
+            self.accumulation_bytes,
+            self.phased_metrics_bytes,
+            self.array_transfer_bytes,
+            self.artifact_serialization_bytes,
+        )
+
+
+def comparison_memory_bound(
+    plan: CommonGridPlan,
+    *,
+    batch_points: int,
+) -> ComparisonMemoryBound:
+    """Conservatively bound every explicit comparison phase before allocation."""
+    if not isinstance(batch_points, int) or batch_points <= 0:
+        raise ValueError("Hovi transfer memory bound requires a positive batch size")
+    resident_observables = 2 * plan.bytes_per_source
+    largest = plan.largest_level_cells
+    cells = plan.total_level_cells
+    # Metrics retain three occupancy masks. The remaining 37 bytes/cell cover the
+    # largest float64 work array, indexed operands, finite masks, quantile copies,
+    # and NumPy temporaries while only one distribution is live at a time.
+    phased_metric_work = largest * 40
+    return ComparisonMemoryBound(
+        accumulation_bytes=(
+            resident_observables
+            + batch_points * _EXPANDED_BATCH_BYTES_PER_POINT
+            + largest * np.dtype(np.int64).itemsize
+            + _FIXED_PHASE_OVERHEAD_BYTES
+        ),
+        phased_metrics_bytes=(
+            resident_observables
+            + phased_metric_work
+            + _FIXED_PHASE_OVERHEAD_BYTES
+        ),
+        array_transfer_bytes=(
+            resident_observables
+            + 2 * cells * np.dtype(np.bool_).itemsize
+            + largest * np.dtype(np.bool_).itemsize
+            + _FIXED_PHASE_OVERHEAD_BYTES
+        ),
+        artifact_serialization_bytes=(
+            resident_observables
+            + 2 * cells * np.dtype(np.bool_).itemsize
+            + _ARTIFACT_SERIALIZATION_WORK_BYTES
+            + _FIXED_PHASE_OVERHEAD_BYTES
+        ),
+    )
+
+
 @dataclass
 class LevelObservables:
     spec: GridLevel
@@ -136,8 +202,11 @@ class MultiscaleObservables:
         self.input_points = 0
         self.included_points = 0
         self.outside_aoi_points = 0
+        self._arrays_transferred = False
 
     def update(self, x_m: np.ndarray, y_m: np.ndarray) -> None:
+        if self._arrays_transferred:
+            raise RuntimeError("Hovi comparison arrays were already transferred")
         x = np.asarray(x_m, dtype=np.float64)
         y = np.asarray(y_m, dtype=np.float64)
         if x.ndim != 1 or y.shape != x.shape:
@@ -170,7 +239,13 @@ class MultiscaleObservables:
                 raise ValueError("Hovi common-grid indexing escaped its declared shape")
             flat = iy * level.spec.width + ix
             counts = np.bincount(flat, minlength=level.spec.cells)
-            level.point_count.ravel()[:] += counts.astype(np.uint64, copy=False)
+            np.add(
+                level.point_count.ravel(),
+                counts,
+                out=level.point_count.ravel(),
+                dtype=np.uint64,
+                casting="unsafe",
+            )
             center_x = self.plan.origin_x_m + (ix + 0.5) * resolution
             center_y = self.plan.origin_y_m + (iy + 0.5) * resolution
             distance = np.hypot(x - center_x, y - center_y).astype(np.float32)
@@ -196,10 +271,31 @@ class MultiscaleObservables:
             output[f"{prefix}_nearest_in_cell_center_distance_m__{tag}"] = nearest
         return output
 
+    def take_arrays(self, prefix: str) -> dict[str, np.ndarray]:
+        """Transfer accumulator storage into the final product without grid copies."""
+        if self._arrays_transferred:
+            raise RuntimeError("Hovi comparison arrays were already transferred")
+        self.validate()
+        output: dict[str, np.ndarray] = {}
+        for level in self.levels:
+            tag = resolution_tag(level.spec.resolution_m)
+            nearest = level.nearest_in_cell_center_distance_m
+            unavailable = np.isfinite(nearest)
+            np.logical_not(unavailable, out=unavailable)
+            nearest[unavailable] = np.nan
+            del unavailable
+            output[f"{prefix}_point_count__{tag}"] = level.point_count
+            output[f"{prefix}_occupied__{tag}"] = level.point_count > 0
+            output[f"{prefix}_nearest_in_cell_center_distance_m__{tag}"] = nearest
+        self._arrays_transferred = True
+        return output
+
 
 def _distribution(values: np.ndarray) -> dict[str, float | int | None]:
     finite = np.asarray(values, dtype=np.float64)
-    finite = finite[np.isfinite(finite)]
+    finite_mask = np.isfinite(finite)
+    if not np.all(finite_mask):
+        finite = finite[finite_mask]
     if not finite.size:
         return {"count": 0, "min": None, "p05": None, "median": None, "p95": None, "max": None}
     return {
@@ -227,31 +323,49 @@ def comparison_metrics(
         full_occupied = full_count > 0
         thin_occupied = thin_count > 0
         joint = full_occupied & thin_occupied
-        ratio = thin_count[full_occupied].astype(np.float64) / full_count[full_occupied]
-        center_delta = (
-            thin_level.nearest_in_cell_center_distance_m[joint].astype(np.float64)
-            - full_level.nearest_in_cell_center_distance_m[joint]
+        both_occupied = int(np.count_nonzero(joint))
+        full_only_occupied = int(np.count_nonzero(full_occupied & ~thin_occupied))
+        thinned_only_occupied = int(np.count_nonzero(~full_occupied & thin_occupied))
+        both_empty = int(np.count_nonzero(~full_occupied & ~thin_occupied))
+        full_metrics = _source_level_metrics(full_level, full_occupied)
+        thinned_metrics = _source_level_metrics(thin_level, thin_occupied)
+
+        count_delta = thin_count.astype(np.float64)
+        count_delta -= full_count
+        count_delta_distribution = _distribution(count_delta)
+        del count_delta
+
+        ratio = thin_count[full_occupied].astype(np.float64)
+        ratio /= full_count[full_occupied]
+        ratio_distribution = _distribution(ratio)
+        del ratio
+
+        center_delta = thin_level.nearest_in_cell_center_distance_m[joint].astype(
+            np.float64
         )
-        count_delta = thin_count.astype(np.float64) - full_count.astype(np.float64)
+        center_delta -= full_level.nearest_in_cell_center_distance_m[joint]
+        center_delta_distribution = _distribution(center_delta)
+        del center_delta
         levels.append(
             {
                 "resolution_m": full_level.spec.resolution_m,
                 "shape_yx": [full_level.spec.height, full_level.spec.width],
-                "full": _source_level_metrics(full_level),
-                "thinned": _source_level_metrics(thin_level),
+                "full": full_metrics,
+                "thinned": thinned_metrics,
                 "paired_numeric_cells": {
-                    "both_occupied": int(np.count_nonzero(joint)),
-                    "full_only_occupied": int(np.count_nonzero(full_occupied & ~thin_occupied)),
-                    "thinned_only_occupied": int(np.count_nonzero(~full_occupied & thin_occupied)),
-                    "both_empty": int(np.count_nonzero(~full_occupied & ~thin_occupied)),
-                    "point_count_thinned_minus_full": _distribution(count_delta),
-                    "point_count_thinned_over_full_where_full_occupied": _distribution(ratio),
+                    "both_occupied": both_occupied,
+                    "full_only_occupied": full_only_occupied,
+                    "thinned_only_occupied": thinned_only_occupied,
+                    "both_empty": both_empty,
+                    "point_count_thinned_minus_full": count_delta_distribution,
+                    "point_count_thinned_over_full_where_full_occupied": ratio_distribution,
                     "center_distance_thinned_minus_full_m_where_both_occupied": (
-                        _distribution(center_delta)
+                        center_delta_distribution
                     ),
                 },
             }
         )
+        del full_occupied, thin_occupied, joint
     return {
         "schema_version": "hovi-full-vs-thinned-common-grid-metrics/1.0.0",
         "observable_boundary": {
@@ -292,8 +406,12 @@ def _source_totals(value: MultiscaleObservables) -> dict[str, int]:
     }
 
 
-def _source_level_metrics(level: LevelObservables) -> dict[str, Any]:
-    occupied = level.point_count > 0
+def _source_level_metrics(
+    level: LevelObservables,
+    occupied: np.ndarray | None = None,
+) -> dict[str, Any]:
+    if occupied is None:
+        occupied = level.point_count > 0
     return {
         "point_count_sum": int(level.point_count.sum(dtype=np.uint64)),
         "occupied_cells": int(np.count_nonzero(occupied)),

@@ -14,6 +14,7 @@ from .artifacts import write_machine_product
 from .binding import HeldFileBinding
 from .model import (
     MultiscaleObservables,
+    comparison_memory_bound,
     comparison_metrics,
     frozen_hovi_grid_plan,
 )
@@ -55,10 +56,11 @@ def compare_hovi_full_vs_thinned(
     if not isinstance(memory_ceiling_bytes, int) or memory_ceiling_bytes <= 0:
         raise ValueError("Hovi transfer memory ceiling must be positive")
     plan = frozen_hovi_grid_plan()
-    projected = plan.bytes_per_source * 2 + plan.largest_level_cells * 8 + batch_points * 160
-    if projected > memory_ceiling_bytes:
+    memory_bound = comparison_memory_bound(plan, batch_points=batch_points)
+    if memory_bound.peak_bytes > memory_ceiling_bytes:
         raise MemoryError(
-            f"Hovi transfer projected working set {projected} exceeds {memory_ceiling_bytes} bytes"
+            "Hovi transfer phase-complete peak-live bound "
+            f"{memory_bound.peak_bytes} exceeds {memory_ceiling_bytes} bytes"
         )
 
     manifest_path = Path(os.path.abspath(os.fspath(full_manifest_path)))
@@ -132,8 +134,8 @@ def compare_hovi_full_vs_thinned(
         )
 
     metrics = comparison_metrics(full, thinned)
-    arrays = full.arrays("full")
-    arrays.update(thinned.arrays("thinned"))
+    arrays = full.take_arrays("full")
+    arrays.update(thinned.take_arrays("thinned"))
     sources = {
         "full": full_source,
         "thinned": thinned_source,

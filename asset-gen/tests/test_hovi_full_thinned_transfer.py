@@ -13,7 +13,9 @@ from assetgen.evidence.hovi.full_scan.transfer.binding import HeldFileBinding
 from assetgen.evidence.hovi.full_scan.transfer.model import (
     CommonGridPlan,
     MultiscaleObservables,
+    comparison_memory_bound,
     comparison_metrics,
+    frozen_hovi_grid_plan,
 )
 
 
@@ -42,6 +44,30 @@ def test_common_grid_computes_only_paired_raw_observables() -> None:
         arrays["full_nearest_in_cell_center_distance_m__0p5m"][0, 0],
         np.hypot(0.1 - 0.25, 0.1 - 0.25),
     )
+
+
+def test_phase_complete_memory_bound_and_zero_copy_array_transfer() -> None:
+    frozen = frozen_hovi_grid_plan()
+    bound = comparison_memory_bound(frozen, batch_points=262_144)
+    legacy_projection = (
+        frozen.bytes_per_source * 2
+        + frozen.largest_level_cells * 8
+        + 262_144 * 160
+    )
+    assert bound.peak_bytes == bound.phased_metrics_bytes
+    assert bound.peak_bytes > legacy_projection
+
+    plan = CommonGridPlan(0.0, 0.0, 1.0, 1.0, (0.5,))
+    observations = MultiscaleObservables(plan)
+    observations.update(np.asarray([0.1]), np.asarray([0.1]))
+    count_storage = observations.levels[0].point_count
+    nearest_storage = observations.levels[0].nearest_in_cell_center_distance_m
+    arrays = observations.take_arrays("source")
+    assert arrays["source_point_count__0p5m"] is count_storage
+    assert arrays["source_nearest_in_cell_center_distance_m__0p5m"] is nearest_storage
+    assert np.isnan(arrays["source_nearest_in_cell_center_distance_m__0p5m"][1, 1])
+    with pytest.raises(RuntimeError, match="already transferred"):
+        observations.update(np.asarray([0.2]), np.asarray([0.2]))
 
 
 def test_held_binding_rejects_in_place_mutation(tmp_path: Path) -> None:
