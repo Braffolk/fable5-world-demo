@@ -1,0 +1,80 @@
+{
+  "schema_version": "opara-1038-frozen-plot-probe/1.0.0",
+  "frozen_before_geometry_inventory": true,
+  "authority": {
+    "selection_contract": "docs/deep-research/microtopography-generation/review/contracts/replacement-target-selection-2.2026-07-14.json",
+    "selection_sha256": "69d796842ce2661b31683920be66ae0b079f7c3b275f24f2326fada07b956f99",
+    "dataset_doi": "10.25532/OPARA-1038",
+    "archive_bitstream_id": "9bb38664-5340-4c9d-ac88-eacfdb77ccee",
+    "archive_name": "00_B_sample_plot.7z",
+    "archive_bytes": 3307259536,
+    "archive_publisher_md5": "605952140081ef2d31d6c2a4a28182c5"
+  },
+  "event": {
+    "date": "2021-07-21",
+    "site_role": "nested_single_slope_plot",
+    "published_position_dms": "51 03 43 N, 13 15 36 E",
+    "event_state": "initial_pre_rainfall_epoch",
+    "management_state": "freshly_cultivated_two_days_prior",
+    "source_basis": "ESSD 18 1275-1286 section 2.3, table 2, and figure 7"
+  },
+  "physical_claim": {
+    "regime": "freshly_cultivated_loess_rainfall_plot",
+    "surface": "single_valued_exposed_soil_before_artificial_rainfall",
+    "included": [
+      "mineral_soil_surface",
+      "soil_aggregates_and_clods",
+      "cultivation_relief",
+      "pre_existing_rill_or_compaction_relief_if_recorded_by_protocol"
+    ],
+    "excluded": [
+      "crop_and_living_vegetation",
+      "standing_or_flowing_water",
+      "rainfall_splash_and_droplets",
+      "metal_plot_boundaries",
+      "ground_control_targets",
+      "sediment_collector",
+      "people_tools_and_other_objects",
+      "occluded_or_interpolated_surface"
+    ],
+    "eligibility": [
+      "field_protocol_binds_the_2021_07_21_event",
+      "field_protocol_records_zero_crop_or_vegetation_cover",
+      "selected_epoch_precedes_artificial_rainfall_and_has_no_surface_water",
+      "soil_moisture_is_preserved_as_a_measured_condition",
+      "processed_cloud_and_raw_images_share_one_reproducible_epoch_identity"
+    ]
+  },
+  "epoch_selector": {
+    "rule": "earliest_processed_dense_cloud_explicitly_bound_to_2021_07_21_before_run_A_rainfall",
+    "required_companions": [
+      "raw_synchronized_images_for_the_same_epoch",
+      "raw_GCP_and_CP_coordinates",
+      "bundle_adjustment_log_with_separate_X_Y_Z_check_point_residuals",
+      "point_precision_map",
+      "field_protocol_and_soil_condition_records"
+    ],
+    "ambiguous_or_missing_action": "target_evidence_insufficient"
+  },
+  "bands": {
+    "B1": {
+      "wavelength_m": [0.25, 1.0],
+      "authorized_for_probe": true,
+      "effective_support_threshold_m": 0.05,
+      "maximum_error_signal_ratio": 0.5
+    },
+    "B2": {
+      "wavelength_m": [0.125, 0.25],
+      "authorized_for_probe": false,
+      "reason": "replacement target selection authorizes B1 only"
+    }
+  },
+  "stopping": {
+    "one_event_only": true,
+    "one_frozen_method": true,
+    "no_converter_revision_after_geometry_view": true,
+    "no_release_estonia_transfer_synthesis_or_owner_claim": true,
+    "fail_if_control_is_not_held_out_or_axis_residuals_are_not_reproducible": true,
+    "fail_if_surface_semantics_or_visibility_masks_are_not_defensible": true
+  }
+}
