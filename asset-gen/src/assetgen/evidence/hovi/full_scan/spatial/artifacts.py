@@ -8,6 +8,7 @@ import re
 import shutil
 import stat
 import struct
+import time
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -113,6 +114,11 @@ class VerifiedSpatialStaging:
     artifact_bytes: int
     manifest: bytes
     manifest_sha256: str
+
+
+def _require_deadline(deadline: float) -> None:
+    if time.monotonic() >= deadline:
+        raise TimeoutError("Hovi spatial verification exceeded its absolute deadline")
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -289,9 +295,10 @@ def _open_staging_root(path: Path) -> int:
         raise
 
 
-def _read_descriptor(descriptor: int, maximum_bytes: int) -> bytes:
+def _read_descriptor(descriptor: int, maximum_bytes: int, deadline: float) -> bytes:
     payload = bytearray()
     while len(payload) <= maximum_bytes:
+        _require_deadline(deadline)
         block = os.read(descriptor, min(1 << 20, maximum_bytes + 1 - len(payload)))
         if not block:
             break
@@ -305,13 +312,16 @@ def _tree_inventory_at(
     root: int,
     *,
     allow_writable_files: bool,
+    deadline: float,
 ) -> tuple[dict[str, InodeIdentity], dict[str, InodeIdentity]]:
     directories = {".": _inode_identity(os.fstat(root))}
     files: dict[str, InodeIdentity] = {}
     allowed_modes = {0o400, 0o600} if allow_writable_files else {0o400}
 
     def walk(directory: int, prefix: str) -> None:
+        _require_deadline(deadline)
         for name in sorted(os.listdir(directory)):
+            _require_deadline(deadline)
             if name in {"", ".", ".."} or "/" in name or "\\" in name:
                 raise ValueError("Hovi spatial staging contains an unsafe name")
             relative = f"{prefix}/{name}" if prefix else name
@@ -359,6 +369,7 @@ def _tree_inventory_at(
     ):
         raise PermissionError("Hovi spatial staging root must be private mode 0700")
     walk(root, "")
+    _require_deadline(deadline)
     directories["."] = _inode_identity(os.fstat(root))
     return directories, files
 
@@ -374,7 +385,10 @@ def _validate_record_block(
     artifact: VerifiedArtifact,
     binding: ScanBinding,
     previous_source: int | None,
+    seen_sources: np.ndarray,
+    deadline: float,
 ) -> tuple[int, ArtifactObservation]:
+    _require_deadline(deadline)
     source = records["source"]
     if source.size == 0:
         raise ValueError("Hovi spatial artifact contains an empty record block")
@@ -384,6 +398,22 @@ def _validate_record_block(
         or (source.size > 1 and bool(np.any(source[1:] <= source[:-1])))
     ):
         raise ValueError("Hovi spatial source ordinals are not strictly increasing")
+    byte_indices = np.right_shift(source, 3).astype(np.intp)
+    masks = np.left_shift(
+        np.uint8(1),
+        np.bitwise_and(source, 7).astype(np.uint8),
+    )
+    boundaries = np.empty(source.size, dtype=np.bool_)
+    boundaries[0] = True
+    boundaries[1:] = byte_indices[1:] != byte_indices[:-1]
+    starts = np.flatnonzero(boundaries)
+    unique_bytes = byte_indices[starts]
+    combined_masks = np.bitwise_or.reduceat(masks, starts)
+    existing = seen_sources[unique_bytes]
+    if bool(np.any(np.bitwise_and(existing, combined_masks))):
+        raise ValueError("Hovi spatial source ordinal occurs in multiple artifacts")
+    seen_sources[unique_bytes] = np.bitwise_or(existing, combined_masks)
+    _require_deadline(deadline)
     if bool(np.any(records["scan"] != artifact.scan)):
         raise ValueError("Hovi spatial record scan byte differs from its artifact")
     for field in ("raw_x", "raw_y", "raw_z"):
@@ -424,6 +454,7 @@ def _validate_record_block(
         and bool(np.all(np.isfinite(file_z)))
     ):
         raise ValueError("Hovi spatial pose reconstruction produced non-finite XYZ")
+    _require_deadline(deadline)
 
     invalid = records["invalid"]
     if artifact.kind == "point_shard":
@@ -457,6 +488,7 @@ def _validate_record_block(
         direction = int(np.count_nonzero(invalid == 1))
         invalid_count = int(np.count_nonzero(invalid == 2))
     finite_count = int(np.count_nonzero(finite))
+    _require_deadline(deadline)
     return (
         int(source[-1]),
         ArtifactObservation(
@@ -473,7 +505,10 @@ def _verify_artifact(
     root: int,
     artifact: VerifiedArtifact,
     binding: ScanBinding,
+    seen_sources: np.ndarray,
+    deadline: float,
 ) -> tuple[VerifiedArtifact, ArtifactObservation]:
+    _require_deadline(deadline)
     descriptor = _open_relative_regular_at(root, artifact.relative_path)
     try:
         before = os.fstat(descriptor)
@@ -493,7 +528,11 @@ def _verify_artifact(
         previous_source: int | None = None
         observed = ArtifactObservation(0, 0, 0, 0, 0)
         block_bytes = RECORD_BYTES * _VERIFY_RECORDS_PER_BLOCK
-        while block := os.read(descriptor, block_bytes):
+        while True:
+            _require_deadline(deadline)
+            block = os.read(descriptor, block_bytes)
+            if not block:
+                break
             digest.update(block)
             total_bytes += len(block)
             payload = carry + block
@@ -505,6 +544,8 @@ def _verify_artifact(
                     artifact,
                     binding,
                     previous_source,
+                    seen_sources,
+                    deadline,
                 )
                 total_records += int(records.size)
                 observed = ArtifactObservation(
@@ -520,6 +561,7 @@ def _verify_artifact(
                     ),
                 )
             carry = payload[complete:]
+            _require_deadline(deadline)
         after = os.fstat(descriptor)
         if (
             carry
@@ -533,6 +575,7 @@ def _verify_artifact(
             os.fchmod(descriptor, 0o400)
             os.fsync(descriptor)
         immutable = os.fstat(descriptor)
+        _require_deadline(deadline)
         if (
             immutable.st_uid != os.getuid()
             or stat.S_IMODE(immutable.st_mode) != 0o400
@@ -548,8 +591,11 @@ def verify_spatial_staging(
     authority: SpatialMaterializationAuthority,
     staging_root: Path,
     native_report: bytes,
+    *,
+    deadline: float,
 ) -> VerifiedSpatialStaging:
     """Hash every staged artifact and build the sole acceptance manifest."""
+    _require_deadline(deadline)
     if (
         not authority.native.execution_authorized
         or authority.execution_selection_sha256 is None
@@ -562,6 +608,7 @@ def verify_spatial_staging(
         raise RuntimeError("Hovi spatial verification requires a frozen execution selection")
     staging_root = Path(os.path.abspath(os.fspath(staging_root)))
     report = _compact_report(native_report)
+    _require_deadline(deadline)
     _require_keys(
         report,
         {
@@ -802,6 +849,7 @@ def verify_spatial_staging(
         initial_directories, initial_files = _tree_inventory_at(
             staging_fd,
             allow_writable_files=True,
+            deadline=deadline,
         )
         existing_manifest = "manifest.json" in initial_files
         allowed_files = expected_files | (
@@ -815,16 +863,28 @@ def verify_spatial_staging(
 
         verified_artifacts: list[VerifiedArtifact] = []
         observed_routes = [[0, 0, 0] for _ in authority.scans]
-        for artifact in artifacts:
-            verified_artifact, observation = _verify_artifact(
-                staging_fd,
-                artifact,
-                authority.scans[artifact.scan],
+        for binding in authority.scans:
+            _require_deadline(deadline)
+            seen_sources = np.zeros(
+                (binding.publisher_records + 7) // 8,
+                dtype=np.uint8,
             )
-            verified_artifacts.append(verified_artifact)
-            observed_routes[artifact.scan][0] += observation.valid
-            observed_routes[artifact.scan][1] += observation.direction
-            observed_routes[artifact.scan][2] += observation.invalid
+            for artifact in artifacts:
+                if artifact.scan != binding.ordinal:
+                    continue
+                _require_deadline(deadline)
+                verified_artifact, observation = _verify_artifact(
+                    staging_fd,
+                    artifact,
+                    binding,
+                    seen_sources,
+                    deadline,
+                )
+                verified_artifacts.append(verified_artifact)
+                observed_routes[artifact.scan][0] += observation.valid
+                observed_routes[artifact.scan][1] += observation.direction
+                observed_routes[artifact.scan][2] += observation.invalid
+            del seen_sources
         artifacts = tuple(verified_artifacts)
         if [tuple(values) for values in observed_routes] != reported_routes_by_scan:
             raise ValueError("Hovi spatial decoded artifact routing differs from report")
@@ -832,6 +892,7 @@ def verify_spatial_staging(
         post_directories, post_files = _tree_inventory_at(
             staging_fd,
             allow_writable_files=False,
+            deadline=deadline,
         )
         if (
             set(post_directories) != expected_directories
@@ -918,6 +979,7 @@ def verify_spatial_staging(
         }
     )
     manifest_sha256 = hashlib.sha256(manifest).hexdigest()
+    _require_deadline(deadline)
     if artifact_bytes + len(manifest) > TREE_CEILING_BYTES:
         raise ValueError("Hovi spatial manifest would exceed the 120 GiB tree ceiling")
     staging_fd = _open_staging_root(staging_root)
@@ -925,6 +987,7 @@ def verify_spatial_staging(
         final_directories, final_files = _tree_inventory_at(
             staging_fd,
             allow_writable_files=False,
+            deadline=deadline,
         )
         if (
             set(final_directories) != expected_directories
@@ -939,7 +1002,11 @@ def verify_spatial_staging(
             manifest_descriptor = _open_relative_regular_at(staging_fd, "manifest.json")
             try:
                 before = os.fstat(manifest_descriptor)
-                payload = _read_descriptor(manifest_descriptor, len(manifest))
+                payload = _read_descriptor(
+                    manifest_descriptor,
+                    len(manifest),
+                    deadline,
+                )
                 after = os.fstat(manifest_descriptor)
                 if (
                     _inode_identity(before) != _inode_identity(after)
@@ -955,6 +1022,7 @@ def verify_spatial_staging(
             finally:
                 os.close(manifest_descriptor)
         root_identity = _inode_identity(os.fstat(staging_fd))
+        _require_deadline(deadline)
         final_directories["."] = root_identity
     finally:
         os.close(staging_fd)
@@ -977,8 +1045,11 @@ def publish_verified_spatial_staging(
     authority: SpatialMaterializationAuthority,
     verified: VerifiedSpatialStaging,
     output_root: Path,
+    *,
+    deadline: float,
 ) -> Path:
     """Commit one verified staging tree; pending native authority always refuses."""
+    _require_deadline(deadline)
     if not authority.native.execution_authorized:
         raise RuntimeError("Hovi spatial publication awaits a frozen native binding")
     output_root = Path(os.path.abspath(os.fspath(output_root)))
@@ -1013,6 +1084,7 @@ def publish_verified_spatial_staging(
         current_directories, current_files = _tree_inventory_at(
             staging_fd,
             allow_writable_files=False,
+            deadline=deadline,
         )
         if (
             current_directories != expected_directories
@@ -1031,6 +1103,7 @@ def publish_verified_spatial_staging(
             try:
                 view = memoryview(verified.manifest)
                 while view:
+                    _require_deadline(deadline)
                     written = os.write(manifest_fd, view)
                     if written <= 0:
                         raise OSError("short write while committing Hovi spatial manifest")
@@ -1044,7 +1117,11 @@ def publish_verified_spatial_staging(
             manifest_fd = _open_relative_regular_at(staging_fd, "manifest.json")
             try:
                 before = os.fstat(manifest_fd)
-                payload = _read_descriptor(manifest_fd, len(verified.manifest))
+                payload = _read_descriptor(
+                    manifest_fd,
+                    len(verified.manifest),
+                    deadline,
+                )
                 after = os.fstat(manifest_fd)
                 if (
                     _inode_identity(before) != existing_manifest
@@ -1057,6 +1134,7 @@ def publish_verified_spatial_staging(
                 os.close(manifest_fd)
 
         for artifact in verified.artifacts:
+            _require_deadline(deadline)
             if artifact.identity is None:
                 raise ValueError("Hovi spatial artifact lacks a verified identity")
             descriptor = _open_relative_regular_at(staging_fd, artifact.relative_path)
@@ -1095,6 +1173,7 @@ def publish_verified_spatial_staging(
         final_directories, final_files = _tree_inventory_at(
             staging_fd,
             allow_writable_files=False,
+            deadline=deadline,
         )
         if (
             final_directories != expected_directories
@@ -1102,6 +1181,7 @@ def publish_verified_spatial_staging(
             or _inode_identity(os.fstat(staging_fd)) != expected_directories["."]
         ):
             raise ValueError("Hovi spatial tree changed at the publication boundary")
+        _require_deadline(deadline)
         _atomic_rename_noreplace_at(
             root_fd,
             verified.root.name,

@@ -179,7 +179,7 @@ def _capture_bounded(
     process: subprocess.Popen[bytes],
     resources: SpatialResources,
     output_root: Path,
-    started: float,
+    deadline: float,
 ) -> tuple[bytes, bytes, SupervisionMetrics]:
     if process.stdout is None or process.stderr is None:
         raise RuntimeError("Hovi spatial capture pipes were not created")
@@ -201,7 +201,7 @@ def _capture_bounded(
             minimum_free = min(minimum_free, free_bytes)
             if free_bytes < resources.free_reserve_bytes:
                 raise OSError("Hovi spatial materialization crossed the 96 GiB reserve")
-            remaining = resources.wall_seconds - (time.monotonic() - started)
+            remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError("Hovi spatial materialization exceeded 24h wall time")
             wait_seconds = min(remaining, resources.supervision_sample_seconds)
@@ -226,7 +226,7 @@ def _capture_bounded(
                     raise RuntimeError(
                         f"Hovi spatial materializer exceeded {label} limit"
                     )
-        remaining = resources.wall_seconds - (time.monotonic() - started)
+        remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError("Hovi spatial materialization exceeded 24h wall time")
         return_code = process.wait(timeout=remaining)
@@ -274,6 +274,7 @@ def run_spatial_materialization(
         raise RuntimeError("Hovi spatial execution awaits a frozen selection")
     verify_execution_implementation(authority)
     started = time.monotonic()
+    deadline = started + authority.resources.wall_seconds
     process: subprocess.Popen[bytes] | None = None
     with select_spatial_execution(authority) as selection:
         try:
@@ -297,27 +298,25 @@ def run_spatial_materialization(
                 process,
                 authority.resources,
                 selection.cwd,
-                started,
+                deadline,
             )
             if stderr:
                 raise RuntimeError("Hovi spatial materializer emitted unexpected stderr")
             _verify_held_inputs(selection)
             verify_execution_implementation(authority)
-            if time.monotonic() - started >= authority.resources.wall_seconds:
-                raise TimeoutError("Hovi spatial materialization exceeded 24h wall time")
             verified = verify_spatial_staging(
                 authority,
                 selection.staging_root,
                 stdout,
+                deadline=deadline,
             )
             _verify_held_inputs(selection)
             verify_execution_implementation(authority)
-            if time.monotonic() - started >= authority.resources.wall_seconds:
-                raise TimeoutError("Hovi spatial verification exceeded 24h wall time")
             publication_path = publish_verified_spatial_staging(
                 authority,
                 verified,
                 selection.cwd,
+                deadline=deadline,
             )
             return SpatialMaterializationResult(
                 publication_path=publication_path,
