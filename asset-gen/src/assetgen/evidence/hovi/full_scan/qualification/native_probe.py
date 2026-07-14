@@ -106,7 +106,8 @@ def _limit_child(authority: PointProbeAuthority) -> None:
 
     limits = authority.resources
     apply(resource.RLIMIT_CPU, limits.cpu_seconds)
-    apply(resource.RLIMIT_RSS, limits.rss_bytes)
+    # macOS rejects lowering RLIMIT_RSS below inherited process state and does not
+    # enforce it as a hard resident-memory ceiling. RLIMIT_AS is the hard boundary.
     apply(resource.RLIMIT_AS, limits.address_space_bytes)
     apply(resource.RLIMIT_FSIZE, limits.record_output_bytes)
     apply(resource.RLIMIT_NOFILE, limits.open_files)
