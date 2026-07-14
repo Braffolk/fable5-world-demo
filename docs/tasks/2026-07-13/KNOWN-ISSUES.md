@@ -195,6 +195,15 @@ audit of the already-listed 4.60 GB sample-slope archive is also closed. Its exa
 official bitstream is retained as metadata only; the record promises none of the
 missing event, axis-residual, TLS/UAV identity, or mask contracts, so the archive
 was not downloaded and has a zero-byte authorization ceiling.
+The final capped search tranche also found no qualifying replacement. Small
+agricultural surfaces lack reusable 3D geometry/control, calibrated multiview/TLS
+benchmarks lack usable natural-surface masks, payload rights, or public references,
+and small European field surfaces lack raw support, explicit semantics, or
+independent control. This closes the reviewed zero-budget hunt until new primary
+evidence appears. Under the current accepted spec, no morphology specialist may be
+implemented. The recommended product-level escape is a narrow user-approved
+research-only amendment with zero target, Estonia-transfer, owner, packing, or
+release authority; production gates remain unchanged.
 Resume this Hovi claim only when new primary evidence supplies registered cell semantics
 and independent control/repeat data, not merely another converter.
 
