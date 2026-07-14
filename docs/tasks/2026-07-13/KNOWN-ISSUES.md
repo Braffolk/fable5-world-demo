@@ -147,6 +147,28 @@ assignment method plus registered semantics, visibility/error evidence, and vali
 physical-analogue/Estonia OOD gates. Hovi must not be collapsed into a generic national
 forest prior.
 
+The subsequent semantic and support/error probe closes the current Hovi forest-floor
+claim more strongly. Semantic binding `39a6ba366015...` binds the four publisher
+quadrat fractions and photographs only to descriptive plot composition. The TLS date is
+2019-07-04, the cover-photo date is 2019-07-26, quadrat locations are approximate, and
+there is no metric photo-to-TLS transform. It therefore emits no point, view, or cell
+labels and leaves mineral soil, roots, deadwood, clasts, and water unmeasured rather than
+zero. Final support/error build `13bb3582f225...` consequently records
+`target_evidence_insufficient` for both B1 and B2: recoverable signal, total error,
+effective support, and acquisition transfer are unidentifiable. This is the protocol's
+required probe stop, not a reason to tune the raw-sheet thresholds or open the sealed
+Järvselja plot.
+
+**Parked-path record:** the spent work produced a reusable exact E57 decoder,
+scan-preserving 103 GB materialization, full/thinned comparator, five raw-hypothesis QA
+views, scoped publisher-semantic binding, and a machine-readable B1/B2 failure decision.
+The exact blocker is absence of a registered accepted surface plus independent XY/Z and
+held-out acquisition evidence; more points from the same publisher protocol do not fix
+that. Focus moves first to the protocol's small ForestSemantic-MS semantic-audit step,
+then to a replacement zero-budget target claim pre-screened for the missing capabilities.
+Resume this Hovi claim only when new primary evidence supplies registered cell semantics
+and independent control/repeat data, not merely another converter.
+
 The durable end-to-end requirement comparison is recorded in
 `MICROTOPOGRAPHY-CONFORMANCE-AUDIT.md`. It also freezes the historical preregistration
 boundary: LUKE can never be grandfathered into owner selection; inspected Hovi/Evo
@@ -280,8 +302,10 @@ and manifest above; it does not establish morphology beauty or authorize a speci
 `releaseReady:true` and a clean boot establish release/runtime correctness, not beauty.
 The verifier's repeated large-artifact decoding/hashing remains a scalability issue for
 future transactions. Hovi full-archive extraction, metadata inventory, and verified raw
-spatial materialization are complete; the materialization's own manifest remains
-staging-only, while atomic publication and target qualification remain separate gates.
+spatial materialization are complete. Its embedded native report remains intentionally
+staging-only, while the Python parent completed the atomic move to the final
+content-addressed materialization path; target qualification remains a separate failed
+gate.
 
 ### National fine-height volume remains a product constraint
 
