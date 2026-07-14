@@ -13,7 +13,7 @@ from .accumulators import (
     MultiscaleShardEvidence,
     VerticalSampleGroup,
 )
-from .manifest import RESOLUTIONS_M
+from .manifest import RESOLUTIONS_M, SHARD_M
 
 
 @dataclass(frozen=True)
@@ -22,11 +22,12 @@ class HypothesisConfig:
 
     vertical_bin_m: float
     smoothing_sigma_m: float
+    mode_union_resolution_m: float
     max_vertical_bins: int
     max_hypotheses_per_cell: int
     group_batch_records: int
     level_block_records: int
-    histogram_memory_ceiling_bytes: int
+    peak_live_memory_ceiling_bytes: int
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.vertical_bin_m) or self.vertical_bin_m <= 0.0:
@@ -36,12 +37,17 @@ class HypothesisConfig:
             or self.smoothing_sigma_m < self.vertical_bin_m
         ):
             raise ValueError("Hovi smoothing sigma must span at least one vertical bin")
+        if (
+            not math.isfinite(self.mode_union_resolution_m)
+            or self.mode_union_resolution_m < self.vertical_bin_m
+        ):
+            raise ValueError("Hovi mode-union resolution must span at least one bin")
         for name in (
             "max_vertical_bins",
             "max_hypotheses_per_cell",
             "group_batch_records",
             "level_block_records",
-            "histogram_memory_ceiling_bytes",
+            "peak_live_memory_ceiling_bytes",
         ):
             if not isinstance(getattr(self, name), int) or getattr(self, name) <= 0:
                 raise ValueError(f"Hovi hypothesis {name} must be a positive integer")
@@ -74,7 +80,7 @@ class SheetHypothesis:
     vertical_basin_max_m: float
     histogram_peak_m: float
     scan_balanced_z_m: float
-    inter_scan_mad_m: float
+    descriptive_inter_scan_mad_m: float
     vertical_binning_half_width_m: float
     unique_scan_count: int
     scan_mask: int
@@ -86,6 +92,8 @@ class SheetHypothesis:
     median_pairwise_view_angle_deg: float | None
     maximum_pairwise_view_angle_deg: float | None
     incidence_state: Literal["unknown_requires_candidate_normal"]
+    pooled_mode_contributed: bool
+    contributing_scan_modes: tuple[tuple[int, float], ...]
     scan_support: tuple[ScanSheetSupport, ...]
 
 
@@ -101,7 +109,10 @@ class CellHypothesisSet:
     sample_count: int
     unique_scan_count: int
     scan_mask: int
-    within_shard_nearest_observed_distance_upper_bound_m: float | None
+    occupied_cell_center_distance_diagnostic_m: float | None
+    occupied_cell_center_distance_role: Literal[
+        "diagnostic_only_forbidden_for_support_or_interpolation"
+    ]
     distance_is_shard_boundary_censored: bool
     interpolation_state: Literal["not_performed"]
     occlusion_state: Literal["unknown_not_inferred_from_absence"]
@@ -117,8 +128,16 @@ class CellHypothesisSet:
     vertical_min_m: float | None
     vertical_max_m: float | None
     raw_mode_count: int | None
+    conservative_peak_live_memory_bound_bytes: int
     hypotheses: tuple[SheetHypothesis, ...]
     unknown_reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _ModeCluster:
+    peak_bin: int
+    pooled_mode_contributed: bool
+    scan_modes: tuple[tuple[int, int], ...]
 
 
 class CandidateSurfaceHypothesisGenerator:
@@ -141,6 +160,18 @@ class CandidateSurfaceHypothesisGenerator:
     ) -> Iterator[CellHypothesisSet]:
         if resolution_m not in RESOLUTIONS_M:
             raise ValueError(f"Hovi hypothesis resolution must be one of {RESOLUTIONS_M}")
+        peak_live_bound = _conservative_peak_live_memory_bound_bytes(
+            self.config,
+            resolution_m,
+        )
+        if self.config.peak_live_memory_ceiling_bytes > evidence.memory_ceiling_bytes:
+            raise MemoryError(
+                "Hovi hypothesis memory ceiling exceeds the evidence workspace ceiling"
+            )
+        if peak_live_bound > self.config.peak_live_memory_ceiling_bytes:
+            raise MemoryError(
+                "Hovi hypothesis peak-live bound exceeds its explicit memory ceiling"
+            )
         with evidence.open_level(
             resolution_m,
             block_records=self.config.level_block_records,
@@ -149,29 +180,35 @@ class CandidateSurfaceHypothesisGenerator:
             observed = np.zeros((cells, cells), dtype=np.bool_)
             observed.flat[level.cell_linear] = True
             if np.any(observed):
-                nearest = distance_transform_edt(~observed) * resolution_m
+                cell_center_distance = distance_transform_edt(~observed) * resolution_m
             else:
-                nearest = np.full((cells, cells), np.inf, dtype=np.float64)
+                cell_center_distance = np.full(
+                    (cells, cells), np.inf, dtype=np.float64
+                )
             groups = iter(level.iter_vertical_groups())
             current = next(groups, None)
             for linear in range(cells * cells):
                 cell_x = linear % cells
                 cell_y = linear // cells
-                distance = float(nearest[cell_y, cell_x])
+                distance = float(cell_center_distance[cell_y, cell_x])
                 if current is None or current.cell_y * cells + current.cell_x != linear:
                     yield self._unknown_cell(
                         evidence,
                         resolution_m,
                         cell_x,
                         cell_y,
-                        nearest_distance=(distance if math.isfinite(distance) else None),
+                        cell_center_distance=(
+                            distance if math.isfinite(distance) else None
+                        ),
+                        peak_live_bound=peak_live_bound,
                     )
                     continue
                 yield self._observed_cell(
                     evidence,
                     level,
                     current,
-                    nearest_distance=distance,
+                    cell_center_distance=distance,
+                    peak_live_bound=peak_live_bound,
                 )
                 current = next(groups, None)
             if current is not None or next(groups, None) is not None:
@@ -184,7 +221,8 @@ class CandidateSurfaceHypothesisGenerator:
         cell_x: int,
         cell_y: int,
         *,
-        nearest_distance: float | None,
+        cell_center_distance: float | None,
+        peak_live_bound: int,
     ) -> CellHypothesisSet:
         return CellHypothesisSet(
             method_config=self.config,
@@ -197,7 +235,10 @@ class CandidateSurfaceHypothesisGenerator:
             sample_count=0,
             unique_scan_count=0,
             scan_mask=0,
-            within_shard_nearest_observed_distance_upper_bound_m=nearest_distance,
+            occupied_cell_center_distance_diagnostic_m=cell_center_distance,
+            occupied_cell_center_distance_role=(
+                "diagnostic_only_forbidden_for_support_or_interpolation"
+            ),
             distance_is_shard_boundary_censored=True,
             interpolation_state="not_performed",
             occlusion_state="unknown_not_inferred_from_absence",
@@ -213,8 +254,13 @@ class CandidateSurfaceHypothesisGenerator:
             vertical_min_m=None,
             vertical_max_m=None,
             raw_mode_count=0,
+            conservative_peak_live_memory_bound_bytes=peak_live_bound,
             hypotheses=(),
-            unknown_reasons=("no_measured_return_in_cell", "occlusion_not_resolved"),
+            unknown_reasons=(
+                "no_measured_return_in_cell",
+                "occlusion_not_resolved",
+                "occupied_cell_center_distance_not_support",
+            ),
         )
 
     def _observed_cell(
@@ -223,7 +269,8 @@ class CandidateSurfaceHypothesisGenerator:
         level: CellEvidenceLevel,
         group: VerticalSampleGroup,
         *,
-        nearest_distance: float,
+        cell_center_distance: float,
+        peak_live_bound: int,
     ) -> CellHypothesisSet:
         minimum = math.inf
         maximum = -math.inf
@@ -247,14 +294,11 @@ class CandidateSurfaceHypothesisGenerator:
                 scan_mask,
                 minimum,
                 maximum,
-                nearest_distance,
+                cell_center_distance,
+                peak_live_bound,
                 raw_mode_count=None,
                 reason="vertical_histogram_ceiling_exceeded",
             )
-        histogram_bytes = 16 * bin_count * np.dtype(np.uint64).itemsize
-        work_bytes = histogram_bytes * 3
-        if work_bytes > self.config.histogram_memory_ceiling_bytes:
-            raise MemoryError("Hovi sheet histogram exceeds its explicit memory ceiling")
         histogram = np.zeros((16, bin_count), dtype=np.uint64)
         for batch in group.iter_batches(max_records=self.config.group_batch_records):
             bins = np.floor(
@@ -266,14 +310,33 @@ class CandidateSurfaceHypothesisGenerator:
         present = totals > 0
         # Equal per-scan mass prevents dense/near scans from winning by point count.
         normalized = histogram[present] / totals[present, None]
-        balanced = normalized.mean(axis=0)
         sigma_bins = self.config.smoothing_sigma_m / self.config.vertical_bin_m
-        smoothed = gaussian_filter1d(balanced, sigma=sigma_bins, mode="nearest")
-        # Preserve every mode; there is deliberately no low/height/prominence filter.
-        peaks = _all_plateau_peaks(smoothed)
-        if peaks.size == 0:
-            peaks = np.asarray([int(np.argmax(smoothed))], dtype=np.int64)
-        if peaks.size > self.config.max_hypotheses_per_cell:
+        per_scan_smoothed = gaussian_filter1d(
+            normalized,
+            sigma=sigma_bins,
+            axis=1,
+            mode="nearest",
+        )
+        pooled_smoothed = gaussian_filter1d(
+            normalized.mean(axis=0),
+            sigma=sigma_bins,
+            mode="nearest",
+        )
+        pooled_peaks = _density_modes(pooled_smoothed)
+        per_scan_peaks = tuple(
+            (int(scan), _density_modes(per_scan_smoothed[index]))
+            for index, scan in enumerate(np.flatnonzero(present))
+        )
+        clusters = _union_mode_clusters(
+            pooled_peaks,
+            per_scan_peaks,
+            vertical_bin_m=self.config.vertical_bin_m,
+            union_resolution_m=self.config.mode_union_resolution_m,
+        )
+        detected_mode_count = int(pooled_peaks.size) + sum(
+            int(scan_peaks.size) for _, scan_peaks in per_scan_peaks
+        )
+        if not _scan_mode_mapping_is_complete(per_scan_peaks, clusters):
             return self._overflow_cell(
                 evidence,
                 level,
@@ -282,11 +345,41 @@ class CandidateSurfaceHypothesisGenerator:
                 scan_mask,
                 minimum,
                 maximum,
-                nearest_distance,
-                raw_mode_count=int(peaks.size),
+                cell_center_distance,
+                peak_live_bound,
+                raw_mode_count=detected_mode_count,
+                reason="per_scan_mode_mapping_unresolved",
+            )
+        if len(clusters) > self.config.max_hypotheses_per_cell:
+            return self._overflow_cell(
+                evidence,
+                level,
+                group,
+                sample_count,
+                scan_mask,
+                minimum,
+                maximum,
+                cell_center_distance,
+                peak_live_bound,
+                raw_mode_count=detected_mode_count,
                 reason="sheet_hypothesis_ceiling_exceeded",
             )
-        basin_edges = _watershed_edges(smoothed, peaks)
+        peaks = np.asarray([cluster.peak_bin for cluster in clusters], dtype=np.int64)
+        if np.any(peaks[1:] <= peaks[:-1]):
+            return self._overflow_cell(
+                evidence,
+                level,
+                group,
+                sample_count,
+                scan_mask,
+                minimum,
+                maximum,
+                cell_center_distance,
+                peak_live_bound,
+                raw_mode_count=detected_mode_count,
+                reason="candidate_mode_order_unresolved",
+            )
+        basin_edges = _watershed_edges(pooled_smoothed, peaks)
         hypotheses = self._measure_hypotheses(
             evidence,
             group,
@@ -295,6 +388,7 @@ class CandidateSurfaceHypothesisGenerator:
             maximum,
             peaks,
             basin_edges,
+            clusters,
         )
         return CellHypothesisSet(
             method_config=self.config,
@@ -307,7 +401,10 @@ class CandidateSurfaceHypothesisGenerator:
             sample_count=sample_count,
             unique_scan_count=scan_mask.bit_count(),
             scan_mask=scan_mask,
-            within_shard_nearest_observed_distance_upper_bound_m=nearest_distance,
+            occupied_cell_center_distance_diagnostic_m=cell_center_distance,
+            occupied_cell_center_distance_role=(
+                "diagnostic_only_forbidden_for_support_or_interpolation"
+            ),
             distance_is_shard_boundary_censored=True,
             interpolation_state="not_performed",
             occlusion_state="unknown_not_inferred_from_absence",
@@ -322,9 +419,14 @@ class CandidateSurfaceHypothesisGenerator:
             synthesis_authorized=False,
             vertical_min_m=minimum,
             vertical_max_m=maximum,
-            raw_mode_count=int(peaks.size),
+            raw_mode_count=detected_mode_count,
+            conservative_peak_live_memory_bound_bytes=peak_live_bound,
             hypotheses=hypotheses,
-            unknown_reasons=("surface_semantics_unknown", "occlusion_not_resolved"),
+            unknown_reasons=(
+                "surface_semantics_unknown",
+                "occlusion_not_resolved",
+                "occupied_cell_center_distance_not_support",
+            ),
         )
 
     def _measure_hypotheses(
@@ -336,6 +438,7 @@ class CandidateSurfaceHypothesisGenerator:
         maximum: float,
         peaks: np.ndarray,
         basin_edges: np.ndarray,
+        clusters: tuple[_ModeCluster, ...],
     ) -> tuple[SheetHypothesis, ...]:
         count = peaks.size
         point_count = np.zeros((count, 16), dtype=np.uint64)
@@ -465,6 +568,7 @@ class CandidateSurfaceHypothesisGenerator:
             medians = np.asarray(scan_medians, dtype=np.float64)
             # One median per scan, then one median across scans: never point weighted.
             balanced_z = float(np.median(medians))
+            # Descriptive cross-view disagreement only, never an error estimate.
             inter_scan_mad = float(np.median(np.abs(medians - balanced_z)))
             ranges = np.asarray(scan_ranges, dtype=np.float64)
             angle_minimum, angle_median, angle_maximum = _view_angle_summary(
@@ -490,7 +594,7 @@ class CandidateSurfaceHypothesisGenerator:
                         ),
                     ),
                     scan_balanced_z_m=balanced_z,
-                    inter_scan_mad_m=inter_scan_mad,
+                    descriptive_inter_scan_mad_m=inter_scan_mad,
                     vertical_binning_half_width_m=self.config.vertical_bin_m / 2.0,
                     unique_scan_count=len(scan_support),
                     scan_mask=sum(1 << support.scan for support in scan_support),
@@ -502,6 +606,24 @@ class CandidateSurfaceHypothesisGenerator:
                     median_pairwise_view_angle_deg=angle_median,
                     maximum_pairwise_view_angle_deg=angle_maximum,
                     incidence_state="unknown_requires_candidate_normal",
+                    pooled_mode_contributed=clusters[
+                        hypothesis_index
+                    ].pooled_mode_contributed,
+                    contributing_scan_modes=tuple(
+                        (
+                            scan,
+                            min(
+                                maximum,
+                                max(
+                                    minimum,
+                                    minimum
+                                    + (mode_bin + 0.5)
+                                    * self.config.vertical_bin_m,
+                                ),
+                            ),
+                        )
+                        for scan, mode_bin in clusters[hypothesis_index].scan_modes
+                    ),
                     scan_support=tuple(scan_support),
                 )
             )
@@ -516,7 +638,8 @@ class CandidateSurfaceHypothesisGenerator:
         scan_mask: int,
         minimum: float,
         maximum: float,
-        nearest_distance: float,
+        cell_center_distance: float,
+        peak_live_bound: int,
         *,
         raw_mode_count: int | None,
         reason: str,
@@ -532,7 +655,10 @@ class CandidateSurfaceHypothesisGenerator:
             sample_count=sample_count,
             unique_scan_count=scan_mask.bit_count(),
             scan_mask=scan_mask,
-            within_shard_nearest_observed_distance_upper_bound_m=nearest_distance,
+            occupied_cell_center_distance_diagnostic_m=cell_center_distance,
+            occupied_cell_center_distance_role=(
+                "diagnostic_only_forbidden_for_support_or_interpolation"
+            ),
             distance_is_shard_boundary_censored=True,
             interpolation_state="not_performed",
             occlusion_state="unknown_not_inferred_from_absence",
@@ -548,9 +674,120 @@ class CandidateSurfaceHypothesisGenerator:
             vertical_min_m=minimum,
             vertical_max_m=maximum,
             raw_mode_count=raw_mode_count,
+            conservative_peak_live_memory_bound_bytes=peak_live_bound,
             hypotheses=(),
-            unknown_reasons=(reason, "surface_semantics_unknown", "occlusion_not_resolved"),
+            unknown_reasons=(
+                reason,
+                "surface_semantics_unknown",
+                "occlusion_not_resolved",
+                "occupied_cell_center_distance_not_support",
+            ),
         )
+
+
+def _conservative_peak_live_memory_bound_bytes(
+    config: HypothesisConfig,
+    resolution_m: float,
+) -> int:
+    """Bound all explicit NumPy/SciPy live work before opening a level."""
+    cells = round(SHARD_M / resolution_m)
+    cell_count = cells * cells
+    # The index itself is disk-backed. This includes its construction batches and
+    # expanded selections, not OS-controlled file-cache residency.
+    level_arrays_and_index_batches = (
+        96 * cell_count + 256 * config.level_block_records
+    )
+    occupied_grid_and_distance_transform = 64 * cell_count
+    expanded_vertical_batches = 384 * config.group_batch_records
+    histogram_modes_and_scipy_temporaries = 4096 * config.max_vertical_bins
+    hypothesis_accumulators = 4096 * config.max_hypotheses_per_cell
+    fixed_interpreter_and_array_overhead = 1 << 20
+    return (
+        level_arrays_and_index_batches
+        + occupied_grid_and_distance_transform
+        + expanded_vertical_batches
+        + histogram_modes_and_scipy_temporaries
+        + hypothesis_accumulators
+        + fixed_interpreter_and_array_overhead
+    )
+
+
+def _density_modes(values: np.ndarray) -> np.ndarray:
+    modes = _all_plateau_peaks(values)
+    if modes.size == 0:
+        return np.asarray([int(np.argmax(values))], dtype=np.int64)
+    return modes
+
+
+def _union_mode_clusters(
+    pooled_modes: np.ndarray,
+    per_scan_modes: tuple[tuple[int, np.ndarray], ...],
+    *,
+    vertical_bin_m: float,
+    union_resolution_m: float,
+) -> tuple[_ModeCluster, ...]:
+    mode_bins: list[int] = [int(value) for value in pooled_modes]
+    mode_scans: list[int] = [-1] * len(mode_bins)
+    for scan, modes in per_scan_modes:
+        mode_bins.extend(int(value) for value in modes)
+        mode_scans.extend([scan] * int(modes.size))
+    if not mode_bins:
+        return ()
+    bins = np.asarray(mode_bins, dtype=np.int64)
+    scans = np.asarray(mode_scans, dtype=np.int16)
+    order = np.lexsort((scans, bins))
+    bins = bins[order]
+    scans = scans[order]
+    maximum_span_bins = int(
+        math.floor(union_resolution_m / vertical_bin_m + 1e-12)
+    )
+    starts = [0]
+    cluster_minimum = int(bins[0])
+    for index in range(1, bins.size):
+        if int(bins[index]) - cluster_minimum > maximum_span_bins:
+            starts.append(index)
+            cluster_minimum = int(bins[index])
+    stops = starts[1:] + [int(bins.size)]
+    result: list[_ModeCluster] = []
+    for start, stop in zip(starts, stops, strict=True):
+        cluster_bins = bins[start:stop]
+        cluster_scans = scans[start:stop]
+        representative = int(math.floor(float(np.mean(cluster_bins)) + 0.5))
+        result.append(
+            _ModeCluster(
+                peak_bin=representative,
+                pooled_mode_contributed=bool(np.any(cluster_scans < 0)),
+                scan_modes=tuple(
+                    sorted(
+                        (
+                            (int(scan), int(mode_bin))
+                            for scan, mode_bin in zip(
+                                cluster_scans,
+                                cluster_bins,
+                                strict=True,
+                            )
+                            if scan >= 0
+                        ),
+                    )
+                ),
+            )
+        )
+    return tuple(result)
+
+
+def _scan_mode_mapping_is_complete(
+    per_scan_modes: tuple[tuple[int, np.ndarray], ...],
+    clusters: tuple[_ModeCluster, ...],
+) -> bool:
+    expected = sorted(
+        (scan, int(mode_bin))
+        for scan, modes in per_scan_modes
+        for mode_bin in modes
+    )
+    mapped = sorted(
+        scan_mode for cluster in clusters for scan_mode in cluster.scan_modes
+    )
+    return bool(clusters) and mapped == expected
 
 
 def _all_plateau_peaks(values: np.ndarray) -> np.ndarray:
