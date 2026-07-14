@@ -298,6 +298,16 @@ raw low-authority substrate states, and may not claim a current ploughed, seedbe
 harrowed, or rolled surface. Its absolute 0.0625 m master may legitimately change
 derived parent means; the historical per-1 m mean-null projection is forbidden.
 
+The bounded OPARA R0 diagnostic is now materialized at artifact
+`441eaf9194cd6e693cb666920bc4dcba386778fd60d08a48150a508a4714878d`.
+Three fixed reconstruction/mask variants retain 13 connected downslope-aligned
+negative forms, but their `0.014-0.049 m` equivalent widths are all below the
+`0.125 m` minimum wavelength representable on the 0.0625 m output grid. The
+artifact is therefore qualitative process evidence only. Its lengths, widths,
+depths, patches, and coordinates cannot be widened, rescaled, copied, or used as
+production geometry parameters; representable agricultural incisions must be
+generated from the explicit hydrologic/process hypothesis and remain labeled R0.
+
 The durable end-to-end requirement comparison is recorded in
 `MICROTOPOGRAPHY-CONFORMANCE-AUDIT.md`. It also freezes the historical preregistration
 boundary: LUKE can never be grandfathered into owner selection; inspected Hovi/Evo
