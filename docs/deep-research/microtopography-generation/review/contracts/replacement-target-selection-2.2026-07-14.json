@@ -1,0 +1,135 @@
+{
+  "schema_version": "microtopography-replacement-target-selection/1.0.0",
+  "checked_at": "2026-07-14",
+  "selection_policy": {
+    "maximum_new_candidates": 3,
+    "evaluated_new_candidates": 2,
+    "stop_on_first_pass": true,
+    "required_before_geometry_download": [
+      "public_raw_point_cloud_or_raw_reconstructable_imagery",
+      "explicit_surface_semantics_and_masks",
+      "reusable_license_for_derivatives_and_training",
+      "independent_control_with_numeric_horizontal_and_vertical_error",
+      "documented_native_support_for_b1_0.25_to_1m"
+    ],
+    "bulk_geometry_downloaded": false
+  },
+  "decision": {
+    "status": "bounded_metadata_pass",
+    "selected_candidate_id": "opara_eastern_germany_bare_cultivated_soil",
+    "authorized_role": "foreign_development_evidence_for_bare_cultivated_loess_tillage_and_rainfall_morphology",
+    "authorized_band": "B1_0.25_to_1m",
+    "next_action": "Freeze one exact bare-soil plot event and epoch from the 3.31 GB publisher sample before download. Selectively retain its raw images, XYZ GCP/CP data, field protocol, dense cloud, precision map, and error log; reject the event if the retained protocol does not prove bare surface semantics or if separate horizontal and vertical CP errors cannot be reproduced from the log.",
+    "not_authorized": [
+      "generic_agricultural_soil",
+      "Estonia_transfer",
+      "forest_peat_sand_rock_or_shore_transfer",
+      "release_qualification",
+      "training_before_target_specific_preregistration",
+      "using_processed_grids_without_raw_support_and_precision_masks",
+      "downloading_the_1.14_TB_plot_or_2.67_TB_slope_archives"
+    ]
+  },
+  "candidates": [
+    {
+      "id": "ahn4_classified_point_cloud_with_bgt_sand_mask",
+      "order": 1,
+      "status": "no_go",
+      "official_records": [
+        "https://www.ahn.nl/dataroom",
+        "https://www.ahn.nl/kwaliteitsbeschrijving",
+        "https://www.ahn.nl/6-controle",
+        "https://data.overheid.nl/dataset/47b9ba38-d47c-44da-b4f0-f2b850039239",
+        "https://docs.geostandaarden.nl/imgeo/catalogus/bgt/"
+      ],
+      "available_evidence": {
+        "geometry": "AHN4 classified raw LAZ; ground, water, buildings, structures, and other returns are distinct classes.",
+        "semantics": "BGT/IMGeo OnbegroeidTerreindeel polygons distinguish zand, strand en strandwal, and zandverstuiving.",
+        "license": "AHN4 CC0; current national BGT CC BY 4.0.",
+        "independent_control": "An independent control party checks absolute planimetry against independently measured reference objects and absolute height against independently measured reference fields.",
+        "published_error_m": {
+          "horizontal_systematic": 0.08,
+          "horizontal_stochastic": 0.05,
+          "vertical_systematic": 0.05,
+          "vertical_stochastic": 0.05
+        },
+        "density_points_per_m2": [
+          10,
+          14
+        ]
+      },
+      "blocking_reasons": [
+        "The documented density implies roughly 0.27-0.32 m mean point spacing and cannot natively resolve the 0.25 m lower edge of B1.",
+        "The 5-8 cm systematic and 5 cm stochastic position terms can equal or exceed common B1 agricultural and sand relief.",
+        "A convenient national classified corpus is not target evidence when its support and error cannot separate the requested signal."
+      ]
+    },
+    {
+      "id": "opara_eastern_germany_bare_cultivated_soil",
+      "order": 2,
+      "status": "bounded_metadata_pass",
+      "dataset": {
+        "title": "Structure from motion cross-scale dataset on agricultural areas in eastern Germany over a period of 3.5 years - plot scale, single slope scale, and catchment scale",
+        "doi": "10.25532/OPARA-1038",
+        "official_record": "https://opara.zih.tu-dresden.de/items/fba06620-4280-41b3-9f16-cc183c135f08",
+        "official_api_record": "https://opara.zih.tu-dresden.de/server/api/core/items/fba06620-4280-41b3-9f16-cc183c135f08",
+        "primary_paper": "https://doi.org/10.5194/essd-18-1275-2026",
+        "method_and_accuracy_paper": "https://doi.org/10.5194/soil-11-1007-2025",
+        "license": "CC-BY-4.0",
+        "publisher_total_bytes": 3859514459783
+      },
+      "smallest_complete_samples": [
+        {
+          "name": "00_B_sample_plot.7z",
+          "bytes": 3307259536,
+          "publisher_md5": "605952140081ef2d31d6c2a4a28182c5"
+        },
+        {
+          "name": "00_A_sample_slope.7z",
+          "bytes": 4597207850,
+          "publisher_md5": "f1ee962f8a8a83fcd73959c6fb62734d"
+        }
+      ],
+      "gate_evidence": {
+        "raw_and_reconstructable_geometry": "The archive publishes raw DSLR/UAV imagery, camera calibration, XYZ GCPs, processed dense PLY/E57 point clouds, point-precision maps, and per-model logs.",
+        "surface_semantics_and_masks": "Plot protocols bind each experiment to soil cover, grain-size distribution, tillage, crop type/stage, soil moisture, bulk density, organic carbon, rainfall, discharge, and sediment. The slope was kept vegetation-free by cultivation; ROIs and GCP bounds define the measured surface.",
+        "native_support": "The slope workflow retains dense points at 2 mm minimum spacing and chooses a 5 mm supported output grid, far finer than B1.",
+        "control_design": "Leica TCRM 1102 XYZ controls have stated 2 mm coordinate accuracy; at least one GCP per reconstruction is excluded from adjustment as an independent CP. Selected experiments also have independent TLS and UAV reference surfaces.",
+        "published_numeric_error_mm": {
+          "plot_median_independent_cp_total": 2.5,
+          "plot_independent_cp_sd": 4.3,
+          "slope_median_independent_cp_total": 6.1,
+          "slope_independent_cp_sd": 10.8,
+          "lateral_precision_near_to_outer": [
+            2,
+            30
+          ],
+          "height_precision_near_to_outer": [
+            2,
+            11
+          ],
+          "independent_reference_height_average_deviation": [
+            8,
+            12
+          ]
+        },
+        "error_artifact_requirement": "The publisher states that every 3D model includes GCP/CP RMSE logs and per-axis point-precision files. A retained event must reproduce separate horizontal and vertical errors from those artifacts before geometry is accepted."
+      },
+      "pass_reason": "This is open, reconstructable, millimetre-supported measured geometry with explicit bare agricultural process semantics and independent control. It is eligible for one frozen B1 bare cultivated-loess evidence probe without weakening the final gate.",
+      "limitations": [
+        "Foreign loess and management practices require a later Estonia analogue/OOD decision.",
+        "One event cannot satisfy independent site/campaign release splits.",
+        "The 3.31 GB sample is the smallest complete publisher unit; no full archive is authorized.",
+        "The published aggregate CP errors do not replace reproducing separate horizontal and vertical errors from the retained event log."
+      ]
+    }
+  ],
+  "documentation_verification": {
+    "downloaded_geometry_bytes": 0,
+    "temporary_small_document": {
+      "name": "essd-18-1275-2026-t03.png",
+      "bytes": 206892,
+      "purpose": "Verify the published aggregate plot/slope GCP and held-out CP error table only; not retained as project evidence."
+    }
+  }
+}
