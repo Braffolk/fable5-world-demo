@@ -31,7 +31,7 @@ DEFAULT_AUTHORITY = (
 )
 EXPECTED_AUTHORITY_BYTES = 11_464
 EXPECTED_AUTHORITY_SHA256 = (
-    "192e03a86bb0886ba8966a48c42cd472a5015c1ba57734309f569e9783b81762"
+    "e2bba01adde5ac848a5217cdc54fcc6b4c4563aeb3012e84000b2dc6500f52b6"
 )
 INVENTORY_BYTES = 806_369
 INVENTORY_SHA256 = (
@@ -539,7 +539,7 @@ def load_spatial_authority(
     expected_native = {
         "command": "materialize",
         "reviewed_contract_commit": (
-            "e9eb37acd31084fa4a5ef6559db829de0c334301"
+            "1e6989d269b1932386384d7c87f614a13d721671"
         ),
         "report_schema": "laas-hovi-e57-spatial-materialization/1.0.0",
         "profile": "hy-spruce4",

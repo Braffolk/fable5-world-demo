@@ -164,7 +164,7 @@
   },
   "native_reader": {
     "command": "materialize",
-    "reviewed_contract_commit": "e9eb37acd31084fa4a5ef6559db829de0c334301",
+    "reviewed_contract_commit": "1e6989d269b1932386384d7c87f614a13d721671",
     "report_schema": "laas-hovi-e57-spatial-materialization/1.0.0",
     "profile": "hy-spruce4",
     "max_file_bytes": 84817645568,
