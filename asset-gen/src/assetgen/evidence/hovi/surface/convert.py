@@ -1,4 +1,4 @@
-"""Immutable HY_SPRUCE4 merged-cloud candidate-surface transaction."""
+"""Immutable merged-cloud candidate-surface transaction for Hovi development plots."""
 from __future__ import annotations
 
 import argparse
@@ -51,7 +51,7 @@ _RECIPE_SCHEMA = "hovi-candidate-surface-recipe/1.0.0"
 _EVIDENCE_SCHEMA = "hovi-candidate-surface-evidence/1.0.0"
 _MANIFEST_SCHEMA = "hovi-candidate-surface-build/1.0.0"
 _QA_SCHEMA = "hovi-candidate-surface-qa/1.0.0"
-_PLOT_ID = "HY_SPRUCE4"
+_DEVELOPMENT_PLOTS = ("HY_SPRUCE4", "HY_PINE2")
 _REGISTRATION_MAE_RE = re.compile(
     r"for Enabled Constraints\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*m"
 )
@@ -95,13 +95,13 @@ def _verify_relative_artifact(root: Path, reference: Mapping[str, Any]) -> Path:
 
 
 def _validate_support(
-    manifest_path: Path, *, source_sha256: str, retention_id: str
+    manifest_path: Path, *, plot_id: str, source_sha256: str, retention_id: str
 ) -> tuple[dict[str, Any], dict[str, Any], str, Path]:
     manifest, manifest_sha = _load_json(manifest_path, "raw-support manifest")
     if (
         manifest.get("schema_version") != "hovi-observation-support-build/1.0.0"
         or manifest.get("status") != "complete"
-        or manifest.get("plot_id") != _PLOT_ID
+        or manifest.get("plot_id") != plot_id
         or manifest.get("scientific_role") != "raw_candidate"
         or manifest.get("qualification_status") != "unqualified"
         or manifest.get("transfer_ceiling") != "none"
@@ -132,7 +132,9 @@ def _validate_support(
     return manifest, inventory, manifest_sha, support_npz_path
 
 
-def _validate_condition(path: Path, retention_id: str) -> tuple[dict[str, Any], str]:
+def _validate_condition(
+    path: Path, retention_id: str, plot_id: str
+) -> tuple[dict[str, Any], str]:
     record, digest = _load_json(path, "condition evidence")
     qualification = _mapping(record.get("qualification"), "condition qualification")
     plot = _mapping(record.get("plot_identity"), "condition plot")
@@ -140,7 +142,7 @@ def _validate_condition(path: Path, retention_id: str) -> tuple[dict[str, Any], 
     if (
         record.get("schema_version") != "hovi-condition-semantics-evidence/1.0.0"
         or path.parent.name != digest
-        or plot.get("plot_id") != _PLOT_ID
+        or plot.get("plot_id") != plot_id
         or retention.get("retention_id") != retention_id
         or qualification.get("role") != "raw_candidate"
         or qualification.get("qualification_status") != "unqualified"
@@ -153,7 +155,7 @@ def _validate_condition(path: Path, retention_id: str) -> tuple[dict[str, Any], 
 
 
 def _validate_photo_qa(
-    path: Path, *, condition_sha256: str, retention_id: str
+    path: Path, *, plot_id: str, condition_sha256: str, retention_id: str
 ) -> tuple[dict[str, Any], str]:
     record, digest = _load_json(path, "semantic-photo QA index")
     qualification = _mapping(record.get("qualification"), "photo QA qualification")
@@ -161,7 +163,7 @@ def _validate_photo_qa(
     if (
         record.get("schema_version") != "hovi-semantic-photo-qa-index/1.0.0"
         or record.get("status") != "complete"
-        or record.get("plot_id") != _PLOT_ID
+        or record.get("plot_id") != plot_id
         or record.get("retention_id") != retention_id
         or record.get("condition_evidence_sha256") != condition_sha256
         or qualification.get("qualification_status") != "unqualified"
@@ -353,32 +355,37 @@ def extract_hovi_candidate_surface(
     condition_evidence_path: Path,
     photo_qa_index_path: Path,
     *,
+    plot_id: str = "HY_SPRUCE4",
     selection_path: Path = CONFIG_DIR / "hovi-public-targets.json",
     work_root: Path = DATA_WORK,
     config: SurfaceConfig = SurfaceConfig(),
     log: Callable[[str], None] = print,
 ) -> Path:
+    if plot_id not in _DEVELOPMENT_PLOTS:
+        raise ValueError("Hovi candidate extraction cannot inspect a sealed or unknown plot")
     selection = HoviSelection.load(selection_path)
-    plot = selection.development_plot(_PLOT_ID)
+    plot = selection.development_plot(plot_id)
     source_selected = plot.geometry_artifact()
     retained = RetainedSelection.load(retained_path, selection=selection)
     source = retained.artifact_for(source_selected)
-    if source.plot_id != _PLOT_ID:
+    if source.plot_id != plot_id:
         raise ValueError("Hovi surface source belongs to another plot")
-    log("verifying retained HY_SPRUCE4 merged LAZ")
+    log(f"verifying retained {plot_id} merged LAZ")
     if sha256_file(source.local_path) != source.sha256:
         raise ValueError("Hovi surface source bytes changed")
 
     support_manifest, support_inventory, support_manifest_sha, support_npz_path = _validate_support(
         support_manifest_path,
+        plot_id=plot_id,
         source_sha256=source.sha256,
         retention_id=retained.retention_id,
     )
     condition, condition_sha = _validate_condition(
-        condition_evidence_path, retained.retention_id
+        condition_evidence_path, retained.retention_id, plot_id
     )
     photo_qa, photo_qa_sha = _validate_photo_qa(
         photo_qa_index_path,
+        plot_id=plot_id,
         condition_sha256=condition_sha,
         retention_id=retained.retention_id,
     )
@@ -392,7 +399,7 @@ def extract_hovi_candidate_surface(
 
     recipe = {
         "schema_version": _RECIPE_SCHEMA,
-        "plot_id": _PLOT_ID,
+        "plot_id": plot_id,
         "selection_sha256": selection.sha256,
         "retention_id": retained.retention_id,
         "source": {
@@ -962,6 +969,7 @@ def extract_hovi_candidate_surface(
     for path, interpretation in render_surface_qa(
         diagnostic_candidate,
         build_root / "qa",
+        plot_id=plot_id,
         disposition=disposition,
     ):
         with Image.open(path) as image:
@@ -1001,7 +1009,7 @@ def extract_hovi_candidate_surface(
         "schema_version": _MANIFEST_SCHEMA,
         "status": "complete",
         "build_id": build_id,
-        "plot_id": _PLOT_ID,
+        "plot_id": plot_id,
         "disposition": disposition,
         "scientific_role": "raw_candidate",
         "qualification_status": "unqualified",
@@ -1024,12 +1032,13 @@ def extract_hovi_candidate_surface(
 
 def _main() -> None:
     parser = argparse.ArgumentParser(
-        description="Extract a conservative unqualified HY_SPRUCE4 candidate surface."
+        description="Extract a conservative unqualified Hovi development candidate surface."
     )
     parser.add_argument("--retained", type=Path, required=True)
     parser.add_argument("--support-manifest", type=Path, required=True)
     parser.add_argument("--condition-evidence", type=Path, required=True)
     parser.add_argument("--photo-qa-index", type=Path, required=True)
+    parser.add_argument("--plot", choices=_DEVELOPMENT_PLOTS, default="HY_SPRUCE4")
     parser.add_argument(
         "--selection", type=Path, default=CONFIG_DIR / "hovi-public-targets.json"
     )
@@ -1040,6 +1049,7 @@ def _main() -> None:
         args.support_manifest,
         args.condition_evidence,
         args.photo_qa_index,
+        plot_id=args.plot,
         selection_path=args.selection,
         work_root=args.work_root,
     )

@@ -143,6 +143,7 @@ def render_surface_qa(
     candidate: SurfaceCandidate,
     qa_dir: Path,
     *,
+    plot_id: str,
     disposition: str,
 ) -> tuple[tuple[Path, str], ...]:
     abstention = disposition == "abstention"
@@ -189,7 +190,7 @@ def render_surface_qa(
         path = qa_dir / filename
         _fit_image(
             rgb,
-            f"HY_SPRUCE4 - {title_prefix} - {filename.removesuffix('.png').replace('_', ' ')} - north up",
+            f"{plot_id} - {title_prefix} - {filename.removesuffix('.png').replace('_', ' ')} - north up",
             path,
         )
         output.append((path, interpretation))
