@@ -791,6 +791,56 @@ while retaining exact enlargement ownership, conservation, masks, rotation,
 partition, and shared edge. Do not resume for score or adjacency variants, fixed
 metric suppression, threshold weakening, or another any-positive overlap rule.
 
+### Public target hunt found no production corpus; combined rill evidence remains research-only
+
+The deterministic branch-initiation competition family remains parked. Three
+independent hard-gate public-data searches found no corpus that jointly provides
+the required target pitch/error, machine-resolvable support and surface
+semantics, transferable conditions, and usable rights. This is a bounded no-find,
+not evidence that a future source cannot qualify and not permission to weaken the
+gates. Active focus moves to a materially different combined rill-diffusion
+research direction.
+
+Two bounded CC BY 4.0 acquisitions are in progress. Hinsberger DOI
+`10.6084/m9.figshare.24592338.v1` contributes
+`Hinsberger_aerial_survey_data.zip` (`20,383,764,301` bytes). Alessio DOI
+`10.17632/6gjn2fmz86.3` contributes `Rill_Data_GIS_supplement.mpk`
+(`9,040,075,751` bytes). These downloads authorize raw retention and archive
+inspection only.
+
+Hinsberger's only allowed model role is paired weak-height supervision from the
+original post-event rill DEM aligned to its orthomosaic, masks, and event/field
+identity. Its reported `2.11 cm` rill-depth and `10.7 cm` width RMSE are feature
+measurement errors, not calibrated per-cell or axis-specific total-surface error;
+the absolute DEM is not production truth. Pre-erosion/SMS-triangulated DEMs,
+DoDs, and E3D/RUSLE outputs are forbidden as height targets or conditions.
+Alessio supplies network topology, width/depth/spacing and planform,
+contributing-area, geology/watershed, transect, and sediment/runoff supervision,
+plus a frozen cross-source audit. Its reported `0.045 m` average SfM-versus-LiDAR
+elevation difference is not an error distribution or truth claim; neither its
+absolute DEM nor its B2 pixels may enter diffusion height loss. Orthophotos from
+either source are annotation/exclusion evidence only, never optical model input.
+
+Abort Hinsberger as a height supervisor if the original post-event rill DEMs are
+absent; CRS, units, field/event identity, or direct-versus-interpolated support
+cannot be resolved; native GSD exceeds `0.05 m`; fewer than three independent
+event groups survive deduplication; DEM/orthomosaic registration exceeds half a
+native pixel; required vegetation/wet/object masks cannot be frozen; or the
+source-grid four-phase B2 gate fails. Abort Alessio as the combined proof if the
+MPK depends on unbundled members; the 5 cm DEM/orthomosaic, rill, transect,
+geology, watershed, or flow layers are missing; CRS/units cannot be resolved;
+rill vectors miss the DEM by more than one source pixel; the fixed catchment
+split lacks usable high-resolution coverage; exclusions cannot be reconstructed;
+or workbooks cannot bind transects to map identities.
+
+Neither source currently has calibrated `total_surface_error`, production-target
+status, or preview authority. No production recipe or browser preview may be
+authorized until archive conversion, direct/interpolated support masks,
+vegetation/water/object masks, and source-grid four-phase B1/B2 QA pass. If one
+source aborts, retain its inventory and provenance but do not silently rename a
+single-source run as the combined route; a B1-only pass is not evidence for the
+renderer-required B2 band.
+
 ### Current conditioning discards real soil structure and ignores mapped cliff/shore constraints
 
 `process/soil.py` keeps only the first soil component, simplified surface texture, stoniness, and fertility. The national source also contains component shares, layered texture, and humus/peat-horizon thickness. At the supplied Taevaskoda point, ETAK maps a natural shoreline escarpment within 5.32 m and the Ahja shoreline within 1.85 m, yet the rejected synthesis did not use those structures to correct the visible 1 m grid boundary. The replacement specification must treat full soil profiles and mapped structural constraints as first-class cook inputs.
