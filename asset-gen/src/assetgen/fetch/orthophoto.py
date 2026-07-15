@@ -1,4 +1,4 @@
-"""Acquire the frozen Taevaskoda Stage-1 RGB/CIR orthophoto evidence."""
+"""Acquire workbook-bound RGB/CIR orthophoto evidence for frozen sheets."""
 from __future__ import annotations
 
 import hashlib
@@ -26,16 +26,12 @@ from ..config import ASSET_GEN_ROOT, DATA_IN, BaseConfig
 from .http import PoliteSession
 
 
-_SELECTION_ID = "taevaskoda-orthophoto-54472-stage1"
-_SELECTION_SCHEMA = "taevaskoda-stage1-orthophoto-selection/1.0.0"
 _WORKBOOK = (
     ASSET_GEN_ROOT.parent
     / "docs/deep-research/microtopography-generation/library/data/maaamet"
     / "tomba_etak_avaandmed.xlsx"
 )
 _WORKBOOK_SHA256 = "fbef1433eff6116174cd1bbeca6e6550e093eeed794c14d583af77e03970b4b5"
-_SHEET_ID = "54472"
-_SHEET_BOUNDS = (675000.0, 6440000.0, 680000.0, 6445000.0)
 _OFFICIAL_HOSTS = ("geoportaal.maaamet.ee", "geoportaal.maaruum.ee")
 _RETRYABLE_HTTP = {429, 500, 502, 503, 504}
 _CONTENT_RANGE = re.compile(r"^bytes (\d+)-(\d+)/(\d+)$")
@@ -57,43 +53,127 @@ class OrthophotoArtifact:
     filename: str
     capture_date: str
     expected_bytes: int
+    expected_sha256: str
     pixel_size_m: float
     raster_size: int
     url: str
 
 
-_ARTIFACTS = (
-    OrthophotoArtifact(
-        product="rgb",
-        workbook_sheet="Ortofotod 2016-2025",
-        source_type="ortofoto_eesti_rgb",
-        filename="54472_OF_RGB_GeoTIFF_2025_07_18.zip",
-        capture_date="2025-07-18",
-        expected_bytes=207_351_332,
-        pixel_size_m=0.2,
-        raster_size=25_000,
+@dataclass(frozen=True)
+class OrthophotoSelection:
+    selection_id: str
+    schema: str
+    sheet: str
+    sheet_bounds: tuple[float, float, float, float]
+    retention_directory: str
+    log_label: str
+    temporal_policy: str
+    artifacts: tuple[OrthophotoArtifact, ...]
+
+
+def _artifact(
+    *,
+    sheet: str,
+    product: str,
+    workbook_sheet: str,
+    source_type: str,
+    capture_date: str,
+    expected_bytes: int,
+    expected_sha256: str,
+    pixel_size_m: float,
+    raster_size: int,
+) -> OrthophotoArtifact:
+    filename = f"{sheet}_OF_{product.upper()}_GeoTIFF_{capture_date.replace('-', '_')}.zip"
+    return OrthophotoArtifact(
+        product=product,
+        workbook_sheet=workbook_sheet,
+        source_type=source_type,
+        filename=filename,
+        capture_date=capture_date,
+        expected_bytes=expected_bytes,
+        expected_sha256=expected_sha256,
+        pixel_size_m=pixel_size_m,
+        raster_size=raster_size,
         url=(
             "https://geoportaal.maaamet.ee/index.php?lang_id=1&plugin_act=otsing"
-            "&kaardiruut=54472&andmetyyp=ortofoto_eesti_rgb&dl=1"
-            "&f=54472_OF_RGB_GeoTIFF_2025_07_18.zip&page_id=610"
+            f"&kaardiruut={sheet}&andmetyyp={source_type}&dl=1"
+            f"&f={filename}&page_id=610"
         ),
-    ),
-    OrthophotoArtifact(
-        product="cir",
-        workbook_sheet="Ortofoto_CIR",
-        source_type="ortofoto_eesti_cir",
-        filename="54472_OF_CIR_GeoTIFF_2024_05_22.zip",
-        capture_date="2024-05-22",
-        expected_bytes=133_805_748,
-        pixel_size_m=0.25,
-        raster_size=20_000,
-        url=(
-            "https://geoportaal.maaamet.ee/index.php?lang_id=1&plugin_act=otsing"
-            "&kaardiruut=54472&andmetyyp=ortofoto_eesti_cir&dl=1"
-            "&f=54472_OF_CIR_GeoTIFF_2024_05_22.zip&page_id=610"
-        ),
-    ),
+    )
+
+
+_TEMPORAL_POLICY = (
+    "RGB 2025 and CIR 2024 remain separate dated observations, never a "
+    "co-temporal composite."
 )
+_SELECTIONS = {
+    "54472": OrthophotoSelection(
+        selection_id="taevaskoda-orthophoto-54472-stage1",
+        schema="taevaskoda-stage1-orthophoto-selection/1.0.0",
+        sheet="54472",
+        sheet_bounds=(675000.0, 6440000.0, 680000.0, 6445000.0),
+        retention_directory="stage1-54472",
+        log_label="Stage-1 orthophoto",
+        temporal_policy=_TEMPORAL_POLICY,
+        artifacts=(
+            _artifact(
+                sheet="54472",
+                product="rgb",
+                workbook_sheet="Ortofotod 2016-2025",
+                source_type="ortofoto_eesti_rgb",
+                capture_date="2025-07-18",
+                expected_bytes=207_351_332,
+                expected_sha256="ea6b108232540c0966a8112ee5236039e9f5774d5a4fbf242ee6e5e488cae83b",
+                pixel_size_m=0.2,
+                raster_size=25_000,
+            ),
+            _artifact(
+                sheet="54472",
+                product="cir",
+                workbook_sheet="Ortofoto_CIR",
+                source_type="ortofoto_eesti_cir",
+                capture_date="2024-05-22",
+                expected_bytes=133_805_748,
+                expected_sha256="92dd4dc6bc67d58983baf919c980af43f78cfe4ec3b196d9e57b06ce778a4a20",
+                pixel_size_m=0.25,
+                raster_size=20_000,
+            ),
+        ),
+    ),
+    "54481": OrthophotoSelection(
+        selection_id="erodible-slope-orthophoto-54481-current",
+        schema="orthophoto-frozen-sheet-selection/1.0.0",
+        sheet="54481",
+        sheet_bounds=(680000.0, 6440000.0, 685000.0, 6445000.0),
+        retention_directory="sheet-54481",
+        log_label="Frozen sheet 54481 orthophoto",
+        temporal_policy=_TEMPORAL_POLICY,
+        artifacts=(
+            _artifact(
+                sheet="54481",
+                product="rgb",
+                workbook_sheet="Ortofotod 2016-2025",
+                source_type="ortofoto_eesti_rgb",
+                capture_date="2025-07-18",
+                expected_bytes=194_611_964,
+                expected_sha256="beb2cce12095409a4124890c1e95ebac90f4bfb53aa9263e8622c0688a9f14d6",
+                pixel_size_m=0.2,
+                raster_size=25_000,
+            ),
+            _artifact(
+                sheet="54481",
+                product="cir",
+                workbook_sheet="Ortofoto_CIR",
+                source_type="ortofoto_eesti_cir",
+                capture_date="2024-05-22",
+                expected_bytes=125_683_915,
+                expected_sha256="fb1ed7a1e02d282d56c03d07e8d255f33eb80f2e89d51d49e0fe21d7c5382c8f",
+                pixel_size_m=0.25,
+                raster_size=20_000,
+            ),
+        ),
+    ),
+}
 
 
 class _DownloadIntegrityError(ValueError):
@@ -175,7 +255,9 @@ def _cell_value(cell: ElementTree.Element, shared: list[str]) -> str:
     return value.text
 
 
-def _validate_workbook() -> tuple[bytes, list[dict[str, Any]]]:
+def _validate_workbook(
+    selection: OrthophotoSelection,
+) -> tuple[bytes, list[dict[str, Any]]]:
     workbook = _WORKBOOK.read_bytes()
     digest = hashlib.sha256(workbook).hexdigest()
     if digest != _WORKBOOK_SHA256:
@@ -185,7 +267,7 @@ def _validate_workbook() -> tuple[bytes, list[dict[str, Any]]]:
         if archive.testzip() is not None:
             raise ValueError("official orthophoto workbook failed ZIP CRC validation")
         shared = _shared_strings(archive)
-        for artifact in _ARTIFACTS:
+        for artifact in selection.artifacts:
             expected_command = f'wget --content-disposition "{artifact.url}"'
             sheet_path = _worksheet_path(archive, artifact.workbook_sheet)
             root = ElementTree.fromstring(archive.read(sheet_path))
@@ -304,6 +386,7 @@ def _compare_retained_prefix(
 
 def _write_resume_state(
     state_path: Path,
+    selection: OrthophotoSelection,
     artifact: OrthophotoArtifact,
     retained_bytes: int,
     attempts: int,
@@ -314,7 +397,7 @@ def _write_resume_state(
         _json_bytes(
             {
                 "schemaVersion": "orthophoto-download-resume/1",
-                "selectionId": _SELECTION_ID,
+                "selectionId": selection.selection_id,
                 "filename": artifact.filename,
                 "url": artifact.url,
                 "expectedBytes": artifact.expected_bytes,
@@ -329,6 +412,7 @@ def _write_resume_state(
 
 def _download_archive(
     session: PoliteSession,
+    selection: OrthophotoSelection,
     artifact: OrthophotoArtifact,
     part: Path,
     log,
@@ -343,7 +427,7 @@ def _download_archive(
     if state_path.exists():
         state = json.loads(state_path.read_bytes())
         if (
-            state.get("selectionId") != _SELECTION_ID
+            state.get("selectionId") != selection.selection_id
             or state.get("filename") != artifact.filename
             or state.get("url") != artifact.url
             or state.get("expectedBytes") != artifact.expected_bytes
@@ -355,12 +439,13 @@ def _download_archive(
         retained_record = json.loads(staged_provenance.read_bytes())
         retained_sha256 = _sha256_file(part)
         if (
-            retained_record.get("selectionId") != _SELECTION_ID
+            retained_record.get("selectionId") != selection.selection_id
             or retained_record.get("product") != artifact.product
             or retained_record.get("filename") != artifact.filename
             or retained_record.get("requestedUrl") != artifact.url
             or retained_record.get("bytes") != artifact.expected_bytes
             or retained_record.get("sha256") != retained_sha256
+            or retained_sha256 != artifact.expected_sha256
         ):
             raise ValueError(f"staged HTTP provenance does not bind {part}")
         return retained_record
@@ -371,7 +456,9 @@ def _download_archive(
     started = datetime.now(timezone.utc).isoformat()
     for attempt in range(1, session.cfg.max_retries + 1):
         retained = part.stat().st_size if part.exists() else 0
-        _write_resume_state(state_path, artifact, retained, attempt, initial_bytes)
+        _write_resume_state(
+            state_path, selection, artifact, retained, attempt, initial_bytes
+        )
         try:
             if retained:
                 log(
@@ -461,6 +548,7 @@ def _download_archive(
         except _DownloadIntegrityError:
             _write_resume_state(
                 state_path,
+                selection,
                 artifact,
                 part.stat().st_size if part.exists() else 0,
                 attempt,
@@ -470,6 +558,7 @@ def _download_archive(
         except requests.RequestException as error:
             _write_resume_state(
                 state_path,
+                selection,
                 artifact,
                 part.stat().st_size if part.exists() else 0,
                 attempt,
@@ -495,7 +584,7 @@ def _download_archive(
         raise AssertionError("completed orthophoto download lacks an HTTP identity request")
     record = {
         "schemaVersion": "orthophoto-http-provenance/1",
-        "selectionId": _SELECTION_ID,
+        "selectionId": selection.selection_id,
         "product": artifact.product,
         "filename": artifact.filename,
         "requestedUrl": artifact.url,
@@ -509,6 +598,10 @@ def _download_archive(
         "bytes": artifact.expected_bytes,
         "sha256": _sha256_file(part),
     }
+    if record["sha256"] != artifact.expected_sha256:
+        raise _DownloadIntegrityError(
+            f"orthophoto SHA-256 changed for {artifact.filename}: {record['sha256']}"
+        )
     _write_atomic(staged_provenance, _json_bytes(record))
     return record
 
@@ -570,7 +663,11 @@ def _extract_archive(archive_path: Path, destination: Path) -> list[dict[str, An
     return extracted
 
 
-def _validate_geotiff(root: Path, artifact: OrthophotoArtifact) -> dict[str, Any]:
+def _validate_geotiff(
+    root: Path,
+    selection: OrthophotoSelection,
+    artifact: OrthophotoArtifact,
+) -> dict[str, Any]:
     candidates = [
         path for path in root.rglob("*") if path.is_file() and path.suffix.lower() in {".tif", ".tiff"}
     ]
@@ -580,10 +677,10 @@ def _validate_geotiff(root: Path, artifact: OrthophotoArtifact) -> dict[str, Any
     expected_transform = Affine(
         artifact.pixel_size_m,
         0.0,
-        _SHEET_BOUNDS[0],
+        selection.sheet_bounds[0],
         0.0,
         -artifact.pixel_size_m,
-        _SHEET_BOUNDS[3],
+        selection.sheet_bounds[3],
     )
     with rasterio.open(path) as source:
         bounds = tuple(float(value) for value in source.bounds)
@@ -598,7 +695,9 @@ def _validate_geotiff(root: Path, artifact: OrthophotoArtifact) -> dict[str, Any
             or not source.transform.almost_equals(expected_transform, precision=1e-9)
             or any(
                 not math.isclose(actual, expected, rel_tol=0.0, abs_tol=1e-6)
-                for actual, expected in zip(bounds, _SHEET_BOUNDS, strict=True)
+                for actual, expected in zip(
+                    bounds, selection.sheet_bounds, strict=True
+                )
             )
         ):
             raise ValueError(
@@ -636,13 +735,15 @@ def _validate_geotiff(root: Path, artifact: OrthophotoArtifact) -> dict[str, Any
 
 def _verify_extraction(
     root: Path,
+    selection: OrthophotoSelection,
     artifact: OrthophotoArtifact,
     archive_sha256: str,
     document: dict[str, Any],
 ) -> None:
     if (
         document.get("schemaVersion") != "orthophoto-extraction-retention/1"
-        or document.get("selectionId") != _SELECTION_ID
+        or document.get("selectionId") != selection.selection_id
+        or document.get("sheet") != selection.sheet
         or document.get("product") != artifact.product
         or document.get("archiveFilename") != artifact.filename
         or document.get("archiveSha256") != archive_sha256
@@ -661,13 +762,14 @@ def _verify_extraction(
             or _sha256_file(path) != entry.get("sha256")
         ):
             raise ValueError(f"retained orthophoto extraction changed: {path}")
-    if _validate_geotiff(root, artifact) != document.get("geoTiff"):
+    if _validate_geotiff(root, selection, artifact) != document.get("geoTiff"):
         raise ValueError(f"retained {artifact.product} GeoTIFF metadata changed")
 
 
 def _materialize_extraction(
     part: Path,
     product_root: Path,
+    selection: OrthophotoSelection,
     artifact: OrthophotoArtifact,
     archive_sha256: str,
 ) -> tuple[Path, dict[str, Any]]:
@@ -678,16 +780,18 @@ def _materialize_extraction(
         if not manifest.is_file():
             raise ValueError(f"orphaned content-addressed extraction: {final_root}")
         document = json.loads(manifest.read_bytes())
-        _verify_extraction(final_root, artifact, archive_sha256, document)
+        _verify_extraction(
+            final_root, selection, artifact, archive_sha256, document
+        )
         return manifest, document
 
     temporary = product_root / f".{archive_sha256}.extracting"
     files = _extract_archive(part, temporary)
-    geotiff = _validate_geotiff(temporary, artifact)
+    geotiff = _validate_geotiff(temporary, selection, artifact)
     document = {
         "schemaVersion": "orthophoto-extraction-retention/1",
-        "selectionId": _SELECTION_ID,
-        "sheet": _SHEET_ID,
+        "selectionId": selection.selection_id,
+        "sheet": selection.sheet,
         "product": artifact.product,
         "captureDate": artifact.capture_date,
         "archiveFilename": artifact.filename,
@@ -714,6 +818,7 @@ def _promote_json_content_addressed(
 
 def _verify_product_retention(
     orthophoto_root: Path,
+    selection: OrthophotoSelection,
     artifact: OrthophotoArtifact,
     pointer: Path,
 ) -> dict[str, Any]:
@@ -734,9 +839,9 @@ def _verify_product_retention(
     )
     if (
         document.get("schemaVersion") != "orthophoto-product-retention/1"
-        or document.get("selectionId") != _SELECTION_ID
+        or document.get("selectionId") != selection.selection_id
         or document.get("product") != artifact.product
-        or document.get("sheet") != _SHEET_ID
+        or document.get("sheet") != selection.sheet
         or document.get("captureDate") != artifact.capture_date
         or document.get("sourceUrl") != artifact.url
         or document.get("archive", {}).get("filename") != artifact.filename
@@ -744,11 +849,12 @@ def _verify_product_retention(
         or not archive.is_file()
         or archive.stat().st_size != artifact.expected_bytes
         or _sha256_file(archive) != archive_sha256
+        or archive_sha256 != artifact.expected_sha256
         or not sidecar.is_file()
         or sidecar.read_text(encoding="ascii").strip() != archive_sha256
         or not provenance.is_file()
         or _sha256_file(provenance) != document.get("httpProvenance", {}).get("sha256")
-        or provenance_document.get("selectionId") != _SELECTION_ID
+        or provenance_document.get("selectionId") != selection.selection_id
         or provenance_document.get("product") != artifact.product
         or provenance_document.get("filename") != artifact.filename
         or provenance_document.get("requestedUrl") != artifact.url
@@ -766,7 +872,9 @@ def _verify_product_retention(
     ):
         raise ValueError(f"retained orthophoto product tuple changed: {pointer}")
     extraction_document = json.loads(extraction_manifest.read_bytes())
-    _verify_extraction(extraction, artifact, archive_sha256, extraction_document)
+    _verify_extraction(
+        extraction, selection, artifact, archive_sha256, extraction_document
+    )
     return document
 
 
@@ -774,25 +882,28 @@ def _fetch_product(
     orthophoto_root: Path,
     workbook_sha256: str,
     workbook_row: dict[str, Any],
+    selection: OrthophotoSelection,
     artifact: OrthophotoArtifact,
     session: PoliteSession,
     log,
 ) -> tuple[Path, dict[str, Any]]:
-    product_root = orthophoto_root / artifact.product / _SHEET_ID
+    product_root = orthophoto_root / artifact.product / selection.sheet
     pointer = product_root / "retained.json"
     if pointer.exists():
-        return pointer, _verify_product_retention(orthophoto_root, artifact, pointer)
+        return pointer, _verify_product_retention(
+            orthophoto_root, selection, artifact, pointer
+        )
 
     archive = product_root / artifact.filename
     if archive.exists():
         raise ValueError(f"orphaned orthophoto archive requires manual audit: {archive}")
     part = archive.with_suffix(archive.suffix + ".part")
-    http_record = _download_archive(session, artifact, part, log)
+    http_record = _download_archive(session, selection, artifact, part, log)
     archive_sha256 = _sha256_file(part)
     if http_record.get("sha256") != archive_sha256:
         raise ValueError(f"staged orthophoto HTTP provenance changed: {part}")
     extraction_manifest, extraction_document = _materialize_extraction(
-        part, product_root, artifact, archive_sha256
+        part, product_root, selection, artifact, archive_sha256
     )
 
     provenance_path, provenance_sha256 = _promote_json_content_addressed(
@@ -807,8 +918,8 @@ def _fetch_product(
 
     product_document = {
         "schemaVersion": "orthophoto-product-retention/1",
-        "selectionId": _SELECTION_ID,
-        "sheet": _SHEET_ID,
+        "selectionId": selection.selection_id,
+        "sheet": selection.sheet,
         "product": artifact.product,
         "captureDate": artifact.capture_date,
         "sourceType": artifact.source_type,
@@ -836,26 +947,43 @@ def _fetch_product(
         product_root / "retention", "retained.json", product_document
     )
     _write_immutable(pointer, content_path.read_bytes())
-    return pointer, _verify_product_retention(orthophoto_root, artifact, pointer)
+    return pointer, _verify_product_retention(
+        orthophoto_root, selection, artifact, pointer
+    )
 
 
-def fetch_taevaskoda_stage1_orthophoto(base: BaseConfig, *, log=print) -> Path:
-    """Fetch and verify the exact RGB/CIR artifacts frozen by the accepted Stage-1 spec."""
-    workbook, decisions = _validate_workbook()
+def fetch_frozen_orthophoto_sheet(
+    base: BaseConfig,
+    sheet: str,
+    *,
+    log=print,
+) -> Path:
+    """Fetch and verify RGB/CIR artifacts for one explicitly frozen sheet."""
+    try:
+        selection = _SELECTIONS[sheet]
+    except KeyError as error:
+        raise ValueError(f"orthophoto sheet is not frozen for acquisition: {sheet}") from error
+    workbook, decisions = _validate_workbook(selection)
     workbook_sha256 = hashlib.sha256(workbook).hexdigest()
     orthophoto_root = (DATA_IN / "orthophoto").resolve()
-    stage_root = orthophoto_root / "stage1-54472"
+    stage_root = orthophoto_root / selection.retention_directory
     snapshot = stage_root / "snapshots" / "workbook" / workbook_sha256 / _WORKBOOK.name
     _write_immutable(snapshot, workbook)
 
     session = PoliteSession(base.fetch)
     products: list[dict[str, Any]] = []
-    for index, (artifact, decision) in enumerate(zip(_ARTIFACTS, decisions, strict=True), 1):
-        log(f"[{index}/{len(_ARTIFACTS)}] Stage-1 orthophoto {artifact.product.upper()}")
+    for index, (artifact, decision) in enumerate(
+        zip(selection.artifacts, decisions, strict=True), 1
+    ):
+        log(
+            f"[{index}/{len(selection.artifacts)}] {selection.log_label} "
+            f"{artifact.product.upper()}"
+        )
         pointer, document = _fetch_product(
             orthophoto_root,
             workbook_sha256,
             decision,
+            selection,
             artifact,
             session,
             log,
@@ -873,9 +1001,9 @@ def fetch_taevaskoda_stage1_orthophoto(base: BaseConfig, *, log=print) -> Path:
         log(f"verified {artifact.filename} ({artifact.expected_bytes / 1e6:.1f} MB)")
 
     global_document = {
-        "schemaVersion": _SELECTION_SCHEMA,
-        "selectionId": _SELECTION_ID,
-        "sheet": _SHEET_ID,
+        "schemaVersion": selection.schema,
+        "selectionId": selection.selection_id,
+        "sheet": selection.sheet,
         "complete": True,
         "products": products,
         "workbook": {
@@ -886,10 +1014,7 @@ def fetch_taevaskoda_stage1_orthophoto(base: BaseConfig, *, log=print) -> Path:
             "decisions": decisions,
         },
         "attribution": _ATTRIBUTION,
-        "temporalPolicy": (
-            "RGB 2025 and CIR 2024 remain separate dated observations, never a "
-            "co-temporal composite."
-        ),
+        "temporalPolicy": selection.temporal_policy,
     }
     content_path, _ = _promote_json_content_addressed(
         stage_root / "retention", "retained.json", global_document
@@ -897,3 +1022,8 @@ def fetch_taevaskoda_stage1_orthophoto(base: BaseConfig, *, log=print) -> Path:
     output = stage_root / "retained.json"
     _write_immutable(output, content_path.read_bytes())
     return output
+
+
+def fetch_taevaskoda_stage1_orthophoto(base: BaseConfig, *, log=print) -> Path:
+    """Fetch the exact accepted Taevaskoda Stage-1 RGB/CIR snapshot."""
+    return fetch_frozen_orthophoto_sheet(base, "54472", log=log)

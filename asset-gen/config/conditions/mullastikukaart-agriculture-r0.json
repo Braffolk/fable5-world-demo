@@ -1,0 +1,6 @@
+{
+  "schema_version": "laas.mullastikukaart-window-selection/1",
+  "name": "agriculture-r0-2426-1498",
+  "bbox_en": [679168.0, 6443648.0, 679296.0, 6443776.0],
+  "crs": "EPSG:3301"
+}

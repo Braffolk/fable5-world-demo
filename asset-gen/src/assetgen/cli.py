@@ -277,6 +277,16 @@ def evidence_fetch_orthophoto_stage1_cmd() -> None:
     click.echo(f"retention manifest: {path}")
 
 
+@main.command("evidence-fetch-orthophoto-sheet")
+@click.option("--sheet", required=True, help="Explicitly frozen Maa-amet sheet id.")
+def evidence_fetch_orthophoto_sheet_cmd(sheet: str) -> None:
+    """Retain current workbook-bound RGB/CIR for a frozen sheet."""
+    from .fetch.orthophoto import fetch_frozen_orthophoto_sheet
+
+    path = fetch_frozen_orthophoto_sheet(load_base(), sheet, log=click.echo)
+    click.echo(f"retention manifest: {path}")
+
+
 @main.command("evidence-fetch-hovi")
 @click.option(
     "--through",
@@ -457,6 +467,63 @@ def micro_agriculture_r0_cmd(config_path: Path, output_root: Path) -> None:
 
     path = build_cultivated_r0(config_path, output_root=output_root)
     click.echo(f"agriculture R0 manifest: {path}")
+
+
+@main.command("condition-soil-window")
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Named Mullastikukaart window selection JSON.",
+)
+@click.option(
+    "--bbox",
+    type=float,
+    nargs=4,
+    default=None,
+    metavar="MIN_E MIN_N MAX_E MAX_N",
+    help="Direct EPSG:3301 window; mutually exclusive with --config.",
+)
+@click.option(
+    "--name",
+    default="direct-bbox",
+    show_default=True,
+    help="Artifact slug used with --bbox.",
+)
+@click.option(
+    "--output-root",
+    type=click.Path(path_type=Path),
+    default=DATA_WORK / "terrain/conditions/soil/mullastikukaart/sha256",
+    show_default=True,
+)
+def condition_soil_window_cmd(
+    config_path: Path | None,
+    bbox: tuple[float, float, float, float] | None,
+    name: str,
+    output_root: Path,
+) -> None:
+    """Snapshot complete Mullastikukaart polygons intersecting one window."""
+    from .terrain.conditions.soil import extract_soil_window, load_window_selection
+
+    if (config_path is None) == (bbox is None):
+        raise click.UsageError("provide exactly one of --config or --bbox")
+    if config_path is not None:
+        selected_name, selected_bbox, selection_source = load_window_selection(
+            config_path
+        )
+    else:
+        assert bbox is not None
+        selected_name = name
+        selected_bbox = bbox
+        selection_source = {"kind": "direct_cli_bbox"}
+    path = extract_soil_window(
+        selected_bbox,
+        name=selected_name,
+        selection_source=selection_source,
+        output_root=output_root,
+    )
+    click.echo(f"soil condition window: {path}")
 
 
 @main.command("micro-fixture-verify")

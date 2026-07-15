@@ -1,0 +1,21 @@
+{
+  "schema_version": "laas.mullastikukaart-official-soil-authority/1",
+  "authority_basis": "Canonical codes explicitly enumerated in the official-legend section of config/soil-types.toml; local data-only variants and convenience aliases are excluded unless listed here.",
+  "official_canonical_codes": [
+    "Kh'", "Kh\"", "Kr", "K", "Kk", "Kor", "Ko", "KI", "LP",
+    "LkI", "LkII", "LkIII", "L(k)I", "L(k)II", "L(k)III", "Lo",
+    "LI", "LII", "LIII", "Ls", "Kh'g", "Kh\"g", "Krg", "Kg",
+    "Kkg", "Korg", "Kog", "KIg", "LPg", "LkIg", "LkIIg", "LkIIIg",
+    "L(k)Ig", "L(k)IIg", "L(k)IIIg", "LIg", "LIIg", "LIIIg", "Lsg",
+    "Gh'", "Gh\"", "Gkr", "Gk", "Gor", "Go", "GI", "LPG", "LkG",
+    "LG", "Gh1", "Go1", "GI1", "LG1", "M'", "M\"", "M'\"",
+    "S'", "S\"", "S'\"", "R'", "R\"", "R'\"", "E2k", "E2o",
+    "E2I", "E3k", "E3o", "E3I", "D", "Dg", "DG", "Ag", "AG",
+    "AG1", "AM'", "AM\"", "AM'\"", "Ar", "ArG", "ArG1", "Arv",
+    "Gr", "Gr1", "Mr", "Av", "B", "Bg", "BG", "Tx", "Txg", "TxG",
+    "TxM", "TxR", "Ty", "Tyg", "TyG", "TyM", "Tz", "Tzg", "TzG",
+    "TzM", "Tu", "Tug", "TuG", "TuM", "Pu", "Pug", "PuG", "Pp",
+    "Ppg", "PpG", "C", "L", "Lk", "Lg", "Lkg"
+  ],
+  "official_aliases": {}
+}
