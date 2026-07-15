@@ -756,6 +756,7 @@ def create_build_plan(
             "structural-repair-overlay-v1",
             "research-microtopography-preview-v1",
             "research-microtopography-generalization-preview-v1",
+            "research-rough-till-structural-preview-v1",
         ):
             raise ValueError(f"unsupported micro recipe kind {micro_recipe_kind!r}")
         if (
@@ -764,6 +765,7 @@ def create_build_plan(
                 "structural-repair-overlay-v1",
                 "research-microtopography-preview-v1",
                 "research-microtopography-generalization-preview-v1",
+                "research-rough-till-structural-preview-v1",
             )
             and base_manifest_sha256 != MICRO_V1_BASE_SHA256
         ):
@@ -820,6 +822,20 @@ def create_build_plan(
             if expectation.get("verifier") != planned_verifier:
                 raise ValueError(
                     "forest generalization preview expectation names a different verifier"
+                )
+        elif micro_recipe_kind == "research-rough-till-structural-preview-v1":
+            from .terrain.microtopography.rough_till_boulder.packed_preview_verify import (
+                VERIFIER_ID as ROUGH_TILL_PREVIEW_VERIFIER_ID,
+                verifier_source_sha256 as rough_till_preview_verifier_source_sha256,
+            )
+
+            planned_verifier = {
+                "id": ROUGH_TILL_PREVIEW_VERIFIER_ID,
+                "sourceSha256": rough_till_preview_verifier_source_sha256(),
+            }
+            if expectation.get("verifier") != planned_verifier:
+                raise ValueError(
+                    "rough-till structural preview expectation names a different verifier"
                 )
         else:
             planned_verifier = {
@@ -1067,6 +1083,12 @@ def _require_micro_verification(
         )
 
         verifier = verify_generalization_preview
+    elif recipe_kind == "research-rough-till-structural-preview-v1":
+        from .terrain.microtopography.rough_till_boulder.packed_preview_verify import (
+            verify_rough_till_preview,
+        )
+
+        verifier = verify_rough_till_preview
     else:
         verifier = {
             "retention-fixture": verify_micro_fixture,
@@ -1336,6 +1358,9 @@ def _manifest_from_plan(
                     else "accepted-forest-generalization-research-preview-v1"
                     if plan.get("microRecipeKind")
                     == "research-microtopography-generalization-preview-v1"
+                    else "rough-till-structural-only-finest-research-preview-v1"
+                    if plan.get("microRecipeKind")
+                    == "research-rough-till-structural-preview-v1"
                     else "measured-synthesis-pilot-v1"
                     if pilot_only
                     else "structural-repair-overlay-v1"
@@ -1488,8 +1513,10 @@ def publish_build(
     if plan.get("microRecipeKind") in (
         "measured-synthesis-pilot",
         "research-microtopography-preview-v1",
+        "research-microtopography-generalization-preview-v1",
+        "research-rough-till-structural-preview-v1",
     ):
-        raise ValueError("measured-synthesis pilot is immutable-preview-only and cannot update latest")
+        raise ValueError("research preview is immutable-preview-only and cannot update latest")
     if plan.get("microRecipeKind") == "structural-repair-overlay-v1":
         raise ValueError("structural repair overlay is preview-only and cannot update latest")
     complete, preview_manifest = _load_complete(build_digest, work_root, out_root)

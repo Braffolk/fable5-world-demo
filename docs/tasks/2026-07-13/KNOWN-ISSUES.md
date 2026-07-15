@@ -1311,11 +1311,35 @@ numbered PNG record is under the build's `qa/` directory.
 This closes only a bounded float research-capacity checkpoint. It is not user
 acceptance, generic rough-till ownership, a learned Estonia distribution,
 national transfer/truth, boulder-pile synthesis, 6.25 cm fine rock evidence,
-packing/browser authority, production, cliff, or sandstone capability. The
+production, cliff, or sandstone capability. The
 weak fabric form is source-derived, but its local Estonia orientation is not
 independently measured. Packing, if separately authorized, must consume the
 exact `2048 x 2048` `after_m` surface and `allowed` mask from `preview.npz`
 without changing the ordinary height format or claiming a finer source grid.
+
+That separate bounded packing authorization is now exercised by final build
+`f2aaedefa6924a2aee593a44fd0a97a84894ebfbf55d3f9c4de57d4535e2ee3d` and
+immutable manifest SHA-256
+`ccbc3eefa360b6edec80cfa3c972a35e270e2cd8cd6df8ff14a1b23b0ddf5e0a`.
+It uses the ordinary format-2 fine-height path and does not update
+`latest.json`. The source's 0.25 m `after_m` authority is embedded only where
+`allowed` is true; forbidden samples use the canonical decoded-base structural
+reconstruction. LOD -2 adds no new stochastic or learned morphology: it is
+Keys cubic structural refinement with exact parent-cell mean correction.
+Therefore the 6.25 cm sampling density improves mesh representation but remains
+explicitly **not** 6.25 cm rock/till evidence.
+
+Independent replay verifies zero decoded seams across 40 comparisons, a
+byte-exact child-derived LOD -1 parent, masked LOD0-L4 closure, no stale
+ancestors, and byte-exact inherited non-height indexes. Maximum structural and
+forbidden-region round-trip errors are `0.00100327 m`; maximum masked LOD0
+closure error is `0.00500465 m`; artifact forbidden residual is zero. Exact
+real-WebGPU boots passed at frame 118 with inherited materials, vegetation, and
+grass present and grounded, and at frame 108 with grass hidden for direct
+geometry inspection. The geometry screenshot SHA-256 is
+`99e4bdfba6000c646f90cd0588c593861e98133fba4f041c10d79cca1ec78dcb`.
+This is still not user visual acceptance, generic rough-till ownership,
+national coverage, production, or `latest` authority.
 
 Rock/cliff-capable regimes remain abstained. They require typed macro
 reconstruction of under-resolved shoulders, edges, ledges, joints/fractures,
