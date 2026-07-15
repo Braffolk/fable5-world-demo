@@ -957,6 +957,20 @@ three labeled QA PNGs remain negative evidence. The next active specialist must
 be materially different and must produce inspectable morphology within the new
 outcome-first work budget.
 
+The separate coarse-to-fine multiscale-amplification specialist also completed
+its full two-attempt budget and is parked. It runs aligned 0.25, 0.125, and
+0.0625 m erosion, conservative thermal transfer, and downstream deposition over
+the accepted Development-A authority. Attempt one exposed unstable support-edge
+thermal transport; one coherent correction restricted the thermal halo and made
+pair transfers disjoint and CFL-limited. Final artifact `0a150a358b3e...` has
+exact protected C0 and conservative sediment, thermal, and total-volume ledgers,
+but retains a `4.9725 m` maximum outlier, storage/support-aligned shoreline
+structures, and negligible morphology elsewhere. The surviving defect is
+consistent with sparse signed inventory being concentrated while prolonging
+across changing hard support, not a coefficient-scale issue. Resume only with a
+structurally different support-aware transfer formulation that proves a local
+relief envelope. Do not add another erosion iteration or constant adjustment.
+
 The national soil preflight resolved one apparent blocker from retained official
 documentation. Pure raised-bog soils encode the organic profile in their parsed
 peat texture sequence; deep profiles may be `T`-only, so blank `Huumus` is a
