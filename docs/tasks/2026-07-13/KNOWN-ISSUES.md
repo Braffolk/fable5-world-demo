@@ -1288,6 +1288,41 @@ residual limits. Relevant geometry QA is under each artifact's `qa/` directory,
 with SHA-256, dimensions, interpretation, source identities, and recipe binding
 in `qa/index.json`. Taevaskoda was not opened and no browser URL exists.
 
+### Multi-form mapped-rock/till capacity is positive but remains narrowly bounded
+
+Float build `8dbbe1393d378a7f1d7240d4fb95d3caad9481d6d9b5a351e0b3718e27459c5d`
+uses one `512 x 512 m` Estonia window at `[683520,6435840,684032,6436352]`.
+The stored research surface is `2048 x 2048` samples at `0.25 m` spacing. Three
+ETAK type-10 single boulders have direct complete Mullastikukaart `Loimis1` and
+`Huumus` parses and are covered by one decoded EGT `50/50` glacial-till/moraine
+polygon. Distinct FORWARD families 2/3/4 provide the three embedded body/socket
+forms; family 1 provides one weak source-derived till-fabric form. The three
+type-20 mapped boulder piles are conservative hard exclusions, not natural-form
+anchors.
+
+Parent visual review accepts the common-scale 48 m before/after pairs as three
+distinct embedded refinements without circular or square islands. Changed
+support remains sparse and non-repeating. Anchor residuals are `+0.154155`,
+`+0.140024`, and `+0.214028 m`; the full residual spans
+`-0.178597..+0.214028 m`. All four retained source families have nonzero use,
+and forbidden plus outer-border residuals are exactly zero. The machine and
+numbered PNG record is under the build's `qa/` directory.
+
+This closes only a bounded float research-capacity checkpoint. It is not user
+acceptance, generic rough-till ownership, a learned Estonia distribution,
+national transfer/truth, boulder-pile synthesis, 6.25 cm fine rock evidence,
+packing/browser authority, production, cliff, or sandstone capability. The
+weak fabric form is source-derived, but its local Estonia orientation is not
+independently measured. Packing, if separately authorized, must consume the
+exact `2048 x 2048` `after_m` surface and `allowed` mask from `preview.npz`
+without changing the ordinary height format or claiming a finer source grid.
+
+Rock/cliff-capable regimes remain abstained. They require typed macro
+reconstruction of under-resolved shoulders, edges, ledges, joints/fractures,
+scarps, bank breaks, and talus/ordinary-terrain transitions before fine
+morphology. Merely increasing bumpiness on a coarse DTM face or ramp is still a
+failed specialist.
+
 ## Visual/Data Investigations
 
 ### Estonia DTM may contain two tall bumps in the Ahja river
