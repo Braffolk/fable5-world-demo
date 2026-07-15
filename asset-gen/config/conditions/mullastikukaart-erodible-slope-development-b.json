@@ -1,0 +1,6 @@
+{
+  "schema_version": "laas.mullastikukaart-window-selection/1",
+  "name": "erodible-slope-development-b-128m",
+  "bbox_en": [679628.03, 6442720.16, 679756.03, 6442848.16],
+  "crs": "EPSG:3301"
+}

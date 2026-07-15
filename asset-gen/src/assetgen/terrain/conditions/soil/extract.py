@@ -16,6 +16,7 @@ import pyproj
 import shapely
 
 from ....config import ASSET_GEN_ROOT, CONFIG_DIR, DATA_IN, DATA_WORK
+from .profile import parse_humus_profile, parse_texture_profile
 from .schema import (
     FIELDS,
     LAYER,
@@ -31,6 +32,39 @@ from .schema import (
 _SCHEMA_VERSION = "laas.mullastikukaart-window/1"
 _REQUIRED_SOURCE_COMPONENTS = (".shp", ".shx", ".dbf", ".prj", ".cpg")
 _OPTIONAL_SOURCE_COMPONENTS = (".sbn", ".sbx", ".shp.xml")
+_PROFILE_AUTHORITIES = (
+    {
+        "path": "data/in/soil/mullalegend.pdf",
+        "sha256": "69602b8fb9e0c3e99d53df32e7caa7aa5f534a91f430f2d185e0017e92502a59",
+        "pages": [1, 2],
+        "sections": [
+            "Lõimis",
+            "Mulla kores",
+            "Lõimisevalem ja mulla uurimissügavus",
+            "Turba ja metsakõdu lagunemisastmed",
+            "Huumuslikud ja turbahorisondid ning metsakõdu",
+        ],
+        "role": "normative_map_formula_legend",
+    },
+    {
+        "path": "data/in/soil/mullakaardi_seletuskiri.pdf",
+        "sha256": "5db90f4db24c51cdc1860689b95cabb3590197852cd6636c6914fbd421289ae5",
+        "pages": [6, 9, 10, 11],
+        "sections": [
+            "Digitaalses andmebaasis on olemas andmed",
+            "V Mullastiku kaardile märgitavad mullaomaduste näitajad ja nende määramine välitöödel",
+            "2. Mulla lõimis (mehaaniline koostis)",
+            "4. Mulla huumuslike horisontide määramine",
+        ],
+        "role": "measurement_and_database_semantics",
+    },
+    {
+        "path": "data/in/soil/mullakaart/Mullakaart.shp.xml",
+        "sha256": "66e608361f799abf7402d4a60b29c048364f584e03004b6b06c19511abdc88da",
+        "sections": ["eainfo/detailed/attr", "Esri/lineage"],
+        "role": "delivered_field_and_lineage_metadata",
+    },
+)
 
 
 def _sha256_file(path: Path) -> str:
@@ -48,14 +82,6 @@ def _canonical_bytes(value: Any) -> bytes:
         sort_keys=True,
         separators=(",", ":"),
     ).encode("ascii")
-
-
-def _raw_only_status(value: Any) -> str:
-    return (
-        "missing"
-        if value is None
-        else "preserved_raw_no_complete_local_official_parser"
-    )
 
 
 def _implementation_sha256() -> str:
@@ -172,6 +198,24 @@ def _table_sources() -> list[dict[str, Any]]:
     return rows
 
 
+def _profile_authority_sources() -> list[dict[str, Any]]:
+    rows = []
+    for specification in _PROFILE_AUTHORITIES:
+        path = ASSET_GEN_ROOT / specification["path"]
+        if not path.is_file():
+            raise FileNotFoundError(f"soil profile authority is absent: {path}")
+        actual_sha256 = _sha256_file(path)
+        if actual_sha256 != specification["sha256"]:
+            raise ValueError(f"soil profile authority changed: {path}")
+        rows.append(
+            {
+                **specification,
+                "bytes": path.stat().st_size,
+            }
+        )
+    return rows
+
+
 def extract_soil_window(
     bbox_en: tuple[float, float, float, float],
     *,
@@ -189,6 +233,7 @@ def extract_soil_window(
         raise FileNotFoundError(f"Mullastikukaart source is absent: {source}")
     source_bundle = _source_bundle(source)
     table_sources = _table_sources()
+    profile_authorities = _profile_authority_sources()
     source_schema = schema_snapshot(source)
     recipe = {
         "schema_version": f"{_SCHEMA_VERSION}.recipe",
@@ -199,11 +244,13 @@ def extract_soil_window(
         "source_bundle": source_bundle,
         "source_schema": source_schema,
         "normalization_tables": table_sources,
+        "profile_semantics_authorities": profile_authorities,
         "implementation_sha256": _implementation_sha256(),
         "runtime_provenance": _runtime_provenance(),
         "geometry_policy": "full_unclipped_ogr_wkb_for_every_intersecting_source_feature",
         "normalization_policy": (
-            "strict exact table entries only; missing and unparseable values remain explicit"
+            "strict official grammar and exact table entries only; missing and "
+            "unparseable values remain explicit with residual source spans"
         ),
     }
     recipe_sha256 = hashlib.sha256(_canonical_bytes(recipe)).hexdigest()
@@ -243,6 +290,8 @@ def extract_soil_window(
         raise RuntimeError("Mullastikukaart source changed during window extraction")
     if _table_sources() != table_sources:
         raise RuntimeError("soil normalization tables changed during window extraction")
+    if _profile_authority_sources() != profile_authorities:
+        raise RuntimeError("soil profile authorities changed during window extraction")
     query = shapely.box(*bbox_en)
     query_area = float(query.area)
     features: list[dict[str, Any]] = []
@@ -272,9 +321,9 @@ def extract_soil_window(
             },
             "Lihtloimis": normalize_lihtloimis(raw["Lihtloimis"], tables),
             "Kivisus": normalize_stoniness(raw["Kivisus"]),
-            "Loimis1": {"status": _raw_only_status(raw["Loimis1"])},
-            "Loimis2": {"status": _raw_only_status(raw["Loimis2"])},
-            "Huumus": {"status": _raw_only_status(raw["Huumus"])},
+            "Loimis1": parse_texture_profile(raw["Loimis1"]),
+            "Loimis2": parse_texture_profile(raw["Loimis2"]),
+            "Huumus": parse_humus_profile(raw["Huumus"]),
         }
         wkb_sha256 = hashlib.sha256(wkb_bytes).hexdigest()
         identity = hashlib.sha256(
@@ -332,7 +381,7 @@ def extract_soil_window(
         "limitations": [
             "Source polygons are 1:10,000 conditioning evidence, not centimeter geometry.",
             "Shapefile FIDs are identities only together with the exact retained source bundle.",
-            "Loimis1, Loimis2, and Huumus remain raw because no complete local official parser is available.",
+            "Profile strings outside the bound official grammar remain explicit with residual source spans.",
             "No missing or unparseable value is assigned a nearest class.",
         ],
     }

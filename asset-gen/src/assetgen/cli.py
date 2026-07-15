@@ -526,6 +526,22 @@ def condition_soil_window_cmd(
     click.echo(f"soil condition window: {path}")
 
 
+@main.command("condition-soil-profile-inventory")
+@click.option(
+    "--output-root",
+    type=click.Path(path_type=Path),
+    default=DATA_WORK
+    / "terrain/conditions/soil/mullastikukaart/profile-inventory/sha256",
+    show_default=True,
+)
+def condition_soil_profile_inventory_cmd(output_root: Path) -> None:
+    """Inventory national support for the official soil-profile grammar."""
+    from .terrain.conditions.soil import inventory_profile_coverage
+
+    path = inventory_profile_coverage(output_root)
+    click.echo(f"soil profile coverage inventory: {path}")
+
+
 @main.command("micro-fixture-verify")
 @click.option("--build", "build_digest", required=True, help="64-hex recipe digest")
 @click.option("--base-manifest", required=True, type=click.Path(path_type=Path))
