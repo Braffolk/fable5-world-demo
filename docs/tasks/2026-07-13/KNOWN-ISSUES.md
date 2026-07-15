@@ -927,9 +927,13 @@ The no-output Phase 1 boundary is now frozen and independently clean. Config
 `361ec1209ab8...`, and spec `c08c65428be0...` bind the exact Guérin mechanism,
 support/void behavior, construction-before-k19 transaction, visual gates,
 content-addressed QA and receipt bytes, and outcome-producing implementation.
-No synthesis has run and no NPZ member array, including k19, was opened during
-the freeze. The next operation is exactly one k11/k32/k36 construction run and
-manual review; failure parks the route without a tuning cycle.
+No synthesis or NPZ member-array access occurred during the freeze. The single
+permitted construction execution at checkpoint `273b50f` subsequently failed
+after `0.68 s` in the first fold because the frozen spectral QA requires one
+all-supported 64-cell square and the construction surface supplies none. The
+failure preceded artifact, PNG, trace, and receipt publication. K19 remains
+unopened. Guérin/LUKE is parked without changing the metric or rerunning against
+consumed construction data; it establishes no algorithm-capacity result.
 
 The national soil preflight resolved one apparent blocker from retained official
 documentation. Pure raised-bog soils encode the organic profile in their parsed
