@@ -935,6 +935,21 @@ failure preceded artifact, PNG, trace, and receipt publication. K19 remains
 unopened. Guérin/LUKE is parked without changing the metric or rerunning against
 consumed construction data; it establishes no algorithm-capacity result.
 
+The active non-agricultural challenger is now a materially different continuous
+morphodynamics implementation under
+`assetgen.terrain.microtopography.erodible_slope.morphodynamics`. It does not
+reuse the rejected branch catalogs, trench/fan stamps, or Schott constants. The
+pre-run package binds accepted C0 and protected masks, fixed parent/fine domains,
+depression-aware organization, extensive solid and ponded inventories,
+dimensionally correct transport, finite residence, analytical maturity, and
+content-addressed float/QA materialization. Tiny synthetic gates pass, including
+exact protected C0, independent cell-average height volume, solid/water ledgers,
+reservoir mixing, typed hydrologic sources, and the project-specific sample
+phase. This is implementation readiness only: no Development-A terrain has run,
+no visible morphology has passed, and no OOD, cook, preview, or production claim
+exists. The next gate is one hash-frozen Development-A float artifact inspected
+for actual coherent morphology.
+
 The national soil preflight resolved one apparent blocker from retained official
 documentation. Pure raised-bog soils encode the organic profile in their parsed
 peat texture sequence; deep profiles may be `T`-only, so blank `Huumus` is a
