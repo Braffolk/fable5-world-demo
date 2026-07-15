@@ -45,6 +45,7 @@
 - Do not collapse a high-fidelity requirement into a toy proxy: a tree is not a pole and sphere, bark is not generic noise, terrain microtopography is not random bumpiness, and realism is not merely "less triangulated."
 - Decomposition does not authorize isolated local perfection that breaks the whole. Reassemble the researched constituents into a coherent system and judge the final user-visible result at its intended scale, density, variance, and context.
 - Harnesses, formats, ingestion, and tests may use pragmatic engineering, but they must not silently lower the quality ceiling of the difficult synthesis or rendering algorithm they support.
+- Keep production proof and research visual investigation distinct, but do not turn ideal evidence gates into a permanent no-output policy. Independent transfer evidence and perfect gate closure are preferred, not absolute requirements. A best-available method may proceed to a labeled research preview on a defensible "generally should transfer" physical-regime hypothesis, and may eventually reach production when it is the only credible zero-budget choice, its remaining defects are minor and bounded, user-visible quality is good, and the alternative is materially worse or no result. Record the uncertainty and abstain outside the matched regime. Do not relax hard safety/integrity gates for catastrophic relief, water/object/protected leakage, broken seams or hierarchy, corrupt packing, runtime instability, destructive regressions, or obviously repetitive/implausible output.
 
 ## Project Budget
 

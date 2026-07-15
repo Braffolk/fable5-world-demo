@@ -989,6 +989,18 @@ foreign campaign, and no Estonia condition/OOD/transfer gate exists. Do not cook
 publish, or treat it as a regime owner until independently qualified Estonia
 conditions and new untouched validation evidence exist.
 
+The same mechanism was allowed two Estonia anchoring attempts under the explicit
+best-available `generally should transfer` research hypothesis. Both restore
+water, hard exclusions, and unsupported cells exactly and preserve one-metre C0
+means. Attempt `8128ba6c...` still has `13-14%` excess gradient energy at patch
+boundaries. Increasing overlap in final attempt `c9e9f2ed...` worsens that excess
+to `74-77%`, exposes a square lattice in the 32 m ground-scale close-up, and
+reaches `0.513 m` residual. This defect is too visible and systematic to accept
+as a minor imperfection, even under the relaxed production-evidence policy. The
+standalone capacity result remains useful, but fixed-grid overlap-add is parked.
+Resume forest anchoring only with a structurally different non-grid transport or
+continuous synthesis formulation, not another patch-size or overlap adjustment.
+
 The national soil preflight resolved one apparent blocker from retained official
 documentation. Pure raised-bog soils encode the organic profile in their parsed
 peat texture sequence; deep profiles may be `T`-only, so blank `Huumus` is a
