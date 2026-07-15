@@ -1351,6 +1351,37 @@ scarps, bank breaks, and talus/ordinary-terrain transitions before fine
 morphology. Merely increasing bumpiness on a coarse DTM face or ramp is still a
 failed specialist.
 
+### Development-A ALS supports a bounded 2D adjacent-escarpment correction, not a cliff specialist
+
+Development-only float artifact
+`asset-gen/data/work/microtopography/coastal-escarpment/als-tgv/sha256/a5d101c1cca45cf817af1707b89ab574912d0774cf435885d8ed90f513753055/manifest.json`
+abandons the rejected line-profile targets completely. One second-order TGV
+residual is solved on a `769 x 1281` node, `0.25 m` lattice over adjacent LOD -2
+chunks `(2436,1492)` and `(2437,1492)` plus the accepted halo. Its Huber data
+attachment uses `22,194` qualified raw 2019 class-2 ALS points. C0 is the exact
+accepted structural authority; RGB/CIR pixels supply only an anisotropic
+regularizer where neither vegetation nor shadow masks them. No Biała height,
+shape, band, distribution, or fitted parameter enters the solve.
+
+The deterministic spatial holdout withholds complete `8 m` blocks. Low-side
+block-median MAE improves from `0.0999441 m` at C0 to `0.0945328 m`; high-side
+error improves from `0.0310890 m` to `0.0255238 m`. Both sides exceed the frozen
+support floor. Residual p01/p99 is `-0.161147/+0.106259 m`, with bounded extrema
+`-0.363142/+0.386048 m`. All `235/235` mapped face/non-heightfield source cells,
+all hard solve nodes, and the complete outer collar remain bit-exact zero
+residual. The four labeled PNGs expose C0/common light, raw support and holdout,
+residual ownership, and before/after cross-sections.
+
+The common-light change is intentionally subtle and the holdout gain on the low
+side is modest. This proves only that locally measured Estonia ALS can support a
+connected adjacent shoulder/toe/apron correction without the prior ribs, caps,
+slabs, or protected-face leakage. It does not infer that correction from
+nationally available conditions, establish independent transfer, reconstruct a
+vertical/undercut sandstone wall, add fine rock morphology, authorize the Suur
+Taevaskoda sentinel, or permit packing/browser/production use. The float
+transaction remains reusable input to a later condition-prediction specialist;
+the correct fallback outside qualified ALS support remains C0/abstention.
+
 ### Biała Góra proves bounded 2D representation capacity, not predictive transfer
 
 The retained Biała Góra calibration artifact `4fdbaa3f0a9c...` was exercised on

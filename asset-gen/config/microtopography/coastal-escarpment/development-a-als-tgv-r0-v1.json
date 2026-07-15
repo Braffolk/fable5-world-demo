@@ -1,0 +1,94 @@
+{
+  "schema_version": "laas.coastal-escarpment-als-tgv-config/1",
+  "recipe_id": "development-a-adjacent-escarpment-als-tgv-r0-v1",
+  "status": "development_only",
+  "target_etak_id": 1826743,
+  "target_en": [680551.76, 6444450.8],
+  "output_chunks": [[-2, 2436, 1492], [-2, 2437, 1492]],
+  "shared_parent": [-1, 609, 373],
+  "canvas_bbox_en": [680416.0, 6444384.0, 680736.0, 6444576.0],
+  "output_bbox_en": [680448.0, 6444416.0, 680704.0, 6444544.0],
+  "solve_pitch_m": 0.25,
+  "outer_zero_collar_m": 8.0,
+  "holdout_block_m": 8.0,
+  "holdout_modulus": 5,
+  "holdout_remainder": 0,
+  "inputs": {
+    "condition_bundle": {
+      "path": "asset-gen/data/work/microtopography/erodible-slope/conditions/sha256/10a5ea53b007f3e6e2e878ccebd70a9712716042139ca35178310655fcb85b8b/bundle.json",
+      "bytes": 354606,
+      "sha256": "9d417818c90b7e8e4db757a70cd2703df5a2e4045ff54ada9248f700bede38f9"
+    },
+    "domain_closure": {
+      "path": "asset-gen/data/work/microtopography/erodible-slope/conditions/domain-closure/sha256/e316add66854bd25fd13dcbf07c017950ebec97b18f0485820367a7ae774a0ac/manifest.json",
+      "bytes": 13504,
+      "sha256": "c2ea6bf89f85421295ebb65bf4b20eac8a99a858ea9e9922dfdcdb6fc5483600"
+    },
+    "domain_npz": {
+      "path": "asset-gen/data/work/microtopography/erodible-slope/conditions/domain-closure/sha256/e316add66854bd25fd13dcbf07c017950ebec97b18f0485820367a7ae774a0ac/canonical-plus256-domain.npz",
+      "bytes": 4444948,
+      "sha256": "b6dcd98f78c8c262a6c2e143b1c32ed902795ac5866bff7c7d9c4923aad85af8"
+    },
+    "etak": {
+      "path": "asset-gen/data/work/microtopography/erodible-slope/conditions/sha256/10a5ea53b007f3e6e2e878ccebd70a9712716042139ca35178310655fcb85b8b/development_a-etak.json",
+      "bytes": 455408,
+      "sha256": "d3026be331b905c3b1df11054d6f2ec98bdf15dec9a76b77f4b939f1197f20e4"
+    },
+    "als": {
+      "path": "asset-gen/data/in/public/als/taevaskoda-ahja-als-adjacent-2019-stage1/raw/sha256/672a337dd9da433225cbc580cdda94e9b44ec0db9bdc662f212cc95fe95f6204/444680_2019_tava.laz",
+      "bytes": 46466173,
+      "sha256": "672a337dd9da433225cbc580cdda94e9b44ec0db9bdc662f212cc95fe95f6204"
+    },
+    "rgb": {
+      "path": "asset-gen/data/in/orthophoto/rgb/54481/beb2cce12095409a4124890c1e95ebac90f4bfb53aa9263e8622c0688a9f14d6/54481.tif",
+      "bytes": 196035422,
+      "sha256": "99b7e1c5e6d381294f640c7e63570cc760c35b1b8e9748a3215863637b024099"
+    },
+    "cir": {
+      "path": "asset-gen/data/in/orthophoto/cir/54481/fb1ed7a1e02d282d56c03d07e8d255f33eb80f2e89d51d49e0fe21d7c5382c8f/54481.tif",
+      "bytes": 127257766,
+      "sha256": "c9a12d2055c4b2b0010466d9ea863570b1f739859fb4acaffdd16b629ac5dc85"
+    },
+    "soil": {
+      "path": "asset-gen/data/work/terrain/conditions/soil/mullastikukaart/sha256/50208874e027a2be4776cd19795a554a8bd7f489d283836ebeecedd5f12bbab4/window.json",
+      "sha256": "97a06ed67c6ec48e75496bdadc470f1afcd280922fef8fae7125a75249f4e51e"
+    },
+    "geology": {
+      "path": "asset-gen/data/work/terrain/conditions/geology/egt-surficial-200k/sha256/8608ba2c87df95b765e95ef92feb9f02d02ee39e5753bcb962479aa6840af40c/window.json",
+      "sha256": "e570bc1a6c8b2c5534d68fd342d0a6ceec23d302039561dd235edf663633fb38"
+    }
+  },
+  "qualification": {
+    "als_class": 2,
+    "maximum_absolute_raw_residual_m": 1.5,
+    "huber_delta_m": 0.12,
+    "minimum_holdout_points_per_side": 500,
+    "require_candidate_better_than_c0_each_side": true
+  },
+  "imagery_guidance": {
+    "ndvi_vegetation_floor": 0.18,
+    "rgb_shadow_luma_ceiling": 0.12,
+    "edge_percentile": 92.0,
+    "normal_regularization_floor": 0.28,
+    "tangent_regularization_floor": 0.75
+  },
+  "tgv": {
+    "iterations": 280,
+    "tau": 0.035,
+    "sigma": 0.035,
+    "theta": 1.0,
+    "first_order_weight": 0.18,
+    "second_order_weight_m": 0.42,
+    "c0_prior_weight": 0.035,
+    "data_weight": 1.0,
+    "maximum_residual_m": 1.5
+  },
+  "hard_laws": {
+    "mapped_face_cells_expected": 235,
+    "mapped_face_cells_must_equal_c0": true,
+    "biala_geometry_or_parameters_forbidden": true,
+    "heightfield_only": true,
+    "packed_output_forbidden": true,
+    "taevaskoda_sentinel_opened": false
+  }
+}
