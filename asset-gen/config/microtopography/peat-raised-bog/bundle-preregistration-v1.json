@@ -100,10 +100,19 @@
   },
   "surface_scope": {
     "included": [
-      "open intact raised-bog peat with positive complete peat and humus support",
+      "open intact raised-bog peat with a completely parsed peat profile and resolved humus-horizon semantics",
       "ground-attached moss hummock lawn and hollow relief",
       "single-valued stable peat surface outside water and dynamic vegetation"
     ],
+    "soil_semantics": {
+      "pure_raised_bog_blank_humus": "distinct_humus_horizon_not_applicable only when every bound soil component is raised-bog and its complete Loimis profile parses as peat; official retained soil documentation defines deep bog profiles as T-only and peat thickness/decomposition in the texture formula",
+      "mixed_or_nonbog_blank_humus": "ownership_unknown",
+      "zero_imputation_forbidden": true,
+      "documentation": [
+        "asset-gen/data/in/soil/mullakaardi_seletuskiri.pdf",
+        "asset-gen/data/in/soil/mullalegend.pdf"
+      ]
+    },
     "required_condition_fields": [
       "connected ETAK mire unit and coverage confidence",
       "full soil mixture layers peat thickness and humus",

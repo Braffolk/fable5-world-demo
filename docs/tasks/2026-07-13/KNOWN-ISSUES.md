@@ -859,6 +859,14 @@ before synthesis rather than filling the gap with a repeated primitive, FBM, or
 generic roughness. A passing capacity result permits only whole-connected-mire R0
 development with crop-last seams and an eventual immutable non-`latest` preview.
 
+The national soil preflight resolved one apparent blocker from retained official
+documentation. Pure raised-bog soils encode the organic profile in their parsed
+peat texture sequence; deep profiles may be `T`-only, so blank `Huumus` is a
+documented non-applicable distinct horizon for a completely parsed pure-bog
+component, not zero and not missing data. This exception does not apply to mixed
+or non-bog components, whose blank `Huumus` remains ownership-unknown. The amended
+machine preregistration SHA-256 is `21d972723f7c2641ce6a9fb7c15e171e85f3378dc83863cc93cb833be94bf115`.
+
 ### Current conditioning discards real soil structure and ignores mapped cliff/shore constraints
 
 `process/soil.py` keeps only the first soil component, simplified surface texture, stoniness, and fertility. The national source also contains component shares, layered texture, and humus/peat-horizon thickness. At the supplied Taevaskoda point, ETAK maps a natural shoreline escarpment within 5.32 m and the Ahja shoreline within 1.85 m, yet the rejected synthesis did not use those structures to correct the visible 1 m grid boundary. The replacement specification must treat full soil profiles and mapped structural constraints as first-class cook inputs.
