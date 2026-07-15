@@ -1,0 +1,132 @@
+{
+  "schema": "laas.erodible-slope-morphodynamics-development-a/1",
+  "recipeId": "development-a-continuous-morphodynamics-v1",
+  "bindings": {
+    "conditionBundle": {
+      "path": "asset-gen/data/work/microtopography/erodible-slope/conditions/sha256/10a5ea53b007f3e6e2e878ccebd70a9712716042139ca35178310655fcb85b8b/bundle.json",
+      "bytes": 354606,
+      "sha256": "9d417818c90b7e8e4db757a70cd2703df5a2e4045ff54ada9248f700bede38f9"
+    },
+    "evaluationPlan": {
+      "path": "asset-gen/config/microtopography/erodible-slope/r0-development-a-two-crop-v1.json",
+      "bytes": 1425,
+      "sha256": "8fcb20f442d1ee925cb9cc5b9bf67035f16337dcf94c40b9f84db0a820d6f7ce"
+    },
+    "domainClosure": {
+      "path": "asset-gen/data/work/microtopography/erodible-slope/conditions/domain-closure/sha256/e316add66854bd25fd13dcbf07c017950ebec97b18f0485820367a7ae774a0ac/manifest.json",
+      "bytes": 13504,
+      "sha256": "c2ea6bf89f85421295ebb65bf4b20eac8a99a858ea9e9922dfdcdb6fc5483600"
+    },
+    "processConfig": {
+      "path": "asset-gen/config/microtopography/erodible-slope/solver-c1-v1.json",
+      "bytes": 1252,
+      "sha256": "c45b420f28b25b59584c72ddacfa0a259ecd9cc9a652b7057a049856764637b9"
+    },
+    "structuralAuthority": {
+      "path": "asset-gen/data/work/terrain-repair/taevaskoda-ahja-structural-authority-stage1/5ffa4334e2013e67ddb2e1c390e455394f1b3fe0f294f12498197f6fd45bde36/authority/manifest.json",
+      "bytes": 1582545,
+      "sha256": "56a29a8e68ddda75571e825eecde749c950c170c457da95b4244a5be96a5a1ed"
+    },
+    "correctedTransaction": {
+      "path": "asset-gen/data/work/terrain-repair/taevaskoda-ahja-stage1-transaction/009fd3d2be07d465199e6330ac9d2fc5a8fc7a16bbb5df0f55e5030ce962d3d1/materialization/transaction.json",
+      "bytes": 897138,
+      "sha256": "90aba35212f577126031b8f913dbb469902ae791bf9bd783ffc9a4f729c334ff"
+    },
+    "structuralAuthorityRecipeSha256": "872c58e8429aaeb5b3f224dfe9d97638671abbd480ae8c39ea7b3cb9644cb8f2"
+  },
+  "spatial": {
+    "canonicalBboxEn": [679841.0, 6443797.0, 681277.0, 6445126.0],
+    "controlBboxEn": [679713.0, 6443669.0, 681405.0, 6445254.0],
+    "outputChunks": [[-2, 2436, 1492], [-2, 2437, 1492]],
+    "outputBboxEn": [680448.0, 6444416.0, 680704.0, 6444544.0],
+    "fineCanvasBboxEn": [680416.0, 6444384.0, 680736.0, 6444576.0],
+    "fineTexelMeters": 0.0625,
+    "fineCanvasShape": [3073, 5121],
+    "stitchedOutputShape": [2049, 4097],
+    "stitchedOutputCanvasSlice": [[512, 2561], [512, 4609]],
+    "westOutputCanvasSlice": [[512, 2561], [512, 2561]],
+    "eastOutputCanvasSlice": [[512, 2561], [2560, 4609]],
+    "sharedCanvasColumn": 2560,
+    "requiredAuthorityChunks": [
+      [-2, 2435, 1491],
+      [-2, 2436, 1491],
+      [-2, 2437, 1491],
+      [-2, 2438, 1491],
+      [-2, 2435, 1492],
+      [-2, 2436, 1492],
+      [-2, 2437, 1492],
+      [-2, 2438, 1492],
+      [-2, 2435, 1493],
+      [-2, 2436, 1493],
+      [-2, 2437, 1493],
+      [-2, 2438, 1493]
+    ],
+    "influenceGuardMeters": 32.0,
+    "maximumRssBytes": 8589934592,
+    "maximumWorkspaceBytes": 12884901888
+  },
+  "c0Sha256": "614146f52f1538b305e647451e96d8726668c6b7a6adeadf7fb7f3c47690f7a7",
+  "morphodynamics": {
+    "event_duration_s": 7200.0,
+    "rainfall_depth_m": 0.04,
+    "material_seed": 26071517,
+    "material_halo_m": 4.0,
+    "sand_correlation_m": 0.5,
+    "till_correlation_m": 1.0,
+    "sand_log_std": 0.3,
+    "till_log_std": 0.18,
+    "material_factor_min": 0.5,
+    "material_factor_max": 2.0,
+    "maturity_growth_s": 900.0,
+    "maturity_heal_s": 86400.0,
+    "maturity_exponent": 1.5,
+    "maturity_floor": 0.15,
+    "deposition_slope_ceiling": 0.12,
+    "transport_kg_per_joule": 0.00018,
+    "deposit_bulk_density_kg_m3": 1450.0,
+    "water_density_kg_m3": 998.0,
+    "gravity_m_s2": 9.80665,
+    "manning_n_s_m13": 0.09,
+    "repose_sand_gradient": 0.7,
+    "repose_till_gradient": 0.95,
+    "sediment_relative_tolerance": 0.00002
+  },
+  "morphodynamicsSha256": "e999e9de5e744b9f53be87d3885b173e71771a37a8d82abf97924db11fd9e329",
+  "implementation": {
+    "sourceRevision": "c1e759ded3623503c92b2bb00d450c9683934049",
+    "files": [
+      {"path": "asset-gen/src/assetgen/config.py", "bytes": 3736, "sha256": "6391f341cf4df5336eec90a437923f524497d8fece9dcc053b185325d0468623"},
+      {"path": "asset-gen/src/assetgen/grid.py", "bytes": 3965, "sha256": "914af76620e27dafb50ce204805037d2525365e579e5e2e517f494a52c0674c7"},
+      {"path": "asset-gen/src/assetgen/height_geom.py", "bytes": 3938, "sha256": "195888cfa451c36f9b63fd4a7852ebeeaa198291d35a8834a3df94291b5a84f0"},
+      {"path": "asset-gen/src/assetgen/terrain/microtopography/erodible_slope/morphodynamics/artifact.py", "bytes": 9523, "sha256": "f13573ba993639e33cf10917a38aaa4fd439db3cc0d897e849a3339d5ac64fca"},
+      {"path": "asset-gen/src/assetgen/terrain/microtopography/erodible_slope/morphodynamics/assemble.py", "bytes": 19822, "sha256": "a6a81aab35c152e37364ce58e2377f8aa1db2df86e4887cdf66391a0b636bb18"},
+      {"path": "asset-gen/src/assetgen/terrain/microtopography/erodible_slope/morphodynamics/hydrology.py", "bytes": 28024, "sha256": "5d140816e53fba25cc0270669d430d1f442916b5e17589bfb52db5601f8191c8"},
+      {"path": "asset-gen/src/assetgen/terrain/microtopography/erodible_slope/morphodynamics/material_field.py", "bytes": 9186, "sha256": "e39f44c2bddc3bad15aaf1bb861e885a118caf2861249c9d0936ab4e1c7ee16a"},
+      {"path": "asset-gen/src/assetgen/terrain/microtopography/erodible_slope/morphodynamics/qa.py", "bytes": 4725, "sha256": "a0e052e0ef30983f41b077a60cbe420a6461d05bf9f465163ba65aebd9c77771"},
+      {"path": "asset-gen/src/assetgen/terrain/microtopography/erodible_slope/morphodynamics/recipe.py", "bytes": 18528, "sha256": "4a36bfcc361a8c8de6b231202f61aeba2156e42bb1ae5684d786d81ff6598d28"},
+      {"path": "asset-gen/src/assetgen/terrain/microtopography/erodible_slope/morphodynamics/relaxation.py", "bytes": 5711, "sha256": "4d157deab63e53f2acc6847e552295a3167f24080e429f07f82ba8ee74d885c5"},
+      {"path": "asset-gen/src/assetgen/terrain/microtopography/erodible_slope/morphodynamics/run.py", "bytes": 1450, "sha256": "8239252d4035e15ef445fb7fc8c338f3f8ccd9dc41905ee6e5e8a5f4b1ab9bbe"},
+      {"path": "asset-gen/src/assetgen/terrain/microtopography/erodible_slope/morphodynamics/sediment.py", "bytes": 13858, "sha256": "b8db64e9e2659f236681072116746b9619e4e380ba653e41d4df57871cda820b"},
+      {"path": "asset-gen/src/assetgen/terrain/microtopography/erodible_slope/morphodynamics/solver.py", "bytes": 14425, "sha256": "7df9a0872c287fceb4903d8b69df9acd829a33cd3f66637fe968d392a82161e9"},
+      {"path": "asset-gen/src/assetgen/terrain/microtopography/erodible_slope/morphodynamics/state.py", "bytes": 17209, "sha256": "e364b6efceb2f48efd3fb0e8f34f5e081271881320a2e3e11d9439dd8bff1f45"},
+      {"path": "asset-gen/src/assetgen/terrain/microtopography/erodible_slope/morphodynamics/structural_base.py", "bytes": 13291, "sha256": "ca82eb9a2892ce8353543404956f9c379366a63db0071a653b9b6187cbbcf902"},
+      {"path": "asset-gen/src/assetgen/terrain/microtopography/erodible_slope/solver/load.py", "bytes": 28111, "sha256": "0daff9b05b4f58f5a7f7172f2a3ae9aa8c7470a50d02ee7573dab0ff140dfc10"},
+      {"path": "asset-gen/src/assetgen/terrain/microtopography/erodible_slope/solver/model.py", "bytes": 9390, "sha256": "c641bcbcbe777dff0f116f13efe35645bc96c6fd0abc7fad3cfae875d9a3f300"},
+      {"path": "asset-gen/src/assetgen/terrain/repair/baseline.py", "bytes": 3830, "sha256": "0f7d75b77168b9227efbba2bcc5b23e7c3bf42c14db8058034397979cdd490bd"},
+      {"path": "asset-gen/src/assetgen/terrain/repair/model.py", "bytes": 6547, "sha256": "148f01cdd7fc0af1872bf565808cddd96dc7994b6e058a6c9eb37d6a6a52232f"},
+      {"path": "asset-gen/src/assetgen/terrain/repair/prolong.py", "bytes": 5654, "sha256": "e49f463e9039a185dd3a22b5b96b531729fe354e438728d30c14abfac78658c7"},
+      {"path": "asset-gen/src/assetgen/terrain/repair/storage.py", "bytes": 15175, "sha256": "b1ad3c3306dbeee285b621ddb9b763a765315426db718e8dd623da163dbf1a3a"}
+    ]
+  },
+  "environment": {
+    "uvLock": {
+      "path": "asset-gen/uv.lock",
+      "bytes": 184154,
+      "sha256": "f62d14092296eea2d13af9ee31af8c070b518984fae46a27a891f4e91ccb3f5e"
+    },
+    "pythonVersion": "3.12.9",
+    "numpyVersion": "2.4.6",
+    "scipyVersion": "1.17.1",
+    "byteorder": "little"
+  }
+}
