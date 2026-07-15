@@ -1164,6 +1164,50 @@ The supplied reference contains vertical and undercut faces. A single-valued hei
 
 The measured pilot cook rasterizes ETAK open water, buildings, paved roads, forest, supported soil context, and buffered slope/cliff lines directly on the fine sample grid. Unpaved trails remain ground. The final independent verifier rerasterized all 25 fine chunks, compared `48,472,349` decoded rejected samples against an independently reconstructed and quantized conservative base, and measured exactly `0 m` rejected residual. The same run bounded decoded 1 m authority-mean error at `0.0003656 m` under a `0.0010153 m` limit and rederived the LOD -1 payload byte-for-byte.
 
+### Natural-escarpment line-normal macro reconstruction is parked after two Development failures
+
+The structural-only screen under
+`assetgen.terrain.structural_reconstruction.natural_escarpment` is independent of
+the parked erodible-slope solvers. It binds the accepted condition bundle
+`10a5ea53b007...`, Development A closure `e316add66854...`, mapped natural
+escarpment ETAK `1826743`, mapped bank slope ETAK `9688719`, accepted C0,
+soil/geology, RGB/CIR edge support, and water/object/non-heightfield/unknown/
+unrelated-protected masks. It emits only 0.25 m float research surfaces and
+labeled before/after, residual/ownership, and station-profile PNGs. It adds no
+fine rock morphology and touches no packed format, runtime, or shader.
+
+Complete attempt 1 artifact
+`asset-gen/data/work/terrain/natural-escarpment-screen/sha256/386f5a42139668eabf6483891080206e46754a7cea648bc170e06535eedf7f73/manifest.json`
+is `development_float_candidate_rejected`. Signed distance to a nearest line
+station was incorrectly treated as distance to the finite line, so both endpoints
+owned broad off-line wedges. Development A reached `+11.909/-2.443 m` residual
+and Development C reached `+7.073/-13.741 m`; the before/after PNGs expose the
+wedges directly.
+
+Complete corrective attempt 2 artifact
+`asset-gen/data/work/terrain/natural-escarpment-screen/sha256/4f66a8b95130985f40bd6b7c772fd0f11184b04f5c0371638b2e419cc0ebf988/manifest.json`
+adds true finite-line distance caps and station-local outer C0 anchors. Every
+forbidden and water residual is exactly zero, imagery-qualified station coverage
+is `94.68%`/`99.02%` for A/C, and adjacent structural coverage is
+`56.21%`/`78.49%`. It still fails: A reaches `+2.159/-2.449 m`, C reaches
+`+3.474/-1.541 m`, and the PNGs show rounded endpoint caps plus locally slab-like
+station ownership rather than a naturally closing two-dimensional shoulder.
+Development A correctly leaves its explicitly non-heightfield target cells
+unchanged; this abstention is not the failure.
+
+**Parked-path record:** the reusable result is the fully bound loader, line-frame
+and RGB/CIR qualification, strict mask ownership, both immutable float surfaces,
+metrics, and QA. The exact blocker is the independent per-station PCHIP surface:
+it has no two-dimensional tangential regularity or residual boundary condition
+that can close a finite mapped feature without caps/slabs. The two permitted
+Development attempts are exhausted. Taevaskoda parent `(-1,607,372)` was never
+opened, so it remains an untouched blind sentinel; no pack, browser preview, or
+scene-specific tuning exists. Resume only with a structurally different
+two-dimensional constrained reconstruction (for example a variational surface
+with exact C0 boundary matching and explicit finite-line endpoint taper) and a
+new frozen two-attempt authorization, not by relaxing the 2 m envelope, clipping
+residuals, adding noise, or tuning these PCHIP parameters.
+
 ## Visual/Data Investigations
 
 ### Estonia DTM may contain two tall bumps in the Ahja river
