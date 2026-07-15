@@ -1,0 +1,307 @@
+{
+  "schema_version": "laas.peat-raised-bog-r0-research-bundle-preregistration/1",
+  "bundle_id": "peat-raised-bog-r0-research-bundle/1",
+  "preregistration_id": "open-intact-nonforested-hummock-lawn-hollow-v1",
+  "status": {
+    "state": "blocked_before_r0_generation",
+    "research_only": true,
+    "r0_generation_authorized": false,
+    "training_authorized": false,
+    "preview_authorized": false,
+    "production_owner_authorized": false,
+    "latest_eligible": false,
+    "blockers": [
+      "materialize and hash-bind the metadata-only development and sealed-audit selection",
+      "bind the accepted corrected structural base and complete Estonia condition snapshot",
+      "freeze the C1 algorithm, coefficients, code revision, uv lock, and thresholds",
+      "freeze the preview extent, cameras, cost expectation, and visual rule"
+    ]
+  },
+  "authority": {
+    "regime_id": "peat.raised_bog",
+    "regime_release_state": "research",
+    "evidence_tier": "R0_raw",
+    "research_role": "deterministic_process_hypothesis",
+    "maximum_result": "immutable_non_latest_research_preview_candidate_after_all_frozen_gates_pass",
+    "target_truth": false,
+    "height_supervision": false,
+    "training": false,
+    "production_owner": null,
+    "estonia_transfer": "none",
+    "latest_eligible": false,
+    "forbidden_claims": [
+      "qualified B1 or B2 target",
+      "measured morphology fit or real-vs-real non-inferiority",
+      "Estonia analogue validation or transfer",
+      "production quality or ownership",
+      "national coverage"
+    ]
+  },
+  "preserved_moore_failure": {
+    "state": "target_evidence_insufficient_for_moore_decimeter_research_preview",
+    "materialization_build_id": "5bdc602d32bcd0c6d685e811d804c615104de4f0b2831eae0e6033653b0d6bdc",
+    "strict_b1_valid_cells": 0,
+    "accepted_window_count": 0,
+    "complete_spectral_core_count": 0,
+    "D_training_authorized": false,
+    "R_training_authorized": false,
+    "E_execution_authorized": false,
+    "b1_only_preview_allowed": false,
+    "reinterpretation_forbidden": true
+  },
+  "retained_evidence": {
+    "moore_archive": {
+      "path": "docs/deep-research/microtopography-generation/library/datasets/zenodo-2545675-moore-peatland-sfm-v1.zip",
+      "bytes": 95777652,
+      "sha256": "044413bb87171776b409172d29fbde16341b228dc43b694cffe9f02a88640a67",
+      "doi": "10.5281/zenodo.2545675",
+      "license": "CC-BY-4.0",
+      "allowed_role": "plot_local_descriptive_form_and_class_statistics_only",
+      "forbidden_roles": [
+        "pixelwise height supervision",
+        "target truth",
+        "acquisition MTF",
+        "total surface error",
+        "Estonia transfer"
+      ]
+    },
+    "moore_materialization": {
+      "root": "asset-gen/data/work/microtopography/moore/m0-materialization/sha256/5bdc602d32bcd0c6d685e811d804c615104de4f0b2831eae0e6033653b0d6bdc",
+      "manifest": {
+        "path": "asset-gen/data/work/microtopography/moore/m0-materialization/sha256/5bdc602d32bcd0c6d685e811d804c615104de4f0b2831eae0e6033653b0d6bdc/manifest.json",
+        "sha256": "13b7a18304ae7e8fe0db786e7e6bb9a199f481dc1f6b95911ed65d6f6068df16"
+      },
+      "source_b2_gate": {
+        "path": "asset-gen/data/work/microtopography/moore/m0-materialization/sha256/5bdc602d32bcd0c6d685e811d804c615104de4f0b2831eae0e6033653b0d6bdc/source-b2-gate.json",
+        "sha256": "9b099aa0412463ca6656afdf92667a11a4a08bd04d8ea9036d640c2733d5a6f0"
+      },
+      "windows_and_splits": {
+        "path": "asset-gen/data/work/microtopography/moore/m0-materialization/sha256/5bdc602d32bcd0c6d685e811d804c615104de4f0b2831eae0e6033653b0d6bdc/windows-and-splits.json",
+        "sha256": "5aba98e96e84e3aab15e06debddc891e4fd47fb26f891be0ea8ec90b74172452"
+      },
+      "grid_count": 68,
+      "geographic_group_count": 8,
+      "finite_cell_count": 3091387,
+      "finite_area_m2": 309.1387
+    },
+    "moore_paper": {
+      "path": "docs/deep-research/microtopography-generation/library/papers/2019-moore-peatland-hummock-hollow-doi-10.5194-bg-16-3491-2019.pdf",
+      "sha256": "b97f86a15f071d59e81ba8e397be2aa67ceb173e1f201ca9b96d0de33d3e34bf",
+      "role": "surface_semantics_and_descriptive_morphology_reference"
+    },
+    "huhola": {
+      "paper_path": "docs/deep-research/microtopography-generation/library/papers/2025-noumonvi-huhola-doi-10.1016-j.ecolmodel.2025.111212.pdf",
+      "paper_sha256": "a951709a9d7ae41c6942422bada0f6168b8a630e263c40b520e034812bdab01f",
+      "repository_path": "docs/deep-research/microtopography-generation/library/repos/huhola",
+      "repository_revision": "fc46c5a222cb76095ffc75e0d28d5ed869cf705e",
+      "role": "hummock_lawn_hollow_label_and_output_diagnostic_only",
+      "generator_role_forbidden": true
+    }
+  },
+  "surface_scope": {
+    "included": [
+      "open intact raised-bog peat with positive complete peat and humus support",
+      "ground-attached moss hummock lawn and hollow relief",
+      "single-valued stable peat surface outside water and dynamic vegetation"
+    ],
+    "required_condition_fields": [
+      "connected ETAK mire unit and coverage confidence",
+      "full soil mixture layers peat thickness and humus",
+      "corrected structural height slope and curvature",
+      "whole-mire drainage and water-distance context",
+      "forest open-water ditch cut-peat road building object dynamic and ownership-unknown masks",
+      "EGT geology coverage and unknown",
+      "dated RGB and CIR exclusion/state evidence without height copying"
+    ],
+    "excluded": [
+      "fen or transitional mire",
+      "drained cut restored or actively extracted peat",
+      "forest or scrub-covered mire",
+      "palsa thermokarst floating mat or pool surface",
+      "open water ditch building road object dynamic vegetation and non-heightfield geometry",
+      "unknown peat profile intactness land cover or ownership"
+    ],
+    "fine_grid": {
+      "lod": -2,
+      "texel_m": 0.0625,
+      "output_is_one_absolute_surface": true,
+      "solve_before_crop": true
+    }
+  },
+  "site_selection": {
+    "state": "blocked_until_content_addressed_selection_exists",
+    "selection_manifest_path": null,
+    "selection_manifest_sha256": null,
+    "source_rule": "Use national structured ETAK soil geology and land-cover metadata only; do not read DTM RGB CIR or detailed geometry pixels before identities are frozen.",
+    "candidate_unit": "one connected named mire complex after metadata exclusions",
+    "development": {
+      "count": 1,
+      "eligibility": "all included-scope predicates resolved true with a contiguous 128 m development core plus the complete declared halo",
+      "stable_order": [
+        "descending eligible core area",
+        "ascending normalized mire identifier"
+      ],
+      "inspection_after_selection": "allowed_for_R0_development_only"
+    },
+    "sealed_abstention_audit": {
+      "count": 1,
+      "eligibility": "a different connected mire complex with raised-bog metadata but at least one required intactness soil forest drainage or ownership condition unresolved and no known hard-excluded object",
+      "stable_order": [
+        "descending unresolved-condition count",
+        "descending candidate area",
+        "ascending normalized mire identifier"
+      ],
+      "separation": "no physical-context or fine-halo overlap with the development mire",
+      "sealed_state": "identity_and_source_hashes_recorded_but_DTM_optical_and_detailed_geometry_unopened_until_complete_C1_recipe_and_run_freeze",
+      "allowed_pass": "C1 is identically absent on unresolved or out-of-envelope ownership",
+      "positive_evidence_credit": false,
+      "post_open_tuning_allowed": false
+    },
+    "global_exclusions": [
+      "any site previously used for candidate tuning or threshold selection",
+      "any Taevaskoda review or sentinel extent",
+      "any coordinate-specific scene selection"
+    ]
+  },
+  "candidate_roles": {
+    "C0": {
+      "kind": "accepted_corrected_structural_surface_only"
+    },
+    "C1": {
+      "kind": "whole_domain_conditional_multitype_marked_form_process_hypothesis",
+      "training_allowed": false,
+      "pixel_loss_allowed": false,
+      "required_structure": [
+        "hummock lawn and hollow form identities remain typed and inspectable",
+        "form marks are sampled from a multi-group descriptive distribution rather than one repeated primitive",
+        "form interaction and orientation are conditioned by whole-mire hydrology and local supported conditions",
+        "any within-form fine remainder is subordinate to recognizable forms and separately typed"
+      ],
+      "config_path": null,
+      "config_sha256": null,
+      "state": "blocked_before_r0_generation"
+    }
+  },
+  "descriptor_capacity_gate": {
+    "method": "Boundary-erode each retained Moore plot, apply the pinned HuHoLa-supported 0.5 m classification only within valid support, and summarize whole typed forms by geographic group without pixelwise training.",
+    "minimum_forms": 200,
+    "minimum_geographic_groups": 6,
+    "required_joint_marks": [
+      "sign and class",
+      "relative relief",
+      "footprint area and axes",
+      "anisotropy orientation and asymmetry",
+      "shoulder profile",
+      "same-class and cross-class spacing adjacency"
+    ],
+    "failure_action": "research_rejected_before_C1_generation",
+    "no_padding_interpolation_or_boundary_reflection_credit": true
+  },
+  "whole_domain_and_seam_law": {
+    "physical_context": "Compute drainage wetness and condition context over the entire connected selected mire and its required upstream or boundary context.",
+    "development_core_m": [128, 128],
+    "maximum_preview_core": "one complete 512 m LOD -1 parent and its 16 LOD -2 children",
+    "fine_halo_min_m": 64,
+    "fine_halo_must_cover": [
+      "maximum C1 form interaction and support radius",
+      "1.875 m two-stage F4 analysis halo",
+      "composer transition support",
+      "hierarchy apron dependencies"
+    ],
+    "global_identity": "Use Section 13.3 world-coordinate PRF with no chunk IDs seeds or worker-order state.",
+    "composition": "Generate one canonical absolute fine canvas over core plus halo, apply confidence transitions only at real physical support boundaries, then crop storage chunks.",
+    "forbidden": [
+      "independent per-chunk solve or seed",
+      "final-output overlap crossfade",
+      "wrap clamp or reflection at storage boundaries",
+      "hard relief edge at ETAK soil geology or ownership polygons"
+    ],
+    "shared_crop_requirement": "Repeated overlapping crops from the same frozen domain must be bit-identical before quantization."
+  },
+  "seeds": {
+    "canonical_recipe_seed_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "sensitivity_only_seed_hex": [
+      "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+    ],
+    "selection_rule": "Only the canonical seed may become the preview candidate; sensitivity seeds may reject it but may not replace it."
+  },
+  "budgets": {
+    "descriptor_capacity": {
+      "wall_seconds_max": 7200,
+      "peak_rss_bytes_max": 17179869184,
+      "scratch_bytes_max": 17179869184
+    },
+    "development_C1": {
+      "wall_seconds_max": 28800,
+      "peak_rss_bytes_max": 34359738368,
+      "scratch_bytes_max": 103079215104,
+      "workers_max": 8
+    },
+    "bounded_preview_cook": {
+      "wall_seconds_max": 86400,
+      "peak_rss_bytes_max": 51539607552,
+      "scratch_bytes_max": 274877906944,
+      "packed_negative_rung_bytes_max": 536870912
+    },
+    "budget_failure_action": "research_rejected_for_exact_recipe"
+  },
+  "metrics_and_failures": {
+    "thresholds_manifest_path": null,
+    "thresholds_manifest_sha256": null,
+    "thresholds_state": "blocked_and_must_freeze_before_C1_generation",
+    "required_metrics": [
+      "typed form count class fraction relief footprint axes asymmetry spacing adjacency and connectivity by Moore group",
+      "C0 versus C1 height gradient normal curvature extrema and HuHoLa class descriptors",
+      "normative F4 R4 B1 and B2 descriptive energy without target wording",
+      "whole-domain versus crop partition and worker-order identity",
+      "shared-edge and decoded quantized normal continuity",
+      "one-meter phase energy and chunk-grid leakage",
+      "periodicity repeated-form nearest-source and effective-shape-use diagnostics",
+      "hard-mask unknown and physical-transition residual",
+      "packed survival compressed bytes peak RSS scratch and wall time"
+    ],
+    "hard_rejections": [
+      "descriptor capacity below the frozen gate",
+      "residual in water hard-excluded or ownership-unknown cells",
+      "nonzero C1 on the sealed abstention audit",
+      "chunk seed edge apron partition or worker-order dependence",
+      "one repeated primitive copied source relief periodic lattice FBM or generic noise",
+      "hummock lawn and hollow forms not recognizable as typed connected morphology",
+      "hard ETAK soil geology condition or coverage seam",
+      "packing hierarchy quantization inherited-layer or runtime-consumer failure",
+      "missing metric threshold artifact or budget overrun",
+      "post-audit tuning or site-specific patch"
+    ]
+  },
+  "qa_png_contract": {
+    "root_pattern": "asset-gen/data/work/microtopography/peat-raised-bog/<build>/qa/",
+    "content_addressed_index_required": true,
+    "required_images": [
+      "01_condition_scope_and_exclusions.png",
+      "02_moore_form_capacity_and_groups.png",
+      "03_c0_c1_height_hillshade.png",
+      "04_typed_hummock_lawn_hollow_forms.png",
+      "05_b1_b2_descriptive_bands.png",
+      "06_partition_seam_and_phase.png",
+      "07_repetition_and_nearest_source.png"
+    ],
+    "index_must_bind": [
+      "image sha256 dimensions and interpretation",
+      "source condition recipe code environment and seed hashes",
+      "development or sealed-audit role",
+      "units and forbidden claim boundary"
+    ]
+  },
+  "publication": {
+    "recipe_kind": "research-microtopography-preview-v1",
+    "state": "blocked",
+    "requires_candidate_state": "research_preview_candidate",
+    "immutable": true,
+    "latest_eligible": false,
+    "release_row_unchanged": true,
+    "wire_format_change_allowed": false,
+    "runtime_synthesis_allowed": false,
+    "production_manifest_mutation_allowed": false
+  }
+}

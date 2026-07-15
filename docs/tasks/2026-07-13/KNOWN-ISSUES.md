@@ -838,6 +838,27 @@ surface-error, masks, transect/cross-source binding, and independent-event
 requirements. A single-source survivor is not the combined route, and weaker
 gates are not a resume condition.
 
+### Raised-bog R0 is the next non-agricultural route, but generation is not yet authorized
+
+The next bounded route is `peat-raised-bog-r0-research-bundle/1`, restricted to
+open, intact, non-forested hummock-lawn-hollow peat. It reuses the exact Moore
+archive and materialization only for plot-local whole-form distributions and
+diagnostics. Moore's zero strict-B1 cells, zero accepted windows, failed source
+B2 gate, and blocked D/R/E candidates remain unchanged; no pixelwise height
+supervision, target truth, Estonia transfer, owner, production, or `latest` claim
+is restored.
+
+The preregistration is currently `blocked_before_r0_generation`. Before any C1
+surface exists, it requires a content-addressed metadata-only development-mire
+selection and a different sealed abstention site, the accepted corrected base and
+complete Estonia peat/mire condition snapshot, exact C1 code/config/environment,
+thresholds, preview extent/cameras, cost expectation, and visual rule. The first
+executable checkpoint is a Moore whole-form capacity artifact. Fewer than 200
+boundary-valid typed forms or fewer than six geographic groups parks the route
+before synthesis rather than filling the gap with a repeated primitive, FBM, or
+generic roughness. A passing capacity result permits only whole-connected-mire R0
+development with crop-last seams and an eventual immutable non-`latest` preview.
+
 ### Current conditioning discards real soil structure and ignores mapped cliff/shore constraints
 
 `process/soil.py` keeps only the first soil component, simplified surface texture, stoniness, and fertility. The national source also contains component shares, layered texture, and humus/peat-horizon thickness. At the supplied Taevaskoda point, ETAK maps a natural shoreline escarpment within 5.32 m and the Ahja shoreline within 1.85 m, yet the rejected synthesis did not use those structures to correct the visible 1 m grid boundary. The replacement specification must treat full soil profiles and mapped structural constraints as first-class cook inputs.

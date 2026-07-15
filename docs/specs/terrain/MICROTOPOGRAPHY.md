@@ -900,6 +900,50 @@ Section 14.6. The preview remains an R0 process hypothesis: attractive output or
 an OOD-abstention pass supplies no measured morphology-fit, positive blind-audit,
 production, owner, or transfer evidence.
 
+### 9.10 Raised-bog R0 research bundle
+
+`peat-raised-bog-r0-research-bundle/1` authorizes one deterministic R0 process
+challenger for open, intact, non-forested `peat.raised_bog` hummock-lawn-hollow
+relief. Its normative machine preregistration is
+`asset-gen/config/microtopography/peat-raised-bog/bundle-preregistration-v1.json`.
+The bundle does not authorize training, pixelwise height supervision, target
+truth, Estonia transfer, a production owner, or `latest` publication.
+
+The Moore archive `044413bb8717...` and failed materialization `5bdc602d32bc...`
+remain plot-local descriptive R0 evidence only. Their zero strict B1 cells, zero
+accepted windows, failed B2 source gate, and blocked D/R/E candidates are not
+relaxed or reinterpreted. HuHoLa may label and diagnose supported forms at its
+documented scale; it is not a generator.
+
+Before generation, the machine contract must hash-bind one metadata-selected
+development mire, one different sealed abstention-audit mire, the accepted
+corrected base, complete peat/humus and mire-condition evidence, hard/unknown
+masks, C0/C1 recipes, code/environment, seeds, budgets, thresholds, cameras, and
+visual rule. Selection reads structured national metadata only. It excludes
+Taevaskoda and any coordinate-specific scene choice; detailed height, optical,
+and geometry pixels for the audit remain sealed until the complete recipe and
+development result are frozen. The audit supplies no positive evidence: its only
+passing result is exact abstention wherever required intactness, soil, forest,
+drainage, or ownership support is unresolved or outside the frozen envelope.
+
+C0 is the corrected structural surface. C1 is one whole-domain conditional,
+multitype marked-form/process hypothesis. It must first recover enough
+boundary-eroded, multi-group descriptive hummock/lawn/hollow forms to pass the
+machine capacity gate; it may not replace failure with one jittered primitive,
+copied relief, a periodic lattice, FBM, or generic roughness. Compute physical
+context over the connected mire, generate one world-coordinate absolute fine
+canvas over publication plus the complete finite-influence/F4/composer/hierarchy
+halo, apply transitions only at real support boundaries, and crop chunks last.
+Per-chunk seeds/solves and final-output seam crossfades are forbidden.
+
+Only the preregistered canonical seed can advance. Sensitivity seeds may reject
+it but may not replace it. A missing hash/threshold/metric, insufficient form
+capacity, hard-mask residual, nonzero sealed-audit output, seam/partition/worker
+dependence, repeated/noise-like morphology, condition-edge relief, budget overrun,
+or packing/runtime failure rejects the exact recipe. A survivor may reach only an
+immutable non-`latest` research preview under Section 14.6; the production row and
+Moore evidence status remain unchanged.
+
 ## 10. Typed Structural Reconstruction
 
 Source repair precedes unresolved synthesis and is evaluated separately.
@@ -1437,19 +1481,22 @@ any pre-preview state -> research_rejected
 ```
 
 `research_declared` requires the applicable bundle and preregistration in Sections
-9.7-9.9. `research_trained` means only that the frozen training or deterministic
+9.7-9.10. `research_trained` means only that the frozen training or deterministic
 development-generation run completed.
 `development_survivor` passes hard surface-safety, forbidden-domain, partition,
 and cost ceilings plus its bundle-specific development gates: weak-evidence fit
-and anti-copy for weak-surface candidates, or the Section 9.9 process gates for
-the erodible-slope R0 candidate.
+and anti-copy for weak-surface candidates, the Section 9.9 process gates for the
+erodible-slope R0 candidate, or the Section 9.10 form-capacity and process gates
+for the raised-bog R0 candidate.
 `research_recipe_frozen` binds code, environment, checkpoint, seed, inference
 windows, composer, pack extent, metrics, and visual rule before any frozen audit.
 `research_audit_pass` requires every bundle-specific frozen audit to pass its
 preregistered role. For `forest-weak-research-bundle/1` these remain the
 ForestSemantic test split, Evo evidence, HY_PINE2 stress behavior, and, when
 opened, sealed Järvselja result. For `erodible-slope-research-bundle/1` it is the
-sealed OOD2 abstention-only stress in Section 9.9. A pass permits one
+sealed OOD2 abstention-only stress in Section 9.9. For
+`peat-raised-bog-r0-research-bundle/1` it is the sealed mire abstention-only
+stress in Section 9.10. A pass permits one
 `research_preview_candidate`; it does not declare a winner or owner. Any audit
 failure, post-audit tuning, prohibited data access, copied/repeated relief,
 unbounded confident OOD output, or failed hierarchy/runtime gate is terminal
@@ -2076,7 +2123,8 @@ Research-preview materialization order is exact:
    before any sealed final audit; the forest bundle retains its exact
    ForestSemantic/Evo/HY_PINE2/Järvselja ordering from Section 9.7 and the
    erodible-slope bundle retains its Development A/C then sealed OOD2 ordering
-   from Section 9.9;
+   from Section 9.9, and the raised-bog bundle retains its metadata-selected
+   development then sealed-abstention ordering from Section 9.10;
 2. run and bind every bundle-specific final audit; a failure terminates the recipe
    rather than retuning;
 3. compose one absolute finest master against the accepted corrected base;
