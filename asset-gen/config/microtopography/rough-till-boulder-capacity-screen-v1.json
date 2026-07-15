@@ -1,0 +1,69 @@
+{
+  "schema_version": "laas.rough-till-boulder-capacity-screen-config/1",
+  "artifact_kind": "float-research-capacity-screen",
+  "inputs": {
+    "condition_arrays": {
+      "path": "asset-gen/data/work/microtopography/erodible-slope/conditions/sha256/10a5ea53b007f3e6e2e878ccebd70a9712716042139ca35178310655fcb85b8b/development_c-domain-enlarged.npz",
+      "bytes": 2293685,
+      "sha256": "7fc47f5fee645e7293c401e2ac6b795bfb43ec1e79e557fd8e2a5372d261dc9d"
+    },
+    "condition_bundle": {
+      "path": "asset-gen/data/work/microtopography/erodible-slope/conditions/sha256/10a5ea53b007f3e6e2e878ccebd70a9712716042139ca35178310655fcb85b8b/bundle.json",
+      "bytes": 354606,
+      "sha256": "9d417818c90b7e8e4db757a70cd2703df5a2e4045ff54ada9248f700bede38f9"
+    },
+    "etak": {
+      "path": "asset-gen/data/in/etak/ETAK_EESTI_GPKG.gpkg",
+      "bytes": 3588767744,
+      "sha256": "e19084c4bff0a6096a7dd38cefa12402bdce98d59c73d5b35c30dda60682f5f9"
+    },
+    "forward_arrays": {
+      "path": "asset-gen/data/work/microtopography/forward/candidate/sha256/d33ae4bbc1229193979dd8b0a5e80b927f79f29df327c0cd7f03b13f4baf6196/mrv-harvest-dtm-patches.npz",
+      "bytes": 417769,
+      "sha256": "9d19ea8c6a4c91572997b60528acf0ae67f8c1e7255fe749512ee68b1d9099e8"
+    },
+    "forward_manifest": {
+      "path": "asset-gen/data/work/microtopography/forward/candidate/sha256/d33ae4bbc1229193979dd8b0a5e80b927f79f29df327c0cd7f03b13f4baf6196/manifest.json",
+      "bytes": 1291,
+      "sha256": "889e2b95b0a687c3a03820a84e81472ae3b4c61f490002cd66d171d44966d729"
+    },
+    "geology_window": {
+      "path": "asset-gen/data/work/terrain/conditions/geology/egt-surficial-200k/sha256/9f238af5de86887538f74a4ef008fcc4768df7650dfe21b3d2d3a55cde4710c0/window.json",
+      "bytes": 496609,
+      "sha256": "7b485b3530e661881de7b1814b2833ec75ed46603e1fd870003ab45c8e9a1f40"
+    }
+  },
+  "site": {
+    "site_id": "development_c_mapped_till_boulder_7488269",
+    "etak_id": 7488269,
+    "etak_type": 20,
+    "etak_height_attribute": 0,
+    "point_en": [680795.338, 6440509.821],
+    "egt_genesis_code": 50,
+    "egt_genesis_name": "Liustikulised setted",
+    "egt_lithology_code": 50,
+    "egt_lithology_name": "Moreen"
+  },
+  "condition_transform": [1.0, 0.0, 680214.0, 0.0, -1.0, 6441696.0],
+  "output_bbox_en": [680768.0, 6440476.0, 680832.0, 6440540.0],
+  "output_pitch_m": 0.25,
+  "source_exemplar": {
+    "source": "FORWARD patch 4, fixed q0.99 roughness quantile",
+    "patch": 4,
+    "center_row_col": [75, 54],
+    "size_cells": 64,
+    "denoise_sigma_cells": 4.0,
+    "tukey_alpha": 0.5,
+    "amplitude_scale": 1.0,
+    "selection_semantics": "interior persistent positive whole-form selected from the preregistered q0.99 patch; not target truth"
+  },
+  "hard_mask_taper_m": 1.0,
+  "capacity_gate": {
+    "positive_form_threshold_m": 0.08,
+    "minimum_center_relief_m": 0.1,
+    "positive_component_area_m2": [0.5, 64.0]
+  },
+  "production_authorized": false,
+  "estonia_transfer_claim": false,
+  "packed_or_runtime_output": false
+}
