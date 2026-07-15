@@ -1,0 +1,44 @@
+{
+  "schema_version": "laas.erodible-slope-process-config/1",
+  "process_texel_m": 1.0,
+  "fine_texel_m": 0.0625,
+  "rainfall_depth_m": 0.04,
+  "event_duration_s": 7200.0,
+  "manning_n_s_m13": 0.09,
+  "water_density_kg_m3": 998.0,
+  "gravity_m_s2": 9.80665,
+  "transport_kg_per_joule": 0.00018,
+  "deposit_bulk_density_kg_m3": 1450.0,
+  "rill_area_threshold_m2": 36.0,
+  "rill_width_min_m": 0.16,
+  "rill_width_max_m": 0.8,
+  "rill_depth_max_m": 0.16,
+  "headcut_relief_max_m": 0.14,
+  "headcut_slope_break_min": 0.025,
+  "seep_relief_max_m": 0.08,
+  "toe_relief_max_m": 0.12,
+  "streamline_step_m": 0.25,
+  "streamline_max_length_m": 384.0,
+  "min_slope": 0.012,
+  "deposition_slope_ceiling": 0.12,
+  "mass_balance_relative_tolerance": 1e-10,
+  "seed": 240713,
+  "material_rules": {
+    "sand_mineral": {
+      "bulk_density_kg_m3": 1500.0,
+      "critical_shear_pa": 2.0,
+      "detachment_kg_m2_s_pa": 0.00035,
+      "runoff_fraction": 0.18,
+      "seep_flux_m_s": 8e-7,
+      "max_erodible_depth_m": 0.18
+    },
+    "till_mineral": {
+      "bulk_density_kg_m3": 1650.0,
+      "critical_shear_pa": 4.5,
+      "detachment_kg_m2_s_pa": 0.00016,
+      "runoff_fraction": 0.3,
+      "seep_flux_m_s": 2e-7,
+      "max_erodible_depth_m": 0.12
+    }
+  }
+}
