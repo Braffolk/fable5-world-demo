@@ -697,12 +697,44 @@ artifact is therefore `r0_correlated_within_site_two_crop_visual_rejected`.
 This is one correlated within-site R0 experiment: development-site credit is
 exactly `1`, while independent-validation, OOD/holdout, production, preview,
 recipe-freeze, and publication credit are all zero. A-east is not an alias for
-Development C and does not fill the vacant second Development role. The next
-blocker is a general upstream/domain-stability and parallel-head morphology
-diagnosis that explains the normal/enlarged ownership change and repeated form
+Development C and does not fill the vacant second Development role.
+
+### Correlated Development A domain closure is solver-authorized at +256 m
+
+The first exact closure transaction
+`asset-gen/data/work/microtopography/erodible-slope/conditions/domain-closure/sha256/802a3f47311bde7106ac65245df5887f0330a0aaed04071552f49efaa7386e61/manifest.json`
+failed rather than trimming or masking dependencies. Its proposed `+128 m`
+canonical and independently materialized `+256 m` control both keep the crop
+dependency graph away from their storage edges, but disagree on `65`
+canonical-only and `43` control-only cells inside the canonical window; the
+control has zero crop dependencies outside that window. Raw D∞ branch A differs
+at `30` targets and `22` weights, branch B at `11` targets and `22` weights;
+both weight maxima are `1`. Finite-depression routing differs at `6` spill
+targets and `6` spill depths with maximum depth-code difference `80`, while
+spill capacity and order are exact. Height, masks, outlets, collar, geology,
+and derived `material_rule` are exact. The `158,643` differing
+`soil_feature_index` cells are extraction-local row labels, not physical soil
+semantics; they must not override the exact derived material identity.
+
+The bounded promotion then converged. Transaction
+`asset-gen/data/work/microtopography/erodible-slope/conditions/domain-closure/sha256/e316add66854bd25fd13dcbf07c017950ebec97b18f0485820367a7ae774a0ac/manifest.json`
+has manifest SHA-256
+`c2ea6bf89f85421295ebb65bf4b20eac8a99a858ea9e9922dfdcdb6fc5483600`.
+Its promoted `+256 m` canonical and independent `+384 m` control contain the
+same `169,591` crop-contributing dependency cells: canonical-only,
+control-only-inside, and control-outside counts are all zero. Every raw D∞
+branch target and weight, finite spill target/capacity/order/depth, and compared
+physical condition is exact, and neither graph touches its storage edge. The
+manifest therefore records `solver_authorized_condition_authority`. This
+authority is finite and sufficient only for the correlated Development A west
+and east crops; it supplies no independent-site, OOD, production, preview,
+recipe-freeze, or publication credit.
+
+Domain closure is no longer the correlated-A blocker. The remaining general
+failure is the comb-like parallel-head morphology. Resolve that repeated form
 organization without crop-specific handling, gate reinterpretation, or
-threshold weakening. Preserve the exact shared edge and all hard, collar,
-opportunity, and abstention semantics.
+threshold weakening, while preserving the exact shared edge, `+256 m` domain
+authority, and all hard, collar, opportunity, and abstention semantics.
 
 ### Current conditioning discards real soil structure and ignores mapped cliff/shore constraints
 

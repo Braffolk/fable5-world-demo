@@ -1,0 +1,33 @@
+{
+  "schema_version": "laas.erodible-slope-domain-closure-plan/1",
+  "condition_bundle": {
+    "path": "asset-gen/data/work/microtopography/erodible-slope/conditions/sha256/10a5ea53b007f3e6e2e878ccebd70a9712716042139ca35178310655fcb85b8b/bundle.json",
+    "bytes": 354606,
+    "sha256": "9d417818c90b7e8e4db757a70cd2703df5a2e4045ff54ada9248f700bede38f9"
+  },
+  "site_config": {
+    "path": "asset-gen/config/microtopography/erodible-slope/condition-sites-v1.json",
+    "bytes": 1387,
+    "sha256": "01b5a10663f548ba1fbaebde24fe548b173b90e73387bf8ac70a3c8a5dd0f0d2"
+  },
+  "solver_config": {
+    "path": "asset-gen/config/microtopography/erodible-slope/solver-c1-v1.json",
+    "bytes": 1252,
+    "sha256": "c45b420f28b25b59584c72ddacfa0a259ecd9cc9a652b7057a049856764637b9"
+  },
+  "canonical_authority": {
+    "path": "asset-gen/data/work/microtopography/erodible-slope/conditions/domain-closure/sha256/802a3f47311bde7106ac65245df5887f0330a0aaed04071552f49efaa7386e61/manifest.json",
+    "bytes": 13621,
+    "sha256": "644617413168bc47dfadca651acdea84b0d7dc24f5e7cf2d6442ab6206499a34"
+  },
+  "source_site_id": "development_a",
+  "canonical_expansion_from_original_m": 256,
+  "control_expansion_from_original_m": 384,
+  "next_expansion_step_m": 128,
+  "crops": [
+    {"crop_id": "development_a_west", "output_chunk": [-2, 2436, 1492]},
+    {"crop_id": "development_a_east", "output_chunk": [-2, 2437, 1492]}
+  ],
+  "forbidden_etak_ids": [9688685, 9688702],
+  "sealed_ood_used": false
+}
