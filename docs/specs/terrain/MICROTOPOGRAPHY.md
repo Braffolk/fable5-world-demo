@@ -824,20 +824,29 @@ where the bound soil/geology evidence supports them; neither is a default.
 Its fixed roles are:
 
 The replacement-role authority is selection recipe
-`15d76d27aade90051e74fa39b96db35ba396df25d14733593f761bc17f0ed2e1`
+`aa59aca7a5209b9504be5c3778b6764d6ae6f5c3bf3de26eab967a9274d7365d`
 at
-`asset-gen/data/work/microtopography/erodible-slope/site-selection/sha256/15d76d27aade90051e74fa39b96db35ba396df25d14733593f761bc17f0ed2e1/selection.json`
+`asset-gen/data/work/microtopography/erodible-slope/site-selection/sha256/aa59aca7a5209b9504be5c3778b6764d6ae6f5c3bf3de26eab967a9274d7365d/selection.json`
 (file SHA-256
-`6a1e0bc5bc0a5e11e3f475429c2bc7862699056daf822899167e7064cf0522e4`).
+`977b336b65c75c0548be74e18ee1eb16c61b19989e8650597cfdbe152111e359`).
 It froze identities from official metadata and exact canonical LOD -2 chunks
 before human pixel or detailed source-geometry inspection. Superseded selection
 artifacts have no authority.
+
+The condition authority is recipe
+`10a5ea53b007f3e6e2e878ccebd70a9712716042139ca35178310655fcb85b8b`
+at
+`asset-gen/data/work/microtopography/erodible-slope/conditions/sha256/10a5ea53b007f3e6e2e878ccebd70a9712716042139ca35178310655fcb85b8b/bundle.json`
+(file SHA-256
+`9d417818c90b7e8e4db757a70cd2703df5a2e4045ff54ada9248f700bede38f9`).
+No other condition bundle may supply Development A, B, or C inputs to this
+research bundle.
 
 | Artifact | Fixed role | Explicit limit |
 |---|---|---|
 | ETAK escarpment `1826743`, `E680551.76 N6444450.80`, sheet `54481` | Development A | R0 condition-bound process development only |
 | ETAK ditch-adjacent slope `1826691`, `E679692.03 N6442784.16`, sheet `54472` | rejected Development B strict-abstention evidence | missing Huumus is unknown; no synthesis, imputation, material default, positive credit, or second Development role |
-| ETAK bank slope `9688719`, `E680730.343232 N6441028.579650`, sheet `54481`, LOD -2 chunk `(2438,1519)`, bounds `[680704,6440960,680832,6441088]` | Development C | second R0 condition-development role; identity and crop are frozen, but physical condition-domain/outlet/collar/invariance qualification is pending and blocks C1 use |
+| ETAK bank slope `9688719`, `E680752.8418668837 N6441183.486937005`, sheet `54481`, LOD -2 chunk `(2438,1518)`, bounds `[680704,6441088,680832,6441216]` | Development C | second R0 condition-development role; exact target line `100.155104 m`, solve-domain coverage `9,713/16,384` (`59.2834%`), target/solve intersection `122/122`, and material support `13,346/16,384` (`81.4575%`) are frozen by the bound condition artifact |
 | Orajõgi bank slope `9688685`, `E681429.34 N6443825.32`, sheet `54481` | consumed and disqualified former OOD | inspected before full recipe freeze; never audit, candidate-selection, threshold, morphology, transfer, or generalization evidence |
 | ETAK bank slope `9688702`, `E681105.772168 N6442476.398258`, sheet `54481`, LOD -2 chunk `(2441,1508)`, bounds `[681088,6442368,681216,6442496]` | sealed OOD2 abstention stress | still uninspected; bounded abstention is its only allowed pass and it supplies no positive morphology, transfer, target, or generalization credit |
 | Schott 2024 paper and pinned public implementation | operator-sequence and ablation reference | no code, constants, boundary conditions, hardness behavior, or scale transfer |
@@ -851,6 +860,14 @@ development evidence only. OOD2 is not a comparable blind positive audit: its on
 passing result is bounded abstention wherever its frozen condition predicate or
 support is unknown or outside the Development A/C envelope. Orajõgi remains consumed
 and may not substitute for OOD2.
+
+Development C's superseded LOD -2 chunk `(2438,1519)`, bounds
+`[680704,6440960,680832,6441088]`, and candidate recipe
+`98c131d4826761e09746c4bd3f02ab34d423f8d7bb94cca2a79422437a898b52`
+are retained only as rejected condition-abstention evidence. That crop contained
+only `725/16,384` solve-domain cells and `22/118` target/solve cells; its zero C1
+residual is the correct fail-closed result, not a solver failure, morphology
+measurement, or basis for changing the solver. OOD2 remains unchanged and sealed.
 
 Before any R0 generation, the machine preregistration must bind the complete soil
 mixtures/layers/humus, authoritative decoded 1:200k `Q_Litoloogia_200` and
@@ -867,8 +884,9 @@ continuous or rotation-qualified routing, canonical world samples, whole-domain
 upstream flux and outlets, declared runoff/seep/material fields, conservative
 erosion/deposition accounting, typed hard masks, and one absolute master cropped
 only after the solve. Development output is R0 descriptive evidence. Development C
-may enter C1 only after its complete physical condition domain, real outlets,
-collar, masks, material support, and invariance gates are hash-bound and pass.
+may enter C1 only through the exact bound condition artifact above and remains
+subject to its frozen domain, outlet, collar, mask, material-support, and invariance
+gates.
 Before opening OOD2, freeze the complete C1 recipe, seed, condition envelope,
 abstention rule, metrics, thresholds, preview extent, cameras, and visual rule.
 Any post-OOD2 change terminates that recipe and requires a genuinely untouched
@@ -2634,10 +2652,10 @@ This separately authorized path does not alter or inherit the forest bundle:
    `asset-gen/config/microtopography/erodible-slope/` with the exact Section 9.9
    roles, sources, masks, physical domains, C0/C1 configs, units, budgets, gates,
    preview extent, cameras, and corrected-only control;
-2. preserve rejected Development B as strict-abstention evidence; qualify
-   Development C's pending physical domain/outlets/collar/masks/material support,
-   then run C0/C1 only on the complete Development A and C physical domains and
-   crop only after each whole-domain solve;
+2. preserve rejected Development B as strict-abstention evidence; use only the
+   bound Development A and corrected Development C condition domains for
+   C0/C1, retain the old Development C crop/candidate as condition-abstention
+   evidence, and crop only after each whole-domain solve;
 3. reject candidates that violate protected features, typed masks, network/outlet
    topology, conservative accounting, rotation/partition identity, one-meter grid
    leakage, recognizable-form, cost, or packing-survival gates;

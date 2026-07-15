@@ -1,8 +1,8 @@
 {
   "schema_version": "laas.erodible-slope-condition-sites/1",
   "selection": {
-    "path": "asset-gen/data/work/microtopography/erodible-slope/site-selection/sha256/15d76d27aade90051e74fa39b96db35ba396df25d14733593f761bc17f0ed2e1/selection.json",
-    "sha256": "6a1e0bc5bc0a5e11e3f475429c2bc7862699056daf822899167e7064cf0522e4"
+    "path": "asset-gen/data/work/microtopography/erodible-slope/site-selection/sha256/aa59aca7a5209b9504be5c3778b6764d6ae6f5c3bf3de26eab967a9274d7365d/selection.json",
+    "sha256": "977b336b65c75c0548be74e18ee1eb16c61b19989e8650597cfdbe152111e359"
   },
   "forbidden_etak_ids": [9688685, 9688702],
   "sites": [
@@ -19,10 +19,11 @@
       "id": "development_c",
       "role": "morphology_development",
       "etak_id": 9688719,
-      "e_m": 680730.3432315282,
-      "n_m": 6441028.579649958,
+      "e_m": 680752.8418668837,
+      "n_m": 6441183.486937005,
       "maaamet_sheet": "54481",
-      "output_chunk": [-2, 2438, 1519],
+      "output_chunk": [-2, 2438, 1518],
+      "output_bounds_en": [680704, 6441088, 680832, 6441216],
       "target_outlet_etak_ids": [7074698],
       "outlet_selection": {
         "policy": "nearest_nonsealed_mapped_flowline_by_exact_geometry_distance",

@@ -1,4 +1,4 @@
-"""Materialize Development A/B condition evidence without terrain synthesis."""
+"""Materialize Development A/C/B condition evidence without terrain synthesis."""
 from __future__ import annotations
 
 import argparse
@@ -48,6 +48,7 @@ class SiteSpec:
     sheet: str
     target_outlet_ids: tuple[int, ...]
     output_chunk: tuple[int, int, int] | None = None
+    output_bounds_en: tuple[int, int, int, int] | None = None
 
 _ETAK_LAYERS: dict[str, tuple[str, ...]] = {
     "E_102_nolv_j": (
@@ -255,7 +256,9 @@ def _load_preregistration(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _load_site_config(path: Path) -> tuple[list[SiteSpec], frozenset[int], dict[str, Any]]:
+def _load_site_config(
+    path: Path,
+) -> tuple[list[SiteSpec], frozenset[int], dict[str, Any], dict[str, Any]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("schema_version") != "laas.erodible-slope-condition-sites/1":
         raise ValueError("unsupported erodible-slope condition site config")
@@ -264,6 +267,12 @@ def _load_site_config(path: Path) -> tuple[list[SiteSpec], frozenset[int], dict[
         raise ValueError("frozen erodible-slope site selection identity changed")
     selection = json.loads(selection_path.read_text(encoding="utf-8"))
     selected = selection["development_replacement"]
+    output_chunk_bounds = [int(value) for value in selected["output_chunk"]["bounds_en"]]
+    support_crop_bounds = [int(value) for value in selected["support"]["crop_bbox_en"]]
+    if support_crop_bounds != output_chunk_bounds:
+        raise ValueError(
+            "Development C selection support crop differs from its exact output chunk"
+        )
     specs = [
         SiteSpec(
             site_id=row["id"],
@@ -276,6 +285,11 @@ def _load_site_config(path: Path) -> tuple[list[SiteSpec], frozenset[int], dict[
             output_chunk=(
                 tuple(int(value) for value in row["output_chunk"])
                 if row.get("output_chunk") is not None
+                else None
+            ),
+            output_bounds_en=(
+                tuple(int(value) for value in row["output_bounds_en"])
+                if row.get("output_bounds_en") is not None
                 else None
             ),
         )
@@ -292,12 +306,13 @@ def _load_site_config(path: Path) -> tuple[list[SiteSpec], frozenset[int], dict[
             int(selected["output_chunk"]["cx"]),
             int(selected["output_chunk"]["cz"]),
         ]
+        or list(development_c.output_bounds_en or ()) != output_chunk_bounds
     ):
         raise ValueError("Development C site config differs from frozen selection")
     forbidden = frozenset(int(value) for value in payload["forbidden_etak_ids"])
     if any(spec.target_etak_id in forbidden for spec in specs):
         raise ValueError("condition site aliases a forbidden OOD ETAK identity")
-    return specs, forbidden, payload
+    return specs, forbidden, payload, selected
 
 
 def _read_target_geometry(spec: SiteSpec) -> shapely.Geometry:
@@ -595,6 +610,99 @@ def _transform(bbox_en: tuple[int, int, int, int]) -> rasterio.Affine:
     return rasterio.transform.from_origin(
         bbox_en[0], bbox_en[3], _GRID_METERS, _GRID_METERS
     )
+
+
+def _aligned_crop_slices(
+    container_bbox_en: tuple[int, int, int, int],
+    crop_bbox_en: tuple[int, int, int, int],
+    shape: tuple[int, int],
+) -> tuple[slice, slice]:
+    min_e, min_n, max_e, max_n = container_bbox_en
+    crop_min_e, crop_min_n, crop_max_e, crop_max_n = crop_bbox_en
+    if not (
+        min_e <= crop_min_e < crop_max_e <= max_e
+        and min_n <= crop_min_n < crop_max_n <= max_n
+    ):
+        raise ValueError("exact output crop is outside its condition evidence window")
+    row_start = max_n - crop_max_n
+    row_stop = max_n - crop_min_n
+    col_start = crop_min_e - min_e
+    col_stop = crop_max_e - min_e
+    expected_shape = (crop_max_n - crop_min_n, crop_max_e - crop_min_e)
+    if (
+        row_start < 0
+        or col_start < 0
+        or row_stop > shape[0]
+        or col_stop > shape[1]
+        or (row_stop - row_start, col_stop - col_start) != expected_shape
+    ):
+        raise ValueError("exact output crop is not aligned to the 1 m condition grid")
+    return slice(row_start, row_stop), slice(col_start, col_stop)
+
+
+def _output_crop_metrics(
+    *,
+    container_bbox_en: tuple[int, int, int, int],
+    crop_bbox_en: tuple[int, int, int, int],
+    target: shapely.Geometry,
+    valid: np.ndarray,
+    solve_domain: np.ndarray,
+    edge_leak: np.ndarray,
+    target_feature: np.ndarray,
+    unknown: np.ndarray,
+    soil_feature_index: np.ndarray,
+    geology_lithology_code: np.ndarray,
+    geology_genesis_code: np.ndarray,
+) -> dict[str, Any]:
+    rows, columns = _aligned_crop_slices(
+        container_bbox_en,
+        crop_bbox_en,
+        valid.shape,
+    )
+    crop_valid = valid[rows, columns]
+    crop_solve = solve_domain[rows, columns]
+    crop_edge_leak = edge_leak[rows, columns]
+    crop_target = target_feature[rows, columns]
+    crop_unknown = unknown[rows, columns]
+    crop_soil = soil_feature_index[rows, columns]
+    crop_lithology = geology_lithology_code[rows, columns]
+    crop_genesis = geology_genesis_code[rows, columns]
+    material_supported = crop_valid & ~crop_unknown
+    target_supported = crop_target & material_supported
+    target_solve = crop_target & crop_solve
+    target_solve_supported = target_solve & material_supported
+    crop_shape = crop_valid.shape
+    process_cells = int(np.prod(crop_shape, dtype=np.int64))
+    material_supported_cells = int(material_supported.sum())
+    solve_domain_cells = int(crop_solve.sum())
+    return {
+        "bbox_en": list(crop_bbox_en),
+        "shape": list(crop_shape),
+        "process_cells": process_cells,
+        "valid_cells": int(crop_valid.sum()),
+        "solve_domain_cells": solve_domain_cells,
+        "solve_domain_fraction": float(solve_domain_cells / process_cells),
+        "edge_leak_cells": int(crop_edge_leak.sum()),
+        "unknown_cells": int(crop_unknown.sum()),
+        "soil_source_covered_cells": int((crop_soil >= 0).sum()),
+        "geology_decoded_cells": int(
+            ((crop_lithology >= 0) & (crop_genesis >= 0)).sum()
+        ),
+        "material_supported_cells": material_supported_cells,
+        "material_supported_fraction": float(
+            material_supported_cells / process_cells
+        ),
+        "target_feature_cells": int(crop_target.sum()),
+        "target_feature_solve_domain_cells": int(target_solve.sum()),
+        "target_feature_material_supported_cells": int(target_supported.sum()),
+        "target_feature_solve_material_supported_cells": int(
+            target_solve_supported.sum()
+        ),
+        "active_target_cells": int(target_solve_supported.sum()),
+        "exact_target_line_intersection_m": float(
+            target.intersection(shapely.box(*crop_bbox_en)).length
+        ),
+    }
 
 
 def _rasterize(
@@ -1210,6 +1318,36 @@ def _site_artifacts(
             unknown=enlarged_unknown,
         )
     )
+    output_crop = None
+    if spec.output_bounds_en is not None:
+        output_crop = {
+            "normal": _output_crop_metrics(
+                container_bbox_en=bbox_en,
+                crop_bbox_en=spec.output_bounds_en,
+                target=target,
+                valid=authority["valid"],
+                solve_domain=drainage.solve_domain,
+                edge_leak=drainage.edge_leak,
+                target_feature=target_feature,
+                unknown=unknown,
+                soil_feature_index=soil["primary"],
+                geology_lithology_code=geology["primary"],
+                geology_genesis_code=geology["secondary"],
+            ),
+            "enlarged": _output_crop_metrics(
+                container_bbox_en=enlarged_bbox_en,
+                crop_bbox_en=spec.output_bounds_en,
+                target=target,
+                valid=enlarged_authority["valid"],
+                solve_domain=enlarged_drainage.solve_domain,
+                edge_leak=enlarged_drainage.edge_leak,
+                target_feature=enlarged_target_feature,
+                unknown=enlarged_unknown,
+                soil_feature_index=enlarged_soil["primary"],
+                geology_lithology_code=enlarged_geology["primary"],
+                geology_genesis_code=enlarged_geology["secondary"],
+            ),
+        }
     arrays = {
         "height": authority["height"].astype(np.float32),
         "valid": authority["valid"].astype(np.uint8),
@@ -1273,6 +1411,7 @@ def _site_artifacts(
         "target_outlet_etak_ids": list(spec.target_outlet_ids),
         "development_role": spec.role,
         "target_material_support": target_material_support,
+        "output_crop": output_crop,
         "domain_policy": {
             "method": "conservative_fail_closed_priority_flood_outlet_partition_on_accepted_authority_1m_evidence_grid",
             "authority": "evidence_domain_delineation_only",
@@ -1387,6 +1526,58 @@ def _site_artifacts(
     }
 
 
+def _validate_selected_output_crop(
+    selected: dict[str, Any],
+    site_result: dict[str, Any],
+) -> None:
+    output_crop = site_result["facts"]["output_crop"]
+    if output_crop is None:
+        raise ValueError("Development C omitted its exact output crop facts")
+    normal = output_crop["normal"]
+    enlarged = output_crop["enlarged"]
+    if normal != enlarged:
+        raise ValueError(
+            "Development C exact output crop differs between normal and enlarged evidence windows"
+        )
+    expected = selected["condition_relevance"]["metrics"]
+    exact_fields = (
+        "active_target_cells",
+        "geology_decoded_cells",
+        "material_supported_cells",
+        "process_cells",
+        "soil_source_covered_cells",
+        "solve_domain_cells",
+        "target_feature_cells",
+        "target_feature_material_supported_cells",
+        "target_feature_solve_domain_cells",
+        "target_feature_solve_material_supported_cells",
+        "unknown_cells",
+        "valid_cells",
+    )
+    for field in exact_fields:
+        if int(normal[field]) != int(expected[field]):
+            raise ValueError(
+                f"Development C exact output crop {field} differs from frozen selection"
+            )
+    float_fields = (
+        "exact_target_line_intersection_m",
+        "material_supported_fraction",
+        "solve_domain_fraction",
+    )
+    for field in float_fields:
+        if not np.isclose(
+            float(normal[field]),
+            float(expected[field]),
+            rtol=0.0,
+            atol=1e-12,
+        ):
+            raise ValueError(
+                f"Development C exact output crop {field} differs from frozen selection"
+            )
+    if int(normal["edge_leak_cells"]) != 0:
+        raise ValueError("Development C exact output crop reaches an evidence edge leak")
+
+
 def materialize_condition_bundle(
     *,
     preregistration_path: Path,
@@ -1397,7 +1588,9 @@ def materialize_condition_bundle(
     output_root: Path | None = None,
 ) -> Path:
     _load_preregistration(preregistration_path)
-    site_specs, forbidden_etak_ids, _site_config = _load_site_config(site_config_path)
+    site_specs, forbidden_etak_ids, _site_config, selected = _load_site_config(
+        site_config_path
+    )
     authority_manifest = json.loads(authority_manifest_path.read_text(encoding="utf-8"))
     if authority_manifest.get("role") != "structural_authority_0.25m":
         raise ValueError("input is not the accepted 0.25 m structural authority")
@@ -1426,6 +1619,12 @@ def materialize_condition_bundle(
         )
         for spec in site_specs
     ]
+    development_c_result = next(
+        result
+        for result in site_results
+        if result["facts"]["site_id"] == "development_c"
+    )
+    _validate_selected_output_crop(selected, development_c_result)
     recipe = {
         "schema_version": f"{_SCHEMA_VERSION}.recipe",
         "inputs": inputs,
@@ -1437,6 +1636,12 @@ def materialize_condition_bundle(
                 "output_chunk": (
                     list(spec.output_chunk) if spec.output_chunk is not None else None
                 ),
+                "output_bounds_en": (
+                    list(spec.output_bounds_en)
+                    if spec.output_bounds_en is not None
+                    else None
+                ),
+                "output_crop": result["facts"]["output_crop"],
                 "target_material_support": result["facts"]["target_material_support"],
                 "bbox_en": result["facts"]["bbox_en"],
                 "enlarged_domain_bbox_en": result["facts"]["enlarged_domain"]["bbox_en"],

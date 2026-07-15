@@ -384,13 +384,21 @@ is frozen at
 `asset-gen/data/work/microtopography/erodible-slope/site-selection/sha256/15d76d27aade90051e74fa39b96db35ba396df25d14733593f761bc17f0ed2e1/selection.json`
 (file SHA-256
 `6a1e0bc5bc0a5e11e3f475429c2bc7862699056daf822899167e7064cf0522e4`).
-Development C is ETAK bank slope `9688719`, exact LOD -2 chunk `(2438,1519)`,
-bounds `[680704,6440960,680832,6441088]`. Condition artifact `fa43f7075214...`
-now binds its normal and independently enlarged evidence windows, mapped flowline
-outlet ETAK `7074698`, collar, typed masks, and complete target material support
-at `240/240` cells in each window. Both windows have zero edge leak. This closes
-the condition-domain enlargement check, not the later solver partition/rotation
-invariance or frozen C1-recipe gates. Sealed OOD2 is ETAK `9688702`,
+The initial Development C crop `(2438,1519)` and condition artifact `fa43f7075214...`
+are retained only as rejected condition-abstention evidence. Corrected selection
+`aa59aca7a5209b9504be5c3778b6764d6ae6f5c3bf3de26eab967a9274d7365d`
+(selection file SHA-256
+`977b336b65c75c0548be74e18ee1eb16c61b19989e8650597cfdbe152111e359`)
+supersedes it with the same exact ETAK bank slope `9688719` but canonical LOD -2
+chunk `(2438,1518)`, bounds `[680704,6441088,680832,6441216]`, and representative
+point `E680752.8418668837 N6441183.486937005`. The materializer fails closed unless
+the frozen support crop equals those exact output bounds. Superseding condition
+artifact `10a5ea53b007...` binds normal and independently enlarged evidence windows,
+mapped flowline outlet ETAK `7074698`, collar, typed masks, complete whole-feature
+target material support at `240/240` cells in each window, and exact-crop agreement.
+Both windows and the exact crop have zero edge leak. This closes the condition-domain
+enlargement check, not the later solver partition/rotation invariance or frozen C1-recipe
+gates. Sealed OOD2 is ETAK `9688702`,
 chunk `(2441,1508)`, bounds `[681088,6442368,681216,6442496]`. It remains
 pixel- and detailed-source-geometry-uninspected, is bounded-abstention-only, and
 must not be opened before complete recipe freeze.
@@ -556,8 +564,8 @@ The rejected LUKE one-parent diagnostic is `47.18 MB` for 17 published chunks. A
 ### Erodible-slope A/C/B condition bundle is R0-preflight ready, not recipe/preview ready
 
 The final reconstructed condition artifact is
-`asset-gen/data/work/microtopography/erodible-slope/conditions/sha256/fa43f7075214eb0f0eef5b3977427823dcf10a09157e53ac9a9f61b774c5077d/bundle.json`
-(file SHA-256 `e301e0165bc1f2e9deaa137f8756de8900c7e48c954224d3db9185a2aaea6828`).
+`asset-gen/data/work/microtopography/erodible-slope/conditions/sha256/10a5ea53b007f3e6e2e878ccebd70a9712716042139ca35178310655fcb85b8b/bundle.json`
+(file SHA-256 `9d417818c90b7e8e4db757a70cd2703df5a2e4045ff54ada9248f700bede38f9`).
 It binds the frozen replacement selection and normal plus independently recomputed
 `+128 m` grids for A/C/B, exact corrected or
 pinned-canonical LOD0 height, accepted fine masks, ETAK, soil, decoded 1:200k geology,
@@ -568,9 +576,12 @@ set amplitude, or authorize a visible boundary.
 
 Development A and Development C are the only morphology-development inputs. A has
 parsed Loimis1 and Huumus on `235/235` normal and enlarged target cells. C binds exact
-LOD -2 chunk `(2438,1519)`, mapped outlet ETAK `7074698`, and `240/240` supported target
-cells in each window. Its solve domain is `18,997` cells in both windows, with `162`
-outlet cells and zero edge leak. C is outside the Taevaskoda-local fine structural-mask
+LOD -2 chunk `(2438,1518)`, mapped outlet ETAK `7074698`, and `240/240` supported target
+cells in each whole-feature window. Its exact `128 x 128` output crop has `9,713` solve
+cells, `13,346` material-supported cells, `3,038` unknown cells, and all `122` target
+cells inside the solve and material-supported sets under both normal and enlarged
+evidence. The exact geometric line intersection is `100.15510404768838 m`; crop and
+whole-window edge leaks are zero. C is outside the Taevaskoda-local fine structural-mask
 bank: fine-mask coverage is explicitly `0/768,936`, not silently fabricated. Its accepted
 corrected/pinned-canonical LOD0 height and national ETAK, soil, geology, orthophoto,
 water, object, vegetation, and unknown masks remain authoritative for this condition
