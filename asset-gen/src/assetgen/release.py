@@ -739,10 +739,12 @@ def create_build_plan(
             "retention-fixture",
             "measured-synthesis-pilot",
             "structural-repair-overlay-v1",
+            "research-microtopography-preview-v1",
         ):
             raise ValueError(f"unsupported micro recipe kind {micro_recipe_kind!r}")
         if (
-            micro_recipe_kind != "structural-repair-overlay-v1"
+            micro_recipe_kind
+            not in ("structural-repair-overlay-v1", "research-microtopography-preview-v1")
             and base_manifest_sha256 != MICRO_V1_BASE_SHA256
         ):
             raise ValueError("manifest format 2 base is not the approved micro v1 release")
@@ -773,6 +775,18 @@ def create_build_plan(
                 "id": STRUCTURAL_VERIFIER_ID,
                 "sourceSha256": structural_verifier_source_sha256(),
             }
+        elif micro_recipe_kind == "research-microtopography-preview-v1":
+            from .terrain.microtopography.forest_exemplar.preview_verify import (
+                VERIFIER_ID as FOREST_PREVIEW_VERIFIER_ID,
+                verifier_source_sha256 as forest_preview_verifier_source_sha256,
+            )
+
+            planned_verifier = {
+                "id": FOREST_PREVIEW_VERIFIER_ID,
+                "sourceSha256": forest_preview_verifier_source_sha256(),
+            }
+            if expectation.get("verifier") != planned_verifier:
+                raise ValueError("forest preview expectation names a different verifier")
         else:
             planned_verifier = {
                 "id": VERIFIER_ID,
@@ -978,16 +992,23 @@ def _require_micro_verification(
         if report.get("passed") is not True:
             raise ValueError("structural verification has not passed")
         return report, _sha256_bytes(blob)
+    if recipe_kind == "research-microtopography-preview-v1":
+        from .terrain.microtopography.forest_exemplar.preview_verify import (
+            verify_irregular_forest_preview,
+        )
+
+        verifier = verify_irregular_forest_preview
+    else:
+        verifier = {
+            "retention-fixture": verify_micro_fixture,
+            "measured-synthesis-pilot": verify_micro_synthesis,
+        }.get(recipe_kind)
     if not VERIFIER_CAN_AUTHORIZE_RELEASE:
         raise ValueError(
             "micro release authorization is closed until the verifier recomputes "
             "hierarchy, apron, mask, determinism, and transient-parent evidence"
         )
     base_release = plan.get("baseRelease") or {}
-    verifier = {
-        "retention-fixture": verify_micro_fixture,
-        "measured-synthesis-pilot": verify_micro_synthesis,
-    }.get(recipe_kind)
     if verifier is None:
         raise ValueError(f"unsupported micro verification recipe kind {recipe_kind!r}")
     try:
@@ -1145,7 +1166,10 @@ def _manifest_from_plan(
     fixture_only: bool = False,
 ) -> tuple[dict[str, Any], dict[str, bytes]]:
     fixture_only = fixture_only or plan.get("microRecipeKind") == "retention-fixture"
-    pilot_only = plan.get("microRecipeKind") == "measured-synthesis-pilot"
+    pilot_only = plan.get("microRecipeKind") in (
+        "measured-synthesis-pilot",
+        "research-microtopography-preview-v1",
+    )
     structural_only = plan.get("microRecipeKind") == "structural-repair-overlay-v1"
     manifest_format = int(plan["manifestFormat"])
     if manifest_format not in (1, 2):
@@ -1238,6 +1262,8 @@ def _manifest_from_plan(
                 "synthesis": (
                     "calibrated-retention-fixture-v1"
                     if fixture_only
+                    else "accepted-irregular-forest-research-preview-v1"
+                    if plan.get("microRecipeKind") == "research-microtopography-preview-v1"
                     else "measured-synthesis-pilot-v1"
                     if pilot_only
                     else "structural-repair-overlay-v1"
@@ -1387,7 +1413,10 @@ def publish_build(
     out_root: Path = DATA_OUT,
 ) -> Path:
     _, plan, _ = _load_plan(build_digest, work_root)
-    if plan.get("microRecipeKind") == "measured-synthesis-pilot":
+    if plan.get("microRecipeKind") in (
+        "measured-synthesis-pilot",
+        "research-microtopography-preview-v1",
+    ):
         raise ValueError("measured-synthesis pilot is immutable-preview-only and cannot update latest")
     if plan.get("microRecipeKind") == "structural-repair-overlay-v1":
         raise ValueError("structural repair overlay is preview-only and cannot update latest")
