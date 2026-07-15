@@ -358,6 +358,36 @@ and bilinear zoom rather than normative F4/R4. Preserve the code/artifact so the
 working lattice/base/typed-form scaffolding is not reimplemented, but do not
 repair, pack, parameter-transfer, or claim this exact recipe.
 
+The Schott 2024 public implementation is not a usable erosion engine for this
+track. It diverges from the paper, leaves hardness inactive, uses closed or
+periodic/noisy boundaries, omits claimed retarget/breach stages, and supplies no
+physical units or sub-decimeter validation. A direct port would reproduce the
+same patch/grid/noise failures just rejected in agriculture. Any erodible-slope
+candidate must be a rederived whole-domain solver with continuous or otherwise
+rotation-qualified routing, real outlets/upstream flux, material/runoff/seep
+fields in declared units, conservative sediment/thermal accounting, and hard
+typed masks. Schott transfers only operator sequencing and ablation logic.
+
+The former EGT 1:200k code-domain gap is closed by the official decoded-domain
+snapshot bound in commit `7ca8f4b` and condition bundle `77b81b2dc051...`.
+`Q_Litoloogia_200` and `Q_Genees_200` remain distinct from the similarly named
+1:50k domains; no 1:50k substitution or inferred code name is allowed.
+Development A is ETAK escarpment
+`1826743` at `E680551.76 N6444450.80`; Development B is ditch-adjacent slope
+`1826691` at `E679692.03 N6442784.16`; untouched OOD is Orajõgi bank slope
+`9688685` at `E681429.34 N6443825.32`. The latter remains pixel-uninspected.
+
+The accepted spec now authorizes `erodible-slope-research-bundle/1` only as a
+bounded R0 process-development path and later immutable non-`latest` preview.
+Its machine preregistration remains `blocked_before_r0_generation` until every
+null condition, provenance, physical-domain, recipe, threshold, and mask binding
+is resolved. Development A and Orajõgi are on sheet `54481` (bounds
+`E680000..685000 N6440000..6445000`), not `54474`; Development B remains on
+sheet `54472`. Orajõgi was accidentally consumed and is permanently disqualified;
+a new objectively selected, identity-frozen untouched OOD is required. Development
+A/B remain one conservative leakage group unless a frozen physical-domain audit
+proves otherwise.
+
 The durable end-to-end requirement comparison is recorded in
 `MICROTOPOGRAPHY-CONFORMANCE-AUDIT.md`. It also freezes the historical preregistration
 boundary: LUKE can never be grandfathered into owner selection; inspected Hovi/Evo
@@ -505,6 +535,28 @@ The rejected LUKE one-parent diagnostic is `47.18 MB` for 17 published chunks. A
 `r1.md` over-centers exact block-average consistency and transfers natural-image inverse-problem results to fallible real DTM observations without establishing the measurement operator or a terrain microgeometry prior. Full-paper checks show DDNM guarantees consistency only for an explicit degradation operator and delegates realism to its pretrained prior; MultiDiffusion provides overlapping image-window consensus, not height/slope/normal continuity or geomorphological correctness; Guérin 2017 cGAN delegates its final amplification to the 2016 sparse method.
 
 `r2.md` recommends Guérin 2016 more broadly than the paper supports: the authors state that geomorphological consistency and small-scale coherence are not guaranteed and rely on similar exemplar/target terrains. It also misidentifies Argudo et al. 2017, *The Visual Computer* 33(6), DOI `10.1007/s00371-017-1393-6`, as the orthophoto FCN. That source is *Coherent Multi-Layer Landscape Synthesis*, a multilayer dictionary method; the orthophoto FCN is Argudo, Chica, and Andujar 2018, *Computer Graphics Forum* 37(2), DOI `10.1111/cgf.13345`. The source ledger must expose such corrections rather than silently inheriting either report.
+
+### Erodible-slope A/B condition bundle is R0-preflight ready, not recipe/preview ready
+
+The provenance-clean condition artifact is
+`asset-gen/data/work/microtopography/erodible-slope/conditions/sha256/77b81b2dc0513aa618fd50eab2de654e3988b34e2a86397b6ed56070bd2f75d3/bundle.json`
+(file SHA-256 `0637109bf0b8584afb53d60d25466f616af855186cd1437957757cbf246a1498`).
+It binds normal and independently recomputed `+128 m` grids for A/B, exact corrected or
+pinned-canonical LOD0 height, accepted fine masks, ETAK, soil, decoded 1:200k geology,
+real outlets, conservative evidence domains, typed abstention masks, and localized
+topographic seep-process support. All four evidence grids have zero edge leak; priority
+flood is domain delineation only and may never route synthesis, alter height, place forms,
+set amplitude, or authorize a visible boundary.
+
+Development A is the only morphology-development input: its mapped target has parsed
+Loimis1 and Huumus on `235/235` normal and enlarged target cells. Development B is a
+strict abstention/negative record: its target has `0/801` supported cells because null
+Huumus is unknown, not absence. Unknown cells force seep support to zero. Top-level
+`ready_for_r0_input_freeze` is true only for non-authorizing development/preflight;
+`ready_for_recipe_freeze_or_preview` is false. Orajõgi ETAK `9688685` was accidentally
+consumed and is permanently disqualified; a genuinely untouched, objectively selected
+and hash-frozen replacement OOD plus the corresponding spec/preregistration amendment
+remain mandatory before recipe freeze or preview.
 
 ### Current conditioning discards real soil structure and ignores mapped cliff/shore constraints
 

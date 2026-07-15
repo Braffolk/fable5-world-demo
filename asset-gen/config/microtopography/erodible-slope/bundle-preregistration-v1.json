@@ -1,0 +1,314 @@
+{
+  "schema_version": "laas.erodible-slope-research-bundle-preregistration/1",
+  "bundle_id": "erodible-slope-research-bundle/1",
+  "preregistration_id": "erodible-slope-development-a-b-orajogi-v1",
+  "status": {
+    "state": "blocked_before_r0_generation",
+    "research_only": true,
+    "r0_generation_authorized": false,
+    "preview_authorized": false,
+    "production_owner_authorized": false,
+    "latest_eligible": false,
+    "reason": "Required condition, domain, recipe, metric, and provenance bindings remain unresolved. Null required values are blockers, not defaults."
+  },
+  "authority": {
+    "regime_id": "fluvial.rill_gully_seep_spring",
+    "regime_release_state": "unsupported",
+    "evidence_tier": "R0_raw",
+    "research_role": "process_hypothesis",
+    "target_truth": false,
+    "production_owner": null,
+    "estonia_transfer": "none",
+    "latest_eligible": false,
+    "allowed_output": "immutable_non_latest_research_preview_after_all_frozen_gates_pass",
+    "forbidden_claims": [
+      "measured morphology fit",
+      "positive blind-audit success",
+      "production quality",
+      "production ownership",
+      "Estonia transfer",
+      "national coverage"
+    ]
+  },
+  "surface_scope": {
+    "included": [
+      "dry single-valued erodible mineral bank and slope",
+      "connected runoff incision",
+      "shallow headcuts",
+      "seep relief",
+      "mass-linked deposition",
+      "compatible colluvial-toe transition"
+    ],
+    "excluded": [
+      "open water",
+      "vertical cliff face",
+      "wall",
+      "cave",
+      "undercut",
+      "detached block",
+      "multi-valued talus",
+      "dynamic object"
+    ],
+    "fine_grid": {
+      "lod": -2,
+      "texel_m": 0.0625,
+      "output_is_one_absolute_surface": true,
+      "solve_before_crop": true
+    }
+  },
+  "sites": [
+    {
+      "id": "development_a",
+      "role": "r0_process_development",
+      "etak_id": 1826743,
+      "feature": "escarpment",
+      "crs": "EPSG:3301",
+      "e_m": 680551.76,
+      "n_m": 6444450.8,
+      "maaamet_sheet": "54481",
+      "sheet_bounds_en": [680000.0, 6440000.0, 685000.0, 6445000.0],
+      "inspection_state": "development_allowed_after_input_freeze",
+      "target_or_transfer_credit": false,
+      "leakage_group": "development_a_b_conservative"
+    },
+    {
+      "id": "development_b",
+      "role": "r0_process_development",
+      "etak_id": 1826691,
+      "feature": "ditch_adjacent_slope",
+      "crs": "EPSG:3301",
+      "e_m": 679692.03,
+      "n_m": 6442784.16,
+      "maaamet_sheet": "54472",
+      "inspection_state": "development_allowed_after_input_freeze",
+      "target_or_transfer_credit": false,
+      "leakage_group": "development_a_b_conservative"
+    },
+    {
+      "id": "orajogi_ood",
+      "role": "sealed_ood_abstention_stress",
+      "etak_id": 9688685,
+      "feature": "bank_slope",
+      "crs": "EPSG:3301",
+      "e_m": 681429.34,
+      "n_m": 6443825.32,
+      "maaamet_sheet": "54481",
+      "sheet_bounds_en": [680000.0, 6440000.0, 685000.0, 6445000.0],
+      "inspection_state": "sealed_pixel_and_geometry_uninspected_until_complete_recipe_freeze",
+      "positive_evidence_credit": false,
+      "allowed_result": "abstention_stress_only",
+      "forbidden_uses": [
+        "training",
+        "parameter selection",
+        "threshold selection",
+        "candidate selection",
+        "positive morphology audit",
+        "target evidence",
+        "transfer evidence"
+      ]
+    }
+  ],
+  "references": [
+    {
+      "id": "schott_2024_paper_and_pinned_repository",
+      "role": "operator_sequence_and_ablation_reference_only",
+      "transfer_allowed": false
+    },
+    {
+      "id": "opara_r0_negative_form_441eaf9194cd",
+      "role": "qualitative_process_existence_diagnostic_only",
+      "geometry_or_parameter_transfer_allowed": false
+    },
+    {
+      "id": "suur_taevaskoda",
+      "role": "post_freeze_visual_and_structural_sentinel_only",
+      "positive_evidence_credit": false,
+      "scene_specific_tuning_allowed": false
+    }
+  ],
+  "required_inputs": [
+    {
+      "id": "amended_spec",
+      "path": "docs/specs/terrain/MICROTOPOGRAPHY.md",
+      "sha256": "e27136013a88783c849d06b1cb4210b5f391f431796901bb9d1e4ab2f62d420f",
+      "state": "resolved",
+      "blocker": null
+    },
+    {
+      "id": "code_and_environment",
+      "revision": null,
+      "environment_lock_sha256": null,
+      "state": "blocked",
+      "blocker": "Bind the exact code revision and uv environment lock."
+    },
+    {
+      "id": "schott_operator_reference",
+      "paper_path": null,
+      "paper_sha256": null,
+      "repository_revision": null,
+      "repository_archive_sha256": null,
+      "state": "blocked",
+      "blocker": "Bind the pinned paper and repository used only for operator sequencing and ablation structure."
+    },
+    {
+      "id": "opara_r0_negative_form_reference",
+      "manifest_path": null,
+      "manifest_sha256": null,
+      "state": "blocked",
+      "blocker": "Bind the exact 441eaf9194cd... diagnostic manifest without transferring its geometry or parameters."
+    },
+    {
+      "id": "accepted_corrected_base",
+      "manifest_path": null,
+      "manifest_sha256": null,
+      "state": "blocked",
+      "blocker": "Bind one accepted immutable corrected structural base."
+    },
+    {
+      "id": "etak_source_and_distances",
+      "source_path": null,
+      "source_sha256": null,
+      "derived_manifest_sha256": null,
+      "state": "blocked",
+      "blocker": "Bind exact ETAK source geometry plus bank, escarpment, ditch, and shore distance products."
+    },
+    {
+      "id": "soil_profile",
+      "source_path": null,
+      "source_sha256": null,
+      "derived_manifest_sha256": null,
+      "state": "blocked",
+      "blocker": "Bind complete soil mixtures, layers, and humus; a dominant code is insufficient."
+    },
+    {
+      "id": "surficial_geology_1_200k",
+      "source_path": null,
+      "source_sha256": null,
+      "q_litoloogia_200_domain_sha256": null,
+      "q_genees_200_domain_sha256": null,
+      "coverage_unknown_mask_sha256": null,
+      "state": "blocked",
+      "blocker": "Acquire authoritative 1:200k code domains and decode coverage. Do not substitute 1:50k domains or infer names."
+    },
+    {
+      "id": "whole_domain_drainage",
+      "source_path": null,
+      "source_sha256": null,
+      "development_a_domain_sha256": null,
+      "development_b_domain_sha256": null,
+      "outlet_and_upstream_boundary_sha256": null,
+      "state": "blocked",
+      "blocker": "Bind complete physical domains, upstream flux, real outlets, and inference collars before choosing crops."
+    },
+    {
+      "id": "dated_masked_optical",
+      "rgb_path": null,
+      "rgb_sha256": null,
+      "rgb_capture_date": null,
+      "cir_path": null,
+      "cir_sha256": null,
+      "cir_capture_date": null,
+      "mask_manifest_sha256": null,
+      "state": "blocked",
+      "blocker": "Bind dated RGB/CIR and masks for every development domain without albedo-to-height copying."
+    },
+    {
+      "id": "hard_masks",
+      "manifest_path": null,
+      "manifest_sha256": null,
+      "required_classes": [
+        "water",
+        "dynamic",
+        "object",
+        "non_heightfield",
+        "protected_feature",
+        "ownership_unknown"
+      ],
+      "state": "blocked",
+      "blocker": "Bind rasterization rules and exact masks over domains and crops."
+    },
+    {
+      "id": "condition_envelope",
+      "manifest_path": null,
+      "manifest_sha256": null,
+      "state": "blocked",
+      "blocker": "Freeze the Development A/B supported condition envelope and unknown policy before generation."
+    },
+    {
+      "id": "visual_sentinel",
+      "reference_path": null,
+      "reference_sha256": null,
+      "state": "blocked",
+      "blocker": "Bind the exact Suur Taevaskoda reference and post-freeze visual rule before preview, never before candidate freeze as tuning evidence."
+    }
+  ],
+  "candidates": {
+    "control": {
+      "id": "C0",
+      "kind": "corrected_only"
+    },
+    "challenger": {
+      "id": "C1",
+      "kind": "rederived_whole_domain_process_event",
+      "config_path": null,
+      "config_sha256": null,
+      "seed": null,
+      "routing_method": null,
+      "routing_rotation_qualification": null,
+      "runoff_event_distribution": null,
+      "seep_field_binding": null,
+      "material_erodibility_binding": null,
+      "erosion_deposition_law": null,
+      "conservation_tolerance": null,
+      "state": "blocked",
+      "blocker": "Freeze physical units, causal fields, event distributions, routing, accounting, seed, and every coefficient before generation."
+    }
+  },
+  "development_gates": {
+    "thresholds_manifest_path": null,
+    "thresholds_manifest_sha256": null,
+    "state": "blocked",
+    "required_rejections": [
+      "protected_feature_damage",
+      "residual_in_hard_mask_or_unknown",
+      "broken_or_outletless_network",
+      "nonconservative_mass_accounting",
+      "chunk_aoi_worker_order_or_rotation_dependence",
+      "one_meter_phase_locking",
+      "repeated_stamp_or_decorative_noise",
+      "unrecognizable_or_disconnected_owned_forms",
+      "packing_or_hierarchy_survival_failure",
+      "cost_ceiling_failure"
+    ]
+  },
+  "sealed_ood_gate": {
+    "site_id": "orajogi_ood",
+    "open_only_after": [
+      "all required inputs resolved and hash-bound",
+      "C1 recipe, code, environment, seed, and candidate identity frozen",
+      "condition envelope and abstention rule frozen",
+      "metrics, thresholds, rejection rules, preview extent, cameras, and visual rule frozen"
+    ],
+    "thresholds_manifest_path": null,
+    "thresholds_manifest_sha256": null,
+    "state": "sealed_and_blocked",
+    "pass_meaning": "bounded abstention on unknown or out-of-envelope cells only",
+    "positive_evidence_credit": false,
+    "post_open_tuning_allowed": false,
+    "changed_recipe_requires_new_untouched_stress_site": true
+  },
+  "publication": {
+    "recipe_kind": "research-microtopography-preview-v1",
+    "preview_domain_manifest_path": null,
+    "preview_domain_manifest_sha256": null,
+    "cameras_manifest_path": null,
+    "cameras_manifest_sha256": null,
+    "state": "blocked",
+    "requires_candidate_state": "research_preview_candidate",
+    "immutable": true,
+    "latest_eligible": false,
+    "release_row_unchanged": true,
+    "wire_format_change_allowed": false,
+    "runtime_synthesis_allowed": false
+  }
+}
