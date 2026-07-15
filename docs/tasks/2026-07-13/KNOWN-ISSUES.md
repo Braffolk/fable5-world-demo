@@ -730,11 +730,66 @@ authority is finite and sufficient only for the correlated Development A west
 and east crops; it supplies no independent-site, OOD, production, preview,
 recipe-freeze, or publication credit.
 
-Domain closure is no longer the correlated-A blocker. The remaining general
-failure is the comb-like parallel-head morphology. Resolve that repeated form
-organization without crop-specific handling, gate reinterpretation, or
-threshold weakening, while preserving the exact shared edge, `+256 m` domain
-authority, and all hard, collar, opportunity, and abstention semantics.
+The correlated solver now retains a narrow fail-closed binding to this authority.
+The evaluation plan names the exact closure manifest and the loader verifies its
+hash, `closure_pass`, solver authorization, exact condition/D∞/spill/dependency
+claims, no storage-edge touch, and exact canonical/control NPZ hashes before
+constructing the domains. Ordinary A/C condition-bundle loading is unchanged.
+This removes accidental fallback to the smaller unstable windows but does not
+authorize morphology, preview, or publication.
+
+### Deterministic branch-initiation competition is parked after two bounded rejections
+
+All-positive reverse-D∞ competition artifact
+`asset-gen/data/work/microtopography/erodible-slope/correlated-crop-evaluation/sha256/58e82247ff507a9150fe3cc778d330a84d689d4f682f945d2d68f93bb3256ddb/manifest.json`
+(manifest SHA-256
+`3586516f04c5aa4af05bb31f183300505455fc45ea9d393ac3b4e658f2892b52`)
+groups heads whenever any nonzero reverse donor support overlaps, then compares
+bound event flux, critical-shear excess, erodible-depth utilization, and incoming
+branch convergence. That graph percolates through D∞ sheet flow: it reduces
+`1,036` qualified heads to `89` and `86` realized streamlines, erasing the west
+rill organization into deposition-dominated sparse islands. West records residual
+absolute p99 `0.0013492568344394453 m`, range
+`[-0.01226297892781651, 0.0115649650805399] m`, and typed fraction
+`0.023193592036587263`; east records p99 `0.0012463887971429681 m`, range
+`[-0.13857647161547265, 0.006515630497786374] m`, and typed fraction
+`0.027064827776098567`. Both recognizable-form proxies fail.
+
+Final dominant-flux arborescence artifact
+`asset-gen/data/work/microtopography/erodible-slope/correlated-crop-evaluation/sha256/bd945ad440f86c6c6f34076dd661c190c1f699b22192334bca6ee1d1b10e8339/manifest.json`
+(manifest SHA-256
+`d1c23feaf7c6fe1a478f1db0a5a517e7e226b6d5e1e143409e2ef8c78b6e9d60`)
+keeps full two-branch D∞ physics but chooses one deterministic event-flux child
+per cell only for competition topology, delineates disjoint reverse capture
+basins, and retains local physical/convergence maxima only among neighboring
+basins. It reduces `1,036` heads to `370` and realizes `354` streamlines. The
+west comb visibly disappears and several coherent rills remain, but acceptance
+still fails: west p99 is `0.0025624121640743717 m`, range
+`[-0.07267531110587726, 0.0115649650805399] m`, and typed fraction
+`0.02935212715507642`; east p99 is `0.0012942295685231893 m`, range
+`[-0.13857647161547265, 0.006515630497786374] m`, and typed fraction
+`0.027164151304270363`. Both recognizable-form proxies remain false.
+
+Both rejected artifacts preserve every hard result: sediment mass error is
+`-2.9558577807620168e-12 kg`; hard masks, rotation, partition, and the shared
+2,049-sample edge pass; canonical/control typed ownership is exact in both crops.
+Maximum enlargement residual differences are at floating roundoff (`58e822...`:
+west `3.469446951953614e-18 m`, east `3.2526065174565133e-19 m`;
+`bd945...`: west `1.214306433183765e-17 m`, east
+`3.2526065174565133e-19 m`). The failure is causal morphology, not domain closure,
+conservation, encoding, or crop seams.
+
+**Parked-path record:** reusable results are the authorized closure loader, both
+immutable one-shot artifacts, their labeled PNGs, and the exact diagnosis that
+any-positive D∞ overlap over-connects sheet flow while dominant-flux local maxima
+remove the comb without producing sufficient recognizable morphology. Active
+focus moves to the next-specialist decision. Reopen this deterministic
+branch-initiation family only with a structurally different initiation model or
+materially new measured initiation/branching evidence that preregisters the
+missing causal organization and passes both correlated recognizable-form gates
+while retaining exact enlargement ownership, conservation, masks, rotation,
+partition, and shared edge. Do not resume for score or adjacency variants, fixed
+metric suppression, threshold weakening, or another any-positive overlap rule.
 
 ### Current conditioning discards real soil structure and ignores mapped cliff/shore constraints
 

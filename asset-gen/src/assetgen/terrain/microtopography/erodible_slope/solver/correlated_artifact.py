@@ -188,7 +188,7 @@ def materialize_correlated_crop_evaluation(
     if any(value.source_site_id != "development_a" for value in evaluations):
         raise ValueError("correlated crops must retain Development A source identity")
     solve_groups = {value.solve_group_id for value in evaluations}
-    if solve_groups != {"development_a_whole_domain_10a5"}:
+    if solve_groups != {"development_a_whole_domain_e316add6"}:
         raise ValueError("correlated crops must share one frozen solve group")
 
     domain = domains["development_a"]

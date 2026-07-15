@@ -38,12 +38,19 @@ def main() -> None:
             output_parent=args.output_parent,
         )
     else:
-        evaluations, accounting, evaluation_sha256 = load_crop_evaluation_plan(
+        (
+            evaluations,
+            accounting,
+            evaluation_sha256,
+            correlated_domain,
+            correlated_control,
+        ) = load_crop_evaluation_plan(
             args.evaluation_plan,
             condition_bundle_path=args.conditions,
-            domains=domains,
-            enlarged_domains=enlarged,
+            config=config,
         )
+        domains["development_a"] = correlated_domain
+        enlarged["development_a"] = correlated_control
         manifest = materialize_correlated_crop_evaluation(
             domains=domains,
             enlarged_domains=enlarged,

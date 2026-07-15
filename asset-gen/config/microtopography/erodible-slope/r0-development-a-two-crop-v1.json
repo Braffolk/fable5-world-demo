@@ -5,8 +5,13 @@
     "bytes": 354606,
     "sha256": "9d417818c90b7e8e4db757a70cd2703df5a2e4045ff54ada9248f700bede38f9"
   },
+  "domain_closure": {
+    "path": "asset-gen/data/work/microtopography/erodible-slope/conditions/domain-closure/sha256/e316add66854bd25fd13dcbf07c017950ebec97b18f0485820367a7ae774a0ac/manifest.json",
+    "bytes": 13504,
+    "sha256": "c2ea6bf89f85421295ebb65bf4b20eac8a99a858ea9e9922dfdcdb6fc5483600"
+  },
   "source_site_id": "development_a",
-  "solve_group_id": "development_a_whole_domain_10a5",
+  "solve_group_id": "development_a_whole_domain_e316add6",
   "crops": [
     {
       "crop_id": "development_a_west",

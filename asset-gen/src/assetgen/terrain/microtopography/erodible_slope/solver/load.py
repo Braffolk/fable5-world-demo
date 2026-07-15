@@ -16,6 +16,7 @@ _BUNDLE_SCHEMA = "laas.erodible-slope-condition-bundle/1"
 _GRID_SCHEMA = "laas.erodible-slope-condition-grid/1"
 _SITE_CONFIG_SCHEMA = "laas.erodible-slope-condition-sites/1"
 _EVALUATION_SCHEMA = "laas.erodible-slope-correlated-crop-evaluation/1"
+_DOMAIN_CLOSURE_SCHEMA = "laas.erodible-slope-domain-closure/1"
 _RUNNABLE_SITES = frozenset({"development_a", "development_c"})
 _EXCLUDED_SITES = frozenset({"development_b"})
 _FORBIDDEN_ETAK_IDS = frozenset({9688685, 9688702})
@@ -40,6 +41,7 @@ _REQUIRED_ARRAYS = {
     "topographic_seep_support_likelihood",
 }
 _ALLOWED_EXTRA_ARRAYS = {"fill_depth", "unknown_bathymetry"}
+_CLOSURE_ARRAYS = _REQUIRED_ARRAYS | {"material_rule"}
 _COARSE_TEXTURES = {
     "sand",
     "fine_sand",
@@ -417,18 +419,163 @@ def _validate_crop_support(domain: SlopeDomain, crop: CropEvaluation, role: str)
         raise ValueError(f"{crop.crop_id} intersects the {role} evidence collar")
 
 
+def _load_closed_domain(
+    path: Path,
+    *,
+    bbox_en: tuple[float, float, float, float],
+    site_id: str,
+    role: str,
+    config: ProcessConfig,
+    closure_identity: dict[str, Any],
+) -> SlopeDomain:
+    with np.load(path, allow_pickle=False) as source:
+        if set(source.files) != _CLOSURE_ARRAYS:
+            raise ValueError(f"{role} closure-domain fields differ")
+        arrays = {name: np.asarray(source[name]) for name in source.files}
+    expected_shape = (
+        int(round((bbox_en[3] - bbox_en[1]) / config.process_texel_m)),
+        int(round((bbox_en[2] - bbox_en[0]) / config.process_texel_m)),
+    )
+    if any(value.shape != expected_shape for value in arrays.values()):
+        raise ValueError(f"{role} closure-domain shape differs")
+    if np.any(arrays["edge_leak"]):
+        raise ValueError(f"{role} closure domain reaches its evidence edge")
+    water = arrays["water"].astype(bool)
+    objects = arrays["object"].astype(bool)
+    non_heightfield = arrays["non_heightfield"].astype(bool)
+    protected = arrays["protected_structure"].astype(bool)
+    outlet = arrays["outlet"].astype(bool)
+    return SlopeDomain(
+        site_id=site_id,
+        bbox_en=bbox_en,
+        texel_m=config.process_texel_m,
+        height_m=arrays["height"].astype(np.float64),
+        valid=arrays["valid"].astype(bool),
+        solve_domain=arrays["solve_domain"].astype(bool),
+        upstream_domain=arrays["upstream_domain"].astype(bool),
+        outlet=outlet,
+        collar=arrays["collar"].astype(bool),
+        routing_barrier=objects | non_heightfield | (water & ~outlet),
+        hard_exclusion=water | objects | non_heightfield | protected,
+        unknown=arrays["unknown"].astype(bool),
+        vegetation_cover=arrays["vegetation_evidence"].astype(np.float64),
+        seep_likelihood=arrays[
+            "topographic_seep_support_likelihood"
+        ].astype(np.float64),
+        upstream_water_m3=np.zeros(expected_shape, dtype=np.float64),
+        material_rule=arrays["material_rule"].astype(np.int16),
+        material_rule_names=tuple(config.material_rules),
+        source_identity={
+            "role": role,
+            "domain_closure": closure_identity,
+            "arrays": {
+                "path": str(path.relative_to(ASSET_GEN_ROOT.parent)),
+                "bytes": path.stat().st_size,
+                "sha256": _sha256_file(path),
+            },
+        },
+    )
+
+
+def _load_authorized_domain_closure(
+    identity: dict[str, Any],
+    config: ProcessConfig,
+) -> tuple[SlopeDomain, SlopeDomain]:
+    manifest_path = _bound_path(identity)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    closure = manifest.get("closure", {})
+    dependency = closure.get("dependency_set_identity", {})
+    condition_identity = closure.get("condition_identity", {})
+    if (
+        manifest.get("schema_version") != _DOMAIN_CLOSURE_SCHEMA
+        or manifest.get("recipe_sha256") != manifest_path.parent.name
+        or manifest.get("state") != "closure_pass"
+        or manifest.get("solver_use_authorized") is not True
+        or manifest.get("canonical_role") != "solver_authorized_condition_authority"
+        or manifest.get("sealed_ood_used") is not False
+        or closure.get("closure_pass") is not True
+        or closure.get("canonical_dependency_touches_storage_edge") is not False
+        or closure.get("control_dependency_touches_storage_edge") is not False
+        or closure.get("next_required_expansion") is not None
+        or dependency.get("exact") is not True
+        or dependency.get("canonical_only_cells") != 0
+        or dependency.get("control_dependency_cells_outside_canonical") != 0
+        or dependency.get("control_only_cells_inside_canonical") != 0
+        or closure.get("raw_dinf_branch_identity", {}).get("a", {}).get("exact") is not True
+        or closure.get("raw_dinf_branch_identity", {}).get("b", {}).get("exact") is not True
+        or closure.get("finite_depression_spill_identity", {}).get("exact") is not True
+        or not isinstance(condition_identity, dict)
+        or not condition_identity
+        or any(
+            row.get("exact") is not True
+            for row in condition_identity.values()
+        )
+    ):
+        raise ValueError("correlated evaluation domain closure is not solver-authorized")
+    counts = manifest.get("routing_dependency_counts", {})
+    canonical_count = counts.get("canonical", {}).get("dependency_cells")
+    control_count = counts.get("control", {}).get("dependency_cells")
+    if canonical_count != control_count or not isinstance(canonical_count, int):
+        raise ValueError("domain-closure dependency counts differ")
+    outputs = manifest.get("outputs", {})
+    canonical_path = _bound_path(outputs.get("canonical_domain", {}))
+    control_path = _bound_path(outputs.get("control_domain", {}))
+    recipe = manifest.get("recipe", {})
+    if (
+        recipe.get("canonical_expansion_from_original_m") != 256
+        or recipe.get("control_expansion_from_original_m") != 384
+    ):
+        raise ValueError("domain-closure expansion authority differs")
+    canonical_bbox = tuple(float(value) for value in recipe.get("canonical_bbox_en", ()))
+    control_bbox = tuple(float(value) for value in recipe.get("control_bbox_en", ()))
+    if len(canonical_bbox) != 4 or len(control_bbox) != 4:
+        raise ValueError("domain-closure bounding boxes are malformed")
+    closure_identity = {
+        "path": str(manifest_path.relative_to(ASSET_GEN_ROOT.parent)),
+        "bytes": identity["bytes"],
+        "sha256": identity["sha256"],
+        "recipe_sha256": manifest["recipe_sha256"],
+        "dependency_cells": canonical_count,
+        "closure_pass": True,
+    }
+    return (
+        _load_closed_domain(
+            canonical_path,
+            bbox_en=canonical_bbox,
+            site_id="development_a",
+            role="canonical_plus256",
+            config=config,
+            closure_identity=closure_identity,
+        ),
+        _load_closed_domain(
+            control_path,
+            bbox_en=control_bbox,
+            site_id="development_a",
+            role="control_plus384",
+            config=config,
+            closure_identity=closure_identity,
+        ),
+    )
+
+
 def load_crop_evaluation_plan(
     path: Path,
     *,
     condition_bundle_path: Path,
-    domains: dict[str, SlopeDomain],
-    enlarged_domains: dict[str, SlopeDomain],
-) -> tuple[tuple[CropEvaluation, ...], dict[str, Any], str]:
+    config: ProcessConfig,
+) -> tuple[
+    tuple[CropEvaluation, ...],
+    dict[str, Any],
+    str,
+    SlopeDomain,
+    SlopeDomain,
+]:
     path = Path(path)
     document = json.loads(path.read_text(encoding="utf-8"))
     expected_fields = {
         "schema_version",
         "condition_bundle",
+        "domain_closure",
         "source_site_id",
         "solve_group_id",
         "crops",
@@ -439,9 +586,12 @@ def load_crop_evaluation_plan(
     bound_bundle = _bound_path(document["condition_bundle"])
     if bound_bundle.resolve() != Path(condition_bundle_path).resolve():
         raise ValueError("evaluation plan condition bundle differs from runner input")
+    canonical_domain, control_domain = _load_authorized_domain_closure(
+        document["domain_closure"], config
+    )
     if document.get("source_site_id") != "development_a":
         raise ValueError("correlated evaluation must retain Development A identity")
-    if document.get("solve_group_id") != "development_a_whole_domain_10a5":
+    if document.get("solve_group_id") != "development_a_whole_domain_e316add6":
         raise ValueError("correlated evaluation solve-group identity differs")
     accounting = document.get("evidence_accounting")
     required_accounting = {
@@ -490,10 +640,16 @@ def load_crop_evaluation_plan(
             bbox_en=tuple(float(value) for value in chunk_bounds_en(grid, chunk)),
             evidence_role=row["evidence_role"],
         )
-        _validate_crop_support(domains["development_a"], evaluation, "normal")
-        _validate_crop_support(enlarged_domains["development_a"], evaluation, "enlarged")
+        _validate_crop_support(canonical_domain, evaluation, "canonical-plus256")
+        _validate_crop_support(control_domain, evaluation, "control-plus384")
         evaluations.append(evaluation)
     if {row.crop_id for row in evaluations} != set(expected_chunks):
         raise ValueError("correlated crop identities are not unique and complete")
     evaluations.sort(key=lambda value: value.output_chunk)
-    return tuple(evaluations), accounting, _sha256_file(path)
+    return (
+        tuple(evaluations),
+        accounting,
+        _sha256_file(path),
+        canonical_domain,
+        control_domain,
+    )
