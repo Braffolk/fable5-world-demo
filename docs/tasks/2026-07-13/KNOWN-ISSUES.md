@@ -1001,6 +1001,18 @@ standalone capacity result remains useful, but fixed-grid overlap-add is parked.
 Resume forest anchoring only with a structurally different non-grid transport or
 continuous synthesis formulation, not another patch-size or overlap adjustment.
 
+That resume condition is now satisfied by the separate irregular transport.
+Artifact `55ff85645ff...` uses deterministic world-locked saturated blue-noise
+sites and a compact Wendland-C2 partition over the same measured 12 m LUKE forms.
+Its source ownership is non-grid; the full crop and 32 m close-up show no
+rectangular quilting or ownership-boundary ridges. Hard exclusions remain exact,
+one-metre mean error is `1.56e-15 m`, residual RMS is `0.0393 m`, and P01/P99 are
+`-0.0894/+0.1053 m`. Boundary gradients are smoother rather than harsher than
+interiors. This passes as the best-available Estonia forest research candidate
+under the explicit `generally should transfer` policy. The foreign-analogue and
+validation limits remain disclosed but do not block a non-`latest` visual
+preview; they still preclude an unqualified national-truth claim.
+
 The national soil preflight resolved one apparent blocker from retained official
 documentation. Pure raised-bog soils encode the organic profile in their parsed
 peat texture sequence; deep profiles may be `T`-only, so blank `Huumus` is a

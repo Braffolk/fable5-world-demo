@@ -2,5 +2,10 @@
 
 from .run import run_forest_exemplar_transport
 from .estonia import run_estonia_forest_exemplar
+from .irregular import run_estonia_irregular_forest_exemplar
 
-__all__ = ["run_estonia_forest_exemplar", "run_forest_exemplar_transport"]
+__all__ = [
+    "run_estonia_forest_exemplar",
+    "run_estonia_irregular_forest_exemplar",
+    "run_forest_exemplar_transport",
+]
