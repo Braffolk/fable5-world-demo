@@ -10,6 +10,16 @@ import numpy as np
 
 
 @dataclass(frozen=True)
+class CropEvaluation:
+    crop_id: str
+    source_site_id: str
+    solve_group_id: str
+    output_chunk: tuple[int, int, int]
+    bbox_en: tuple[float, float, float, float]
+    evidence_role: str
+
+
+@dataclass(frozen=True)
 class ProcessConfig:
     schema_version: str
     process_texel_m: float

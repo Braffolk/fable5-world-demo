@@ -5,7 +5,8 @@ import argparse
 from pathlib import Path
 
 from .artifact import materialize_candidate
-from .load import load_condition_bundle
+from .correlated_artifact import materialize_correlated_crop_evaluation
+from .load import load_condition_bundle, load_crop_evaluation_plan
 from .model import load_process_config
 
 
@@ -18,22 +19,45 @@ def main() -> None:
         default=Path("config/microtopography/erodible-slope/solver-c1-v1.json"),
     )
     parser.add_argument("--output-parent", type=Path)
+    parser.add_argument("--evaluation-plan", type=Path)
     args = parser.parse_args()
     config = load_process_config(args.config)
     domains, enlarged, crops, collars, condition_sha256 = load_condition_bundle(
         args.conditions, config
     )
-    manifest = materialize_candidate(
-        domains=domains,
-        enlarged_domains=enlarged,
-        crops_en=crops,
-        collars_m=collars,
-        config=config,
-        config_path=args.config,
-        condition_bundle_path=args.conditions,
-        condition_bundle_sha256=condition_sha256,
-        output_parent=args.output_parent,
-    )
+    if args.evaluation_plan is None:
+        manifest = materialize_candidate(
+            domains=domains,
+            enlarged_domains=enlarged,
+            crops_en=crops,
+            collars_m=collars,
+            config=config,
+            config_path=args.config,
+            condition_bundle_path=args.conditions,
+            condition_bundle_sha256=condition_sha256,
+            output_parent=args.output_parent,
+        )
+    else:
+        evaluations, accounting, evaluation_sha256 = load_crop_evaluation_plan(
+            args.evaluation_plan,
+            condition_bundle_path=args.conditions,
+            domains=domains,
+            enlarged_domains=enlarged,
+        )
+        manifest = materialize_correlated_crop_evaluation(
+            domains=domains,
+            enlarged_domains=enlarged,
+            evaluations=evaluations,
+            evidence_accounting=accounting,
+            collars_m=collars,
+            config=config,
+            config_path=args.config,
+            condition_bundle_path=args.conditions,
+            condition_bundle_sha256=condition_sha256,
+            evaluation_plan_path=args.evaluation_plan,
+            evaluation_plan_sha256=evaluation_sha256,
+            output_parent=args.output_parent,
+        )
     print(manifest)
 
 

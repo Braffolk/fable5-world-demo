@@ -10,11 +10,12 @@ import numpy as np
 
 from .....config import ASSET_GEN_ROOT, load_base
 from .....grid import ChunkId, chunk_bounds_en, chunk_id_for_en
-from .model import ProcessConfig, SlopeDomain
+from .model import CropEvaluation, ProcessConfig, SlopeDomain
 
 _BUNDLE_SCHEMA = "laas.erodible-slope-condition-bundle/1"
 _GRID_SCHEMA = "laas.erodible-slope-condition-grid/1"
 _SITE_CONFIG_SCHEMA = "laas.erodible-slope-condition-sites/1"
+_EVALUATION_SCHEMA = "laas.erodible-slope-correlated-crop-evaluation/1"
 _RUNNABLE_SITES = frozenset({"development_a", "development_c"})
 _EXCLUDED_SITES = frozenset({"development_b"})
 _FORBIDDEN_ETAK_IDS = frozenset({9688685, 9688702})
@@ -315,10 +316,15 @@ def _runnable_crops(
             chunk = ChunkId(cx=explicit[1], cz=explicit[2], lod=explicit[0])
             if chunk != point_chunk:
                 raise ValueError(f"{site_id} output chunk does not contain target point")
+            explicit_bounds = row.get("output_bounds_en")
+            if explicit_bounds is not None and tuple(explicit_bounds) != chunk_bounds_en(
+                grid, chunk
+            ):
+                raise ValueError(f"{site_id} output bounds differ from chunk grid")
         chunks[site_id] = chunk
     if configured["development_a"].get("output_chunk") is not None:
         raise ValueError("Development A crop must remain point-derived")
-    if chunks["development_c"] != ChunkId(2438, 1519, -2):
+    if chunks["development_c"] != ChunkId(2438, 1518, -2):
         raise ValueError("Development C explicit output chunk differs")
 
     crops = {
@@ -387,3 +393,107 @@ def load_condition_bundle(
             if not (e0 <= crop[0] < crop[2] <= e1 and n0 <= crop[1] < crop[3] <= n1):
                 raise ValueError(f"{site_id} crop lies outside {role} physical domain")
     return domains, enlarged, crops, collars, _sha256_file(path)
+
+
+def _validate_crop_support(domain: SlopeDomain, crop: CropEvaluation, role: str) -> None:
+    e0, n0, e1, n1 = domain.bbox_en
+    ce0, cn0, ce1, cn1 = crop.bbox_en
+    if not (e0 <= ce0 < ce1 <= e1 and n0 <= cn0 < cn1 <= n1):
+        raise ValueError(f"{crop.crop_id} lies outside Development A {role} domain")
+    col0 = int(round((ce0 - e0) / domain.texel_m))
+    col1 = int(round((ce1 - e0) / domain.texel_m))
+    row0 = int(round((n1 - cn1) / domain.texel_m))
+    row1 = int(round((n1 - cn0) / domain.texel_m))
+    window = np.s_[row0:row1, col0:col1]
+    expected = (
+        int(round((cn1 - cn0) / domain.texel_m)),
+        int(round((ce1 - ce0) / domain.texel_m)),
+    )
+    if domain.height_m[window].shape != expected:
+        raise ValueError(f"{crop.crop_id} {role} process window shape differs")
+    if not np.all(domain.valid[window] & domain.solve_domain[window]):
+        raise ValueError(f"{crop.crop_id} has invalid or unsolved {role} cells")
+    if np.any(domain.collar[window]):
+        raise ValueError(f"{crop.crop_id} intersects the {role} evidence collar")
+
+
+def load_crop_evaluation_plan(
+    path: Path,
+    *,
+    condition_bundle_path: Path,
+    domains: dict[str, SlopeDomain],
+    enlarged_domains: dict[str, SlopeDomain],
+) -> tuple[tuple[CropEvaluation, ...], dict[str, Any], str]:
+    path = Path(path)
+    document = json.loads(path.read_text(encoding="utf-8"))
+    expected_fields = {
+        "schema_version",
+        "condition_bundle",
+        "source_site_id",
+        "solve_group_id",
+        "crops",
+        "evidence_accounting",
+    }
+    if set(document) != expected_fields or document.get("schema_version") != _EVALUATION_SCHEMA:
+        raise ValueError("unsupported correlated-crop evaluation plan")
+    bound_bundle = _bound_path(document["condition_bundle"])
+    if bound_bundle.resolve() != Path(condition_bundle_path).resolve():
+        raise ValueError("evaluation plan condition bundle differs from runner input")
+    if document.get("source_site_id") != "development_a":
+        raise ValueError("correlated evaluation must retain Development A identity")
+    if document.get("solve_group_id") != "development_a_whole_domain_10a5":
+        raise ValueError("correlated evaluation solve-group identity differs")
+    accounting = document.get("evidence_accounting")
+    required_accounting = {
+        "evidence_label": "r0_correlated_within_site_two_crop_visual_evaluation",
+        "development_site_credit": 1,
+        "independent_validation_site_credit": 0,
+        "ood_holdout_credit": 0,
+        "production_credit": 0,
+        "preview_authorized": False,
+        "recipe_freeze_authorized": False,
+    }
+    if accounting != required_accounting:
+        raise ValueError("correlated evaluation evidence accounting differs")
+    expected_chunks = {
+        "development_a_west": ChunkId(cx=2436, cz=1492, lod=-2),
+        "development_a_east": ChunkId(cx=2437, cz=1492, lod=-2),
+    }
+    rows = document.get("crops")
+    if not isinstance(rows, list) or len(rows) != len(expected_chunks):
+        raise ValueError("correlated evaluation requires exactly A-west and A-east")
+    grid = load_base().grid
+    evaluations: list[CropEvaluation] = []
+    for row in rows:
+        if set(row) != {"crop_id", "output_chunk", "evidence_role"}:
+            raise ValueError("correlated crop fields differ")
+        crop_id = row["crop_id"]
+        if crop_id not in expected_chunks:
+            raise ValueError(f"unexpected correlated crop {crop_id}")
+        values = row["output_chunk"]
+        if not (
+            isinstance(values, list)
+            and len(values) == 3
+            and all(isinstance(value, int) for value in values)
+        ):
+            raise ValueError(f"{crop_id} output chunk is malformed")
+        chunk = ChunkId(cx=values[1], cz=values[2], lod=values[0])
+        if chunk != expected_chunks[crop_id]:
+            raise ValueError(f"{crop_id} output chunk differs")
+        if row["evidence_role"] != "correlated_within_site_r0_visual_evaluation":
+            raise ValueError(f"{crop_id} evidence role differs")
+        evaluation = CropEvaluation(
+            crop_id=crop_id,
+            source_site_id="development_a",
+            solve_group_id=document["solve_group_id"],
+            output_chunk=(chunk.lod, chunk.cx, chunk.cz),
+            bbox_en=tuple(float(value) for value in chunk_bounds_en(grid, chunk)),
+            evidence_role=row["evidence_role"],
+        )
+        _validate_crop_support(domains["development_a"], evaluation, "normal")
+        _validate_crop_support(enlarged_domains["development_a"], evaluation, "enlarged")
+        evaluations.append(evaluation)
+    if {row.crop_id for row in evaluations} != set(expected_chunks):
+        raise ValueError("correlated crop identities are not unique and complete")
+    evaluations.sort(key=lambda value: value.output_chunk)
+    return tuple(evaluations), accounting, _sha256_file(path)

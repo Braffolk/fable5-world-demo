@@ -1,0 +1,31 @@
+{
+  "schema_version": "laas.erodible-slope-correlated-crop-evaluation/1",
+  "condition_bundle": {
+    "path": "asset-gen/data/work/microtopography/erodible-slope/conditions/sha256/10a5ea53b007f3e6e2e878ccebd70a9712716042139ca35178310655fcb85b8b/bundle.json",
+    "bytes": 354606,
+    "sha256": "9d417818c90b7e8e4db757a70cd2703df5a2e4045ff54ada9248f700bede38f9"
+  },
+  "source_site_id": "development_a",
+  "solve_group_id": "development_a_whole_domain_10a5",
+  "crops": [
+    {
+      "crop_id": "development_a_west",
+      "output_chunk": [-2, 2436, 1492],
+      "evidence_role": "correlated_within_site_r0_visual_evaluation"
+    },
+    {
+      "crop_id": "development_a_east",
+      "output_chunk": [-2, 2437, 1492],
+      "evidence_role": "correlated_within_site_r0_visual_evaluation"
+    }
+  ],
+  "evidence_accounting": {
+    "evidence_label": "r0_correlated_within_site_two_crop_visual_evaluation",
+    "development_site_credit": 1,
+    "independent_validation_site_credit": 0,
+    "ood_holdout_credit": 0,
+    "production_credit": 0,
+    "preview_authorized": false,
+    "recipe_freeze_authorized": false
+  }
+}

@@ -184,6 +184,8 @@ def render_qa(
     source_hashes: dict[str, str],
     recipe_sha256: str,
     diagnostics: dict[str, Any],
+    crop_id: str | None = None,
+    solve_group_id: str | None = None,
 ) -> list[dict[str, Any]]:
     # F4/R4 analyzes the 2048-square payload core; the final row/column are
     # shared edge samples retained by the 2049-square absolute surface.
@@ -279,11 +281,12 @@ def render_qa(
         ),
     )
     rows: list[dict[str, Any]] = []
+    subject_id = domain.site_id if crop_id is None else crop_id
     for filename, title, interpretation, image, legend in definitions:
         path = Path(qa_root) / filename
         _document(
             path,
-            title=f"{domain.site_id}: {title}",
+            title=f"{subject_id}: {title}",
             interpretation=interpretation,
             image=image,
             legend=legend,
@@ -305,6 +308,15 @@ def render_qa(
         "source_hashes": dict(sorted(source_hashes.items())),
         "images": rows,
     }
+    if crop_id is not None:
+        index.update(
+            {
+                "crop_id": crop_id,
+                "source_site_id": domain.site_id,
+                "solve_group_id": solve_group_id,
+                "evidence_role": "correlated_within_site_r0_visual_evaluation",
+            }
+        )
     index_path = Path(qa_root) / "index.json"
     index_path.write_text(
         json.dumps(index, ensure_ascii=False, indent=2, sort_keys=True) + "\n",

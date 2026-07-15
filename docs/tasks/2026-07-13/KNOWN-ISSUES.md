@@ -668,6 +668,42 @@ crop behavior and visual/process coherence only. They receive no independent-sit
 generalization, holdout, production, or publication credit and do not fill the
 vacant second Development role.
 
+### Correlated Development A east/west evaluation is rejected on domain stability and morphology
+
+Immutable artifact
+`asset-gen/data/work/microtopography/erodible-slope/correlated-crop-evaluation/sha256/61485b0da781428dd1ca2ac586676201a27541837cf214340eae422c27cf6576/manifest.json`
+(manifest SHA-256
+`8f5756c0cb4e7549aaf0eb864930835e658ed4362fa9642083dbf14c347d5a06`)
+uses exactly one Development A whole-domain baseline solve and form plan, one
+shared seep-off control, and one independently enlarged-domain control. West
+LOD -2 crop `(2436,1492)` and adjacent east crop `(2437,1492)` are rendered
+from that same physical realization. Their 2,049-sample boundary at
+`E680576` is bit-exact for C0, C1, residual, incision, deposition, ownership,
+hard exclusion, and material support; every recorded floating maximum
+difference is zero.
+
+West passes the current visible proxy with typed crop fraction
+`0.034418579835513566`, residual absolute p99 `0.0032925130970120906 m`,
+and exact normal/enlarged typed ownership. East has typed fraction
+`0.028521811041870463` and residual absolute p99
+`0.0013706830520935033 m`; it fails the visible proxy and exact typed
+normal/enlarged ownership. Its enlarged residual maximum is only
+`0.00033725942209539284 m`, inside the frozen magnitude gate, so weakening
+that threshold would neither explain nor cure the ownership instability.
+The QA also exposes comb-like parallel-head/form organization rather than the
+required naturally branching and converging connected morphology. The overall
+artifact is therefore `r0_correlated_within_site_two_crop_visual_rejected`.
+
+This is one correlated within-site R0 experiment: development-site credit is
+exactly `1`, while independent-validation, OOD/holdout, production, preview,
+recipe-freeze, and publication credit are all zero. A-east is not an alias for
+Development C and does not fill the vacant second Development role. The next
+blocker is a general upstream/domain-stability and parallel-head morphology
+diagnosis that explains the normal/enlarged ownership change and repeated form
+organization without crop-specific handling, gate reinterpretation, or
+threshold weakening. Preserve the exact shared edge and all hard, collar,
+opportunity, and abstention semantics.
+
 ### Current conditioning discards real soil structure and ignores mapped cliff/shore constraints
 
 `process/soil.py` keeps only the first soil component, simplified surface texture, stoniness, and fertility. The national source also contains component shares, layered texture, and humus/peat-horizon thickness. At the supplied Taevaskoda point, ETAK maps a natural shoreline escarpment within 5.32 m and the Ahja shoreline within 1.85 m, yet the rejected synthesis did not use those structures to correct the visible 1 m grid boundary. The replacement specification must treat full soil profiles and mapped structural constraints as first-class cook inputs.
