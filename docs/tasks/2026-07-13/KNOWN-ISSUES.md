@@ -879,8 +879,27 @@ preregistration v2 (SHA-256 `431b269d49f7...`) selects translation-edge-correcte
 class-pair evidence and a hydrology-conditioned two-field plurigaussian R0
 hypothesis. It does not revive Moore B2, infer complete form shapes, add a fine
 noise remainder, authorize production/`latest`, or change runtime/wire behavior.
-Its next gate is the six-group edge-corrected evidence materialization; failure
-rejects v2 without retuning or method fallback.
+That gate is now complete and rejected. Artifact `038e3695aee6...` (manifest
+SHA-256 `aa37bf8fd796...`) finds 621 lawn cells, one hollow, and zero hummocks;
+required axial typed support, class-conditional margins, and all eight leave-one-
+group-out folds fail. V2 is parked without retuning or lawn-only synthesis.
+Condition snapshot `8d450c7fe056...` (file SHA-256 `1356bfa83916...`)
+independently fails closed because accepted
+corrected format-1 C0 lacks the selected site's LOD0 `(0,81,89)`, leaving all
+65,536 development-halo cells height-unknown and C1 authority zero. Its whole-
+mire 10 m hydrology remains explicitly non-C0 context, and sealed-site pixels
+remain unopened.
+
+The active visually structural fallback is the existing Estonia
+`fluvial.rill_gully_seep_spring` Development-A authority, not agriculture and not
+a generic sandstone-wall generator. The next candidate must be a materially new
+whole-domain headcut/gully-event plus depositional-toe hypothesis; variants of the
+exhausted branch scoring, adjacency, suppression, spacing, or thresholds remain
+forbidden. It may emit only heightfield-compatible connected incision, shallow
+scarps, seep relief, colluvial deposition, and toes. Vertical cliffs, caves,
+undercuts, detached blocks, water, and non-single-valued talus remain excluded.
+Both adjacent Development-A crops must pass from one realization before packing;
+Taevaskoda remains an untouched frozen-recipe sentinel rather than a tuning site.
 
 The national soil preflight resolved one apparent blocker from retained official
 documentation. Pure raised-bog soils encode the organic profile in their parsed
