@@ -40,6 +40,15 @@ class ParentOrganizationHierarchy:
 
 
 @dataclass(frozen=True)
+class OrganizationTransferDiagnostics:
+    directed_candidates: int
+    admitted: int
+    rejected_outside: int
+    rejected_routing: int
+    rejected_side_parent: int
+
+
+@dataclass(frozen=True)
 class OrganizationHierarchy:
     filled_level_m: np.ndarray
     flood_parent: np.ndarray
@@ -48,6 +57,7 @@ class OrganizationHierarchy:
     reservoir_owner: np.ndarray
     reservoir_capacity_m3: np.ndarray
     source_role: str
+    transfer_diagnostics: OrganizationTransferDiagnostics
 
 
 @dataclass(frozen=True)
@@ -207,6 +217,11 @@ def bind_parent_organization_to_fine(
     parent_cols = parent.filled_level_m.shape[1]
     fine_col = np.arange(shape[1], dtype=np.int32)[None, :]
     block_rows = 128
+    directed_candidates = 0
+    admitted_count = 0
+    rejected_outside = 0
+    rejected_routing = 0
+    rejected_side_parent = 0
     for start in range(0, shape[0], block_rows):
         stop = min(shape[0], start + block_rows)
         coordinate_block = np.meshgrid(rows[start:stop], cols, indexing="ij")
@@ -248,12 +263,30 @@ def bind_parent_organization_to_fine(
         )
         candidate = fallback_row * shape[1] + fallback_col
         candidate_safe = np.clip(candidate, 0, routing.size - 1)
-        accepted = (
-            inside
-            & connected_block
-            & ((direction_row != 0) | (direction_col != 0))
-            & routing.ravel()[candidate_safe]
+        directed = connected_block & (
+            (direction_row != 0) | (direction_col != 0)
         )
+        candidate_routing = routing.ravel()[candidate_safe]
+        safe_row = np.clip(fallback_row, 0, shape[0] - 1)
+        safe_col = np.clip(fallback_col, 0, shape[1] - 1)
+        candidate_parent = (
+            nearest_rows[safe_row] * parent_cols + nearest_cols[safe_col]
+        )
+        parent_admissible = (candidate_parent == parent_flat) | (
+            candidate_parent == parent_target
+        )
+        accepted = directed & inside & candidate_routing & parent_admissible
+        directed_candidates += int(np.count_nonzero(directed))
+        rejected_outside += int(np.count_nonzero(directed & ~inside))
+        rejected_routing += int(
+            np.count_nonzero(directed & inside & ~candidate_routing)
+        )
+        rejected_side_parent += int(
+            np.count_nonzero(
+                directed & inside & candidate_routing & ~parent_admissible
+            )
+        )
+        admitted_count += int(np.count_nonzero(accepted))
         flood_parent[start:stop][accepted] = candidate[accepted]
         parent_rank = parent.drain_rank.ravel()[parent_flat].astype(np.int64)
         projection = (
@@ -265,6 +298,13 @@ def bind_parent_organization_to_fine(
         rank_block[~connected_block] = -1
         rank[start:stop] = rank_block
     fallback_indices = np.flatnonzero(flood_parent.ravel() >= 0)
+    if directed_candidates != (
+        admitted_count
+        + rejected_outside
+        + rejected_routing
+        + rejected_side_parent
+    ):
+        raise RuntimeError("fine fallback admission diagnostics do not partition candidates")
     if np.any(
         rank.ravel()[flood_parent.ravel()[fallback_indices]]
         >= rank.ravel()[fallback_indices]
@@ -312,6 +352,13 @@ def bind_parent_organization_to_fine(
         reservoir_owner=owner_dense,
         reservoir_capacity_m3=capacities,
         source_role=parent.role,
+        transfer_diagnostics=OrganizationTransferDiagnostics(
+            directed_candidates=directed_candidates,
+            admitted=admitted_count,
+            rejected_outside=rejected_outside,
+            rejected_routing=rejected_routing,
+            rejected_side_parent=rejected_side_parent,
+        ),
     )
 
 
