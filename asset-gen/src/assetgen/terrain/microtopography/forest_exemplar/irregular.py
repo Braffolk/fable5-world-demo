@@ -81,13 +81,14 @@ def _candidate_site(gx: int, gy: int, cell: int) -> Site:
 def _world_locked_sites(
     *,
     master_cells: int,
+    master_bbox: tuple[float, float, float, float] = MASTER_BBOX,
     candidate_cell: int,
     minimum_distance: int,
     saturation_distance: int,
     saturation_rounds: int,
     support_radius: int,
 ) -> list[Site]:
-    e_min, _n_min, _e_max, n_max = MASTER_BBOX
+    e_min, _n_min, _e_max, n_max = master_bbox
     master_col0 = int(round((e_min - WORLD_ANCHOR_E) / TEXEL_M))
     master_row0 = int(round((WORLD_ANCHOR_N - n_max) / TEXEL_M))
     margin = support_radius + minimum_distance + saturation_rounds * saturation_distance
@@ -193,6 +194,60 @@ def _wendland_weight(
     return one_minus**4 * (4.0 * distance + 1.0)
 
 
+def _select_site_patch(
+    *,
+    site: Site,
+    values: np.ndarray,
+    source_index: np.ndarray,
+    source_row0: int,
+    source_row1: int,
+    source_col0: int,
+    source_col1: int,
+    weight: np.ndarray,
+    active: np.ndarray,
+    current_numerator: np.ndarray,
+    current_denominator: np.ndarray,
+    candidate_use: np.ndarray,
+    source_use: np.ndarray,
+) -> tuple[int, float, float, np.ndarray]:
+    """Choose one measured form exactly as the accepted irregular transport does."""
+    overlap = active & (current_denominator > 1e-12)
+    shortlist_count = min(96, len(values))
+    hashes = np.fromiter(
+        (
+            _mix64(site.priority ^ (index * 0x9E3779B97F4A7C15))
+            for index in range(len(values))
+        ),
+        dtype=np.uint64,
+        count=len(values),
+    )
+    shortlist = np.argpartition(hashes, shortlist_count - 1)[:shortlist_count]
+    patch_values = values[
+        shortlist,
+        source_row0:source_row1,
+        source_col0:source_col1,
+    ].astype(np.float64)
+    if overlap.any():
+        current = current_numerator[overlap] / current_denominator[overlap]
+        overlap_values = patch_values[:, overlap]
+        overlap_weight = weight[overlap]
+        weight_sum = float(overlap_weight.sum())
+        offsets = (
+            (current[None, :] - overlap_values) * overlap_weight[None, :]
+        ).sum(axis=1) / weight_sum
+        difference = current[None, :] - (overlap_values + offsets[:, None])
+        scores = (difference * difference * overlap_weight[None, :]).sum(axis=1) / weight_sum
+    else:
+        offsets = np.zeros(shortlist_count, dtype=np.float64)
+        scores = np.zeros(shortlist_count, dtype=np.float64)
+    source_excess = source_use[source_index[shortlist]] - source_use.min()
+    scores += 0.0025 * candidate_use[shortlist] + 0.012 * source_excess
+    best_local = int(np.argmin(scores))
+    selected = int(shortlist[best_local])
+    offset = float(offsets[best_local])
+    return selected, offset, float(scores[best_local]), patch_values[best_local] + offset
+
+
 def _assemble_irregular(
     candidates: list[Candidate],
     sites: list[Site],
@@ -200,8 +255,9 @@ def _assemble_irregular(
     master_cells: int,
     patch_cells: int,
     support_radius: int,
+    master_bbox: tuple[float, float, float, float] = MASTER_BBOX,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[dict[str, Any]]]:
-    e_min, _n_min, _e_max, n_max = MASTER_BBOX
+    e_min, _n_min, _e_max, n_max = master_bbox
     master_col0 = int(round((e_min - WORLD_ANCHOR_E) / TEXEL_M))
     master_row0 = int(round((WORLD_ANCHOR_N - n_max) / TEXEL_M))
     values = np.stack([candidate.values for candidate in candidates]).astype(np.float32)
@@ -237,41 +293,21 @@ def _assemble_irregular(
         if not active.any():
             continue
         region = np.s_[row0:row1, col0:col1]
-        overlap = active & (denominator[region] > 1e-12)
-        shortlist_count = min(96, len(candidates))
-        hashes = np.fromiter(
-            (
-                _mix64(site.priority ^ (index * 0x9E3779B97F4A7C15))
-                for index in range(len(candidates))
-            ),
-            dtype=np.uint64,
-            count=len(candidates),
+        selected, offset, selected_score, patch = _select_site_patch(
+            site=site,
+            values=values,
+            source_index=source_index,
+            source_row0=source_row0,
+            source_row1=source_row1,
+            source_col0=source_col0,
+            source_col1=source_col1,
+            weight=weight,
+            active=active,
+            current_numerator=numerator[region],
+            current_denominator=denominator[region],
+            candidate_use=candidate_use,
+            source_use=source_use,
         )
-        shortlist = np.argpartition(hashes, shortlist_count - 1)[:shortlist_count]
-        patch_values = values[
-            shortlist,
-            source_row0:source_row1,
-            source_col0:source_col1,
-        ].astype(np.float64)
-        if overlap.any():
-            current = numerator[region][overlap] / denominator[region][overlap]
-            overlap_values = patch_values[:, overlap]
-            overlap_weight = weight[overlap]
-            weight_sum = float(overlap_weight.sum())
-            offsets = (
-                (current[None, :] - overlap_values) * overlap_weight[None, :]
-            ).sum(axis=1) / weight_sum
-            difference = current[None, :] - (overlap_values + offsets[:, None])
-            scores = (difference * difference * overlap_weight[None, :]).sum(axis=1) / weight_sum
-        else:
-            offsets = np.zeros(shortlist_count, dtype=np.float64)
-            scores = np.zeros(shortlist_count, dtype=np.float64)
-        source_excess = source_use[source_index[shortlist]] - source_use.min()
-        scores += 0.0025 * candidate_use[shortlist] + 0.012 * source_excess
-        best_local = int(np.argmin(scores))
-        selected = int(shortlist[best_local])
-        offset = float(offsets[best_local])
-        patch = patch_values[best_local] + offset
         numerator[region] += weight * patch
         denominator[region] += weight
         region_weight = dominant_weight[region]
@@ -294,7 +330,7 @@ def _assemble_irregular(
                 "transform": candidates[selected].transform,
                 "support_fraction": candidates[selected].support_fraction,
                 "offset_m": offset,
-                "overlap_mse_m2": float(scores[best_local]),
+                "overlap_mse_m2": selected_score,
             }
         )
     if np.any(denominator <= 1e-12) or np.any(dominant_site < 0):

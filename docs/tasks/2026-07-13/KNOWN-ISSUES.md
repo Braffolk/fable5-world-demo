@@ -1013,6 +1013,25 @@ under the explicit `generally should transfer` policy. The foreign-analogue and
 validation limits remain disclosed but do not block a non-`latest` visual
 preview; they still preclude an unqualified national-truth claim.
 
+Multi-site float artifact `089e4eace548...` generalizes that exact transport to
+three condition-frozen full 512 m parents rather than the prior 128 m browser
+crop. The final sites are 8.7-12.1 km apart within the only canonical format-1
+base window, carry distinct soil/geology signatures, and have `54.0-83.1%` exact
+fine eligibility. All three preserve hard exclusions exactly, close each 1 m
+mean below `5.51e-15 m`, remain boundary-smoother than their interiors, and clear
+the cross-site copy screen. This closes the sparse-coverage and obvious-repeat
+questions for the float pilot, not morphology quality or national transfer.
+Ground-scale QA remains dominated by dense high-frequency relief, and each site
+contains isolated `2.51-2.64 m` residual extrema despite ordinary P01/P99 ranges
+of roughly `-0.138/+0.170 m` or tighter. Before production ownership, determine
+whether those extrema originate in measured exemplar defects or transport
+offsets and replace the failure structurally; do not hide it with a global
+roughness/amplitude knob. Wider national geographic validation is additionally
+blocked by canonical LOD0 base coverage, currently only `cx=148..155,
+cz=90..97`. The implementation now requires the complete base halo during site
+selection. The artifact remains float-only with no cook, pack, browser,
+`latest`, or production authority.
+
 The accepted irregular candidate is now packed through the ordinary format-2
 height path without runtime or wire changes. Recipe `38f861e9aec5...` and
 immutable manifest `716289d00291...` contain four changed LOD -2 children, their

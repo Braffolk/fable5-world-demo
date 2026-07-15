@@ -1,0 +1,43 @@
+{
+  "schema": "forest-mesic-mineral-generalization-pilot/1",
+  "authority": "research_float_only_no_production_no_pack_no_latest",
+  "regime": "forest.mesic_mineral",
+  "selection_texel_m": 8.0,
+  "national_atlas_texel_m": 128.0,
+  "minimum_allowed_fraction": 0.5,
+  "regions": [
+    {
+      "id": "southeast-southwest-retained",
+      "bbox_en": [672000, 6435000, 677000, 6440000],
+      "topographic_role": "level"
+    },
+    {
+      "id": "southeast-northcentral-retained",
+      "bbox_en": [677000, 6446000, 682000, 6451000],
+      "topographic_role": "forest_dense"
+    },
+    {
+      "id": "southeast-east-retained",
+      "bbox_en": [683000, 6438000, 688000, 6443000],
+      "topographic_role": "rolling"
+    }
+  ],
+  "transport": {
+    "patch_cells": 192,
+    "candidate_step_cells": 16,
+    "minimum_patch_support_fraction": 0.78,
+    "site_candidate_cell": 24,
+    "site_minimum_distance_cells": 64,
+    "site_saturation_distance_cells": 48,
+    "site_saturation_rounds": 8,
+    "support_radius_cells": 88,
+    "site_seed": 5494753648857170772
+  },
+  "acceptance": {
+    "maximum_one_metre_mean_error_m": 1e-10,
+    "maximum_hard_exclusion_residual_m": 0.0,
+    "maximum_boundary_mean_ratio": 1.15,
+    "maximum_boundary_p95_ratio": 1.15,
+    "minimum_cross_site_nearest_copy_rmse_m": 0.005
+  }
+}
