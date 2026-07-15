@@ -1,0 +1,49 @@
+{
+  "schema_version": "laas.erodible-slope-exemplar-field-config/1",
+  "recipe_id": "development-a-whole-domain-biala-exemplar-field-r0-v1",
+  "status": "development_r0_only",
+  "inputs": {
+    "structural_config": {"path": "asset-gen/config/microtopography/coastal-escarpment/development-a-als-structural-r1-v1.json", "bytes": 4284, "sha256": "a5fd770fd8733c50da6aeeb47d121376e30a6cd96f5b7c36be1f828de8557aa4"},
+    "structural_manifest": {"path": "asset-gen/data/work/microtopography/coastal-escarpment/als-structural/sha256/ed91840fac7839642c18590eb697c43e914d6dce03c2eb4f58b7eaffaa05ef47/manifest.json", "bytes": 4328, "sha256": "3032f38ba645d8d65caab90722786e760aa3b398f65c1c57a60e9aa4089d727b"},
+    "network": {"path": "asset-gen/data/work/microtopography/coastal-escarpment/als-structural/sha256/ed91840fac7839642c18590eb697c43e914d6dce03c2eb4f58b7eaffaa05ef47/network-strength-f32.npy", "bytes": 247940, "sha256": "3706470f7ce5161a88a0943cb19a336a517b6fb84c71f4a59fa3074c1d1ff719"},
+    "biala_manifest": {"path": "asset-gen/data/work/terrain/microtopography/biala-coastal-escarpment-capacity/sha256/9d27b52da864ed51d4e0118545f2537bc9b91c7aba0ef7f5fd63e765ba144cca/manifest.json", "bytes": 1263, "sha256": "6aac5b5c642cd662bb4e54d4080a7ca2df868201783313ef27579c80949d9733"},
+    "biala_capacity": {"path": "asset-gen/data/work/terrain/microtopography/biala-coastal-escarpment-capacity/sha256/9d27b52da864ed51d4e0118545f2537bc9b91c7aba0ef7f5fd63e765ba144cca/biala-source-domain-capacity.npz", "bytes": 3164291, "sha256": "0516d8f06566dd377726b70d9e1f79e247e060ca9fe4891f8aca6b50fae1e331"}
+  },
+  "source_pitch_m": 0.5,
+  "source_core_m": 128.0,
+  "source_core_offset_m": 32.0,
+  "model": {
+    "model_pitch_m": 1.0,
+    "hard_transition_m": 5.0,
+    "registration_iterations": 10,
+    "registration_smoothing_m": 12.0,
+    "registration_maximum_step_m": 0.65,
+    "exemplar_smoothing_m": 1.25,
+    "minimum_slope": 0.045,
+    "slope_ramp": 0.16,
+    "maximum_slope": 1.05,
+    "steep_ramp": 0.45,
+    "network_context_m": 5.0,
+    "macro_p95_m": 0.68,
+    "incision_depth_m": 0.19,
+    "seep_depth_m": 0.07,
+    "erosion_smoothing_m": 1.0,
+    "maximum_erosion_m": 0.62,
+    "transport_steps": 38,
+    "ownership_minimum_relief_m": 0.012
+  },
+  "hard_laws": {
+    "absolute_c0_authority": true,
+    "crop_after_whole_domain_solve": true,
+    "mapped_non_heightfield_face_stays_c0": true,
+    "outer_collar_stays_c0": true,
+    "protected_hard_and_water_stay_c0": true,
+    "taevaskoda_or_ood_opened": false
+  },
+  "evidence_boundary": {
+    "role": "one Development-A R0 macro-morphology challenger",
+    "biala": "Baltic coastal erodible mineral scarp 2D capacity analogue only",
+    "estonia_predictive_transfer": false,
+    "production_or_packing_authorized": false
+  }
+}
