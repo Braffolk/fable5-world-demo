@@ -931,9 +931,13 @@ No synthesis or NPZ member-array access occurred during the freeze. The single
 permitted construction execution at checkpoint `273b50f` subsequently failed
 after `0.68 s` in the first fold because the frozen spectral QA requires one
 all-supported 64-cell square and the construction surface supplies none. The
-failure preceded artifact, PNG, trace, and receipt publication. K19 remains
-unopened. Guérin/LUKE is parked without changing the metric or rerunning against
-consumed construction data; it establishes no algorithm-capacity result.
+failure preceded artifact, PNG, trace, and receipt publication. K19 remained
+unopened at that checkpoint. A later generic exploratory NPZ inventory opened
+its arrays before the separate whole-form candidate was selected. K19 did not
+enter that candidate, but the observer-blind holdout claim is permanently
+invalidated; it must receive no future untouched-test credit. Guérin/LUKE is
+parked without changing the metric or rerunning against consumed construction
+data; it establishes no algorithm-capacity result.
 
 The continuous morphodynamics challenger under
 `assetgen.terrain.microtopography.erodible_slope.morphodynamics` is now parked. It does not
@@ -970,6 +974,20 @@ consistent with sparse signed inventory being concentrated while prolonging
 across changing hard support, not a coefficient-scale issue. Resume only with a
 structurally different support-aware transfer formulation that proves a local
 relief envelope. Do not add another erosion iteration or constant adjustment.
+
+The bounded whole-form exemplar specialist reached an inspectable result within
+its two-attempt limit. Attempt `885eb265a193...` retained real forest-floor forms
+but exposed a non-integral final overlap grid and collapsed 21 of 25 placements
+onto K36. Final artifact `e67feb86a7b7...` uses exact 72-cell pairwise overlaps
+and balances K11/K32/K36 at `8/8/9`; its `512 x 512` float surface at 0.0625 m has
+`0.09284 m` RMS relief, `0.6491` p95 slope, and coherent measured mound,
+depression, ridge, and fine-contact structure without an added noise remainder.
+Three labeled PNGs bind the surface, scale bands, and exemplar ownership. This is
+only a positive `forest.mesic_mineral` algorithm-capacity hypothesis. Model-side
+completion of source holes is not evidence, the three calibration plots are one
+foreign campaign, and no Estonia condition/OOD/transfer gate exists. Do not cook,
+publish, or treat it as a regime owner until independently qualified Estonia
+conditions and new untouched validation evidence exist.
 
 The national soil preflight resolved one apparent blocker from retained official
 documentation. Pure raised-bog soils encode the organic profile in their parsed
