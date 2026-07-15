@@ -823,20 +823,34 @@ where the bound soil/geology evidence supports them; neither is a default.
 
 Its fixed roles are:
 
+The replacement-role authority is selection recipe
+`15d76d27aade90051e74fa39b96db35ba396df25d14733593f761bc17f0ed2e1`
+at
+`asset-gen/data/work/microtopography/erodible-slope/site-selection/sha256/15d76d27aade90051e74fa39b96db35ba396df25d14733593f761bc17f0ed2e1/selection.json`
+(file SHA-256
+`6a1e0bc5bc0a5e11e3f475429c2bc7862699056daf822899167e7064cf0522e4`).
+It froze identities from official metadata and exact canonical LOD -2 chunks
+before human pixel or detailed source-geometry inspection. Superseded selection
+artifacts have no authority.
+
 | Artifact | Fixed role | Explicit limit |
 |---|---|---|
 | ETAK escarpment `1826743`, `E680551.76 N6444450.80`, sheet `54481` | Development A | R0 condition-bound process development only |
-| ETAK ditch-adjacent slope `1826691`, `E679692.03 N6442784.16`, sheet `54472` | Development B | R0 condition-bound process development only; not an independent site/campaign claim |
-| Orajõgi bank slope `9688685`, `E681429.34 N6443825.32`, sheet `54481` | sealed OOD abstention stress | no inspection before recipe freeze and no positive morphology, transfer, target, or generalization credit |
+| ETAK ditch-adjacent slope `1826691`, `E679692.03 N6442784.16`, sheet `54472` | rejected Development B strict-abstention evidence | missing Huumus is unknown; no synthesis, imputation, material default, positive credit, or second Development role |
+| ETAK bank slope `9688719`, `E680730.343232 N6441028.579650`, sheet `54481`, LOD -2 chunk `(2438,1519)`, bounds `[680704,6440960,680832,6441088]` | Development C | second R0 condition-development role; identity and crop are frozen, but physical condition-domain/outlet/collar/invariance qualification is pending and blocks C1 use |
+| Orajõgi bank slope `9688685`, `E681429.34 N6443825.32`, sheet `54481` | consumed and disqualified former OOD | inspected before full recipe freeze; never audit, candidate-selection, threshold, morphology, transfer, or generalization evidence |
+| ETAK bank slope `9688702`, `E681105.772168 N6442476.398258`, sheet `54481`, LOD -2 chunk `(2441,1508)`, bounds `[681088,6442368,681216,6442496]` | sealed OOD2 abstention stress | still uninspected; bounded abstention is its only allowed pass and it supplies no positive morphology, transfer, target, or generalization credit |
 | Schott 2024 paper and pinned public implementation | operator-sequence and ablation reference | no code, constants, boundary conditions, hardness behavior, or scale transfer |
 | OPARA R0 negative-form diagnostic `441eaf9194cd...` | qualitative process-existence diagnostic | no width, depth, amplitude, spacing, scale, or geometry transfer |
 | Suur Taevaskoda | final visual/structural sentinel | no training, tuning, threshold selection, candidate selection, or scene-specific repair |
 
-Development A and B are one conservative leakage group unless a frozen physical-
+Development A and C are one conservative leakage group unless a frozen physical-
 domain audit proves disjoint catchments and inference halos. They are never counted
-as Section 9.3 independent qualified sites. Orajõgi is not a comparable blind
-positive audit: its only passing result is bounded abstention wherever its frozen
-condition predicate or support is unknown or outside the Development A/B envelope.
+as Section 9.3 independent qualified sites. Development B remains strict-abstention
+development evidence only. OOD2 is not a comparable blind positive audit: its only
+passing result is bounded abstention wherever its frozen condition predicate or
+support is unknown or outside the Development A/C envelope. Orajõgi remains consumed
+and may not substitute for OOD2.
 
 Before any R0 generation, the machine preregistration must bind the complete soil
 mixtures/layers/humus, authoritative decoded 1:200k `Q_Litoloogia_200` and
@@ -852,15 +866,17 @@ The only initial candidates are corrected-only `C0` and one rederived `C1` with
 continuous or rotation-qualified routing, canonical world samples, whole-domain
 upstream flux and outlets, declared runoff/seep/material fields, conservative
 erosion/deposition accounting, typed hard masks, and one absolute master cropped
-only after the solve. Development output is R0 descriptive evidence. Before
-opening Orajõgi, freeze the complete C1 recipe, seed, condition envelope,
+only after the solve. Development output is R0 descriptive evidence. Development C
+may enter C1 only after its complete physical condition domain, real outlets,
+collar, masks, material support, and invariance gates are hash-bound and pass.
+Before opening OOD2, freeze the complete C1 recipe, seed, condition envelope,
 abstention rule, metrics, thresholds, preview extent, cameras, and visual rule.
-Any post-Orajõgi change terminates that recipe and requires a genuinely untouched
+Any post-OOD2 change terminates that recipe and requires a genuinely untouched
 replacement stress site.
 
 A frozen C1 may reach `research_preview_candidate` only after it passes its
-preregistered Development A/B safety, topology, conservation, partition, grid-
-leakage, typed-form, and packing-survival gates and Orajõgi abstention stress.
+preregistered Development A/C safety, topology, conservation, partition, grid-
+leakage, typed-form, and packing-survival gates and OOD2 abstention stress.
 This permits one immutable `research-microtopography-preview-v1` manifest under
 Section 14.6. The preview remains an R0 process hypothesis: attractive output or
 an OOD-abstention pass supplies no measured morphology-fit, positive blind-audit,
@@ -1415,7 +1431,7 @@ windows, composer, pack extent, metrics, and visual rule before any frozen audit
 preregistered role. For `forest-weak-research-bundle/1` these remain the
 ForestSemantic test split, Evo evidence, HY_PINE2 stress behavior, and, when
 opened, sealed Järvselja result. For `erodible-slope-research-bundle/1` it is the
-sealed Orajõgi abstention-only stress in Section 9.9. A pass permits one
+sealed OOD2 abstention-only stress in Section 9.9. A pass permits one
 `research_preview_candidate`; it does not declare a winner or owner. Any audit
 failure, post-audit tuning, prohibited data access, copied/repeated relief,
 unbounded confident OOD output, or failed hierarchy/runtime gate is terminal
@@ -2041,7 +2057,8 @@ Research-preview materialization order is exact:
    development audit, then freeze the complete synthesis recipe and expectation
    before any sealed final audit; the forest bundle retains its exact
    ForestSemantic/Evo/HY_PINE2/Järvselja ordering from Section 9.7 and the
-   erodible-slope bundle retains its Orajõgi ordering from Section 9.9;
+   erodible-slope bundle retains its Development A/C then sealed OOD2 ordering
+   from Section 9.9;
 2. run and bind every bundle-specific final audit; a failure terminates the recipe
    rather than retuning;
 3. compose one absolute finest master against the accepted corrected base;
@@ -2617,14 +2634,17 @@ This separately authorized path does not alter or inherit the forest bundle:
    `asset-gen/config/microtopography/erodible-slope/` with the exact Section 9.9
    roles, sources, masks, physical domains, C0/C1 configs, units, budgets, gates,
    preview extent, cameras, and corrected-only control;
-2. run C0/C1 on the complete Development A and B physical domains and crop only
-   after each whole-domain solve;
+2. preserve rejected Development B as strict-abstention evidence; qualify
+   Development C's pending physical domain/outlets/collar/masks/material support,
+   then run C0/C1 only on the complete Development A and C physical domains and
+   crop only after each whole-domain solve;
 3. reject candidates that violate protected features, typed masks, network/outlet
    topology, conservative accounting, rotation/partition identity, one-meter grid
    leakage, recognizable-form, cost, or packing-survival gates;
 4. freeze the surviving recipe, seed, condition envelope, abstention rule,
-   thresholds, and visual rule before opening Orajõgi;
-5. run Orajõgi once as OOD abstention stress with zero positive-evidence credit;
+   thresholds, and visual rule before opening OOD2; Orajõgi remains consumed and
+   disqualified;
+5. run OOD2 once as OOD abstention stress with zero positive-evidence credit;
    failure rejects the exact recipe and any change requires a new sealed site;
 6. only after every frozen gate passes, materialize one immutable non-`latest`
    research preview through Section 14.6, complete the real-WebGPU gate, and
@@ -2810,8 +2830,8 @@ Defaults recommended by this spec:
   `forest-weak-research-bundle/1` path in Stage 2R, with no truth, owner, transfer,
   or release claim;
 - next R0 process investigation: the exact
-  `erodible-slope-research-bundle/1` path in Stage 2E, with Orajõgi reserved for
-  abstention-only stress and no positive-evidence credit;
+  `erodible-slope-research-bundle/1` path in Stage 2E, with OOD2 reserved for
+  abstention-only stress and no positive-evidence credit; Orajõgi is consumed;
 - first production morphology proof: whichever exact regime the zero-budget
   public-target protocol qualifies first; Hovi forest remains a conversion
   candidate, not a preselected owner;
@@ -2889,8 +2909,8 @@ null, all release rows unchanged, and canonical `latest.json` unchanged.
 ### 22.2 Erodible-slope R0 checkpoint completion
 
 Stage 2E is complete only when the exact bundle/preregistration, resolved input
-blockers, Development A/B whole-domain C0/C1 evidence, frozen recipe and
-abstention rule, one-shot Orajõgi stress result, relevant labeled PNG diagnostics,
+blockers, Development A/C whole-domain C0/C1 evidence, frozen recipe and
+abstention rule, one-shot OOD2 stress result, relevant labeled PNG diagnostics,
 immutable pack, exact real-WebGPU boot, and user visual investigation exist under
 one recipe hash. Its terminal and production effects are identical to Section
 22.1, but it carries no weak-surface, positive-audit, target-fit, or transfer claim.

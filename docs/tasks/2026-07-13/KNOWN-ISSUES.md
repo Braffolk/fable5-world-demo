@@ -373,20 +373,34 @@ snapshot bound in commit `7ca8f4b` and condition bundle `77b81b2dc051...`.
 `Q_Litoloogia_200` and `Q_Genees_200` remain distinct from the similarly named
 1:50k domains; no 1:50k substitution or inferred code name is allowed.
 Development A is ETAK escarpment
-`1826743` at `E680551.76 N6444450.80`; Development B is ditch-adjacent slope
-`1826691` at `E679692.03 N6442784.16`; untouched OOD is Orajõgi bank slope
-`9688685` at `E681429.34 N6443825.32`. The latter remains pixel-uninspected.
+`1826743` at `E680551.76 N6444450.80`. Development B, ditch-adjacent slope
+`1826691` at `E679692.03 N6442784.16`, is now rejected strict-abstention evidence:
+its missing Huumus may not be imputed or defaulted. Orajõgi `9688685` was inspected
+before full recipe freeze and is permanently consumed/disqualified.
+
+Replacement selection recipe
+`15d76d27aade90051e74fa39b96db35ba396df25d14733593f761bc17f0ed2e1`
+is frozen at
+`asset-gen/data/work/microtopography/erodible-slope/site-selection/sha256/15d76d27aade90051e74fa39b96db35ba396df25d14733593f761bc17f0ed2e1/selection.json`
+(file SHA-256
+`6a1e0bc5bc0a5e11e3f475429c2bc7862699056daf822899167e7064cf0522e4`).
+Development C is ETAK bank slope `9688719`, exact LOD -2 chunk `(2438,1519)`,
+bounds `[680704,6440960,680832,6441088]`. Its identity and crop are frozen, but
+its complete condition domain, outlets, collar, masks, material support, and
+invariance are not yet qualified; C1 remains blocked. Sealed OOD2 is ETAK `9688702`,
+chunk `(2441,1508)`, bounds `[681088,6442368,681216,6442496]`. It remains
+pixel- and detailed-source-geometry-uninspected, is bounded-abstention-only, and
+must not be opened before complete recipe freeze.
 
 The accepted spec now authorizes `erodible-slope-research-bundle/1` only as a
 bounded R0 process-development path and later immutable non-`latest` preview.
 Its machine preregistration remains `blocked_before_r0_generation` until every
 null condition, provenance, physical-domain, recipe, threshold, and mask binding
-is resolved. Development A and Orajõgi are on sheet `54481` (bounds
-`E680000..685000 N6440000..6445000`), not `54474`; Development B remains on
-sheet `54472`. Orajõgi was accidentally consumed and is permanently disqualified;
-a new objectively selected, identity-frozen untouched OOD is required. Development
-A/B remain one conservative leakage group unless a frozen physical-domain audit
-proves otherwise.
+is resolved and the machine preregistration integrates the frozen replacement
+roles. Development A, Development C, and OOD2 are on sheet `54481` (bounds
+`E680000..685000 N6440000..6445000`), not `54474`; rejected Development B remains
+on sheet `54472`. Development A/C remain one conservative leakage group unless a
+frozen physical-domain audit proves otherwise.
 
 The durable end-to-end requirement comparison is recorded in
 `MICROTOPOGRAPHY-CONFORMANCE-AUDIT.md`. It also freezes the historical preregistration
@@ -554,9 +568,10 @@ strict abstention/negative record: its target has `0/801` supported cells becaus
 Huumus is unknown, not absence. Unknown cells force seep support to zero. Top-level
 `ready_for_r0_input_freeze` is true only for non-authorizing development/preflight;
 `ready_for_recipe_freeze_or_preview` is false. Orajõgi ETAK `9688685` was accidentally
-consumed and is permanently disqualified; a genuinely untouched, objectively selected
-and hash-frozen replacement OOD plus the corresponding spec/preregistration amendment
-remain mandatory before recipe freeze or preview.
+consumed and is permanently disqualified. The replacement selection and normative
+spec amendment are now frozen, but Development C condition-domain qualification and
+machine-preregistration integration remain mandatory before recipe freeze or preview;
+sealed OOD2 must remain unopened until that complete freeze.
 
 ### Current conditioning discards real soil structure and ignores mapped cliff/shore constraints
 
