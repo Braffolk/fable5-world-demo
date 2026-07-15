@@ -12,6 +12,12 @@ ARCHIVE_MD5 = "b7729bd73319e1860b98437df685c3a4"
 LICENSE_SPDX = "CC-BY-4.0"
 LICENSE_URL = "https://creativecommons.org/licenses/by/4.0/"
 
+# Exact research-only selective-retention transaction. This is an alternative
+# evidence boundary to the complete publisher archive, never its equivalent.
+SELECTIVE_MANIFEST_SHA256 = "5fe584d1132e318350638c88a6004333779d1de1eea97fc023e987e10f9bc520"
+SELECTIVE_RECIPE_SHA256 = "dec740173419be3e3e894247831e0fc0b2c77c07407beee94f40ce73bdb98f40"
+SELECTIVE_RANGE_PROVENANCE_SHA256 = "783d09654e53861b96a29caf2bdf8148df5edec87f58e2e18098c3301cb12228"
+
 
 @dataclass(frozen=True)
 class ArchiveMember:

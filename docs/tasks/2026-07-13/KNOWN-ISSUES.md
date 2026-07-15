@@ -791,55 +791,52 @@ while retaining exact enlargement ownership, conservation, masks, rotation,
 partition, and shared edge. Do not resume for score or adjacency variants, fixed
 metric suppression, threshold weakening, or another any-positive overlap rule.
 
-### Public target hunt found no production corpus; combined rill evidence remains research-only
+### Public target hunt found no production corpus; agriculture and combined rill evidence are parked
 
 The deterministic branch-initiation competition family remains parked. Three
 independent hard-gate public-data searches found no corpus that jointly provides
 the required target pitch/error, machine-resolvable support and surface
 semantics, transferable conditions, and usable rights. This is a bounded no-find,
 not evidence that a future source cannot qualify and not permission to weaken the
-gates. Active focus moves to a materially different combined rill-diffusion
-research direction.
+gates. The subsequent bounded qualifications completed, but neither corpus
+cleared those gates.
 
-Two bounded CC BY 4.0 acquisitions are in progress. Hinsberger DOI
-`10.6084/m9.figshare.24592338.v1` contributes
-`Hinsberger_aerial_survey_data.zip` (`20,383,764,301` bytes). Alessio DOI
-`10.17632/6gjn2fmz86.3` contributes `Rill_Data_GIS_supplement.mpk`
-(`9,040,075,751` bytes). These downloads authorize raw retention and archive
-inspection only.
+Hinsberger DOI `10.6084/m9.figshare.24592338.v1` is preserved through selective
+retention artifact `dec740173419be3e3e894247831e0fc0b2c77c07407beee94f40ce73bdb98f40`:
+three DEM and three orthomosaic members were retained from the
+`20,383,764,301`-byte archive. The retained selection is qualified for research
+inspection only; the whole-archive publisher MD5 was not verified and full
+archive equivalence is not claimed. Final portable/revalidated qualifier artifact
+`3af7581156aae8d8b3330e09fdef903969bd3fd6038d8031cb4acb024ade676f`
+(manifest SHA-256 `b0daf8b4d672...`) is `research_diagnostic_only` /
+`not_authorized`. Its blockers are nonsquare DEM GSD, unresolved native Z units,
+DEM/orthomosaic CRS mismatch and unmeasured empirical registration, unresolved
+direct-versus-interpolated support, unestablished event-group independence,
+uncalibrated total-surface error, unfrozen vegetation/water/object masks, and an
+incomplete Alessio cross-source audit. It has no weak-height, training,
+production, or preview authority.
 
-Hinsberger's only allowed model role is paired weak-height supervision from the
-original post-event rill DEM aligned to its orthomosaic, masks, and event/field
-identity. Its reported `2.11 cm` rill-depth and `10.7 cm` width RMSE are feature
-measurement errors, not calibrated per-cell or axis-specific total-surface error;
-the absolute DEM is not production truth. Pre-erosion/SMS-triangulated DEMs,
-DoDs, and E3D/RUSLE outputs are forbidden as height targets or conditions.
-Alessio supplies network topology, width/depth/spacing and planform,
-contributing-area, geology/watershed, transect, and sediment/runoff supervision,
-plus a frozen cross-source audit. Its reported `0.045 m` average SfM-versus-LiDAR
-elevation difference is not an error distribution or truth claim; neither its
-absolute DEM nor its B2 pixels may enter diffusion height loss. Orthophotos from
-either source are annotation/exclusion evidence only, never optical model input.
+Alessio DOI `10.17632/6gjn2fmz86.3` retains the exact
+`9,040,075,751`-byte MPK (SHA-256 `61d11524df35353c9339896c7831c9f107a41e7afb87706a4009b8111a110fbc`),
+four workbooks, and a `644`-file, `12,156,440,444`-logical-byte morphology
+extraction. Qualifier artifact
+`a3a4835b68432f433522aaac52d203185a371b25f612a15cf917dd03f5f64fa3`
+(manifest SHA-256 `9417c6889214...`) is also `research_diagnostic_only` /
+`not_authorized`. Six-site morphology/topology descriptors are reusable, but
+absolute-height supervision is forbidden. Remaining blockers are unresolved DEM
+CRS/XY units, failed CSC rill-flow and OC bedrock/vegetation-mask registration,
+uncalibrated total-surface error, and unbound workbook transect identities. It
+has no training, production, or preview authority.
 
-Abort Hinsberger as a height supervisor if the original post-event rill DEMs are
-absent; CRS, units, field/event identity, or direct-versus-interpolated support
-cannot be resolved; native GSD exceeds `0.05 m`; fewer than three independent
-event groups survive deduplication; DEM/orthomosaic registration exceeds half a
-native pixel; required vegetation/wet/object masks cannot be frozen; or the
-source-grid four-phase B2 gate fails. Abort Alessio as the combined proof if the
-MPK depends on unbundled members; the 5 cm DEM/orthomosaic, rill, transect,
-geology, watershed, or flow layers are missing; CRS/units cannot be resolved;
-rill vectors miss the DEM by more than one source pixel; the fixed catchment
-split lacks usable high-resolution coverage; exclusions cannot be reconstructed;
-or workbooks cannot bind transects to map identities.
-
-Neither source currently has calibrated `total_surface_error`, production-target
-status, or preview authority. No production recipe or browser preview may be
-authorized until archive conversion, direct/interpolated support masks,
-vegetation/water/object masks, and source-grid four-phase B1/B2 QA pass. If one
-source aborts, retain its inventory and provenance but do not silently rename a
-single-source run as the combined route; a B1-only pass is not evidence for the
-renderer-required B2 band.
+**Parked-path record:** agriculture remains parked after its R0 morphology
+failure, and the combined rill-diffusion route is now parked with it. Preserve
+the retained data, conversions, descriptors, manifests, and exact blockers; do
+not publish either route as a browser showcase, training authority, production
+truth, or frozen recipe. Reopen the combined route only when machine-verifiable
+evidence closes units/CRS, empirical registration, direct/interpolated support,
+surface-error, masks, transect/cross-source binding, and independent-event
+requirements. A single-source survivor is not the combined route, and weaker
+gates are not a resume condition.
 
 ### Current conditioning discards real soil structure and ignores mapped cliff/shore constraints
 

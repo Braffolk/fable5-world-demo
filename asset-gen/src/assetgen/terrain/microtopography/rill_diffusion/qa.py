@@ -106,6 +106,33 @@ def render_height_band_qa(
     canvas.save(destination, format="PNG", optimize=True)
 
 
+def render_height_band_abort_qa(
+    destination: Path,
+    survey_id: str,
+    abort_reasons: list[str],
+) -> None:
+    canvas = Image.new("RGB", (1040, 300), "#ddd8cc")
+    draw = ImageDraw.Draw(canvas)
+    draw.text((24, 22), f"Hinsberger {survey_id}: height-band analysis aborted", fill="#111916", font=_font())
+    draw.text(
+        (24, 52),
+        "Research-only. DEM metadata/support read; orthomosaic pixels unread. No B1/B2 values emitted.",
+        fill="#34423b",
+        font=_font(),
+    )
+    draw.text((24, 88), "Frozen structural gate failures:", fill="#7b241c", font=_font())
+    for index, reason in enumerate(abort_reasons):
+        draw.text((44, 114 + index * 24), f"- {reason}", fill="#7b241c", font=_font())
+    draw.text(
+        (24, 254),
+        "No padding, resampling workaround, support invention, truth, training, production, or preview claim.",
+        fill="#34423b",
+        font=_font(),
+    )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(destination, format="PNG", optimize=True)
+
+
 def qa_index(qa_root: Path, interpretations: dict[str, str]) -> dict[str, Any]:
     images = []
     for path in sorted(qa_root.glob("*.png")):
