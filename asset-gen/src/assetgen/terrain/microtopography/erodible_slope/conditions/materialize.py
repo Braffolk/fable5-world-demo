@@ -24,6 +24,7 @@ from .....config import ASSET_GEN_ROOT, DATA_IN, DATA_WORK, load_base
 from .....cook.chunkio import read_chunk, read_chunk_v2
 from .....cook.encode import decode_quant16
 from .....grid import ChunkId, chunk_bounds_en, chunks_covering_bbox_en
+from .....release import read_v1_index
 from ....conditions.geology import extract_egt_surficial_window
 from ....conditions.soil import extract_soil_window
 from .drainage import DrainageDomain, delineate_drainage_domain
@@ -31,7 +32,6 @@ from .drainage import DrainageDomain, delineate_drainage_domain
 _SCHEMA_VERSION = "laas.erodible-slope-condition-bundle/1"
 _SITE_ARRAY_SCHEMA = "laas.erodible-slope-condition-grid/1"
 _ETAK = DATA_IN / "etak" / "ETAK_EESTI_GPKG.gpkg"
-_CONSUMED_OOD_ID = 9688685
 _GRID_METERS = 1.0
 _SEARCH_MARGIN_METERS = 384
 _ENLARGEMENT_METERS = 128
@@ -41,31 +41,13 @@ _COLLAR_METERS = 32
 @dataclass(frozen=True)
 class SiteSpec:
     site_id: str
+    role: str
     target_etak_id: int
     target_e: float
     target_n: float
     sheet: str
     target_outlet_ids: tuple[int, ...]
-
-
-_SITES = (
-    SiteSpec(
-        site_id="development_a",
-        target_etak_id=1826743,
-        target_e=680551.76,
-        target_n=6444450.80,
-        sheet="54481",
-        target_outlet_ids=(1962675,),
-    ),
-    SiteSpec(
-        site_id="development_b",
-        target_etak_id=1826691,
-        target_e=679692.03,
-        target_n=6442784.16,
-        sheet="54472",
-        target_outlet_ids=(7079012, 7079089),
-    ),
-)
+    output_chunk: tuple[int, int, int] | None = None
 
 _ETAK_LAYERS: dict[str, tuple[str, ...]] = {
     "E_102_nolv_j": (
@@ -270,14 +252,52 @@ def _load_preregistration(path: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("bundle_id") != "erodible-slope-research-bundle/1":
         raise ValueError("unexpected erodible-slope bundle identity")
-    sites = {row["id"]: row for row in payload["sites"]}
-    for spec in _SITES:
-        row = sites.get(spec.site_id)
-        expected = (spec.target_etak_id, spec.target_e, spec.target_n, spec.sheet)
-        actual = (row["etak_id"], row["e_m"], row["n_m"], row["maaamet_sheet"])
-        if actual != expected:
-            raise ValueError(f"preregistration site drift for {spec.site_id}")
     return payload
+
+
+def _load_site_config(path: Path) -> tuple[list[SiteSpec], frozenset[int], dict[str, Any]]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("schema_version") != "laas.erodible-slope-condition-sites/1":
+        raise ValueError("unsupported erodible-slope condition site config")
+    selection_path = ASSET_GEN_ROOT.parent / payload["selection"]["path"]
+    if _sha256_file(selection_path) != payload["selection"]["sha256"]:
+        raise ValueError("frozen erodible-slope site selection identity changed")
+    selection = json.loads(selection_path.read_text(encoding="utf-8"))
+    selected = selection["development_replacement"]
+    specs = [
+        SiteSpec(
+            site_id=row["id"],
+            role=row["role"],
+            target_etak_id=int(row["etak_id"]),
+            target_e=float(row["e_m"]),
+            target_n=float(row["n_m"]),
+            sheet=str(row["maaamet_sheet"]),
+            target_outlet_ids=tuple(int(value) for value in row["target_outlet_etak_ids"]),
+            output_chunk=(
+                tuple(int(value) for value in row["output_chunk"])
+                if row.get("output_chunk") is not None
+                else None
+            ),
+        )
+        for row in payload["sites"]
+    ]
+    development_c = next(spec for spec in specs if spec.site_id == "development_c")
+    if (
+        development_c.target_etak_id != int(selected["etak_id"])
+        or [development_c.target_e, development_c.target_n]
+        != [float(value) for value in selected["representative_point_en"]]
+        or list(development_c.output_chunk or ())
+        != [
+            int(selected["output_chunk"]["lod"]),
+            int(selected["output_chunk"]["cx"]),
+            int(selected["output_chunk"]["cz"]),
+        ]
+    ):
+        raise ValueError("Development C site config differs from frozen selection")
+    forbidden = frozenset(int(value) for value in payload["forbidden_etak_ids"])
+    if any(spec.target_etak_id in forbidden for spec in specs):
+        raise ValueError("condition site aliases a forbidden OOD ETAK identity")
+    return specs, forbidden, payload
 
 
 def _read_target_geometry(spec: SiteSpec) -> shapely.Geometry:
@@ -308,6 +328,7 @@ def _site_bbox(target: shapely.Geometry) -> tuple[int, int, int, int]:
 def _read_etak_features(
     bbox_en: tuple[int, int, int, int],
     target: shapely.Geometry,
+    forbidden_etak_ids: frozenset[int],
 ) -> tuple[list[dict[str, Any]], dict[str, list[shapely.Geometry]]]:
     records: list[dict[str, Any]] = []
     geometries: dict[str, list[shapely.Geometry]] = {}
@@ -316,7 +337,9 @@ def _read_etak_features(
             _ETAK,
             layer=layer,
             bbox=bbox_en,
-            where=f"etak_id <> {_CONSUMED_OOD_ID}",
+            where=" AND ".join(
+                f"etak_id <> {etak_id}" for etak_id in sorted(forbidden_etak_ids)
+            ),
             columns=list(fields),
             return_fids=True,
         )
@@ -333,8 +356,8 @@ def _read_etak_features(
                 field: _json_scalar(columns[index][source_index])
                 for index, field in enumerate(fields)
             }
-            if int(raw["etak_id"]) == _CONSUMED_OOD_ID:
-                raise RuntimeError("consumed Orajogi OOD geometry entered A/B extraction")
+            if int(raw["etak_id"]) in forbidden_etak_ids:
+                raise RuntimeError("forbidden OOD geometry entered condition extraction")
             layer_geometries.append(geometry)
             records.append(
                 {
@@ -363,7 +386,7 @@ def _authority_tiles(
     authority_root: Path,
     authority_manifest: dict[str, Any],
     bbox_en: tuple[int, int, int, int],
-) -> tuple[dict[str, np.ndarray], list[dict[str, Any]]]:
+) -> tuple[dict[str, np.ndarray], list[dict[str, Any]], list[list[int]]]:
     grid = load_base().grid
     chunks = chunks_covering_bbox_en(grid, bbox_en, -2)
     manifest_tiles = {tuple(row["key"]): row for row in authority_manifest["tiles"]}
@@ -374,10 +397,12 @@ def _authority_tiles(
     unknown_bathymetry = np.zeros(shape, dtype=bool)
     forbidden_morphology = np.zeros(shape, dtype=bool)
     identities: list[dict[str, Any]] = []
+    missing: list[list[int]] = []
     for chunk in chunks:
         row = manifest_tiles.get((-2, chunk.cx, chunk.cz))
         if row is None:
-            raise ValueError(f"accepted authority lacks tile {-2, chunk.cx, chunk.cz}")
+            missing.append([-2, chunk.cx, chunk.cz])
+            continue
         path = authority_root / row["path"]
         if _sha256_file(path) != row["sha256"]:
             raise ValueError(f"accepted authority tile hash mismatch: {path}")
@@ -425,14 +450,12 @@ def _authority_tiles(
                 "baselineSha256": row["baselineSha256"],
             }
         )
-    if not valid.all():
-        raise ValueError("accepted authority does not completely cover A/B condition bbox")
     return {
         "height": height,
         "valid": valid,
         "unknown_bathymetry": unknown_bathymetry,
         "forbidden_morphology": forbidden_morphology,
-    }, identities
+    }, identities, missing
 
 
 def _corrected_lod0_window(
@@ -449,6 +472,19 @@ def _corrected_lod0_window(
     for tile in authority_manifest["baselineAuthority"]["tiles"]:
         for dependency in tile["dependencies"]:
             baseline_rows.setdefault(tuple(dependency["chunk"]), dependency)
+    release = authority_manifest["baselineAuthority"]["release"]
+    canonical_index_path = (
+        DATA_WORK.parent
+        / "out"
+        / "m"
+        / release["manifestSha256"][:16]
+        / release["heightIndexPath"]
+    )
+    if _sha256_file(canonical_index_path) != release["heightIndexSha256"]:
+        raise ValueError("pinned canonical height index identity changed")
+    canonical_index = {
+        record.key: record for record in read_v1_index(canonical_index_path)
+    }
     grid = load_base().grid
     encode = load_base().encode
     min_e, min_n, max_e, max_n = bbox_en
@@ -459,22 +495,44 @@ def _corrected_lod0_window(
         if row is None:
             baseline = baseline_rows.get((0, chunk.cx, chunk.cz))
             if baseline is None:
-                raise ValueError(
-                    f"accepted corrected/canonical LOD0 lacks chunk {(0, chunk.cx, chunk.cz)}"
+                record = canonical_index.get((0, chunk.cx, chunk.cz))
+                if record is None:
+                    raise ValueError(
+                        f"accepted corrected/canonical LOD0 lacks chunk {(0, chunk.cx, chunk.cz)}"
+                    )
+                hash8 = ((record.hash64 >> 32) & 0xFFFFFFFF).to_bytes(4, "big").hex()
+                path = (
+                    DATA_WORK.parent
+                    / "out/c/height/0"
+                    / f"{chunk.cx}_{chunk.cz}.{hash8}.bin"
                 )
-            path = DATA_WORK.parent / "out" / baseline["content_relative_path"]
-            if _sha256_file(path) != baseline["sha256"]:
-                raise ValueError(f"accepted canonical LOD0 hash mismatch: {path}")
-            meta, payload = read_chunk(path)
-            expected_decoded_sha256 = baseline["decoded_sha256"]
-            identity = {
-                "key": baseline["chunk"],
-                "role": "pinned_canonical_unmodified_lod0",
-                "path": _repo_relative(path),
-                "bytes": baseline["bytes"],
-                "container_sha256": baseline["sha256"],
-                "decoded_values_sha256": expected_decoded_sha256,
-            }
+                if path.stat().st_size != record.size:
+                    raise ValueError(f"pinned canonical LOD0 size mismatch: {path}")
+                container_sha256 = _sha256_file(path)
+                meta, payload = read_chunk(path)
+                expected_decoded_sha256 = None
+                identity = {
+                    "key": [0, chunk.cx, chunk.cz],
+                    "role": "pinned_canonical_unmodified_lod0",
+                    "path": _repo_relative(path),
+                    "bytes": record.size,
+                    "index_hash64": record.hash64,
+                    "container_sha256": container_sha256,
+                }
+            else:
+                path = DATA_WORK.parent / "out" / baseline["content_relative_path"]
+                if _sha256_file(path) != baseline["sha256"]:
+                    raise ValueError(f"accepted canonical LOD0 hash mismatch: {path}")
+                meta, payload = read_chunk(path)
+                expected_decoded_sha256 = baseline["decoded_sha256"]
+                identity = {
+                    "key": baseline["chunk"],
+                    "role": "pinned_canonical_unmodified_lod0",
+                    "path": _repo_relative(path),
+                    "bytes": baseline["bytes"],
+                    "container_sha256": baseline["sha256"],
+                    "decoded_values_sha256": expected_decoded_sha256,
+                }
         else:
             path = materialization_path.parent / row["path"]
             if _sha256_file(path) != row["containerSha256"]:
@@ -507,8 +565,9 @@ def _corrected_lod0_window(
         decoded_sha256 = hashlib.sha256(
             np.ascontiguousarray(values, dtype="<f4").tobytes()
         ).hexdigest()
-        if decoded_sha256 != expected_decoded_sha256:
+        if expected_decoded_sha256 is not None and decoded_sha256 != expected_decoded_sha256:
             raise ValueError(f"accepted corrected LOD0 decoded identity mismatch: {path}")
+        identity["decoded_values_sha256"] = decoded_sha256
         tile_min_e, tile_min_n, tile_max_e, tile_max_n = (
             int(value) for value in chunk_bounds_en(grid, chunk)
         )
@@ -970,11 +1029,16 @@ def _site_artifacts(
     authority_manifest: dict[str, Any],
     accepted_materialization_path: Path,
     domain_snapshot_path: Path,
+    forbidden_etak_ids: frozenset[int],
 ) -> dict[str, Any]:
     target = _read_target_geometry(spec)
     bbox_en = _site_bbox(target)
-    records, geometries = _read_etak_features(bbox_en, target)
-    authority, authority_tiles = _authority_tiles(
+    records, geometries = _read_etak_features(
+        bbox_en,
+        target,
+        forbidden_etak_ids,
+    )
+    authority, authority_tiles, missing_authority_tiles = _authority_tiles(
         authority_root, authority_manifest, bbox_en
     )
     corrected_height, corrected_lod0 = _corrected_lod0_window(
@@ -983,6 +1047,8 @@ def _site_artifacts(
         bbox_en,
     )
     authority["height"] = corrected_height
+    authority["fine_mask_coverage"] = authority["valid"].copy()
+    authority["valid"] = np.isfinite(corrected_height)
     transform = _transform(bbox_en)
     shape = authority["height"].shape
     masks = _mask_sources(spec, records, geometries, shape, transform, authority)
@@ -1002,6 +1068,7 @@ def _site_artifacts(
     enlarged_records, enlarged_geometries = _read_etak_features(
         enlarged_bbox_en,
         target,
+        forbidden_etak_ids,
     )
     enlarged_height, enlarged_corrected_lod0 = _corrected_lod0_window(
         accepted_materialization_path,
@@ -1190,8 +1257,8 @@ def _site_artifacts(
     orthophoto = _available_orthophoto(spec.sheet)
     if not orthophoto["complete"]:
         blockers.append(f"dated_rgb_cir_missing_for_sheet_{spec.sheet}")
-    if spec.site_id == "development_a" and not target_material_support["complete"]:
-        blockers.append("development_a_target_material_support_incomplete")
+    if spec.role == "morphology_development" and not target_material_support["complete"]:
+        blockers.append(f"{spec.site_id}_target_material_support_incomplete")
     facts = {
         "site_id": spec.site_id,
         "target_etak_id": spec.target_etak_id,
@@ -1204,11 +1271,7 @@ def _site_artifacts(
         "grid_m": _GRID_METERS,
         "collar_m": _COLLAR_METERS,
         "target_outlet_etak_ids": list(spec.target_outlet_ids),
-        "development_role": (
-            "morphology_development"
-            if target_material_support["complete"]
-            else "strict_material_abstention_negative"
-        ),
+        "development_role": spec.role,
         "target_material_support": target_material_support,
         "domain_policy": {
             "method": "conservative_fail_closed_priority_flood_outlet_partition_on_accepted_authority_1m_evidence_grid",
@@ -1257,6 +1320,12 @@ def _site_artifacts(
             "p99": float(np.percentile(drainage.fill_depth, 99.0)),
         },
         "authority_tiles": authority_tiles,
+        "fine_structural_mask_coverage": {
+            "covered_cells": int(authority["fine_mask_coverage"].sum()),
+            "total_cells": int(authority["fine_mask_coverage"].size),
+            "missing_lod_minus_2_tiles": missing_authority_tiles,
+            "missing_semantics": "local_fine_structural_masks_unavailable; accepted_corrected_or_canonical_lod0_height_and_national_typed_masks_remain_authoritative",
+        },
         "corrected_lod0": corrected_lod0,
         "enlarged_domain": {
             "bbox_en": list(enlarged_bbox_en),
@@ -1321,18 +1390,21 @@ def _site_artifacts(
 def materialize_condition_bundle(
     *,
     preregistration_path: Path,
+    site_config_path: Path,
     authority_manifest_path: Path,
     accepted_materialization_path: Path,
     domain_snapshot_path: Path,
     output_root: Path | None = None,
 ) -> Path:
     _load_preregistration(preregistration_path)
+    site_specs, forbidden_etak_ids, _site_config = _load_site_config(site_config_path)
     authority_manifest = json.loads(authority_manifest_path.read_text(encoding="utf-8"))
     if authority_manifest.get("role") != "structural_authority_0.25m":
         raise ValueError("input is not the accepted 0.25 m structural authority")
     authority_root = authority_manifest_path.parent
     inputs = {
         "preregistration": _file_identity(preregistration_path),
+        "site_config": _file_identity(site_config_path),
         "accepted_structural_authority": _file_identity(authority_manifest_path),
         "accepted_structural_authority_recipe_sha256": authority_manifest["recipeSha256"],
         "accepted_corrected_materialization": _file_identity(
@@ -1350,8 +1422,9 @@ def materialize_condition_bundle(
             authority_manifest=authority_manifest,
             accepted_materialization_path=accepted_materialization_path,
             domain_snapshot_path=domain_snapshot_path,
+            forbidden_etak_ids=forbidden_etak_ids,
         )
-        for spec in _SITES
+        for spec in site_specs
     ]
     recipe = {
         "schema_version": f"{_SCHEMA_VERSION}.recipe",
@@ -1359,7 +1432,12 @@ def materialize_condition_bundle(
         "sites": [
             {
                 "site_id": result["facts"]["site_id"],
+                "development_role": result["facts"]["development_role"],
                 "target_etak_id": result["facts"]["target_etak_id"],
+                "output_chunk": (
+                    list(spec.output_chunk) if spec.output_chunk is not None else None
+                ),
+                "target_material_support": result["facts"]["target_material_support"],
                 "bbox_en": result["facts"]["bbox_en"],
                 "enlarged_domain_bbox_en": result["facts"]["enlarged_domain"]["bbox_en"],
                 "authority_tiles": result["facts"]["authority_tiles"],
@@ -1367,11 +1445,23 @@ def materialize_condition_bundle(
                 "geology_window": result["facts"]["geology_window"],
                 "orthophoto": result["facts"]["orthophoto"],
             }
-            for result in site_results
+            for spec, result in zip(site_specs, site_results, strict=True)
         ],
         "policies": {
             "development_only": True,
             "consumed_orajogi_used": False,
+            "sealed_ood_used": False,
+            "forbidden_etak_ids": sorted(forbidden_etak_ids),
+            "runnable_morphology_site_ids": sorted(
+                result["facts"]["site_id"]
+                for result in site_results
+                if result["facts"]["development_role"] == "morphology_development"
+            ),
+            "solver_excluded_site_ids": sorted(
+                result["facts"]["site_id"]
+                for result in site_results
+                if result["facts"]["development_role"] != "morphology_development"
+            ),
             "condition_grid_m": _GRID_METERS,
             "search_margin_m": _SEARCH_MARGIN_METERS,
             "minimum_evidence_collar_m": _COLLAR_METERS,
@@ -1498,7 +1588,7 @@ def materialize_condition_bundle(
             for blocker in row["blockers"]
         }
         | {
-            "orajogi_9688685_consumed_and_disqualified_replacement_ood_required_before_recipe_freeze"
+            "complete_recipe_freeze_and_run_required_before_opening_selected_sealed_ood2_9688702"
         }
     )
     bundle = {
@@ -1517,7 +1607,7 @@ def materialize_condition_bundle(
             "ready_for_r0_input_freeze": not any(
                 blocker
                 for blocker in blockers
-                if "replacement_ood" not in blocker
+                if "selected_sealed_ood2" not in blocker
             ),
             "ready_for_recipe_freeze_or_preview": False,
             "blockers": blockers,
@@ -1577,7 +1667,7 @@ def materialize_condition_bundle(
             "Any generated crop must independently pass support/collar, domain-enlargement, partition, and rotation invariance gates.",
             "Vegetation polygons are evidence of vegetation presence, not individual object footprints.",
             "Mapped geology is regional conditioning and its boundaries are not synthesis seams.",
-            "Orajogi ETAK 9688685 is consumed and disqualified; no replacement was searched or opened.",
+            "Orajogi ETAK 9688685 is consumed and disqualified; replacement OOD2 ETAK 9688702 is identity-frozen by the bound selection and remains sealed and unmaterialized.",
         ],
     }
     bundle_path_temporary = temporary / "bundle.json"
@@ -1593,6 +1683,7 @@ def materialize_condition_bundle(
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--preregistration", type=Path, required=True)
+    parser.add_argument("--site-config", type=Path, required=True)
     parser.add_argument("--authority-manifest", type=Path, required=True)
     parser.add_argument("--accepted-materialization", type=Path, required=True)
     parser.add_argument("--egt-domain-snapshot", type=Path, required=True)
@@ -1604,6 +1695,7 @@ def main() -> None:
     args = _parse_args()
     path = materialize_condition_bundle(
         preregistration_path=args.preregistration,
+        site_config_path=args.site_config,
         authority_manifest_path=args.authority_manifest,
         accepted_materialization_path=args.accepted_materialization,
         domain_snapshot_path=args.egt_domain_snapshot,

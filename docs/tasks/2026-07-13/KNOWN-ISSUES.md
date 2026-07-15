@@ -385,9 +385,12 @@ is frozen at
 (file SHA-256
 `6a1e0bc5bc0a5e11e3f475429c2bc7862699056daf822899167e7064cf0522e4`).
 Development C is ETAK bank slope `9688719`, exact LOD -2 chunk `(2438,1519)`,
-bounds `[680704,6440960,680832,6441088]`. Its identity and crop are frozen, but
-its complete condition domain, outlets, collar, masks, material support, and
-invariance are not yet qualified; C1 remains blocked. Sealed OOD2 is ETAK `9688702`,
+bounds `[680704,6440960,680832,6441088]`. Condition artifact `fa43f7075214...`
+now binds its normal and independently enlarged evidence windows, mapped flowline
+outlet ETAK `7074698`, collar, typed masks, and complete target material support
+at `240/240` cells in each window. Both windows have zero edge leak. This closes
+the condition-domain enlargement check, not the later solver partition/rotation
+invariance or frozen C1-recipe gates. Sealed OOD2 is ETAK `9688702`,
 chunk `(2441,1508)`, bounds `[681088,6442368,681216,6442496]`. It remains
 pixel- and detailed-source-geometry-uninspected, is bounded-abstention-only, and
 must not be opened before complete recipe freeze.
@@ -550,28 +553,41 @@ The rejected LUKE one-parent diagnostic is `47.18 MB` for 17 published chunks. A
 
 `r2.md` recommends Guérin 2016 more broadly than the paper supports: the authors state that geomorphological consistency and small-scale coherence are not guaranteed and rely on similar exemplar/target terrains. It also misidentifies Argudo et al. 2017, *The Visual Computer* 33(6), DOI `10.1007/s00371-017-1393-6`, as the orthophoto FCN. That source is *Coherent Multi-Layer Landscape Synthesis*, a multilayer dictionary method; the orthophoto FCN is Argudo, Chica, and Andujar 2018, *Computer Graphics Forum* 37(2), DOI `10.1111/cgf.13345`. The source ledger must expose such corrections rather than silently inheriting either report.
 
-### Erodible-slope A/B condition bundle is R0-preflight ready, not recipe/preview ready
+### Erodible-slope A/C/B condition bundle is R0-preflight ready, not recipe/preview ready
 
-The provenance-clean condition artifact is
-`asset-gen/data/work/microtopography/erodible-slope/conditions/sha256/77b81b2dc0513aa618fd50eab2de654e3988b34e2a86397b6ed56070bd2f75d3/bundle.json`
-(file SHA-256 `0637109bf0b8584afb53d60d25466f616af855186cd1437957757cbf246a1498`).
-It binds normal and independently recomputed `+128 m` grids for A/B, exact corrected or
+The final reconstructed condition artifact is
+`asset-gen/data/work/microtopography/erodible-slope/conditions/sha256/fa43f7075214eb0f0eef5b3977427823dcf10a09157e53ac9a9f61b774c5077d/bundle.json`
+(file SHA-256 `e301e0165bc1f2e9deaa137f8756de8900c7e48c954224d3db9185a2aaea6828`).
+It binds the frozen replacement selection and normal plus independently recomputed
+`+128 m` grids for A/C/B, exact corrected or
 pinned-canonical LOD0 height, accepted fine masks, ETAK, soil, decoded 1:200k geology,
 real outlets, conservative evidence domains, typed abstention masks, and localized
-topographic seep-process support. All four evidence grids have zero edge leak; priority
+topographic seep-process support. All six evidence grids have zero edge leak; priority
 flood is domain delineation only and may never route synthesis, alter height, place forms,
 set amplitude, or authorize a visible boundary.
 
-Development A is the only morphology-development input: its mapped target has parsed
-Loimis1 and Huumus on `235/235` normal and enlarged target cells. Development B is a
+Development A and Development C are the only morphology-development inputs. A has
+parsed Loimis1 and Huumus on `235/235` normal and enlarged target cells. C binds exact
+LOD -2 chunk `(2438,1519)`, mapped outlet ETAK `7074698`, and `240/240` supported target
+cells in each window. Its solve domain is `18,997` cells in both windows, with `162`
+outlet cells and zero edge leak. C is outside the Taevaskoda-local fine structural-mask
+bank: fine-mask coverage is explicitly `0/768,936`, not silently fabricated. Its accepted
+corrected/pinned-canonical LOD0 height and national ETAK, soil, geology, orthophoto,
+water, object, vegetation, and unknown masks remain authoritative for this condition
+stage; a future operation that specifically requires local 0.25 m structural masks must
+abstain or materialize a separately qualified authority.
+
+Development B is a
 strict abstention/negative record: its target has `0/801` supported cells because null
-Huumus is unknown, not absence. Unknown cells force seep support to zero. Top-level
+Huumus is unknown, not absence, and it is excluded from the solver runnable set. Unknown
+cells force seep support to zero. The machine inventory is therefore exactly A/C runnable,
+B rejected evidence, Orajõgi `9688685` consumed/disqualified, and selected OOD2 `9688702`
+sealed and unmaterialized. Top-level
 `ready_for_r0_input_freeze` is true only for non-authorizing development/preflight;
-`ready_for_recipe_freeze_or_preview` is false. Orajõgi ETAK `9688685` was accidentally
-consumed and is permanently disqualified. The replacement selection and normative
-spec amendment are now frozen, but Development C condition-domain qualification and
-machine-preregistration integration remain mandatory before recipe freeze or preview;
-sealed OOD2 must remain unopened until that complete freeze.
+`ready_for_recipe_freeze_or_preview` is false. The remaining blocker is the complete
+recipe freeze and frozen run before sealed OOD2 may be opened; it is no longer a missing
+replacement-selection blocker. Twelve labeled QA PNGs and their content identities are
+indexed under the artifact's `qa/` directory.
 
 ### Current conditioning discards real soil structure and ignores mapped cliff/shore constraints
 

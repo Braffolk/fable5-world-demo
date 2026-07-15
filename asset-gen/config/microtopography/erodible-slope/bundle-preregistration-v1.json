@@ -1,7 +1,7 @@
 {
   "schema_version": "laas.erodible-slope-research-bundle-preregistration/1",
   "bundle_id": "erodible-slope-research-bundle/1",
-  "preregistration_id": "erodible-slope-development-a-b-orajogi-v1",
+  "preregistration_id": "erodible-slope-development-a-c-sealed-ood2-v1",
   "status": {
     "state": "blocked_before_r0_generation",
     "research_only": true,
@@ -9,7 +9,7 @@
     "preview_authorized": false,
     "production_owner_authorized": false,
     "latest_eligible": false,
-    "reason": "Required condition, domain, recipe, metric, and provenance bindings remain unresolved. Null required values are blockers, not defaults."
+    "reason": "Frozen replacement selection is bound and authorizes Development A/C only as process-development inputs. Condition qualification, the complete C0/C1 recipe, metrics, thresholds, preview extent, and cameras remain unresolved; selected OOD2 stays sealed through complete recipe freeze and the frozen run."
   },
   "authority": {
     "regime_id": "fluvial.rill_gully_seep_spring",
@@ -68,25 +68,47 @@
       "maaamet_sheet": "54481",
       "sheet_bounds_en": [680000.0, 6440000.0, 685000.0, 6445000.0],
       "inspection_state": "development_allowed_after_input_freeze",
+      "solver_runnable": true,
       "target_or_transfer_credit": false,
-      "leakage_group": "development_a_b_conservative"
+      "leakage_group": "development_a_c_conservative"
+    },
+    {
+      "id": "development_c",
+      "role": "r0_process_development",
+      "etak_id": 9688719,
+      "feature": "bank_slope",
+      "crs": "EPSG:3301",
+      "e_m": 680730.3432315282,
+      "n_m": 6441028.579649958,
+      "maaamet_sheet": "54481",
+      "sheet_bounds_en": [680000.0, 6440000.0, 685000.0, 6445000.0],
+      "output_chunk": [-2, 2438, 1519],
+      "inspection_state": "development_allowed_after_input_freeze",
+      "selection_binding": {
+        "path": "asset-gen/data/work/microtopography/erodible-slope/site-selection/sha256/15d76d27aade90051e74fa39b96db35ba396df25d14733593f761bc17f0ed2e1/selection.json",
+        "sha256": "6a1e0bc5bc0a5e11e3f475429c2bc7862699056daf822899167e7064cf0522e4"
+      },
+      "solver_runnable": true,
+      "target_or_transfer_credit": false,
+      "leakage_group": "development_a_c_conservative"
     },
     {
       "id": "development_b",
-      "role": "r0_process_development",
+      "role": "strict_material_abstention_negative",
       "etak_id": 1826691,
       "feature": "ditch_adjacent_slope",
       "crs": "EPSG:3301",
       "e_m": 679692.03,
       "n_m": 6442784.16,
       "maaamet_sheet": "54472",
-      "inspection_state": "development_allowed_after_input_freeze",
-      "target_or_transfer_credit": false,
-      "leakage_group": "development_a_b_conservative"
+      "inspection_state": "retained_as_rejected_material_support_evidence",
+      "solver_runnable": false,
+      "exclusion_reason": "Target Huumus is unknown, not absent; material support is 0/801 cells on both normal and enlarged grids.",
+      "target_or_transfer_credit": false
     },
     {
-      "id": "orajogi_ood",
-      "role": "sealed_ood_abstention_stress",
+      "id": "orajogi_consumed",
+      "role": "consumed_disqualified",
       "etak_id": 9688685,
       "feature": "bank_slope",
       "crs": "EPSG:3301",
@@ -94,9 +116,38 @@
       "n_m": 6443825.32,
       "maaamet_sheet": "54481",
       "sheet_bounds_en": [680000.0, 6440000.0, 685000.0, 6445000.0],
-      "inspection_state": "sealed_pixel_and_geometry_uninspected_until_complete_recipe_freeze",
+      "inspection_state": "consumed_before_complete_recipe_freeze_and_permanently_disqualified",
+      "solver_runnable": false,
       "positive_evidence_credit": false,
-      "allowed_result": "abstention_stress_only",
+      "allowed_result": "none",
+      "forbidden_uses": [
+        "training",
+        "parameter selection",
+        "threshold selection",
+        "candidate selection",
+        "positive morphology audit",
+        "target evidence",
+        "transfer evidence",
+        "sealed OOD audit"
+      ]
+    },
+    {
+      "id": "replacement_ood2",
+      "role": "sealed_ood_abstention_stress",
+      "etak_id": 9688702,
+      "feature": "bank_slope",
+      "crs": "EPSG:3301",
+      "maaamet_sheet": "54481",
+      "sheet_bounds_en": [680000.0, 6440000.0, 685000.0, 6445000.0],
+      "output_chunk": [-2, 2441, 1508],
+      "inspection_state": "identity_frozen_pixel_and_detailed_source_geometry_uninspected_until_complete_recipe_freeze_and_run",
+      "selection_binding": {
+        "path": "asset-gen/data/work/microtopography/erodible-slope/site-selection/sha256/15d76d27aade90051e74fa39b96db35ba396df25d14733593f761bc17f0ed2e1/selection.json",
+        "sha256": "6a1e0bc5bc0a5e11e3f475429c2bc7862699056daf822899167e7064cf0522e4"
+      },
+      "solver_runnable": false,
+      "positive_evidence_credit": false,
+      "allowed_result": "bounded_abstention_stress_only",
       "forbidden_uses": [
         "training",
         "parameter selection",
@@ -108,6 +159,12 @@
       ]
     }
   ],
+  "solver_site_inventory": {
+    "runnable_morphology_site_ids": ["development_a", "development_c"],
+    "excluded_site_ids": ["development_b", "orajogi_consumed", "replacement_ood2"],
+    "development_b_retention": "rejected_strict_material_abstention_evidence_only",
+    "replacement_ood2_state": "selected_identity_frozen_sealed_and_unmaterialized"
+  },
   "references": [
     {
       "id": "schott_2024_paper_and_pinned_repository",
@@ -127,6 +184,13 @@
     }
   ],
   "required_inputs": [
+    {
+      "id": "frozen_replacement_selection",
+      "path": "asset-gen/data/work/microtopography/erodible-slope/site-selection/sha256/15d76d27aade90051e74fa39b96db35ba396df25d14733593f761bc17f0ed2e1/selection.json",
+      "sha256": "6a1e0bc5bc0a5e11e3f475429c2bc7862699056daf822899167e7064cf0522e4",
+      "state": "resolved",
+      "blocker": null
+    },
     {
       "id": "amended_spec",
       "path": "docs/specs/terrain/MICROTOPOGRAPHY.md",
@@ -232,7 +296,7 @@
       "manifest_path": null,
       "manifest_sha256": null,
       "state": "blocked",
-      "blocker": "Freeze the Development A/B supported condition envelope and unknown policy before generation."
+      "blocker": "Freeze the supported Development A/C condition envelope and unknown policy before generation; Development B is excluded as strict abstention evidence."
     },
     {
       "id": "visual_sentinel",
@@ -282,7 +346,9 @@
     ]
   },
   "sealed_ood_gate": {
-    "site_id": "orajogi_ood",
+    "site_id": "replacement_ood2",
+    "selection_path": "asset-gen/data/work/microtopography/erodible-slope/site-selection/sha256/15d76d27aade90051e74fa39b96db35ba396df25d14733593f761bc17f0ed2e1/selection.json",
+    "selection_sha256": "6a1e0bc5bc0a5e11e3f475429c2bc7862699056daf822899167e7064cf0522e4",
     "open_only_after": [
       "all required inputs resolved and hash-bound",
       "C1 recipe, code, environment, seed, and candidate identity frozen",
