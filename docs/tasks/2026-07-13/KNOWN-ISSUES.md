@@ -1338,8 +1338,12 @@ real-WebGPU boots passed at frame 118 with inherited materials, vegetation, and
 grass present and grounded, and at frame 108 with grass hidden for direct
 geometry inspection. The geometry screenshot SHA-256 is
 `99e4bdfba6000c646f90cd0588c593861e98133fba4f041c10d79cca1ec78dcb`.
-This is still not user visual acceptance, generic rough-till ownership,
-national coverage, production, or `latest` authority.
+The subsequent user inspection is a neutral visual-capacity pass, not strong
+acceptance. The user saw the inherited exposed boulder together with a shallow,
+varying mound/socket, found it “fineish,” and had little else in this bounded
+view to judge. No obvious artifact was reported. That limited observation does
+not establish a rough-till owner and grants no production, national, cliff,
+fine-rock, or `latest` authority.
 
 Rock/cliff-capable regimes remain abstained. They require typed macro
 reconstruction of under-resolved shoulders, edges, ledges, joints/fractures,
