@@ -510,7 +510,14 @@ def _build_targets(
     parent = hierarchy.flood_parent.ravel()[source[fallback]]
     has_parent = parent >= 0
     fallback_source = source[fallback][has_parent]
-    target_a.ravel()[fallback_source] = parent[has_parent]
+    fallback_parent = parent[has_parent]
+    advances = _advances_hierarchy(
+        fallback_source,
+        fallback_parent,
+        np.ones(fallback_source.shape, dtype=bool),
+        hierarchy,
+    )
+    target_a.ravel()[fallback_source[advances]] = fallback_parent[advances]
 
     for target, drop, length in (
         (target_a, drop_a, length_a),
@@ -605,7 +612,14 @@ def solve_hydrology(
     discharge.fill(0.0)
     ponded = allocate_array(workspace, "ponded-water-m3", authority.cell_shape, np.float64)
     order = np.flatnonzero(active.ravel())
-    order = order[np.argsort(hierarchy.drain_rank.ravel()[order])[::-1]].astype(np.int32)
+    order = order[
+        np.lexsort(
+            (
+                hierarchy.drain_rank.ravel()[order],
+                hierarchy.filled_level_m.ravel()[order],
+            )
+        )[::-1]
+    ].astype(np.int32)
     ta, tb = target_a.ravel(), target_b.ravel()
     wb = weight_b.ravel().astype(np.float64)
     q = source.ravel().copy()
