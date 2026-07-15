@@ -1,0 +1,84 @@
+{
+  "schema_version": "laas.coastal-escarpment-als-structural-config/1",
+  "recipe_id": "development-a-connected-als-structural-r1-v1",
+  "status": "development_only",
+  "target_etak_id": 1826743,
+  "output_chunks": [[-2, 2436, 1492], [-2, 2437, 1492]],
+  "shared_parent": [-1, 609, 373],
+  "canvas_bbox_en": [680416.0, 6444384.0, 680736.0, 6444576.0],
+  "output_bbox_en": [680448.0, 6444416.0, 680704.0, 6444544.0],
+  "solve_pitch_m": 0.25,
+  "reference_pitch_m": 1.0,
+  "outer_zero_collar_m": 8.0,
+  "holdout_block_m": 8.0,
+  "holdout_modulus": 5,
+  "holdout_remainder": 0,
+  "inputs": {
+    "condition_bundle": {"path": "asset-gen/data/work/microtopography/erodible-slope/conditions/sha256/10a5ea53b007f3e6e2e878ccebd70a9712716042139ca35178310655fcb85b8b/bundle.json", "bytes": 354606, "sha256": "9d417818c90b7e8e4db757a70cd2703df5a2e4045ff54ada9248f700bede38f9"},
+    "domain_closure": {"path": "asset-gen/data/work/microtopography/erodible-slope/conditions/domain-closure/sha256/e316add66854bd25fd13dcbf07c017950ebec97b18f0485820367a7ae774a0ac/manifest.json", "bytes": 13504, "sha256": "c2ea6bf89f85421295ebb65bf4b20eac8a99a858ea9e9922dfdcdb6fc5483600"},
+    "domain_npz": {"path": "asset-gen/data/work/microtopography/erodible-slope/conditions/domain-closure/sha256/e316add66854bd25fd13dcbf07c017950ebec97b18f0485820367a7ae774a0ac/canonical-plus256-domain.npz", "bytes": 4444948, "sha256": "b6dcd98f78c8c262a6c2e143b1c32ed902795ac5866bff7c7d9c4923aad85af8"},
+    "etak": {"path": "asset-gen/data/work/microtopography/erodible-slope/conditions/sha256/10a5ea53b007f3e6e2e878ccebd70a9712716042139ca35178310655fcb85b8b/development_a-etak.json", "bytes": 455408, "sha256": "d3026be331b905c3b1df11054d6f2ec98bdf15dec9a76b77f4b939f1197f20e4"},
+    "als": {"path": "asset-gen/data/in/public/als/taevaskoda-ahja-als-adjacent-2019-stage1/raw/sha256/672a337dd9da433225cbc580cdda94e9b44ec0db9bdc662f212cc95fe95f6204/444680_2019_tava.laz", "bytes": 46466173, "sha256": "672a337dd9da433225cbc580cdda94e9b44ec0db9bdc662f212cc95fe95f6204"},
+    "soil": {"path": "asset-gen/data/work/terrain/conditions/soil/mullastikukaart/sha256/50208874e027a2be4776cd19795a554a8bd7f489d283836ebeecedd5f12bbab4/window.json", "sha256": "97a06ed67c6ec48e75496bdadc470f1afcd280922fef8fae7125a75249f4e51e"},
+    "geology": {"path": "asset-gen/data/work/terrain/conditions/geology/egt-surficial-200k/sha256/8608ba2c87df95b765e95ef92feb9f02d02ee39e5753bcb962479aa6840af40c/window.json", "sha256": "e570bc1a6c8b2c5534d68fd342d0a6ceec23d302039561dd235edf663633fb38"}
+  },
+  "als_qualification": {
+    "classification": 2,
+    "minimum_last_return_fraction": 0.45,
+    "scan_angle_soft_limit_degrees": 24.0,
+    "maximum_detrended_spread_m": 0.45,
+    "maximum_reference_residual_m": 1.2
+  },
+  "local_reference": {
+    "fine_radius_m": 3.0,
+    "fine_neighbors": 40,
+    "fine_minimum_points": 10,
+    "broad_radius_m": 6.0,
+    "broad_neighbors": 80,
+    "broad_minimum_points": 24,
+    "irls_iterations": 3,
+    "huber_floor_m": 0.05,
+    "ridge": 0.0001,
+    "minimum_confidence": 0.12,
+    "depression_scale_agreement_m": 0.18
+  },
+  "structural_network": {
+    "scales_m": [1.0, 2.0, 4.0],
+    "strength_percentile": 76.0,
+    "minimum_component_cells": 16,
+    "gap_close_m": 2.0,
+    "target_adjacency_m": 4.0,
+    "confidence_transition_m": 6.0
+  },
+  "tgv": {
+    "iterations": 420,
+    "tau": 0.02,
+    "sigma": 0.02,
+    "theta": 1.0,
+    "first_order_weight": 0.06,
+    "second_order_weight_m": 0.18,
+    "c0_prior_inside": 0.005,
+    "c0_prior_outside": 0.35,
+    "data_weight": 12.0,
+    "huber_delta_m": 0.08,
+    "normal_regularization_floor": 0.3,
+    "tangent_regularization_floor": 0.82,
+    "maximum_residual_m": 1.2
+  },
+  "gates": {
+    "mapped_face_source_cells": 235,
+    "minimum_holdout_points_per_side": 500,
+    "minimum_holdout_blocks_per_side": 8,
+    "require_block_median_improvement_each_side": true,
+    "maximum_hard_residual_m": 0.0,
+    "maximum_boundary_jump_m": 0.03
+  },
+  "hard_laws": {
+    "mapped_non_heightfield_face_stays_c0": true,
+    "no_arbitrary_distance_corridor": true,
+    "line_profile_target_forbidden": true,
+    "biala_geometry_or_parameters_forbidden": true,
+    "packed_output_requires_offline_acceptance": true,
+    "taevaskoda_sentinel_opened": false
+  }
+}
