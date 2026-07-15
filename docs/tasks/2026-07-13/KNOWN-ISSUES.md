@@ -1351,6 +1351,53 @@ scarps, bank breaks, and talus/ordinary-terrain transitions before fine
 morphology. Merely increasing bumpiness on a coarse DTM face or ramp is still a
 failed specialist.
 
+### Biała Góra proves bounded 2D representation capacity, not predictive transfer
+
+The retained Biała Góra calibration artifact `4fdbaa3f0a9c...` was exercised on
+one `128 x 128 m` source-domain core at EPSG:2180 bounds
+`[202636.5,684821.5,202764.5,684949.5]`. The core has `97.680664%` direct
+qualified vendor-class-2 support under the frozen count/range screen and contains
+a connected coast-parallel crest/face/toe break, asymmetric bench, two
+slump-headwall sockets and aprons, a branching chute/gully, and adjacent ordinary
+ground. The method is a masked normalized two-dimensional scale-space
+decomposition; it does not parameterize a target by a mapped line, line normal,
+or repeated cross-profile.
+
+Attempt 1 `a07b7a8c4742f179064847c8f4efcb39b1cae6772ee010de4f142e41570f0ae8`
+is immutably rejected. It spent one complete visual attempt and produced reusable
+selection/QA code, but its 3 m modelable-distance rule reconstructed unknown
+class-2 gaps, including vegetation/classification holes, and the raw
+source-minus-structural fine band remained visibly broadband and pixel-speckled.
+Focus continued for exactly one consolidated correction because removing unknown
+ownership and band-limiting the residual directly addressed both failures without
+changing the selected source system or adding infrastructure.
+
+Final attempt `9d27b52da864ed51d4e0118545f2537bc9b91c7aba0ef7f5fd63e765ba144cca`
+stores float artifact SHA-256 `0516d8f06566dd377726b70d9e1f79e247e060ca9fe4891f8aca6b50fae1e331`
+and four labeled PNGs under its content-addressed `qa/` directory. It publishes
+no interpolated unknown cell: direct and modelable core coverage are both
+`97.680664%`. Its structural component is the source-resolved 1.25 m surface
+relative to an 8 m base; its stricter fine component is only the band-limited
+`0.5-1.25 m` source component over direct heightfield-safe support. The macro component has
+`2.22193 m` absolute p95 and the admitted fine component `0.157856 m` absolute
+p95. Common-light overview and paired closeups retain the connected macro system
+without the parked solvers' ribs, caps, slabs, wedges, or active-boundary jumps.
+Unknown pixels remain explicit rather than being hidden by a beauty render.
+The isolated fine-component panel is still locally granular. It does not visibly
+turn the final shaded reconstruction into random bumpiness, but it is not accepted
+as realistic fine morphology and receives no fine-synthesis credit.
+
+This is a positive **source-domain representation-capacity** result only. Vendor
+class 2 remains calibration-only, not authoritative target truth; the screen does
+not predict morphology from a coarse Estonia surface, prove physical transfer,
+establish an Estonia condition owner, support 6.25 cm rock detail, authorize
+packing/browser work, or solve vertical/undercut/overhanging cliffs. The two-attempt
+budget is exhausted. Preserve the code, config, float surface, masks, and QA.
+Resume this path only when a legally usable qualified source/target pairing can
+drive the same 2D form representation from Estonia-observable conditions and a
+disjoint source-domain holdout can test prediction rather than self-reconstruction;
+until then rock/cliff-capable Estonia regimes remain abstained.
+
 ## Visual/Data Investigations
 
 ### Estonia DTM may contain two tall bumps in the Ahja river

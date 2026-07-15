@@ -1,0 +1,54 @@
+{
+  "schema_version": "laas.biala-coastal-escarpment-capacity-config/1",
+  "source": {
+    "manifest": "asset-gen/data/work/microtopography/biala_gora/candidate/sha256/4fdbaa3f0a9c33457e073e9733e2d4e364161185fdc673e913bf0ed3dccf2505/manifest.json",
+    "build_id": "4fdbaa3f0a9c33457e073e9733e2d4e364161185fdc673e913bf0ed3dccf2505",
+    "origin_xy_m": [202268.5, 684533.5]
+  },
+  "selection": {
+    "crs": "EPSG:2180",
+    "cell_m": 0.5,
+    "center_xy_cells": [864, 704],
+    "core_m": 128.0,
+    "halo_m": 32.0,
+    "selection_basis": "97.68 percent direct qualified support in a core containing a coast-parallel crest/face/toe break, an asymmetric bench, two slump-headwall sockets and aprons, a branching chute/gully, and adjacent ordinary ground"
+  },
+  "support": {
+    "minimum_vendor_class2_returns": 2,
+    "maximum_vendor_class2_range_m": 1.0,
+    "maximum_interpolation_distance_m": 0.0,
+    "fine_minimum_vendor_class2_returns": 3,
+    "fine_maximum_vendor_class2_range_m": 0.75,
+    "fine_minimum_local_support_fraction": 0.84,
+    "fine_maximum_slope_rise_run": 2.0
+  },
+  "reconstruction": {
+    "method": "masked normalized two-dimensional scale-space reconstruction",
+    "base_sigma_m": 8.0,
+    "structural_sigma_m": 1.25,
+    "fine_sigma_m": 0.5,
+    "macro_semantics": "source-resolved connected face, shoulder/toe break, gullies, mass-wasting ribs, and ordinary ground relative to the 8 m base",
+    "fine_semantics": "source-resolved coherent 0.5-1.25 m relief admitted only by direct heightfield-safe vendor class-2 support; raw pixel residual is excluded"
+  },
+  "acceptance": {
+    "minimum_direct_core_fraction": 0.97,
+    "minimum_modelable_core_fraction": 0.97,
+    "hard_reject_visuals": [
+      "roughened ramp without connected form recovery",
+      "cross-line ribs",
+      "finite-line caps",
+      "slabs or wedges",
+      "morphology across unsupported cells",
+      "invented vertical or overhanging geometry"
+    ]
+  },
+  "evidence_boundary": {
+    "role": "source-domain representation capacity screen only",
+    "vendor_class2_is_authoritative_truth": false,
+    "source_supports_0_0625_m_detail": false,
+    "predictive_transfer_test": false,
+    "estonia_transfer_authorized": false,
+    "packing_or_browser_authorized": false,
+    "permitted_claim": "the retained 0.5 m source and this two-dimensional representation can preserve a connected coastal scarp/gully/shoulder/toe system without line-parameterization artifacts"
+  }
+}
