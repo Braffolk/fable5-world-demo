@@ -224,14 +224,12 @@ def bind_parent_organization_to_fine(
     rejected_side_parent = 0
     for start in range(0, shape[0], block_rows):
         stop = min(shape[0], start + block_rows)
-        coordinate_block = np.meshgrid(rows[start:stop], cols, indexing="ij")
-        filled_block = ndimage.map_coordinates(
-            parent.filled_level_m,
-            coordinate_block,
-            order=1,
-            mode="nearest",
-            prefilter=False,
-        ).astype(np.float32)
+        parent_row = nearest_rows[start:stop, None]
+        parent_col = nearest_cols[None, :]
+        # Flood levels are organization attributes, not a continuous terrain
+        # signal.  Use the same owning parent cell as the hierarchy fields;
+        # interpolating across an inactive +inf sentinel creates NaN controls.
+        filled_block = parent.filled_level_m[parent_row, parent_col]
         c0 = authority.c0_node_m
         fine_height = 0.25 * (
             c0[start:stop, :-1]
@@ -240,7 +238,6 @@ def bind_parent_organization_to_fine(
             + c0[start + 1 : stop + 1, 1:]
         )
         filled[start:stop] = np.maximum(filled_block, fine_height).astype(np.float32)
-        parent_row = nearest_rows[start:stop, None]
         parent_flat = parent_row * parent_cols + nearest_cols[None, :]
         connected_block = parent.connected.ravel()[parent_flat] & routing[start:stop]
         connected[start:stop] = connected_block
@@ -297,6 +294,16 @@ def bind_parent_organization_to_fine(
         rank_block = parent_rank * rank_stride + local_rank
         rank_block[~connected_block] = -1
         rank[start:stop] = rank_block
+    filled[~routing] = np.inf
+    if not np.isfinite(filled[routing]).all():
+        raise RuntimeError("fine routing support has a nonfinite flood level")
+    # Parent queue ordinals contain irrelevant gaps from cells outside this
+    # fixed fine authority.  Compress the induced order without changing any
+    # equality or ordering relation; a causal reversal still fails identity.
+    connected_rank = rank[connected]
+    if connected_rank.size:
+        unique_rank = np.unique(connected_rank)
+        rank[connected] = np.searchsorted(unique_rank, connected_rank)
     fallback_indices = np.flatnonzero(flood_parent.ravel() >= 0)
     if directed_candidates != (
         admitted_count
@@ -344,6 +351,8 @@ def bind_parent_organization_to_fine(
                 weights=depth[selected] * cell_area,
                 minlength=capacities.size,
             )
+    if not np.isfinite(capacities).all():
+        raise RuntimeError("fine reservoir capacity is nonfinite")
     return OrganizationHierarchy(
         filled_level_m=filled,
         flood_parent=flood_parent,
