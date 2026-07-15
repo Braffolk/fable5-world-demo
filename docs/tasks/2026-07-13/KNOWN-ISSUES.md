@@ -1048,6 +1048,31 @@ inventories are inherited. The exact research URL passed real Chromium/WebGPU
 through frame 146 on 2026-07-15 with no captured page, TSL, WebGPU, pipeline, or
 asset errors. This is a visual research checkpoint, not national publication.
 
+The accepted full-parent forest generalization candidate is now also packed
+through that same ordinary path. Recipe `6d28b79a393f...` and immutable manifest
+SHA-256 `48bacfc559d1c5f626168d753d4ef3ec46394847ef2d6ad5f3894936641b540d`
+contain all 16 LOD -2 children of parent `-1/606/361`, byte-exact decoded-child
+parent derivation, and masked corrected LOD0-L4 closure. Independent verification
+reports zero decoded fine seams, `0.00099945 m` maximum C1 round-trip error,
+`0.00156737 m` maximum LOD0 closure error, and zero hard-exclusion residual.
+The first publication attempt exposed a missing release-kind allowlist binding;
+the second exposed one-quantum seams caused by independently selected chunk
+offsets. The final recipe uses one shared fine quantization lattice and passed
+the exact lower-altitude Estonia WebGPU boot through frame 158 without captured
+page, HTTP, asset-stream, TSL, WebGPU, pipeline, or bind-group errors. This is a
+single 512 m, `83.05%`-eligible mesic-mineral-forest research preview. Its outer
+boundary uses transient base support rather than evidence of continuation into
+adjacent synthesized parents, so it grants neither multi-parent continuity nor
+national publication authority.
+
+Elongated lines, ridges, or bumps are not defects merely because they occur in a
+field: cultivation, drainage, vehicle, erosion, and substrate processes can
+produce real long forms. Reject them only when evidence identifies ownership or
+chunk locking, absence from the measured C0/condition, discontinuity across
+otherwise continuous terrain, broken provenance, or another causal mismatch.
+This rule prevents a shape-only gate from erasing real agricultural morphology
+while retaining fail-closed rejection of synthetic seams and tiling artifacts.
+
 The national soil preflight resolved one apparent blocker from retained official
 documentation. Pure raised-bog soils encode the organic profile in their parsed
 peat texture sequence; deep profiles may be `T`-only, so blank `Huumus` is a

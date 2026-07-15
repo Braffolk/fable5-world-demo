@@ -740,11 +740,16 @@ def create_build_plan(
             "measured-synthesis-pilot",
             "structural-repair-overlay-v1",
             "research-microtopography-preview-v1",
+            "research-microtopography-generalization-preview-v1",
         ):
             raise ValueError(f"unsupported micro recipe kind {micro_recipe_kind!r}")
         if (
             micro_recipe_kind
-            not in ("structural-repair-overlay-v1", "research-microtopography-preview-v1")
+            not in (
+                "structural-repair-overlay-v1",
+                "research-microtopography-preview-v1",
+                "research-microtopography-generalization-preview-v1",
+            )
             and base_manifest_sha256 != MICRO_V1_BASE_SHA256
         ):
             raise ValueError("manifest format 2 base is not the approved micro v1 release")
@@ -787,6 +792,20 @@ def create_build_plan(
             }
             if expectation.get("verifier") != planned_verifier:
                 raise ValueError("forest preview expectation names a different verifier")
+        elif micro_recipe_kind == "research-microtopography-generalization-preview-v1":
+            from .terrain.microtopography.forest_exemplar.generalization_preview_verify import (
+                VERIFIER_ID as FOREST_GENERALIZATION_VERIFIER_ID,
+                verifier_source_sha256 as forest_generalization_verifier_source_sha256,
+            )
+
+            planned_verifier = {
+                "id": FOREST_GENERALIZATION_VERIFIER_ID,
+                "sourceSha256": forest_generalization_verifier_source_sha256(),
+            }
+            if expectation.get("verifier") != planned_verifier:
+                raise ValueError(
+                    "forest generalization preview expectation names a different verifier"
+                )
         else:
             planned_verifier = {
                 "id": VERIFIER_ID,
@@ -998,6 +1017,12 @@ def _require_micro_verification(
         )
 
         verifier = verify_irregular_forest_preview
+    elif recipe_kind == "research-microtopography-generalization-preview-v1":
+        from .terrain.microtopography.forest_exemplar.generalization_preview_verify import (
+            verify_generalization_preview,
+        )
+
+        verifier = verify_generalization_preview
     else:
         verifier = {
             "retention-fixture": verify_micro_fixture,
@@ -1264,6 +1289,9 @@ def _manifest_from_plan(
                     if fixture_only
                     else "accepted-irregular-forest-research-preview-v1"
                     if plan.get("microRecipeKind") == "research-microtopography-preview-v1"
+                    else "accepted-forest-generalization-research-preview-v1"
+                    if plan.get("microRecipeKind")
+                    == "research-microtopography-generalization-preview-v1"
                     else "measured-synthesis-pilot-v1"
                     if pilot_only
                     else "structural-repair-overlay-v1"
