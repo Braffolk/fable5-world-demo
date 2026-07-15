@@ -1382,6 +1382,40 @@ Taevaskoda sentinel, or permit packing/browser/production use. The float
 transaction remains reusable input to a later condition-prediction specialist;
 the correct fallback outside qualified ALS support remains C0/abstention.
 
+The later explicit bounded-preview task authorizes packing this exact accepted
+float artifact for visual investigation only; it does not broaden the artifact's
+scientific credit. Recipe `1f7e3220914cfdaebc32c491335db06e027aa0a78e6f894885e072432a84381a`
+publishes immutable non-`latest` manifest SHA-256
+`bbba982d9f9ade4f2fdfd582c7758f7c3997fb4851b0614c44ebbba62c5bd8cf`.
+The two nominal output chunks were not a valid publication boundary: residual
+continued by `0.178242 m` at the nominal west edge and `0.129547 m` at the south
+edge. Cropping there would have created a visible step. The packed closure
+therefore carries the full artifact and zero collar through four complete LOD -1
+parents, 64 published LOD -2 children, and 17 deduplicated apron supports under
+the existing ordinary hierarchy.
+
+Independent verifier SHA-256 `37df3527a0fad72dbb446ae7bca5617de08740b88caa142fee29a45cb26edce7`
+rebinds the original config, float arrays, evidence inputs, C0, and masks. It
+proves all 144 decoded fine seam comparisons and every adjacent-parent seam are
+exactly zero; all four parents are byte-exactly child-derived; maximum structural
+round-trip error is `0.00100327 m`; conservative hard/mapped-face C0 error is
+`0.00100136 m`; masked LOD0 closure error is `0.00500274 m`; artifact hard,
+mapped-face, and outer-collar residuals remain exactly zero; and inherited biome,
+boulder, canopy, debris, soil, tree, understory, water, and water-cover indexes
+are byte-exact. The source is an inclusive 0.25 m node lattice, so packing samples
+it bilinearly at 0.25 m storage centers. Any interpolation stencil touching hard
+or mapped-face authority selects C0 conservatively.
+
+Exact real-WebGPU boots passed at frame 100 for the normal view and frame 86 for
+the `grass=0` geometry view on fresh `:5185/:8795`, with no page, local HTTP,
+TSL, WebGPU, pipeline, bind-group, or command-buffer error. Screenshot inspection
+shows continuous terrain with inherited materials, trees/understory, and grounded
+grass present. Geometry screenshot SHA-256 is
+`a733bc4e4bf557eaefeeb49847ea6e7379c3ed8193a23518a91f3be44b1cc86b`.
+The ordinary LOD -2 surface is Keys-plus-mean reconstruction of measured 0.25 m
+structure; it makes no new morphology claim below 0.25 m and remains neither a
+vertical-cliff solution nor a production/national specialist.
+
 ### Biała Góra proves bounded 2D representation capacity, not predictive transfer
 
 The retained Biała Góra calibration artifact `4fdbaa3f0a9c...` was exercised on

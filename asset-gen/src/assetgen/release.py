@@ -757,6 +757,7 @@ def create_build_plan(
             "research-microtopography-preview-v1",
             "research-microtopography-generalization-preview-v1",
             "research-rough-till-structural-preview-v1",
+            "research-als-tgv-structural-preview-v1",
         ):
             raise ValueError(f"unsupported micro recipe kind {micro_recipe_kind!r}")
         if (
@@ -766,6 +767,7 @@ def create_build_plan(
                 "research-microtopography-preview-v1",
                 "research-microtopography-generalization-preview-v1",
                 "research-rough-till-structural-preview-v1",
+                "research-als-tgv-structural-preview-v1",
             )
             and base_manifest_sha256 != MICRO_V1_BASE_SHA256
         ):
@@ -836,6 +838,20 @@ def create_build_plan(
             if expectation.get("verifier") != planned_verifier:
                 raise ValueError(
                     "rough-till structural preview expectation names a different verifier"
+                )
+        elif micro_recipe_kind == "research-als-tgv-structural-preview-v1":
+            from .terrain.microtopography.coastal_escarpment.als_tgv.packed_preview_verify import (
+                VERIFIER_ID as ALS_TGV_PREVIEW_VERIFIER_ID,
+                verifier_source_sha256 as als_tgv_preview_verifier_source_sha256,
+            )
+
+            planned_verifier = {
+                "id": ALS_TGV_PREVIEW_VERIFIER_ID,
+                "sourceSha256": als_tgv_preview_verifier_source_sha256(),
+            }
+            if expectation.get("verifier") != planned_verifier:
+                raise ValueError(
+                    "ALS/TGV structural preview expectation names a different verifier"
                 )
         else:
             planned_verifier = {
@@ -1089,6 +1105,12 @@ def _require_micro_verification(
         )
 
         verifier = verify_rough_till_preview
+    elif recipe_kind == "research-als-tgv-structural-preview-v1":
+        from .terrain.microtopography.coastal_escarpment.als_tgv.packed_preview_verify import (
+            verify_als_tgv_preview,
+        )
+
+        verifier = verify_als_tgv_preview
     else:
         verifier = {
             "retention-fixture": verify_micro_fixture,
@@ -1260,6 +1282,7 @@ def _manifest_from_plan(
     pilot_only = plan.get("microRecipeKind") in (
         "measured-synthesis-pilot",
         "research-microtopography-preview-v1",
+        "research-als-tgv-structural-preview-v1",
     )
     structural_only = plan.get("microRecipeKind") == "structural-repair-overlay-v1"
     manifest_format = int(plan["manifestFormat"])
@@ -1361,6 +1384,9 @@ def _manifest_from_plan(
                     else "rough-till-structural-only-finest-research-preview-v1"
                     if plan.get("microRecipeKind")
                     == "research-rough-till-structural-preview-v1"
+                    else "als-tgv-structural-only-finest-research-preview-v1"
+                    if plan.get("microRecipeKind")
+                    == "research-als-tgv-structural-preview-v1"
                     else "measured-synthesis-pilot-v1"
                     if pilot_only
                     else "structural-repair-overlay-v1"
@@ -1515,6 +1541,7 @@ def publish_build(
         "research-microtopography-preview-v1",
         "research-microtopography-generalization-preview-v1",
         "research-rough-till-structural-preview-v1",
+        "research-als-tgv-structural-preview-v1",
     ):
         raise ValueError("research preview is immutable-preview-only and cannot update latest")
     if plan.get("microRecipeKind") == "structural-repair-overlay-v1":
