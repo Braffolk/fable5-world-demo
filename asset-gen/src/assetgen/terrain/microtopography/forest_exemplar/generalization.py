@@ -375,6 +375,21 @@ def _load_candidates() -> list[Candidate]:
     return _candidates(surfaces, 192, 16)
 
 
+def _candidate_capacity(candidates: list[Candidate]) -> dict[str, float]:
+    square_sum = 0.0
+    count = 0
+    maximum = 0.0
+    for candidate in candidates:
+        values = np.asarray(candidate.values, dtype=np.float64)
+        square_sum += float(np.sum(values * values, dtype=np.float64))
+        count += values.size
+        maximum = max(maximum, float(np.max(np.abs(values))))
+    return {
+        "rms_m": float(np.sqrt(square_sum / count)),
+        "maximum_abs_m": maximum,
+    }
+
+
 def _memmap(path: Path, dtype, shape: tuple[int, int], *, fill=0):
     array = np.memmap(path, dtype=dtype, mode="w+", shape=shape)
     array[:] = fill
@@ -433,7 +448,7 @@ def _assemble_disk(
         if not active.any():
             continue
         region = np.s_[row0:row1, col0:col1]
-        selected, offset, selected_score, patch = _select_site_patch(
+        selected, match_offset, selected_score, patch = _select_site_patch(
             site=site,
             values=values,
             source_index=source_index,
@@ -469,7 +484,8 @@ def _assemble_disk(
                 "source_x": candidates[selected].x,
                 "transform": candidates[selected].transform,
                 "support_fraction": candidates[selected].support_fraction,
-                "offset_m": offset,
+                "match_offset_m": match_offset,
+                "applied_offset_m": 0.0,
                 "overlap_mse_m2": selected_score,
             }
         )
@@ -622,6 +638,7 @@ def _generate_site(
     candidates: list[Candidate],
     base: PinnedBaseHeight,
     config: dict[str, Any],
+    candidate_capacity: dict[str, float],
     root: Path,
 ) -> tuple[dict[str, Any], np.ndarray]:
     site_root = root / "sites" / site.region_id
@@ -635,6 +652,15 @@ def _generate_site(
         candidates, site.bbox_en, scratch, config
     )
     allowed, mask_evidence = _fine_mask(site.bbox_en, scratch / "allowed.u8")
+    residual = np.memmap(raw_path, dtype=np.float32, mode="r", shape=(FINE_CELLS, FINE_CELLS))
+    maximum_unprojected = 0.0
+    for row0 in range(0, FINE_CELLS, 128):
+        row1 = min(FINE_CELLS, row0 + 128)
+        maximum_unprojected = max(
+            maximum_unprojected,
+            float(np.max(np.abs(residual[row0:row1]), initial=0.0)),
+        )
+    del residual
     maximum_mean = _project_disk(raw_path, allowed)
     residual = np.memmap(raw_path, dtype=np.float32, mode="r", shape=(FINE_CELLS, FINE_CELLS))
     maximum_hard = 0.0
@@ -688,6 +714,8 @@ def _generate_site(
     )
     np.save(qa_root / "closeup_residual_f32.npy", close_residual, allow_pickle=False)
     output_values = residual[np.asarray(allowed, dtype=bool)]
+    output_rms = float(np.sqrt(np.mean(output_values * output_values)))
+    output_maximum = float(np.max(np.abs(output_values), initial=0.0))
     metrics = {
         "site": asdict(site),
         "mask": mask_evidence,
@@ -696,9 +724,19 @@ def _generate_site(
         "placement_count": len(placements),
         "source_placement_counts": source_counts,
         "boundary_gradient_ratios_at_0_5m": boundary,
-        "residual_rms_allowed_m": float(np.sqrt(np.mean(output_values * output_values))),
+        "candidate_capacity": candidate_capacity,
+        "residual_rms_allowed_m": output_rms,
         "residual_p01_p99_allowed_m": [float(value) for value in np.percentile(output_values, [1, 99])],
-        "maximum_abs_residual_m": float(np.max(np.abs(output_values), initial=0.0)),
+        "maximum_abs_unprojected_residual_m": maximum_unprojected,
+        "maximum_abs_residual_m": output_maximum,
+        "output_over_candidate_abs_ratio": output_maximum / candidate_capacity["maximum_abs_m"],
+        "output_over_candidate_rms_ratio": output_rms / candidate_capacity["rms_m"],
+        "maximum_abs_match_offset_m": max(
+            (abs(item["match_offset_m"]) for item in placements), default=0.0
+        ),
+        "maximum_abs_applied_offset_m": max(
+            (abs(item["applied_offset_m"]) for item in placements), default=0.0
+        ),
         "maximum_one_metre_mean_error_m": maximum_mean,
         "maximum_hard_exclusion_residual_m": maximum_hard,
         "closeup_parent_cell_xy": [close_x, close_y],
@@ -765,6 +803,7 @@ def run_generalization(selection_root: Path) -> Path:
         raise FileExistsError(f"immutable artifact already exists: {destination}")
     destination.parent.mkdir(parents=True, exist_ok=True)
     candidates = _load_candidates()
+    candidate_capacity = _candidate_capacity(candidates)
     base = PinnedBaseHeight(BASE_MANIFEST, BASE_MANIFEST_SHA256, ASSET_GEN_ROOT / "data/out", load_base().encode, audit=False)
     # Failed full-resolution runs are retained for diagnosis rather than silently
     # discarding multi-gigabyte completed stages.
@@ -780,6 +819,7 @@ def run_generalization(selection_root: Path) -> Path:
                 candidates=candidates,
                 base=base,
                 config=config,
+                candidate_capacity=candidate_capacity,
                 root=staging,
             )
         repetition = _nearest_copy(closeups)
@@ -791,6 +831,12 @@ def run_generalization(selection_root: Path) -> Path:
                 failures.append(f"{name}: one-metre mean")
             if site_metrics["maximum_hard_exclusion_residual_m"] > acceptance["maximum_hard_exclusion_residual_m"]:
                 failures.append(f"{name}: hard exclusion")
+            if site_metrics["maximum_abs_applied_offset_m"] != 0.0:
+                failures.append(f"{name}: nonzero applied placement datum")
+            if site_metrics["output_over_candidate_abs_ratio"] > acceptance["maximum_output_over_candidate_abs_ratio"]:
+                failures.append(f"{name}: measured maximum-absolute envelope")
+            if site_metrics["output_over_candidate_rms_ratio"] > acceptance["maximum_output_over_candidate_rms_ratio"]:
+                failures.append(f"{name}: measured RMS envelope")
             for key, value in site_metrics["boundary_gradient_ratios_at_0_5m"].items():
                 limit = acceptance["maximum_boundary_p95_ratio"] if "p95" in key else acceptance["maximum_boundary_mean_ratio"]
                 if value > limit:

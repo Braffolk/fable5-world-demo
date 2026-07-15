@@ -38,6 +38,8 @@
     "maximum_hard_exclusion_residual_m": 0.0,
     "maximum_boundary_mean_ratio": 1.15,
     "maximum_boundary_p95_ratio": 1.15,
+    "maximum_output_over_candidate_abs_ratio": 1.0,
+    "maximum_output_over_candidate_rms_ratio": 1.0,
     "minimum_cross_site_nearest_copy_rmse_m": 0.005
   }
 }

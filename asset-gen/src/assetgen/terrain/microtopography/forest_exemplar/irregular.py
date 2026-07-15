@@ -210,7 +210,7 @@ def _select_site_patch(
     candidate_use: np.ndarray,
     source_use: np.ndarray,
 ) -> tuple[int, float, float, np.ndarray]:
-    """Choose one measured form exactly as the accepted irregular transport does."""
+    """Choose by DC-invariant overlap shape while preserving the measured datum."""
     overlap = active & (current_denominator > 1e-12)
     shortlist_count = min(96, len(values))
     hashes = np.fromiter(
@@ -232,20 +232,20 @@ def _select_site_patch(
         overlap_values = patch_values[:, overlap]
         overlap_weight = weight[overlap]
         weight_sum = float(overlap_weight.sum())
-        offsets = (
+        match_offsets = (
             (current[None, :] - overlap_values) * overlap_weight[None, :]
         ).sum(axis=1) / weight_sum
-        difference = current[None, :] - (overlap_values + offsets[:, None])
+        difference = current[None, :] - (overlap_values + match_offsets[:, None])
         scores = (difference * difference * overlap_weight[None, :]).sum(axis=1) / weight_sum
     else:
-        offsets = np.zeros(shortlist_count, dtype=np.float64)
+        match_offsets = np.zeros(shortlist_count, dtype=np.float64)
         scores = np.zeros(shortlist_count, dtype=np.float64)
     source_excess = source_use[source_index[shortlist]] - source_use.min()
     scores += 0.0025 * candidate_use[shortlist] + 0.012 * source_excess
     best_local = int(np.argmin(scores))
     selected = int(shortlist[best_local])
-    offset = float(offsets[best_local])
-    return selected, offset, float(scores[best_local]), patch_values[best_local] + offset
+    match_offset = float(match_offsets[best_local])
+    return selected, match_offset, float(scores[best_local]), patch_values[best_local]
 
 
 def _assemble_irregular(
@@ -293,7 +293,7 @@ def _assemble_irregular(
         if not active.any():
             continue
         region = np.s_[row0:row1, col0:col1]
-        selected, offset, selected_score, patch = _select_site_patch(
+        selected, match_offset, selected_score, patch = _select_site_patch(
             site=site,
             values=values,
             source_index=source_index,
@@ -329,7 +329,8 @@ def _assemble_irregular(
                 "source_x": candidates[selected].x,
                 "transform": candidates[selected].transform,
                 "support_fraction": candidates[selected].support_fraction,
-                "offset_m": offset,
+                "match_offset_m": match_offset,
+                "applied_offset_m": 0.0,
                 "overlap_mse_m2": selected_score,
             }
         )
