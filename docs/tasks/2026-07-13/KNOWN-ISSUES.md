@@ -935,20 +935,27 @@ failure preceded artifact, PNG, trace, and receipt publication. K19 remains
 unopened. Guérin/LUKE is parked without changing the metric or rerunning against
 consumed construction data; it establishes no algorithm-capacity result.
 
-The active non-agricultural challenger is now a materially different continuous
-morphodynamics implementation under
-`assetgen.terrain.microtopography.erodible_slope.morphodynamics`. It does not
+The continuous morphodynamics challenger under
+`assetgen.terrain.microtopography.erodible_slope.morphodynamics` is now parked. It does not
 reuse the rejected branch catalogs, trench/fan stamps, or Schott constants. The
-pre-run package binds accepted C0 and protected masks, fixed parent/fine domains,
+package binds accepted C0 and protected masks, fixed parent/fine domains,
 depression-aware organization, extensive solid and ponded inventories,
 dimensionally correct transport, finite residence, analytical maturity, and
-content-addressed float/QA materialization. Tiny synthetic gates pass, including
+content-addressed float/QA materialization. Synthetic and real-data mechanical gates pass, including
 exact protected C0, independent cell-average height volume, solid/water ledgers,
 reservoir mixing, typed hydrologic sources, and the project-specific sample
-phase. This is implementation readiness only: no Development-A terrain has run,
-no visible morphology has passed, and no OOD, cook, preview, or production claim
-exists. The next gate is one hash-frozen Development-A float artifact inspected
-for actual coherent morphology.
+phase. Exact recipe `95b330dc9570...` produced immutable float artifact
+`c7deecd29239...` in one final bound run. It reaches `0.0854582 m` maximum relief
+with effectively exact solid and volume ledgers and no visible water/protected
+leak or shared-window seam. It nevertheless fails the preregistered visible gate:
+C1 is nearly indistinguishable from C0 except sparse hairline incision, while the
+signed-relief and process PNGs show repeated short near-parallel combs on steep
+bank margins. The hydraulic-depth calculation also emitted one invalid-power
+runtime warning. This exact method is parked without OOD, cook, browser, or
+coefficient/operator tuning. Its reusable package, recipe, floats, metrics, and
+three labeled QA PNGs remain negative evidence. The next active specialist must
+be materially different and must produce inspectable morphology within the new
+outcome-first work budget.
 
 The national soil preflight resolved one apparent blocker from retained official
 documentation. Pure raised-bog soils encode the organic profile in their parsed
