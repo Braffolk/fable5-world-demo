@@ -1065,6 +1065,20 @@ boundary uses transient base support rather than evidence of continuation into
 adjacent synthesized parents, so it grants neither multi-parent continuity nor
 national publication authority.
 
+The user completed the visual investigation on 2026-07-15 and found this exact
+full-parent result natural, physically right, and free of visible weirdness. It
+is therefore locked as the current `forest.mesic_mineral` research owner with
+status `research_preview_investigated`. The complete binding is software commit
+`62c2a6e515196685adb49357478006336e39d57e`, recipe
+`6d28b79a393fe377d51629906f7608f6ac66630b34074f07589413fff590af1c`,
+manifest SHA-256
+`48bacfc559d1c5f626168d753d4ef3ec46394847ef2d6ad5f3894936641b540d`,
+and the exact frame-158-booted URL
+`http://localhost:5182/?scene=world&src=estonia&dataurl=http%3A%2F%2Flocalhost%3A8792&alt=12&x=310528&z=185088&yaw=0&pitch=-0.22&shadowclipres=896`.
+This status is deliberately narrow: it does not authorize production, `latest`,
+national coverage, multi-parent continuity, another forest regime, or any
+non-forest regime.
+
 Elongated lines, ridges, or bumps are not defects merely because they occur in a
 field: cultivation, drainage, vehicle, erosion, and substrate processes can
 produce real long forms. Reject them only when evidence identifies ownership or
@@ -1084,6 +1098,23 @@ machine preregistration SHA-256 is `21d972723f7c2641ce6a9fb7c15e171e85f3378dc838
 ### Current conditioning discards real soil structure and ignores mapped cliff/shore constraints
 
 `process/soil.py` keeps only the first soil component, simplified surface texture, stoniness, and fertility. The national source also contains component shares, layered texture, and humus/peat-horizon thickness. At the supplied Taevaskoda point, ETAK maps a natural shoreline escarpment within 5.32 m and the Ahja shoreline within 1.85 m, yet the rejected synthesis did not use those structures to correct the visible 1 m grid boundary. The replacement specification must treat full soil profiles and mapped structural constraints as first-class cook inputs.
+
+For rock and cliff regimes, typed structural reconstruction is a non-negotiable
+part of the specialist rather than a later cosmetic pass. Where the source DTM
+under-resolves an outcrop face, shoulder, edge, ledge, fracture system, scarp,
+bank break, talus transition, or shoreline profile, the cook must use qualified
+structural and material evidence to reconstruct or correct the macro geometry
+before synthesizing finer morphology. A specialist that preserves coarse
+grid-shaped rock geometry or an inherited ramp and only adds bumpiness or noise
+fails the visual objective. Before activation, every materially different region
+or condition that may receive cliff edges or rocky geometry requires an
+inspectable representative preview. Its visual gate must judge macro correction
+and fine detail together, including shoulders, scarps, rock edges, ledges,
+talus/shore transitions, and their transition into adjacent ordinary terrain.
+This requirement is general by physical regime, not a Taevaskoda coordinate
+patch, and remains bounded by what the active heightfield representation can
+express; true overhangs and overlapping surfaces still require the separately
+scoped non-heightfield path recorded below.
 
 ### EGT 1:50,000 geology is not national coverage
 
