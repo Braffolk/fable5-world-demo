@@ -30,6 +30,16 @@ class HeroCoverage:
     authority_lod0: HeightChunkId
 
 
+@dataclass(frozen=True)
+class ParentSetCoverage:
+    """Canonical closure for an arbitrary finite set of LOD -1 parents."""
+
+    parents: tuple[HeightChunkId, ...]
+    published_fine: tuple[HeightChunkId, ...]
+    transient_support: tuple[HeightChunkId, ...]
+    authorities_lod0: tuple[HeightChunkId, ...]
+
+
 def _check_lod(lod: int) -> None:
     if not HEIGHT_LOD_MIN <= lod <= HEIGHT_LOD_MAX:
         raise ValueError(f"height LOD {lod} outside {HEIGHT_LOD_MIN}..{HEIGHT_LOD_MAX}")
@@ -117,3 +127,29 @@ def plan_hero(parent_cx: int, parent_cz: int) -> HeroCoverage:
         + [HeightChunkId(-2, fine_cx0 + 4, fine_cz0 + 4)]
     )
     return HeroCoverage(parent, children, support, parent_of(parent))
+
+
+def plan_parent_set(parents: tuple[HeightChunkId, ...]) -> ParentSetCoverage:
+    """Union and deduplicate the exact closure for finite LOD -1 coverage.
+
+    Published children take precedence when one parent's apron support is another
+    parent's published child.  This works for disjoint, adjacent, and irregular
+    parent sets without changing the one-parent planning contract.
+    """
+    if not parents:
+        raise ValueError("parent set must not be empty")
+    canonical_parents = tuple(sorted(set(parents)))
+    if len(canonical_parents) != len(parents):
+        raise ValueError("parent set contains duplicates")
+    if any(parent.lod != -1 for parent in canonical_parents):
+        raise ValueError("parent set may contain only LOD -1 chunks")
+    heroes = tuple(plan_hero(parent.cx, parent.cz) for parent in canonical_parents)
+    published = set().union(*(set(hero.published_fine) for hero in heroes))
+    support = set().union(*(set(hero.transient_support) for hero in heroes)) - published
+    authorities = {hero.authority_lod0 for hero in heroes}
+    return ParentSetCoverage(
+        canonical_parents,
+        tuple(sorted(published)),
+        tuple(sorted(support)),
+        tuple(sorted(authorities)),
+    )

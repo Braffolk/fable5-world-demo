@@ -318,22 +318,36 @@ def audit_release(
         coverage = manifest.get("coverage", {}).get("height")
         if not isinstance(coverage, dict):
             raise ValueError("format-2 release lacks declared height coverage")
-        parent = HeightChunkId(*coverage["parent"])
-        authority = HeightChunkId(*coverage["authority"])
+        parent_rows = coverage.get("parents")
+        authority_rows = coverage.get("authorities")
+        if parent_rows is None:
+            parent_rows = [coverage["parent"]]
+        if authority_rows is None:
+            authority_rows = [coverage["authority"]]
+        parents = tuple(HeightChunkId(*row) for row in parent_rows)
+        authorities = tuple(HeightChunkId(*row) for row in authority_rows)
         fine = tuple(HeightChunkId(*key) for key in coverage["publishedFine"])
-        if parent.lod != -1 or authority != parent_of(parent):
+        if not parents or len(set(parents)) != len(parents):
+            raise ValueError("format-2 height coverage has an invalid parent set")
+        expected_authorities = {parent_of(parent) for parent in parents}
+        if any(parent.lod != -1 for parent in parents) or set(authorities) != expected_authorities:
             raise ValueError("format-2 height coverage has an invalid parent/authority chain")
-        if set(fine) != set(children_of(parent)):
-            raise ValueError("format-2 fine coverage is not the complete 4x4 parent rectangle")
-        declared_negative = {(chunk.lod, chunk.cx, chunk.cz) for chunk in (*fine, parent)}
+        expected_fine = set().union(*(set(children_of(parent)) for parent in parents))
+        if set(fine) != expected_fine:
+            raise ValueError("format-2 fine coverage is not complete for every parent")
+        declared_negative = {
+            (chunk.lod, chunk.cx, chunk.cz) for chunk in (*fine, *parents)
+        }
         indexed_negative = {key for key in height_keys if key[0] < 0}
-        if declared_negative != indexed_negative or (authority.lod, authority.cx, authority.cz) not in height_keys:
+        authority_keys = {(chunk.lod, chunk.cx, chunk.cz) for chunk in authorities}
+        if declared_negative != indexed_negative or not authority_keys.issubset(height_keys):
             raise ValueError("format-2 indexed height keys do not match declared coverage")
-        ancestor = authority
         required_floor = set()
-        while ancestor.lod < 4:
-            ancestor = parent_of(ancestor)
-            required_floor.add((ancestor.lod, ancestor.cx, ancestor.cz))
+        for authority in authorities:
+            ancestor = authority
+            while ancestor.lod < 4:
+                ancestor = parent_of(ancestor)
+                required_floor.add((ancestor.lod, ancestor.cx, ancestor.cz))
         if not required_floor.issubset(height_keys):
             raise ValueError(
                 f"format-2 release lacks authority ancestors: {sorted(required_floor - height_keys)}"
@@ -703,6 +717,7 @@ def create_build_plan(
     base_out_root: Path = DATA_OUT,
     manifest_format: int = 1,
     micro_parent: tuple[int, int] | None = None,
+    micro_parents: tuple[tuple[int, int], ...] | None = None,
 ) -> Path:
     if manifest_format not in (1, 2):
         raise ValueError("manifest format must be 1 or 2")
@@ -836,12 +851,34 @@ def create_build_plan(
                 entry["containerVersion"],
                 micro_recipe_kind,
             )
-        if micro_parent is not None and expectation["parent"][1:] != list(micro_parent):
-            raise ValueError("requested micro parent differs from the frozen expectation")
-        micro_coverage = {
-            key: expectation[key]
-            for key in ("parent", "publishedFine", "transientSupport", "authority")
-        }
+        if micro_parent is not None and micro_parents is not None:
+            raise ValueError("request either one micro parent or a micro parent set")
+        if "parents" in expectation:
+            expected_parents = tuple(tuple(row[1:]) for row in expectation["parents"])
+            if micro_parent is not None or (
+                micro_parents is not None and expected_parents != micro_parents
+            ):
+                raise ValueError("requested micro parents differ from the frozen expectation")
+            micro_coverage = {
+                key: expectation[key]
+                for key in (
+                    "sites",
+                    "parents",
+                    "publishedFine",
+                    "transientSupport",
+                    "authorities",
+                )
+            }
+        else:
+            if micro_parents is not None or (
+                micro_parent is not None
+                and expectation["parent"][1:] != list(micro_parent)
+            ):
+                raise ValueError("requested micro parent differs from the frozen expectation")
+            micro_coverage = {
+                key: expectation[key]
+                for key in ("parent", "publishedFine", "transientSupport", "authority")
+            }
         if micro_recipe_kind == "measured-synthesis-pilot":
             effective_cook_rev = _measured_synthesis_cook_revision(
                 build_root, build_digest, cook_rev
@@ -865,14 +902,21 @@ def create_build_plan(
         if manifest_format == 2:
             if base_release["codec"] != "deflate":
                 raise ValueError("format-2 base release must use deflate")
-            authority = tuple(micro_coverage["authority"])
+            authority_rows = micro_coverage.get("authorities")
+            if authority_rows is None:
+                authority_rows = [micro_coverage["authority"]]
             base_keys = {
                 (e["lod"], e["cx"], e["cz"])
                 for e in base_release["chunks"]
                 if e["layer"] == "height"
             }
-            if authority not in base_keys:
-                raise ValueError(f"base release lacks required LOD0 authority chunk {authority}")
+            missing_authorities = {
+                tuple(authority) for authority in authority_rows
+            } - base_keys
+            if missing_authorities:
+                raise ValueError(
+                    f"base release lacks required LOD0 authority chunks {sorted(missing_authorities)}"
+                )
     for layer in sorted({entry["layer"] for entry in entries}):
         layer_schemas.setdefault(layer, LAYER_DOC.get(layer, {}))
     plan = {

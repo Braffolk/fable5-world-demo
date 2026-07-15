@@ -1079,6 +1079,26 @@ This status is deliberately narrow: it does not authorize production, `latest`,
 national coverage, multi-parent continuity, another forest regime, or any
 non-forest regime.
 
+The one-parent release limitation is now closed for finite parent sets. Recipe
+`dffa2ca2e3d0602fbb1abe548ede020b2dec8a4e7fe79cfe78f40e7ecec45fba`
+publishes all three frozen disjoint forest sites through one ordinary format-2
+manifest, SHA-256
+`8459fa8f5a7f281923398170daf3719fbed0d17bac2408ebe67af7bbd43a9a87`.
+It contains 48 complete LOD -2 children and three independently derived LOD -1
+parents, with 27 unioned/deduplicated transient supports. One corrected-base
+transaction submitted authorities `(0,150,96)`, `(0,151,90)`, and `(0,154,94)`
+together so shared LOD1-L4 ancestry was mask-spliced once. Independent verification
+reports zero decoded seams, `0.00099945 m` maximum C1 round-trip error,
+`0.00156737 m` maximum masked LOD0 closure error, zero hard-exclusion residual,
+and byte-exact inherited non-height indexes. Seven height payloads actually changed;
+five additional planned transaction artifacts were valid byte-identical quantization
+no-ops, and no change occurred outside the transaction. The southwest, northcentral,
+and east exact Estonia URLs passed fresh real-WebGPU boots at frames `105`, `98`,
+and `90`; captured views retain materials, trees, understory/debris, and grounded
+grass. This proves disjoint multi-parent delivery and three-site persistence, not
+continuity between adjacent synthesized parents, national coverage, production
+transfer, or `latest` authority.
+
 Elongated lines, ridges, or bumps are not defects merely because they occur in a
 field: cultivation, drainage, vehicle, erosion, and substrate processes can
 produce real long forms. Reject them only when evidence identifies ownership or

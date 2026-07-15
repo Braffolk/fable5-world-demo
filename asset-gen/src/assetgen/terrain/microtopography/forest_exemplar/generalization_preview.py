@@ -1,9 +1,10 @@
-"""Pack one accepted multi-site forest master as an immutable format-2 preview."""
+"""Pack the accepted disjoint forest masters as one immutable format-2 preview."""
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -12,7 +13,12 @@ from scipy.interpolate import RectBivariateSpline
 from ....config import DATA_OUT, DATA_WORK, BaseConfig, load_base
 from ....cook.micro_hierarchy import assemble_parent_source_memmap, box_mean4_striped
 from ....cook.pinned_height import PinnedBaseHeight
-from ....height_geom import HeightChunkId, chunk_origin_en_units, plan_hero
+from ....height_geom import (
+    HeightChunkId,
+    chunk_origin_en_units,
+    plan_hero,
+    plan_parent_set,
+)
 from ....release import create_build_plan, materialize_corrected_format1_base, materialize_preview
 from ....process.micro_fixture import conservative_cell_correct
 from ...repair.base_transaction import (
@@ -25,16 +31,50 @@ from .preview import _decoded, _immutable, _json_bytes, _sha256, _write_height
 
 
 RECIPE_KIND = "research-microtopography-generalization-preview-v1"
-COOK_REVISION = 1
+COOK_REVISION = 2
 ARTIFACT_SCHEMA = "forest-mesic-mineral-multi-site-float-artifact/1"
-SITE_ID = "southeast-northcentral-retained"
-PARENT = HeightChunkId(-1, 606, 361)
-AUTHORITY = HeightChunkId(0, 151, 90)
-REVIEW_BBOX = (678912, 6450176, 679424, 6450688)
 FINE_QSCALE = 0.002
 PARENT_QSCALE = 0.005
 FINE_CORE = 2048
 FACTOR = 16
+
+
+@dataclass(frozen=True)
+class SiteSpec:
+    site_id: str
+    parent: HeightChunkId
+    authority: HeightChunkId
+    bbox_en: tuple[int, int, int, int]
+
+    def json(self) -> dict[str, object]:
+        return {
+            "siteId": self.site_id,
+            "reviewBboxEn": list(self.bbox_en),
+            "parent": [self.parent.lod, self.parent.cx, self.parent.cz],
+            "authority": [self.authority.lod, self.authority.cx, self.authority.cz],
+        }
+
+
+SITES = (
+    SiteSpec(
+        "southeast-southwest-retained",
+        HeightChunkId(-1, 601, 384),
+        HeightChunkId(0, 150, 96),
+        (676352, 6438400, 676864, 6438912),
+    ),
+    SiteSpec(
+        "southeast-northcentral-retained",
+        HeightChunkId(-1, 606, 361),
+        HeightChunkId(0, 151, 90),
+        (678912, 6450176, 679424, 6450688),
+    ),
+    SiteSpec(
+        "southeast-east-retained",
+        HeightChunkId(-1, 617, 378),
+        HeightChunkId(0, 154, 94),
+        (684544, 6441472, 685056, 6441984),
+    ),
+)
 
 
 def _artifact_files(artifact_root: Path) -> dict[str, str]:
@@ -45,9 +85,11 @@ def _artifact_files(artifact_root: Path) -> dict[str, str]:
         or manifest.get("status") != "research_candidate_pass"
     ):
         raise ValueError("forest generalization artifact is not the frozen passing candidate")
-    metrics = manifest.get("site_metrics", {}).get(SITE_ID)
-    if metrics is None or tuple(metrics["site"]["bbox_en"]) != REVIEW_BBOX:
-        raise ValueError("forest generalization artifact lacks the selected site")
+    metrics_by_site = manifest.get("site_metrics", {})
+    for site in SITES:
+        metrics = metrics_by_site.get(site.site_id)
+        if metrics is None or tuple(metrics["site"]["bbox_en"]) != site.bbox_en:
+            raise ValueError(f"forest generalization artifact lacks {site.site_id}")
     for relative, identity in manifest["files"].items():
         path = artifact_root / relative
         if path.stat().st_size != identity["bytes"] or _sha256(path) != identity["sha256"]:
@@ -63,6 +105,7 @@ def _recipe_identity(
         Path(__file__),
         Path(__file__).with_name("generalization_preview_verify.py"),
         Path(__file__).with_name("preview.py"),
+        Path(__file__).parents[3] / "height_geom.py",
         Path(__file__).parents[3] / "cook/chunkio.py",
         Path(__file__).parents[3] / "cook/encode.py",
         Path(__file__).parents[3] / "cook/micro_hierarchy.py",
@@ -71,23 +114,19 @@ def _recipe_identity(
         Path(__file__).parents[3] / "release.py",
     )
     inputs: dict[str, object] = {
-        "id": "laas.micro.forest-generalization-preview.recipe.v1",
+        "id": "laas.micro.forest-generalization-multi-parent-preview.recipe.v2",
         "artifact": {
             "root": artifact_root.as_posix(),
             "manifestSha256": _sha256(artifact_root / "manifest.json"),
             "recipeSha256": _sha256(artifact_root / "recipe.json"),
             "files": _artifact_files(artifact_root),
-            "siteId": SITE_ID,
+            "siteIds": [site.site_id for site in SITES],
         },
         "sourceBase": {
             "manifest": source_base_manifest.as_posix(),
             "manifestSha256": _sha256(source_base_manifest),
         },
-        "coverage": {
-            "reviewBboxEn": list(REVIEW_BBOX),
-            "parent": [PARENT.lod, PARENT.cx, PARENT.cz],
-            "authority": [AUTHORITY.lod, AUTHORITY.cx, AUTHORITY.cz],
-        },
+        "coverage": {"sites": [site.json() for site in SITES]},
         "sourceSha256": {
             path.relative_to(Path(__file__).parents[4]).as_posix(): _sha256(path)
             for path in source_paths
@@ -95,7 +134,7 @@ def _recipe_identity(
     }
     blob = _json_bytes(inputs)
     return hashlib.sha256(
-        b"laas.micro.forest-generalization-preview.recipe.v1\0" + blob
+        b"laas.micro.forest-generalization-multi-parent-preview.recipe.v2\0" + blob
     ).hexdigest(), inputs
 
 
@@ -122,28 +161,32 @@ def _stage_fine(
     artifact_root: Path,
     source_base_manifest: Path,
 ) -> tuple[dict[HeightChunkId, Path], list[dict[str, object]]]:
-    coverage = plan_hero(PARENT.cx, PARENT.cz)
-    c1 = np.load(
-        artifact_root / f"sites/{SITE_ID}/surface/c1_height_f32.npy", mmap_mode="r"
-    )
-    if c1.shape != (8192, 8192) or c1.dtype != np.float32:
-        raise ValueError("selected forest master must be float32 8192 square")
+    coverage = plan_parent_set(tuple(site.parent for site in SITES))
+    masters: dict[HeightChunkId, np.ndarray] = {}
+    for site in SITES:
+        c1 = np.load(
+            artifact_root / f"sites/{site.site_id}/surface/c1_height_f32.npy",
+            mmap_mode="r",
+        )
+        if c1.shape != (8192, 8192) or c1.dtype != np.float32:
+            raise ValueError(f"{site.site_id} master must be float32 8192 square")
+        masters[site.parent] = c1
     source_sha = _sha256(source_base_manifest)
     pinned = PinnedBaseHeight(source_base_manifest, source_sha, DATA_OUT, base.encode)
     scratch = build_root / "scratch/fine-cores"
     scratch.mkdir(parents=True, exist_ok=True)
-    fine_cx0, fine_cz0 = PARENT.cx * 4, PARENT.cz * 4
 
     def core_path(chunk: HeightChunkId) -> Path:
         return scratch / f"{chunk.cx}_{chunk.cz}.npy"
 
     def core(chunk: HeightChunkId) -> np.ndarray:
-        dx, dz = chunk.cx - fine_cx0, chunk.cz - fine_cz0
-        if 0 <= dx < 4 and 0 <= dz < 4:
-            return c1[
-                dz * FINE_CORE : (dz + 1) * FINE_CORE,
-                dx * FINE_CORE : (dx + 1) * FINE_CORE,
-            ]
+        for parent, master in masters.items():
+            dx, dz = chunk.cx - parent.cx * 4, chunk.cz - parent.cz * 4
+            if 0 <= dx < 4 and 0 <= dz < 4:
+                return master[
+                    dz * FINE_CORE : (dz + 1) * FINE_CORE,
+                    dx * FINE_CORE : (dx + 1) * FINE_CORE,
+                ]
         path = core_path(chunk)
         if not path.exists():
             values = _baseline_core(pinned, chunk)
@@ -152,6 +195,7 @@ def _stage_fine(
             temporary.replace(path)
         return np.load(path, mmap_mode="r")
 
+    published = set(coverage.published_fine)
     paths: dict[HeightChunkId, Path] = {}
     identities: list[dict[str, object]] = []
     for chunk in (*coverage.published_fine, *coverage.transient_support):
@@ -160,42 +204,47 @@ def _stage_fine(
         values[:-1, -1] = core(HeightChunkId(-2, chunk.cx + 1, chunk.cz))[:, 0]
         values[-1, :-1] = core(HeightChunkId(-2, chunk.cx, chunk.cz + 1))[0, :]
         values[-1, -1] = core(HeightChunkId(-2, chunk.cx + 1, chunk.cz + 1))[0, 0]
-        root = build_root / ("chunks" if chunk in coverage.published_fine else "transient")
+        root = build_root / ("chunks" if chunk in published else "transient")
         destination = root / "height/-2" / f"{chunk.cx}_{chunk.cz}.lac"
         destination.parent.mkdir(parents=True, exist_ok=True)
-        # One shared quantization lattice makes equal apron samples decode bit-exactly.
         identity = _write_height(
             destination, base, chunk, values, FINE_QSCALE, qoffset=30.0
         )
-        identity["role"] = "accepted-master" if chunk in coverage.published_fine else "base-apron-support"
+        identity["role"] = "accepted-master" if chunk in published else "base-apron-support"
         paths[chunk] = destination
         identities.append(identity)
     return paths, identities
 
 
-def _stage_parent(
+def _stage_parents(
     base: BaseConfig,
     build_root: Path,
     paths: dict[HeightChunkId, Path],
-) -> tuple[dict[str, object], np.ndarray]:
-    coverage = plan_hero(PARENT.cx, PARENT.cz)
-    mosaic = assemble_parent_source_memmap(
-        build_root / "scratch/forest-generalization-parent-source.f32",
-        coverage,
-        lambda chunk: _decoded(paths[chunk], base),
-    )
-    parent_values = box_mean4_striped(mosaic)
-    destination = build_root / "chunks/height/-1" / f"{PARENT.cx}_{PARENT.cz}.lac"
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    identity = _write_height(destination, base, PARENT, parent_values, PARENT_QSCALE)
-    return identity, _decoded(destination, base)
+) -> tuple[list[dict[str, object]], dict[HeightChunkId, np.ndarray]]:
+    identities: list[dict[str, object]] = []
+    decoded: dict[HeightChunkId, np.ndarray] = {}
+    for site in SITES:
+        coverage = plan_hero(site.parent.cx, site.parent.cz)
+        mosaic = assemble_parent_source_memmap(
+            build_root / f"scratch/forest-generalization-parent-{site.parent.cx}-{site.parent.cz}.f32",
+            coverage,
+            lambda chunk: _decoded(paths[chunk], base),
+        )
+        values = box_mean4_striped(mosaic)
+        destination = build_root / "chunks/height/-1" / f"{site.parent.cx}_{site.parent.cz}.lac"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        identity = _write_height(destination, base, site.parent, values, PARENT_QSCALE)
+        identity["siteId"] = site.site_id
+        identities.append(identity)
+        decoded[site.parent] = _decoded(destination, base)
+    return identities, decoded
 
 
 def _corrected_base(
     base: BaseConfig,
     build_root: Path,
     source_manifest: Path,
-    parent_decoded: np.ndarray,
+    parent_decoded: dict[HeightChunkId, np.ndarray],
     artifact_root: Path,
     content_root: Path,
 ):
@@ -207,26 +256,38 @@ def _corrected_base(
         encode=base.encode,
         cache_chunks=4,
     )
-    inherited = source.load(AUTHORITY).decoded[:-1, :-1]
-    target = np.array(inherited, dtype=np.float64, copy=True)
-    parent_lod0 = box_mean4_striped(parent_decoded[:2048, :2048])
-    packed = np.load(
-        artifact_root / f"sites/{SITE_ID}/surface/allowed_packbits_u8.npy", mmap_mode="r"
-    )
-    allowed = np.unpackbits(packed, axis=1, bitorder="little")[:, :8192].astype(bool)
-    coarse_mask = allowed.reshape(512, 16, 512, 16).any(axis=(1, 3))
-    origin_e = base.grid.anchor_e + AUTHORITY.cx * base.grid.chunk_m
-    origin_n = base.grid.anchor_n - AUTHORITY.cz * base.grid.chunk_m
-    x0 = REVIEW_BBOX[0] - origin_e
-    y0 = origin_n - REVIEW_BBOX[3]
-    window = np.s_[y0 : y0 + 512, x0 : x0 + 512]
-    target[window] = parent_lod0
-    affected = np.zeros((2048, 2048), dtype=bool)
-    affected[window] = coarse_mask
+    targets: dict[HeightChunkId, np.ndarray] = {}
+    masks: dict[HeightChunkId, np.ndarray] = {}
+    for site in SITES:
+        target = targets.setdefault(
+            site.authority,
+            np.array(source.load(site.authority).decoded[:-1, :-1], dtype=np.float64, copy=True),
+        )
+        affected = masks.setdefault(site.authority, np.zeros((2048, 2048), dtype=bool))
+        parent_lod0 = box_mean4_striped(parent_decoded[site.parent][:2048, :2048])
+        packed = np.load(
+            artifact_root / f"sites/{site.site_id}/surface/allowed_packbits_u8.npy",
+            mmap_mode="r",
+        )
+        allowed = np.unpackbits(packed, axis=1, bitorder="little")[:, :8192].astype(bool)
+        coarse_mask = allowed.reshape(512, 16, 512, 16).any(axis=(1, 3))
+        origin_e = base.grid.anchor_e + site.authority.cx * base.grid.chunk_m
+        origin_n = base.grid.anchor_n - site.authority.cz * base.grid.chunk_m
+        x0 = site.bbox_en[0] - origin_e
+        y0 = origin_n - site.bbox_en[3]
+        window = np.s_[y0 : y0 + 512, x0 : x0 + 512]
+        if affected[window].any():
+            raise ValueError(f"corrected LOD0 ownership overlaps at {site.site_id}")
+        target[window] = parent_lod0
+        affected[window] = coarse_mask
+    corrected = {
+        authority: CorrectedLod0Core(targets[authority], masks[authority])
+        for authority in sorted(targets)
+    }
     transaction = build_corrected_base_transaction(
         source=source,
         staging_root=build_root / "corrected-base",
-        corrected_lod0={AUTHORITY: CorrectedLod0Core(target, affected)},
+        corrected_lod0=corrected,
         grid=base.grid,
         encode=base.encode,
     )
@@ -261,11 +322,11 @@ def materialize_generalization_preview(
     build_root = work_root / "builds" / build_digest
     build_root.mkdir(parents=True, exist_ok=True)
     paths, fine_identities = _stage_fine(base, build_root, artifact_root, source_base_manifest)
-    parent_identity, parent_decoded = _stage_parent(base, build_root, paths)
+    parent_identities, parent_decoded = _stage_parents(base, build_root, paths)
     corrected_transaction, corrected_release = _corrected_base(
         base, build_root, source_base_manifest, parent_decoded, artifact_root, content_root
     )
-    coverage = plan_hero(PARENT.cx, PARENT.cz)
+    coverage = plan_parent_set(tuple(site.parent for site in SITES))
     inputs["correctedBase"] = {
         "manifest": corrected_release.manifest_path.as_posix(),
         "manifestSha256": corrected_release.manifest_sha256,
@@ -285,13 +346,14 @@ def materialize_generalization_preview(
             "chunkRes": base.grid.chunk_res,
             "lodStep": base.grid.lod_step,
         },
-        "parent": [PARENT.lod, PARENT.cx, PARENT.cz],
+        "sites": [site.json() for site in SITES],
+        "parents": [[c.lod, c.cx, c.cz] for c in coverage.parents],
         "publishedFine": [[c.lod, c.cx, c.cz] for c in coverage.published_fine],
         "transientSupport": [[c.lod, c.cx, c.cz] for c in coverage.transient_support],
-        "authority": [AUTHORITY.lod, AUTHORITY.cx, AUTHORITY.cz],
+        "authorities": [[c.lod, c.cx, c.cz] for c in coverage.authorities_lod0],
         "expectedPublished": [
             ["height", c.lod, c.cx, c.cz]
-            for c in (*coverage.published_fine, coverage.parent)
+            for c in (*coverage.published_fine, *coverage.parents)
         ],
         "verifier": {"id": VERIFIER_ID, "sourceSha256": verifier_source_sha256()},
     }
@@ -303,13 +365,13 @@ def materialize_generalization_preview(
     )
     evidence = {
         "format": 1,
-        "cook": "accepted-forest-generalization-absolute-master-v1",
+        "cook": "accepted-forest-generalization-multi-parent-absolute-master-v2",
         "cookRevision": COOK_REVISION,
         "recipeSha256": build_digest,
         "artifactManifestSha256": _sha256(artifact_root / "manifest.json"),
-        "siteId": SITE_ID,
+        "sites": [site.json() for site in SITES],
         "children": fine_identities,
-        "parent": parent_identity,
+        "parents": parent_identities,
         "changedFine": [[c.lod, c.cx, c.cz] for c in coverage.published_fine],
         "correctedBase": inputs["correctedBase"],
     }
@@ -325,7 +387,7 @@ def materialize_generalization_preview(
         base_manifest_sha256=corrected_release.manifest_sha256,
         base_out_root=content_root,
         manifest_format=2,
-        micro_parent=(PARENT.cx, PARENT.cz),
+        micro_parents=tuple((parent.cx, parent.cz) for parent in coverage.parents),
     )
     return materialize_preview(build_digest, work_root=work_root, out_root=content_root)
 
