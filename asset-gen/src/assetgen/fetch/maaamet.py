@@ -9,12 +9,14 @@ Sheet grids: 1:10k (5-digit) for dem_1m, 1:2000 (6-digit) for ndsm_*_1m,
 from __future__ import annotations
 
 import html
+import hashlib
+import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import quote
 
-from ..config import DATA_IN
+from ..config import ASSET_GEN_ROOT, DATA_IN, BaseConfig
 from ..sheets import GRIDS, Sheet, load_sheet_grid, sheets_for_bbox
 from .http import PoliteSession
 
@@ -25,6 +27,11 @@ COUNTRY_FILES = {
     # dest subdir -> (andmetyyp, filename)
     "country": ("mp_korgusmudelid", "DTM_10m_eesti.tif"),
 }
+
+_DEVELOPMENT_SELECTION = (
+    ASSET_GEN_ROOT / "config/evidence/orthophoto-development-sheets-v1.json"
+)
+_OFFICIAL_HOSTS = ("geoportaal.maaamet.ee", "geoportaal.maaruum.ee")
 
 
 @dataclass(frozen=True)
@@ -123,3 +130,127 @@ def run_fetch(session: PoliteSession, items: list[FetchItem], log=print) -> tupl
     if skipped:
         log(f"skipped {skipped} already-present files")
     return got, skipped
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _identity(path: Path) -> dict[str, object]:
+    return {
+        "path": path.resolve().relative_to(ASSET_GEN_ROOT.parent.resolve()).as_posix(),
+        "bytes": path.stat().st_size,
+        "sha256": _sha256_file(path),
+    }
+
+
+def _write_immutable(path: Path, payload: bytes) -> None:
+    if path.exists():
+        if path.read_bytes() != payload:
+            raise ValueError(f"immutable DTM retention changed: {path}")
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".part")
+    temporary.write_bytes(payload)
+    temporary.replace(path)
+
+
+def fetch_recorded_development_dtm1m(
+    base: BaseConfig,
+    *,
+    log=print,
+) -> Path:
+    """Retain the two frozen Development DTM sheets with HTTP provenance."""
+    selection = json.loads(_DEVELOPMENT_SELECTION.read_text(encoding="utf-8"))
+    if (
+        selection.get("schemaVersion")
+        != "orthophoto-frozen-sheet-selection-set/1"
+        or 9688702 not in {int(value) for value in selection.get("excludedEtakIds", [])}
+    ):
+        raise ValueError("Development public-input selection is invalid or exposes OOD2")
+    maximum_attempts = int(selection.get("maximumAttemptsPerProduct", 0))
+    if maximum_attempts not in (1, 2):
+        raise ValueError("Development DTM attempts must be capped at one or two")
+    requested = {
+        str(row["sheet"]): int(row["expectedBytes"])
+        for row in selection.get("dtm1m", {}).get("sheets", [])
+    }
+    if set(requested) != {"63944", "65901"}:
+        raise ValueError("Development DTM selection must contain exactly 63944 and 65901")
+
+    grids_dir = DATA_IN / "grids"
+    grid_rows = {row.nr: row for row in load_sheet_grid(grids_dir, "10k")}
+    session = PoliteSession(replace(base.fetch, max_retries=maximum_attempts))
+    products: list[dict[str, object]] = []
+    failures: list[dict[str, str]] = []
+    for sheet in sorted(requested):
+        try:
+            grid_row = grid_rows.get(sheet)
+            if grid_row is None:
+                raise ValueError(f"official 1:10k grid omits sheet {sheet}")
+            items = plan_elevation(
+                session,
+                grid_row.bbox,
+                grids_dir,
+                want_dem1m=True,
+                want_ndsm=False,
+                want_chm=False,
+            )
+            matches = [item for item in items if item.dest.name == f"{sheet}_dtm_1m.tif"]
+            if len(matches) != 1:
+                raise ValueError(f"generic DTM plan did not resolve exactly one sheet {sheet}")
+            item = matches[0]
+            provenance = DATA_IN / "dem_1m" / "provenance" / "http" / f"{sheet}.json"
+            path, _downloaded = session.download_recorded(
+                item.url,
+                item.dest,
+                provenance,
+                min_bytes=1 << 20,
+                expected_bytes=requested[sheet],
+                allowed_final_hosts=_OFFICIAL_HOSTS,
+            )
+            products.append(
+                {
+                    "sheet": sheet,
+                    "boundsEn": list(grid_row.bbox),
+                    "sourceUrl": item.url,
+                    "raster": _identity(path),
+                    "httpProvenance": _identity(provenance),
+                }
+            )
+            log(f"verified DTM 1m sheet {sheet} ({path.stat().st_size / 1e6:.1f} MB)")
+        except Exception as error:
+            failures.append(
+                {"sheet": sheet, "errorType": type(error).__name__, "error": str(error)}
+            )
+            log(f"DTM sheet {sheet} failed; continuing other sheet: {error}")
+
+    document = {
+        "schemaVersion": "development-dtm1m-retention/1",
+        "complete": not failures and len(products) == len(requested),
+        "selection": _identity(_DEVELOPMENT_SELECTION),
+        "sheetGrid": _identity(grids_dir / GRIDS["10k"][0]),
+        "products": products,
+        "failures": failures,
+        "attribution": {
+            "provider": "Maa- ja Ruumiamet",
+            "terms": selection["dtm1m"]["license"],
+            "includeSourceAndAcquisitionDate": True,
+        },
+    }
+    payload = (json.dumps(document, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    digest = hashlib.sha256(payload).hexdigest()
+    root = DATA_IN / "dem_1m" / "retention"
+    content = root / "sha256" / digest / "inventory.json"
+    _write_immutable(content, payload)
+    if failures:
+        raise RuntimeError(
+            f"Development DTM acquisition incomplete; inventory retained at {content}"
+        )
+    pointer = root / "development-sheets-v1.json"
+    _write_immutable(pointer, payload)
+    return pointer

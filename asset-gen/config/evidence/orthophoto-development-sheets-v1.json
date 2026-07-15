@@ -1,0 +1,78 @@
+{
+  "schemaVersion": "orthophoto-frozen-sheet-selection-set/1",
+  "workbook": {
+    "path": "docs/deep-research/microtopography-generation/library/data/maaamet/tomba_etak_avaandmed.xlsx",
+    "sha256": "fbef1433eff6116174cd1bbeca6e6550e093eeed794c14d583af77e03970b4b5"
+  },
+  "excludedEtakIds": [9688702],
+  "maximumAttemptsPerProduct": 2,
+  "dtm1m": {
+    "sheets": [
+      {"sheet": "63944", "expectedBytes": 76325854},
+      {"sheet": "65901", "expectedBytes": 64823889}
+    ],
+    "license": "Maa- ja Ruumiamet open data; attribution and acquisition date required"
+  },
+  "sheets": [
+    {
+      "selectionId": "national-development-orthophoto-63944-v1",
+      "sheet": "63944",
+      "sheetBoundsEn": [545000, 6595000, 550000, 6600000],
+      "retentionDirectory": "development-63944",
+      "candidateEtakIds": [1812320, 1812321],
+      "temporalPolicy": "Retain the latest workbook-listed RGB and CIR independently; dates remain separate observations and are never treated as a co-temporal composite.",
+      "artifacts": [
+        {
+          "product": "rgb",
+          "workbookSheet": "Ortofotod 2016-2025",
+          "sourceType": "ortofoto_eesti_rgb",
+          "captureDate": "2025-05-10",
+          "expectedBytes": 208852782,
+          "expectedSha256": null,
+          "pixelSizeM": 0.2,
+          "rasterSize": 25000
+        },
+        {
+          "product": "cir",
+          "workbookSheet": "Ortofoto_CIR",
+          "sourceType": "ortofoto_eesti_cir",
+          "captureDate": "2024-04-30",
+          "expectedBytes": 190872479,
+          "expectedSha256": null,
+          "pixelSizeM": 0.2,
+          "rasterSize": 25000
+        }
+      ]
+    },
+    {
+      "selectionId": "national-development-orthophoto-65901-v1",
+      "sheet": "65901",
+      "sheetBoundsEn": [700000, 6590000, 705000, 6595000],
+      "retentionDirectory": "development-65901",
+      "candidateEtakIds": [1812065],
+      "temporalPolicy": "Retain the latest workbook-listed RGB and CIR independently; same filename date does not create a stronger co-temporality claim than the official metadata supports.",
+      "artifacts": [
+        {
+          "product": "rgb",
+          "workbookSheet": "Ortofotod 2016-2025",
+          "sourceType": "ortofoto_eesti_rgb",
+          "captureDate": "2022-05-25",
+          "expectedBytes": 118558922,
+          "expectedSha256": null,
+          "pixelSizeM": 0.2,
+          "rasterSize": 25000
+        },
+        {
+          "product": "cir",
+          "workbookSheet": "Ortofoto_CIR",
+          "sourceType": "ortofoto_eesti_cir",
+          "captureDate": "2022-05-25",
+          "expectedBytes": 112415227,
+          "expectedSha256": null,
+          "pixelSizeM": 0.2,
+          "rasterSize": 25000
+        }
+      ]
+    }
+  ]
+}

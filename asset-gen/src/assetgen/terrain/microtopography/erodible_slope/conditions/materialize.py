@@ -14,6 +14,7 @@ from typing import Any, Iterable
 import numpy as np
 import pyogrio
 import pyogrio.raw
+import rasterio
 import rasterio.features
 import rasterio.transform
 import shapely
@@ -606,6 +607,53 @@ def _corrected_lod0_window(
     return height, identities
 
 
+def _official_dtm_window(
+    path: Path,
+    bbox_en: tuple[int, int, int, int],
+) -> tuple[np.ndarray, list[dict[str, Any]]]:
+    """Read an exact aligned 1 m window from one retained official DTM sheet."""
+    min_e, min_n, max_e, max_n = bbox_en
+    with rasterio.open(path) as source:
+        if (
+            str(source.crs) != "EPSG:3301"
+            or source.count != 1
+            or source.transform.a != 1.0
+            or source.transform.e != -1.0
+            or source.transform.b != 0.0
+            or source.transform.d != 0.0
+            or not (
+                source.bounds.left <= min_e < max_e <= source.bounds.right
+                and source.bounds.bottom <= min_n < max_n <= source.bounds.top
+            )
+        ):
+            raise ValueError(f"retained official DTM cannot supply exact window: {path}")
+        window = rasterio.windows.Window(
+            col_off=min_e - source.bounds.left,
+            row_off=source.bounds.top - max_n,
+            width=max_e - min_e,
+            height=max_n - min_n,
+        )
+        height = source.read(1, window=window, out_dtype="float32")
+        if height.shape != (max_n - min_n, max_e - min_e):
+            raise ValueError("retained official DTM window shape differs")
+        invalid = ~np.isfinite(height)
+        if source.nodata is not None:
+            invalid |= height == np.float32(source.nodata)
+        if np.any(invalid):
+            raise ValueError("retained official DTM window contains invalid cells")
+    identity = _file_identity(path)
+    identity.update(
+        {
+            "role": "retained_official_maaamet_dtm_1m",
+            "source_window_bbox_en": list(bbox_en),
+            "decoded_values_sha256": hashlib.sha256(
+                np.ascontiguousarray(height, dtype="<f4").tobytes()
+            ).hexdigest(),
+        }
+    )
+    return height, [identity]
+
+
 def _transform(bbox_en: tuple[int, int, int, int]) -> rasterio.Affine:
     return rasterio.transform.from_origin(
         bbox_en[0], bbox_en[3], _GRID_METERS, _GRID_METERS
@@ -1138,6 +1186,7 @@ def _site_artifacts(
     accepted_materialization_path: Path,
     domain_snapshot_path: Path,
     forbidden_etak_ids: frozenset[int],
+    official_dtm_path: Path | None = None,
 ) -> dict[str, Any]:
     target = _read_target_geometry(spec)
     bbox_en = _site_bbox(target)
@@ -1146,16 +1195,39 @@ def _site_artifacts(
         target,
         forbidden_etak_ids,
     )
-    authority, authority_tiles, missing_authority_tiles = _authority_tiles(
-        authority_root, authority_manifest, bbox_en
-    )
-    corrected_height, corrected_lod0 = _corrected_lod0_window(
-        accepted_materialization_path,
-        authority_manifest,
-        bbox_en,
-    )
+    if official_dtm_path is None:
+        authority, authority_tiles, missing_authority_tiles = _authority_tiles(
+            authority_root, authority_manifest, bbox_en
+        )
+        corrected_height, corrected_lod0 = _corrected_lod0_window(
+            accepted_materialization_path,
+            authority_manifest,
+            bbox_en,
+        )
+    else:
+        corrected_height, corrected_lod0 = _official_dtm_window(
+            official_dtm_path, bbox_en
+        )
+        authority = {
+            "height": corrected_height,
+            "valid": np.ones(corrected_height.shape, dtype=bool),
+            "unknown_bathymetry": np.zeros(corrected_height.shape, dtype=bool),
+            "forbidden_morphology": np.zeros(corrected_height.shape, dtype=bool),
+        }
+        authority_tiles = []
+        missing_authority_tiles = [
+            [-2, chunk.cx, chunk.cz]
+            for chunk in sorted(
+                chunks_covering_bbox_en(load_base().grid, bbox_en, -2),
+                key=lambda chunk: (chunk.cz, chunk.cx),
+            )
+        ]
     authority["height"] = corrected_height
-    authority["fine_mask_coverage"] = authority["valid"].copy()
+    authority["fine_mask_coverage"] = (
+        authority["valid"].copy()
+        if official_dtm_path is None
+        else np.zeros(corrected_height.shape, dtype=bool)
+    )
     authority["valid"] = np.isfinite(corrected_height)
     transform = _transform(bbox_en)
     shape = authority["height"].shape
@@ -1178,11 +1250,16 @@ def _site_artifacts(
         target,
         forbidden_etak_ids,
     )
-    enlarged_height, enlarged_corrected_lod0 = _corrected_lod0_window(
-        accepted_materialization_path,
-        authority_manifest,
-        enlarged_bbox_en,
-    )
+    if official_dtm_path is None:
+        enlarged_height, enlarged_corrected_lod0 = _corrected_lod0_window(
+            accepted_materialization_path,
+            authority_manifest,
+            enlarged_bbox_en,
+        )
+    else:
+        enlarged_height, enlarged_corrected_lod0 = _official_dtm_window(
+            official_dtm_path, enlarged_bbox_en
+        )
     enlarged_authority = {
         "height": enlarged_height,
         "valid": np.ones(enlarged_height.shape, dtype=bool),

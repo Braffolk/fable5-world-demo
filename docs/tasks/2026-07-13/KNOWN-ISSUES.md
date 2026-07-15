@@ -600,6 +600,74 @@ recipe freeze and frozen run before sealed OOD2 may be opened; it is no longer a
 replacement-selection blocker. Twelve labeled QA PNGs and their content identities are
 indexed under the artifact's `qa/` directory.
 
+### The second erodible-slope Development role is vacant after input-only opportunity qualification
+
+The preceding A/C runnable inventory is preserved as historical condition-bundle
+state, but it is superseded for current execution. Candidate
+`90df9d5cbb36cf21d6871d346d448716489d1f1c3dc5d8a1a7ce55a0d69c5d2c`
+is rejected: Development C's mapped line is intentionally protected, all `122/122`
+target cells are protected and `0/122` are form-active, and the correct solver leaves
+only sparse neighboring forms. This is a site-qualification failure, not evidence
+that the solver should modify the line or relax hard masks.
+
+Corrected input-only opportunity proposal
+`07d0e5d40ee4ff9813c4a63c54ded5021ce42dad656ebb41c0bf37580d2eb084`
+(proposal file SHA-256
+`29d902e5ac2ab766d2bad8f0e2dcb50cd183c42307a7ee805508fd9df387e1d8`)
+requires actual form-active/hard/collar semantics and treats runoff and seep as
+separate typed opportunities. Runoff uses the bound event, accumulated upstream
+flux, DTM slope, material critical shear, `36 m2` rill-area threshold, and `0.012`
+slope floor; either type must provide the same sufficiently extensive, connected,
+target-adjacent component in normal and enlarged evidence windows. Development A
+passes as the positive control. Current C chunk `(2438,1518)` has only `38` runoff-
+opportunity cells in a best `37`-cell, `9.43 m` component with zero target-contact
+cells and no seep opportunity; old C chunk `(2438,1519)` has neither type. The sole
+remaining local metadata candidate, ETAK `9688758`, also has neither type. It is not
+a replacement, so Development A is currently the only runnable morphology-
+development site.
+
+The bounded national acquisition is complete as exactly six retained Maa-amet
+products. Sheet `63944` binds the 1 m DTM (`76,325,854` bytes, SHA-256
+`0a38695b75af...`, HTTP provenance `4d764b660d77...`), RGB captured 2025-05-10
+(`208,852,782`-byte archive `db494371d8f8...`, retained identity
+`00d4b3b49ad3...`, extraction inventory `2b9af317ad5d...`), and CIR captured
+2024-04-30 (`190,872,479`-byte archive `845f78026b88...`, retained identity
+`ee5502e53f5e...`, extraction inventory `ad02a3116167...`). Sheet `65901` binds
+the 1 m DTM (`64,823,889` bytes, SHA-256 `5b675e00e25b...`, HTTP provenance
+`3fe62a5df7d3...`), RGB captured 2022-05-25 (`118,558,922`-byte archive
+`51d592eba3e0...`, retained identity `3974b6a179fb...`, extraction inventory
+`958e667b9762...`), and CIR captured 2022-05-25 (`112,415,227`-byte archive
+`72a10cdb0ed4...`, retained identity `34d60d0e262f...`, extraction inventory
+`8209957cb27f...`). RGB/CIR manifests and file identities were bound, but image
+pixels were never opened or used to rank candidates.
+
+The deterministic frozen order is exhausted in no-pass report
+`66d3457fbf03d500788e6e863a9b76ae5c671acae39233c9ddb9ec3302179d06`
+(report file SHA-256
+`fbe4bf61f5fc4df1caa0e3c31afba4c27d359b3c934ba6e1afa41de21778d690`).
+ETAK `1812065` fails the contact gate: its closest qualifying-sized seep component
+in LOD -2 chunk `(cz,cx)=(342,2619)` has `1,069` cells, `105.11898020814318 m`
+span, and only `7` cells within 4 m of the target against the frozen minimum `16`;
+another `1,322`-cell component has zero contact. ETAK `1812320` reaches only `123`
+cells, `18.439088914585774 m` span, and zero contact. ETAK `1812321` reaches only
+`307` cells, `28.600699292150182 m` span, and zero contact. The latter two fail
+area, span, and contact together. Every evaluated opportunity mask is identical
+between normal and independent `+128 m` condition windows, and all candidates have
+zero active materialization blockers, so these are process-opportunity failures,
+not acquisition-window failures. Development A remains the positive control and
+sole qualified morphology-development site; OOD2 `9688702` remained excluded at
+source, sealed, and unopened.
+
+Further independent-site search is parked. The completed acquisition, condition
+materializations, and no-pass report remain reusable; resume only with a newly
+frozen metadata-eligible candidate set or materially new public evidence, never by
+weakening area, span, contact, hard-mask, or normal/enlarged-identity gates. The next
+bounded step instead uses west and east Development A crops from one whole-domain
+R0 solve. Those crops are deliberately correlated and can diagnose within-domain
+crop behavior and visual/process coherence only. They receive no independent-site,
+generalization, holdout, production, or publication credit and do not fill the
+vacant second Development role.
+
 ### Current conditioning discards real soil structure and ignores mapped cliff/shore constraints
 
 `process/soil.py` keeps only the first soil component, simplified surface texture, stoniness, and fertility. The national source also contains component shares, layered texture, and humus/peat-horizon thickness. At the supplied Taevaskoda point, ETAK maps a natural shoreline escarpment within 5.32 m and the Ahja shoreline within 1.85 m, yet the rejected synthesis did not use those structures to correct the visible 1 m grid boundary. The replacement specification must treat full soil profiles and mapped structural constraints as first-class cook inputs.

@@ -10,7 +10,7 @@ import shutil
 import stat
 import time
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -32,6 +32,10 @@ _WORKBOOK = (
     / "tomba_etak_avaandmed.xlsx"
 )
 _WORKBOOK_SHA256 = "fbef1433eff6116174cd1bbeca6e6550e093eeed794c14d583af77e03970b4b5"
+_DEVELOPMENT_SELECTIONS = (
+    ASSET_GEN_ROOT
+    / "config/evidence/orthophoto-development-sheets-v1.json"
+)
 _OFFICIAL_HOSTS = ("geoportaal.maaamet.ee", "geoportaal.maaruum.ee")
 _RETRYABLE_HTTP = {429, 500, 502, 503, 504}
 _CONTENT_RANGE = re.compile(r"^bytes (\d+)-(\d+)/(\d+)$")
@@ -53,7 +57,7 @@ class OrthophotoArtifact:
     filename: str
     capture_date: str
     expected_bytes: int
-    expected_sha256: str
+    expected_sha256: str | None
     pixel_size_m: float
     raster_size: int
     url: str
@@ -79,7 +83,7 @@ def _artifact(
     source_type: str,
     capture_date: str,
     expected_bytes: int,
-    expected_sha256: str,
+    expected_sha256: str | None,
     pixel_size_m: float,
     raster_size: int,
 ) -> OrthophotoArtifact:
@@ -174,6 +178,77 @@ _SELECTIONS = {
         ),
     ),
 }
+
+
+def _file_identity(path: Path) -> dict[str, Any]:
+    return {
+        "path": _safe_relative(path, ASSET_GEN_ROOT.parent),
+        "bytes": path.stat().st_size,
+        "sha256": _sha256_file(path),
+    }
+
+
+def _load_development_selections(
+) -> tuple[dict[str, OrthophotoSelection], dict[str, Any], int]:
+    document = json.loads(_DEVELOPMENT_SELECTIONS.read_text(encoding="utf-8"))
+    if document.get("schemaVersion") != "orthophoto-frozen-sheet-selection-set/1":
+        raise ValueError("unsupported development orthophoto selection schema")
+    workbook = document.get("workbook", {})
+    if (
+        workbook.get("path") != _safe_relative(_WORKBOOK, ASSET_GEN_ROOT.parent)
+        or workbook.get("sha256") != _WORKBOOK_SHA256
+    ):
+        raise ValueError("development orthophoto selection binds another workbook")
+    excluded = {int(value) for value in document.get("excludedEtakIds", [])}
+    candidate_ids = {
+        int(value)
+        for row in document.get("sheets", [])
+        for value in row.get("candidateEtakIds", [])
+    }
+    if 9688702 not in excluded or candidate_ids & excluded:
+        raise ValueError("development orthophoto selection does not exclude sealed OOD2")
+    selections: dict[str, OrthophotoSelection] = {}
+    for row in document.get("sheets", []):
+        sheet = str(row["sheet"])
+        if sheet in selections or not re.fullmatch(r"\d{5}", sheet):
+            raise ValueError(f"duplicate or invalid orthophoto sheet id: {sheet}")
+        bounds = tuple(float(value) for value in row["sheetBoundsEn"])
+        if len(bounds) != 4 or bounds[2] - bounds[0] != 5000 or bounds[3] - bounds[1] != 5000:
+            raise ValueError(f"orthophoto sheet {sheet} is not one 5 km square")
+        artifacts = tuple(
+            _artifact(
+                sheet=sheet,
+                product=str(artifact["product"]),
+                workbook_sheet=str(artifact["workbookSheet"]),
+                source_type=str(artifact["sourceType"]),
+                capture_date=str(artifact["captureDate"]),
+                expected_bytes=int(artifact["expectedBytes"]),
+                expected_sha256=(
+                    str(artifact["expectedSha256"])
+                    if artifact.get("expectedSha256") is not None
+                    else None
+                ),
+                pixel_size_m=float(artifact["pixelSizeM"]),
+                raster_size=int(artifact["rasterSize"]),
+            )
+            for artifact in row["artifacts"]
+        )
+        if [artifact.product for artifact in artifacts] != ["rgb", "cir"]:
+            raise ValueError(f"orthophoto sheet {sheet} must freeze RGB then CIR")
+        selections[sheet] = OrthophotoSelection(
+            selection_id=str(row["selectionId"]),
+            schema="orthophoto-frozen-sheet-retention/1.0.0",
+            sheet=sheet,
+            sheet_bounds=bounds,
+            retention_directory=str(row["retentionDirectory"]),
+            log_label="National Development orthophoto",
+            temporal_policy=str(row["temporalPolicy"]),
+            artifacts=artifacts,
+        )
+    maximum_attempts = int(document.get("maximumAttemptsPerProduct", 0))
+    if maximum_attempts not in (1, 2):
+        raise ValueError("development orthophoto attempts must be capped at one or two")
+    return selections, _file_identity(_DEVELOPMENT_SELECTIONS), maximum_attempts
 
 
 class _DownloadIntegrityError(ValueError):
@@ -445,7 +520,10 @@ def _download_archive(
             or retained_record.get("requestedUrl") != artifact.url
             or retained_record.get("bytes") != artifact.expected_bytes
             or retained_record.get("sha256") != retained_sha256
-            or retained_sha256 != artifact.expected_sha256
+            or (
+                artifact.expected_sha256 is not None
+                and retained_sha256 != artifact.expected_sha256
+            )
         ):
             raise ValueError(f"staged HTTP provenance does not bind {part}")
         return retained_record
@@ -598,7 +676,10 @@ def _download_archive(
         "bytes": artifact.expected_bytes,
         "sha256": _sha256_file(part),
     }
-    if record["sha256"] != artifact.expected_sha256:
+    if (
+        artifact.expected_sha256 is not None
+        and record["sha256"] != artifact.expected_sha256
+    ):
         raise _DownloadIntegrityError(
             f"orthophoto SHA-256 changed for {artifact.filename}: {record['sha256']}"
         )
@@ -849,7 +930,10 @@ def _verify_product_retention(
         or not archive.is_file()
         or archive.stat().st_size != artifact.expected_bytes
         or _sha256_file(archive) != archive_sha256
-        or archive_sha256 != artifact.expected_sha256
+        or (
+            artifact.expected_sha256 is not None
+            and archive_sha256 != artifact.expected_sha256
+        )
         or not sidecar.is_file()
         or sidecar.read_text(encoding="ascii").strip() != archive_sha256
         or not provenance.is_file()
@@ -959,10 +1043,12 @@ def fetch_frozen_orthophoto_sheet(
     log=print,
 ) -> Path:
     """Fetch and verify RGB/CIR artifacts for one explicitly frozen sheet."""
-    try:
-        selection = _SELECTIONS[sheet]
-    except KeyError as error:
-        raise ValueError(f"orthophoto sheet is not frozen for acquisition: {sheet}") from error
+    development_selections, selection_manifest, maximum_attempts = (
+        _load_development_selections()
+    )
+    selection = _SELECTIONS.get(sheet) or development_selections.get(sheet)
+    if selection is None:
+        raise ValueError(f"orthophoto sheet is not frozen for acquisition: {sheet}")
     workbook, decisions = _validate_workbook(selection)
     workbook_sha256 = hashlib.sha256(workbook).hexdigest()
     orthophoto_root = (DATA_IN / "orthophoto").resolve()
@@ -970,7 +1056,12 @@ def fetch_frozen_orthophoto_sheet(
     snapshot = stage_root / "snapshots" / "workbook" / workbook_sha256 / _WORKBOOK.name
     _write_immutable(snapshot, workbook)
 
-    session = PoliteSession(base.fetch)
+    fetch_config = (
+        replace(base.fetch, max_retries=maximum_attempts)
+        if sheet in development_selections
+        else base.fetch
+    )
+    session = PoliteSession(fetch_config)
     products: list[dict[str, Any]] = []
     for index, (artifact, decision) in enumerate(
         zip(selection.artifacts, decisions, strict=True), 1
@@ -1013,6 +1104,9 @@ def fetch_frozen_orthophoto_sheet(
             "snapshot": _safe_relative(snapshot, orthophoto_root),
             "decisions": decisions,
         },
+        "selectionManifest": (
+            selection_manifest if sheet in development_selections else None
+        ),
         "attribution": _ATTRIBUTION,
         "temporalPolicy": selection.temporal_policy,
     }

@@ -287,6 +287,15 @@ def evidence_fetch_orthophoto_sheet_cmd(sheet: str) -> None:
     click.echo(f"retention manifest: {path}")
 
 
+@main.command("evidence-fetch-development-dtm")
+def evidence_fetch_development_dtm_cmd() -> None:
+    """Retain the frozen national Development 1 m DTM sheets."""
+    from .fetch.maaamet import fetch_recorded_development_dtm1m
+
+    path = fetch_recorded_development_dtm1m(load_base(), log=click.echo)
+    click.echo(f"retention manifest: {path}")
+
+
 @main.command("evidence-fetch-hovi")
 @click.option(
     "--through",
