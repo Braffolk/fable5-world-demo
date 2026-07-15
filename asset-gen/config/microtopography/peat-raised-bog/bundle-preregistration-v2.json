@@ -1,0 +1,214 @@
+{
+  "schema_version": "laas.peat-raised-bog-r0-research-bundle-preregistration/2",
+  "bundle_id": "peat-raised-bog-r0-research-bundle/2",
+  "preregistration_id": "open-intact-nonforested-edge-corrected-plurigaussian-v2",
+  "status": {
+    "state": "method_selected_blocked_before_r0_generation",
+    "research_only": true,
+    "method_implementation_authorized": true,
+    "r0_generation_authorized": false,
+    "preview_authorized": false,
+    "production_owner_authorized": false,
+    "latest_eligible": false,
+    "remaining_blockers": [
+      "bind the accepted corrected structural base and complete selected-mire condition snapshot",
+      "materialize the edge-corrected Moore class-pair evidence and pass its six-group support gate",
+      "freeze the exact plurigaussian fit and synthesis config implementation revision uv lock and budgets",
+      "freeze the exact proof cameras metric thresholds and visual rule before generation"
+    ]
+  },
+  "immutable_history": {
+    "v1_preregistration": {
+      "path": "asset-gen/config/microtopography/peat-raised-bog/bundle-preregistration-v1.json",
+      "sha256": "21d972723f7c2641ce6a9fb7c15e171e85f3378dc83863cc93cb833be94bf115",
+      "state": "closed_rejected_before_C1_generation",
+      "reinterpretation_or_mutation_forbidden": true
+    },
+    "moore_whole_form_capacity": {
+      "path": "asset-gen/data/work/microtopography/peat-raised-bog/moore-form-capacity/sha256/cc811bc0425a9762f9afc978a65039f673069e6632db0cf9361ed379d7738c83/manifest.json",
+      "sha256": "ecf647306241496a4d831223ffd6cfe0881f8b07607d416e9cd0b06def0d3cd9",
+      "build_id": "cc811bc0425a9762f9afc978a65039f673069e6632db0cf9361ed379d7738c83",
+      "result": "reject",
+      "observed_whole_forms": 1,
+      "observed_geographic_groups": 1,
+      "required_whole_forms": 200,
+      "required_geographic_groups": 6,
+      "boundary_rejected_components": 68,
+      "effect": "marked-form and whole-form empirical C1 remain ineligible",
+      "reinterpretation_or_gate_weakening_forbidden": true
+    },
+    "moore_source_B2_gate": {
+      "state": "failed_and_unchanged",
+      "strict_b1_valid_cells": 0,
+      "accepted_window_count": 0,
+      "complete_spectral_core_count": 0,
+      "B2_truth_or_spectrum_claim_forbidden": true,
+      "b1_only_fallback_forbidden": true
+    }
+  },
+  "site_selection": {
+    "path": "asset-gen/data/work/microtopography/peat-raised-bog/site-selection/sha256/46daa389e388a9783bff96f7caba3abedd1293bfe151f98ff13ea9d9b5c0750a/selection.json",
+    "sha256": "ff7cca92e6767e96c63c1d01376f836a74b0fc61ceb7824b12be240e65a837be",
+    "recipe_id": "46daa389e388a9783bff96f7caba3abedd1293bfe151f98ff13ea9d9b5c0750a",
+    "status": "selected",
+    "only_this_selection_transaction_is_authorized": true,
+    "development": {
+      "normalized_mire_identifier": "etak-component-0004069028",
+      "core_bounds_en": [536384.0, 6452416.0, 536512.0, 6452544.0],
+      "halo_bounds_en": [536320.0, 6452352.0, 536576.0, 6452608.0],
+      "core_m": 128.0,
+      "minimum_halo_m": 64.0
+    },
+    "sealed_abstention_audit": {
+      "normalized_mire_identifier": "etak-component-0004069025",
+      "core_bounds_en": [531776.0, 6450880.0, 531904.0, 6451008.0],
+      "halo_bounds_en": [531712.0, 6450816.0, 531968.0, 6451072.0],
+      "unresolved_condition": "soil_profile_or_humus_semantics",
+      "only_passing_result": "C1_is_identically_absent",
+      "positive_evidence_credit": false,
+      "post_open_tuning_allowed": false
+    }
+  },
+  "authority": {
+    "regime_id": "peat.raised_bog",
+    "regime_release_state": "research",
+    "research_role": "censored_class_geostatistical_process_hypothesis",
+    "maximum_result": "one_immutable_non_latest_development_preview_after_all_v2_gates_pass",
+    "target_truth": false,
+    "height_supervision": false,
+    "pixelwise_training": false,
+    "measured_morphology_fit": false,
+    "estonia_transfer": "none_beyond_one_selected_development_hypothesis",
+    "production_owner": null,
+    "latest_eligible": false,
+    "runtime_synthesis_allowed": false,
+    "wire_format_change_allowed": false
+  },
+  "method_decision": {
+    "selected": "hydrology_conditioned_edge_corrected_plurigaussian_typed_morphology",
+    "rejected": {
+      "censor_aware_marked_form_partial_likelihood": "one complete hollow zero complete hummocks or lawns and nonrandom clipped-plot selection do not identify shape mark or interaction distributions",
+      "generic_geostatistical_remainder": "typed morphology is required; generic roughness FBM and decorative noise are forbidden",
+      "independent_fine_noise": "Moore does not identify a 0.0625 m residual spectrum or B2 truth"
+    }
+  },
+  "evidence_estimation": {
+    "source": "the exact Moore materialization reclassified by the exact HuHoLa operator bound in the failed capacity artifact",
+    "classification_cell_m": 0.5,
+    "classes": ["hollow", "lawn", "hummock"],
+    "independent_unit": "geographic_group",
+    "group_weighting": "each of the eight Moore geographic groups receives equal weight",
+    "censoring_rule": "whole-form identities are not used; a class pair contributes only when both exact lag endpoints are observed finite 0.5 m cells",
+    "edge_correction": "for each group class pair and D4-collapsed lattice-offset orbit divide observed ordered-pair counts by the number of valid endpoint pairs in that orbit",
+    "candidate_offset_orbits": "all integer 0.5 m lattice offsets with 0 < dx^2 + dy^2 <= 16 collapsed by sign swap and axis exchange",
+    "support_rule": "retain an orbit only when every class-pair denominator is nonzero in at least six geographic groups; require retained 0.5 m and 1.0 m axial orbits or reject",
+    "fitted_evidence": [
+      "group-balanced class fractions",
+      "ordered class transition probabilities and indicator auto/cross-transiograms",
+      "group-centered class-conditional HHDH margins and relative-height quantiles"
+    ],
+    "fit": {
+      "latent_fields": 2,
+      "covariance_family": "isotropic Matern",
+      "nu_candidates": [0.5, 1.5, 2.5],
+      "range_bounds_m": [0.5, 2.0],
+      "interfield_correlation_bounds": [-0.9, 0.9],
+      "truncation": "hollow when G1 < a_low + b_low*G2; hummock when G1 > a_high + b_high*G2; lawn otherwise; enforce a_high-a_low >= 0.25",
+      "objective": "bounded float64 scipy least_squares on equal-weight group class fractions and retained transiograms",
+      "selection": "minimum leave-one-geographic-group-out objective then lexicographically lowest parameter vector after 1e-12 objective ties",
+      "uncertainty": "report eight leave-one-group-out fits and an eight-group bootstrap envelope; no pixel bootstrap"
+    },
+    "forbidden_inferences": [
+      "national or Estonia class prevalence",
+      "complete form shape or marked-point interaction distributions",
+      "directional anisotropy from Moore",
+      "10-100 m ridge string flark or pool organization",
+      "hydrology-to-morphology coefficients",
+      "0.0625 m residual spectrum B2 truth acquisition MTF or total surface error"
+    ]
+  },
+  "conditioning": {
+    "required_fields": [
+      "connected ETAK mire identity and coverage confidence",
+      "complete peat profile mixture thickness decomposition and humus semantics",
+      "corrected structural height slope and curvature",
+      "whole-mire drainage wetness flow direction and water-distance context",
+      "forest open-water ditch cut-peat road building object dynamic and ownership-unknown masks",
+      "EGT geology coverage and unknown"
+    ],
+    "hypothesis_only_monotone_responses": [
+      "wetter lower and water-proximal supported cells shift thresholds toward hollow and lawn",
+      "drier supported dome positions shift thresholds toward lawn and hummock"
+    ],
+    "unknown_or_out_of_envelope_action": "C1_equals_zero",
+    "hard_exclusion_action": "C1_equals_zero",
+    "optical_role": "dated RGB and CIR may support exclusion or state review only and never supply height"
+  },
+  "whole_domain_algorithm": {
+    "context": "compute hydrology and conditions over the complete connected selected mire and required upstream or boundary context",
+    "generation_domain": "one canonical absolute fine canvas over the exact selected core plus complete covariance composer F4 and hierarchy halo",
+    "latent_simulation": "deterministic coordinate-keyed innovations with positive-definite circulant embedding over a doubled nonperiodic work domain; reject after two dimension doublings if embedding remains nonpositive",
+    "hydrology_conditioning": "smoothly vary truncation thresholds and relief amplitude only; no hard relief edge at condition polygons",
+    "height_surface": "map continuous signed truncation margins through group-balanced monotone class-conditional quantile curves and sample that continuous typed form-margin surface at 0.0625 m",
+    "fine_remainder": "none",
+    "output": "one absolute 0.0625 m surface composed with the corrected structural base; derive all parents from that surface and crop storage chunks last",
+    "partition_law": "overlapping crops worker counts batch order retries and adjacent requests must produce bit-identical prequantization samples",
+    "forbidden": [
+      "per-chunk solve seed or synthesis",
+      "final-output seam crossfade",
+      "wrap clamp reflection or padding credit",
+      "FBM generic noise repeated stamps copied relief or independent B2 detail"
+    ],
+    "canonical_seed_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+  },
+  "required_gates": {
+    "before_generation": [
+      "all exact bindings and remaining status blockers are closed",
+      "six-group edge-corrected support and leave-one-group-out evidence materialization passes",
+      "all fit parameters code environment budgets thresholds cameras and visual rule are frozen"
+    ],
+    "candidate": [
+      "held-out group class fractions transition probabilities transiograms HHDH margins and relative-height quantiles remain inside frozen group-bootstrap envelopes",
+      "HuHoLa at 0.5 m yields connected recognizable hummock lawn and hollow classes rather than fragmented or noise-like relief",
+      "wetness and dome ablations produce the preregistered monotone class response without condition-edge seams",
+      "hard exclusions and every unknown or out-of-envelope cell have exactly zero C1",
+      "sealed abstention audit has exactly zero C1 and grants no positive evidence",
+      "periodicity repeated-form nearest-source and generic-noise diagnostics pass",
+      "whole-domain versus crop partition worker-order and shared-edge identity are exact",
+      "decoded hierarchy quantization normals materials trees plants and grass remain continuous and grounded",
+      "packed negative-rung budget and exact real-WebGPU boot pass"
+    ],
+    "failure_action": "reject_the_exact_v2_recipe_without_parameter_tuning_or_method_fallback"
+  },
+  "smallest_useful_proof": {
+    "development_core_bounds_en": [536384.0, 6452416.0, 536512.0, 6452544.0],
+    "solve_bounds_minimum_en": [536320.0, 6452352.0, 536576.0, 6452608.0],
+    "core_m": [128.0, 128.0],
+    "minimum_halo_m": 64.0,
+    "candidate": "canonical_seed_only",
+    "comparand": "accepted corrected structural surface only",
+    "required_asset_diagnostics": [
+      "01_plurigaussian_classes_hydrology.png",
+      "02_corrected_vs_c1_height_hillshade.png"
+    ],
+    "ground_camera": {
+      "anchor": "development core center",
+      "eye_height_above_decoded_C0_m": 1.7,
+      "look_distance_m": 32.0,
+      "look_direction": "whole-mire downslope drainage direction at core center; due east only if the frozen direction is undefined",
+      "horizontal_fov_deg": 70.0
+    },
+    "browser_proof": "one immutable non-latest side-by-side corrected-only versus C1 preview using the exact camera after packed hierarchy and real-WebGPU gates pass",
+    "success": "typed connected hummock lawn and hollow relief is immediately recognizable hydrologically coherent nonrepeating seam-free and visibly better than corrected-only",
+    "failure": "barely visible generic random bumpy repeated blocky or edge-seamed relief"
+  },
+  "publication": {
+    "state": "blocked",
+    "immutable": true,
+    "latest_eligible": false,
+    "production_manifest_mutation_allowed": false,
+    "wire_format_change_allowed": false,
+    "runtime_synthesis_allowed": false,
+    "runtime_role": "ordinary packed height demand decode cache interpolate sample cull and render only"
+  }
+}

@@ -277,8 +277,9 @@ ZIP inventories confirm that a format-only 2019 PC+DSM probe would cost
 downloaded. Resume only if SITES publishes at least three paired point-cloud/DSM
 acquisitions with the recorded masks and external control.
 
-The active fallback is not another dataset search. It is one bounded R0
-`agriculture.cultivated` process-hypothesis development prototype. Retained OPARA
+This historical fallback is not the active browser-showcase route. It is one
+bounded R0 `agriculture.cultivated` process-hypothesis development prototype
+retained as supporting evidence only. Retained OPARA
 may supply only conservative connected negative-form/rill diagnostics, never
 height truth. Audited tillage and multiscale-erosion research supplies the causal
 form decomposition. The prototype must create typed parcel-global row/track/clod/
@@ -838,7 +839,7 @@ surface-error, masks, transect/cross-source binding, and independent-event
 requirements. A single-source survivor is not the combined route, and weaker
 gates are not a resume condition.
 
-### Raised-bog R0 is the next non-agricultural route, but generation is not yet authorized
+### Raised-bog R0 is the active visually structural route, but generation is not yet authorized
 
 The next bounded route is `peat-raised-bog-r0-research-bundle/1`, restricted to
 open, intact, non-forested hummock-lawn-hollow peat. It reuses the exact Moore
@@ -852,12 +853,34 @@ The preregistration is currently `blocked_before_r0_generation`. Before any C1
 surface exists, it requires a content-addressed metadata-only development-mire
 selection and a different sealed abstention site, the accepted corrected base and
 complete Estonia peat/mire condition snapshot, exact C1 code/config/environment,
-thresholds, preview extent/cameras, cost expectation, and visual rule. The first
-executable checkpoint is a Moore whole-form capacity artifact. Fewer than 200
-boundary-valid typed forms or fewer than six geographic groups parks the route
-before synthesis rather than filling the gap with a repeated primitive, FBM, or
-generic roughness. A passing capacity result permits only whole-connected-mire R0
-development with crop-last seams and an eventual immutable non-`latest` preview.
+thresholds, preview extent/cameras, cost expectation, and visual rule.
+
+The Moore whole-form capacity checkpoint is complete and rejected. Corrected
+portable strict-replay artifact
+`cc811bc0425a9762f9afc978a65039f673069e6632db0cf9361ed379d7738c83`
+(manifest SHA-256 `ecf647306241496a4d831223ffd6cfe0881f8b07607d416e9cd0b06def0d3cd9`)
+retains only one boundary-valid hollow in one geographic group against the frozen
+minimum of 200 complete forms across six groups; 68 components are boundary-
+truncated. This parks the exact whole-form marked sampler before synthesis. The
+gate must not be weakened, censored forms must not be relabeled as complete, and
+plot padding, repeated primitives, FBM, or generic roughness are not substitutes.
+Raised bog remains active only if the metadata selector passes and a materially
+different censor-aware whole-mire method is preregistered within Moore's actual
+clipped-plot authority. Any development surface must still solve one connected
+mire before crop-last chunking and may reach only an immutable non-`latest` R0
+preview after its own gates pass.
+
+Metadata-only site selection `46daa389e388...` passed without opening DTM,
+optical, or detailed geometry pixels. Development mire
+`etak-component-0004069028` has 209 eligible core-plus-halo footprints; sealed
+abstention mire `etak-component-0004069025` is physically distinct and retains
+the exact unresolved `soil_profile_or_humus_semantics` condition. Replacement
+preregistration v2 (SHA-256 `431b269d49f7...`) selects translation-edge-corrected
+class-pair evidence and a hydrology-conditioned two-field plurigaussian R0
+hypothesis. It does not revive Moore B2, infer complete form shapes, add a fine
+noise remainder, authorize production/`latest`, or change runtime/wire behavior.
+Its next gate is the six-group edge-corrected evidence materialization; failure
+rejects v2 without retuning or method fallback.
 
 The national soil preflight resolved one apparent blocker from retained official
 documentation. Pure raised-bog soils encode the organic profile in their parsed

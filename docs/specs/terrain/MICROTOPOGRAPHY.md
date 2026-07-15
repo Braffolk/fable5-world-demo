@@ -944,6 +944,42 @@ or packing/runtime failure rejects the exact recipe. A survivor may reach only a
 immutable non-`latest` research preview under Section 14.6; the production row and
 Moore evidence status remain unchanged.
 
+#### 9.10.1 Censored-evidence v2 replacement
+
+Version 1 at SHA-256 `21d972723f7c...` is immutable rejected history. Its exact
+Moore whole-form artifact `cc811bc0425a...` (manifest SHA-256
+`ecf647306241...`) found one complete hollow in one geographic group against the
+frozen `200`-form/six-group gate and boundary-rejected `68` components. It
+therefore permanently terminates the v1 marked-form/whole-form C1 route. The
+failed Moore source-B2 gate is also unchanged: Moore supplies neither B2 truth
+nor an identified `0.0625 m` residual spectrum, and no B1-only or independent
+fine-noise fallback is allowed.
+
+The replacement machine contract is
+`asset-gen/config/microtopography/peat-raised-bog/bundle-preregistration-v2.json`.
+It binds v1, the failed capacity artifact, and connected-mire site-selection
+transaction `46daa389e388...` (selection SHA-256 `ff7cca92e676...`). V2 changes
+the evidence unit rather than weakening v1: group-balanced, translation-edge-
+corrected HuHoLa class fractions, ordered class transitions, indicator
+transiograms, HHDH margins, and relative-height quantiles may inform one
+hydrology-conditioned two-field plurigaussian R0 hypothesis. Complete form
+shapes, marked interactions, directional or long-range mire organization,
+hydrology coefficients, Estonia transfer, and production quality remain
+unidentified.
+
+Compute hydrology and conditions over the complete connected mire. Generate one
+canonical absolute surface over the exact selected `128 x 128 m` development
+core plus at least its bound `64 m` halo, sample only the continuous typed
+form-margin surface at `0.0625 m`, compose with the corrected base, derive parents,
+and crop storage chunks last. Generic FBM/noise, copied or repeated forms,
+per-chunk synthesis, condition-edge relief, and a separate fine remainder are
+forbidden. V2's frozen evidence, abstention, monotone-conditioning, repetition,
+partition, hierarchy, packing, inherited-layer, and real-WebGPU gates all apply.
+Its smallest proof is the two bound asset diagnostics plus one exact-camera,
+immutable non-`latest` corrected-only-versus-C1 browser comparison. It changes no
+wire format or runtime synthesis law and can never authorize production or
+`latest` publication.
+
 ## 10. Typed Structural Reconstruction
 
 Source repair precedes unresolved synthesis and is evaluated separately.
