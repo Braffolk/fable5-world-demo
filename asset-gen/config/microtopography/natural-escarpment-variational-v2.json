@@ -1,0 +1,71 @@
+{
+  "schema_version": "laas.natural-escarpment-variational-config/1",
+  "artifact_kind": "structural-only-float-research-screen",
+  "attempt": 2,
+  "development_scope": "generic sand/till bank-escarpment development only; not sandstone authority",
+  "condition_bundle": {
+    "path": "asset-gen/data/work/microtopography/erodible-slope/conditions/sha256/10a5ea53b007f3e6e2e878ccebd70a9712716042139ca35178310655fcb85b8b/bundle.json",
+    "bytes": 354606,
+    "sha256": "9d417818c90b7e8e4db757a70cd2703df5a2e4045ff54ada9248f700bede38f9"
+  },
+  "development_a_closure": {
+    "path": "asset-gen/data/work/microtopography/erodible-slope/conditions/domain-closure/sha256/e316add66854bd25fd13dcbf07c017950ebec97b18f0485820367a7ae774a0ac/manifest.json",
+    "bytes": 13504,
+    "sha256": "c2ea6bf89f85421295ebb65bf4b20eac8a99a858ea9e9922dfdcdb6fc5483600"
+  },
+  "sites": [
+    {
+      "site_id": "development_a",
+      "target_etak_id": 1826743,
+      "target_semantics": "Looduslik jarsak; kaldaastang",
+      "output_bbox_en": [680448, 6444352, 680704, 6444544],
+      "structural_strength": 0.42,
+      "profile": {"kind": "shoulder_scarp_talus", "toe_fraction": 0.18, "shoulder_fraction": 0.76}
+    },
+    {
+      "site_id": "development_c",
+      "target_etak_id": 9688719,
+      "target_semantics": "Nolv; kaldaastang",
+      "output_bbox_en": [680672, 6440960, 680800, 6441216],
+      "structural_strength": 0.34,
+      "profile": {"kind": "bank_break", "toe_fraction": 0.10, "shoulder_fraction": 0.88}
+    }
+  ],
+  "output_pitch_m": 0.25,
+  "evidence_station_step_m": 1.0,
+  "profile_radius_m": 18.0,
+  "profile_step_m": 0.25,
+  "profile_measurement_sigma_m": 1.0,
+  "break_search_radius_m": 4.0,
+  "minimum_half_width_m": 2.5,
+  "maximum_half_width_m": 12.0,
+  "shoulder_gradient_fraction": 0.28,
+  "minimum_relief_m": 1.0,
+  "maximum_relief_m": 16.0,
+  "minimum_peak_gradient": 0.05,
+  "minimum_imagery_support": 0.05,
+  "minimum_solve_confidence": 0.05,
+  "along_line_evidence_sigma_m": 5.5,
+  "outer_match_band_m": 3.0,
+  "endpoint_zero_m": 0.75,
+  "endpoint_taper_m": 12.0,
+  "fixed_boundary_collar_m": 0.75,
+  "hard_mask_taper_m": 2.0,
+  "target_weight_min": 0.8,
+  "target_weight_evidence": 2.2,
+  "boundary_anchor_weight": 8.0,
+  "membrane_weight": 2.5,
+  "solver_relative_tolerance": 1e-8,
+  "solver_maximum_iterations": 1200,
+  "maximum_residual_abs_m": 2.0,
+  "maximum_active_boundary_jump_m": 0.08,
+  "forbidden": [
+    "water",
+    "object",
+    "non_heightfield",
+    "unrelated_protected_structure",
+    "unknown_or_unsupported_material"
+  ],
+  "taevaskoda_used": false,
+  "packed_or_runtime_output": false
+}

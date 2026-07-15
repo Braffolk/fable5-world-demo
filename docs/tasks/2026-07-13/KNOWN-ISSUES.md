@@ -1248,6 +1248,46 @@ with exact C0 boundary matching and explicit finite-line endpoint taper) and a
 new frozen two-attempt authorization, not by relaxing the 2 m envelope, clipping
 residuals, adding noise, or tuning these PCHIP parameters.
 
+### Global-2D variational escarpment reconstruction is also parked after two bounded attempts
+
+The follow-up track is separate from the rejected station-wise PCHIP method and
+is bound only to generic sand/till bank-escarpment development. Development A
+ETAK `1826743` and Development C ETAK `9688719` are neither sandstone authority
+nor transfer evidence. Suur Taevaskoda remained sealed throughout.
+
+`assetgen.terrain.structural_reconstruction.natural_escarpment.variational_screen`
+constructs one residual surface over the entire finite mapped feature. Measured
+low/high shoulders and RGB/CIR support supply a soft structural target. A global
+sparse screened-membrane solve couples both map dimensions while hard water,
+object, non-heightfield, unknown-material, unrelated-structure, output-edge, and
+finite-endpoint cells remain exact C0. This implementation and the content-
+addressed float surfaces are reusable; it does not use PCHIP, pack assets, alter
+runtime formats, or synthesize browser-side detail.
+
+Attempt 1 is immutable artifact `ca17522efd38...`. It stays within the 2 m
+structural envelope and preserves all hard and endpoint cells exactly, but the
+nearest dense frame produces regular cross-line ribs. The active/fixed boundary
+jump reaches `0.982226 m` on A and `0.231437 m` on C, so the result is rejected.
+Attempt 2 is immutable artifact `e95c1b9ca09...`. It uses continuous exact
+polyline projection and a fixed zero collar. Displacements remain bounded
+(`-1.345812/+1.155105 m` on A and `-0.844660/+0.542005 m` on C); every hard,
+water, endpoint-zero, and output-boundary residual is exactly zero. It still
+fails the boundary-continuity gate at `0.459301 m` on A and `0.092414 m` on C,
+and both common-scale shaded before/after PNGs retain visible cross-line ribs.
+This is not credible macro reconstruction and receives no preview, sandstone,
+packing, runtime, transfer, or production credit.
+
+The second two-attempt limit is exhausted, so active focus moves away rather
+than weakening the visual or boundary gates. The fallback is continued
+abstention for rock/cliff-capable regimes while already accepted forest work
+remains independent. Resume only when a replacement abandons the line-profile
+target as its primary surface parameterization, or supplies a genuinely
+continuous 2D structural authority/tangent field with exact Dirichlet collars;
+do not resume by adjusting profile fractions, membrane weights, tapers, or
+residual limits. Relevant geometry QA is under each artifact's `qa/` directory,
+with SHA-256, dimensions, interpretation, source identities, and recipe binding
+in `qa/index.json`. Taevaskoda was not opened and no browser URL exists.
+
 ## Visual/Data Investigations
 
 ### Estonia DTM may contain two tall bumps in the Ahja river
