@@ -1013,6 +1013,17 @@ under the explicit `generally should transfer` policy. The foreign-analogue and
 validation limits remain disclosed but do not block a non-`latest` visual
 preview; they still preclude an unqualified national-truth claim.
 
+The accepted irregular candidate is now packed through the ordinary format-2
+height path without runtime or wire changes. Recipe `38f861e9aec5...` and
+immutable manifest `716289d00291...` contain four changed LOD -2 children, their
+byte-exact decoded-child LOD -1 parent, and masked corrected LOD0-L4 closure.
+Independent verification reports zero excluded-C0 change, zero decoded fine
+seams, `0.00099945 m` maximum C1 round-trip error, and `0.00468946 m` maximum
+LOD0 closure error under the `0.00501 m` limit. Vegetation, material, and water
+inventories are inherited. The exact research URL passed real Chromium/WebGPU
+through frame 146 on 2026-07-15 with no captured page, TSL, WebGPU, pipeline, or
+asset errors. This is a visual research checkpoint, not national publication.
+
 The national soil preflight resolved one apparent blocker from retained official
 documentation. Pure raised-bog soils encode the organic profile in their parsed
 peat texture sequence; deep profiles may be `T`-only, so blank `Huumus` is a
