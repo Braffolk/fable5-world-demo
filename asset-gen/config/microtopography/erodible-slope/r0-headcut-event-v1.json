@@ -1,0 +1,132 @@
+{
+  "schema_version": "laas.erodible-slope-headcut-event-config/1",
+  "bindings": {
+    "condition_bundle": {
+      "path": "asset-gen/data/work/microtopography/erodible-slope/conditions/sha256/10a5ea53b007f3e6e2e878ccebd70a9712716042139ca35178310655fcb85b8b/bundle.json",
+      "bytes": 354606,
+      "sha256": "9d417818c90b7e8e4db757a70cd2703df5a2e4045ff54ada9248f700bede38f9"
+    },
+    "domain_closure": {
+      "path": "asset-gen/data/work/microtopography/erodible-slope/conditions/domain-closure/sha256/e316add66854bd25fd13dcbf07c017950ebec97b18f0485820367a7ae774a0ac/manifest.json",
+      "bytes": 13504,
+      "sha256": "c2ea6bf89f85421295ebb65bf4b20eac8a99a858ea9e9922dfdcdb6fc5483600"
+    },
+    "evaluation_plan": {
+      "path": "asset-gen/config/microtopography/erodible-slope/r0-development-a-two-crop-v1.json",
+      "bytes": 1425,
+      "sha256": "8fcb20f442d1ee925cb9cc5b9bf67035f16337dcf94c40b9f84db0a820d6f7ce"
+    },
+    "process_config": {
+      "path": "asset-gen/config/microtopography/erodible-slope/solver-c1-v1.json",
+      "bytes": 1252,
+      "sha256": "c45b420f28b25b59584c72ddacfa0a259ecd9cc9a652b7057a049856764637b9"
+    }
+  },
+  "implementation": {
+    "headcut_event": {
+      "path": "asset-gen/src/assetgen/terrain/microtopography/erodible_slope/solver/headcut_event.py",
+      "bytes": 26858,
+      "sha256": "b93ae4d4107ecd32087befef692a0936891f3b2a2cbb4a8d7f05e460f9e0b192"
+    },
+    "headcut_event_artifact": {
+      "path": "asset-gen/src/assetgen/terrain/microtopography/erodible_slope/solver/headcut_event_artifact.py",
+      "bytes": 25014,
+      "sha256": "95898221bff8a1db09661407db38491397142f86fd10b1d7e2237f96cab5c9de"
+    },
+    "headcut_event_run": {
+      "path": "asset-gen/src/assetgen/terrain/microtopography/erodible_slope/solver/headcut_event_run.py",
+      "bytes": 1839,
+      "sha256": "67c14544b2a3b22ed8416b2c4350ffaa784b08a80d598a3dea5cda0ea4ccafa5"
+    },
+    "load": {
+      "path": "asset-gen/src/assetgen/terrain/microtopography/erodible_slope/solver/load.py",
+      "bytes": 28111,
+      "sha256": "0daff9b05b4f58f5a7f7172f2a3ae9aa8c7470a50d02ee7573dab0ff140dfc10"
+    },
+    "model": {
+      "path": "asset-gen/src/assetgen/terrain/microtopography/erodible_slope/solver/model.py",
+      "bytes": 9390,
+      "sha256": "c641bcbcbe777dff0f116f13efe35645bc96c6fd0abc7fad3cfae875d9a3f300"
+    },
+    "process": {
+      "path": "asset-gen/src/assetgen/terrain/microtopography/erodible_slope/solver/process.py",
+      "bytes": 7000,
+      "sha256": "2f1f8839e7941a7889aefc70d75c6c7ec312211e909720cf13dc2bfc92c1e763"
+    },
+    "routing": {
+      "path": "asset-gen/src/assetgen/terrain/microtopography/erodible_slope/solver/routing.py",
+      "bytes": 15815,
+      "sha256": "c0cbf560868a362091a0bfcb2bd26393bf634faea6f60cb7d17e801124a9f110"
+    },
+    "forms": {
+      "path": "asset-gen/src/assetgen/terrain/microtopography/erodible_slope/solver/forms.py",
+      "bytes": 28797,
+      "sha256": "2eeae4c0039386f466ac8ab450a69fce14bae8f4b65b5c42c69c316472fc2e7f"
+    },
+    "artifact": {
+      "path": "asset-gen/src/assetgen/terrain/microtopography/erodible_slope/solver/artifact.py",
+      "bytes": 18993,
+      "sha256": "d652ef4375a865934b038f195610d491bf2b297b447d8aa2fc60d96d91270871"
+    }
+  },
+  "canonical_seed": 26071501,
+  "synthesis_bbox_en": [680448.0, 6444416.0, 680704.0, 6444544.0],
+  "physical_parameters": {
+    "candidate_halo_m": 31.0,
+    "minimum_contributing_area_m2": 48.0,
+    "minimum_slope_gradient": 0.04,
+    "maximum_slope_gradient": 0.8,
+    "minimum_shear_ratio": 0.55,
+    "minimum_seep_likelihood": 0.62,
+    "minimum_downstream_slope_break": 0.015,
+    "minimum_failure_opportunity": 0.12,
+    "minimum_failure_patch_area_m2": 2.0,
+    "failure_footprint_sigma_m": 1.5,
+    "event_age_min_years": 0.25,
+    "event_age_max_years": 2.5,
+    "retreat_length_min_m": 4.0,
+    "retreat_length_max_m": 9.0,
+    "downstream_length_min_m": 8.0,
+    "downstream_length_max_m": 18.0,
+    "gully_width_min_m": 0.35,
+    "gully_width_max_m": 1.1,
+    "incision_depth_min_m": 0.05,
+    "incision_depth_max_m": 0.16,
+    "headcut_width_min_m": 1.2,
+    "headcut_width_max_m": 3.0,
+    "headcut_depth_max_m": 0.18,
+    "toe_slope_ceiling": 0.18,
+    "fan_length_min_m": 4.0,
+    "fan_length_max_m": 8.0,
+    "fan_half_width_min_m": 1.2,
+    "fan_half_width_max_m": 3.5,
+    "fan_relief_max_m": 0.12
+  },
+  "budgets": {
+    "maximum_events": 48,
+    "maximum_total_erosion_volume_m3": 40.0,
+    "maximum_support_radius_m": 31.0
+  },
+  "recognizable_form_gates": {
+    "minimum_incision_max_m": 0.04,
+    "minimum_deposition_max_m": 0.005,
+    "minimum_connected_incision_span_m": 6.0,
+    "minimum_typed_fraction": 0.0002,
+    "maximum_typed_fraction": 0.2,
+    "maximum_enlargement_residual_m": 0.001,
+    "maximum_volume_relative_error": 1e-10
+  },
+  "negative_controls": [
+    "corrected_only_C0",
+    "hydrology_disabled_must_generate_zero_events"
+  ],
+  "exclusions": [
+    "no_runtime_synthesis",
+    "no_noise_fbm_sines_or_repeated_stamps",
+    "no_branch_score_adjacency_suppression_threshold_or_spacing_retuning",
+    "no_per_chunk_seed_or_solve",
+    "no_Taevaskoda_Biala_Gora_or_scene_specific_tuning",
+    "no_vertical_cliffs_caves_undercuts_detached_blocks_water_or_non_heightfield_talus",
+    "no_production_preview_transfer_or_morphology_truth_claim"
+  ]
+}

@@ -898,8 +898,29 @@ exhausted branch scoring, adjacency, suppression, spacing, or thresholds remain
 forbidden. It may emit only heightfield-compatible connected incision, shallow
 scarps, seep relief, colluvial deposition, and toes. Vertical cliffs, caves,
 undercuts, detached blocks, water, and non-single-valued talus remain excluded.
-Both adjacent Development-A crops must pass from one realization before packing;
+Both adjacent Development-A crops had to pass from one realization before packing;
 Taevaskoda remains an untouched frozen-recipe sentinel rather than a tuning site.
+
+The exact headcut-event challenger is now rejected. Frozen config
+`r0-headcut-event-v1.json` has SHA-256 `3efc46f38828...`; corrected final-audit
+artifact `0ecf3595eac2...` has manifest SHA-256 `ae4462d66fab...`. West visibly
+contains a parallel-line/triangular-fan family but the original proxy did not
+implement the preregistered comb/repetition exclusion, so final audit fails it
+closed. East has no event. Emitted crop integration also finds `2.305059771 m3`
+incision and `3.482331927 m3` deposition, not the zero error claimed by equal
+unclipped plan volumes. Hydrology-off was switch plumbing rather than a scientific
+ablation. Do not pack, tune, or use the attractive subset as positive evidence.
+
+Existing-data triage rejects both a Biała-based cliff dictionary/learner and a
+FORWARD-plus-residual-bank forest splice. One different bounded screen remains
+scientifically honest: the pre-bank LUKE absolute k11/k19/k32/k36 surfaces are
+`256 x 256` at 0.0625 m, retain 1-16 m layout, and include measured/confidence
+masks with `67.56-86.18%` direct support. A support-aware ideal 1 m degradation
+can form exact low/high pairs for one Guérin sparse-representation algorithm
+capacity screen, with k19 excluded until method/config/rejection rules are frozen.
+This can test coherent reconstruction versus copying/quilting/phase/noise only;
+it cannot authorize Maa-amet source repair, conditions, independent validation,
+Estonia transfer, production, or browser publication.
 
 The national soil preflight resolved one apparent blocker from retained official
 documentation. Pure raised-bog soils encode the organic profile in their parsed
