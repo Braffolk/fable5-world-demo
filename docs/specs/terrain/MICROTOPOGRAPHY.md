@@ -4,9 +4,9 @@
 
 **Date:** 2026-07-13
 
-**Status:** reviewed architecture with zero-external-budget evidence amendment; a bounded weak-evidence research-preview path is authorized, while production morphology remains gated by public-data qualification
+**Status:** reviewed architecture with zero-external-budget evidence amendments; bounded weak-surface and R0 process research-preview paths are authorized, while production morphology remains gated by public-data qualification
 
-**Decision:** implement one evidence-gated typed hybrid surface pipeline in `asset-gen`. Deterministic evidence fusion owns source repair and mapped structure. A deterministic regime graph owns eligibility, transitions, and abstention. Production unresolved morphology is produced only by a per-regime specialist that wins a preregistered target-scale bakeoff. Before such targets exist, evidence-tiered research specialists may be trained and packed only into immutable, explicitly non-production browser previews under Sections 9.6-9.8. A deterministic composer produces one canonical absolute finest surface, and the existing packed-height cook derives and publishes the hierarchy. The browser performs no synthesis.
+**Decision:** implement one evidence-gated typed hybrid surface pipeline in `asset-gen`. Deterministic evidence fusion owns source repair and mapped structure. A deterministic regime graph owns eligibility, transitions, and abstention. Production unresolved morphology is produced only by a per-regime specialist that wins a preregistered target-scale bakeoff. Before such targets exist, evidence-tiered research specialists may be developed and packed only into immutable, explicitly non-production browser previews under Sections 9.6-9.9. A deterministic composer produces one canonical absolute finest surface, and the existing packed-height cook derives and publishes the hierarchy. The browser performs no synthesis.
 
 **Quality target:** beautiful, realistic, non-repeating geometric variance whose forms and distributions change for defensible physical reasons: substrate, surficial material, soil profile, hydrology, slope position, vegetation and disturbance history, land use, management state, and direct local evidence.
 
@@ -40,7 +40,7 @@ The final terrain remains synthesized below the reliable source support. Metadat
 9. **No broad-class style lookup.** `forest`, `field`, `bog`, `sand`, or a soil code alone may not select final geometry. Physical factors remain separate until a supported regime and event state are established.
 10. **One canonical finest surface.** LOD -2 is generated once in world coordinates. LOD -1, corrected LOD 0, and affected ancestors derive from the accepted decoded child hierarchy; rungs are never synthesized independently.
 11. **Storage chunks are not physical domains.** Feature ownership, phase, conditions, and stochastic state depend on stable world coordinates and physical domains, never final chunk identity, cook order, worker, request sequence, or AOI enclosure.
-12. **Unsupported means no invented production residual.** It does not mean generic detail, a foreign analogue, or the visually nearest class in any production, `pilot`, `national`, or `latest` asset. A research specialist may emit only inside an explicit research-preview domain that passes Sections 9.6-9.8 and 14.6; that geometry remains non-authoritative and cannot substitute for an unsupported production row.
+12. **Unsupported means no invented production residual.** It does not mean generic detail, a foreign analogue, or the visually nearest class in any production, `pilot`, `national`, or `latest` asset. A research specialist may emit only inside an explicit research-preview domain that passes Sections 9.6-9.9 and 14.6; that geometry remains non-authoritative and cannot substitute for an unsupported production row.
 13. **A heightfield claim is single-valued.** Vertical faces, undercuts, caves, overhangs, detached blocks, and root plates are not solved by finer sampling. This spec marks them unsupported; a separate structural representation requires a separate specification.
 14. **All surface consumers agree.** Terrain mesh, grass roots, trees/plants, materials, normals, probes, collision, and water boundaries must follow the accepted packed surface and transition policy. Fine terrain may not disable or strand inherited content.
 15. **No scene-specific fixes.** Suur Taevaskoda is a fixed generalization review site, not a coordinate special case, hand-authored patch, or training/tuning site.
@@ -811,6 +811,61 @@ candidate that fails after either is viewed is `research_rejected`; the scene ma
 not be patched and the same sentinel may not be used to tune a replacement. A
 candidate that abstains on unsupported cells is preferable to generic coverage.
 
+### 9.9 Erodible-slope R0 research bundle
+
+`erodible-slope-research-bundle/1` authorizes one deterministic process/event
+challenger for `fluvial.rill_gully_seep_spring` research development on dry,
+single-valued erodible mineral bank and slope surfaces. It does not qualify a
+target, supply measured morphology truth, establish Estonia transfer, select a
+production owner, or change the regime row from `unsupported`.
+Sandstone-derived substrate and compatible colluvial toes are conditions only
+where the bound soil/geology evidence supports them; neither is a default.
+
+Its fixed roles are:
+
+| Artifact | Fixed role | Explicit limit |
+|---|---|---|
+| ETAK escarpment `1826743`, `E680551.76 N6444450.80`, sheet `54481` | Development A | R0 condition-bound process development only |
+| ETAK ditch-adjacent slope `1826691`, `E679692.03 N6442784.16`, sheet `54472` | Development B | R0 condition-bound process development only; not an independent site/campaign claim |
+| Orajõgi bank slope `9688685`, `E681429.34 N6443825.32`, sheet `54481` | sealed OOD abstention stress | no inspection before recipe freeze and no positive morphology, transfer, target, or generalization credit |
+| Schott 2024 paper and pinned public implementation | operator-sequence and ablation reference | no code, constants, boundary conditions, hardness behavior, or scale transfer |
+| OPARA R0 negative-form diagnostic `441eaf9194cd...` | qualitative process-existence diagnostic | no width, depth, amplitude, spacing, scale, or geometry transfer |
+| Suur Taevaskoda | final visual/structural sentinel | no training, tuning, threshold selection, candidate selection, or scene-specific repair |
+
+Development A and B are one conservative leakage group unless a frozen physical-
+domain audit proves disjoint catchments and inference halos. They are never counted
+as Section 9.3 independent qualified sites. Orajõgi is not a comparable blind
+positive audit: its only passing result is bounded abstention wherever its frozen
+condition predicate or support is unknown or outside the Development A/B envelope.
+
+Before any R0 generation, the machine preregistration must bind the complete soil
+mixtures/layers/humus, authoritative decoded 1:200k `Q_Litoloogia_200` and
+`Q_Genees_200` domains plus coverage/unknown masks, ETAK geometry/distances,
+whole-domain drainage and real outlets, dated masked RGB/CIR, accepted corrected
+base, water/dynamic/object/non-heightfield/protected-feature masks, physical
+processing domains, code/environment, candidate/control configs, units, event
+distributions, budgets, seeds, metrics, thresholds, and rejection rules. A null,
+unhashed, inferred, or substituted required input blocks generation; the 1:50k
+domains may not replace the 1:200k domains.
+
+The only initial candidates are corrected-only `C0` and one rederived `C1` with
+continuous or rotation-qualified routing, canonical world samples, whole-domain
+upstream flux and outlets, declared runoff/seep/material fields, conservative
+erosion/deposition accounting, typed hard masks, and one absolute master cropped
+only after the solve. Development output is R0 descriptive evidence. Before
+opening Orajõgi, freeze the complete C1 recipe, seed, condition envelope,
+abstention rule, metrics, thresholds, preview extent, cameras, and visual rule.
+Any post-Orajõgi change terminates that recipe and requires a genuinely untouched
+replacement stress site.
+
+A frozen C1 may reach `research_preview_candidate` only after it passes its
+preregistered Development A/B safety, topology, conservation, partition, grid-
+leakage, typed-form, and packing-survival gates and Orajõgi abstention stress.
+This permits one immutable `research-microtopography-preview-v1` manifest under
+Section 14.6. The preview remains an R0 process hypothesis: attractive output or
+an OOD-abstention pass supplies no measured morphology-fit, positive blind-audit,
+production, owner, or transfer evidence.
+
 ## 10. Typed Structural Reconstruction
 
 Source repair precedes unresolved synthesis and is evaluated separately.
@@ -1347,23 +1402,28 @@ research_declared
 any pre-preview state -> research_rejected
 ```
 
-`research_declared` requires the bundle and preregistration in Sections 9.7-9.8.
-`research_trained` means only that the frozen training run completed.
-`development_survivor` passes hard surface-safety, forbidden-domain, weak-evidence
-fit, anti-copy, partition, and cost ceilings on development evidence.
+`research_declared` requires the applicable bundle and preregistration in Sections
+9.7-9.9. `research_trained` means only that the frozen training or deterministic
+development-generation run completed.
+`development_survivor` passes hard surface-safety, forbidden-domain, partition,
+and cost ceilings plus its bundle-specific development gates: weak-evidence fit
+and anti-copy for weak-surface candidates, or the Section 9.9 process gates for
+the erodible-slope R0 candidate.
 `research_recipe_frozen` binds code, environment, checkpoint, seed, inference
 windows, composer, pack extent, metrics, and visual rule before any frozen audit.
-`research_audit_pass` requires the ForestSemantic test split, Evo evidence,
-HY_PINE2 stress behavior, and, when opened, sealed Järvselja result to pass their
-preregistered role-specific gates. A pass permits one
+`research_audit_pass` requires every bundle-specific frozen audit to pass its
+preregistered role. For `forest-weak-research-bundle/1` these remain the
+ForestSemantic test split, Evo evidence, HY_PINE2 stress behavior, and, when
+opened, sealed Järvselja result. For `erodible-slope-research-bundle/1` it is the
+sealed Orajõgi abstention-only stress in Section 9.9. A pass permits one
 `research_preview_candidate`; it does not declare a winner or owner. Any audit
 failure, post-audit tuning, prohibited data access, copied/repeated relief,
 unbounded confident OOD output, or failed hierarchy/runtime gate is terminal
 `research_rejected` for that frozen recipe.
 
 Research comparison may report descriptive weak-surface fit, cross-view
-coherence, band energy, morphology descriptors, packing survival, and fixed visual
-preference against corrected-only. It may not report real-vs-real
+coherence, band energy, morphology descriptors, R0 process topology/conservation,
+packing survival, and fixed visual preference against corrected-only. It may not report real-vs-real
 non-inferiority, target RMSE, recoverable truth, production success, or Estonia
 transfer. Candidate selection for preview is by the preregistered research rule;
 cost may not rescue a visibly or geometrically failed candidate.
@@ -1977,10 +2037,13 @@ scientific authority, never packing correctness.
 
 Research-preview materialization order is exact:
 
-1. bind the previously frozen ForestSemantic semantic recipe and test audit, then
-   freeze the complete synthesis recipe and expectation before final Evo,
-   HY_PINE2, or Järvselja model evaluation;
-2. run and bind those final audits; a failure terminates the recipe rather than retuning;
+1. bind every applicable bundle-specific development input and completed
+   development audit, then freeze the complete synthesis recipe and expectation
+   before any sealed final audit; the forest bundle retains its exact
+   ForestSemantic/Evo/HY_PINE2/Järvselja ordering from Section 9.7 and the
+   erodible-slope bundle retains its Orajõgi ordering from Section 9.9;
+2. run and bind every bundle-specific final audit; a failure terminates the recipe
+   rather than retuning;
 3. compose one absolute finest master against the accepted corrected base;
 4. stage and independently verify `research-microtopography-preview-v1`;
 5. materialize a content-addressed merged format-2 manifest without modifying the
@@ -2082,15 +2145,19 @@ These gates are unchanged and are required before production owner selection.
 A research specialist instead requires all of the following, without claiming a
 production pass:
 
-- exact `forest-weak-research-bundle/1` artifacts, roles, licenses, hashes, site/
-  campaign identities, and no prohibited-data access;
+- exact applicable bundle artifacts, roles, licenses, hashes, identities, and no
+  prohibited-data access: `forest-weak-research-bundle/1` follows Sections
+  9.7-9.8 and `erodible-slope-research-bundle/1` follows Section 9.9;
 - a validated `ResearchSurfaceEvidence` artifact with `R0/R1/R2` tier, separate
   B1/B2 eligibility, probabilistic semantics, explicit unknown/forbidden masks,
-  and no fabricated total-error estimate;
-- no geometry loss outside `research_trainable` cells and no positive credit from
-  `research_diagnostic` or stress-only evidence;
-- frozen contiguous spatial leakage groups and the semantic, sensor/campaign,
-  stress, Järvselja, and Taevaskoda roles in Sections 9.7-9.8;
+  and no fabricated total-error estimate for weak-surface candidates; or the
+  complete hash-bound R0 process/condition contract in Section 9.9 for the
+  erodible-slope process candidate;
+- no geometry outside `research_trainable` weak-surface cells or the frozen
+  erodible-slope R0 condition/mask domain, and no positive credit from
+  `research_diagnostic`, R0 process references, or stress-only evidence;
+- frozen contiguous spatial leakage groups and every applicable bundle-specific
+  development, audit, stress, and sentinel role;
 - candidate state `research_preview_candidate` before packing;
 - literal non-production authority metadata and an immutable non-`latest` extent.
 
@@ -2542,6 +2609,30 @@ Failure parks the exact recipe and evidence; it does not trigger scene tuning,
 generic filler, another broad dataset hunt, or relaxation of production gates.
 Success proves only that the hypothesis is worth investigating visually.
 
+### Stage 2E: erodible-slope R0 process research
+
+This separately authorized path does not alter or inherit the forest bundle:
+
+1. resolve every blocker and freeze the machine preregistration under
+   `asset-gen/config/microtopography/erodible-slope/` with the exact Section 9.9
+   roles, sources, masks, physical domains, C0/C1 configs, units, budgets, gates,
+   preview extent, cameras, and corrected-only control;
+2. run C0/C1 on the complete Development A and B physical domains and crop only
+   after each whole-domain solve;
+3. reject candidates that violate protected features, typed masks, network/outlet
+   topology, conservative accounting, rotation/partition identity, one-meter grid
+   leakage, recognizable-form, cost, or packing-survival gates;
+4. freeze the surviving recipe, seed, condition envelope, abstention rule,
+   thresholds, and visual rule before opening Orajõgi;
+5. run Orajõgi once as OOD abstention stress with zero positive-evidence credit;
+   failure rejects the exact recipe and any change requires a new sealed site;
+6. only after every frozen gate passes, materialize one immutable non-`latest`
+   research preview through Section 14.6, complete the real-WebGPU gate, and
+   provide its manifest-bound URL for visual investigation.
+
+The output remains an R0 process hypothesis and the regime remains production
+`unsupported`. No result in this stage satisfies Section 9.3 or selects an owner.
+
 ### Stage 2P: public qualification and first production regime
 
 - convert/qualify the selective Hovi Järvselja/Hyytiälä forest subset first;
@@ -2641,6 +2732,9 @@ Do not retain `asset-gen/src/assetgen/process/micro_synth.py` as a fallback.
 - add a separately typed `forest-weak-research-bundle/1` configuration and
   `microtopography-research-surface/1.0.0` validation; do not overload the target
   registry with weak evidence;
+- add the separately typed `erodible-slope-research-bundle/1` R0 process
+  preregistration under `config/microtopography/erodible-slope/`; any unresolved
+  required input must remain a machine-visible generation blocker;
 - keep physical thresholds per regime/evidence; do not add one national roughness knob.
 
 ### 19.4 Recipe, verification, and release
@@ -2715,6 +2809,9 @@ Defaults recommended by this spec:
 - first research morphology investigation: the exact
   `forest-weak-research-bundle/1` path in Stage 2R, with no truth, owner, transfer,
   or release claim;
+- next R0 process investigation: the exact
+  `erodible-slope-research-bundle/1` path in Stage 2E, with Orajõgi reserved for
+  abstention-only stress and no positive-evidence credit;
 - first production morphology proof: whichever exact regime the zero-budget
   public-target protocol qualifies first; Hovi forest remains a conversion
   candidate, not a preselected owner;
@@ -2738,6 +2835,10 @@ The 2026-07-14 user review additionally closed these decisions:
   browser preview and cannot become target truth, a production owner, or evidence
   of Estonia transfer.
 
+The 2026-07-15 review additionally authorizes the bounded Stage 2E R0 process
+path in Section 9.9. It does not relax its explicit input blockers, qualify
+erodible-slope morphology truth, or change the production regime row.
+
 The remaining product decision is wide/national fine-coverage and retained-build
 storage policy after measured pilot entropy.
 
@@ -2747,8 +2848,10 @@ Required checkpoints:
 2. user reviews the Stage 1 corrected-source live URL;
 3. user reviews the first verified Stage 2R research-only live URL without that
    review changing production status;
-4. user reviews the first public-target-qualified production morphology regime;
-5. user explicitly approves any multi-parent/national cook.
+4. user reviews any verified Stage 2E R0 research-only live URL without that
+   review supplying positive morphology or production evidence;
+5. user reviews the first public-target-qualified production morphology regime;
+6. user explicitly approves any multi-parent/national cook.
 
 ## 22. Definition Of Done
 
@@ -2782,6 +2885,15 @@ exist under one recipe hash. Its terminal is
 `research_preview_investigated` or `research_rejected`, never project Definition
 of Done. It leaves all production claim cells `U`, all production owner fields
 null, all release rows unchanged, and canonical `latest.json` unchanged.
+
+### 22.2 Erodible-slope R0 checkpoint completion
+
+Stage 2E is complete only when the exact bundle/preregistration, resolved input
+blockers, Development A/B whole-domain C0/C1 evidence, frozen recipe and
+abstention rule, one-shot Orajõgi stress result, relevant labeled PNG diagnostics,
+immutable pack, exact real-WebGPU boot, and user visual investigation exist under
+one recipe hash. Its terminal and production effects are identical to Section
+22.1, but it carries no weak-surface, positive-audit, target-fit, or transfer claim.
 
 ## 23. Normative Research Record
 
