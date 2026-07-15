@@ -1099,6 +1099,26 @@ grass. This proves disjoint multi-parent delivery and three-site persistence, no
 continuity between adjacent synthesized parents, national coverage, production
 transfer, or `latest` authority.
 
+The user then reviewed all three sites blind, without being told what made their
+conditions distinct. Southwest looked natural both high and close, with local
+variation between bumpier and calmer ground; its visible material was less varied
+than the previously accepted site and carried a slight teal cast. Northcentral
+looked greener and especially natural because small dirt/stone lines formed
+coherent ground patterns. East also looked natural and broadly resembled southwest,
+possibly with a slightly smoother surface, although the user explicitly regarded
+that distinction as uncertain. Inspection with grass disabled exposed credible
+`6-20 cm` microdetail and restrained `30-70 cm` macrodetail appropriate to these
+mostly flat sites. A separate grass-enabled check also looked correct and grounded.
+All three therefore pass blind visual investigation, and exact recipe
+`dffa2ca2e3d0602fbb1abe548ede020b2dec8a4e7fe79cfe78f40e7ecec45fba` /
+manifest `8459fa8f5a7f281923398170daf3719fbed0d17bac2408ebe67af7bbd43a9a87`
+is `research_preview_investigated`. The forest morphology is locked for these
+three disjoint sites. The observed color, shading, and material differences are
+inherited contextual observations, not a demonstrated terrain-synthesis defect;
+no material correction is authorized from this review alone. This acceptance does
+not grant production, `latest`, national coverage, adjacent-parent continuity,
+another forest regime, or any non-forest regime.
+
 Elongated lines, ridges, or bumps are not defects merely because they occur in a
 field: cultivation, drainage, vehicle, erosion, and substrate processes can
 produce real long forms. Reject them only when evidence identifies ownership or
