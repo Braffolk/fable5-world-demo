@@ -922,6 +922,15 @@ This can test coherent reconstruction versus copying/quilting/phase/noise only;
 it cannot authorize Maa-amet source repair, conditions, independent validation,
 Estonia transfer, production, or browser publication.
 
+The no-output Phase 1 boundary is now frozen and independently clean. Config
+`8ce53408eb2d...`, semantic anchor `979fbbd24839...`, trust root
+`361ec1209ab8...`, and spec `c08c65428be0...` bind the exact Guérin mechanism,
+support/void behavior, construction-before-k19 transaction, visual gates,
+content-addressed QA and receipt bytes, and outcome-producing implementation.
+No synthesis has run and no NPZ member array, including k19, was opened during
+the freeze. The next operation is exactly one k11/k32/k36 construction run and
+manual review; failure parks the route without a tuning cycle.
+
 The national soil preflight resolved one apparent blocker from retained official
 documentation. Pure raised-bog soils encode the organic profile in their parsed
 peat texture sequence; deep profiles may be `T`-only, so blank `Huumus` is a

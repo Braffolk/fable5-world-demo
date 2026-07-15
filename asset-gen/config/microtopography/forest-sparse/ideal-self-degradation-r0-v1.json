@@ -1,0 +1,278 @@
+{
+  "schema": "forest-sparse-ideal-r0-screen/1",
+  "status": "phase_1_frozen_not_executed",
+  "semantic_anchor": {
+    "sha256": "979fbbd24839b0cc4285042515c0dec809a75af34eaa4a94fc3884846d103f2b",
+    "included_top_level_keys": ["schema", "purpose", "authority", "primary_method", "surfaces", "algorithm", "rejection_gates", "human_gate_workflow", "budget", "environment", "source_bindings"],
+    "excluded_top_level_keys": ["status", "semantic_anchor", "implementation", "output", "frozen_command_sequence"],
+    "justification": "Implementation file hashes and artifact paths are replay bookkeeping. Commands are operational spelling. Status is lifecycle metadata. None may alter sources, scientific operators, thresholds, gates, authority, receipts, budgets, or environment without changing this anchor."
+  },
+  "purpose": "One bounded ideal-self-degradation capacity screen of the released Guerin sparse terrain-amplification mechanism on absolute extraction-valid LUKE surfaces.",
+  "authority": {
+    "allows": [
+      "algorithmic_form_reconstruction_capacity_on_the_bound_foreign_analogue_surfaces"
+    ],
+    "forbids": [
+      "maa_amet_error_or_degradation_model",
+      "estonia_transfer",
+      "condition_responsiveness",
+      "independent_campaign_validation",
+      "production_or_owner_selection",
+      "browser_preview",
+      "cook_or_packing",
+      "latest_publication",
+      "runtime_wire_or_shader_change"
+    ],
+    "historical_luke_exception": "Supersedes the historical-LUKE exclusion only for this exact pre-bank absolute-surface R0 algorithm screen. It does not rehabilitate the residual bank or quilt."
+  },
+  "primary_method": {
+    "paper": {
+      "citation": "Guerin, Digne, Galin and Peytavie (2016), Sparse representation of terrains for procedural modeling, doi:10.1111/cgf.12821",
+      "path": "docs/deep-research/microtopography-generation/library/papers/2016-guerin-sparse-terrain-doi-10.1111-cgf.12821.pdf",
+      "sha256": "1cd279c92af7a78736973db6acbad4364c095f3e04ccf7e89aae09afc7f83340"
+    },
+    "repository": {
+      "url": "https://github.com/eric-guerin/terrain-amplification",
+      "revision": "5b83d65315e9845401df78f6a104c21f9bd473d5",
+      "snapshot_path": "docs/deep-research/microtopography-generation/library/repos/github-eric-guerin-terrain-amplification-5b83d653.tar.gz",
+      "snapshot_sha256": "3e2f64fb1d06c04e00988a35b88afa4dba6306aafc9df52df71a04451e5dd576",
+      "license": "MIT",
+      "released_algorithm": "Complete paired patch dictionary, mean removal, polynomial compact-support mask, OMP sparsity one, corresponding high atom substitution, weighted overlap-add. No released K-SVD training path."
+    }
+  },
+  "surfaces": {
+    "construction": [
+      {
+        "source_id": "k11",
+        "role": "construction",
+        "path": "asset-gen/data/in/microtopo-exemplars/lapinjarvi-2016/derived-v1/k11-ground.npz",
+        "sha256": "a5d78feece68a1dd30bf2721837b8bbee6ca1418f2443de15801a18191cd650b",
+        "shape": [256, 256],
+        "texel_m": 0.0625,
+        "origin_m": [-8.0, -8.0]
+      },
+      {
+        "source_id": "k32",
+        "role": "construction",
+        "path": "asset-gen/data/in/microtopo-exemplars/lapinjarvi-2016/derived-v1/k32-ground.npz",
+        "sha256": "04839a7b5fd5f650958090e68fef31881c3dfa9a9c017a96d475e6e25348a23f",
+        "shape": [256, 256],
+        "texel_m": 0.0625,
+        "origin_m": [-8.0, -8.0]
+      },
+      {
+        "source_id": "k36",
+        "role": "construction",
+        "path": "asset-gen/data/in/microtopo-exemplars/lapinjarvi-2016/derived-v1/k36-ground.npz",
+        "sha256": "7e120561120ea44baf346f7bbd99661487982b43e7d301c9644908abfa0b82b3",
+        "shape": [256, 256],
+        "texel_m": 0.0625,
+        "origin_m": [-8.0, -8.0]
+      }
+    ],
+    "evaluation_only": {
+      "source_id": "k19",
+      "role": "evaluation_only",
+      "path": "asset-gen/data/in/microtopo-exemplars/lapinjarvi-2016/derived-v1/k19-ground.npz",
+      "sha256": "1147bea0d3c2edf5bca9e4c8e916f3fb47fd5733c1ae1bcbd7c219f92ba1cae4",
+      "shape": [256, 256],
+      "texel_m": 0.0625,
+      "origin_m": [-8.0, -8.0],
+      "opening_rule": "The evaluation command may load k19 only after an immutable construction artifact passes every numeric gate and a separately authored persisted human adjudication passes every indexed construction visual gate. k19 never supplies atoms, parameters, thresholds, selection, or retries."
+    }
+  },
+  "algorithm": {
+    "fine_texel_m": 0.0625,
+    "coarse_texel_m": 1.0,
+    "factor": 16,
+    "degradation": {
+      "operator": "confidence_weighted_exact_1m_area_mean",
+      "min_direct_fraction": 0.5,
+      "min_support_fraction": 0.75,
+      "min_mean_confidence": 0.35,
+      "unsupported_policy": "absent_not_zero_not_nearest_not_filled"
+    },
+    "reconstruction_baseline": "support_preserving_normalized_bilinear_only_for_diagnostics",
+    "low_patch_cells": 8,
+    "low_stride_cells": 2,
+    "high_patch_cells": 128,
+    "high_stride_cells": 32,
+    "patch_footprint_m": 8.0,
+    "overlap": "pinned_build_mask_polynomial_weighted_overlap_add",
+    "dictionary": {
+      "kind": "complete_paired_exemplar_dictionary",
+      "construction_protocol": "three_leave_one_plot_out_folds_then_all_three_for_k19",
+      "min_low_support_fraction": 0.75,
+      "min_high_direct_fraction": 0.7,
+      "min_atom_norm_m": 1e-12,
+      "normalization": "arithmetic_pre_mask_low_and_high_means_then_both_paired_atoms_divided_by_the_corresponding_masked_low_atom_l2_norm_exactly_as_pinned_matlab",
+      "unsupported_policy": "retain_separate_low_and_high_support_and_confidence_masks"
+    },
+    "matching": {
+      "method": "support_restricted_pinned_mask_orthogonal_matching_pursuit",
+      "sparsity": 1,
+      "min_common_support_fraction": 0.7,
+      "tie_break": "lowest_squared_error_then_dictionary_index",
+      "mean": "arithmetic_mean_over_supported_patch_cells_before_mask_multiplication",
+      "coefficient": "least_squares_on_common_low_support_with_mask_squared_euclidean_weight_because_query_and_atom_are_each_pre_multiplied_by_the_pinned_mask",
+      "confidence_role": "confidence_controls_low_cell_and_atom_admission_but_does_not_reweight_the_pinned_omp_objective"
+    },
+    "output_support": "intersection_of_selected_exemplar_high_support_and_target_fine_measured_or_bounded_fill_support; confidence_is_the_pairwise_minimum; target_voids_remain_absent",
+    "sparsity": 1,
+    "randomness": "none",
+    "phase_or_augmentation": "none",
+    "forbidden_operators": [
+      "nearest_fill_as_truth",
+      "quilting_or_patch_search_outside_the_paired_dictionary",
+      "phase_randomization",
+      "rotation_or_reflection_augmentation",
+      "generic_noise_or_fbm",
+      "post_hoc_form_injection"
+    ],
+    "declared_release_departures": [
+      "Use explicit measured/support/confidence masks instead of treating every image pixel as truth.",
+      "Use a metric 1 m confidence-weighted area observation instead of MATLAB imresize's implicit image kernel.",
+      "Include every mathematically valid endpoint patch origin; the release's floor-without-plus-one loop omits the last valid row and column.",
+      "Do not replicate unsupported borders; missing support remains absent."
+    ]
+  },
+  "rejection_gates": {
+    "scope": "Float metric reconstruction before any quantization, packing, cook, or renderer operation.",
+    "support_safe_metrics": {
+      "relief": "Gaussian sigma 8 fine cells, truncate 4 sigma; accept residual only after 32-cell binary erosion and complete normalized kernel support.",
+      "gradient": "Central finite differences scored only after one-cell erosion of common direct-measurement support.",
+      "spectrum": "Largest deterministic all-supported square of at least 64 cells; least-squares plane detrend; separable Hann window; no zero-filled void boundary enters the FFT.",
+      "seams": "Only adjacent pairs with common target and reconstruction support enter seam and reference step distributions."
+    },
+    "numeric_ranges": {
+      "direct_truth_coverage": [0.45, 1.0],
+      "fine_relief_rms_ratio": [0.5, 1.75],
+      "gradient_p95_ratio": [0.4, 2.0],
+      "excursion_component_wasserstein_median_units": [0.0, 2.0],
+      "effective_atom_count": [4.0, 25.0],
+      "max_atom_fraction": [0.0, 0.4],
+      "source_count": [2.0, 3.0],
+      "max_source_fraction": [0.0, 0.8],
+      "seam_step_ratio": [0.0, 2.0],
+      "axis_spectral_energy_fraction": [0.0, 0.25],
+      "fine_relief_neighbor_correlation": [0.05, 0.99],
+      "assigned_patch_count": [8.0, 25.0]
+    },
+    "visual": [
+      {
+        "id": "copying",
+        "reject_if": "A distinctive measured form is reproduced as a recognizable direct copy, or one atom visibly dominates the reconstructed plot."
+      },
+      {
+        "id": "nearest_source",
+        "reject_if": "The reconstruction reads as one source plot transplanted wholesale or as spatial blocks switching between source identities."
+      },
+      {
+        "id": "quilting",
+        "reject_if": "Any patch boundary, overlap cross, rectangular mosaic, or discontinuity is visible in absolute height or fine relief."
+      },
+      {
+        "id": "phase_and_grid",
+        "reject_if": "Forms lock to the 2 m placement phase, repeat at the patch stride, or produce axis-aligned/grid-periodic structure absent from measured truth."
+      },
+      {
+        "id": "noise",
+        "reject_if": "Added relief reads as unstructured bumpiness, speckle, random roughness, or a fine remainder rather than spatially coherent terrain forms."
+      },
+      {
+        "id": "form",
+        "reject_if": "The reconstruction does not retain recognizable multiscale mound, depression, ridge, channel, and connective layout comparable to the held-out absolute surface."
+      },
+      {
+        "id": "void_and_support",
+        "reject_if": "Unsupported cells are shown or scored as measured truth, or low-confidence/void boundaries create apparent forms."
+      }
+    ],
+    "decision": "Construction numerics create no authority. A separately authored hash-bound human pass over every construction panel and assignment trace is required before k19 can open. K19 numerics also create no authority; a second separately authored hash-bound human adjudication is required for the terminal algorithm-capacity-only decision. Any failure parks Guerin/LUKE without parameter, threshold, seed, patch, dictionary, degradation, or gate tuning."
+  },
+  "human_gate_workflow": {
+    "approval_schema": "forest-sparse-visual-adjudication/1",
+    "self_authorization": "forbidden",
+    "artifact_identity": "Each stage is first written to staging. A canonical content manifest enumerates and hashes every manifest, QA index, PNG, assignment trace, unfilled template, and copied prior receipt. The SHA-256 of that content-manifest file is the immutable directory identity. Replay rejects every added, omitted, replaced, duplicate, unsafe-path, non-regular, or symlink file.",
+    "receipt_preservation": "Evaluation stores the exact construction receipt bytes inside its own content-addressed artifact. The terminal artifact stores exact copies of both construction and evaluation receipts; no receipt is canonicalized or regenerated.",
+    "receipt_contract": {
+      "required_reviewer_identity": "project_owner_human_reviewer",
+      "authoring_method_enum": ["human_authored_outside_generator"],
+      "required_authoring_method": "human_authored_outside_generator",
+      "required_receipt_keys": ["schema", "stage", "config_sha256", "semantic_sha256", "artifact_content_manifest_sha256", "reviewer_identity", "authoring_method", "adjudicated_at", "decision", "reviewed_files", "gate_decisions"],
+      "required_review_file_keys": ["path", "sha256"],
+      "required_gate_decision_keys": ["id", "passed", "notes"],
+      "generator_rule": "The generator emits only an unfilled template with null identity, method, timestamp, decision, and gate decisions. It never creates a filled receipt.",
+      "provenance_limit": "Exact fields and bytes establish a replayable human-authorship assertion under this project contract; arbitrary strings or this validator do not cryptographically prove who authored the receipt."
+    },
+    "construction": "The construction command emits an immutable manifest, QA index, three eight-panel PNGs, three complete assignment traces, and an unfilled approval template. Evaluation requires a human-authored outside-generator receipt with the exact configured identity and method, timestamp, exact artifact content-manifest hash, every indexed file/hash, ordered boolean decisions and notes for every frozen visual gate, and aggregate pass.",
+    "evaluation": "The k19 command emits a separate immutable pending artifact and unfilled approval template. Only the finalization command may record algorithm_capacity_only, and only from a human-authored outside-generator complete k19 visual receipt.",
+    "authorized_outcome_before_terminal_pass": "none"
+  },
+  "budget": {
+    "algorithm_realization_count": 1,
+    "construction_execution_count": 1,
+    "evaluation_execution_count_if_human_unlocked": 1,
+    "failed_real_attempts_before_park": 1,
+    "max_wall_seconds": 1200,
+    "max_peak_rss_bytes": 8589934592,
+    "cpu_threads": 1,
+    "gpu": "forbidden",
+    "network": "forbidden",
+    "fallback": "park_guerin_luke_and_return_to_an_independently_qualified_candidate"
+  },
+  "environment": {
+    "runner": "uv",
+    "python_requirement": ">=3.11",
+    "pyproject_path": "asset-gen/pyproject.toml",
+    "pyproject_sha256": "ae45546adf9063757e04c8826bcf4b3908a04fc91a90bcf9bba359ddc706bfd5",
+    "uv_lock_path": "asset-gen/uv.lock",
+    "uv_lock_sha256": "f62d14092296eea2d13af9ee31af8c070b518984fae46a27a891f4e91ccb3f5e",
+    "required_environment": {
+      "OMP_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": "1",
+      "VECLIB_MAXIMUM_THREADS": "1"
+    }
+  },
+  "source_bindings": [
+    {"path": "docs/deep-research/microtopography-generation/library/papers/2016-guerin-sparse-terrain-doi-10.1111-cgf.12821.pdf", "sha256": "1cd279c92af7a78736973db6acbad4364c095f3e04ccf7e89aae09afc7f83340"},
+    {"path": "docs/deep-research/microtopography-generation/library/repos/github-eric-guerin-terrain-amplification-5b83d653.tar.gz", "sha256": "3e2f64fb1d06c04e00988a35b88afa4dba6306aafc9df52df71a04451e5dd576"},
+    {"path": "docs/deep-research/microtopography-generation/library/repos/terrain-amplification/README.md", "sha256": "79c9b0fea14cfde0b365ece3423327229c98d1e970e326e18a0fa9812b0467d4"},
+    {"path": "docs/deep-research/microtopography-generation/library/repos/terrain-amplification/build_mask.m", "sha256": "9759d899327bf546307b2f7aba9bf58e91d715d5755008c771ad35e2856e235f"},
+    {"path": "docs/deep-research/microtopography-generation/library/repos/terrain-amplification/terrain_dilate.m", "sha256": "ee247101382faca4319739e2e69e6d5c10bb7a36ccd361ce7601bf3ceebf2f0e"},
+    {"path": "docs/deep-research/microtopography-generation/library/repos/terrain-amplification/terrain_super_resolution.m", "sha256": "2afdce357ac22f29c632c57f6c0e3fa7855f15aae083730e27ae5fcd32e915ee"},
+    {"path": "docs/deep-research/microtopography-generation/library/repos/terrain-amplification/LICENSE.txt", "sha256": "0b70a8f54fc2d902f00ec38281d7e5e5335cadbd08f8f8114d77158db567cf82"},
+    {"path": "asset-gen/config/microtopography-exemplars.json", "sha256": "7f0b47eaac270f92b0fca9b531af4999c126673a1ce22bc87052e05fd4c7f822"},
+    {"path": "asset-gen/data/in/microtopo-exemplars/lapinjarvi-2016/manifest.json", "sha256": "650ad26bc68284af28f0d222c175044758de83f9552cf742d321ef25353b9043"},
+    {"path": "asset-gen/data/in/microtopo-exemplars/lapinjarvi-2016/derived-v1/qa/ground-extraction-metrics.json", "sha256": "920625525f5a2f1d9b4448d207f9282e73c8866bb4977e13367329d26de07a35"},
+    {"path": "asset-gen/src/assetgen/process/microtopo/preprocess.py", "sha256": "a48a90798fa7c2465d14511eb8523b947093f450aaf0f46bd9d1c227540790a7"},
+    {"path": "asset-gen/src/assetgen/process/microtopo/model.py", "sha256": "c1f410ee96a27e40f6643a74387761308cb159c95f90f20e51fa4ecf7692c2d1"},
+    {"path": "asset-gen/pyproject.toml", "sha256": "ae45546adf9063757e04c8826bcf4b3908a04fc91a90bcf9bba359ddc706bfd5"},
+    {"path": "asset-gen/uv.lock", "sha256": "f62d14092296eea2d13af9ee31af8c070b518984fae46a27a891f4e91ccb3f5e"}
+  ],
+  "implementation": {
+    "package": "assetgen.terrain.microtopography.forest_sparse",
+    "trust_root_path": "asset-gen/src/assetgen/terrain/microtopography/forest_sparse/frozen_anchor.py",
+    "files": [
+      {"path": "asset-gen/src/assetgen/terrain/microtopography/forest_sparse/__init__.py", "sha256": "e286b8805be4e8665ec28f079c913cb3ec8d382d3d3ffbeb399d01aa9fde0017"},
+      {"path": "asset-gen/src/assetgen/terrain/microtopography/forest_sparse/__main__.py", "sha256": "4e58b4ef5ddc25626b3e4ad5c8e9e84e7261900a819ccd65e4b4da953f7dd4eb"},
+      {"path": "asset-gen/src/assetgen/terrain/microtopography/forest_sparse/contracts.py", "sha256": "22963db58da5047af82fb864f69ae8d889158eda5d171a026e102c52f9dc5097"},
+      {"path": "asset-gen/src/assetgen/terrain/microtopography/forest_sparse/frozen_anchor.py", "sha256": "361ec1209ab8bd613daed53df39d99aacdd635a70fff8f863eb8de4902fe8dac"},
+      {"path": "asset-gen/src/assetgen/terrain/microtopography/forest_sparse/operators.py", "sha256": "4e47c04fe5e3a38934101ad207c6fb5b8e6bf562b432cb63d7e0145c0dbba53e"},
+      {"path": "asset-gen/src/assetgen/terrain/microtopography/forest_sparse/qa.py", "sha256": "25407879f573e34cab7ec1ebdf251fe65cfbbbe739c516e7c7ec922215dee7f6"},
+      {"path": "asset-gen/src/assetgen/terrain/microtopography/forest_sparse/screen.py", "sha256": "f1911315c1b41562d0a2f359e38cb2ee68f138f92735e45d1a4382792912278e"}
+    ]
+  },
+  "output": {
+    "root": "asset-gen/data/work/microtopography/forest-sparse/ideal-self-degradation-r0-v1",
+    "immutable": true,
+    "qa_images": "Construction writes three eight-panel PNGs and complete per-patch source/coordinate/coefficient/error traces. Human-unlocked evaluation writes one equivalent k19 package. Each staged content manifest binds the result, QA index, every review file, unfilled template, and copied exact receipt before its own hash becomes the immutable directory identity.",
+    "publication": "none"
+  },
+  "frozen_command_sequence": {
+    "construction": "cd asset-gen && PYTHONPYCACHEPREFIX=/tmp/assetgen-forest-sparse-pycache OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 UV_CACHE_DIR=/tmp/uv-cache uv run --offline python -m assetgen.terrain.microtopography.forest_sparse --config config/microtopography/forest-sparse/ideal-self-degradation-r0-v1.json --run-construction",
+    "evaluation_after_human_authored_construction_pass": "cd asset-gen && PYTHONPYCACHEPREFIX=/tmp/assetgen-forest-sparse-pycache OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 UV_CACHE_DIR=/tmp/uv-cache uv run --offline python -m assetgen.terrain.microtopography.forest_sparse --config config/microtopography/forest-sparse/ideal-self-degradation-r0-v1.json --run-evaluation --construction-manifest <immutable-construction-manifest> --visual-approval <human-authored-outside-generator-construction-receipt>",
+    "terminal_after_human_authored_k19_adjudication": "cd asset-gen && PYTHONPYCACHEPREFIX=/tmp/assetgen-forest-sparse-pycache OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 UV_CACHE_DIR=/tmp/uv-cache uv run --offline python -m assetgen.terrain.microtopography.forest_sparse --config config/microtopography/forest-sparse/ideal-self-degradation-r0-v1.json --finalize-evaluation --evaluation-manifest <immutable-evaluation-manifest> --visual-approval <human-authored-outside-generator-evaluation-receipt>"
+  }
+}

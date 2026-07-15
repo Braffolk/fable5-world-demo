@@ -232,7 +232,7 @@ by an Estonia target-scale paper.
 
 | Primary work | Demonstrated scale, data, degradation, and evaluation | Code/data/checkpoint and access | Direct finding | Limitation and permitted transfer |
 |---|---|---|---|---|
-| Eric Guérin, Julie Digne, Eric Galin, Adrien Peytavie (2016), *Sparse Representation of Terrains for Procedural Modeling* | Paired low/high terrain patches; results up to `8192 x 8192`; exemplar and input must contain similar terrain; timing and visual evaluation | Full paper local; linked MATLAB repository snapshot revision `5b83d65315e9845401df78f6a104c21f9bd473d5`, MIT, officialness not yet verified and code not yet read line-by-line; no national dataset or learned checkpoint | Coupled sparse coefficients can transfer exemplar detail while conditioning on low terrain | It does not supply material/geology semantics or guaranteed geomorphological/small-scale coherence; use only as a contextual-exemplar challenger/component |
+| Eric Guérin, Julie Digne, Eric Galin, Adrien Peytavie (2016), *Sparse Representation of Terrains for Procedural Modeling* | Paired low/high terrain patches; results up to `8192 x 8192`; exemplar and input must contain similar terrain; timing and visual evaluation | Full paper local and read; linked MATLAB snapshot revision `5b83d65315e9845401df78f6a104c21f9bd473d5`, MIT, read line-by-line; the release uses a complete dictionary and OMP sparsity one rather than exposing the paper's learned-dictionary path; no national dataset or learned checkpoint | Coupled sparse coefficients can transfer exemplar detail while conditioning on low terrain | It does not supply material/geology semantics or guaranteed geomorphological/small-scale coherence; use only as a contextual-exemplar challenger/component |
 | Oscar Argudo, Albert Chica, Carlos Andujar (2018), *Terrain Super-resolution through Aerial Imagery and Fully Convolutional Networks* | `15 m` DEM plus `1 m` orthophoto to `2 m` DEM on selected Pyrenees/Tyrol alpine terrain, roughly `400 m` training tiles; Euclidean height loss and metre-scale errors | Full paper local; no official code/checkpoint found; paper access does not license an implementation | Registered optical imagery can improve structural terrain inference | Vegetation and shadows produce false height, and the output scale is far above 6.25 cm; transfer only the masked optical-conditioning hypothesis |
 | Yinhuai Wang, Jiwen Yu, Jian Zhang (2023), *Zero-Shot Image Restoration Using Denoising Diffusion Null-Space Model* | Natural-image inverse problems with explicit linear operator `A`; super-resolution uses synthetic average pooling/replication on ImageNet/CelebA | Full paper local; linked repository snapshot revision `00b58eac7843a4c99114fd8fa42da7aa2b6808af`, MIT, officialness not yet verified and code not yet read line-by-line; pretrained priors are natural-image, not terrain | Range/null-space projection can enforce a known linear observation exactly | Maa-amet is not known block averaging and contains correctable error; transfer soft observation-likelihood reasoning only, never exact raw-DTM preservation or its image prior |
 | Omer Bar-Tal, Lior Yariv, Yaron Lipman, Tali Dekel (2023), *MultiDiffusion: Fusing Diffusion Paths for Controlled Image Generation* | Overlapping Stable Diffusion image/latent crops fused through weighted least-squares pixel consensus; panorama/control evaluation | Full paper local; linked repository snapshot revision `69bcdcef437dfdbf48c53624d6bf6f397b5f4894`, officialness not yet verified and code not yet read line-by-line; audited snapshot has no license file | Per-step overlap consensus can reconcile local denoiser predictions | It guarantees neither height gradients, normals, curvature, drainage nor hierarchy; transfer only as a terrain-native tiling challenger after validation |
@@ -979,6 +979,99 @@ Its smallest proof is the two bound asset diagnostics plus one exact-camera,
 immutable non-`latest` corrected-only-versus-C1 browser comparison. It changes no
 wire format or runtime synthesis law and can never authorize production or
 `latest` publication.
+
+### 9.11 LUKE absolute-surface sparse capacity exception
+
+The historical LUKE residual bank and quilt remain rejected and excluded by
+Section 9.7. One narrower exception is authorized by machine preregistration
+`asset-gen/config/microtopography/forest-sparse/ideal-self-degradation-r0-v1.json`
+(full-config SHA-256 `8ce53408eb2df83dfbd9b529c173e12d2eedbdfb1be494dbd3625096556a43de`; normative semantic SHA-256
+`979fbbd24839b0cc4285042515c0dec809a75af34eaa4a94fc3884846d103f2b`):
+the four pre-bank, extraction-approved absolute `256 x 256` surfaces at
+`0.0625 m` may enter exactly one ideal-self-degradation R0 screen of the pinned
+Guérin release mechanism. `k11`, `k32`, and `k36` supply complete paired atoms in
+three leave-one-plot-out construction folds. Those folds first write an immutable
+construction artifact with numeric results, float-height panels, and complete
+selected-atom source/coordinate/coefficient/error traces. `k19` remains unopened
+until every construction numeric gate passes and a human-authored outside-generator
+receipt with the exact configured reviewer-role and authoring-method fields
+hash-binds every indexed review file and explicitly passes every visual gate.
+This is a replayable project-contract assertion, not cryptographic proof of the
+author's identity; arbitrary strings cannot satisfy the exact receipt schema.
+`k19` may not supply an atom, threshold, parameter, selection, retry, or fallback.
+
+The fixed operator computes confidence-weighted 1 m area observations, uses
+`8 x 8` low patches paired with `128 x 128` fine patches, 2 m placement stride,
+the release's polynomial compact-support overlap, and sparsity-one OMP. Matching
+uses arithmetic pre-mask means and the exact mask-squared Euclidean effect from
+multiplying both query and atom by the pinned mask; corresponding high atoms are
+divided by their low-atom norm as in the pinned MATLAB. Explicit evidence masks,
+metric area degradation, complete endpoint patch coverage, and absent rather than
+replicated unsupported borders are the declared support-aware departures.
+
+Elevation, direct-measurement support, bounded-fill support, and confidence remain
+separate. Every emitted fine sample intersects the selected exemplar's fine
+support with the target fine measured-or-bounded support, using the lesser
+confidence; target voids remain absent. QA truth is displayed only on that common
+support. Gradients use one-cell-eroded common direct support. Fine relief requires
+a complete 32-cell-eroded, four-sigma Gaussian kernel. Spectral QA uses a fully
+supported square, plane detrending, and a separable Hann window, never a zero-filled
+void edge. All numeric and float-height visual rejection gates for copying,
+nearest-source transplantation, quilting, patch phase/grid, noise, recognizable
+forms, and void boundaries are frozen before `k19` opens.
+
+The `k19` command writes a second immutable artifact with outcome `none` and
+pending human receipt. The generator creates only unfilled receipt templates.
+Only a second human-authored outside-generator receipt may create a terminal
+`algorithm_capacity_only` decision. Numeric success alone, an unfilled template,
+or the executing agent's own claim cannot authorize either transition.
+
+Each stage is sealed through a canonical content manifest enumerating and hashing
+the result manifest, QA index, every PNG, every assignment trace, the exact
+unfilled template, and every copied prior receipt. The SHA-256 of that content
+manifest is the immutable directory identity. Replay rejects any replacement,
+addition, omission, duplicate, unsafe path, symlink, or non-regular file. The
+evaluation artifact preserves the construction receipt's exact bytes; the
+terminal artifact preserves both receipts' exact bytes. Receipts are never
+canonicalized or regenerated downstream. Each receipt transition captures the
+source once, then parses, validates, hashes, and copies that same immutable byte
+buffer. Finalization applies the same rule to its preserved construction receipt;
+it may not hash and subsequently reopen the path.
+
+The semantic hash covers the schema, purpose, authority, primary sources, exact
+surface identities, algorithm, thresholds, numeric and visual gates, receipt
+contract, budgets, environment, and source bindings. Code hardcodes and verifies
+that anchor. Lifecycle status, implementation hashes, output paths, and command
+spelling are excluded as non-scientific bookkeeping, avoiding a code/config hash
+cycle without allowing a source, threshold, gate, or authority change to pass
+silently.
+
+The single deliberate machine preregistration trust-root update point is
+`asset-gen/src/assetgen/terrain/microtopography/forest_sparse/frozen_anchor.py`
+(SHA-256 `361ec1209ab8bd613daed53df39d99aacdd635a70fff8f863eb8de4902fe8dac`).
+It hardcodes the semantic anchor and exact SHA-256 map for every other
+outcome-producing file in that package. Static closure requires the package file
+set, config implementation bindings, trust-root map, and actual bytes to match
+exactly; additions and omissions fail. The trust root deliberately cannot
+self-hash. Its own hash is recorded in the full config and this specification,
+and the accepting repository commit seals that identity.
+
+The CLI package initializer is inert. Before importing a sibling outcome module,
+`__main__` requires the package directory to contain exactly the seven anchored
+regular `.py` files, with no symlink, directory, local `__pycache__`, bytecode,
+extension module, extra source module, or other shadow-capable entry. After
+imports and before config or surface work, it verifies every outcome module's
+`__spec__.origin` against the anchored source path and verifies the bound external
+`assetgen.process.microtopo.model` origin against its exact source path. Frozen
+commands set `PYTHONPYCACHEPREFIX=/tmp/assetgen-forest-sparse-pycache`; local
+package bytecode is forbidden rather than silently preferred.
+
+This exception can answer only whether that algorithm reconstructs coherent form
+under its own ideal paired observation. It grants no Maa-amet degradation or
+error model, Estonia transfer, condition responsiveness, campaign independence,
+production/owner authority, packing, cook, browser, `latest`, runtime, wire, or
+shader authority. Any construction or `k19` failure parks Guérin/LUKE without
+tuning the degradation, patches, dictionary, gates, or code.
 
 ## 10. Typed Structural Reconstruction
 
