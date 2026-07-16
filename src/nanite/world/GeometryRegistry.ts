@@ -2078,6 +2078,21 @@ export class GeometryRegistry {
     this.pushRange(this.instAttr, base * 8, pool.blockSize * 8);
     this.pushRange(this.instMeshAttr, base, pool.blockSize);
   }
+
+  /** Refresh only pooled-instance root Y values after the packed terrain morph
+   *  centre changes. X/Z/scale, orientation, idF, mesh ownership, and parked slots
+   *  remain untouched. `a` is the block's absolute A-word mirror. */
+  rewriteInstanceBlockGround(block: number, first: number, count: number, a: Float32Array): void {
+    const pool = this.instPool;
+    if (!pool) throw new Error('GeometryRegistry: no instance pool reserved');
+    if (block < 0 || block >= pool.blocks) throw new Error(`GeometryRegistry: rewriteInstanceBlockGround ${block} out of range`);
+    if (first < 0 || count < 0 || first + count > pool.blockSize) {
+      throw new Error(`GeometryRegistry: invalid ground range ${first}+${count}/${pool.blockSize}`);
+    }
+    const base = pool.first + block * pool.blockSize;
+    for (let i = first; i < first + count; i++) this.instArr[(base + i) * 8 + 1] = a[i * 4 + 1] as number;
+    this.pushRange(this.instAttr, (base + first) * 8, count * 8);
+  }
   /** slot's fixed geometry base offsets (constant for the pool's lifetime;
    *  cluster base also = the mesh record's clusterStart after a load). Probe/debug. */
   tileSlotBase(slot: number): { vert: number; tri: number; cluster: number } {

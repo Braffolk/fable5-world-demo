@@ -422,6 +422,10 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     let speciesMap: ReturnType<typeof buildSpeciesMap> | null = null;
     if (streamed) {
       speciesMap = buildSpeciesMap(worldManifest.dictionaries, VegClass.KarstGnarl * 8);
+      // Format-2 negative height rungs must ground every streamed near instance on
+      // the same CPU-mirrored finest/morph surface as terrain and grass. Keeping the
+      // sampler absent preserves old-manifest record-key grounding exactly.
+      const groundHeightAt = field.cookedMicroHeight ? (x: number, z: number): number => field.heightAt(x, z) : undefined;
       // eslint-disable-next-line no-console
       console.log(speciesMap.summary);
       // idF → EVERY rendering head. Trees add a leaf + voxel crown sibling on the SAME
@@ -444,6 +448,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
           idFOf: speciesMap.idFOf,
           boulderRadiusOf: (cls) => lib.clsRadius[cls] ?? 1,
           bandDist: INST_BAND_DIST,
+          ...(groundHeightAt ? { groundHeightAt } : {}),
         }),
         headsOf,
         reg: wr.registry,
@@ -456,7 +461,11 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       // eslint-disable-next-line no-console
       console.log(scatterMap.summary);
       const uband = new InstanceBand({
-        plan: understoryDebrisPlan(worldSource, worldManifest, scatterMap, { cellMeters: UBAND_CELL, bandDist: UBAND_DIST }),
+        plan: understoryDebrisPlan(worldSource, worldManifest, scatterMap, {
+          cellMeters: UBAND_CELL,
+          bandDist: UBAND_DIST,
+          ...(groundHeightAt ? { groundHeightAt } : {}),
+        }),
         headsOf,
         reg: wr.registry,
       });
@@ -502,6 +511,10 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // (generated world: origin stays (0,0) forever — under the 8 km threshold).
   engine.onUpdate(() => {
     const c = engine.camera.position;
+    // InstanceBand refresh samples heightAt during brain.update, so advance the
+    // shared morph centre first. The terrain shader sees this same centre later in
+    // the frame; generated/old manifests retain their previous path.
+    if (streamed && field.cookedMicroHeight) field.setSurfaceCenter(c.x, c.z);
     brain.update(c.x, c.z);
     brain.drain(engine.renderer);
     // S6d KEYSTONE: the camera-relative raster hook has landed (NaniteCam builds
@@ -521,7 +534,6 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     // generated world leaves the anchor at (0,0) ⇒ every sampler is IEEE-identical.
     if (streamed) {
       field.setRenderAnchor(Math.round(c.x / 512) * 512, Math.round(c.z / 512) * 512);
-      if (field.cookedMicroHeight) field.setSurfaceCenter(c.x, c.z);
     }
     Object.assign(engine.stats.counters, brain.counters(), streamOrigin.counters());
   });

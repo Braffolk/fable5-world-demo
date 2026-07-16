@@ -126,12 +126,18 @@ export interface ChunkInstanceOpts {
   idFOf: (species: number, variant: number) => number;
   /** nominal radius per rock class — presence enables ETAK boulder ingest. */
   boulderRadiusOf?: (cls: number) => number;
+  /** Accepted packed-surface sampler. Present only for negative-rung manifests;
+   *  absence preserves the record-key LOD0 grounding path byte-for-byte. */
+  groundHeightAt?: (x: number, z: number) => number;
 }
 
 export interface ChunkInstances {
   a: Float32Array; // A-words (x,y,z,scale) — ABSOLUTE game space
   b: Float32Array; // B-words (yaw,leanX,leanZ,idF)
   count: number;
+  /** Root/base offset from the accepted terrain surface. NaN means the source
+   *  supplied an authoritative Y and the instance must not be regrounded. */
+  groundOffsets?: Float32Array;
 }
 
 /**
@@ -153,6 +159,7 @@ export async function buildChunkInstances(
   const derive = await makeDeriver(source, manifest, key);
   const aArr: number[] = [];
   const bArr: number[] = [];
+  const groundOffsets: number[] | null = opts.groundHeightAt ? [] : null;
 
   const trees = manifest.layers.trees ? await source.fetch('trees', key) : null;
   if (trees && trees.kind === 'records') {
@@ -169,7 +176,12 @@ export async function buildChunkInstances(
         ageStageVariant(scale, ditherOfVariant(cols.variant[i] as number)),
       );
       const dv = cols.y && cols.yaw && cols.leanX && cols.leanZ ? null : derive(xLocal, zLocal);
-      aArr.push(x, cols.y ? (cols.y[i] as number) : (dv as { h: number }).h - scale * 0.12, z, scale);
+      const groundOffset = -scale * 0.12;
+      const y = cols.y
+        ? (cols.y[i] as number)
+        : (opts.groundHeightAt ? opts.groundHeightAt(x, z) : (dv as { h: number }).h) + groundOffset;
+      aArr.push(x, y, z, scale);
+      groundOffsets?.push(cols.y ? Number.NaN : groundOffset);
       bArr.push(
         cols.yaw ? (cols.yaw[i] as number) : (dv as { yaw: number }).yaw,
         cols.leanX ? (cols.leanX[i] as number) : (dv as { leanX: number }).leanX,
@@ -194,14 +206,25 @@ export async function buildChunkInstances(
         originX: minX,
         originZ: minZ,
         radiusOf: opts.boulderRadiusOf,
-        heightAt: (wx, wz) => derive(wx - minX, wz - minZ).h,
+        heightAt: opts.groundHeightAt ?? ((wx, wz) => derive(wx - minX, wz - minZ).h),
       });
-      for (let i = 0; i < inst.a.length; i++) aArr.push(inst.a[i] as number);
+      for (let i = 0; i < inst.a.length; i += 4) {
+        const x = inst.a[i] as number;
+        const y = inst.a[i + 1] as number;
+        const z = inst.a[i + 2] as number;
+        aArr.push(x, y, z, inst.a[i + 3] as number);
+        groundOffsets?.push(y - (opts.groundHeightAt as (x: number, z: number) => number)(x, z));
+      }
       for (let i = 0; i < inst.b.length; i++) bArr.push(inst.b[i] as number);
     }
   }
 
-  return { a: Float32Array.from(aArr), b: Float32Array.from(bArr), count: aArr.length / 4 };
+  return {
+    a: Float32Array.from(aArr),
+    b: Float32Array.from(bArr),
+    count: aArr.length / 4,
+    ...(groundOffsets ? { groundOffsets: Float32Array.from(groundOffsets) } : {}),
+  };
 }
 
 // --- derive-if-absent --------------------------------------------------------------------

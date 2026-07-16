@@ -23,6 +23,7 @@
 import type { GeometryRegistry } from './GeometryRegistry';
 import { buildChunkInstances, type ChunkInstances } from './ChunkContent';
 import type { WorldManifest, WorldSource } from '../../world/source/WorldSource';
+import { MICRO_MORPH_BANDS } from './TerrainMorph';
 
 /** the residency-grain + content contract for one band. Cells are integer (cx,cz)
  *  over a grid of `cellMeters` anchored at (originX,originZ); `build` produces the
@@ -39,6 +40,9 @@ export interface CellPlan {
   exists(cx: number, cz: number): boolean;
   /** build one cell's flat instance list. */
   build(cx: number, cz: number): Promise<ChunkInstances>;
+  /** Packed finest/morph surface. Absent on old manifests, which retain their
+   *  original record-key grounding and incur no refresh work. */
+  groundHeightAt?: (x: number, z: number) => number;
   /** optional extra HUD counters (e.g. the understory/debris split). */
   extra?(): Record<string, number>;
 }
@@ -49,6 +53,9 @@ interface ReadyBlock {
   a: Float32Array;
   b: Float32Array;
   meshIds: Uint32Array;
+  groundOffsets?: Float32Array;
+  dirtyFirst?: number;
+  dirtyLast?: number;
 }
 interface ReadyChunk {
   key: string;
@@ -59,7 +66,7 @@ interface ReadyChunk {
 interface ResidentChunk {
   cx: number;
   cz: number;
-  blocks: number[];
+  blocks: { slot: number; data: ReadyBlock }[];
   instCount: number;
 }
 
@@ -74,6 +81,7 @@ export interface InstanceBandDeps {
 }
 
 const KEY = (cx: number, cz: number): string => `${cx}:${cz}`;
+const GROUND_MORPH_OUTER_M = Math.max(MICRO_MORPH_BANDS[-2].outerM, MICRO_MORPH_BANDS[-1].outerM);
 
 export class InstanceBand {
   private readonly d: InstanceBandDeps;
@@ -91,6 +99,9 @@ export class InstanceBand {
   private camZ = 0;
   private lastDiffAt = -1e9;
   private dropWarned = false;
+  private haveGroundCenter = false;
+  private groundCenterX = 0;
+  private groundCenterZ = 0;
 
   private nDropped = 0;
   private nLoaded = 0;
@@ -120,6 +131,7 @@ export class InstanceBand {
   update(camX: number, camZ: number): void {
     this.camX = camX;
     this.camZ = camZ;
+    this.refreshGround(camX, camZ);
     const now = performance.now();
     if (now - this.lastDiffAt < 200) return;
     this.lastDiffAt = now;
@@ -149,7 +161,7 @@ export class InstanceBand {
     for (const [key, rc] of this.resident) {
       if (want.has(key)) continue;
       if (this.chunkDist(rc.cx, rc.cz, camX, camZ) <= exit) continue;
-      for (const b of rc.blocks) this.d.reg.freeInstanceBlock(b);
+      for (const b of rc.blocks) this.d.reg.freeInstanceBlock(b.slot);
       this.nResidentInst -= rc.instCount;
       this.resident.delete(key);
       this.nEvicted++;
@@ -182,12 +194,20 @@ export class InstanceBand {
     let a: number[] = [];
     let b: number[] = [];
     let m: number[] = [];
+    let g: number[] = [];
     const flush = (): void => {
       if (m.length === 0) return;
-      blocks.push({ count: m.length, a: Float32Array.from(a), b: Float32Array.from(b), meshIds: Uint32Array.from(m) });
+      blocks.push({
+        count: m.length,
+        a: Float32Array.from(a),
+        b: Float32Array.from(b),
+        meshIds: Uint32Array.from(m),
+        ...(inst.groundOffsets ? { groundOffsets: Float32Array.from(g) } : {}),
+      });
       a = [];
       b = [];
       m = [];
+      g = [];
     };
     for (let i = 0; i < inst.count; i++) {
       const idF = inst.b[i * 4 + 3] as number;
@@ -201,6 +221,7 @@ export class InstanceBand {
         a.push(inst.a[i * 4] as number, inst.a[i * 4 + 1] as number, inst.a[i * 4 + 2] as number, inst.a[i * 4 + 3] as number);
         b.push(inst.b[i * 4] as number, inst.b[i * 4 + 1] as number, inst.b[i * 4 + 2] as number, idF);
         m.push(head);
+        if (inst.groundOffsets) g.push(inst.groundOffsets[i] as number);
         if (m.length === bs) flush();
       }
     }
@@ -227,7 +248,7 @@ export class InstanceBand {
       } else {
         this.d.reg.rewriteInstanceBlock(slot, blk.count, blk.a, blk.b, blk.meshIds);
         const res = this.resident.get(rc.key) ?? { cx: rc.cx, cz: rc.cz, blocks: [], instCount: 0 };
-        res.blocks.push(slot);
+        res.blocks.push({ slot, data: blk });
         res.instCount += blk.count;
         this.resident.set(rc.key, res);
         this.nResidentInst += blk.count;
@@ -238,7 +259,63 @@ export class InstanceBand {
         this.nLoaded++;
       }
     }
+    for (const rc of this.resident.values()) {
+      for (const block of rc.blocks) {
+        const first = block.data.dirtyFirst;
+        const last = block.data.dirtyLast;
+        if (first === undefined || last === undefined) continue;
+        const bytes = (last - first + 1) * 32 + 64;
+        if (used > 0 && used + bytes > bytesRemaining) return used;
+        this.d.reg.rewriteInstanceBlockGround(block.slot, first, last - first + 1, block.data.a);
+        delete block.data.dirtyFirst;
+        delete block.data.dirtyLast;
+        used += bytes;
+      }
+    }
     return used;
+  }
+
+  /** Refresh only the union of the old/new packed-morph envelopes. Outside that
+   *  union the camera morph weight is unchanged, so touching those instances
+   *  would waste CPU/upload bandwidth. Dirty ranges drain through the same token
+   *  bucket as initial instance writes. */
+  private refreshGround(camX: number, camZ: number): void {
+    const heightAt = this.d.plan.groundHeightAt;
+    if (!heightAt) return;
+    const oldX = this.groundCenterX;
+    const oldZ = this.groundCenterZ;
+    const hadOld = this.haveGroundCenter;
+    this.groundCenterX = camX;
+    this.groundCenterZ = camZ;
+    this.haveGroundCenter = true;
+
+    const refresh = (block: ReadyBlock, resident: boolean): void => {
+      const offsets = block.groundOffsets;
+      if (!offsets) return;
+      let first = block.count;
+      let last = -1;
+      for (let i = 0; i < block.count; i++) {
+        const offset = offsets[i] as number;
+        if (!Number.isFinite(offset)) continue;
+        const d = i * 4;
+        const x = block.a[d] as number;
+        const z = block.a[d + 2] as number;
+        const inNew = Math.max(Math.abs(x - camX), Math.abs(z - camZ)) <= GROUND_MORPH_OUTER_M;
+        const inOld = hadOld && Math.max(Math.abs(x - oldX), Math.abs(z - oldZ)) <= GROUND_MORPH_OUTER_M;
+        if (!inNew && !inOld) continue;
+        const y = Math.fround(heightAt(x, z) + offset);
+        if ((block.a[d + 1] as number) === y) continue;
+        block.a[d + 1] = y;
+        first = Math.min(first, i);
+        last = i;
+      }
+      if (!resident || last < first) return;
+      block.dirtyFirst = Math.min(block.dirtyFirst ?? first, first);
+      block.dirtyLast = Math.max(block.dirtyLast ?? last, last);
+    };
+
+    for (const chunk of this.ready) for (const block of chunk.blocks) refresh(block, false);
+    for (const chunk of this.resident.values()) for (const block of chunk.blocks) refresh(block.data, true);
   }
 
   /** evict the farthest non-wanted resident cell → free a block; -1 if none. */
@@ -255,7 +332,7 @@ export class InstanceBand {
     }
     if (worstKey === null) return -1;
     const rc = this.resident.get(worstKey) as ResidentChunk;
-    for (const b of rc.blocks) this.d.reg.freeInstanceBlock(b);
+    for (const b of rc.blocks) this.d.reg.freeInstanceBlock(b.slot);
     this.nResidentInst -= rc.instCount;
     this.resident.delete(worstKey);
     this.nEvicted++;
@@ -284,7 +361,12 @@ export class InstanceBand {
 export function treeBoulderPlan(
   source: WorldSource,
   manifest: WorldManifest,
-  opts: { idFOf: (species: number, variant: number) => number; boulderRadiusOf: (cls: number) => number; bandDist: number },
+  opts: {
+    idFOf: (species: number, variant: number) => number;
+    boulderRadiusOf: (cls: number) => number;
+    bandDist: number;
+    groundHeightAt?: (x: number, z: number) => number;
+  },
 ): CellPlan {
   return {
     cellMeters: manifest.grid.chunkMeters,
@@ -292,12 +374,17 @@ export function treeBoulderPlan(
     originX: manifest.grid.originX,
     originZ: manifest.grid.originZ,
     label: 'band',
+    ...(opts.groundHeightAt ? { groundHeightAt: opts.groundHeightAt } : {}),
     exists(cx: number, cz: number): boolean {
       const key = { lod: 0, cx, cz };
       return manifest.coverage('trees', key) !== null || manifest.coverage('boulders', key) !== null;
     },
     build(cx: number, cz: number): Promise<ChunkInstances> {
-      return buildChunkInstances(source, manifest, { lod: 0, cx, cz }, { idFOf: opts.idFOf, boulderRadiusOf: opts.boulderRadiusOf });
+      return buildChunkInstances(source, manifest, { lod: 0, cx, cz }, {
+        idFOf: opts.idFOf,
+        boulderRadiusOf: opts.boulderRadiusOf,
+        ...(opts.groundHeightAt ? { groundHeightAt: opts.groundHeightAt } : {}),
+      });
     },
   };
 }

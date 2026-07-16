@@ -87,7 +87,7 @@ export function understoryDebrisPlan(
   source: WorldSource,
   manifest: WorldManifest,
   map: ScatterMap,
-  opts: { cellMeters: number; bandDist: number },
+  opts: { cellMeters: number; bandDist: number; groundHeightAt?: (x: number, z: number) => number },
 ): CellPlan {
   const chunkM = manifest.grid.chunkMeters; // 2048 (parent stride)
   const originX = manifest.grid.originX;
@@ -116,6 +116,7 @@ export function understoryDebrisPlan(
     originX,
     originZ,
     label: 'uband',
+    ...(opts.groundHeightAt ? { groundHeightAt: opts.groundHeightAt } : {}),
     exists(cx: number, cz: number): boolean {
       // a fine cell exists iff its parent 2048 m chunk carries either guidance layer
       const pcx = Math.floor((cx * opts.cellMeters) / chunkM);
@@ -132,11 +133,17 @@ export function understoryDebrisPlan(
       const parent = await parentOf(pcx, pcz);
       const a: number[] = [];
       const b: number[] = [];
-      const nU = scatterGrid(a, b, x0, z0, C, UNDER_STEP, UNDER_PEAK, 0x51a3, parent.minX, parent.minZ, parent.deriver, parent.uRes, parent.uId, parent.uDen, (id, r) => pickClass(map.understory(id), r), () => 1);
-      const nD = scatterGrid(a, b, x0, z0, C, DEBRIS_STEP, DEBRIS_PEAK, 0x2c9f, parent.minX, parent.minZ, parent.deriver, parent.dRes, parent.dId, parent.dDen, (id, r) => pickClass(map.debris(id), r), (id) => map.debris(id).base / map.maxDebrisBase);
+      const groundOffsets: number[] | null = opts.groundHeightAt ? [] : null;
+      const nU = scatterGrid(a, b, groundOffsets, opts.groundHeightAt, x0, z0, C, UNDER_STEP, UNDER_PEAK, 0x51a3, parent.minX, parent.minZ, parent.deriver, parent.uRes, parent.uId, parent.uDen, (id, r) => pickClass(map.understory(id), r), () => 1);
+      const nD = scatterGrid(a, b, groundOffsets, opts.groundHeightAt, x0, z0, C, DEBRIS_STEP, DEBRIS_PEAK, 0x2c9f, parent.minX, parent.minZ, parent.deriver, parent.dRes, parent.dId, parent.dDen, (id, r) => pickClass(map.debris(id), r), (id) => map.debris(id).base / map.maxDebrisBase);
       builtUnder += nU;
       builtDebris += nD;
-      return { a: Float32Array.from(a), b: Float32Array.from(b), count: a.length / 4 };
+      return {
+        a: Float32Array.from(a),
+        b: Float32Array.from(b),
+        count: a.length / 4,
+        ...(groundOffsets ? { groundOffsets: Float32Array.from(groundOffsets) } : {}),
+      };
     },
     extra: () => ({ 'uband.built.under': builtUnder, 'uband.built.debris': builtDebris }),
   };
@@ -178,6 +185,8 @@ async function loadParent(
 function scatterGrid(
   a: number[],
   b: number[],
+  groundOffsets: number[] | null,
+  groundHeightAt: ((x: number, z: number) => number) | undefined,
   x0: number,
   z0: number,
   C: number,
@@ -226,8 +235,9 @@ function scatterGrid(
       const variant = Math.min(3, Math.floor(hVar * 4));
       const { scale, sink, lean } = sizeFor(cls, hScale);
       const g = deriver(lx, lz);
-      a.push(px, g.h - sink, pz, scale);
+      a.push(px, (groundHeightAt ? groundHeightAt(px, pz) : g.h) - sink, pz, scale);
       b.push(j0 * TAU, g.leanX * lean, g.leanZ * lean, cls * 8 + variant);
+      groundOffsets?.push(-sink);
       n++;
     }
   }
