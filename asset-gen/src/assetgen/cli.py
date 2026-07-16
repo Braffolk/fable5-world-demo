@@ -149,7 +149,7 @@ def country_floor_biome(workers: int, min_lod: int) -> None:
 @click.option("--aoi", required=True)
 @click.option("--layer", "layers_opt", multiple=True,
               type=click.Choice(["height", "biome", "water", "waterbed", "canopy", "soil", "trees",
-                                  "understory", "debris", "boulders"]),
+                                  "understory", "debris", "boulders", "geology"]),
               help="Cook only these layers (default: all the AOI enables)")
 @click.option("--workers", default=6, show_default=True)
 def cook(aoi: str, layers_opt: tuple[str, ...], workers: int) -> None:
@@ -189,6 +189,10 @@ def cook(aoi: str, layers_opt: tuple[str, ...], workers: int) -> None:
         from .cook.layers_cook import cook_soil
 
         cook_soil(base, bbox, log=click.echo)
+    if "geology" in wanted:
+        from .cook.layers_cook import cook_geology
+
+        cook_geology(base, bbox, log=click.echo)
     if "trees" in wanted:
         from .cook.trees_cook import cook_trees
 
@@ -206,7 +210,7 @@ def cook(aoi: str, layers_opt: tuple[str, ...], workers: int) -> None:
         from .cook.layers_cook import cook_boulders
 
         cook_boulders(base, bbox, log=click.echo)
-    known = {"height", "biome", "water", "waterbed", "canopy", "soil", "trees", "understory", "debris", "boulders"}
+    known = {"height", "biome", "water", "waterbed", "canopy", "soil", "trees", "understory", "debris", "boulders", "geology"}
     for name in sorted(wanted - known):
         click.echo(f"(layer {name}: cooker lands in a later phase)")
     click.echo("cook complete.")

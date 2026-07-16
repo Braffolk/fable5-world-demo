@@ -18,6 +18,7 @@ from ..process.landcover import (
 )
 from ..process.mosaic import RasterStack, dem_sources
 from ..process.soil import check_unknown_budget, rasterize_soil, unmapped_textures, unmapped_types
+from ..process.geology import rasterize_geology
 from ..process.water import bed_depth_field, rasterize_water
 from .chunkio import ChunkMeta, read_chunk, write_chunk
 from .encode import (
@@ -406,6 +407,20 @@ def cook_soil(base: BaseConfig, bbox_en, log=print) -> None:
     check_unknown_budget(len(chunks) * _res_2m(base) ** 2, log=log)
     if unmapped_types or unmapped_textures:
         log("  soil: unparseable codes present but under budget (censused above)")
+
+
+def cook_geology(base: BaseConfig, bbox_en, log=print) -> None:
+    """Cook the optional national EGT categorical geology plane at 2 m."""
+    chunks = chunks_covering_bbox_en(base.grid, bbox_en, 0)
+    for i, c in enumerate(chunks):
+        dest = chunk_path("geology", c)
+        if dest.exists():
+            continue
+        planes = rasterize_geology(_window_2m(base, c))
+        payload = encode_u8_planes(base.encode, planes)
+        write_chunk(dest, _meta(base, "geology", c, enc=2), payload)
+        if (i + 1) % 16 == 0 or i + 1 == len(chunks):
+            log(f"  geology [{i + 1}/{len(chunks)}]")
 
 
 def _read_planes(base: BaseConfig, layer: str, c, nplanes: int) -> list | None:

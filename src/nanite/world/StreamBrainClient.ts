@@ -150,7 +150,7 @@ export class StreamBrainClient {
     // #116: 'soil' too — the brain fills/scrolls the soil plane, so it needs soil's chunk
     // existence keys (else fetchChunk returns null and the plane fills all-zero). No-op on
     // the generated world (no soil layer ⇒ `!meta` skip).
-    for (const layer of ['height', 'biome', 'fields', 'water', 'watercover', 'canopy', 'trees', 'soil'] as const) {
+    for (const layer of ['height', 'biome', 'fields', 'water', 'watercover', 'canopy', 'trees', 'soil', 'geology'] as const) {
       const meta = manifest.layers[layer];
       if (!meta) continue;
       const chunkKeys: Record<number, Float64Array> = {};

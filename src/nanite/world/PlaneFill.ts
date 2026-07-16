@@ -92,6 +92,9 @@ export interface FieldPlan {
    *  classId land-cover block + texCore). null when the source has no soil layer (the
    *  generated world ⇒ the TerrainMaterial soil-modulation path never compiles). */
   soil: PlanePlan | null;
+  /** Optional categorical geology on the 2 m condition lattice. Four channels are
+   *  sampled nearest; null keeps old manifests and generated worlds unchanged. */
+  geology: PlanePlan | null;
   coverageBox: CoverageBox;
   /** the biome plane's channels 2/3 carry the merged far-forest canopy
    *  (heightM, cover) — true iff the source has a canopy layer. The generated
@@ -143,6 +146,12 @@ export const SOIL_CHANNELS: readonly (readonly [string, number])[] = [
   ['stoniness', 1],
   ['boniteet', 2],
   ['texSkeleton', 3],
+];
+export const GEOLOGY_CHANNELS: readonly (readonly [string, number])[] = [
+  ['bedrockFamily', 0],
+  ['surficialFamily', 1],
+  ['processFamily', 2],
+  ['coverageFlags', 3],
 ];
 /** Estonia dry water texels decode to NaN (§9a) — mapped to the dry sentinel
  *  the generated field uses downstream of its bed−2 encoding. */
@@ -543,6 +552,11 @@ export function planField(manifest: WorldManifest): FieldPlan {
   if (soilMeta && soilMeta.lods.includes(0)) {
     soil = planLayer(manifest, 'soil', U8_PLANE_RES, U8_PLANE_RES).find((p) => p.lod === 0) ?? null;
   }
+  let geology: PlanePlan | null = null;
+  const geologyMeta = manifest.layers.geology;
+  if (geologyMeta && geologyMeta.lods.includes(0)) {
+    geology = planLayer(manifest, 'geology', U8_PLANE_RES, U8_PLANE_RES).find((p) => p.lod === 0) ?? null;
+  }
   return {
     cookedMicroHeight: manifest.format === 2 && height.some((level) => level.lod < 0),
     height,
@@ -553,6 +567,7 @@ export function planField(manifest: WorldManifest): FieldPlan {
     waterCover,
     waterCoverFar,
     soil,
+    geology,
     coverageBox: coverageBoxM(manifest),
     biomeHasCanopy: !!manifest.layers.canopy,
   };

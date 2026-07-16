@@ -445,7 +445,29 @@ def materialize_corrected_format1_base(
         "chunks": entries,
         "tombstones": normalized_tombstones,
     }
+    added_layers = sorted({entry["layer"] for entry in entries} - set(base_release["layerSchemas"]))
+    for layer in added_layers:
+        schema = LAYER_DOC.get(layer)
+        if not schema:
+            raise ValueError(f"new optional layer lacks a manifest schema: {layer}")
+        plan["layerSchemas"][layer] = dict(schema)
     manifest, indexes = _manifest_from_plan(plan)
+    touched_layers = {entry["layer"] for entry in entries} | {row[0] for row in normalized_tombstones}
+    inherited_index_sha256: dict[str, str] = {}
+    snapshot_indexes = release_root / "inputs" / "base" / "index"
+    for layer in sorted(set(base_release["layerSchemas"]) - touched_layers):
+        inherited = (snapshot_indexes / f"{layer}.bin").read_bytes()
+        if indexes.get(layer) != inherited:
+            raise ValueError(f"corrected release changed inherited {layer} index identity")
+        inherited_index_sha256[layer] = _sha256_bytes(inherited)
+    optional_layer_identity: dict[str, dict[str, Any]] = {}
+    for layer in added_layers:
+        if manifest["layers"][layer].get("enc") != LAYER_DOC[layer]["enc"]:
+            raise ValueError(f"optional layer schema drift: {layer}")
+        optional_layer_identity[layer] = {
+            "schemaSha256": _sha256_bytes(_json_bytes(LAYER_DOC[layer])),
+            "indexSha256": _sha256_bytes(indexes[layer]),
+        }
     manifest_blob = _json_bytes(manifest)
     manifest_sha = _sha256_bytes(manifest_blob)
     destination = release_root / "m" / manifest_sha[:16]
@@ -465,6 +487,8 @@ def materialize_corrected_format1_base(
         "tombstoneCount": len(normalized_tombstones),
         "chunkCount": audit.chunk_count,
         "totalBytes": audit.total_bytes,
+        "inheritedLayerIndexesByteExact": inherited_index_sha256,
+        "optionalLayerIdentity": optional_layer_identity,
         "passed": True,
     }
     verification_blob = _json_bytes(verification)

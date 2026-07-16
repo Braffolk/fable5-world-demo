@@ -12,6 +12,7 @@ export type LayerName =
   | 'water'
   | 'trees'
   | 'soil'
+  | 'geology'
   | 'understory'
   | 'debris'
   | 'boulders'

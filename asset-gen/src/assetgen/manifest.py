@@ -76,6 +76,25 @@ LAYER_DOC = {
     "soil": {"enc": 2, "texelMeters": 2,
               "planes": ["soilType", "texCore", "texSkeleton", "stoniness", "boniteet"],
               "semantics": "full Mullastikukaart taxonomy (config/soil-types.toml + soil-texture.toml); 0 = no data, 255 = unparseable"},
+    "geology": {
+        "enc": 2,
+        "texelMeters": 2,
+        "planes": ["bedrockFamily", "surficialFamily", "processFamily", "coverageFlags"],
+        "semantics": (
+            "optional categorical EGT geology; nearest sampling only. bedrockFamily: 0 unknown, "
+            "1 sandstone, 2 carbonate, 3 other. surficialFamily: 0 unknown/not-applicable, "
+            "1 unconsolidated sand (lito200=40), 2 till/moraine (50), 3 gravel/outwash (30), "
+            "4 peat (90), 5 other (10/20/60/70/80/100/30000). processFamily: 0 unknown, "
+            "1 fluvial (genees200=10), 2 lacustrine (20), 3 glaciofluvial (30), "
+            "4 glaciolacustrine (40), 5 glacial (50), 6 marine (60), 7 colluvial (70), "
+            "8 peat-forming (80), 9 anthropogenic (90), 10 aeolian (100), 11 water (112), "
+            "12 mapped bedrock exposure (lito200=20000). coverageFlags: bit0 authoritative "
+            "polygon coverage, bit1 bedrock family known, bit2 surficial class known, bit3 process "
+            "known, bit4 mapped bedrock exposure, bit5 1:50k source. Current national cook uses "
+            "retained 1:200k EGT surficial and bedrock polygons, so bit5 is clear. Bedrock is a "
+            "subsurface formation prior unless bit4 is set; coarse polygons never place an exact cliff."
+        ),
+    },
     "trees": {
         "enc": 3,
         "columns": [["x", "u16"], ["z", "u16"], ["species", "u8"], ["scale", "u8"],

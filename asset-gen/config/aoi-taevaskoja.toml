@@ -15,6 +15,7 @@ water = true
 trees = true
 canopy = true
 soil = true
+geology = true
 understory = true
 debris = true
 boulders = true
