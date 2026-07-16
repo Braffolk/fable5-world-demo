@@ -136,6 +136,12 @@ def verify_generalization_preview(
         raise ValueError("forest generalization expectation names another verifier")
 
     inputs = expectation["recipeInputs"]
+    if inputs.get("id") == "laas.micro.forest-adjacent-two-parent-preview.recipe.v1":
+        from .adjacent_preview_verify import verify_adjacent_preview
+
+        return verify_adjacent_preview(
+            build_digest, base_manifest_path, base_out_root, work_root
+        )
     artifact_root = Path(inputs["artifact"]["root"])
     if _sha256(artifact_root / "manifest.json") != inputs["artifact"]["manifestSha256"]:
         raise ValueError("accepted forest generalization manifest changed")
