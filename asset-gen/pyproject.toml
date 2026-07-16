@@ -22,6 +22,11 @@ dependencies = [
 [project.scripts]
 assetgen = "assetgen.cli:main"
 
+[project.optional-dependencies]
+microtopography-ml = [
+    "torch>=2.13.0",
+]
+
 [dependency-groups]
 dev = [
     "pypdf>=6.14.2",

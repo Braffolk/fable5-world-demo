@@ -1,0 +1,55 @@
+{
+  "schema_version": "laas.erodible-slope-single-field-ml-config/1",
+  "recipe_id": "development-a-biala-single-field-multiscale-r0-v1",
+  "status": "development_r0_only",
+  "inputs": {
+    "structural_config": {"path": "asset-gen/config/microtopography/coastal-escarpment/development-a-als-structural-r1-v1.json", "bytes": 4284, "sha256": "a5fd770fd8733c50da6aeeb47d121376e30a6cd96f5b7c36be1f828de8557aa4"},
+    "structural_manifest": {"path": "asset-gen/data/work/microtopography/coastal-escarpment/als-structural/sha256/ed91840fac7839642c18590eb697c43e914d6dce03c2eb4f58b7eaffaa05ef47/manifest.json", "bytes": 4328, "sha256": "3032f38ba645d8d65caab90722786e760aa3b398f65c1c57a60e9aa4089d727b"},
+    "network": {"path": "asset-gen/data/work/microtopography/coastal-escarpment/als-structural/sha256/ed91840fac7839642c18590eb697c43e914d6dce03c2eb4f58b7eaffaa05ef47/network-strength-f32.npy", "bytes": 247940, "sha256": "3706470f7ce5161a88a0943cb19a336a517b6fb84c71f4a59fa3074c1d1ff719"},
+    "biala_manifest": {"path": "asset-gen/data/work/terrain/microtopography/biala-coastal-escarpment-capacity/sha256/9d27b52da864ed51d4e0118545f2537bc9b91c7aba0ef7f5fd63e765ba144cca/manifest.json", "bytes": 1263, "sha256": "6aac5b5c642cd662bb4e54d4080a7ca2df868201783313ef27579c80949d9733"},
+    "biala_capacity": {"path": "asset-gen/data/work/terrain/microtopography/biala-coastal-escarpment-capacity/sha256/9d27b52da864ed51d4e0118545f2537bc9b91c7aba0ef7f5fd63e765ba144cca/biala-source-domain-capacity.npz", "bytes": 3164291, "sha256": "0516d8f06566dd377726b70d9e1f79e247e060ca9fe4891f8aca6b50fae1e331"},
+    "singan_paper": {"path": "docs/deep-research/microtopography-generation/library/papers/2019-shaham-singan-arxiv-1905.01164.pdf", "bytes": 10329259, "sha256": "312df83e77437727028536d7f238f54212896dffe696e7b3f98ac74be2d183e2"},
+    "singan_repository": {"path": "docs/deep-research/microtopography-generation/library/repos/github-tamarott-SinGAN-df38a421.tar.gz", "bytes": 83382452, "sha256": "8eddef30ab1c07fbcd22095246b52ee0fb1ffc2588fe64634e06b3e16d04f128"}
+  },
+  "source_pitch_m": 0.5,
+  "source_core_m": 128.0,
+  "source_core_offset_m": 32.0,
+  "model_pitch_m": 0.5,
+  "model": {
+    "pyramid_sizes": [64, 128, 256],
+    "channels": 24,
+    "layers": 5,
+    "iterations_per_scale": 500,
+    "learning_rate": 0.00035,
+    "noise_amplitude": 0.18,
+    "reconstruction_weight": 14.0,
+    "derivative_weight": 2.0,
+    "source_detrend_sigma_m": 8.0,
+    "training_seed": 172901,
+    "generation_seed": 881071,
+    "minimum_slope": 0.025,
+    "slope_ramp": 0.18,
+    "hard_transition_m": 5.0,
+    "target_abs_p95_m": 0.16,
+    "maximum_relief_m": 0.46,
+    "soft_parent_strength": 0.72
+  },
+  "hard_laws": {
+    "absolute_c0_authority": true,
+    "crop_after_whole_domain_generation": true,
+    "mapped_non_heightfield_face_stays_c0": true,
+    "outer_collar_stays_c0": true,
+    "protected_hard_and_water_stay_c0": true,
+    "soft_one_metre_consistency_not_exact_raw_dtm": true,
+    "taevaskoda_or_ood_opened": false
+  },
+  "evidence_boundary": {
+    "role": "one bounded Development-A R0 learned single-field challenger",
+    "biala": "0.5 m source-domain Baltic erodible mineral scarp capacity analogue only",
+    "artifact_0_25_m_role": "existing C0 lattice and interpolation only",
+    "truth_below_0_5_m": false,
+    "estonia_predictive_transfer": false,
+    "production_or_packing_authorized": false
+  }
+}
+
