@@ -2175,6 +2175,25 @@ independent sub-metre geometry. Resume only after explicit bounded 1 m parent
 correction authority for mapped dunes or a qualified exemplar with more than 1 cm
 credible post-projection residual. Do not amplify, invent ripples, or pack this result.
 
+2026-07-17 correction: the seven-site national parent-support diagnostic
+(`data/work/microtopography/dune-parent-support-diagnostic/`; EGT `genees200=100`,
+535 aeolian-sand polygons; pilot FID 4659 plus six stratified sites on six fresh
+provenance-bound Maa-amet 1 m sheets) refutes this park's failure theory. The
+Estonian 1 m parent inside mapped aeolian polygons carries genuine dune relief
+(detrended 1.8-3.9 m, crest-core 4-8 m band p95 at 28-57% of Mrzezyno's
+active-coast amplitude, slopes to 63 deg, interpolation-plateau fraction only
+1-2%). The attempt's 3.8 mm residual was measured against the parent's own 1 m
+block-means, which is definitionally near-zero for a generator that preserves
+them; "flat parent" was a mis-scoped premise, not a measurement. Consequences:
+resume condition 1 (bounded 1 m parent correction) is void — no correction is
+evidence-supported or needed; the macro landform already renders from the base
+DTM. The regime's real gap is the 0.0625-1 m band, and the honest resume path is
+a qualified sub-metre Baltic sand prior (first lead: ~4 cm RTK-UAV SfM Curonian
+Spit dune DEMs recorded in the research library; facts-only inventory in
+`SUBMETRE-SAND-PRIOR-INVENTORY.md`) driving a sub-metre-band-only rerun of the
+preserved generator with exact 1 m mean preservation. The parked artifact
+`4edad71d...` itself remains immutable negative evidence; do not pack it.
+
 ## Integration Risks
 
 - Dataset conversion previously became inefficiently serialized behind HY_SPRUCE4 full-E57 handling, with two failed full attempts and repeated implementation/review micro-cycles before a morphology input existed. Native codec-word padding commit `ba92ab4` completed the verified full materialization and the Python publisher completed its atomic move. The full-scan Hovi track is now parked after its fully observed central 6.25 cm QA remained dominated by competing/unresolved sheets; no threshold-tuning loop is authorized. Evo 1086/1065 are parked after sparse-surface diagnosis; the downsampled HY_PINE2 stress condition is also parked after its candidate sheet correctly abstained, and its full archive remains unfetched. A blocked track is parked without deleting its code or provenance; it resumes only if quicker alternatives fail or its scientific role is unique.
