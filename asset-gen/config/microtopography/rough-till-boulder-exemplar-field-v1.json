@@ -1,0 +1,25 @@
+{
+  "schema_version": "laas.rough-till-boulder-exemplar-field-config/1",
+  "bbox_en": [683520.0, 6435840.0, 684032.0, 6436352.0],
+  "pitch_m": 0.25,
+  "inputs": {
+    "dtm": {"path": "asset-gen/data/in/dem_1m/54383_dtm_1m.tif", "bytes": 80056792, "sha256": "3dba2401f9043eb2638ff39e490073b52ef1fe453027c75e242507aedd2d12f6"},
+    "forward_arrays": {"path": "asset-gen/data/work/microtopography/forward/candidate/sha256/d33ae4bbc1229193979dd8b0a5e80b927f79f29df327c0cd7f03b13f4baf6196/mrv-harvest-dtm-patches.npz", "bytes": 417769, "sha256": "9d19ea8c6a4c91572997b60528acf0ae67f8c1e7255fe749512ee68b1d9099e8"},
+    "soil_window": {"path": "asset-gen/data/work/terrain/conditions/soil/mullastikukaart/sha256/11103ea1698f0e97be08779693703ff3a644374309f77f9cc6aa34ea8456051f/window.json", "bytes": 131917, "sha256": "62daddbf8a08ec814e5bb47aa748716e2354f921dbf9a51aa2db2df361390643"},
+    "geology_window": {"path": "asset-gen/data/work/terrain/conditions/geology/egt-surficial-200k/sha256/67749249f8be73572188f979329f55d60dd37e7ded11616e2776ec85f5daf2fc/window.json", "bytes": 491562, "sha256": "a0d51065c8cedd9902943877b7bd30086d3f54f51597c14c48dccb68e1e9de3d"}
+  },
+  "etak_source_identity": {"path": "asset-gen/data/in/etak/ETAK_EESTI_GPKG.gpkg", "bytes": 3588767744, "sha256": "e19084c4bff0a6096a7dd38cefa12402bdce98d59c73d5b35c30dda60682f5f9", "archive_sha256": "10a56a6cc1ea80ae1b63ad5b3a9220ba6f69015005a892e180954b62ac2effbb"},
+  "single_boulders": [
+    {"etak_id": 1145271, "point_en": [683694.936, 6435908.094]},
+    {"etak_id": 1145269, "point_en": [683797.973, 6435959.684]},
+    {"etak_id": 1145643, "point_en": [683888.95, 6436052.36]}
+  ],
+  "excluded_boulder_piles": [1147668, 1147669, 1145228],
+  "pile_exclusion_radius_m": 4.0,
+  "outer_collar_m": 8.0,
+  "hard_mask_taper_m": 3.0,
+  "quilt_patch_cells": 96,
+  "deterministic_seed": 20260716,
+  "production_authorized": false,
+  "packing_authorized": false
+}
