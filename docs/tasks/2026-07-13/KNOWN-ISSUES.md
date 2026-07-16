@@ -1148,10 +1148,16 @@ The exact all-layer and `grass=0` Estonia boots on fresh `:5187/:8797` ports
 pass through frames `89` and `125` with zero captured page, console, request,
 TSL, WebGPU, pipeline, bind-group, or command-buffer errors. Captured views retain
 materials, trees, understory, grass, and grounded roots, and show no reset strip.
-The remaining gate is user traversal across the center of
-`http://localhost:5187/?scene=world&src=estonia&dataurl=http%3A%2F%2Flocalhost%3A8797&alt=12&x=316160&z=193536&yaw=0&pitch=-0.22&shadowclipres=896`.
-Until that review, this is a verified research candidate rather than accepted
-adjacent-parent continuity, production, `latest`, or national coverage.
+The user completed free-flight visual investigation at
+`http://localhost:5187/?scene=world&src=estonia&dataurl=http%3A%2F%2Flocalhost%3A8797&alt=12&x=316160&z=193536&yaw=0&pitch=-0.22&shadowclipres=896`
+without being told which compass direction crossed the boundary. No seam,
+straight boundary, or detail reset was visible while moving around. The forest
+floor remained natural and appeared possibly more diverse than the earlier
+view; the prominent ditch is inherited C0 macrostructure and was not presented
+as a cliff result. Adjacent-parent `forest.mesic_mineral` continuity is therefore
+`research_preview_investigated`, and its generator/ownership behavior is locked.
+This acceptance still grants no production, `latest`, national coverage,
+another forest regime, or non-forest authority.
 
 Elongated lines, ridges, or bumps are not defects merely because they occur in a
 field: cultivation, drainage, vehicle, erosion, and substrate processes can
