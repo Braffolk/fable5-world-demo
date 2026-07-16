@@ -60,6 +60,8 @@
 - Before giving the user any live URL, boot that exact URL through readiness, cloud bake, and several settled frames. The agent, not the user, is the first WebGPU/compiler test.
 - Capture `pageerror`, console errors, and WebGPU/TSL diagnostics during the whole boot. Any TSL invalid-code message, uncaptured WebGPU error, shader validation error, invalid pipeline/bind group/command buffer, uniform-size violation, or non-uniform-barrier error fails the boot even if `window.__laas.ready` becomes true.
 - Do not report a URL as ready until the exact served manifest and exact URL boot cleanly. If it fails, fix it and rerun the complete boot before returning.
+- Visual-review instructions must be executable from the UI the user actually has. When the world has no compass, coordinates, map, or direction indicator, never ask the user to travel north/south/east/west or "toward" an unstated target. Provide separate exact camera URLs for each review location, or use an unmistakable visible landmark and a directly observable check.
+- Do not imply that a packed coverage area is simultaneously visible when fine levels are camera-windowed or radially morphed. State the actual visible radius and use multiple exact start URLs to inspect spatially separated packed regions.
 - Do not solve memory failures by merely raising a ceiling. Account for downstream CPU and GPU allocations and WebGPU binding limits first.
 - The Estonia review target is `scene=world&src=estonia`, never `scene=estonia`. Center the Taevaskoda pilot at game coordinates `x=311123.082&z=190723.435` (`58.107506 N, 27.050242 E`) and include the actual asset-server `dataurl`.
 
