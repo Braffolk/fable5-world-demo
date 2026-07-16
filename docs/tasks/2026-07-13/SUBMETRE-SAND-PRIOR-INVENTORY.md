@@ -1,0 +1,71 @@
+# Sub-metre (0.0625–1 m) Baltic sand-dune morphology prior — FACTS-ONLY inventory
+
+Compiled 2026-07-17. Read-only inventory for the `sand.dune_aeolian` sub-metre gap.
+No downloads performed. No recommendations or go/no-go calls — a separate reviewer decides.
+
+Scope: qualify a SUB-METRE (0.0625–1 m band) morphology prior for Baltic dune-sand
+surfaces (ripples, blowout scarps, hummocks, sand micro-relief). The existing Mrzeżyno
+artifact is qualified for the `>=1 m` band only. This pass verifies the "RTK-UAV SfM
+~4 cm Curonian-Spit dune DEMs in the research library" lead named in
+`docs/tasks/2026-07-13/KNOWN-ISSUES.md:2191` and `TASKLIST.md:28`, and inventories any
+other <=0.25 m geometry over sand/dune/beach surfaces.
+
+## Availability legend
+- **(i) LOCAL** = bytes present on disk in this repo.
+- **(ii) LEAD** = a recorded download path/DOI exists; bytes NOT local.
+- **(iii) MENTION** = named/screened but no download path and/or no reusable artifact.
+
+---
+
+## Candidate table
+
+| # | Name / dataset | What & where | Res / GSD | Independent error / control | License | Local vs lead | Prior screening verdict (project) |
+|---|----------------|--------------|-----------|-----------------------------|---------|---------------|-----------------------------------|
+| 1 | **Pilkosios / Nagliai active dunes multi-epoch SfM** (Tijūnaitė et al.), Curonian Spit, Lithuania | *This is the "~4 cm RTK-UAV SfM Curonian Spit" lead.* 5 RTK-UAV SfM DEM epochs of active bare sand + grassland + sparse canopy. No public archive found. Paper only: `baltica.gamtc.lt/.../06__tijunaite__baltica_36_2_...pdf` ("Development of active dunes on the Curonian Spit") | Output spacing 4.02/3.94/3.90/3.84 cm (2018–2019, SenseFly eBee RTK + Pix4D); 6.58 cm (2022, DJI Phantom Pro RTK + Pixpro). "Output spacing must not be treated as measured resolution." | **None published** — no checkpoints, no independent error distribution, no support masks recorded | Article access does NOT establish dataset reuse rights; no artifact license | **(iii) MENTION / author-request LEAD** — no download path | **`L`** (BALTIC-PUBLIC-TARGET-DATA-HUNT.md): "high-priority author request for bare-sand process morphology" |
+| 2 | **Dutchman's Cap (Olando kepurė) coastal cliff**, Lithuania | ~2 km / ~3 ha Baltic cliff, parabolic dune over moraine, landslides, active erosion. UAV photogrammetry + LiDAR. No public archive; "paper says data available from authors." DOI `10.3389/frsen.2025.1397513` | 1 cm mesh | Photogrammetric GCP RMSE X/Y/Z = 1.3 / 0.9 / 2.3 cm; combined LiDAR-photogrammetry RMSE = 4.9 / 5.6 / 4.0 cm. Ground/veg classification + support "remain inadequate"; overhangs are not heightfields | Article CC BY "does not by itself license unreleased data" | **(iii) MENTION / author-request LEAD** | **`L`, becoming `R` if obtained with rights** — "valuable cliff/moraine/dune evidence" |
+| 3 | **Preila lagoon shoreline**, Lithuania (Curonian Lagoon) | 566.84 m vegetated lagoon shoreline. Matrice 600 Pro imagery/LiDAR + Mavic Air imagery → point clouds, orthomosaics, DSM. No point-cloud/DEM archive found. DOI `10.3389/frsen.2026.1786848` | ~2 cm target GSD, 5 LKS-94 GCPs | Achieved target-scale ground error and vegetation-free ground support "are not established" | Article CC BY; dataset license not separately established | **(iii) MENTION / author-request LEAD** | **`L`** — "shoreline/vegetation conditioning, not ground truth as documented" |
+| 4 | **Kaigu extracted peatland**, Latvia | 16.4 ha abandoned peat-extraction field: dry/moist bare peat, sedges, reeds, water, ditches. Not sand, but bare-surface UAV analogue. No machine-readable DEM/cloud/raw-image artifact found | RTK UAV photogrammetry, 5 RTK-GNSS GCPs; **no GSD / effective resolution published** | No error distribution, no ground semantics under vegetation, no support masks published | Article CC BY; no independently licensed geometry artifact | **(iii) MENTION / author-request LEAD** | **`L`** (peat, not sand) — "useful peat morphology if authors release raw data and checkpoints" |
+| 5 | **Biała Góra coastal cliff UAV-LiDAR time series** (a.k.a. "Mrzeżyno-adjacent" cliff), near Międzyzdroje, Poland | 10 UAV-LiDAR epochs (Feb 2022–Dec 2023) over ~1 km cliff. RepOD Dataverse, DOI `10.18150/BHH1RC`. ZIP-compressed LAS + natural-color RGB + return number. **27,401,865,660 bytes compressed (27.402 GB / 25.520 GiB)**, directly downloadable | Raw unstructured/unclassified point clouds; density not stated | **None**: "no density, independent positional error, GCP/checkpoint record, support mask, or authoritative ground class" | Dataset + files CC BY 4.0 | **(ii) LEAD, immediate download** (bytes NOT local; a derived local capacity probe exists at `asset-gen/data/work/terrain/microtopography/biala-coastal-escarpment-capacity/.../biala-source-domain-capacity.npz`) | **`R`, immediate download** — "conversion/pretraining and change-consistency evidence, not target truth yet." NOTE: **cliff/moraine, not dune-sand micro-relief** |
+| 6 | **Mrzeżyno beach-dune DEM set, 2022-02** (the existing prior) | Southern Baltic coast, Poland. DJI Zenmuse L1 UAV-LiDAR. Zenodo DOI `10.5281/zenodo.15476933`, file `2022-02.zip`. Regimes tagged: `sand.dune_aeolian`, `shore.beach_sand` | **0.10 m DEM** (source geometry member `2022-02-28.tif`, EPSG:2180, 4621×10423, pixel 0.1 m); 7,799,608 valid cells (16.19%) | Campaign-level independent RTK/GCP: median vertical dev <=0.05 m, vertical p95 <=0.10 m. (SfM checkpoint context, not LiDAR truth: planimetric RMSE <=0.03 m, vertical RMSE <=0.04 m) | CC BY 4.0 | **(i) LOCAL** — source `.../mrzezyno/source/sha256/48959174…/2022-02-28.tif` = 192,715,409 B; target `.../mrzezyno/target/sha256/f6aa61f6…/mrzezyno-morphology-target.npz` = 24,294,838 B (7,799,605 finite cells) | **`>=1 m` band ONLY.** Contract `replacement-target-selection.2026-07-14.json`: `bounded_pass`, band B1 [0.25–1.0 m] `candidate_only`. Later NARROWED: TASKLIST.md:137 — "0.2–1 m does not clear the campaign 0.10 m p95 bound"; scope = 1–8 m band statistics only. `not_authorized` incl. "fine sand-ripple truth", "B2 supervision" |
+
+### Explicitly rejected in prior screening (verbatim reasons — these bind)
+
+| # | Name | Res | Local vs lead | Prior verdict + verbatim rejection reason |
+|---|------|-----|---------------|-------------------------------------------|
+| 7 | **Point Beach, Wisconsin, Aug 2020** (`replacement-target-selection.2026-07-14.json`, id `point_beach_wisconsin_2020_08`) | DEM 0.1 m grid; SfM processing grid 0.0411 m; cloud 697.96 pts/m², unclassified. DJI Phantom 4 RTK SfM. DOI `10.5069/G9X63K4B`, CC-BY-4.0 | (ii) LEAD (temp verification only) | **`no_go`.** Blocking reasons verbatim: "The published 0.72 m vertical and 0.77 m total control-point RMSE cannot support B1 geometry." / "The cloud is unclassified and does not provide a terrain-semantic or support mask." (GCP count 4; RMSE z=0.719944 m, total=0.771777 m) |
+| 8 | **Virginia Tech StREAM Lab Spring 2026 drone LiDAR** (`replacement-target-selection.2026-07-14.json`, id `virginia_stream_lab_spring_2026`) | DTM 0.1 m grid; 1294.86 pts/m² total, DJI Matrice 350 RTK + Zenmuse L1. DOI `10.5069/G9NZ85W7`, CC-BY-4.0 | (ii) LEAD | **`no_go`.** Verbatim: "No independent Spring 2026 terrain check-point distribution is published." / "The report explicitly leaves known ground/vegetation streambank misclassifications unverified and uncorrected." / "The DTM includes low-return unassigned points and linearly interpolated stream bathymetry, so its surface semantics and support are insufficient for target truth." (fluvial, not dune-sand) |
+| 9 | **AHN4 classified point cloud + BGT sand mask**, Netherlands (`replacement-target-selection-2.2026-07-14.json`, id `ahn4_classified_point_cloud_with_bgt_sand_mask`) | Density 10–14 pts/m² (implies ~0.27–0.32 m spacing). BGT/IMGeo distinguishes *zand*, *strand en strandwal*, *zandverstuiving*. AHN4 CC0; BGT CC BY 4.0 | (ii) LEAD | **`no_go`.** Verbatim: "The documented density implies roughly 0.27–0.32 m mean point spacing and cannot natively resolve the 0.25 m lower edge of B1." / "The 5–8 cm systematic and 5 cm stochastic position terms can equal or exceed common B1 agricultural and sand relief." / "A convenient national classified corpus is not target evidence when its support and error cannot separate the requested signal." Published error m: h-systematic 0.08, h-stochastic 0.05, v-systematic 0.05, v-stochastic 0.05 |
+| 10 | **Ystad bathymetric UAV-LiDAR demonstrations**, Sweden (`NORDIC-PUBLIC-TARGET-DATA-HUNT.md:121`) | "Relevant sandy Baltic beach/topobathymetric process" | (iii) MENTION | **`X`.** Verbatim: "Commercial case study; no open corpus or license." |
+| 11 | **Oulanka multispectral high-density LiDAR preprint**, Finland (`NORDIC…:119`, arXiv 2603.22230) | ~500–1,600 pts/m² over sand, gravel, vegetation, forest floor, water | (iii) MENTION | **`X` for current planning.** Verbatim: "No public data DOI, download, or reuse license was found. Project pages direct users to contact the team." (fluvial, not dune) |
+
+### Adjacent / not sand-dune geometry (screened, listed to close the search)
+- **Getåberget, Åland orthomosaics** (`NORDIC…:56`, DOI `10.5281/zenodo.4719627`): 0.0055 m GSD UAV orthomosaics, 16.6 GB, 5–10 GCP, CC BY 4.0. Verdict **`C` only**: "No height field, point cloud, DEM, or raw-image reconstruction package; useful only as optical/fracture context." (exposed rock)
+- **Stordalen Mire 5 cm UAV DSM**, Sweden (`NORDIC…:54`): 0.05 m UAV photogrammetric DSM, 2019-08-16, SITES CC BY 4.0. Verdict **`E?`**: "a visible DSM in a subarctic palsa/thermokarst mire, not bare-earth or an Estonia-equivalent peat distribution." (peat, not sand)
+- **Opara eastern-Germany bare cultivated soil** (`replacement-target-selection-2…`, DOI `10.25532/OPARA-1038`): mm-supported SfM (5 mm output grid, 2 mm point spacing), bare cultivated *loess*, independent CP errors published, CC BY 4.0. Verdict **`bounded_metadata_pass`** for the AGRICULTURE regime — "reject forest_peat_**sand**_rock_or_shore_transfer." (loess tillage, not aeolian sand)
+- **Latvia LĢIA / Lithuania national ALS**: CC BY 4.0, ~1.5 ground pts/m², ~12 cm claimed vertical accuracy. Verdict **`C` only** — "far too sparse and inaccurate for direct 6.25 cm targets."
+- **calibrated-multiview `Point_Beach` / `sand_box` scenes** (`calibrated-multiview-surface-selection…`): multiview-stereo benchmark scenes; "test sets without downloadable laser/reference ground truth." Not usable sand geometry.
+
+### Parked GENERATED artifact (not a measured prior — context only)
+- **`sand-dune-aeolian-float`** at `asset-gen/data/work/microtopography/sand-dune-aeolian/float/sha256/4edad71d4943…/` (LOCAL, npz = 2,633,088 B). A generator output, not measured sand data. Built from Estonian Maa-amet DTM sheet 61391 (FID 4659) + the Mrzeżyno `>=1 m` prior only. Result: residual p95 = 3.8 mm, "visibly indistinguishable" — parked as negative evidence (commit `01cdd60`). Not a sand-morphology source.
+- **Prior diagnostic that names the Curonian lead**: `asset-gen/data/work/microtopography/dune-parent-support-diagnostic/SUMMARY.json` (7 national aeolian sites). It recommends (c) "relief already present in the 1 m parent," states the remaining gap is the sub-metre (<1 m) band, and that "the sole qualified prior (Mrzeżyno, >=1 m band only) explicitly cannot authorize" it. The "~4 cm RTK-UAV SfM Curonian Spit" phrasing itself is in `KNOWN-ISSUES.md:2191` and `TASKLIST.md:28`, which point to the research-library record = candidate #1 above.
+
+---
+
+## Independent control / checkpoints — cross-cut (qualification historically fails on missing independent error)
+- **Has independent campaign-level RTK/GCP error published:** #6 Mrzeżyno (median v-dev <=0.05 m, v-p95 <=0.10 m). This is the ONLY sand candidate with local bytes AND independent error — and it is `>=1 m` band only.
+- **Has GCP RMSE but data NOT public / no held-out checkpoints:** #2 Dutchman's Cap (GCP RMSE 1.3/0.9/2.3 cm; combined 4.9/5.6/4.0 cm).
+- **Published position error but too coarse / error exceeds signal:** #9 AHN4 (5–8 cm systematic + 5 cm stochastic); #7 Point Beach (v-RMSE 0.72 m); #8 Virginia StREAM (no independent CP distribution).
+- **NO independent error/control record at all:** #1 Pilkosios/Curonian (only output-spacing figures, explicitly "must not be treated as measured resolution"), #3 Preila, #4 Kaigu, #5 Biała Góra.
+
+---
+
+## Facts I could NOT determine
+1. Whether the Pilkosios/Nagliai (Curonian) DEMs, orthomosaics, dense clouds, raw images, checkpoints, or land-cover masks exist at ANY public URL — the project record says "No public archive found"; I did not download or web-search this pass (no-download constraint).
+2. Any independent positional-error distribution, per-cell support mask, or checkpoint set for candidates #1, #3, #4, #5 — none is recorded in-repo, and I could not confirm one exists.
+3. The native/effective (not nominal-output) resolution of the Curonian DEMs — the record explicitly warns the 3.84–6.58 cm output spacing is not measured resolution; the true resolvable scale is unknown.
+4. Acquisition season/exact dates beyond years: Pilkosios epochs are "2018–2019" and "2022" only; no month/season recorded in-repo.
+5. Whether any author has already been contacted or granted rights for #1–#4 — the docs list these as planned/parallel requests (`PUBLIC-TARGET-QUALIFICATION-PROTOCOL.md:555`); no reply or grant is recorded.
+6. Bare-vs-vegetated / wet-vs-dry sand semantics and masks for the Curonian data — the record notes "output is surface geometry where vegetation is present," but no mask artifact or per-cell semantic layer is documented.
+7. Whether the Biała Góra (#5) cliff clouds contain any dune-sand micro-relief usable at 0.0625–1 m (it is characterized as cliff/moraine; unclassified; no ground-class density given).
+8. Byte sizes / file lists for #1–#4 (no archive located, so nothing to size).
+9. Whether a web search under Lithuanian/Russian toponyms (Kuršių nerija, Nida, Parnidis, Kurshskaya kosa) or generic UAV-SfM dune-DEM terms would surface a public archive not yet recorded in-repo — not attempted this pass (no-download / read-only-library scope).
