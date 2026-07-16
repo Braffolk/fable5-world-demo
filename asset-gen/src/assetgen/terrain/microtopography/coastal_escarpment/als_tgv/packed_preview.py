@@ -21,13 +21,17 @@ from ....repair.base_transaction import (
 )
 from ....repair.pinned_baseline import PinnedDecodedBaseline
 from ....repair.prolong import prolong_structural_4x
+from ...erodible_slope.morphodynamics.structural_base import (
+    StructuralC0TransitionSupport,
+    load_development_a_structural_transition_support,
+)
 from ...forest_exemplar.preview import _decoded, _immutable, _json_bytes, _sha256, _write_height
 from .evidence import load_evidence
 from .packed_preview_verify import VERIFIER_ID, verifier_source_sha256
 
 
 RECIPE_KIND = "research-als-tgv-structural-preview-v1"
-COOK_REVISION = 1
+COOK_REVISION = 2
 ARTIFACT_SCHEMA = "laas.coastal-escarpment-als-tgv-artifact/1"
 CONFIG_SCHEMA = "laas.coastal-escarpment-als-tgv-config/1"
 ARTIFACT_STATE = "development_float_candidate_accepted"
@@ -123,6 +127,7 @@ def _recipe_identity(artifact_root: Path, source_base_manifest: Path) -> tuple[s
         Path(__file__).parents[3] / "repair/base_transaction.py",
         Path(__file__).parents[3] / "repair/pinned_baseline.py",
         Path(__file__).parents[3] / "repair/prolong.py",
+        Path(__file__).parents[2] / "erodible_slope/morphodynamics/structural_base.py",
         Path(__file__).parents[4] / "release.py",
     )
     inputs: dict[str, Any] = {
@@ -148,6 +153,7 @@ def _recipe_identity(artifact_root: Path, source_base_manifest: Path) -> tuple[s
             "sourceGridConvention": "inclusive 0.25 m nodes",
             "packedAuthorityConvention": "0.25 m storage centers sampled bilinearly from source nodes",
             "hardOwnership": "any bilinear stencil touching hard or mapped-face authority selects C0",
+            "c0Ownership": "accepted structural support with quintic delta closure to pinned baseline",
         },
         "finestRungSemantics": {
             "sourcePitchM": SOURCE_PITCH_M,
@@ -203,6 +209,46 @@ def _sample_artifact_support(
     return sampled_c0, sampled_c1, overlay & conservative_hard
 
 
+def _smooth_axis_weight(values: np.ndarray, inner_min: float, inner_max: float, outer_min: float, outer_max: float) -> np.ndarray:
+    distance = np.maximum(np.maximum(inner_min - values, values - inner_max), 0.0)
+    clearance = np.where(values < inner_min, inner_min - outer_min, outer_max - inner_max)
+    t = np.clip(distance / clearance, 0.0, 1.0)
+    return 1.0 - (t * t * t * (t * (t * 6.0 - 15.0) + 10.0))
+
+
+def _sample_c0_transition(
+    base: BaseConfig,
+    chunk: HeightChunkId,
+    transition: StructuralC0TransitionSupport,
+) -> tuple[np.ndarray, np.ndarray]:
+    origin_e = base.grid.anchor_e + chunk.cx * 128.0
+    origin_n = base.grid.anchor_n - chunk.cz * 128.0
+    indices = np.arange(-4, 516, dtype=np.float64)
+    east = origin_e + (indices + 0.5) * SOURCE_PITCH_M
+    north = origin_n - (indices + 0.5) * SOURCE_PITCH_M
+    e0, n0, e1, n1 = transition.bbox_en
+    cols = (east - e0) / transition.pitch_m
+    rows = (n1 - north) / transition.pitch_m
+    valid_rows = (rows >= 0.0) & (rows <= transition.c0_height_m.shape[0] - 1)
+    valid_cols = (cols >= 0.0) & (cols <= transition.c0_height_m.shape[1] - 1)
+    sampled = np.zeros((520, 520), dtype=np.float64)
+    if valid_rows.any() and valid_cols.any():
+        rr, cc = np.meshgrid(rows[valid_rows], cols[valid_cols], indexing="ij")
+        sampled[np.ix_(valid_rows, valid_cols)] = ndimage.map_coordinates(
+            transition.c0_height_m,
+            [rr, cc],
+            order=1,
+            mode="nearest",
+        )
+    weight = (
+        _smooth_axis_weight(east, ARTIFACT_BBOX[0], ARTIFACT_BBOX[2], e0, e1)[None, :]
+        * _smooth_axis_weight(north, ARTIFACT_BBOX[1], ARTIFACT_BBOX[3], n0, n1)[:, None]
+    )
+    valid = valid_rows[:, None] & valid_cols[None, :]
+    weight[~valid] = 0.0
+    return sampled, weight
+
+
 def _stage_fine(
     base: BaseConfig,
     build_root: Path,
@@ -223,15 +269,18 @@ def _stage_fine(
     scratch = build_root / "scratch/als-tgv-fine-cores"
     scratch.mkdir(parents=True, exist_ok=True)
     dependency_roots: dict[str, str] = {}
+    transition = load_development_a_structural_transition_support()
 
     def core(chunk: HeightChunkId) -> np.ndarray:
         path = scratch / f"{chunk.cx}_{chunk.cz}.npy"
+        reconstructed = baseline.reconstruct(chunk, halo_samples=4)
+        dependency_roots[f"{chunk.cx},{chunk.cz}"] = reconstructed.dependency_root_sha256
         if path.exists():
             return np.load(path, mmap_mode="r")
-        reconstructed = baseline.reconstruct(chunk, halo_samples=4)
         support = reconstructed.tile.height
         baseline_fine = prolong_structural_4x(support, parent_rows=(4, 516), parent_cols=(4, 516))
         sampled_c0, sampled_c1, support_hard = _sample_artifact_support(base, chunk, c0, c1, hard)
+        transition_c0, transition_weight = _sample_c0_transition(base, chunk, transition)
         origin_e = base.grid.anchor_e + chunk.cx * 128.0
         origin_n = base.grid.anchor_n - chunk.cz * 128.0
         indices = np.arange(-4, 516, dtype=np.float64)
@@ -243,21 +292,25 @@ def _stage_fine(
             & (east[None, :] >= ARTIFACT_BBOX[0])
             & (east[None, :] <= ARTIFACT_BBOX[2])
         )
-        c0_support = np.array(support, dtype=np.float64, copy=True)
-        c1_support = np.array(support, dtype=np.float64, copy=True)
+        c0_support = np.asarray(support, dtype=np.float64) + transition_weight * (
+            transition_c0 - np.asarray(support, dtype=np.float64)
+        )
+        c1_support = np.array(c0_support, copy=True)
         c0_support[overlay] = sampled_c0[overlay]
         c1_support[overlay] = np.where(support_hard[overlay], sampled_c0[overlay], sampled_c1[overlay])
         c0_fine = prolong_structural_4x(c0_support, parent_rows=(4, 516), parent_cols=(4, 516))
         c1_fine = prolong_structural_4x(c1_support, parent_rows=(4, 516), parent_cols=(4, 516))
-        core_overlay = np.repeat(np.repeat(overlay[4:516, 4:516], 4, axis=0), 4, axis=1)
+        c0_overlay = transition_weight[4:516, 4:516] > 0.0
+        core_overlay = np.repeat(np.repeat(c0_overlay, 4, axis=0), 4, axis=1)
+        residual_overlay = np.repeat(np.repeat(overlay[4:516, 4:516], 4, axis=0), 4, axis=1)
         core_hard = np.repeat(np.repeat(support_hard[4:516, 4:516], 4, axis=0), 4, axis=1)
         values = np.array(baseline_fine, dtype=np.float32, copy=True)
-        values[core_overlay] = c1_fine[core_overlay]
-        values[core_overlay & core_hard] = c0_fine[core_overlay & core_hard]
+        values[core_overlay] = c0_fine[core_overlay]
+        values[residual_overlay] = c1_fine[residual_overlay]
+        values[residual_overlay & core_hard] = c0_fine[residual_overlay & core_hard]
         temporary = path.with_suffix(".tmp.npy")
         np.save(temporary, values, allow_pickle=False)
         temporary.replace(path)
-        dependency_roots[f"{chunk.cx},{chunk.cz}"] = reconstructed.dependency_root_sha256
         return np.load(path, mmap_mode="r")
 
     published = set(coverage.published_fine)

@@ -173,6 +173,37 @@ class StructuralFineCanvas:
         return self
 
 
+@dataclass(frozen=True)
+class StructuralC0TransitionSupport:
+    """Accepted C0 on the largest symmetric five-tap-valid support lattice."""
+
+    bbox_en: tuple[float, float, float, float]
+    pitch_m: float
+    c0_height_m: np.ndarray
+    forbidden_morphology: np.ndarray
+    unknown_bathymetry: np.ndarray
+
+    def __post_init__(self) -> None:
+        e0, n0, e1, n1 = self.bbox_en
+        expected_shape = (
+            int(round((n1 - n0) / self.pitch_m)) + 1,
+            int(round((e1 - e0) / self.pitch_m)) + 1,
+        )
+        arrays = (
+            self.c0_height_m,
+            self.forbidden_morphology,
+            self.unknown_bathymetry,
+        )
+        if any(value.shape != expected_shape for value in arrays):
+            raise ValueError("structural transition support has the wrong shape")
+        if self.c0_height_m.dtype != np.float32 or not np.isfinite(self.c0_height_m).all():
+            raise ValueError("structural transition C0 must be finite float32")
+        if any(value.dtype != np.bool_ for value in arrays[1:]):
+            raise ValueError("structural transition masks must be boolean")
+        for value in arrays:
+            value.flags.writeable = False
+
+
 def _load_required_tiles(
     document: dict[str, Any], authority_root: Path
 ) -> tuple[dict[tuple[int, int, int], tuple[Any, Any]], tuple[StructuralTileIdentity, ...]]:
@@ -294,6 +325,84 @@ def _prolong_canvas(
     if fine.shape != FINE_CANVAS_SHAPE:
         raise ValueError("structural prolongation did not produce the fixed canvas")
     return fine, fine_forbidden, fine_unknown
+
+
+def _prolong_phase_zero_tiled(
+    parent: np.ndarray,
+    *,
+    row_start: int,
+    row_stop: int,
+    col_start: int,
+    col_stop: int,
+) -> np.ndarray:
+    """Evaluate the phase used by the 0.25 m solve lattice without a huge fine canvas."""
+    result = np.empty((row_stop - row_start, col_stop - col_start), dtype=np.float32)
+    tile_side = 256
+    for r0 in range(row_start, row_stop, tile_side):
+        r1 = min(r0 + tile_side, row_stop)
+        for c0 in range(col_start, col_stop, tile_side):
+            c1 = min(c0 + tile_side, col_stop)
+            fine = prolong_structural_4x(
+                parent,
+                parent_rows=(r0, r1),
+                parent_cols=(c0, c1),
+            )
+            result[r0 - row_start : r1 - row_start, c0 - col_start : c1 - col_start] = (
+                fine[::4, ::4]
+            )
+    return result
+
+
+def load_development_a_structural_transition_support() -> StructuralC0TransitionSupport:
+    """Load accepted C0 beyond the solve canvas for continuous packing ownership."""
+    manifest_path = ASSET_GEN_ROOT / ACCEPTED_AUTHORITY_RELATIVE_PATH
+    payload = manifest_path.read_bytes()
+    if _sha256(payload) != ACCEPTED_AUTHORITY_SHA256:
+        raise ValueError("accepted structural-authority manifest SHA-256 differs")
+    document = json.loads(payload, object_pairs_hook=_reject_duplicate_keys)
+    if not isinstance(document, dict):
+        raise ValueError("accepted structural-authority manifest must be an object")
+    _validate_manifest_header(document)
+    tiles, _identities = _load_required_tiles(document, manifest_path.parent)
+    parent, forbidden, unknown = _assemble_parent_mosaic(tiles)
+
+    canvas_row_start = _PARENT_START_ROW
+    canvas_row_stop = _PARENT_START_ROW + _PARENT_REQUEST_SHAPE[0]
+    canvas_col_start = _PARENT_START_COL
+    canvas_col_stop = _PARENT_START_COL + _PARENT_REQUEST_SHAPE[1]
+    symmetric_support = min(
+        canvas_row_start - 2,
+        parent.shape[0] - 2 - canvas_row_stop,
+        canvas_col_start - 2,
+        parent.shape[1] - 2 - canvas_col_stop,
+    )
+    if symmetric_support <= 0:
+        raise ValueError("accepted structural authority has no transition support")
+    row_start = canvas_row_start - symmetric_support
+    row_stop = canvas_row_stop + symmetric_support
+    col_start = canvas_col_start - symmetric_support
+    col_stop = canvas_col_stop + symmetric_support
+    c0 = _prolong_phase_zero_tiled(
+        parent,
+        row_start=row_start,
+        row_stop=row_stop,
+        col_start=col_start,
+        col_stop=col_stop,
+    )
+    collar_m = symmetric_support * _AUTHORITY_TEXEL_M
+    bbox = (
+        FINE_CANVAS_BBOX_EN[0] - collar_m,
+        FINE_CANVAS_BBOX_EN[1] - collar_m,
+        FINE_CANVAS_BBOX_EN[2] + collar_m,
+        FINE_CANVAS_BBOX_EN[3] + collar_m,
+    )
+    return StructuralC0TransitionSupport(
+        bbox_en=bbox,
+        pitch_m=_AUTHORITY_TEXEL_M,
+        c0_height_m=c0,
+        forbidden_morphology=np.asarray(forbidden[row_start:row_stop, col_start:col_stop], dtype=bool),
+        unknown_bathymetry=np.asarray(unknown[row_start:row_stop, col_start:col_stop], dtype=bool),
+    )
 
 
 def load_development_a_structural_base() -> StructuralFineCanvas:

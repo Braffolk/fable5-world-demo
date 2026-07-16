@@ -20,6 +20,10 @@ from .....release import audit_base_release, micro_verification_binding, read_v1
 from ....repair.base_transaction import AuditedFormat1HeightSource
 from ....repair.pinned_baseline import PinnedDecodedBaseline
 from ....repair.prolong import prolong_structural_4x
+from ...erodible_slope.morphodynamics.structural_base import (
+    StructuralC0TransitionSupport,
+    load_development_a_structural_transition_support,
+)
 from .evidence import load_evidence
 
 
@@ -160,22 +164,88 @@ def _sample_support(base, chunk, c0, c1, hard):
     return sampled_c0, sampled_c1, overlay, overlay & target_hard
 
 
-def _expected_core(baseline, base, chunk, c0, c1, hard):
+def _smooth_axis_weight(values, inner_min, inner_max, outer_min, outer_max):
+    distance = np.maximum(np.maximum(inner_min - values, values - inner_max), 0.0)
+    clearance = np.where(values < inner_min, inner_min - outer_min, outer_max - inner_max)
+    t = np.clip(distance / clearance, 0.0, 1.0)
+    return 1.0 - (t * t * t * (t * (t * 6.0 - 15.0) + 10.0))
+
+
+def _sample_c0_transition(base, chunk, transition: StructuralC0TransitionSupport):
+    origin_e = base.grid.anchor_e + chunk.cx * 128.0
+    origin_n = base.grid.anchor_n - chunk.cz * 128.0
+    indices = np.arange(-4, 516, dtype=np.float64)
+    east = origin_e + (indices + 0.5) * SOURCE_PITCH_M
+    north = origin_n - (indices + 0.5) * SOURCE_PITCH_M
+    e0, n0, e1, n1 = transition.bbox_en
+    cols = (east - e0) / transition.pitch_m
+    rows = (n1 - north) / transition.pitch_m
+    valid_r = (rows >= 0.0) & (rows <= transition.c0_height_m.shape[0] - 1)
+    valid_c = (cols >= 0.0) & (cols <= transition.c0_height_m.shape[1] - 1)
+    sampled = np.zeros((520, 520), dtype=np.float64)
+    if valid_r.any() and valid_c.any():
+        rr, cc = np.meshgrid(rows[valid_r], cols[valid_c], indexing="ij")
+        sampled[np.ix_(valid_r, valid_c)] = ndimage.map_coordinates(
+            transition.c0_height_m, [rr, cc], order=1, mode="nearest"
+        )
+    weight = (
+        _smooth_axis_weight(east, ARTIFACT_BBOX[0], ARTIFACT_BBOX[2], e0, e1)[None, :]
+        * _smooth_axis_weight(north, ARTIFACT_BBOX[1], ARTIFACT_BBOX[3], n0, n1)[:, None]
+    )
+    weight[~(valid_r[:, None] & valid_c[None, :])] = 0.0
+    return sampled, weight
+
+
+def _expected_core(baseline, base, chunk, c0, c1, hard, transition):
     support = baseline.reconstruct(chunk, halo_samples=4).tile.height
     baseline_fine = prolong_structural_4x(support, parent_rows=(4, 516), parent_cols=(4, 516))
     sampled_c0, sampled_c1, overlay, target_hard = _sample_support(base, chunk, c0, c1, hard)
-    c0_support = np.array(support, dtype=np.float64, copy=True)
-    c1_support = np.array(support, dtype=np.float64, copy=True)
+    transition_c0, transition_weight = _sample_c0_transition(base, chunk, transition)
+    support64 = np.asarray(support, dtype=np.float64)
+    c0_support = support64 + transition_weight * (transition_c0 - support64)
+    c1_support = np.array(c0_support, copy=True)
     c0_support[overlay] = sampled_c0[overlay]
     c1_support[overlay] = np.where(target_hard[overlay], sampled_c0[overlay], sampled_c1[overlay])
     c0_fine = prolong_structural_4x(c0_support, parent_rows=(4, 516), parent_cols=(4, 516))
     c1_fine = prolong_structural_4x(c1_support, parent_rows=(4, 516), parent_cols=(4, 516))
+    c0_overlay = np.repeat(
+        np.repeat(transition_weight[4:516, 4:516] > 0.0, 4, axis=0), 4, axis=1
+    )
     fine_overlay = np.repeat(np.repeat(overlay[4:516, 4:516], 4, axis=0), 4, axis=1)
     fine_hard = np.repeat(np.repeat(target_hard[4:516, 4:516], 4, axis=0), 4, axis=1)
     expected = np.array(baseline_fine, dtype=np.float64, copy=True)
+    expected[c0_overlay] = c0_fine[c0_overlay]
     expected[fine_overlay] = c1_fine[fine_overlay]
     expected[fine_overlay & fine_hard] = c0_fine[fine_overlay & fine_hard]
     return expected, c0_fine, fine_overlay & fine_hard
+
+
+def _former_edge_gradient_error(base, chunk, decoded, expected):
+    pitch = 0.0625
+    origin_e = base.grid.anchor_e + chunk.cx * 128.0
+    origin_n = base.grid.anchor_n - chunk.cz * 128.0
+    east = origin_e + (np.arange(FINE_CORE) + 0.5) * pitch
+    north = origin_n - (np.arange(FINE_CORE) + 0.5) * pitch
+    maximum = 0.0
+    comparisons = 0
+    for edge in (ARTIFACT_BBOX[0], ARTIFACT_BBOX[2]):
+        right = int(np.searchsorted(east, edge))
+        if 0 < right < FINE_CORE:
+            rows = (north >= ARTIFACT_BBOX[1]) & (north <= ARTIFACT_BBOX[3])
+            actual_gradient = decoded[rows, right] - decoded[rows, right - 1]
+            expected_gradient = expected[rows, right] - expected[rows, right - 1]
+            maximum = max(maximum, float(np.max(np.abs(actual_gradient - expected_gradient), initial=0.0)))
+            comparisons += int(np.count_nonzero(rows))
+    reversed_north = -north
+    for edge in (ARTIFACT_BBOX[1], ARTIFACT_BBOX[3]):
+        lower = int(np.searchsorted(reversed_north, -edge))
+        if 0 < lower < FINE_CORE:
+            cols = (east >= ARTIFACT_BBOX[0]) & (east <= ARTIFACT_BBOX[2])
+            actual_gradient = decoded[lower, cols] - decoded[lower - 1, cols]
+            expected_gradient = expected[lower, cols] - expected[lower - 1, cols]
+            maximum = max(maximum, float(np.max(np.abs(actual_gradient - expected_gradient), initial=0.0)))
+            comparisons += int(np.count_nonzero(cols))
+    return maximum, comparisons
 
 
 def _max_seams(paths: dict[HeightChunkId, Path], encode: EncodeConfig) -> tuple[float, int]:
@@ -267,9 +337,14 @@ def verify_als_tgv_preview(build_digest: str, base_manifest_path: Path, base_out
     )
     maximum_structural_error = 0.0
     maximum_hard_error = 0.0
+    maximum_former_edge_gradient_error = 0.0
+    former_edge_comparisons = 0
     affected_chunks = 0
+    transition = load_development_a_structural_transition_support()
     for chunk in coverage.published_fine:
-        expected, expected_c0, fine_hard = _expected_core(baseline, base, chunk, c0, c1, hard)
+        expected, expected_c0, fine_hard = _expected_core(
+            baseline, base, chunk, c0, c1, hard, transition
+        )
         decoded = _decoded(paths[chunk], base.encode)[2][:-1, :-1]
         maximum_structural_error = max(
             maximum_structural_error,
@@ -281,9 +356,21 @@ def verify_als_tgv_preview(build_digest: str, base_manifest_path: Path, base_out
                 maximum_hard_error,
                 float(np.max(np.abs(decoded[fine_hard].astype(np.float64) - expected_c0[fine_hard]))),
             )
-    if maximum_structural_error > 0.00101 or maximum_hard_error > 0.00101:
+        edge_error, edge_comparisons = _former_edge_gradient_error(
+            base, chunk, decoded.astype(np.float64), expected
+        )
+        maximum_former_edge_gradient_error = max(maximum_former_edge_gradient_error, edge_error)
+        former_edge_comparisons += edge_comparisons
+    if (
+        maximum_structural_error > 0.00101
+        or maximum_hard_error > 0.00101
+        or maximum_former_edge_gradient_error > 0.00201
+        or former_edge_comparisons == 0
+    ):
         raise ValueError(
-            f"ALS/TGV packed reconstruction errors structural={maximum_structural_error}, hard={maximum_hard_error}"
+            "ALS/TGV packed reconstruction errors "
+            f"structural={maximum_structural_error}, hard={maximum_hard_error}, "
+            f"former_edge_gradient={maximum_former_edge_gradient_error}"
         )
     maximum_seam, seam_comparisons = _max_seams(paths, base.encode)
     if maximum_seam != 0.0:
@@ -403,6 +490,14 @@ def verify_als_tgv_preview(build_digest: str, base_manifest_path: Path, base_out
             "affectedPublishedChunkCount": affected_chunks,
             "fineMorphologyClaimBelow025M": "none",
             "inheritedLayerIndexesByteExact": inherited_layers,
+            "c0OwnershipTransition": {
+                "supportBboxEn": list(transition.bbox_en),
+                "supportPitchM": transition.pitch_m,
+                "operator": "accepted structural C0 delta with separable quintic closure to pinned baseline",
+                "maxFormerRectangleEdgeGradientErrorM": maximum_former_edge_gradient_error,
+                "formerRectangleEdgeComparisons": former_edge_comparisons,
+                "zeroValueAndDerivativeAtOuterSupport": True,
+            },
         }),
     }
     report = {
