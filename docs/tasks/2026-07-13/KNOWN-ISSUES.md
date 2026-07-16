@@ -1899,6 +1899,49 @@ The historical accepted infrastructure checkpoint removed the `TerrainField` cei
 
 The bounded full-parent challenger at artifact `27af29e19748...` passes its mechanical ownership and exclusion laws, but its common-light QA visibly reads as source-patch synthesis: granular texture, broad rounded or rectangular activity islands, and abrupt family blocks replace coherent till, clast/socket, and depositional organization. It is parked before packing. Its deterministic assembly and mapped body/socket code remain reusable evidence infrastructure, but another patch-placement or blending correction is not authorized; rough-till resumes only through a materially different structural mechanism or materially stronger evidence.
 
+### Matched forest/boulder replacement composition is rejected
+
+Exact user review rejected float artifact `46ecefb71c30...` and packed recipe
+`9da8192b7f8d...`. Each mapped boulder sat inside a massive rectangular area where the
+accepted forest detail disappeared, and the intended body/socket change was not
+detectable. This overrides the agent-only float/settled-frame assessment. Passing seams,
+quantization, hierarchy, masks, and boot gates did not make the rendered morphology
+acceptable.
+
+The defect is asset-gen composition, not transport, runtime, or material shading.
+`rough_till_boulder/multi_form.py` marks `source_usage` wherever the tapered source
+template exceeds `1e-5`; families 2 and 4 therefore label `3814/4096` and `3804/4096`
+cells of their fixed `16 x 16 m` crops. `boulder_composition.py` incorrectly treated that
+provenance as exclusive body/socket occupancy and replaced the forest residual over the
+nearly full squares. The 0.5 m QA reduction hid the missing fine forest band, while the
+ownership panel showed the squares but mislabeled them as bounded physical support.
+
+The one authorized correction is additive cross-scale composition: keep the accepted
+mean-null forest carrier and add the unchanged condition-masked rock delta. Focused QA
+must compare forest-only against forest-plus-rock at the same position and expose the
+former extraction boundary at sufficient resolution. Browser acceptance requires both
+continuous forest detail and a clearly visible source-supported body/socket change. If
+the unchanged source form remains visually ineffective, park the families instead of
+amplifying or rescaling them. Canonical `latest` remains unchanged.
+
+The additive correction closes the rectangular carrier-loss defect but does not rescue
+the mapped form at its unchanged authority. Family-4-only float artifact
+`cb78f999032f...` (manifest SHA-256 `fb3bcfc86650...`) uses exact
+`C1 = C0 + forest residual + rock delta`; its complete 16 m window recovers the forest
+carrier within `2.78e-17 m`, retains carrier RMS `0.0315156785 m`, closes the rock parent
+mean within `2.78e-17 m`, and has zero abstained/pile leakage. Native 6.25 cm QA
+`16c09a2b34d0...` no longer shows a rectangular band-energy void. Unchanged packing independently
+passes as recipe `31c2c2837917...`, manifest SHA-256 `c5af06f8e730...`, and
+micro-verification SHA-256 `43baeae4f2b4...`, with zero seams and byte-exact inherited
+non-height layers. The exact `grass=0` real-WebGPU boot passes at frame 163. Direct user
+review confirms the rectangle is gone and the mapped tiny stone has a visible, slight
+localized hump that is appropriate at its actual scale. Accept family 4 as a bounded
+small-rock socket/forest-continuity checkpoint. It is not evidence for boulder-scale
+macroform, another mapped family, rough-till ownership, production, or national coverage.
+Family 2 remains parked as visually ineffective at unchanged source amplitude. Preserve
+the additive operator, config, float artifact, packer/verifier generalization, packed
+preview, and QA without retuning source amplitude/scale/orientation.
+
 ## Integration Risks
 
 - Dataset conversion previously became inefficiently serialized behind HY_SPRUCE4 full-E57 handling, with two failed full attempts and repeated implementation/review micro-cycles before a morphology input existed. Native codec-word padding commit `ba92ab4` completed the verified full materialization and the Python publisher completed its atomic move. The full-scan Hovi track is now parked after its fully observed central 6.25 cm QA remained dominated by competing/unresolved sheets; no threshold-tuning loop is authorized. Evo 1086/1065 are parked after sparse-surface diagnosis; the downsampled HY_PINE2 stress condition is also parked after its candidate sheet correctly abstained, and its full archive remains unfetched. A blocked track is parked without deleting its code or provenance; it resumes only if quicker alternatives fail or its scientific role is unique.

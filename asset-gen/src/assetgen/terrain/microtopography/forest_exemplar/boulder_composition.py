@@ -14,6 +14,7 @@ from typing import Any
 
 import numpy as np
 from PIL import Image, ImageDraw
+from scipy import ndimage
 
 from assetgen.config import ASSET_GEN_ROOT, load_base
 from assetgen.cook.pinned_height import PinnedBaseHeight
@@ -34,6 +35,9 @@ from .run import _canonical_json, _sha256
 
 
 SCHEMA = "forest-mesic-mineral-mapped-boulder-composition/1"
+POSITIVE_SCHEMA_V1 = "forest-mesic-mineral-mapped-boulder-composition-positive/1"
+POSITIVE_SCHEMA_V2 = "forest-mesic-mineral-mapped-boulder-composition-positive/2"
+POSITIVE_SCHEMA = "forest-mesic-mineral-mapped-boulder-composition-positive/3"
 FINE_PITCH_M = 0.0625
 PARENT_METRES = 512
 FINE_CELLS = 8192
@@ -46,14 +50,26 @@ OUTPUT_ROOT = (
 
 def _read_config(path: Path) -> dict[str, Any]:
     config = json.loads(path.read_text(encoding="utf-8"))
-    if config.get("schema") != SCHEMA:
+    if config.get("schema") not in {
+        SCHEMA,
+        POSITIVE_SCHEMA_V1,
+        POSITIVE_SCHEMA_V2,
+        POSITIVE_SCHEMA,
+    }:
         raise ValueError("unsupported forest/boulder composition config")
     if config.get("authority") != "research_float_only_no_production_no_pack_no_latest":
         raise ValueError("composition cannot authorize packing or production")
-    if config.get("bbox_en") != [683520, 6435840, 684032, 6436352]:
-        raise ValueError("composition bbox differs from the accepted mapped-rock parent")
-    if config.get("parent") != {"lod": -1, "cx": 615, "cz": 389}:
-        raise ValueError("composition parent differs")
+    expected_site = (
+        ([680448, 6436352, 680960, 6436864], {"lod": -1, "cx": 609, "cz": 388})
+        if config["schema"] in {
+            POSITIVE_SCHEMA_V1,
+            POSITIVE_SCHEMA_V2,
+            POSITIVE_SCHEMA,
+        }
+        else ([683520, 6435840, 684032, 6436352], {"lod": -1, "cx": 615, "cz": 389})
+    )
+    if config.get("bbox_en") != expected_site[0] or config.get("parent") != expected_site[1]:
+        raise ValueError("composition site differs from its frozen schema")
     if config.get("texel_m") != FINE_PITCH_M:
         raise ValueError("composition changed the accepted fine lattice")
     accepted_transport = {
@@ -166,9 +182,11 @@ def _compose_rocks(
     residual: np.memmap,
     ownership: np.memmap,
     rock_condition: np.memmap,
+    forest_allowed: np.memmap,
     source_path: Path,
     mapped: list[dict[str, Any]],
-) -> dict[str, Any]:
+    bbox: tuple[int, int, int, int],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     source = np.load(source_path, allow_pickle=False)
     coarse_residual = np.asarray(source["residual_m"], dtype=np.float64)
     usage = np.asarray(source["source_usage"], dtype=np.uint8)
@@ -179,16 +197,28 @@ def _compose_rocks(
         raise ValueError("mapped-rock source usage is invalid")
     if np.any((usage >= 2) & ~source_allowed):
         raise ValueError("mapped body/socket support escaped its accepted soil+till mask")
-    padded = np.pad(coarse_residual, 2, mode="constant")
     metrics: dict[str, Any] = {"families": {}, "generic_till_owned_cells": 0}
+    qa_records: list[dict[str, Any]] = []
     for item in mapped:
         code = int(item["source_family"])
-        coarse_owner = usage == code
+        source_point = item.get("source_point_en", item["point_en"])
+        source_east = 683520.0 + (np.arange(2048) + 0.5) * 0.25
+        source_north = 6436352.0 - (np.arange(2048) + 0.5) * 0.25
+        source_center_row = int(np.argmin(np.abs(source_north - float(source_point[1]))))
+        source_center_col = int(np.argmin(np.abs(source_east - float(source_point[0]))))
+        source_row0, source_row1 = source_center_row - 32, source_center_row + 32
+        source_col0, source_col1 = source_center_col - 32, source_center_col + 32
+        coarse_owner = usage[source_row0:source_row1, source_col0:source_col1] == code
         rows, cols = np.nonzero(coarse_owner)
         if rows.size == 0:
             raise ValueError(f"mapped source family {code} is empty")
-        row0, row1 = int(rows.min()), int(rows.max()) + 1
-        col0, col1 = int(cols.min()), int(cols.max()) + 1
+        point_e, point_n = map(float, item["point_en"])
+        target_east = bbox[0] + (np.arange(2048) + 0.5) * 0.25
+        target_north = bbox[3] - (np.arange(2048) + 0.5) * 0.25
+        target_center_row = int(np.argmin(np.abs(target_north - point_n)))
+        target_center_col = int(np.argmin(np.abs(target_east - point_e)))
+        row0, row1 = target_center_row - 32, target_center_row + 32
+        col0, col1 = target_center_col - 32, target_center_col + 32
         condition = np.asarray(
             rock_condition[
                 row0 * ROCK_FACTOR : row1 * ROCK_FACTOR,
@@ -199,48 +229,93 @@ def _compose_rocks(
         condition_cells = condition.reshape(
             row1 - row0, ROCK_FACTOR, col1 - col0, ROCK_FACTOR
         ).all(axis=(1, 3))
-        accepted_coarse = coarse_owner[row0:row1, col0:col1] & condition_cells
+        accepted_coarse = coarse_owner & condition_cells
         fine_owner = np.repeat(np.repeat(accepted_coarse, ROCK_FACTOR, axis=0), ROCK_FACTOR, axis=1)
+        source_patch = coarse_residual[source_row0:source_row1, source_col0:source_col1]
         fine_rock = prolong_structural_4x(
-            padded,
-            parent_rows=(row0 + 2, row1 + 2),
-            parent_cols=(col0 + 2, col1 + 2),
+            np.pad(source_patch, 2, mode="constant"),
+            parent_rows=(2, 66),
+            parent_cols=(2, 66),
         )
         fine_rows = np.s_[row0 * ROCK_FACTOR : row1 * ROCK_FACTOR]
         fine_cols = np.s_[col0 * ROCK_FACTOR : col1 * ROCK_FACTOR]
+        context_margin = 64  # 4 m around the complete 16 m source window.
+        context_row0 = row0 * ROCK_FACTOR - context_margin
+        context_row1 = row1 * ROCK_FACTOR + context_margin
+        context_col0 = col0 * ROCK_FACTOR - context_margin
+        context_col1 = col1 * ROCK_FACTOR + context_margin
+        context_rows = np.s_[context_row0:context_row1]
+        context_cols = np.s_[context_col0:context_col1]
+        context_current = np.asarray(c1[context_rows, context_cols], dtype=np.float64).copy()
+        context_forest_residual = np.asarray(
+            residual[context_rows, context_cols], dtype=np.float64
+        ).copy()
         current = np.asarray(c1[fine_rows, fine_cols], dtype=np.float64)
         forest_residual = np.asarray(residual[fine_rows, fine_cols], dtype=np.float64)
-        baseline = current - forest_residual
-        composed_residual = np.where(fine_owner, fine_rock, forest_residual)
-        c1[fine_rows, fine_cols] = (baseline + composed_residual).astype(np.float32)
+        rock_delta = np.where(fine_owner, fine_rock, 0.0)
+        composed_residual = forest_residual + rock_delta
+        c1[fine_rows, fine_cols] = (current + rock_delta).astype(np.float32)
         residual[fine_rows, fine_cols] = composed_residual.astype(np.float32)
         local_ownership = ownership[fine_rows, fine_cols]
         local_ownership[fine_owner] = code
-        blocks = composed_residual.reshape(
+        # Rock closure is relative to the already-forested carrier, not to C0.
+        blocks = rock_delta.reshape(
             row1 - row0, ROCK_FACTOR, col1 - col0, ROCK_FACTOR
         ).mean(axis=(1, 3))
         mean_error = float(
             np.max(
-                np.abs(blocks[accepted_coarse] - coarse_residual[row0:row1, col0:col1][accepted_coarse]),
+                np.abs(blocks[accepted_coarse] - source_patch[accepted_coarse]),
                 initial=0.0,
             )
         )
-        point_e, point_n = map(float, item["point_en"])
-        parent_row = int((6436352.0 - point_n) / 0.25)
-        parent_col = int((point_e - 683520.0) / 0.25)
+        fine_forest = np.asarray(forest_allowed[fine_rows, fine_cols], dtype=bool)
+        forest_overlap = float(np.mean(fine_forest[fine_owner]))
+        forest_distance = ndimage.distance_transform_edt(~fine_forest) * FINE_PITCH_M
+        max_forest_distance = float(np.max(forest_distance[fine_owner], initial=0.0))
+        anchor_fine_row = target_center_row * 4 + 2
+        anchor_fine_col = target_center_col * 4 + 2
+        forest_interior = ndimage.distance_transform_edt(fine_forest) * FINE_PITCH_M
+        local_anchor_row = anchor_fine_row - row0 * 4
+        local_anchor_col = anchor_fine_col - col0 * 4
+        anchor_clearance = float(forest_interior[local_anchor_row, local_anchor_col])
+        recovered_forest = composed_residual - rock_delta
+        carrier_error = float(np.max(np.abs(recovered_forest - forest_residual), initial=0.0))
+        carrier_rms_before = float(np.sqrt(np.mean(forest_residual * forest_residual)))
+        carrier_rms_recovered = float(np.sqrt(np.mean(recovered_forest * recovered_forest)))
         metrics["families"][str(code)] = {
             "etak_id": int(item["etak_id"]),
             "owned_fine_cells": int(np.count_nonzero(fine_owner)),
             "owned_parent_cells": int(np.count_nonzero(accepted_coarse)),
             "parent_mean_max_error_m": mean_error,
-            "anchor_parent_residual_m": float(coarse_residual[parent_row, parent_col]),
-            "anchor_owned": bool(usage[parent_row, parent_col] == code and accepted_coarse[parent_row - row0, parent_col - col0]),
+            "source_anchor_parent_residual_m": float(source_patch[32, 32]),
+            "anchor_owned": bool(accepted_coarse[32, 32]),
+            "rock_support_forest_overlap_fraction": forest_overlap,
+            "maximum_rock_support_to_forest_distance_m": max_forest_distance,
+            "anchor_forest_interior_clearance_m": anchor_clearance,
+            "whole_window_forest_carrier_maximum_error_m": carrier_error,
+            "whole_window_forest_carrier_rms_before_m": carrier_rms_before,
+            "whole_window_forest_carrier_rms_recovered_m": carrier_rms_recovered,
             "fine_bbox_rows_cols": [row0 * 4, row1 * 4, col0 * 4, col1 * 4],
         }
+        context_rock_delta = np.zeros_like(context_current)
+        context_rock_delta[
+            context_margin:-context_margin, context_margin:-context_margin
+        ] = rock_delta
+        qa_records.append(
+            {
+                "etak_id": int(item["etak_id"]),
+                "source_family": code,
+                "c0": (context_current - context_forest_residual).astype(np.float32),
+                "forest_carrier": context_current.astype(np.float32),
+                "composed": (context_current + context_rock_delta).astype(np.float32),
+                "rock_delta": context_rock_delta.astype(np.float32),
+                "recovered_forest": context_current.astype(np.float32),
+            }
+        )
     c1.flush()
     residual.flush()
     ownership.flush()
-    return metrics
+    return metrics, qa_records
 
 
 def _resize_rgb(rgb: np.ndarray, size: int) -> Image.Image:
@@ -252,12 +327,30 @@ def _shade(values: np.ndarray) -> np.ndarray:
     return np.repeat(value[..., None], 3, axis=2)
 
 
+def _native_shade(values: np.ndarray) -> np.ndarray:
+    value = _hillshade(values, FINE_PITCH_M)
+    return np.repeat(value[..., None], 3, axis=2)
+
+
+def _band_energy(values: np.ndarray) -> np.ndarray:
+    band = values - ndimage.gaussian_filter(values, sigma=8.0, mode="reflect")
+    return np.sqrt(ndimage.gaussian_filter(band * band, sigma=4.0, mode="reflect"))
+
+
+def _grayscale(values: np.ndarray, maximum: float) -> np.ndarray:
+    scaled = np.clip(values / max(maximum, 1.0e-12), 0.0, 1.0)
+    rgb = np.rint(scaled[..., None] * 255.0).astype(np.uint8)
+    return np.repeat(rgb, 3, axis=2)
+
+
 def _write_qa(
     qa: Path,
     c0: np.ndarray,
     c1: np.ndarray,
     ownership: np.ndarray,
     mapped: list[dict[str, Any]],
+    rock_qa: list[dict[str, Any]],
+    bbox: tuple[int, int, int, int],
 ) -> list[Path]:
     qa.mkdir(parents=True, exist_ok=True)
     shade0, shade1 = _shade(c0), _shade(c1)
@@ -266,12 +359,14 @@ def _write_qa(
         qa / f"0{index + 2}_mapped_rock_{int(item['etak_id'])}_socket_closeup.png"
         for index, item in enumerate(mapped)
     )
-    paths.append(qa / "05_ordinary_forest_to_rock_transition.png")
+    transition_number = len(mapped) + 2
+    paths.append(qa / f"0{transition_number}_mapped_rock_ownership_transitions.png")
+    paths.append(qa / f"0{transition_number + 1}_ordinary_forest_context.png")
 
     canvas = Image.new("RGB", (1328, 718), (244, 242, 234))
     draw = ImageDraw.Draw(canvas)
     draw.text((16, 12), "01  FULL FOREST + MAPPED-ROCK COMPOSITION", fill=(20, 24, 20))
-    draw.text((16, 34), "same 512 m parent and common light; mapped bodies replace forest only on bounded support", fill=(70, 72, 66))
+    draw.text((16, 34), "same 512 m parent and common light; mapped rock deltas add to the preserved forest carrier", fill=(70, 72, 66))
     canvas.paste(_resize_rgb(shade0, 640), (16, 62))
     canvas.paste(_resize_rgb(shade1, 640), (672, 62))
     draw.text((16, 44), "PINNED C0", fill=(20, 24, 20))
@@ -279,36 +374,80 @@ def _write_qa(
     canvas.save(paths[0], compress_level=9)
 
     centers: list[tuple[int, int]] = []
-    for path, item in zip(paths[1:4], mapped, strict=True):
+    for path, item, native in zip(
+        paths[1 : 1 + len(mapped)], mapped, rock_qa, strict=True
+    ):
         point_e, point_n = map(float, item["point_en"])
-        col = int((point_e - 683520.0) / 0.5)
-        row = int((6436352.0 - point_n) / 0.5)
+        col = int((point_e - bbox[0]) / 0.5)
+        row = int((bbox[3] - point_n) / 0.5)
         centers.append((row, col))
-        half = 48
-        crop = np.s_[row - half : row + half, col - half : col + half]
-        sheet = Image.new("RGB", (1328, 718), (244, 242, 234))
+        carrier = np.asarray(native["forest_carrier"], dtype=np.float64)
+        composed = np.asarray(native["composed"], dtype=np.float64)
+        recovered = np.asarray(native["recovered_forest"], dtype=np.float64)
+        carrier_energy = _band_energy(carrier)
+        recovered_energy = _band_energy(recovered)
+        energy_maximum = float(
+            np.percentile(np.concatenate((carrier_energy.ravel(), recovered_energy.ravel())), 99.5)
+        )
+        carrier_error = np.abs(recovered - carrier)
+        error_maximum = max(float(np.max(carrier_error)), 1.0e-7)
+        sheet = Image.new("RGB", (1248, 900), (244, 242, 234))
         draw = ImageDraw.Draw(sheet)
         draw.text((16, 12), f"MAPPED ROCK {int(item['etak_id'])} / FAMILY {int(item['source_family'])}", fill=(20, 24, 20))
-        draw.text((16, 34), "48 x 48 m at identical common light; left C0, right composed body/socket in forest", fill=(70, 72, 66))
-        sheet.paste(_resize_rgb(shade0[crop], 640), (16, 62))
-        sheet.paste(_resize_rgb(shade1[crop], 640), (672, 62))
+        draw.text((16, 34), "native 0.0625 m samples over identical 24 m context; outline is the complete 16 m source window", fill=(70, 72, 66))
+        panels = (
+            ("PINNED C0", _native_shade(np.asarray(native["c0"], dtype=np.float64))),
+            ("FOREST CARRIER BEFORE ROCK", _native_shade(carrier)),
+            ("ADDITIVE COMPOSITION", _native_shade(composed)),
+            ("FOREST BAND ENERGY BEFORE", _grayscale(carrier_energy, energy_maximum)),
+            ("RECOVERED CARRIER BAND ENERGY", _grayscale(recovered_energy, energy_maximum)),
+            ("RECOVERED CARRIER ERROR (0.1 um white)", _grayscale(carrier_error, error_maximum)),
+        )
+        for panel_index, (label, rgb) in enumerate(panels):
+            panel_col = panel_index % 3
+            panel_row = panel_index // 3
+            left = 16 + panel_col * 408
+            top = 84 + panel_row * 408
+            draw.text((left, top - 18), label, fill=(20, 24, 20))
+            panel = _resize_rgb(rgb, 384)
+            panel_draw = ImageDraw.Draw(panel)
+            panel_draw.rectangle((64, 64, 319, 319), outline=(220, 45, 35), width=2)
+            sheet.paste(panel, (left, top))
         sheet.save(path, compress_level=9)
 
-    row, col = centers[1]
-    half = 72
-    crop = np.s_[row - half : row + half, col - half : col + half]
     palette = np.asarray(
         [[42, 43, 39], [50, 135, 82], [218, 92, 63], [225, 155, 54], [120, 91, 177]],
         dtype=np.uint8,
     )
-    transition = Image.new("RGB", (1944, 718), (244, 242, 234))
+    transition = Image.new("RGB", (1944, 718 * len(centers)), (244, 242, 234))
     draw = ImageDraw.Draw(transition)
-    draw.text((16, 12), "05  ORDINARY FOREST-TO-ROCK OWNERSHIP TRANSITION", fill=(20, 24, 20))
-    draw.text((16, 34), "72 x 72 m context; green forest, orange mapped family 3, charcoal exact abstention", fill=(70, 72, 66))
-    transition.paste(_resize_rgb(shade0[crop], 624), (16, 62))
-    transition.paste(_resize_rgb(shade1[crop], 624), (656, 62))
-    transition.paste(_resize_rgb(palette[np.clip(ownership[crop], 0, 4)], 624), (1296, 62))
-    transition.save(paths[4], compress_level=9)
+    for index, (row, col) in enumerate(centers):
+        half = 72
+        crop = np.s_[row - half : row + half, col - half : col + half]
+        top = index * 718
+        draw.text((16, top + 12), f"MAPPED ROCK OWNERSHIP TRANSITION {index + 1}", fill=(20, 24, 20))
+        draw.text((16, top + 34), "72 x 72 m context; green forest, warm mapped body/socket, charcoal exact abstention", fill=(70, 72, 66))
+        transition.paste(_resize_rgb(shade0[crop], 624), (16, top + 62))
+        transition.paste(_resize_rgb(shade1[crop], 624), (656, top + 62))
+        transition.paste(_resize_rgb(palette[np.clip(ownership[crop], 0, 4)], 624), (1296, top + 62))
+    transition.save(paths[-2], compress_level=9)
+
+    # Pick a forest-owned 72 m context farthest from mapped support.
+    forest = ownership == 1
+    rock = ownership >= 2
+    distance = ndimage.distance_transform_edt(~rock)
+    score = np.where(forest, distance, -1.0)
+    context_row, context_col = np.unravel_index(int(np.argmax(score)), score.shape)
+    context_row = int(np.clip(context_row, 72, c1.shape[0] - 72))
+    context_col = int(np.clip(context_col, 72, c1.shape[1] - 72))
+    crop = np.s_[context_row - 72 : context_row + 72, context_col - 72 : context_col + 72]
+    forest_sheet = Image.new("RGB", (1328, 718), (244, 242, 234))
+    draw = ImageDraw.Draw(forest_sheet)
+    draw.text((16, 12), "ORDINARY MESIC-MINERAL FOREST CONTEXT", fill=(20, 24, 20))
+    draw.text((16, 34), "72 x 72 m common-light C0/C1 context away from mapped body/socket supports", fill=(70, 72, 66))
+    forest_sheet.paste(_resize_rgb(shade0[crop], 640), (16, 62))
+    forest_sheet.paste(_resize_rgb(shade1[crop], 640), (672, 62))
+    forest_sheet.save(paths[-1], compress_level=9)
     return paths
 
 
@@ -317,14 +456,14 @@ def run(config_path: Path) -> Path:
     bbox = tuple(map(int, config["bbox_en"]))
     source_path = _bound(config["rock_source"])
     recipe = {
-        "schema": SCHEMA + ".recipe/1",
+        "schema": config["schema"] + ".recipe/1",
         "authority": config["authority"],
         "config": _identity(config_path),
         "implementation": _identity(Path(__file__).resolve()),
         "locked_forest_implementation": _identity(Path(__file__).with_name("adjacent.py")),
         "mapped_rock_source": _identity(source_path),
         "base_manifest_sha256": BASE_MANIFEST_SHA256,
-        "composition": "forest owner replaced only by mapped families 2/3/4 on complete admissible 0.25 m supports",
+        "composition": "exact additive cross-scale composition: C1 = C0 + locked forest residual + condition-masked mapped-rock delta",
         "runtime": {"python": platform.python_version(), "numpy": np.__version__, "platform": platform.platform()},
     }
     build_id = hashlib.sha256(_canonical_json(recipe)).hexdigest()
@@ -368,13 +507,15 @@ def run(config_path: Path) -> Path:
             surface / "composition_ownership_u8.npy", mode="w+", dtype=np.uint8, shape=(FINE_CELLS, FINE_CELLS)
         )
         ownership[:] = np.asarray(forest_allowed, dtype=np.uint8)
-        rock_metrics = _compose_rocks(
+        rock_metrics, rock_qa = _compose_rocks(
             c1=c1,
             residual=residual,
             ownership=ownership,
             rock_condition=rock_condition,
+            forest_allowed=forest_allowed,
             source_path=source_path,
             mapped=config["mapped_boulders"],
+            bbox=bbox,
         )
         maximum_abstained = 0.0
         maximum_pile = 0.0
@@ -401,7 +542,15 @@ def run(config_path: Path) -> Path:
         residual_half = _reduce8(residual, (FINE_CELLS, FINE_CELLS))
         c0_half = c1_half - residual_half
         ownership_half = np.asarray(ownership[4::8, 4::8], dtype=np.uint8)
-        pngs = _write_qa(qa, c0_half, c1_half, ownership_half, config["mapped_boulders"])
+        pngs = _write_qa(
+            qa,
+            c0_half,
+            c1_half,
+            ownership_half,
+            config["mapped_boulders"],
+            rock_qa,
+            bbox,
+        )
         acceptance = config["acceptance"]
         failures = []
         if float(np.mean(forest_allowed)) < acceptance["minimum_forest_allowed_fraction"]:
@@ -415,8 +564,20 @@ def run(config_path: Path) -> Path:
                 failures.append(f"empty mapped family {family['etak_id']}")
             if family["parent_mean_max_error_m"] > acceptance["maximum_rock_parent_mean_error_m"]:
                 failures.append(f"mapped family mean {family['etak_id']}")
+            if (
+                family["whole_window_forest_carrier_maximum_error_m"]
+                > acceptance["maximum_whole_window_forest_carrier_error_m"]
+            ):
+                failures.append(f"forest carrier preservation {family['etak_id']}")
             if not family["anchor_owned"]:
                 failures.append(f"mapped anchor rejected {family['etak_id']}")
+            if "minimum_rock_support_forest_overlap_fraction" in acceptance:
+                if family["rock_support_forest_overlap_fraction"] < acceptance["minimum_rock_support_forest_overlap_fraction"]:
+                    failures.append(f"mapped support forest overlap {family['etak_id']}")
+                if family["maximum_rock_support_to_forest_distance_m"] > acceptance["maximum_rock_support_to_forest_distance_m"]:
+                    failures.append(f"mapped support forest distance {family['etak_id']}")
+                if family["anchor_forest_interior_clearance_m"] < acceptance["minimum_anchor_forest_interior_clearance_m"]:
+                    failures.append(f"mapped anchor forest clearance {family['etak_id']}")
         metrics = {
             "bbox_en": list(bbox),
             "shape": [FINE_CELLS, FINE_CELLS],
@@ -439,7 +600,7 @@ def run(config_path: Path) -> Path:
         del c1, residual, ownership, forest_allowed, rock_condition, pile_mask
         shutil.rmtree(scratch)
         qa_index = {
-            "schema": SCHEMA + ".qa/1",
+            "schema": config["schema"] + ".qa/1",
             "build_id": build_id,
             "images": [
                 {"path": f"qa/{path.name}", "bytes": path.stat().st_size, "sha256": _sha256(path), "dimensions_px": list(Image.open(path).size)}
@@ -447,8 +608,9 @@ def run(config_path: Path) -> Path:
             ],
             "interpretation": [
                 "01 compares the complete pinned and composed parent under identical common light.",
-                "02-04 are separate 48 m mapped body/socket before/after closeups.",
-                "05 shows ordinary forest, bounded mapped-rock ownership, and exact abstention together in one 72 m context.",
+                f"02-{len(config['mapped_boulders']) + 1:02d} are native-pitch 24 m same-position C0/carrier/composed and carrier-band preservation sheets; each outlines the complete 16 m source window.",
+                f"{len(config['mapped_boulders']) + 2:02d} shows bounded mapped-rock ownership and the surrounding forest transition for every mapped form.",
+                f"{len(config['mapped_boulders']) + 3:02d} is an ordinary forest C0/C1 context away from mapped forms.",
             ],
         }
         (qa / "index.json").write_bytes(_canonical_json(qa_index) + b"\n")
@@ -457,16 +619,23 @@ def run(config_path: Path) -> Path:
             for path in sorted(staging.rglob("*")) if path.is_file()
         }
         manifest = {
-            "schema": SCHEMA + ".artifact/1",
+            "schema": config["schema"] + ".artifact/1",
             "build_id": build_id,
             "status": "ready_to_pack" if not failures else "park_before_pack",
             "failures": failures,
             "metrics": metrics,
             "authority": {"production": False, "packing": False, "browser": False, "latest": False, "national": False},
-            "ownership": {"0": "exact C0 abstention", "1": "locked mesic-mineral forest", "2": "mapped body/socket 1145271", "3": "mapped body/socket 1145269", "4": "mapped body/socket 1145643"},
+            "ownership": {
+                "0": "exact C0 abstention",
+                "1": "locked mesic-mineral forest",
+                **{
+                    str(int(item["source_family"])): f"mapped body/socket {int(item['etak_id'])}"
+                    for item in config["mapped_boulders"]
+                },
+            },
             "limitations": [
-                "This composes one accepted forest research owner with three bounded mapped-rock forms; it establishes no generic till owner.",
-                "The mapped forms retain 0.25 m source authority and use structural reconstruction only below that pitch.",
+                f"This composes one accepted forest research owner with {len(config['mapped_boulders'])} bounded mapped-rock forms; it establishes no generic till owner.",
+                "Mapped rock deltas retain 0.25 m source authority, use structural reconstruction only below that pitch, and add to rather than replace the locked forest carrier.",
                 "Boulder piles, cliffs/slopes, water, hard surfaces, unsupported soil, and unknown context receive no residual.",
                 "No packing, browser, runtime, format, production, latest, or national authority is granted by this float artifact.",
             ],

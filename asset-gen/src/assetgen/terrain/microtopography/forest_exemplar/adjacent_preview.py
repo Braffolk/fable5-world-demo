@@ -11,7 +11,7 @@ from typing import Any
 
 import numpy as np
 
-from ....config import DATA_OUT, DATA_WORK, BaseConfig, load_base
+from ....config import ASSET_GEN_ROOT, DATA_OUT, DATA_WORK, BaseConfig, load_base
 from ....cook.micro_hierarchy import assemble_parent_source_memmap, box_mean4_striped
 from ....cook.pinned_height import PinnedBaseHeight
 from ....height_geom import HeightChunkId, plan_hero, plan_parent_set
@@ -38,7 +38,7 @@ from .generalization_preview_verify import VERIFIER_ID, verifier_source_sha256
 from .preview import _decoded, _immutable, _json_bytes, _sha256, _write_height
 
 
-COOK_REVISION = 3
+COOK_REVISION = 4
 TEXEL_M = 0.0625
 
 
@@ -95,6 +95,15 @@ BLOCK_SITES = (
     ),
 )
 
+COMPOSITION_SITES = (
+    SiteSpec(
+        "forest-boulder-composition-positive",
+        HeightChunkId(-1, 609, 388),
+        HeightChunkId(0, 152, 97),
+        (680448, 6436352, 680960, 6436864),
+    ),
+)
+
 PAIR_LAYOUT = ArtifactLayout(
     "forest-mesic-mineral-adjacent-continuity-artifact/1",
     (16384, 8192),
@@ -113,10 +122,21 @@ BLOCK_LAYOUT = ArtifactLayout(
     "laas.micro.forest-adjacent-four-parent-preview.recipe.v1",
     "accepted-forest-adjacent-four-parent-absolute-master-v1",
 )
+COMPOSITION_LAYOUT = ArtifactLayout(
+    "forest-mesic-mineral-mapped-boulder-composition-positive/3.artifact/1",
+    (8192, 8192),
+    (680448, 6436352, 680960, 6436864),
+    (2436, 1552),
+    COMPOSITION_SITES,
+    # Reuse the already released contiguous-master verification dispatch.  The
+    # artifact schema and content-addressed inputs keep this recipe distinct.
+    "laas.micro.forest-adjacent-two-parent-preview.recipe.v1",
+    "accepted-forest-mapped-boulder-composition-absolute-master-v2",
+)
 
 
 def _layout_for_schema(schema: str) -> ArtifactLayout:
-    for layout in (PAIR_LAYOUT, BLOCK_LAYOUT):
+    for layout in (PAIR_LAYOUT, BLOCK_LAYOUT, COMPOSITION_LAYOUT):
         if layout.schema == schema:
             return layout
     raise ValueError(f"unsupported adjacent forest artifact schema: {schema}")
@@ -127,21 +147,84 @@ def _artifact_layout(artifact_root: Path) -> ArtifactLayout:
     return _layout_for_schema(manifest.get("schema", ""))
 
 
+def _composition_families(
+    artifact_root: Path, manifest: dict[str, Any]
+) -> tuple[int, ...]:
+    recipe = json.loads((artifact_root / "recipe.json").read_bytes())
+    identity = recipe.get("config", {})
+    config_path = (ASSET_GEN_ROOT.parent / identity.get("path", "")).resolve()
+    if (
+        ASSET_GEN_ROOT.parent.resolve() not in config_path.parents
+        or not config_path.is_file()
+        or config_path.stat().st_size != identity.get("bytes")
+        or _sha256(config_path) != identity.get("sha256")
+    ):
+        raise ValueError("composition config binding changed")
+    config = json.loads(config_path.read_bytes())
+    families = tuple(
+        sorted({int(row["source_family"]) for row in config.get("mapped_boulders", ())})
+    )
+    metric_families = manifest.get("metrics", {}).get("rock", {}).get("families", {})
+    ownership_families = {
+        int(code) for code in manifest.get("ownership", {}) if int(code) not in {0, 1}
+    }
+    if (
+        not families
+        or not set(families).issubset({2, 3, 4})
+        or manifest.get("schema") != config.get("schema", "") + ".artifact/1"
+        or {int(code) for code in metric_families} != set(families)
+        or ownership_families != set(families)
+        or any(
+            int(metric_families[str(code)].get("owned_fine_cells", 0)) <= 0
+            for code in families
+        )
+    ):
+        raise ValueError("composition mapped-family binding changed")
+    return families
+
+
 def _artifact_files(
     artifact_root: Path, layout: ArtifactLayout
 ) -> dict[str, str]:
     manifest = json.loads((artifact_root / "manifest.json").read_bytes())
     metrics = manifest.get("metrics", {})
-    if (
+    common_invalid = (
         manifest.get("schema") != layout.schema
         or manifest.get("build_id") != artifact_root.name
-        or manifest.get("status") != "inspect_float_preview"
         or manifest.get("failures") != []
         or tuple(metrics.get("bbox_en", ())) != layout.master_bbox
         or tuple(metrics.get("shape", ())) != layout.master_shape
-        or metrics.get("maximum_hard_exclusion_residual_m") != 0.0
-        or float(metrics.get("maximum_one_metre_mean_error_m", 1.0)) > 1e-12
-    ):
+    )
+    if layout == COMPOSITION_LAYOUT:
+        rock = metrics.get("rock", {})
+        families = rock.get("families", {})
+        expected_families = _composition_families(artifact_root, manifest)
+        invalid = (
+            common_invalid
+            or manifest.get("status") != "ready_to_pack"
+            or metrics.get("maximum_abstained_residual_m") != 0.0
+            or metrics.get("maximum_boulder_pile_residual_m") != 0.0
+            or rock.get("generic_till_owned_cells") != 0
+            or {int(code) for code in families} != set(expected_families)
+            or any(
+                not row.get("anchor_owned")
+                or float(row.get("parent_mean_max_error_m", 1.0)) > 1e-10
+                or float(row.get("whole_window_forest_carrier_maximum_error_m", 1.0))
+                > 1e-12
+                or float(row.get("rock_support_forest_overlap_fraction", 0.0)) < 0.9
+                or float(row.get("maximum_rock_support_to_forest_distance_m", 99.0)) > 2.1
+                or float(row.get("anchor_forest_interior_clearance_m", 0.0)) < 6.0
+                for row in families.values()
+            )
+        )
+    else:
+        invalid = (
+            common_invalid
+            or manifest.get("status") != "inspect_float_preview"
+            or metrics.get("maximum_hard_exclusion_residual_m") != 0.0
+            or float(metrics.get("maximum_one_metre_mean_error_m", 1.0)) > 1e-12
+        )
+    if invalid:
         raise ValueError("adjacent forest artifact is not the accepted float candidate")
     for relative, identity in manifest["files"].items():
         path = artifact_root / relative
@@ -217,6 +300,7 @@ def _save_npy_immutable(path: Path, values: np.ndarray) -> None:
 
 def _stage_masks(
     build_root: Path,
+    artifact_root: Path,
     layout: ArtifactLayout,
 ) -> tuple[dict[HeightChunkId, Path], dict[str, dict[str, int]]]:
     paths: dict[HeightChunkId, Path] = {}
@@ -225,6 +309,32 @@ def _stage_masks(
     for site in layout.sites:
         packed = np.empty((8192, 1024), dtype=np.uint8)
         evidence: dict[str, int] = {}
+        if layout == COMPOSITION_LAYOUT:
+            ownership = np.load(
+                artifact_root / "surface/composition_ownership_u8.npy",
+                mmap_mode="r",
+            )
+            if ownership.shape != (8192, 8192) or ownership.dtype != np.uint8:
+                raise ValueError("composition ownership must be uint8 8192 square")
+            packed[:] = np.packbits(ownership > 0, axis=1, bitorder="little")
+            manifest = json.loads((artifact_root / "manifest.json").read_bytes())
+            families = _composition_families(artifact_root, manifest)
+            actual_families = set(np.unique(ownership).tolist()) - {0, 1}
+            if actual_families != set(families):
+                raise ValueError("composition ownership families changed")
+            evidence = {
+                "ownedCells": int(np.count_nonzero(ownership)),
+                "forestOwnedCells": int(np.count_nonzero(ownership == 1)),
+                **{
+                    f"mappedFamily{code}OwnedCells": int(np.count_nonzero(ownership == code))
+                    for code in families
+                },
+            }
+            path = build_root / "evidence/masks" / f"{site.parent.cx}_{site.parent.cz}.npy"
+            _save_npy_immutable(path, packed)
+            paths[site.parent] = path
+            evidence_by_site[site.site_id] = evidence
+            continue
         e_min, _n_min, _e_max, n_max = site.bbox_en
         for tile_row in range(4):
             for tile_col in range(4):
@@ -422,7 +532,7 @@ def materialize_adjacent_preview(
     )
     build_root = work_root / "builds" / build_digest
     build_root.mkdir(parents=True, exist_ok=True)
-    mask_paths, mask_metrics = _stage_masks(build_root, layout)
+    mask_paths, mask_metrics = _stage_masks(build_root, artifact_root, layout)
     paths, fine_identities = _stage_fine(
         base, build_root, artifact_root, source_base_manifest, layout
     )
@@ -443,6 +553,11 @@ def materialize_adjacent_preview(
         site.site_id: {
             "path": mask_paths[site.parent].relative_to(build_root).as_posix(),
             "sha256": _sha256(mask_paths[site.parent]),
+            "kind": (
+                "composition-ownership"
+                if layout == COMPOSITION_LAYOUT
+                else "recomputed-morphology-allowed"
+            ),
             "evidence": mask_metrics[site.site_id],
         }
         for site in layout.sites

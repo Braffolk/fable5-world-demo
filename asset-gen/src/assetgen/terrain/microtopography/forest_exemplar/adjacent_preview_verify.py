@@ -10,7 +10,7 @@ from typing import Any
 
 import numpy as np
 
-from ....config import EncodeConfig, load_base
+from ....config import ASSET_GEN_ROOT, EncodeConfig, load_base
 from ....cook.chunkio import read_chunk_v2
 from ....cook.encode import decode_quant16, encode_quant16_checked
 from ....cook.micro_hierarchy import assemble_parent_source_memmap, box_mean4_striped
@@ -20,6 +20,7 @@ from ....process.micro_masks import rasterize_micro_morphology_mask
 from ....release import audit_base_release, micro_verification_binding, read_v1_index
 from ...repair.base_transaction import AuditedFormat1HeightSource
 from .adjacent_preview import (
+    COMPOSITION_LAYOUT,
     TEXEL_M,
     _layout_for_schema,
 )
@@ -56,6 +57,42 @@ def _load_json_bound(path: Path, sha_path: Path | None = None) -> dict[str, Any]
     if sha_path is not None and hashlib.sha256(blob).hexdigest() != sha_path.read_text().strip():
         raise ValueError(f"JSON identity mismatch: {path}")
     return json.loads(blob)
+
+
+def _composition_families(
+    artifact_root: Path, manifest: dict[str, Any]
+) -> tuple[int, ...]:
+    recipe = json.loads((artifact_root / "recipe.json").read_bytes())
+    identity = recipe.get("config", {})
+    config_path = (ASSET_GEN_ROOT.parent / identity.get("path", "")).resolve()
+    if (
+        ASSET_GEN_ROOT.parent.resolve() not in config_path.parents
+        or not config_path.is_file()
+        or config_path.stat().st_size != identity.get("bytes")
+        or _sha256(config_path) != identity.get("sha256")
+    ):
+        raise ValueError("composition config binding changed")
+    config = json.loads(config_path.read_bytes())
+    families = tuple(
+        sorted({int(row["source_family"]) for row in config.get("mapped_boulders", ())})
+    )
+    metric_families = manifest.get("metrics", {}).get("rock", {}).get("families", {})
+    ownership_families = {
+        int(code) for code in manifest.get("ownership", {}) if int(code) not in {0, 1}
+    }
+    if (
+        not families
+        or not set(families).issubset({2, 3, 4})
+        or manifest.get("schema") != config.get("schema", "") + ".artifact/1"
+        or {int(code) for code in metric_families} != set(families)
+        or ownership_families != set(families)
+        or any(
+            int(metric_families[str(code)].get("owned_fine_cells", 0)) <= 0
+            for code in families
+        )
+    ):
+        raise ValueError("composition mapped-family binding changed")
+    return families
 
 
 def _decoded(path: Path, encode: EncodeConfig) -> tuple[Any, bytes, np.ndarray]:
@@ -101,6 +138,8 @@ def _height_inventory(manifest_path: Path) -> dict[tuple[int, int, int], tuple[i
 def _verify_mask(
     *,
     build_root: Path,
+    artifact_root: Path,
+    layout: Any,
     site: Any,
     identity: dict[str, Any],
 ) -> tuple[np.ndarray, dict[str, int]]:
@@ -113,6 +152,35 @@ def _verify_mask(
     packed = np.load(path, mmap_mode="r")
     if packed.shape != (8192, 1024) or packed.dtype != np.uint8:
         raise ValueError(f"invalid morphology mask shape: {site.site_id}")
+    if layout == COMPOSITION_LAYOUT:
+        if identity.get("kind") != "composition-ownership":
+            raise ValueError("composition mask is not bound to artifact ownership")
+        ownership = np.load(
+            artifact_root / "surface/composition_ownership_u8.npy", mmap_mode="r"
+        )
+        if ownership.shape != (8192, 8192) or ownership.dtype != np.uint8:
+            raise ValueError("composition ownership shape changed")
+        actual = np.packbits(ownership > 0, axis=1, bitorder="little")
+        if not np.array_equal(actual, packed):
+            raise ValueError("composition ownership mask changed")
+        manifest = json.loads((artifact_root / "manifest.json").read_bytes())
+        families = _composition_families(artifact_root, manifest)
+        actual_families = set(np.unique(ownership).tolist()) - {0, 1}
+        if actual_families != set(families):
+            raise ValueError("composition ownership families changed")
+        evidence = {
+            "ownedCells": int(np.count_nonzero(ownership)),
+            "forestOwnedCells": int(np.count_nonzero(ownership == 1)),
+            **{
+                f"mappedFamily{code}OwnedCells": int(np.count_nonzero(ownership == code))
+                for code in families
+            },
+        }
+        if evidence != identity["evidence"]:
+            raise ValueError("composition ownership evidence changed")
+        return (ownership > 0), evidence
+    if identity.get("kind") != "recomputed-morphology-allowed":
+        raise ValueError("forest mask has another authority")
     evidence: dict[str, int] = {}
     e_min, _n_min, _e_max, n_max = site.bbox_en
     for tile_row in range(4):
@@ -166,15 +234,42 @@ def verify_adjacent_preview(
         raise ValueError("adjacent artifact manifest changed")
     artifact_manifest = json.loads((artifact_root / "manifest.json").read_bytes())
     metrics = artifact_manifest.get("metrics", {})
-    if (
+    common_invalid = (
         artifact_manifest.get("schema") != layout.schema
-        or artifact_manifest.get("status") != "inspect_float_preview"
         or artifact_manifest.get("failures") != []
         or tuple(metrics.get("bbox_en", ())) != layout.master_bbox
         or tuple(metrics.get("shape", ())) != layout.master_shape
-        or metrics.get("maximum_hard_exclusion_residual_m") != 0.0
-        or float(metrics.get("maximum_one_metre_mean_error_m", 1.0)) > 1e-12
-    ):
+    )
+    if layout == COMPOSITION_LAYOUT:
+        rock = metrics.get("rock", {})
+        families = rock.get("families", {})
+        expected_families = _composition_families(artifact_root, artifact_manifest)
+        invalid = (
+            common_invalid
+            or artifact_manifest.get("status") != "ready_to_pack"
+            or metrics.get("maximum_abstained_residual_m") != 0.0
+            or metrics.get("maximum_boulder_pile_residual_m") != 0.0
+            or rock.get("generic_till_owned_cells") != 0
+            or {int(code) for code in families} != set(expected_families)
+            or any(
+                not row.get("anchor_owned")
+                or float(row.get("parent_mean_max_error_m", 1.0)) > 1e-10
+                or float(row.get("whole_window_forest_carrier_maximum_error_m", 1.0))
+                > 1e-12
+                or float(row.get("rock_support_forest_overlap_fraction", 0.0)) < 0.9
+                or float(row.get("maximum_rock_support_to_forest_distance_m", 99.0)) > 2.1
+                or float(row.get("anchor_forest_interior_clearance_m", 0.0)) < 6.0
+                for row in families.values()
+            )
+        )
+    else:
+        invalid = (
+            common_invalid
+            or artifact_manifest.get("status") != "inspect_float_preview"
+            or metrics.get("maximum_hard_exclusion_residual_m") != 0.0
+            or float(metrics.get("maximum_one_metre_mean_error_m", 1.0)) > 1e-12
+        )
+    if invalid:
         raise ValueError("adjacent artifact gates changed")
     for relative, identity in artifact_manifest["files"].items():
         path = artifact_root / relative
@@ -224,7 +319,11 @@ def verify_adjacent_preview(
     mask_rows: dict[str, Any] = {}
     for site in sites:
         allowed, mask_evidence = _verify_mask(
-            build_root=build_root, site=site, identity=inputs["masks"][site.site_id]
+            build_root=build_root,
+            artifact_root=artifact_root,
+            layout=layout,
+            site=site,
+            identity=inputs["masks"][site.site_id],
         )
         allowed_by_parent[site.parent] = allowed
         mask_rows[site.site_id] = mask_evidence
@@ -380,7 +479,7 @@ def verify_adjacent_preview(
                         float(np.max(np.abs(north[-1, :] - south[0, :]))),
                     )
                 shared_parent_comparisons += 1
-    if shared_parent_comparisons == 0:
+    if len(parents) > 1 and shared_parent_comparisons == 0:
         raise ValueError("adjacent preview contains no shared parent boundaries")
     # Parent chunks select independent integer-metre qoffsets. Their wire lattices
     # coincide, while float32 decode order can differ by one ULP around 60 metres.
@@ -470,12 +569,29 @@ def verify_adjacent_preview(
         "hardMasks": _gate(
             {
                 "maxC1RoundTripErrorM": maximum_c1_error,
-                "maxArtifactHardExclusionResidualM": metrics[
-                    "maximum_hard_exclusion_residual_m"
-                ],
-                "maxArtifactOneMetreMeanErrorM": metrics[
-                    "maximum_one_metre_mean_error_m"
-                ],
+                **(
+                    {
+                        "maxArtifactAbstainedResidualM": metrics[
+                            "maximum_abstained_residual_m"
+                        ],
+                        "maxArtifactBoulderPileResidualM": metrics[
+                            "maximum_boulder_pile_residual_m"
+                        ],
+                        "maxArtifactForestOneMetreMeanErrorM": metrics[
+                            "forest_projection_maximum_one_metre_mean_error_m"
+                        ],
+                        "mappedRockSupport": metrics["rock"]["families"],
+                    }
+                    if layout == COMPOSITION_LAYOUT
+                    else {
+                        "maxArtifactHardExclusionResidualM": metrics[
+                            "maximum_hard_exclusion_residual_m"
+                        ],
+                        "maxArtifactOneMetreMeanErrorM": metrics[
+                            "maximum_one_metre_mean_error_m"
+                        ],
+                    }
+                ),
                 "independentlyRecomputedMasks": mask_rows,
                 "waterAndStructuralExclusionsPreserved": True,
                 "inheritedLayerIndexesByteExact": inherited_layers,

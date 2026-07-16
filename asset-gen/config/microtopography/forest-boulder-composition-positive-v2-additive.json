@@ -1,0 +1,58 @@
+{
+  "schema": "forest-mesic-mineral-mapped-boulder-composition-positive/2",
+  "authority": "research_float_only_no_production_no_pack_no_latest",
+  "regime": "forest.mesic_mineral+mapped_boulder.body_socket",
+  "bbox_en": [680448, 6436352, 680960, 6436864],
+  "parent": {"lod": -1, "cx": 609, "cz": 388},
+  "texel_m": 0.0625,
+  "rock_source": {
+    "path": "asset-gen/data/work/terrain/rough-till-boulder-multi-form/sha256/8dbbe1393d378a7f1d7240d4fb95d3caad9481d6d9b5a351e0b3718e27459c5d/preview.npz",
+    "bytes": 22820923,
+    "sha256": "a017f076f064a4c60f5668a4ab0cf3ea37c46f3037d0f26a55493b51c14fae93"
+  },
+  "mapped_boulders": [
+    {
+      "etak_id": 1145672,
+      "point_en": [680680.700000003, 6436783.329999998],
+      "source_family": 4,
+      "source_point_en": [683888.950, 6436052.360]
+    },
+    {
+      "etak_id": 1145673,
+      "point_en": [680652.3599999994, 6436465.629999999],
+      "source_family": 2,
+      "source_point_en": [683694.936, 6435908.094]
+    }
+  ],
+  "family_assignment": {
+    "method": "one-to-one minimum standardized 33m C0 descriptor cost over slope vector, detrended RMS and p95 relief, quadratic curvature tensor, and gradient anisotropy",
+    "selected_total_cost": 40.862130894522806,
+    "runner_up_total_cost": 41.30230476898459,
+    "selected": {"1145672": 4, "1145673": 2},
+    "no_rotation_scale_or_amplitude_change": true
+  },
+  "excluded_boulder_piles": [1145260],
+  "pile_exclusion_radius_m": 4.0,
+  "transport": {
+    "patch_cells": 192,
+    "candidate_step_cells": 16,
+    "minimum_patch_support_fraction": 0.78,
+    "site_candidate_cell": 24,
+    "site_minimum_distance_cells": 64,
+    "site_saturation_distance_cells": 48,
+    "site_saturation_rounds": 8,
+    "support_radius_cells": 88,
+    "site_seed": 5494753648857171000
+  },
+  "acceptance": {
+    "maximum_forest_one_metre_mean_error_m": 1e-10,
+    "maximum_abstained_residual_m": 0.0,
+    "maximum_rock_parent_mean_error_m": 1e-10,
+    "maximum_whole_window_forest_carrier_error_m": 1e-12,
+    "minimum_forest_allowed_fraction": 0.45,
+    "minimum_rock_owned_cells_per_family": 1,
+    "minimum_rock_support_forest_overlap_fraction": 0.9,
+    "maximum_rock_support_to_forest_distance_m": 2.1,
+    "minimum_anchor_forest_interior_clearance_m": 6.0
+  }
+}
