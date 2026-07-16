@@ -1,6 +1,6 @@
 # Microtopography Known Issues
 
-Last updated: 2026-07-15
+Last updated: 2026-07-16
 
 ## Active Blockers
 
@@ -1415,6 +1415,227 @@ grass present. Geometry screenshot SHA-256 is
 The ordinary LOD -2 surface is Keys-plus-mean reconstruction of measured 0.25 m
 structure; it makes no new morphology claim below 0.25 m and remains neither a
 vertical-cliff solution nor a production/national specialist.
+
+User-visible investigation rejects this ALS/TGV result as a full escarpment
+macro specialist. The wavy structure visible on the face is a positive, modest
+ALS-anchored feature, but shoulder/crest macro occurs only sparsely, terminates
+abruptly, and leaves long boring gaps. The face macro remains too soft. The
+apparent holes coincide with the river but are not deep bed pits: ALS/TGV residual
+is exactly zero on sampled water nodes, and correct `2 m` water sampling gives a
+`0.605724 m` maximum depth, `0.259611 m` p99 depth, zero samples deeper than
+`1 m`, and only `0.101318/0.289154 m` at the two cited locations. The prior
+multi-metre reading was caused by indexing the `2 m` water layer as though it
+shared the height grid. No bed repair is warranted: the large C0 deltas remove
+the false raw-DTM/TIN bridge rather than create a cavity. The separately confirmed
+rectangular C0 splice visible as a right-angle white/green strip was an
+absolute-C0 packing-ownership handoff, not a material, inherited-index, chunk,
+quantization, or water defect. Commit `a478443` closes it by continuing the
+accepted C0 authority over its bound structural support and fading only the
+continuation delta to the pinned baseline with a separable quintic transition;
+the accepted artifact C0 and residual remain unchanged inside their original
+support. Replacement recipe
+`34cb26cc3be64a7a68963f1f83658520b5e7b65a2a94e0cade2d4012904ea6f9`
+publishes manifest SHA-256
+`8ed4f6f7ca2a21aad914ea7952455ad6c2c028358396faa571361452f76bba93`.
+Independent verifier SHA-256
+`da7045c14c32b44fcdb39db1f0b75e60dfc744ca2c212f21a4daf13fc35e4b6b`
+passes all 16,384 decoded former-edge gradient comparisons with `0.00197703 m`
+maximum error, all fine and adjacent-parent seams at exactly zero, `0.00500274 m`
+masked LOD0 closure, and byte-exact inherited biome, boulder, canopy, debris,
+soil, tree, understory, water, and water-cover indexes. Exact normal and
+`grass=0` WebGPU boots on fresh `:5186/:8796` pass at frames 104/101. The live
+geometry review URL is
+`http://localhost:5186/?scene=world&src=estonia&dataurl=http%3A%2F%2Flocalhost%3A8796&alt=8&x=311911.76&z=191069.20&yaw=0&pitch=-0.28&grass=0&shadowclipres=896`.
+This closes packing ownership only; it does not upgrade the rejected ALS
+morphology or grant morphology-owner, production, national, cliff, or fine-rock
+credit.
+
+The algorithm explains the visual result. Only `27.4%` of the solve is active,
+and ALS data attach to only `6.4%` of active nodes. RGB/CIR guidance is effectively
+absent because the vegetation/shadow mask covers `99.99963%` of the relevant
+domain. A binary `48 m` active boundary truncates the residual instead of allowing
+forms to close through a confidence transition. Much of the major toe relief is
+already present in C0 and TGV changes it only modestly, while the mapped face is
+hard C0 by design. The packed preview is therefore `research_rejected` as a full
+macro specialist, while its measured local correction, immutable packing,
+hierarchy, and clean runtime proof remain reusable.
+
+The next active route is robust ALS local-surface/reference confidence followed
+by a multiscale connected crest/shoulder/toe/gully network over a smooth,
+confidence-connected domain. TGV becomes only the final projection rather than
+the morphology generator. Existing hard, water, mapped-face/non-heightfield,
+outer-collar, seam, and hierarchy laws remain unchanged; the route may not fill
+unknown water/shore ownership or soften a protected face to improve appearance.
+
+That replacement route is now also parked after one complete attempt and one
+consolidated correction. Attempt 1 is immutable float artifact
+`684449eb5f54965c9cf49f7e17fd2d42bdfb3239e424dd659b3bc7d20919e614`.
+It correctly converts LAS 1.4 point-format 8 scan angle from `0.006 degree`
+units, qualifies `42,305` class-2 points with robust local quadratic fits, and
+extracts connected multiscale break/ridge/valley authority. Exact hard,
+mapped-face, and collar residual is zero. Its low-side spatial-block holdout
+improves from `0.068180` to `0.061757 m`, while the high side worsens from
+`0.033200` to `0.034114 m`. The artifact's 0.05-confidence-contour metric is
+not an ownership boundary and incorrectly reports a transition failure. More
+importantly, common-light and residual QA show that the height target remains a
+field of local measurement islands even though the separately extracted network
+is connected.
+
+Corrected attempt 2 is immutable artifact
+`ed91840fac7839642c18590eb697c43e914d6dce03c2eb4f58b7eaffaa05ef47`.
+It gives height authority only to the broad 6 m fit, retains the fine fit solely
+as scale-agreement confidence, and measures the actual zero-support handoff.
+All exact hard laws and the zero-support transition pass, but low-side holdout
+worsens from `0.068180` to `0.073761 m`; high-side improvement is only
+`0.033200` to `0.033060 m`. The result still reads as granular ALS correction,
+not connected crest/shoulder/toe/gully morphology. It is therefore rejected
+before packing and browser work.
+
+**Parked-path record:** effort produced a reusable standards-correct ALS loader,
+robust density/spread/return/scan/overlap confidence, confidence-connected
+physical-domain selection, multiscale connected structural-network extraction,
+TGV projection, two immutable float artifacts, and four labeled PNGs per
+artifact. The exact blocker is structural: a connected feature mask does not
+turn local measured residuals into a connected process landform, and stronger
+smoothing trades one holdout side against the other. Focus moves because the
+one-attempt/one-fix limit is exhausted. The active fallback is accepted C0 plus
+the earlier measured ALS correction as reusable structural evidence, while the
+next challenger must generate whole-domain C1 incision, drainage, headcut, and
+conservative deposition form. Resume this route only if new measured geometry
+or a materially different operator can predict connected height form rather
+than merely relabel or smooth the same residual islands.
+
+The materially different whole-domain Biała exemplar-field challenger from
+commit `2b26a03` is also parked after one complete attempt and one consolidated
+correction. It elastically registered one connected two-dimensional Biała macro
+field to Development-A C0 slope and the preserved ALS structural network, solved
+one absolute `769 x 1281` master at `0.25 m`, cropped last, and used continuous
+downslope transport for conservative target-conditioned incision/seep toes.
+Biała supplied only R0 Baltic erodible mineral-scarp representation capacity:
+the substrate/process analogy is unconsolidated coastal sand/till with runoff
+incision, shallow mass wasting, seep influence, and colluvial toes, not Estonia
+predictive transfer, production evidence, or sandstone authority.
+
+Attempt 1 `43d2706c6ea5...` passed mechanical gates but destroyed too much of the
+source's paired signed organization by routing the entire erosional half into
+generic low-slope storage. The single correction preserves the exemplar's paired
+signed two-dimensional field and routes only added target-conditioned incision
+and seep relief. Final immutable artifact
+`0855afa3a7cb04d2a544d9e3daf78cf20ea98b28cf4ae35f4330c225f0ea560d`
+has C1 float SHA-256 `50885db19ed2...` and delta SHA-256 `57a9ab70272b...`.
+All hard, water, mapped non-heightfield face, protected, and outer-collar
+residual maxima are exactly zero. Erosion and deposition are
+`856.448120/856.448181 m3`, net volume is `0.000030518 m3`, and relative
+conservation error is `3.56327e-8`. Relief spans `-0.517907/+0.390438 m`,
+absolute p95 is `0.201024 m`, `54.6187%` of eligible cells change by more than
+`2 cm`, and maximum adjacent residual change is `0.062829 m`.
+
+The final common-light gate nevertheless rejects the field. Macro remains too
+soft in the publication interior; the right bank resolves into long paired
+generator-shaped bands, lower slopes into broad lobes, and seep relief is
+negligible (`37` typed cells). This is neither recognizable varied whole-domain
+crest/headcut/drainage/toe morphology nor worth packing. Reusable work is the
+hash-bound exemplar registration, exact ownership taper, conservative signed
+composition and toe transport, float artifact, typed-form field, four numbered
+QA PNGs, and the negative result that a single whole-field registration does not
+transfer Biała's source organization credibly onto this target. Do not resume
+with another whole-field registration, amplitude/warp retune, or any parked
+erosion variant. Resume only if a target-conditioned paired sparse/dictionary
+method can select and transport multiple typed Biała shoulder/headcut/incision/
+seep/toe atoms irregularly, preserve pair ownership and connected target routing,
+and avoid repetition under common light. That Biała paired sparse/dictionary
+typed irregular-transport challenger is the active fallback.
+
+That paired sparse/dictionary challenger is now also parked. Commit `576bfa6`
+implements four landform-typed coupled dictionaries (`shoulder`,
+`scarp_safe_side`, `incision`, and `toe`), sparsity-one OMP conditioned on
+Development-A C0 plus the preserved ALS network, and a deterministic irregular
+Wendland-C2 partition. Immutable float artifact
+`361e3b0c59f55eeb7386ef6e563fc44bf82458884c0a5f5c3d0ba44a1276039b`
+has C1 SHA-256 `23467cb747d364cc15a4c4704eea1926653289ec8f5858ce51450d1e537927fa`.
+Its evidence boundary is exact: Biała supplies paired `1 m` low and `0.5 m`
+high atoms only. The artifact's `0.25 m` lattice is interpolation and inherited
+C0 sampling, never measured or learned truth below `0.5 m`.
+
+The mechanical laws pass. Every hard, water, mapped-face/non-heightfield,
+protected, and outer-collar residual is exactly zero; maximum one-metre parent
+mean error is `2.81761e-9 m`. Relief spans `-0.328668/+0.300133 m`, absolute p95
+is `0.061287 m`, and `29.8046%` of eligible cells change by more than `2 cm`.
+The bank contains 320 atoms per type, selects 214 distinct source centers, and
+places 1,175 irregular supports. These measurements do not rescue the result:
+only `3/1175` placements are incision-owned, versus 765 shoulder, 366 safe-side,
+and 41 toe placements.
+
+Common-light and signed-band QA reject the artifact. Exact one-metre projection
+exposes a dense checker/waffle phase across the slopes and toes; alternating
+signed bands dominate the supported scale view, and the shaded result reads as
+patterned bumpiness rather than connected shoulder/gully/toe landform. The
+irregular ownership itself avoids a rectangular placement grid, but it cannot
+hide the phase imposed by the paired innovation plus exact local closure. This
+is not worth packing and grants no Estonia transfer, production, cliff-owner,
+or sub-`0.5 m` evidence.
+
+**Parked-path record:** effort produced reusable typed paired-atom extraction,
+sparsity-one coupled low/high selection, C0/ALS structural conditioning,
+world-locked irregular compact-support assembly, exact hard restoration,
+one-metre closure checks, nearest-source and dominant-site attribution arrays,
+one content-addressed float artifact, and four numbered QA PNGs. The exact
+blocker is visible phase locking and type collapse: satisfying local one-metre
+closure turns the Biała innovations into checker/waffle relief while incision
+receives only three placements. Focus moves because the one real run plus its
+single consolidated code correction is exhausted and further dictionary,
+overlap, atom-count, patch-size, or closure-projection tuning would remain in the
+same failed family. The active fallback is the bounded per-regime Biała
+single-field multiscale learned generator, not more dictionary/overlap/atom
+tuning. Resume this sparse path only if a materially new support-qualified paired
+source or closure representation objectively removes phase locking under the
+same common light, recovers connected incision ownership without weakening any
+hard or one-metre law, and the learned-generator fallback has failed or the
+sparse mechanism supplies a uniquely required capability.
+
+### The single-field learned escarpment challenger learns texture, not cliff organization
+
+The bounded per-regime Biała single-field multiscale learned route is complete
+and parked at commit `b58e486`. Final immutable artifact
+`a0054c3616c9ec28a011dddbd00c160273f0e5849fdfff00b23a5cc571982c68`
+binds checkpoint SHA-256
+`ca7191c23babb91bf56b79a37199acc65c4690bfd43d6de80a1413d4f0a76db1`,
+C1 SHA-256
+`783a70d4c8e0530fc0a07ba7b338f91c785d10ad635781cd693003f9806d9191`,
+and delta SHA-256
+`613afc14c8b277a9ad3448470c459bba35f75509b51f77cb1e8506153ea863ad`.
+The terrain-native model has 52,059 generator parameters across `2.0`, `1.0`,
+and `0.5 m` scales and trained for 1,500 updates on PyTorch 2.13.0 MPS in
+`57.887 s`. It conditions on C0 slope and signed curvature plus the preserved
+ALS network; discriminators see normalized height, gradient, Laplacian, and
+scale-band channels rather than RGB.
+
+Mechanical and anti-copy evidence is positive but insufficient. Hard,
+mapped-face, and collar maxima are exactly zero. At frozen strength `0.45`,
+soft one-metre mean consistency has `0.091607/0.256525 m` p95/max error and is
+explicitly not exact DTM closure. Relief spans `-0.46/+0.46 m`, absolute p95 is
+`0.102497 m`, and `34.5749%` of samples exceed `2 cm`. Nearest-source correlation
+has `0.595210/0.881115` p50/p95 with zero patches above `0.98`; checker score is
+`0.000239` and gradient-axis ratio is `1.068701`. This confirms that the route
+is neither a copied source quilt nor the prior checker failure.
+
+Common-light visual capacity still fails. The corrected result removes the
+first attempt's broad blobs and makes relief visible, but reads as widespread
+mottled learned texture with alternating bank-edge stamps. It does not produce
+coherent converging incision, continuous crest/shoulder breakup, or credible
+face-to-toe transport organization. Apparent holes at the toe are excluded from
+this decision because a river lies immediately below the bank and the rendered
+water, bank, and exposed terrain cannot be separated reliably by eye there.
+Rejection rests on the unambiguous crest, shoulder, and face failures.
+
+**Parked-path record:** preserve the optional Torch dependency, frozen configs,
+isolated package, checkpoint, float artifact, and four prescribed QA PNGs. The
+exact blocker is architectural: internal patch statistics from one Biała field,
+even with C0 and ALS conditioning, do not encode long-range source-to-toe process
+organization. Do not continue this family by changing patch size, loss weights,
+training duration, or local conditioning. The next challenger must introduce a
+materially different long-range structural/process model and must pass float-level
+common-light inspection before any packing or browser work.
 
 ### Biała Góra proves bounded 2D representation capacity, not predictive transfer
 
