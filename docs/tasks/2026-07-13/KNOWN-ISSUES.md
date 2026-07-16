@@ -2128,8 +2128,10 @@ screenshots under `shots/forest-l0-*.png`. The one earlier transient dense-floor
 Three/TSL `null.constructor` console error (2026-07-16, passed on immediate
 identical retry) did not recur. The four boots confirm terrain continuity,
 materials, trees/understory, and grounded grass at each pose. The full-extent user
-repetition/transition/seam/grounding review is now the only open gate for this
-checkpoint; its verdict is pending.
+review completed 2026-07-17: ACCEPTED at all four positions (natural detail and
+variance, no artifacts, no visible seams; strong-morphology judged possibly best).
+This checkpoint is closed. Standing user law recorded from the review: review
+links must carry `grass=0` so the underlying mesh is judgeable.
 
 A 2026-07-17 post-hoc diff review of commit `e9d5d93` found two sibling-list
 omissions in `asset-gen/src/assetgen/release.py`. The consequential one is fixed:
