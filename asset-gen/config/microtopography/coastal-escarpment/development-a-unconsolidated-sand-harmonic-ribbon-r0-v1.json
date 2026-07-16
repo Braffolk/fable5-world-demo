@@ -1,0 +1,41 @@
+{
+  "schema_version": "laas.unconsolidated-sand-harmonic-ribbon-config/1",
+  "recipe_id": "development-a-etak-1826743-unconsolidated-sand-harmonic-ribbon-r0-v1",
+  "status": "development_float_qa_only",
+  "regime": {"owner": "unconsolidated_glaciolacustrine_sand", "lithology_code": 40, "lithology_name_et": "Liiv", "genesis_code": 40, "genesis_name_et": "Jaajarvesetted"},
+  "inputs": {
+    "chain_config": {"path": "asset-gen/config/microtopography/coastal-escarpment/development-a-unconsolidated-sand-curvilinear-strip-r0-v1.json", "bytes": 4593, "sha256": "9baec092510f09bab4f3d19783ad077f7bec169c27871363af9ac4fb40a331d4"}
+  },
+  "domain": {
+    "topology_closing_cells": 5,
+    "minimum_domain_area_m2": 1400.0,
+    "maximum_corner_error_m": 1.5,
+    "solver_relative_tolerance": 1e-10,
+    "solver_iterations": 3000,
+    "maximum_solver_residual": 1e-8,
+    "minimum_interior_jacobian": 1e-10,
+    "minimum_control_v_separation": 0.002,
+    "minimum_control_order_fraction": 0.90
+  },
+  "macro": {
+    "u_samples": 256,
+    "v_samples": 128,
+    "along_u_smoothing_m": 2.0,
+    "minimum_control_v_separation": 0.01,
+    "endpoint_taper_m": 6.0,
+    "maximum_shift_m": 1.25
+  },
+  "process": {
+    "headcut_seed_count": 5,
+    "minimum_seed_spacing_m": 9.0,
+    "minimum_valley_strength_percentile": 68.0,
+    "path_lateral_step_cells": 2,
+    "maximum_erosion_depth_m": 0.28,
+    "biala_p95_gain": 1.6,
+    "path_width_m": 0.65,
+    "toe_deposition_v": 0.10,
+    "toe_deposition_width_v": 0.08
+  },
+  "micro": {"absolute_p95_ceiling_m": 0.015, "biala_p95_fraction": 0.10},
+  "evidence_boundary": {"effective_morphology_floor_m": 0.25, "sub_0_25_m_is_generated_continuation": true, "harmonic_injectivity_required": true, "closest_line_ownership": false, "global_xy_smoothing": false, "noise_fbm_or_stamps": false, "packing_runtime_or_production_authorized": false}
+}

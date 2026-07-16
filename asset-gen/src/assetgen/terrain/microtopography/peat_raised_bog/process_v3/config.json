@@ -1,0 +1,84 @@
+{
+  "schema_version": "laas.peat-raised-bog-process-v3-config/1",
+  "status": "development_float_qa_only",
+  "target": {
+    "name": "Valgesoo",
+    "normalized_mire_identifier": "etak-component-0004069052",
+    "clear_halo_bounds_epsg3301_m": [680192, 6449280, 680448, 6449536],
+    "core_bounds_epsg3301_m": [680256, 6449344, 680384, 6449472]
+  },
+  "v3_deviation": {
+    "exhausted_v2": "open-intact-nonforested-edge-corrected-plurigaussian-v2",
+    "reason": "v2 rejected with no retained typed transition orbit, no supported hummock margin, and no leave-one-group-out fit; its statistical target and mechanism remain parked",
+    "new_mechanism": "deterministic coupled water-table vegetation-state peat-accretion dynamics conditioned by measured broad relief and boundary drainage",
+    "not_a_v2_replay": true,
+    "not_estonia_calibrated": true,
+    "production_or_owner_claim": false
+  },
+  "evidence_policy": {
+    "classes": ["hollow", "lawn", "hummock"],
+    "huhola_lawn_decision_half_band_m": 0.04,
+    "supported_use": "the lawn decision margin has eight-group support and is used only to classify/check the lawn band",
+    "unsupported_not_used": [
+      "hummock or hollow prevalence",
+      "hummock or hollow class-conditional height margin",
+      "typed class transitions at any orbit",
+      "directional anisotropy",
+      "Estonia class prevalence",
+      "hydrology-to-morphology coefficients"
+    ]
+  },
+  "model": {
+    "coarse_pitch_m": 1.0,
+    "process_pitch_m": 0.5,
+    "output_pitch_m": 0.25,
+    "coarse_steps": 180,
+    "process_steps": 90,
+    "coarse_dt": 0.12,
+    "process_dt": 0.07,
+    "broad_relief_sigma_m": 24.0,
+    "boundary_drain_length_m": 28.0,
+    "directional_slope_start": 0.00135,
+    "directional_slope_full": 0.00175,
+    "directional_interior_min_m": 12.0,
+    "peat_relief_amplitude_m": 0.13,
+    "peat_relief_limit_m": 0.16,
+    "no_random_seed_or_random_source": true,
+    "solve_complete_connected_mire_before_crop": true,
+    "exact_measured_1m_parent_means": true,
+    "separate_fine_noise_remainder": false
+  },
+  "gates": {
+    "parent_mean_max_abs_m": 0.0,
+    "minimum_core_fraction_per_extreme_class": 0.08,
+    "core_lawn_fraction_range": [0.15, 0.75],
+    "core_abs_delta_p99_m_range": [0.04, 0.14],
+    "maximum_direct_hummock_hollow_adjacencies": 0,
+    "maximum_spectral_single_bin_power_fraction": 0.02,
+    "maximum_parent_seam_to_interior_jump_ratio": 1.75,
+    "minimum_process_change_rms": 0.05
+  },
+  "forbidden": [
+    "plurigaussian replay",
+    "generic random noise or fBm",
+    "copied primitives",
+    "periodic lattice",
+    "patch stamps",
+    "separate fine-noise remainder",
+    "pack serve runtime material shader or format change"
+  ],
+  "inputs": {
+    "measured_float": {
+      "path": "asset-gen/data/work/microtopography/peat-raised-bog/measured-float/sha256/6e0148da0c28636f1577c531431cd9cc62f7a6c5610fdccd1c231f52749d2365/measured-float.npz",
+      "sha256": "28ed716789e5817c95e64a9fd037d3a0d254d95034c3bfda175c7a574a4f584e"
+    },
+    "edge_corrected_v2_evidence": {
+      "path": "asset-gen/data/work/microtopography/peat-raised-bog/edge-corrected-evidence-v2/sha256/038e3695aee69af53217c0b39687646bf8fe245b09f32323ff8e0c5f4830338b/evidence.json",
+      "sha256": "9d61d89d27d070eafbd0198040018373ce06cd5af5b03bb46f8c29f7fc4c4467"
+    },
+    "moore_whole_form_capacity": {
+      "path": "asset-gen/data/work/microtopography/peat-raised-bog/moore-form-capacity/sha256/12d6f6083898a05670bcb035b0194bc0ab02ed104692b05696049d253f723c36/forms.json",
+      "sha256": "11672d34400213e329ba5f5f141662d14b2c841181877505c036beb07c924da3"
+    }
+  }
+}

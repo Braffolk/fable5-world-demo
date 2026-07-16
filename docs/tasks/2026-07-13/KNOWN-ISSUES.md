@@ -2038,6 +2038,32 @@ as a supported broad carrier and diagnostic reference only; its 0.25 m reconstru
 is interpolation around measured parent means, not decimetre truth or a morphology
 owner.
 
+### The injective sand-bank ribbon fixes coordinates but not cliff morphology
+
+Harmonic-ribbon artifact `2b9cb44e349d69939ec57e6322e50f74eb32bc8c0512467178b469519f39442e`
+(manifest SHA-256 `2889c236b816...`) proves a simple hole-free domain, a bounded
+harmonic residual, strictly positive interior Jacobians, zero folds, and ordered
+apron-to-crest control chains. This removes the predecessor's spokes and triangular
+wedges, but common-light QA still shows only one broad soft bank-parallel shelf. It has
+no legible shoulder/bench/recess hierarchy, no recognizable connected headcut-to-toe
+rills, and its fine continuation outlines ownership/process edges. Preserve the
+injective mapping implementation as reusable infrastructure and the synthesis as
+negative evidence; the entire chain/strip morphology family is exhausted without a
+usable cliff owner.
+
+### Raised-bog process v3 forms a subcell labyrinth rather than peatland complexes
+
+Coupled water-table, vegetation-state, and peat-feedback artifact
+`f6bf62ee1f195bcee5c888d1ebe0b7abd7d54c0710755665bff2c195f0114b39`
+is rejected before packing. It preserves exclusions, remains deterministic and finite,
+and evolves hollow/lawn/hummock fractions, but produces `6,725` hollow and `7,533`
+hummock components with median extreme area `0.25 m2`, plus `73,087` direct
+hummock-hollow contacts. Common-light QA exposes a pervasive dot/grid carrier and an
+over-segmented labyrinth, not coherent hummock-lawn-hollow complexes, strings, flarks,
+or pool margins. Its exact-parent closure also misses by `2.842e-14 m` and core p99
+relief exceeds the frozen ceiling. Preserve it as negative process evidence; do not
+tune, pack, or claim a raised-bog owner.
+
 ## Integration Risks
 
 - Dataset conversion previously became inefficiently serialized behind HY_SPRUCE4 full-E57 handling, with two failed full attempts and repeated implementation/review micro-cycles before a morphology input existed. Native codec-word padding commit `ba92ab4` completed the verified full materialization and the Python publisher completed its atomic move. The full-scan Hovi track is now parked after its fully observed central 6.25 cm QA remained dominated by competing/unresolved sheets; no threshold-tuning loop is authorized. Evo 1086/1065 are parked after sparse-surface diagnosis; the downsampled HY_PINE2 stress condition is also parked after its candidate sheet correctly abstained, and its full archive remains unfetched. A blocked track is parked without deleting its code or provenance; it resumes only if quicker alternatives fail or its scientific role is unique.
