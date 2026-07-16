@@ -83,7 +83,11 @@ result-producing work through dynamic Workflows (and Agent for one-off reads/dig
   `agent()` calls — inherit the session model). Everything simpler — generation runs,
   ingestion, harnesses, mechanical edits, routine fixes, tests — runs on
   **`model: 'opus'`, `effort: 'xhigh'`**. Don't burn Fable tokens on mechanical work;
-  don't hand Opus a judgment call.
+  don't hand Opus a judgment call. Rescuing a "probably incompatible" dataset into a
+  usable one is a judgment task (user law 07-17): Opus may measure, but the
+  fit/salvage/method calls are Fable-tier.
+- **User judgment cadence (user law 07-17):** ask for visual verdicts sparingly — batch
+  review points into one ask; never ask during announced AFK (user announces AFK first).
 - **Context economy:** never read a large spec/ledger wholesale into the orchestrator —
   delegate a digest (current one: `docs/tasks/2026-07-13/SPEC-ORCHESTRATOR-DIGEST.md`).
   Have agents return structured/terse results, not file dumps. Update the task ledger at
@@ -123,7 +127,12 @@ result-producing work through dynamic Workflows (and Agent for one-off reads/dig
   page/console/TSL/WebGPU/pipeline errors fail the boot even if ready fires. Every boot
   review also eyeballs terrain continuity, materials, trees/plants, grass grounding.
   Give exact-position URLs; NEVER compass directions (UI has no compass). Estonia target
-  is `scene=world&src=estonia`.
+  is `scene=world&src=estonia`. **Terrain review links always carry `grass=0`** (user law
+  07-17 — grass hides the mesh); run the all-layer boot separately for surface agreement.
+- **Best-fit doctrine (user law 07-17):** when a regime has no perfect candidate, pick the
+  best fit and make it work — IF doable without significant effort. This tempers, not
+  repeals, the never-fake ethos: corrections still need evidence; bounded weak-evidence
+  best-fit beats indefinite abstention.
 - **Shaders are performance-critical:** no edit on "should work"; smallest validity fix;
   written perf rationale; re-boot after any shader-path change; traces over casual A/B
   (thermal noise) — see the profiling rule above.
