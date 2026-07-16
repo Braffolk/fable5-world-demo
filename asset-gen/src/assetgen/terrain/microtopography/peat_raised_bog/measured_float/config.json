@@ -1,0 +1,67 @@
+{
+  "schema_version": "laas.peat-raised-bog-measured-float-config/1",
+  "status": "development_float_qa_only",
+  "target": {
+    "name": "Valgesoo",
+    "normalized_mire_identifier": "etak-component-0004069052",
+    "minimum_etak_id": 4069052,
+    "member_etak_ids": [4069052],
+    "source_fids": [1974],
+    "component_bounds_epsg3301_m": [680043.44, 6449146.88, 680774.74, 6449775.45],
+    "component_geometry_sha256": "bee6ed5283badbdc4fb1a0a721cda82adc63ef1578da319b40355dcc705d8208",
+    "clear_halo_bounds_epsg3301_m": [680192, 6449280, 680448, 6449536],
+    "core_bounds_epsg3301_m": [680256, 6449344, 680384, 6449472],
+    "center_epsg3301_m": [680320, 6449408]
+  },
+  "method": {
+    "parent_pitch_m": 1.0,
+    "fine_pitch_m": 0.25,
+    "real_parent_support_m": 2.0,
+    "solve_scope": "complete_integer_aligned_connected_mire_bbox_before_late_halo_and_core_crops",
+    "prolongation": "terrain.repair.prolong.prolong_structural_4x",
+    "parent_mean_law": "every_4x4_fine_block_mean_equals_its_measured_1m_parent_float64",
+    "synthesis": false
+  },
+  "policy": {
+    "hard_and_unknown_exclusions_retained": true,
+    "inferred_strings_flarks_or_pools": false,
+    "noise_stamps_or_fbm": false,
+    "submetre_tuft_relief": false,
+    "packing_runtime_shader_material_or_format_authority": false,
+    "interpretation": "apparent form is measured 1m DTM structure smoothly reconstructed at 0.25m, not synthesized decimetre truth"
+  },
+  "sources": {
+    "dtm": {
+      "path": "asset-gen/data/in/dem_1m/54483_dtm_1m.tif",
+      "sha256": "14e571d68204c5e8ecd2d33bdc232b7dfe17d56ff7a72f81383e866af488fe72"
+    },
+    "etak": {
+      "path": "asset-gen/data/in/etak/ETAK_EESTI_GPKG.gpkg",
+      "sha256": "e19084c4bff0a6096a7dd38cefa12402bdce98d59c73d5b35c30dda60682f5f9"
+    },
+    "soil": [
+      {"path": "asset-gen/data/in/soil/mullakaart/Mullakaart.shp", "sha256": "c454cc9bbdaf902b55523e363d35d6199b403d0551c177e5624203a222662db9"},
+      {"path": "asset-gen/data/in/soil/mullakaart/Mullakaart.shx", "sha256": "a37bceefd60b2928d7ac0c39eb300ba48b444cbbabbbac3e817f043b993bb5de"},
+      {"path": "asset-gen/data/in/soil/mullakaart/Mullakaart.dbf", "sha256": "fca024c72c62a22426614b32b855b2b3541c1f4f98dc6e43bdfc8f86dacee1e8"},
+      {"path": "asset-gen/data/in/soil/mullakaart/Mullakaart.prj", "sha256": "2614f6a5640cd6296aad4c46b1aff4ae03ec3fa1da0310985d2b345b1e154269"},
+      {"path": "asset-gen/data/in/soil/mullakaart/Mullakaart.cpg", "sha256": "3ad3031f5503a4404af825262ee8232cc04d4ea6683d42c5dd0a2f2a27ac9824"},
+      {"path": "asset-gen/data/in/soil/mullakaart/Mullakaart.sbn", "sha256": "2696f27e63c244a403e6c979b38b939d126c457181712ae32abb0762e1969c97"},
+      {"path": "asset-gen/data/in/soil/mullakaart/Mullakaart.sbx", "sha256": "0ae55581eee61e3e3542d349d081d0c361093429e25682e21abf9e8b4bdc4e0e"},
+      {"path": "asset-gen/data/in/soil/mullakaart/Mullakaart.shp.xml", "sha256": "66e608361f799abf7402d4a60b29c048364f584e03004b6b06c19511abdc88da"}
+    ],
+    "geology": [
+      {"path": "docs/deep-research/microtopography-generation/library/data/egt/pinnakate-200k/q_avamus_a_200t.shp", "sha256": "f78147d2fa24238777d0b692f264a94a24254886aa10ace2a1cf8e7cbc8f29c6"},
+      {"path": "docs/deep-research/microtopography-generation/library/data/egt/pinnakate-200k/q_avamus_a_200t.shx", "sha256": "28e2bae558a73e329bf08bf8d5adc31919f4fde371ec31ea2670862ea35a9216"},
+      {"path": "docs/deep-research/microtopography-generation/library/data/egt/pinnakate-200k/q_avamus_a_200t.dbf", "sha256": "6e45cec5e9e816ed693e3584ca91e4c7904e653a23cff30c178927d6c5e6f2ce"},
+      {"path": "docs/deep-research/microtopography-generation/library/data/egt/pinnakate-200k/q_avamus_a_200t.prj", "sha256": "2614f6a5640cd6296aad4c46b1aff4ae03ec3fa1da0310985d2b345b1e154269"},
+      {"path": "docs/deep-research/microtopography-generation/library/data/egt/pinnakate-200k/q_avamus_a_200t.cpg", "sha256": "3ad3031f5503a4404af825262ee8232cc04d4ea6683d42c5dd0a2f2a27ac9824"},
+      {"path": "docs/deep-research/microtopography-generation/library/data/egt/pinnakate-200k/q_avamus_a_200t.sbn", "sha256": "e17564682d16946735d943be375885760be9c0202263b92ddd6a1013bbcfbdab"},
+      {"path": "docs/deep-research/microtopography-generation/library/data/egt/pinnakate-200k/q_avamus_a_200t.sbx", "sha256": "cce4856c8ccfa999b3a4c9c9dfbd3fce6b50323fe9e24e1c8dee1970c4cbcc40"},
+      {"path": "docs/deep-research/microtopography-generation/library/data/egt/pinnakate-200k/q_avamus_a_200t.shp.xml", "sha256": "a3db63022560e6876a1949e9f5e5812cbeeb792617a27e19a1d40b035fb458a6"}
+    ],
+    "geology_domains": {
+      "path": "asset-gen/data/work/terrain/conditions/geology/egt-surficial-200k-domains/sha256/8d5c7ba4ee72ded6f5b1bd3ce3de4604b0c53c524c7a7a8500b7999aaa689a71/snapshot.json",
+      "sha256": "8d5c7ba4ee72ded6f5b1bd3ce3de4604b0c53c524c7a7a8500b7999aaa689a71"
+    }
+  }
+}

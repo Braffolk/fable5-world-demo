@@ -2014,6 +2014,30 @@ verification, and native QA as neutral/negative evidence. Family 4 is parked for
 boulder-scale body/socket use; do not amplify, rescale, rotate, repack, or claim a
 visible large-stone specialist from this checkpoint.
 
+### The curvilinear sand-bank strip is mechanically closed but topologically folded
+
+The second lithology-specific `unconsolidated_glaciolacustrine_sand` FLOAT attempt is
+artifact `7fa0167feb6fb1cf830016fdaa573a4c1e498e56d5fc8c13cab4159c3cecc17b`
+(manifest SHA-256 `f37354259444...`). It closes hard, collar, outer-edge, finite,
+conservation, and paired-station gates, but its closest-chain `(s,n)` map folds at the
+tight bank bend. Common-light QA exposes radial spokes, triangular wedges and caps, a
+broad faceted apron slab, disconnected oval rill sockets, and micro detail following
+those false edges. Preserve the code and artifact as negative evidence; do not tune,
+pack, serve, or claim a cliff owner. The active replacement must prove an injective
+curved-domain parameterization before it is allowed to synthesize morphology.
+
+### The Valgesoo measured bog pass is a carrier, not synthesized bog morphology
+
+Measured FLOAT artifact `6e0148da0c28636f1577c531431cd9cc62f7a6c5610fdccd1c231f52749d2365`
+solves one complete connected Valgesoo mire with real support, preserves every 1 m mean
+exactly, and retains all exclusions. Its detrended greater-than-16 m relief is only
+`0.0747 m` total range / `0.0274 m` absolute p95, while the measured 2-16 m band is
+`0.0353 m` absolute p95. QA shows a gentle broad grade and weak cellular meso relief,
+but no convincing dome, hummock-lawn-hollow system, strings, flarks, or pools. Retain it
+as a supported broad carrier and diagnostic reference only; its 0.25 m reconstruction
+is interpolation around measured parent means, not decimetre truth or a morphology
+owner.
+
 ## Integration Risks
 
 - Dataset conversion previously became inefficiently serialized behind HY_SPRUCE4 full-E57 handling, with two failed full attempts and repeated implementation/review micro-cycles before a morphology input existed. Native codec-word padding commit `ba92ab4` completed the verified full materialization and the Python publisher completed its atomic move. The full-scan Hovi track is now parked after its fully observed central 6.25 cm QA remained dominated by competing/unresolved sheets; no threshold-tuning loop is authorized. Evo 1086/1065 are parked after sparse-surface diagnosis; the downsampled HY_PINE2 stress condition is also parked after its candidate sheet correctly abstained, and its full archive remains unfetched. A blocked track is parked without deleting its code or provenance; it resumes only if quicker alternatives fail or its scientific role is unique.
