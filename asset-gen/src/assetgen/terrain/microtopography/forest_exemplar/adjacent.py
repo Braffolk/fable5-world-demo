@@ -1,4 +1,4 @@
-"""Contiguous two-parent float proof for the accepted forest specialist."""
+"""Contiguous multi-parent float proofs for the accepted forest specialist."""
 
 from __future__ import annotations
 
@@ -45,26 +45,40 @@ from .irregular import (
 from .run import SOURCE_SHA256, _canonical_json, _percentile_rgb, _sha256
 
 
-OUTPUT_ROOT = (
+PAIR_OUTPUT_ROOT = (
     ASSET_GEN_ROOT
     / "data/work/microtopography/estonia-forest-adjacent-continuity/artifact/sha256"
+)
+BLOCK_OUTPUT_ROOT = (
+    ASSET_GEN_ROOT
+    / "data/work/microtopography/estonia-forest-adjacent-block/artifact/sha256"
 )
 
 
 def _read_config(path: Path) -> dict[str, Any]:
     config = json.loads(path.read_text(encoding="utf-8"))
-    if config.get("schema") != "forest-mesic-mineral-adjacent-continuity/1":
+    schema = config.get("schema")
+    if schema not in {
+        "forest-mesic-mineral-adjacent-continuity/1",
+        "forest-mesic-mineral-adjacent-block/1",
+    }:
         raise ValueError("unsupported adjacent-continuity config")
     if config.get("authority") != "research_float_only_no_production_no_pack_no_latest":
         raise ValueError("adjacent proof cannot authorize packing or production")
     if config.get("regime") != "forest.mesic_mineral" or config.get("texel_m") != TEXEL_M:
         raise ValueError("adjacent proof changed the accepted regime or lattice")
     bbox = tuple(map(int, config["bbox_en"]))
-    if bbox != (684544, 6441472, 685056, 6442496):
-        raise ValueError("adjacent proof domain differs from the frozen pair")
-    parents = config["parents"]
-    if [(row["cx"], row["cz"]) for row in parents] != [(617, 377), (617, 378)]:
-        raise ValueError("adjacent parent identities differ")
+    parents = [(row["cx"], row["cz"]) for row in config["parents"]]
+    if schema == "forest-mesic-mineral-adjacent-continuity/1":
+        if bbox != (684544, 6441472, 685056, 6442496):
+            raise ValueError("adjacent proof domain differs from the frozen pair")
+        if parents != [(617, 377), (617, 378)]:
+            raise ValueError("adjacent parent identities differ")
+    else:
+        if bbox != (684544, 6441472, 685568, 6442496):
+            raise ValueError("adjacent block differs from the qualified 2x2 domain")
+        if parents != [(617, 377), (618, 377), (617, 378), (618, 378)]:
+            raise ValueError("adjacent block parent identities differ")
     accepted_transport = {
         "patch_cells": 192,
         "candidate_step_cells": 16,
@@ -79,6 +93,10 @@ def _read_config(path: Path) -> dict[str, Any]:
     if config["transport"] != accepted_transport:
         raise ValueError("adjacent proof retuned the accepted forest transport")
     return config
+
+
+def _is_block(config: dict[str, Any]) -> bool:
+    return config["schema"] == "forest-mesic-mineral-adjacent-block/1"
 
 
 def _shape(bbox: tuple[int, int, int, int]) -> tuple[int, int]:
@@ -200,7 +218,7 @@ def _assemble(
     bbox: tuple[int, int, int, int],
     scratch: Path,
     config: dict[str, Any],
-) -> tuple[Path, Path, Path, list[dict[str, Any]], dict[str, int], int]:
+) -> tuple[Path, Path, Path, list[dict[str, Any]], dict[str, int], dict[str, int]]:
     rows, cols = _shape(bbox)
     transport = config["transport"]
     support_radius = int(transport["support_radius_cells"])
@@ -229,7 +247,8 @@ def _assemble(
     master_col0 = int(round((e_min - WORLD_ANCHOR_E) / TEXEL_M))
     master_row0 = int(round((WORLD_ANCHOR_N - n_max) / TEXEL_M))
     seam_row = rows // 2
-    cross_seam_sites = 0
+    seam_col = cols // 2
+    crossing_sites = {"horizontal": 0, "vertical": 0, "junction": 0}
     for site_index, site in enumerate(sites):
         center_row = site.global_row - master_row0
         center_col = site.global_col - master_col0
@@ -279,8 +298,14 @@ def _assemble(
         local_source[stronger] = source_index[selected]
         candidate_use[selected] += 1
         source_use[source_index[selected]] += 1
-        if row0 < seam_row < row1 and np.any(active[seam_row - row0 - 1 : seam_row - row0 + 1]):
-            cross_seam_sites += 1
+        crosses_horizontal = abs(center_row - seam_row) < support_radius
+        crosses_vertical = abs(center_col - seam_col) < support_radius
+        if crosses_horizontal:
+            crossing_sites["horizontal"] += 1
+        if crosses_vertical:
+            crossing_sites["vertical"] += 1
+        if crosses_horizontal and crosses_vertical:
+            crossing_sites["junction"] += 1
         placements.append(
             {
                 "site_index": site_index,
@@ -324,7 +349,7 @@ def _assemble(
         scratch / "dominant-site.i32",
         placements,
         {source_id: int(source_use[index]) for index, source_id in enumerate(SOURCE_IDS)},
-        cross_seam_sites,
+        crossing_sites,
     )
 
 
@@ -569,6 +594,163 @@ def _secondary_qa(
     return paths
 
 
+def _draw_cross(
+    draw: ImageDraw.ImageDraw,
+    *,
+    left: int,
+    top: int,
+    width: int,
+    height: int,
+) -> None:
+    draw.line((left + width // 2, top, left + width // 2, top + height), fill=(220, 40, 30), width=3)
+    draw.line((left, top + height // 2, left + width, top + height // 2), fill=(220, 40, 30), width=3)
+
+
+def _block_qa(
+    qa: Path,
+    residual: np.ndarray,
+    ownership: np.ndarray,
+    c0: np.ndarray,
+    c1: np.ndarray,
+    allowed: np.ndarray,
+) -> list[Path]:
+    paths = [
+        qa / "01_full_master_common_light.png",
+        qa / "02_four_parent_junction_closeups.png",
+        qa / "03_eligibility_hard_mask_overlay.png",
+        qa / "04_ground_scale_transition_crops.png",
+    ]
+    shade0 = np.repeat(_hillshade(c0, 0.5)[..., None], 3, axis=2)
+    shade1 = np.repeat(_hillshade(c1, 0.5)[..., None], 3, axis=2)
+
+    full0 = _resize(shade0, 640)
+    full1 = _resize(shade1, 640)
+    canvas = Image.new("RGB", (1328, 718), (244, 242, 234))
+    draw = ImageDraw.Draw(canvas)
+    draw.text((16, 12), "01  FULL 2x2 MASTER AT COMMON LIGHT", fill=(20, 24, 20))
+    draw.text((16, 34), "one 1024 x 1024 m solve; red cross marks storage parents only", fill=(70, 72, 66))
+    canvas.paste(full0, (16, 62))
+    canvas.paste(full1, (672, 62))
+    draw.text((16, 44), "PINNED C0", fill=(20, 24, 20))
+    draw.text((672, 44), "FOREST C1", fill=(20, 24, 20))
+    _draw_cross(draw, left=16, top=62, width=640, height=640)
+    _draw_cross(draw, left=672, top=62, width=640, height=640)
+    canvas.save(paths[0], compress_level=9)
+
+    center_row, center_col = c1.shape[0] // 2, c1.shape[1] // 2
+    half = 128
+    crop = np.s_[center_row - half : center_row + half, center_col - half : center_col + half]
+    own_center = ownership.shape[0] // 2
+    own_half = 64
+    own_crop = ownership[
+        own_center - own_half : own_center + own_half,
+        own_center - own_half : own_center + own_half,
+    ]
+    palette = np.asarray([[45, 123, 113], [217, 139, 71], [103, 87, 145]], dtype=np.uint8)
+    panels = [
+        ("C0 JUNCTION", shade0[crop]),
+        ("C1 JUNCTION", shade1[crop]),
+        ("SIGNED RESIDUAL", _percentile_rgb(residual[crop], diverging=True)),
+        ("SOURCE OWNERSHIP", palette[np.clip(own_crop, 0, 2)]),
+    ]
+    junction = Image.new("RGB", (1056, 1092), (244, 242, 234))
+    draw = ImageDraw.Draw(junction)
+    draw.text((16, 12), "02  FOUR-PARENT JUNCTION CLOSEUPS", fill=(20, 24, 20))
+    draw.text((16, 34), "128 x 128 m centered on the common junction; identical light and scale", fill=(70, 72, 66))
+    for index, (label, panel) in enumerate(panels):
+        left = 16 + (index % 2) * 520
+        top = 72 + (index // 2) * 510
+        image = Image.fromarray(panel).resize((504, 504), Image.Resampling.BILINEAR)
+        junction.paste(image, (left, top))
+        draw.text((left, top - 18), label, fill=(20, 24, 20))
+        _draw_cross(draw, left=left, top=top, width=504, height=504)
+    junction.save(paths[1], compress_level=9)
+
+    hard_rgb = np.zeros((*allowed.shape, 3), dtype=np.uint8)
+    hard_rgb[allowed] = (54, 135, 72)
+    hard_rgb[~allowed] = (190, 67, 48)
+    overlay = shade1.copy()
+    overlay[allowed] = (0.72 * overlay[allowed] + 0.28 * np.asarray((54, 135, 72))).astype(np.uint8)
+    overlay[~allowed] = (0.58 * overlay[~allowed] + 0.42 * np.asarray((190, 67, 48))).astype(np.uint8)
+    mask_image = _resize(hard_rgb, 640)
+    overlay_image = _resize(overlay, 640)
+    masks = Image.new("RGB", (1328, 718), (244, 242, 234))
+    draw = ImageDraw.Draw(masks)
+    draw.text((16, 12), "03  ELIGIBILITY / HARD-EXCLUSION OVERLAY", fill=(20, 24, 20))
+    draw.text((16, 34), "green = forest synthesis eligible; red = hard zero residual", fill=(70, 72, 66))
+    masks.paste(mask_image, (16, 62))
+    masks.paste(overlay_image, (672, 62))
+    draw.text((16, 44), "CATEGORICAL MASK", fill=(20, 24, 20))
+    draw.text((672, 44), "MASK OVER C1", fill=(20, 24, 20))
+    _draw_cross(draw, left=16, top=62, width=640, height=640)
+    _draw_cross(draw, left=672, top=62, width=640, height=640)
+    masks.save(paths[2], compress_level=9)
+
+    # Choose two spatially separated 48 m windows with the strongest real
+    # eligible-to-hard transition in the southeast parent.
+    window = 96
+    candidates: list[tuple[float, int, int]] = []
+    for row in range(center_row, allowed.shape[0] - window + 1, 32):
+        for col in range(center_col, allowed.shape[1] - window + 1, 32):
+            fraction = float(np.mean(allowed[row : row + window, col : col + window]))
+            candidates.append((min(fraction, 1.0 - fraction), row, col))
+    candidates.sort(reverse=True)
+    selected: list[tuple[int, int]] = []
+    for score, row, col in candidates:
+        if score <= 0.05:
+            continue
+        if all((row - other_row) ** 2 + (col - other_col) ** 2 >= 192**2 for other_row, other_col in selected):
+            selected.append((row, col))
+        if len(selected) == 2:
+            break
+    if len(selected) != 2:
+        raise RuntimeError("qualified block did not yield two meaningful transition crops")
+    transitions = Image.new("RGB", (1872, 1310), (244, 242, 234))
+    draw = ImageDraw.Draw(transitions)
+    draw.text((16, 12), "04  GROUND-SCALE REAL MASK TRANSITIONS", fill=(20, 24, 20))
+    draw.text((16, 34), "two 48 x 48 m southeast crops; C1 must taper without a ridge or abrupt ownership cutoff", fill=(70, 72, 66))
+    for row_index, (row, col) in enumerate(selected):
+        region = np.s_[row : row + window, col : col + window]
+        transition_panels = [
+            ("C0", shade0[region]),
+            ("C1", shade1[region]),
+            ("ELIGIBLE / HARD", hard_rgb[region]),
+        ]
+        top = 82 + row_index * 610
+        for col_index, (label, panel) in enumerate(transition_panels):
+            left = 16 + col_index * 616
+            image = Image.fromarray(panel).resize((600, 600), Image.Resampling.NEAREST if col_index == 2 else Image.Resampling.BILINEAR)
+            transitions.paste(image, (left, top))
+            draw.text((left, top - 18), f"{label}  crop {row_index + 1}", fill=(20, 24, 20))
+    transitions.save(paths[3], compress_level=9)
+    return paths
+
+
+def _axis_seam_metrics(
+    residual: np.ndarray,
+    allowed: np.ndarray,
+    *,
+    axis: int,
+) -> dict[str, Any]:
+    if axis == 1:
+        residual = residual.T
+        allowed = allowed.T
+    seam = residual.shape[0] // 2
+    seam_valid = allowed[seam - 1] & allowed[seam]
+    seam_steps = np.abs(residual[seam] - residual[seam - 1])[seam_valid]
+    neighborhood = np.abs(np.diff(residual[seam - 64 : seam + 65], axis=0))
+    neighborhood_valid = allowed[seam - 64 : seam + 64] & allowed[seam - 63 : seam + 65]
+    neighborhood_valid[63] = False
+    local_steps = neighborhood[neighborhood_valid]
+    return {
+        "eligible_sample_count": int(seam_steps.size),
+        "residual_step_mean_m": float(np.mean(seam_steps)) if seam_steps.size else None,
+        "residual_step_p95_m": float(np.percentile(seam_steps, 95)) if seam_steps.size else None,
+        "local_nonseam_step_mean_m": float(np.mean(local_steps)) if local_steps.size else None,
+        "local_nonseam_step_p95_m": float(np.percentile(local_steps, 95)) if local_steps.size else None,
+    }
+
+
 def _identity(path: Path) -> dict[str, Any]:
     return {
         "path": str(path.resolve().relative_to(ASSET_GEN_ROOT.parent)),
@@ -579,10 +761,15 @@ def _identity(path: Path) -> dict[str, Any]:
 
 def run(config_path: Path) -> Path:
     config = _read_config(config_path)
+    is_block = _is_block(config)
     bbox = tuple(map(int, config["bbox_en"]))
     shape = _shape(bbox)
     recipe = {
-        "schema": "forest-mesic-mineral-adjacent-continuity-recipe/1",
+        "schema": (
+            "forest-mesic-mineral-adjacent-block-recipe/1"
+            if is_block
+            else "forest-mesic-mineral-adjacent-continuity-recipe/1"
+        ),
         "authority": config["authority"],
         "config": _identity(config_path),
         "implementation": _identity(Path(__file__).resolve()),
@@ -602,7 +789,7 @@ def run(config_path: Path) -> Path:
         },
     }
     build_id = hashlib.sha256(_canonical_json(recipe)).hexdigest()
-    destination = OUTPUT_ROOT / build_id
+    destination = (BLOCK_OUTPUT_ROOT if is_block else PAIR_OUTPUT_ROOT) / build_id
     if destination.exists():
         return destination
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -632,7 +819,7 @@ def run(config_path: Path) -> Path:
             dominant_path,
             placements,
             source_counts,
-            cross_seam_sites,
+            crossing_sites,
         ) = _assemble(
             candidates=candidates,
             bbox=bbox,
@@ -669,47 +856,68 @@ def run(config_path: Path) -> Path:
         residual_half = _reduce8(residual, shape)
         c0_half = c1_half - residual_half
         allowed_half = _reduce8(allowed, shape) >= 1.0
-        seam_row = c1_half.shape[0] // 2
-        seam_valid = allowed_half[seam_row - 1] & allowed_half[seam_row]
-        seam_steps = np.abs(residual_half[seam_row] - residual_half[seam_row - 1])[seam_valid]
-        neighborhood = np.abs(np.diff(residual_half[seam_row - 64 : seam_row + 65], axis=0))
-        neighborhood_valid = (
-            allowed_half[seam_row - 64 : seam_row + 64]
-            & allowed_half[seam_row - 63 : seam_row + 65]
-        )
-        neighborhood_valid[63] = False
-        local_steps = neighborhood[neighborhood_valid]
         output = residual[np.asarray(allowed, dtype=bool)]
         output_rms = float(np.sqrt(np.mean(output * output)))
         output_maximum = float(np.max(np.abs(output), initial=0.0))
-        parent_allowed = [
-            float(np.mean(allowed[: shape[0] // 2])),
-            float(np.mean(allowed[shape[0] // 2 :])),
-        ]
-        seam = {
-            "cross_seam_site_count": cross_seam_sites,
-            "eligible_sample_count": int(seam_steps.size),
-            "residual_step_mean_m": float(np.mean(seam_steps)) if seam_steps.size else None,
-            "residual_step_p95_m": float(np.percentile(seam_steps, 95)) if seam_steps.size else None,
-            "local_nonseam_step_mean_m": float(np.mean(local_steps)) if local_steps.size else None,
-            "local_nonseam_step_p95_m": float(np.percentile(local_steps, 95)) if local_steps.size else None,
-        }
-        _primary_qa(qa / "01_contiguous_master_and_shared_seam.png", c0_half, c1_half, seam_row)
-        pngs = [qa / "01_contiguous_master_and_shared_seam.png"]
-        pngs.extend(
-            _secondary_qa(
+        seam_horizontal = _axis_seam_metrics(residual_half, allowed_half, axis=0)
+        seam_horizontal["cross_seam_site_count"] = crossing_sites["horizontal"]
+        if is_block:
+            half_rows, half_cols = shape[0] // 2, shape[1] // 2
+            parent_allowed = {
+                config["parents"][0]["role"]: float(np.mean(allowed[:half_rows, :half_cols])),
+                config["parents"][1]["role"]: float(np.mean(allowed[:half_rows, half_cols:])),
+                config["parents"][2]["role"]: float(np.mean(allowed[half_rows:, :half_cols])),
+                config["parents"][3]["role"]: float(np.mean(allowed[half_rows:, half_cols:])),
+            }
+            seam_vertical = _axis_seam_metrics(residual_half, allowed_half, axis=1)
+            seam_vertical["cross_seam_site_count"] = crossing_sites["vertical"]
+            seam = {
+                "horizontal": seam_horizontal,
+                "vertical": seam_vertical,
+                "cross_junction_site_count": crossing_sites["junction"],
+            }
+            pngs = _block_qa(
                 qa,
                 residual_half,
                 ownership_1m,
                 c0_half,
                 c1_half,
                 allowed_half,
-                seam_row,
             )
-        )
+        else:
+            parent_allowed = [
+                float(np.mean(allowed[: shape[0] // 2])),
+                float(np.mean(allowed[shape[0] // 2 :])),
+            ]
+            seam = seam_horizontal
+            _primary_qa(
+                qa / "01_contiguous_master_and_shared_seam.png",
+                c0_half,
+                c1_half,
+                c1_half.shape[0] // 2,
+            )
+            pngs = [qa / "01_contiguous_master_and_shared_seam.png"]
+            pngs.extend(
+                _secondary_qa(
+                    qa,
+                    residual_half,
+                    ownership_1m,
+                    c0_half,
+                    c1_half,
+                    allowed_half,
+                    c1_half.shape[0] // 2,
+                )
+            )
         acceptance = config["acceptance"]
         failures = []
-        if min(parent_allowed) < acceptance["minimum_parent_allowed_fraction"]:
+        if is_block:
+            for role, minimum in acceptance["minimum_parent_allowed_fraction_by_role"].items():
+                if parent_allowed[role] < minimum:
+                    failures.append(f"parent eligibility: {role}")
+            fractions = list(parent_allowed.values())
+            if max(fractions) - min(fractions) < acceptance["minimum_parent_allowed_fraction_range"]:
+                failures.append("block lacks a meaningful eligibility transition")
+        elif min(parent_allowed) < acceptance["minimum_parent_allowed_fraction"]:
             failures.append("parent eligibility")
         if maximum_mean > acceptance["maximum_one_metre_mean_error_m"]:
             failures.append("one-metre mean closure")
@@ -719,12 +927,24 @@ def run(config_path: Path) -> Path:
             failures.append("measured maximum envelope")
         if output_rms / capacity["rms_m"] > acceptance["maximum_output_over_candidate_rms_ratio"]:
             failures.append("measured RMS envelope")
-        if cross_seam_sites < acceptance["minimum_cross_seam_site_count"]:
+        if is_block:
+            minimum_axis = acceptance["minimum_cross_seam_site_count_per_axis"]
+            if crossing_sites["horizontal"] < minimum_axis:
+                failures.append("no ownership support crosses horizontal parent seam")
+            if crossing_sites["vertical"] < minimum_axis:
+                failures.append("no ownership support crosses vertical parent seam")
+            if crossing_sites["junction"] < acceptance["minimum_cross_junction_site_count"]:
+                failures.append("no ownership support crosses four-parent junction")
+        elif crossing_sites["horizontal"] < acceptance["minimum_cross_seam_site_count"]:
             failures.append("no ownership support crosses parent seam")
         metrics = {
             "bbox_en": list(bbox),
             "shape": list(shape),
-            "parent_allowed_fraction_north_south": parent_allowed,
+            (
+                "parent_allowed_fraction_by_role"
+                if is_block
+                else "parent_allowed_fraction_north_south"
+            ): parent_allowed,
             "mask": mask_evidence,
             "site_count": len({item["site_index"] for item in placements}),
             "placement_count": len(placements),
@@ -745,7 +965,11 @@ def run(config_path: Path) -> Path:
         del output, c1, residual, allowed, ownership
         shutil.rmtree(scratch)
         qa_index = {
-            "schema": "forest-mesic-mineral-adjacent-continuity-qa/1",
+            "schema": (
+                "forest-mesic-mineral-adjacent-block-qa/1"
+                if is_block
+                else "forest-mesic-mineral-adjacent-continuity-qa/1"
+            ),
             "build_id": build_id,
             "images": [
                 {
@@ -756,12 +980,21 @@ def run(config_path: Path) -> Path:
                 }
                 for path in pngs
             ],
-            "interpretation": [
-                "01 is primary: both complete parents and a seam-centered strip use identical common light; red is only the storage-parent boundary.",
-                "02 shows one signed residual and ownership field solved over the full contiguous domain before any parent crop.",
-                "03 is a 32 m ground-scale before/after crop centered exactly on the shared boundary.",
-                "04 compares the complete new and previously accepted parent at identical scale and light.",
-            ],
+            "interpretation": (
+                [
+                    "01 compares the complete 2x2 C0/C1 master under identical common light; the red cross marks storage-parent boundaries only.",
+                    "02 inspects C0, C1, signed residual, and source ownership at the common four-parent junction.",
+                    "03 binds the eligible and hard-zero synthesis regions to their location on the C1 terrain.",
+                    "04 inspects two real southeast eligibility transitions at ground scale for ridges, abrupt cutoffs, or ownership resets.",
+                ]
+                if is_block
+                else [
+                    "01 is primary: both complete parents and a seam-centered strip use identical common light; red is only the storage-parent boundary.",
+                    "02 shows one signed residual and ownership field solved over the full contiguous domain before any parent crop.",
+                    "03 is a 32 m ground-scale before/after crop centered exactly on the shared boundary.",
+                    "04 compares the complete new and previously accepted parent at identical scale and light.",
+                ]
+            ),
         }
         (qa / "index.json").write_bytes(_canonical_json(qa_index) + b"\n")
         files = {
@@ -773,7 +1006,11 @@ def run(config_path: Path) -> Path:
             if path.is_file()
         }
         manifest = {
-            "schema": "forest-mesic-mineral-adjacent-continuity-artifact/1",
+            "schema": (
+                "forest-mesic-mineral-adjacent-block-artifact/1"
+                if is_block
+                else "forest-mesic-mineral-adjacent-continuity-artifact/1"
+            ),
             "build_id": build_id,
             "status": "inspect_float_preview" if not failures else "park_before_inspection",
             "failures": failures,
@@ -787,7 +1024,11 @@ def run(config_path: Path) -> Path:
             },
             "limitations": [
                 "foreign analogue research owner, not Estonia target truth or production authority",
-                "one contiguous pair extends continuity evidence only; it does not authorize wide coverage",
+                (
+                    "one contiguous 2x2 block extends junction and mask-transition evidence only; it does not authorize wide coverage"
+                    if is_block
+                    else "one contiguous pair extends continuity evidence only; it does not authorize wide coverage"
+                ),
                 "the accepted forest morphology and transport parameters were not retuned",
             ],
             "files": files,

@@ -1,10 +1,11 @@
-"""Pack the accepted contiguous two-parent forest master as a format-2 preview."""
+"""Pack an accepted contiguous forest master as a format-2 preview."""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -38,13 +39,21 @@ from .preview import _decoded, _immutable, _json_bytes, _sha256, _write_height
 
 
 COOK_REVISION = 3
-ARTIFACT_SCHEMA = "forest-mesic-mineral-adjacent-continuity-artifact/1"
-MASTER_SHAPE = (16384, 8192)
-MASTER_BBOX = (684544, 6441472, 685056, 6442496)
-MASTER_FINE_ORIGIN = (2468, 1508)
 TEXEL_M = 0.0625
 
-SITES = (
+
+@dataclass(frozen=True)
+class ArtifactLayout:
+    schema: str
+    master_shape: tuple[int, int]
+    master_bbox: tuple[int, int, int, int]
+    master_fine_origin: tuple[int, int]
+    sites: tuple[SiteSpec, ...]
+    recipe_id: str
+    cook_id: str
+
+
+PAIR_SITES = (
     SiteSpec(
         "east-adjacent-north",
         HeightChunkId(-1, 617, 377),
@@ -59,17 +68,77 @@ SITES = (
     ),
 )
 
+BLOCK_SITES = (
+    SiteSpec(
+        "east-adjacent-northwest",
+        HeightChunkId(-1, 617, 377),
+        HeightChunkId(0, 154, 94),
+        (684544, 6441984, 685056, 6442496),
+    ),
+    SiteSpec(
+        "east-adjacent-northeast",
+        HeightChunkId(-1, 618, 377),
+        HeightChunkId(0, 154, 94),
+        (685056, 6441984, 685568, 6442496),
+    ),
+    SiteSpec(
+        "east-adjacent-southwest",
+        HeightChunkId(-1, 617, 378),
+        HeightChunkId(0, 154, 94),
+        (684544, 6441472, 685056, 6441984),
+    ),
+    SiteSpec(
+        "east-adjacent-southeast-transition",
+        HeightChunkId(-1, 618, 378),
+        HeightChunkId(0, 154, 94),
+        (685056, 6441472, 685568, 6441984),
+    ),
+)
 
-def _artifact_files(artifact_root: Path) -> dict[str, str]:
+PAIR_LAYOUT = ArtifactLayout(
+    "forest-mesic-mineral-adjacent-continuity-artifact/1",
+    (16384, 8192),
+    (684544, 6441472, 685056, 6442496),
+    (2468, 1508),
+    PAIR_SITES,
+    "laas.micro.forest-adjacent-two-parent-preview.recipe.v1",
+    "accepted-forest-adjacent-two-parent-absolute-master-v1",
+)
+BLOCK_LAYOUT = ArtifactLayout(
+    "forest-mesic-mineral-adjacent-block-artifact/1",
+    (16384, 16384),
+    (684544, 6441472, 685568, 6442496),
+    (2468, 1508),
+    BLOCK_SITES,
+    "laas.micro.forest-adjacent-four-parent-preview.recipe.v1",
+    "accepted-forest-adjacent-four-parent-absolute-master-v1",
+)
+
+
+def _layout_for_schema(schema: str) -> ArtifactLayout:
+    for layout in (PAIR_LAYOUT, BLOCK_LAYOUT):
+        if layout.schema == schema:
+            return layout
+    raise ValueError(f"unsupported adjacent forest artifact schema: {schema}")
+
+
+def _artifact_layout(artifact_root: Path) -> ArtifactLayout:
+    manifest = json.loads((artifact_root / "manifest.json").read_bytes())
+    return _layout_for_schema(manifest.get("schema", ""))
+
+
+def _artifact_files(
+    artifact_root: Path, layout: ArtifactLayout
+) -> dict[str, str]:
     manifest = json.loads((artifact_root / "manifest.json").read_bytes())
     metrics = manifest.get("metrics", {})
     if (
-        manifest.get("schema") != ARTIFACT_SCHEMA
+        manifest.get("schema") != layout.schema
         or manifest.get("build_id") != artifact_root.name
         or manifest.get("status") != "inspect_float_preview"
         or manifest.get("failures") != []
-        or tuple(metrics.get("bbox_en", ())) != MASTER_BBOX
-        or tuple(metrics.get("shape", ())) != MASTER_SHAPE
+        or tuple(metrics.get("bbox_en", ())) != layout.master_bbox
+        or tuple(metrics.get("shape", ())) != layout.master_shape
         or metrics.get("maximum_hard_exclusion_residual_m") != 0.0
         or float(metrics.get("maximum_one_metre_mean_error_m", 1.0)) > 1e-12
     ):
@@ -79,14 +148,17 @@ def _artifact_files(artifact_root: Path) -> dict[str, str]:
         if path.stat().st_size != identity["bytes"] or _sha256(path) != identity["sha256"]:
             raise ValueError(f"adjacent forest artifact changed: {relative}")
     master = np.load(artifact_root / "surface/c1_height_f32.npy", mmap_mode="r")
-    if master.shape != MASTER_SHAPE or master.dtype != np.float32:
-        raise ValueError("adjacent forest master must be float32 16384x8192")
+    if master.shape != layout.master_shape or master.dtype != np.float32:
+        raise ValueError(
+            f"adjacent forest master must be float32 {layout.master_shape}"
+        )
     return {relative: row["sha256"] for relative, row in manifest["files"].items()}
 
 
 def _recipe_identity(
     artifact_root: Path,
     source_base_manifest: Path,
+    layout: ArtifactLayout,
 ) -> tuple[str, dict[str, Any]]:
     source_paths = (
         Path(__file__),
@@ -103,23 +175,23 @@ def _recipe_identity(
         Path(__file__).parents[3] / "release.py",
     )
     inputs: dict[str, Any] = {
-        "id": "laas.micro.forest-adjacent-two-parent-preview.recipe.v1",
+        "id": layout.recipe_id,
         "artifact": {
             "root": artifact_root.as_posix(),
-            "schema": ARTIFACT_SCHEMA,
+            "schema": layout.schema,
             "manifestSha256": _sha256(artifact_root / "manifest.json"),
             "recipeSha256": _sha256(artifact_root / "recipe.json"),
-            "files": _artifact_files(artifact_root),
+            "files": _artifact_files(artifact_root, layout),
         },
         "sourceBase": {
             "manifest": source_base_manifest.as_posix(),
             "manifestSha256": _sha256(source_base_manifest),
         },
-        "coverage": {"sites": [site.json() for site in SITES]},
+        "coverage": {"sites": [site.json() for site in layout.sites]},
         "singleContiguousMaster": {
-            "bboxEn": list(MASTER_BBOX),
-            "shape": list(MASTER_SHAPE),
-            "fineOrigin": list(MASTER_FINE_ORIGIN),
+            "bboxEn": list(layout.master_bbox),
+            "shape": list(layout.master_shape),
+            "fineOrigin": list(layout.master_fine_origin),
         },
         "sourceSha256": {
             path.relative_to(Path(__file__).parents[4]).as_posix(): _sha256(path)
@@ -128,7 +200,7 @@ def _recipe_identity(
     }
     blob = _json_bytes(inputs)
     digest = hashlib.sha256(
-        b"laas.micro.forest-adjacent-two-parent-preview.recipe.v1\0" + blob
+        (layout.recipe_id + "\0").encode() + blob
     ).hexdigest()
     return digest, inputs
 
@@ -145,11 +217,12 @@ def _save_npy_immutable(path: Path, values: np.ndarray) -> None:
 
 def _stage_masks(
     build_root: Path,
+    layout: ArtifactLayout,
 ) -> tuple[dict[HeightChunkId, Path], dict[str, dict[str, int]]]:
     paths: dict[HeightChunkId, Path] = {}
     evidence_by_site: dict[str, dict[str, int]] = {}
     tile_cells = 2048
-    for site in SITES:
+    for site in layout.sites:
         packed = np.empty((8192, 1024), dtype=np.uint8)
         evidence: dict[str, int] = {}
         e_min, _n_min, _e_max, n_max = site.bbox_en
@@ -180,8 +253,9 @@ def _stage_fine(
     build_root: Path,
     artifact_root: Path,
     source_base_manifest: Path,
+    layout: ArtifactLayout,
 ) -> tuple[dict[HeightChunkId, Path], list[dict[str, Any]]]:
-    coverage = plan_parent_set(tuple(site.parent for site in SITES))
+    coverage = plan_parent_set(tuple(site.parent for site in layout.sites))
     master = np.load(artifact_root / "surface/c1_height_f32.npy", mmap_mode="r")
     source_sha = _sha256(source_base_manifest)
     pinned = PinnedBaseHeight(source_base_manifest, source_sha, DATA_OUT, base.encode)
@@ -192,9 +266,12 @@ def _stage_fine(
         return scratch / f"{chunk.cx}_{chunk.cz}.npy"
 
     def core(chunk: HeightChunkId) -> np.ndarray:
-        dx = chunk.cx - MASTER_FINE_ORIGIN[0]
-        dz = chunk.cz - MASTER_FINE_ORIGIN[1]
-        if 0 <= dx < 4 and 0 <= dz < 8:
+        dx = chunk.cx - layout.master_fine_origin[0]
+        dz = chunk.cz - layout.master_fine_origin[1]
+        if (
+            0 <= dx < layout.master_shape[1] // FINE_CORE
+            and 0 <= dz < layout.master_shape[0] // FINE_CORE
+        ):
             return master[
                 dz * FINE_CORE : (dz + 1) * FINE_CORE,
                 dx * FINE_CORE : (dx + 1) * FINE_CORE,
@@ -236,10 +313,11 @@ def _stage_parents(
     base: BaseConfig,
     build_root: Path,
     paths: dict[HeightChunkId, Path],
+    layout: ArtifactLayout,
 ) -> tuple[list[dict[str, Any]], dict[HeightChunkId, np.ndarray]]:
     identities: list[dict[str, Any]] = []
     decoded: dict[HeightChunkId, np.ndarray] = {}
-    for site in SITES:
+    for site in layout.sites:
         coverage = plan_hero(site.parent.cx, site.parent.cz)
         mosaic = assemble_parent_source_memmap(
             build_root / f"scratch/forest-adjacent-parent-{site.parent.cx}-{site.parent.cz}.f32",
@@ -270,6 +348,7 @@ def _corrected_base(
     parent_decoded: dict[HeightChunkId, np.ndarray],
     mask_paths: dict[HeightChunkId, Path],
     content_root: Path,
+    layout: ArtifactLayout,
 ):
     source_sha = _sha256(source_manifest)
     source = AuditedFormat1HeightSource(
@@ -281,7 +360,7 @@ def _corrected_base(
     )
     targets: dict[HeightChunkId, np.ndarray] = {}
     masks: dict[HeightChunkId, np.ndarray] = {}
-    for site in SITES:
+    for site in layout.sites:
         target = targets.setdefault(
             site.authority,
             np.array(source.load(site.authority).decoded[:-1, :-1], dtype=np.float64, copy=True),
@@ -337,14 +416,19 @@ def materialize_adjacent_preview(
     base = load_base()
     artifact_root = artifact_root.resolve()
     source_base_manifest = source_base_manifest.resolve()
-    build_digest, inputs = _recipe_identity(artifact_root, source_base_manifest)
+    layout = _artifact_layout(artifact_root)
+    build_digest, inputs = _recipe_identity(
+        artifact_root, source_base_manifest, layout
+    )
     build_root = work_root / "builds" / build_digest
     build_root.mkdir(parents=True, exist_ok=True)
-    mask_paths, mask_metrics = _stage_masks(build_root)
+    mask_paths, mask_metrics = _stage_masks(build_root, layout)
     paths, fine_identities = _stage_fine(
-        base, build_root, artifact_root, source_base_manifest
+        base, build_root, artifact_root, source_base_manifest, layout
     )
-    parent_identities, parent_decoded = _stage_parents(base, build_root, paths)
+    parent_identities, parent_decoded = _stage_parents(
+        base, build_root, paths, layout
+    )
     corrected_transaction, corrected_release = _corrected_base(
         base,
         build_root,
@@ -352,15 +436,16 @@ def materialize_adjacent_preview(
         parent_decoded,
         mask_paths,
         content_root,
+        layout,
     )
-    coverage = plan_parent_set(tuple(site.parent for site in SITES))
+    coverage = plan_parent_set(tuple(site.parent for site in layout.sites))
     inputs["masks"] = {
         site.site_id: {
             "path": mask_paths[site.parent].relative_to(build_root).as_posix(),
             "sha256": _sha256(mask_paths[site.parent]),
             "evidence": mask_metrics[site.site_id],
         }
-        for site in SITES
+        for site in layout.sites
     }
     inputs["correctedBase"] = {
         "manifest": corrected_release.manifest_path.as_posix(),
@@ -381,7 +466,7 @@ def materialize_adjacent_preview(
             "chunkRes": base.grid.chunk_res,
             "lodStep": base.grid.lod_step,
         },
-        "sites": [site.json() for site in SITES],
+        "sites": [site.json() for site in layout.sites],
         "parents": [[c.lod, c.cx, c.cz] for c in coverage.parents],
         "publishedFine": [[c.lod, c.cx, c.cz] for c in coverage.published_fine],
         "transientSupport": [[c.lod, c.cx, c.cz] for c in coverage.transient_support],
@@ -400,11 +485,11 @@ def materialize_adjacent_preview(
     )
     evidence = {
         "format": 1,
-        "cook": "accepted-forest-adjacent-two-parent-absolute-master-v1",
+        "cook": layout.cook_id,
         "cookRevision": COOK_REVISION,
         "recipeSha256": build_digest,
         "artifactManifestSha256": _sha256(artifact_root / "manifest.json"),
-        "sites": [site.json() for site in SITES],
+        "sites": [site.json() for site in layout.sites],
         "children": fine_identities,
         "parents": parent_identities,
         "masks": inputs["masks"],

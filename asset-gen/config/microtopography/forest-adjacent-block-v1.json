@@ -1,0 +1,61 @@
+{
+  "schema": "forest-mesic-mineral-adjacent-block/1",
+  "authority": "research_float_only_no_production_no_pack_no_latest",
+  "regime": "forest.mesic_mineral",
+  "bbox_en": [684544, 6441472, 685568, 6442496],
+  "parents": [
+    {
+      "role": "northwest",
+      "cx": 617,
+      "cz": 377,
+      "bbox_en": [684544, 6441984, 685056, 6442496]
+    },
+    {
+      "role": "northeast",
+      "cx": 618,
+      "cz": 377,
+      "bbox_en": [685056, 6441984, 685568, 6442496]
+    },
+    {
+      "role": "southwest",
+      "cx": 617,
+      "cz": 378,
+      "bbox_en": [684544, 6441472, 685056, 6441984],
+      "accepted_float_build": "5c7ab3ac6bb80ef84f465c36f5daf93f781a5b10ae7c63ed499462fdd76bf39a",
+      "accepted_packed_recipe": "dffa2ca2e3d0"
+    },
+    {
+      "role": "southeast_transition",
+      "cx": 618,
+      "cz": 378,
+      "bbox_en": [685056, 6441472, 685568, 6441984]
+    }
+  ],
+  "texel_m": 0.0625,
+  "transport": {
+    "patch_cells": 192,
+    "candidate_step_cells": 16,
+    "minimum_patch_support_fraction": 0.78,
+    "site_candidate_cell": 24,
+    "site_minimum_distance_cells": 64,
+    "site_saturation_distance_cells": 48,
+    "site_saturation_rounds": 8,
+    "support_radius_cells": 88,
+    "site_seed": 5494753648857171000
+  },
+  "acceptance": {
+    "minimum_parent_allowed_fraction_by_role": {
+      "northwest": 0.5,
+      "northeast": 0.5,
+      "southwest": 0.5,
+      "southeast_transition": 0.25
+    },
+    "minimum_parent_allowed_fraction_range": 0.2,
+    "maximum_one_metre_mean_error_m": 1e-10,
+    "maximum_hard_exclusion_residual_m": 0.0,
+    "maximum_output_over_candidate_abs_ratio": 1.0,
+    "maximum_output_over_candidate_rms_ratio": 1.0,
+    "minimum_cross_seam_site_count_per_axis": 1,
+    "minimum_cross_junction_site_count": 1
+  }
+}

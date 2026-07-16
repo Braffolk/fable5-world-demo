@@ -1159,6 +1159,38 @@ as a cliff result. Adjacent-parent `forest.mesic_mineral` continuity is therefor
 This acceptance still grants no production, `latest`, national coverage,
 another forest regime, or non-forest authority.
 
+The stronger two-axis/junction limitation is also closed for the current forest
+research owner. One unchanged world-locked generator produced a contiguous
+`1024 x 1024 m` master across parents `(617,377)`, `(618,377)`, `(617,378)`, and
+`(618,378)`, including a broad eligibility/hard-mask transition in the fourth
+parent. Float artifact `41ff0ad0ecdad696c66c8ddd3974392f7d608af4274c446a188e8d6ede3f132c`
+and its four labeled PNGs expose the entire master, the four-parent junction,
+the condition transition, and ground-scale crops. Cross-axis and cross-junction
+forms remain continuous, hard residual and one-metre mean error are zero to the
+recorded tolerances, and no ownership ridge or phase reset is visible.
+
+Packed recipe `dc4c28617df3d9fd71bb128fd3f730afb817efd9b79017e0f9ccc57fe0afb6f2`,
+manifest SHA-256 `7563ea2267a2a6d85578c55f441f670b2d2f7b3381f498103d91e21c36b7099c`,
+and verification `2f8380d953732082edb04060c78e663693f144d2297211725ae7bb2d761c6543`
+prove complete four-parent coverage: 64 published LOD -2 chunks, four LOD -1
+parents, 17 transient supports, zero decoded child seams, four parent-boundary
+comparisons below `1e-5 m`, and unchanged inherited non-height layers. Four
+independent exact-position real-WebGPU boots pass when run in isolation. The
+user found all four starts natural and detailed, with no seams, glitches, square
+patterns, or unnatural repetition, so this checkpoint is
+`research_preview_investigated` and the forest generator remains locked.
+
+Only the camera-near portion appears at full `0.0625 m` resolution at one time.
+This is the existing runtime policy, not sparse cooked coverage: LOD -2 uses a
+96 m sampling window, is fully weighted through 32 m, and fades to zero by 40 m;
+LOD -1 is fully weighted through 128 m and fades by 160 m. Visual-review links
+must therefore start inside an eligible patch and state this radius explicitly;
+never describe the entire packed kilometre as simultaneously finest-detailed.
+Two concurrent boot-smoke processes once triggered a transient renderer
+`null.constructor` fatal while the same URLs passed unchanged in isolated runs.
+Treat that as a nondeterministic runtime/resource risk, not a terrain-data gap,
+and keep real-WebGPU verification isolated rather than concurrent.
+
 Elongated lines, ridges, or bumps are not defects merely because they occur in a
 field: cultivation, drainage, vehicle, erosion, and substrate processes can
 produce real long forms. Reject them only when evidence identifies ownership or

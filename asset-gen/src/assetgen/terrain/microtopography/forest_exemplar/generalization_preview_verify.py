@@ -136,7 +136,10 @@ def verify_generalization_preview(
         raise ValueError("forest generalization expectation names another verifier")
 
     inputs = expectation["recipeInputs"]
-    if inputs.get("id") == "laas.micro.forest-adjacent-two-parent-preview.recipe.v1":
+    if inputs.get("id") in {
+        "laas.micro.forest-adjacent-two-parent-preview.recipe.v1",
+        "laas.micro.forest-adjacent-four-parent-preview.recipe.v1",
+    }:
         from .adjacent_preview_verify import verify_adjacent_preview
 
         return verify_adjacent_preview(

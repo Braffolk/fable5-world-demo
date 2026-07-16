@@ -1,4 +1,4 @@
-"""Independent verifier for the contiguous two-parent forest preview."""
+"""Independent verifier for a contiguous multi-parent forest preview."""
 
 from __future__ import annotations
 
@@ -20,18 +20,13 @@ from ....process.micro_masks import rasterize_micro_morphology_mask
 from ....release import audit_base_release, micro_verification_binding, read_v1_index
 from ...repair.base_transaction import AuditedFormat1HeightSource
 from .adjacent_preview import (
-    ARTIFACT_SCHEMA,
-    MASTER_BBOX,
-    MASTER_FINE_ORIGIN,
-    MASTER_SHAPE,
-    SITES,
     TEXEL_M,
+    _layout_for_schema,
 )
 
 
 VERIFIER_ID = "assetgen.forest-generalization-preview-verify.v2"
 RECIPE_KIND = "research-microtopography-generalization-preview-v1"
-RECIPE_ID = "laas.micro.forest-adjacent-two-parent-preview.recipe.v1"
 
 
 def _verifier_source_sha256() -> str:
@@ -154,7 +149,9 @@ def verify_adjacent_preview(
     )
     plan = _load_json_bound(build_root / "plan.json", build_root / "plan.sha256")
     inputs = expectation["recipeInputs"]
-    if inputs.get("id") != RECIPE_ID:
+    layout = _layout_for_schema(inputs.get("artifact", {}).get("schema", ""))
+    sites = layout.sites
+    if inputs.get("id") != layout.recipe_id:
         raise ValueError("adjacent verifier received another recipe")
     if expectation.get("recipeKind") != RECIPE_KIND or plan.get("microRecipeKind") != RECIPE_KIND:
         raise ValueError("adjacent verifier received another recipe kind")
@@ -170,11 +167,11 @@ def verify_adjacent_preview(
     artifact_manifest = json.loads((artifact_root / "manifest.json").read_bytes())
     metrics = artifact_manifest.get("metrics", {})
     if (
-        artifact_manifest.get("schema") != ARTIFACT_SCHEMA
+        artifact_manifest.get("schema") != layout.schema
         or artifact_manifest.get("status") != "inspect_float_preview"
         or artifact_manifest.get("failures") != []
-        or tuple(metrics.get("bbox_en", ())) != MASTER_BBOX
-        or tuple(metrics.get("shape", ())) != MASTER_SHAPE
+        or tuple(metrics.get("bbox_en", ())) != layout.master_bbox
+        or tuple(metrics.get("shape", ())) != layout.master_shape
         or metrics.get("maximum_hard_exclusion_residual_m") != 0.0
         or float(metrics.get("maximum_one_metre_mean_error_m", 1.0)) > 1e-12
     ):
@@ -184,12 +181,12 @@ def verify_adjacent_preview(
         if _sha256(path) != identity["sha256"] or path.stat().st_size != identity["bytes"]:
             raise ValueError(f"adjacent artifact changed: {relative}")
     master = np.load(artifact_root / "surface/c1_height_f32.npy", mmap_mode="r")
-    if master.shape != MASTER_SHAPE or master.dtype != np.float32:
+    if master.shape != layout.master_shape or master.dtype != np.float32:
         raise ValueError("adjacent master shape changed")
 
-    coverage = plan_parent_set(tuple(site.parent for site in SITES))
+    coverage = plan_parent_set(tuple(site.parent for site in sites))
     expected_coverage = {
-        "sites": [site.json() for site in SITES],
+        "sites": [site.json() for site in sites],
         "parents": [[c.lod, c.cx, c.cz] for c in coverage.parents],
         "publishedFine": [[c.lod, c.cx, c.cz] for c in coverage.published_fine],
         "transientSupport": [[c.lod, c.cx, c.cz] for c in coverage.transient_support],
@@ -225,7 +222,7 @@ def verify_adjacent_preview(
 
     allowed_by_parent: dict[HeightChunkId, np.ndarray] = {}
     mask_rows: dict[str, Any] = {}
-    for site in SITES:
+    for site in sites:
         allowed, mask_evidence = _verify_mask(
             build_root=build_root, site=site, identity=inputs["masks"][site.site_id]
         )
@@ -253,13 +250,13 @@ def verify_adjacent_preview(
     maximum_lod0_error = 0.0
     parent_rows: list[dict[str, Any]] = []
     parent_decoded: dict[HeightChunkId, np.ndarray] = {}
-    for site in SITES:
+    for site in sites:
         hero = plan_hero(site.parent.cx, site.parent.cz)
         x0, z0 = site.parent.cx * 4, site.parent.cz * 4
         site_c1_error = 0.0
         for chunk in hero.published_fine:
-            dx = chunk.cx - MASTER_FINE_ORIGIN[0]
-            dz = chunk.cz - MASTER_FINE_ORIGIN[1]
+            dx = chunk.cx - layout.master_fine_origin[0]
+            dz = chunk.cz - layout.master_fine_origin[1]
             decoded = _decoded(paths[chunk], base.encode)[2][:-1, :-1]
             expected = master[
                 dz * 2048 : (dz + 1) * 2048,
@@ -327,22 +324,68 @@ def verify_adjacent_preview(
             }
         )
 
-    north, south = (site.parent for site in SITES)
-    parent_shared_seam = float(
-        np.max(np.abs(parent_decoded[north][-1, :] - parent_decoded[south][0, :]))
-    )
+    parents = sorted(parent_decoded)
+    parent_shared_seam = 0.0
+    shared_child_seam = 0.0
+    shared_parent_comparisons = 0
+    for first in parents:
+        for second in parents:
+            if first.cz == second.cz and second.cx == first.cx + 1:
+                parent_shared_seam = max(
+                    parent_shared_seam,
+                    float(
+                        np.max(
+                            np.abs(
+                                parent_decoded[first][:, -1]
+                                - parent_decoded[second][:, 0]
+                            )
+                        )
+                    ),
+                )
+                boundary_cx = second.cx * 4
+                for cz in range(first.cz * 4, first.cz * 4 + 4):
+                    left = _decoded(
+                        paths[HeightChunkId(-2, boundary_cx - 1, cz)], base.encode
+                    )[2]
+                    right = _decoded(
+                        paths[HeightChunkId(-2, boundary_cx, cz)], base.encode
+                    )[2]
+                    shared_child_seam = max(
+                        shared_child_seam,
+                        float(np.max(np.abs(left[:, -1] - right[:, 0]))),
+                    )
+                shared_parent_comparisons += 1
+            if first.cx == second.cx and second.cz == first.cz + 1:
+                parent_shared_seam = max(
+                    parent_shared_seam,
+                    float(
+                        np.max(
+                            np.abs(
+                                parent_decoded[first][-1, :]
+                                - parent_decoded[second][0, :]
+                            )
+                        )
+                    ),
+                )
+                boundary_cz = second.cz * 4
+                for cx in range(first.cx * 4, first.cx * 4 + 4):
+                    north = _decoded(
+                        paths[HeightChunkId(-2, cx, boundary_cz - 1)], base.encode
+                    )[2]
+                    south = _decoded(
+                        paths[HeightChunkId(-2, cx, boundary_cz)], base.encode
+                    )[2]
+                    shared_child_seam = max(
+                        shared_child_seam,
+                        float(np.max(np.abs(north[-1, :] - south[0, :]))),
+                    )
+                shared_parent_comparisons += 1
+    if shared_parent_comparisons == 0:
+        raise ValueError("adjacent preview contains no shared parent boundaries")
     # Parent chunks select independent integer-metre qoffsets. Their wire lattices
     # coincide, while float32 decode order can differ by one ULP around 60 metres.
     if parent_shared_seam > 1e-5:
         raise ValueError(f"decoded shared parent seam is {parent_shared_seam} m")
-    shared_child_seam = 0.0
-    for cx in range(MASTER_FINE_ORIGIN[0], MASTER_FINE_ORIGIN[0] + 4):
-        north_chunk = _decoded(paths[HeightChunkId(-2, cx, 1511)], base.encode)[2]
-        south_chunk = _decoded(paths[HeightChunkId(-2, cx, 1512)], base.encode)[2]
-        shared_child_seam = max(
-            shared_child_seam,
-            float(np.max(np.abs(north_chunk[-1, :] - south_chunk[0, :]))),
-        )
     if shared_child_seam != 0.0:
         raise ValueError(f"decoded shared child seam is {shared_child_seam} m")
 
@@ -391,6 +434,7 @@ def verify_adjacent_preview(
                 "correctedHierarchyPlanSha256": corrected["hierarchyPlanSha256"],
                 "sharedParentSeamErrorM": parent_shared_seam,
                 "sharedParentSeamLimitM": 1e-5,
+                "sharedParentBoundaryComparisons": shared_parent_comparisons,
             }
         ),
         "headers": _gate({"fine": header_rows, "parentQscaleM": 0.005}),
@@ -413,6 +457,7 @@ def verify_adjacent_preview(
                 "sharedChildSeamErrorM": shared_child_seam,
                 "sharedParentSeamErrorM": parent_shared_seam,
                 "sharedParentSeamLimitM": 1e-5,
+                "sharedParentBoundaryComparisons": shared_parent_comparisons,
             }
         ),
         "determinism": _gate(
