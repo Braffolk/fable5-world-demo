@@ -74,9 +74,16 @@ rebuilt and generation run.
 
 ## Frozen gates (to bind in preregistration v3, before generation)
 
-- Exactness: 1 m mean error ≤ 1e-12 m; hard/water/unknown/sealed residual
-  exactly 0; halo/crop-last identity (whole-domain solve, per-chunk anything
-  forbidden).
+- Parent deviation (user law 2026-07-17: exactness is a diagnostic, not a
+  goal): report the C1-vs-parent deviation field (p50/p95/max + area fraction).
+  Bog forms are decimetre-scale so deviations should be naturally small, but do
+  NOT chase 1e-12 closure: form-attributed deviation inside the patterned area
+  is acceptable (loose cap p99 ≤ ~0.3 m there); over unpatterned/form-free area
+  deviation p95 ≤ ~2 cm (DC-drift guard). Ancestors rederive from the accepted
+  fine surface; raw-parent fidelity is not a gate.
+- Safety exactness (unchanged): open-water/pool surfaces relief-free, hard/
+  unknown/sealed residuals exactly 0; halo/crop-last identity (whole-domain
+  solve, per-chunk anything forbidden).
 - Anti-corrugation (v3's reason to exist, measured on the string skeleton):
   string spacing CV ≥ 0.35 (v3 fails if strings are evenly spaced like the
   form-graph's corrugations); orientation coherence localized, not mire-wide.

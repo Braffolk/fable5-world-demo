@@ -133,6 +133,14 @@ result-producing work through dynamic Workflows (and Agent for one-off reads/dig
   best fit and make it work — IF doable without significant effort. This tempers, not
   repeals, the never-fake ethos: corrections still need evidence; bounded weak-evidence
   best-fit beats indefinite abstention.
+- **Exactness is a diagnostic, NOT a goal (user law 07-17):** never gate synthesis on
+  exact fidelity to the 1 m parent — the parent is itself fallible (photo-vs-heightmap
+  anomalies proven). Added macrodetail (cliffs especially) MAY deviate from parent means
+  where the form demands it: report the deviation field, require form-attribution and a
+  near-zero taper over form-free ground (DC-drift guard), and rederive ancestors from the
+  accepted fine surface (machinery already does). What stays EXACT is only safety +
+  self-consistency: water relief-free, protected/sealed untouched, hard masks, quantization
+  round-trip, decoded-child parents, seams. Chasing 1e-12 closure is the known self-trap.
 - **Shaders are performance-critical:** no edit on "should work"; smallest validity fix;
   written perf rationale; re-boot after any shader-path change; traces over casual A/B
   (thermal noise) — see the profiling rule above.

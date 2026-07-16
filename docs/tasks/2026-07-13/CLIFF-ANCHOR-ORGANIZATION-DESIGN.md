@@ -60,9 +60,19 @@ representation, satisfying the park's disjunction.
 
 ## Frozen gates (bind concrete numbers in preregistration before generation)
 
-- Exactness: hard/water/protected/collar residuals exactly 0; 1 m closure
-  ≤ 1e-9 m outside authorized structural-correction envelope; sealed/sentinel
-  untouched.
+- Parent deviation (user law 2026-07-17: exactness is a diagnostic, not a
+  goal — the 1 m parent is itself fallible): the synthesized macroform MAY
+  deviate from the 1 m parent means wherever the form demands it. Report the
+  deviation field (p50/p95/max + area fraction); deviations must be
+  FORM-ATTRIBUTED (inside mapped escarpment/bank corridors and their tapers,
+  magnitude bounded by the locally anchored ALS envelope, not a fixed cap) and
+  must taper to near-zero over form-free ordinary ground (p95 ≤ ~2 cm there —
+  guard against the +7 m DC-drift failure mode, not against macro relief).
+  Ancestors are rederived from the accepted fine surface by the existing
+  machinery, so parent fidelity to the RAW DTM is not a gate.
+- Safety exactness (unchanged, non-negotiable): water surfaces relief-free,
+  protected features, hard masks, collar-to-C0 continuity, sealed/sentinel
+  sites untouched — exactly 0 residual there.
 - Anchor fidelity: withheld ALS block-median error must NOT regress vs the
   accepted ALS/TGV field on either mapped side (the a5d101c1 holdout protocol).
 - Connectedness (the reason this attempt exists): fraction of mapped line length
