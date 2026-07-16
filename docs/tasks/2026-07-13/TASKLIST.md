@@ -8,6 +8,29 @@ Ship beautiful, physically credible, materially and geomorphologically condition
 
 ## Current State
 
+### Ranked regime ledger
+
+This is the active cross-regime priority list. Rank is implementation priority, not
+surface-area share. `Usable` means usable only inside the stated research mask; it does
+not imply production, `latest`, or national authority. Update this table whenever a
+regime starts, parks, gains a visual verdict, or changes owner.
+
+| Rank | Regime family | Current state | Done / usable evidence | Active next proof |
+|---:|---|---|---|---|
+| 1 | Sandstone/carbonate outcrops, erodible banks, colluvial/talus slopes | **Primary active; no usable morphology owner** | Structural Taevaskoda repair is accepted. Several deterministic, exemplar, learned, diffusion, and morphodynamic challengers are preserved as negative evidence. | Reconstruct the `0.5 m` to multi-metre crest/shoulder/ledge/face/toe structure even where local 1 m means must move by `0.5-1.0 m` or more, then add `6.25-50 cm` material/erosion detail. Judge the complete rendered profile, not per-cell downsample closure. |
+| 2 | Mesic-mineral ordinary forest floor | **Usable bounded research owner; approximately 65% complete** | Three disjoint parents, adjacent-parent continuity, a four-parent junction, packing, inherited layers, WebGPU boots, and blind user review are accepted. Small family-4 stones have an accepted subtle additive socket; boulder-scale use is parked. | Run the locked generator unchanged over one complete LOD0 tranche in the background; then inspect regional repetition, condition transitions, cost, and packing. Expand later to pit/mound and managed-clearcut forest states rather than relabeling this owner. |
+| 3 | Raised bog / intact open mire | **Active audit; no usable morphology owner** | Moore/HuHoLa and selected-mire evidence paths were materialized; the whole-form and plurigaussian attempts failed their evidence gates and are preserved. | Select the cheapest evidence-supported Estonia float pilot that can show connected hummock/lawn/hollow or string-pool organization without noise, water relief, or repeated primitives. |
+| 4 | Fen/transitional mire and drained/cut peat | **Not done; unsupported** | Condition fields exist, but raised-bog evidence does not span these hydrologic or disturbance states. | Separate subtype/site selection and process evidence; do not inherit a raised-bog owner. |
+| 5 | Fluvial banks, floodplains, active bars, rills/gullies, springs, and shoreline transitions | **Partially investigated; no usable morphology owner** | River anomaly repair and structural shoreline/water transactions are accepted. Rill/headcut/morphodynamic challengers are parked after weak, comb-like, or unstable morphology. | Reopen only with a materially different connected source-to-toe/process mechanism; keep water surfaces relief-free and preserve real banks/channels. |
+| 6 | Managed fields: ploughed and seedbed/harrowed/rolled | **Not done; no usable owner** | Literature, OPARA, and neighboring-source audits establish operation-dependent scales but did not yield qualified reusable target geometry. | Produce a small state-specific field pilot when an existing retained surface can support rows, clods, wheel tracks, direction, and management state without generic repetition. Agriculture remains lower visual priority than cliffs, peat, and forest, but cannot be silently omitted from national coverage. |
+| 7 | Glacial till/moraine and gravel/esker/outwash | **Attempted and parked; no usable owner** | FORWARD conversion, mapped-rock families, rough-till fields, and two additive stone checkpoints are preserved. Tiny-stone grounding/continuity is accepted; generic till and boulder macroform are not. | Resume only with a structural depositional/clast mechanism or stronger source evidence, not patch placement, noise, or amplitude tuning. |
+| 8 | Grassland, pasture/meadow, and yard turf | **Not done; unsupported** | No morphology specialist or qualified target has been run. | Select distinct pasture/meadow versus maintained-turf pilots; do not reuse forest or field texture. |
+| 9 | Exposed sand and aeolian dunes | **Not done; unsupported** | Mrzezyno and related source audits are retained but did not establish target truth or Estonia transfer. | Require material state, wind/process direction, and heightfield-valid dune context before a pilot. |
+| 10 | Beach sand and shingle/gravel/cobble shore | **Not done; unsupported** | Shore position/water structure exists; no material-matched morphology owner exists. | Run separate sand and clastic-shore pilots with dated shoreline state and strict water/non-heightfield exclusions. |
+| 11 | Carbonate alvar, pavement, and karst | **Not done; unsupported** | National geology can condition selection but supplies no decimetre target morphology. | Acquire or identify retained analogue evidence for thin-soil pavement, fissures, and karst while excluding caves/overhangs. |
+| 12 | Coastal wetland | **Not done; unsupported** | No inundation-conditioned morphology pilot exists. | Separate wetland substrate morphology from dynamic water state and vegetation. |
+| 13 | Technogenic disturbed ground, roads/tracks, quarry/spoil | **Not done; unsupported** | Structural road/building masks exist only as exclusions for natural-regime cooks. | Split subtype and dated disturbance state before synthesis; never apply one generic disturbed-ground style. |
+
 ### Active 2026-07-15 checkpoint
 
 - [x] Complete immutable Taevaskoda structural transaction `009fd3d2be07d465199e6330ac9d2fc5a8fc7a16bbb5df0f55e5030ce962d3d1` steps 01-07: authority, scientific closure, bounded structural materialization, corrected base and water transactions, staging, and corrected format-1 base release.
