@@ -73,8 +73,75 @@ Re-profiling is SLOW (capture + manual Xcode export + ~10 min analyze), so do NO
 one fresh run per serious optimization push (and after meaningful changes), reused within the session.
 Subagents do NOT inherit this file — put the profiling context + the results-folder paths in their prompt.
 
+## Orchestration & model tiering (2026-07-17, supersedes AGENTS.md "Delegation")
+
+The main session is an ORCHESTRATOR. It protects its own context window and delegates
+result-producing work through dynamic Workflows (and Agent for one-off reads/digests):
+
+- **Tiering:** judgment calls, architectural thinking, reviews, adversarial verification,
+  and complex algorithm design run on **Fable 5 at high effort** (omit `model` in workflow
+  `agent()` calls — inherit the session model). Everything simpler — generation runs,
+  ingestion, harnesses, mechanical edits, routine fixes, tests — runs on
+  **`model: 'opus'`, `effort: 'xhigh'`**. Don't burn Fable tokens on mechanical work;
+  don't hand Opus a judgment call.
+- **Context economy:** never read a large spec/ledger wholesale into the orchestrator —
+  delegate a digest (current one: `docs/tasks/2026-07-13/SPEC-ORCHESTRATOR-DIGEST.md`).
+  Have agents return structured/terse results, not file dumps. Update the task ledger at
+  every terminal result so compaction never loses state.
+- Delegation is ONE level deep: workflow/sub-agents do their own work and never re-delegate.
+- Work autonomously; return to the user only for live-URL visual gates, destructive or
+  irreversible actions, and genuine scope decisions.
+
+## Efficiency laws (distilled from AGENTS.md after a ~10B-token overrun; full text there)
+
+- **Outcome first.** Every substantial track starts by naming the next artifact a user or
+  downstream system can actually inspect, and works backward only through strictly
+  necessary dependencies. Commits/schemas/audits/tests are not outcomes.
+- **One owner per track**, through a real end-to-end result. No tiny implement→review
+  ping-pong; one consolidated diagnose+fix+rerun cycle per failure, one independent review
+  at the complete boundary (earlier only for irreversible/destructive/format boundaries).
+- **Two real end-to-end failures ⇒ park** (record blocker + objective resume condition in
+  KNOWN-ISSUES; never delete reusable work) — unless the capability is uniquely required
+  and the reason is recorded. Parking is surfaced to the user, never silent.
+- **Parallelize independent candidates** (datasets, methods, integrations) instead of
+  serializing behind the hardest one; advance the first that meets the real quality bar.
+- **Stop research once the current decision is resolved.** Batch docs/provenance/commits
+  at outcome boundaries; don't interrupt the critical path for ceremony.
+- Evidence closure, hashes, preregistration, and gates SUPPORT the next visible terrain
+  artifact; they are never the product. Supporting work that doesn't unblock the next
+  inspectable artifact is scope expansion.
+
+## Project laws that always apply (full versions in AGENTS.md + the spec)
+
+- **All terrain synthesis is cook-side in `asset-gen`;** the browser only streams, decodes,
+  samples, morphs, renders packed heights. Canonical grid: LOD0 = 1 m / 2048 m; LOD -1 =
+  0.25 m / 512 m; LOD -2 = 0.0625 m / 128 m. No decorative noise, no broad-class style
+  lookup, no scene-specific fixes. Source DTM is fallible — evidence-backed correction
+  beats exact reconstruction.
+- **Real runtime acceptance:** before giving the user ANY live URL, boot that exact URL
+  (exact manifest, exact port) via `npx tsx tools/boot-smoke.ts` in real Chromium/WebGPU —
+  page/console/TSL/WebGPU/pipeline errors fail the boot even if ready fires. Every boot
+  review also eyeballs terrain continuity, materials, trees/plants, grass grounding.
+  Give exact-position URLs; NEVER compass directions (UI has no compass). Estonia target
+  is `scene=world&src=estonia`.
+- **Shaders are performance-critical:** no edit on "should work"; smallest validity fix;
+  written perf rationale; re-boot after any shader-path change; traces over casual A/B
+  (thermal noise) — see the profiling rule above.
+- **Zero external budget:** no paid data/surveys/vendors/hardware unless the user reopens
+  budget. Exhaust public/open sources incl. physically-analogous Baltic/Nordic regions.
+- **Research standard:** a feature name is never its spec — decompose into real constituent
+  phenomena and ground quality-defining work in full primary sources, never abstracts or
+  one plausible search hit. No toy proxies for high-fidelity asks.
+- Python runs through **`uv`** (`uv run`, `uv add/sync`) — never bare pip/.venv.
+- Tests stay lean while algorithms are in flux; a passing test is never runtime acceptance.
+- Task ledgers `docs/tasks/2026-07-13/{TASKLIST,KNOWN-ISSUES}.md` stay current enough that
+  the user can inspect progress without interrupting. The year is **2026**. Local commits
+  at clean checkpoints, ONE task per commit with an explicit file list; **no push**.
+
 ## Pointers
 - Reality-check pattern + grounding examples: memory `interrogate-constraints-lift-a-level`.
 - Never park / drop / reframe / redirect work without surfacing it for the user's call: memory
   `surface-decisions-never-park-silently`.
 - Perf-cycle flows (now carry the premise-audit stage): `docs/perf-runs/NEXT-AGENT-CYCLE-PROMPT.md`.
+- Microtopography arc: spec `docs/specs/terrain/MICROTOPOGRAPHY.md` (normative), orchestrator
+  digest + ledgers in `docs/tasks/2026-07-13/`, engineering rules `AGENTS.md`.
