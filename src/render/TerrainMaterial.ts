@@ -75,6 +75,12 @@ export interface TerrainShadingInputs {
    *  WITHOUT any soil node ⇒ BIT-IDENTICAL. Same cooked-source discriminator family
    *  as `landcover`/`hasCanopy`. */
   hasSoil: boolean;
+  /** the geology plane (30a16ef: EGT categorical priors [bedrockFamily,
+   *  surficialFamily, processFamily, coverageFlags] on the 2 m lattice, ids
+   *  nearest-only) — true iff the source cooked one. Old manifests and the
+   *  generated world have none, so their graphs compile WITHOUT any geology
+   *  node ⇒ BIT-IDENTICAL. Same discriminator family as hasSoil/hasCanopy. */
+  hasGeology: boolean;
   /**
    * surface context override (N4 nanite resolve): explicit world position +
    * camera position instead of the vertex-pipeline TSL singletons. The old
@@ -299,6 +305,75 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
   const riverDepth = riverRaw;
   const zm = zoneMasks(wxz, inp.mp);
 
+  // ---------- geology priors (EGT, optional plane — 30a16ef) --------------------
+  // [bedrockFamily, surficialFamily, processFamily, coverageFlags] on the 2 m
+  // condition lattice. CATEGORY IDENTITY is one NEAREST tap — ids are never
+  // interpolated; the second bilinear tap is ONLY a boundary-confidence signal
+  // (|linear − nearest| ≈ edge proximity, the landcover classInterior idiom),
+  // so every derived appearance parameter fades to 0 BEFORE the nearest id can
+  // change and no straight polygon seam can print. Both taps ride wxzB, so the
+  // fades meander with the other control planes (world-stable, TAA-stable).
+  // The values are coarse regional PRIORS (1:200k map evidence): they re-tint
+  // existing palettes and bias existing weights; they never place bedding,
+  // cliffs, or polygon-edge geometry. Per-family KNOWN bits × the authoritative
+  // bit gate every term — missing evidence ⇒ weight 0 ⇒ exactly the current
+  // material. The whole block sits inside `if (inp.hasGeology)` ⇒ old manifests
+  // and the generated world compile BIT-IDENTICAL graphs. Cost when present:
+  // 5 rgba8 samples (1 nearest + the 4-load toroidal bilinear) + ~70 ALU of
+  // windows/mixes whose temporaries die at the composite — no cross-branch
+  // liveness, no storage buffers, one texture binding (the plane itself).
+  let geo: {
+    sandstone: NF;
+    carbonate: NF;
+    sand: NF;
+    till: NF;
+    gravel: NF;
+    peat: NF;
+    aeolian: NF;
+    expose: NF;
+  } | null = null;
+  if (inp.hasGeology) {
+    const gN = field.geologyAt(wxzB);
+    const gL = field.geologyLinearAt(wxzB);
+    const bed = (gN.x as unknown as NF).mul(255);
+    const surf = (gN.y as unknown as NF).mul(255);
+    const proc = (gN.z as unknown as NF).mul(255);
+    const flags = (gN.w as unknown as NF).mul(255).add(0.5).floor();
+    const bit = (i: number): NF => flags.div(1 << i).floor().mod(2) as unknown as NF;
+    // boundary confidence: any channel's bilinear value pulling away from the
+    // nearest byte means a category edge inside the 2×2 — fade before it
+    const dMax = gL.x
+      .sub(gN.x)
+      .abs()
+      .max(gL.y.sub(gN.y).abs())
+      .max(gL.z.sub(gN.z).abs())
+      .max(gL.w.sub(gN.w).abs())
+      .mul(255);
+    const interior = smoothstep(0.55, 0.12, dMax);
+    const auth = bit(0).mul(interior) as unknown as NF;
+    /** unit window at categorical id k (nearest ids are exact bytes) */
+    const idW = (v: NF, k: number): NF =>
+      smoothstep(k - 0.45, k - 0.05, v).mul(smoothstep(k + 0.45, k + 0.05, v)) as unknown as NF;
+    const bedK = bit(1).mul(auth) as unknown as NF;
+    const surfK = bit(2).mul(auth) as unknown as NF;
+    const procK = bit(3).mul(auth) as unknown as NF;
+    geo = {
+      sandstone: idW(bed, 1).mul(bedK) as unknown as NF,
+      carbonate: idW(bed, 2).mul(bedK) as unknown as NF,
+      sand: idW(surf, 1).mul(surfK) as unknown as NF,
+      till: idW(surf, 2).mul(surfK) as unknown as NF,
+      gravel: idW(surf, 3).mul(surfK) as unknown as NF,
+      peat: idW(surf, 4).mul(surfK) as unknown as NF,
+      // aeolian refines SAND toward clean dune pale; the other process families
+      // either duplicate a surficial family (peat-forming, glaciofluvial gravel)
+      // or belong to systems handled elsewhere (water, anthropogenic → landcover)
+      aeolian: idW(proc, 10).mul(procK) as unknown as NF,
+      // mapped bedrock exposure (flag bit 4): an exposure PRIOR, applied only
+      // where slope already suggests rock (see the rockW bias below)
+      expose: bit(4).mul(auth) as unknown as NF,
+    };
+  }
+
   // ---------- macro variation (2–50 m breakup — tiling killer) ----------------
   const macroA = val(43.7);
   const macroB = val(11.3, 0.37, 0.61);
@@ -363,13 +438,37 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
   // lichen/weathering: dark macro splotches on long-exposed faces
   const lichen = smoothstep(0.6, 0.85, val(23.7, 0.53, 0.27));
   rockCol = mix(rockCol, rockCol.mul(0.62), lichen.mul(0.5));
+  if (geo) {
+    // bedrock family → rock PALETTE prior (identity of exposed rock only —
+    // exposure itself still comes from slope/relief/rockExposure). Devonian
+    // sandstone: banded red-ochre (the Taevaskoja outcrops); carbonate: pale
+    // limestone gray. Reuses the existing strata band so banding structure is
+    // cosmetic noise, not asserted bedding; cavity/meso modulation below
+    // applies on top of the swapped palette.
+    const sandstoneR = mix(vec3(0.33, 0.19, 0.12), vec3(0.57, 0.39, 0.25), strata);
+    const carbonateR = mix(vec3(0.35, 0.34, 0.31), vec3(0.57, 0.55, 0.49), strata);
+    rockCol = mix(rockCol, sandstoneR, geo.sandstone.mul(0.85));
+    rockCol = mix(rockCol, carbonateR, geo.carbonate.mul(0.85));
+  }
   // cavity dirt: concave-ish micro band darkening
   rockCol = rockCol.mul(meso.mul(0.22).add(0.89)).mul(micro.mul(0.1).add(0.95));
 
   const scree = vec3(0.36, 0.345, 0.325).mul(meso.mul(0.35).add(0.78));
-  const soil = mix(vec3(0.155, 0.12, 0.085), vec3(0.24, 0.195, 0.135), meso).mul(
+  let soil = mix(vec3(0.155, 0.12, 0.085), vec3(0.24, 0.195, 0.135), meso).mul(
     micro.mul(0.2).add(0.9),
-  );
+  ) as unknown as NV3;
+  if (geo) {
+    // surficial family → bare-ground mineral tints (soil feeds the composite
+    // base AND litter, so one chain covers every place bare ground shows —
+    // including the relief lace patches). Targets keep the meso variation so
+    // tinted regions don't flatten; the id windows are mutually exclusive.
+    const gm = meso.mul(0.3).add(0.85);
+    const sandT = mix(vec3(0.42, 0.35, 0.22), vec3(0.5, 0.44, 0.31), geo.aeolian).mul(gm);
+    soil = mix(soil, sandT, geo.sand.mul(0.55)) as unknown as NV3;
+    soil = mix(soil, vec3(0.235, 0.2, 0.155).mul(gm), geo.till.mul(0.45)) as unknown as NV3;
+    soil = mix(soil, vec3(0.38, 0.36, 0.33).mul(gm), geo.gravel.mul(0.5)) as unknown as NV3;
+    soil = mix(soil, vec3(0.075, 0.058, 0.042).mul(gm), geo.peat.mul(0.6)) as unknown as NV3;
+  }
   // grass field color = the FINAL grass LOD: matched to the blade-ring
   // palette (screen-average of the blade ramps) with the SAME ~1.6 m patch
   // dryness, so the geometric grass dissolves into this instead of ending
@@ -397,6 +496,11 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
     smoothstep(0.62, 1.15, classSlope).max(rockExposure.mul(0.85)) as unknown as NF,
   ).toVar();
   if (reliefRock) rockW.assign(rockW.max(reliefRock.mul(0.9)));
+  if (geo) {
+    // mapped bedrock-exposure polygons (flag bit 4) BIAS exposure where slope
+    // already suggests rock — a prior on the weight, never a placed cliff.
+    rockW.assign(rockW.max(smoothstep(0.3, 0.85, classSlope).mul(geo.expose).mul(0.55)));
+  }
   const screeW = refineOverlap(
     smoothstep(0.42, 0.62, classSlope)
       .mul(smoothstep(1.15, 0.7, classSlope))
@@ -621,7 +725,16 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
   if (inp.hasCanopy) {
     const cover = bio.w as unknown as NF;
     const canopyH = (bio.z as unknown as NF).mul(255); // heightM, m
-    const forestK = smoothstep(0.12, 0.62, cover).mul(smoothstep(1, 6, canopyH));
+    const forestK = smoothstep(0.12, 0.62, cover)
+      .mul(smoothstep(1, 6, canopyH))
+      // The tint's DOMAIN made explicit — it was implicit via biome-LOD
+      // residency ("coarse level answered ⇒ far"), which leaked treetop green
+      // onto NEAR terrain during stream transients. Distant forest only: fade
+      // in where individual rendered trees genuinely thin out…
+      .mul(smoothstep(300, 800, camDist))
+      // …and downward-visible ground only: a cliff FACE under a forested brow
+      // is rock, not treetops (the "green cliffs" report).
+      .mul(smoothstep(0.9, 0.5, classSlope));
     const canopyCol = mix(
       vec3(0.038, 0.066, 0.03),
       vec3(0.02, 0.043, 0.024),

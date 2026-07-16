@@ -615,6 +615,10 @@ export function buildNaniteResolve(
         // it off (an A/B toggle beside ?watercover; default on where a soil plane exists).
         // No-op on the generated world (hasSoil already false ⇒ compile-time bit-identical).
         hasSoil: world.field.hasSoil && new URLSearchParams(window.location.search).get('soil') !== '0',
+        // geology priors (30a16ef) — gated to a cooked geology plane; ?geology=0
+        // forces it off (the A/B toggle beside ?soil). No-op on old manifests
+        // (hasGeology already false ⇒ compile-time bit-identical).
+        hasGeology: world.field.hasGeology && q.get('geology') !== '0',
         surf: { wp, camPos, noiseCoord },
       });
       let tc: NV3 = shading.colorNode;

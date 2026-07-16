@@ -666,6 +666,15 @@ export class TerrainField {
     return planeNearest4(this.geology, wxz);
   }
 
+  /** Bilinear tap of the geology plane used ONLY as a boundary-confidence
+   *  signal: |linear − nearest| per channel ≈ proximity to a category edge.
+   *  Category IDENTITY always comes from geologyAt's nearest tap — this tap's
+   *  mixed values are never decoded as ids (the biome classInterior idiom). */
+  geologyLinearAt(wxz: NV2): NV4 {
+    if (!this.geology) return vec4(0) as unknown as NV4;
+    return planeLinear(this.geology, wxz) as unknown as NV4;
+  }
+
   /** nearest-texel waterY — hot gates (raster riverDepth, grass water gate).
    *  −1e4 (the dry sentinel, far below any bed) when the source has no water. */
   fieldWaterYNearest(wxz: NV2): NF {
