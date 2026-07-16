@@ -1942,6 +1942,23 @@ Family 2 remains parked as visually ineffective at unchanged source amplitude. P
 the additive operator, config, float artifact, packer/verifier generalization, packed
 preview, and QA without retuning source amplitude/scale/orientation.
 
+The later rock-only v4 challenge does not upgrade that bounded tiny-stone result.
+ETAK type-10 target `1145648` has mapped `korgus=2`; float artifact
+`3fd28734a7edd154235d01b96927cee44664879066e3091bcdb261765b923a04`, packed
+recipe `76210df793d36bafe124ee8449570725207cd703cfe26f13eec65da1240a0b69`,
+manifest SHA-256 `3ff6ff3eb96a3edbd558001125b5cd89aaac04543f10b1fe2d109a33cb302c29`,
+and micro-verification SHA-256
+`bc6bdfb6ce7dc28ced5a192f424dc366d8905f40b23aaa7a840cef818bca9a2f`
+pass rock-only ownership, type-20 exclusions, ordinary hierarchy, inherited-layer,
+transport, and grounding checks. The exact direct camera also passes real WebGPU at
+frame 168 and shows no rectangular carrier loss. User review supersedes the agent's
+initial framing: the visible object is simply a stone in the ground, the surrounding
+hump is slight, and nothing around it is visually attributable to synthesized
+large-stone morphology. Preserve the v4 implementation, config, floats, packed recipe,
+verification, and native QA as neutral/negative evidence. Family 4 is parked for
+boulder-scale body/socket use; do not amplify, rescale, rotate, repack, or claim a
+visible large-stone specialist from this checkpoint.
+
 ## Integration Risks
 
 - Dataset conversion previously became inefficiently serialized behind HY_SPRUCE4 full-E57 handling, with two failed full attempts and repeated implementation/review micro-cycles before a morphology input existed. Native codec-word padding commit `ba92ab4` completed the verified full materialization and the Python publisher completed its atomic move. The full-scan Hovi track is now parked after its fully observed central 6.25 cm QA remained dominated by competing/unresolved sheets; no threshold-tuning loop is authorized. Evo 1086/1065 are parked after sparse-surface diagnosis; the downsampled HY_PINE2 stress condition is also parked after its candidate sheet correctly abstained, and its full archive remains unfetched. A blocked track is parked without deleting its code or provenance; it resumes only if quicker alternatives fail or its scientific role is unique.

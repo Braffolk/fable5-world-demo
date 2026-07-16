@@ -103,6 +103,14 @@ COMPOSITION_SITES = (
         (680448, 6436352, 680960, 6436864),
     ),
 )
+ROCK_ONLY_SITES = (
+    SiteSpec(
+        "mapped-boulder-body-socket-rock-only-1145648",
+        HeightChunkId(-1, 615, 390),
+        HeightChunkId(0, 153, 97),
+        (683520, 6435328, 684032, 6435840),
+    ),
+)
 
 PAIR_LAYOUT = ArtifactLayout(
     "forest-mesic-mineral-adjacent-continuity-artifact/1",
@@ -133,10 +141,19 @@ COMPOSITION_LAYOUT = ArtifactLayout(
     "laas.micro.forest-adjacent-two-parent-preview.recipe.v1",
     "accepted-forest-mapped-boulder-composition-absolute-master-v2",
 )
+ROCK_ONLY_LAYOUT = ArtifactLayout(
+    "mapped-boulder-body-socket-rock-only/1.artifact/1",
+    (8192, 8192),
+    (683520, 6435328, 684032, 6435840),
+    (2460, 1560),
+    ROCK_ONLY_SITES,
+    "laas.micro.mapped-boulder-rock-only-preview.recipe.v1",
+    "accepted-mapped-boulder-rock-only-absolute-master-v1",
+)
 
 
 def _layout_for_schema(schema: str) -> ArtifactLayout:
-    for layout in (PAIR_LAYOUT, BLOCK_LAYOUT, COMPOSITION_LAYOUT):
+    for layout in (PAIR_LAYOUT, BLOCK_LAYOUT, COMPOSITION_LAYOUT, ROCK_ONLY_LAYOUT):
         if layout.schema == schema:
             return layout
     raise ValueError(f"unsupported adjacent forest artifact schema: {schema}")
@@ -214,6 +231,28 @@ def _artifact_files(
                 or float(row.get("rock_support_forest_overlap_fraction", 0.0)) < 0.9
                 or float(row.get("maximum_rock_support_to_forest_distance_m", 99.0)) > 2.1
                 or float(row.get("anchor_forest_interior_clearance_m", 0.0)) < 6.0
+                for row in families.values()
+            )
+        )
+    elif layout == ROCK_ONLY_LAYOUT:
+        rock = metrics.get("rock", {})
+        families = rock.get("families", {})
+        expected_families = _composition_families(artifact_root, manifest)
+        invalid = (
+            common_invalid
+            or manifest.get("status") != "inspect_float_preview"
+            or manifest.get("authority", {}).get("forest_transfer") is not False
+            or metrics.get("maximum_abstained_residual_m") != 0.0
+            or metrics.get("maximum_boulder_pile_residual_m") != 0.0
+            or rock.get("generic_till_owned_cells") != 0
+            or set(expected_families) != {4}
+            or {int(code) for code in families} != {4}
+            or any(
+                not row.get("anchor_owned")
+                or int(row.get("etak_id", 0)) != 1145648
+                or float(row.get("parent_mean_max_error_m", 1.0)) > 1e-10
+                or float(row.get("whole_window_base_carrier_maximum_error_m", 1.0))
+                > 1e-12
                 for row in families.values()
             )
         )
@@ -309,7 +348,7 @@ def _stage_masks(
     for site in layout.sites:
         packed = np.empty((8192, 1024), dtype=np.uint8)
         evidence: dict[str, int] = {}
-        if layout == COMPOSITION_LAYOUT:
+        if layout in (COMPOSITION_LAYOUT, ROCK_ONLY_LAYOUT):
             ownership = np.load(
                 artifact_root / "surface/composition_ownership_u8.npy",
                 mmap_mode="r",
@@ -324,12 +363,13 @@ def _stage_masks(
                 raise ValueError("composition ownership families changed")
             evidence = {
                 "ownedCells": int(np.count_nonzero(ownership)),
-                "forestOwnedCells": int(np.count_nonzero(ownership == 1)),
                 **{
                     f"mappedFamily{code}OwnedCells": int(np.count_nonzero(ownership == code))
                     for code in families
                 },
             }
+            if layout == COMPOSITION_LAYOUT:
+                evidence["forestOwnedCells"] = int(np.count_nonzero(ownership == 1))
             path = build_root / "evidence/masks" / f"{site.parent.cx}_{site.parent.cz}.npy"
             _save_npy_immutable(path, packed)
             paths[site.parent] = path
@@ -555,7 +595,7 @@ def materialize_adjacent_preview(
             "sha256": _sha256(mask_paths[site.parent]),
             "kind": (
                 "composition-ownership"
-                if layout == COMPOSITION_LAYOUT
+                if layout in (COMPOSITION_LAYOUT, ROCK_ONLY_LAYOUT)
                 else "recomputed-morphology-allowed"
             ),
             "evidence": mask_metrics[site.site_id],

@@ -21,6 +21,7 @@ from ....release import audit_base_release, micro_verification_binding, read_v1_
 from ...repair.base_transaction import AuditedFormat1HeightSource
 from .adjacent_preview import (
     COMPOSITION_LAYOUT,
+    ROCK_ONLY_LAYOUT,
     TEXEL_M,
     _layout_for_schema,
 )
@@ -152,7 +153,7 @@ def _verify_mask(
     packed = np.load(path, mmap_mode="r")
     if packed.shape != (8192, 1024) or packed.dtype != np.uint8:
         raise ValueError(f"invalid morphology mask shape: {site.site_id}")
-    if layout == COMPOSITION_LAYOUT:
+    if layout in (COMPOSITION_LAYOUT, ROCK_ONLY_LAYOUT):
         if identity.get("kind") != "composition-ownership":
             raise ValueError("composition mask is not bound to artifact ownership")
         ownership = np.load(
@@ -170,12 +171,13 @@ def _verify_mask(
             raise ValueError("composition ownership families changed")
         evidence = {
             "ownedCells": int(np.count_nonzero(ownership)),
-            "forestOwnedCells": int(np.count_nonzero(ownership == 1)),
             **{
                 f"mappedFamily{code}OwnedCells": int(np.count_nonzero(ownership == code))
                 for code in families
             },
         }
+        if layout == COMPOSITION_LAYOUT:
+            evidence["forestOwnedCells"] = int(np.count_nonzero(ownership == 1))
         if evidence != identity["evidence"]:
             raise ValueError("composition ownership evidence changed")
         return (ownership > 0), evidence
@@ -259,6 +261,28 @@ def verify_adjacent_preview(
                 or float(row.get("rock_support_forest_overlap_fraction", 0.0)) < 0.9
                 or float(row.get("maximum_rock_support_to_forest_distance_m", 99.0)) > 2.1
                 or float(row.get("anchor_forest_interior_clearance_m", 0.0)) < 6.0
+                for row in families.values()
+            )
+        )
+    elif layout == ROCK_ONLY_LAYOUT:
+        rock = metrics.get("rock", {})
+        families = rock.get("families", {})
+        expected_families = _composition_families(artifact_root, artifact_manifest)
+        invalid = (
+            common_invalid
+            or artifact_manifest.get("status") != "inspect_float_preview"
+            or artifact_manifest.get("authority", {}).get("forest_transfer") is not False
+            or metrics.get("maximum_abstained_residual_m") != 0.0
+            or metrics.get("maximum_boulder_pile_residual_m") != 0.0
+            or rock.get("generic_till_owned_cells") != 0
+            or set(expected_families) != {4}
+            or {int(code) for code in families} != {4}
+            or any(
+                not row.get("anchor_owned")
+                or int(row.get("etak_id", 0)) != 1145648
+                or float(row.get("parent_mean_max_error_m", 1.0)) > 1e-10
+                or float(row.get("whole_window_base_carrier_maximum_error_m", 1.0))
+                > 1e-12
                 for row in families.values()
             )
         )
@@ -583,6 +607,16 @@ def verify_adjacent_preview(
                         "mappedRockSupport": metrics["rock"]["families"],
                     }
                     if layout == COMPOSITION_LAYOUT
+                    else {
+                        "maxArtifactAbstainedResidualM": metrics[
+                            "maximum_abstained_residual_m"
+                        ],
+                        "maxArtifactBoulderPileResidualM": metrics[
+                            "maximum_boulder_pile_residual_m"
+                        ],
+                        "mappedRockSupport": metrics["rock"]["families"],
+                    }
+                    if layout == ROCK_ONLY_LAYOUT
                     else {
                         "maxArtifactHardExclusionResidualM": metrics[
                             "maximum_hard_exclusion_residual_m"

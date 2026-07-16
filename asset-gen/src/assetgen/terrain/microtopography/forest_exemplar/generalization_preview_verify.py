@@ -139,6 +139,7 @@ def verify_generalization_preview(
     if inputs.get("id") in {
         "laas.micro.forest-adjacent-two-parent-preview.recipe.v1",
         "laas.micro.forest-adjacent-four-parent-preview.recipe.v1",
+        "laas.micro.mapped-boulder-rock-only-preview.recipe.v1",
     }:
         from .adjacent_preview_verify import verify_adjacent_preview
 

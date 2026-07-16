@@ -1,0 +1,41 @@
+{
+  "schema": "mapped-boulder-body-socket-rock-only/1",
+  "authority": "research_float_only_no_production_no_pack_no_latest",
+  "regime": "mapped_boulder.body_socket.rock_only",
+  "bbox_en": [683520, 6435328, 684032, 6435840],
+  "parent": {"lod": -1, "cx": 615, "cz": 390},
+  "texel_m": 0.0625,
+  "rock_source": {
+    "path": "asset-gen/data/work/terrain/rough-till-boulder-multi-form/sha256/8dbbe1393d378a7f1d7240d4fb95d3caad9481d6d9b5a351e0b3718e27459c5d/preview.npz",
+    "bytes": 22820923,
+    "sha256": "a017f076f064a4c60f5668a4ab0cf3ea37c46f3037d0f26a55493b51c14fae93"
+  },
+  "mapped_boulders": [
+    {
+      "etak_id": 1145648,
+      "point_en": [683871.66, 6435469.33],
+      "source_family": 4,
+      "source_point_en": [683888.95, 6436052.36]
+    }
+  ],
+  "target_evidence": {
+    "source": "ETAK E_101_kivi_p",
+    "type": 10,
+    "recorded_height_m": 2,
+    "point_z_m": 67.229
+  },
+  "family_assignment": {
+    "method": "family 4 is the sole user-accepted additive body/socket family; this checkpoint changes only the ETAK target",
+    "selected": {"1145648": 4},
+    "no_rotation_scale_or_amplitude_change": true
+  },
+  "excluded_boulder_piles": [1086981, 1145223, 1147667],
+  "pile_exclusion_radius_m": 4.0,
+  "acceptance": {
+    "maximum_abstained_residual_m": 0.0,
+    "maximum_boulder_pile_residual_m": 0.0,
+    "maximum_rock_parent_mean_error_m": 1e-10,
+    "maximum_whole_window_base_carrier_error_m": 1e-12,
+    "minimum_rock_owned_cells_per_family": 1
+  }
+}
