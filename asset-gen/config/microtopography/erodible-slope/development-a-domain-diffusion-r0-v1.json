@@ -1,0 +1,72 @@
+{
+  "schema_version": "laas.erodible-slope-domain-diffusion-config/1",
+  "status": "development_r0_only",
+  "inputs": {
+    "structural_config": {
+      "path": "asset-gen/config/microtopography/coastal-escarpment/development-a-als-structural-r1-v1.json",
+      "bytes": 4284,
+      "sha256": "a5fd770fd8733c50da6aeeb47d121376e30a6cd96f5b7c36be1f828de8557aa4"
+    },
+    "network": {
+      "path": "asset-gen/data/work/microtopography/coastal-escarpment/als-structural/sha256/ed91840fac7839642c18590eb697c43e914d6dce03c2eb4f58b7eaffaa05ef47/network-strength-f32.npy",
+      "bytes": 247940,
+      "sha256": "3706470f7ce5161a88a0943cb19a336a517b6fb84c71f4a59fa3074c1d1ff719"
+    },
+    "biala_manifest": {
+      "path": "asset-gen/data/work/microtopography/biala_gora/candidate/sha256/4fdbaa3f0a9c33457e073e9733e2d4e364161185fdc673e913bf0ed3dccf2505/manifest.json",
+      "bytes": 952,
+      "sha256": "8f4e04b98ba60110d72b12bf4b9dd2a38d17383536f3e734bc7834e68520cab5"
+    },
+    "biala_candidate": {
+      "path": "asset-gen/data/work/microtopography/biala_gora/candidate/sha256/4fdbaa3f0a9c33457e073e9733e2d4e364161185fdc673e913bf0ed3dccf2505/2022-02-27-process-candidate.npz",
+      "bytes": 16774835,
+      "sha256": "bae6176af9e8c31ad7870671f500f54dbdf0003b42c92ccb59bca5210e33c557"
+    }
+  },
+  "source_pitch_m": 0.5,
+  "source_support": {
+    "minimum_returns": 2,
+    "maximum_range_m": 1.0,
+    "minimum_window_support": 0.95
+  },
+  "geographic_holdout_start_xy_cells": [896, 768],
+  "training": {
+    "width": 32,
+    "batch_size": 4,
+    "learning_rate": 0.0002,
+    "ddim_steps": 40
+  },
+  "stage1": {
+    "role": "domain-scale crest-shoulder-face-toe organization at 2 m; never modified by stage 2",
+    "iterations": 1800,
+    "training_seed": 117031,
+    "generation_seed": 890117,
+    "holdout_seed": 230941,
+    "maximum_relief_m": 0.65
+  },
+  "stage2": {
+    "role": "1-2 m within-form innovation conditioned on frozen stage 1; high-pass ownership only",
+    "iterations": 1800,
+    "training_seed": 117047,
+    "generation_seed": 890131,
+    "holdout_seed": 230947,
+    "maximum_owned_wavelength_m": 4.0,
+    "maximum_relief_m": 0.14
+  },
+  "ownership": {
+    "minimum_slope": 0.01,
+    "slope_ramp": 0.12,
+    "network_weight": 0.55,
+    "hard_transition_m": 4.0,
+    "soft_parent_strength": 0.15,
+    "maximum_total_relief_m": 0.72
+  },
+  "evidence_boundary": {
+    "source": "one retained Biala Gora first epoch, geographically separated same-site holdout",
+    "source_support_floor_m": 0.5,
+    "estonia_transfer": false,
+    "production": false,
+    "packing": false,
+    "taevaskoda_or_ood_opened": false
+  }
+}
