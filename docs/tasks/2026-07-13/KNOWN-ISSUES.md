@@ -1637,6 +1637,46 @@ training duration, or local conditioning. The next challenger must introduce a
 materially different long-range structural/process model and must pass float-level
 common-light inspection before any packing or browser work.
 
+### Domain diffusion confirms that the retained epoch lacks long-context diversity
+
+The materially different domain-scale metric pixel-diffusion challenger is
+complete and parked at commit `e7d2e97`. Immutable artifact
+`597b54f6420655a7eb3708625e1369e3e4b09bceee975ac6a6780cb99ca89d79`
+contains six finite `(769,1281)` float arrays, nine hash-bound outputs, and four
+hash-verified QA PNGs. Stage 1 generates the 2 m crest/shoulder/face/toe field
+over 128 m contexts. Stage 2 is conditioned on the frozen Stage-1 result and
+owns only the 1-2 m high-pass innovation; its fine/macro RMS ratio is `0.04055`
+and low-pass leakage is `0.00170 m`, so it does not overwrite the coarse field.
+Hard, mapped-face, and collar deltas remain exactly zero.
+
+The common-light and signed-scale evidence rejects the result before packing.
+Stage 1 produces widespread striated relief and broad alternating positive and
+negative lobes rather than connected crest/shoulder breakup and coherent
+source-to-toe organization. Target absolute-delta p95 is `0.574635 m` and relief
+saturates at `+/-0.72 m`. Stage 2 remains mechanically subordinate but reads as
+small mottled and squiggled texture, so it cannot repair the failed macro field.
+As with the prior visual review, the river-adjacent toe is not rejection evidence;
+the clear crest, shoulder, and face failures are sufficient.
+
+The geographically separated same-epoch holdout identifies the limiting cause.
+Generated delta/gradient RMS is `0.403929/0.081892`, versus
+`0.762499/0.158739` in the direct-support weak surface, and the visible held-out
+incision nearly disappears. After removing the nonoverlapping 128 m holdout plus
+buffer, only four direct-support 128 m Stage-1 training windows remain; Stage 2
+has 49 smaller windows but cannot invent the missing long-range conditional
+distribution. This collapses domain diffusion toward another single-image model.
+
+**Parked-path record:** preserve the two-stage metric diffusion implementation,
+frozen config, content-addressed training cache, float artifact, and four QA
+images. Do not continue by changing guidance, amplitude, losses, DDIM steps, or
+training duration: those adjustments cannot manufacture absent domain-scale
+morphology examples. The next active question is evidence capacity, not model
+selection. The nine other public Biała epochs remain unfetched and unselected
+under the no-bulk-acquisition decision. Resume learned long-context synthesis
+only if a new exact selection supplies materially more process-diverse supported
+128 m contexts, or another public source supplies equivalent physical-regime
+evidence; otherwise keep the cliff-capable regime abstained.
+
 ### Biała Góra proves bounded 2D representation capacity, not predictive transfer
 
 The retained Biała Góra calibration artifact `4fdbaa3f0a9c...` was exercised on
