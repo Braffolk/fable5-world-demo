@@ -32,7 +32,7 @@ The final terrain remains synthesized below the reliable source support. Metadat
 1. **All synthesis is cook-side.** Every final height is generated and packed in `asset-gen`. The browser may demand, fetch, decode, cache, interpolate, morph, sample, cull, and render packed data. It may not invent terrain.
 2. **Store final geometry, not synthesis parameters.** The output is ordinary absolute EH2000 height data in the accepted payload. No runtime decoder network, procedural parameters, residual texture, fBm, or browser displacement is permitted.
 3. **Keep the canonical shared grid.** Height LOD 0 remains 1 m in 2,048 m chunks. LOD -1 is 0.25 m in 512 m chunks. LOD -2 is 0.0625 m in 128 m chunks. Every rung retains a `2049 x 2049` payload including apron. Do not redefine global LOD 0 as 128 m.
-4. **Keep the accepted representation path.** The next proof may change cooked height contents, recipe identity, release planning, and verification. It may not add a new LAC payload, index encoding, server protocol, runtime synthesis path, shader path, or provenance branch in `TerrainField`. One representation-only runtime defect remains: streamed trees/boulders and understory/debris currently ground at LOD0 rather than the packed fine/morphed surface. Section 19.5 authorizes only the minimal shared packed-surface sampling correction required to close that defect; it may not synthesize or reinterpret geometry.
+4. **Keep the accepted representation path.** The next proof may change cooked height contents, recipe identity, release planning, and verification. Except for the narrow 2026-07-16 optional geology-category exception in Section 4.5, it may not add a new LAC payload, index encoding, server protocol, runtime synthesis path, shader path, or provenance branch in `TerrainField`. One representation-only runtime defect remains: streamed trees/boulders and understory/debris currently ground at LOD0 rather than the packed fine/morphed surface. Section 19.5 authorizes only the minimal shared packed-surface sampling correction required to close that defect; it may not synthesize or reinterpret geometry.
 5. **Beauty is the objective; delivery correctness is a constraint.** Quantization, determinism, seams, hierarchy consistency, and clean boot are mandatory. None proves realistic morphology.
 6. **The raw DTM is fallible evidence.** Exact agreement is required only where the calibrated observation model supports it. Known water, interpolation, vegetation, object, scan, and gridding errors may and should be corrected.
 7. **The corrected packed hierarchy is authoritative.** Once evidence selects a corrected surface, all parents must agree with that accepted surface. Raw defects must not reappear during LOD fallback.
@@ -40,7 +40,7 @@ The final terrain remains synthesized below the reliable source support. Metadat
 9. **No broad-class style lookup.** `forest`, `field`, `bog`, `sand`, or a soil code alone may not select final geometry. Physical factors remain separate until a supported regime and event state are established.
 10. **One canonical finest surface.** LOD -2 is generated once in world coordinates. LOD -1, corrected LOD 0, and affected ancestors derive from the accepted decoded child hierarchy; rungs are never synthesized independently.
 11. **Storage chunks are not physical domains.** Feature ownership, phase, conditions, and stochastic state depend on stable world coordinates and physical domains, never final chunk identity, cook order, worker, request sequence, or AOI enclosure.
-12. **Unsupported means no invented production residual.** It does not mean generic detail, a foreign analogue, or the visually nearest class in any production, `pilot`, `national`, or `latest` asset. A research specialist may emit only inside an explicit research-preview domain that passes Sections 9.6-9.9 and 14.6; that geometry remains non-authoritative and cannot substitute for an unsupported production row.
+12. **Unsupported means no invented production residual.** It does not mean generic detail, a foreign analogue, or the visually nearest class in any production, `pilot`, `national`, or `latest` asset. A research specialist may emit only inside an explicit research-preview domain that passes Sections 9.6-9.9 and 14.6, or the separately recorded post-screen forest escalation in Section 9.11.1; that geometry remains non-authoritative and cannot substitute for an unsupported production row.
 13. **A heightfield claim is single-valued.** Vertical faces, undercuts, caves, overhangs, detached blocks, and root plates are not solved by finer sampling. This spec marks them unsupported; a separate structural representation requires a separate specification.
 14. **All surface consumers agree.** Terrain mesh, grass roots, trees/plants, materials, normals, probes, collision, and water boundaries must follow the accepted packed surface and transition policy. Fine terrain may not disable or strand inherited content.
 15. **No scene-specific fixes.** Suur Taevaskoda is a fixed generalization review site, not a coordinate special case, hand-authored patch, or training/tuning site.
@@ -185,6 +185,23 @@ The Suur Taevaskoda reference contains a vertical/undercut sandstone face. A sin
 - source errors and microtopography in those supported regions.
 
 It does not cover the vertical wall, caves, or undercuts. Do not add a structural-cluster format or runtime path in this pass.
+
+### 4.5 User-authorized optional geology-category exception
+
+On 2026-07-16 the user authorized one narrow exception to Section 2.4 so cliff and
+material review can distinguish coarse physical material priors. An optional LAC
+categorical plane may carry nearest-sampled bedrock family, surficial family,
+process family, and explicit coverage/known/source-scale flags into the runtime.
+`TerrainField` may expose that optional capability and `TerrainMaterial` may use it
+only to adjust material appearance. Old manifests without the plane must remain an
+exact no-op.
+
+This exception does **not** authorize terrain geometry, displacement, synthesis,
+bedding or fracture placement, outcrop placement, morphology-owner selection, or
+polygon-edge relief in the browser. The streamed categories are coarse appearance
+priors, not a replacement for Section 8's full-fidelity cook-only geology, soil,
+support, uncertainty, and regime conditions. Missing or unknown categories abstain;
+coarse polygon edges must not become visible material seams.
 
 ## 5. Research Verdict
 
@@ -1072,6 +1089,38 @@ error model, Estonia transfer, condition responsiveness, campaign independence,
 production/owner authority, packing, cook, browser, `latest`, runtime, wire, or
 shader authority. Any construction or `k19` failure parks Guérin/LUKE without
 tuning the degradation, patches, dictionary, gates, or code.
+
+#### 9.11.1 Post-screen bounded forest research-preview escalation
+
+On 2026-07-16 the user explicitly authorized a bounded research-preview escalation
+after the sparse screen, despite Section 9.11's original no-pack/no-browser limit.
+The measured K11/K32/K36 whole-form carrier may be composed in world coordinates,
+packed through the ordinary negative-height hierarchy, and investigated in an
+immutable non-`latest` Estonia browser preview under the project's relaxed
+"generally should transfer" research rule. This is a superseding user decision for
+that exact bounded research track, not evidence that the original sparse screen
+passed and not blanket authority for LUKE, quilting, foreign analogues, or forest
+production.
+
+The escalation remains `research_only`: it establishes no target truth, campaign
+independence, Estonia transfer, production owner, `pilot`, `national`, or `latest`
+authority. The accepted world-locked generator and parameters may be scale-tested
+without retuning, but pit/mound forest, managed/clear-cut forest, other soil or
+substrate states, and every non-forest regime require separate owners. Any future
+production promotion still requires Sections 9.2-9.5 and 12.6.
+
+The complete LOD0 FLOAT scale test is immutable artifact
+`6d3bae2fa0ed0da3373deb7aee11c0a044d00c7d3e108aeb79fe37c204c1d53f`:
+one `32768 x 32768` absolute 0.0625 m master over LOD0 `(0,154,94)`, generated as
+one world-coordinate domain across all 16 storage parents. It contains 263,799
+placements balanced exactly `87,933/87,933/87,933` across K11/K32/K36, zero hard-
+exclusion residual, `6.28e-16 m` maximum one-metre mean error, `0.03410 m` eligible
+residual RMS, sampled p01/p99 `-0.09122/+0.11101 m`, and `0.45333 m` maximum
+absolute residual. All six internal parent boundaries have residual-step p95 below
+their local non-seam p95; 4,230 horizontal, 4,233 vertical, and 67 junction-crossing
+sites exercise ownership continuity. These are FLOAT/mechanical results pending
+the numbered PNG review, ordinary hierarchy packing, cost measurement, exact
+multi-position WebGPU boots, and user browser review.
 
 ## 10. Typed Structural Reconstruction
 
@@ -2613,7 +2662,18 @@ cameras/paths from `visual-review-v1.json`; query-string `cam` values are record
 byte-for-byte in that artifact. Inspect terrain continuity, water/shore, material
 presence, tree/plant/understory/debris presence, and all root grounding.
 
-No shader change is authorized for this synthesis proof. Do not give the user a URL until this exact boot passes.
+Except for Section 4.5's narrow optional geology appearance path, no shader change
+is authorized for this synthesis proof. Do not give the user a URL until this exact
+boot passes.
+
+The Section 4.5 functional checkpoint uses exact manifest SHA-256
+`ce4cf01c40b3c34cc01bcd1c6d5bb420a3bf083b4f859a387a325a32f4fe6ac4`.
+Real-WebGPU boots with geology enabled passed through settled frames 88 and 70;
+the same manifest with `geology=0` passed through frame 90. This closes functional
+ingest, optional-capability, material-graph, and no-geology-toggle behavior only.
+GPU-trace/performance acceptance of the added plane allocation, texture accesses,
+and material ALU remains pending and must be recorded before the path receives
+performance acceptance.
 
 ### 16.8 Testing discipline
 

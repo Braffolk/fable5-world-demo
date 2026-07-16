@@ -2064,6 +2064,38 @@ or pool margins. Its exact-parent closure also misses by `2.842e-14 m` and core 
 relief exceeds the frozen ceiling. Preserve it as negative process evidence; do not
 tune, pack, or claim a raised-bog owner.
 
+### Optional coarse geology is functionally accepted but not performance-qualified
+
+The user authorized a narrow 2026-07-16 exception for an optional streamed coarse
+geology categorical payload. Commit `30a16ef` publishes nearest
+bedrock/surficial/process categories and explicit coverage flags, and commit
+`bf0b68b` uses them only to vary terrain-material appearance. It has no geometry,
+displacement, microtopography synthesis, feature-placement, fracture, bedding,
+outcrop, or morphology-owner authority; old manifests must remain an exact no-op.
+Exact manifest
+`ce4cf01c40b3c34cc01bcd1c6d5bb420a3bf083b4f859a387a325a32f4fe6ac4`
+passed real-WebGPU functional boots with geology enabled at frames `88/70` and with
+`geology=0` at frame `90`. This closes functional ingest, capability, appearance,
+and disable-path behavior only. A fresh game-only GPU trace and performance
+acceptance remain required before broad adoption; this open qualification does not
+block asset-gen synthesis work.
+
+### Full-LOD0 forest scale-out is FLOAT-ready, not packed or browser-accepted
+
+The user-authorized bounded forest research-preview escalation supersedes the
+earlier LUKE no-pack/browser restriction for this exact track only; it does not
+grant blanket production, `latest`, national, or target-truth authority. Immutable
+artifact `6d3bae2fa0ed0da3373deb7aee11c0a044d00c7d3e108aeb79fe37c204c1d53f`
+contains a `32768 x 32768` 6.25 cm C1 master for complete LOD0 `(0,154,94)`. It
+reports `263,799` balanced K11/K32/K36 sites, zero hard-exclusion residual,
+`6.28e-16 m` maximum one-metre mean error, `0.03410 m` allowed residual RMS,
+sampled P01/P99 `-0.09122/+0.11101 m`, maximum residual `0.45333 m`, and all six
+internal parent-seam p95 residual steps below their nearby non-seam p95 values.
+Five numbered QA PNGs plus a machine index exist and the FLOAT build reports no
+failures. Those images still require visual inspection; hierarchy packing,
+packed/served cost, multi-position real-WebGPU boots, repetition/condition-transition
+inspection, and user visual review remain open.
+
 ## Integration Risks
 
 - Dataset conversion previously became inefficiently serialized behind HY_SPRUCE4 full-E57 handling, with two failed full attempts and repeated implementation/review micro-cycles before a morphology input existed. Native codec-word padding commit `ba92ab4` completed the verified full materialization and the Python publisher completed its atomic move. The full-scan Hovi track is now parked after its fully observed central 6.25 cm QA remained dominated by competing/unresolved sheets; no threshold-tuning loop is authorized. Evo 1086/1065 are parked after sparse-surface diagnosis; the downsampled HY_PINE2 stress condition is also parked after its candidate sheet correctly abstained, and its full archive remains unfetched. A blocked track is parked without deleting its code or provenance; it resumes only if quicker alternatives fail or its scientific role is unique.
