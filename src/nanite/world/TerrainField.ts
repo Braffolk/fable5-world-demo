@@ -545,6 +545,59 @@ export class TerrainField {
     return out as unknown as NV4;
   }
 
+  /** Fn-stack-only CLASS slope (rise/run) — the material-SELECTION slope for
+   *  fine-lattice cooks. A micro height source (texel < 0.5 m) carries
+   *  centimetre texel-to-texel relief whose nearest-texel CD slope is
+   *  piecewise-CONSTANT per texel and statistical noise against the material
+   *  class windows (measured 2026-07-16: p50 adjacent-texel slope jump 0.27 ≈
+   *  the entire grassW window; 1 cm height quanta step slope by 0.08) — so the
+   *  material BLEND field updated in texel-sized blocks over full-resolution
+   *  carriers. Classes read the first ≥0.5 m level through the C0 smooth
+   *  gradient instead: selection becomes continuous at the scale its windows
+   *  were tuned on. */
+  fieldClassSlopeHot(wxz: NV2): NF {
+    const first = this.heightLevels.findIndex((l) => l.texel >= 0.5);
+    const levels = first < 0 ? this.heightLevels.slice(-1) : this.heightLevels.slice(first);
+    const out = float(0).toVar();
+    hotLevelChain(levels, wxz, (lvl) => {
+      const g = planeGradientSmooth(lvl as HeightLevel, wxz);
+      out.assign(g.length());
+    });
+    return out as unknown as NF;
+  }
+
+  /** Fn-stack-only fine-relief slope: C0-continuous gradient magnitude at the
+   *  finest level with texel ≥ 0.2 m (the 4×4-reduced rung — measured adjacent
+   *  jump p50 0.067 vs 0.27 at the raw micro texel, so the field varies at
+   *  ~25 cm+ form scale instead of echoing per-texel synth noise as 6–12 cm
+   *  blobs). Drives sub-metre material exposure that traces actual micro-forms
+   *  without printing any lattice. */
+  fieldReliefSlopeHot(wxz: NV2): NF {
+    const first = this.heightLevels.findIndex((l) => l.texel >= 0.2);
+    const levels = first < 0 ? this.heightLevels.slice(-1) : this.heightLevels.slice(first);
+    const out = float(0).toVar();
+    hotLevelChain(levels, wxz, (lvl) => {
+      const g = planeGradientSmooth(lvl as HeightLevel, wxz);
+      out.assign(g.length());
+    });
+    return out as unknown as NF;
+  }
+
+  /** Fn-stack-only C0 world normal (xyz) + slope (w) from planeGradientSmooth at
+   *  the finest containing level — the smooth counterpart of fieldNormalSlopeHot
+   *  for fine-lattice cooks, where the nearest-texel CD stencil's per-texel
+   *  CONSTANT normal renders as faint 6–12 cm facet tiles under the sun term. */
+  fieldNormalSlopeSmoothHot(wxz: NV2): NV4 {
+    const out = vec4(0, 1, 0, 0).toVar();
+    hotLevelChain(this.heightLevels, wxz, (lvl) => {
+      const g = planeGradientSmooth(lvl as HeightLevel, wxz);
+      out.assign(
+        vec4(vec3(g.x.negate(), 1, g.y.negate()).normalize(), g.length()),
+      );
+    });
+    return out as unknown as NV4;
+  }
+
   /** surface-fields sample [moisture, flowStrength, snow, rockExposure] — one
    *  hardware-filtered rgba8 tap at the finest containing level. vec4(0) when
    *  the source has no fields layer (forest/gallery single-level fields). */
@@ -1023,6 +1076,44 @@ function planeHeightGradient(lvl: HeightLevel, wxz: NV2): NV3 {
   const dx = mix(s10.sub(s00), s11.sub(s01), f.y).div(lvl.texel);
   const dz = mix(s01.sub(s00), s11.sub(s10), f.x).div(lvl.texel);
   return vec3(height, dx, dz) as unknown as NV3;
+}
+
+/** C0-continuous height gradient (m/m): the 2×2 surrounding CELL mean-gradients
+ *  (each cell's average bilinear-surface gradient) bilinearly interpolated at the
+ *  continuous sample point — the dual grid, 3×3 stencil. cdTaps snaps to the
+ *  nearest texel (piecewise-CONSTANT slope per texel) and planeHeightGradient's
+ *  components are piecewise-constant along their own axis, so any threshold
+ *  downstream prints the texel lattice as axis-aligned blocks; this field is
+ *  continuous everywhere, so thresholds trace the relief forms instead. */
+function planeGradientSmooth(lvl: HeightLevel, wxz: NV2): NV2 {
+  const gc = clamp(gridCoords(lvl, wxz).sub(0.5), 0, lvl.res - 2);
+  const i0 = floor(gc);
+  const f = fract(gc);
+  const xi = [
+    i0.x as unknown as NF,
+    clamp(i0.x.add(1), 0, lvl.res - 1) as unknown as NF,
+    clamp(i0.x.add(2), 0, lvl.res - 1) as unknown as NF,
+  ];
+  const yi = [
+    i0.y as unknown as NF,
+    clamp(i0.y.add(1), 0, lvl.res - 1) as unknown as NF,
+    clamp(i0.y.add(2), 0, lvl.res - 1) as unknown as NF,
+  ];
+  const h: NF[][] = xi.map((x) =>
+    yi.map((y) => {
+      const t = texelU(lvl, x, y);
+      return texLoadR(lvl.tex, t.x, t.y);
+    }),
+  );
+  const H = (a: number, b: number): NF => (h[a] as NF[])[b] as NF;
+  // cell (a,b) ∈ {0,1}²: mean gradient over its 2×2 sample corners
+  const cdx = (a: number, b: number): NF =>
+    H(a + 1, b).sub(H(a, b)).add(H(a + 1, b + 1)).sub(H(a, b + 1)) as unknown as NF;
+  const cdz = (a: number, b: number): NF =>
+    H(a, b + 1).sub(H(a, b)).add(H(a + 1, b + 1)).sub(H(a + 1, b)) as unknown as NF;
+  const dx = mix(mix(cdx(0, 0), cdx(1, 0), f.x), mix(cdx(0, 1), cdx(1, 1), f.x), f.y);
+  const dz = mix(mix(cdz(0, 0), cdz(1, 0), f.x), mix(cdz(0, 1), cdz(1, 1), f.x), f.y);
+  return vec2(dx, dz).div(lvl.texel * 2) as unknown as NV2;
 }
 
 export function planeNearest(lvl: FieldLevel, wxz: NV2): NF {
