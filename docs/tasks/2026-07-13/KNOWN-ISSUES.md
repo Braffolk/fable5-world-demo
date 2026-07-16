@@ -2112,6 +2112,22 @@ failures. Those images still require visual inspection; hierarchy packing,
 packed/served cost, multi-position real-WebGPU boots, repetition/condition-transition
 inspection, and user visual review remain open.
 
+### Mrzezyno supports dune landform scale only, not beach or fine-ripple truth
+
+Target artifact
+`f6aa61f6ecd256d04175d9a9bf72809d488383e3695bd844eb388ff2bf829e9a`
+retains 7,799,605 finite cells from the 0.10 m provider DEM, excludes declared
+nodata and all three corrupt extremes, and binds a 24,294,838-byte target NPZ plus
+four QA PNGs. Conservative high-relief dune candidates clear the campaign 0.10 m
+p95 elevation bound only in the 1-2 m (`0.1626 m`), 2-4 m (`0.3386 m`), and 4-8 m
+(`0.6946 m`) bands. The 0.2-0.5 m (`0.0346 m`) and 0.5-1 m (`0.0777 m`) bands do
+not; low coastal patches fail every band. Use only masked high-relief patches and
+1-8 m amplitude/correlation statistics as a dune-landform morphology prior. The
+raster lacks material, wet/dry, shoreline/water, process-direction, vegetation-
+confusion, and per-cell point-support labels, so it grants no fine-ripple,
+pixelwise-target, `shore.beach_sand`, Estonia-owner, production, or national
+authority. Resume beach sand separately with dated material and shoreline support.
+
 ## Integration Risks
 
 - Dataset conversion previously became inefficiently serialized behind HY_SPRUCE4 full-E57 handling, with two failed full attempts and repeated implementation/review micro-cycles before a morphology input existed. Native codec-word padding commit `ba92ab4` completed the verified full materialization and the Python publisher completed its atomic move. The full-scan Hovi track is now parked after its fully observed central 6.25 cm QA remained dominated by competing/unresolved sheets; no threshold-tuning loop is authorized. Evo 1086/1065 are parked after sparse-surface diagnosis; the downsampled HY_PINE2 stress condition is also parked after its candidate sheet correctly abstained, and its full archive remains unfetched. A blocked track is parked without deleting its code or provenance; it resumes only if quicker alternatives fail or its scientific role is unique.
