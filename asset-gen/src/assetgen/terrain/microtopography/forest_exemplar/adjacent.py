@@ -53,6 +53,10 @@ BLOCK_OUTPUT_ROOT = (
     ASSET_GEN_ROOT
     / "data/work/microtopography/estonia-forest-adjacent-block/artifact/sha256"
 )
+TRANCHE_OUTPUT_ROOT = (
+    ASSET_GEN_ROOT
+    / "data/work/microtopography/estonia-forest-lod0-tranche/artifact/sha256"
+)
 
 
 def _read_config(path: Path) -> dict[str, Any]:
@@ -61,6 +65,7 @@ def _read_config(path: Path) -> dict[str, Any]:
     if schema not in {
         "forest-mesic-mineral-adjacent-continuity/1",
         "forest-mesic-mineral-adjacent-block/1",
+        "forest-mesic-mineral-lod0-tranche/1",
     }:
         raise ValueError("unsupported adjacent-continuity config")
     if config.get("authority") != "research_float_only_no_production_no_pack_no_latest":
@@ -74,11 +79,34 @@ def _read_config(path: Path) -> dict[str, Any]:
             raise ValueError("adjacent proof domain differs from the frozen pair")
         if parents != [(617, 377), (617, 378)]:
             raise ValueError("adjacent parent identities differ")
-    else:
+    elif schema == "forest-mesic-mineral-adjacent-block/1":
         if bbox != (684544, 6441472, 685568, 6442496):
             raise ValueError("adjacent block differs from the qualified 2x2 domain")
         if parents != [(617, 377), (618, 377), (617, 378), (618, 378)]:
             raise ValueError("adjacent block parent identities differ")
+    else:
+        if bbox != (684032, 6440960, 686080, 6443008):
+            raise ValueError("LOD0 tranche differs from the declared complete domain")
+        if config.get("lod0") != [0, 154, 94]:
+            raise ValueError("LOD0 tranche identity changed")
+        grid = config.get("parent_grid")
+        if grid != {"rows": 4, "cols": 4, "northwest": [-1, 616, 376]}:
+            raise ValueError("LOD0 tranche parent grid changed")
+        expected_parents = [
+            (cx, cz) for cz in range(376, 380) for cx in range(616, 620)
+        ]
+        if parents != expected_parents:
+            raise ValueError("LOD0 tranche parent identities differ")
+        for index, row in enumerate(config["parents"]):
+            grid_row, grid_col = divmod(index, 4)
+            expected_bbox = [
+                684032 + grid_col * PARENT_M,
+                6443008 - (grid_row + 1) * PARENT_M,
+                684032 + (grid_col + 1) * PARENT_M,
+                6443008 - grid_row * PARENT_M,
+            ]
+            if row.get("role") != f"r{grid_row}_c{grid_col}" or row.get("bbox_en") != expected_bbox:
+                raise ValueError(f"LOD0 tranche parent declaration changed at index {index}")
     accepted_transport = {
         "patch_cells": 192,
         "candidate_step_cells": 16,
@@ -97,6 +125,10 @@ def _read_config(path: Path) -> dict[str, Any]:
 
 def _is_block(config: dict[str, Any]) -> bool:
     return config["schema"] == "forest-mesic-mineral-adjacent-block/1"
+
+
+def _is_tranche(config: dict[str, Any]) -> bool:
+    return config["schema"] == "forest-mesic-mineral-lod0-tranche/1"
 
 
 def _shape(bbox: tuple[int, int, int, int]) -> tuple[int, int]:
@@ -246,8 +278,9 @@ def _assemble(
     e_min, _n_min, _e_max, n_max = bbox
     master_col0 = int(round((e_min - WORLD_ANCHOR_E) / TEXEL_M))
     master_row0 = int(round((WORLD_ANCHOR_N - n_max) / TEXEL_M))
-    seam_row = rows // 2
-    seam_col = cols // 2
+    parent_cells = round(PARENT_M / TEXEL_M)
+    seam_rows = tuple(range(parent_cells, rows, parent_cells))
+    seam_cols = tuple(range(parent_cells, cols, parent_cells))
     crossing_sites = {"horizontal": 0, "vertical": 0, "junction": 0}
     for site_index, site in enumerate(sites):
         center_row = site.global_row - master_row0
@@ -298,8 +331,12 @@ def _assemble(
         local_source[stronger] = source_index[selected]
         candidate_use[selected] += 1
         source_use[source_index[selected]] += 1
-        crosses_horizontal = abs(center_row - seam_row) < support_radius
-        crosses_vertical = abs(center_col - seam_col) < support_radius
+        crosses_horizontal = any(
+            abs(center_row - seam_row) < support_radius for seam_row in seam_rows
+        )
+        crosses_vertical = any(
+            abs(center_col - seam_col) < support_radius for seam_col in seam_cols
+        )
         if crosses_horizontal:
             crossing_sites["horizontal"] += 1
         if crosses_vertical:
@@ -726,16 +763,158 @@ def _block_qa(
     return paths
 
 
+def _tranche_qa(
+    qa: Path,
+    *,
+    bbox: tuple[int, int, int, int],
+    residual: np.ndarray,
+    c1: np.ndarray,
+    residual_half: np.ndarray,
+    c0_half: np.ndarray,
+    c1_half: np.ndarray,
+    allowed_half: np.ndarray,
+    ownership_1m: np.ndarray,
+) -> tuple[list[Path], list[dict[str, Any]]]:
+    paths = [qa / "01_full_domain_eligibility_and_ownership.png"]
+    palette = np.asarray(
+        [[45, 123, 113], [217, 139, 71], [103, 87, 145]], dtype=np.uint8
+    )
+    allowed_rgb = np.empty((*allowed_half.shape, 3), dtype=np.uint8)
+    allowed_rgb[allowed_half] = (54, 135, 72)
+    allowed_rgb[~allowed_half] = (190, 67, 48)
+    ownership_rgb = palette[np.clip(ownership_1m, 0, 2)]
+    eligibility_image = _resize(allowed_rgb, 760)
+    ownership_image = _resize(ownership_rgb, 760)
+    overview = Image.new("RGB", (1568, 828), (244, 242, 234))
+    draw = ImageDraw.Draw(overview)
+    draw.text((16, 12), "01  COMPLETE LOD0 TRANCHE ELIGIBILITY + OWNERSHIP", fill=(20, 24, 20))
+    draw.text(
+        (16, 34),
+        "2048 x 2048 m single-domain solve; green = eligible, red = hard zero; ownership is K11/K32/K36",
+        fill=(70, 72, 66),
+    )
+    overview.paste(eligibility_image, (16, 62))
+    overview.paste(ownership_image, (792, 62))
+    draw.text((16, 44), "ELIGIBILITY / HARD EXCLUSION", fill=(20, 24, 20))
+    draw.text((792, 44), "WORLD-LOCKED SOURCE OWNERSHIP", fill=(20, 24, 20))
+    for boundary in (190, 380, 570):
+        draw.line((16 + boundary, 62, 16 + boundary, 822), fill=(35, 35, 35), width=1)
+        draw.line((792 + boundary, 62, 792 + boundary, 822), fill=(35, 35, 35), width=1)
+        draw.line((16, 62 + boundary, 776, 62 + boundary), fill=(35, 35, 35), width=1)
+        draw.line((792, 62 + boundary, 1552, 62 + boundary), fill=(35, 35, 35), width=1)
+    overview.save(paths[0], compress_level=9)
+
+    window = 64  # 32 m at the 0.5 m QA lattice; 512 x 512 native samples.
+    candidates: list[dict[str, float | int]] = []
+    for row in range(0, allowed_half.shape[0] - window + 1, window):
+        for col in range(0, allowed_half.shape[1] - window + 1, window):
+            region = np.s_[row : row + window, col : col + window]
+            eligible = float(np.mean(allowed_half[region]))
+            if eligible <= 0.05:
+                continue
+            relief = float(np.std(c0_half[region], dtype=np.float64))
+            added = float(np.std(residual_half[region], dtype=np.float64))
+            candidates.append(
+                {
+                    "row": row,
+                    "col": col,
+                    "eligible": eligible,
+                    "transition": min(eligible, 1.0 - eligible),
+                    "relief": relief,
+                    "added": added,
+                }
+            )
+    if not candidates:
+        raise RuntimeError("LOD0 tranche yielded no eligible QA windows")
+
+    selected: list[tuple[str, dict[str, float | int]]] = []
+
+    def choose(label: str, key, predicate=lambda item: True) -> None:
+        pool = [item for item in candidates if predicate(item)]
+        pool.sort(key=key, reverse=True)
+        for item in pool:
+            row, col = int(item["row"]), int(item["col"])
+            if all(
+                (row - int(other["row"])) ** 2 + (col - int(other["col"])) ** 2
+                >= 256**2
+                for _other_label, other in selected
+            ):
+                selected.append((label, item))
+                return
+        raise RuntimeError(f"LOD0 tranche could not select a distinct {label} QA window")
+
+    choose("dense eligible floor", lambda item: (item["eligible"], item["added"]))
+    choose(
+        "strong eligibility transition",
+        lambda item: (item["transition"], item["added"]),
+        lambda item: item["transition"] > 0.05,
+    )
+    choose(
+        "higher base-relief eligible floor",
+        lambda item: (item["relief"], item["eligible"]),
+        lambda item: item["eligible"] >= 0.25,
+    )
+    choose(
+        "strong added morphology",
+        lambda item: (item["added"], item["eligible"]),
+        lambda item: item["eligible"] >= 0.25,
+    )
+
+    selections: list[dict[str, Any]] = []
+    scale = 8
+    native_window = window * scale
+    for index, (label, item) in enumerate(selected, start=2):
+        row, col = int(item["row"]), int(item["col"])
+        fine_row, fine_col = row * scale, col * scale
+        fine_region = np.s_[
+            fine_row : fine_row + native_window,
+            fine_col : fine_col + native_window,
+        ]
+        native_c1 = np.asarray(c1[fine_region], dtype=np.float32)
+        native_c0 = native_c1 - np.asarray(residual[fine_region], dtype=np.float32)
+        shade0 = np.repeat(_hillshade(native_c0, TEXEL_M)[..., None], 3, axis=2)
+        shade1 = np.repeat(_hillshade(native_c1, TEXEL_M)[..., None], 3, axis=2)
+        image_path = qa / f"{index:02d}_native_{label.replace(' ', '_')}.png"
+        paths.append(image_path)
+        canvas = Image.new("RGB", (1072, 590), (244, 242, 234))
+        draw = ImageDraw.Draw(canvas)
+        east = bbox[0] + fine_col * TEXEL_M
+        north = bbox[3] - fine_row * TEXEL_M
+        draw.text((16, 12), f"{index:02d}  {label.upper()}", fill=(20, 24, 20))
+        draw.text(
+            (16, 34),
+            f"32 x 32 m native 6.25 cm samples; same light; NW corner E={east:.2f} N={north:.2f}",
+            fill=(70, 72, 66),
+        )
+        canvas.paste(Image.fromarray(shade0), (16, 62))
+        canvas.paste(Image.fromarray(shade1), (544, 62))
+        draw.text((16, 44), "PINNED C0", fill=(20, 24, 20))
+        draw.text((544, 44), "FOREST C1", fill=(20, 24, 20))
+        canvas.save(image_path, compress_level=9)
+        selections.append(
+            {
+                "image": f"qa/{image_path.name}",
+                "condition": label,
+                "northwest_en": [east, north],
+                "eligible_fraction": item["eligible"],
+                "base_relief_std_m": item["relief"],
+                "added_relief_std_m": item["added"],
+            }
+        )
+    return paths, selections
+
+
 def _axis_seam_metrics(
     residual: np.ndarray,
     allowed: np.ndarray,
     *,
     axis: int,
+    seam: int | None = None,
 ) -> dict[str, Any]:
     if axis == 1:
         residual = residual.T
         allowed = allowed.T
-    seam = residual.shape[0] // 2
+    seam = residual.shape[0] // 2 if seam is None else seam
     seam_valid = allowed[seam - 1] & allowed[seam]
     seam_steps = np.abs(residual[seam] - residual[seam - 1])[seam_valid]
     neighborhood = np.abs(np.diff(residual[seam - 64 : seam + 65], axis=0))
@@ -759,16 +938,52 @@ def _identity(path: Path) -> dict[str, Any]:
     }
 
 
+def _allowed_residual_metrics(
+    residual: np.ndarray, allowed: np.ndarray
+) -> tuple[float, float, list[float], int]:
+    count = 0
+    sum_squares = 0.0
+    maximum = 0.0
+    sample_stride = 128
+    samples: list[np.ndarray] = []
+    for row0 in range(0, residual.shape[0], 128):
+        row1 = min(residual.shape[0], row0 + 128)
+        values = np.asarray(residual[row0:row1], dtype=np.float32)
+        mask = np.asarray(allowed[row0:row1], dtype=bool)
+        selected = values[mask]
+        count += int(selected.size)
+        sum_squares += float(np.sum(selected * selected, dtype=np.float64))
+        maximum = max(maximum, float(np.max(np.abs(selected), initial=0.0)))
+        if row0 % sample_stride == 0:
+            sampled_values = values[0, ::sample_stride]
+            sampled_mask = mask[0, ::sample_stride]
+            samples.append(sampled_values[sampled_mask])
+    if count == 0:
+        raise RuntimeError("LOD0 tranche contains no eligible residual samples")
+    sample = np.concatenate(samples)
+    return (
+        float(np.sqrt(sum_squares / count)),
+        maximum,
+        [float(value) for value in np.percentile(sample, [1, 99])],
+        sample_stride,
+    )
+
+
 def run(config_path: Path) -> Path:
     config = _read_config(config_path)
     is_block = _is_block(config)
+    is_tranche = _is_tranche(config)
     bbox = tuple(map(int, config["bbox_en"]))
     shape = _shape(bbox)
     recipe = {
         "schema": (
-            "forest-mesic-mineral-adjacent-block-recipe/1"
-            if is_block
-            else "forest-mesic-mineral-adjacent-continuity-recipe/1"
+            "forest-mesic-mineral-lod0-tranche-recipe/1"
+            if is_tranche
+            else (
+                "forest-mesic-mineral-adjacent-block-recipe/1"
+                if is_block
+                else "forest-mesic-mineral-adjacent-continuity-recipe/1"
+            )
         ),
         "authority": config["authority"],
         "config": _identity(config_path),
@@ -789,7 +1004,12 @@ def run(config_path: Path) -> Path:
         },
     }
     build_id = hashlib.sha256(_canonical_json(recipe)).hexdigest()
-    destination = (BLOCK_OUTPUT_ROOT if is_block else PAIR_OUTPUT_ROOT) / build_id
+    output_root = (
+        TRANCHE_OUTPUT_ROOT
+        if is_tranche
+        else (BLOCK_OUTPUT_ROOT if is_block else PAIR_OUTPUT_ROOT)
+    )
+    destination = output_root / build_id
     if destination.exists():
         return destination
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -813,6 +1033,7 @@ def run(config_path: Path) -> Path:
         qa.mkdir()
         scratch.mkdir()
         (staging / "recipe.json").write_bytes(_canonical_json(recipe) + b"\n")
+        print("[forest-tranche] synthesis 0%: assembling world-locked residual", flush=True)
         (
             residual_path,
             ownership_path,
@@ -826,8 +1047,11 @@ def run(config_path: Path) -> Path:
             scratch=scratch,
             config=config,
         )
+        print("[forest-tranche] synthesis 25%: residual assembled; rasterizing masks", flush=True)
         allowed, mask_evidence = _fine_mask(bbox, scratch / "allowed.u8")
+        print("[forest-tranche] synthesis 40%: masks complete; projecting one-metre closure", flush=True)
         maximum_mean = _project(residual_path, allowed, shape)
+        print("[forest-tranche] synthesis 60%: projection complete; writing absolute C1", flush=True)
         residual = np.memmap(residual_path, dtype=np.float32, mode="r", shape=shape)
         maximum_hard = 0.0
         maximum_unprojected = 0.0
@@ -845,6 +1069,7 @@ def run(config_path: Path) -> Path:
             residual_path=residual_path,
             destination=surface / "c1_height_f32.npy",
         )
+        print("[forest-tranche] synthesis 75%: C1 complete; reducing diagnostics", flush=True)
         ownership = np.memmap(ownership_path, dtype=np.uint8, mode="r", shape=shape)
         ownership_1m = np.asarray(
             ownership[FACTOR // 2 :: FACTOR, FACTOR // 2 :: FACTOR], dtype=np.uint8
@@ -856,12 +1081,59 @@ def run(config_path: Path) -> Path:
         residual_half = _reduce8(residual, shape)
         c0_half = c1_half - residual_half
         allowed_half = _reduce8(allowed, shape) >= 1.0
-        output = residual[np.asarray(allowed, dtype=bool)]
-        output_rms = float(np.sqrt(np.mean(output * output)))
-        output_maximum = float(np.max(np.abs(output), initial=0.0))
+        output_rms, output_maximum, output_percentiles, percentile_stride = (
+            _allowed_residual_metrics(residual, allowed)
+        )
         seam_horizontal = _axis_seam_metrics(residual_half, allowed_half, axis=0)
         seam_horizontal["cross_seam_site_count"] = crossing_sites["horizontal"]
-        if is_block:
+        tranche_selections: list[dict[str, Any]] = []
+        if is_tranche:
+            parent_allowed = {}
+            fine_parent_cells = round(PARENT_M / TEXEL_M)
+            for index, parent in enumerate(config["parents"]):
+                grid_row, grid_col = divmod(index, 4)
+                region = np.s_[
+                    grid_row * fine_parent_cells : (grid_row + 1) * fine_parent_cells,
+                    grid_col * fine_parent_cells : (grid_col + 1) * fine_parent_cells,
+                ]
+                parent_allowed[parent["role"]] = float(np.mean(allowed[region]))
+            qa_parent_cells = round(PARENT_M / 0.5)
+            seam = {
+                "horizontal": [
+                    _axis_seam_metrics(
+                        residual_half, allowed_half, axis=0, seam=boundary
+                    )
+                    for boundary in range(
+                        qa_parent_cells, residual_half.shape[0], qa_parent_cells
+                    )
+                ],
+                "vertical": [
+                    _axis_seam_metrics(
+                        residual_half, allowed_half, axis=1, seam=boundary
+                    )
+                    for boundary in range(
+                        qa_parent_cells, residual_half.shape[1], qa_parent_cells
+                    )
+                ],
+                "cross_seam_site_counts": {
+                    "horizontal": crossing_sites["horizontal"],
+                    "vertical": crossing_sites["vertical"],
+                },
+                "cross_junction_site_count": crossing_sites["junction"],
+            }
+            pngs, tranche_selections = _tranche_qa(
+                qa,
+                bbox=bbox,
+                residual=residual,
+                c1=c1,
+                residual_half=residual_half,
+                c0_half=c0_half,
+                c1_half=c1_half,
+                allowed_half=allowed_half,
+                ownership_1m=ownership_1m,
+            )
+            print("[forest-tranche] synthesis 95%: QA complete; binding artifact", flush=True)
+        elif is_block:
             half_rows, half_cols = shape[0] // 2, shape[1] // 2
             parent_allowed = {
                 config["parents"][0]["role"]: float(np.mean(allowed[:half_rows, :half_cols])),
@@ -910,7 +1182,14 @@ def run(config_path: Path) -> Path:
             )
         acceptance = config["acceptance"]
         failures = []
-        if is_block:
+        if is_tranche:
+            domain_allowed = float(np.mean(allowed_half))
+            if domain_allowed < acceptance["minimum_domain_allowed_fraction"]:
+                failures.append("tranche eligibility")
+            fractions = list(parent_allowed.values())
+            if max(fractions) - min(fractions) < acceptance["minimum_parent_allowed_fraction_range"]:
+                failures.append("tranche lacks a meaningful eligibility transition")
+        elif is_block:
             for role, minimum in acceptance["minimum_parent_allowed_fraction_by_role"].items():
                 if parent_allowed[role] < minimum:
                     failures.append(f"parent eligibility: {role}")
@@ -927,7 +1206,7 @@ def run(config_path: Path) -> Path:
             failures.append("measured maximum envelope")
         if output_rms / capacity["rms_m"] > acceptance["maximum_output_over_candidate_rms_ratio"]:
             failures.append("measured RMS envelope")
-        if is_block:
+        if is_block or is_tranche:
             minimum_axis = acceptance["minimum_cross_seam_site_count_per_axis"]
             if crossing_sites["horizontal"] < minimum_axis:
                 failures.append("no ownership support crosses horizontal parent seam")
@@ -942,7 +1221,7 @@ def run(config_path: Path) -> Path:
             "shape": list(shape),
             (
                 "parent_allowed_fraction_by_role"
-                if is_block
+                if is_block or is_tranche
                 else "parent_allowed_fraction_north_south"
             ): parent_allowed,
             "mask": mask_evidence,
@@ -952,7 +1231,8 @@ def run(config_path: Path) -> Path:
             "seam": seam,
             "candidate_capacity": capacity,
             "residual_rms_allowed_m": output_rms,
-            "residual_p01_p99_allowed_m": [float(v) for v in np.percentile(output, [1, 99])],
+            "residual_sample_p01_p99_allowed_m": output_percentiles,
+            "residual_percentile_sample_stride_cells": percentile_stride,
             "maximum_abs_residual_m": output_maximum,
             "maximum_abs_unprojected_residual_m": maximum_unprojected,
             "output_over_candidate_abs_ratio": output_maximum / capacity["maximum_abs_m"],
@@ -961,14 +1241,20 @@ def run(config_path: Path) -> Path:
             "maximum_hard_exclusion_residual_m": maximum_hard,
             "authority_p01_p99_m": [float(v) for v in np.percentile(authority, [1, 99])],
         }
+        if is_tranche:
+            metrics["qa_selections"] = tranche_selections
         (staging / "metrics.json").write_bytes(_canonical_json(metrics) + b"\n")
-        del output, c1, residual, allowed, ownership
+        del c1, residual, allowed, ownership
         shutil.rmtree(scratch)
         qa_index = {
             "schema": (
-                "forest-mesic-mineral-adjacent-block-qa/1"
-                if is_block
-                else "forest-mesic-mineral-adjacent-continuity-qa/1"
+                "forest-mesic-mineral-lod0-tranche-qa/1"
+                if is_tranche
+                else (
+                    "forest-mesic-mineral-adjacent-block-qa/1"
+                    if is_block
+                    else "forest-mesic-mineral-adjacent-continuity-qa/1"
+                )
             ),
             "build_id": build_id,
             "images": [
@@ -982,18 +1268,26 @@ def run(config_path: Path) -> Path:
             ],
             "interpretation": (
                 [
-                    "01 compares the complete 2x2 C0/C1 master under identical common light; the red cross marks storage-parent boundaries only.",
-                    "02 inspects C0, C1, signed residual, and source ownership at the common four-parent junction.",
-                    "03 binds the eligible and hard-zero synthesis regions to their location on the C1 terrain.",
-                    "04 inspects two real southeast eligibility transitions at ground scale for ridges, abrupt cutoffs, or ownership resets.",
+                    "01 binds complete-tranche eligibility and hard exclusions to the world-locked K11/K32/K36 ownership field; thin lines mark the 4x4 storage-parent grid only.",
+                    "02-05 compare four spatially distinct 32 m C0/C1 windows using native 6.25 cm samples and identical illumination.",
+                    "The four windows deliberately cover dense eligibility, a real eligibility transition, higher base relief, and strong added morphology.",
                 ]
-                if is_block
-                else [
-                    "01 is primary: both complete parents and a seam-centered strip use identical common light; red is only the storage-parent boundary.",
-                    "02 shows one signed residual and ownership field solved over the full contiguous domain before any parent crop.",
-                    "03 is a 32 m ground-scale before/after crop centered exactly on the shared boundary.",
-                    "04 compares the complete new and previously accepted parent at identical scale and light.",
-                ]
+                if is_tranche
+                else (
+                    [
+                        "01 compares the complete 2x2 C0/C1 master under identical common light; the red cross marks storage-parent boundaries only.",
+                        "02 inspects C0, C1, signed residual, and source ownership at the common four-parent junction.",
+                        "03 binds the eligible and hard-zero synthesis regions to their location on the C1 terrain.",
+                        "04 inspects two real southeast eligibility transitions at ground scale for ridges, abrupt cutoffs, or ownership resets.",
+                    ]
+                    if is_block
+                    else [
+                        "01 is primary: both complete parents and a seam-centered strip use identical common light; red is only the storage-parent boundary.",
+                        "02 shows one signed residual and ownership field solved over the full contiguous domain before any parent crop.",
+                        "03 is a 32 m ground-scale before/after crop centered exactly on the shared boundary.",
+                        "04 compares the complete new and previously accepted parent at identical scale and light.",
+                    ]
+                )
             ),
         }
         (qa / "index.json").write_bytes(_canonical_json(qa_index) + b"\n")
@@ -1007,9 +1301,13 @@ def run(config_path: Path) -> Path:
         }
         manifest = {
             "schema": (
-                "forest-mesic-mineral-adjacent-block-artifact/1"
-                if is_block
-                else "forest-mesic-mineral-adjacent-continuity-artifact/1"
+                "forest-mesic-mineral-lod0-tranche-artifact/1"
+                if is_tranche
+                else (
+                    "forest-mesic-mineral-adjacent-block-artifact/1"
+                    if is_block
+                    else "forest-mesic-mineral-adjacent-continuity-artifact/1"
+                )
             ),
             "build_id": build_id,
             "status": "inspect_float_preview" if not failures else "park_before_inspection",
@@ -1025,9 +1323,13 @@ def run(config_path: Path) -> Path:
             "limitations": [
                 "foreign analogue research owner, not Estonia target truth or production authority",
                 (
-                    "one contiguous 2x2 block extends junction and mask-transition evidence only; it does not authorize wide coverage"
-                    if is_block
-                    else "one contiguous pair extends continuity evidence only; it does not authorize wide coverage"
+                    "one complete 2048 m LOD0 tranche extends morphology and transition evidence only; it does not authorize national coverage"
+                    if is_tranche
+                    else (
+                        "one contiguous 2x2 block extends junction and mask-transition evidence only; it does not authorize wide coverage"
+                        if is_block
+                        else "one contiguous pair extends continuity evidence only; it does not authorize wide coverage"
+                    )
                 ),
                 "the accepted forest morphology and transport parameters were not retuned",
             ],
@@ -1035,6 +1337,7 @@ def run(config_path: Path) -> Path:
         }
         (staging / "manifest.json").write_bytes(_canonical_json(manifest) + b"\n")
         os.replace(staging, destination)
+    print("[forest-tranche] synthesis 100%: immutable float artifact complete", flush=True)
     return destination
 
 

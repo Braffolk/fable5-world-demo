@@ -780,6 +780,7 @@ def create_build_plan(
             "structural-repair-overlay-v1",
             "research-microtopography-preview-v1",
             "research-microtopography-generalization-preview-v1",
+            "research-forest-lod0-tranche-preview-v1",
             "research-rough-till-structural-preview-v1",
             "research-als-tgv-structural-preview-v1",
         ):
@@ -790,6 +791,7 @@ def create_build_plan(
                 "structural-repair-overlay-v1",
                 "research-microtopography-preview-v1",
                 "research-microtopography-generalization-preview-v1",
+                "research-forest-lod0-tranche-preview-v1",
                 "research-rough-till-structural-preview-v1",
                 "research-als-tgv-structural-preview-v1",
             )
@@ -848,6 +850,20 @@ def create_build_plan(
             if expectation.get("verifier") != planned_verifier:
                 raise ValueError(
                     "forest generalization preview expectation names a different verifier"
+                )
+        elif micro_recipe_kind == "research-forest-lod0-tranche-preview-v1":
+            from .terrain.microtopography.forest_exemplar.lod0_tranche_preview_verify import (
+                VERIFIER_ID as FOREST_TRANCHE_VERIFIER_ID,
+                verifier_source_sha256 as forest_tranche_verifier_source_sha256,
+            )
+
+            planned_verifier = {
+                "id": FOREST_TRANCHE_VERIFIER_ID,
+                "sourceSha256": forest_tranche_verifier_source_sha256(),
+            }
+            if expectation.get("verifier") != planned_verifier:
+                raise ValueError(
+                    "forest LOD0 tranche preview expectation names a different verifier"
                 )
         elif micro_recipe_kind == "research-rough-till-structural-preview-v1":
             from .terrain.microtopography.rough_till_boulder.packed_preview_verify import (
@@ -1123,6 +1139,12 @@ def _require_micro_verification(
         )
 
         verifier = verify_generalization_preview
+    elif recipe_kind == "research-forest-lod0-tranche-preview-v1":
+        from .terrain.microtopography.forest_exemplar.lod0_tranche_preview_verify import (
+            verify_lod0_tranche_preview,
+        )
+
+        verifier = verify_lod0_tranche_preview
     elif recipe_kind == "research-rough-till-structural-preview-v1":
         from .terrain.microtopography.rough_till_boulder.packed_preview_verify import (
             verify_rough_till_preview,
