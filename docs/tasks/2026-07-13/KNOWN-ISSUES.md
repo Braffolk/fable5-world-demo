@@ -2118,9 +2118,32 @@ fine seams over 544 comparisons, zero parent seams over all 24 boundaries,
 `0.00187445 m` maximum decoded LOD0 closure error, `0.00099945 m` C1 round-trip
 error, zero hard leakage, and byte-identical inherited indexes. The first packing
 attempt exposed a shared-parent quantization-datum defect and is superseded; the
-entire corrected second attempt was re-encoded under one shared datum. Three of four
-exact real-WebGPU positions pass at frames `94/93/96`. The remaining strong-morphology
-boot plus full-extent user repetition/transition/grounding review remain open.
+entire corrected second attempt was re-encoded under one shared datum. On 2026-07-17
+the original vite server (`:5193`) was found dead, so a fresh server on `:5195` was
+started against the unchanged `:8803` immutable data endpoint, and all four exact
+review positions were re-booted on the new exact URLs: dense floor frame `96`,
+eligibility transition frame `92`, higher base relief frame `88`, strong morphology
+frame `89`, each with zero page/console/TSL/WebGPU/pipeline errors and labeled
+screenshots under `shots/forest-l0-*.png`. The one earlier transient dense-floor
+Three/TSL `null.constructor` console error (2026-07-16, passed on immediate
+identical retry) did not recur. The four boots confirm terrain continuity,
+materials, trees/understory, and grounded grass at each pose. The full-extent user
+repetition/transition/seam/grounding review is now the only open gate for this
+checkpoint; its verdict is pending.
+
+A 2026-07-17 post-hoc diff review of commit `e9d5d93` found two sibling-list
+omissions in `asset-gen/src/assetgen/release.py`. The consequential one is fixed:
+`publish_build`'s latest-promotion guard did not list
+`research-forest-lod0-tranche-preview-v1`, so the research-only tranche could have
+been promoted into production `latest.json`; the five research-preview kinds are
+now one shared `RESEARCH_PREVIEW_KINDS` constant consumed by the guard and both
+format-2 validation lists. The second finding is deliberately NOT fixed: the
+tranche manifest's `synthesis` provenance string falls through to the generic
+`"microtopography-v1"` label because the label chain in `_manifest_from_plan`
+has no tranche branch. That chain participates in manifest derivation, so changing
+it now would make re-verification of the already-published immutable manifest
+`49d298c42d5d...` fail. Accept the generic label for this published build; add the
+tranche branch only together with the next new recipe kind, before its first pack.
 
 ### Mrzezyno supports dune landform scale only, not beach or fine-ripple truth
 
