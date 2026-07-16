@@ -1,0 +1,58 @@
+{
+  "schema_version": "laas.unconsolidated-sand-feature-graph-config/1",
+  "recipe_id": "development-a-etak-1826743-unconsolidated-glaciolacustrine-sand-feature-graph-r0-v1",
+  "status": "development_float_qa_only",
+  "target": {
+    "etak_id": 1826743,
+    "bbox_epsg3301_m": [680448.0, 6444416.0, 680576.0, 6444544.0],
+    "game_center_xz_m": [311872.0, 191040.0]
+  },
+  "regime": {
+    "owner": "unconsolidated_glaciolacustrine_sand",
+    "lithology_code": 40,
+    "lithology_name_et": "Liiv",
+    "genesis_code": 40,
+    "genesis_name_et": "Jaajarvesetted"
+  },
+  "inputs": {
+    "condition_bundle": {"path": "asset-gen/data/work/microtopography/erodible-slope/conditions/sha256/10a5ea53b007f3e6e2e878ccebd70a9712716042139ca35178310655fcb85b8b/bundle.json", "bytes": 354606, "sha256": "9d417818c90b7e8e4db757a70cd2703df5a2e4045ff54ada9248f700bede38f9"},
+    "domain_closure": {"path": "asset-gen/data/work/microtopography/erodible-slope/conditions/domain-closure/sha256/e316add66854bd25fd13dcbf07c017950ebec97b18f0485820367a7ae774a0ac/manifest.json", "bytes": 13504, "sha256": "c2ea6bf89f85421295ebb65bf4b20eac8a99a858ea9e9922dfdcdb6fc5483600"},
+    "domain_npz": {"path": "asset-gen/data/work/microtopography/erodible-slope/conditions/domain-closure/sha256/e316add66854bd25fd13dcbf07c017950ebec97b18f0485820367a7ae774a0ac/canonical-plus256-domain.npz", "bytes": 4444948, "sha256": "b6dcd98f78c8c262a6c2e143b1c32ed902795ac5866bff7c7d9c4923aad85af8"},
+    "structural_config": {"path": "asset-gen/config/microtopography/coastal-escarpment/development-a-als-structural-r1-v1.json", "bytes": 4284, "sha256": "a5fd770fd8733c50da6aeeb47d121376e30a6cd96f5b7c36be1f828de8557aa4"},
+    "structural_manifest": {"path": "asset-gen/data/work/microtopography/coastal-escarpment/als-structural/sha256/ed91840fac7839642c18590eb697c43e914d6dce03c2eb4f58b7eaffaa05ef47/manifest.json", "bytes": 4328, "sha256": "3032f38ba645d8d65caab90722786e760aa3b398f65c1c57a60e9aa4089d727b"},
+    "reference_surface": {"path": "asset-gen/data/work/microtopography/coastal-escarpment/als-structural/sha256/ed91840fac7839642c18590eb697c43e914d6dce03c2eb4f58b7eaffaa05ef47/reference-surface-f32.npy", "bytes": 247940, "sha256": "27dc0684fd6bc0fb2ef80eff23b8725954c638b743480c8d2d6252ccf3cad2a9"},
+    "reference_confidence": {"path": "asset-gen/data/work/microtopography/coastal-escarpment/als-structural/sha256/ed91840fac7839642c18590eb697c43e914d6dce03c2eb4f58b7eaffaa05ef47/reference-confidence-f32.npy", "bytes": 247940, "sha256": "bf12fe52251db19b1098eeb6aa4d5a101d34e8c4932de557d9673686d18d4c59"},
+    "network_strength": {"path": "asset-gen/data/work/microtopography/coastal-escarpment/als-structural/sha256/ed91840fac7839642c18590eb697c43e914d6dce03c2eb4f58b7eaffaa05ef47/network-strength-f32.npy", "bytes": 247940, "sha256": "3706470f7ce5161a88a0943cb19a336a517b6fb84c71f4a59fa3074c1d1ff719"},
+    "biala_manifest": {"path": "asset-gen/data/work/terrain/microtopography/biala-coastal-escarpment-capacity/sha256/9d27b52da864ed51d4e0118545f2537bc9b91c7aba0ef7f5fd63e765ba144cca/manifest.json", "bytes": 1263, "sha256": "6aac5b5c642cd662bb4e54d4080a7ca2df868201783313ef27579c80949d9733"},
+    "biala_capacity": {"path": "asset-gen/data/work/terrain/microtopography/biala-coastal-escarpment-capacity/sha256/9d27b52da864ed51d4e0118545f2537bc9b91c7aba0ef7f5fd63e765ba144cca/biala-source-domain-capacity.npz", "bytes": 3164291, "sha256": "0516d8f06566dd377726b70d9e1f79e247e060ca9fe4891f8aca6b50fae1e331"}
+  },
+  "solver": {
+    "outer_collar_m": 8.0,
+    "maximum_shift_m": 1.25,
+    "measured_target_sigma_m": 1.0,
+    "height_constraint_weight": 7.0,
+    "normal_constraint_weight": 2.8,
+    "tangent_constraint_weight": 1.2,
+    "c0_screen_weight": 0.035,
+    "biharmonic_weight_m4": 0.018,
+    "cg_iterations": 240,
+    "cg_relative_tolerance": 0.00002
+  },
+  "erosion": {
+    "maximum_erosion_depth_m": 0.42,
+    "biala_p95_gain": 1.8
+  },
+  "micro_continuation": {
+    "absolute_p95_ceiling_m": 0.018,
+    "biala_p95_fraction": 0.11
+  },
+  "evidence_boundary": {
+    "effective_morphology_floor_m": 0.25,
+    "sub_0_25_m_is_generated_continuation": true,
+    "sub_0_25_m_measured_truth": false,
+    "whole_field_warp_or_patch_stamping": false,
+    "one_metre_mean_closure": false,
+    "packing_runtime_or_production_authorized": false,
+    "taevaskoda_sentinel_opened": false
+  }
+}

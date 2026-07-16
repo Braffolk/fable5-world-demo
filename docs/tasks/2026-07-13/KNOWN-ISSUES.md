@@ -1863,6 +1863,61 @@ drive the same 2D form representation from Estonia-observable conditions and a
 disjoint source-domain holdout can test prediction rather than self-reconstruction;
 until then rock/cliff-capable Estonia regimes remain abstained.
 
+### The lithology-specific glaciolacustrine-sand feature graph produces bands, not a cliff system
+
+The single bounded `unconsolidated_glaciolacustrine_sand` attempt is complete
+and rejected. It owns only EGT `Q_Litoloogia_200=40` (`Liiv`) and
+`Q_Genees_200=40` (`Jaajarvesetted`) on ETAK natural escarpment `1826743`,
+exact EPSG:3301 bbox `[680448,6444416,680576,6444544]`, game center
+`(311872,191040)`. It does not claim sandstone, carbonate, till, generic cliff,
+Taevaskoda, national, production, packing, or runtime authority.
+
+Immutable FLOAT artifact
+`c756d4d5a47aeea514157dd87321f8050491380cce1881ffea32fda02fa2aa43`
+is retained at
+`asset-gen/data/work/microtopography/coastal-escarpment/unconsolidated-sand-feature-graph/sha256/c756d4d5a47aeea514157dd87321f8050491380cce1881ffea32fda02fa2aa43/`.
+Manifest SHA-256 is
+`8db3f631a86e2f5adb06feba3b8a086049dcc4db35664bb9d06256ac5702dfd0`;
+the absolute `2049 x 2049` 0.0625 m master SHA-256 is
+`24f76a15a8487c66878a38ce2c1842070aa26a9045bd515f8cb7daa7e032620f`.
+The artifact also retains the 0.25 m research fields and exactly four numbered
+`1800 x 1400` QA PNGs. Biala contributes only a normalized cross-feature
+profile/curvature and named 0.25-1.25 m band statistics evaluated on an
+interpolated 0.25 m lattice from its native 0.5 m source. The honest target
+morphology evidence floor remains 0.25 m; 6.25-50 cm samples are explicitly a
+subordinate band-limited continuation, not measured truth.
+
+Narrow supporting results are positive but insufficient. The ordered measured
+crest/shoulder, upper break, lower bench, valley/rill, and toe/apron graph
+reduces graph-node RMSE from `0.40335865 m` on C0 to `0.14164161 m` on C1.
+Erosion and deposition are `19.58290697/19.58290697 m3`, with
+`3.42523e-10` relative conservation error; the master is finite and
+single-valued, and no graph cell reaches the outer edge. These facts establish
+only that the bounded solve and conservative ledger execute.
+
+The required gates reject the artifact. Casting the absolute master to float32
+loses exact C0 identity on hard and outer-collar samples by
+`1.9073456e-6 m`, and conjugate gradient reaches the frozen 240-iteration limit
+(`cg_info=240`). More importantly, common-light C0/C1 and closeup QA show long
+river-parallel signed bands, broad slab/lobe corrections, and almost no
+recognizable branching rills, headcuts, or distinct colluvial toe. The isolated
+micro band follows the same linear graph edges and cannot rescue the failed
+macro organization. This directly triggers the preregistered bands/slabs and
+missing-rill/toe rejection; no packing, serving, runtime work, or second attempt
+occurred.
+
+**Parked-path record:** preserve the exact config, isolated
+`coastal_escarpment/unconsolidated_sand_feature_graph` package, master and
+research fields, source-profile statistics, transport ledger, manifest, and
+four QA PNGs. The blocker is not a small weight or iteration defect: the
+ALS-derived raster feature masks and screened-biharmonic interpolation organize
+correction parallel to the bank rather than into a connected source-to-toe
+erosion system. Do not resume through float-precision repair, more CG
+iterations, threshold/weight changes, or another run of this formulation.
+Resume only if a materially different target-supported representation can
+produce connected crest/face/headcut/rill/toe macrostructure under common light
+without weakening exact hard ownership or conservative transport.
+
 ## Visual/Data Investigations
 
 ### Estonia DTM may contain two tall bumps in the Ahja river
