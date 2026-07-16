@@ -440,14 +440,75 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
   rockCol = mix(rockCol, rockCol.mul(0.62), lichen.mul(0.5));
   if (geo) {
     // bedrock family → rock PALETTE prior (identity of exposed rock only —
-    // exposure itself still comes from slope/relief/rockExposure). Devonian
-    // sandstone: banded red-ochre (the Taevaskoja outcrops); carbonate: pale
-    // limestone gray. Reuses the existing strata band so banding structure is
-    // cosmetic noise, not asserted bedding; cavity/meso modulation below
-    // applies on top of the swapped palette.
-    const sandstoneR = mix(vec3(0.33, 0.19, 0.12), vec3(0.57, 0.39, 0.25), strata);
+    // exposure itself still comes from slope/relief/rockExposure).
+    // SANDSTONE (Estonian Devonian reference — Taevaskoja/Härma walls):
+    // near-HORIZONTAL strata whose color FAMILY drifts with depth — cream/
+    // buff, salmon-pink, red-ochre, thin maroon seams — bands 0.3–2 m with
+    // only mild lateral waviness. The generic strataPhase's heavy lateral
+    // warp (±7.3 phase units, tuned to fragment kilometre-scale generated
+    // massifs) exceeds a 25 m outcrop's WHOLE elevation phase and reads as
+    // camo mottle, so sandstone gets its own h-dominant signal: ~1.25 m
+    // bands (±0.4 m waviness), an ~18 m member-family drift sliding the
+    // palette pale→red with depth, and occasional thin maroon seams. Still
+    // cosmetic noise banding, not asserted bedding.
+    // Superposed strata signals (ref: Härma/Taevaskoja walls) — the variety
+    // lives in three independent axes, all h-dominant and value-noise
+    // IRREGULAR (features vary ±50% around their nominal size):
+    //   hueSig  ~5 m  color members through a 4-stop ramp (cream → ochre-
+    //                 salmon → brick → dusty violet)
+    //   thick   ~1.8 m broad value banding (midrange-expanded)
+    //   lam     ~0.4 m thin laminae, arriving in PACKETS (bundle ~8 m) with
+    //                 quiet washes between — sedimentary bundling
+    const ssLane = valS(310, 0.77, 0.13).mul(1.1).add(17.3);
+    // Per-band lateral pinch-and-swell: these are cross-bedded FLUVIAL sheets —
+    // individual beds wander independently, so each selector gets its OWN
+    // decorrelated warp (one shared warp made every boundary undulate in
+    // parallel, the "too perfectly bandy" read).
+    const ssWav1 = valS(9.7, 0.31, 0.57).mul(0.35);
+    const ssWav2 = valS(7.3, 0.63, 0.29).mul(0.3);
+    const ssWav3 = valS(11.9, 0.17, 0.91).mul(0.4);
+    // "up top" datum: the Devonian beds are subhorizontal (dips <1°), so within
+    // a valley ABSOLUTE elevation ≈ stratigraphic depth — free (h). The member
+    // ceiling drifts ±12 m regionally via one slow tap. deepBias fades the cold
+    // member out above the ceiling; deepBias2 (fully on ~16 m below it) makes
+    // the violet washes BROADER and more common in the deepest sections (ref:
+    // the bottom-third violet wash).
+    const deepCeil = valS(2900, 0.19, 0.83).mul(12).add(54);
+    const deepBias = smoothstep(deepCeil.add(8), deepCeil.sub(6), h);
+    const deepBias2 = smoothstep(deepCeil.sub(4), deepCeil.sub(16), h);
+    // ALL BANDS, NO BASE (ref): every elevation is a COMMITTED band color.
+    // E() expands value noise's midpoint-heavy distribution onto plateaus, so
+    // each band holds one solid color with a narrow soft edge. s1 (~2.4 m)
+    // switches warm↔deep family (its raised lower knee keeps grazing crossings
+    // warm — no sliver-thin deep bands); s2/s3 (~0.7 m) pick within the family.
+    const E = (x: NF): NF => smoothstep(0.38, 0.62, x) as unknown as NF;
+    const s1 = smoothstep(0.4, 0.66, band(h.mul(0.42).add(ssWav1), ssLane.add(11.1)));
+    const s2 = E(band(h.mul(1.5).add(ssWav2.mul(1.5)), ssLane.add(29.3)));
+    // violet: window shifted by depth (thicker/commoner at the bottom), gated
+    // to WELL-committed deep bands only — a thin deep sliver renders brick,
+    // never a thin blue line (the immersion breaker); thin warm laminae stay.
+    const s3 = E(
+      band(h.mul(1.5).add(ssWav3.mul(1.5)), ssLane.add(53.9)).add(deepBias2.mul(0.14)),
+    )
+      .mul(deepBias)
+      .mul(smoothstep(0.55, 0.85, s1));
+    const lam = band(h.mul(2.4).add(ssWav2.mul(2)), ssLane.add(47.9));
+    const bundle = smoothstep(0.42, 0.72, band(h.mul(0.13), ssLane.add(71.3)));
+    const warmPair = mix(vec3(0.82, 0.75, 0.62), vec3(0.76, 0.5, 0.36), s2);
+    // violet stop: dusty, low-chroma, a touch darker (ref) — not vivid purple
+    const deepPair = mix(vec3(0.58, 0.32, 0.24), vec3(0.44, 0.36, 0.39), s3);
+    let sandstoneR = mix(
+      warmPair,
+      deepPair,
+      s1.mul(deepBias.mul(0.45).add(0.55)),
+    ) as unknown as NV3;
+    // thin laminae in packets — soft value shimmer only. (A discrete dark
+    // "seam line" term was tried and cut: sub-decimetre hard lines read as
+    // rendering artifacts at wall scale, not geology.)
+    sandstoneR = sandstoneR.mul(lam.sub(0.5).mul(0.22).mul(bundle).add(1)) as unknown as NV3;
+    // CARBONATE: pale limestone gray on the generic strata band.
     const carbonateR = mix(vec3(0.35, 0.34, 0.31), vec3(0.57, 0.55, 0.49), strata);
-    rockCol = mix(rockCol, sandstoneR, geo.sandstone.mul(0.85));
+    rockCol = mix(rockCol, sandstoneR, geo.sandstone.mul(0.9));
     rockCol = mix(rockCol, carbonateR, geo.carbonate.mul(0.85));
   }
   // cavity dirt: concave-ish micro band darkening
