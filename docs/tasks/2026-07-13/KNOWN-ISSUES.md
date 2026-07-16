@@ -2080,6 +2080,22 @@ and disable-path behavior only. A fresh game-only GPU trace and performance
 acceptance remain required before broad adoption; this open qualification does not
 block asset-gen synthesis work.
 
+### The raised-bog form-scale graph is coherent but unnaturally periodic
+
+Whole-mire FLOAT artifact
+`caf9e5f2660f646cd3ac9cd0a711042a685e46fa23164538e1b05f7e69c662dc`
+replaces per-cell dynamics with one crop-last domain-scale travel graph, preserves
+all hard/water/outside cells, closes to its synthesized 1 m parent within
+`4.26e-14 m`, and retains 43 measured depression components as pools. It therefore
+proves that coherent full-mire strings and typed form bands can be generated without
+storage-parent resets. It is still rejected before packing: a single scalar travel
+coordinate produces nearly continuous and evenly spaced contour corrugations across
+the mire, measured warp only wiggles those bands, and pools read as isolated sockets
+or rings instead of integrated pool-string complexes. Preserve the graph and artifact
+as negative structural evidence. Resume only with observed or generated topology that
+can branch, merge, terminate, and couple pool margins to the network; do not spend a
+correction cycle tuning phase, spacing, or warp.
+
 ### Full-LOD0 forest scale-out is FLOAT-ready, not packed or browser-accepted
 
 The user-authorized bounded forest research-preview escalation supersedes the

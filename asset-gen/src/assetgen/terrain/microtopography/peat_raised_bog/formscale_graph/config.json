@@ -1,0 +1,54 @@
+{
+  "schema_version": "laas.peat-raised-bog-formscale-graph-config/1",
+  "status": "development_float_qa_only",
+  "target": {
+    "name": "Valgesoo",
+    "normalized_mire_identifier": "etak-component-0004069052",
+    "clear_halo_bounds_epsg3301_m": [680192, 6449280, 680448, 6449536],
+    "core_bounds_epsg3301_m": [680256, 6449344, 680384, 6449472]
+  },
+  "method": {
+    "representation": "whole_mire_geodesic_form_graph",
+    "parent_pitch_m": 1.0,
+    "fine_pitch_m": 0.25,
+    "solve_scope": "complete_connected_mire_then_crop",
+    "broad_sigma_m": 28.0,
+    "medium_sigmas_m": [5.0, 16.0],
+    "crest_percentile": 98.5,
+    "crest_minimum_interior_m": 55.0,
+    "string_spacing_inner_m": 25.0,
+    "string_spacing_outer_m": 15.0,
+    "string_half_width_fraction": 0.14,
+    "flark_half_width_fraction": 0.25,
+    "minimum_form_interior_m": 10.0,
+    "string_slope_start": 0.00065,
+    "string_slope_full": 0.00125,
+    "parent_relief_limit_m": 0.22,
+    "fine_relief_limit_m": 0.018,
+    "pool_minimum_area_m2": 20,
+    "pool_maximum_area_m2": 900,
+    "no_random_seed_or_random_source": true,
+    "exact_hierarchy_closure_to_synthesized_parent": true
+  },
+  "evidence_boundary": {
+    "measured_site_condition_use": [
+      "complete connected mire geometry and authority",
+      "measured broad dome and slope",
+      "measured 2-16 m relief for form segmentation",
+      "mapped water road forest object and unknown exclusions"
+    ],
+    "unsupported_claims": [
+      "Estonia raised-bog class prevalence",
+      "measured string flark pool dimensions at Valgesoo",
+      "production owner or national transfer"
+    ],
+    "not_process_v3_retune": true,
+    "not_plurigaussian_or_per_cell_dynamics": true
+  },
+  "inputs": {
+    "measured_float": {
+      "path": "asset-gen/data/work/microtopography/peat-raised-bog/measured-float/sha256/6e0148da0c28636f1577c531431cd9cc62f7a6c5610fdccd1c231f52749d2365/measured-float.npz",
+      "sha256": "28ed716789e5817c95e64a9fd037d3a0d254d95034c3bfda175c7a574a4f584e"
+    }
+  }
+}
