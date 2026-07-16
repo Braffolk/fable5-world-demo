@@ -52,6 +52,17 @@ MICRO_VERIFY_GATES = (
 )
 MICRO_V1_BASE_SHA256 = "708478a57c2118eaa618867e87cc74a35e20c615999b60d7e4177b595ef5495a"
 
+# Immutable-preview-only research recipe kinds. Every list that must cover all
+# research previews derives from this tuple; a new research kind added here is
+# automatically excluded from `latest` promotion by publish_build.
+RESEARCH_PREVIEW_KINDS = (
+    "research-microtopography-preview-v1",
+    "research-microtopography-generalization-preview-v1",
+    "research-forest-lod0-tranche-preview-v1",
+    "research-rough-till-structural-preview-v1",
+    "research-als-tgv-structural-preview-v1",
+)
+
 
 @dataclass(frozen=True)
 class IndexRecord:
@@ -778,22 +789,14 @@ def create_build_plan(
             "retention-fixture",
             "measured-synthesis-pilot",
             "structural-repair-overlay-v1",
-            "research-microtopography-preview-v1",
-            "research-microtopography-generalization-preview-v1",
-            "research-forest-lod0-tranche-preview-v1",
-            "research-rough-till-structural-preview-v1",
-            "research-als-tgv-structural-preview-v1",
+            *RESEARCH_PREVIEW_KINDS,
         ):
             raise ValueError(f"unsupported micro recipe kind {micro_recipe_kind!r}")
         if (
             micro_recipe_kind
             not in (
                 "structural-repair-overlay-v1",
-                "research-microtopography-preview-v1",
-                "research-microtopography-generalization-preview-v1",
-                "research-forest-lod0-tranche-preview-v1",
-                "research-rough-till-structural-preview-v1",
-                "research-als-tgv-structural-preview-v1",
+                *RESEARCH_PREVIEW_KINDS,
             )
             and base_manifest_sha256 != MICRO_V1_BASE_SHA256
         ):
@@ -1584,10 +1587,7 @@ def publish_build(
     _, plan, _ = _load_plan(build_digest, work_root)
     if plan.get("microRecipeKind") in (
         "measured-synthesis-pilot",
-        "research-microtopography-preview-v1",
-        "research-microtopography-generalization-preview-v1",
-        "research-rough-till-structural-preview-v1",
-        "research-als-tgv-structural-preview-v1",
+        *RESEARCH_PREVIEW_KINDS,
     ):
         raise ValueError("research preview is immutable-preview-only and cannot update latest")
     if plan.get("microRecipeKind") == "structural-repair-overlay-v1":
