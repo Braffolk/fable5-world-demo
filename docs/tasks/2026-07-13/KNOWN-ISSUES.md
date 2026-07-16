@@ -1677,6 +1677,47 @@ only if a new exact selection supplies materially more process-diverse supported
 128 m contexts, or another public source supplies equivalent physical-regime
 evidence; otherwise keep the cliff-capable regime abstained.
 
+### A second Biała epoch adds support coverage, not morphology diversity
+
+The bounded metadata screen could not identify process-state diversity among the
+nine unfetched Biała archives: authoritative RepOD metadata supplies dates,
+archive sizes/MD5s, and the common DJI M300/Zenmuse L1 site/protocol, but no event
+labels, per-epoch support, registration/error, ground-support, or processing
+semantics. The full remaining-nine payload is `27,050,684,594` bytes and remains
+unauthorized. The cheapest exact temporal hypothesis was therefore retained as
+the only probe: `2022-11-10.zip`, RepOD file `54443`, exactly `509,963,696`
+bytes, MD5 `5f86b53f20bff55d2819e9e18546c57a`, SHA-256
+`609bd72589c7e7bc4c2ce368bd94b5ca05c49b85d58f89c7268f3bdc00895ab4`.
+Its sole `895,465,853`-byte LAS and archive total `1,405,429,549` bytes, below
+the frozen 2 GiB cache ceiling while preserving the 64 GiB free-space reserve.
+
+The November LAS is compatible with the retained February source: LAS 1.2,
+point format 3, EPSG:2180, and the same 0.5 m vendor-class-2 direct-support rule
+of count at least two and range at most 1 m. Extraction id is `d36cfb662efc...`;
+LAS SHA-256 is
+`c8bffa113fc95723f8129715b984d0311a7ccadc96b69f81cd553c19a4aa5e2e`.
+Candidate build `5401bf079361...` binds NPZ SHA-256
+`8d95233189874117971cb5cbf2b630938cc995837f07a3b3b9d4a9100d50ed82`.
+Stable-terrain rigid registration is `dx=0`, `dy=-0.05 m`, `dz=-0.0038 m`.
+
+Final epoch comparison
+`c2f38d123d4416a97d23b09bfca560fb4aea4b3d62d44b3aa7a132c1c1783a1a`
+finds four qualified nonoverlapping 128 m windows in February and six in
+November, but the geographic union is still only six. The two additions are
+support-completed endpoints of the same diagonal surveyed cliff corridor and
+repeat the same crest/shoulder/face/toe anatomy. Registered-delta QA shows
+acquisition/corridor-edge differences and local change, not a new connected
+long-context morphology family. No training ran.
+
+**Parked-path record:** preserve exact retention/extraction, the compatible
+0.5 m conversion, epoch registration/capacity comparison, and four numbered QA
+PNGs. Do not fetch the remaining eight archives or rerun domain diffusion unless
+primary metadata or a cheap exact probe identifies a materially different cliff
+system/process state with new supported 128 m contexts. More epochs of the same
+single corridor do not solve the learned model's conditional-diversity blocker.
+The cliff-capable regime remains abstained and active effort moves to an already
+retained non-cliff regime with a credible route to visible progress.
+
 ### Biała Góra proves bounded 2D representation capacity, not predictive transfer
 
 The retained Biała Góra calibration artifact `4fdbaa3f0a9c...` was exercised on
