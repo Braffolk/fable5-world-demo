@@ -1191,6 +1191,32 @@ Two concurrent boot-smoke processes once triggered a transient renderer
 Treat that as a nondeterministic runtime/resource risk, not a terrain-data gap,
 and keep real-WebGPU verification isolated rather than concurrent.
 
+The first forest-plus-mapped-boulder composition site is mechanically valid but
+physically unsuitable for the requested transition proof. Float build
+`9dc60226b5be668664097bde58dc734fc6f1c384359baa5341f4f70c33f57991`
+(manifest SHA-256
+`b8b7fc6ddaeed5b0184ae6f299bd0d5020d96fba2c46526641e1529cde22cf35`)
+uses the locked forest transport unchanged and gives mapped families 2/3/4
+exclusive ownership only on their accepted body/socket supports. Generic till
+owns zero cells; all three anchors survive; rock parent-mean error is at most
+`2.78e-17 m`; abstention and mapped-pile leakage are exactly zero.
+
+The stop is caused by site selection rather than composition mechanics. Only
+`1.395%` of parent `(-1,615,389)` is eligible mesic forest. The three accepted
+mapped forms are respectively `322.7 m`, `249.5 m`, and `131.5 m` from the
+nearest eligible forest at the one-metre proxy, so no forest-to-rock transition
+exists to inspect or pack. QA `05_ordinary_forest_to_rock_transition.png` exposes
+orange mapped-rock ownership entirely inside charcoal abstention and no green
+forest. The three closeup subtitles incorrectly say `in forest`; their geometry
+remains valid mapped-rock evidence, but the ownership panel and manifest are the
+authoritative interpretation. Preserve the implementation and artifact rather
+than deleting them, but do not rerun, pack, or loosen the forest predicate.
+Resume only after selecting an accepted mapped-rock parent where matching forest
+eligibility intersects or directly borders the rock support. The current
+`minimum_forest_allowed_fraction` gate measures parent-wide capacity only and does
+not prove adjacency; any resumed positive candidate must add an explicit
+rock-support-to-forest overlap/distance gate before materialization.
+
 Elongated lines, ridges, or bumps are not defects merely because they occur in a
 field: cultivation, drainage, vehicle, erosion, and substrate processes can
 produce real long forms. Reject them only when evidence identifies ownership or

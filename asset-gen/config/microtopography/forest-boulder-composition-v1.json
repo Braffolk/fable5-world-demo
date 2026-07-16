@@ -1,0 +1,38 @@
+{
+  "schema": "forest-mesic-mineral-mapped-boulder-composition/1",
+  "authority": "research_float_only_no_production_no_pack_no_latest",
+  "regime": "forest.mesic_mineral+mapped_boulder.body_socket",
+  "bbox_en": [683520, 6435840, 684032, 6436352],
+  "parent": {"lod": -1, "cx": 615, "cz": 389},
+  "texel_m": 0.0625,
+  "rock_source": {
+    "path": "asset-gen/data/work/terrain/rough-till-boulder-multi-form/sha256/8dbbe1393d378a7f1d7240d4fb95d3caad9481d6d9b5a351e0b3718e27459c5d/preview.npz",
+    "bytes": 22820923,
+    "sha256": "a017f076f064a4c60f5668a4ab0cf3ea37c46f3037d0f26a55493b51c14fae93"
+  },
+  "mapped_boulders": [
+    {"etak_id": 1145271, "point_en": [683694.936, 6435908.094], "source_family": 2},
+    {"etak_id": 1145269, "point_en": [683797.973, 6435959.684], "source_family": 3},
+    {"etak_id": 1145643, "point_en": [683888.950, 6436052.360], "source_family": 4}
+  ],
+  "excluded_boulder_piles": [1147668, 1147669, 1145228],
+  "pile_exclusion_radius_m": 4.0,
+  "transport": {
+    "patch_cells": 192,
+    "candidate_step_cells": 16,
+    "minimum_patch_support_fraction": 0.78,
+    "site_candidate_cell": 24,
+    "site_minimum_distance_cells": 64,
+    "site_saturation_distance_cells": 48,
+    "site_saturation_rounds": 8,
+    "support_radius_cells": 88,
+    "site_seed": 5494753648857171000
+  },
+  "acceptance": {
+    "maximum_forest_one_metre_mean_error_m": 1e-10,
+    "maximum_abstained_residual_m": 0.0,
+    "maximum_rock_parent_mean_error_m": 1e-10,
+    "minimum_forest_allowed_fraction": 0.2,
+    "minimum_rock_owned_cells_per_family": 1
+  }
+}
