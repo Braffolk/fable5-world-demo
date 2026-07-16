@@ -1119,6 +1119,40 @@ no material correction is authorized from this review alone. This acceptance doe
 not grant production, `latest`, national coverage, adjacent-parent continuity,
 another forest regime, or any non-forest regime.
 
+The adjacent-parent continuity limitation now has a verified live candidate.
+Float commit `a14b008` and artifact
+`4e5762bb9a41be5500a5815633c6572a76eb65ae8abc9d3b380db8deba3ff451`
+apply the locked `forest.mesic_mineral` generator once over contiguous parents
+`(617,377)` and `(617,378)` at EPSG:3301 bounds
+`E684544..685056, N6441472..6442496`, then crop. The generator retains the
+accepted source candidates, world hash, site spacing, Wendland ownership, zero
+offsets, hard mask, and one-metre projection; no morphology retuning occurred.
+Exactly 351 sites cross the parent boundary. Seam residual-step mean/p95 is
+`0.01939/0.04999 m`, lower than nearby non-seam `0.02399/0.06548 m`;
+one-metre closure is `9.39e-16 m`, hard residual is zero, and ownership counts
+remain balanced at K11/K32/K36 `11251/11252/11251`. Full-parent, seam-strip,
+ground-scale, ownership, and common-light PNGs expose no seam or reset.
+
+Packed commit `1c9e647`, build
+`d1cdf0768c0fe0d80936fcb49f194dba640feae00cd11a907351c24d66454ee8`,
+and manifest SHA-256
+`b97c88a68bb7a7e6a9c64ba5ec37778971dd76aeb6c65c5d813fd16f5ffd423c`
+reuse the ordinary negative-rung hierarchy and change no runtime, shader, binary
+format, release policy, or canonical `latest`. All seven verifier gates pass.
+Maximum C1 round-trip error is `0.00099945 m`; masked LOD0 closure is
+`0.00156403 m`; shared child seam is zero; the independently decoded shared
+parent seam is `3.8147e-6 m`, below the explicit `1e-5 m` limit; inherited
+biome/material/vegetation/water layers remain unchanged.
+
+The exact all-layer and `grass=0` Estonia boots on fresh `:5187/:8797` ports
+pass through frames `89` and `125` with zero captured page, console, request,
+TSL, WebGPU, pipeline, bind-group, or command-buffer errors. Captured views retain
+materials, trees, understory, grass, and grounded roots, and show no reset strip.
+The remaining gate is user traversal across the center of
+`http://localhost:5187/?scene=world&src=estonia&dataurl=http%3A%2F%2Flocalhost%3A8797&alt=12&x=316160&z=193536&yaw=0&pitch=-0.22&shadowclipres=896`.
+Until that review, this is a verified research candidate rather than accepted
+adjacent-parent continuity, production, `latest`, or national coverage.
+
 Elongated lines, ridges, or bumps are not defects merely because they occur in a
 field: cultivation, drainage, vehicle, erosion, and substrate processes can
 produce real long forms. Reject them only when evidence identifies ownership or
