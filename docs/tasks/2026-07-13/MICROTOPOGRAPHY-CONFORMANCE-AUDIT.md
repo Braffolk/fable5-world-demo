@@ -1,6 +1,6 @@
 # Microtopography Delivery Conformance Audit
 
-Date: 2026-07-15
+Date: 2026-07-17
 
 Normative authority: `docs/specs/terrain/MICROTOPOGRAPHY.md`
 
@@ -39,7 +39,7 @@ Agriculture development artifact `de1f0d4adb49...` has now reached that rejectio
 | Ordinary packed-height representation, no provenance branch or new wire format | Existing format-1 corrected base and format-2 negative-rung transport are retained | **Pass** |
 | Fallible DTM is repaired before morphology | Evidence-bounded Ahja water/shore/base correction is published through corrected parents | **Pass for bounded Stage 1 area** |
 | One absolute finest surface and decoded-child hierarchy | Structural transaction proves bounded parent closure and immutable release | **Pass for structural proof; not yet exercised by accepted morphology** |
-| All surface consumers agree | Terrain and grass use packed fine terrain; the spec-recorded generic tree/boulder/understory/debris grounding repair remains outstanding | **Partial** |
+| All surface consumers agree | Terrain and grass use packed fine terrain; commit `8bded0a` refreshes trees, boulders, understory, and debris against the packed fine field without runtime synthesis or a wire-format change | **Pass, infrastructure; full-L0 visual review pending** |
 | Source ledger is machine-audited before owner evidence is used | Ledger v2 contains 129 records; 10 allow consequential judgment; source limitations remain explicit | **Pass for research selection, not target qualification** |
 | Full-fidelity condition fabric and complete soil/substrate/hydrology semantics | National inputs are audited, but the production `ConditionField` fabric and full soil mixture/profile parser are not implemented | **Blocked before regime inference** |
 | Explicit regime/release rows with fail-closed unsupported state | The 26-row initial registry exists and leaves production morphology unsupported | **Pass as an abstaining registry; no released row** |
@@ -50,7 +50,7 @@ Agriculture development artifact `de1f0d4adb49...` has now reached that rejectio
 | Required challenger families and corrected-only control | No qualified-regime bakeoff has begun | **Not started** |
 | Real-vs-real noninferiority, blind rendered preference, and valid no-owner states | No qualified target split or frozen blind review exists | **Not started** |
 | Signal exceeds observation/interpolation error in every claimed B1/B2 band | Hovi build `13bb3582f225...` correctly leaves transfer gain, recoverable signal, and total error unset for B1 `0.25-1 m` and B2 `0.125-0.25 m`; no candidate has a qualified decomposition | **Blocked; `target_evidence_insufficient`** |
-| Canonical morphology cook, hierarchy, masks, cost ledger, immutable preview, real-WebGPU boot, and visual gate | Accepted infrastructure exists, but there is no accepted specialist output to cook | **Not authorized** |
+| Canonical morphology cook, hierarchy, masks, cost ledger, immutable preview, real-WebGPU boot, and visual gate | Bounded forest research recipe `e9b45446c7a4...` now exercises the complete ordinary hierarchy and passes independent packing verification plus three of four exact boots; it remains non-production and awaits the last boot and full-extent user visual verdict | **Pass for bounded research infrastructure; production not authorized** |
 | Full Estonia Definition of Done | Unsupported regimes, owner selection, serving policy, and visible morphology remain open | **Not met** |
 
 ## Dataset Disposition

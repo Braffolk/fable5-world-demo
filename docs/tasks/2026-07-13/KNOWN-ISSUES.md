@@ -2096,7 +2096,7 @@ as negative structural evidence. Resume only with observed or generated topology
 can branch, merge, terminate, and couple pool margins to the network; do not spend a
 correction cycle tuning phase, spacing, or warp.
 
-### Full-LOD0 forest scale-out is FLOAT-ready, not packed or browser-accepted
+### Full-LOD0 forest scale-out is packed and verified; final visual review remains
 
 The user-authorized bounded forest research-preview escalation supersedes the
 earlier LUKE no-pack/browser restriction for this exact track only; it does not
@@ -2107,10 +2107,20 @@ reports `263,799` balanced K11/K32/K36 sites, zero hard-exclusion residual,
 `6.28e-16 m` maximum one-metre mean error, `0.03410 m` allowed residual RMS,
 sampled P01/P99 `-0.09122/+0.11101 m`, maximum residual `0.45333 m`, and all six
 internal parent-seam p95 residual steps below their nearby non-seam p95 values.
-Five numbered QA PNGs plus a machine index exist and the FLOAT build reports no
-failures. Those images still require visual inspection; hierarchy packing,
-packed/served cost, multi-position real-WebGPU boots, repetition/condition-transition
-inspection, and user visual review remain open.
+Five numbered QA PNGs plus a machine index were visually inspected and accepted for
+packing. Corrected recipe
+`e9b45446c7a426bebd6b468d729dcc9f6e555dd3ee6ce7c9b2c20abd62cd2025`
+publishes manifest SHA-256
+`49d298c42d5d1ac600ec3d4e78228177963ca6211a813f08b68caf539b0c12f6`:
+256 LOD -2 chunks, 16 LOD -1 parents, 33 transient supports, and 1,001,639,616
+final manifest bytes. Independent verification passes all seven gates, measures zero
+fine seams over 544 comparisons, zero parent seams over all 24 boundaries,
+`0.00187445 m` maximum decoded LOD0 closure error, `0.00099945 m` C1 round-trip
+error, zero hard leakage, and byte-identical inherited indexes. The first packing
+attempt exposed a shared-parent quantization-datum defect and is superseded; the
+entire corrected second attempt was re-encoded under one shared datum. Three of four
+exact real-WebGPU positions pass at frames `94/93/96`. The remaining strong-morphology
+boot plus full-extent user repetition/transition/grounding review remain open.
 
 ### Mrzezyno supports dune landform scale only, not beach or fine-ripple truth
 
@@ -2128,9 +2138,21 @@ confusion, and per-cell point-support labels, so it grants no fine-ripple,
 pixelwise-target, `shore.beach_sand`, Estonia-owner, production, or national
 authority. Resume beach sand separately with dated material and shoreline support.
 
+The first condition-selected Estonia dune attempt is preserved as FLOAT artifact
+`4edad71d4943fee31e99394f9c76dd01c18f29b61bdf6318a425f405152cea45` and parked
+before packing. It binds official coastal aeolian-sand support, Maa-amet DTM sheet
+61391, and only the qualified Mrzezyno 1-8 m prior. Mechanical closure passes at
+`7.1e-15 m` and shore alignment is `0.998`, but residual p95 is only `3.8 mm` and
+common-light before/after is visually indistinguishable. This is a structural
+authority conflict, not a tuning failure: exact 1 m block-mean preservation removes
+the only evidence-authorized dune landform relief, while Mrzezyno does not authorize
+independent sub-metre geometry. Resume only after explicit bounded 1 m parent
+correction authority for mapped dunes or a qualified exemplar with more than 1 cm
+credible post-projection residual. Do not amplify, invent ripples, or pack this result.
+
 ## Integration Risks
 
 - Dataset conversion previously became inefficiently serialized behind HY_SPRUCE4 full-E57 handling, with two failed full attempts and repeated implementation/review micro-cycles before a morphology input existed. Native codec-word padding commit `ba92ab4` completed the verified full materialization and the Python publisher completed its atomic move. The full-scan Hovi track is now parked after its fully observed central 6.25 cm QA remained dominated by competing/unresolved sheets; no threshold-tuning loop is authorized. Evo 1086/1065 are parked after sparse-surface diagnosis; the downsampled HY_PINE2 stress condition is also parked after its candidate sheet correctly abstained, and its full archive remains unfetched. A blocked track is parked without deleting its code or provenance; it resumes only if quicker alternatives fail or its scientific role is unique.
 - The root `estonia-asset-gen` worktree contains unrelated dirty and old-agent changes. Integration must preserve user work and must not copy the obsolete 128 m global-grid rewrite or hash/noise synthesizer.
 - A production pilot preview may be materialized locally, but it must not update `latest.json` until realism, masks, and user-visible acceptance pass.
-- The accepted replacement spec requires a target-evidence-gated per-regime specialist architecture, not a continuation of the measured mineral-forest quilt. Stage 1 structural repair is complete, `releaseReady:true`, and user-accepted through transaction `009fd...`; superseded `7a2d...` artifacts remain history, not current authority. Morphology implementation remains gated by qualified target evidence. One minimal generic packed-surface grounding correction for trees/boulders/understory/debris remains an infrastructure dependency; it does not synthesize geometry or change the wire format.
+- The accepted replacement spec requires a target-evidence-gated per-regime specialist architecture, not a continuation of the measured mineral-forest quilt. Stage 1 structural repair is complete, `releaseReady:true`, and user-accepted through transaction `009fd...`; superseded `7a2d...` artifacts remain history, not current authority. Morphology implementation remains gated by qualified target evidence. Commit `8bded0a` closes the generic packed-surface grounding correction for trees, boulders, understory, and debris without synthesis or wire-format changes; full-L0 forest user review still must confirm the combined visible result.
