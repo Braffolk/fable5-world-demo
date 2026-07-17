@@ -117,6 +117,36 @@ rebuilt and generation run.
   from the brief, gate design change, or disappointing-result diagnosis =
   escalate back to orchestrator (Fable) — do not self-vary the method.
 
+## v4 amendment (2026-07-17): gradient-modulated wavelength (2nd/final mechanism attempt)
+
+v3.0/v3.1 outcome: the emergent network is real (349 branch + 354 merge junctions,
+pools 100% margin-coupled, safety/amplitude/parent-deviation all pass) but a
+HOMOGENEOUS Gray-Scott/Turing system selects a single characteristic wavelength
+(~21 m), so mire-scale spacing CV is 0.19 (gate ≥0.35) — genuinely uniform, not a
+window artifact. Going up a level: the failing given is spatial homogeneity of the
+kinetics. Real patterned mires vary string spacing because the controlling
+gradient (dome slope, water flux, peat depth) varies across the mire
+(Eppinga 2009 / Belyea & Baird string-spacing↔slope relation).
+
+v4 mechanism (materially different, physically grounded, NOT a tune): make the
+reaction-diffusion length scale SPATIALLY HETEROGENEOUS by modulating the
+diffusion coefficients (Turing λ ∝ √D) with the local mire hydrological field —
+the same |∇dome| / routing-flux field the solver already computes for anisotropy.
+Where the dome is steeper / flux higher, wavelength shrinks; on the flat central
+dome it widens. This spreads the wavelength spectrum → spacing CV rises from
+gradient heterogeneity, while branch/merge/terminate topology and pool coupling
+(already passing) are preserved. Freeze the D-modulation law and its bounds from
+the literature relation BEFORE running; amplitudes still only from Valgesoo/Moore.
+
+v4 is the SECOND and FINAL bog mechanism attempt (v3.1 was a measurement re-scope,
+not a mechanism). If v4's mire-scale spacing gate still fails, bog PARKS with the
+recorded resume condition; do not attempt a third mechanism or tune v4. If v4
+passes all gates, pack + verify + boot for user review. If v4 improves but still
+misses the CV threshold while the topology/coupling/regime gates pass, that is an
+orchestrator decision to surface to the user (best-fit doctrine: their visual
+verdict on a real labyrinth vs a preregistered soft threshold I chose), NOT a
+silent kill and NOT a silent pack.
+
 ## Orchestrator checklist
 
 1. [ ] B0 corrected-base transaction for (0,81,89) verified.
