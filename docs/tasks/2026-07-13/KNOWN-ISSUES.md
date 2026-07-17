@@ -2200,3 +2200,16 @@ preserved generator with exact 1 m mean preservation. The parked artifact
 - The root `estonia-asset-gen` worktree contains unrelated dirty and old-agent changes. Integration must preserve user work and must not copy the obsolete 128 m global-grid rewrite or hash/noise synthesizer.
 - A production pilot preview may be materialized locally, but it must not update `latest.json` until realism, masks, and user-visible acceptance pass.
 - The accepted replacement spec requires a target-evidence-gated per-regime specialist architecture, not a continuation of the measured mineral-forest quilt. Stage 1 structural repair is complete, `releaseReady:true`, and user-accepted through transaction `009fd...`; superseded `7a2d...` artifacts remain history, not current authority. Morphology implementation remains gated by qualified target evidence. Commit `8bded0a` closes the generic packed-surface grounding correction for trees, boulders, understory, and debris without synthesis or wire-format changes; full-L0 forest user review still must confirm the combined visible result.
+
+### Fetcher does not validate response content-type (Maa-amet not-found saved as .tif)
+
+Discovered 2026-07-17 during the `aoi-dunes` base cook. `assetgen fetch` stores
+Maa-amet sheet responses without checking content-type, so nonexistent sheets
+(e.g. 26 west-coast sea-side nDSM sheets with no data) get saved as ~194-byte HTML
+"sheet-not-found" 200-responses with a `.tif` extension, which then crashes
+`process/trees.py:69` on read. Worked around for the dune cook by quarantining the
+non-TIFF files via magic-byte check into `data/in/ndsm_1m/_quarantine_html_notfound/`
+(moved, not deleted). Not fixed in code (out of overnight scope): the fetcher will
+re-download these on the next `fetch`. Fix = content-type/magic-byte validation at
+fetch time, treating a non-raster 200 as an intentional "no sheet here" (empty/skip),
+not an error. Low priority; only affects AOIs that include no-data sheets (coast/sea).
