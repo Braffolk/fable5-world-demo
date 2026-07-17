@@ -929,6 +929,19 @@ export class TerrainField {
       .sub(vec2(this.uMorphCenterRel as unknown as NV2));
     const radius = local.x.abs().max(local.y.abs());
     const camera = smootherStep01Tsl(radius.sub(band.innerM).div(band.outerM - band.innerM)).oneMinus();
+    const available = this.microAvailabilityGpu(level, wxz);
+    return camera.mul(available) as unknown as NF;
+  }
+
+  /** Coverage-edge availability factor of {@link microMorphWeightGpu} WITHOUT the
+   *  camera term — the camera-INDEPENDENT "is a packed rung actually cooked here"
+   *  signal (smootherstep to 1 inside the level's coverage box + res interior, 0
+   *  at/outside its edge). Uniforms + ALU only, no texture taps. Extracted so both
+   *  the shipping morph weight and the debug availability accessor share ONE exact
+   *  expression — the default morph path is node-for-node unchanged. */
+  private microAvailabilityGpu(level: HeightLevel, wxz: NV2): NF {
+    const lod = level.lod as -2 | -1;
+    const band = MICRO_MORPH_BANDS[lod];
     const grid = gridCoords(level, wxz);
     const coverageMin = vec2(level.uCoverageMin as unknown as NV2);
     const coverageMax = vec2(level.uCoverageMax as unknown as NV2);
@@ -942,8 +955,38 @@ export class TerrainField {
       .min(coverageMax.x.sub(grid.x).sub(1))
       .min(coverageMax.y.sub(grid.y).sub(1));
     const edgeM = edgeSamples.mul(level.texel);
-    const available = smootherStep01Tsl(edgeM.div(band.availabilityM));
-    return camera.mul(available) as unknown as NF;
+    return smootherStep01Tsl(edgeM.div(band.availabilityM)) as unknown as NF;
+  }
+
+  /** DEBUG-only (`?nandbg=lod`): the packed-rung morph weights the height sampler
+   *  ACTUALLY applies at a world point — camera×availability, so the pair IS the
+   *  LOD the surface resolves to right now. `fineW`→lod-2 (0.0625 m), `parentW`→
+   *  lod-1 (0.25 m); both ~0 ⇒ only the LOD0 (1 m) base is sampled. Uniforms+ALU
+   *  only (no texture/storage reads ⇒ no new bindings). Returns null when the
+   *  field carries no packed negative levels (nothing but LOD0 base anywhere). */
+  lodDebugSampleWeights(wxz: NV2): { fineW: NF; parentW: NF } | null {
+    if (!this.cookedMicroHeight) return null;
+    const fine = this.heightLevels.find((level) => level.lod === -2);
+    const parent = this.heightLevels.find((level) => level.lod === -1);
+    return {
+      fineW: fine ? this.microMorphWeightGpu(fine, wxz) : (float(0) as unknown as NF),
+      parentW: parent ? this.microMorphWeightGpu(parent, wxz) : (float(0) as unknown as NF),
+    };
+  }
+
+  /** DEBUG-only (`?nandbg=finelod` clip): camera-INDEPENDENT availability of the
+   *  packed fine rungs — where the cook PACKED negative-LOD data (coverage extent),
+   *  as opposed to where the camera-gated geomorph currently blends it in. `fineA`→
+   *  lod-2 present, `parentA`→lod-1 present (each >0 inside its coverage). Uniforms+
+   *  ALU only. Returns null when the field carries no packed negative levels. */
+  lodDebugAvailability(wxz: NV2): { fineA: NF; parentA: NF } | null {
+    if (!this.cookedMicroHeight) return null;
+    const fine = this.heightLevels.find((level) => level.lod === -2);
+    const parent = this.heightLevels.find((level) => level.lod === -1);
+    return {
+      fineA: fine ? this.microAvailabilityGpu(fine, wxz) : (float(0) as unknown as NF),
+      parentA: parent ? this.microAvailabilityGpu(parent, wxz) : (float(0) as unknown as NF),
+    };
   }
 }
 

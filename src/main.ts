@@ -33,6 +33,10 @@ import { buildScene, registerScene, type WorldContext } from './debug/Scenes';
  *   nanshadow=0→ no shadow-clipmap raster, no shadow sample in the resolve
  *   nandbg=flat→ flat-albedo resolve (no lighting / IBL / GI) — r.scene becomes
  *                the pure materialize cost (unpack → fetch 3 verts → barycentric)
+ *   nandbg=lod → DEBUG terrain packed-LOD tint: LOD-2 (0.0625 m) green, LOD-1
+ *                (0.25 m) yellow, LOD0 (1 m base) red; gradients = geomorph bands
+ *   nandbg=finelod→ DEBUG clip: hide all but terrain carrying a packed fine
+ *                (negative) rung, so only cooked fine-detail patches render
  * SURVIVORS = exactly the pure geometry pipeline: instance/cluster cull → SW
  * depth+payload raster → HW big-tri pass → flat resolve. Geometry (terrain /
  * rock / bark / deadwood) is KEPT — `veg` is deliberately NOT ablated because it

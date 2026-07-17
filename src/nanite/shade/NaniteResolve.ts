@@ -21,6 +21,14 @@
  * cov (covered px red) | cls (matClass tint) | cluster (meshlet hash tint, like
  * the ?nanitedbg=cluster view but for the full-frame migrated set); ?nandepth=0
  * (depth write off); ?nanshadow=0; ?nanwind=0; ?nanbark=const|lN.
+ *
+ * TERRAIN packed-LOD inspection (DEBUG-only, zero cost when absent):
+ *   ?nandbg=lod     — tint terrain by the packed rung it SAMPLES: LOD-2 (0.0625 m)
+ *                     GREEN, LOD-1 (0.25 m) YELLOW, LOD0 (1 m base/coarser) RED;
+ *                     red→yellow→green = the real geomorph blend bands. Non-terrain grey.
+ *   ?nandbg=finelod — CLIP: hide everything except terrain that carries a packed fine
+ *                     (negative) rung, keyed on camera-independent availability, so only
+ *                     the cooked fine-detail patch renders (rest → sky). Reveals LOD holes.
  */
 
 import { Mesh, Sphere, Vector3, Vector4 } from 'three';
@@ -1414,6 +1422,59 @@ export function buildNaniteResolve(
         wNormal as unknown as NV3,
       ) as unknown as NF;
       return vec4(s, s, s, 1) as unknown as NV4;
+    }
+    // ?nandbg=lod / ?nandbg=finelod — TERRAIN packed-LOD inspection (DEBUG-only,
+    // built ONLY when the flag is present ⇒ the default shader graph is byte-identical
+    // and pays nothing). Both read the packed-rung morph fields on world.field, which
+    // are uniforms+ALU with NO texture/storage taps ⇒ zero new bindings (safe for the
+    // 10-storage-buffer/stage ceiling), and reflect the LOD the height sampler resolves.
+    //   nandbg=lod    : colour terrain by the dominant packed rung it SAMPLES (camera ×
+    //                   availability morph weight) — LOD-2 (0.0625 m, finest) = GREEN,
+    //                   LOD-1 (0.25 m) = YELLOW, LOD0 (1 m base / coarser) = RED. The
+    //                   red→yellow→green gradients ARE the real geomorph blend bands
+    //                   (coloured toward the dominant target — no fabricated crisp seam);
+    //                   the LOD-2/LOD-1 rings track the 32-40 m / 128-160 m camera bands.
+    //                   Non-terrain pixels (trees/rock/grass/voxel) = dark grey.
+    //   nandbg=finelod: CLIP — Discard everything that is NOT terrain carrying a packed
+    //                   fine (negative) rung. Keyed on camera-INDEPENDENT availability
+    //                   (WHERE the cook packed fine data, not where the camera-gated
+    //                   geomorph currently blends it), so the surviving lit patch is the
+    //                   exact packed extent; base-only terrain + all non-terrain → sky.
+    if (nandbg === 'lod') {
+      const gray = vec3(0.05, 0.05, 0.06) as unknown as NV3;
+      const w =
+        pass === 'terr' || pass === 'both'
+          ? world.field.lodDebugSampleWeights(wp.xz as unknown as NV2)
+          : null;
+      if (!w) return vec4(isT.select(vec3(0.9, 0.15, 0.1) as unknown as NV3, gray), 1) as unknown as NV4;
+      const lod0 = vec3(0.9, 0.15, 0.1) as unknown as NV3; // 1 m base / coarser
+      const lod1 = vec3(0.95, 0.85, 0.1) as unknown as NV3; // LOD-1 0.25 m
+      const lod2 = vec3(0.1, 0.9, 0.2) as unknown as NV3; // LOD-2 0.0625 m
+      const tint = mix(
+        mix(lod0, lod1, w.parentW.clamp(0, 1)),
+        lod2,
+        w.fineW.clamp(0, 1),
+      ) as unknown as NV3;
+      return vec4(isT.select(tint, gray), 1) as unknown as NV4;
+    }
+    if (nandbg === 'finelod') {
+      const a =
+        pass === 'terr' || pass === 'both'
+          ? world.field.lodDebugAvailability(wp.xz as unknown as NV2)
+          : null;
+      // non-terrain pixels (trees/rock/grass/voxel) never carry a terrain rung → clip.
+      If(matClass.notEqual(uint(0)), () => {
+        Discard();
+      });
+      // terrain lacking a packed fine rung here → clip. a null (field carries no packed
+      // negative levels at all) ⇒ every terrain pixel is base-only ⇒ clip all terrain.
+      const noFine = a
+        ? (a.fineA.add(a.parentA).lessThanEqual(float(1e-4)) as unknown as NB)
+        : (matClass.equal(uint(0)) as unknown as NB);
+      If(noFine, () => {
+        Discard();
+      });
+      return vec4(lit, 1) as unknown as NV4;
     }
     if (nandbg === 'cov') return vec4(1, 0, 0, 1); // every covered pixel red
     // ?nandbg=ftonly — ISOLATE the far-tile aggregated field: fartile pixels keep
