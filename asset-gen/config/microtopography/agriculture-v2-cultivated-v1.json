@@ -1,0 +1,102 @@
+{
+  "schema_version": "laas.agriculture-v2-cultivated.conditions/1",
+  "status": "development_float_qa_only",
+  "provenance_note": "Agriculture v2 inverts every v1 failure (artifact de1f0d4adb49...): no fixed row lattice (per-parcel direction field + variable spacing), clods = world-PRF marked point process (no analytic stamp reuse), whole-domain world-coordinate model (no per-tile priority-flood hydrology), every scalar claim hash-bound to a source artifact. Frozen BEFORE the measurement run; thresholds below are the acceptance gates.",
+  "site": {
+    "dev_tile_lod_cx_cz": [-2, 2426, 1498],
+    "dev_tile_bbox_en": [679168.0, 6443648.0, 679296.0, 6443776.0],
+    "boundary_window_bbox_en": [678976.0, 6443648.0, 679232.0, 6443904.0],
+    "cross_parcel_aoi_bbox_en": [678464.0, 6442944.0, 680000.0, 6444480.0],
+    "texel_m": 0.0625,
+    "dev_parcel_etak_id": 3477279,
+    "comment": "Dev tile is fully interior to parcel 3477279 (v1-comparable). Boundary window straddles the parcel west edge (E~679007) for taper + boundary-transition QA and the form-free-ground taper gate. Cross-parcel AOI holds 7 arable parcels for the direction-variation gate."
+  },
+  "sources": {
+    "corrected_base": {
+      "path": "data/work/terrain-repair/taevaskoda-ahja-stage1-transaction/009fd3d2be07d465199e6330ac9d2fc5a8fc7a16bbb5df0f55e5030ce962d3d1/corrected-base/decoded-core/0/151_93.npy",
+      "lod0_cx": 151,
+      "lod0_cz": 93,
+      "sha256": "19f24d2415785e5525ee744b77841a33ffff627b54dd50c9e0e90a7f7622ec87",
+      "role": "R1_corrected_parent_height"
+    },
+    "etak": {
+      "path": "data/in/etak/ETAK_EESTI_GPKG.gpkg",
+      "sha256": "e19084c4bff0a6096a7dd38cefa12402bdce98d59c73d5b35c30dda60682f5f9",
+      "arable_layer": "E_303_haritav_maa_a",
+      "role": "arable_parcels_and_hard_masks_and_ditches"
+    },
+    "mullakaart": {
+      "path": "data/in/soil/mullakaart/Mullakaart.shp",
+      "sha256": "c454cc9bbdaf902b55523e363d35d6199b403d0551c177e5624203a222662db9",
+      "role": "soil_texture_loimis"
+    },
+    "marzahn_2012": {
+      "path": "../docs/deep-research/microtopography-generation/library/papers/2012-marzahn-dual-scale-soil-roughness-doi-10.3390-rs4072016.pdf",
+      "sha256": "37e55852fbf610eb51ef132f7c3ba5f346df9e619736c6d785a85b50ff7b98ee",
+      "role": "dual_scale_roughness_facts",
+      "license": "CC BY 3.0"
+    }
+  },
+  "marzahn_dual_scale_facts": {
+    "note": "Marzahn, Seidel & Ludwig 2012, Remote Sens. 4:2016-2032, doi:10.3390/rs4072016. Table 7 detrended two-scale roughness (units cm): s = RMS height, l = autocorrelation length; scale 1 (small) = seedbed rows + soil clods/aggregates; scale 2 (large) = wheel tracks. Table 1 (Roemkens): random roughness 2-200 mm (clods/aggregates), oriented roughness 200-400 mm (rows/tillage). Section 3.2: wheel tracks are sharply bounded with 4-6 cm relief to the surrounding seedbed and a ~200 cm periodicity; s2 > s1 (large scale rougher).",
+    "small_scale_rows_clods": {"rms_cm_range": [0.24, 1.24], "autocorr_len_cm_range": [11.0, 71.6]},
+    "large_scale_wheel_tracks": {"rms_cm_range": [1.12, 2.43], "autocorr_len_cm_range": [23.47, 105.6]},
+    "wheel_track_relief_cm": [4.0, 6.0],
+    "wheel_track_spacing_cm": 200.0,
+    "states_table5": ["seedbed", "crusted_seedbed", "smooth_crusted"]
+  },
+  "operation_unknown_mixture": {
+    "note": "Management state (ploughed/seedbed/crusted/rolled) is NOT observed on this parcel. Rather than a silent single-look default, an explicit mixture over Marzahn Table 5 states drives a spatial state field (world-PRF macro-cells assigned by these weights); each state carries development-hypothesis form scalings. Weights follow the Table 5 sample census (2 seedbed / 5 crusted seedbed / 1 smooth crusted of 8 ESUs).",
+    "state_weights": {"seedbed": 0.25, "crusted_seedbed": 0.625, "smooth_crusted": 0.125},
+    "state_macro_cell_m": 18.0,
+    "state_form_scalings": {
+      "seedbed":        {"row_amp": 1.00, "track_amp": 1.00, "clod_density": 1.00, "clod_size": 1.00},
+      "crusted_seedbed":{"row_amp": 0.80, "track_amp": 1.00, "clod_density": 0.55, "clod_size": 0.85},
+      "smooth_crusted": {"row_amp": 0.50, "track_amp": 0.90, "clod_density": 0.28, "clod_size": 0.70}
+    }
+  },
+  "soil_texture": {
+    "note": "Mullakaart dev-tile polygons: LP (dominant, Lihtloimis v1sl/v1ls, Boniteet 47, Kivisus II, Huumus 23-26) and E2I (Lihtloimis sl/ls, Boniteet 40). Texture sl/ls = sandy loam over loamy sand, weakly gravelly. Friable medium-light texture -> moderate clod size multiplier. Bound as evidence; NOT calibrated truth.",
+    "dominant_lihtloimis": "v1sl/v1ls",
+    "texture_clod_size_multiplier": 1.0
+  },
+  "row_scale_grounding": "row_spacing_mean 0.40 m is anchored to the coarse end of the Roemkens (Table 1, cited in the bound Marzahn 2012 PDF) oriented-roughness band 200-400 mm (rows/tillage patterns) and is consistent with Marzahn's wide-row ESUs (sugar beet 5/8, maize, onion). This is well separated from the ~2.0 m wheel-track scale (ratio ~5) and above the 0.14-0.30 m clod band, so the added-relief spectrum shows two distinct scales. Correction rationale (run-2): run-1 used an ungrounded 0.22 m generic-cereal spacing whose row peak was spectrally buried under the wheel-track skirt; all gate thresholds stayed frozen.",
+  "params": {
+    "row_spacing_mean_m": 0.40,
+    "row_spacing_lognormal_sigma": 0.33,
+    "row_spacing_clamp_m": [0.26, 0.68],
+    "row_relief_m": 0.014,
+    "row_curvature_per_m": 0.00035,
+    "row_amp_cv": 0.35,
+    "row_dropout_fraction": 0.06,
+    "headland_band_m": 8.0,
+    "headland_row_amp_scale": 0.35,
+    "track_spacing_mean_m": 2.0,
+    "track_spacing_cv": 0.10,
+    "track_width_m": 0.34,
+    "track_depth_m": 0.05,
+    "track_rim_fraction": 0.16,
+    "track_curvature_per_m": 0.00035,
+    "clod_cell_m": 0.42,
+    "clod_base_occupancy": 0.5,
+    "clod_diameter_m": [0.14, 0.30],
+    "clod_height_m": [0.008, 0.032],
+    "clod_elongation_range": [0.55, 0.95],
+    "clod_shape_exp_range": [1.7, 3.4],
+    "clod_track_suppression": 0.85,
+    "boundary_collar_m": 2.0,
+    "solve_margin_m": 24.0
+  },
+  "gates": {
+    "row_variance_share_max": 0.5,
+    "spacing_cv_min": 0.25,
+    "cross_parcel_direction_std_deg_min": 10.0,
+    "cross_parcel_phase_min_frac": 0.15,
+    "scale_break_wavelength_ratio_min": 3.0,
+    "row_peak_wavelength_m_range": [0.14, 0.55],
+    "track_peak_wavelength_m_range": [1.2, 3.0],
+    "taper_formfree_p95_m_max": 0.02,
+    "safety_residual_cells_max": 0,
+    "partition_byte_identical_required": true
+  }
+}
