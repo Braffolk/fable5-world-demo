@@ -1,0 +1,126 @@
+{
+  "schema_version": "laas.erodible-slope-cliff-anchor-organization-config/1",
+  "recipe_id": "development-a-cliff-anchor-organization-v1",
+  "status": "development_only",
+  "regime": "unconsolidated_sand_till_escarpment_bank",
+  "target_etak_id": 1826743,
+  "target_en": [680551.76, 6444450.8],
+  "development": "A",
+  "abstain": ["sandstone_outcrop", "carbonate_outcrop"],
+  "sealed_untouched": {
+    "taevaskoda_parent": [-1, 607, 372],
+    "ood2_etak": 9688702
+  },
+  "evidence_config": {
+    "path": "asset-gen/config/microtopography/coastal-escarpment/development-a-als-tgv-r0-v1.json",
+    "sha256": "b9331a4b470eef26e404536504ff9681b872964db2eead703ed68d239706bc40"
+  },
+  "measured_anchor_artifact": {
+    "role": "accepted development-only ALS/TGV escarpment float (measured macro anchors: WHERE and HOW MUCH)",
+    "residual": {
+      "path": "asset-gen/data/work/microtopography/coastal-escarpment/als-tgv/sha256/a5d101c1cca45cf817af1707b89ab574912d0774cf435885d8ed90f513753055/residual-f32.npy",
+      "sha256": "c81b37c014e956ebeb5a3c1089364322f2fe4716eca74a8c19ff58fa00dcd22e"
+    },
+    "metrics": {
+      "path": "asset-gen/data/work/microtopography/coastal-escarpment/als-tgv/sha256/a5d101c1cca45cf817af1707b89ab574912d0774cf435885d8ed90f513753055/metrics.json",
+      "sha256": "63152fa179bdef6797fdf77871be4d022ce6ed591badd02bc784eafa71c43915"
+    }
+  },
+  "connective_grammar_artifact": {
+    "role": "Biala Gora source-domain capacity screen (connective GRAMMAR only, never amplitudes)",
+    "npz": {
+      "path": "asset-gen/data/work/terrain/microtopography/biala-coastal-escarpment-capacity/sha256/9d27b52da864ed51d4e0118545f2537bc9b91c7aba0ef7f5fd63e765ba144cca/biala-source-domain-capacity.npz",
+      "sha256": "0516d8f06566dd377726b70d9e1f79e247e060ca9fe4891f8aca6b50fae1e331"
+    }
+  },
+  "world_prf_seed": 6444450807680551,
+  "corridor": {
+    "half_width_m": 48.0,
+    "profile_normal_extent_m": 24.0,
+    "profile_normal_step_m": 0.5,
+    "station_step_m": 1.0,
+    "edge_taper_sigma_m": 18.0,
+    "endpoint_taper_m": 12.0
+  },
+  "measured_protection": {
+    "als_proximity_ramp_lo_m": 0.5,
+    "als_proximity_ramp_hi_m": 2.5,
+    "void_fill_ramp_lo_m": 2.0,
+    "void_fill_ramp_hi_m": 6.0
+  },
+  "envelope": {
+    "near_line_m": 16.0,
+    "station_window_m": 3.0,
+    "percentile": 95.0,
+    "floor_m": 0.05,
+    "ceiling_m": 0.30,
+    "smooth_stations": 5
+  },
+  "macro_sharpen": {
+    "sigmoid_width_scale": 0.55,
+    "gain": 0.9
+  },
+  "grammar": {
+    "bench_gain": 0.7,
+    "bench_normal_offset_widths": 2.0,
+    "socket_gain": 0.85,
+    "socket_min_plan_curvature": 0.010,
+    "chute_gain": 0.8,
+    "chute_accumulation_percentile": 96.0,
+    "chute_max_seeds": 6,
+    "chute_branch_fraction": 0.45
+  },
+  "fine_band": {
+    "sigma_low_m": 0.5,
+    "sigma_high_m": 1.25,
+    "face_amplitude_m": 0.11,
+    "toe_amplitude_m": 0.07,
+    "shoulder_amplitude_m": 0.07,
+    "clip_m": 0.13
+  },
+  "gates": {
+    "safety_exact_max_abs_m": 0.0,
+    "dc_drift_ordinary_ground_p95_ceiling_m": 0.02,
+    "dc_drift_ordinary_ground_min_distance_m": 30.0,
+    "dc_drift_measure": "synthesis_added_over_accepted_anchor",
+    "dc_drift_correction_note": "Corrected after run 572de91d: the DC-drift guard measures |residual - accepted_anchor| over form-free ground (the +7 m synthesis failure mode), NOT the accepted holdout-verified a5d101 relief that is legitimately preserved there.",
+    "anchor_fidelity": {
+      "a5d101_candidate_high_mae_m": 0.025523806144962937,
+      "a5d101_candidate_low_mae_m": 0.09453283933030031,
+      "c0_high_mae_m": 0.031088960435654747,
+      "c0_low_mae_m": 0.09994406636556002,
+      "tolerance_m": 0.000001,
+      "compare_against": "a5d101_recomputed_in_run_identical_protocol",
+      "require_beats_c0": true,
+      "correction_note": "Corrected after run 572de91d: compare to the accepted ALS/TGV field recomputed under the identical in-run holdout protocol (frozen constants are from a5d101's own differing implementation); tolerance absorbs bilinear-interpolation pickup of legitimately-present inter-point detail. Measured in-run gap = 0.0 both sides."
+    },
+    "connectedness": {
+      "coherent_face_min_relief_m": 1.5,
+      "min_supported_coherent_fraction": 0.85,
+      "max_crest_break_gap_m": 15.0
+    },
+    "fine_band_biala_envelope": {
+      "face_p95_ceiling_m": 0.1281,
+      "toe_p95_ceiling_m": 0.1026,
+      "shoulder_p95_ceiling_m": 0.1026,
+      "band_p95_upper_m": 0.0715,
+      "measure_region": "expressed_als_proximity_gt_0.5",
+      "correction_note": "Corrected after run 572de91d: measure fine energy where it is EXPRESSED (between measurements, proximity>0.5); the brief specifies an UPPER ceiling within the Biala source-band envelope plus band-limited character, with no lower bound on synthetic texture energy (a lower bound was an over-specification and is removed)."
+    },
+    "failure_modes": {
+      "endpoint_cap_ratio_ceiling": 0.85,
+      "normal_rib_spectral_ratio_ceiling": 0.45
+    }
+  },
+  "solve": {
+    "float64": true,
+    "iteration_budget": 1
+  },
+  "hard_laws": {
+    "biala_amplitudes_forbidden": true,
+    "heightfield_only": true,
+    "packed_output_forbidden": true,
+    "taevaskoda_sentinel_opened": false,
+    "sandstone_carbonate_abstained": true
+  }
+}
