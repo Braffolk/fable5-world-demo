@@ -31,7 +31,7 @@ RECIPE_KIND = "research-peat-bog-network-preview-v1"
 PARENT = HeightChunkId(-1, 335, 402)
 AUTHORITY = HeightChunkId(0, 83, 100)
 CORE_BBOX = (540224.0, 6429504.0, 540352.0, 6429632.0)
-RELIEF_PITCH_M = 0.25
+RELIEF_PITCH_M = 0.0625  # native finest-rung pitch; relief placed 1:1 into the fine core
 FINE_CORE = 2048
 AUTH_WINDOW = (slice(1088, 1216), slice(1600, 1728))
 PARENT_WINDOW = (slice(64, 192), slice(64, 192))
@@ -97,10 +97,10 @@ def verify_bog_network_preview(
     if _sha256(artifact_root / "measurements.json") != recipe_inputs["artifact"]["measurementsSha256"]:
         raise ValueError("accepted bog measurements changed")
     relief = np.asarray(
-        np.load(artifact_root / float_name)["core_relief_025m"], dtype=np.float64
+        np.load(artifact_root / float_name)["core_relief_00625m"], dtype=np.float64
     )
-    if relief.shape != (512, 512):
-        raise ValueError("bog core relief must be 512 square")
+    if relief.shape != (FINE_CORE, FINE_CORE):
+        raise ValueError(f"bog core relief must be {FINE_CORE} square")
 
     coverage = plan_hero(PARENT.cx, PARENT.cz)
     expected_coverage = {
@@ -158,10 +158,15 @@ def verify_bog_network_preview(
             if col_in.any() and row_in.any():
                 rr = np.nonzero(row_in)[0]
                 cc = np.nonzero(col_in)[0]
-                rel_r = np.clip(((n1 - north[rr]) / RELIEF_PITCH_M).astype(np.int64), 0, 511)
-                rel_c = np.clip(((east[cc] - e0) / RELIEF_PITCH_M).astype(np.int64), 0, 511)
+                # Native 0.0625 m relief, world-aligned to the fine-core lattice: place 1:1 (each
+                # in-core fine texel <- its own relief texel), NOT a 4x4 nearest block.
+                rel_r0 = int(round((n1 - north[rr[0]]) / RELIEF_PITCH_M - 0.5))
+                rel_c0 = int(round((east[cc[0]] - e0) / RELIEF_PITCH_M - 0.5))
+                block = relief[rel_r0:rel_r0 + rr.size, rel_c0:rel_c0 + cc.size]
+                if block.shape != (rr.size, cc.size):
+                    raise ValueError("relief core does not cover the in-core fine texels 1:1")
                 grid = np.ix_(rr, cc)
-                values[grid] = values[grid] + relief[np.ix_(rel_r, rel_c)]
+                values[grid] = values[grid] + block
                 mask[grid] = True
             expected_cores[chunk] = values.astype(np.float32)
             applied_masks[chunk] = mask

@@ -49,13 +49,16 @@ from .network_preview_verify import VERIFIER_ID, verifier_source_sha256
 
 RECIPE_KIND = "research-peat-bog-network-preview-v1"
 RECIPE_ID = "laas.micro.peat-bog-network-preview.recipe.v1"
-COOK_REVISION = 1
+COOK_REVISION = 2
 ARTIFACT_SCHEMA = "laas.peat-raised-bog-r0-research-bundle-preregistration/4"
 PARENT = HeightChunkId(-1, 335, 402)
 AUTHORITY = HeightChunkId(0, 83, 100)
 CORE_BBOX = (540224.0, 6429504.0, 540352.0, 6429632.0)
 CORE_M = 128.0
-RELIEF_PITCH_M = 0.25
+# The relief is synthesized natively at the LOD -2 finest pitch (0.0625 m == FINE_CORE over the
+# 128 m core), so it is placed 1:1 into the fine core. (It was 0.25 m and 4x nearest-upsampled,
+# which stamped flat 0.25 m terraces into the 6 cm fine rung.)
+RELIEF_PITCH_M = 0.0625
 FINE_QSCALE = 0.002
 PARENT_QSCALE = 0.005
 # A single shared quant offset across all fine chunks so adjacent chunks land on the
@@ -81,9 +84,9 @@ DEFAULT_FLOAT_NAME = "network-v4-float.npz"
 
 def _load_relief(artifact_root: Path, float_name: str = DEFAULT_FLOAT_NAME) -> np.ndarray:
     npz = np.load(artifact_root / float_name)
-    relief = np.asarray(npz["core_relief_025m"], dtype=np.float64)
-    if relief.shape != (512, 512):
-        raise ValueError(f"bog core relief must be 512 square 0.25 m, got {relief.shape}")
+    relief = np.asarray(npz["core_relief_00625m"], dtype=np.float64)
+    if relief.shape != (FINE_CORE, FINE_CORE):
+        raise ValueError(f"bog core relief must be {FINE_CORE} square 0.0625 m, got {relief.shape}")
     return relief
 
 
@@ -160,9 +163,15 @@ def _carved_core(
     if col_in.any() and row_in.any():
         rr = np.nonzero(row_in)[0]
         cc = np.nonzero(col_in)[0]
-        rel_r = np.clip(((n1 - north[rr]) / RELIEF_PITCH_M).astype(np.int64), 0, 511)
-        rel_c = np.clip(((east[cc] - e0) / RELIEF_PITCH_M).astype(np.int64), 0, 511)
-        block = relief[np.ix_(rel_r, rel_c)]
+        # The relief is native 0.0625 m over CORE_BBOX and world-aligned to the fine-core lattice,
+        # so each in-core fine texel maps to its OWN relief texel (1:1) -- NOT a 4x4 block. The
+        # in-core rows/cols are contiguous runs; recover the world-aligned relief index of the
+        # first in-core texel and take the matching contiguous relief slice.
+        rel_r0 = int(round((n1 - north[rr[0]]) / RELIEF_PITCH_M - 0.5))
+        rel_c0 = int(round((east[cc[0]] - e0) / RELIEF_PITCH_M - 0.5))
+        block = relief[rel_r0:rel_r0 + rr.size, rel_c0:rel_c0 + cc.size]
+        if block.shape != (rr.size, cc.size):
+            raise ValueError("relief core does not cover the in-core fine texels 1:1")
         grid = np.ix_(rr, cc)
         values[grid] = values[grid] + block
         mask[grid] = True

@@ -132,3 +132,45 @@ def roughness_field(grid: WorkGrid, white: np.ndarray, *, corner_m: float, slope
     amplitude = highpass * red
     amplitude[0, 0] = 0.0
     return _colour(white, amplitude)
+
+
+def _interp_axis(a: np.ndarray, factor: int, axis: int) -> np.ndarray:
+    """1-D exact band-limited (trig) periodic interpolation of a CELL-CENTERED real signal by
+    an integer ``factor`` along ``axis``.
+
+    Low samples sit at cell centers (i+0.5)/N of the period; the returned samples sit at
+    (j+0.5)/M with M = factor*N. This evaluates the SAME band-limited periodic function the
+    low-grid spectral synthesis defines (the continuous surface sampled finer), NOT a
+    nearest/bilinear upsample. The even-N Nyquist bin is split so the interpolant stays real,
+    and a half-cell Fourier phase shift lands the refined samples on the correct cell-centered
+    positions (the low and refined cell centers never coincide for factor>=2).
+    """
+    a = np.moveaxis(a, axis, -1)
+    n_lo = a.shape[-1]
+    m_hi = factor * n_lo
+    x = np.fft.fft(a, axis=-1)
+    half = n_lo // 2
+    x_hi = np.zeros(a.shape[:-1] + (m_hi,), dtype=complex)
+    x_hi[..., :half] = x[..., :half]  # positive freqs 0..half-1
+    if half > 1:
+        x_hi[..., m_hi - (half - 1):] = x[..., half + 1:]  # negative freqs -(half-1)..-1
+    if n_lo % 2 == 0:  # split the Nyquist (-N/2 == +N/2) so the interpolant is real
+        x_hi[..., half] = 0.5 * x[..., half]
+        x_hi[..., m_hi - half] = 0.5 * x[..., half]
+    else:
+        x_hi[..., half] = x[..., half]
+    # Half-cell alignment: natural zero-pad gives F(j/M); we want F((j + 0.5 - 0.5*factor)/M).
+    modes = np.fft.fftfreq(m_hi, d=1.0 / m_hi)  # signed integer mode per index
+    delta = (0.5 - 0.5 * factor) / m_hi
+    x_hi = x_hi * np.exp(1j * 2.0 * np.pi * modes * delta)
+    y = np.fft.ifft(x_hi, axis=-1).real * factor
+    return np.moveaxis(y, -1, axis)
+
+
+def fft_interp_cellcentered(field_lo: np.ndarray, factor: int) -> np.ndarray:
+    """Exact 2-D band-limited (trig) periodic interpolation of a cell-centered real field by an
+    integer ``factor`` (separable: applied along each axis). Real in -> real out."""
+    if factor == 1:
+        return np.asarray(field_lo, dtype=np.float64)
+    out = _interp_axis(np.asarray(field_lo, dtype=np.float64), factor, axis=0)
+    return _interp_axis(out, factor, axis=1)

@@ -17,5 +17,8 @@ order, or crop window. The whole core + halo is solved once; the storage core is
 last. Deterministic float64.
 
 Produces the relief float in the interface the existing packer/verifier consume
-(network_preview.py / network_preview_verify.py: key ``core_relief_025m``, 512x512, 0.25 m).
+(network_preview.py / network_preview_verify.py: key ``core_relief_00625m``, 2048x2048,
+0.0625 m). The surface is synthesized NATIVELY at the LOD -2 finest pitch (0.0625 m) so the
+packer places it 1:1 into the fine core -- no 4x nearest-neighbour upsample, which had stamped
+flat 0.25 m terraces into the 6 cm rung.
 """

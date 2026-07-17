@@ -34,7 +34,9 @@ AMP_P50 = (0.15, 0.25)
 AMP_P95 = (0.28, 0.40)
 PSD_SLOPE = (-4.6, -3.3)
 DOMINANT_SPACING = (0.8, 3.0)
-MICROFORM_BAND_M = (0.5, 3.0)  # resolvable microform band at 0.25 m pitch (see gates.radial_psd)
+MICROFORM_BAND_M = (0.5, 3.0)  # microform PSD fit band; kept fixed for apples-to-apples with
+#                                the 0.25 m gate (0.0625 m now resolves down to 0.125 m Nyquist,
+#                                but the microform fit stays in the 0.5-3 m band; see gates.radial_psd)
 FIRST_ZERO = (0.3, 0.9)
 COARSE_SCALE_MIN_M = 8.0
 HOLLOW_HUMMOCK_MAX = 0.01
@@ -166,7 +168,7 @@ def freeze(result: synth.SynthResult, report: dict, output_root: Path) -> Path:
     out.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         out / FLOAT_NAME,
-        core_relief_025m=relief,
+        core_relief_00625m=relief,
         latent_std_core=result.latent_std[result.core_slice].astype(np.float32),
         coarse_core=result.coarse[result.core_slice].astype(np.float32),
         authority_core=result.authority[result.core_slice],

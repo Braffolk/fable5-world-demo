@@ -1,9 +1,19 @@
-"""Whole-core+halo plurigaussian synthesis -> the 512x512 0.25 m core relief float.
+"""Whole-core+halo plurigaussian synthesis -> the 2048x2048 0.0625 m core relief float.
 
 Solves the two-field plurigaussian over a fixed work domain (core + 192 m halo) in world
 coordinates, then crops the storage core last. Reuses ``peat_bog_network`` hydrology (flow
 direction), masks (ETAK authority / open water) and prf (world-keyed innovations). Produces
-the relief in the interface the existing packer/verifier consume (``core_relief_025m``).
+the relief in the interface the existing packer/verifier consume (``core_relief_00625m``).
+
+The relief is emitted at the LOD -2 finest rung pitch (0.0625 m, 2048 over the 128 m core) so
+the packer places it 1:1 (no 4x nearest-neighbour block-replication, which produced flat
+0.25 m terraces). The stochastic fields are DRAWN on the accepted 0.25 m lattice -- fixing the
+realization byte-identically to the accepted, gate-passing 0.25 m surface -- and then
+band-limited (trig / FFT zero-pad) INTERPOLATED to 0.0625 m. That evaluates the SAME
+continuous surface the accepted spectral synthesis already defines, sampled finer; it is
+mathematically exact for the band-limited field (NOT a nearest/bilinear upsample). World-PRF
+determinism stays on the 0.25 m lattice. Masks, pool-bias, ordered thresholds, the per-cell
+Gaussian anamorphosis and the tapers are evaluated natively at 0.0625 m.
 """
 from __future__ import annotations
 
@@ -25,8 +35,14 @@ MIRE_GEOMETRY_SHA256 = "0f85b612f992acf54d80cd5ee622738bb6d954dcf090840169190992
 WHOLE_MIRE_BOUNDS = (539999.4959999993, 6425554.344999999, 541869.2299999967, 6430000.0929999985)
 CORE_BBOX = (540224.0, 6429504.0, 540352.0, 6429632.0)
 CORE_M = 128.0
-OUTPUT_PITCH_M = 0.25
-CORE_RES = 512  # 128 m / 0.25 m
+OUTPUT_PITCH_M = 0.0625  # LOD -2 finest rung pitch; the surface is sampled here (no terraces)
+CORE_RES = 2048  # 128 m / 0.0625 m == FINE_CORE
+# The stochastic fields are DRAWN on this accepted lattice (world-PRF keys on it), which fixes
+# the realization byte-identically to the accepted 0.25 m surface; they are then trig
+# (band-limited) interpolated to OUTPUT_PITCH_M -- the SAME continuous surface sampled finer,
+# not a nearest/bilinear upsample. Masks, pool-bias, thresholds, anamorphosis and tapers are
+# evaluated natively at OUTPUT_PITCH_M.
+FIELD_PITCH_M = 0.25
 HALO_MARGIN_M = 192.0  # >= 3 coarse correlation lengths of context around the core
 MIRE_LAYER = "E_306_margala_a"
 
@@ -60,7 +76,7 @@ class SynthParams:
 
 @dataclass
 class SynthResult:
-    relief_core: np.ndarray  # (512,512) float64, 0.25 m over CORE_BBOX
+    relief_core: np.ndarray  # (2048,2048) float64, 0.0625 m over CORE_BBOX
     height_work: np.ndarray  # raw relative height over the work grid (pre-envelope)
     relief_work: np.ndarray  # enveloped relief over the work grid
     latent_std: np.ndarray  # standardized latent over the work grid
@@ -135,21 +151,33 @@ def synthesize(etak: Path, dtm10: Path, params: SynthParams,
     height = int(round((n1 - n0) / OUTPUT_PITCH_M))
     grid = fields.WorkGrid(east0=float(e0), north1=float(n1), width=width, height=height, pitch=OUTPUT_PITCH_M)
 
+    # Stochastic fields on the accepted FIELD_PITCH_M lattice -> byte-identical accepted
+    # realization; then band-limited trig interpolation to the 6 cm output grid.
+    upsample = int(round(FIELD_PITCH_M / OUTPUT_PITCH_M))
+    fwidth = int(round((e1 - e0) / FIELD_PITCH_M))
+    fheight = int(round((n1 - n0) / FIELD_PITCH_M))
+    field_grid = fields.WorkGrid(
+        east0=float(e0), north1=float(n1), width=fwidth, height=fheight, pitch=FIELD_PITCH_M
+    )
+
     mire = load_mire(etak)
     mask_set = masks.build(etak, mire, work_bbox, OUTPUT_PITCH_M)
     authority = mask_set.authority
     open_water = mask_set.open_water
     flow_angle = _flow_angle(dtm10, work_bbox)
 
-    white = _white_cache(grid, cache_dir)
-    fine = fields.fine_field(grid, white["fine"], range_m=params.fine_range_m, nu=params.fine_nu)
-    coarse = fields.coarse_field(
-        grid, white["coarse"], major_len_m=params.coarse_major_len_m,
+    white = _white_cache(field_grid, cache_dir)
+    fine_lo = fields.fine_field(field_grid, white["fine"], range_m=params.fine_range_m, nu=params.fine_nu)
+    coarse_lo = fields.coarse_field(
+        field_grid, white["coarse"], major_len_m=params.coarse_major_len_m,
         minor_len_m=params.coarse_minor_len_m, flow_angle_rad=flow_angle,
     )
-    rough = fields.roughness_field(
-        grid, white["rough"], corner_m=params.roughness_corner_m, slope_exp=params.roughness_slope_exp
+    rough_lo = fields.roughness_field(
+        field_grid, white["rough"], corner_m=params.roughness_corner_m, slope_exp=params.roughness_slope_exp
     )
+    fine = fields.fft_interp_cellcentered(fine_lo, upsample)
+    coarse = fields.fft_interp_cellcentered(coarse_lo, upsample)
+    rough = fields.fft_interp_cellcentered(rough_lo, upsample)
 
     # Pool-margin wetness bias: hollows grade into real ETAK pools; bias the latent downward
     # within a margin of open water. Distance in metres.

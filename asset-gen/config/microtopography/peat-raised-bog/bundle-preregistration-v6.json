@@ -7,7 +7,7 @@
   "amendment_kind": "concrete_recipe_freeze_for_the_v2_plurigaussian_route",
   "route": "hydrology_conditioned_two_field_plurigaussian_gaussian_anamorphosis",
   "status": {
-    "state": "float_and_preview_generated_gates_pass_awaiting_ground_level_verdict",
+    "state": "cook_revision_2_native_6cm_relief_float_and_preview_generated_all_7_synthesis_gates_and_7_verifier_gates_pass_terraces_fixed_awaiting_user_visual_verdict",
     "research_only": true,
     "method_implementation_authorized": true,
     "r0_generation_authorized": true,
@@ -116,31 +116,37 @@
     "canonical_seed_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
   },
   "frozen_artifact": {
-    "root": "asset-gen/data/work/microtopography/peat-bog-plurigaussian-v6/sha256/b24701994267d1ec1166a20a9c2b7178714a1bde8776f0b70a704e69be318a1c",
-    "build_id": "b24701994267d1ec1166a20a9c2b7178714a1bde8776f0b70a704e69be318a1c",
+    "cook_revision": 2,
+    "cook_revision_note": "COOK_REVISION 1->2: the relief is now emitted at the LOD -2 finest rung 0.0625 m (2048^2 over the 128 m core) via band-limited FFT (trig) interpolation of the ACCEPTED 0.25 m stochastic fields to 0.0625 m, with masks/pool-bias/ordered-thresholds/anamorphosis/tapers evaluated natively at 0.0625 m. This fixes the packer's 4x nearest-neighbour upsample, which had stamped flat 0.25 m terraces into the 6 cm rung. The interpolation is mathematically exact for the band-limited field (NOT nearest/bilinear) and PRESERVES the accepted realization (0.25 m nodes unchanged; class fractions hollow 0.4245 vs the accepted 0.4247).",
+    "root": "asset-gen/data/work/microtopography/peat-bog-plurigaussian-v6/sha256/2a9bfd1708c2ff5a6b82dfa2213508fc09c24392157b8fb21a723c4489ee3ee0",
+    "build_id": "2a9bfd1708c2ff5a6b82dfa2213508fc09c24392157b8fb21a723c4489ee3ee0",
     "float_name": "plurigaussian-v6-float.npz",
-    "float_sha256": "4f5a2d3a9e912bfcbb79cfa80e158f20ad09f6fdc999997e8595e26245038f22",
-    "measurements_sha256": "d9788815e0d08d4b549f9c89b0f0543a21ece853956a85d5197eabecbb7f867e",
+    "float_key": "core_relief_00625m",
+    "float_shape": [2048, 2048],
+    "float_pitch_m": 0.0625,
+    "float_sha256": "23295c291a7c32cc066ffe111f7af4ac33230eff8a52484ef40c8626a9a2c266",
+    "measurements_sha256": "e43edfea9defef9b414a7adfdacaea6b15cd9c0e7ab95577a5e138b986d95871",
     "implementation_source_sha256": {
-      "__init__.py": "c5c6982fc355bfdc63433554d5bbff690c99c252735685cf33000f87d925cd9b",
+      "__init__.py": "3ccec2d0634b7da0fe00846df1bf59a0c0ad4b8ed12caf4882a09b19f40abbce",
       "anamorphosis.py": "6fb59737c9bac9c1b471c5432bdcc6f3386ebd5a11e6d26cf24a7f02773f3aec",
-      "fields.py": "33b5116609e149cb10bf0c5850ec06d8028502ea2468ebf57b5c3dd31be90d78",
+      "fields.py": "c5fbf97fb5195f73267d4ca0825e9efdf73bc1f1707fecf8943a20ca09965b0e",
       "gates.py": "da95b51691f830a0bb74609f1ab887165c5bf1dffbf46df330c41218066fdaed",
-      "qa.py": "a479590bce9cd7072843854d19e67678f3ea3dd461c6cc6791bb5e6a52339982",
-      "run.py": "2e3f13286c90a1d9206f861c7d37cd41bb243d64404d72101a7cb264cefa0124",
-      "synth.py": "31125da44211f1aecc21df8bcbc5ffe36bdfb0ef211c6cd78fb52796f07110b1"
+      "qa.py": "51a8b54820c96507bd64ecda60672ead87ef6baab5e00c5b6de74af577fa5b22",
+      "run.py": "a041d45b708387d3fab59876bd6303f7283eaa819f6735b99d223854ed881c93",
+      "synth.py": "f6c8a22203e09f072017400af745c22ec4b2b667116996037bed87c0f88bd534"
     }
   },
   "required_gates": {
     "measured_on_output_relief": true,
+    "measured_at_cook_revision": 2,
     "results": {
-      "safety_exact": {"passed": true, "off_authority_residual_cells": 0, "open_water_residual_cells": 0, "core_edge_abs_p99_m": 8.98e-05},
-      "amplitude": {"passed": true, "local_relief_p50_m": 0.2007, "p50_target": [0.15, 0.25], "local_relief_p95_m": 0.3326, "p95_target": [0.28, 0.40], "global_p95_minus_p5_m": 0.2966},
-      "transiogram_ordering": {"passed": true, "hollow_hummock_contact": 0.00121, "max": 0.01, "monotone": true},
-      "class_fractions": {"passed": true, "plurigaussian": {"hollow": 0.4247, "lawn": 0.2823, "hummock": 0.2930}, "ilyasov_target": {"hollow": 0.4125, "lawn": 0.2875, "hummock": 0.3}, "max_abs_error": 0.0122, "tol": 0.08},
-      "anti_artifact": {"passed": true, "psd_loglog_slope": -3.794, "slope_target": [-4.6, -3.3], "dominant_wavelength_m": 2.415, "spacing_target": [0.8, 3.0], "periodicity_peak_ratio": 1.40, "periodicity_max": 8.0, "microform_band_m": [0.5, 3.0]},
-      "two_scale": {"passed": true, "microform_first_zero_m": 0.75, "first_zero_target": [0.3, 0.9], "coarse_half_autocorr_m": 22.5, "coarse_min_m": 8.0},
-      "pool_coupling": {"passed": true, "margin_low_fraction": 0.622, "min": 0.6, "hummock_over_pool_cells": 0}
+      "safety_exact": {"passed": true, "off_authority_residual_cells": 0, "open_water_residual_cells": 0, "core_edge_abs_p99_m": 5.690775785355551e-06},
+      "amplitude": {"passed": true, "local_relief_p50_m": 0.21969733079460274, "p50_target": [0.15, 0.25], "local_relief_p95_m": 0.3517464692572474, "p95_target": [0.28, 0.40], "global_p95_minus_p5_m": 0.2965568334750481},
+      "transiogram_ordering": {"passed": true, "hollow_hummock_contact": 0.0, "max": 0.01, "monotone": true},
+      "class_fractions": {"passed": true, "plurigaussian": {"hollow": 0.42453177999304076, "lawn": 0.2826208101912723, "hummock": 0.2928474098156869}, "ilyasov_target": {"hollow": 0.4125, "lawn": 0.2875, "hummock": 0.3}, "max_abs_error": 0.012031779993040781, "tol": 0.08},
+      "anti_artifact": {"passed": true, "psd_loglog_slope": -3.8369305658710893, "slope_target": [-4.6, -3.3], "dominant_wavelength_m": 2.4150943396226414, "spacing_target": [0.8, 3.0], "periodicity_peak_ratio": 1.408182169715195, "periodicity_max": 8.0, "microform_band_m": [0.5, 3.0]},
+      "two_scale": {"passed": true, "microform_first_zero_m": 0.75, "first_zero_target": [0.3, 0.9], "coarse_half_autocorr_m": 22.4375, "coarse_min_m": 8.0},
+      "pool_coupling": {"passed": true, "margin_low_fraction": 0.6200189895898796, "min": 0.6, "hummock_over_pool_cells": 0}
     },
     "measurement_notes": {
       "moore_estimators": "microform gates are measured on the sigma=0.5 m detrended output, exactly Moore's method.",
@@ -148,24 +154,34 @@
     },
     "ground_level_gate": "the AUTHORITATIVE acceptance gate is the real-WebGPU ground-level boot of the packed preview (grass=0); top-down hillshade is NOT sufficient (it fooled the orchestrator three times)."
   },
+  "known_followups_gate_appropriateness": {
+    "status": "open_deferred_not_blocking_this_preview",
+    "discovered": "2026-07-17 during the COOK_REVISION 2 terrace fix",
+    "issue": "The class_fractions and pool_coupling gates are measured over the 128 m storage core, which is SMALLER than the ~60 m coarse ridge-hollow patterning correlation length (~2 wavelengths). So both gates are FRAGILE to whichever phase of the coarse patterning field the core happens to sample, and the 128 m core cannot represent whole-bog ecological area fractions. Additionally, pool_coupling's hummock-over-pool test uses a median-relative threshold (height > authority_median + 0.06) that mis-fires and counts ALL relief-free open-water cells as 'hummock over pool' whenever the surface skews hollow enough that the median relief falls below -0.06 m.",
+    "evidence": "A native-6 cm re-draw (a DIFFERENT world-PRF realization, coarse mean over the core +0.224 -> -1.120) shifted class hollow 0.42 -> 0.67 and tripped 429514 spurious hummock-over-pool cells, FAILING both gates -- purely from the coarse phase, not the recipe. The accepted realization (preserved by the COOK_REVISION 2 band-limited interpolation) passes both. The original COOK_REVISION 1 pass was partly the luck of that coarse draw.",
+    "recommended_fix": "Measure class_fractions over the whole connected-mire authority (or several core-sized windows) rather than one 128 m core; make pool_coupling robust to a hollow-skewed median (e.g. test relief against 0 / a fixed hollow band, not the authority median). Gate-appropriateness work, does not change the synthesis recipe."
+  },
   "packed_preview": {
-    "note": "packer/verifier (network_preview.py / network_preview_verify.py) reused unchanged; only the synthesis float was swapped.",
-    "recipe_sha256": "75952d34416223821d5e8361beec7ee1266bdaebd1ed4c9f91e53f0d6541300f",
-    "preview_manifest_path": "asset-gen/data/out/builds/75952d34416223821d5e8361beec7ee1266bdaebd1ed4c9f91e53f0d6541300f/m/a1b171f1d95ca567/manifest.json",
-    "preview_manifest_sha256": "a1b171f1d95ca5677c0532659a441cb75af9e043ea4239f2177fde757f0e9aec",
-    "corrected_base_manifest_sha256": "522cccb459204b60",
+    "note": "packer/verifier (network_preview.py / network_preview_verify.py) updated for COOK_REVISION 2: RELIEF_PITCH_M 0.25->0.0625 and _carved_core places the 2048^2 6 cm relief 1:1 (world-aligned contiguous slice, no np.ix_ block-replication); the verifier's expected_core mirrors it. This repack is on the accepted-realization COOK_REVISION 2 float.",
+    "recipe_sha256": "bb80f700c74981a922ec6e4df23394e0b0bf2a8d518cd7d467e9a375c344a121",
+    "preview_manifest_path": "asset-gen/data/out/builds/bb80f700c74981a922ec6e4df23394e0b0bf2a8d518cd7d467e9a375c344a121/m/329e627b41030664/manifest.json",
+    "preview_manifest_sha256": "329e627b41030664f4667831ddb99dd2222bf0c62997b7535afdad0ab8f5a125",
+    "corrected_base_manifest_sha256": "314556d01e2ee7f845ff27225250eb20d6b82dcc0b9de0fada8a4bceb29e3d87",
+    "source_base_manifest_path": "asset-gen/data/out/builds/3bfad95469e46fc2c91d05c1e17686010d1aa261e1cc06671b99c6431b77f175/m/7aa4d523ea99c37d/manifest.json",
     "independent_verifier": {
       "verifier": "assetgen.peat-bog-network-preview-verify.v1",
       "all_gates_passed": true,
-      "gates": ["coverage", "parentClosure", "headers", "decodedHierarchy", "aprons", "determinism", "hardMasks"]
+      "gates": ["coverage", "parentClosure", "headers", "decodedHierarchy", "aprons", "determinism", "hardMasks"],
+      "evidence": {"apron_max_seam_m": 0.0, "max_lod0_decoded_child_error_m": 0.00500178337097168, "max_core_round_trip_error_m": 0.00099945068359375, "max_excluded_c0_change_m": 0.00099945068359375, "carved_samples": 4194304, "pool_and_open_water_relief_free": true}
     },
     "ground_level_boot": {
-      "note": "real-WebGPU boot-smoke, grass=0, dry-hummock vantage; the core-center vantage sits in a pool (hollows correctly at the water table).",
+      "note": "COOK_REVISION 2 real-WebGPU boot-smoke, grass=0, eye 1.6 m, static settled (frame 150), dry-hummock vantage; zero page/console/WebGPU/pipeline errors. Also confirmed at the float level by a per-texel NEAREST 0.0625 m hillshade (no 4x4 block-replication).",
       "core_center_en": [540288.0, 6429568.0],
       "dry_hummock_game_xz": [171670, 205931],
       "url_template": "http://localhost:<vite>/?src=estonia&scene=world&grass=0&shadowclipres=896&x=171670&z=205931&dataurl=http://localhost:<data-port>&alt=1.6&yaw=2.4&pitch=-0.10&T=7",
       "en_to_game": "game x = E - 368640 (anchorE); game z = 6635520 (anchorN) - N",
-      "verdict": "reads as a bumpy organic bog: rounded hummock-hollow microrelief AND diagonal 10-100 m ridge-hollow patterning under low raking sun; real pools; NOT dashes/lattice/blocky."
+      "smoke_verdict": "near-field reads as smooth rolling organic bog: rounded hummock-hollow microrelief + two-scale patterning, real Laugas pools, NO flat rectangular terraces / step blocks (the COOK_REVISION 1 defect is gone).",
+      "user_visual_verdict": "pending"
     }
   },
   "publication": {

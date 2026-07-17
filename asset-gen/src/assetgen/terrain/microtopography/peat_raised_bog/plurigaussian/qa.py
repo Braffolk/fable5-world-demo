@@ -28,9 +28,11 @@ def render(result, out_dir: Path) -> list[str]:
     import matplotlib.pyplot as plt
     from matplotlib import cm
 
+    from . import synth
+
     out_dir.mkdir(parents=True, exist_ok=True)
     core = result.relief_core
-    pitch = 0.25
+    pitch = synth.OUTPUT_PITCH_M
     auth = result.authority[result.core_slice]
     water = result.open_water[result.core_slice]
     written: list[str] = []
@@ -49,6 +51,24 @@ def render(result, out_dir: Path) -> list[str]:
     plt.close(fig)
     written.append(p.name)
 
+    # 1b. Per-texel NEAREST hillshade of a close 16 m window, interpolation='none': proves the
+    # native-0.0625 m relief has NO 4x block-replication (each 6 cm texel is distinct). Contrast
+    # with the old 0.25 m upsample, where texels came in flat 4x4 blocks (the terrace defect).
+    n = int(round(16.0 / pitch))  # 16 m window near the core center
+    r0 = core.shape[0] // 2
+    c0 = core.shape[1] // 2
+    win = core[r0:r0 + n, c0:c0 + n]
+    hs_nn = _hillshade(win, pitch, az_deg=315.0, alt_deg=25.0)
+    fig, ax = plt.subplots(figsize=(7, 7), dpi=160)
+    ax.imshow(hs_nn, cmap="gray", interpolation="none", extent=[0, 16, 0, 16])
+    ax.set_title(f"v6 6 cm relief — NEAREST hillshade, 16 m window ({n}x{n} texels, no block-replication)")
+    ax.set_xlabel("m")
+    ax.set_ylabel("m")
+    p = out_dir / "01b_hillshade_nearest_6cm.png"
+    fig.savefig(p, bbox_inches="tight")
+    plt.close(fig)
+    written.append(p.name)
+
     # 2. Relief colourmap.
     fig, ax = plt.subplots(figsize=(7, 7), dpi=140)
     im = ax.imshow(np.where(auth, core, np.nan), extent=[0, 128, 0, 128],
@@ -63,7 +83,9 @@ def render(result, out_dir: Path) -> list[str]:
     # 3. Low-oblique perspective preview of a central 64 m transect strip (form check).
     from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
-    sub = core[128:384, 128:384]  # central 64 m
+    half = int(round(32.0 / pitch))  # central 64 m strip
+    mid = core.shape[0] // 2
+    sub = core[mid - half:mid + half, mid - half:mid + half]
     xx, yy = np.meshgrid(np.arange(sub.shape[1]) * pitch, np.arange(sub.shape[0]) * pitch)
     fig = plt.figure(figsize=(10, 5), dpi=140)
     ax = fig.add_subplot(111, projection="3d")
