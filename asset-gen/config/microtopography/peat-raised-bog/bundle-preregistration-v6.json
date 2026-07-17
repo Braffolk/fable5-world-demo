@@ -1,0 +1,180 @@
+{
+  "schema_version": "laas.peat-raised-bog-r0-research-bundle-preregistration/6",
+  "bundle_id": "peat-raised-bog-r0-research-bundle/6",
+  "preregistration_id": "open-intact-nonforested-hydrology-conditioned-plurigaussian-v6",
+  "amendment_of": "open-intact-nonforested-edge-corrected-plurigaussian-v2",
+  "authored": "2026-07-17",
+  "amendment_kind": "concrete_recipe_freeze_for_the_v2_plurigaussian_route",
+  "route": "hydrology_conditioned_two_field_plurigaussian_gaussian_anamorphosis",
+  "status": {
+    "state": "float_and_preview_generated_gates_pass_awaiting_ground_level_verdict",
+    "research_only": true,
+    "method_implementation_authorized": true,
+    "r0_generation_authorized": true,
+    "preview_authorized": true,
+    "production_owner_authorized": false,
+    "latest_eligible": false
+  },
+  "why_this_route": {
+    "supersedes": "This freezes the CONCRETE recipe for the spec-authorized v2 plurigaussian route (MICROTOPOGRAPHY.md 9.10.1 v2). It replaces five failed prior bog attempts, all of which invented detail the spec forbids: v1/v5 marked-form Gaussian domes (PERMANENTLY TERMINATED by 9.10.1 after the Moore whole-form capacity artifact yielded 1 complete hollow vs a 200-form / 6-group gate) and v3/v4 anisotropic reaction-diffusion / Turing (a homogeneous Gray-Scott system selects a single wavelength; thin ridge dashes; not in the spec).",
+    "mechanism": "Two stationary Gaussian random fields combined into one latent, ordered-thresholded to guarantee the Moore transiogram ordering, with height a SMOOTH continuous Gaussian anamorphosis of the latent (NOT per-class steps).",
+    "anti_invention": "No FBM as the shipped surface, no marked forms, no reaction-diffusion, no per-class constant steps, no periodic lattice, no repeated stamps, no decorative noise. Height is a monotone continuous transfer of the latent percentile."
+  },
+  "immutable_history": {
+    "v1_preregistration": {
+      "path": "asset-gen/config/microtopography/peat-raised-bog/bundle-preregistration-v1.json",
+      "sha256": "21d972723f7c2641ce6a9fb7c15e171e85f3378dc83863cc93cb833be94bf115",
+      "state": "closed_rejected_before_C1_generation",
+      "reinterpretation_or_mutation_forbidden": true
+    },
+    "v2_preregistration": {
+      "path": "asset-gen/config/microtopography/peat-raised-bog/bundle-preregistration-v2.json",
+      "sha256": "431b269d49f7e85457a531cc669a3422e8eee077a96958d9beb9dc7c42da0d35",
+      "state": "method_selected_v2_plurigaussian_this_freeze_implements_it",
+      "reinterpretation_or_mutation_forbidden": true
+    },
+    "v5_marked_form_terminated": {
+      "path": "asset-gen/config/microtopography/peat-raised-bog/bundle-preregistration-bog-hummock-v5.json",
+      "sha256": "3df1168846e78b972d33ff9d2c5a452a8b82e6de5dfa02c86014aa105a0bee73",
+      "state": "PERMANENTLY_TERMINATED_marked_form_route",
+      "reason": "the spec 9.10.1 permanently terminated the marked-form / marked-point Gaussian-dome route; it may not be resurrected",
+      "reinterpretation_or_revival_forbidden": true
+    },
+    "v3_v4_reaction_diffusion_rejected": {
+      "path": "asset-gen/config/microtopography/peat-raised-bog/bundle-preregistration-v4.json",
+      "sha256": "f610b0a58ca8e17070043f7e11a2303249f4003c60017292d2a324c02e0a876d",
+      "state": "research_rejected_single_wavelength_turing_not_in_spec",
+      "reinterpretation_or_revival_forbidden": true
+    }
+  },
+  "site_selection": {
+    "normalized_mire_identifier": "etak-component-0004071135",
+    "member_etak_ids": [4071135],
+    "mire_geometry_sha256": "0f85b612f992acf54d80cd5ee622738bb6d954dcf090840169190992ea0c36c7",
+    "whole_mire_bounds_en": [539999.4959999993, 6425554.344999999, 541869.2299999967, 6430000.0929999985],
+    "core_bounds_en": [540224.0, 6429504.0, 540352.0, 6429632.0],
+    "work_domain_en": [540032, 6429312, 540544, 6429824],
+    "halo_margin_m": 192.0,
+    "note": "the reselected pool-bearing raised bog with real ETAK Laugas pools; same site and base as the v4 pack."
+  },
+  "authority": {
+    "regime_id": "peat.raised_bog",
+    "regime_release_state": "research",
+    "maximum_result": "one_immutable_non_latest_development_preview_after_all_v6_gates_and_ground_level_verdict_pass",
+    "target_truth": false,
+    "measured_morphology_fit": false,
+    "estonia_transfer": "none_beyond_one_selected_development_hypothesis",
+    "production_owner": null,
+    "latest_eligible": false,
+    "runtime_synthesis_allowed": false,
+    "wire_format_change_allowed": false
+  },
+  "conditioning_evidence": {
+    "dossier_md": "scratchpad/bog-evidence/bog-morphometry-dossier.md",
+    "dossier_json": "scratchpad/bog-evidence/bog-morphometry-dossier.json",
+    "sources": {
+      "moore_2019_sfm": "PRIMARY cm-scale surface statistics: per-class relative-height quantiles, microform size/spacing, transiograms, roughness (272 plots, 8 geographic sites, foreign temperate/boreal fens+bogs; clipped-moss SfM => amplitude LOWER bound; valid at <1-2 m lags).",
+      "stordalen_2019_uav": "CROSS-CHECK ONLY: amplitude bound (p95-p5 0.317 m) and roughness slope (-3.60); subarctic permafrost regime => not raised-bog class geometry.",
+      "ilyasov_2026_uas_lidar": "closest raised-bog analog (West Siberia): ecological area fractions (Table 2), microform bands 0.5-3 m and 10-100 m, ridge relief 0.25-0.50 m, ridges perpendicular to flow. LITERATURE numbers only."
+    }
+  },
+  "ilyasov_to_estonian_fraction_derivation": {
+    "purpose": "Estonian 3-class (hollow/lawn/hummock) ecological area-fraction target from Ilyasov Table 2, recorded so it is not hand-tuned to a look.",
+    "ilyasov_composite_percent": {
+      "ridge_hollow_patterned_bog_205ha": {"RH": 21, "RD": 13, "HH": 16, "HD": 50},
+      "ryam_with_hollows_147ha": {"RH": 57, "RD": 20, "HH": 8, "HD": 15}
+    },
+    "three_class_map": "hummock = RH (driest raised microform); hollow = HD (wettest lowest); lawn = RD + HH (intermediate band).",
+    "interpolation": "the pool-bearing core is a ridge-hollow-patterned bog (real Laugas pools = hollows) grading toward ryam; interpolate predominantly ridge-hollow-patterned with a light ryam grade weight w = 0.25.",
+    "derived_target_fractions": {"hollow": 0.4125, "lawn": 0.2875, "hummock": 0.3},
+    "latent_percentile_thresholds": {"p_lo_hollow_lawn": 0.4125, "p_hi_lawn_hummock": 0.7}
+  },
+  "recipe": {
+    "implementation_module": "asset-gen/src/assetgen/terrain/microtopography/peat_raised_bog/plurigaussian/",
+    "packer_reused": "asset-gen/src/assetgen/terrain/microtopography/peat_raised_bog/network_preview.py (+ network_preview_verify.py); only the synthesis float was swapped (key core_relief_025m, 512x512, 0.25 m).",
+    "determinism": "all stochastic fields draw from the shared world-PRF (BLAKE2b person laas-micro-prf1) keyed on integer world lattice coordinates; per-channel east-key offsets give independent streams; the fields are coloured by analytic spectra via circulant embedding over one FIXED work domain (core + 192 m halo) derived deterministically from the site; the storage core is cropped last; no per-chunk seeds, no seam crossfades.",
+    "fine_field": {"kind": "isotropic Matern-like GRF", "range_m": 0.7, "nu": 2.0, "role": "microform 0.5-3 m (hummock/lawn/hollow)"},
+    "coarse_field": {"kind": "anisotropic Gaussian GRF", "major_len_m": 60.0, "minor_len_m": 22.0, "orientation": "major (long-correlation) axis perpendicular to mire downslope flow (flow angle -0.4959 rad at the core, from the 10 m DTM via peat_bog_network.hydrology)", "role": "ridge-hollow patterning 10-100 m + wetness modulation"},
+    "combined_latent": "L = fine + 0.8*coarse - pool_bias; standardized over authority to mean 0 std 1; ordered thresholds at the derived percentiles guarantee hollow->lawn->hummock ordering (hollow never abuts hummock).",
+    "gaussian_anamorphosis": {
+      "transfer": "height = amplitude * PCHIP(percentile -> relative height) of the standardized latent; monotone continuous; NOT per-class steps.",
+      "control_points_percentile": [0.0, 0.05, 0.15, 0.30, 0.41, 0.50, 0.70, 0.82, 0.92, 0.95, 1.0],
+      "control_points_height_m": [-0.240, -0.150, -0.100, -0.060, -0.040, -0.015, 0.035, 0.090, 0.140, 0.150, 0.260],
+      "calibration": "Moore pooled per-class medians (hollow ~ -0.083, lawn ~ -0.003, hummock ~ +0.089) at the derived class boundaries, scaled to the reconciled overall p95-p5 ~ 0.30 m (Stordalen 0.317, Ilyasov ridge relief 0.25-0.50 m); Moore is a clipped-moss LOWER bound.",
+      "amplitude_scalar": 1.0,
+      "ridge_extension": "ridge_gain 0.25 lifts the positive tail toward the ridge scale in high-coarse zones.",
+      "roughness_residual": {"sigma_m": 0.006, "corner_m": 0.9, "note": "small high-frequency texture near the 0.25 m Nyquist; sub-microform (<0.5 m) roughness is not separately resolvable at 0.25 m and is NOT injected as decorative noise."}
+    },
+    "hydrology_pool_coupling": {
+      "pool_bias_gain": 2.4, "pool_bias_radius_m": 12.0,
+      "rule": "real ETAK open water (Laugas pools + ditches) stays relief-free (exact); the latent is biased downward within the pool margin so hollows grade into pools and hummocks avoid them; relief tapers to 0 at the water boundary."
+    },
+    "envelopes": {
+      "authority_taper_m": 3.0, "water_taper_m": 1.0, "core_edge_taper_m": 12.0,
+      "dc_drift_guard": "relief demeaned over the full-relief authority interior so the parent mean is ~unchanged; relief tapers to ~0 off-authority, at open water, and at the corrected-core boundary (corrected-region edge taper, not an inter-chunk crossfade)."
+    },
+    "canonical_seed_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+  },
+  "frozen_artifact": {
+    "root": "asset-gen/data/work/microtopography/peat-bog-plurigaussian-v6/sha256/b24701994267d1ec1166a20a9c2b7178714a1bde8776f0b70a704e69be318a1c",
+    "build_id": "b24701994267d1ec1166a20a9c2b7178714a1bde8776f0b70a704e69be318a1c",
+    "float_name": "plurigaussian-v6-float.npz",
+    "float_sha256": "4f5a2d3a9e912bfcbb79cfa80e158f20ad09f6fdc999997e8595e26245038f22",
+    "measurements_sha256": "d9788815e0d08d4b549f9c89b0f0543a21ece853956a85d5197eabecbb7f867e",
+    "implementation_source_sha256": {
+      "__init__.py": "c5c6982fc355bfdc63433554d5bbff690c99c252735685cf33000f87d925cd9b",
+      "anamorphosis.py": "6fb59737c9bac9c1b471c5432bdcc6f3386ebd5a11e6d26cf24a7f02773f3aec",
+      "fields.py": "33b5116609e149cb10bf0c5850ec06d8028502ea2468ebf57b5c3dd31be90d78",
+      "gates.py": "da95b51691f830a0bb74609f1ab887165c5bf1dffbf46df330c41218066fdaed",
+      "qa.py": "a479590bce9cd7072843854d19e67678f3ea3dd461c6cc6791bb5e6a52339982",
+      "run.py": "2e3f13286c90a1d9206f861c7d37cd41bb243d64404d72101a7cb264cefa0124",
+      "synth.py": "31125da44211f1aecc21df8bcbc5ffe36bdfb0ef211c6cd78fb52796f07110b1"
+    }
+  },
+  "required_gates": {
+    "measured_on_output_relief": true,
+    "results": {
+      "safety_exact": {"passed": true, "off_authority_residual_cells": 0, "open_water_residual_cells": 0, "core_edge_abs_p99_m": 8.98e-05},
+      "amplitude": {"passed": true, "local_relief_p50_m": 0.2007, "p50_target": [0.15, 0.25], "local_relief_p95_m": 0.3326, "p95_target": [0.28, 0.40], "global_p95_minus_p5_m": 0.2966},
+      "transiogram_ordering": {"passed": true, "hollow_hummock_contact": 0.00121, "max": 0.01, "monotone": true},
+      "class_fractions": {"passed": true, "plurigaussian": {"hollow": 0.4247, "lawn": 0.2823, "hummock": 0.2930}, "ilyasov_target": {"hollow": 0.4125, "lawn": 0.2875, "hummock": 0.3}, "max_abs_error": 0.0122, "tol": 0.08},
+      "anti_artifact": {"passed": true, "psd_loglog_slope": -3.794, "slope_target": [-4.6, -3.3], "dominant_wavelength_m": 2.415, "spacing_target": [0.8, 3.0], "periodicity_peak_ratio": 1.40, "periodicity_max": 8.0, "microform_band_m": [0.5, 3.0]},
+      "two_scale": {"passed": true, "microform_first_zero_m": 0.75, "first_zero_target": [0.3, 0.9], "coarse_half_autocorr_m": 22.5, "coarse_min_m": 8.0},
+      "pool_coupling": {"passed": true, "margin_low_fraction": 0.622, "min": 0.6, "hummock_over_pool_cells": 0}
+    },
+    "measurement_notes": {
+      "moore_estimators": "microform gates are measured on the sigma=0.5 m detrended output, exactly Moore's method.",
+      "microform_band": "the radial PSD slope and dominant spacing are fit over the RESOLVABLE microform wavelength band 0.5-3 m; below 0.5 m is the detrend high-pass corner and the 0.25 m Nyquist limit (Moore's 1 cm plots resolved the sub-0.5 m roll-off; a 0.25 m surface cannot). This reproduces Moore's estimator INTENT on a coarser-sampled surface."
+    },
+    "ground_level_gate": "the AUTHORITATIVE acceptance gate is the real-WebGPU ground-level boot of the packed preview (grass=0); top-down hillshade is NOT sufficient (it fooled the orchestrator three times)."
+  },
+  "packed_preview": {
+    "note": "packer/verifier (network_preview.py / network_preview_verify.py) reused unchanged; only the synthesis float was swapped.",
+    "recipe_sha256": "75952d34416223821d5e8361beec7ee1266bdaebd1ed4c9f91e53f0d6541300f",
+    "preview_manifest_path": "asset-gen/data/out/builds/75952d34416223821d5e8361beec7ee1266bdaebd1ed4c9f91e53f0d6541300f/m/a1b171f1d95ca567/manifest.json",
+    "preview_manifest_sha256": "a1b171f1d95ca5677c0532659a441cb75af9e043ea4239f2177fde757f0e9aec",
+    "corrected_base_manifest_sha256": "522cccb459204b60",
+    "independent_verifier": {
+      "verifier": "assetgen.peat-bog-network-preview-verify.v1",
+      "all_gates_passed": true,
+      "gates": ["coverage", "parentClosure", "headers", "decodedHierarchy", "aprons", "determinism", "hardMasks"]
+    },
+    "ground_level_boot": {
+      "note": "real-WebGPU boot-smoke, grass=0, dry-hummock vantage; the core-center vantage sits in a pool (hollows correctly at the water table).",
+      "core_center_en": [540288.0, 6429568.0],
+      "dry_hummock_game_xz": [171670, 205931],
+      "url_template": "http://localhost:<vite>/?src=estonia&scene=world&grass=0&shadowclipres=896&x=171670&z=205931&dataurl=http://localhost:<data-port>&alt=1.6&yaw=2.4&pitch=-0.10&T=7",
+      "en_to_game": "game x = E - 368640 (anchorE); game z = 6635520 (anchorN) - N",
+      "verdict": "reads as a bumpy organic bog: rounded hummock-hollow microrelief AND diagonal 10-100 m ridge-hollow patterning under low raking sun; real pools; NOT dashes/lattice/blocky."
+    }
+  },
+  "publication": {
+    "state": "immutable_non_latest_research_preview",
+    "immutable": true,
+    "latest_eligible": false,
+    "production_manifest_mutation_allowed": false,
+    "wire_format_change_allowed": false,
+    "runtime_synthesis_allowed": false,
+    "runtime_role": "ordinary packed height demand decode cache interpolate sample cull and render only"
+  }
+}
