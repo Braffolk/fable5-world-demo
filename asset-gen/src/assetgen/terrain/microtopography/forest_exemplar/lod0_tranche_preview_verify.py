@@ -31,9 +31,6 @@ RECIPE_KIND = "research-forest-lod0-tranche-preview-v1"
 RECIPE_ID = "laas.micro.forest-lod0-tranche-preview.recipe.v1"
 ARTIFACT_SCHEMA = "forest-mesic-mineral-lod0-tranche-artifact/1"
 MASTER_SHAPE = (32768, 32768)
-MASTER_BBOX = (684032, 6440960, 686080, 6443008)
-MASTER_FINE_ORIGIN = (2464, 1504)
-AUTHORITY = HeightChunkId(0, 154, 94)
 TEXEL_M = 0.0625
 TRANCHE_QOFFSET_M = 30.0
 
@@ -43,30 +40,69 @@ class SiteSpec:
     site_id: str
     parent: HeightChunkId
     bbox_en: tuple[int, int, int, int]
+    authority: HeightChunkId
 
     def json(self) -> dict[str, object]:
         return {
             "siteId": self.site_id,
             "reviewBboxEn": list(self.bbox_en),
             "parent": [self.parent.lod, self.parent.cx, self.parent.cz],
-            "authority": [AUTHORITY.lod, AUTHORITY.cx, AUTHORITY.cz],
+            "authority": [self.authority.lod, self.authority.cx, self.authority.cz],
         }
 
 
-SITES = tuple(
-    SiteSpec(
-        f"forest-lod0-154-94-r{row}-c{col}",
-        HeightChunkId(-1, 616 + col, 376 + row),
-        (
-            684032 + col * 512,
-            6443008 - (row + 1) * 512,
-            684032 + (col + 1) * 512,
-            6443008 - row * 512,
-        ),
-    )
-    for row in range(4)
-    for col in range(4)
-)
+@dataclass(frozen=True)
+class TrancheGeom:
+    """All 154-94-style geometry of one LOD0 tranche derived from its chunk id."""
+
+    cx: int
+    cz: int
+    bbox: tuple[int, int, int, int]
+
+    @property
+    def authority(self) -> HeightChunkId:
+        return HeightChunkId(0, self.cx, self.cz)
+
+    @property
+    def fine_origin(self) -> tuple[int, int]:
+        return (self.cx * 16, self.cz * 16)
+
+    @property
+    def parent_origin(self) -> tuple[int, int]:
+        return (self.cx * 4, self.cz * 4)
+
+    @property
+    def sites(self) -> tuple[SiteSpec, ...]:
+        e_min, _n_min, _e_max, n_max = self.bbox
+        pcx0, pcz0 = self.parent_origin
+        authority = self.authority
+        return tuple(
+            SiteSpec(
+                f"forest-lod0-{self.cx}-{self.cz}-r{row}-c{col}",
+                HeightChunkId(-1, pcx0 + col, pcz0 + row),
+                (
+                    e_min + col * 512,
+                    n_max - (row + 1) * 512,
+                    e_min + (col + 1) * 512,
+                    n_max - row * 512,
+                ),
+                authority,
+            )
+            for row in range(4)
+            for col in range(4)
+        )
+
+
+def geom_from_inputs(inputs: dict[str, Any]) -> TrancheGeom:
+    master = inputs["singleContiguousMaster"]
+    _lod, cx, cz = inputs["coverage"]["sites"][0]["authority"]
+    geom = TrancheGeom(cx=int(cx), cz=int(cz), bbox=tuple(master["bboxEn"]))
+    if (
+        list(master["shape"]) != list(MASTER_SHAPE)
+        or list(master["fineOrigin"]) != list(geom.fine_origin)
+    ):
+        raise ValueError("forest tranche master geometry is not self-consistent")
+    return geom
 
 
 def verifier_source_sha256() -> str:
@@ -121,11 +157,11 @@ def _height_inventory(manifest_path: Path) -> dict[tuple[int, int, int], tuple[i
 
 
 def _verify_masks(
-    build_root: Path, inputs: dict[str, Any]
+    build_root: Path, inputs: dict[str, Any], sites: tuple[SiteSpec, ...]
 ) -> tuple[dict[HeightChunkId, np.ndarray], list[dict[str, Any]]]:
     allowed_by_parent: dict[HeightChunkId, np.ndarray] = {}
     rows: list[dict[str, Any]] = []
-    for site in SITES:
+    for site in sites:
         identity = inputs["masks"][site.site_id]
         path = build_root / identity["path"]
         if _sha256(path) != identity["sha256"]:
@@ -188,6 +224,12 @@ def verify_lod0_tranche_preview(
     inputs = expectation["recipeInputs"]
     if inputs.get("id") != RECIPE_ID:
         raise ValueError("forest tranche recipe ID changed")
+    geom = geom_from_inputs(inputs)
+    sites = geom.sites
+    authority = geom.authority
+    fine_origin = geom.fine_origin
+    master_bbox = geom.bbox
+    parent_ce, parent_cn = geom.parent_origin
     artifact_root = Path(inputs["artifact"]["root"])
     if _sha256(artifact_root / "manifest.json") != inputs["artifact"]["manifestSha256"]:
         raise ValueError("forest tranche manifest changed")
@@ -198,7 +240,7 @@ def verify_lod0_tranche_preview(
         or artifact.get("build_id") != artifact_root.name
         or artifact.get("status") != "inspect_float_preview"
         or artifact.get("failures") != []
-        or tuple(metrics.get("bbox_en", ())) != MASTER_BBOX
+        or tuple(metrics.get("bbox_en", ())) != master_bbox
         or tuple(metrics.get("shape", ())) != MASTER_SHAPE
         or metrics.get("maximum_hard_exclusion_residual_m") != 0.0
         or float(metrics.get("maximum_one_metre_mean_error_m", 1.0)) > 1e-12
@@ -210,9 +252,9 @@ def verify_lod0_tranche_preview(
             raise ValueError(f"forest tranche artifact changed: {relative}")
     master = np.load(artifact_root / "surface/c1_height_f32.npy", mmap_mode="r")
 
-    coverage = plan_parent_set(tuple(site.parent for site in SITES))
+    coverage = plan_parent_set(tuple(site.parent for site in sites))
     expected_coverage = {
-        "sites": [site.json() for site in SITES],
+        "sites": [site.json() for site in sites],
         "parents": [[c.lod, c.cx, c.cz] for c in coverage.parents],
         "publishedFine": [[c.lod, c.cx, c.cz] for c in coverage.published_fine],
         "transientSupport": [[c.lod, c.cx, c.cz] for c in coverage.transient_support],
@@ -248,8 +290,8 @@ def verify_lod0_tranche_preview(
         ):
             raise ValueError(f"fine header mismatch: {chunk}")
         if chunk in published:
-            dx = chunk.cx - MASTER_FINE_ORIGIN[0]
-            dz = chunk.cz - MASTER_FINE_ORIGIN[1]
+            dx = chunk.cx - fine_origin[0]
+            dz = chunk.cz - fine_origin[1]
             expected = master[
                 dz * 2048 : (dz + 1) * 2048,
                 dx * 2048 : (dx + 1) * 2048,
@@ -281,7 +323,7 @@ def verify_lod0_tranche_preview(
     if maximum_seam != 0.0:
         raise ValueError(f"decoded fine seam is {maximum_seam} m")
 
-    allowed_by_parent, mask_rows = _verify_masks(build_root, inputs)
+    allowed_by_parent, mask_rows = _verify_masks(build_root, inputs, sites)
     parent_evidence = {HeightChunkId(*row["key"]): row for row in evidence["parents"]}
     if set(parent_evidence) != set(coverage.parents):
         raise ValueError("forest tranche evidence lacks exact parent set")
@@ -296,11 +338,11 @@ def verify_lod0_tranche_preview(
         encode=base.encode,
         cache_chunks=2,
     )
-    decoded_lod0 = corrected_source.load(AUTHORITY).decoded[:-1, :-1]
+    decoded_lod0 = corrected_source.load(authority).decoded[:-1, :-1]
     parent_decoded: dict[HeightChunkId, np.ndarray] = {}
     parent_rows: list[dict[str, Any]] = []
     maximum_lod0_error = 0.0
-    for site in SITES:
+    for site in sites:
         hero = plan_hero(site.parent.cx, site.parent.cz)
         mosaic = assemble_parent_source_memmap(
             build_root / f"scratch/verify-forest-tranche-parent-{site.parent.cx}-{site.parent.cz}.f32",
@@ -327,8 +369,8 @@ def verify_lod0_tranche_preview(
         parent_decoded[site.parent] = decoded_parent
         reduced_lod0 = box_mean4_striped(decoded_parent[:2048, :2048])
         coarse_mask = allowed_by_parent[site.parent].reshape(512, 16, 512, 16).any(axis=(1, 3))
-        row = site.parent.cz - 376
-        col = site.parent.cx - 616
+        row = site.parent.cz - parent_cn
+        col = site.parent.cx - parent_ce
         actual = decoded_lod0[
             row * 512 : (row + 1) * 512,
             col * 512 : (col + 1) * 512,

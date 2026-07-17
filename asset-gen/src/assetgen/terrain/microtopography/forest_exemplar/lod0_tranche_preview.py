@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +31,13 @@ from .generalization_preview import (
     PARENT_QSCALE,
     _baseline_core,
 )
-from .lod0_tranche_preview_verify import VERIFIER_ID, verifier_source_sha256
+from .lod0_tranche_preview_verify import (
+    MASTER_SHAPE,
+    TRANCHE_QOFFSET_M,
+    VERIFIER_ID,
+    TrancheGeom,
+    verifier_source_sha256,
+)
 from .preview import _decoded, _immutable, _json_bytes, _sha256, _write_height
 
 
@@ -40,46 +45,21 @@ RECIPE_KIND = "research-forest-lod0-tranche-preview-v1"
 RECIPE_ID = "laas.micro.forest-lod0-tranche-preview.recipe.v1"
 COOK_REVISION = 2
 ARTIFACT_SCHEMA = "forest-mesic-mineral-lod0-tranche-artifact/1"
-MASTER_SHAPE = (32768, 32768)
-MASTER_BBOX = (684032, 6440960, 686080, 6443008)
-MASTER_FINE_ORIGIN = (2464, 1504)
-AUTHORITY = HeightChunkId(0, 154, 94)
+TRANCHE_CONFIG_SCHEMA = "forest-mesic-mineral-lod0-tranche/1"
 TEXEL_M = 0.0625
-TRANCHE_QOFFSET_M = 30.0
 
 
-@dataclass(frozen=True)
-class SiteSpec:
-    site_id: str
-    parent: HeightChunkId
-    bbox_en: tuple[int, int, int, int]
-
-    def json(self) -> dict[str, object]:
-        return {
-            "siteId": self.site_id,
-            "reviewBboxEn": list(self.bbox_en),
-            "parent": [self.parent.lod, self.parent.cx, self.parent.cz],
-            "authority": [AUTHORITY.lod, AUTHORITY.cx, AUTHORITY.cz],
-        }
+def _geom_from_config(config_path: Path) -> TrancheGeom:
+    config = json.loads(config_path.read_bytes())
+    if config.get("schema") != TRANCHE_CONFIG_SCHEMA:
+        raise ValueError(f"not a forest LOD0 tranche config: {config_path}")
+    lod, cx, cz = config["lod0"]
+    if lod != 0:
+        raise ValueError("forest LOD0 tranche config authority is not a LOD0 chunk")
+    return TrancheGeom(cx=int(cx), cz=int(cz), bbox=tuple(config["bbox_en"]))
 
 
-SITES = tuple(
-    SiteSpec(
-        f"forest-lod0-154-94-r{row}-c{col}",
-        HeightChunkId(-1, 616 + col, 376 + row),
-        (
-            684032 + col * 512,
-            6443008 - (row + 1) * 512,
-            684032 + (col + 1) * 512,
-            6443008 - row * 512,
-        ),
-    )
-    for row in range(4)
-    for col in range(4)
-)
-
-
-def _artifact_files(artifact_root: Path) -> dict[str, str]:
+def _artifact_files(artifact_root: Path, master_bbox: tuple[int, int, int, int]) -> dict[str, str]:
     manifest = json.loads((artifact_root / "manifest.json").read_bytes())
     metrics = manifest.get("metrics", {})
     if (
@@ -87,7 +67,7 @@ def _artifact_files(artifact_root: Path) -> dict[str, str]:
         or manifest.get("build_id") != artifact_root.name
         or manifest.get("status") != "inspect_float_preview"
         or manifest.get("failures") != []
-        or tuple(metrics.get("bbox_en", ())) != MASTER_BBOX
+        or tuple(metrics.get("bbox_en", ())) != master_bbox
         or tuple(metrics.get("shape", ())) != MASTER_SHAPE
         or metrics.get("maximum_hard_exclusion_residual_m") != 0.0
         or float(metrics.get("maximum_one_metre_mean_error_m", 1.0)) > 1e-12
@@ -104,7 +84,7 @@ def _artifact_files(artifact_root: Path) -> dict[str, str]:
 
 
 def _recipe_identity(
-    artifact_root: Path, source_base_manifest: Path
+    artifact_root: Path, source_base_manifest: Path, geom: TrancheGeom
 ) -> tuple[str, dict[str, Any]]:
     source_paths = (
         Path(__file__),
@@ -126,17 +106,17 @@ def _recipe_identity(
             "schema": ARTIFACT_SCHEMA,
             "manifestSha256": _sha256(artifact_root / "manifest.json"),
             "recipeSha256": _sha256(artifact_root / "recipe.json"),
-            "files": _artifact_files(artifact_root),
+            "files": _artifact_files(artifact_root, geom.bbox),
         },
         "sourceBase": {
             "manifest": source_base_manifest.as_posix(),
             "manifestSha256": _sha256(source_base_manifest),
         },
-        "coverage": {"sites": [site.json() for site in SITES]},
+        "coverage": {"sites": [site.json() for site in geom.sites]},
         "singleContiguousMaster": {
-            "bboxEn": list(MASTER_BBOX),
+            "bboxEn": list(geom.bbox),
             "shape": list(MASTER_SHAPE),
-            "fineOrigin": list(MASTER_FINE_ORIGIN),
+            "fineOrigin": list(geom.fine_origin),
         },
         "sourceSha256": {
             path.relative_to(Path(__file__).parents[4]).as_posix(): _sha256(path)
@@ -158,12 +138,12 @@ def _save_npy_immutable(path: Path, values: np.ndarray) -> None:
 
 
 def _stage_masks(
-    build_root: Path,
+    build_root: Path, geom: TrancheGeom
 ) -> tuple[dict[HeightChunkId, Path], dict[str, dict[str, int]]]:
     paths: dict[HeightChunkId, Path] = {}
     evidence_by_site: dict[str, dict[str, int]] = {}
     tile_cells = 2048
-    for site in SITES:
+    for site in geom.sites:
         packed = np.empty((8192, 1024), dtype=np.uint8)
         evidence: dict[str, int] = {}
         e_min, _n_min, _e_max, n_max = site.bbox_en
@@ -192,17 +172,19 @@ def _stage_fine(
     build_root: Path,
     artifact_root: Path,
     source_base_manifest: Path,
+    geom: TrancheGeom,
 ) -> tuple[dict[HeightChunkId, Path], list[dict[str, Any]]]:
-    coverage = plan_parent_set(tuple(site.parent for site in SITES))
+    coverage = plan_parent_set(tuple(site.parent for site in geom.sites))
     master = np.load(artifact_root / "surface/c1_height_f32.npy", mmap_mode="r")
     source_sha = _sha256(source_base_manifest)
     pinned = PinnedBaseHeight(source_base_manifest, source_sha, DATA_OUT, base.encode)
     scratch = build_root / "scratch/fine-cores"
     scratch.mkdir(parents=True, exist_ok=True)
+    fine_origin = geom.fine_origin
 
     def core(chunk: HeightChunkId) -> np.ndarray:
-        dx = chunk.cx - MASTER_FINE_ORIGIN[0]
-        dz = chunk.cz - MASTER_FINE_ORIGIN[1]
+        dx = chunk.cx - fine_origin[0]
+        dz = chunk.cz - fine_origin[1]
         if 0 <= dx < 16 and 0 <= dz < 16:
             return master[
                 dz * FINE_CORE : (dz + 1) * FINE_CORE,
@@ -241,10 +223,11 @@ def _stage_parents(
     base: BaseConfig,
     build_root: Path,
     paths: dict[HeightChunkId, Path],
+    geom: TrancheGeom,
 ) -> tuple[list[dict[str, Any]], dict[HeightChunkId, np.ndarray]]:
     identities: list[dict[str, Any]] = []
     decoded: dict[HeightChunkId, np.ndarray] = {}
-    for index, site in enumerate(SITES, 1):
+    for index, site in enumerate(geom.sites, 1):
         hero = plan_hero(site.parent.cx, site.parent.cz)
         mosaic = assemble_parent_source_memmap(
             build_root / f"scratch/forest-tranche-parent-{site.parent.cx}-{site.parent.cz}.f32",
@@ -282,6 +265,7 @@ def _corrected_base(
     parent_decoded: dict[HeightChunkId, np.ndarray],
     mask_paths: dict[HeightChunkId, Path],
     content_root: Path,
+    geom: TrancheGeom,
 ):
     source_sha = _sha256(source_manifest)
     source = AuditedFormat1HeightSource(
@@ -291,11 +275,13 @@ def _corrected_base(
         encode=base.encode,
         cache_chunks=4,
     )
-    target = np.array(source.load(AUTHORITY).decoded[:-1, :-1], dtype=np.float64, copy=True)
+    authority = geom.authority
+    parent_ce, parent_cn = geom.parent_origin
+    target = np.array(source.load(authority).decoded[:-1, :-1], dtype=np.float64, copy=True)
     affected = np.zeros((2048, 2048), dtype=bool)
-    for site in SITES:
-        row = site.parent.cz - 376
-        col = site.parent.cx - 616
+    for site in geom.sites:
+        row = site.parent.cz - parent_cn
+        col = site.parent.cx - parent_ce
         window = np.s_[row * 512 : (row + 1) * 512, col * 512 : (col + 1) * 512]
         if affected[window].any():
             raise ValueError(f"corrected LOD0 ownership overlaps at {site.site_id}")
@@ -303,7 +289,7 @@ def _corrected_base(
         allowed = _unpack_allowed(mask_paths[site.parent])
         target[window] = parent_lod0
         affected[window] = allowed.reshape(512, 16, 512, 16).any(axis=(1, 3))
-    corrected = {AUTHORITY: CorrectedLod0Core(target, affected)}
+    corrected = {authority: CorrectedLod0Core(target, affected)}
     transaction = build_corrected_base_transaction(
         source=source,
         staging_root=build_root / "corrected-base",
@@ -330,6 +316,7 @@ def _corrected_base(
 
 def materialize_lod0_tranche_preview(
     *,
+    config: Path,
     artifact_root: Path,
     source_base_manifest: Path,
     content_root: Path = DATA_OUT,
@@ -338,17 +325,20 @@ def materialize_lod0_tranche_preview(
     base = load_base()
     artifact_root = artifact_root.resolve()
     source_base_manifest = source_base_manifest.resolve()
-    build_digest, inputs = _recipe_identity(artifact_root, source_base_manifest)
+    geom = _geom_from_config(config.resolve())
+    build_digest, inputs = _recipe_identity(artifact_root, source_base_manifest, geom)
     build_root = work_root / "builds" / build_digest
     build_root.mkdir(parents=True, exist_ok=True)
     print(f"[forest-tranche-pack] recipe {build_digest}", flush=True)
-    mask_paths, mask_metrics = _stage_masks(build_root)
-    paths, fine_identities = _stage_fine(base, build_root, artifact_root, source_base_manifest)
-    parent_identities, parent_decoded = _stage_parents(base, build_root, paths)
-    corrected_transaction, corrected_release = _corrected_base(
-        base, build_root, source_base_manifest, parent_decoded, mask_paths, content_root
+    mask_paths, mask_metrics = _stage_masks(build_root, geom)
+    paths, fine_identities = _stage_fine(
+        base, build_root, artifact_root, source_base_manifest, geom
     )
-    coverage = plan_parent_set(tuple(site.parent for site in SITES))
+    parent_identities, parent_decoded = _stage_parents(base, build_root, paths, geom)
+    corrected_transaction, corrected_release = _corrected_base(
+        base, build_root, source_base_manifest, parent_decoded, mask_paths, content_root, geom
+    )
+    coverage = plan_parent_set(tuple(site.parent for site in geom.sites))
     inputs["masks"] = {
         site.site_id: {
             "path": mask_paths[site.parent].relative_to(build_root).as_posix(),
@@ -356,7 +346,7 @@ def materialize_lod0_tranche_preview(
             "kind": "recomputed-morphology-allowed",
             "evidence": mask_metrics[site.site_id],
         }
-        for site in SITES
+        for site in geom.sites
     }
     inputs["correctedBase"] = {
         "manifest": corrected_release.manifest_path.as_posix(),
@@ -377,7 +367,7 @@ def materialize_lod0_tranche_preview(
             "chunkRes": base.grid.chunk_res,
             "lodStep": base.grid.lod_step,
         },
-        "sites": [site.json() for site in SITES],
+        "sites": [site.json() for site in geom.sites],
         "parents": [[c.lod, c.cx, c.cz] for c in coverage.parents],
         "publishedFine": [[c.lod, c.cx, c.cz] for c in coverage.published_fine],
         "transientSupport": [[c.lod, c.cx, c.cz] for c in coverage.transient_support],
@@ -400,7 +390,7 @@ def materialize_lod0_tranche_preview(
         "cookRevision": COOK_REVISION,
         "recipeSha256": build_digest,
         "artifactManifestSha256": _sha256(artifact_root / "manifest.json"),
-        "sites": [site.json() for site in SITES],
+        "sites": [site.json() for site in geom.sites],
         "children": fine_identities,
         "parents": parent_identities,
         "masks": inputs["masks"],
@@ -424,6 +414,7 @@ def materialize_lod0_tranche_preview(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--artifact-root", type=Path, required=True)
     parser.add_argument("--source-base-manifest", type=Path, required=True)
     parser.add_argument("--content-root", type=Path, default=DATA_OUT)

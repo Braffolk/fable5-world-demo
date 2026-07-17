@@ -1,0 +1,52 @@
+{
+  "schema": "forest-mesic-mineral-lod0-tranche/1",
+  "authority": "research_float_only_no_production_no_pack_no_latest",
+  "regime": "forest.mesic_mineral",
+  "lod0": [0, 151, 93],
+  "bbox_en": [677888, 6443008, 679936, 6445056],
+  "parent_grid": {
+    "rows": 4,
+    "cols": 4,
+    "northwest": [-1, 604, 372]
+  },
+  "parents": [
+    {"role": "r0_c0", "cx": 604, "cz": 372, "bbox_en": [677888, 6444544, 678400, 6445056]},
+    {"role": "r0_c1", "cx": 605, "cz": 372, "bbox_en": [678400, 6444544, 678912, 6445056]},
+    {"role": "r0_c2", "cx": 606, "cz": 372, "bbox_en": [678912, 6444544, 679424, 6445056]},
+    {"role": "r0_c3", "cx": 607, "cz": 372, "bbox_en": [679424, 6444544, 679936, 6445056]},
+    {"role": "r1_c0", "cx": 604, "cz": 373, "bbox_en": [677888, 6444032, 678400, 6444544]},
+    {"role": "r1_c1", "cx": 605, "cz": 373, "bbox_en": [678400, 6444032, 678912, 6444544]},
+    {"role": "r1_c2", "cx": 606, "cz": 373, "bbox_en": [678912, 6444032, 679424, 6444544]},
+    {"role": "r1_c3", "cx": 607, "cz": 373, "bbox_en": [679424, 6444032, 679936, 6444544]},
+    {"role": "r2_c0", "cx": 604, "cz": 374, "bbox_en": [677888, 6443520, 678400, 6444032]},
+    {"role": "r2_c1", "cx": 605, "cz": 374, "bbox_en": [678400, 6443520, 678912, 6444032]},
+    {"role": "r2_c2", "cx": 606, "cz": 374, "bbox_en": [678912, 6443520, 679424, 6444032]},
+    {"role": "r2_c3", "cx": 607, "cz": 374, "bbox_en": [679424, 6443520, 679936, 6444032]},
+    {"role": "r3_c0", "cx": 604, "cz": 375, "bbox_en": [677888, 6443008, 678400, 6443520]},
+    {"role": "r3_c1", "cx": 605, "cz": 375, "bbox_en": [678400, 6443008, 678912, 6443520]},
+    {"role": "r3_c2", "cx": 606, "cz": 375, "bbox_en": [678912, 6443008, 679424, 6443520]},
+    {"role": "r3_c3", "cx": 607, "cz": 375, "bbox_en": [679424, 6443008, 679936, 6443520]}
+  ],
+  "texel_m": 0.0625,
+  "transport": {
+    "patch_cells": 192,
+    "candidate_step_cells": 16,
+    "minimum_patch_support_fraction": 0.78,
+    "site_candidate_cell": 24,
+    "site_minimum_distance_cells": 64,
+    "site_saturation_distance_cells": 48,
+    "site_saturation_rounds": 8,
+    "support_radius_cells": 88,
+    "site_seed": 5494753648857171000
+  },
+  "acceptance": {
+    "minimum_domain_allowed_fraction": 0.30,
+    "minimum_parent_allowed_fraction_range": 0.20,
+    "maximum_one_metre_mean_error_m": 1e-10,
+    "maximum_hard_exclusion_residual_m": 0.0,
+    "maximum_output_over_candidate_abs_ratio": 1.0,
+    "maximum_output_over_candidate_rms_ratio": 1.0,
+    "minimum_cross_seam_site_count_per_axis": 1,
+    "minimum_cross_junction_site_count": 1
+  }
+}
