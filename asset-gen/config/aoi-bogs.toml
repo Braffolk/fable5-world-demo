@@ -1,0 +1,21 @@
+# Small AOI clipping to the raised-bog development mire (central Estonia, Põlva/Tartu
+# region), so the ordinary format-1 height base + ancestry can be cooked here and the
+# bog v4 self-organized-network fine overlay (research preview) can pin to it.
+# Centered on dev mire etak-component-0004069028, core
+# [536384,6452416,536512,6452544] EPSG:3301; raw 1 m DTM sheet 53532 already fetched.
+# Snapped outward to the 2048 m chunk grid at load time; sized to cover the whole
+# connected mire + fine-overlay halo, not the whole country.
+
+name = "bogs"
+center_e = 536448
+center_n = 6452480
+half_m = 3072
+
+[layers]
+height = true
+landcover = true
+water = true
+trees = true
+soil = true
+understory = true
+debris = true

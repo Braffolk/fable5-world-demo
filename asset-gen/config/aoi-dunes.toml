@@ -1,0 +1,21 @@
+# Small AOI clipping to the west-coast aeolian dune pilot (Läänemaa), so the ordinary
+# format-1 height base + ancestry can be cooked here for a dune fine-overlay preview.
+# Centered on official EGT coastal aeolian sand polygon FID 4659, EPSG:3301
+# E394368 N6533632; raw 1 m DTM sheet 61391 already fetched. This region carries genuine
+# 1-8 m dune landform relief in the base DTM (2026-07-17 parent-support diagnostic: 24 m
+# range, sculpted ridges/swales), so the base cook alone renders the dune macro-landform.
+# Snapped outward to the 2048 m chunk grid at load time.
+
+name = "dunes"
+center_e = 394368
+center_n = 6533632
+half_m = 3072
+
+[layers]
+height = true
+landcover = true
+water = true
+trees = true
+soil = true
+understory = true
+debris = true
