@@ -80,6 +80,13 @@ const MAX_LOADS_PER_DIFF = 4;
 /** wrapping plane windows re-center in snaps of res/8 texels (bounded packet
  *  counts; hysteresis = half a snap). */
 const SCROLL_DIV = 8;
+/** PREDICTIVE SCROLL: lead a wrapping window's re-centre target by the camera
+ *  velocity over this horizon (s), so the window stays centred UNDER sustained
+ *  motion instead of trailing behind it (its re-centre is paced by the 10 Hz
+ *  pose feed + the shared upload token bucket). Zero velocity ⇒ zero lead ⇒ no
+ *  oscillation at rest. The lead is clamped (see windowTarget) so a spurious
+ *  velocity spike can never fling the window past its own half-extent. */
+const SCROLL_LEAD_S = 0.2;
 /** S6f: the root tiling of the coverage box is held ≤ this many tiles per side
  *  by adding coarser rungs — the always-resident country shell stays a small
  *  constant (≤ ~144 tiles) for ANY world size. */
@@ -166,6 +173,7 @@ export class StreamBrainCore {
 
   // counters
   private nFetch = 0;
+  private nFetchErr = 0;
   private nFetchInFlight = 0;
   private nBakeInFlight = 0;
   private nCache = 0;
@@ -336,6 +344,25 @@ export class StreamBrainCore {
     return p;
   }
 
+  /** fetchChunk that TOLERATES a transient fetch/decode failure (network error,
+   *  the localhost HTTP/1.1 connection-pool stampede under a scroll burst) — a
+   *  rejected fetch returns null (the chunk is treated as momentarily absent)
+   *  instead of throwing. Without this ONE network blip during a window scroll/
+   *  refill propagates out of assemble* and ABORTS the whole pose tick, leaving
+   *  the finest (lod-2) camera window STRANDED at its old origin: availability
+   *  collapses under the camera and the fine LOD never returns because every
+   *  retry re-throws on the same still-failing chunks (the "green loads rarer and
+   *  rarer, then stops completely" bug). The skipped region clamp-extends from the
+   *  chunks that DID land and self-heals on a later scroll that re-fetches it. */
+  private async tryFetch(layer: LayerName, key: ChunkKey): Promise<ChunkPayload | null> {
+    try {
+      return await this.fetchChunk(layer, key);
+    } catch {
+      this.nFetchErr++;
+      return null;
+    }
+  }
+
   /** drop consumed decode payloads (post-boot: the windows retain everything). */
   private dropLru(): void {
     this.lru.clear();
@@ -462,7 +489,7 @@ export class StreamBrainCore {
     const place = { ...plan, n0x, n0z };
     let box: FilledBox | null = null;
     for (const key of chunksInWindow(geo, plan.lod, n0x, n0z, plan.res)) {
-      const payload = await this.fetchChunk(layer, key);
+      const payload = await this.tryFetch(layer, key);
       if (!payload || payload.kind !== 'height') continue;
       box = copyChunkF32(out, plan.res, plan.res, place, geo, key.cx, key.cz, payload.heights, payload.res, box, mapNaN);
     }
@@ -488,7 +515,7 @@ export class StreamBrainCore {
     const place = { ...plan, n0x, n0z };
     let box: FilledBox | null = null;
     for (const key of chunksInWindow(geo, plan.lod, n0x, n0z, plan.res)) {
-      const payload = await this.fetchChunk(layer, key);
+      const payload = await this.tryFetch(layer, key);
       if (!payload || payload.kind !== 'planes') continue;
       box = copyChunkU8(out, plan.res, plan.res, place, geo, key.cx, key.cz, payload.planes, payload.res, names, channels, box);
     }
@@ -500,7 +527,7 @@ export class StreamBrainCore {
     if (overlay && oMeta?.lods.includes(plan.lod)) {
       const oNames = oMeta.planes ?? [];
       for (const key of chunksInWindow(geo, plan.lod, n0x, n0z, plan.res)) {
-        const payload = await this.fetchChunk(overlay.layer, key);
+        const payload = await this.tryFetch(overlay.layer, key);
         if (!payload || payload.kind !== 'planes') continue;
         copyChunkU8(out, plan.res, plan.res, place, geo, key.cx, key.cz, payload.planes, payload.res, oNames, overlay.channels, box);
       }
@@ -539,7 +566,11 @@ export class StreamBrainCore {
   armFartiles(msg: FtArmMsg): void {
     const g = this.grid;
     this.ftBand = new FartileBand({
-      fetch: (layer, key) => this.fetchChunk(layer, key),
+      // tolerant fetch: the band's fire-and-forget cell bakes do NOT catch a fetch
+      // rejection, so a transient network error / RPC timeout on a trees chunk would
+      // surface as an UNHANDLED rejection (a fatal pageerror). tryFetch turns it into
+      // a momentarily-absent chunk (null) — the band re-nominates the cell next pose.
+      fetch: (layer, key) => this.tryFetch(layer, key),
       emit: (packet, transfer) => this.deps.emit({ kind: 'packets', packets: [packet] }, transfer),
       treesExist: (cx, cz) => this.chunkExists('trees', { lod: 0, cx, cz }),
       grid: { originX: g.originX, originZ: g.originZ, chunkMeters: g.chunkMeters },
@@ -575,7 +606,7 @@ export class StreamBrainCore {
       while (this.pendingPose) {
         const p = this.pendingPose;
         this.pendingPose = null;
-        await this.scrollPlanes(p.x, p.z);
+        await this.scrollPlanes(p.x, p.z, p.vx, p.vz);
         if (this.pool) {
           // iterate the FRINGE ONLY (§2): the tree decides split/hold/merge per
           // leaf, fires instant merges, and starts refine txs under the bake
@@ -599,34 +630,54 @@ export class StreamBrainCore {
   // ---- plane window scroll (wrapping levels only — Estonia; generated levels
   // are pinned by plan.wraps=false and never enter) ------------------------------------
 
-  private async scrollPlanes(camX: number, camZ: number): Promise<void> {
+  private async scrollPlanes(camX: number, camZ: number, vx = 0, vz = 0): Promise<void> {
     for (let i = 0; i < this.hWin.length; i++) {
-      await this.scrollLevel('height', i, this.hWin[i] as HeightWindow, camX, camZ);
+      await this.scrollLevel('height', i, this.hWin[i] as HeightWindow, camX, camZ, vx, vz);
     }
-    if (this.wWin) await this.scrollLevel('water', 0, this.wWin, camX, camZ);
-    if (this.wcWin) await this.scrollU8('watercover', WATERCOVER_CHANNELS, this.wcWin, camX, camZ, (p, t) => this.pushFarCover(p, t));
-    if (this.sWin) await this.scrollU8('soil', SOIL_CHANNELS, this.sWin, camX, camZ);
-    if (this.gWin) await this.scrollU8('geology', GEOLOGY_CHANNELS, this.gWin, camX, camZ);
+    if (this.wWin) await this.scrollLevel('water', 0, this.wWin, camX, camZ, vx, vz);
+    if (this.wcWin) await this.scrollU8('watercover', WATERCOVER_CHANNELS, this.wcWin, camX, camZ, vx, vz, (p, t) => this.pushFarCover(p, t));
+    if (this.sWin) await this.scrollU8('soil', SOIL_CHANNELS, this.sWin, camX, camZ, vx, vz);
+    if (this.gWin) await this.scrollU8('geology', GEOLOGY_CHANNELS, this.gWin, camX, camZ, vx, vz);
     // biome/fields planes scroll with the SAME rule but hold no brain window —
     // regions assemble straight from LRU'd chunks. (Their consumers are filtered
     // rgba8 taps; sub-texel placement is uncritical.) They ride height's snap
     // cadence at their own resolution once a wrapping level exists (S6).
   }
 
-  /** re-center one wrapping window on the camera (SCROLL_DIV snaps, coverage
-   *  clamp), emitting fills for the exposed L-shape THEN the origin commit —
-   *  packet order carries promote-after-fill. */
-  private async scrollLevel(plane: PlaneKind, level: number, win: HeightWindow, camX: number, camZ: number): Promise<void> {
-    const plan = win.plan;
-    if (!plan.wraps) return;
-    const geo = this.layerGeo(plane === 'water' ? 'water' : 'height');
+  /** snapped + coverage-clamped window origin for a camera pose, with PREDICTIVE
+   *  LEAD (velocity × SCROLL_LEAD_S) so the window stays centred under sustained
+   *  motion. The lead is clamped to ¼ of the window extent so a velocity spike can
+   *  never push the target past the window's own half — zero velocity ⇒ zero lead
+   *  ⇒ the exact rest placement (no oscillation). Shared by scrollLevel/scrollU8. */
+  private windowTarget(
+    plan: PlanePlan,
+    geo: RasterGeom,
+    camX: number,
+    camZ: number,
+    vx: number,
+    vz: number,
+  ): { n0x: number; n0z: number } {
     const step = Math.max(1, Math.floor(plan.res / SCROLL_DIV));
-    const wantX = Math.round((camX - (plan.res / 2) * plan.texel - geo.originX) / plan.texel / step) * step;
-    const wantZ = Math.round((camZ - (plan.res / 2) * plan.texel - geo.originZ) / plan.texel / step) * step;
+    const leadCap = plan.res * plan.texel * 0.25;
+    const leadX = Math.max(-leadCap, Math.min(leadCap, vx * SCROLL_LEAD_S));
+    const leadZ = Math.max(-leadCap, Math.min(leadCap, vz * SCROLL_LEAD_S));
+    const wantX = Math.round((camX + leadX - (plan.res / 2) * plan.texel - geo.originX) / plan.texel / step) * step;
+    const wantZ = Math.round((camZ + leadZ - (plan.res / 2) * plan.texel - geo.originZ) / plan.texel / step) * step;
     // clamp the window into the layer's chunk coverage (a window past the rim
     // would only clamp-extend — the pinned-parity clamp, applied universally)
     const n0x = Math.min(Math.max(wantX, plan.nMinX), Math.max(plan.nMinX, plan.nMaxX - plan.res + 1));
     const n0z = Math.min(Math.max(wantZ, plan.nMinZ), Math.max(plan.nMinZ, plan.nMaxZ - plan.res + 1));
+    return { n0x, n0z };
+  }
+
+  /** re-center one wrapping window on the camera (SCROLL_DIV snaps, coverage
+   *  clamp), emitting fills for the exposed L-shape THEN the origin commit —
+   *  packet order carries promote-after-fill. */
+  private async scrollLevel(plane: PlaneKind, level: number, win: HeightWindow, camX: number, camZ: number, vx = 0, vz = 0): Promise<void> {
+    const plan = win.plan;
+    if (!plan.wraps) return;
+    const geo = this.layerGeo(plane === 'water' ? 'water' : 'height');
+    const { n0x, n0z } = this.windowTarget(plan, geo, camX, camZ, vx, vz);
     const dx = n0x - win.n0x;
     const dz = n0z - win.n0z;
     if (dx === 0 && dz === 0) return;
@@ -774,7 +825,7 @@ export class StreamBrainCore {
     const place = { ...plan, n0x: rx0, n0z: rz0 };
     let box: FilledBox | null = null;
     for (const key of chunksInWindow(geo, plan.lod, rx0, rz0, rw, rh)) {
-      const payload = await this.fetchChunk(layer, key);
+      const payload = await this.tryFetch(layer, key);
       if (!payload || payload.kind !== 'height') continue;
       box = copyChunkF32(out, rw, rh, place, geo, key.cx, key.cz, payload.heights, payload.res, box, plane === 'water' ? WATER_DRY_SENTINEL : undefined);
     }
@@ -792,16 +843,14 @@ export class StreamBrainCore {
     win: U8Window,
     camX: number,
     camZ: number,
+    vx = 0,
+    vz = 0,
     afterScroll?: (packets: StreamPacket[], transfers: Transferable[]) => void,
   ): Promise<void> {
     const plan = win.plan;
     if (!plan.wraps) return;
     const geo = this.layerGeo(kind);
-    const step = Math.max(1, Math.floor(plan.res / SCROLL_DIV));
-    const wantX = Math.round((camX - (plan.res / 2) * plan.texel - geo.originX) / plan.texel / step) * step;
-    const wantZ = Math.round((camZ - (plan.res / 2) * plan.texel - geo.originZ) / plan.texel / step) * step;
-    const n0x = Math.min(Math.max(wantX, plan.nMinX), Math.max(plan.nMinX, plan.nMaxX - plan.res + 1));
-    const n0z = Math.min(Math.max(wantZ, plan.nMinZ), Math.max(plan.nMinZ, plan.nMaxZ - plan.res + 1));
+    const { n0x, n0z } = this.windowTarget(plan, geo, camX, camZ, vx, vz);
     const dx = n0x - win.n0x;
     const dz = n0z - win.n0z;
     if (dx === 0 && dz === 0) return;
@@ -889,7 +938,7 @@ export class StreamBrainCore {
     const place = { ...plan, n0x: rx0, n0z: rz0 };
     let box: FilledBox | null = null;
     for (const key of chunksInWindow(geo, plan.lod, rx0, rz0, rw, rh)) {
-      const payload = await this.fetchChunk(layer, key);
+      const payload = await this.tryFetch(layer, key);
       if (!payload || payload.kind !== 'planes') continue;
       box = copyChunkU8(out, rw, rh, place, geo, key.cx, key.cz, payload.planes, payload.res, names, channels, box);
     }
@@ -1261,6 +1310,7 @@ export class StreamBrainCore {
         'stream.bake.built': this.nBuilt,
         'stream.bake.inflight': this.nBakeInFlight,
         'stream.fetch.total': this.nFetch,
+        'stream.fetch.err': this.nFetchErr,
         'stream.fetch.inflight': this.nFetchInFlight,
         'stream.lru.mb': Math.round(this.lruBytes / 2 ** 20),
         'stream.ram.mb': Math.round(this.ramBytes() / 2 ** 20),

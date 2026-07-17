@@ -105,6 +105,20 @@ export interface FieldPlan {
 
 export const HEIGHT_PLANE_RES = 2048;
 export const MICRO_HEIGHT_PLANE_RES = 1536;
+/** The FINEST packed rung (lod-2, 0.0625 m) gets a LARGER camera window than the
+ *  lod-1 rung: 2560² · 0.0625 m = 160 m wide (80 m half-extent) vs the shared
+ *  1536² = 96 m. The lod-2 geomorph band (MICRO_MORPH_BANDS[-2]) needs a 40 m
+ *  radius, so at 1536² only 8 m of slack sat between the morph band and the
+ *  window edge — under fast motion / a teleport the camera outran the window's
+ *  scroll, availability collapsed to 0 under the camera and the GREEN fine LOD
+ *  vanished. 2560² lifts the slack to 40 m and, because the window scrolls in
+ *  res/SCROLL_DIV snaps, it re-centres far less often (bigger snap step) → fewer
+ *  scroll fills → less chunk-fetch pressure (the fetch-stampede that strands the
+ *  window). VRAM: 2560²·4 B = 25.0 MB vs 1536²·4 B = 9.0 MB, a +16.0 MB delta
+ *  (measured bog set 222.3 → 238.3 MB, inside the 256 MB TerrainField ceiling).
+ *  The lod-1 rung (0.25 m) already had 32 m of slack (1536² = 384 m window) and
+ *  tracked the camera fine, so it keeps 1536² and does not pay the extra VRAM. */
+export const MICRO_HEIGHT_FINE_PLANE_RES = 2560;
 export const U8_PLANE_RES = 1024;
 /** cover-or-window rule (S3b): a level's plane res grows past the default
  *  window res up to the cap when that makes it cover the source's WHOLE layer
@@ -406,7 +420,7 @@ export function planLayer(
         * manifest.grid.chunkMeters * manifest.grid.lodStep ** lod
       : span;
     const res = geo.mode === 'physical-level' && lod < 0
-      ? MICRO_HEIGHT_PLANE_RES
+      ? (lod <= -2 ? MICRO_HEIGHT_FINE_PLANE_RES : MICRO_HEIGHT_PLANE_RES)
       : levelRes(levelSpan, texel, windowRes, cap);
     const place = placeLevel(geo, lod, res, cx, cz);
     const box = lodBox;

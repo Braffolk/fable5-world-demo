@@ -32,12 +32,28 @@ try {
 // fetch RPC (main services it against the live WorldSource)
 let nextFetchId = 1;
 const pendingFetch = new Map<number, { resolve: (p: ChunkPayload | null) => void; reject: (e: Error) => void }>();
+/** A fetch RPC MUST always settle. If a fetchRes is ever lost — a decode/HTTP
+ *  failure that surfaces as an unhandled main-thread rejection instead of a
+ *  fetchRes, or a saturated serial fetch service that never drains this id — the
+ *  awaiting scroll/refill (StreamBrainCore.tryFetch) would block the pose tick
+ *  FOREVER (busy stuck), permanently freezing every plane window: the fine LOD
+ *  stops streaming and never returns. This ceiling guarantees the RPC rejects so
+ *  tryFetch treats it as a momentarily-absent chunk (the region clamp-extends and
+ *  self-heals on a later scroll) — streaming can never permanently wedge. A late
+ *  fetchRes for a timed-out id is ignored (its pending entry is already gone). */
+const FETCH_RPC_TIMEOUT_MS = 6000;
 
 const core = new StreamBrainCore({
   fetch(layer: LayerName, key: ChunkKey): Promise<ChunkPayload | null> {
     const id = nextFetchId++;
     return new Promise((resolve, reject) => {
-      pendingFetch.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        if (pendingFetch.delete(id)) reject(new Error(`stream fetch RPC timeout: ${layer} ${key.lod}:${key.cx},${key.cz}`));
+      }, FETCH_RPC_TIMEOUT_MS);
+      pendingFetch.set(id, {
+        resolve: (p) => { clearTimeout(timer); resolve(p); },
+        reject: (e) => { clearTimeout(timer); reject(e); },
+      });
       post({ kind: 'fetch', id, layer, key });
     });
   },
