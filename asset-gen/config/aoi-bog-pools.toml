@@ -1,0 +1,22 @@
+# Pool-bearing raised-bog AOI (reselection after the first bog site, etak-component
+# -0004069028, was found to be an atypical POOLLESS mire — 0 ETAK Laugas, no DTM
+# depressions; see bog-water-investigation). This mire, etak-component-0004071135,
+# is a 545 ha open raised bog with 436 mapped Laugas (bog pools). The pack core
+# [540224,6429632,540352,6429760] lands on 14 mapped pools. Real Laugas cook into
+# the water layer and render as actual water; the microtopography synthesis adds the
+# string/hollow/lawn relief BETWEEN pools (and must treat the real pools as
+# relief-free water, like open water). ~20 km S of the first site (same fetch belt).
+
+name = "bog-pools"
+center_e = 540288
+center_n = 6429696
+half_m = 3072
+
+[layers]
+height = true
+landcover = true
+water = true
+trees = true
+soil = true
+understory = true
+debris = true
