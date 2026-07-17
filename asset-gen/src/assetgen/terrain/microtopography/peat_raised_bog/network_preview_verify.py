@@ -28,13 +28,13 @@ from ...repair.base_transaction import AuditedFormat1HeightSource
 
 VERIFIER_ID = "assetgen.peat-bog-network-preview-verify.v1"
 RECIPE_KIND = "research-peat-bog-network-preview-v1"
-PARENT = HeightChunkId(-1, 327, 357)
-AUTHORITY = HeightChunkId(0, 81, 89)
-CORE_BBOX = (536384.0, 6452416.0, 536512.0, 6452544.0)
+PARENT = HeightChunkId(-1, 335, 402)
+AUTHORITY = HeightChunkId(0, 83, 100)
+CORE_BBOX = (540224.0, 6429504.0, 540352.0, 6429632.0)
 RELIEF_PITCH_M = 0.25
 FINE_CORE = 2048
-AUTH_WINDOW = (slice(704, 832), slice(1856, 1984))
-PARENT_WINDOW = (slice(192, 320), slice(320, 448))
+AUTH_WINDOW = (slice(1088, 1216), slice(1600, 1728))
+PARENT_WINDOW = (slice(64, 192), slice(64, 192))
 
 
 def verifier_source_sha256() -> str:

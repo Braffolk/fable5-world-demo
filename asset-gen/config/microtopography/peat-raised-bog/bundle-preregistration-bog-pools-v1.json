@@ -1,0 +1,329 @@
+{
+  "schema_version": "laas.peat-raised-bog-r0-research-bundle-preregistration/4",
+  "bundle_id": "peat-raised-bog-r0-research-bundle/4",
+  "preregistration_id": "open-intact-nonforested-gradient-modulated-wavelength-network-bog-pools-v1",
+  "amendment_of": "open-intact-nonforested-gradient-modulated-wavelength-network-v4",
+  "authored": "2026-07-17",
+  "amendment_kind": "mechanism_change_gradient_modulated_wavelength",
+  "status": {
+    "state": "method_frozen_before_r0_generation",
+    "research_only": true,
+    "method_implementation_authorized": true,
+    "r0_generation_authorized": true,
+    "preview_authorized": false,
+    "production_owner_authorized": false,
+    "latest_eligible": false,
+    "packing_authorized": false,
+    "orchestrator_gates_packing": true,
+    "second_and_final_bog_mechanism_attempt": true
+  },
+  "why_materially_different": {
+    "v3_terminal_outcome": "v3.0 built a real emergent network (349 branch + 354 merge junctions, pool coupling 1.000, safety/amplitude/parent-deviation PASS) but a HOMOGENEOUS Gray-Scott/Turing system with spatially-constant diffusion coefficients selects a SINGLE characteristic wavelength (~19.7 m mean, spacing_mean_m 19.725). v3.0 window anti-corrugation FAILED (spacing_cv 0.2026 < 0.35) and v3.1's mire-scale re-scope did not overturn it: the uniformity is genuine, not a window artifact. v3.0 and v3.1 remain research_rejected and immutable.",
+    "failing_given_identified_one_level_up": "The failing 'given' is spatial HOMOGENEITY of the reaction-diffusion kinetics: v3.0 used constant D_u, D_v everywhere, so the Turing length scale is locked mire-wide regardless of the local hydrology. Real patterned mires vary string spacing because the controlling gradient (dome slope / water flux / peat depth) varies across the mire.",
+    "v4_mechanism": "Make the reaction-diffusion LENGTH SCALE spatially heterogeneous by modulating the diffusion coefficients (Turing wavelength lambda proportional to sqrt(D)) with the local mire hydrological gradient field |grad dome| the solver already computes for anisotropy. Where the dome is steeper (higher slope-driven flow) the diffusion coefficients shrink, so the local wavelength shortens; on the flat central dome D is unchanged and the wavelength stays wide. This spreads the wavelength SPECTRUM from the mire's real gradient heterogeneity.",
+    "not_a_parameter_tune": "This is spatial heterogeneity of the kinetics, not a re-tuning of the v3.0 constants. The base feed/kill/D_u/D_v/anisotropy/slope_ref are UNCHANGED from v3.0; a spatial modulation FIELD (bounded monotone function of the same |grad dome| field) multiplies the diffusion coefficients cell-by-cell. v3.0's rejected homogeneous recipe is not retuned; a new spatial degree of freedom (gradient-locked wavelength) is introduced, grounded in the peatland-patterning literature relation below.",
+    "rejected_families_not_retuned": [
+      "Moore whole-form marked sampler (censored forms)",
+      "v2 two-field plurigaussian (HuHoLa evidence collapse)",
+      "whole-mire form-scale graph caf9e5f2660f (single scalar travel coordinate -> even corrugations, isolated pool sockets)",
+      "v3.0 / v3.1 HOMOGENEOUS anisotropic activator-inhibitor (single locked wavelength) -> research_rejected, immutable, NOT retuned here"
+    ]
+  },
+  "wavelength_gradient_law": {
+    "literature_relation": {
+      "direction": "String / ridge spacing (pattern wavelength) DECREASES as the local surface slope gradient (and slope-driven water flow) INCREASES: widest on the flat central dome, shortest on the steeper flanks. Strings orient perpendicular to rainwater flow; their configuration and spacing are set by the slope gradient of the peatland surface.",
+      "primary_sources": {
+        "korotkov_ilyasov_2026": {
+          "citation": "Ilyasov et al. (2026) UAS-LiDAR Mapping of Bog Microrelief. Drones 10(2):121.",
+          "doi": "10.3390/drones10020121",
+          "path": "docs/deep-research/microtopography-generation/library/papers/2026-korotkov-uas-lidar-bog-microrelief-doi-10.3390-drones10020121.pdf",
+          "sha256": "9fa9b6c021c4d9c086fb0dce0ec0b315d27402004b4277536c35f84c666083a1",
+          "read_verbatim": "'Ridge-hollow patterned bog ... ridges and Sphagnum hollows, generally oriented perpendicular to the direction of rainwater flow. The configuration and spacing of the ridges and hollows are related to the slope gradient of the peatland surface. Ridges are drier and elevated 25-50 cm above the adjacent hollows.' Microtopographic ridge/hollow element dimensions span ~10 to 100 m.",
+          "role": "on-disk primary source; establishes (a) strings perpendicular to flow, (b) spacing controlled by slope gradient, (c) ~10-100 m element-dimension envelope. Dimensionless regime only; NOT an Estonian amplitude."
+        },
+        "couwenberg_joosten_2005": {
+          "citation": "Couwenberg & Joosten (2005) Self-organization in raised bog patterning: the origin of microtope zonation and mesotope diversity. Journal of Ecology 93:1238-1248.",
+          "doi": "10.1111/j.1365-2745.2005.01035.x",
+          "access": "publisher paywalled; abstract/summary read via publisher landing + review syntheses",
+          "extracted_relation": "Lateral acrotelm water flow over a dome-shaped catotelm: hummocks (low transmissivity) dam water and stimulate hollows upslope; hollows (high transmissivity) drain upslope areas and stimulate hummocks. The characteristic length scale of the alternating string/flark pattern is set by this lateral-flow feedback, so stronger slope-driven flow shortens the transverse spacing."
+        },
+        "rietkerk_2004_eppinga_2009": {
+          "citation": "Rietkerk et al. (2004) A putative mechanism for bog patterning, Am Nat 163:699-708 (doi 10.1086/383065); Eppinga et al. (2009) Nutrients and Hydrology Indicate the Driving Mechanisms of Peatland Surface Patterning, Am Nat 173:803-818 (doi 10.1086/598487).",
+          "extracted_relation": "Scale-dependent ecohydrological feedback with downslope advection of the fast-diffusing water/nutrient inhibitor. Stronger advection (steeper slope / higher flux) shifts the fastest-growing Turing mode to a HIGHER wavenumber, i.e. a SHORTER wavelength, and orients bands transverse to flow. This is the model-side justification for the same direction Korotkov/Couwenberg report empirically."
+        }
+      },
+      "magnitude": "Within a single raised-bog dome the wavelength varies over a sub-range of the ~10-100 m Korotkov element envelope. Anchoring to the advective-length scaling lambda proportional to slope^(-1/2): this mire's authority slope spans p10..p90 = 0.00064..0.00481 m/m (7.5x range), implying a ~sqrt(7.5) = 2.7x intra-dome wavelength range. The frozen D-modulation floor (below) is set so the local wavelength varies by ~2.6x (v3.0's ~19.7 m flat-dome wavelength down to ~8 m on the steepest flanks), squarely inside the Korotkov 10-100 m regime envelope."
+    },
+    "modulation_law": {
+      "field": "|grad dome| = ProcessHydrology.slope_mag (m/m), the smoothed 10 m dome gradient magnitude the v3 solver already computes for anisotropy; NOT a new input.",
+      "reference": "K * median(slope_mag over the mire authority region); K frozen = 2.0. median is a robust, parameter-free anchor to THIS dome's own gradient distribution (computed once, deterministic); it makes the modulation express its full bounded range across the mire's real gradient heterogeneity WITHOUT hand-picking an absolute slope reference from the output.",
+      "relative_gradient": "r(x) = clip( slope_mag(x) / (K * median_authority_slope), 0, 1 ), monotone increasing in slope.",
+      "d_scale": "D_scale(x) = 1 - (1 - d_min) * r(x); bounded in [d_min, 1]; monotone DECREASING in slope.",
+      "applied": "D_u_local(x) = D_u * D_scale(x); D_v_local(x) = D_v * D_scale(x). Both the isotropic Laplacian diffusion and the along-flow anisotropic inhibitor term use the LOCAL D_u_local(x). Local-multiply (heterogeneous-lambda) form; the smoothed dome gradient makes grad(D) small so the ridgeline diffusion-modulation is well-behaved. Turing lambda proportional to sqrt(D_scale) => steeper -> shorter wavelength.",
+      "bounds": {
+        "d_min": 0.15,
+        "K": 2.0,
+        "d_min_rationale": "lambda-factor floor sqrt(d_min) = 0.387; i.e. steepest-flank wavelength ~= 0.39 x flat-dome wavelength, a ~2.6x intra-dome range matching the sqrt(7.5) advective-length scaling over this mire's p10-p90 slope range and staying inside the Korotkov 10-100 m envelope. Chosen from the literature magnitude BEFORE running; NOT reverse-engineered to the spacing gate.",
+        "K_rationale": "reference gradient = 2x the mire's median slope; a standard robust high-gradient threshold. Cells at >= 2x median slope reach the wavelength floor.",
+        "diagnostic_recorded_before_run": "over the mire authority, the frozen law gives D_scale p1/50/99 = 0.15/0.575/0.948, local lambda-factor p1/50/99 = 0.387/0.758/0.974, between-location CV(lambda-factor) = 0.283, floor-fraction (r==1) = 0.198. This is the between-location wavelength heterogeneity the mechanism injects; the actual pooled spacing CV is measured honestly at mire scale after the run."
+      },
+      "numerical_stability": "D_scale <= 1 everywhere, so D_u_local <= v3.0 D_u = 0.16 and D_v_local <= 0.08; explicit float64 stability (D*dt <= 0.25 in grid units) is preserved and only improved by the modulation. No base parameter changes."
+    }
+  },
+  "carrier_decision": {
+    "chosen": "ORCHESTRATOR_AUTHORIZED_FALLBACK",
+    "fallback_carrier": "raw 1 m Maa-amet ALS DTM sheet 53243 over the output core+halo only; whole-mire dome/routing from the national 10 m DTM. Same fallback family as v4; only the sheet changes for the reselected site.",
+    "unchanged_from_v3": true
+  },
+  "immutable_history": {
+    "v1_preregistration": {
+      "path": "asset-gen/config/microtopography/peat-raised-bog/bundle-preregistration-v1.json",
+      "sha256": "21d972723f7c2641ce6a9fb7c15e171e85f3378dc83863cc93cb833be94bf115",
+      "reinterpretation_or_mutation_forbidden": true
+    },
+    "v2_preregistration": {
+      "path": "asset-gen/config/microtopography/peat-raised-bog/bundle-preregistration-v2.json",
+      "sha256": "431b269d49f7e85457a531cc669a3422e8eee077a96958d9beb9dc7c42da0d35",
+      "reinterpretation_or_mutation_forbidden": true
+    },
+    "v3_preregistration": {
+      "path": "asset-gen/config/microtopography/peat-raised-bog/bundle-preregistration-v3.json",
+      "sha256": "96885c592535c061a9ebcdcda48c97bb63443fb5da8a63c1231bf5b5e899254d",
+      "state": "research_rejected_terminal",
+      "reinterpretation_or_mutation_forbidden": true
+    },
+    "v3_1_preregistration": {
+      "path": "asset-gen/config/microtopography/peat-raised-bog/bundle-preregistration-v3.1.json",
+      "sha256": "dc9c7f03389f539227d93ec88dc75ca2ea7b50239a6c8c47e108f8f72aecdfc0",
+      "state": "research_rejected_terminal_measurement_rescope",
+      "reinterpretation_or_mutation_forbidden": true
+    },
+    "v3_0_immutable_artifact": {
+      "recipe_sha256": "5384c76254f862b893ccc332bd8d9dcb5d1e2b570fef4f63edb98a83205324f0",
+      "path": "asset-gen/data/work/microtopography/peat-bog-network-v3/sha256/5384c76254f862b893ccc332bd8d9dcb5d1e2b570fef4f63edb98a83205324f0/",
+      "mutation_forbidden": true,
+      "note": "v4 does not modify or reinterpret this artifact or v3.0/v3.1 code paths; it adds sibling modules."
+    },
+    "rejected_form_scale_graph": {
+      "family": "whole-mire form-scale graph",
+      "prefix": "caf9e5f2660f",
+      "reinterpretation_or_retune_forbidden": true
+    }
+  },
+  "site": {
+    "development_mire": {
+      "normalized_mire_identifier": "etak-component-0004071135",
+      "member_etak_ids": [
+        4071135
+      ],
+      "geometry_sha256": "0f85b612f992acf54d80cd5ee622738bb6d954dcf090840169190992ea0c36c7",
+      "whole_mire_bounds_en": [
+        539999.4959999993,
+        6425554.344999999,
+        541869.2299999967,
+        6430000.0929999985
+      ],
+      "core_bounds_en": [
+        540224.0,
+        6429504.0,
+        540352.0,
+        6429632.0
+      ],
+      "halo_bounds_en": [
+        540160.0,
+        6429440.0,
+        540416.0,
+        6429696.0
+      ],
+      "lod0_chunk": [
+        0,
+        83,
+        100
+      ],
+      "lod1_parent": [
+        -1,
+        335,
+        402
+      ],
+      "minimum_halo_m": 64.0,
+      "core_selection_note": "Given pack core [540224,6429632,540352,6429760] (center N on the 512 m LOD-1 boundary 402*512) straddled two LOD-1 parents (335,401)+(335,402) which the single-parent hero packer cannot represent; shifted 128 m south to [540224,6429504,540352,6429632] (center 540288,6429568) so the 2x2 LOD-2 block sits wholly under LOD-1 parent (335,402). This core lands on 7 Laugas, 1661 m2 (10.1%) open water; authority LOD0 chunk unchanged (0,83,100).",
+      "core_laugas_count": 7,
+      "core_open_water_m2": 1661.1
+    },
+    "sealed_abstention_mire": {
+      "rule": "not applicable to this reselected site; no sealed neighbor in the bog-pools domain."
+    }
+  },
+  "authority": {
+    "regime_id": "peat.raised_bog",
+    "regime_release_state": "research",
+    "research_role": "gradient_modulated_wavelength_self_organization_process_hypothesis",
+    "maximum_result": "one_immutable_non_latest_development_preview_after_all_v4_gates_pass_and_orchestrator_pack_gate",
+    "target_truth": false,
+    "height_supervision": false,
+    "pixelwise_training": false,
+    "measured_morphology_fit": false,
+    "estonia_transfer": "none_beyond_one_selected_development_hypothesis",
+    "production_owner": null,
+    "latest_eligible": false,
+    "runtime_synthesis_allowed": false,
+    "wire_format_change_allowed": false,
+    "amplitude_source": "Valgesoo measured carrier + Moore plot-scale descriptive distributions ONLY; papers supply the DIMENSIONLESS wavelength-gradient regime only (direction + relative magnitude), never literal Estonian amplitudes."
+  },
+  "carrier_and_conditions": {
+    "fallback_carrier_dtm1m": {
+      "path": "asset-gen/data/in/dem_1m/53243_dtm_1m.tif",
+      "sha256": "0c5e21ce9c66c26826aa1d322fbea8a53eaa68450a60d5ca9578905bf79fe9f0",
+      "crs": "EPSG:3301"
+    },
+    "whole_mire_hydrology_dtm10m": {
+      "path": "asset-gen/data/in/country/DTM_10m_eesti.tif",
+      "sha256": "df0f6f5ffe2d070d0bec9def55c019091e5da4db7f5a2a9ddbc5cd2f653be12c"
+    },
+    "etak": {
+      "path": "asset-gen/data/in/etak/ETAK_EESTI_GPKG.gpkg",
+      "sha256": "e19084c4bff0a6096a7dd38cefa12402bdce98d59c73d5b35c30dda60682f5f9"
+    },
+    "valgesoo_carrier": {
+      "path": "asset-gen/data/work/microtopography/peat-raised-bog/measured-float/sha256/6e0148da0c28636f1577c531431cd9cc62f7a6c5610fdccd1c231f52749d2365/measured-float.npz",
+      "sha256": "28ed716789e5817c95e64a9fd037d3a0d254d95034c3bfda175c7a574a4f584e"
+    },
+    "moore_descriptive": {
+      "path": "asset-gen/data/work/microtopography/peat-raised-bog/moore-form-capacity/sha256/12d6f6083898a05670bcb035b0194bc0ab02ed104692b05696049d253f723c36/forms.json",
+      "sha256": "11672d34400213e329ba5f5f141662d14b2c841181877505c036beb07c924da3"
+    }
+  },
+  "amplitude_calibration": {
+    "unchanged_from_v3": true,
+    "frozen_typed_form_amplitudes_m": {
+      "ridge_peak": 0.06,
+      "hollow_floor": 0.05,
+      "lawn": 0.0,
+      "pool_surface": 0.0,
+      "peak_to_peak_ridge_hollow": 0.11
+    },
+    "source": "Valgesoo measured carrier + Moore descriptive only; identical to v3.0."
+  },
+  "world_prf": {
+    "person": "laas-micro-prf1",
+    "keying": "BLAKE2b(person) over integer world (E,N) cell coordinates; per-cell uniform nucleation noise. Identical to v3.0; NOT keyed by storage chunks; periodic/wrap/reflection boundaries forbidden; worker count/order must not change bytes."
+  },
+  "solve": {
+    "domain": "whole connected development mire + 128 m solve margin (>= 64 m required halo); process grid 2 m; deterministic float64 explicit integration; Neumann (edge) solve-domain boundary; fixed iteration budget; crop output core+halo LAST. Identical to v3.0 except the per-cell D-modulation field.",
+    "process_pitch_m": 2.0,
+    "output_pitch_m": 0.25,
+    "carrier_pitch_m": 1.0,
+    "solve_margin_m": 128.0,
+    "iteration_budget": 14000,
+    "dt": 0.5,
+    "params_dimensionless": {
+      "feed": 0.037,
+      "kill": 0.06,
+      "D_u": 0.16,
+      "D_v": 0.08,
+      "anisotropy": 3.0,
+      "slope_ref": 0.02,
+      "seed_quantile": 0.6
+    },
+    "d_modulation": {
+      "d_min": 0.15,
+      "K": 2.0,
+      "field": "slope_mag",
+      "reference": "K*median(slope_mag over authority)"
+    },
+    "typed_thresholds": {
+      "ridge_level": 0.5,
+      "pool_wet_percentile": 66.0,
+      "hollow_wet_percentile": 33.0
+    },
+    "no_random_no_wallclock_no_order_dependence": true,
+    "periodic_boundaries_forbidden": true
+  },
+  "frozen_gates": {
+    "carried_over_from_v3_unchanged": {
+      "note": "Evaluated exactly as v3.0 on the output core+halo window (run.py machinery); thresholds identical.",
+      "safety_exactness": {
+        "pool_and_open_water_relief_free": true,
+        "hard_unknown_sealed_residual_exactly_zero": true,
+        "halo_crop_last_identity_exact": true,
+        "sealed_mire_pixel_unopened": true
+      },
+      "parent_deviation_diagnostic": {
+        "unpatterned_form_free_p95_max_m": 0.02,
+        "patterned_area_p99_max_m": 0.3,
+        "note": "diagnostic per 2026-07-17 user law; raw-parent fidelity is not a gate."
+      },
+      "amplitude_envelope": {
+        "b1_band_2_to_16m_rms_min_m": 0.01,
+        "b1_band_2_to_16m_rms_max_m": 0.0467,
+        "core_abs_relief_p99_max_m": 0.16
+      },
+      "topology": {
+        "branch_merge_junctions_per_km2_min": 40.0,
+        "terminations_per_km2_min": 40.0,
+        "branch_min_count": 1,
+        "merge_min_count": 1,
+        "both_branch_and_merge_types_present": true
+      },
+      "pool_coupling": {
+        "pool_perimeter_adjacent_to_string_or_hummock_fraction_min": 0.7,
+        "pool_coupling_radius_m": 16.0
+      }
+    },
+    "mire_scale_anti_corrugation": {
+      "note": "Replaces the v3.0 window anti_corrugation gate with the SAME three mire-scale gates v3.1 froze (128 m blocks over the whole mire; unmodified orientation/skeleton/spacing machinery). Thresholds IDENTICAL to bundle-preregistration-v3.1.json; frozen before any v4 computation.",
+      "block_grid": {
+        "block_size_m": 128.0,
+        "block_size_cells": 64,
+        "process_pitch_m": 2.0,
+        "tiling": "non-overlapping 64x64-cell blocks, origin at array index (0,0) of whole_labels; high-edge remainder strip discarded.",
+        "ridge_mask": "whole_labels == RIDGE (1)."
+      },
+      "patterned_block_criterion": {
+        "min_ridge_cells": 128,
+        "rationale": "128 of 4096 cells (>=3.1% string coverage over a 128 m block) guarantees enough string pixels to estimate a local orientation and contribute spacing samples. Frozen from measurement-support reasoning."
+      },
+      "gate_a_orientation_domain_dispersion": {
+        "metric": "per patterned block theta_b = 0.5*angle(mean(exp(2j*angle_ridge_cells))) via the gates._orientation_resultant doubled-angle construction restricted to the block; R_dom = |mean over patterned blocks of exp(2j*theta_b)|.",
+        "block_orientation_resultant_R_dom_max": 0.5,
+        "pass_condition": "R_dom <= 0.50 (circular variance of block orientations >= 0.50)."
+      },
+      "gate_b_pooled_spacing_cv": {
+        "metric": "skeletonize the whole ridge mask (network.skeletonize); distance-transform spacing peaks (2*distance at local maxima) whose peak location falls inside a patterned block; pool and CV = std/mean.",
+        "pooled_spacing_cv_min": 0.35,
+        "pass_condition": "pooled spacing CV >= 0.35."
+      },
+      "gate_c_two_regimes_present": {
+        "metric": "classify each patterned block by internal orientation resultant R_int = gates._orientation_resultant restricted to the block: 'labyrinth' if R_int < 0.50, 'aligned' if R_int >= 0.50.",
+        "regime_split_R_int": 0.5,
+        "min_blocks_per_regime": 3,
+        "min_fraction_per_regime": 0.05,
+        "pass_condition": "both classes contain >= 3 patterned blocks AND >= 5% of patterned blocks."
+      }
+    },
+    "rejection_terminals": [
+      "mire-scale spacing gate fail (pooled CV < 0.35)",
+      "mire-scale orientation gate fail (R_dom > 0.50)",
+      "mire-scale regime gate fail (a regime class below the block/fraction floor)",
+      "any carried-over v3.0 gate fail (topology / pool_coupling / safety_exactness / parent_deviation / amplitude_envelope)",
+      "-> research_rejected for this exact recipe. NO parameter tuning after viewing QA (one consolidated correction cycle allowed for harness/plumbing defects only). v4 is the SECOND and FINAL bog mechanism attempt: if the spacing gate still fails, bog PARKS with the recorded resume condition; no third mechanism, no v4 tune.",
+      "SURFACE-NOT-KILL: if v4 improves but still misses the CV threshold while topology/coupling/regime gates pass, that is an orchestrator decision to surface to the user (best-fit doctrine), NOT a silent kill and NOT a silent pack."
+    ]
+  },
+  "implementation": {
+    "package": "asset-gen/src/assetgen/terrain/microtopography/peat_raised_bog/peat_bog_network",
+    "v4_modules": "sibling files network_v4.py / gates_v4.py / run_v4.py / config_v4.json / qa_v4.py / tests_invariants_v4.py; v1/v2/form-graph/process_v3 and v3.0 modules (network.py/run.py/gates.py/config.json) and the v3.0 artifact are UNTOUCHED.",
+    "reuses_v3_unchanged": "hydrology.py, masks.py, carve.py, prf.py, and network.py's classify/compute_cuts/normalized_activator/skeletonize/analyze_topology/pool_coupling are imported unmodified.",
+    "determinism": "float64; fixed iterations; whole-array ops; no wall-clock/random/order/worker dependence",
+    "output_root": "asset-gen/data/work/microtopography/peat-bog-network-v4/sha256/<recipe_sha256>"
+  },
+  "publication": {
+    "state": "blocked_pending_orchestrator_pack_gate",
+    "immutable": true,
+    "latest_eligible": false,
+    "production_manifest_mutation_allowed": false,
+    "wire_format_change_allowed": false,
+    "runtime_synthesis_allowed": false
+  },
+  "bog_pools_reselection_note": "Reselected pool-bearing raised bog etak-component-0004071135 (Raba, 545 ha, 436 Laugas) after the v4 development mire etak-component-0004069028 was found POOLLESS (0 Laugas, no DTM depressions). Identical frozen mechanism/gates/amplitudes/carrier-decision as bundle-preregistration-v4.json; only the SITE and the raw 1 m carrier sheet change. ETAK Laugas (E_202_seisuveekogu_a) are relief-free open water in the synthesis authority mask (masks.py already rasterizes E_202 into open_water), so the network carves string/hollow relief only BETWEEN pools."
+}

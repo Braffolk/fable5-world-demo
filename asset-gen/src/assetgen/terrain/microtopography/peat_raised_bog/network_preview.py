@@ -2,8 +2,10 @@
 research-only, immutable, non-latest format-2 preview.
 
 The bog v4 float (gates all pass, orchestrator-accepted) carves a 128 m core over
-the development mire etak-component-0004069028. The core straddles the 2x2 LOD -2
-block whose LOD -1 parent is (-1, 327, 357) and whose LOD0 authority is (0, 81, 89).
+the reselected pool-bearing mire etak-component-0004071135. The core straddles the
+2x2 LOD -2 block whose LOD -1 parent is (-1, 335, 402) and whose LOD0 authority is
+(0, 83, 100). The ETAK Laugas (bog pools) are relief-free open water; the synthesized
+string/hollow relief lands only between them.
 Packing mirrors the forest single-exemplar preview: baseline fine cores are derived
 from the pinned bog base, the bog relief is added inside the core (world-coordinate
 placement keeps decoded seams exact), the LOD -1 parent is box-mean derived from the
@@ -49,28 +51,28 @@ RECIPE_KIND = "research-peat-bog-network-preview-v1"
 RECIPE_ID = "laas.micro.peat-bog-network-preview.recipe.v1"
 COOK_REVISION = 1
 ARTIFACT_SCHEMA = "laas.peat-raised-bog-r0-research-bundle-preregistration/4"
-PARENT = HeightChunkId(-1, 327, 357)
-AUTHORITY = HeightChunkId(0, 81, 89)
-CORE_BBOX = (536384.0, 6452416.0, 536512.0, 6452544.0)
+PARENT = HeightChunkId(-1, 335, 402)
+AUTHORITY = HeightChunkId(0, 83, 100)
+CORE_BBOX = (540224.0, 6429504.0, 540352.0, 6429632.0)
 CORE_M = 128.0
 RELIEF_PITCH_M = 0.25
 FINE_QSCALE = 0.002
 PARENT_QSCALE = 0.005
 # A single shared quant offset across all fine chunks so adjacent chunks land on the
 # same quantization grid and apron seams decode bit-identically (exact-zero seam gate).
-# The mire sits ~4-24 m; offset 0 with qscale 0.002 spans 0..131 m with no overflow.
+# The pool-bearing mire sits ~57 m; offset 0 with qscale 0.002 spans 0..131 m, no overflow.
 FINE_QOFFSET = 0.0
-# LOD0 authority (0,81,89) 1 m window covering the 128 m core.
-AUTH_WINDOW = (slice(704, 832), slice(1856, 1984))
-# LOD -1 parent (-1,327,357) 1 m (box-mean-of-fine) window covering the core.
-PARENT_WINDOW = (slice(192, 320), slice(320, 448))
+# LOD0 authority (0,83,100) 1 m window covering the 128 m core.
+AUTH_WINDOW = (slice(1088, 1216), slice(1600, 1728))
+# LOD -1 parent (-1,335,402) 1 m (box-mean-of-fine) window covering the core.
+PARENT_WINDOW = (slice(64, 192), slice(64, 192))
 
 
 def _artifact_root() -> Path:
     return (
         DATA_WORK
         / "microtopography/peat-bog-network-v4/sha256"
-        / "64e112c9625909096624b776c142dca019ac009074e52ccd151b1f1ea8327753"
+        / "b29a72d8faf0ef72163e0c9a6440991f6a560e1eb410b21cfa32a7f4c51c7979"
     )
 
 
