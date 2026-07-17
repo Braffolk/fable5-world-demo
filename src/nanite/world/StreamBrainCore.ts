@@ -374,14 +374,20 @@ export class StreamBrainCore {
   async fillPlanesBoot(): Promise<void> {
     const packets: StreamPacket[] = [];
     const transfers: Transferable[] = [];
-    // height levels — retained brain-side (tile bakes read them)
-    this.hWin = [];
-    for (let i = 0; i < this.plan.height.length; i++) {
+    // height levels — retained brain-side (tile bakes read them). Assembled
+    // COARSEST→FINEST so each level's COARSE UNDERLAY (missing-fine → coarse
+    // fallback) can read the already-resident coarser windows; packets still ship
+    // in ascending-level order (the unchanged fill contract).
+    this.hWin = new Array(this.plan.height.length);
+    for (let i = this.plan.height.length - 1; i >= 0; i--) {
       const plan = this.plan.height[i] as PlanePlan;
-      const data = await this.assembleF32('height', plan, plan.n0x, plan.n0z);
-      this.hWin.push({ plan, data, n0x: plan.n0x, n0z: plan.n0z, phaseX: 0, phaseY: 0 });
-      const copy = data.slice(); // window is retained — ship a copy
-      packets.push({ kind: 'fill', plane: 'height', level: i, x: 0, y: 0, w: plan.res, h: plan.res, f32: copy });
+      const data = await this.assembleF32('height', plan, plan.n0x, plan.n0z, undefined, i);
+      this.hWin[i] = { plan, data, n0x: plan.n0x, n0z: plan.n0z, phaseX: 0, phaseY: 0 };
+    }
+    for (let i = 0; i < this.hWin.length; i++) {
+      const win = this.hWin[i] as HeightWindow;
+      const copy = win.data.slice(); // window is retained — ship a copy
+      packets.push({ kind: 'fill', plane: 'height', level: i, x: 0, y: 0, w: win.plan.res, h: win.plan.res, f32: copy });
       transfers.push(copy.buffer);
     }
     // biome / fields — assembled transiently, transferred outright
@@ -483,21 +489,27 @@ export class StreamBrainCore {
     n0x: number,
     n0z: number,
     mapNaN?: number,
+    levelIndex?: number,
   ): Promise<Float32Array> {
     const geo = this.layerGeo(layer);
     const out = new Float32Array(plan.res * plan.res);
     const place = { ...plan, n0x, n0z };
     let box: FilledBox | null = null;
+    const missing: ChunkKey[] = [];
     for (const key of chunksInWindow(geo, plan.lod, n0x, n0z, plan.res)) {
       const payload = await this.tryFetch(layer, key);
-      if (!payload || payload.kind !== 'height') continue;
+      if (!payload || payload.kind !== 'height') { missing.push(key); continue; }
       box = copyChunkF32(out, plan.res, plan.res, place, geo, key.cx, key.cz, payload.heights, payload.res, box, mapNaN);
     }
-    if (!box) {
+    if (box) clampExtend(out, plan.res, plan.res, 1, box);
+    // COARSE UNDERLAY (the LOD-fallback fix): an absent fine chunk resolves to the
+    // resident coarser surface, never a hole. No-op for water / the coarsest level /
+    // a fully-covered level ⇒ the generated world is byte-identical.
+    const underlaid = layer === 'height' && levelIndex !== undefined
+      && this.underlayMissingF32(out, plan.res, plan.res, place, geo, plan, levelIndex, missing);
+    if (!box && !underlaid) {
       this.deps.emit({ kind: 'log', level: 'warn', msg: `terrain field: layer '${layer}' lod ${plan.lod} — no chunks landed, plane is zero` });
-      return out;
     }
-    clampExtend(out, plan.res, plan.res, 1, box);
     return out;
   }
 
@@ -631,7 +643,9 @@ export class StreamBrainCore {
   // are pinned by plan.wraps=false and never enter) ------------------------------------
 
   private async scrollPlanes(camX: number, camZ: number, vx = 0, vz = 0): Promise<void> {
-    for (let i = 0; i < this.hWin.length; i++) {
+    // COARSEST→FINEST: a finer level's COARSE UNDERLAY reads the coarser windows, so
+    // scroll them into their new placement first (the coarsest is pinned ⇒ a no-op).
+    for (let i = this.hWin.length - 1; i >= 0; i--) {
       await this.scrollLevel('height', i, this.hWin[i] as HeightWindow, camX, camZ, vx, vz);
     }
     if (this.wWin) await this.scrollLevel('water', 0, this.wWin, camX, camZ, vx, vz);
@@ -702,7 +716,7 @@ export class StreamBrainCore {
     const phaseY = (((win.phaseY + dz) % plan.res) + plan.res) % plan.res;
     const emitRegion = async (rx0: number, rz0: number, rw: number, rh: number): Promise<void> => {
       if (rw <= 0 || rh <= 0) return;
-      const sub = await this.assembleRegionF32(plane, plan, rx0, rz0, rw, rh);
+      const sub = await this.assembleRegionF32(plane, plan, rx0, rz0, rw, rh, plane === 'water' ? undefined : level);
       for (const r of wrapRects(rx0 - n0x, rz0 - n0z, rw, rh, phaseX, phaseY, plan.res)) {
         // region-local origin of this physical rect (rects are logically
         // contiguous, so the mapping is a constant offset)
@@ -740,7 +754,7 @@ export class StreamBrainCore {
   private async refillWindow(plane: PlaneKind, level: number, win: HeightWindow, n0x: number, n0z: number, geo: RasterGeom): Promise<void> {
     const plan = win.plan;
     const layer: LayerName = plane === 'water' ? 'water' : 'height';
-    const data = await this.assembleF32(layer, { ...plan, wraps: plan.wraps }, n0x, n0z, plane === 'water' ? WATER_DRY_SENTINEL : undefined);
+    const data = await this.assembleF32(layer, { ...plan, wraps: plan.wraps }, n0x, n0z, plane === 'water' ? WATER_DRY_SENTINEL : undefined, plane === 'water' ? undefined : level);
     win.data.set(data);
     win.n0x = n0x;
     win.n0z = n0z;
@@ -818,19 +832,124 @@ export class StreamBrainCore {
     return { level, strideTexels, tx0, tz0, tileTexels: size, key: `L${level}:${Math.round(tx0 / size)},${Math.round(tz0 / size)}` };
   }
 
-  private async assembleRegionF32(plane: PlaneKind, plan: PlanePlan, rx0: number, rz0: number, rw: number, rh: number): Promise<Float32Array> {
+  private async assembleRegionF32(plane: PlaneKind, plan: PlanePlan, rx0: number, rz0: number, rw: number, rh: number, levelIndex?: number): Promise<Float32Array> {
     const layer: LayerName = plane === 'water' ? 'water' : 'height';
     const geo = this.layerGeo(layer);
     const out = new Float32Array(rw * rh);
     const place = { ...plan, n0x: rx0, n0z: rz0 };
     let box: FilledBox | null = null;
+    const missing: ChunkKey[] = [];
     for (const key of chunksInWindow(geo, plan.lod, rx0, rz0, rw, rh)) {
       const payload = await this.tryFetch(layer, key);
-      if (!payload || payload.kind !== 'height') continue;
+      if (!payload || payload.kind !== 'height') { missing.push(key); continue; }
       box = copyChunkF32(out, rw, rh, place, geo, key.cx, key.cz, payload.heights, payload.res, box, plane === 'water' ? WATER_DRY_SENTINEL : undefined);
     }
     if (box) clampExtend(out, rw, rh, 1, box);
+    // COARSE UNDERLAY: a missing fine chunk in the scrolled L-shape resolves to the
+    // resident coarser surface (never a hole under the camera during flight).
+    if (layer === 'height' && levelIndex !== undefined) {
+      this.underlayMissingF32(out, rw, rh, place, geo, plan, levelIndex, missing);
+    }
     return out;
+  }
+
+  // ---- COARSE UNDERLAY (the LOD-fallback correctness fix) --------------------------------
+  //
+  // The finest (lod-2) height plane is a camera window over a LIMITED cooked patch;
+  // its GPU availability keys off the chunk COVERAGE BOX, not per-texel fill
+  // (microAvailabilityGpu / availabilityMorphWeight). So a fine chunk momentarily
+  // ABSENT *inside* the coverage box (the 6 s-tolerant tryFetch returning null under a
+  // localhost fetch stampede) kept full fine availability while its plane region was
+  // left unfilled/stale — the sampler read that region at full fine weight → a HOLE in
+  // the ground under the camera. The reliability tweak in 02a82b7 lowered the frequency
+  // but could never make the hole impossible.
+  //
+  // The LOD hierarchy already holds the answer: a missing FINE region must resolve to
+  // the coarser RESIDENT surface (lod-1 / lod0 / the pinned country floor), never a
+  // hole and never stale data. This fills the footprint of every absent chunk with the
+  // upsampled coarser resident window so the fine plane is NEVER unfilled — the value
+  // there simply IS the coarse surface (seamless, deterministic, self-heals when the
+  // chunk lands). Purely a plane-fill (worker/CPU) change: no shader/TSL edit, no new
+  // GPU allocation (0 VRAM delta), and it runs only over absent-chunk footprints ⇒ a
+  // fully-covered level / the generated world is byte-identical (missing == []).
+
+  /** world coord → fractional lattice index at a level's plane (inverse of latticeWorld). */
+  private worldToLat(geo: RasterGeom, plan: PlanePlan, world: number, axis: 'x' | 'z'): number {
+    const o = axis === 'x' ? geo.originX : geo.originZ;
+    if (geo.mode === 'physical-level') return (world - o) / plan.texel - 0.5;
+    const off = plan.stride >> 1;
+    return (world - o - (off + 0.5) * geo.texel0) / plan.texel;
+  }
+
+  /** bilinear sample of a retained height window at fractional lattice index (nx,nz)
+   *  in that window's own lattice (clamped to residency, phase-wrapped) — the same
+   *  read heightAtLattice uses. */
+  private sampleWindow(w: HeightWindow, nx: number, nz: number): number {
+    const res = w.plan.res;
+    const x0 = Math.floor(nx);
+    const z0 = Math.floor(nz);
+    const fx = nx - x0;
+    const fz = nz - z0;
+    const at = (x: number, z: number): number => {
+      const sx = Math.min(Math.max(x, w.n0x), w.n0x + res - 1);
+      const sz = Math.min(Math.max(z, w.n0z), w.n0z + res - 1);
+      const px = (((sx - w.n0x + w.phaseX) % res) + res) % res;
+      const pz = (((sz - w.n0z + w.phaseY) % res) + res) % res;
+      return w.data[pz * res + px] as number;
+    };
+    const a = at(x0, z0) * (1 - fx) + at(x0 + 1, z0) * fx;
+    const b = at(x0, z0 + 1) * (1 - fx) + at(x0 + 1, z0 + 1) * fx;
+    return a * (1 - fz) + b * fz;
+  }
+
+  /** the finest coarser resident window that covers (x,z); falls through to the
+   *  coarsest (pinned country floor), which always covers the renderable domain. */
+  private sampleCoarser(coarser: readonly HeightWindow[], geo: RasterGeom, x: number, z: number): number {
+    for (let i = 0; i < coarser.length; i++) {
+      const w = coarser[i] as HeightWindow;
+      const nx = this.worldToLat(geo, w.plan, x, 'x');
+      const nz = this.worldToLat(geo, w.plan, z, 'z');
+      const covered = nx >= w.n0x && nx <= w.n0x + w.plan.res - 1 && nz >= w.n0z && nz <= w.n0z + w.plan.res - 1;
+      if (covered || i === coarser.length - 1) return this.sampleWindow(w, nx, nz);
+    }
+    return 0; // unreachable — coarser always has ≥1 entry here
+  }
+
+  /** fill every ABSENT chunk's footprint in a height region with the upsampled coarser
+   *  resident surface. Returns whether a coarse fallback was available (⇒ the caller
+   *  suppresses the "plane is zero" warning). No-op / returns false for the coarsest
+   *  level (no coarser source); returns true with nothing to do when already complete. */
+  private underlayMissingF32(
+    out: Float32Array,
+    w: number,
+    h: number,
+    place: { n0x: number; n0z: number },
+    geo: RasterGeom,
+    plan: PlanePlan,
+    levelIndex: number,
+    missing: readonly ChunkKey[],
+  ): boolean {
+    if (levelIndex >= this.hWin.length - 1) return false; // coarsest level: no coarser fallback
+    if (missing.length === 0) return true; // already complete
+    const coarser: HeightWindow[] = [];
+    for (let i = levelIndex + 1; i < this.hWin.length; i++) coarser.push(this.hWin[i] as HeightWindow);
+    const cr = geo.chunkRes;
+    for (const key of missing) {
+      const pxLo = Math.max(0, key.cx * cr - place.n0x);
+      const pxHi = Math.min(w - 1, (key.cx + 1) * cr - 1 - place.n0x);
+      const pzLo = Math.max(0, key.cz * cr - place.n0z);
+      const pzHi = Math.min(h - 1, (key.cz + 1) * cr - 1 - place.n0z);
+      if (pxLo > pxHi || pzLo > pzHi) continue;
+      for (let pz = pzLo; pz <= pzHi; pz++) {
+        const worldZ = latticeWorld(geo, plan.lod, place.n0z + pz, 'z');
+        const o0 = pz * w;
+        for (let px = pxLo; px <= pxHi; px++) {
+          const worldX = latticeWorld(geo, plan.lod, place.n0x + px, 'x');
+          out[o0 + px] = this.sampleCoarser(coarser, geo, worldX, worldZ);
+        }
+      }
+    }
+    return true;
   }
 
   // ---- u8 camera-window scroll (#114 watercover / #116 soil — the u8 twin of

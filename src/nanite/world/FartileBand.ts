@@ -259,6 +259,16 @@ export class FartileBand {
         trees && trees.kind === 'records'
           ? this.buildCellPools(trees, height, pcx, pcz, cellX0, cellZ0, cm, margin)
           : [];
+      // DEFER (null): the cell's trees need a ground-derive (no precomputed y/yaw)
+      // but the LOD0 height chunk is momentarily absent (fetch tolerance returned
+      // null). Grounding them from a null deriver threw `derive is not a function`,
+      // rejecting the whole bake and spamming the console (the far-tile regression).
+      // Instead drop the cell with NOTHING reserved and leave it un-resident so
+      // pose() re-nominates it next tick once the height chunk lands — the SAME
+      // clean DEFER outcome the pool-full path below uses. Trees are never grounded
+      // on stale/absent data, and no cell is dropped forever (a bake is still a
+      // total function to residency once its source is present).
+      if (flats === null) return;
       const cellSize = this.cfg.cellSizes[grade] as number;
       const plan =
         flats.length > 0
@@ -362,7 +372,7 @@ export class FartileBand {
     cellZ0: number,
     cm: number,
     margin: number,
-  ): SplatPoolFlat[] {
+  ): SplatPoolFlat[] | null {
     const { cols, count } = trees;
     const footprint = this.grid.chunkMeters; // LOD0
     const minX = this.grid.originX + pcx * footprint;
@@ -372,6 +382,9 @@ export class FartileBand {
       needDerive && height && height.kind === 'height'
         ? makeGroundDeriver(height.heights, height.res, footprint, pcx, pcz)
         : null;
+    // trees need grounding but the height chunk is absent ⇒ signal DEFER (bakeCell
+    // re-nominates the cell next tick) rather than call a null deriver.
+    if (needDerive && !derive) return null;
     const byId = new Map<number, { a: number[]; b: number[] }>();
     for (let i = 0; i < count; i++) {
       const xLocal = cols.x[i] as number;
@@ -390,6 +403,7 @@ export class FartileBand {
         y = cols.y[i] as number;
         yaw = cols.yaw[i] as number;
       } else {
+        // needDerive ⇒ derive is non-null here (a null deriver returned early above).
         const dv = (derive as NonNullable<typeof derive>)(xLocal, zLocal);
         y = cols.y ? (cols.y[i] as number) : dv.h - scale * 0.12;
         yaw = cols.yaw ? (cols.yaw[i] as number) : dv.yaw;
