@@ -91,12 +91,13 @@ def verify_bog_network_preview(
 
     recipe_inputs = expectation["recipeInputs"]
     artifact_root = Path(recipe_inputs["artifact"]["root"])
-    if _sha256(artifact_root / "network-v4-float.npz") != recipe_inputs["artifact"]["floatSha256"]:
-        raise ValueError("accepted bog v4 float changed")
+    float_name = recipe_inputs["artifact"].get("floatName", "network-v4-float.npz")
+    if _sha256(artifact_root / float_name) != recipe_inputs["artifact"]["floatSha256"]:
+        raise ValueError("accepted bog float changed")
     if _sha256(artifact_root / "measurements.json") != recipe_inputs["artifact"]["measurementsSha256"]:
-        raise ValueError("accepted bog v4 measurements changed")
+        raise ValueError("accepted bog measurements changed")
     relief = np.asarray(
-        np.load(artifact_root / "network-v4-float.npz")["core_relief_025m"], dtype=np.float64
+        np.load(artifact_root / float_name)["core_relief_025m"], dtype=np.float64
     )
     if relief.shape != (512, 512):
         raise ValueError("bog core relief must be 512 square")

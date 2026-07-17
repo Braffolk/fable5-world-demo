@@ -1,0 +1,99 @@
+{
+  "schema_version": "laas.peat-bog-hummock-v5-preregistration/1",
+  "status": "development_float_qa_only",
+  "title": "Bog v5 organic hummock-hollow field (marked-point process; mechanism break from v3/v4)",
+  "frozen_utc": "2026-07-17",
+  "mechanism": {
+    "choice": "B_marked_point_process_of_organic_rounded_domes",
+    "why_not_A": "Option A (real measured micro-relief patches placed the forest-floor way) does NOT qualify: the only real bog surface retained for this mire is 1 m ALS (measured-float.npz), whose core plane-residual range is ~0.33 m at 1 m posting and cannot resolve individual 0.3-1 m Sphagnum hummocks (p95 ~0.08 m). No centimetre-scale bog hummock raster exists locally to use as a placeable exemplar, so the accepted forest exemplar machinery has nothing real to place. Option B synthesizes organic rounded domes with morphometry grounded in Moore 2019.",
+    "rejected_family": "v3/v4 Rietkerk/Eppinga anisotropic reaction-diffusion string generator (peat_bog_network) is PERMANENTLY not the visible surface: thin 5 cm ridge lines rendered as glitchy dashes.",
+    "summary": "World-locked blue-noise marked-point process of rounded, irregular, coalescing Wendland-C2 domes at three superposed scales (1/2/4 m) with per-hummock jittered height/radius/anisotropy/outline-warp; wet hollows in the interstices; soft coalescence cap; sub-metre Sphagnum roughness; hummocks suppressed and relief tapered to 0 at the REAL ETAK Laugas pool margins; isotropic (site slope ~0.3% is sub-threshold for string patterning). NO thin ridges, NO periodic lattice, NO single characteristic wavelength."
+  },
+  "real_morphometry": {
+    "primary_source": {
+      "citation": "Moore, P.A., Lukenbach, M.C., Thompson, D.K., Kettridge, N., Granath, G., Waddington, J.M. (2019). Assessing the peatland hummock-hollow classification framework using high-resolution elevation models. Biogeosciences 16, 3491-3506. https://doi.org/10.5194/bg-16-3491-2019",
+      "pdf_sha256": "b97f86a15f071d59e81ba8e397be2aa67ceb173e1f201ca9b96d0de33d3e34bf",
+      "numbers_used": {
+        "hummock_hollow_spatial_scale_m": [1.0, 10.0],
+        "dominant_scale_psd_rolloff_m": [2.4, 2.9],
+        "hummock_surface_above_water_table_m": 0.20,
+        "hummock_hollow_modal_separation_m": [0.19, 0.21],
+        "tall_hummock_modes_m": [0.28, 0.53],
+        "raised_bog_reference_plot_Rodmossen_SE_modes_m": [0.17, 0.36],
+        "site_level_relief_sigma_m": 0.147,
+        "hummock_footprint_up_to_m2": 3.0,
+        "hummock_flank_modal_slope_deg": [16.0, 20.3],
+        "submetre_fractal_hurst": [0.14, 0.26],
+        "variance_captured_above_length_scale_m": 0.6
+      }
+    },
+    "site_measured": {
+      "note": "Measured on the target mire from the cooked base + ETAK at 0.25 m over the halo.",
+      "core_open_water_pool_cells": 27661,
+      "core_open_water_pool_fraction": 0.1055,
+      "core_authority_fraction": 0.894,
+      "core_slope_p95_m_per_m": 0.00297,
+      "regime": "flat raised-bog interior -> isotropic hummock field (string patterning not supported)"
+    }
+  },
+  "target": {
+    "normalized_mire_identifier": "etak-component-0004071135",
+    "member_etak_ids": [4071135],
+    "mire_geometry_sha256": "0f85b612f992acf54d80cd5ee622738bb6d954dcf090840169190992ea0c36c7",
+    "whole_mire_bounds_en": [539999.4959999993, 6425554.344999999, 541869.2299999967, 6430000.0929999985],
+    "core_bounds_en": [540224, 6429504, 540352, 6429632],
+    "halo_bounds_en": [540160, 6429440, 540416, 6429696],
+    "core_slice_in_halo": [[256, 768], [256, 768]],
+    "lod0_authority_chunk": [0, 83, 100],
+    "lod_minus1_parent_chunk": [-1, 335, 402],
+    "output_pitch_m": 0.25,
+    "core_relief_shape": [512, 512]
+  },
+  "inputs": {
+    "etak": {"path": "asset-gen/data/in/etak/ETAK_EESTI_GPKG.gpkg", "sha256": "e19084c4bff0a6096a7dd38cefa12402bdce98d59c73d5b35c30dda60682f5f9"},
+    "hydrology_dtm10m": {"path": "asset-gen/data/in/country/DTM_10m_eesti.tif", "sha256": "df0f6f5ffe2d070d0bec9def55c019091e5da4db7f5a2a9ddbc5cd2f653be12c"},
+    "carrier_dtm1m": {"path": "asset-gen/data/in/dem_1m/53243_dtm_1m.tif", "sha256": "0c5e21ce9c66c26826aa1d322fbea8a53eaa68450a60d5ca9578905bf79fe9f0"}
+  },
+  "source_base_manifest": {
+    "manifest_sha256": "7aa4d523ea99c37d1731ba57d6b146adbdb51e5aa1521d8a40da4f41dfd43792",
+    "relative_path": "builds/3bfad95469e46fc2c91d05c1e17686010d1aa261e1cc06671b99c6431b77f175/m/7aa4d523ea99c37d/manifest.json",
+    "note": "pool-bearing base with real Laugas water + full LOD0-4 column"
+  },
+  "prf_person": "laas-micro-prf1",
+  "gate_thresholds": {
+    "amp_p95_band_m": [0.15, 0.40],
+    "amp_p99abs_max_m": 0.50,
+    "amp_max_max_m": 0.60,
+    "amp_p50_band_m": [-0.08, 0.03],
+    "hollow_fraction_min": 0.15,
+    "hummock_fraction_min": 0.05,
+    "orient_resultant_max": 0.35,
+    "spectrum_band_m": [0.5, 16.0],
+    "spectrum_peak_fraction_max": 0.20,
+    "spectrum_excess_peak_prominence_max": 2.5,
+    "spectrum_loglog_slope_band": [-3.2, -1.4],
+    "hummock_diameter_band_m": [0.5, 2.5],
+    "peak_spacing_band_m": [1.0, 4.0],
+    "pool_present_cells_min": 1000,
+    "pool_margin_low_fraction_min": 0.70,
+    "pool_near_mean_relief_max_m": 0.03
+  },
+  "gate_rationale": {
+    "amp_p95_band_m": "Moore hummock-hollow separation 0.19-0.21 m and tall modes to 0.53 m; brief requires p95 ~0.2-0.4 m and NOT below 0.1 m (the v4 too-flat failure).",
+    "orient_resultant_max": "isotropic bumpy field -> low gradient-orientation resultant; aligned strings/lattice would drive R high.",
+    "spectrum_peak_fraction_max": "a single reaction-diffusion wavelength concentrates radial-PSD energy into one bin; a broadband organic field must not.",
+    "spectrum_excess_peak_prominence_max": "a Turing/reaction-diffusion single-wavelength lattice shows a radial-PSD bin rising many-fold above the smoothed red-spectrum trend; an organic field stays near ~1x. Stricter, valid lattice detector.",
+    "spectrum_loglog_slope_band": "Moore submetre Hurst 0.14-0.26 => power-law PSD slope -2(H+1) ~ -2.28..-2.52; band widened for the multi-scale field. Rejects white/flat or peaked spectra.",
+    "hummock_diameter_band_m": "Moore hummock footprint up to a few m^2 -> equivalent diameter ~0.5-2.5 m.",
+    "peak_spacing_band_m": "Moore hummock-hollow scale 1-10 m with dominant ~2.5 m."
+  },
+  "premise_audit_correction": {
+    "gate_removed": "spectrum_dominant_wavelength_band_m [1.0, 6.0]",
+    "reason": "Invalid metric: it took the argmax radial-PSD bin as a characteristic wavelength. Bog microtopography has a RED/fractal power-law spectrum (measured log-log slope -2.23, matching Moore's Hurst-derived -2(H+1)), so energy rises smoothly toward longer wavelengths with a broad, near-flat plateau; the argmax bin (measured 8.13 m) is unstable plateau noise, not a characteristic wavelength, and Moore's 2.4-2.9 m figure is a PSD-slope BREAKPOINT, not the peak-energy location. The metric wrongly flagged correct physics and would have rewarded a lattice.",
+    "replaced_by": ["spectrum_excess_peak_prominence_ratio (<= 2.5)", "spectrum_loglog_slope (in [-3.2, -1.4])"],
+    "audit_probe_values": {"excess_peak_prominence_ratio": 1.24, "loglog_slope": -2.23, "orient_resultant_R": 0.013, "spectrum_peak_fraction": 0.084},
+    "note": "Correction strengthens anti-artifact protection (prominence + power-law slope are stricter Turing-lattice detectors than argmax-bin), per the CLAUDE.md premise-audit rule; it does not relax a gate to pass."
+  },
+  "safety_law": "ETAK open water (Laugas pools), hard exclusion, and non-mire cells are held EXACTLY relief-free (== 0). Quantization round-trip, apron seams, LOD-1 box-mean and LOD0 closure are enforced by the packer's independent verifier.",
+  "ground_level_qa_is_the_real_gate": true
+}

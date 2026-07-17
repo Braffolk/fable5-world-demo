@@ -76,15 +76,20 @@ def _artifact_root() -> Path:
     )
 
 
-def _load_relief(artifact_root: Path) -> np.ndarray:
-    npz = np.load(artifact_root / "network-v4-float.npz")
+DEFAULT_FLOAT_NAME = "network-v4-float.npz"
+
+
+def _load_relief(artifact_root: Path, float_name: str = DEFAULT_FLOAT_NAME) -> np.ndarray:
+    npz = np.load(artifact_root / float_name)
     relief = np.asarray(npz["core_relief_025m"], dtype=np.float64)
     if relief.shape != (512, 512):
         raise ValueError(f"bog core relief must be 512 square 0.25 m, got {relief.shape}")
     return relief
 
 
-def _recipe_identity(artifact_root: Path, source_base_manifest: Path) -> tuple[str, dict[str, Any]]:
+def _recipe_identity(
+    artifact_root: Path, source_base_manifest: Path, float_name: str = DEFAULT_FLOAT_NAME
+) -> tuple[str, dict[str, Any]]:
     source_paths = (
         Path(__file__),
         Path(__file__).with_name("network_preview_verify.py"),
@@ -103,8 +108,9 @@ def _recipe_identity(artifact_root: Path, source_base_manifest: Path) -> tuple[s
             "root": artifact_root.as_posix(),
             "schema": ARTIFACT_SCHEMA,
             "buildId": artifact_root.name,
+            "floatName": float_name,
             "measurementsSha256": _sha256(artifact_root / "measurements.json"),
-            "floatSha256": _sha256(artifact_root / "network-v4-float.npz"),
+            "floatSha256": _sha256(artifact_root / float_name),
         },
         "sourceBase": {
             "manifest": source_base_manifest.as_posix(),
@@ -266,6 +272,7 @@ def materialize_bog_network_preview(
     *,
     source_base_manifest: Path,
     artifact_root: Path | None = None,
+    float_name: str = DEFAULT_FLOAT_NAME,
     content_root: Path = DATA_OUT,
     work_root: Path = DATA_WORK,
 ) -> Path:
@@ -273,8 +280,8 @@ def materialize_bog_network_preview(
     artifact_root = (artifact_root or _artifact_root()).resolve()
     source_base_manifest = source_base_manifest.resolve()
     source_base_sha = _sha256(source_base_manifest)
-    relief = _load_relief(artifact_root)
-    build_digest, recipe_inputs = _recipe_identity(artifact_root, source_base_manifest)
+    relief = _load_relief(artifact_root, float_name)
+    build_digest, recipe_inputs = _recipe_identity(artifact_root, source_base_manifest, float_name)
     build_root = work_root / "builds" / build_digest
     build_root.mkdir(parents=True, exist_ok=True)
     print(f"[bog-network-pack] recipe {build_digest}", flush=True)
@@ -361,12 +368,14 @@ def _main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-base-manifest", type=Path, required=True)
     parser.add_argument("--artifact-root", type=Path, default=None)
+    parser.add_argument("--float-name", type=str, default=DEFAULT_FLOAT_NAME)
     parser.add_argument("--content-root", type=Path, default=DATA_OUT)
     parser.add_argument("--work-root", type=Path, default=DATA_WORK)
     args = parser.parse_args()
     print(materialize_bog_network_preview(
         source_base_manifest=args.source_base_manifest,
         artifact_root=args.artifact_root,
+        float_name=args.float_name,
         content_root=args.content_root,
         work_root=args.work_root,
     ))
