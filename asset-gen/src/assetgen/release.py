@@ -61,6 +61,7 @@ RESEARCH_PREVIEW_KINDS = (
     "research-forest-lod0-tranche-preview-v1",
     "research-rough-till-structural-preview-v1",
     "research-als-tgv-structural-preview-v1",
+    "research-peat-bog-network-preview-v1",
 )
 
 
@@ -896,6 +897,20 @@ def create_build_plan(
                 raise ValueError(
                     "ALS/TGV structural preview expectation names a different verifier"
                 )
+        elif micro_recipe_kind == "research-peat-bog-network-preview-v1":
+            from .terrain.microtopography.peat_raised_bog.network_preview_verify import (
+                VERIFIER_ID as BOG_NETWORK_VERIFIER_ID,
+                verifier_source_sha256 as bog_network_verifier_source_sha256,
+            )
+
+            planned_verifier = {
+                "id": BOG_NETWORK_VERIFIER_ID,
+                "sourceSha256": bog_network_verifier_source_sha256(),
+            }
+            if expectation.get("verifier") != planned_verifier:
+                raise ValueError(
+                    "peat-bog network preview expectation names a different verifier"
+                )
         else:
             planned_verifier = {
                 "id": VERIFIER_ID,
@@ -1160,6 +1175,12 @@ def _require_micro_verification(
         )
 
         verifier = verify_als_tgv_preview
+    elif recipe_kind == "research-peat-bog-network-preview-v1":
+        from .terrain.microtopography.peat_raised_bog.network_preview_verify import (
+            verify_bog_network_preview,
+        )
+
+        verifier = verify_bog_network_preview
     else:
         verifier = {
             "retention-fixture": verify_micro_fixture,

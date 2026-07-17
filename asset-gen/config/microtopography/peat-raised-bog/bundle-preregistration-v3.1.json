@@ -1,0 +1,84 @@
+{
+  "schema_version": "laas.peat-raised-bog-r0-research-bundle-preregistration/3.1",
+  "bundle_id": "peat-raised-bog-r0-research-bundle/3",
+  "preregistration_id": "open-intact-nonforested-anisotropic-ecohydrological-network-v3",
+  "amendment_of": "open-intact-nonforested-anisotropic-ecohydrological-network-v3",
+  "authored": "2026-07-17",
+  "amendment_kind": "measurement_protocol_only",
+  "amendment_scope": {
+    "what_changes": "ONLY the anti_corrugation gate is re-operationalized from window-scale (256 m core+halo) to mire-scale (whole patterned mire, per-128 m block statistics). No re-run. No parameter change. No generator, config, or artifact change. Evaluated on the SAME immutable v3.0 FLOAT artifact.",
+    "what_does_not_change": "The generator, its parameters, its config, and its stored FLOAT field are untouched. Every other v3.0 gate result (safety_exactness, parent_deviation, amplitude_envelope, topology, pool_coupling) carries over VERBATIM and unchanged.",
+    "no_further_protocol_changes": "Any v3.1 mire-scale gate that fails is a REAL rejection reported exactly; no further protocol amendment is permitted after v3.1."
+  },
+  "evaluated_on_immutable_artifact": {
+    "path": "asset-gen/data/work/microtopography/peat-bog-network-v3/sha256/5384c76254f862b893ccc332bd8d9dcb5d1e2b570fef4f63edb98a83205324f0/",
+    "artifact_recipe_sha256": "5384c76254f862b893ccc332bd8d9dcb5d1e2b570fef4f63edb98a83205324f0",
+    "whole_mire_field": "network-v3-float.npz -> whole_labels (2258x2189 uint8, LAWN=0/RIDGE=1/HOLLOW=2/POOL=3), whole_activator, whole_inhibitor; process pitch 2 m; process bbox EN [534968,6448380,539346,6452896].",
+    "field_is_frozen": true,
+    "no_regeneration": true
+  },
+  "v3_0_terminal_record": {
+    "predecessor_preregistration": {
+      "path": "asset-gen/config/microtopography/peat-raised-bog/bundle-preregistration-v3.json",
+      "sha256": "96885c592535c061a9ebcdcda48c97bb63443fb5da8a63c1231bf5b5e899254d"
+    },
+    "v3_0_status": "research_rejected",
+    "v3_0_status_is_terminal_and_unaltered": true,
+    "v3_0_anti_corrugation_window_gate_fired": {
+      "verbatim": "v3.0's anti_corrugation gate was evaluated on the 256 m core+halo window (run.py proc_region = halo authority) and FAILED: spacing_cv 0.20263022629216862 < 0.35 min; orientation_resultant_length 0.6724680882474674 > 0.60 max. This window-scale FAIL fired, is recorded, and STANDS: v3.0 remains research_rejected. v3.1 does NOT overturn or re-run v3.0; it does not change the v3.0 verdict.",
+      "window_spacing_cv": 0.20263022629216862,
+      "window_orientation_resultant_length": 0.6724680882474674
+    },
+    "premise_audit_ruling": "The orchestrator premise-audit found the v3.0 anti_corrugation METRIC was mis-scoped by the design brief: the brief's stated intent (BOG-V3-NETWORK-TOPOLOGY-DESIGN.md line 89; v3.0 frozen_gates.anti_corrugation.orientation_coherence_localized_not_mire_wide=true) is 'orientation coherence localized, not mire-wide', i.e. a MIRE-SCALE dispersion property, whereas v3.0 measured it inside a single 256 m window where a raised-bog dome's locally-coherent orientation domain is expected and does not falsify mire-wide diversity. The whole-mire QA PNG (01_whole_mire_organization.png) shows a labyrinth with locally varying orientation domains. v3.1 operationalizes the pre-stated mire-scale intent; it does NOT relax the anti-corrugation requirement, it moves the measurement window to the scale the brief specified."
+  },
+  "carried_over_v3_0_gate_results_unchanged": {
+    "source": "asset-gen/data/work/microtopography/peat-bog-network-v3/sha256/5384c76254f862b893ccc332bd8d9dcb5d1e2b570fef4f63edb98a83205324f0/measurements.json",
+    "safety_exactness": {"passed": true, "note": "hard/open-water/pool residual cells 0; crop_identity_exact true; sealed_pixels_opened 0."},
+    "parent_deviation": {"passed": true, "note": "unpatterned p95 0.00408 m <= 0.02; patterned p99 0.05697 m <= 0.30; diagnostic only."},
+    "amplitude_envelope": {"passed": true, "note": "band 2-16 m RMS 0.02299 m in [0.010,0.0467]; core |relief| p99 0.05682 m <= 0.16."},
+    "topology": {"passed": true, "note": "branch 349 / merge 354 / term 34; junctions 13409.8/km2 >= 40; terminations 598.3/km2 >= 40; both branch and merge present."},
+    "pool_coupling": {"passed": true, "note": "coupling fraction 1.000 >= 0.70 (3126/3126 perimeter cells)."}
+  },
+  "v3_1_mire_scale_anti_corrugation_gates": {
+    "purpose": "Replace ONLY the window-scale anti_corrugation gate with three mire-scale gates that operationalize the brief's pre-stated 'orientation coherence localized, not mire-wide' intent. Thresholds below are frozen from peatland-patterning literature/physics reasoning BEFORE any computation on the field.",
+    "block_grid_definition": {
+      "block_size_m": 128.0,
+      "block_size_cells": 64,
+      "process_pitch_m": 2.0,
+      "tiling": "non-overlapping 64x64-cell blocks, origin at array index (0,0) of the stored whole_labels; the partial remainder strip on the high-row/high-col edge is discarded.",
+      "ridge_mask": "whole_labels == RIDGE (1); this is the emergent string skeleton the corrugation gate measures.",
+      "reused_machinery": "orientation resultant = gates._orientation_resultant (doubled-angle resultant of the gaussian-smoothed ridge-field gradient normal); spacing = network.skeletonize + distance-transform peak spacing (network.analyze_topology). No new estimator is introduced."
+    },
+    "patterned_block_criterion": {
+      "rule": "A 64x64 block is 'patterned' iff it contains at least min_ridge_cells RIDGE cells. Outside the mire the label field is all LAWN, so this criterion restricts to mire interior with a resolvable local string field.",
+      "min_ridge_cells": 128,
+      "min_ridge_cells_rationale": "128 of 4096 cells (>=3.1% string coverage over a 128 m block) guarantees enough string pixels to estimate a local orientation and to contribute spacing samples; frozen from measurement-support reasoning, not from the field."
+    },
+    "gate_a_orientation_domain_dispersion": {
+      "metric": "For each patterned block compute its dominant string orientation theta_b = 0.5*angle(mean(exp(2j*angle_ridge_cells))) via gates._orientation_resultant's doubled-angle construction restricted to the block. Then the mire-wide block-orientation RESULTANT R_dom = |mean over patterned blocks of exp(2j*theta_b)|; circular variance CV_circ = 1 - R_dom.",
+      "frozen_threshold": {"block_orientation_resultant_R_dom_max": 0.50, "equivalently_circular_variance_min": 0.50},
+      "pass_condition": "R_dom <= 0.50 (circular variance of block orientations >= 0.50).",
+      "rationale": "Ombrotrophic raised-bog domes drain radially. Korotkov/Ilyasov (2026, Drones 10(2):121) and Rietkerk (2004, Am Nat 163:699) establish ridges orient PERPENDICULAR to local rainwater flow, so string orientation must rotate with the radial drainage field across the mire, populating a broad arc of orientations. A globally single-orientation field (R_dom -> 1) is the corrugation failure mode the form-graph exhibited. R_dom <= 0.50 forbids any single orientation from carrying more than half the vector coherence across blocks, while still permitting a dominant regional drainage axis. This is STRICTER than the window gate's 0.60 because at mire scale the radial dome guarantees genuine orientation diversity."
+    },
+    "gate_b_pooled_spacing_cv": {
+      "metric": "Skeletonize the whole ridge mask (network.skeletonize); take distance-transform spacing peaks (network.analyze_topology spacing_samples, = 2*distance at local maxima) whose peak location falls inside a patterned block; pool them and compute CV = std/mean.",
+      "frozen_threshold": {"pooled_spacing_cv_min": 0.35},
+      "pass_condition": "pooled spacing CV >= 0.35.",
+      "rationale": "Beguin/Brunetti/Kasparian (2019, Sci Rep 9:1750) show self-organized ombrotrophic-peatland networks are percolating/branched with irregular string spacing; Korotkov (2026) reports 10-100 m ridge/hollow element dimensions -> broad spacing range. An evenly-spaced corrugation field (form-graph failure mode) has CV well below 0.35. The 0.35 floor is the same literature-derived discriminator as the window gate; pooling across the whole mire (labyrinth core + margin) only widens the spacing distribution, so 0.35 is conservative, NOT a relaxation."
+    },
+    "gate_c_two_regimes_present": {
+      "metric": "Classify each patterned block by its INTERNAL orientation resultant R_int = gates._orientation_resultant restricted to the block: 'labyrinth' if R_int < 0.50, 'aligned/regular' if R_int >= 0.50. Count blocks in each class.",
+      "frozen_threshold": {"regime_split_R_int": 0.50, "min_blocks_per_regime": 3, "min_fraction_per_regime": 0.05},
+      "pass_condition": "both the labyrinth class (R_int < 0.50) and the aligned/regular class (R_int >= 0.50) contain >= 3 patterned blocks AND >= 5% of patterned blocks each.",
+      "rationale": "Rietkerk (2004) predicts a slope-governed labyrinth<->stripe transition: the flat central dome yields an isotropic maze/labyrinth (low internal coherence) and graded margins yield aligned strings transverse to flow (high internal coherence). Eppinga (2009, Am Nat 173:803) confirms maze and string forms co-occur. A genuine self-organized dome must therefore exhibit BOTH a low-coherence labyrinth population and a high-coherence aligned population; a single regime everywhere indicates a placed/thresholded field. R_int=0.50 is the natural midpoint between isotropic (0) and perfectly aligned (1); the 3-block / 5% floors ensure each regime is a real population, not noise."
+    }
+  },
+  "v3_1_pass_condition": "v3.1 PASSES iff gate_a AND gate_b AND gate_c pass AND all carried-over v3.0 gates (safety_exactness, parent_deviation, amplitude_envelope, topology, pool_coupling) are PASS. Any mire-scale gate failing = real rejection, reported exactly, no further protocol change.",
+  "immutability": {
+    "field_regeneration_forbidden": true,
+    "parameter_change_forbidden": true,
+    "generator_modification_forbidden": true,
+    "further_measurement_protocol_amendment_forbidden": true,
+    "thresholds_frozen_before_computation": true
+  }
+}

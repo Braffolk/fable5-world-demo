@@ -1,0 +1,271 @@
+{
+  "schema_version": "laas.peat-raised-bog-r0-research-bundle-preregistration/3",
+  "bundle_id": "peat-raised-bog-r0-research-bundle/3",
+  "preregistration_id": "open-intact-nonforested-anisotropic-ecohydrological-network-v3",
+  "authored": "2026-07-17",
+  "status": {
+    "state": "method_frozen_before_r0_generation",
+    "research_only": true,
+    "method_implementation_authorized": true,
+    "r0_generation_authorized": true,
+    "preview_authorized": false,
+    "production_owner_authorized": false,
+    "latest_eligible": false,
+    "packing_authorized": false,
+    "orchestrator_gates_packing": true
+  },
+  "why_materially_different": {
+    "park_condition": "TASKLIST rank 3 demands observed or generated network topology that can branch, merge, terminate, and couple pool margins to string/flark complexes.",
+    "rejected_families_not_retuned": [
+      "Moore whole-form marked sampler (censored forms: 1 whole form / 1 group vs frozen 200-form/6-group gate)",
+      "v2 two-field plurigaussian (HuHoLa evidence collapse: 621 lawn cells / 1 hollow / 0 hummocks; no retained typed transition orbit)",
+      "whole-mire form-scale graph caf9e5f2660f (single scalar travel coordinate -> even contour corrugations, isolated pool sockets)"
+    ],
+    "v3_mechanism": "anisotropic ecohydrological self-organization: a two-field activator-inhibitor reaction-diffusion-advection system whose steady-state banding is emergent. Strings transverse to flow that branch/merge/terminate where advection is strong; labyrinth/maze where flow is weak; ponding in inter-string troughs. Topology is generated, not placed."
+  },
+  "carrier_decision": {
+    "stage0_b0_assessment": "corrected-structural-base transaction for LOD0 (0,81,89) is architecturally pinned: src/assetgen/terrain/repair/stage1_transaction.py is the frozen Taevaskoda-Ahja pilot (imports pilots.taevaskoda_authority, config config/terrain-repair/taevaskoda-ahja-authority-stage1.json, contract-frozen corrected LOD0 plan cx 148..155 cz 90..97). It cannot generalize to cx 81 cz 89 without region-specific evidence/water corrections and would break the frozen Stage-1 contract. No served/pinned LOD0 height exists for the dev mire in any data/out manifest; no local 1 m DTM tile covered it before this run.",
+    "chosen": "ORCHESTRATOR_AUTHORIZED_FALLBACK",
+    "fallback_carrier": "raw 1 m Maa-amet ALS DTM sheet 53532 (open-mire ALS ground, high quality), read over the output core+halo only; whole-mire dome/routing computed from the national 10 m DTM (existing condition machinery). Per the 2026-07-17 user exactness law, raw-parent fidelity is a diagnostic, not a gate.",
+    "fallback_explicitly_recorded": true
+  },
+  "immutable_history": {
+    "v1_preregistration": {
+      "path": "asset-gen/config/microtopography/peat-raised-bog/bundle-preregistration-v1.json",
+      "sha256": "21d972723f7c2641ce6a9fb7c15e171e85f3378dc83863cc93cb833be94bf115",
+      "state": "closed_rejected_before_C1_generation",
+      "reinterpretation_or_mutation_forbidden": true
+    },
+    "v2_preregistration": {
+      "path": "asset-gen/config/microtopography/peat-raised-bog/bundle-preregistration-v2.json",
+      "sha256": "431b269d49f7e85457a531cc669a3422e8eee077a96958d9beb9dc7c42da0d35",
+      "state": "method_selected_blocked_before_r0_generation",
+      "reinterpretation_or_mutation_forbidden": true
+    },
+    "rejected_form_scale_graph": {
+      "family": "whole-mire form-scale graph",
+      "prefix": "caf9e5f2660f",
+      "reinterpretation_or_retune_forbidden": true
+    },
+    "prior_process_v3_proof": {
+      "path": "asset-gen/src/assetgen/terrain/microtopography/peat_raised_bog/process_v3",
+      "note": "committed rejected coupled hummock/lawn/hollow occupancy proof (commit db95f77) run on Valgesoo; different mechanism; NOT reused, NOT modified.",
+      "reuse_or_mutation_forbidden": true
+    }
+  },
+  "site": {
+    "development_mire": {
+      "normalized_mire_identifier": "etak-component-0004069028",
+      "member_etak_ids": [4069028],
+      "geometry_sha256": "cfb57c8f8e8f8adbb8552db2a3f7e8e25ce6853ff6b94d9075f13b96c35bebc2",
+      "whole_mire_bounds_en": [535096.887000002, 6448508.870000001, 539216.0799999982, 6452767.734000001],
+      "core_bounds_en": [536384.0, 6452416.0, 536512.0, 6452544.0],
+      "halo_bounds_en": [536320.0, 6452352.0, 536576.0, 6452608.0],
+      "lod0_chunk": [0, 81, 89],
+      "minimum_halo_m": 64.0
+    },
+    "sealed_abstention_mire": {
+      "normalized_mire_identifier": "etak-component-0004069025",
+      "rule": "pixel-unopened; abstention-only; not in the v3 domain; C1 identically absent; grants no positive evidence."
+    }
+  },
+  "authority": {
+    "regime_id": "peat.raised_bog",
+    "regime_release_state": "research",
+    "research_role": "anisotropic_ecohydrological_self_organization_process_hypothesis",
+    "maximum_result": "one_immutable_non_latest_development_preview_after_all_v3_gates_pass_and_orchestrator_pack_gate",
+    "target_truth": false,
+    "height_supervision": false,
+    "pixelwise_training": false,
+    "measured_morphology_fit": false,
+    "estonia_transfer": "none_beyond_one_selected_development_hypothesis",
+    "production_owner": null,
+    "latest_eligible": false,
+    "runtime_synthesis_allowed": false,
+    "wire_format_change_allowed": false,
+    "amplitude_source": "Valgesoo measured carrier + Moore plot-scale descriptive distributions ONLY; papers supply DIMENSIONLESS regime only."
+  },
+  "primary_sources": {
+    "transfer_rule": "Published models supply the DIMENSIONLESS regime only (Turing/scale-dependent-feedback instability with fast-inhibitor diffusion contrast; advective anisotropy orienting bands transverse to flow; labyrinth<->stripe transition with slope). No literal amplitudes, prevalences, or Estonian coefficients are taken from any paper.",
+    "rietkerk_2004": {
+      "citation": "Rietkerk, Dekker, Wassen, Verkroost, Bierkens (2004) A putative mechanism for bog patterning. American Naturalist 163(5):699-708.",
+      "doi": "10.1086/383065",
+      "access": "abstract/publisher paywalled; mechanism read from open-access reproductions below",
+      "extracted_mechanism": "scale-dependent feedback: vascular plants harvest nutrients advected by water flow; short-range facilitation (activator) plus long-range water/nutrient depletion (inhibitor) yields maze patterns on flat bog and string/ridge patterns transverse to flow on gradients."
+    },
+    "eppinga_2008_2009": {
+      "citation": "Eppinga, de Ruiter, Wassen, Rietkerk (2009) Nutrients and Hydrology Indicate the Driving Mechanisms of Peatland Surface Patterning. American Naturalist 173(6):803-818.",
+      "doi": "10.1086/598487",
+      "access": "publisher paywalled; abstract confirms three pattern-forming mechanisms",
+      "extracted_regime": "three mechanisms (peat accumulation, water ponding, nutrient accumulation) produce similar surface patterning; ponding couples hollows/pools to inter-string troughs; different mechanism combinations give similar maze/string forms."
+    },
+    "beguin_brunetti_kasparian_2019": {
+      "citation": "Beguin, Brunetti, Kasparian (2019) Quantitative analysis of self-organized patterns in ombrotrophic peatlands. Scientific Reports 9:1750.",
+      "doi": "10.1038/s41598-018-37736-8",
+      "open_access": "PMC6365544 ; arXiv 1902.02571",
+      "extracted": "open-access implementation of the Rietkerk nutrient-accumulation Turing model. Activator = biomass (self-attracting short range, DB=2 m2/yr); inhibitor = fast-diffusing nutrient/water (DN=10 m2/yr) advected along hydraulic head; domain 256x256 m at 2 m resolution; nutrient input is the control parameter driving the sequence spots -> lines/labyrinth -> percolating branched network; clusters merge into linear and branched structures.",
+      "regime_used": "fast-inhibitor diffusion contrast (D_inhibitor/D_activator ~ 5) with downslope advection; 2 m process grid; 256 m output window matches the published domain scale."
+    },
+    "korotkov_ilyasov_2026": {
+      "citation": "Ilyasov et al. (2026) UAS-LiDAR Mapping of Bog Microrelief. Drones 10(2):121.",
+      "doi": "10.3390/drones10020121",
+      "path": "docs/deep-research/microtopography-generation/library/papers/2026-korotkov-uas-lidar-bog-microrelief-doi-10.3390-drones10020121.pdf",
+      "sha256": "9fa9b6c021c4d9c086fb0dce0ec0b315d27402004b4277536c35f84c666083a1",
+      "extracted_regime_dimensions": "ridge-hollow patterned bog: ridges oriented PERPENDICULAR to rainwater flow; configuration and spacing related to slope gradient; microtopographic (ridge/hollow) element dimensions ~10 to 100 m; ridges elevated 25-50 cm above hollows (regime magnitude, NOT used as Estonian amplitude).",
+      "role": "dimensionless spacing/orientation regime only"
+    },
+    "model_selected": {
+      "name": "anisotropic two-field activator-inhibitor (Gray-Scott kinetics, along-flow anisotropic inhibitor diffusion)",
+      "mechanism_class": "scale-dependent ecohydrological feedback (Rietkerk 2004 / Eppinga 2008-2009): self-facilitating peat/vascular activator + fast-diffusing water/nutrient inhibitor -> Turing banding; slope anisotropy orients bands transverse to flow.",
+      "fields": {
+        "V": "activator: peat/vascular ridge-forming biomass (self-facilitating autocatalysis; slow diffusion D_v)",
+        "U": "inhibitor: plant-available water/nutrient substrate consumed by V (fast diffusion D_u >> D_v)"
+      },
+      "equations_dimensionless": [
+        "dU/dt = D_u*laplacian(U) + anisotropy*strength*D_u*dir2(U) - U*V^2 + feed*(1-U)",
+        "dV/dt = D_v*laplacian(V) + U*V^2 - (feed+kill)*V"
+      ],
+      "anisotropy": "strength = clamp(|grad dome|/slope_ref, 0, 1); dir2(U) is the second derivative of U along the downslope flow unit vector. Enhanced along-flow water/solute spreading orients Turing bands TRANSVERSE to flow (strings) where the dome is graded; strength->0 leaves an isotropic labyrinth/maze on the flat dome. This transfers the Rietkerk/Eppinga anisotropy regime by enhanced along-flow lateral transport rather than by destabilising advection.",
+      "kinetics_choice": "Gray-Scott is the canonical robust two-variable activator-inhibitor labyrinth/stripe former; the physically-literal extended-Klausmeier advection form leaves the homogeneous state Turing-stable except at impractically strong advection (verified on synthetic domains before freezing). The mechanism class (peat activator vs fast water/nutrient inhibitor with flow anisotropy) is unchanged; only the reaction kinetics are the robust Gray-Scott form.",
+      "why_this_model": "deterministically yields branch/merge/terminate string networks where the dome is graded and irregular labyrinths on the flat dome - exactly the demanded topology class - and is numerically stable under explicit float64 integration.",
+      "validated_on_synthetic_before_freeze": "flat domain -> labyrinth (junctions ~5700/km2, spacing CV ~0.63, pool coupling ~0.73, balanced ridge/lawn/hollow/pool); graded domain -> strings transverse to flow. Determinism confirmed (identical bytes across repeat runs)."
+    }
+  },
+  "carrier_and_conditions": {
+    "fallback_carrier_dtm1m": {
+      "path": "asset-gen/data/in/dem_1m/53532_dtm_1m.tif",
+      "sha256": "d7e37b3f123da37393c45675ab3d89b513fface6902f05367dff0e6ed5e00909",
+      "role": "raw ALS 1 m carrier over the output core+halo only; provenance = Maa-amet 1:10k sheet 53532, geoportaal dem_1m_geotiff.",
+      "crs": "EPSG:3301",
+      "covers_output": "core+halo [536320,6452352,536576,6452608] fully inside sheet bounds [535000,6450000,540000,6455000]"
+    },
+    "whole_mire_hydrology_dtm10m": {
+      "path": "asset-gen/data/in/country/DTM_10m_eesti.tif",
+      "sha256": "df0f6f5ffe2d070d0bec9def55c019091e5da4db7f5a2a9ddbc5cd2f653be12c",
+      "role": "national 10 m DTM whole-mire dome + priority-flood routing + downslope flow direction + slope over the connected mire + 100 m context (NOT a corrected C0)."
+    },
+    "etak": {
+      "path": "asset-gen/data/in/etak/ETAK_EESTI_GPKG.gpkg",
+      "sha256": "e19084c4bff0a6096a7dd38cefa12402bdce98d59c73d5b35c30dda60682f5f9",
+      "role": "mire coverage, hard exclusions (forest/open-water/ditch/road/building/object/cut-peat), and dynamic-unknown masks over the output halo."
+    },
+    "site_selection": {
+      "path": "asset-gen/data/work/microtopography/peat-raised-bog/site-selection/sha256/46daa389e388a9783bff96f7caba3abedd1293bfe151f98ff13ea9d9b5c0750a/selection.json",
+      "sha256": "ff7cca92e6767e96c63c1d01376f836a74b0fc61ceb7824b12be240e65a837be"
+    }
+  },
+  "amplitude_calibration": {
+    "valgesoo_carrier": {
+      "path": "asset-gen/data/work/microtopography/peat-raised-bog/measured-float/sha256/6e0148da0c28636f1577c531431cd9cc62f7a6c5610fdccd1c231f52749d2365/measured-float.npz",
+      "sha256": "28ed716789e5817c95e64a9fd037d3a0d254d95034c3bfda175c7a574a4f584e",
+      "accepted_low_relief_envelope_m": {
+        "core_plane_residual_abs_p95": 0.0815,
+        "core_plane_residual_range": 0.3308,
+        "core_raw_range": 0.4281,
+        "band_2_to_16m_abs_p95": 0.0353,
+        "band_2_to_16m_abs_p99": 0.0467,
+        "macro_over_16m_abs_p95": 0.0274
+      }
+    },
+    "moore_descriptive": {
+      "path": "asset-gen/data/work/microtopography/peat-raised-bog/moore-form-capacity/sha256/12d6f6083898a05670bcb035b0194bc0ab02ed104692b05696049d253f723c36/forms.json",
+      "sha256": "11672d34400213e329ba5f5f141662d14b2c841181877505c036beb07c924da3",
+      "descriptive_only": true,
+      "form_relative_relief_m": 0.1276,
+      "extreme_abs_hhdh_m": 0.0649,
+      "note": "one whole form (a hollow); amplitude anchor is descriptive, not a fit or transfer."
+    },
+    "frozen_typed_form_amplitudes_m": {
+      "ridge_peak": 0.06,
+      "hollow_floor": 0.05,
+      "lawn": 0.0,
+      "pool_surface": 0.0,
+      "peak_to_peak_ridge_hollow": 0.11,
+      "rationale": "peak-to-peak 0.11 m sits at Moore descriptive relative-relief 0.128 m and within Valgesoo core plane-residual (p95 0.0815, range 0.331); it keeps the generated 2-16 m band inside the accepted low-relief carrier."
+    }
+  },
+  "world_prf": {
+    "person": "laas-micro-prf1",
+    "keying": "BLAKE2b(person) over integer world (E,N) cell coordinates; per-cell uniform nucleation noise. NOT keyed by storage chunks; periodic/wrap/reflection boundaries forbidden; worker count/order must not change bytes."
+  },
+  "solve": {
+    "domain": "whole connected development mire + 128 m solve margin (>= 64 m required halo); process grid 2 m; deterministic float64 explicit integration; Neumann (edge) solve-domain boundary; fixed iteration budget with recorded convergence residual; crop output core+halo LAST.",
+    "process_pitch_m": 2.0,
+    "output_pitch_m": 0.25,
+    "carrier_pitch_m": 1.0,
+    "solve_margin_m": 128.0,
+    "iteration_budget": 14000,
+    "dt": 0.5,
+    "params_dimensionless": {"feed": 0.037, "kill": 0.060, "D_u": 0.16, "D_v": 0.08, "anisotropy": 3.0, "slope_ref": 0.02, "seed_quantile": 0.6},
+    "typed_thresholds": {"ridge_level": 0.5, "pool_wet_percentile": 66.0, "hollow_wet_percentile": 33.0},
+    "pool_coupling_radius_m": 16.0,
+    "no_random_no_wallclock_no_order_dependence": true,
+    "periodic_boundaries_forbidden": true
+  },
+  "frozen_gates": {
+    "parent_deviation_diagnostic": {
+      "rule": "report C1-vs-raw-parent deviation field p50/p95/max + patterned area fraction",
+      "unpatterned_form_free_p95_max_m": 0.02,
+      "patterned_area_p99_max_m": 0.30,
+      "note": "exactness is a diagnostic per 2026-07-17 user law; raw-parent fidelity is not a gate."
+    },
+    "safety_exactness": {
+      "pool_and_open_water_relief_free": true,
+      "hard_unknown_sealed_residual_exactly_zero": true,
+      "halo_crop_last_identity_exact": true,
+      "sealed_mire_pixel_unopened": true
+    },
+    "anti_corrugation": {
+      "string_spacing_cv_min": 0.35,
+      "orientation_coherence_localized_not_mire_wide": true,
+      "global_orientation_resultant_length_max": 0.60
+    },
+    "topology": {
+      "patterned_area_normalized": true,
+      "branch_merge_junctions_per_km2_min": 40.0,
+      "terminations_per_km2_min": 40.0,
+      "both_branch_and_merge_types_present": true,
+      "branch_min_count": 1,
+      "merge_min_count": 1,
+      "N_derivation": "junction/termination floors derived from the published maze/string imagery (Beguin 2019 percolating branched networks; Rietkerk/Eppinga anastomosing strings; Korotkov 10-100 m ridge spacing). A genuine self-organized network at ~15-25 m wavelength produces junction densities well above 100/km2; the 40/km2 floor is a conservative discriminator that an evenly-spaced corrugation field (form-graph failure mode) fails."
+    },
+    "pool_coupling": {
+      "pool_perimeter_adjacent_to_string_or_hummock_fraction_min": 0.70,
+      "coupling_metric": "fraction of pool-perimeter cells whose nearest string lies within the trough-membership radius (16 m ~ half the ~34 m string spacing observed in synthetic validation). A pool in an inter-string trough is bounded by a string within this radius; the form-graph's isolated sockets (no string within tens of metres) fail. Radius set pre-generation from the pattern's characteristic spacing, not tuned to the site result.",
+      "pool_coupling_radius_m": 16.0,
+      "pools_are_inter_string_troughs_not_isolated_sockets": true
+    },
+    "amplitude_envelope": {
+      "b1_band_2_to_16m_rms_max_m": 0.0467,
+      "b1_band_2_to_16m_rms_min_m": 0.010,
+      "core_abs_relief_p99_max_m": 0.16,
+      "note": "generated 2-16 m band RMS must land inside the Valgesoo carrier envelope [0.010, 0.0467]; core |relief| p99 within Moore/Valgesoo decimetre envelope."
+    },
+    "control": {
+      "C0_corrected_only_run_packaged_alongside": "C0 = raw carrier (no relief) over the same core+halo",
+      "common_light_before_after_qa": true
+    },
+    "rejection_terminals": [
+      "corrugation gate fail (spacing CV < 0.35 or global orientation resultant length > 0.60)",
+      "topology gate fail (junctions or terminations below floor, or a junction type absent)",
+      "pool-socket recurrence (coupling < 0.70)",
+      "any safety-exactness miss (nonzero residual in hard/unknown/pool/sealed, or crop identity break)",
+      "amplitude out of carrier envelope",
+      "-> research_rejected for this exact recipe; NO parameter tuning after viewing QA (one consolidated correction cycle allowed for harness/plumbing defects only)."
+    ]
+  },
+  "implementation": {
+    "package": "asset-gen/src/assetgen/terrain/microtopography/peat_raised_bog/peat_bog_network",
+    "isolation": "does not modify v1/v2/form-graph/process_v3 artifacts or code paths",
+    "determinism": "float64; fixed iterations; whole-array ops; no wall-clock/random/order/worker dependence",
+    "output_root": "asset-gen/data/work/microtopography/peat-bog-network-v3/sha256/<recipe_sha256>"
+  },
+  "publication": {
+    "state": "blocked_pending_orchestrator_pack_gate",
+    "immutable": true,
+    "latest_eligible": false,
+    "production_manifest_mutation_allowed": false,
+    "wire_format_change_allowed": false,
+    "runtime_synthesis_allowed": false
+  }
+}

@@ -1,0 +1,101 @@
+{
+  "schema_version": "laas.peat-bog-network-v4-config/1",
+  "status": "development_float_qa_only",
+  "carrier_decision": "orchestrator_authorized_fallback_raw_1m_als",
+  "preregistration": {
+    "path": "asset-gen/config/microtopography/peat-raised-bog/bundle-preregistration-v4.json",
+    "sha256": "f610b0a58ca8e17070043f7e11a2303249f4003c60017292d2a324c02e0a876d"
+  },
+  "target": {
+    "name": "development-raised-bog-etak-component-0004069028",
+    "normalized_mire_identifier": "etak-component-0004069028",
+    "member_etak_ids": [4069028],
+    "geometry_sha256": "cfb57c8f8e8f8adbb8552db2a3f7e8e25ce6853ff6b94d9075f13b96c35bebc2",
+    "whole_mire_bounds_en": [535096.887000002, 6448508.870000001, 539216.0799999982, 6452767.734000001],
+    "core_bounds_en": [536384, 6452416, 536512, 6452544],
+    "halo_bounds_en": [536320, 6452352, 536576, 6452608],
+    "lod0_chunk": [0, 81, 89]
+  },
+  "sealed_mire_identifier": "etak-component-0004069025",
+  "inputs": {
+    "carrier_dtm1m": {
+      "path": "asset-gen/data/in/dem_1m/53532_dtm_1m.tif",
+      "sha256": "d7e37b3f123da37393c45675ab3d89b513fface6902f05367dff0e6ed5e00909"
+    },
+    "hydrology_dtm10m": {
+      "path": "asset-gen/data/in/country/DTM_10m_eesti.tif",
+      "sha256": "df0f6f5ffe2d070d0bec9def55c019091e5da4db7f5a2a9ddbc5cd2f653be12c"
+    },
+    "etak": {
+      "path": "asset-gen/data/in/etak/ETAK_EESTI_GPKG.gpkg",
+      "sha256": "e19084c4bff0a6096a7dd38cefa12402bdce98d59c73d5b35c30dda60682f5f9"
+    },
+    "selection": {
+      "path": "asset-gen/data/work/microtopography/peat-raised-bog/site-selection/sha256/46daa389e388a9783bff96f7caba3abedd1293bfe151f98ff13ea9d9b5c0750a/selection.json",
+      "sha256": "ff7cca92e6767e96c63c1d01376f836a74b0fc61ceb7824b12be240e65a837be"
+    },
+    "valgesoo_carrier": {
+      "path": "asset-gen/data/work/microtopography/peat-raised-bog/measured-float/sha256/6e0148da0c28636f1577c531431cd9cc62f7a6c5610fdccd1c231f52749d2365/measured-float.npz",
+      "sha256": "28ed716789e5817c95e64a9fd037d3a0d254d95034c3bfda175c7a574a4f584e"
+    },
+    "moore_forms": {
+      "path": "asset-gen/data/work/microtopography/peat-raised-bog/moore-form-capacity/sha256/12d6f6083898a05670bcb035b0194bc0ab02ed104692b05696049d253f723c36/forms.json",
+      "sha256": "11672d34400213e329ba5f5f141662d14b2c841181877505c036beb07c924da3"
+    }
+  },
+  "prf_person": "laas-micro-prf1",
+  "solve": {
+    "process_pitch_m": 2.0,
+    "output_pitch_m": 0.25,
+    "carrier_pitch_m": 1.0,
+    "solve_margin_m": 128.0,
+    "iteration_budget": 14000,
+    "dt": 0.5,
+    "params": {
+      "feed": 0.037,
+      "kill": 0.060,
+      "D_u": 0.16,
+      "D_v": 0.08,
+      "anisotropy": 3.0,
+      "slope_ref": 0.02,
+      "seed_quantile": 0.6
+    },
+    "d_modulation": {
+      "d_min": 0.15,
+      "K": 2.0
+    },
+    "thresholds": {
+      "ridge_level": 0.5,
+      "pool_wet_percentile": 66.0,
+      "hollow_wet_percentile": 33.0
+    }
+  },
+  "amplitudes": {
+    "ridge_peak": 0.06,
+    "hollow_floor": 0.05
+  },
+  "gates": {
+    "string_spacing_cv_min": 0.35,
+    "global_orientation_resultant_length_max": 0.60,
+    "branch_merge_junctions_per_km2_min": 40.0,
+    "terminations_per_km2_min": 40.0,
+    "branch_min_count": 1,
+    "merge_min_count": 1,
+    "pool_perimeter_adjacent_fraction_min": 0.70,
+    "pool_coupling_radius_m": 16.0,
+    "unpatterned_form_free_p95_max_m": 0.02,
+    "patterned_area_p99_max_m": 0.30,
+    "b1_band_2_to_16m_rms_min_m": 0.010,
+    "b1_band_2_to_16m_rms_max_m": 0.0467,
+    "core_abs_relief_p99_max_m": 0.16
+  },
+  "mire_scale_gates": {
+    "block_size_cells": 64,
+    "min_ridge_cells": 128,
+    "block_orientation_resultant_R_dom_max": 0.50,
+    "pooled_spacing_cv_min": 0.35,
+    "regime_split_R_int": 0.50,
+    "min_blocks_per_regime": 3,
+    "min_fraction_per_regime": 0.05
+  }
+}
