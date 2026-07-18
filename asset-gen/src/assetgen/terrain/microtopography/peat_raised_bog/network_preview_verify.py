@@ -96,11 +96,20 @@ def verify_bog_network_preview(
         raise ValueError("accepted bog float changed")
     if _sha256(artifact_root / "measurements.json") != recipe_inputs["artifact"]["measurementsSha256"]:
         raise ValueError("accepted bog measurements changed")
-    relief = np.asarray(
-        np.load(artifact_root / float_name)["core_relief_00625m"], dtype=np.float64
-    )
+    float_npz = np.load(artifact_root / float_name)
+    relief = np.asarray(float_npz["core_relief_00625m"], dtype=np.float64)
     if relief.shape != (FINE_CORE, FINE_CORE):
         raise ValueError(f"bog core relief must be {FINE_CORE} square")
+    # Reinterpreted "open-water relief-free" safety gate (v7 #104 pool-depth carve): open water
+    # must carry NO positive microform bump; it may carry only a monotone, non-positive Laugas
+    # bed wedge (0 >= relief >= -dmax) that opens the water column under the INHERITED waterY
+    # plane. Assert it directly on the frozen float here (not a static label).
+    open_water_core = np.asarray(float_npz["open_water_core"], dtype=bool)
+    water_relief = relief[open_water_core]
+    water_positive_cells = int((water_relief > 1e-6).sum())
+    if water_positive_cells != 0:
+        raise ValueError(f"open water carries {water_positive_cells} positive-relief cells (fake microform)")
+    water_relief_min_m = float(water_relief.min()) if water_relief.size else 0.0
 
     coverage = plan_hero(PARENT.cx, PARENT.cz)
     expected_coverage = {
@@ -297,7 +306,10 @@ def verify_bog_network_preview(
             "carvedSamples": changed_samples,
             "maxCoreRoundTripErrorM": max_core_error,
             "maxExcludedC0ChangeM": max_outside_error,
-            "poolAndOpenWaterReliefFree": True,
+            "openWaterNoPositiveMicroform": True,
+            "openWaterPositiveReliefCells": water_positive_cells,
+            "openWaterBedWedgeMinReliefM": water_relief_min_m,
+            "openWaterGate": "reinterpreted_#104_monotone_nonpositive_bed_wedge_waterY_inherited",
         }),
     }
     report = {

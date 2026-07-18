@@ -4,8 +4,9 @@ research-only, immutable, non-latest format-2 preview.
 The bog v4 float (gates all pass, orchestrator-accepted) carves a 128 m core over
 the reselected pool-bearing mire etak-component-0004071135. The core straddles the
 2x2 LOD -2 block whose LOD -1 parent is (-1, 335, 402) and whose LOD0 authority is
-(0, 83, 100). The ETAK Laugas (bog pools) are relief-free open water; the synthesized
-string/hollow relief lands only between them.
+(0, 83, 100). The ETAK Laugas (bog pools) carry a monotone non-positive #104 bed-depth
+wedge (v7 pool-depth carve) so the inherited waterY plane floats above a real carved bed;
+the synthesized string/hollow relief lands only on the land between them.
 Packing mirrors the forest single-exemplar preview: baseline fine cores are derived
 from the pinned bog base, the bog relief is added inside the core (world-coordinate
 placement keeps decoded seams exact), the LOD -1 parent is box-mean derived from the
@@ -49,7 +50,7 @@ from .network_preview_verify import VERIFIER_ID, verifier_source_sha256
 
 RECIPE_KIND = "research-peat-bog-network-preview-v1"
 RECIPE_ID = "laas.micro.peat-bog-network-preview.recipe.v1"
-COOK_REVISION = 2
+COOK_REVISION = 3
 ARTIFACT_SCHEMA = "laas.peat-raised-bog-r0-research-bundle-preregistration/4"
 PARENT = HeightChunkId(-1, 335, 402)
 AUTHORITY = HeightChunkId(0, 83, 100)

@@ -95,6 +95,26 @@ def fine_field(grid: WorkGrid, white: np.ndarray, *, range_m: float, nu: float) 
     return _colour(white, np.sqrt(power))
 
 
+def multiscale_fine_field(
+    grid: WorkGrid, white: np.ndarray, *, ranges: tuple[tuple[float, float], ...], nu: float
+) -> np.ndarray:
+    """Isotropic microform field whose PSD is a weighted SUM of Matern densities over several
+    correlation lengths -> a BROAD microform size distribution (0.3-3 m), one white stream,
+    one field, deterministic. ``ranges`` is a tuple of (range_m, weight). Unit variance.
+
+    A single Matern (v6) has one characteristic size; superposing Matern DENSITIES (not fields)
+    under one sqrt gives genuine size variation while keeping the surface a single stationary
+    GRF (no seam/phase issues from mixing independent draws).
+    """
+    ky, kx = _radial_freq(grid.height, grid.width, grid.pitch)
+    k2 = kx * kx + ky * ky
+    power = np.zeros_like(k2)
+    for range_m, weight in ranges:
+        alpha2 = 2.0 * nu / (range_m * range_m)
+        power = power + weight * (alpha2 + k2) ** (-(nu + 1.0))
+    return _colour(white, np.sqrt(power))
+
+
 def coarse_field(
     grid: WorkGrid, white: np.ndarray, *, major_len_m: float, minor_len_m: float, flow_angle_rad: float
 ) -> np.ndarray:
@@ -114,6 +134,29 @@ def coarse_field(
     k_minor = kx * (fr) + ky * (fc)
     power = np.exp(-0.5 * (k_major * k_major * major_len_m * major_len_m
                            + k_minor * k_minor * minor_len_m * minor_len_m))
+    return _colour(white, np.sqrt(power))
+
+
+def multiscale_coarse_field(
+    grid: WorkGrid, white: np.ndarray, *,
+    octaves: tuple[tuple[float, float, float], ...], flow_angle_rad: float
+) -> np.ndarray:
+    """Anisotropic ridge-hollow patterning field whose PSD superposes several anisotropic
+    Gaussian octaves at different wavelengths -> a RANGE of ridge spacings instead of one
+    single-wavelength stripe spectrum. ``octaves`` is a tuple of (major_len_m, minor_len_m,
+    weight); every octave's MAJOR (long-correlation) axis is perpendicular to flow. Unit
+    variance. One white stream, one field (no independent-draw mixing).
+    """
+    ky, kx = _radial_freq(grid.height, grid.width, grid.pitch)
+    fr, fc = np.sin(flow_angle_rad), np.cos(flow_angle_rad)
+    k_major = kx * (-fc) + ky * (fr)  # perpendicular to flow (long axis)
+    k_minor = kx * (fr) + ky * (fc)   # along flow (ridge-hollow alternation)
+    power = np.zeros_like(kx)
+    for major_len_m, minor_len_m, weight in octaves:
+        power = power + weight * np.exp(
+            -(k_major * k_major * major_len_m * major_len_m
+              + k_minor * k_minor * minor_len_m * minor_len_m)
+        )
     return _colour(white, np.sqrt(power))
 
 

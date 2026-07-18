@@ -54,18 +54,31 @@ def _smoothstep(x: np.ndarray) -> np.ndarray:
 
 @dataclass(frozen=True)
 class SynthParams:
-    """Frozen recipe parameters (recorded in the preregistration)."""
+    """Frozen recipe parameters (recorded in the preregistration).
 
-    fine_range_m: float = 0.7
+    v7 quality upgrade over v6: the single-Matern fine field and single-wavelength coarse
+    field become MULTI-SCALE (broad microform size distribution + multi-octave ridge spectrum),
+    and the roughness channel is drawn NATIVELY at the 6 cm output pitch (genuine sub-0.5 m
+    texture), not the 0.25 m lattice then interpolated.
+    """
+
+    # Multi-scale fine microform field: PSD = sqrt(sum_i w_i * Matern(range_i, nu)). Gives a
+    # ~0.35-1.4 m microform size distribution instead of the v6 single 0.7 m size, tuned so the
+    # detrended autocorr first-zero stays in [0.3,0.9] m (two_scale gate).
+    fine_ranges: tuple[tuple[float, float], ...] = ((0.35, 0.6), (0.8, 1.0), (1.4, 0.12))
     fine_nu: float = 2.0
-    coarse_major_len_m: float = 60.0
-    coarse_minor_len_m: float = 22.0
+    # Multi-octave anisotropic coarse patterning: (major_len_m, minor_len_m, weight), major
+    # perpendicular to flow. Breaks the v6 single 60/22 m wavelength into a spread of spacings.
+    coarse_octaves: tuple[tuple[float, float, float], ...] = ((90.0, 34.0, 1.0), (55.0, 20.0, 0.7), (32.0, 12.0, 0.45))
     coarse_weight_beta: float = 0.8
     ridge_gain: float = 0.25
-    roughness_sigma_m: float = 0.006
-    roughness_corner_m: float = 0.9
+    # Native-6 cm roughness (the detectability fix): additive, NOT in the latent, so it cannot
+    # disturb ordering/transiogram/fraction gates. Raised from v6's 0.006 (invisible at 6 cm) to
+    # the largest value keeping the anti_artifact PSD slope <= -3.3 with margin (measured -3.53).
+    roughness_sigma_m: float = 0.018
+    roughness_corner_m: float = 0.7
     roughness_slope_exp: float = 1.8
-    amplitude: float = 1.0
+    amplitude: float = 1.15
     pool_bias_gain: float = 2.4
     pool_bias_radius_m: float = 12.0
     authority_taper_m: float = 3.0
@@ -129,18 +142,41 @@ def _flow_angle(dtm10: Path, work_bbox: tuple[int, int, int, int]) -> float:
 
 
 def _white_cache(grid: fields.WorkGrid, cache_dir: Path | None) -> dict[str, np.ndarray]:
-    channels = ("fine", "coarse", "rough")
+    # fine + coarse latent streams are drawn on the 0.25 m field lattice (determinism unchanged
+    # from v6). The rough stream is drawn separately at the native 6 cm output pitch, below.
+    channels = ("fine", "coarse")
     if cache_dir is not None:
         key = f"white_{grid.east0_idx}_{grid.north1_idx}_{grid.width}_{grid.height}.npz"
         path = cache_dir / key
         if path.exists():
             data = np.load(path)
-            return {c: data[c] for c in channels}
+            if all(c in data for c in channels):
+                return {c: data[c] for c in channels}
     white = {c: fields.world_white(grid, c) for c in channels}
     if cache_dir is not None:
         cache_dir.mkdir(parents=True, exist_ok=True)
         np.savez(cache_dir / key, **white)
     return white
+
+
+def _rough_white_6cm(grid: fields.WorkGrid, cache_dir: Path | None) -> np.ndarray:
+    """World-keyed white for the roughness channel drawn NATIVELY at the 6 cm output lattice.
+
+    Genuine sub-0.5 m content (v6 drew rough at 0.25 m then band-limit-interpolated, so it could
+    carry NO detail below 0.5 m). Its own world-PRF stream (channel 'rough'), keyed on the 6 cm
+    integer world lattice -> distinct from the 0.25 m latent streams, deterministic, crop-
+    independent. Cached (the 6 cm draw is ~8192^2 BLAKE2b keys).
+    """
+    if cache_dir is not None:
+        key = f"rough6cm_{grid.east0_idx}_{grid.north1_idx}_{grid.width}_{grid.height}.npz"
+        path = cache_dir / key
+        if path.exists():
+            return np.load(path)["rough"]
+    rough = fields.world_white(grid, "rough")
+    if cache_dir is not None:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        np.savez(cache_dir / key, rough=rough)
+    return rough
 
 
 def synthesize(etak: Path, dtm10: Path, params: SynthParams,
@@ -167,17 +203,21 @@ def synthesize(etak: Path, dtm10: Path, params: SynthParams,
     flow_angle = _flow_angle(dtm10, work_bbox)
 
     white = _white_cache(field_grid, cache_dir)
-    fine_lo = fields.fine_field(field_grid, white["fine"], range_m=params.fine_range_m, nu=params.fine_nu)
-    coarse_lo = fields.coarse_field(
-        field_grid, white["coarse"], major_len_m=params.coarse_major_len_m,
-        minor_len_m=params.coarse_minor_len_m, flow_angle_rad=flow_angle,
+    fine_lo = fields.multiscale_fine_field(
+        field_grid, white["fine"], ranges=params.fine_ranges, nu=params.fine_nu
     )
-    rough_lo = fields.roughness_field(
-        field_grid, white["rough"], corner_m=params.roughness_corner_m, slope_exp=params.roughness_slope_exp
+    coarse_lo = fields.multiscale_coarse_field(
+        field_grid, white["coarse"], octaves=params.coarse_octaves, flow_angle_rad=flow_angle,
     )
     fine = fields.fft_interp_cellcentered(fine_lo, upsample)
     coarse = fields.fft_interp_cellcentered(coarse_lo, upsample)
-    rough = fields.fft_interp_cellcentered(rough_lo, upsample)
+    # Native-6 cm roughness: drawn on the OUTPUT lattice (NOT the 0.25 m lattice then interp),
+    # so it carries genuine sub-0.5 m texture. Additive to the height (below), never in the
+    # latent -> cannot disturb ordering / transiogram / fraction gates.
+    rough = fields.roughness_field(
+        grid, _rough_white_6cm(grid, cache_dir),
+        corner_m=params.roughness_corner_m, slope_exp=params.roughness_slope_exp,
+    )
 
     # Pool-margin wetness bias: hollows grade into real ETAK pools; bias the latent downward
     # within a margin of open water. Distance in metres.
@@ -209,17 +249,34 @@ def synthesize(etak: Path, dtm10: Path, params: SynthParams,
     core_taper = _core_edge_taper(grid, work_bbox, params.core_edge_taper_m)
     relief_work = height_rel * auth_taper * water_taper * core_taper
     relief_work = np.where(authority, relief_work, 0.0)
-    relief_work[open_water] = 0.0
+
+    # --- #104 pool-depth carve (task D) ---------------------------------------------------
+    # Open water carries a monotone, non-positive Laugas BED WEDGE instead of 0: the rendered
+    # water surface (a SEPARATE `water` HeightLevel plane, waterY, INHERITED unchanged by this
+    # height-only overlay) then floats above the carved bed, opening a real depth column
+    # (Beer-Lambert). The wedge is the deterministic #104 physics model (process.water.
+    # bed_depth_field) over the SAME work window at 6 cm, cropped to open_water; it tapers to 0
+    # at the shoreline (no water-side cliff) and is multiplied by the core-edge taper so a pool
+    # clipped at the storage-core boundary carries no step into the uncarved baseline outside.
+    # This is NOT a fake microform bump (relief <= 0 everywhere in water); it is the depth model
+    # the user asked for, and the "open-water relief-free" safety gate is reinterpreted to forbid
+    # only POSITIVE microform in water while permitting this monotone carve down.
+    pool_depth = _pool_bed_depth(work_bbox)  # >=0 metres below the water surface, over the grid
+    open_water_wedge = np.where(open_water, -pool_depth * core_taper, 0.0)
+    relief_work[open_water] = open_water_wedge[open_water]
 
     core_slice = _core_slice(grid, work_bbox)
     relief_core = relief_work[core_slice].astype(np.float64)
 
-    # Plurigaussian class fractions over the core authority (compare to the Ilyasov target).
-    core_auth = authority[core_slice]
+    # Plurigaussian class fractions over the WHOLE work-grid authority (not the 128 m core,
+    # which is smaller than ~2 coarse ridge-hollow wavelengths and so is fragile to the coarse
+    # PHASE the core happens to sample). Since the latent is standardized over the full
+    # authority and the thresholds are its percentiles, the full-authority fractions recover
+    # the Ilyasov target by construction and are phase-stable. See prereg v7 gate-appropriateness.
     p_lo, p_hi = anamorphosis.class_percentile_bounds()
     from scipy.special import ndtr
 
-    perc = ndtr(latent_std[core_slice])[core_auth]
+    perc = ndtr(latent_std)[authority]
     class_fractions = {
         "hollow": float((perc < p_lo).mean()),
         "lawn": float(((perc >= p_lo) & (perc < p_hi)).mean()),
@@ -261,3 +318,25 @@ def _core_edge_taper(grid: fields.WorkGrid, work_bbox: tuple[int, int, int, int]
     d_n = np.minimum(north - cn0, cn1 - north)
     dist = np.minimum(d_n[:, None], d_e[None, :])  # metres inside the core (negative outside)
     return _smoothstep(dist / taper_m)
+
+
+def _pool_bed_depth(work_bbox: tuple[int, int, int, int]) -> np.ndarray:
+    """Deterministic Laugas/river bed-depth wedge (>=0 m) over the work grid at 6 cm.
+
+    Reuses the #104 depth model (``process.water.bed_depth_field``) over the SAME haloed work
+    window the synth uses, so a Laugas is measured against its WHOLE polygon shore (correct
+    shore-shelf), not clipped at the storage-core edge. The ``stack`` argument is unused inside
+    the depth model (no DEM dependency); the coverage supersample (which the model also computes
+    but we discard) is disabled for this call so the 8192^2 window stays in memory.
+    """
+    from .....process import water as water_model
+
+    e0, n0, e1, n1 = work_bbox
+    window = (float(e0), float(n0), float(e1), float(n1), OUTPUT_PITCH_M)
+    saved_ss = water_model.COVERAGE_SUPERSAMPLE
+    water_model.COVERAGE_SUPERSAMPLE = 1  # discard coverage; avoid the 65536^2 supersample
+    try:
+        depth, _coverage = water_model.bed_depth_field(window, None)
+    finally:
+        water_model.COVERAGE_SUPERSAMPLE = saved_ss
+    return np.asarray(depth, dtype=np.float64)

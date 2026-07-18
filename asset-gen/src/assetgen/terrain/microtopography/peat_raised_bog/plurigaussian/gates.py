@@ -191,18 +191,31 @@ def local_relief(height: np.ndarray, mask: np.ndarray, pitch: float, window_m: f
 
 def pool_coupling(height: np.ndarray, open_water: np.ndarray, authority: np.ndarray,
                   pitch: float, radius_m: float) -> dict[str, float]:
-    """Fraction of pool-margin cells that are low (hollow-side), and hummock-over-pool count."""
+    """Fraction of pool-margin cells that are low (hollow-side), and hummock-over-pool count.
+
+    Robust to a hollow-skewed surface: the "low" and "hummock" tests are against a FIXED
+    datum, NOT the authority median (which mis-fires when the surface skews hollow enough that
+    the median relief falls below the dead-band). The relief is demeaned over the interior in
+    synth, so 0 is the bog datum. A margin cell is "low" if its relief < 0 (below datum); the
+    hummock-over-pool test flags any POSITIVE microform relief > +BREAK_M standing in open
+    water. The carved bed-wedge (relief <= 0 in water) therefore never counts as a hummock.
+    """
     if not open_water.any():
         return {"pool_present": False, "margin_low_fraction": None, "hummock_over_pool_cells": 0}
     dist = distance_transform_edt(~open_water) * pitch
     margin = (dist > 0) & (dist <= radius_m) & authority
-    # A margin cell is "low" if its height is below the authority median (hollow-side).
-    med = float(np.median(height[authority]))
-    low_frac = float((height[margin] < med).mean()) if margin.any() else None
-    hummock_over_pool = int((height[open_water] > med + 0.06).sum())
+    # "low" = relief below the demeaned bog datum (0); robust to a hollow skew (no median).
+    low_frac = float((height[margin] < 0.0).mean()) if margin.any() else None
+    # Detrended hollow-band fraction reported as corroborating evidence (Moore dead-band).
+    z_rel = detrend(height, authority, pitch)
+    margin_hollow_frac = (float((z_rel[margin] < -BREAK_M).mean())
+                          if margin.any() and np.isfinite(z_rel[margin]).any() else None)
+    # Any positive microform relief > +BREAK_M in open water is a fake hummock-over-pool.
+    hummock_over_pool = int((height[open_water] > BREAK_M).sum())
     return {
         "pool_present": True,
         "margin_low_fraction": low_frac,
+        "margin_hollow_fraction": margin_hollow_frac,
         "margin_cells": int(margin.sum()),
         "hummock_over_pool_cells": hummock_over_pool,
     }

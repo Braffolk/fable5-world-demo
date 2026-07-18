@@ -1,0 +1,207 @@
+{
+  "schema_version": "laas.peat-raised-bog-r0-research-bundle-preregistration/7",
+  "bundle_id": "peat-raised-bog-r0-research-bundle/7",
+  "preregistration_id": "open-intact-nonforested-hydrology-conditioned-plurigaussian-v7",
+  "amendment_of": "open-intact-nonforested-hydrology-conditioned-plurigaussian-v6",
+  "authored": "2026-07-18",
+  "amendment_kind": "quality_and_pooldepth_recipe_freeze_over_v6_plus_gate_appropriateness_resolution",
+  "route": "hydrology_conditioned_two_field_plurigaussian_gaussian_anamorphosis",
+  "status": {
+    "state": "cook_revision_3_v7_float_and_preview_generated_all_synthesis_gates_and_verifier_gates_pass_pooldepth_carved_awaiting_orchestrator_ground_level_verdict",
+    "research_only": true,
+    "method_implementation_authorized": true,
+    "r0_generation_authorized": true,
+    "preview_authorized": true,
+    "production_owner_authorized": false,
+    "latest_eligible": false
+  },
+  "why_this_route": {
+    "supersedes": "v7 keeps the spec-authorized v2 plurigaussian route but upgrades ground-level QUALITY (v6 read under-detailed at a 6 cm eye view) and adds the #104 pool-depth carve (v6 pools were painted-on flat). It also RESOLVES the v6 known gate-appropriateness followup (fractions/pool_coupling scope).",
+    "mechanism": "Two stationary Gaussian random fields combined into one latent, ordered-thresholded to guarantee the Moore transiogram ordering, with height a SMOOTH continuous Gaussian anamorphosis of the latent. v7 makes the fine field MULTI-SCALE and the coarse field MULTI-OCTAVE, draws the roughness NATIVELY at 6 cm, and carves the ETAK Laugas bed with a monotone #104 depth wedge.",
+    "anti_invention": "No FBM as the shipped surface, no marked forms, no reaction-diffusion, no per-class steps, no periodic lattice, no repeated stamps, no decorative noise. The roughness is a deterministic world-keyed high-frequency GRF (additive, NOT in the latent). The pool wedge is the deterministic #104 physics model (ETAK type + measured shore distance), never faked."
+  },
+  "immutable_history": {
+    "v6_preregistration": {
+      "path": "asset-gen/config/microtopography/peat-raised-bog/bundle-preregistration-v6.json",
+      "sha256": "101c3f34c012602cc4b6729aa78a0299f826b52b68863f530b1a4765ddfc24a4",
+      "state": "superseded_by_this_v7_amendment_quality_and_pooldepth",
+      "reinterpretation_or_mutation_forbidden": true
+    },
+    "v2_preregistration": {
+      "path": "asset-gen/config/microtopography/peat-raised-bog/bundle-preregistration-v2.json",
+      "sha256": "431b269d49f7e85457a531cc669a3422e8eee077a96958d9beb9dc7c42da0d35",
+      "state": "method_selected_v2_plurigaussian_v6_and_v7_implement_it",
+      "reinterpretation_or_mutation_forbidden": true
+    },
+    "v1_preregistration": {
+      "path": "asset-gen/config/microtopography/peat-raised-bog/bundle-preregistration-v1.json",
+      "sha256": "21d972723f7c2641ce6a9fb7c15e171e85f3378dc83863cc93cb833be94bf115",
+      "state": "closed_rejected_before_C1_generation",
+      "reinterpretation_or_mutation_forbidden": true
+    },
+    "v5_marked_form_terminated": {
+      "path": "asset-gen/config/microtopography/peat-raised-bog/bundle-preregistration-bog-hummock-v5.json",
+      "sha256": "3df1168846e78b972d33ff9d2c5a452a8b82e6de5dfa02c86014aa105a0bee73",
+      "state": "PERMANENTLY_TERMINATED_marked_form_route",
+      "reinterpretation_or_revival_forbidden": true
+    },
+    "v3_v4_reaction_diffusion_rejected": {
+      "path": "asset-gen/config/microtopography/peat-raised-bog/bundle-preregistration-v4.json",
+      "sha256": "f610b0a58ca8e17070043f7e11a2303249f4003c60017292d2a324c02e0a876d",
+      "state": "research_rejected_single_wavelength_turing_not_in_spec",
+      "reinterpretation_or_revival_forbidden": true
+    }
+  },
+  "site_selection": {
+    "normalized_mire_identifier": "etak-component-0004071135",
+    "member_etak_ids": [4071135],
+    "mire_geometry_sha256": "0f85b612f992acf54d80cd5ee622738bb6d954dcf090840169190992ea0c36c7",
+    "core_bounds_en": [540224.0, 6429504.0, 540352.0, 6429632.0],
+    "work_domain_en": [540032, 6429312, 540544, 6429824],
+    "halo_margin_m": 192.0,
+    "note": "the reselected pool-bearing raised bog with real ETAK Laugas pools; same site and base as the v4/v6 pack."
+  },
+  "authority": {
+    "regime_id": "peat.raised_bog",
+    "regime_release_state": "research",
+    "maximum_result": "one_immutable_non_latest_development_preview_after_all_v7_gates_and_ground_level_verdict_pass",
+    "target_truth": false,
+    "measured_morphology_fit": false,
+    "estonia_transfer": "none_beyond_one_selected_development_hypothesis",
+    "production_owner": null,
+    "latest_eligible": false,
+    "runtime_synthesis_allowed": false,
+    "wire_format_change_allowed": false
+  },
+  "gate_appropriateness_resolution": {
+    "resolves": "the v6 known_followups_gate_appropriateness (fractions + pool_coupling were measured over the 128 m storage core, smaller than ~2 coarse ridge-hollow wavelengths, so both were fragile to the coarse PHASE the core happened to sample).",
+    "premise_audit_finding": "The two gates need OPPOSITE scopes, not the same one. (1) fractions: measure over the WHOLE work-grid authority. Because the latent is standardized over the full authority and the class thresholds ARE its percentiles, the full-authority fractions recover the Ilyasov target by construction and are phase-stable; the tiled-128 m-window distribution proves it (per-window hollow 0.405 +- 0.132 spread vs a stable full-authority 0.402). (2) pool_coupling: KEEP core-scoped (pool-margin coupling is a LOCAL relationship at the real Laugas pools that are actually carved and rendered) but FIX the mis-firing threshold. Measured proof the scope matters: the robust margin-low fraction is 0.759 over the core vs 0.081 over the full 512 m grid, where the pool_bias downshift is ~0-mean against a global datum and most 'open_water' is the distant ditch network, not the Laugas. The brief's suggestion to move BOTH to full-grid was audited and REJECTED on this data for pool_coupling.",
+    "fractions_fix": "synth.class_fractions computes class fractions from ndtr(latent_std)[authority] over the WHOLE work grid (not core_slice); run.evaluate reports the tiled-128 m-window mean +- std as phase-stability evidence.",
+    "pool_coupling_fix": "gates.pool_coupling: margin-low test is a fixed relief < 0 datum (not the authority median); hummock-over-pool is a fixed relief > +0.06 m band (was height > median+0.06, which counted EVERY relief-free water cell as a hummock once the median skewed hollow). Robust to a hollow skew and to the new non-positive bed wedge.",
+    "safety_gates_unchanged": "the core edge-taper and land off-authority (non-water) residual gates stay measured exactly on the core; only the open-water residual gate is REINTERPRETED (below)."
+  },
+  "quality_upgrades_over_v6": {
+    "micro_multiscale_fine": "fields.multiscale_fine_field: PSD = sqrt(sum_i w_i * Matern(range_i, nu)) over ranges [(0.35,0.6),(0.8,1.0),(1.4,0.12)] (range_m, weight), nu 2.0 -> a ~0.35-1.4 m microform SIZE distribution instead of the v6 single 0.7 m size. One white stream, one field, deterministic. Tuned so the detrended autocorr first-zero stays in [0.3,0.9] m (measured 0.875).",
+    "micro_native_6cm_roughness": "the roughness channel is drawn NATIVELY at the 6 cm output pitch (its own world-PRF 'rough' stream keyed on the 6 cm integer world lattice), NOT at 0.25 m then band-limit-interpolated, so it carries genuine sub-0.5 m texture. Additive (height += sigma*rough), NOT in the latent -> cannot disturb ordering/transiogram/fraction gates. sigma raised 0.006 -> 0.018 m (the largest value keeping the anti_artifact PSD slope <= -3.3 with margin; measured -3.53), corner 0.7 m, slope_exp 1.8 (PSD ~ k^-3.6). Latent (fine+coarse) determinism is UNCHANGED (still 0.25 m draw + band-limited interp).",
+    "macro_multioctave_coarse": "fields.multiscale_coarse_field: PSD superposes anisotropic Gaussian octaves (major_len,minor_len,weight) = [(90,34,1.0),(55,20,0.7),(32,12,0.45)], every major axis perpendicular to flow, re-standardized to unit variance -> a RANGE of ridge spacings, breaking the v6 single 60/22 m wavelength stripe spectrum (periodicity peak 1.46, coarse half-autocorr 22.75 m >= 8). Domain-warp escalation was NOT needed and NOT applied (avoid over-engineering)."
+  },
+  "pool_depth_carve": {
+    "task": "#104 pool-depth carve (case B, surface-independent): the rendered water surface Y comes from a SEPARATE `water` HeightLevel plane (waterY), NOT the `height` layer. The bog preview corrects only HEIGHT, so it INHERITS the base's water plane UNCHANGED; carving the bed DOWN opens a real water column (Beer-Lambert).",
+    "implementation": "synth._pool_bed_depth computes the deterministic depth wedge via process.water.bed_depth_field over the SAME haloed work window at 6 cm (so a Laugas is measured against its whole polygon shore, not clipped at the core edge; coverage supersample disabled for the call to keep the 8192^2 window in memory, coverage discarded). relief_work[open_water] = -depth * core_edge_taper (mirrors layers_cook h - depth; the core-edge taper keeps a pool clipped at the storage-core boundary from stepping into the uncarved baseline). Per-type depth from ETAK E_202 tyyp (Laugas plateau 1.5 m over a 10 m shore shelf d = dmax*(2s - s^2)).",
+    "measured_carve_in_frozen_core": {
+      "carved_cells": 425224,
+      "carved_depth_min_m": 3.796174173363329e-07,
+      "carved_depth_mean_m": 0.5400022942332429,
+      "carved_depth_max_m": 1.4657723903656006,
+      "note": "positive metres carved BELOW the inherited water surface; max 1.47 m ~ the Laugas 1.5 m plateau. waterY is UNTOUCHED (the height-only packer never writes a water layer)."
+    },
+    "reinterpreted_open_water_safety_gate": {
+      "old": "open-water relief == 0 (exact).",
+      "new": "open water carries NO positive/microform relief; it carries ONLY a monotone, non-positive Laugas bed wedge (0 >= relief >= -dmax, 0 at shore, deepening inward). waterY untouched. This forbids FAKE bumps in water while permitting the legitimate #104 monotone depth carve DOWN the user asked for.",
+      "synth_gate": "run.evaluate safety: land_off_authority_residual_cells == 0 AND water_positive_relief_cells == 0 AND core_edge_abs_p99 <= 0.01; reports water_relief min/mean/max.",
+      "verifier_gate": "network_preview_verify hardMasks now ASSERTS openWaterPositiveReliefCells == 0 on the frozen float's open_water_core (not a static label); reports openWaterBedWedgeMinReliefM."
+    }
+  },
+  "recipe": {
+    "implementation_module": "asset-gen/src/assetgen/terrain/microtopography/peat_raised_bog/plurigaussian/",
+    "packer_reused": "asset-gen/src/assetgen/terrain/microtopography/peat_raised_bog/network_preview.py (+ network_preview_verify.py); only the synthesis float was swapped (key core_relief_00625m, 2048x2048, 0.0625 m). COOK_REVISION 2->3 (pool-depth carve).",
+    "determinism": "fine + coarse latent streams draw from the shared world-PRF (BLAKE2b person laas-micro-prf1) on the 0.25 m lattice then band-limited (trig) interpolate to 6 cm (v6 determinism unchanged); the roughness stream draws natively on the 6 cm lattice ('rough' channel offset); all coloured by analytic spectra over one FIXED work domain (core + 192 m halo); the storage core is cropped last; no per-chunk seeds, no seam crossfades.",
+    "params": {
+      "fine_ranges_range_m_weight": [[0.35, 0.6], [0.8, 1.0], [1.4, 0.12]],
+      "fine_nu": 2.0,
+      "coarse_octaves_major_minor_weight": [[90.0, 34.0, 1.0], [55.0, 20.0, 0.7], [32.0, 12.0, 0.45]],
+      "coarse_weight_beta": 0.8,
+      "ridge_gain": 0.25,
+      "roughness_sigma_m": 0.018,
+      "roughness_corner_m": 0.7,
+      "roughness_slope_exp": 1.8,
+      "amplitude": 1.15,
+      "pool_bias_gain": 2.4,
+      "pool_bias_radius_m": 12.0,
+      "authority_taper_m": 3.0,
+      "water_taper_m": 1.0,
+      "core_edge_taper_m": 12.0,
+      "flow_angle_rad": -0.4959465809087236,
+      "canonical_seed_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+    },
+    "ilyasov_derived_target_fractions": {"hollow": 0.4125, "lawn": 0.2875, "hummock": 0.3},
+    "gaussian_anamorphosis": {
+      "transfer": "height = amplitude * PCHIP(percentile -> relative height) of the standardized latent; monotone continuous; NOT per-class steps (control points unchanged from v6).",
+      "control_points_percentile": [0.0, 0.05, 0.15, 0.30, 0.41, 0.50, 0.70, 0.82, 0.92, 0.95, 1.0],
+      "control_points_height_m": [-0.240, -0.150, -0.100, -0.060, -0.040, -0.015, 0.035, 0.090, 0.140, 0.150, 0.260]
+    }
+  },
+  "frozen_artifact": {
+    "cook_revision": 3,
+    "root": "asset-gen/data/work/microtopography/peat-bog-plurigaussian-v7/sha256/c74ebfecde151cf91b9adcfb0756bcce1b7177e48817cd48b8b5ffd0768da23d",
+    "build_id": "c74ebfecde151cf91b9adcfb0756bcce1b7177e48817cd48b8b5ffd0768da23d",
+    "float_name": "plurigaussian-v7-float.npz",
+    "float_key": "core_relief_00625m",
+    "float_shape": [2048, 2048],
+    "float_pitch_m": 0.0625,
+    "float_sha256": "92ccfb4147fb99d859deacd5ba306686bd9fef938b5d87e9ab9370e7eeb1c439",
+    "measurements_sha256": "68c4c1c55acb48432c6bec75180a8c4a85bc8521f09c081357a54672a73a4f35",
+    "implementation_source_sha256": {
+      "__init__.py": "3ccec2d0634b7da0fe00846df1bf59a0c0ad4b8ed12caf4882a09b19f40abbce",
+      "anamorphosis.py": "6fb59737c9bac9c1b471c5432bdcc6f3386ebd5a11e6d26cf24a7f02773f3aec",
+      "fields.py": "7481206a778f221fbf6100b23fbd1894c2e871e67dc6e6ee940ffc2205419adf",
+      "gates.py": "c1230c42aa2e164c0eada587a35ac9ae228a5dcd62f5bfd5389aad2f37967db6",
+      "qa.py": "51a8b54820c96507bd64ecda60672ead87ef6baab5e00c5b6de74af577fa5b22",
+      "run.py": "76560568e54bbba9fd1659de26708b6cc76d229912e7c4b6e02fe76ecf42ae4a",
+      "synth.py": "46be1bb92132b6cecf995426cf195157ed562144feca73394a87f9cbc80cc1dd",
+      "tests_invariants.py": "a813463c2c6c3e6bceca5a7f53411b62dc3a7583e300e031dded4a735feed6d9"
+    },
+    "depth_model_source_sha256": {"process/water.py": "0e41eb2603189bc08746fb1e7071dbe38dfe9d4813769b7e38ffe7765f68ca22"}
+  },
+  "required_gates": {
+    "measured_on_output_relief": true,
+    "measured_at_cook_revision": 3,
+    "results": {
+      "safety": {"passed": true, "land_off_authority_residual_cells": 0, "water_positive_relief_cells": 0, "water_relief_min_m": -1.4657723903656006, "water_relief_mean_m": -0.5346087335058612, "water_relief_max_m": -0.0, "core_edge_abs_p99_m": 1.3295390991806447e-05, "note": "open-water gate reinterpreted: monotone non-positive bed wedge, no positive microform"},
+      "pool_depth": {"carved_cells": 425224, "carved_depth_min_m": 3.796174173363329e-07, "carved_depth_mean_m": 0.5400022942332429, "carved_depth_max_m": 1.4657723903656006},
+      "amplitude": {"passed": true, "local_relief_p50_m": 0.22526017572076074, "p50_target": [0.15, 0.25], "local_relief_p95_m": 0.3778152729756891, "p95_target": [0.28, 0.4], "global_p95_minus_p5_m": 0.3642608041673422},
+      "transiogram_ordering": {"passed": true, "hollow_hummock_contact": 0.0, "max": 0.01, "monotone": true},
+      "class_fractions": {"passed": true, "measured_over": "whole_work_grid_authority", "plurigaussian": {"hollow": 0.4024348286160473, "lawn": 0.2934346745235711, "hummock": 0.30413049686038157}, "ilyasov_target": {"hollow": 0.4125, "lawn": 0.2875, "hummock": 0.3}, "max_abs_error": 0.010065171383952687, "tol": 0.08, "tiled_128m_window_distribution": {"windows": 16, "hollow_mean": 0.4050472601202565, "hollow_std": 0.13231775142256638, "lawn_mean": 0.2932214601851404, "lawn_std": 0.028341368455570056, "hummock_mean": 0.30173127969460306, "hummock_std": 0.13014281930778054}},
+      "anti_artifact": {"passed": true, "psd_loglog_slope": -3.532914907635798, "slope_target": [-4.6, -3.3], "dominant_wavelength_m": 2.909090909090909, "spacing_target": [0.8, 3.0], "periodicity_peak_ratio": 1.458654246711564, "periodicity_max": 8.0, "microform_band_m": [0.5, 3.0]},
+      "two_scale": {"passed": true, "microform_first_zero_m": 0.875, "first_zero_target": [0.3, 0.9], "coarse_half_autocorr_m": 22.75, "coarse_min_m": 8.0},
+      "pool_coupling": {"passed": true, "scope": "core", "margin_low_fraction": 0.7587078881936665, "min": 0.6, "hummock_over_pool_cells": 0, "margin_hollow_fraction": 0.023507472881772726}
+    },
+    "ground_level_gate": "the AUTHORITATIVE acceptance gate is the real-WebGPU ground-level boot of the packed preview (grass=0), judged by the orchestrator/user; top-down hillshade is NOT sufficient."
+  },
+  "packed_preview": {
+    "note": "packer/verifier updated for COOK_REVISION 3 (pool-depth carve): the open-water gate is reinterpreted (verifier hardMasks now asserts openWaterPositiveReliefCells == 0 on the frozen float's open_water_core). Repack is on the v7 float.",
+    "recipe_sha256": "d07a78c58a4cc69e516f8e7bee57efae700c24040f00ca818bfc469f068d808a",
+    "preview_manifest_path": "asset-gen/data/out/builds/d07a78c58a4cc69e516f8e7bee57efae700c24040f00ca818bfc469f068d808a/m/f38a967ac83e1e4f/manifest.json",
+    "preview_manifest_sha256": "f38a967ac83e1e4fce0a839044a6ca4702f72e27d81dba627fc1c84430c076b6",
+    "corrected_base_manifest_sha256": "925b826097f2efc61b80fe208d4493235b6e86c63ea360da9885c0359bd99cd6",
+    "source_base_manifest_path": "asset-gen/data/out/builds/3bfad95469e46fc2c91d05c1e17686010d1aa261e1cc06671b99c6431b77f175/m/7aa4d523ea99c37d/manifest.json",
+    "packer_source_sha256": {
+      "network_preview.py": "fb2f10d09e138ccf0d9e23532b5be1b83798d55aad03979b97d79c79d9a21766",
+      "network_preview_verify.py": "2869212e16ee62f3bd5bca83badbac126558dc62f002baf3bff4f8599cdae4f6"
+    },
+    "independent_verifier": {
+      "verifier": "assetgen.peat-bog-network-preview-verify.v1",
+      "all_gates_passed": true,
+      "gates": ["coverage", "parentClosure", "headers", "decodedHierarchy", "aprons", "determinism", "hardMasks"],
+      "evidence": {"apron_max_seam_m": 0.0, "max_lod0_decoded_child_error_m": 0.00500178337097168, "max_core_round_trip_error_m": 0.00099945068359375, "max_excluded_c0_change_m": 0.00099945068359375, "carved_samples": 4194304, "open_water_positive_relief_cells": 0, "open_water_bed_wedge_min_relief_m": -1.4657723903656006}
+    },
+    "ground_level_boot": {
+      "note": "COOK_REVISION 3 real-WebGPU boot-smoke, grass=0, eye ~1.4-1.6 m, static settled; zero page/console/WebGPU/pipeline errors. QA PNGs rendered for the orchestrator's honest ground-level verdict.",
+      "core_center_en": [540288.0, 6429568.0],
+      "dry_hummock_game_xz": [171670, 205931],
+      "largest_pool_centroid_game_xz": [171653, 205962],
+      "en_to_game": "game x = E - 368640 (anchorE); game z = 6635520 (anchorN) - N",
+      "url_template": "http://localhost:<vite>/?src=estonia&scene=world&grass=0&shadowclipres=896&x=171670&z=205931&dataurl=http://localhost:<data-port>&alt=1.6&yaw=2.4&pitch=-0.08&T=8",
+      "user_visual_verdict": "pending"
+    }
+  },
+  "publication": {
+    "state": "immutable_non_latest_research_preview",
+    "immutable": true,
+    "latest_eligible": false,
+    "production_manifest_mutation_allowed": false,
+    "wire_format_change_allowed": false,
+    "runtime_synthesis_allowed": false,
+    "runtime_role": "ordinary packed height demand decode cache interpolate sample cull and render only"
+  }
+}
