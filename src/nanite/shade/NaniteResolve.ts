@@ -245,10 +245,10 @@ export function buildNaniteResolve(
   world: ResolveWorld,
 ): NaniteResolveHandles {
   const hf = world.hf;
-  // only the noise bakes are read from hf here — biomeTex/fieldsTex are S4-released
+  // only the noiseA bake is read from hf here — biomeTex/fieldsTex are S4-released
   // boot textures (may already be gone under the ?profile deferred graph build)
-  if (!hf.noiseA || !hf.noiseB) {
-    throw new Error('NaniteResolve: heightfield noise bakes missing (boot order)');
+  if (!hf.noiseA) {
+    throw new Error('NaniteResolve: heightfield noise bake missing (boot order)');
   }
   const q = new URLSearchParams(window.location.search);
   // S6d KEYSTONE (build-time gate): the streamed (Estonia) world reconstructs the
@@ -276,7 +276,7 @@ export function buildNaniteResolve(
   // bindHfVerts=false: the resolve reconstructs terrain world pos from DEPTH and only
   // calls fetchWorldVert for rock/bark (the explicit-mesh else branch), so it must NOT
   // bind the stride-1 terrain buffer — one fewer storage buffer in the fragment stage (2e).
-  const fetch = makeFetch(gpu, heightSrc, undefined, windOn ? { camPos: cam.camPos } : undefined, false);
+  const fetch = makeFetch(gpu, heightSrc, windOn ? { camPos: cam.camPos } : undefined, false);
   const nandepth = q.get('nandepth');
   const nandbg = q.get('nandbg');
   // SW/HW crossover px for the ?nandbg=clhw split tint (matches the raster's CLHW_MAX).
@@ -614,14 +614,8 @@ export function buildNaniteResolve(
       const shading = buildTerrainShading({
         field: world.field,
         noiseA: hf.noiseA as StorageTexture,
-        noiseB: hf.noiseB as StorageTexture,
         mp: hf.mp,
         hasCanopy: world.field.biomeCarriesCanopy,
-        // The 1.45 m fbm albedo "meso" mottle is decorative noise (baked un-mipmapped,
-        // ungated by distance -> reads at constant screen-scale near AND far = fake). It
-        // violates the no-decorative-noise law and masks the real 6 cm relief lighting, so
-        // it is OFF by default now; ?meso=1 restores it for A/B comparison.
-        meso: q.get('meso') === '1',
         landcover: world.field.biomeCarriesCanopy && q.get('landcover') !== '0',
         // #116 soil modulation — gated to a cooked soil layer (Estonia). ?soil=0 forces
         // it off (an A/B toggle beside ?watercover; default on where a soil plane exists).
@@ -1408,13 +1402,14 @@ export function buildNaniteResolve(
     if (nandbg === 'flat') return vec4(albedo, 1);
     if (nandbg === 'albedo') return vec4(albedo, 1);
     if (nandbg === 'normal') return vec4(wNormal.mul(0.5).add(0.5), 1);
-    // ?nandbg=relief — pure microtopography: matte terrain lit ONLY by a fixed low raking
-    // light on the real cooked surface normal (wNormal carries the 6 cm relief gradient),
-    // XZ-tilted x4 as a shading-only relief exaggeration. No albedo, no palette -> genuine
-    // hummock/hollow relief reads as light/shadow so the surface topology is unmistakable.
+    // ?nandbg=relief — PURE real microtopography: matte terrain lit ONLY by a fixed low
+    // raking light on the real cooked surface normal. wNormal is now the amplified real
+    // field gradient and nothing else (every procedural bump/displacement term was
+    // removed from TerrainMaterial), so this view shows genuine hummock/hollow relief
+    // as light/shadow. Modest extra x2 XZ tilt on top of RELIEF_LIGHT_K for readability.
     if (nandbg === 'relief') {
       const rlfN = normalize(
-        vec3(wNormal.x.mul(4), wNormal.y, wNormal.z.mul(4)),
+        vec3(wNormal.x.mul(2), wNormal.y, wNormal.z.mul(2)),
       ) as unknown as NV3;
       const rake = normalize(vec3(0.42, 0.16, 0.9)) as unknown as NV3;
       const rlfL = dot(rlfN, rake).clamp(0, 1).mul(0.85).add(0.15);

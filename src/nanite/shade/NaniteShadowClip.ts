@@ -80,7 +80,7 @@ import {
   type NaniteCam,
 } from '../NaniteCommon';
 import { buildClipCull, type ClipCull } from '../cull/NaniteClipCull';
-import type { TerrainDisp, TrunkWindOpt } from '../raster/NaniteFetch';
+import type { TrunkWindOpt } from '../raster/NaniteFetch';
 import type { TerrainField } from '../world/TerrainField';
 import { voxWindScalars, voxWindOffset } from '../raster/NaniteVoxWind';
 import { windContext } from '../../render/Wind';
@@ -256,7 +256,6 @@ export function buildNaniteShadowClip(
   /** terrain height source for the depth rasters' terrain fetch: the
    *  TerrainField plane pyramid */
   heightSrc: TerrainField,
-  disp?: TerrainDisp,
   wind?: TrunkWindOpt,
   /** item 6: the measured deepest DAG anchor-chain (registry.maxDagDepth + margin) — the
    *  BFS pass count for the SHARED cut (paid once/frame when a level re-rasters). Omitted ⇒
@@ -543,7 +542,7 @@ export function buildNaniteShadowClip(
   });
   for (let k = 0; k < LEVELS; k++) {
     const lv = levels[k]!;
-    lv.raster = buildNaniteRaster(gpu, heightSrc, lv.cam, clipCull.queue, vis, 'flat', false, disp, wind, false, false, false, undefined, fieldAnchor);
+    lv.raster = buildNaniteRaster(gpu, heightSrc, lv.cam, clipCull.queue, vis, 'flat', false, wind, false, false, false, undefined, fieldAnchor);
   }
 
   // ---- P3b VOX CROWN SHADOW CASTERS (?shvox2, DEFAULT OFF — additive opt-in) -----

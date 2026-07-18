@@ -646,9 +646,6 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
             : null,
         farShadow: farSh ? (wxz: import('../gpu/TSLTypes').NV2) => farSh.visAt(wxz) : null,
         barkTex: naniteBark ?? null,
-        // Format 2 stores the complete geometric terrain surface. Keep material
-        // noise in shading, but never add procedural vertex/root displacement.
-        cookedTerrainGeometry: streamed && worldManifest.format === 2,
         // S6d KEYSTONE: on the streamed world feed the camera/reconstruct/shadow
         // chain the live StreamOrigin as its render anchor (rebase-rare, 8 km-
         // snapped) so the whole project chain is small-coordinate. Generated ⇒

@@ -11,12 +11,9 @@
  */
 
 
-import type { StorageTexture } from 'three/webgpu';
-import { If, clamp, float, mix, smoothstep, texture, time, uint, vec2, vec3, wgslFn } from 'three/tsl';
+import { If, float, smoothstep, time, uint, vec2, vec3, wgslFn } from 'three/tsl';
 import type { TerrainField } from '../world/TerrainField';
 import type { NB, NF, NU, NV2, NV3, NV4 } from '../../gpu/TSLTypes';
-import { DISP } from '../../render/TerrainMaterial';
-import { PERIOD_FBM, PERIOD_RID, PERIOD_VAL } from '../../gpu/passes/NoiseBake';
 import { WORLD_SIZE } from '../../world/WorldConst';
 import { gustAt, gustLagAt, windExposure, windU, WIND_LAG_M } from '../../render/Wind';
 import { SKIRT_DEPTH_A, SKIRT_DEPTH_B } from '../build/BuildHeightGrid';
@@ -77,88 +74,6 @@ interface TrunkWindFields {
   branchBase: NF;
   /** N9-C0: leaf-flutter amplitude base (s·gust·exposure, ≤120 m faded); 0 on trunk */
   flutBase: NF;
-}
-
-/**
- * Terrain micro-displacement inputs ('terrain' transform channel, N4-C1):
- * the EXACT TerrainTiles vertex formula (world-space fields, distance-faded
- * 45→85 m) applied to heightfield vertices at fetch time, so the raster, the
- * HW passes and the resolve all see the displaced surface. (The full-frame
- * C1 gate vs ?nanite=0 is what verifies displacement.)
- *
- * S3b: reads the TerrainField planes — slope from a height-plane CD (the
- * retired normalTex.w stencil), snow/rockExposure/flow from the fields plane,
- * riverDepth derived as waterY − ground (spec §3: not stored).
- */
-export interface TerrainDisp {
-  field: TerrainField;
-  noiseA: StorageTexture;
-  noiseB: StorageTexture;
-  camPos: UniformV3;
-  /** S6e: the render anchor A (= StreamOrigin) on the STREAMED world. `wpos` passed to
-   *  terrainDispAt is ABSOLUTE (field/noise samplers are world-anchored), but camPos is
-   *  ANCHOR-relative since S6d — the fade distance must compare like frames, so the
-   *  camera is re-absoluted with this. Omitted on generated ⇒ verbatim absolute build. */
-  anchor?: UniformV3;
-}
-
-/**
- * TerrainTiles micro-displacement at a world xz, verbatim (world-space fields;
- * amplitude gated by slope/rockExposure/snow, faded 45→85 m). Factored out of
- * hfWorld so NON-terrain surface followers (procedural grass roots — the ground
- * a blade stands on is the DISPLACED surface, not raw heightTex) evaluate the
- * EXACT same expression tree as the terrain vertices. Call inside an Fn stack.
- */
-export function terrainDispAt(disp: TerrainDisp, wpos: NV2, groundH: NF): NF {
-  // S6e: wpos is ABSOLUTE; disp.camPos is anchor-relative since S6d — re-absolute the
-  // camera on streamed (anchor set) so the fade distance compares like frames. The f32
-  // re-add costs ~3 cm at 311 km on a 45→85 m fade — immaterial. Generated: verbatim.
-  const camXZ = disp.anchor
-    ? (vec3(disp.camPos).xz.add(vec3(disp.anchor).xz) as unknown as NV2)
-    : (vec3(disp.camPos).xz as unknown as NV2);
-  const camD = wpos.sub(camXZ).length();
-  const dOut = float(0).toVar();
-  If(camD.lessThan(float(DISP.fade1)), () => {
-    // slope = height-plane CD (the retired normalTex.w stencil); flow/snow/
-    // rockExposure = ONE filtered fields-plane tap; riverDepth = waterY −
-    // ground (spec §3: not stored, derived — every caller holds the ground
-    // height it displaces: vert fetch / grass root).
-    const fld = disp.field.fieldsAt(wpos);
-    const slope = disp.field.fieldSlopeHot(wpos);
-    const riverDepth = disp.field.fieldWaterYNearest(wpos).sub(groundH).max(0);
-    const rockK = smoothstep(DISP.slopeKnee0, DISP.slopeKnee1, slope).max(fld.w.mul(0.85)) as unknown as NF;
-    const gravelK = smoothstep(0.32, 0.7, fld.y)
-      .max(smoothstep(0.02, 0.2, riverDepth))
-      .mul(float(DISP.gravel)) as unknown as NF;
-    const snow = fld.z as unknown as NF;
-    const dispAmp = (mix(float(DISP.base), float(DISP.rock), rockK) as unknown as NF)
-      .max(gravelK)
-      .mul(snow.mul(0.75).oneMinus())
-      .mul(clamp(float(DISP.fade1).sub(camD).div(DISP.fade1 - DISP.fade0), 0, 1));
-    const f1 = (texture(disp.noiseA, wpos.div(DISP.sF1 * PERIOD_FBM), 0) as unknown as NV4).y
-      .mul(2)
-      .sub(1);
-    const f2 = (
-      texture(
-        disp.noiseA,
-        wpos.div(DISP.sF2 * PERIOD_VAL).add(vec2(0.31, 0.77)),
-        0,
-      ) as unknown as NV4
-    ).x
-      .mul(2)
-      .sub(1);
-    const r1 = (texture(disp.noiseB, wpos.div(DISP.sRid * PERIOD_RID), 0) as unknown as NV4).z
-      .mul(2)
-      .sub(1);
-    dOut.assign(
-      f1
-        .mul(DISP.wF1)
-        .add(f2.mul(DISP.wF2))
-        .add(r1.mul(rockK.mul(1 - DISP.ridBase).add(DISP.ridBase)).mul(DISP.wRid))
-        .mul(dispAmp),
-    );
-  });
-  return dOut as unknown as NF;
 }
 
 /** per-(instance, cluster) decode shared by the 3 corner fetches */
@@ -245,7 +160,6 @@ export function makeFetch(
   gpu: RegistryGpu,
   /** terrain height source: the TerrainField plane pyramid */
   field: TerrainField,
-  disp?: TerrainDisp,
   wind?: TrunkWindOpt,
   /** N8-D2 Stage 2e: bind the stride-1 terrain-DAG vertex buffer (gpu.hfVerts) in
    *  the isHF&&isDAG branch. The RASTER needs it (terrain positions); the RESOLVE
@@ -256,8 +170,8 @@ export function makeFetch(
   /** PERF task #76 kernel-split: which fetch path THIS instance compiles.
    *  'both' (default) = the runtime If(isHF).Else UNION — byte-identical to the
    *    pre-split code (a closure emits the same nodes as the old inline body).
-   *  'explicit' = leaf/trunk/rock ONLY — no heightfield arm ⇒ terrainDispAt (6 tex
-   *    + fbm) is never compiled ⇒ the leaf kernel sheds those registers.
+   *  'explicit' = leaf/trunk/rock ONLY — no heightfield arm ⇒ the leaf kernel
+   *    sheds the terrain field-tap registers.
    *  'terrain' = heightfield ONLY — no explicit arm and NO wind precompute ⇒ the
    *    terrain kernel reserves zero instance-transform / wind registers.
    *  A specialized raster kernel picks one class so it never reserves the other's
@@ -440,7 +354,8 @@ export function makeFetch(
   //      transform each UNIQUE vert ONCE, keyed by its global index vi). ----------
 
   /** heightfield TAIL shared by both HF conventions: grid texel (sx,sz) + skirtDrop
-   *  → world pos (height fetch + reconstruction + the verbatim micro-displacement).
+   *  → world pos (height fetch + reconstruction — the packed cooked heights ARE the
+   *  surface; no runtime displacement, per the cook-side-synthesis law).
    *  Only how (sx,sz) are obtained differs (adaptive-indexed vs implicit window grid). */
   const hfWorld = (ctx: VertCtx, sx: NU, sz: NU, skirtDrop: NF): NV3 => {
     const out = vec3(0).toVar();
@@ -458,7 +373,6 @@ export function makeFetch(
     // near-uniform per cluster (A15's level-select cost stays off the hot path).
     const h = field.fieldHeightHot(vec2(wsx, wsz) as unknown as NV2);
     const y = h.toVar();
-    if (disp) y.addAssign(terrainDispAt(disp, vec2(wsx, wsz) as unknown as NV2, h));
     // Far-forest canopy: on COARSE tiles (texel ≥ 16 m — trees are sub-texel
     // there, so no crown geometry is emitted) the cooked CHM canopy becomes REAL
     // surface displacement, raising forest masses on the horizon. Fine/near bands

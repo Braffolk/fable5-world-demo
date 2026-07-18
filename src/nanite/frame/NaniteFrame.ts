@@ -93,9 +93,6 @@ export function buildNaniteFrame(
      *  (mountains shade valleys at any distance). Multiplied like cloudShadow. */
     farShadow?: ((wxz: import('../../gpu/TSLTypes').NV2) => NF) | null;
     barkTex: import('three').Texture | null;
-    /** Format-2 terrain geometry is fully cooked. Runtime material displacement would
-     * synthesize a second geometric surface and is therefore compiled out. */
-    cookedTerrainGeometry?: boolean;
     /** S6d PRECISION: the per-frame render anchor A (= StreamOrigin) for the
      *  streamed (Estonia) world — the camera VP / reconstruct / shadow chain is
      *  built RELATIVE to it so f32 stays sub-metre at ~311 km absolute coords.
@@ -227,26 +224,11 @@ export function buildNaniteFrame(
       crownLod0: params.get('crownlod0') === '1',
     },
   );
-  if (!hf.noiseA || !hf.noiseB) {
-    throw new Error('NaniteFrame: heightfield noise bakes missing (boot order)');
-  }
-  // ?nanodisp=1 — disable terrain micro-displacement (root-cause bisect for
-  // near-camera transparency: the disp branch only runs within 85 m)
-  const dispOff = params.get('nanodisp') === '1' || world.cookedTerrainGeometry === true;
-  // S6e: the render-anchor uniform for terrain FIELD sampling (NaniteFetch hfWorld /
-  // terrainDispAt) — the S6d anchor-relative vert positions must be re-absoluted to
-  // hit the world-anchored field planes. Streamed only; undefined ⇒ generated compiles
+  // S6e: the render-anchor uniform for terrain FIELD sampling (NaniteFetch hfWorld)
+  // — the S6d anchor-relative vert positions must be re-absoluted to hit the
+  // world-anchored field planes. Streamed only; undefined ⇒ generated compiles
   // the verbatim absolute path (byte-identical shader).
   const fieldAnchor = world.streamAnchor ? cam.anchor : undefined;
-  const disp = dispOff
-    ? undefined
-    : {
-        field,
-        noiseA: hf.noiseA,
-        noiseB: hf.noiseB,
-        camPos: cam.camPos,
-        anchor: fieldAnchor,
-      };
   // trunk wind (matches the resolve's makeFetch — both read ?nanwind so the
   // rastered geometry and the resolve's barycentric corners stay bit-identical)
   const windOn = params.get('nanwind') !== '0';
@@ -259,10 +241,10 @@ export function buildNaniteFrame(
   const grassMode = params.get('grass');
   const grassOn = grassMode !== '0' && grassMode !== 'off';
   const grass = grassOn
-    ? buildGrassField({ cam, vis, field, canopyTex: world.canopyTex, disp })
+    ? buildGrassField({ cam, vis, field, canopyTex: world.canopyTex })
     : null;
   const raster = buildNaniteRaster(
-    registry.gpu, field, cam, cull, vis, 'flat', true, disp, windOpt, false, true, voxActive,
+    registry.gpu, field, cam, cull, vis, 'flat', true, windOpt, false, true, voxActive,
     grass ? { batch: grass.batch, renderHw: grass.renderHw, enabled: grass.enabled } : undefined,
     fieldAnchor, // S6e: absolute field-sample coords for the anchor-relative terrain verts
   );
@@ -281,7 +263,6 @@ export function buildNaniteFrame(
         registry.gpu,
         registry.instanceCount,
         field,
-        disp,
         windOpt,
         measuredHierDepth,
         voxActive,
@@ -391,7 +372,7 @@ export function buildNaniteFrame(
   let probeRead: (() => Promise<Float32Array>) | null = null;
   let probeSet: ((pix: number[][]) => void) | null = null;
   if (probeOn) {
-    const fetchDbg = makeFetch(registry.gpu, field, undefined, undefined, true, 'both', fieldAnchor);
+    const fetchDbg = makeFetch(registry.gpu, field, undefined, true, 'both', fieldAnchor);
     const probeAttr = new StorageBufferAttribute(new Float32Array(32), 1);
     probeAttr.name = 'nanProbeReadback';
     const outBuf = storage(probeAttr, 'float', 32);

@@ -53,7 +53,6 @@ import {
 import type { NB, NF, NU, NV2, NV3, NV4 } from '../../gpu/TSLTypes';
 import { canopyAt, cellHash, cellHash2 } from '../../gpu/passes/Scatter';
 import { gustAt, windContext, windExposure, windU } from '../../render/Wind';
-import { terrainDispAt, type TerrainDisp } from '../raster/NaniteFetch';
 import type { TerrainField } from '../world/TerrainField';
 import type { NaniteCam } from '../NaniteCommon';
 import type { NaniteVisBuffers } from '../raster/NaniteRaster';
@@ -128,7 +127,7 @@ const RAY_SHELL_H = 1.5; // max blade reach above ground (incl. mid-card 2× + w
 // pass (O(area), blade-count-independent), so the per-pixel march FETCHES its world
 // instead of deriving it in-register (the kernel is occupancy-bound: 47.6→15.1 ms came
 // from shrinking live state, not ALU). Per 0.84 m texel (= 8×8 fine cells):
-//   ctx  (uvec4): ground+disp f32 | ground gradient half2 | (swardTop, gustAmp) half2
+//   ctx  (uvec4): ground f32 | ground gradient half2 | (swardTop, gustAmp) half2
 //   mask (uvec2): 64-bit fine-cell occupancy — the DENSITY LAW baked to bits
 //     (bit = cellHash(cell) < dens·thin·edge, the exact kernel accept)
 // March: 1 ctx load per texel step (replaces 4-tap heightAt + widen/top math), empty
@@ -216,9 +215,6 @@ export interface GrassBuildOpts {
    *  height-plane CD, water gate → waterY plane). */
   field: TerrainField;
   canopyTex: StorageTexture | null;
-  /** terrain micro-displacement (NaniteFrame's disp) — blades must root on the
-   *  DISPLACED surface or short blades sink into the near-field relief. */
-  disp?: TerrainDisp;
 }
 
 
@@ -256,12 +252,9 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
   const heightAt = (p: NV2): NF =>
     streamed ? field.fieldHeightFinestHot(p) : field.fieldHeight(p, 0);
 
-  /** ground height a blade roots on = heightfield + terrain micro-displacement */
-  const groundAt = (p: NV2): NF => {
-    if (!opts.disp) return heightAt(p);
-    const h = heightAt(p);
-    return h.add(terrainDispAt(opts.disp, p, h)) as unknown as NF;
-  };
+  /** ground height a blade roots on = the real cooked heightfield (runtime
+   *  terrain displacement is gone — cook-side-synthesis law) */
+  const groundAt = (p: NV2): NF => heightAt(p);
 
   const depthKey24 = (cz: NF): NU =>
     uint(float(1).sub(cz).mul(16777215).clamp(0, 16777215)) as unknown as NU;
@@ -454,10 +447,10 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
       const dist = (streamed ? wposG.sub(camG) : wpos.sub(vec2(cam.camPos.x, cam.camPos.z)))
         .length()
         .toVar() as unknown as NF;
-      // ground (heightfield + micro-displacement) and its gradient (central diff at
+      // ground (the real cooked heightfield) and its gradient (central diff at
       // ±half pitch). Blades plane-reconstruct off these: ≤ cm error at 0.84 m pitch
-      // over the ~1 m-bilinear heightfield; meadow disp amplitude is ~0.04 m
-      // (veg-gated) — this is what fixes the lite-path sunken blades on slopes.
+      // over the ~1 m-bilinear heightfield — this is what fixes the lite-path
+      // sunken blades on slopes.
       const g = groundAt(wpos).toVar() as unknown as NF;
       const hp = GUIDE_PITCH / 2;
       const dgdx = groundAt(wpos.add(vec2(hp, 0)) as unknown as NV2)

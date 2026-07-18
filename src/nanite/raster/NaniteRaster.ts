@@ -71,7 +71,6 @@ import {
 } from '../NaniteCommon';
 import {
   makeFetch,
-  type TerrainDisp,
   type TrunkWindOpt,
   type VertCtx,
 } from './NaniteFetch';
@@ -231,8 +230,6 @@ export function buildNaniteRaster(
   /** false (?shade=0): pure matClass color, no lambert — the parity gate's
    *  shading-free mode (coverage/structure compare only) */
   shade = true,
-  /** terrain micro-displacement (frame mode; dbg views omit — NaniteFetch) */
-  disp?: TerrainDisp,
   /** trunk wind (frame mode) — MUST match the resolve's makeFetch so the
    *  rastered geometry and the resolve's barycentric corners agree */
   wind?: TrunkWindOpt,
@@ -381,7 +378,7 @@ export function buildNaniteRaster(
   const auditV = sU32Views(auditAttr, 4);
 
   // ---- shared fetch helpers (NaniteFetch.ts — also the resolve's decode) ----------
-  const nfetch = makeFetch(gpu, heightSrc, disp, wind, true, 'both', fieldAnchor);
+  const nfetch = makeFetch(gpu, heightSrc, wind, true, 'both', fieldAnchor);
   // fetchWorldVertDyn is used only by the HW vertex stage (./raster/Hw, via nfetch).
   const { makeCtx, fetchWorldVert } = nfetch;
   // A2 (2026-07-09 HW vertex-prepass): CLASS-SPLIT fetch variants for the two `_cl` world1
@@ -389,8 +386,8 @@ export function buildNaniteRaster(
   // only the heightfield arm — so each `_cl` vertex shader sheds the OTHER class's fetch-union
   // registers (same trick ?ksplit uses for the SW kernel). Consumed by buildHw ONLY on the
   // world1 (ctxPrepass / clusterCtxV != null) camera path; the flat ctx read replaces makeCtx.
-  const nfetchExplicit = makeFetch(gpu, heightSrc, disp, wind, true, 'explicit', fieldAnchor);
-  const nfetchTerrain = makeFetch(gpu, heightSrc, disp, wind, true, 'terrain', fieldAnchor);
+  const nfetchExplicit = makeFetch(gpu, heightSrc, wind, true, 'explicit', fieldAnchor);
+  const nfetchTerrain = makeFetch(gpu, heightSrc, wind, true, 'terrain', fieldAnchor);
   // HW vertex-prepass (2026-07-09, DEFAULT ON): the `_clE` mesh HW draw reads its verts
   // pre-projected from projVertBuf (w=1 screen-linear clip) instead of re-running the
   // compute-fetch + wind + vp + snap path. `?hwproj=0` is the disable-only escape back to
@@ -401,7 +398,7 @@ export function buildNaniteRaster(
   // ?ksplit (PERF task #76): build world1 as TWO class-specialized kernels —
   // 'explicit' (leaf/trunk/rock) + 'terrain' (heightfield) — each compiling ONLY its
   // own fetch arm (makeFetch variant), so it reserves ONLY its own registers (the leaf
-  // kernel sheds terrainDispAt; the terrain kernel sheds the transform+wind set = the
+  // kernel sheds the explicit-mesh decode; the terrain kernel sheds the transform+wind set = the
   // branch-union that pinned world1's occupancy floor). MEASUREMENT stage: both dispatch
   // over the WHOLE qRaster and route by a uniform isHF early-out — byte-identical output,
   // ~1ms doubled launches — so Xcode can read each kernel's registers/occupancy BEFORE
@@ -521,7 +518,7 @@ export function buildNaniteRaster(
     // splitVariant===undefined ⇒ the module nfetch (identical node graph to the
     // pre-split kernel).
     const kFetch = splitVariant
-      ? makeFetch(gpu, heightSrc, disp, wind, true, splitVariant, fieldAnchor)
+      ? makeFetch(gpu, heightSrc, wind, true, splitVariant, fieldAnchor)
       : nfetch;
     const kMakeCtx = kFetch.makeCtx;
     const kn = Fn(() => {
@@ -1396,7 +1393,7 @@ export function buildNaniteRaster(
   // buildClusterCtx (./raster/ClusterCtx) at the top of buildNaniteRaster.
   // ?ksplit (PERF task #76): the two class-specialized world1 kernels. Named per variant
   // so a capture reads the split cleanly (nanRasterWorld1Explicit = the leaf/trunk whale
-  // shed of terrainDispAt; nanRasterWorld1Terrain = heightfield, no transform/wind). Both
+  // shed of the terrain field taps; nanRasterWorld1Terrain = heightfield, no transform/wind). Both
   // dispatch over the FULL queue (rasterDispatchFull) and route by the isHF early-out —
   // the Stage-1 measurement form (byte-identical output; Stage 2 adds the cull-side
   // partition that drops the doubled launches). Built only under ?ksplit (0 cost off).
