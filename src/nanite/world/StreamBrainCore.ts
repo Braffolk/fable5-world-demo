@@ -236,6 +236,7 @@ export class StreamBrainCore {
       startBake: (req) => this.startBake(req),
       emitRefine: (p) => this.emitRefine(p),
       emitMerge: (p) => this.emitMerge(p),
+      canRefine: (level, tx0, tz0, size) => this.finerDataExists(level, tx0, tz0, size),
     });
   }
 
@@ -1294,6 +1295,43 @@ export class StreamBrainCore {
     const stride = (this.hWin[j] as HeightWindow).plan.stride;
     const coarsest = (this.hWin[this.hWin.length - 1] as HeightWindow).plan.stride;
     return stride <= t.strideTexels || t.strideTexels >= coarsest;
+  }
+
+  /**
+   * Does finer source DATA EXIST (in the manifest, independent of current window
+   * residency) to bake this leaf's children? The tree's refine ring is pure
+   * geometry (ringR): near a fine/coarse DATA boundary it perpetually wants to
+   * split the coarse-only annulus, whose child bakes then abort in
+   * bakeSourceReady (no stride-≤child data there) and RE-NOMINATE every tick —
+   * an unbounded nominate→abort→refetch loop (leak). Gating wantFiner on this
+   * predicate dissolves that: a leaf only splits where child data actually exists.
+   *
+   * Mirrors bakeSrcLevel's chunk-coverage test but drops the resident-window
+   * (n0x) clause and keeps ONLY the manifest bounds (nMin/nMax) — so a
+   * genuinely-pending-but-existing region still refines (the abort/retry there is
+   * bounded, resolving when its window scrolls in). Format-1 / generated worlds
+   * (full coverage) always return true ⇒ byte-identical residency.
+   */
+  private finerDataExists(leafLevel: number, tx0: number, tz0: number, size: number): boolean {
+    if (leafLevel <= 0) return false;
+    if (this.manifestFormat !== 2) return true;
+    const cfg = this.tilesCfg;
+    const childStride = 1 << (leafLevel - 1);
+    const nx0 = Math.min(Math.max(tx0, cfg.latMin), cfg.latMax);
+    const nx1 = Math.min(Math.max(tx0 + size, cfg.latMin), cfg.latMax);
+    const nz0 = Math.min(Math.max(tz0, cfg.latMin), cfg.latMax);
+    const nz1 = Math.min(Math.max(tz0 + size, cfg.latMin), cfg.latMax);
+    for (let i = 0; i < this.hWin.length; i++) {
+      const plan = (this.hWin[i] as HeightWindow).plan;
+      const s = plan.stride;
+      if (s > childStride) continue; // coarser than the child needs — cannot source it
+      const x0 = Math.floor((nx0 + 0.5) / s - 0.5);
+      const x1 = Math.ceil((nx1 + 0.5) / s - 0.5);
+      const z0 = Math.floor((nz0 + 0.5) / s - 0.5);
+      const z1 = Math.ceil((nz1 + 0.5) / s - 0.5);
+      if (x0 >= plan.nMinX && x1 <= plan.nMaxX && z0 >= plan.nMinZ && z1 <= plan.nMaxZ) return true;
+    }
+    return false;
   }
 
   private async bakeTile(t: ClipmapTile): Promise<TileGeometry | 'overCap' | null> {

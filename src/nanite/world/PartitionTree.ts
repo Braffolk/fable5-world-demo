@@ -99,6 +99,13 @@ export interface TreeDeps {
   startBake(req: BakeReq): void;
   emitRefine(p: RefinePacket): void;
   emitMerge(p: MergePacket): void;
+  /** does finer source DATA EXIST for this leaf's children (manifest coverage,
+   *  residency-independent)? Gates wantFiner so the tree never nominates a split
+   *  whose bake can only ABORT (no child data there) — the perpetual re-nominate/
+   *  abort/refetch loop at a fine↔coarse data boundary. Full-coverage / generated
+   *  worlds always return true (no residency change). Optional: absent ⇒ always
+   *  refinable (legacy behaviour / the node probe's synchronous fakes). */
+  canRefine?(level: number, tx0: number, tz0: number, size: number): boolean;
 }
 
 /** the in-flight refine transaction — a FIELD of a Leaf, so ≤1 per node. */
@@ -206,6 +213,11 @@ export class PartitionTree {
    *  ring block, the doubling-clipmap radius. */
   private ringR(k: number): number {
     return (this.cfg.tilesPerSide / 2) * (this.cfg.gridN << k);
+  }
+
+  /** does finer child DATA exist for this leaf (deps predicate; absent ⇒ true)? */
+  private canRefine(n: NodeCommon): boolean {
+    return this.deps.canRefine ? this.deps.canRefine(n.level, n.tx0, n.tz0, n.size) : true;
   }
 
   /** Chebyshev distance (texels) from (px,pz) to a tile footprint's nearest point. */
@@ -338,7 +350,10 @@ export class PartitionTree {
     const size = this.cfg.gridN << level;
     const key = this.quadKey(level, tx0, tz0);
     const commonBase = { id: this.nextNodeId++, level, tx0, tz0, size, key, parent, quadrant };
-    const wantFiner = level > 0 && this.nearDist(commonBase, camX, camZ) < this.ringR(level - 1);
+    const wantFiner =
+      level > 0
+      && this.nearDist(commonBase, camX, camZ) < this.ringR(level - 1)
+      && (this.deps.canRefine ? this.deps.canRefine(level, tx0, tz0, size) : true);
     if (!wantFiner) {
       const leaf: Leaf = { ...commonBase, kind: 'leaf', slot: -1, tx: null, votedMerge: false };
       this.pendingBootNodes.set(leaf.id, leaf);
@@ -417,8 +432,12 @@ export class PartitionTree {
       // "wants finer but hasn't" must be a visible state, never a quiet coarse patch
       if (leaf.tx) txLive++;
       if (camX >= leaf.tx0 && camX < leaf.tx0 + leaf.size && camZ >= leaf.tz0 && camZ < leaf.tz0 + leaf.size) camLevel = leaf.level;
-      // refine intent
-      const wantFiner = leaf.level > 0 && this.nearDist(leaf, camX, camZ) < this.ringR(leaf.level - 1);
+      // refine intent — ring geometry AND finer child data actually existing
+      // (else the split's bake can only abort + re-nominate forever; §data-gate)
+      const wantFiner =
+        leaf.level > 0
+        && this.nearDist(leaf, camX, camZ) < this.ringR(leaf.level - 1)
+        && this.canRefine(leaf);
       if (wantFiner) {
         if (!leaf.tx) splitCandidates.push(leaf);
       } else if (leaf.tx) {
