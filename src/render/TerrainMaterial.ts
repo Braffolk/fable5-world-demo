@@ -377,8 +377,6 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
   // ---------- macro variation (2–50 m breakup — tiling killer) ----------------
   const macroA = val(43.7);
   const macroB = val(11.3, 0.37, 0.61);
-  const macroMix = macroA.mul(0.65).add(macroB.mul(0.35));
-  const macroTint = macroMix.sub(0.5).mul(0.16); // ±8% value shift
 
   // ---------- meso/micro detail noise ------------------------------------------
   const meso: NF = inp.meso ? fbmV(1.45) : float(0.5);
@@ -724,7 +722,6 @@ export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
   col = mix(col, gravel, riverW.mul(0.85).mul(pondK.oneMinus()));
   col = mix(col, vec3(0.055, 0.052, 0.038), pondK);
   col = mix(col, snowCol, snowW);
-  col = col.mul(macroTint.add(1));
 
   // feedback 2.8 (splat half): a real grass field is DIRECTIONAL — forward
   // scatter through backlit blades brightens and warms it toward the sun at
