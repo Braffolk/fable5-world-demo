@@ -72,6 +72,21 @@ function sizeFor(cls: number, hy: number): { scale: number; sink: number; lean: 
       return { scale: hy * 0.5 + 0.6, sink: 0.05, lean: 0 };
     case VegClass.Branch:
       return { scale: hy * 0.8 + 0.6, sink: 0.05, lean: 0.3 };
+    // Bog understory: meshes author base at y=0 and real-metre heights (each module's
+    // exported *_HEIGHT const), so the generic 3 cm shrub sink buries them and the
+    // sub-1 generic curve shrinks them below their real species range. Curves below
+    // land mesh(H)×scale in the REAL range per species; sink ≈ stem-litter contact.
+    case VegClass.CottonGrass: // tussock culms, mesh 0.42-0.5 m ≈ real 0.3-0.6 m
+      return { scale: 0.9 + hy * 0.3, sink: 0.01, lean: 0 };
+    case VegClass.Heather: // Calluna, mesh 0.22-0.36 m → real 0.2-0.55 m
+      return { scale: 1.0 + hy * 0.6, sink: 0.01, lean: 0 };
+    case VegClass.LabradorTea: // mesh 0.3-0.55 m → real 0.5-1.2 m
+      return { scale: 1.2 + hy * 0.8, sink: 0.01, lean: 0 };
+    case VegClass.BogRosemary: // mesh 0.15-0.3 m ≈ real 0.1-0.4 m (stays low)
+      return { scale: 1.0 + hy * 0.3, sink: 0.008, lean: 0 };
+    case VegClass.Cranberry: // creeping mat, mesh 0.06-0.1 m → real 0.05-0.15 m
+    case VegClass.Cloudberry: // herb, mesh 0.1-0.2 m → real 0.1-0.3 m
+      return { scale: 1.0 + hy * 0.5, sink: 0.005, lean: 0 };
     default: // shrubs (BushHazel/BushPink/Juniper)
       return { scale: Math.pow(hy, 1.4) * 0.7 + 0.6, sink: 0.03, lean: 0 };
   }
