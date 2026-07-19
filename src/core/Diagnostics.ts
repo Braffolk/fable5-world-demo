@@ -27,7 +27,7 @@ const INTERESTING_LIMITS: readonly (keyof GPUSupportedLimits & string)[] = [
  * Compute passes bind many storage buffers — the default 8 is not enough.
  *
  * maxSampledTexturesPerShaderStage: the nanite resolve übershader samples the
- * terrain maps + probe GI + 4 CSM cascades + canopy + caustics + the bark
+ * terrain maps + probe GI + 4 CSM cascades + canopy + the bark
  * texture-array — 17, over the spec-DEFAULT 16. This adapter reports 48, so we
  * raise the request (D-N23/D-N25: storage buffers are the real cap at 10/F9,
  * "sampled textures are separate and plentiful"). Clamped to adapterMax below,

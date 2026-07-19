@@ -76,7 +76,7 @@ import type { Heightfield } from '../world/Heightfield';
 /** clear alpine water: absorption per meter (r dies first → teal depths) */
 const SIGMA = { r: 0.42, g: 0.135, b: 0.095 };
 
-/** flowmap cycles/s — shared by ripples, foam and the caustic advection */
+/** flowmap cycles/s — shared by the ripple and foam advection */
 export const FLOW_CYC = 0.45;
 
 /** #114/#115 SHORELINE SMOOTHING — coverage-α as a SOFT edge, not a hard mask.
@@ -106,7 +106,7 @@ export interface WaterLevelHandles {
 
 export function waterMaterial(
   // hf carries ONLY the hydrology flow field + baked ripple noise (ripple/foam
-  // advection, caustic drift). The water SURFACE (waterY/waterYFar) reads the
+  // advection). The water SURFACE (waterY/waterYFar) reads the
   // TerrainField water plane since the S9 water port — the one path both sources
   // ride, so Estonia's streamed water renders through this same material; terrain
   // HEIGHT reads live on the TerrainField planes since S3a.

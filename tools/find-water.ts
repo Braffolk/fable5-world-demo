@@ -1,6 +1,6 @@
 /**
  * Scans the booted world's CPU hydrology mirrors for good water framings:
- * shallow wet cells (caustic band) with a dry bank a few meters away to
+ * shallow wet cells (shallow band) with a dry bank a few meters away to
  * stand on. Prints candidate `--x --z --yaw` shot args, best first.
  *
  *   npx tsx tools/find-water.ts [--seed 1] [--top 12] [--minDepth 0.08]

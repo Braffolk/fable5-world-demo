@@ -28,7 +28,7 @@
  *   5. grass: cantilever bend (tip², GroundRing) + fine shimmer, with the
  *      same lean² rule so strong wind flattens the sward.
  *
- * Context is a module singleton like sunU/caustics: set it before any
+ * Context is a module singleton like sunU: set it before any
  * vegetation material builds; absent context (gallery) → no wind.
  */
 

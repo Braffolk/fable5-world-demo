@@ -444,7 +444,7 @@ export class TerrainField {
     return this.finestSelect(wxz, planeNearest);
   }
 
-  /** bilinear waterY (near consumers: caustics, water gates) */
+  /** bilinear waterY (near consumers: bed wetness, water gates) */
   fieldWaterY(wxz: NV2): NF {
     const w = this.water;
     if (!w) throw new Error('TerrainField: no water plane');
