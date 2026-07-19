@@ -66,6 +66,7 @@ import {
 import type { NB, NF, NU, NV2, NV3, NV4 } from '../../gpu/TSLTypes';
 import type { NaniteShadow } from './NaniteShadowClip';
 import type { ShadowHalf } from './NaniteShadowHalf';
+import { causticContext, causticDepth, causticTint } from '../../render/Caustics';
 import { buildTerrainShading } from '../../render/TerrainMaterial';
 import { sunU } from '../../render/VegMaterials';
 import { canopyAt } from '../../gpu/passes/Scatter';
@@ -373,7 +374,7 @@ export function buildNaniteResolve(
   // (rock/bark/leaf/deadwood/legacy-grass, matClass 1-5); each fullscreen pass Discards the
   // OTHER family right after the matClass decode and BEFORE wp reconstruction (the RP-5 reorder
   // precedent), and — crucially — BUILDS only its own family's subgraphs, so 'terr' never
-  // binds/builds verts/indices/barkTex and 'mesh' never binds the terrain samplers.
+  // binds/builds verts/indices/barkTex and 'mesh' never binds the terrain samplers/caustics.
   // The 'vox' (voxel-side) and 'both' (forest single-pass merge) kinds are unchanged.
   const buildMat = (pass: 'terr' | 'mesh' | 'vox' | 'both'): NodeMaterial => {
   const mat = new NodeMaterial();
@@ -594,12 +595,12 @@ export function buildNaniteResolve(
     // binding sets. The const declarations stay at top-level so the shared mux + lighting compile
     // in EVERY pass. TERRAIN reads no storage buffer, but its subgraph is NOT free: buildTerrain-
     // Shading's implicit-derivative texture() samples are the demote-forcing op, and the whole
-    // subgraph (~14 samples + fbm) inflates register/instruction pressure → collapsed
+    // subgraph (~14 samples + fbm + caustics) inflates register/instruction pressure → collapsed
     // occupancy (measured as the dominant driver of the close-up voxel r.scene cliff, 37.5ms in a
     // crown). Under the P2 split it is built ONLY in 'terr'/'both' — the 'mesh'/'vox' shaders never
     // pay it (a mesh/voxel pixel is never matClass 0), which is the whole point of the family split.
     // P2: TERRAIN family built ONLY in the 'terr' and 'both' passes (NOT 'mesh'/'vox') — this is
-    // what keeps buildTerrainShading's samplers out of the mesh material's bindings.
+    // what keeps buildTerrainShading's samplers + caustics out of the mesh material's bindings.
     if ((pass === 'terr' || pass === 'both') && hasClass(0)) If(isT, () => {
       // TerrainField planes: normal/slope = in-shader height-plane CD,
       // fields/biome plane taps, riverDepth derived (spec §3).
@@ -647,18 +648,17 @@ export function buildNaniteResolve(
         surf: { wp, camPos, noiseCoord },
       });
       let tc: NV3 = shading.colorNode;
-      // Submerged-bed wetness: waterline fringe darkening + biofilm tint, both
-      // driven by the REAL cooked waterY column depth (no patterned light —
-      // no-fake-detail law).
-      if (world.field.water) {
-        const d = world.field.fieldWaterY(wp.xz).sub(wp.y);
+      const cctx = causticContext();
+      if (cctx) {
+        const d = causticDepth(wp);
         const fringe = smoothstep(-0.45, -0.04, d);
+        const caust = causticTint(wp, d);
         const biofilm = smoothstep(0.04, 0.5, d);
         let wetCol = tc
           .mul(fringe.mul(0.38).oneMinus())
           .mul(biofilm.mul(0.42).oneMinus()) as unknown as NV3;
         wetCol = mix(wetCol, wetCol.mul(vec3(0.72, 0.86, 0.55)), biofilm.mul(0.65)) as unknown as NV3;
-        tc = wetCol;
+        tc = wetCol.mul(caust.mul(1.7).add(1)) as unknown as NV3;
       }
       albedo.assign(tc);
       wNormal.assign(shading.worldNormalNode);

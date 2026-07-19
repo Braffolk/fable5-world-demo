@@ -28,6 +28,7 @@ import {
 import { fbm3, valueNoise3 } from '../gpu/noise/NoiseTSL';
 import type { NF, NV3, NV4 } from '../gpu/TSLTypes';
 import { BARK_FIELDS } from '../vegetation/BarkField';
+import { applyCaustics } from './Caustics';
 import { runiform } from '../gpu/RenderUniform';
 
 /**
@@ -112,6 +113,7 @@ export function barkArrayMaterial(
     const moss = smoothstep(0.05, 0.65, normalWorld.y).mul(d.z).mul(mossN).clamp(0, 1);
     albedo = mix(albedo, vec3(0.05, 0.1, 0.032), moss) as unknown as NV3;
     albedo = albedo.mul(float(1).sub(d.z.mul(0.25))) as unknown as NV3; // rot
+    applyCaustics(mat);
   }
   mat.colorNode = hueShift(albedo, d.x, 0.12).mul(d.w.mul(0.45).add(0.55));
   mat.normalNode = normalMap(vec3(s.r, s.g, 1));
@@ -180,6 +182,8 @@ export function rockMaterial(opts?: {
   mat.colorNode = albedo.mul(d.w.mul(0.35).add(0.65));
   mat.aoNode = d.w;
   mat.metalness = 0;
+  // submerged boulders / streambed cobbles dance with the water caustics
+  applyCaustics(mat);
   return mat;
 }
 

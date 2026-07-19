@@ -15,8 +15,9 @@ import { ProbeGI } from '../gpu/passes/ProbeGI';
 import { CanopyWindow } from '../gpu/passes/CanopyWindow';
 import { addScatterDebug } from './ScatterDebug';
 import { buildVegLibrary } from '../vegetation/VegLibrary';
+import { CausticsBake, setCausticContext } from '../render/Caustics';
 import { setWindContext, windU } from '../render/Wind';
-import { updateSunUniforms } from '../render/VegMaterials';
+import { sunU, updateSunUniforms } from '../render/VegMaterials';
 import { Heightfield } from '../world/Heightfield';
 import { GeneratedWorldSource } from '../world/source/GeneratedWorldSource';
 import { RemoteWorldSource } from '../world/source/RemoteWorldSource';
@@ -59,7 +60,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // with the GPU-await boot phases below (heightfield/erosion/sky/scatter/GI)
   // instead of serializing after them. Determinism: veg geometry is seeded per
   // label (seed.rng is stateless), the atlas/impostor captures use bespoke
-  // materials (no wind context reads), and prep results are keyed by
+  // materials (no wind/caustic context reads), and prep results are keyed by
   // idF / job index — completion order cannot reorder them.
   const ablate = new Set(
     (new URLSearchParams(window.location.search).get('ablate') ?? '').split(','),
@@ -175,7 +176,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   armPreviewClip(streamed ? worldManifest : null);
   // The live boot heightfield — after S4/S9 it feeds ONLY boot-time consumers
   // (scatter + classification inside source.open, the registry terrain build),
-  // the still-live flow field (water ripple/foam advection reads it),
+  // the still-live flow field (water ripples + caustics advection read it),
   // wind noise, and the ?profile=1 texture handoff. Every other runtime read
   // lives on the TerrainField planes + the S4 windows below; the boot-only GPU
   // set (incl. biome/fields textures since S4) is released right after the
@@ -183,7 +184,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // The generated source owns a live boot Heightfield; the streamed world has no
   // procedural terrain — a stub carries ONLY the still-live boot handles the
   // subsystems read off `hf` (real procedural noise for wind/froxels/resolve;
-  // zero-flow placeholder hydrology for the water ripple/foam advection).
+  // zero-flow placeholder hydrology for the water ripples/caustics advection).
   // Terrain + water DATA live on the TerrainField planes for BOTH.
   const hf: Heightfield = streamed
     ? await Heightfield.forStreamedWorld(engine.renderer, seed)
@@ -306,6 +307,18 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   await gi.init(engine.renderer);
   sunSky.dimAmbientForGI();
   engine.onUpdate(() => gi.tick(engine.renderer));
+
+  // Phase 6 caustics: per-frame analytic bake + module context — MUST be
+  // set before any material factory runs (terrain tiles, rocks, debris all
+  // self-apply at build time). ?ablate=caustics to A/B, ?caustk=N to tune.
+  if (!ablate.has('caustics')) {
+    if (!hf.flow) throw new Error('caustic context without hydrology');
+    const bake = new CausticsBake();
+    const ck = Number(new URLSearchParams(window.location.search).get('caustk') ?? NaN);
+    if (Number.isFinite(ck)) bake.focusK.value = ck;
+    setCausticContext({ field, flow: hf.flow, simRes: hf.simRes, noiseA: hf.noiseA, bake, sunDir: sunU.dir });
+    engine.onUpdate(() => bake.update(engine.renderer));
+  }
 
   // Phase 6 wind: global gust field for all vegetation (?wind=N strength,
   // ?winddir=deg, ?ablate=wind to A/B) — context before veg materials build
@@ -735,7 +748,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // boot-only GPU set (height + hardness + erosion scratch buffers, normalTex,
   // since S4 biomeTex + fieldsTex, and since S9 waterY — the water material now
   // reads the TerrainField water plane). Only the flow field stays (ripple/foam
-  // advection). Under ?profile these are loading-device resources
+  // advection + caustic drift). Under ?profile these are loading-device resources
   // outside the swap handoff, so releasing early is safe (see releaseBootGpuSet).
   {
     const freedMb = hf.releaseBootGpuSet(engine.renderer);

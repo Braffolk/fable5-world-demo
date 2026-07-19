@@ -199,7 +199,7 @@ export class Heightfield {
    * the subsystems still read off `hf` (they never learn which source feeds the
    * world — law 3): the REAL procedural noise bake (wind/froxels/resolve need
    * it, it is world-data-independent), plus tiny placeholder hydrology/water
-   * buffers so water constructs and runs (it renders nothing — the
+   * buffers so water + caustics construct and run (they render nothing — the
    * water is the dry sentinel everywhere — until the S9 water port reads the
    * TerrainField water plane). No boot GPU set to release (returns 0).
    */
@@ -226,7 +226,7 @@ export class Heightfield {
     hf.noiseB = noise.texB;
 
     // placeholder hydrology at a small sim res — ZERO flow for the water
-    // material's ripple/foam advection. The water SURFACE
+    // material's ripple/foam advection + the caustic drift. The water SURFACE
     // reads the streamed TerrainField water plane (S9 port), where Estonia's
     // real waterY lands — nothing here holds a water level.
     const simRes = 256;
@@ -520,7 +520,7 @@ export class Heightfield {
    * the remaining reads run inside source.open, before this call). Since the S9
    * water port, waterY joins the set — its last reader was the water material,
    * which now samples the TerrainField water plane (fed by cpuWaterY, already
-   * read back). The flow field STAYS (ripple/foam advection reads
+   * read back). The flow field STAYS (ripple/foam advection + caustic drift read
    * it live). Call strictly AFTER boot bakes complete.
    * Safe under ?profile=1: these resources are not in the swap handoff and
    * nothing on the render device references them, so the loading-device copies
