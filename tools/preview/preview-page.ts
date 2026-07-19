@@ -17,6 +17,7 @@ import {
   AmbientLight,
   Box3,
   BoxGeometry,
+  type BufferGeometry,
   Color,
   DirectionalLight,
   GridHelper,
@@ -42,6 +43,12 @@ declare global {
       tris: number;
       views: readonly string[];
       render: (view: string) => Promise<void>;
+      /** wind mode (?wind=1): filmstrip metadata + per-cell displaced render. */
+      wind: {
+        rows: readonly { label: string; h0: number; freq: number }[];
+        frames: number;
+        render: (row: number, frame: number) => Promise<void>;
+      } | null;
     };
   }
 }
@@ -147,6 +154,115 @@ function countTris(obj: Object3D): number {
   return Math.round(tris);
 }
 
+// ─────────────────────────── wind (verification) ─────────────────────────────
+// A CPU per-vertex transcription of the ENGINE sway (NaniteFetch.windOffset +
+// makeCtx leaf/trunk block). Drives ONLY off vdata.y (flex) — the in-world truth
+// (vdata.z phase is dead; phase is per-instance). Fixed per-instance block:
+// e=1, s=0.45, g/gL canned, one hashed instPhase; per-vertex prof/flex exactly as
+// the shader writes it. Reproduces the stuck-head/stretch on the current meshes and
+// (row 2 / --ab) previews the crown with shrub params (h0 0.9 / freq 1.8, issue 1b).
+const WIND_DIR = { x: 0.78, y: 0.63 }; // ≈ windU.dir (already ~unit)
+// windU.strength default is 0.45; the preview exaggerates it (diagnostic gain) so a
+// flex discontinuity — the head sitting a few cm off its culm tip in EVERY frame,
+// growing with s² via the lean term — is unmistakable at plant scale. The FORMULA is
+// verbatim; only the input strength is scaled, exactly as ?wind=N does in-world.
+const WIND_S = 0.45 * 1.6; // diagnostic strength
+const WIND_G = 0.7; // canned gust g∈[0,1]
+const WIND_GL = 0.55; // canned lagged gust
+const WIND_INST_PHASE = 0.37; // one representative hashed per-instance phase
+const WIND_FRAMES = 5; // time samples across ~one natural period
+
+interface WindMesh {
+  geo: BufferGeometry;
+  orig: Float32Array; // original positions (xyz stride 3)
+  flex: Float32Array; // per-vertex flex (vdata.y)
+}
+let windMeshes: WindMesh[] = [];
+let windRows: { label: string; h0: number; freq: number }[] = [];
+
+/** per-instance scalars for one (h0, freq) channel config (S=1, e=1, near). */
+function windInst(freq: number): { leanBase: number; swayABase: number; branchBase: number; natW: number; ph: number } {
+  const eks = 1;
+  const leanBase = WIND_S * WIND_S * (0.9 * WIND_G + 0.5) * eks * 1.1;
+  const swayABase = WIND_S * (0.75 * WIND_G + 0.25) * eks * 0.5;
+  const branchBase = (WIND_GL - 0.45) * 1 * eks * 0.55;
+  const fJit = (WIND_INST_PHASE * 7.31) % 1;
+  const natW = (0.15 + 0.3 * fJit) * (Math.PI * 2) * freq; // /sqrt(max(S,.25)) = /1 (S=1)
+  const ph = WIND_INST_PHASE * Math.PI * 2;
+  return { leanBase, swayABase, branchBase, natW, ph };
+}
+
+/** displace every wind mesh into (row, frame) and render from the fixed side view. */
+async function renderWind(row: number, frame: number): Promise<void> {
+  const cfg = windRows[row] as { label: string; h0: number; freq: number };
+  const inst = windInst(cfg.freq);
+  const period = (Math.PI * 2) / Math.max(inst.natW, 1e-4);
+  const t = (frame / (WIND_FRAMES - 1)) * period;
+  const swayPhase = Math.sin(t * inst.natW + inst.ph);
+  const swayXPhase = Math.sin(t * inst.natW * 1.31 + inst.ph * 1.7);
+  for (const wm of windMeshes) {
+    const pos = wm.geo.getAttribute('position');
+    const arr = pos.array as Float32Array;
+    for (let i = 0; i < wm.flex.length; i++) {
+      const px = wm.orig[i * 3] as number;
+      const py = wm.orig[i * 3 + 1] as number;
+      const pz = wm.orig[i * 3 + 2] as number;
+      const flex = wm.flex[i] as number;
+      const localY = py; // S=1, base at y≈0
+      const yn = localY / (localY + cfg.h0);
+      const prof = Math.min(yn * yn * 1.7 + flex * 0.3, 1.6);
+      const swayA = inst.swayABase * prof;
+      const sway = swayPhase * swayA;
+      const swayX = swayXPhase * swayA * 0.45;
+      const along = inst.leanBase * prof + sway + inst.branchBase * flex;
+      const dy = -0.2 * flex * (Math.abs(along) + Math.abs(swayX));
+      arr[i * 3] = px + WIND_DIR.x * along - WIND_DIR.y * swayX;
+      arr[i * 3 + 1] = py + dy;
+      arr[i * 3 + 2] = pz + WIND_DIR.y * along + WIND_DIR.x * swayX;
+    }
+    pos.needsUpdate = true;
+  }
+  await renderer.renderAsync(scene, camera);
+  await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+}
+
+/** Capture the meshes' rest positions + flex, freeze a stable side camera, and
+ *  publish window.__preview.wind. `ab` adds a second row with the shrub params. */
+function setupWind(obj: Object3D, size: Vector3, ab: boolean): void {
+  windMeshes = [];
+  obj.traverse((o) => {
+    const mesh = o as Mesh;
+    if (!mesh.isMesh || !mesh.geometry) return;
+    const geo = mesh.geometry;
+    const pos = geo.getAttribute('position');
+    if (!pos) return;
+    const orig = (pos.array as Float32Array).slice();
+    const vd = geo.getAttribute('vdata');
+    const flex = new Float32Array(pos.count);
+    if (vd) for (let i = 0; i < pos.count; i++) flex[i] = vd.getY(i);
+    windMeshes.push({ geo, orig, flex });
+  });
+  windRows = [{ label: 'leaf h0=6 f=1 (in-world default)', h0: 6, freq: 1 }];
+  if (ab) windRows.push({ label: 'shrub h0=0.9 f=1.8 (1b flag)', h0: 0.9, freq: 1.8 });
+
+  // freeze a stable THREE-QUARTER camera framed on the rest object (no per-frame
+  // refit, so a lagging/shearing head is visible as motion against a fixed frame;
+  // the wind-dir ≈ (0.78,0.63) motion reads laterally from this angle).
+  const { dir, up } = viewDir('threeq');
+  const radius = 0.5 * Math.max(size.x, size.y, size.z, 0.05);
+  // widen so the exaggerated peak sway stays in frame
+  const dist = fitDistance(radius) * 1.6;
+  target = new Vector3(0, size.y / 2, 0);
+  camera.up.copy(up);
+  camera.position.copy(target).addScaledVector(dir, dist);
+  camera.lookAt(target);
+  camera.near = Math.max(dist - radius * 3, 0.001);
+  camera.far = dist + radius * 3 + 10;
+  camera.updateProjectionMatrix();
+
+  window.__preview.wind = { rows: windRows, frames: WIND_FRAMES, render: renderWind };
+}
+
 async function main(): Promise<void> {
   window.__preview = {
     ready: false,
@@ -155,6 +271,7 @@ async function main(): Promise<void> {
     tris: 0,
     views: VIEWS,
     render: renderView,
+    wind: null,
   };
 
   try {
@@ -244,6 +361,13 @@ async function main(): Promise<void> {
     camera = new PerspectiveCamera(35, 1, 0.01, 100);
 
     await renderView('front');
+
+    // wind verification mode (?wind=1): capture rest state + a stable side camera
+    // and publish the filmstrip render hook (Node harness drives the cells).
+    if (qp('wind', '') !== '') {
+      setupWind(obj, size, qp('windab', '') !== '');
+    }
+
     window.__preview.ready = true;
   } catch (err) {
     window.__preview.error = err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err);

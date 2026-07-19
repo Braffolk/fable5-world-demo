@@ -112,6 +112,8 @@ async function main(): Promise<void> {
   const px = str(args['px']) ?? '1024';
   const scaleHint = str(args['scale-hint']);
   const port = Number(str(args['port']) ?? 5211);
+  const windMode = args['wind'] === true || str(args['wind']) === '1';
+  const windAB = args['ab'] === true || str(args['ab']) === '1';
   const mod = servedModulePath(moduleInput);
 
   mkdirSync(outDir, { recursive: true });
@@ -152,6 +154,8 @@ async function main(): Promise<void> {
     page.on('pageerror', (e) => console.log(`[pageerror] ${e.message}`));
 
     const q = new URLSearchParams({ mod, exp: exportName, seed, stream, px });
+    if (windMode) q.set('wind', '1');
+    if (windAB) q.set('windab', '1');
     const url = `${base}/tools/preview/preview.html?${q.toString()}`;
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
 
@@ -171,6 +175,40 @@ async function main(): Promise<void> {
     const d = info.dims;
 
     const canvas = page.locator('canvas');
+
+    // ── wind filmstrip mode: render each (row × frame) cell of the CPU-transcribed
+    //    engine sway, then composite a grid so a stuck/stretch tear is visible ────
+    if (windMode) {
+      const wind = await page.evaluate(() => {
+        const w = window.__preview.wind;
+        return w ? { rows: w.rows.map((r) => r.label), frames: w.frames } : null;
+      });
+      if (!wind) throw new Error('wind mode requested but window.__preview.wind is null');
+      const cs = Number(px);
+      const cw = Math.min(Math.round(cs / wind.frames), Math.round(cs / Math.max(wind.rows.length, 1)));
+      const composites: sharp.OverlayOptions[] = [];
+      for (let r = 0; r < wind.rows.length; r++) {
+        for (let f = 0; f < wind.frames; f++) {
+          await page.evaluate(([rr, ff]) => window.__preview.wind!.render(rr as number, ff as number), [r, f]);
+          const outPath = resolve(outDir, `wind_r${r}_f${f}.png`);
+          await canvas.screenshot({ path: outPath });
+          const tile = await sharp(outPath).resize(cw, cw).toBuffer();
+          composites.push({ input: tile, left: f * cw, top: r * cw });
+        }
+      }
+      const sheetPath = resolve(outDir, 'wind.png');
+      await sharp({ create: { width: cw * wind.frames, height: cw * wind.rows.length, channels: 3, background: { r: 140, g: 140, b: 140 } } })
+        .composite(composites)
+        .png()
+        .toFile(sheetPath);
+      console.log('');
+      console.log('[veg-preview] WIND DONE');
+      if (d) console.log(`  bbox (m):  x=${d.x.toFixed(3)}  y=${d.y.toFixed(3)}  z=${d.z.toFixed(3)}`);
+      console.log(`  rows:      ${wind.rows.join('  |  ')}`);
+      console.log(`  frames/row: ${wind.frames}`);
+      console.log(`  filmstrip: ${sheetPath}`);
+      return;
+    }
     const written: string[] = [];
     for (const view of info.views) {
       await page.evaluate((v) => window.__preview.render(v), view);
