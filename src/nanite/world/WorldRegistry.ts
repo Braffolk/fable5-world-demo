@@ -123,6 +123,10 @@ const SHRUB_CLASSES: ReadonlySet<number> = new Set([
   VegClass.BushHazel,
   VegClass.BushPink,
   VegClass.Juniper,
+  // Estonia raised-bog dwarf shrubs (bark head + leaf crown, same path as BushPink)
+  VegClass.Heather,
+  VegClass.LabradorTea,
+  VegClass.BogRosemary,
 ]);
 const DEADWOOD_CLASSES: ReadonlySet<number> = new Set([
   VegClass.Log,
@@ -144,6 +148,10 @@ const FOLIAGE_CLASSES: ReadonlySet<number> = new Set([
   VegClass.FlowerUmbel,
   VegClass.FlowerBell,
   VegClass.FlowerDaisy,
+  // Estonia raised-bog leaf-only plants (cotton-grass tussock + creeping berry mats)
+  VegClass.CottonGrass,
+  VegClass.Cranberry,
+  VegClass.Cloudberry,
 ]);
 
 export interface WorldRegistryResult {

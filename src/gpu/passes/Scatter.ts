@@ -86,6 +86,17 @@ export const enum VegClass {
   StoneM = 28, // 0.2–0.6 m → 280 m
   StoneS = 29, // 6–20 cm → 90 m
   Branch = 30, // fallen branches on forest floors → 230 m
+  // 31 is reserved by ETAK_ERRATIC_CLASS (RockGen.ts hero erratic head).
+  // Estonia raised-bog understory (QA-approved bog meshes, ScatterMap-only; the
+  // generated world never emits these, so its byte output is unchanged). Begins at
+  // 32, cleanly above the 0–31 block. Bog TREES are NOT here — the tree block 0–15
+  // is full and its class == TREE_SPECIES index, so they need a separate design pass.
+  CottonGrass = 32, // Eriophorum vaginatum — white hare's-tail sedge (FOLIAGE)
+  Heather = 33, // Calluna vulgaris — purple dwarf shrub (SHRUB)
+  LabradorTea = 34, // Rhododendron tomentosum — white-corymb dwarf shrub (SHRUB)
+  BogRosemary = 35, // Andromeda polifolia — pink urn-bell dwarf shrub (SHRUB)
+  Cranberry = 36, // Vaccinium oxycoccos — creeping red-berry mat (FOLIAGE)
+  Cloudberry = 37, // Rubus chamaemorus — amber-berry palmate herb (FOLIAGE)
 }
 
 /** structural variants baked per tree species (geometry reuse, D5) */

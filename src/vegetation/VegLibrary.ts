@@ -37,6 +37,16 @@ import {
   UNDERSTORY_SPECIES,
   type FlowerKind,
 } from "./Understory";
+// Estonia raised-bog understory (8 QA-approved bog meshes; ScatterMap-only, dormant
+// in the generated world). Bog TREES (BogTrees.ts) are intentionally NOT imported —
+// their VegClass can't be allocated without a design pass (tree block 0–15 is full).
+import { buildCottonGrass, COTTONGRASS_COTTON_TINT, COTTONGRASS_CLS_MAXDIST } from "./bog/CottonGrass";
+import { buildHeather, HEATHER_FOLIAGE, HEATHER_CLS_MAX_DIST } from "./bog/Heather";
+import { buildLabradorTea, LABTEA_FOLIAGE, LABTEA_CLS_MAX_DIST } from "./bog/LabradorTea";
+import { buildBogRosemary, BOGROSEMARY_FOLIAGE, BOGROSEMARY_CLS_MAX_DIST } from "./bog/BogRosemary";
+import { buildCranberry, CRANBERRY_FOLIAGE, CRANBERRY_CLS_MAX_DIST } from "./bog/Cranberry";
+import { buildCloudberry, CLOUDBERRY_FOLIAGE, CLOUDBERRY_CLS_MAX_DIST } from "./bog/Cloudberry";
+import { mergeGeo } from "./bog/EricaceousKit";
 import type { GrowthInstance, SpeciesParams } from "./VegTypes";
 
 export interface PoolPart {
@@ -347,10 +357,11 @@ export async function buildVegLibrary(
   const barkTex = await bakeBarkArray();
 
   const pools: VegPool[] = [];
-  // sized to the VegClass reserved-block max (ETAK_ERRATIC_CLASS = 31) + 1.
-  const clsHeight = new Array<number>(32).fill(1);
-  const clsRadius = new Array<number>(32).fill(1);
-  const clsMaxDist = new Array<number>(32).fill(150);
+  // sized to the highest VegClass + 1: ETAK_ERRATIC_CLASS = 31 plus the bog
+  // understory block (CottonGrass..Cloudberry = 32..37), so 38.
+  const clsHeight = new Array<number>(38).fill(1);
+  const clsRadius = new Array<number>(38).fill(1);
+  const clsMaxDist = new Array<number>(38).fill(150);
   const trackCls = (cls: number, h: number, r: number): void => {
     clsHeight[cls] = Math.max(clsHeight[cls] ?? 1, h);
     clsRadius[cls] = Math.max(clsRadius[cls] ?? 1, r);
@@ -558,6 +569,91 @@ export async function buildVegLibrary(
       });
     }
     clsMaxDist[cls] = 90;
+  }
+
+  // ---- Estonia raised-bog understory (ScatterMap-only; the generated world never
+  //      emits classes 32–37, so its byte output is unchanged). Two shapes:
+  //      dwarf SHRUBS (bark head + leaf crown, the BushPink path) and leaf-only
+  //      FOLIAGE (the fern/flower path). The bog crowns merge flowers/berries with
+  //      vdata.x, but the nanite leaf resolve is single-tint (no vdata.x blossom
+  //      select — that's the shared #113 follow-up), so each pool takes ONE tint:
+  //      the shrubs/berry-plants their FOLIAGE tint; cotton-grass its near-white
+  //      COTTON tint (the white hare's-tail head is the plant's read). ----
+  progress(0.82, "veg: bog understory pools");
+  const bogShrubs = [
+    { cls: VegClass.Heather, build: buildHeather, tint: HEATHER_FOLIAGE, maxDist: HEATHER_CLS_MAX_DIST },
+    { cls: VegClass.LabradorTea, build: buildLabradorTea, tint: LABTEA_FOLIAGE, maxDist: LABTEA_CLS_MAX_DIST },
+    { cls: VegClass.BogRosemary, build: buildBogRosemary, tint: BOGROSEMARY_FOLIAGE, maxDist: BOGROSEMARY_CLS_MAX_DIST },
+  ];
+  for (const { cls, build, tint, maxDist } of bogShrubs) {
+    for (let v = 0; v < 4; v++) {
+      await yieldIfDue();
+      const shrub = build(seed.rng(`veg/bog/shrub/${cls}/${v}`));
+      const b = bounds([shrub.bark, shrub.crown]);
+      trackCls(cls, b.height, b.radius);
+      pools.push({
+        cls,
+        variant: v,
+        barkLayer: 2, // shrub opaque part uses bark field layer 2 (as BushPink)
+        r1: [{ geo: shrub.bark, tris: shrub.barkTris, castShadow: true }],
+        r2: null,
+        trisR1: shrub.barkTris,
+        trisR2: 0,
+        height: b.height,
+        radius: b.radius,
+        leaf: { geo: shrub.crown, tris: shrub.crownTris, color: tint },
+      });
+    }
+    clsMaxDist[cls] = maxDist;
+  }
+  // cotton-grass: leaf-only, merge the green blade tussock + the white cotton heads
+  // into ONE leaf geometry and tint near-white (single-tint pool → the hero cotton
+  // reads; the blades pale under it — a judgment call for the visual gate).
+  for (let v = 0; v < 4; v++) {
+    await yieldIfDue();
+    const cg = buildCottonGrass(seed.rng(`veg/bog/cottongrass/${v}`));
+    const geo = mergeGeo([cg.blades, cg.cotton]);
+    const tris = geo.index ? geo.index.count / 3 : 0;
+    const b = bounds([geo]);
+    trackCls(VegClass.CottonGrass, b.height, b.radius);
+    pools.push({
+      cls: VegClass.CottonGrass,
+      variant: v,
+      r1: null,
+      r2: null,
+      trisR1: 0,
+      trisR2: 0,
+      height: b.height,
+      radius: b.radius,
+      leaf: { geo, tris, color: COTTONGRASS_COTTON_TINT },
+    });
+  }
+  clsMaxDist[VegClass.CottonGrass] = COTTONGRASS_CLS_MAXDIST;
+  // cranberry / cloudberry: leaf-only, one merged geo (berries masked by vdata.x =
+  // muted foliage under the single-tint resolve, #113 follow-up). FOLIAGE tint.
+  const bogFoliage = [
+    { cls: VegClass.Cranberry, build: buildCranberry, tint: CRANBERRY_FOLIAGE, maxDist: CRANBERRY_CLS_MAX_DIST },
+    { cls: VegClass.Cloudberry, build: buildCloudberry, tint: CLOUDBERRY_FOLIAGE, maxDist: CLOUDBERRY_CLS_MAX_DIST },
+  ];
+  for (const { cls, build, tint, maxDist } of bogFoliage) {
+    for (let v = 0; v < 4; v++) {
+      await yieldIfDue();
+      const { geo, tris } = build(seed.rng(`veg/bog/foliage/${cls}/${v}`));
+      const b = bounds([geo]);
+      trackCls(cls, b.height, b.radius);
+      pools.push({
+        cls,
+        variant: v,
+        r1: null,
+        r2: null,
+        trisR1: 0,
+        trisR2: 0,
+        height: b.height,
+        radius: b.radius,
+        leaf: { geo, tris, color: tint },
+      });
+    }
+    clsMaxDist[cls] = maxDist;
   }
 
   // ---- extras: deadfall -------------------------------------------------------

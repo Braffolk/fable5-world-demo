@@ -37,7 +37,18 @@ const UNDER_KEYWORDS: readonly (readonly [RegExp, VegClass])[] = [
   [/hepatica|anemone|may_lily|lily_of|harebell|bellflower|campanula|wintergreen/, VegClass.FlowerBell],
   [/daisy|buttercup|knapweed|sorrel|oxalis|marigold|clover|dandelion|globeflower|hawkweed/, VegClass.FlowerDaisy],
   [/juniper/, VegClass.Juniper],
-  [/heather|cowberry|lingonberry|labrador|cranberry|cloudberry|crowberry|bilberry|blueberry|whortle/, VegClass.BushPink],
+  // Estonia raised-bog palette (understory-communities.toml community 5 + heath/fen):
+  // these have their own QA-approved bog meshes, so they route to dedicated pools —
+  // ABOVE the generic BushPink line so they win the first-match. bog_rosemary has no
+  // cooked token yet (dormant until the cook adds it), wired here so it's ready.
+  [/cottongrass|cotton_grass|eriophorum/, VegClass.CottonGrass],
+  [/heather|calluna/, VegClass.Heather],
+  [/labrador_tea|labrador|ledum/, VegClass.LabradorTea],
+  [/bog_rosemary|andromeda/, VegClass.BogRosemary],
+  [/cranberry/, VegClass.Cranberry], // matches bog_cranberry
+  [/cloudberry/, VegClass.Cloudberry],
+  // remaining ericaceous berries with no dedicated mesh keep the generic dwarf-shrub pool
+  [/cowberry|lingonberry|crowberry|bilberry|blueberry|whortle/, VegClass.BushPink],
   [/raspberry|hazel|willow|bramble|buckthorn|dogwood|spiraea|scrub|shrub|bush/, VegClass.BushHazel],
 ];
 
@@ -62,6 +73,12 @@ const CLASS_NAME: Record<number, string> = {
   [VegClass.FlowerUmbel]: 'FlowerUmbel',
   [VegClass.FlowerBell]: 'FlowerBell',
   [VegClass.FlowerDaisy]: 'FlowerDaisy',
+  [VegClass.CottonGrass]: 'CottonGrass',
+  [VegClass.Heather]: 'Heather',
+  [VegClass.LabradorTea]: 'LabradorTea',
+  [VegClass.BogRosemary]: 'BogRosemary',
+  [VegClass.Cranberry]: 'Cranberry',
+  [VegClass.Cloudberry]: 'Cloudberry',
   [VegClass.Log]: 'Log',
   [VegClass.Stump]: 'Stump',
   [VegClass.Branch]: 'Branch',

@@ -42,6 +42,9 @@ const CODE_TO_CLASS: Record<string, VegClass> = {
   MA: VegClass.Pine, // mänd — Scots pine (the pilot's dominant)
   KU: VegClass.Spruce, // kuusk — Norway spruce
   KS: VegClass.Birch, // kask — birch
+  SK: VegClass.Birch, // sookask — downy/bog birch (was falling through to Beech via
+  // the broadleaf leaf-class default). Downy birch IS a birch → the Birch pool. A
+  // dedicated stunted BogBirch pool is deferred with the bog-tree task (block full).
   HB: VegClass.Aspen, // haab — European aspen (own upright-oval form; was folding to Birch/weeping)
   PP: VegClass.Aspen, // hybrid poplar — same genus (Populus), reads as aspen (was Beech-fallback)
   LV: VegClass.GreyAlder, // hall lepp — grey alder (own short open ovoid; was Beech-fallback, 9.8%)
