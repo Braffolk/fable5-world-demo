@@ -52,6 +52,42 @@ TLDR of today's bog work. Done section is terse; "not done yet" has the detail.
 - Tree-gen rework — `docs/tasks/2026-07-20/TREE-GEN-REWORK.md` (natural placement + age variation);
   after the bog arc, before other-regime microtopography.
 
+## Open questions for the user (do NOT act without their call)
+- **"Labrador tea" naming vs native status:** user flagged it as non-native/weird for Estonia and wants
+  it removed from usage — but the modeled species is **Rhododendron tomentosum / Ledum palustre**
+  (Estonian *sookail*), which IS native to Estonian raised bogs (a defining raba dwarf shrub). The
+  misleading part is the common name ("Labrador tea" = the North American *R. groenlandicum*). Likely a
+  RENAME (marsh Labrador tea / wild rosemary / sookail), not a removal. Confirm before removing a
+  genuinely-native plant. Kept in the current wind/scale/grounding fixes meanwhile. (task tracker #32.)
+
+## In-world bug batch (2026-07-19/20, user AFK — autonomous, all FABLE; opus NOT trusted here)
+Reported after walking the populated bog preview. Fable diagnosis (IN-WORLD-DIAGNOSIS.md) root-caused all
+six with cited code + the exact engine sway function; fixes dispatched file-disjoint. RESULTS:
+- **Scale + grounding (2,3) DONE — commit `e6263b2`.** Per-class sizeFor curves (real-size) + sink
+  0.005-0.01 (was a flat 3cm burying a 5cm cranberry). Zero perf, same instance count.
+- **Wind (1a flex + 1b shrub-param flag) + sookail leaves DONE — commit `5720ff8`** (+ wind-preview
+  tooling `e00087b`). Root: flex authored 0..1 per sub-object but engine sway uses flex as ~the whole
+  amplitude for <0.5m plants → connected parts tore (cotton head detached/stretched). Re-authored flex
+  as a plant-global monotone field anchored at each part's attach point; rigid sub-objects one constant
+  flex. 1b: leaf channel hardcoded TREE wind params → shrub stems 1.8x faster than their leaves; added a
+  free MESH_FLAG_SHRUB_WIND, trees byte-identical. Sookail leaves narrowed (were too wide = American look).
+  Verified via a new `veg-preview --wind` animated filmstrip (before: heads fly off; after: coherent) +
+  in-world burst. Cosmetics 6.1/6.2 folded in.
+- **LOD ladder (4=5) DONE — commit `f692573`.** The "3D shadow-ray" speckle = mm-scale geometry rendered
+  single-LOD → sub-pixel stochastic pixels. New BogLod.ts gives the 6 leaf pools a 4-rung prune-and-preserve
+  ladder (λ 1.0/0.55/0.32/0.18, survivors widen ×1/λ) wired as pool.leaf.buildLadder like trees; LOD0
+  byte-identical, net perf win. (Definitive moving-view speckle confirmation = a user visual gate.)
+  NOTE: the LOD agent stalled in a boot-retry loop; orchestrator stopped it, verified the code (sound
+  prune-and-preserve, tsc clean, LOD0 unchanged, 90fps), and committed.
+ALL FIVE in-world fixes committed. Bog plants are colored, real-sized, grounded, wind-coherent, LOD'd.
+Deferred (scope/perf, surfaced to user): clump/patch density (the "reads like a carpet" lever — costs
+instances; ties to UNDER_STEP 2.4m ceiling), the fake deadwood LOGS on open bog (→ TREE-GEN-REWORK #3).
+
+## NEXT (autonomous): moss / CARPET (#21/#26)
+After LOD commits: sphagnum cushion mesh(es) (Fable) → CARPET seam + 6 cleanups (per GROUNDCOVER-LAYER-
+ARCH.md) → fly-over gate. User note: moss + plants must COEXIST (plants grow IN the sphagnum), not
+compete for scatter slots.
+
 ## Working notes
 - Live env: data server `:8790` (bog preview manifest), vite `:5199`. Bog preview manifest sha
   `f38a967ac83e1e4f` (build d07a78c5…). Ground URL base in `scratchpad/bog-veg/` specs.
