@@ -21,6 +21,7 @@ import type { BufferGeometry, Object3D } from 'three';
 import type { Rng } from '../../core/Seed';
 import { MeshGrower } from '../TubeMesh';
 import { growStem, walkStem, scaleLeaf, urnBell, mergeGeo, perpFrame, stemFlexAt, type StemSample } from './EricaceousKit';
+import { BOG_LOD_NATIVE, type BogLodCtx } from './BogLod';
 
 // ---- recommended integration params ----------------------------------------
 export const HEATHER_HEIGHT: [number, number] = [0.22, 0.36];
@@ -37,8 +38,10 @@ interface Parts {
 
 /** decorate one wiry stem with dense whorled scale-leaves + (upper) florets.
  *  Heather foliage must MASS to hide the stems — 4 appressed scale-leaves per
- *  node in a decussate cross, at a short (~5 mm) internode. */
-function dressStem(parts: Parts, samples: StemSample[], rng: Rng, floreting: boolean): void {
+ *  node in a decussate cross, at a short (~5 mm) internode. LOD (`lod`): whole
+ *  scale-leaves / florets prune to λ with survivors widened ×1/λ — routing +
+ *  width only, the rng draw order is identical at every rung. */
+function dressStem(parts: Parts, samples: StemSample[], rng: Rng, floreting: boolean, lod: BogLodCtx): void {
   const u = new Vector3();
   const v = new Vector3();
   const leafPhase = rng.float() * Math.PI * 2;
@@ -53,12 +56,12 @@ function dressStem(parts: Parts, samples: StemSample[], rng: Rng, floreting: boo
       const side = new Vector3().crossVectors(axis, outN).normalize();
       const hue = (rng.float() - 0.5) * 0.6;
       const len = 0.006 + rng.float() * 0.003;
-      scaleLeaf(parts.leaf, p, axis, side, outN, len, len * 0.34, hue, attachFlex, 0.5 + 0.45 * t);
+      scaleLeaf(lod.target(parts.leaf, p, k * 4 + q), p, axis, side, outN, len, len * 0.34 * lod.widthMul, hue, attachFlex, 0.5 + 0.45 * t);
     }
   });
   if (!floreting) return;
   // terminal raceme: many tiny magenta florets down the upper stem, pendent
-  walkStem(samples, 0.0085, 0.55, (p, dir, t) => {
+  walkStem(samples, 0.0085, 0.55, (p, dir, t, k) => {
     perpFrame(dir, u, v);
     const a = rng.float() * Math.PI * 2;
     // floret hangs slightly out + down from the stem
@@ -69,11 +72,11 @@ function dressStem(parts: Parts, samples: StemSample[], rng: Rng, floreting: boo
       .normalize();
     const size = 0.0042 + rng.float() * 0.0024;
     void rng.float();
-    urnBell(parts.flower, p, hang, size, 5, leafPhase, stemFlexAt(t));
+    urnBell(lod.target(parts.flower, p, k), p, hang, size, 5, leafPhase, stemFlexAt(t), lod.widthMul);
   });
 }
 
-export function buildHeatherParts(rng: Rng): Parts {
+export function buildHeatherParts(rng: Rng, lod: BogLodCtx = BOG_LOD_NATIVE): Parts {
   const bark = new MeshGrower();
   const leaf = new MeshGrower();
   const flower = new MeshGrower();
@@ -105,7 +108,7 @@ export function buildHeatherParts(rng: Rng): Parts {
       },
       rng.fork(`stem${i}`),
     );
-    dressStem(parts, samples, rng.fork(`dress${i}`), true);
+    dressStem(parts, samples, rng.fork(`dress${i}`), true, lod);
     // short secondary twigs off the mid/upper stem for mounded density
     const twigs = 1 + rng.int(2);
     for (let s = 0; s < twigs; s++) {
@@ -130,15 +133,17 @@ export function buildHeatherParts(rng: Rng): Parts {
         },
         rng.fork(`twig${i}_${s}`),
       );
-      dressStem(parts, tw, rng.fork(`tdress${i}_${s}`), rng.chance(0.7));
+      dressStem(parts, tw, rng.fork(`tdress${i}_${s}`), rng.chance(0.7), lod);
     }
   }
   return parts;
 }
 
-/** Integration builder: { bark, crown } with tri counts (mirrors buildShrub). */
-export function buildHeather(rng: Rng): { bark: BufferGeometry; crown: BufferGeometry; barkTris: number; crownTris: number } {
-  const parts = buildHeatherParts(rng);
+/** Integration builder: { bark, crown } with tri counts (mirrors buildShrub).
+ *  `lod` (default native = LOD0) regenerates a coarser crown-LOD rung from the
+ *  same seed — see BogLod.ts. Bark is unaffected (it rides the QEM DAG). */
+export function buildHeather(rng: Rng, lod: BogLodCtx = BOG_LOD_NATIVE): { bark: BufferGeometry; crown: BufferGeometry; barkTris: number; crownTris: number } {
+  const parts = buildHeatherParts(rng, lod);
   const bark = parts.bark.build();
   const leafGeo = parts.leaf.build();
   const flowerGeo = parts.flower.build();

@@ -20,6 +20,7 @@ import type { BufferGeometry, Object3D } from 'three';
 import type { Rng } from '../../core/Seed';
 import { MeshGrower } from '../TubeMesh';
 import { growStem, walkStem, leafBlade, starFloret, mergeGeo, perpFrame, stemFlexAt, STEM_FLEX_TIP, type StemSample } from './EricaceousKit';
+import { BOG_LOD_NATIVE, type BogLodCtx } from './BogLod';
 
 // ---- recommended integration params ----------------------------------------
 export const LABTEA_HEIGHT: [number, number] = [0.3, 0.55];
@@ -37,10 +38,17 @@ interface Parts {
   flower: MeshGrower;
 }
 
-/** clothe a stem with elliptic leathery leaves, densest toward the tip. */
-function dressStem(parts: Parts, samples: StemSample[], rng: Rng): void {
+/** leaf-blade curve segments per LOD detail tier (emission-only — no rng). */
+const LEAF_SEGS = [3, 2, 2] as const;
+
+/** clothe a stem with elliptic leathery leaves, densest toward the tip. LOD:
+ *  whole leaves prune to λ (survivor widths ×1/λ), blade segs coarsen by tier —
+ *  routing/width/segs only, so the rng draw order is identical at every rung. */
+function dressStem(parts: Parts, samples: StemSample[], rng: Rng, lod: BogLodCtx): void {
   const u = new Vector3();
   const v = new Vector3();
+  const W = lod.widthMul;
+  const segs = LEAF_SEGS[lod.detail] as number;
   let node = 0;
   // spiral leaves; density ramps up over the upper stem (leaves cluster at tips)
   walkStem(samples, 0.01, 0.18, (p, dir, t) => {
@@ -48,6 +56,7 @@ function dressStem(parts: Parts, samples: StemSample[], rng: Rng): void {
     // thin out lower leaves, crowd the top
     if (t < 0.5 && rng.float() > 0.55) { node++; return; }
     const golden = node * 2.399963; // spiral phyllotaxis
+    const salt = node;
     node++;
     for (const jitter of [0]) {
       const a = golden + jitter;
@@ -61,7 +70,7 @@ function dressStem(parts: Parts, samples: StemSample[], rng: Rng): void {
       // leaves with a STRONG revolute (rolled-under) margin — NOT the broad American
       // R. groenlandicum. Width ≈ 0.18·len at the widest (was 0.3), keel + revolute
       // 0.65 roll the margins hard under, so the leaf reads narrow from every angle.
-      leafBlade(parts.leaf, p, axis, side, len, len * 0.09, len * 0.18, len * 0.05, 0.32, 0.65, hue, stemFlexAt(t), 0.5 + 0.4 * t, Math.min(1, 0.8 + 0.4 * t), 3);
+      leafBlade(lod.target(parts.leaf, p, salt), p, axis, side, len, len * 0.09 * W, len * 0.18 * W, len * 0.05 * W, 0.32, 0.65, hue, stemFlexAt(t), 0.5 + 0.4 * t, Math.min(1, 0.8 + 0.4 * t), segs);
     }
   });
 }
@@ -70,7 +79,7 @@ function dressStem(parts: Parts, samples: StemSample[], rng: Rng): void {
  *  Florets sit on a slightly-flattened ball (spherical cap wrapping past the
  *  equator) and face radially outward, so the cluster reads as a soft fluffy
  *  dome from every angle rather than a sparse flat disc. */
-function corymb(parts: Parts, tip: Vector3, up: Vector3, rng: Rng, swayPhase: number, attachFlex: number): void {
+function corymb(parts: Parts, tip: Vector3, up: Vector3, rng: Rng, swayPhase: number, attachFlex: number, lod: BogLodCtx): void {
   const u = new Vector3();
   const v = new Vector3();
   perpFrame(up, u, v);
@@ -96,11 +105,12 @@ function corymb(parts: Parts, tip: Vector3, up: Vector3, rng: Rng, swayPhase: nu
       .addScaledVector(up, radial.dot(up) * R * 0.8);
     // florets face outward from the ball centre, biased a touch upward
     const faceN = new Vector3().copy(radial).addScaledVector(up, 0.25).normalize();
-    starFloret(parts.flower, c, faceN, 0.0062 + rng.float() * 0.003, swayPhase, attachFlex);
+    // LOD: prune whole florets to λ, survivors' petals widen ×1/λ (dome area kept)
+    starFloret(lod.target(parts.flower, c, i), c, faceN, 0.0062 + rng.float() * 0.003, swayPhase, attachFlex, lod.widthMul);
   }
 }
 
-export function buildLabradorTeaParts(rng: Rng): Parts {
+export function buildLabradorTeaParts(rng: Rng, lod: BogLodCtx = BOG_LOD_NATIVE): Parts {
   const bark = new MeshGrower();
   const leaf = new MeshGrower();
   const flower = new MeshGrower();
@@ -128,9 +138,9 @@ export function buildLabradorTeaParts(rng: Rng): Parts {
       },
       rng.fork(`stem${i}`),
     );
-    dressStem(parts, samples, rng.fork(`dress${i}`));
+    dressStem(parts, samples, rng.fork(`dress${i}`), lod);
     const tip = samples[samples.length - 1] as StemSample;
-    if (rng.chance(0.85)) corymb(parts, tip.p.clone(), tip.dir.clone(), rng.fork(`cor${i}`), rng.float() * Math.PI * 2, STEM_FLEX_TIP);
+    if (rng.chance(0.85)) corymb(parts, tip.p.clone(), tip.dir.clone(), rng.fork(`cor${i}`), rng.float() * Math.PI * 2, STEM_FLEX_TIP, lod);
     // one upper side branch (open, few-branched habit)
     if (rng.chance(0.6)) {
       const si = Math.max(2, samples.length - 3 + rng.int(2));
@@ -153,16 +163,18 @@ export function buildLabradorTeaParts(rng: Rng): Parts {
         },
         rng.fork(`br${i}`),
       );
-      dressStem(parts, br, rng.fork(`bdress${i}`));
+      dressStem(parts, br, rng.fork(`bdress${i}`), lod);
       const bt = br[br.length - 1] as StemSample;
-      if (rng.chance(0.7)) corymb(parts, bt.p.clone(), bt.dir.clone(), rng.fork(`bcor${i}`), rng.float() * Math.PI * 2, STEM_FLEX_TIP);
+      if (rng.chance(0.7)) corymb(parts, bt.p.clone(), bt.dir.clone(), rng.fork(`bcor${i}`), rng.float() * Math.PI * 2, STEM_FLEX_TIP, lod);
     }
   }
   return parts;
 }
 
-export function buildLabradorTea(rng: Rng): { bark: BufferGeometry; crown: BufferGeometry; barkTris: number; crownTris: number } {
-  const parts = buildLabradorTeaParts(rng);
+/** `lod` (default native = LOD0) regenerates a coarser crown-LOD rung from the
+ *  same seed — see BogLod.ts. Bark is unaffected (it rides the QEM DAG). */
+export function buildLabradorTea(rng: Rng, lod: BogLodCtx = BOG_LOD_NATIVE): { bark: BufferGeometry; crown: BufferGeometry; barkTris: number; crownTris: number } {
+  const parts = buildLabradorTeaParts(rng, lod);
   const bark = parts.bark.build();
   const crown = mergeGeo([parts.leaf.build(), parts.flower.build()]);
   return { bark, crown, barkTris: parts.bark.triCount, crownTris: parts.leaf.triCount + parts.flower.triCount };

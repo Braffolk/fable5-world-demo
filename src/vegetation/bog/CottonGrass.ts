@@ -44,6 +44,7 @@ import {
 } from 'three';
 import type { Rng } from '../../core/Seed';
 import { MeshGrower } from '../TubeMesh';
+import { BOG_LOD_NATIVE, type BogLodCtx } from './BogLod';
 
 // ── recommended integration params (the integrator wires enum/VegLibrary/etc.) ──
 
@@ -77,14 +78,21 @@ const _R = new Vector3();
 const _Nl = new Vector3();
 const _Nr = new Vector3();
 
+/** blade / culm curve segments per LOD detail tier (emission-only — no rng). */
+const SEGS_BY_DETAIL = [4, 3, 2] as const;
+
 /** One keeled sedge blade: a curved (quadratic-Bezier) tapered ribbon folded along
  *  a raised midrib so the cross-section is a shallow tent (keel) — reads as a stiff
- *  triangular sedge blade and catches light on two facets. */
+ *  triangular sedge blade and catches light on two facets. LOD: `widthMul` widens
+ *  the survivor blade (Cook §3.3), `segs` coarsens the curve; both emission-only,
+ *  so the rng draw order is identical at every rung. */
 function addBlade(
   g: MeshGrower,
   base: Vector3,
   az: number,
   rng: Rng,
+  widthMul: number,
+  segs: number,
 ): void {
   // erect-to-arching stiff tussock: bias toward upright blades (arch^1.4), and
   // keep tips well off the ground so nothing sprawls flat like a stray wire.
@@ -96,7 +104,7 @@ function addBlade(
   const tipUp = 0.9 - 0.4 * arch; // tips stay high (ascending), never drooping to ground
   const ctrlUp = 0.62 + 0.26 * arch; // arch-over height of the control point
   const ctrlOut = 0.22 + 0.12 * arch;
-  const hw0 = 0.0009 + rng.float() * 0.0008; // base half-width (0.9-1.7 mm blade)
+  const hw0 = (0.0009 + rng.float() * 0.0008) * widthMul; // base half-width (0.9-1.7 mm blade at LOD0)
   const keel = 0.55 + rng.float() * 0.4; // keel height as fraction of half-width
   const phase = rng.float() * Math.PI * 2;
   // Blades carry their warm/cool hue jitter in vdata.x (like ferns/trees). The nanite
@@ -117,7 +125,6 @@ function addBlade(
   const p1y = base.y + ctrlUp * len;
   const p1z = base.z + oz * reach * len * ctrlOut;
 
-  const segs = 4;
   let prev: [number, number, number] | null = null;
   for (let i = 0; i <= segs; i++) {
     const t = i / segs;
@@ -173,12 +180,17 @@ const _perp2 = new Vector3();
 
 /** Thin erect culm: a tapered 2-plane cross (a slim stalk) following a gently
  *  leaning + nodding Bezier from the clump base up to the head. Pale green
- *  (goes in the blade/green geometry). Returns the head anchor point + tip dir. */
+ *  (goes in the blade/green geometry). Returns the head anchor point + tip dir.
+ *  LOD: culms are STRUCTURAL (each carries the hero cotton head) so they are
+ *  never pruned; they widen ×`widthMul` so the ~1 mm stalk stays a coherent
+ *  line at range instead of dissolving into the speckle being fixed. */
 function addCulm(
   g: MeshGrower,
   base: Vector3,
   az: number,
   rng: Rng,
+  widthMul: number,
+  segs: number,
 ): { top: Vector3; dir: Vector3 } {
   const h = 0.4 + rng.float() * 0.08; // 0.40 .. 0.48 m
   const leanR = 0.02 + rng.float() * 0.06; // outward lean of the top
@@ -195,9 +207,8 @@ function addCulm(
   const p1y = base.y + h * 0.55;
   const p1z = base.z + oz * leanR * 0.4;
 
-  const segs = 4;
-  const r0 = 0.0011; // base radius ~1.1 mm
-  const r1 = 0.0006;
+  const r0 = 0.0011 * widthMul; // base radius ~1.1 mm at LOD0
+  const r1 = 0.0006 * widthMul;
   // build both perpendicular planes as tapered strips
   const rings: { ids: number[] }[] = [];
   for (let i = 0; i <= segs; i++) {
@@ -260,6 +271,8 @@ function addFiber(
   tip: Vector3,
   center: Vector3,
   phase: number,
+  widthMul: number,
+  coarse: boolean,
 ): void {
   _bdir.copy(tip).sub(root);
   const len = _bdir.length();
@@ -276,14 +289,20 @@ function addFiber(
   _bq1.normalize();
   _bq2.copy(_bdir).cross(_bq1).normalize();
 
-  const w0 = 0.0007; // root
-  const w1 = 0.00052; // mid
-  const w2 = 0.00006; // feathery point
-  const pts: [Vector3, number, number][] = [
-    [root, w0, 0],
-    [_bp1, w1, 0.5],
-    [tip, w2, 1],
-  ];
+  const w0 = 0.0007 * widthMul; // root (0.7 mm at LOD0)
+  const w1 = 0.00052 * widthMul; // mid
+  const w2 = 0.00006 * widthMul; // feathery point
+  // coarse tier: drop the bow midpoint — one segment per plane (emission-only).
+  const pts: [Vector3, number, number][] = coarse
+    ? [
+        [root, w0, 0],
+        [tip, w2, 1],
+      ]
+    : [
+        [root, w0, 0],
+        [_bp1, w1, 0.5],
+        [tip, w2, 1],
+      ];
   for (const [plane, nrm] of [
     [_bq1, _bq2],
     [_bq2, _bq1],
@@ -315,7 +334,7 @@ function ballPoint(out: Vector3, rng: Rng, shellBias: number): void {
  *  interior roots to tips on a slightly obovoid, gravity-sagged shell, crisscrossing
  *  into an opaque soft ball (hundreds of pappus hairs) — the E. vaginatum single
  *  hare's-tail head, nodding on its culm. */
-function addCottonHead(g: MeshGrower, top: Vector3, rng: Rng): void {
+function addCottonHead(g: MeshGrower, top: Vector3, rng: Rng, lod: BogLodCtx): void {
   const R = 0.011 + rng.float() * 0.004; // head radius ~1.1-1.5 cm (head ~2-3 cm)
   const phase = rng.float() * Math.PI * 2;
   // head centre sits just above the culm tip; obovoid (taller than wide)
@@ -332,7 +351,9 @@ function addCottonHead(g: MeshGrower, top: Vector3, rng: Rng): void {
     // root scattered through the interior (crisscross fill → opaque, un-spiky)
     ballPoint(_off, rng, 0);
     _broot.copy(_C).addScaledVector(_off, R * 0.42);
-    addFiber(g, _broot, _btip, _C, phase);
+    // LOD: prune whole fibres to λ (like conifer intra-spray needles), survivors
+    // width ×1/λ — the puff keeps its covered area with fewer, silkier-wide hairs.
+    addFiber(lod.target(g, _btip, i), _broot, _btip, _C, phase, lod.widthMul, lod.detail === 2);
   }
 }
 
@@ -341,8 +362,12 @@ function addCottonHead(g: MeshGrower, top: Vector3, rng: Rng): void {
 const _cbase = new Vector3();
 
 /** Integration builder. Returns two leaf-class geometries: `blades` (green tussock
- *  + culms) and `cotton` (pure-white seed-heads). Both bind to one instance. */
-export function buildCottonGrass(rng: Rng): {
+ *  + culms) and `cotton` (pure-white seed-heads). Both bind to one instance.
+ *  `lod` (default native = LOD0, byte-identical) regenerates a coarser crown-LOD
+ *  rung: blades/fibres pruned to λ + widened ×1/λ, culms widened, curve segments
+ *  coarsened — same seed, same rng draw order (pruned elements build into the
+ *  ctx's discard sink), so survivors match LOD0 exactly except for width. */
+export function buildCottonGrass(rng: Rng, lod: BogLodCtx = BOG_LOD_NATIVE): {
   blades: BufferGeometry;
   cotton: BufferGeometry;
   bladeTris: number;
@@ -350,6 +375,7 @@ export function buildCottonGrass(rng: Rng): {
 } {
   const greenG = new MeshGrower();
   const whiteG = new MeshGrower();
+  const segs = SEGS_BY_DETAIL[lod.detail] as number;
 
   // dense tussock of fine blades fanning from a tight base
   const blades = 74 + rng.int(26);
@@ -359,7 +385,7 @@ export function buildCottonGrass(rng: Rng): {
     _cbase.set(Math.cos(az) * rBase, 0, Math.sin(az) * rBase);
     // blade splays roughly outward from where it sits in the clump
     const bladeAz = az + (rng.float() - 0.5) * 1.4;
-    addBlade(greenG, _cbase, bladeAz, rng);
+    addBlade(lod.target(greenG, _cbase, i), _cbase, bladeAz, rng, lod.widthMul, segs);
   }
 
   // a few culms, each with ONE white cotton head above the clump
@@ -368,8 +394,8 @@ export function buildCottonGrass(rng: Rng): {
     const az = (i / culms) * Math.PI * 2 + rng.float() * 0.9;
     const rBase = rng.float() * 0.02;
     _cbase.set(Math.cos(az) * rBase, 0, Math.sin(az) * rBase);
-    const { top } = addCulm(greenG, _cbase, az, rng);
-    addCottonHead(whiteG, top, rng);
+    const { top } = addCulm(greenG, _cbase, az, rng, lod.widthMul, segs);
+    addCottonHead(whiteG, top, rng, lod);
   }
 
   return {

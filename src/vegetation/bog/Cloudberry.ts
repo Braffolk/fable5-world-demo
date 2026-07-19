@@ -41,6 +41,7 @@ import type { BufferGeometry, Object3D } from 'three';
 import type { Rng } from '../../core/Seed';
 import { MeshGrower } from '../TubeMesh';
 import { growStem, STEM_FLEX_TIP, type StemSample } from './EricaceousKit';
+import { BOG_LOD_NATIVE, type BogLodCtx } from './BogLod';
 
 // ---- recommended integration params ----------------------------------------
 /** low leaf-dominated plant: leaves held up on short stalks reach ~10–20 cm. */
@@ -71,9 +72,7 @@ interface Parts {
 
 /** small low-res sphere with outward normals welded into `g`. RIGID: one CONSTANT
  *  flex (`attachFlex`) so the drupelet sways as one unit with its stalk. */
-function sphere(g: MeshGrower, center: Vector3, radius: number, vdx: number, swayPhase: number, attachFlex: number, aoScale = 1): void {
-  const stacks = 4;
-  const slices = 6;
+function sphere(g: MeshGrower, center: Vector3, radius: number, vdx: number, swayPhase: number, attachFlex: number, aoScale = 1, stacks = 4, slices = 6): void {
   const rows: number[][] = [];
   for (let i = 0; i <= stacks; i++) {
     const phi = (i / stacks) * Math.PI;
@@ -116,13 +115,26 @@ function sphere(g: MeshGrower, center: Vector3, radius: number, vdx: number, swa
  *   fwd    unit in-plane forward axis (θ=0), horizontal, away from the petiole
  *   R      blade radius (m); blade width ≈ 2R
  */
-function palmateLeaf(g: MeshGrower, base: Vector3, fwd: Vector3, nrm: Vector3, R: number, lobes: number, swayPhase: number, attachFlex: number, rng: Rng): void {
+function palmateLeaf(g: MeshGrower, base: Vector3, fwd: Vector3, nrm: Vector3, R: number, lobes: number, swayPhase: number, attachFlex: number, rng: Rng, tier: LeafTier = 0): void {
   const right = new Vector3().crossVectors(nrm, fwd).normalize();
   const sweep = 2.95; // radians each side of θ=0 → ~338° total → ~22° cordate notch
-  const teethPerLobe = 7; // doubly-serrate marginal teeth per lobe
+  // LOD leaf tier (cloudTier): the parasol leaf is the plant's dominant mass and
+  // there are only 2-3 per shoot, so cloudberry's crown-LOD cut rides THIS
+  // intra-element lever (teeth × rings ≈ 1.0 → 0.5 → 0.29 → 0.17 of the leaf's
+  // tris) instead of whole-element pruning (λ over so few leaves could zero a
+  // plant). The rng stream is per-leaf (fork), so the tier's different draw
+  // count is isolated.
+  const teethPerLobe = ([7, 5, 4, 3] as const)[tier]; // doubly-serrate marginal teeth per lobe
   const Na = lobes * teethPerLobe * 2; // 2 angular samples / tooth → crisp serration
   // denser rings toward the rim so the teeth stay sharp and thin
-  const ringF = [0.0, 0.14, 0.28, 0.42, 0.55, 0.67, 0.78, 0.87, 0.94, 0.98, 1.0];
+  const ringF = (
+    [
+      [0.0, 0.14, 0.28, 0.42, 0.55, 0.67, 0.78, 0.87, 0.94, 0.98, 1.0],
+      [0.0, 0.16, 0.32, 0.48, 0.62, 0.76, 0.88, 1.0],
+      [0.0, 0.24, 0.48, 0.7, 0.88, 1.0],
+      [0.0, 0.35, 0.65, 0.87, 1.0],
+    ] as const
+  )[tier] as readonly number[];
   const m = ringF.length;
   const lobeDepth = 0.26; // broadly-rounded lobes (sinus depth as fraction of R)
   const phi0 = Math.PI; // a SINUS on the midline → lobes flank the forward axis
@@ -263,10 +275,30 @@ function whiteFlower(g: MeshGrower, center: Vector3, up: Vector3, size: number, 
   }
 }
 
+/** cloudberry's 4-step LOD tier: the shared ladder's λ re-expressed as an
+ *  intra-leaf detail ladder. The parasol leaves are never pruned (λ over a
+ *  2-3-leaf shoot could zero a plant), so the leaf's teeth×ring resolution IS
+ *  this species' λ lever — one distinct tier per rung, so no two rungs bake
+ *  identical geometry into the crown DAG. */
+type LeafTier = 0 | 1 | 2 | 3;
+function cloudTier(lod: BogLodCtx): LeafTier {
+  return lod.lambda >= 1 ? 0 : lod.lambda >= 0.5 ? 1 : lod.lambda >= 0.3 ? 2 : 3;
+}
+
+/** drupelet sphere resolution per LOD leaf tier (emission-only — no rng). The
+ *  single amber berry is the species read: never pruned/resized, tris cut here. */
+const DRUP_RES = [
+  [4, 6],
+  [4, 6],
+  [3, 5],
+  [2, 4],
+] as const;
+
 /** amber raspberry-like aggregate berry: a cluster of a few plump drupelets on a dome.
  *  RIGID: `attachFlex` is the constant flex for every drupelet (its stalk-top flex). */
-function aggregateBerry(g: MeshGrower, center: Vector3, R: number, swayPhase: number, attachFlex: number, rng: Rng): void {
+function aggregateBerry(g: MeshGrower, center: Vector3, R: number, swayPhase: number, attachFlex: number, rng: Rng, tier: LeafTier): void {
   const drupR = R * 0.46;
+  const [stacks, slices] = DRUP_RES[tier] as readonly [number, number];
   const n = 7 + rng.int(4); // 7–10 plump drupelets
   for (let i = 0; i < n; i++) {
     const t = (i + 0.5) / n;
@@ -278,14 +310,14 @@ function aggregateBerry(g: MeshGrower, center: Vector3, R: number, swayPhase: nu
       center.y + y * (R - drupR * 0.4),
       center.z + Math.sin(a) * rr * (R - drupR * 0.5),
     );
-    sphere(g, c, drupR * (0.85 + rng.float() * 0.3), 1, swayPhase, attachFlex, 1);
+    sphere(g, c, drupR * (0.85 + rng.float() * 0.3), 1, swayPhase, attachFlex, 1, stacks, slices);
   }
 }
 
 /** one LOW shoot: a very short reddish basal stem, 2–3 round palmate leaves held
  *  UP on ascending reddish petioles, and (optionally) a single amber berry sitting
  *  among / just above the leaf canopy — or, preview-only, a white flower. */
-function buildShoot(parts: Parts, origin: Vector3, rng: Rng, opts: { berry: boolean; flower: boolean }): void {
+function buildShoot(parts: Parts, origin: Vector3, rng: Rng, opts: { berry: boolean; flower: boolean }, lod: BogLodCtx, tier: LeafTier): void {
   const swayPhase = rng.float() * Math.PI * 2;
   // SHORT basal stem (mostly hidden among the leaves) — the plant is leaf-forward,
   // not a tall bare stalk. 2–4.5 cm.
@@ -297,8 +329,8 @@ function buildShoot(parts: Parts, origin: Vector3, rng: Rng, opts: { berry: bool
       azimuth: rng.float() * Math.PI * 2,
       lean: 0.05 + rng.float() * 0.06,
       height: stemH,
-      baseR: 0.0016,
-      tipR: 0.0011,
+      baseR: 0.0016 * lod.widthMul, // structural stem — widened, never pruned
+      tipR: 0.0011 * lod.widthMul,
       segs: 4,
       wander: 0.08,
       ascend: 0.6,
@@ -329,8 +361,8 @@ function buildShoot(parts: Parts, origin: Vector3, rng: Rng, opts: { berry: bool
         azimuth: az,
         lean: 0.28 + rng.float() * 0.12,
         height: petH,
-        baseR: 0.001,
-        tipR: 0.0007,
+        baseR: 0.001 * lod.widthMul, // structural petiole — widened, never pruned
+        tipR: 0.0007 * lod.widthMul,
         segs: 4,
         wander: 0.05,
         ascend: 0.5,
@@ -351,7 +383,7 @@ function buildShoot(parts: Parts, origin: Vector3, rng: Rng, opts: { berry: bool
     const R = 0.026 + rng.float() * 0.016; // blade radius 2.6–4.2 cm → 5–8 cm wide (dominant)
     const lobes = 5 + rng.int(3); // 5–7 rounded lobes
     // leaf attaches at the petiole TIP (growStem tip flex) → that is its attach flex.
-    palmateLeaf(parts.leaf, tip.p.clone(), fwd, nrmL, R, lobes, swayPhase, STEM_FLEX_TIP, rng.fork(`leaf${i}`));
+    palmateLeaf(parts.leaf, tip.p.clone(), fwd, nrmL, R, lobes, swayPhase, STEM_FLEX_TIP, rng.fork(`leaf${i}`), tier);
   }
 
   // berry / flower sits among / just above the leaf canopy on a short reddish stalk.
@@ -368,9 +400,9 @@ function buildShoot(parts: Parts, origin: Vector3, rng: Rng, opts: { berry: bool
     const stalkTop = new Vector3(stalkBase.x + (rng.float() - 0.5) * 0.01, stalkTopY, stalkBase.z + (rng.float() - 0.5) * 0.01);
     // stalk base welds to the main-stem top (growStem tip flex); the berry rides
     // the stalk-top flex (stalk base + its small gradient) as one rigid unit.
-    thinStalk(parts.stem, stalkBase, stalkTop, 0.0009, swayPhase, STEM_FLEX_TIP);
+    thinStalk(parts.stem, stalkBase, stalkTop, 0.0009 * lod.widthMul, swayPhase, STEM_FLEX_TIP);
     if (opts.berry) {
-      aggregateBerry(parts.berry, stalkTop.clone().addScaledVector(UP, 0.006), 0.007 + rng.float() * 0.003, swayPhase, STEM_FLEX_TIP + 0.15, rng.fork('berry'));
+      aggregateBerry(parts.berry, stalkTop.clone().addScaledVector(UP, 0.006), 0.007 + rng.float() * 0.003, swayPhase, STEM_FLEX_TIP + 0.15, rng.fork('berry'), tier);
     } else {
       whiteFlower(parts.flower, stalkTop, UP, 0.012 + rng.float() * 0.004, swayPhase);
     }
@@ -401,8 +433,9 @@ function thinStalk(g: MeshGrower, a: Vector3, b: Vector3, r: number, swayPhase: 
   }
 }
 
-export function buildCloudberryParts(rng: Rng): Parts {
+export function buildCloudberryParts(rng: Rng, lod: BogLodCtx = BOG_LOD_NATIVE): Parts {
   const parts: Parts = { leaf: new MeshGrower(), stem: new MeshGrower(), berry: new MeshGrower(), flower: new MeshGrower() };
+  const tier = cloudTier(lod);
   const shoots = 3 + rng.int(4); // small clump of 3–6 shoots reads as a low leafy patch
   for (let i = 0; i < shoots; i++) {
     const az = (i / shoots) * Math.PI * 2 + rng.float() * 0.9;
@@ -411,7 +444,7 @@ export function buildCloudberryParts(rng: Rng): Parts {
     // most shoots purely leafy; some carry the terminal amber berry, one may flower
     const berry = rng.chance(0.45);
     const flower = !berry && i === 0 && rng.chance(0.5);
-    buildShoot(parts, origin, rng.fork(`shoot${i}`), { berry, flower });
+    buildShoot(parts, origin, rng.fork(`shoot${i}`), { berry, flower }, lod, tier);
   }
   return parts;
 }
@@ -443,8 +476,11 @@ function weld(g: MeshGrower, src: BufferGeometry): void {
  *  leaves carry vdata.x = 0 → foliage tint; amber berries carry vdata.x = 1 →
  *  amber tint under a flower-style material). White spring flowers are NOT included
  *  (preview-only). */
-export function buildCloudberry(rng: Rng): { geo: BufferGeometry; tris: number; berryTris: number } {
-  const parts = buildCloudberryParts(rng);
+/** `lod` (default native = LOD0, byte-identical) regenerates a coarser crown-LOD
+ *  rung from the same seed — see BogLod.ts (cloudberry cuts on the intra-element
+ *  detail tier; its few big parasol leaves are never pruned). */
+export function buildCloudberry(rng: Rng, lod: BogLodCtx = BOG_LOD_NATIVE): { geo: BufferGeometry; tris: number; berryTris: number } {
+  const parts = buildCloudberryParts(rng, lod);
   const g = new MeshGrower();
   weld(g, parts.stem.build());
   weld(g, parts.leaf.build());

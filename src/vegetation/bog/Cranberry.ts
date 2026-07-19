@@ -39,6 +39,7 @@ import type { BufferGeometry, Object3D } from 'three';
 import type { Rng } from '../../core/Seed';
 import { MeshGrower } from '../TubeMesh';
 import { growStem, walkStem, leafBlade, perpFrame, stemFlexAt, STEM_FLEX_TIP, type StemSample } from './EricaceousKit';
+import { BOG_LOD_NATIVE, type BogLodCtx } from './BogLod';
 
 // ---- recommended integration params ----------------------------------------
 /** compact leafy plant height (m): ascending shoots + berry stalks reach ~6–10 cm. */
@@ -63,11 +64,19 @@ interface Parts {
 const UP = new Vector3(0, 1, 0);
 const GOLDEN = 2.399963; // golden-angle phyllotaxy for alternate leaves
 
+/** berry sphere resolution per LOD detail tier (emission-only — no rng). Berries
+ *  are the species' colour read, so they are never pruned or resized; their tri
+ *  cut is carried by this intra-element lever (70 → 48 → 30 tris). */
+const BERRY_RES = [
+  [5, 7],
+  [4, 6],
+  [3, 5],
+] as const;
+
 /** A small round berry (low-res lat/long sphere) with outward normals, welded
  *  into the berry grower. vdata.x = 1 so the flower-style material tints it red. */
-function berrySphere(g: MeshGrower, center: Vector3, radius: number, swayPhase: number, attachFlex: number): void {
-  const stacks = 5;
-  const slices = 7;
+function berrySphere(g: MeshGrower, center: Vector3, radius: number, swayPhase: number, attachFlex: number, detail: 0 | 1 | 2): void {
+  const [stacks, slices] = BERRY_RES[detail] as readonly [number, number];
   const rows: number[][] = [];
   for (let i = 0; i <= stacks; i++) {
     const phi = (i / stacks) * Math.PI; // 0..π (pole to pole)
@@ -107,13 +116,15 @@ function berrySphere(g: MeshGrower, center: Vector3, radius: number, swayPhase: 
  * a bare stem. `spread` blends the leaf axis between "held out from the stem" and
  * "up" — ascending shoots hold leaves out+up; low runners hold them nearly flat.
  */
-function dressStem(parts: Parts, samples: StemSample[], spacing: number, spread: number, tStart: number, rng: Rng): void {
+function dressStem(parts: Parts, samples: StemSample[], spacing: number, spread: number, tStart: number, rng: Rng, lod: BogLodCtx): void {
   const u = new Vector3();
   const v = new Vector3();
+  const W = lod.widthMul;
   let node = 0;
   walkStem(samples, spacing, tStart, (p, dir, t) => {
     perpFrame(dir, u, v);
     const a = node * GOLDEN + rng.float() * 0.35;
+    const salt = node;
     node++;
     const outN = new Vector3().copy(u).multiplyScalar(Math.cos(a)).addScaledVector(v, Math.sin(a));
     // leaf axis: mostly outward from the stem, lifted toward UP, a touch forward
@@ -128,10 +139,11 @@ function dressStem(parts: Parts, samples: StemSample[], spacing: number, spread:
     const len = 0.005 + rng.float() * 0.0033; // 5–8.3 mm (comparable to a berry)
     const hue = (rng.float() - 0.5) * 0.55;
     // narrow-ovate & leathery: broadest below mid, acute tip, margins STRONGLY
-    // rolled under (revolute) → reads narrow/needle-like like the real leaf
+    // rolled under (revolute) → reads narrow/needle-like like the real leaf.
+    // LOD: whole leaves prune to λ, survivor widths ×1/λ (segs already the min 2).
     leafBlade(
-      parts.foliage, p, axis, side,
-      len, len * 0.24, len * 0.34, len * 0.05,
+      lod.target(parts.foliage, p, salt), p, axis, side,
+      len, len * 0.24 * W, len * 0.34 * W, len * 0.05 * W,
       0.16, 0.6, hue, stemFlexAt(t), 0.5 + 0.4 * t, 0.98, 2,
     );
   });
@@ -151,7 +163,7 @@ function sampleAt(samples: StemSample[], frac: number): StemSample {
  * bare stalk. Berry ~5–7 mm — comparable to a leaf. The pedicels spring from the
  * same top-of-shoot zone so the berries group naturally.
  */
-function addBerryCluster(parts: Parts, samples: StemSample[], baseAz: number, rng: Rng): void {
+function addBerryCluster(parts: Parts, samples: StemSample[], baseAz: number, rng: Rng, lod: BogLodCtx): void {
   const n = 2 + rng.int(2); // 2–3 berries per cluster
   for (let b = 0; b < n; b++) {
     const seat = sampleAt(samples, 0.72 + rng.float() * 0.22); // upper part of the shoot
@@ -165,8 +177,8 @@ function addBerryCluster(parts: Parts, samples: StemSample[], baseAz: number, rn
         azimuth: az,
         lean: 0.45, // spring up-and-out from the node
         height: stalkH,
-        baseR: 0.00035,
-        tipR: 0.00028,
+        baseR: 0.00035 * lod.widthMul,
+        tipR: 0.00028 * lod.widthMul,
         segs: 4,
         wander: 0.14,
         ascend: 0.1,
@@ -182,11 +194,11 @@ function addBerryCluster(parts: Parts, samples: StemSample[], baseAz: number, rn
     // RIGID: one CONSTANT flex = the pedicel-tip flex (growStem tip), so it sways
     // as one unit with the stalk instead of shearing.
     const c = new Vector3().copy(tip.p).addScaledVector(tip.dir, rBerry * 0.85);
-    berrySphere(parts.berry, c, rBerry, phase, STEM_FLEX_TIP);
+    berrySphere(parts.berry, c, rBerry, phase, STEM_FLEX_TIP, lod.detail);
   }
 }
 
-export function buildCranberryParts(rng: Rng): Parts {
+export function buildCranberryParts(rng: Rng, lod: BogLodCtx = BOG_LOD_NATIVE): Parts {
   const foliage = new MeshGrower();
   const berry = new MeshGrower();
   const parts: Parts = { foliage, berry };
@@ -205,8 +217,8 @@ export function buildCranberryParts(rng: Rng): Parts {
         azimuth: az,
         lean: 0.9, // nearly horizontal creeper
         height: len,
-        baseR: 0.0006,
-        tipR: 0.0004,
+        baseR: 0.0006 * lod.widthMul, // structural runner — widened, never pruned
+        tipR: 0.0004 * lod.widthMul,
         segs: 6,
         wander: 0.18,
         ascend: 0.12, // hug the moss but lift the tip a touch (not a dead flat wire)
@@ -216,7 +228,7 @@ export function buildCranberryParts(rng: Rng): Parts {
       },
       rng.fork(`runner${i}`),
     );
-    dressStem(parts, samples, 0.0045, 0.3, 0.05, rng.fork(`rleaf${i}`));
+    dressStem(parts, samples, 0.0045, 0.3, 0.05, rng.fork(`rleaf${i}`), lod);
     const tip = samples[samples.length - 1] as StemSample;
     runnerTips.push({ p: tip.p.clone(), az: az + (rng.float() - 0.5) });
   }
@@ -239,8 +251,8 @@ export function buildCranberryParts(rng: Rng): Parts {
         azimuth: baseAz,
         lean: 0.22 + rng.float() * 0.22, // mostly upright, a little outward tilt
         height: h,
-        baseR: 0.0005,
-        tipR: 0.0003,
+        baseR: 0.0005 * lod.widthMul, // structural shoot — widened, never pruned
+        tipR: 0.0003 * lod.widthMul,
         segs: 6,
         wander: 0.13,
         ascend: 0.55, // pull upright → erect leafy shoot
@@ -251,12 +263,12 @@ export function buildCranberryParts(rng: Rng): Parts {
       rng.fork(`shoot${i}`),
     );
     // dense leaves, held out+up, over most of the shoot
-    dressStem(parts, samples, 0.003, 0.42, 0.06, rng.fork(`sleaf${i}`));
+    dressStem(parts, samples, 0.003, 0.42, 0.06, rng.fork(`sleaf${i}`), lod);
 
     // ── berries: distributed across ~60% of the shoots (not just 1–2), each a
     //    small cluster nestled in that shoot's leafy tip. ──
     if (rng.chance(0.6)) {
-      addBerryCluster(parts, samples, baseAz, rng.fork(`berry${i}`));
+      addBerryCluster(parts, samples, baseAz, rng.fork(`berry${i}`), lod);
     }
   }
 
@@ -265,8 +277,10 @@ export function buildCranberryParts(rng: Rng): Parts {
 
 /** Integration builder: ONE merged leaf-only BufferGeometry (berries masked by
  *  vdata.x = 1). Consumed as a FOLIAGE leaf pool. */
-export function buildCranberry(rng: Rng): { geo: BufferGeometry; tris: number; berryTris: number } {
-  const parts = buildCranberryParts(rng);
+/** `lod` (default native = LOD0, byte-identical) regenerates a coarser crown-LOD
+ *  rung from the same seed — see BogLod.ts. */
+export function buildCranberry(rng: Rng, lod: BogLodCtx = BOG_LOD_NATIVE): { geo: BufferGeometry; tris: number; berryTris: number } {
+  const parts = buildCranberryParts(rng, lod);
   const g = new MeshGrower();
   weld(g, parts.foliage.build());
   weld(g, parts.berry.build());

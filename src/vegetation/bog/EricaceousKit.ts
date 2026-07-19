@@ -272,6 +272,8 @@ export function scaleLeaf(
  * A small pendulous urn/bell flower along `dir` (the direction it hangs/points).
  * Lathe of a narrow-neck → round-belly → constricted-mouth profile. `size` is the
  * bell length (m). vdata.x = 1 (petal). Used for heather florets + bog-rosemary bells.
+ * `widthMul` (crown-LOD survivor growth) scales the RADIUS only — never the length
+ * (the spike law) — so a pruned rung's surviving bells keep the covered area.
  */
 export function urnBell(
   g: MeshGrower,
@@ -281,6 +283,7 @@ export function urnBell(
   sides: number,
   swayPhase: number,
   attachFlex: number,
+  widthMul = 1,
 ): void {
   const u = new Vector3();
   const v = new Vector3();
@@ -298,7 +301,7 @@ export function urnBell(
   for (let ri = 0; ri < prof.length; ri++) {
     const [tt, rf] = prof[ri] as [number, number];
     c.copy(attach).addScaledVector(dir, size * tt);
-    const rr = rf * size;
+    const rr = rf * size * widthMul;
     const ring: number[] = [];
     const ao = 0.55 + 0.45 * tt; // mouth brighter
     for (let k = 0; k <= sides; k++) {
@@ -344,9 +347,10 @@ export function pedicel(g: MeshGrower, a: Vector3, b: Vector3, hw: number, swayP
 /**
  * A flat 5-petal white star flower (Labrador-tea corymb floret) in the plane
  * whose normal is `up`. `size` is the flower radius. Petals vdata.x = 1, tiny
- * centre vdata.x = 0.5.
+ * centre vdata.x = 0.5. `widthMul` (crown-LOD survivor growth) widens the petals
+ * only — the flower radius (its length scale) never changes.
  */
-export function starFloret(g: MeshGrower, center: Vector3, up: Vector3, size: number, swayPhase: number, attachFlex: number): void {
+export function starFloret(g: MeshGrower, center: Vector3, up: Vector3, size: number, swayPhase: number, attachFlex: number, widthMul = 1): void {
   const u = new Vector3();
   const v = new Vector3();
   perpFrame(up, u, v);
@@ -361,7 +365,7 @@ export function starFloret(g: MeshGrower, center: Vector3, up: Vector3, size: nu
     dir.copy(u).multiplyScalar(Math.cos(a)).addScaledVector(v, Math.sin(a));
     perp.copy(u).multiplyScalar(-Math.sin(a)).addScaledVector(v, Math.cos(a));
     const baseR = size * 0.16;
-    const w = size * 0.32;
+    const w = size * 0.32 * widthMul;
     tip.copy(center).addScaledVector(dir, size).addScaledVector(up, size * 0.08);
     s0.copy(center).addScaledVector(dir, baseR).addScaledVector(perp, -w);
     s1.copy(center).addScaledVector(dir, baseR).addScaledVector(perp, w);

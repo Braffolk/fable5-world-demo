@@ -47,6 +47,7 @@ import { buildBogRosemary, BOGROSEMARY_FOLIAGE, BOGROSEMARY_BLOSSOM, BOGROSEMARY
 import { buildCranberry, CRANBERRY_FOLIAGE, CRANBERRY_BERRY, CRANBERRY_CLS_MAX_DIST } from "./bog/Cranberry";
 import { buildCloudberry, CLOUDBERRY_FOLIAGE, CLOUDBERRY_BERRY, CLOUDBERRY_CLS_MAX_DIST } from "./bog/Cloudberry";
 import { mergeGeo } from "./bog/EricaceousKit";
+import { BOG_LOD_LADDER, BogLodCtx } from "./bog/BogLod";
 import type { GrowthInstance, SpeciesParams } from "./VegTypes";
 
 export interface PoolPart {
@@ -600,7 +601,8 @@ export async function buildVegLibrary(
   for (const { cls, build, tint, blossom, maxDist } of bogShrubs) {
     for (let v = 0; v < 4; v++) {
       await yieldIfDue();
-      const shrub = build(seed.rng(`veg/bog/shrub/${cls}/${v}`));
+      const label = `veg/bog/shrub/${cls}/${v}`;
+      const shrub = build(seed.rng(label));
       const b = bounds([shrub.bark, shrub.crown]);
       trackCls(cls, b.height, b.radius);
       pools.push({
@@ -613,7 +615,20 @@ export async function buildVegLibrary(
         trisR2: 0,
         height: b.height,
         radius: b.radius,
-        leaf: { geo: shrub.crown, tris: shrub.crownTris, color: tint, blossom },
+        leaf: {
+          geo: shrub.crown,
+          tris: shrub.crownTris,
+          color: tint,
+          blossom,
+          // bog crown-LOD (BogLod.ts): LAZY prune-and-preserve ladder, the tree
+          // template — regenerates the crown per rung from the SAME seed, so the
+          // λ=1 rung is byte-identical to `crown`. DAG-cache-miss only.
+          buildLadder: (): CrownLodLevel[] =>
+            BOG_LOD_LADDER.map((rung) => {
+              const s = build(seed.rng(label), new BogLodCtx(rung.lambda, rung.detail, cls * 8 + v));
+              return { lambda: rung.lambda, geo: s.crown, tris: s.crownTris, keptAnchors: 0 };
+            }),
+        },
       });
     }
     clsMaxDist[cls] = maxDist;
@@ -624,7 +639,8 @@ export async function buildVegLibrary(
   // blossom, so the hero white head reads against GREEN blades (not a pale plant).
   for (let v = 0; v < 4; v++) {
     await yieldIfDue();
-    const cg = buildCottonGrass(seed.rng(`veg/bog/cottongrass/${v}`));
+    const label = `veg/bog/cottongrass/${v}`;
+    const cg = buildCottonGrass(seed.rng(label));
     const geo = mergeGeo([cg.blades, cg.cotton]);
     const tris = geo.index ? geo.index.count / 3 : 0;
     const b = bounds([geo]);
@@ -638,7 +654,19 @@ export async function buildVegLibrary(
       trisR2: 0,
       height: b.height,
       radius: b.radius,
-      leaf: { geo, tris, color: COTTONGRASS_BLADE_TINT, blossom: COTTONGRASS_COTTON_TINT },
+      leaf: {
+        geo,
+        tris,
+        color: COTTONGRASS_BLADE_TINT,
+        blossom: COTTONGRASS_COTTON_TINT,
+        // bog crown-LOD (BogLod.ts): same seed + same merge per rung ⇒ λ=1 ≡ `geo`.
+        buildLadder: (): CrownLodLevel[] =>
+          BOG_LOD_LADDER.map((rung) => {
+            const c = buildCottonGrass(seed.rng(label), new BogLodCtx(rung.lambda, rung.detail, VegClass.CottonGrass * 8 + v));
+            const rg = mergeGeo([c.blades, c.cotton]);
+            return { lambda: rung.lambda, geo: rg, tris: rg.index ? rg.index.count / 3 : 0, keptAnchors: 0 };
+          }),
+      },
     });
   }
   clsMaxDist[VegClass.CottonGrass] = COTTONGRASS_CLS_MAXDIST;
@@ -651,7 +679,8 @@ export async function buildVegLibrary(
   for (const { cls, build, tint, blossom, maxDist } of bogFoliage) {
     for (let v = 0; v < 4; v++) {
       await yieldIfDue();
-      const { geo, tris } = build(seed.rng(`veg/bog/foliage/${cls}/${v}`));
+      const label = `veg/bog/foliage/${cls}/${v}`;
+      const { geo, tris } = build(seed.rng(label));
       const b = bounds([geo]);
       trackCls(cls, b.height, b.radius);
       pools.push({
@@ -663,7 +692,18 @@ export async function buildVegLibrary(
         trisR2: 0,
         height: b.height,
         radius: b.radius,
-        leaf: { geo, tris, color: tint, blossom },
+        leaf: {
+          geo,
+          tris,
+          color: tint,
+          blossom,
+          // bog crown-LOD (BogLod.ts): lazy per-rung regen, same seed ⇒ λ=1 ≡ `geo`.
+          buildLadder: (): CrownLodLevel[] =>
+            BOG_LOD_LADDER.map((rung) => {
+              const r = build(seed.rng(label), new BogLodCtx(rung.lambda, rung.detail, cls * 8 + v));
+              return { lambda: rung.lambda, geo: r.geo, tris: r.tris, keptAnchors: 0 };
+            }),
+        },
       });
     }
     clsMaxDist[cls] = maxDist;

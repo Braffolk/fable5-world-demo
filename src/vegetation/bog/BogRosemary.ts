@@ -21,6 +21,7 @@ import type { BufferGeometry, Object3D } from 'three';
 import type { Rng } from '../../core/Seed';
 import { MeshGrower } from '../TubeMesh';
 import { growStem, walkStem, leafBlade, urnBell, pedicel, mergeGeo, perpFrame, stemFlexAt, STEM_FLEX_TIP, type StemSample } from './EricaceousKit';
+import { BOG_LOD_NATIVE, type BogLodCtx } from './BogLod';
 
 // ---- recommended integration params ----------------------------------------
 export const BOGROSEMARY_HEIGHT: [number, number] = [0.15, 0.3];
@@ -35,14 +36,21 @@ interface Parts {
   flower: MeshGrower;
 }
 
-/** sparse, ±erect, strongly revolute linear leaves along a thin stem. */
-function dressStem(parts: Parts, samples: StemSample[], rng: Rng): void {
+/** leaf-blade curve segments per LOD detail tier (emission-only — no rng). */
+const LEAF_SEGS = [3, 2, 2] as const;
+
+/** sparse, ±erect, strongly revolute linear leaves along a thin stem. LOD: whole
+ *  leaves prune to λ (survivor widths ×1/λ), blade segs coarsen by tier. */
+function dressStem(parts: Parts, samples: StemSample[], rng: Rng, lod: BogLodCtx): void {
   const u = new Vector3();
   const v = new Vector3();
+  const W = lod.widthMul;
+  const segs = LEAF_SEGS[lod.detail] as number;
   let node = 0;
   walkStem(samples, 0.018, 0.12, (p, dir, t) => {
     perpFrame(dir, u, v);
     const a = node * 2.399963 + rng.float() * 0.3; // sparse spiral
+    const salt = node;
     node++;
     const outN = new Vector3().copy(u).multiplyScalar(Math.cos(a)).addScaledVector(v, Math.sin(a));
     // held ±erect: axis leans strongly along the stem
@@ -51,12 +59,14 @@ function dressStem(parts: Parts, samples: StemSample[], rng: Rng): void {
     const len = 0.016 + rng.float() * 0.014;
     const hue = (rng.float() - 0.5) * 0.4;
     // linear: near-constant narrow width, strong keel + revolute → almost needle-like
-    leafBlade(parts.leaf, p, axis, side, len, len * 0.07, len * 0.09, len * 0.03, 0.34, 0.6, hue, stemFlexAt(t), 0.55 + 0.35 * t, 0.95, 3);
+    leafBlade(lod.target(parts.leaf, p, salt), p, axis, side, len, len * 0.07 * W, len * 0.09 * W, len * 0.03 * W, 0.34, 0.6, hue, stemFlexAt(t), 0.55 + 0.35 * t, 0.95, segs);
   });
 }
 
-/** nodding terminal cluster of 2–6 pink urn-bells on thin pink pedicels. */
-function bellCluster(parts: Parts, tip: Vector3, up: Vector3, rng: Rng, swayPhase: number): void {
+/** nodding terminal cluster of 2–6 pink urn-bells on thin pink pedicels. LOD: a
+ *  pedicel+bell pair prunes as ONE element (never a bare stalk or a floating
+ *  bell); survivors widen ×1/λ (pedicel width, bell radius — never lengths). */
+function bellCluster(parts: Parts, tip: Vector3, up: Vector3, rng: Rng, swayPhase: number, lod: BogLodCtx): void {
   const u = new Vector3();
   const v = new Vector3();
   perpFrame(up, u, v);
@@ -71,9 +81,10 @@ function bellCluster(parts: Parts, tip: Vector3, up: Vector3, rng: Rng, swayPhas
       .addScaledVector(u, Math.cos(a) * reach)
       .addScaledVector(v, Math.sin(a) * reach)
       .addScaledVector(up, 0.004 + rng.float() * 0.004);
+    const tgt = lod.target(parts.flower, stalkEnd, i);
     // bells hang at the terminal cluster (stem tip): pedicel carries the tip flex
     // (+0.1 to its end), the bell rides that pedicel-end flex as one rigid unit.
-    pedicel(parts.flower, tip, stalkEnd, 0.0006, swayPhase, STEM_FLEX_TIP);
+    pedicel(tgt, tip, stalkEnd, 0.0006 * lod.widthMul, swayPhase, STEM_FLEX_TIP);
     const size = 0.006 + rng.float() * 0.0035;
     // hang direction: mostly down, slightly outward (nodding)
     const hang = new Vector3()
@@ -82,11 +93,11 @@ function bellCluster(parts: Parts, tip: Vector3, up: Vector3, rng: Rng, swayPhas
       .addScaledVector(v, Math.sin(a) * 0.25)
       .normalize();
     void rng.float();
-    urnBell(parts.flower, stalkEnd, hang, size, 6, swayPhase, STEM_FLEX_TIP + 0.1);
+    urnBell(tgt, stalkEnd, hang, size, 6, swayPhase, STEM_FLEX_TIP + 0.1, lod.widthMul);
   }
 }
 
-export function buildBogRosemaryParts(rng: Rng): Parts {
+export function buildBogRosemaryParts(rng: Rng, lod: BogLodCtx = BOG_LOD_NATIVE): Parts {
   const bark = new MeshGrower();
   const leaf = new MeshGrower();
   const flower = new MeshGrower();
@@ -114,15 +125,17 @@ export function buildBogRosemaryParts(rng: Rng): Parts {
       },
       rng.fork(`stem${i}`),
     );
-    dressStem(parts, samples, rng.fork(`dress${i}`));
+    dressStem(parts, samples, rng.fork(`dress${i}`), lod);
     const tip = samples[samples.length - 1] as StemSample;
-    if (rng.chance(0.8)) bellCluster(parts, tip.p.clone(), tip.dir.clone(), rng.fork(`bells${i}`), rng.float() * Math.PI * 2);
+    if (rng.chance(0.8)) bellCluster(parts, tip.p.clone(), tip.dir.clone(), rng.fork(`bells${i}`), rng.float() * Math.PI * 2, lod);
   }
   return parts;
 }
 
-export function buildBogRosemary(rng: Rng): { bark: BufferGeometry; crown: BufferGeometry; barkTris: number; crownTris: number } {
-  const parts = buildBogRosemaryParts(rng);
+/** `lod` (default native = LOD0) regenerates a coarser crown-LOD rung from the
+ *  same seed — see BogLod.ts. Bark is unaffected (it rides the QEM DAG). */
+export function buildBogRosemary(rng: Rng, lod: BogLodCtx = BOG_LOD_NATIVE): { bark: BufferGeometry; crown: BufferGeometry; barkTris: number; crownTris: number } {
+  const parts = buildBogRosemaryParts(rng, lod);
   const bark = parts.bark.build();
   const crown = mergeGeo([parts.leaf.build(), parts.flower.build()]);
   return { bark, crown, barkTris: parts.bark.triCount, crownTris: parts.leaf.triCount + parts.flower.triCount };
