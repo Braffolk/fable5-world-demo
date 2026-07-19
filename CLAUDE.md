@@ -151,9 +151,13 @@ result-producing work through dynamic Workflows (and Agent for one-off reads/dig
   one plausible search hit. No toy proxies for high-fidelity asks.
 - Python runs through **`uv`** (`uv run`, `uv add/sync`) — never bare pip/.venv.
 - Tests stay lean while algorithms are in flux; a passing test is never runtime acceptance.
-- Task ledgers `docs/tasks/2026-07-13/{TASKLIST,KNOWN-ISSUES}.md` stay current enough that
-  the user can inspect progress without interrupting. The year is **2026**. Local commits
-  at clean checkpoints, ONE task per commit with an explicit file list; **no push**.
+- **Task tracking is DUAL (user law 07-19):** manage work through BOTH channels, kept in sync —
+  (a) the **Claude Code tasklist tool** (TaskCreate/TaskUpdate/TaskList) for live in-session state,
+  AND (b) durable **`docs/tasks/{YYYY-MM-DD}/{task}.md`** files for cross-session state the user can
+  inspect without interrupting. A task isn't durably tracked until it's in the dated md too; update
+  both at terminal results so compaction never loses state. (Legacy ledgers:
+  `docs/tasks/2026-07-13/{TASKLIST,KNOWN-ISSUES}.md`.) The year is **2026**. Local commits at clean
+  checkpoints, ONE task per commit with an explicit file list; **no push**.
 
 ## Pointers
 - Reality-check pattern + grounding examples: memory `interrogate-constraints-lift-a-level`.
