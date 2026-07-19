@@ -143,15 +143,28 @@ export function waterMaterial(
   // the generated world (hasWaterCoverage=false) ⇒ every #GAP/coverage gate below
   // compiles the pre-coverage graph VERBATIM (bit-identical generated water).
   const coverOn = field.hasWaterCoverage && new URLSearchParams(window.location.search).get('watercover') !== '0';
-  // #GAP wetSurf = Estonia's NEAR water surface. Its dry cells hold the −1e4 dry
-  // sentinel, so a plain bilinear near a shore blends the real water level with −1e4
-  // and PLUNGES into a pit (the shore gap). Sample WET-PREFERRING (fieldWaterYWet
-  // masks the sentinel corners out of the 2×2 — the near analog of the #115 far
-  // maxReduce) so the surface stays FLAT at the true level up to the α shoreline,
-  // then clamp the degenerate all-dry vertex to just under the bed so a shore-
-  // crossing triangle MEETS the bank instead of diving. Generated ⇒ false ⇒ the
-  // exact old fieldWaterY tap + unclamped position.
-  const wetSurf = coverOn && !lvl.far;
+  // FINE-TERRAIN SHORELINE (format-2 micro cooks without a watercover α — the bog
+  // preview): the cooked terrain is real 6 cm geometry near camera, but waterY stays
+  // a flat per-pool level on the 2 m lattice with −1e4 dry sentinels. The old binary
+  // path cut the sheet at the sentinel DIVE (2 m-quantized blocky edge, receding from
+  // the true shore) and the dive-fade rampK erased another ~2-4 m ring (measured at
+  // the fly pool: sheet dead 0.5 m past the last wet 2×2 while the fine bed is still
+  // below waterY). The shoreline is really the FINE bed crossing the flat pool level,
+  // so: ride the wet-preferring flat surface (wetSurf) and gate per fragment on the
+  // fine bed with a 5 cm underground extension — the depth test + vDepth feather
+  // finish the waterline at fine-terrain resolution. Estonia keeps its α coverage
+  // path (hasWaterCoverage gates fineShore OFF even under ?watercover=0); format-1
+  // sources (generated world) compile the old graph verbatim.
+  const fineShore = field.cookedMicroHeight && !field.hasWaterCoverage;
+  // #GAP wetSurf = the NEAR water surface on sources whose dry cells hold the −1e4
+  // sentinel (Estonia's α path AND the fineShore path): a plain bilinear near a shore
+  // blends the real water level with −1e4 and PLUNGES into a pit (the shore gap).
+  // Sample WET-PREFERRING (fieldWaterYWet masks the sentinel corners out of the 2×2 —
+  // the near analog of the #115 far maxReduce) so the surface stays FLAT at the true
+  // level up to the shoreline, then clamp the degenerate all-dry vertex to just under
+  // the bed so a shore-crossing triangle MEETS the bank instead of diving. Generated
+  // ⇒ false ⇒ the exact old fieldWaterY tap + unclamped position.
+  const wetSurf = (coverOn || fineShore) && !lvl.far;
   const sampleY = (q: NV2): NF =>
     lvl.far ? field.fieldWaterYFar(q) : wetSurf ? field.fieldWaterYWet(q) : field.fieldWaterY(q);
   const wxz = lvl.origin.add(positionLocal.xz.mul(lvl.cell));
@@ -216,6 +229,15 @@ export function waterMaterial(
     const covFar = field.fieldWaterCoverageFar(p);
     wet = covFar.greaterThan(WET_EPS_FAR) as unknown as NB;
     coverFeather = smoothstep(WET_EPS_FAR, 0.5, covFar) as unknown as NF;
+  } else if (fineShore && !lvl.far) {
+    // fineShore near: the shoreline IS the fine bed crossing the flat pool level.
+    // positionWorld.y rides the wet-dilated flat surface (wetSurf), so keep the
+    // fragment while the 6 cm bed sits below it (+5 cm underground extension —
+    // the hardware depth test cuts the submerged rim, so no discard-aliasing at
+    // the waterline; hummock tops above the level emerge as real islands). The
+    // old −0.75 dive guard belongs to the diving-sheet geometry, not this one.
+    const bedH = field.fieldHeightFinest(p);
+    wet = positionWorld.y.greaterThan(bedH.sub(0.05)) as unknown as NB;
   } else {
     const bedH = lvl.far ? field.fieldHeightFinestNearest(p) : field.fieldHeightFinest(p);
     wet = positionWorld.y.greaterThan(bedH.sub(0.75)) as unknown as NB;
@@ -462,10 +484,12 @@ export function waterMaterial(
   // dark silt bed as a rim band); the #115 Estonia far-coverage path instead
   // feathers the shore via coverFeather (from covFar) below. Near levels fade the
   // steep field dive.
-  // #GAP Estonia near (wetSurf): DISABLE the dive-fade — the wet-preferring surface
-  // no longer dives at the shore, so fading on |∇surfaceY| would only erase the real
-  // shoreline; coverFeather (from the α) owns the shore opacity there. Far ⇒ 1
-  // (unchanged). Generated near ⇒ the exact old smoothstep dive-fade (bit-identical).
+  // #GAP wetSurf near (Estonia α + fineShore): DISABLE the dive-fade — the wet-
+  // preferring surface no longer dives at the shore, so fading on |∇surfaceY| would
+  // only erase the real shoreline (its ±2 m stencil ate a measured ~2-4 m ring at
+  // the bog pools); coverFeather (α) or the vDepth feather (fineShore) owns the
+  // shore opacity there. Far ⇒ 1 (unchanged). Generated near ⇒ the exact old
+  // smoothstep dive-fade (bit-identical).
   const rampK =
     lvl.far || wetSurf ? float(1) : smoothstep(0.55, 0.3, vec2(gWx, gWz).length());
   // #114/#115: feather the very shore by the coverage fraction (near AND far coverage
