@@ -20,7 +20,7 @@ import { Group, Mesh, MeshStandardMaterial, DoubleSide, Vector3 } from 'three';
 import type { BufferGeometry, Object3D } from 'three';
 import type { Rng } from '../../core/Seed';
 import { MeshGrower } from '../TubeMesh';
-import { growStem, walkStem, scaleLeaf, urnBell, mergeGeo, perpFrame, type StemSample } from './EricaceousKit';
+import { growStem, walkStem, scaleLeaf, urnBell, mergeGeo, perpFrame, stemFlexAt, type StemSample } from './EricaceousKit';
 
 // ---- recommended integration params ----------------------------------------
 export const HEATHER_HEIGHT: [number, number] = [0.22, 0.36];
@@ -44,6 +44,7 @@ function dressStem(parts: Parts, samples: StemSample[], rng: Rng, floreting: boo
   const leafPhase = rng.float() * Math.PI * 2;
   walkStem(samples, 0.007, 0.02, (p, dir, t, k) => {
     perpFrame(dir, u, v);
+    const attachFlex = stemFlexAt(t);
     const roll = (k % 2) * (Math.PI / 4); // decussate: quarter-turn each node
     for (let q = 0; q < 4; q++) {
       const a = roll + (q / 4) * Math.PI * 2;
@@ -52,7 +53,7 @@ function dressStem(parts: Parts, samples: StemSample[], rng: Rng, floreting: boo
       const side = new Vector3().crossVectors(axis, outN).normalize();
       const hue = (rng.float() - 0.5) * 0.6;
       const len = 0.006 + rng.float() * 0.003;
-      scaleLeaf(parts.leaf, p, axis, side, outN, len, len * 0.34, hue, 0, 0.5 + 0.45 * t);
+      scaleLeaf(parts.leaf, p, axis, side, outN, len, len * 0.34, hue, attachFlex, 0.5 + 0.45 * t);
     }
   });
   if (!floreting) return;
@@ -68,8 +69,7 @@ function dressStem(parts: Parts, samples: StemSample[], rng: Rng, floreting: boo
       .normalize();
     const size = 0.0042 + rng.float() * 0.0024;
     void rng.float();
-    urnBell(parts.flower, p, hang, size, 5, leafPhase);
-    void t;
+    urnBell(parts.flower, p, hang, size, 5, leafPhase, stemFlexAt(t));
   });
 }
 

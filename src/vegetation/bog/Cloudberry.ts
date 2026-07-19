@@ -40,7 +40,7 @@ import { BufferAttribute, Group, Mesh, MeshStandardMaterial, DoubleSide, Vector3
 import type { BufferGeometry, Object3D } from 'three';
 import type { Rng } from '../../core/Seed';
 import { MeshGrower } from '../TubeMesh';
-import { growStem, type StemSample } from './EricaceousKit';
+import { growStem, STEM_FLEX_TIP, type StemSample } from './EricaceousKit';
 
 // ---- recommended integration params ----------------------------------------
 /** low leaf-dominated plant: leaves held up on short stalks reach ~10–20 cm. */
@@ -69,8 +69,9 @@ interface Parts {
   flower: MeshGrower;
 }
 
-/** small low-res sphere with outward normals welded into `g`. */
-function sphere(g: MeshGrower, center: Vector3, radius: number, vdx: number, swayPhase: number, aoScale = 1): void {
+/** small low-res sphere with outward normals welded into `g`. RIGID: one CONSTANT
+ *  flex (`attachFlex`) so the drupelet sways as one unit with its stalk. */
+function sphere(g: MeshGrower, center: Vector3, radius: number, vdx: number, swayPhase: number, attachFlex: number, aoScale = 1): void {
   const stacks = 4;
   const slices = 6;
   const rows: number[][] = [];
@@ -87,7 +88,7 @@ function sphere(g: MeshGrower, center: Vector3, radius: number, vdx: number, swa
       row.push(
         g.vertex(
           center.x + nx * radius, center.y + y * radius, center.z + nz * radius,
-          nx, y, nz, k / slices, i / stacks, vdx, 0.4, swayPhase, ao,
+          nx, y, nz, k / slices, i / stacks, vdx, attachFlex, swayPhase, ao,
         ),
       );
     }
@@ -115,7 +116,7 @@ function sphere(g: MeshGrower, center: Vector3, radius: number, vdx: number, swa
  *   fwd    unit in-plane forward axis (θ=0), horizontal, away from the petiole
  *   R      blade radius (m); blade width ≈ 2R
  */
-function palmateLeaf(g: MeshGrower, base: Vector3, fwd: Vector3, nrm: Vector3, R: number, lobes: number, swayPhase: number, rng: Rng): void {
+function palmateLeaf(g: MeshGrower, base: Vector3, fwd: Vector3, nrm: Vector3, R: number, lobes: number, swayPhase: number, attachFlex: number, rng: Rng): void {
   const right = new Vector3().crossVectors(nrm, fwd).normalize();
   const sweep = 2.95; // radians each side of θ=0 → ~338° total → ~22° cordate notch
   const teethPerLobe = 7; // doubly-serrate marginal teeth per lobe
@@ -217,8 +218,10 @@ function palmateLeaf(g: MeshGrower, base: Vector3, fwd: Vector3, nrm: Vector3, R
       const p = (pos[ri] as Vector3[])[j] as Vector3;
       const nv = (nrmGrid[ri] as Vector3[])[j] as Vector3;
       const ao = 0.5 + 0.45 * f; // centre shaded (petiole well), rim open to sky
-      // uv.v carries the centre→rim fraction (drives the preview's reddish-margin tint)
-      row.push(g.vertex(p.x, p.y, p.z, nv.x, nv.y, nv.z, j / Na, f, 0, 0.2 + 0.6 * f, swayPhase, ao));
+      // uv.v carries the centre→rim fraction (drives the preview's reddish-margin
+      // tint). flex is monotone from the petiole-tip attach flex (centre f=0) with a
+      // small +0.15 gradient to the rim → the blade sways with its petiole, no tear.
+      row.push(g.vertex(p.x, p.y, p.z, nv.x, nv.y, nv.z, j / Na, f, 0, attachFlex + 0.15 * f, swayPhase, ao));
     }
     ids.push(row);
   }
@@ -260,8 +263,9 @@ function whiteFlower(g: MeshGrower, center: Vector3, up: Vector3, size: number, 
   }
 }
 
-/** amber raspberry-like aggregate berry: a cluster of a few plump drupelets on a dome. */
-function aggregateBerry(g: MeshGrower, center: Vector3, R: number, swayPhase: number, rng: Rng): void {
+/** amber raspberry-like aggregate berry: a cluster of a few plump drupelets on a dome.
+ *  RIGID: `attachFlex` is the constant flex for every drupelet (its stalk-top flex). */
+function aggregateBerry(g: MeshGrower, center: Vector3, R: number, swayPhase: number, attachFlex: number, rng: Rng): void {
   const drupR = R * 0.46;
   const n = 7 + rng.int(4); // 7–10 plump drupelets
   for (let i = 0; i < n; i++) {
@@ -274,7 +278,7 @@ function aggregateBerry(g: MeshGrower, center: Vector3, R: number, swayPhase: nu
       center.y + y * (R - drupR * 0.4),
       center.z + Math.sin(a) * rr * (R - drupR * 0.5),
     );
-    sphere(g, c, drupR * (0.85 + rng.float() * 0.3), 1, swayPhase, 1);
+    sphere(g, c, drupR * (0.85 + rng.float() * 0.3), 1, swayPhase, attachFlex, 1);
   }
 }
 
@@ -346,7 +350,8 @@ function buildShoot(parts: Parts, origin: Vector3, rng: Rng, opts: { berry: bool
     fwd.normalize();
     const R = 0.026 + rng.float() * 0.016; // blade radius 2.6–4.2 cm → 5–8 cm wide (dominant)
     const lobes = 5 + rng.int(3); // 5–7 rounded lobes
-    palmateLeaf(parts.leaf, tip.p.clone(), fwd, nrmL, R, lobes, swayPhase, rng.fork(`leaf${i}`));
+    // leaf attaches at the petiole TIP (growStem tip flex) → that is its attach flex.
+    palmateLeaf(parts.leaf, tip.p.clone(), fwd, nrmL, R, lobes, swayPhase, STEM_FLEX_TIP, rng.fork(`leaf${i}`));
   }
 
   // berry / flower sits among / just above the leaf canopy on a short reddish stalk.
@@ -361,17 +366,21 @@ function buildShoot(parts: Parts, origin: Vector3, rng: Rng, opts: { berry: bool
     // amber berry always peeks clear of the up-cupped leaf rims from the side.
     const stalkTopY = cy + 0.02 + rng.float() * 0.015;
     const stalkTop = new Vector3(stalkBase.x + (rng.float() - 0.5) * 0.01, stalkTopY, stalkBase.z + (rng.float() - 0.5) * 0.01);
-    thinStalk(parts.stem, stalkBase, stalkTop, 0.0009, swayPhase);
+    // stalk base welds to the main-stem top (growStem tip flex); the berry rides
+    // the stalk-top flex (stalk base + its small gradient) as one rigid unit.
+    thinStalk(parts.stem, stalkBase, stalkTop, 0.0009, swayPhase, STEM_FLEX_TIP);
     if (opts.berry) {
-      aggregateBerry(parts.berry, stalkTop.clone().addScaledVector(UP, 0.006), 0.007 + rng.float() * 0.003, swayPhase, rng.fork('berry'));
+      aggregateBerry(parts.berry, stalkTop.clone().addScaledVector(UP, 0.006), 0.007 + rng.float() * 0.003, swayPhase, STEM_FLEX_TIP + 0.15, rng.fork('berry'));
     } else {
       whiteFlower(parts.flower, stalkTop, UP, 0.012 + rng.float() * 0.004, swayPhase);
     }
   }
 }
 
-/** a short thin 4-sided reddish stalk from a→b (berry/flower pedicel), vdata.x = 0. */
-function thinStalk(g: MeshGrower, a: Vector3, b: Vector3, r: number, swayPhase: number): void {
+/** a short thin 4-sided reddish stalk from a→b (berry/flower pedicel), vdata.x = 0.
+ *  Base rides its `attachFlex` (the stem top it welds to) + a small +0.15 gradient to
+ *  the tip, so the stalk and its berry stay synced with the stem. */
+function thinStalk(g: MeshGrower, a: Vector3, b: Vector3, r: number, swayPhase: number, attachFlex: number): void {
   const dir = new Vector3().subVectors(b, a);
   const len = dir.length() || 1e-4;
   dir.multiplyScalar(1 / len);
@@ -384,8 +393,8 @@ function thinStalk(g: MeshGrower, a: Vector3, b: Vector3, r: number, swayPhase: 
   for (let k = 0; k <= sides; k++) {
     const th = (k / sides) * Math.PI * 2;
     const rad = new Vector3().copy(u).multiplyScalar(Math.cos(th)).addScaledVector(v, Math.sin(th));
-    ringA.push(g.vertex(a.x + rad.x * r, a.y + rad.y * r, a.z + rad.z * r, rad.x, rad.y, rad.z, k / sides, 0, 0, 0.2, swayPhase, 0.7));
-    ringB.push(g.vertex(b.x + rad.x * r * 0.7, b.y + rad.y * r * 0.7, b.z + rad.z * r * 0.7, rad.x, rad.y, rad.z, k / sides, 1, 0, 0.8, swayPhase, 0.9));
+    ringA.push(g.vertex(a.x + rad.x * r, a.y + rad.y * r, a.z + rad.z * r, rad.x, rad.y, rad.z, k / sides, 0, 0, attachFlex, swayPhase, 0.7));
+    ringB.push(g.vertex(b.x + rad.x * r * 0.7, b.y + rad.y * r * 0.7, b.z + rad.z * r * 0.7, rad.x, rad.y, rad.z, k / sides, 1, 0, attachFlex + 0.15, swayPhase, 0.9));
   }
   for (let k = 0; k < sides; k++) {
     g.quad(ringA[k] as number, ringA[k + 1] as number, ringB[k + 1] as number, ringB[k] as number);

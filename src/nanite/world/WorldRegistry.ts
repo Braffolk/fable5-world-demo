@@ -163,6 +163,15 @@ const FOLIAGE_CLASSES: ReadonlySet<number> = new Set([
   VegClass.Cranberry,
   VegClass.Cloudberry,
 ]);
+/** issue 1b: the FOLIAGE-primary bog plants that are LOW (<0.6 m) — their leaf head
+ *  gets MESH_FLAG_SHRUB_WIND so the leaf-wind fetch cantilevers (freq 1.8, h0 0.9)
+ *  instead of using the tree-fixed params (h0 6 barely bends a 0.5 m plant). Ferns/
+ *  forest flowers stay on the tree-leaf params (unchanged). */
+const BOG_FOLIAGE_CLASSES: ReadonlySet<number> = new Set([
+  VegClass.CottonGrass,
+  VegClass.Cranberry,
+  VegClass.Cloudberry,
+]);
 
 export interface WorldRegistryResult {
   registry: GeometryRegistry;
@@ -1004,6 +1013,8 @@ export async function buildWorldRegistry(input: {
         matParam: packLeafTint(foliage.color),
         matParam2: foliage.blossom ? packBlossomTint(foliage.blossom) : 0,
         aggregate: true,
+        // 1b: low bog foliage cantilevers on the shrub leaf-wind params (h0 0.9).
+        shrubWind: BOG_FOLIAGE_CLASSES.has(pool.cls),
       });
       reg.setMaxDistance(head, lib.clsMaxDist[pool.cls] ?? 120);
       heads.set(idF, head);
@@ -1066,6 +1077,9 @@ export async function buildWorldRegistry(input: {
         matParam: packLeafTint(pool.leaf.color),
         matParam2: pool.leaf.blossom ? packBlossomTint(pool.leaf.blossom) : 0,
         aggregate: true,
+        // 1b: a shrub's leaf crown must sway on the SAME cantilever params (freq 1.8,
+        // h0 0.9) as its bark stems — trees stay unset (byte-identical tree crowns).
+        shrubWind: SHRUB_CLASSES.has(pool.cls),
       });
       // trees hand their crown to a voxel sibling at transitionDist and continue as
       // impostors to TREE_GEO_FAR; understory shrubs are short-range dense cover — the

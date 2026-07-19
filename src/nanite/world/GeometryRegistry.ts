@@ -176,6 +176,14 @@ export const MESH_FLAG_TWO_SIDED = 16;
  *  ~1.2 km, the user-visible aerial holes), and the resolve blends its brick normals toward
  *  up (?ftnrm) to kill the tile-pitch dark banding from splat-averaged mean normals. */
 export const MESH_FLAG_FARTILE = 32;
+/** 2026-07-20 (issue 1b): this LEAF-channel head belongs to a low SHRUB / bog dwarf
+ *  plant (<0.6 m), so the leaf-wind fetch must use the SHRUB cantilever params
+ *  (freq 1.8, h0 0.9) — the same the trunk channel already applies via wind-profile 2
+ *  — instead of the TREE-fixed leaf params (freq 1, h0 6). Without it a shrub's leaf
+ *  crown oscillates at a different rate/profile than its own bark stems (they share
+ *  the posKey phase but not natW). Trees leave it unset ⇒ byte-identical. Free: rides
+ *  the existing flags byte (bits 16-23 of mesh word 6; bits 1..32 were in use). */
+export const MESH_FLAG_SHRUB_WIND = 64;
 /** cluster-record flag bits (byte 1 of word 7) */
 export const CLUSTER_FLAG_HEIGHTFIELD = 1;
 /** N8-D1: this cluster carries a DAG record at the same global index in gpu.dag */
@@ -222,6 +230,10 @@ export interface RegisterOpts {
   /** N9-C2: render from both faces — the SW raster re-winds back-faces instead of
    *  culling, so the source needs no reversed-winding duplicate (leaf crowns). */
   twoSided?: boolean;
+  /** issue 1b: this leaf head is a low SHRUB/bog plant — sets MESH_FLAG_SHRUB_WIND so
+   *  the leaf-wind fetch uses the shrub cantilever params (freq 1.8, h0 0.9). Trees omit
+   *  it (byte-identical). */
+  shrubWind?: boolean;
   /** max wind sway amplitude in meters — cluster-bound padding at cull (F6) */
   swayPad?: number;
   /** explicit-mesh material parameter (e.g. bark texture-array slice). Stored
@@ -3061,6 +3073,7 @@ export class GeometryRegistry {
     if (opts.aggregate) flags |= MESH_FLAG_AGGREGATE;
     if (opts.castShadows !== false) flags |= MESH_FLAG_CAST_SHADOWS;
     if (opts.twoSided) flags |= MESH_FLAG_TWO_SIDED;
+    if (opts.shrubWind) flags |= MESH_FLAG_SHRUB_WIND;
     return {
       handle,
       label: opts.label ?? `mesh${handle}`,

@@ -29,6 +29,19 @@ import type { SkelBranch } from '../VegTypes';
 
 const UP = new Vector3(0, 1, 0);
 
+/** Stem sway-flex range (vdata.y) authored by growStem via tubeForBranch. The
+ *  in-world sway reads ONLY vdata.y, so flex must be a plant-GLOBAL MONOTONE field:
+ *  a leaf/flower welded onto the stem at walk-fraction `t` inherits the stem's flex
+ *  THERE (stemFlexAt) as its attachment flex, keeping the whole plant coherent under
+ *  wind (no head/leaf shearing off its parent). Kept here so growStem and every
+ *  caller agree on the same base→tip ramp. */
+export const STEM_FLEX_BASE = 0.08;
+export const STEM_FLEX_TIP = 0.6;
+/** flex of a growStem centerline at normalized position t∈[0,1] (attachment flex). */
+export function stemFlexAt(t: number): number {
+  return STEM_FLEX_BASE + (STEM_FLEX_TIP - STEM_FLEX_BASE) * t;
+}
+
 export interface StemSample {
   p: Vector3;
   dir: Vector3;
@@ -112,8 +125,8 @@ export function growStem(bark: MeshGrower, o: StemOpts, rng: Rng): StemSample[] 
       uRepeats: 1,
       vScale: 1,
       swayPhase: o.swayPhase,
-      swayFlexBase: 0.08,
-      swayFlexTip: 0.6,
+      swayFlexBase: STEM_FLEX_BASE,
+      swayFlexTip: STEM_FLEX_TIP,
       hue: o.hue,
     },
     rng,
@@ -175,6 +188,12 @@ export function perpFrame(dir: Vector3, outU: Vector3, outV: Vector3): void {
  * lanceolate/elliptic width profile (w0 base → w1 mid → w2 tip). `axis` runs the
  * length, `side` is across the blade, both unit; `keel` lifts the midrib, `revolute`
  * rolls the margins under. Real 3-D volume, per-vertex tilted normals for shading.
+ *
+ * `attachFlex` = the stem's sway flex at the leaf's attachment node (stemFlexAt(t));
+ * the blade — a genuinely bendy part — adds a small +0.15 gradient base→tip on top,
+ * so the leaf sways coherently with its stem instead of tearing off (vdata.y). The
+ * per-leaf hue jitter rides vdata.x within the LEAF part-band (0.5-centred so the
+ * signed jitter survives the [0,1] unorm clamp AND stays below the ≥0.85 petal band).
  */
 export function leafBlade(
   g: MeshGrower,
@@ -188,7 +207,7 @@ export function leafBlade(
   keel: number,
   revolute: number,
   hue: number,
-  vdx: number,
+  attachFlex: number,
   aoBase: number,
   aoTip: number,
   segs = 3,
@@ -197,6 +216,7 @@ export function leafBlade(
   const nL = new Vector3().copy(n).addScaledVector(side, -0.4).normalize();
   const nR = new Vector3().copy(n).addScaledVector(side, 0.4).normalize();
   const widthAt = (t: number): number => (t < 0.5 ? w0 + (w1 - w0) * (t / 0.5) : w1 + (w2 - w1) * ((t - 0.5) / 0.5));
+  const hx = 0.5 + hue * 0.5; // leaf part-band hue (6.1: was lost in the dead z slot)
   const L: number[] = [];
   const M: number[] = [];
   const R: number[] = [];
@@ -211,9 +231,10 @@ export function leafBlade(
     pL.copy(c).addScaledVector(side, -w).addScaledVector(n, -revolute * w);
     pR.copy(c).addScaledVector(side, w).addScaledVector(n, -revolute * w);
     const ao = aoBase + (aoTip - aoBase) * t;
-    L.push(g.vertex(pL.x, pL.y, pL.z, nL.x, nL.y, nL.z, 0, t, vdx, 0.4, hue, ao));
-    M.push(g.vertex(mid.x, mid.y, mid.z, n.x, n.y, n.z, 0.5, t, vdx, 0.5, hue, ao));
-    R.push(g.vertex(pR.x, pR.y, pR.z, nR.x, nR.y, nR.z, 1, t, vdx, 0.4, hue, ao));
+    const flex = attachFlex + 0.15 * t; // monotone from the attachment node
+    L.push(g.vertex(pL.x, pL.y, pL.z, nL.x, nL.y, nL.z, 0, t, hx, flex, 0, ao));
+    M.push(g.vertex(mid.x, mid.y, mid.z, n.x, n.y, n.z, 0.5, t, hx, flex, 0, ao));
+    R.push(g.vertex(pR.x, pR.y, pR.z, nR.x, nR.y, nR.z, 1, t, hx, flex, 0, ao));
   }
   for (let i = 0; i < segs; i++) {
     g.quad(L[i] as number, M[i] as number, M[i + 1] as number, L[i + 1] as number);
@@ -221,7 +242,9 @@ export function leafBlade(
   }
 }
 
-/** Tiny appressed scale leaf (heather): a small 2-tri leaf hugging the stem. */
+/** Tiny appressed scale leaf (heather): a small 2-tri leaf hugging the stem. Rides
+ *  the stem's attachment flex (`attachFlex`) so it sways with its node; hue jitter
+ *  in the leaf part-band on vdata.x (6.1). */
 export function scaleLeaf(
   g: MeshGrower,
   base: Vector3,
@@ -231,15 +254,17 @@ export function scaleLeaf(
   len: number,
   wid: number,
   hue: number,
-  vdx: number,
+  attachFlex: number,
   ao: number,
 ): void {
   const tip = new Vector3().copy(base).addScaledVector(axis, len).addScaledVector(outN, len * 0.25);
   const a0 = new Vector3().copy(base).addScaledVector(side, -wid);
   const a1 = new Vector3().copy(base).addScaledVector(side, wid);
-  const v0 = g.vertex(a0.x, a0.y, a0.z, outN.x, outN.y, outN.z, 0, 0, vdx, 0.5, hue, ao);
-  const v1 = g.vertex(a1.x, a1.y, a1.z, outN.x, outN.y, outN.z, 1, 0, vdx, 0.5, hue, ao);
-  const v2 = g.vertex(tip.x, tip.y, tip.z, outN.x, outN.y, outN.z, 0.5, 1, vdx, 0.7, hue, ao);
+  const hx = 0.5 + hue * 0.5;
+  const fTip = attachFlex + 0.1;
+  const v0 = g.vertex(a0.x, a0.y, a0.z, outN.x, outN.y, outN.z, 0, 0, hx, attachFlex, 0, ao);
+  const v1 = g.vertex(a1.x, a1.y, a1.z, outN.x, outN.y, outN.z, 1, 0, hx, attachFlex, 0, ao);
+  const v2 = g.vertex(tip.x, tip.y, tip.z, outN.x, outN.y, outN.z, 0.5, 1, hx, fTip, 0, ao);
   g.tri(v0, v1, v2);
 }
 
@@ -255,6 +280,7 @@ export function urnBell(
   size: number,
   sides: number,
   swayPhase: number,
+  attachFlex: number,
 ): void {
   const u = new Vector3();
   const v = new Vector3();
@@ -282,7 +308,8 @@ export function urnBell(
       const px = c.x + rad.x * rr;
       const py = c.y + rad.y * rr;
       const pz = c.z + rad.z * rr;
-      ring.push(g.vertex(px, py, pz, nrm.x, nrm.y, nrm.z, k / sides, tt, 1, 0.6, swayPhase, ao));
+      // RIGID bell: one CONSTANT flex = its attachment-point flex (sways as one unit).
+      ring.push(g.vertex(px, py, pz, nrm.x, nrm.y, nrm.z, k / sides, tt, 1, attachFlex, swayPhase, ao));
     }
     rings.push(ring);
   }
@@ -295,14 +322,16 @@ export function urnBell(
   }
 }
 
-/** A short thin pedicel (flower-coloured) — bog-rosemary's nodding pink stalks. */
-export function pedicel(g: MeshGrower, a: Vector3, b: Vector3, hw: number, swayPhase: number): void {
+/** A short thin pedicel (flower-coloured) — bog-rosemary's nodding pink stalks.
+ *  Carries the stem's attach flex at its base + a small +0.1 gradient to its tip
+ *  (a bendy stalk), so the bell it feeds stays synced with the stem. */
+export function pedicel(g: MeshGrower, a: Vector3, b: Vector3, hw: number, swayPhase: number, attachFlex: number): void {
   const dir = new Vector3().subVectors(b, a).normalize();
   const u = new Vector3();
   const v = new Vector3();
   perpFrame(dir, u, v);
   const mk = (p: Vector3, off: Vector3, vv: number): number =>
-    g.vertex(p.x + off.x, p.y + off.y, p.z + off.z, u.x, u.y, u.z, 0, vv, 1, 0.5, swayPhase, 0.8);
+    g.vertex(p.x + off.x, p.y + off.y, p.z + off.z, u.x, u.y, u.z, 0, vv, 1, attachFlex + 0.1 * vv, swayPhase, 0.8);
   const uL = new Vector3().copy(u).multiplyScalar(-hw);
   const uR = new Vector3().copy(u).multiplyScalar(hw);
   const a0 = mk(a, uL, 0);
@@ -317,7 +346,7 @@ export function pedicel(g: MeshGrower, a: Vector3, b: Vector3, hw: number, swayP
  * whose normal is `up`. `size` is the flower radius. Petals vdata.x = 1, tiny
  * centre vdata.x = 0.5.
  */
-export function starFloret(g: MeshGrower, center: Vector3, up: Vector3, size: number, swayPhase: number): void {
+export function starFloret(g: MeshGrower, center: Vector3, up: Vector3, size: number, swayPhase: number, attachFlex: number): void {
   const u = new Vector3();
   const v = new Vector3();
   perpFrame(up, u, v);
@@ -336,10 +365,11 @@ export function starFloret(g: MeshGrower, center: Vector3, up: Vector3, size: nu
     tip.copy(center).addScaledVector(dir, size).addScaledVector(up, size * 0.08);
     s0.copy(center).addScaledVector(dir, baseR).addScaledVector(perp, -w);
     s1.copy(center).addScaledVector(dir, baseR).addScaledVector(perp, w);
-    const c = g.vertex(center.x, center.y, center.z, up.x, up.y, up.z, 0.5, 0, 0.5, 0.4, swayPhase, 0.7);
-    const p0 = g.vertex(s0.x, s0.y, s0.z, up.x, up.y, up.z, 0, 0.5, 1, 0.5, swayPhase, 0.85);
-    const p1 = g.vertex(s1.x, s1.y, s1.z, up.x, up.y, up.z, 1, 0.5, 1, 0.5, swayPhase, 0.85);
-    const pt = g.vertex(tip.x, tip.y, tip.z, up.x, up.y, up.z, 0.5, 1, 1, 0.6, swayPhase, 1);
+    // RIGID floret: one CONSTANT flex = its corymb attachment-point flex.
+    const c = g.vertex(center.x, center.y, center.z, up.x, up.y, up.z, 0.5, 0, 0.5, attachFlex, swayPhase, 0.7);
+    const p0 = g.vertex(s0.x, s0.y, s0.z, up.x, up.y, up.z, 0, 0.5, 1, attachFlex, swayPhase, 0.85);
+    const p1 = g.vertex(s1.x, s1.y, s1.z, up.x, up.y, up.z, 1, 0.5, 1, attachFlex, swayPhase, 0.85);
+    const pt = g.vertex(tip.x, tip.y, tip.z, up.x, up.y, up.z, 0.5, 1, 1, attachFlex, swayPhase, 1);
     g.tri(c, p0, pt);
     g.tri(c, pt, p1);
   }

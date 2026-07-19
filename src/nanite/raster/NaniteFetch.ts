@@ -19,6 +19,7 @@ import { gustAt, gustLagAt, windExposure, windU, WIND_LAG_M } from '../../render
 import { SKIRT_DEPTH_A, SKIRT_DEPTH_B } from '../build/BuildHeightGrid';
 import {
   CLUSTER_FLAG_DAG,
+  MESH_FLAG_SHRUB_WIND,
   MESH_FLAG_TWO_SIDED,
   MESH_WORDS,
   TRANSFORM_CHANNEL,
@@ -209,6 +210,9 @@ export function makeFetch(
     // N9-C2: two-sided bit (flags byte 2 of w6) — the raster re-winds back-faces
     // instead of culling for these meshes (leaf crowns). Free: w6 already loaded.
     const twoSided = w6.shiftRight(uint(16)).bitAnd(uint(MESH_FLAG_TWO_SIDED)).notEqual(uint(0)).toVar();
+    // issue 1b: leaf head of a low shrub/bog plant → the leaf-wind block picks the
+    // shrub cantilever params (freq 1.8, h0 0.9). Cluster-uniform (per-mesh flag).
+    const shrubWind = w6.shiftRight(uint(16)).bitAnd(uint(MESH_FLAG_SHRUB_WIND)).notEqual(uint(0)).toVar();
     const quadsX = elemU(gpu.meshes, mBase.add(uint(10))).bitAnd(uint(0xffff)).toVar();
     const gx = triStart.bitAnd(uint(0xffff)).mul(winW).toVar();
     const gz = triStart.shiftRight(uint(16)).mul(winW).toVar();
@@ -285,14 +289,18 @@ export function makeFetch(
         const e = windExposure(origin.xz as unknown as NV2);
         const g = gustAt(origin.xz as unknown as NV2);
         const gL = gustLagAt(origin.xz as unknown as NV2, WIND_LAG_M);
-        h0.assign(float(6));
+        // 1b: low shrub/bog leaf heads cantilever (freq 1.8, h0 0.9) so the crown
+        // sways WITH its bark stems (which already use profile-2 shrub params); trees
+        // stay freq 1 / h0 6 → select(false,…) collapses to the identical tree math.
+        h0.assign(shrubWind.select(float(0.9), float(6)));
+        const freq = shrubWind.select(float(1.8), float(1));
         const farAtten = float(1).sub(dist.sub(380).div(100).clamp(0, 1));
         const eks = e.mul(farAtten).toVar();
         leanBase.assign(s.mul(s).mul(g.mul(0.9).add(0.5)).mul(eks).mul(1.1));
         swayABase.assign(s.mul(g.mul(0.75).add(0.25)).mul(eks).mul(0.5));
         const instPhase = slotHash(posKey, 211).toVar();
         const fJit = instPhase.mul(7.31).fract();
-        natW.assign(fJit.mul(0.3).add(0.15).mul(6.2832).div(A.w.max(0.25).sqrt()));
+        natW.assign(fJit.mul(0.3).add(0.15).mul(6.2832).mul(freq).div(A.w.max(0.25).sqrt()));
         ph.assign(instPhase.mul(6.2832));
         const brAtten = float(1).sub(dist.sub(160).div(140).clamp(0, 1));
         branchBase.assign(gL.sub(0.45).mul(s).mul(eks).mul(0.55).mul(brAtten));

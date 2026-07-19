@@ -20,7 +20,7 @@ import { Group, Mesh, MeshStandardMaterial, DoubleSide, Vector3 } from 'three';
 import type { BufferGeometry, Object3D } from 'three';
 import type { Rng } from '../../core/Seed';
 import { MeshGrower } from '../TubeMesh';
-import { growStem, walkStem, leafBlade, urnBell, pedicel, mergeGeo, perpFrame, type StemSample } from './EricaceousKit';
+import { growStem, walkStem, leafBlade, urnBell, pedicel, mergeGeo, perpFrame, stemFlexAt, STEM_FLEX_TIP, type StemSample } from './EricaceousKit';
 
 // ---- recommended integration params ----------------------------------------
 export const BOGROSEMARY_HEIGHT: [number, number] = [0.15, 0.3];
@@ -51,8 +51,7 @@ function dressStem(parts: Parts, samples: StemSample[], rng: Rng): void {
     const len = 0.016 + rng.float() * 0.014;
     const hue = (rng.float() - 0.5) * 0.4;
     // linear: near-constant narrow width, strong keel + revolute → almost needle-like
-    leafBlade(parts.leaf, p, axis, side, len, len * 0.07, len * 0.09, len * 0.03, 0.34, 0.6, hue, 0, 0.55 + 0.35 * t, 0.95, 3);
-    void t;
+    leafBlade(parts.leaf, p, axis, side, len, len * 0.07, len * 0.09, len * 0.03, 0.34, 0.6, hue, stemFlexAt(t), 0.55 + 0.35 * t, 0.95, 3);
   });
 }
 
@@ -72,7 +71,9 @@ function bellCluster(parts: Parts, tip: Vector3, up: Vector3, rng: Rng, swayPhas
       .addScaledVector(u, Math.cos(a) * reach)
       .addScaledVector(v, Math.sin(a) * reach)
       .addScaledVector(up, 0.004 + rng.float() * 0.004);
-    pedicel(parts.flower, tip, stalkEnd, 0.0006, swayPhase);
+    // bells hang at the terminal cluster (stem tip): pedicel carries the tip flex
+    // (+0.1 to its end), the bell rides that pedicel-end flex as one rigid unit.
+    pedicel(parts.flower, tip, stalkEnd, 0.0006, swayPhase, STEM_FLEX_TIP);
     const size = 0.006 + rng.float() * 0.0035;
     // hang direction: mostly down, slightly outward (nodding)
     const hang = new Vector3()
@@ -81,7 +82,7 @@ function bellCluster(parts: Parts, tip: Vector3, up: Vector3, rng: Rng, swayPhas
       .addScaledVector(v, Math.sin(a) * 0.25)
       .normalize();
     void rng.float();
-    urnBell(parts.flower, stalkEnd, hang, size, 6, swayPhase);
+    urnBell(parts.flower, stalkEnd, hang, size, 6, swayPhase, STEM_FLEX_TIP + 0.1);
   }
 }
 

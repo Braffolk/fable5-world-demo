@@ -38,7 +38,7 @@ import { Group, Mesh, MeshStandardMaterial, DoubleSide, Vector3 } from 'three';
 import type { BufferGeometry, Object3D } from 'three';
 import type { Rng } from '../../core/Seed';
 import { MeshGrower } from '../TubeMesh';
-import { growStem, walkStem, leafBlade, perpFrame, type StemSample } from './EricaceousKit';
+import { growStem, walkStem, leafBlade, perpFrame, stemFlexAt, STEM_FLEX_TIP, type StemSample } from './EricaceousKit';
 
 // ---- recommended integration params ----------------------------------------
 /** compact leafy plant height (m): ascending shoots + berry stalks reach ~6–10 cm. */
@@ -65,7 +65,7 @@ const GOLDEN = 2.399963; // golden-angle phyllotaxy for alternate leaves
 
 /** A small round berry (low-res lat/long sphere) with outward normals, welded
  *  into the berry grower. vdata.x = 1 so the flower-style material tints it red. */
-function berrySphere(g: MeshGrower, center: Vector3, radius: number, swayPhase: number): void {
+function berrySphere(g: MeshGrower, center: Vector3, radius: number, swayPhase: number, attachFlex: number): void {
   const stacks = 5;
   const slices = 7;
   const rows: number[][] = [];
@@ -86,7 +86,7 @@ function berrySphere(g: MeshGrower, center: Vector3, radius: number, swayPhase: 
           center.x + nx * radius, center.y + ny * radius, center.z + nz * radius,
           nx, ny, nz,
           k / slices, i / stacks,
-          1, 0.5, swayPhase, ao,
+          1, attachFlex, swayPhase, ao,
         ),
       );
     }
@@ -132,7 +132,7 @@ function dressStem(parts: Parts, samples: StemSample[], spacing: number, spread:
     leafBlade(
       parts.foliage, p, axis, side,
       len, len * 0.24, len * 0.34, len * 0.05,
-      0.16, 0.6, hue, 0, 0.5 + 0.4 * t, 0.98, 2,
+      0.16, 0.6, hue, stemFlexAt(t), 0.5 + 0.4 * t, 0.98, 2,
     );
   });
 }
@@ -178,9 +178,11 @@ function addBerryCluster(parts: Parts, samples: StemSample[], baseAz: number, rn
     );
     const tip = stalk[stalk.length - 1] as StemSample;
     const rBerry = 0.0026 + rng.float() * 0.001; // 5.2–7.2 mm diameter (≈ leaf size)
-    // berry sits AT the pedicel tip along its (nodding) direction → visibly joined
+    // berry sits AT the pedicel tip along its (nodding) direction → visibly joined.
+    // RIGID: one CONSTANT flex = the pedicel-tip flex (growStem tip), so it sways
+    // as one unit with the stalk instead of shearing.
     const c = new Vector3().copy(tip.p).addScaledVector(tip.dir, rBerry * 0.85);
-    berrySphere(parts.berry, c, rBerry, phase);
+    berrySphere(parts.berry, c, rBerry, phase, STEM_FLEX_TIP);
   }
 }
 

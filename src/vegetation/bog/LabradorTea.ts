@@ -19,7 +19,7 @@ import { Group, Mesh, MeshStandardMaterial, DoubleSide, Vector3 } from 'three';
 import type { BufferGeometry, Object3D } from 'three';
 import type { Rng } from '../../core/Seed';
 import { MeshGrower } from '../TubeMesh';
-import { growStem, walkStem, leafBlade, starFloret, mergeGeo, perpFrame, type StemSample } from './EricaceousKit';
+import { growStem, walkStem, leafBlade, starFloret, mergeGeo, perpFrame, stemFlexAt, STEM_FLEX_TIP, type StemSample } from './EricaceousKit';
 
 // ---- recommended integration params ----------------------------------------
 export const LABTEA_HEIGHT: [number, number] = [0.3, 0.55];
@@ -57,8 +57,11 @@ function dressStem(parts: Parts, samples: StemSample[], rng: Rng): void {
       const side = new Vector3().crossVectors(axis, outN).normalize();
       const len = 0.022 + rng.float() * 0.013 + t * 0.006;
       const hue = (rng.float() - 0.5) * 0.5;
-      // narrow-elliptic: narrow base, widest mid, tapered tip; strong revolute margins
-      leafBlade(parts.leaf, p, axis, side, len, len * 0.12, len * 0.3, len * 0.07, 0.28, 0.4, hue, 0, 0.5 + 0.4 * t, Math.min(1, 0.8 + 0.4 * t), 3);
+      // TRUE sookail (R. tomentosum / Ledum palustre): NARROW, near-linear leathery
+      // leaves with a STRONG revolute (rolled-under) margin — NOT the broad American
+      // R. groenlandicum. Width ≈ 0.18·len at the widest (was 0.3), keel + revolute
+      // 0.65 roll the margins hard under, so the leaf reads narrow from every angle.
+      leafBlade(parts.leaf, p, axis, side, len, len * 0.09, len * 0.18, len * 0.05, 0.32, 0.65, hue, stemFlexAt(t), 0.5 + 0.4 * t, Math.min(1, 0.8 + 0.4 * t), 3);
     }
   });
 }
@@ -67,7 +70,7 @@ function dressStem(parts: Parts, samples: StemSample[], rng: Rng): void {
  *  Florets sit on a slightly-flattened ball (spherical cap wrapping past the
  *  equator) and face radially outward, so the cluster reads as a soft fluffy
  *  dome from every angle rather than a sparse flat disc. */
-function corymb(parts: Parts, tip: Vector3, up: Vector3, rng: Rng, swayPhase: number): void {
+function corymb(parts: Parts, tip: Vector3, up: Vector3, rng: Rng, swayPhase: number, attachFlex: number): void {
   const u = new Vector3();
   const v = new Vector3();
   perpFrame(up, u, v);
@@ -93,7 +96,7 @@ function corymb(parts: Parts, tip: Vector3, up: Vector3, rng: Rng, swayPhase: nu
       .addScaledVector(up, radial.dot(up) * R * 0.8);
     // florets face outward from the ball centre, biased a touch upward
     const faceN = new Vector3().copy(radial).addScaledVector(up, 0.25).normalize();
-    starFloret(parts.flower, c, faceN, 0.0062 + rng.float() * 0.003, swayPhase);
+    starFloret(parts.flower, c, faceN, 0.0062 + rng.float() * 0.003, swayPhase, attachFlex);
   }
 }
 
@@ -127,7 +130,7 @@ export function buildLabradorTeaParts(rng: Rng): Parts {
     );
     dressStem(parts, samples, rng.fork(`dress${i}`));
     const tip = samples[samples.length - 1] as StemSample;
-    if (rng.chance(0.85)) corymb(parts, tip.p.clone(), tip.dir.clone(), rng.fork(`cor${i}`), rng.float() * Math.PI * 2);
+    if (rng.chance(0.85)) corymb(parts, tip.p.clone(), tip.dir.clone(), rng.fork(`cor${i}`), rng.float() * Math.PI * 2, STEM_FLEX_TIP);
     // one upper side branch (open, few-branched habit)
     if (rng.chance(0.6)) {
       const si = Math.max(2, samples.length - 3 + rng.int(2));
@@ -152,7 +155,7 @@ export function buildLabradorTeaParts(rng: Rng): Parts {
       );
       dressStem(parts, br, rng.fork(`bdress${i}`));
       const bt = br[br.length - 1] as StemSample;
-      if (rng.chance(0.7)) corymb(parts, bt.p.clone(), bt.dir.clone(), rng.fork(`bcor${i}`), rng.float() * Math.PI * 2);
+      if (rng.chance(0.7)) corymb(parts, bt.p.clone(), bt.dir.clone(), rng.fork(`bcor${i}`), rng.float() * Math.PI * 2, STEM_FLEX_TIP);
     }
   }
   return parts;

@@ -100,11 +100,11 @@ function addBlade(
   const keel = 0.55 + rng.float() * 0.4; // keel height as fraction of half-width
   const phase = rng.float() * Math.PI * 2;
   // Blades carry their warm/cool hue jitter in vdata.x (like ferns/trees). The nanite
-  // leaf resolve reads vdata.x=1 as the "cotton head" part-id for the blossom split, so
-  // the blade jitter is kept to ±0.6 — comfortably below that petal band — to avoid a
-  // stray blade near x≈1 flashing white. (Shading-attribute range only; geometry, the
-  // preview warm/cool read, and the culm/cotton parts are all unchanged.)
-  const hueJit = (rng.float() * 2 - 1) * 0.6;
+  // leaf resolve reads vdata.x≥~0.85 as the "cotton head" part-id, so keep the jitter
+  // clear of that band. geometryToSource clamps vdata to [0,1], which would crush the
+  // COOL half of a raw ±jitter to 0 (6.2) — so author it 0.5-CENTRED: 0.5+jit/2 spans
+  // [0.2,0.8], preserving the signed jitter AND staying below the petal band.
+  const hueJit = 0.5 + (rng.float() * 2 - 1) * 0.3;
 
   const ox = Math.cos(az);
   const oz = Math.sin(az);
@@ -290,7 +290,10 @@ function addFiber(
   ] as [Vector3, Vector3][]) {
     let prev: number[] | null = null;
     for (const [p, w, tt] of pts) {
-      const flex = 0.3 + 0.6 * tt;
+      // The cotton head is a RIGID sub-object welded onto the culm tip (flex 1.0),
+      // so every fibre vertex carries that ONE constant attach flex — the head
+      // translates as one with its culm instead of lagging/shearing (1a).
+      const flex = 1;
       const ao = 0.9 + 0.1 * tt;
       const a = g.vertex(p.x - plane.x * w, p.y - plane.y * w, p.z - plane.z * w, nrm.x, nrm.y, nrm.z, 0, tt, 1, flex, phase, ao);
       const b = g.vertex(p.x + plane.x * w, p.y + plane.y * w, p.z + plane.z * w, nrm.x, nrm.y, nrm.z, 1, tt, 1, flex, phase, ao);
