@@ -73,6 +73,7 @@ import { BARK_FIELDS, BARK_TEX_RES } from '../../vegetation/BarkField';
 import { fbm3, valueNoise3 } from '../../gpu/noise/NoiseTSL';
 import type { ProbeGI } from '../../gpu/passes/ProbeGI';
 import type { Heightfield } from '../../world/Heightfield';
+import { previewClipBox } from '../../world/PreviewClip';
 import type { TerrainField } from '../world/TerrainField';
 import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK, CLUSTER_WORDS, MESH_FLAG_FARTILE, MESH_WORDS, readVertex } from '../world/GeometryRegistry';
 import type { RegistryGpu } from '../world/GeometryRegistry';
@@ -533,6 +534,25 @@ export function buildNaniteResolve(
     const wp = (
       streamed ? (wpRel as unknown as { add(o: NV3): NV3 }).add(vec3(cam.anchor)).toVar() : wpRel
     ) as unknown as NV3;
+    // RESEARCH-PREVIEW CLIP (src/world/PreviewClip): when the streamed manifest is a
+    // cooked-micro preview, render ONLY the synthesized core box — every visbuffer
+    // pixel outside Discards to cleared depth ⇒ sky void with a hard boundary. One
+    // gate right after `wp` covers ALL passes/classes (terrain, grass, mesh veg,
+    // voxel crowns, far tiles). BUILD-time gated: previewClipBox() is null on the
+    // full Estonia release + the generated world ⇒ zero nodes, byte-identical shader.
+    const clip = previewClipBox();
+    if (clip) {
+      If(
+        wp.x
+          .lessThan(clip.minX)
+          .or(wp.x.greaterThan(clip.maxX))
+          .or(wp.z.lessThan(clip.minZ))
+          .or(wp.z.greaterThan(clip.maxZ)),
+        () => {
+          Discard();
+        },
+      );
+    }
     const item = { x: instId, y: ci } as unknown as { x: NU; y: NU };
     const isT = matClass.equal(uint(0));
 

@@ -72,6 +72,7 @@ import type { NB, NF, NI, NV2, NV3, NV4 } from '../gpu/TSLTypes';
 import type { Atmosphere } from '../sky/Atmosphere';
 import type { TerrainField } from '../nanite/world/TerrainField';
 import type { Heightfield } from '../world/Heightfield';
+import { previewClipBox } from '../world/PreviewClip';
 
 /** clear alpine water: absorption per meter (r dies first → teal depths) */
 const SIGMA = { r: 0.42, g: 0.135, b: 0.095 };
@@ -243,6 +244,19 @@ export function waterMaterial(
     wet = positionWorld.y.greaterThan(bedH.sub(0.75)) as unknown as NB;
   }
   mat.maskNode = wetGuard ? insideInner.not().and(inWorld).and(wet) : insideInner.not().and(inWorld);
+  // RESEARCH-PREVIEW CLIP (src/world/PreviewClip): the cooked-micro preview renders
+  // ONLY the synthesized core box — mask water outside it (matches the NaniteResolve
+  // terrain/veg discard ⇒ no far lakes floating in the void). BUILD-time gated:
+  // previewClipBox() is null on every non-preview run ⇒ zero nodes, identical shader.
+  const clip = previewClipBox();
+  if (clip) {
+    const inClip = p.x
+      .greaterThan(clip.minX)
+      .and(p.x.lessThan(clip.maxX))
+      .and(p.y.greaterThan(clip.minZ))
+      .and(p.y.lessThan(clip.maxZ));
+    mat.maskNode = (mat.maskNode as unknown as NB).and(inClip);
+  }
 
   // ---- flow field --------------------------------------------------------------
   const simRes = hf.simRes;

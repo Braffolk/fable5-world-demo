@@ -20,6 +20,7 @@ import { updateSunUniforms } from '../render/VegMaterials';
 import { Heightfield } from '../world/Heightfield';
 import { GeneratedWorldSource } from '../world/source/GeneratedWorldSource';
 import { RemoteWorldSource } from '../world/source/RemoteWorldSource';
+import { armPreviewClip } from '../world/PreviewClip';
 import type { WorldSource } from '../world/source/WorldSource';
 import { buildChunkContentStreams, type ChunkContentStreams } from '../nanite/world/ChunkContent';
 import { StreamBrainClient } from '../nanite/world/StreamBrainClient';
@@ -167,6 +168,11 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     ? new RemoteWorldSource(params.dataUrl ?? undefined)
     : new GeneratedWorldSource(engine.renderer, seed);
   const worldManifest = await worldSource.open((p, m) => ctx.progress(p * 0.94, m));
+  // RESEARCH-PREVIEW CLIP: a cooked-micro preview manifest (format 2, micro fine
+  // window) renders ONLY the synthesized core — void beyond (src/world/PreviewClip).
+  // Streamed-only + manifest-gated ⇒ the full Estonia release (format 1) and the
+  // generated world can never arm it; consumers read the box at shader build time.
+  armPreviewClip(streamed ? worldManifest : null);
   // The live boot heightfield — after S4/S9 it feeds ONLY boot-time consumers
   // (scatter + classification inside source.open, the registry terrain build),
   // the still-live flow field (water ripple/foam advection reads it),
