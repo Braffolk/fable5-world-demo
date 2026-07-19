@@ -302,23 +302,37 @@ class DecodePool {
   private rr = 0;
 
   constructor(n: number) {
-    for (let i = 0; i < n; i++) {
-      const worker = new Worker(new URL('./Lac1Decode.worker.ts', import.meta.url), {
-        type: 'module',
-        name: `lac1-decode-${i}`,
-      });
-      worker.onmessage = (e: MessageEvent<Lac1DecodeRes>): void => {
-        const job = this.pending.get(e.data.id);
-        if (!job) return; // already aborted/settled
-        this.pending.delete(e.data.id);
-        job.cleanup();
-        if (e.data.ok) job.resolve(e.data.payload);
-        else if (e.data.aborted) job.reject(new DOMException('chunk fetch aborted', 'AbortError'));
-        else job.reject(new Error(`Lac1Decode: ${e.data.error}`));
-      };
-      worker.onerror = (e: ErrorEvent): void => this.failAll(new Error(`Lac1Decode worker crashed: ${e.message}`));
-      this.workers.push(worker);
-    }
+    for (let i = 0; i < n; i++) this.workers.push(this.spawn(i));
+  }
+
+  /** (re)create the worker at pool index i. A crashed worker previously stayed
+   *  in the rotation DEAD: every job round-robined onto it never got a response,
+   *  burned its 30 s deadline holding a FetchGate slot, and the stream's fetches
+   *  degenerated into permanent RPC timeouts after a heavy roam ("fine LOD stops
+   *  streaming"). onerror now respawns the worker in place (pending jobs are
+   *  failed — the demand/heal loops re-request them against the fresh worker). */
+  private spawn(i: number): Worker {
+    const worker = new Worker(new URL('./Lac1Decode.worker.ts', import.meta.url), {
+      type: 'module',
+      name: `lac1-decode-${i}`,
+    });
+    worker.onmessage = (e: MessageEvent<Lac1DecodeRes>): void => {
+      const job = this.pending.get(e.data.id);
+      if (!job) return; // already aborted/settled
+      this.pending.delete(e.data.id);
+      job.cleanup();
+      if (e.data.ok) job.resolve(e.data.payload);
+      else if (e.data.aborted) job.reject(new DOMException('chunk fetch aborted', 'AbortError'));
+      else job.reject(new Error(`Lac1Decode: ${e.data.error}`));
+    };
+    worker.onerror = (e: ErrorEvent): void => {
+      this.failAll(new Error(`Lac1Decode worker crashed: ${e.message}`));
+      if (this.workers[i] === worker) {
+        worker.terminate();
+        this.workers[i] = this.spawn(i);
+      }
+    };
+    return worker;
   }
 
   decode(job: Omit<Lac1DecodeJob, 'kind' | 'id'>, signal?: AbortSignal): Promise<ChunkPayload> {
@@ -326,14 +340,32 @@ class DecodePool {
     const id = this.nextId++;
     const worker = this.workers[this.rr++ % this.workers.length] as Worker;
     return new Promise<ChunkPayload>((resolve, reject) => {
+      // JOB DEADLINE: a decode that never responds (a worker-side hang / a lost
+      // response) must still SETTLE, or its FetchGate slot leaks — 6 leaked slots
+      // starve every later fetch FOREVER (the "fine LOD stops streaming after
+      // roaming" wedge: at rest every retry then dies on the RPC timeout while
+      // the pipe stays dead). A late response after the deadline is ignored
+      // (pending entry already gone).
+      const deadline = setTimeout(() => {
+        const p = this.pending.get(id);
+        if (!p) return;
+        this.pending.delete(id);
+        p.cleanup();
+        worker.postMessage({ kind: 'abort', id } satisfies Lac1DecodeReq);
+        p.reject(new Error('Lac1Decode: job deadline (30 s) — worker unresponsive'));
+      }, 30_000);
+      const cleanup = (): void => {
+        clearTimeout(deadline);
+        signal?.removeEventListener('abort', onAbort);
+      };
       const onAbort = (): void => {
         const p = this.pending.get(id);
         if (!p) return;
         this.pending.delete(id);
+        p.cleanup();
         worker.postMessage({ kind: 'abort', id } satisfies Lac1DecodeReq);
         p.reject(new DOMException('chunk fetch aborted', 'AbortError'));
       };
-      const cleanup = (): void => signal?.removeEventListener('abort', onAbort);
       signal?.addEventListener('abort', onAbort);
       this.pending.set(id, { resolve, reject, cleanup });
       worker.postMessage({ kind: 'decode', id, ...job } satisfies Lac1DecodeReq);

@@ -573,6 +573,8 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
     sunSky,
     naniteRegistry,
     streamOrigin,
+    field,
+    brain,
   };
 
   // S4 camera-follow: the subsystem windows track the camera every frame (on

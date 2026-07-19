@@ -93,7 +93,14 @@ export class StreamBrainClient {
   private booting = true;
   private brainCounters: Record<string, number> = {};
   /** serial fetch service — the generated source's lazy GPU readbacks
-   *  (biome/fields planes) must not race themselves */
+   *  (biome/fields planes) must not race themselves. NOTE: under a scroll burst /
+   *  main-thread stall the queue latency can exceed the brain's 6 s fetch-RPC
+   *  timeout — those chunks then land as DEGRADED window content (coarse
+   *  underlay). That is now a RECOVERABLE state: StreamBrainCore's degraded
+   *  ledger defers fine bakes there and healDegraded refills + re-bakes when the
+   *  retry succeeds. (A concurrent service was tried and REVERTED: the decode
+   *  pool wedges under real concurrency — held burst-gate slots starve every
+   *  later fetch and the boot stalls nondeterministically.) */
   private fetchChain: Promise<void> = Promise.resolve();
   private lastPoseAt = 0;
   private lastPoseX = 0;
@@ -207,9 +214,28 @@ export class StreamBrainClient {
 
   private onBrain(msg: BrainToMain): void {
     switch (msg.kind) {
-      case 'fetch':
-        this.fetchChain = this.fetchChain.then(() => this.serviceFetch(msg.id, msg.layer, msg.key));
+      case 'fetch': {
+        // STALE-DROP: the brain's fetch RPC times out at 6 s; once a queued
+        // request is older than that, servicing it is pure waste — the late
+        // fetchRes is always ignored (its pending entry is gone). Under a scroll
+        // burst the serial chain backlogs by hundreds; fully servicing dead
+        // entries kept the queue latency above the RPC timeout for MINUTES, so
+        // every live fetch (incl. the degraded-chunk heal retries) kept dying at
+        // rest — "fine LOD stops streaming after roaming". Flushing stale
+        // entries instantly keeps queue latency bounded so heals land. The 7 s
+        // margin exceeds the 6 s RPC timeout: never drops a request the brain
+        // still awaits. Brain-visible behavior for a stale entry is IDENTICAL
+        // (it already timed out) — both sources, zero policy change.
+        const enqueuedAt = performance.now();
+        this.fetchChain = this.fetchChain.then(() => {
+          if (performance.now() - enqueuedAt > 7000) {
+            this.post({ kind: 'fetchRes', id: msg.id, ok: false, payload: null, error: 'stale — brain RPC already timed out' });
+            return;
+          }
+          return this.serviceFetch(msg.id, msg.layer, msg.key);
+        });
         break;
+      }
       case 'packets':
         this.mailbox.push(...msg.packets);
         break;
@@ -370,6 +396,18 @@ export class StreamBrainClient {
         reg.unparkTileSlot(p.unparkSlot); // restore the coarse parent (instant)
         for (const slot of p.freeSlots) reg.evictHeightDagTile(slot); // drop the fine children
         field.applyLevelGrid(p.levelGrid);
+        break;
+      }
+      // in-place geometry refresh of an already-resident slot (a degraded boot
+      // bake re-baked after its failed chunk healed). No tree/level-grid change.
+      // A parked parent re-parks around the overwrite (unpark → attach → park:
+      // parkTileSlot saves the NEW rootCount, so a later merge restores honestly).
+      case 'tileRefresh': {
+        const reg = this.reg;
+        if (!reg) break;
+        if (p.parked) reg.unparkTileSlot(p.tile.slot);
+        this.attachTile(p.tile);
+        if (p.parked) reg.parkTileSlot(p.tile.slot);
         break;
       }
       // S8 far-tile attach/evict — one drain step each (brain owns slot/granule

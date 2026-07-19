@@ -100,6 +100,37 @@ interface HeightWindow {
   n0z: number;
   phaseX: number;
   phaseY: number;
+  /** format-2 DEGRADED CONTENT ledger: chunks that EXIST in the manifest but whose
+   *  fetch FAILED when this window (re)filled, so their footprint holds the coarse
+   *  UNDERLAY surface, not the real content. Keyed by packed chunk key. A bake that
+   *  reads a degraded footprint would commit a SMOOTH tile whose DAG simplifies its
+   *  edge lattice — live-sampled heights then re-open the relief and T-junction
+   *  seams crack against full-lattice neighbors (the persistent eye-level holes).
+   *  bakeSourceReady defers such bakes; healDegraded retries the fetch, refills the
+   *  footprint, and re-bakes the boot tiles that had already committed from it.
+   *  Empty forever on format-1 / generated (recording is format-2-gated). */
+  degraded: Map<number, DegradedChunk>;
+}
+
+interface DegradedChunk {
+  key: ChunkKey;
+  /** Date.now() before which the heal pass skips this entry (retry backoff). */
+  retryAt: number;
+  backoffMs: number;
+}
+
+/** a resident tile whose geometry was baked from DEGRADED window content. */
+interface TaintEntry {
+  key: string;
+  parked: boolean;
+  /** source window level index the degraded chunks live in */
+  win: number;
+  /** packed support chunk keys the bake read */
+  chunks: Set<number>;
+  level: number;
+  tx0: number;
+  tz0: number;
+  size: number;
 }
 
 /** #114 watercover window — same toroidal scroll as HeightWindow but an rgba8
@@ -180,6 +211,14 @@ export class StreamBrainCore {
   private nBuilt = 0;
   private nScrolls = 0;
   private overCapWarned = false;
+  private nHeal = 0;
+  private nRefresh = 0;
+
+  /** slot → DEGRADED-bake bookkeeping for a RESIDENT tile (a bake that had to
+   *  read failed-fetch underlay — boot only; runtime refines defer instead).
+   *  healDegraded re-bakes + in-place refreshes these once their chunks land. */
+  private readonly tainted = new Map<number, TaintEntry>();
+  private healBusy = false;
 
   constructor(deps: BrainDeps) {
     this.deps = deps;
@@ -264,7 +303,32 @@ export class StreamBrainCore {
   }
 
   private releaseSlots(slots: number[]): void {
-    for (const s of slots) this.tileFree.push(s);
+    for (const s of slots) {
+      this.tileFree.push(s);
+      this.tainted.delete(s); // a released slot's taint entry is dead
+    }
+  }
+
+  /** consume a bake's transient degraded-source fields: record a taint entry for
+   *  a RESIDENT slot (boot node / committed refine child) and STRIP the fields so
+   *  they never cross the worker boundary. No-op for clean bakes. */
+  private recordTaint(g: TileGeometry, parked: boolean): void {
+    if (g.srcDegraded && g.srcWin !== undefined && g.srcChunkKeys) {
+      const level = Math.round(Math.log2(g.size / this.cfg.gridN));
+      this.tainted.set(g.slot, {
+        key: g.key,
+        parked,
+        win: g.srcWin,
+        chunks: new Set(g.srcChunkKeys),
+        level,
+        tx0: g.x0,
+        tz0: g.z0,
+        size: g.size,
+      });
+    }
+    delete g.srcDegraded;
+    delete g.srcWin;
+    delete g.srcChunkKeys;
   }
 
   // ---- chunk fetch (LRU + dedupe + authoritative absence) ---------------------------
@@ -378,6 +442,31 @@ export class StreamBrainCore {
     this.lruBytes = 0;
   }
 
+  /** record an exists-but-failed chunk into a window's degraded ledger (format-2
+   *  height only — everything else keeps the old behavior byte-for-byte). An
+   *  authoritatively ABSENT chunk is NOT degraded: its underlay content is the
+   *  correct final surface (coverage rim), never healed, never gated on. */
+  private recordDegraded(layer: LayerName, key: ChunkKey, out?: Map<number, DegradedChunk>): void {
+    if (!out || this.manifestFormat !== 2 || layer !== 'height') return;
+    if (!this.chunkExists(layer, key)) return;
+    const packed = this.packKey(key.lod, key.cx, key.cz);
+    if (!out.has(packed)) out.set(packed, { key, retryAt: 0, backoffMs: 500 });
+  }
+
+  /** drop degraded entries whose chunk no longer overlaps the window box (the
+   *  scroll moved away — the demand law forgets them; a return re-records). */
+  private pruneDegraded(win: HeightWindow): void {
+    if (win.degraded.size === 0) return;
+    const cr = this.layerGeo('height').chunkRes;
+    for (const [packed, ent] of win.degraded) {
+      const x0 = ent.key.cx * cr;
+      const z0 = ent.key.cz * cr;
+      if (x0 + cr <= win.n0x || x0 >= win.n0x + win.plan.res || z0 + cr <= win.n0z || z0 >= win.n0z + win.plan.res) {
+        win.degraded.delete(packed);
+      }
+    }
+  }
+
   // ---- boot plane fills ---------------------------------------------------------------
 
   async fillPlanesBoot(): Promise<void> {
@@ -390,8 +479,9 @@ export class StreamBrainCore {
     this.hWin = new Array(this.plan.height.length);
     for (let i = this.plan.height.length - 1; i >= 0; i--) {
       const plan = this.plan.height[i] as PlanePlan;
-      const data = await this.assembleF32('height', plan, plan.n0x, plan.n0z, undefined, i);
-      this.hWin[i] = { plan, data, n0x: plan.n0x, n0z: plan.n0z, phaseX: 0, phaseY: 0 };
+      const degraded = new Map<number, DegradedChunk>();
+      const data = await this.assembleF32('height', plan, plan.n0x, plan.n0z, undefined, i, degraded);
+      this.hWin[i] = { plan, data, n0x: plan.n0x, n0z: plan.n0z, phaseX: 0, phaseY: 0, degraded };
     }
     for (let i = 0; i < this.hWin.length; i++) {
       const win = this.hWin[i] as HeightWindow;
@@ -422,7 +512,7 @@ export class StreamBrainCore {
     if (this.plan.water) {
       const plan = this.plan.water;
       const data = await this.assembleF32('water', plan, plan.n0x, plan.n0z, WATER_DRY_SENTINEL);
-      this.wWin = { plan, data, n0x: plan.n0x, n0z: plan.n0z, phaseX: 0, phaseY: 0 };
+      this.wWin = { plan, data, n0x: plan.n0x, n0z: plan.n0z, phaseX: 0, phaseY: 0, degraded: new Map() };
       const copy = data.slice();
       packets.push({ kind: 'fill', plane: 'water', level: 0, x: 0, y: 0, w: plan.res, h: plan.res, f32: copy });
       transfers.push(copy.buffer);
@@ -499,6 +589,7 @@ export class StreamBrainCore {
     n0z: number,
     mapNaN?: number,
     levelIndex?: number,
+    degradedOut?: Map<number, DegradedChunk>,
   ): Promise<Float32Array> {
     const geo = this.layerGeo(layer);
     const out = new Float32Array(plan.res * plan.res);
@@ -507,7 +598,11 @@ export class StreamBrainCore {
     const missing: ChunkKey[] = [];
     for (const key of chunksInWindow(geo, plan.lod, n0x, n0z, plan.res)) {
       const payload = await this.tryFetch(layer, key);
-      if (!payload || payload.kind !== 'height') { missing.push(key); continue; }
+      if (!payload || payload.kind !== 'height') {
+        missing.push(key);
+        this.recordDegraded(layer, key, degradedOut);
+        continue;
+      }
       box = copyChunkF32(out, plan.res, plan.res, place, geo, key.cx, key.cz, payload.heights, payload.res, box, mapNaN);
     }
     if (box) clampExtend(out, plan.res, plan.res, 1, box);
@@ -640,6 +735,19 @@ export class StreamBrainCore {
         // its bakes are fire-and-forget, emitting ftAttach/ftEvict as they land.
         this.ftBand?.pose(p.x, p.z);
       }
+      // DEGRADED-CONTENT HEAL (format 2): retry failed chunks, refill their window
+      // footprints, and re-bake the resident tiles that committed through them.
+      // Fire-and-forget behind a busy flag — a slow retry must never stall the
+      // pose loop (the pose feed runs at 10 Hz even at rest, so healing proceeds
+      // while the user stands still — exactly when the stuck holes were visible).
+      if (this.manifestFormat === 2 && !this.healBusy && this.hWin.some((w) => w.degraded.size > 0)) {
+        this.healBusy = true;
+        void this.healDegraded()
+          .catch((e) => this.deps.emit({ kind: 'log', level: 'warn', msg: `stream heal: ${e instanceof Error ? e.message : String(e)}` }))
+          .finally(() => {
+            this.healBusy = false;
+          });
+      }
     } catch (e) {
       this.deps.emit({ kind: 'log', level: 'error', msg: `stream brain tick: ${e instanceof Error ? e.message : String(e)}` });
     } finally {
@@ -725,7 +833,16 @@ export class StreamBrainCore {
     const phaseY = (((win.phaseY + dz) % plan.res) + plan.res) % plan.res;
     const emitRegion = async (rx0: number, rz0: number, rw: number, rh: number): Promise<void> => {
       if (rw <= 0 || rh <= 0) return;
-      const sub = await this.assembleRegionF32(plane, plan, rx0, rz0, rw, rh, plane === 'water' ? undefined : level);
+      const sub = await this.assembleRegionF32(
+        plane,
+        plan,
+        rx0,
+        rz0,
+        rw,
+        rh,
+        plane === 'water' ? undefined : level,
+        plane === 'water' ? undefined : win.degraded,
+      );
       for (const r of wrapRects(rx0 - n0x, rz0 - n0z, rw, rh, phaseX, phaseY, plan.res)) {
         // region-local origin of this physical rect (rects are logically
         // contiguous, so the mapping is a constant offset)
@@ -752,6 +869,7 @@ export class StreamBrainCore {
     win.n0z = n0z;
     win.phaseX = phaseX;
     win.phaseY = phaseY;
+    this.pruneDegraded(win);
     packets.push(this.originPacket(plane, level, plan, geo, win));
     this.pushFarWater(plane, win, packets, transfers);
     this.nScrolls++;
@@ -763,12 +881,22 @@ export class StreamBrainCore {
   private async refillWindow(plane: PlaneKind, level: number, win: HeightWindow, n0x: number, n0z: number, geo: RasterGeom): Promise<void> {
     const plan = win.plan;
     const layer: LayerName = plane === 'water' ? 'water' : 'height';
-    const data = await this.assembleF32(layer, { ...plan, wraps: plan.wraps }, n0x, n0z, plane === 'water' ? WATER_DRY_SENTINEL : undefined, plane === 'water' ? undefined : level);
+    win.degraded.clear(); // whole-window refill — the ledger repopulates from this assembly
+    const data = await this.assembleF32(
+      layer,
+      { ...plan, wraps: plan.wraps },
+      n0x,
+      n0z,
+      plane === 'water' ? WATER_DRY_SENTINEL : undefined,
+      plane === 'water' ? undefined : level,
+      plane === 'water' ? undefined : win.degraded,
+    );
     win.data.set(data);
     win.n0x = n0x;
     win.n0z = n0z;
     win.phaseX = 0;
     win.phaseY = 0;
+    this.pruneDegraded(win);
     const copy = data.slice();
     const packets: StreamPacket[] = [
       { kind: 'fill', plane, level, x: 0, y: 0, w: plan.res, h: plan.res, f32: copy },
@@ -841,7 +969,16 @@ export class StreamBrainCore {
     return { level, strideTexels, tx0, tz0, tileTexels: size, key: `L${level}:${Math.round(tx0 / size)},${Math.round(tz0 / size)}` };
   }
 
-  private async assembleRegionF32(plane: PlaneKind, plan: PlanePlan, rx0: number, rz0: number, rw: number, rh: number, levelIndex?: number): Promise<Float32Array> {
+  private async assembleRegionF32(
+    plane: PlaneKind,
+    plan: PlanePlan,
+    rx0: number,
+    rz0: number,
+    rw: number,
+    rh: number,
+    levelIndex?: number,
+    degradedOut?: Map<number, DegradedChunk>,
+  ): Promise<Float32Array> {
     const layer: LayerName = plane === 'water' ? 'water' : 'height';
     const geo = this.layerGeo(layer);
     const out = new Float32Array(rw * rh);
@@ -850,7 +987,11 @@ export class StreamBrainCore {
     const missing: ChunkKey[] = [];
     for (const key of chunksInWindow(geo, plan.lod, rx0, rz0, rw, rh)) {
       const payload = await this.tryFetch(layer, key);
-      if (!payload || payload.kind !== 'height') { missing.push(key); continue; }
+      if (!payload || payload.kind !== 'height') {
+        missing.push(key);
+        this.recordDegraded(layer, key, degradedOut);
+        continue;
+      }
       box = copyChunkF32(out, rw, rh, place, geo, key.cx, key.cz, payload.heights, payload.res, box, plane === 'water' ? WATER_DRY_SENTINEL : undefined);
     }
     if (box) clampExtend(out, rw, rh, 1, box);
@@ -1118,6 +1259,9 @@ export class StreamBrainCore {
       const b = baked[i];
       if (!b || b === 'overCap') throw new Error(`stream boot: tile ${d.desc.key} failed to bake`);
       b.slot = i; // boot slots are assigned deterministically 0..bootSlotCount-1
+      // boot bakes ARE allowed through degraded content (frame-1 terrain beats a
+      // void) — record them so healDegraded re-bakes + refreshes them in place.
+      this.recordTaint(b, !d.isLeaf);
       pmV = Math.max(pmV, b.gridVerts.length);
       pmT = Math.max(pmT, b.indices.length / 3);
       pmC = Math.max(pmC, b.clusterCount);
@@ -1127,6 +1271,13 @@ export class StreamBrainCore {
     });
     this.tree.seedBoot(slotOf);
     this.bootSlotCount = descs.length;
+    if (this.tainted.size > 0) {
+      this.deps.emit({
+        kind: 'log',
+        level: 'warn',
+        msg: `stream boot: ${this.tainted.size} tiles baked from DEGRADED content (failed fetches) — heal pass re-bakes them as chunks land`,
+      });
+    }
     // §5 provisioning — PURE RING ARITHMETIC, world-size-independent: fringe ≤
     // roots + per finer rung one hysteresis ring annulus ((M+2)² − (M/2)² leaves,
     // clamped by that rung's world tiling); parked ancestors = the quadtree's
@@ -1196,10 +1347,114 @@ export class StreamBrainCore {
     });
   }
 
+  // ---- degraded-content heal (the persistent eye-level hole fix) ---------------------------
+
+  /** retry a few degraded chunks (backoff-paced); each one that lands refills its
+   *  window footprint (fill packets — GPU + retained data) and triggers in-place
+   *  re-bakes of the resident tiles that baked through it. Runs OUTSIDE the pose
+   *  loop behind healBusy; every await re-validates window placement. */
+  private async healDegraded(): Promise<void> {
+    const now = Date.now();
+    let budget = 4;
+    const healedByWin = new Map<number, number[]>();
+    for (let i = 0; i < this.hWin.length && budget > 0; i++) {
+      const win = this.hWin[i] as HeightWindow;
+      if (win.degraded.size === 0) continue;
+      for (const [packed, ent] of [...win.degraded]) {
+        if (budget <= 0) break;
+        if (ent.retryAt > now) continue;
+        budget--;
+        const payload = await this.tryFetch('height', ent.key);
+        if (!payload || payload.kind !== 'height') {
+          ent.retryAt = Date.now() + ent.backoffMs;
+          ent.backoffMs = Math.min(8000, ent.backoffMs * 2);
+          continue;
+        }
+        if (!(await this.healChunkFill(i, win, ent.key))) continue; // a scroll raced the fill — retry next pass
+        win.degraded.delete(packed);
+        this.nHeal++;
+        let list = healedByWin.get(i);
+        if (!list) healedByWin.set(i, (list = []));
+        list.push(packed);
+      }
+    }
+    if (healedByWin.size > 0) await this.refreshTainted(healedByWin);
+  }
+
+  /** write one healed chunk's real content into a retained window (the chunk∩window
+   *  rect): assemble the region (LRU-hot — the heal fetch just landed it), then
+   *  UNDER AN UNMOVED PLACEMENT copy it into the toroidal backing and emit the
+   *  fill packets (same promote-after-fill mailbox path as a scroll's L-strip).
+   *  Returns false if a scroll moved the window during the assembly awaits. */
+  private async healChunkFill(levelIndex: number, win: HeightWindow, key: ChunkKey): Promise<boolean> {
+    const plan = win.plan;
+    const cr = this.layerGeo('height').chunkRes;
+    const n0x0 = win.n0x;
+    const n0z0 = win.n0z;
+    const ph0x = win.phaseX;
+    const ph0y = win.phaseY;
+    const rx0 = Math.max(key.cx * cr, win.n0x);
+    const rz0 = Math.max(key.cz * cr, win.n0z);
+    const rx1 = Math.min((key.cx + 1) * cr, win.n0x + plan.res);
+    const rz1 = Math.min((key.cz + 1) * cr, win.n0z + plan.res);
+    const rw = rx1 - rx0;
+    const rh = rz1 - rz0;
+    if (rw <= 0 || rh <= 0) return true; // no longer in the window — nothing to fill
+    const sub = await this.assembleRegionF32('height', plan, rx0, rz0, rw, rh, levelIndex);
+    if (win.n0x !== n0x0 || win.n0z !== n0z0 || win.phaseX !== ph0x || win.phaseY !== ph0y) return false;
+    const packets: StreamPacket[] = [];
+    const transfers: Transferable[] = [];
+    for (const r of wrapRects(rx0 - win.n0x, rz0 - win.n0z, rw, rh, win.phaseX, win.phaseY, plan.res)) {
+      const lz0 = ((((r.y - win.phaseY) % plan.res) + plan.res) % plan.res) + win.n0z - rz0;
+      const lx0 = ((((r.x - win.phaseX) % plan.res) + plan.res) % plan.res) + win.n0x - rx0;
+      const part = new Float32Array(r.w * r.h);
+      for (let y = 0; y < r.h; y++) {
+        const src = (lz0 + y) * rw + lx0;
+        for (let x = 0; x < r.w; x++) part[y * r.w + x] = sub[src + x] as number;
+        win.data.set(part.subarray(y * r.w, (y + 1) * r.w), (r.y + y) * plan.res + r.x);
+      }
+      packets.push({ kind: 'fill', plane: 'height', level: levelIndex, x: r.x, y: r.y, w: r.w, h: r.h, f32: part });
+      transfers.push(part.buffer);
+    }
+    this.deps.emit({ kind: 'packets', packets }, transfers);
+    return true;
+  }
+
+  /** re-bake every tainted RESIDENT tile whose support overlapped a just-healed
+   *  chunk, and refresh it IN PLACE (no tree change — same slot, park preserved).
+   *  A tile still touching other degraded chunks waits for their heals. */
+  private async refreshTainted(healedByWin: Map<number, number[]>): Promise<void> {
+    for (const [slot, ent] of [...this.tainted]) {
+      const healed = healedByWin.get(ent.win);
+      if (!healed || !healed.some((p) => ent.chunks.has(p))) continue;
+      const t = this.synthTile(ent.level, ent.tx0, ent.tz0, ent.size);
+      if (!this.bakeSourceReady(t)) continue; // other support chunks still degraded
+      const r = await this.bakeTile(t);
+      if (!r || r === 'overCap') continue;
+      if (this.tainted.get(slot) !== ent) continue; // slot merged/re-purposed mid-bake
+      this.tainted.delete(slot);
+      r.slot = slot;
+      delete r.srcDegraded;
+      delete r.srcWin;
+      delete r.srcChunkKeys;
+      this.nRefresh++;
+      this.deps.emit(
+        { kind: 'packets', packets: [{ kind: 'tileRefresh', tile: r, parked: ent.parked }] },
+        [r.gridVerts.buffer, r.indices.buffer, r.clusterData.buffer],
+      );
+    }
+  }
+
   /** tree dep: a committed refine — park the parent slot, attach the ≤4 baked
    *  children, update the level grid. ONE atomic drain step on main (§6). */
   private emitRefine(p: RefinePacket): void {
     const children = p.children.map((c) => c.payload as TileGeometry);
+    // taint bookkeeping at the COMMIT point (slot ownership is certain here):
+    // degraded children become tainted leaves; the parked parent's entry (if
+    // any) flips parked so a later refresh re-parks after the overwrite.
+    for (const c of children) this.recordTaint(c, false);
+    const parentTaint = this.tainted.get(p.parkSlot);
+    if (parentTaint) parentTaint.parked = true;
     const transfers: Transferable[] = [];
     for (const c of children) transfers.push(c.gridVerts.buffer, c.indices.buffer, c.clusterData.buffer);
     this.deps.emit({ kind: 'packets', packets: [{ kind: 'tileRefine', parkSlot: p.parkSlot, children, levelGrid: p.levelGrid }] }, transfers);
@@ -1208,6 +1463,9 @@ export class StreamBrainCore {
   /** tree dep: a committed merge — unpark the retained parent slot, evict the ≤4
    *  child slots, update the level grid (no bake — coarsen is always ready, §4). */
   private emitMerge(p: MergePacket): void {
+    const t = this.tainted.get(p.unparkSlot);
+    if (t) t.parked = false; // the retained parent renders again — refresh live
+    for (const s of p.freeSlots) this.tainted.delete(s); // evicted children's taint dies
     this.deps.emit({ kind: 'packets', packets: [{ kind: 'tileMerge', unparkSlot: p.unparkSlot, freeSlots: p.freeSlots, levelGrid: p.levelGrid }] });
   }
 
@@ -1309,17 +1567,54 @@ export class StreamBrainCore {
     return w.data[pz * plan.res + px] as number;
   }
 
+  /** the source-window support chunks of a tile bake at window level j — the
+   *  SAME lattice range bakeTile's cache-key fold walks (single source of truth
+   *  for fold, degraded-content gate and taint bookkeeping). */
+  private supportChunkKeys(t: ClipmapTile, j: number): ChunkKey[] {
+    const geo = this.layerGeo('height');
+    const plan = (this.hWin[j] as HeightWindow).plan;
+    const s = plan.stride;
+    const jx0 = this.manifestFormat === 2 ? Math.floor((t.tx0 + 0.5) / s - 0.5) : Math.floor(t.tx0 / s);
+    const jz0 = this.manifestFormat === 2 ? Math.floor((t.tz0 + 0.5) / s - 0.5) : Math.floor(t.tz0 / s);
+    const jres = this.manifestFormat === 2
+      ? Math.ceil((t.tx0 + t.tileTexels + 0.5) / s - 0.5) - jx0 + 1
+      : Math.ceil(t.tileTexels / s) + 1;
+    return chunksInWindow(geo, plan.lod, jx0, jz0, jres);
+  }
+
+  /** does this bake's support range overlap a DEGRADED chunk footprint (a failed
+   *  fetch whose window content is coarse underlay)? Format-1 / generated: the
+   *  ledger is empty forever ⇒ always false (byte-identical residency). */
+  private supportDegraded(t: ClipmapTile, j: number): boolean {
+    const win = this.hWin[j] as HeightWindow;
+    if (win.degraded.size === 0) return false;
+    for (const k of this.supportChunkKeys(t, j)) {
+      if (win.degraded.has(this.packKey(k.lod, k.cx, k.cz))) return true;
+    }
+    return false;
+  }
+
   /** S6f READY GATE: a level-k tile's bake needs a source window at stride ≤ its
    *  own (else the "fine" tile would be a decimation of coarse data, committed
    *  and cached as if it were the real content — the roamed-pose flat-tile bug).
    *  Super-data rungs (stride ≥ the coarsest window's) are always ready. A not-
    *  ready refine aborts; the pose tick re-nominates the leaf once the window's
-   *  scroll lands (the demand law's promote-after-fill, applied to tiles). */
+   *  scroll lands (the demand law's promote-after-fill, applied to tiles).
+   *
+   *  CONTENT GATE (the persistent eye-level hole fix): placement alone is NOT
+   *  readiness — a window that is resident at the right placement but holds a
+   *  failed-fetch chunk's coarse UNDERLAY would bake a SMOOTH tile whose DAG
+   *  simplifies its edge lattice (17²/65² vs the honest 129²); live-sampled
+   *  heights then re-open the relief and the mixed-lattice seams CRACK against
+   *  full-lattice neighbors — a hole that persists at rest because the tree sees
+   *  a healthy fine leaf and nothing ever re-bakes. Deferring on degraded content
+   *  keeps the leaf honestly coarse until healDegraded lands the real chunk. */
   private bakeSourceReady(t: ClipmapTile): boolean {
     const j = this.bakeSrcLevel(t);
     const stride = (this.hWin[j] as HeightWindow).plan.stride;
     const coarsest = (this.hWin[this.hWin.length - 1] as HeightWindow).plan.stride;
-    return stride <= t.strideTexels || t.strideTexels >= coarsest;
+    if (!(stride <= t.strideTexels || t.strideTexels >= coarsest)) return false;
+    return !this.supportDegraded(t, j);
   }
 
   /**
@@ -1398,6 +1693,18 @@ export class StreamBrainCore {
     // extraction clamp into a stale placement — that baked flat garbage under a
     // content-correct cache key (the poisoned-cache half of the roamed-pose bug).
     const j = this.bakeSrcLevel(t);
+    const srcChunks = this.supportChunkKeys(t, j);
+    // DEGRADED-CONTENT flag (format 2): the support range overlaps a failed-fetch
+    // chunk's coarse underlay. Runtime refines never get here degraded (the
+    // bakeSourceReady content gate defers them); BOOT bakes do (frame-1 terrain
+    // beats a void) — they are NEVER CACHED (the content key cannot tell underlay
+    // from real content) and are recorded for healDegraded's in-place re-bake.
+    let degraded = this.manifestFormat === 2 && (() => {
+      const win = this.hWin[j] as HeightWindow;
+      if (win.degraded.size === 0) return false;
+      for (const k of srcChunks) if (win.degraded.has(this.packKey(k.lod, k.cx, k.cz))) return true;
+      return false;
+    })();
     const sub = new Float32Array(vpa * vpa);
     for (let gz = 0; gz <= gridN; gz++) {
       const nz = Math.min(Math.max(t.tz0 + gz * t.strideTexels, cfg.latMin), cfg.latMax);
@@ -1417,22 +1724,19 @@ export class StreamBrainCore {
     // (-sb2 → -sb3; the coarsest window now always spans the box ⇒ far tiles always
     // bake real, so the fold is henceforth an honest identity).
     let fold = 0n;
-    const geo = this.layerGeo('height');
-    const plan = (this.hWin[j] as HeightWindow).plan;
-    const s = plan.stride;
-    const jx0 = this.manifestFormat === 2 ? Math.floor((t.tx0 + 0.5) / s - 0.5) : Math.floor(t.tx0 / s);
-    const jz0 = this.manifestFormat === 2 ? Math.floor((t.tz0 + 0.5) / s - 0.5) : Math.floor(t.tz0 / s);
-    const jres = this.manifestFormat === 2
-      ? Math.ceil((t.tx0 + t.tileTexels + 0.5) / s - 0.5) - jx0 + 1
-      : Math.ceil(t.tileTexels / s) + 1;
-    for (const key of chunksInWindow(geo, plan.lod, jx0, jz0, jres)) fold ^= this.chunkHash('height', key);
+    for (const key of srcChunks) fold ^= this.chunkHash('height', key);
     const skirtLevel = cfg.skirt ? t.level : -1;
     const opts: HeightDagOpts = skirtLevel >= 0 ? { skirtLevel } : {};
-    const suffix = `-sb3-s${t.strideTexels}-j${j}-${t.tx0}x${t.tz0}-h${fold.toString(16)}${skirtLevel >= 0 ? `-sk${skirtLevel}` : ''}`;
+    // -sb4: retires every -sb3 entry — the fold is content-BLIND (manifest hashes,
+    // not window state), so degraded-content bakes poisoned the old generation
+    // (flat DAGs served forever, across sessions). -sb4 entries are honest: a
+    // degraded bake is never put (below).
+    const suffix = `-sb4-s${t.strideTexels}-j${j}-${t.tx0}x${t.tz0}-h${fold.toString(16)}${skirtLevel >= 0 ? `-sk${skirtLevel}` : ''}`;
     const cacheKey = heightDagCacheKey(cfg.seed >>> 0, gridN, suffix);
     let built: HeightDagResult | null = await getCachedHeightDag(cacheKey);
     if (built) {
       this.nCache++;
+      degraded = false; // cached entries are clean-content bakes — the geometry is honest
     } else {
       this.nBakeInFlight++;
       try {
@@ -1453,7 +1757,10 @@ export class StreamBrainCore {
         } else {
           built = buildHeightGrid(hfArgs, opts);
         }
-        void putCachedHeightDag(cacheKey, built); // fire-and-forget
+        // NEVER cache a degraded-content bake — the key cannot distinguish it
+        // from the real content, so it would poison every future bake of this
+        // tile (this session AND future sessions — IndexedDB persists).
+        if (!degraded) void putCachedHeightDag(cacheKey, built); // fire-and-forget
         this.nBuilt++;
       } finally {
         this.nBakeInFlight--;
@@ -1496,6 +1803,10 @@ export class StreamBrainCore {
       x0: t.tx0,
       z0: t.tz0,
       size: t.tileTexels,
+      // brain-internal taint bookkeeping (recordTaint consumes + strips these)
+      ...(degraded
+        ? { srcDegraded: true, srcWin: j, srcChunkKeys: srcChunks.map((k) => this.packKey(k.lod, k.cx, k.cz)) }
+        : {}),
     };
   }
 
@@ -1527,6 +1838,10 @@ export class StreamBrainCore {
         'stream.lru.mb': Math.round(this.lruBytes / 2 ** 20),
         'stream.ram.mb': Math.round(this.ramBytes() / 2 ** 20),
         'stream.scrolls': this.nScrolls,
+        'stream.win.degraded': this.hWin.reduce((s, w) => s + w.degraded.size, 0),
+        'stream.tiles.tainted': this.tainted.size,
+        'stream.heal.ok': this.nHeal,
+        'stream.tile.refresh': this.nRefresh,
         ...(this.ftBand ? this.ftBand.counters() : {}),
       },
     });

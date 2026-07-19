@@ -274,7 +274,17 @@ export function buildHeightGrid(hf: HeightField, opts: HeightDagOpts = {}): Heig
     const l = kept[k] as number;
     const stride = 1 << l;
     const cells = gridN >> l; // cells per axis at this level
-    const ownError = errAt[l] as number;
+    // LEAF CONTRACT (the vanishing-tile fix): the FINEST KEPT level is this
+    // tile's leaf representation — there is NOTHING finer to descend to, so its
+    // ownError MUST be 0 or the cut refuses it near the camera and emits NOTHING
+    // (pOwn = projK·err/denO > τ within ~772·err/τ metres: a collapsed-but-kept
+    // level-ℓ>0 tile — a genuinely calm bog lawn, err ≤ REDUCE — VANISHED inside
+    // ~5-8 m at eye level while rendering fine from altitude; the persistent
+    // near-camera terrain holes). Coalescing keeps its ≤ REDUCE honesty bound;
+    // rendered heights live-sample the field anyway, so drawing the finest kept
+    // lattice is always strictly better than a hole. Coarser levels keep their
+    // real errors (the anchor-chain descent still retires them near the camera).
+    const ownError = k === 0 ? 0 : (errAt[l] as number);
     const isRoot = k === kept.length - 1;
     const parentError = isRoot ? Infinity : (errAt[kept[k + 1] as number] as number);
     const blocks = Math.ceil(cells / CLUSTER_BLOCK);

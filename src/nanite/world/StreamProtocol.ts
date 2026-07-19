@@ -171,6 +171,13 @@ export interface TileGeometry {
   x0: number;
   z0: number;
   size: number;
+  /** BRAIN-INTERNAL taint bookkeeping (format 2 only) — set by bakeTile when the
+   *  bake read DEGRADED window content (a failed-fetch chunk's coarse underlay),
+   *  consumed + STRIPPED brain-side before the geometry ships (never crosses the
+   *  worker boundary). srcChunkKeys = the packed support chunk keys at srcWin. */
+  srcDegraded?: boolean;
+  srcWin?: number;
+  srcChunkKeys?: number[];
 }
 
 /** MAILBOX packets — drained strictly FIFO under the ONE token bucket. The tile
@@ -208,6 +215,13 @@ export type StreamPacket =
   /** MERGE: unpark the parent's retained slot (draw restored, instant — no bake),
    *  evict the ≤4 child slots, update the level grid. */
   | { kind: 'tileMerge'; unparkSlot: number; freeSlots: number[]; levelGrid: LevelGridEdit[] }
+  /** REFRESH: re-attach honest geometry into an ALREADY-RESIDENT slot in place —
+   *  no tree/level-grid change. Emitted after a degraded-content bake's source
+   *  chunk HEALS (the fetch that failed at bake time finally landed): the flat
+   *  simplified-lattice tile is replaced by the real full-lattice bake, closing
+   *  the T-junction seam holes it opened against fine neighbors. `parked` re-parks
+   *  a retained parent payload after the overwrite (unpark → attach → park). */
+  | { kind: 'tileRefresh'; tile: TileGeometry; parked: boolean }
   /** S8 FARTILE ATTACH: one baked far-tile → its brain-assigned pool slot + granule
    *  ids (brickBase = poolBrickBase + gid·128). `levels` = the tile's packed voxel
    *  pyramid (CrownPack words). Applied as one drain step (reg.attachFartileSlot). */
@@ -295,6 +309,8 @@ export function packetTransfers(packets: StreamPacket[]): Transferable[] {
       if (p.u8) t.push(p.u8.buffer);
     } else if (p.kind === 'tileRefine') {
       for (const c of p.children) t.push(...tileTransfers(c));
+    } else if (p.kind === 'tileRefresh') {
+      t.push(...tileTransfers(p.tile));
     } else if (p.kind === 'ftAttach') {
       t.push(p.granules.buffer);
       for (const l of p.levels) t.push(l.words.buffer, l.occupied.buffer);
@@ -318,6 +334,7 @@ export function packetBytes(p: StreamPacket): number {
     return b;
   }
   if (p.kind === 'tileMerge') return 72 + p.freeSlots.length * 8; // unpark + evicts + grid poke
+  if (p.kind === 'tileRefresh') return 72 + tileBytes(p.tile); // in-place re-attach
   if (p.kind === 'ftAttach') {
     let b = 72;
     for (const l of p.levels) b += l.words.byteLength; // the writeBuffer'd brick words dominate
