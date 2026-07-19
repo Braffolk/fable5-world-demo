@@ -36,6 +36,7 @@ import { internalSize } from '../../render/RenderScale';
 import { VegClass } from '../../gpu/passes/Scatter';
 import type { ChunkContentStreams } from './ChunkContent';
 import { CROWN_LOD_SCHEDULE, type VegLib, type VegPool, type PoolPart } from '../../vegetation/VegLibrary';
+import { BOG_LOD_LADDER } from '../../vegetation/bog/BogLod';
 import { ETAK_ERRATIC_CLASS } from '../../vegetation/RockGen';
 import type { CrownLodLevel } from '../../vegetation/TreeBuilder';
 import type { Heightfield } from '../../world/Heightfield';
@@ -532,8 +533,17 @@ function planVegJobs(
     if (policy.matClass === 'leaf') {
       if (!leafOn || !pool.leaf) continue;
       const leafGeo = pool.leaf.geo;
+      const buildLadder = pool.leaf.buildLadder;
       let leafSrc: ExplicitSource | null = null;
-      plan.aggJobs.push({ label: `c${pool.cls}v${pool.variant}/leaf`, source: () => (leafSrc ??= geometryToSource(leafGeo)) });
+      let leafRungs: CrownLodLevelMesh[] | null = null;
+      plan.aggJobs.push({
+        label: `c${pool.cls}v${pool.variant}/leaf`,
+        source: () => (leafSrc ??= geometryToSource(leafGeo)),
+        // LAZY ladder regen (cache-miss only), mirroring the tree/shrub branch
+        // below — bog leaf-PRIMARY pools (cotton-grass, cranberry, cloudberry)
+        // carry a buildLadder; ferns/flowers don't (undefined ⇒ single-level).
+        ladder: () => (leafRungs ??= ladderToMeshes(buildLadder ? buildLadder() : null)),
+      });
       continue;
     }
     if (!inSet(policy.matClass)) continue;
@@ -632,6 +642,8 @@ export async function prepareWorldVeg(input: {
       // crown-LOD Phase 2: the ladder's λ schedule + count + error scale set the
       // crown DAG payload — a miss here would silently serve stale (LOD0-only) crowns.
       crownLod: CROWN_LOD_SCHEDULE,
+      // bog understory ladder schedule (BogLod.ts) — same staleness argument.
+      bogLod: BOG_LOD_LADDER,
       crownLodErrorK: knobs.crownLodErrorK,
       knobs: knobs.keyKnobs,
     },
