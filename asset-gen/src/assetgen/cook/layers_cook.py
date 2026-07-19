@@ -473,6 +473,18 @@ def cook_understory(base: BaseConfig, bbox_en, log=print) -> None:
         slope = _slope_2m(base, c, res2)
         wet = cell_wetness(soil[0], soil[1])
         rich = cell_richness(soil[4], soil[1])
+        # A raba/fen LAND-COVER polygon is direct evidence of saturated peat. Where the soil plane
+        # lacks peat/gley data over such a mire (a data gap: texCore=unknown, soilType not gley),
+        # its neutral wetness (~0.45) would tank the wet-loving bog/fen community's suitability
+        # match (tw=0.9) ~12x, crushing density to a near-invisible dusting. The land cover is
+        # authoritative for moisture here, so floor wetness to the community's wet target.
+        from ..process.understory import load_communities
+
+        comm = load_communities()
+        wetland_ids = [comm.id_by_name[n] for n in ("bog", "fen_sedge") if n in comm.id_by_name]
+        if wetland_ids:
+            is_wetland = np.isin(community, wetland_ids)
+            wet = np.where(is_wetland, np.maximum(wet, tw[community]), wet)
         suit = understory_suitability(community, tw, tf, slope, wet, rich, soil[3])
         density = np.clip(density.astype(np.float32) * suit, 0, 255).astype(np.uint8)
         # fuzz the polygon edges + break up flat interiors (seamless across chunks)

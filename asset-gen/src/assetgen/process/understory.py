@@ -102,6 +102,15 @@ def rasterize_understory(
     base = np.array([comm.base_density.get(int(c), 0.0) for c in range(256)])
     dens = base[community] / max(base.max(), 1e-6)  # 0..1 by community richness
     fert = np.clip(boniteet_plane.astype(np.float32) / 60.0, 0.3, 1.3)  # boniteet ~0..60
+    # Open raba/fen carry NO forest-stand boniteet (metsaregister is a stand attribute; the open
+    # mire has no stand -> boniteet reads 0). That data gap is NOT genuine near-zero productivity:
+    # a raised bog has a characteristic, poverty-appropriate dwarf-shrub/sedge cover already
+    # encoded in base_density. Don't let the missing stand value re-penalize it. The raba/fen
+    # LAND-COVER polygon (community 5/6 from land_cover) is the authoritative site evidence.
+    wetland_ids = [comm.id_by_name[n] for n in ("bog", "fen_sedge") if n in comm.id_by_name]
+    if wetland_ids:
+        wetland = np.isin(community, wetland_ids)
+        fert = np.where(wetland, np.maximum(fert, 0.9), fert)
     shade = 1.0 - 0.4 * np.clip(vegdensity_plane.astype(np.float32) / 255.0 - 0.6, 0, 0.4) / 0.4
     density = np.clip(dens * fert * shade * 255.0, 0, 255).astype(np.uint8)
     density[community == 0] = 0

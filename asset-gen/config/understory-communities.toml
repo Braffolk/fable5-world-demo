@@ -53,8 +53,20 @@ id = 5
 name = "raised-bog dwarf"
 moisture = "wet"
 fertility = "poor"
-base_density = 16.0
-palette = ["sphagnum:6", "cottongrass:2", "labrador_tea:2", "bog_cranberry:2", "cloudberry:1", "heather:1"]
+# A raised bog carries one of the DENSEST ground layers — a continuous Sphagnum carpet with
+# dwarf shrubs (Calluna, Ledum, Andromeda, Vaccinium) and cotton-grass tussocks over the whole
+# open expanse. The client renders understory from the per-cell density byte directly (it does
+# NOT scale by this base_density; understory baseFrac=1), so the byte must carry that lushness;
+# a low base under-normalises the byte and leaves the raba a bare dusting. Set at the mire-cover
+# level (= meadow, the palette max) so the byte can reach the scatter grain. Not "solid carpet":
+# the client's 2.4 m scatter grid + the Sphagnum tint-only fraction keep it patchy.
+base_density = 30.0
+# Sphagnum is the dominant carpet but the client renders it as a TERRAIN TINT (classId-keyed
+# peat colour), NOT a scattered mesh — its scatter token is a SKIP. A high scatter weight would
+# therefore just waste scatter slots (they land on "nothing"), thinning the VISIBLE dwarf-shrub/
+# cotton-grass plants. Keep a small documentary weight so the moss still reads in the mix, but
+# give most scatter slots to the plants that actually render.
+palette = ["sphagnum:2", "cottongrass:2", "labrador_tea:2", "bog_cranberry:2", "bog_rosemary:2", "cloudberry:1", "heather:1"]
 
 [communities.fen_sedge]
 id = 6
