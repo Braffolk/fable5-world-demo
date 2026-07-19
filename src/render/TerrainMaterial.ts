@@ -98,15 +98,13 @@ export interface TerrainShading {
   worldNormalNode: NV3;
 }
 
-/** LIGHTING-normal gradient amplification for the REAL cooked relief. The C0
- *  smooth field normal tilts only ~11° at a genuine 0.2 slope, so the real
- *  6 cm hummock/hollow relief lights weakly; scaling the REAL XZ gradient
- *  steepens the light response of geometry that actually exists — legal
- *  (stronger light on real geometry), unlike the removed noise bumps. Applied
- *  to the lighting normal ONLY — baseNormal (class selection, grazing sheen)
- *  stays exact. Fades with distance for free: the field pyramid's coarser
- *  levels carry no fine gradient. */
-const RELIEF_LIGHT_K = 2.0;
+/** LIGHTING-normal gradient scale for the REAL cooked relief. MUST be 1.0:
+ *  amplifying the normal past the true gradient makes the shading steeper than
+ *  the geometry it sits on — "dramatic shading that doesn't match geometry",
+ *  the same lie as the removed noise bumps. Honest shading matches the mesh:
+ *  if the relief reads as flat, the fix is in the GEOMETRY/amplitude (cook or
+ *  mesh tessellation), NOT in exaggerating the normal here. */
+const RELIEF_LIGHT_K = 1.0;
 
 export function buildTerrainShading(inp: TerrainShadingInputs): TerrainShading {
   const wp = inp.surf?.wp ?? (positionWorld as unknown as NV3);

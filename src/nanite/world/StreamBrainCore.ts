@@ -236,7 +236,15 @@ export class StreamBrainCore {
       startBake: (req) => this.startBake(req),
       emitRefine: (p) => this.emitRefine(p),
       emitMerge: (p) => this.emitMerge(p),
-      canRefine: (level, tx0, tz0, size) => this.finerDataExists(level, tx0, tz0, size),
+      // Data must EXIST (manifest) and the child bakes' source windows must be
+      // ready NOW — else the tree starts a tx whose startBake can only abort and
+      // re-nominate every tick. With coverage-clamped windows (windowTarget) a
+      // wanted-but-unreachable tile is a STEADY state at a resting camera (e.g.
+      // a small fine-coverage box pinning the window off a ring tile), so the
+      // abort loop would never resolve; gating want on readiness makes it a
+      // deferral instead (re-evaluated per pose tick — scrolls unblock it).
+      canRefine: (level, tx0, tz0, size) =>
+        this.finerDataExists(level, tx0, tz0, size) && this.childSourcesReady(level, tx0, tz0, size),
     });
   }
 
@@ -1226,11 +1234,28 @@ export class StreamBrainCore {
         const x1 = Math.ceil((nx1 + 0.5) / s - 0.5);
         const z0 = Math.floor((nz0 + 0.5) / s - 0.5);
         const z1 = Math.ceil((nz1 + 0.5) / s - 0.5);
+        // Coverage clauses allow a 1-texel rim past nMin/nMax: the fills define
+        // exactly one clamp-extended sample there (clampExtend(…, 1, box) in
+        // pushFill/assembleRegionF32), and a tile edge ALIGNED to the coverage
+        // west/north edge needs support at nMin−1 (the −0.5 widening) — strict
+        // bounds sent such tiles to the floor fallback while finerDataExists let
+        // them refine: an unbounded abort/re-nominate spin (bog v7, camera leaf
+        // frozen at L4 on the coverage north edge). RESIDENCY is tested on the
+        // coverage-CLAMPED support range: windowTarget clamps windows INTO
+        // coverage, so a rim index is never resident, but heightAtLattice clamps
+        // reads to the window box — and when the clamped range passes here the
+        // window edge coincides with the coverage edge, so that clamped read IS
+        // the defined rim value (byte-identical to a 1-wider window). Interior
+        // support keeps strict residency — no wrong-data clamping representable.
+        const cx0 = Math.max(x0, plan.nMinX);
+        const cx1 = Math.min(x1, plan.nMaxX);
+        const cz0 = Math.max(z0, plan.nMinZ);
+        const cz1 = Math.min(z1, plan.nMaxZ);
         if (
-          x0 >= w.n0x && x1 <= w.n0x + plan.res - 1
-          && z0 >= w.n0z && z1 <= w.n0z + plan.res - 1
-          && x0 >= plan.nMinX && x1 <= plan.nMaxX
-          && z0 >= plan.nMinZ && z1 <= plan.nMaxZ
+          cx0 >= w.n0x && cx1 <= w.n0x + plan.res - 1
+          && cz0 >= w.n0z && cz1 <= w.n0z + plan.res - 1
+          && x0 >= plan.nMinX - 1 && x1 <= plan.nMaxX + 1
+          && z0 >= plan.nMinZ - 1 && z1 <= plan.nMaxZ + 1
         ) return i;
       }
       return this.hWin.length - 1;
@@ -1329,9 +1354,39 @@ export class StreamBrainCore {
       const x1 = Math.ceil((nx1 + 0.5) / s - 0.5);
       const z0 = Math.floor((nz0 + 0.5) / s - 0.5);
       const z1 = Math.ceil((nz1 + 0.5) / s - 0.5);
-      if (x0 >= plan.nMinX && x1 <= plan.nMaxX && z0 >= plan.nMinZ && z1 <= plan.nMaxZ) return true;
+      // ±1 rim: sampling one index past coverage is DEFINED (the fills clamp-
+      // extend exactly one texel — clampExtend(…, 1, box)), and a leaf whose edge
+      // coincides with the coverage west/north edge computes x0 = nMinX−1 from
+      // the −0.5 bilinear-support widening (chunk grids and tile grids nest, so
+      // the alignment is systematic — bog v7: the camera's L10 leaf froze the
+      // whole cascade at 64 m cells). Must match bakeSrcLevel's coverage clauses
+      // exactly, else unlocked edge children pick no source window and
+      // re-nominate forever.
+      if (x0 >= plan.nMinX - 1 && x1 <= plan.nMaxX + 1 && z0 >= plan.nMinZ - 1 && z1 <= plan.nMaxZ + 1) return true;
     }
     return false;
+  }
+
+  /** Are the ≤4 child bakes of this leaf sourceable from the CURRENT windows
+   *  (bakeSourceReady per child, mirroring PartitionTree.childDescs' on-field
+   *  clip)? The want-side twin of startBake's authoritative per-quad gate — see
+   *  canRefine above. Format-1 / generated: windows cover the whole lattice ⇒
+   *  always true (byte-identical residency). */
+  private childSourcesReady(leafLevel: number, tx0: number, tz0: number, size: number): boolean {
+    if (this.manifestFormat !== 2) return true;
+    if (leafLevel <= 0) return false;
+    const cs = size >> 1;
+    const cfg = this.tilesCfg;
+    for (let j = 0; j < 2; j++) {
+      for (let i = 0; i < 2; i++) {
+        const cx = tx0 + i * cs;
+        const cz = tz0 + j * cs;
+        // PartitionTree.onField: fully off-field children are never baked
+        if (!(cx < cfg.latMax + 1 && cz < cfg.latMax + 1 && cx + cs > cfg.latMin && cz + cs > cfg.latMin)) continue;
+        if (!this.bakeSourceReady(this.synthTile(leafLevel - 1, cx, cz, cs))) return false;
+      }
+    }
+    return true;
   }
 
   private async bakeTile(t: ClipmapTile): Promise<TileGeometry | 'overCap' | null> {
