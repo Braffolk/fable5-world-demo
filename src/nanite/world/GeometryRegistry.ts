@@ -228,6 +228,13 @@ export interface RegisterOpts {
    *  in mesh-record word 7 — which holds hfOriginX for HEIGHTFIELD meshes only,
    *  so explicit meshes reuse it free (resolve reads it raw via meshWord(7)). */
   matParam?: number;
+  /** #113: SECOND explicit-mesh material word — the leaf head's BLOSSOM/berry tint
+   *  (packed RGB + a presence marker in the high byte, see packBlossomTint). Stored
+   *  in mesh-record word 9, which holds hf cellSize for HEIGHTFIELD meshes ONLY, so
+   *  explicit meshes reuse it free (the same dual-purpose pattern as matParam/word 7).
+   *  0 ⇒ no blossom → the resolve's petal-mix collapses to a no-op. Read raw via
+   *  meshWord(9). Rides attachDag / registerLod with the head record automatically. */
+  matParam2?: number;
   /** stats-table label */
   label?: string;
 }
@@ -723,6 +730,9 @@ interface MeshEntry {
   swayPad: number;
   /** explicit-mesh material param packed into word 7 (hfOriginX slot) */
   matParam: number;
+  /** explicit-mesh 2nd material param packed into word 9 (hf cellSize slot) — the
+   *  leaf BLOSSOM tint; 0 for non-blossom / heightfield meshes. */
+  matParam2: number;
   vertBase: number;
   vertCount: number;
   triBase: number;
@@ -1321,6 +1331,7 @@ export class GeometryRegistry {
       castShadows: (head.flags & MESH_FLAG_CAST_SHADOWS) !== 0,
       swayPad: head.swayPad,
       matParam: head.matParam, // LOD bark shares the head's texture-array slice
+      matParam2: head.matParam2, // …and its blossom tint (word 9)
       label: `${head.label}/lod`,
     });
     tail.lodNext = lod;
@@ -3059,6 +3070,7 @@ export class GeometryRegistry {
       winQuads,
       swayPad: opts.swayPad ?? 0,
       matParam: opts.matParam ?? 0,
+      matParam2: opts.matParam2 ?? 0,
       vertBase: 0,
       vertCount: 0,
       triBase: 0,
@@ -3192,7 +3204,10 @@ export class GeometryRegistry {
     // a voxel head, so the two readings never collide; the cull only reads nearDist on
     // hierarchical meshes (rootCount>0), where hf is undefined.
     m[b + 8] = e.hf ? f32Bits(e.hf.originZ) : f32Bits(e.nearDist);
-    m[b + 9] = f32Bits(e.hf?.cellSize ?? 0);
+    // word 9: hfCellSize (heightfield) | matParam2 raw-u32 (explicit, e.g. the leaf
+    // BLOSSOM tint — read raw by the resolve). Explicit meshes are never heightfields,
+    // so the two readings never collide (mirrors word 7's matParam/hfOriginX split).
+    m[b + 9] = e.hf ? f32Bits(e.hf.cellSize) : e.matParam2 >>> 0;
     m[b + 10] = ((e.hf?.quadsX ?? 0) | ((e.hf?.quadsZ ?? 0) << 16)) >>> 0;
     m[b + 11] = f32Bits(e.swayPad);
     m[b + 12] = f32Bits(e.sphere[0]);

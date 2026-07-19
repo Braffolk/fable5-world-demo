@@ -869,6 +869,20 @@ export function buildNaniteResolve(
         toF(mp.shiftRight(uint(8)).bitAnd(uint(0xff))),
         toF(mp.shiftRight(uint(16)).bitAnd(uint(0xff))),
       ).div(255) as unknown as NV3;
+      // #113 BLOSSOM/berry tint (matParam, mesh word 9): linear RGB + a 0xFF presence
+      // marker in the high byte. Crowns that merge flowers/berries into the leaf geo
+      // (bog dwarf-shrubs, cotton heads, understory flowers) mark the petal/berry verts
+      // with the part-id vdata.x≈1; the mix below swaps the foliage tint for `blossom`
+      // there. Pools WITHOUT a blossom pack word 9 = 0 → hasBlossomF = 0 → the mix is a
+      // no-op (trees/ferns/plain crowns shade byte-for-byte as before). Read by BOTH the
+      // full and the ?resfar cheap path (meshId already decoded; both need base/blossom).
+      const mp2 = fetch.meshWord(meshId, 9);
+      const blossom = vec3(
+        toF(mp2.bitAnd(uint(0xff))),
+        toF(mp2.shiftRight(uint(8)).bitAnd(uint(0xff))),
+        toF(mp2.shiftRight(uint(16)).bitAnd(uint(0xff))),
+      ).div(255) as unknown as NV3;
+      const hasBlossomF = toF(mp2.shiftRight(uint(24)).bitAnd(uint(0xff))).div(255);
       const fullLeaf = (): void => {
         const ctx = fetch.makeCtx(instId, ci);
         const w0 = fetch.fetchWorldVert(ctx, localTri, 0);
@@ -892,7 +906,13 @@ export function buildNaniteResolve(
           .mul(k.clamp(0, 1))
           .add(base.mul(vec3(0.7, 0.95, 1.25)).mul(k.negate().clamp(0, 1)))
           .add(base.mul(float(1).sub(k.abs()))) as unknown as NV3;
-        albedo.assign(tintedHue.mul(dv.w.mul(0.8).add(0.2)) as unknown as NV3);
+        // #113 petal/berry select: petal=part-id 1, centre 0.5, leaf 0 (mesh convention,
+        // mirrors flowerMaterial). petalK ramps only near x≈1, gated by hasBlossomF so a
+        // non-blossom pool (petalMix≡0) keeps tintedHue exactly — byte-identical. Leaves
+        // (x=0) also keep tintedHue (petalK=0); only true petals swap to `blossom`.
+        const petalK = smoothstep(0.85, 0.95, dv.x as unknown as NF);
+        const crownAlb = mix(tintedHue, blossom, petalK.mul(hasBlossomF)) as unknown as NV3;
+        albedo.assign(crownAlb.mul(dv.w.mul(0.8).add(0.2)) as unknown as NV3);
         // instance-rotated geometric normal, flipped to face the camera (two-sided)
         const gnrm = normalize(
           instRotateDir(ctx.yawSc, va.nrm)
@@ -919,7 +939,14 @@ export function buildNaniteResolve(
           const gn = normalize(instRotateDir(yawSc, va.nrm)) as unknown as NV3;
           const toCam = normalize(camPos.sub(wp)) as unknown as NV3;
           wNormal.assign(dot(gn, toCam).lessThan(0).select(gn.negate(), gn) as unknown as NV3);
-          albedo.assign(base.mul(0.68) as unknown as NV3);
+          // #113 cheap far-leaf: the same blossom select on the QUAD's single vertex
+          // (no 3-vert interp needed — leaf/petal tris are single-part). Nearly free
+          // (one vdata unpack + a mix); keeps far berries/petals coloured through the
+          // 36 m→clsMaxDist band where understory has no voxel sibling. hasBlossomF=0
+          // pools stay base·0.68, unchanged.
+          const dvx = unpackVdata(va.vdata).x as unknown as NF;
+          const cheapAlb = mix(base, blossom, smoothstep(0.85, 0.95, dvx).mul(hasBlossomF)) as unknown as NV3;
+          albedo.assign(cheapAlb.mul(0.68) as unknown as NV3);
         }).Else(fullLeaf);
       } else {
         fullLeaf();

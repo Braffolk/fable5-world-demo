@@ -99,7 +99,12 @@ function addBlade(
   const hw0 = 0.0009 + rng.float() * 0.0008; // base half-width (0.9-1.7 mm blade)
   const keel = 0.55 + rng.float() * 0.4; // keel height as fraction of half-width
   const phase = rng.float() * Math.PI * 2;
-  const hueJit = rng.float() * 2 - 1;
+  // Blades carry their warm/cool hue jitter in vdata.x (like ferns/trees). The nanite
+  // leaf resolve reads vdata.x=1 as the "cotton head" part-id for the blossom split, so
+  // the blade jitter is kept to ±0.6 — comfortably below that petal band — to avoid a
+  // stray blade near x≈1 flashing white. (Shading-attribute range only; geometry, the
+  // preview warm/cool read, and the culm/cotton parts are all unchanged.)
+  const hueJit = (rng.float() * 2 - 1) * 0.6;
 
   const ox = Math.cos(az);
   const oz = Math.sin(az);

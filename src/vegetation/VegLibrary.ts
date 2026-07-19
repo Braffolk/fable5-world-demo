@@ -40,12 +40,12 @@ import {
 // Estonia raised-bog understory (8 QA-approved bog meshes; ScatterMap-only, dormant
 // in the generated world). Bog TREES (BogTrees.ts) are intentionally NOT imported —
 // their VegClass can't be allocated without a design pass (tree block 0–15 is full).
-import { buildCottonGrass, COTTONGRASS_COTTON_TINT, COTTONGRASS_CLS_MAXDIST } from "./bog/CottonGrass";
-import { buildHeather, HEATHER_FOLIAGE, HEATHER_CLS_MAX_DIST } from "./bog/Heather";
-import { buildLabradorTea, LABTEA_FOLIAGE, LABTEA_CLS_MAX_DIST } from "./bog/LabradorTea";
-import { buildBogRosemary, BOGROSEMARY_FOLIAGE, BOGROSEMARY_CLS_MAX_DIST } from "./bog/BogRosemary";
-import { buildCranberry, CRANBERRY_FOLIAGE, CRANBERRY_CLS_MAX_DIST } from "./bog/Cranberry";
-import { buildCloudberry, CLOUDBERRY_FOLIAGE, CLOUDBERRY_CLS_MAX_DIST } from "./bog/Cloudberry";
+import { buildCottonGrass, COTTONGRASS_BLADE_TINT, COTTONGRASS_COTTON_TINT, COTTONGRASS_CLS_MAXDIST } from "./bog/CottonGrass";
+import { buildHeather, HEATHER_FOLIAGE, HEATHER_BLOSSOM, HEATHER_CLS_MAX_DIST } from "./bog/Heather";
+import { buildLabradorTea, LABTEA_FOLIAGE, LABTEA_BLOSSOM, LABTEA_CLS_MAX_DIST } from "./bog/LabradorTea";
+import { buildBogRosemary, BOGROSEMARY_FOLIAGE, BOGROSEMARY_BLOSSOM, BOGROSEMARY_CLS_MAX_DIST } from "./bog/BogRosemary";
+import { buildCranberry, CRANBERRY_FOLIAGE, CRANBERRY_BERRY, CRANBERRY_CLS_MAX_DIST } from "./bog/Cranberry";
+import { buildCloudberry, CLOUDBERRY_FOLIAGE, CLOUDBERRY_BERRY, CLOUDBERRY_CLS_MAX_DIST } from "./bog/Cloudberry";
 import { mergeGeo } from "./bog/EricaceousKit";
 import type { GrowthInstance, SpeciesParams } from "./VegTypes";
 
@@ -79,6 +79,12 @@ export interface VegPool {
     geo: BufferGeometry;
     tris: number;
     color: { r: number; g: number; b: number; hueVar: number };
+    /** #113: optional BLOSSOM/berry tint for crowns that merge flowers/berries into
+     *  the leaf geo (bog dwarf-shrubs, cotton heads, understory flowers). The leaf
+     *  resolve mixes this in on the part-id channel (vdata.x → petal), so petals/
+     *  berries read their real colour while leaves/stems keep `color`. Undefined for
+     *  plain crowns (trees, ferns) → the resolve's mix is a no-op. */
+    blossom?: { r: number; g: number; b: number };
     /** crown-LOD Phase 2: LAZY builder for the pre-pruned mesh ladder (finest→
      *  coarsest, λ per CROWN_LOD_SCHEDULE) fed to BuildCrownLodDag as the DAG's LOD
      *  levels. Deterministically REGENERATES the crown (same seed) and returns its
@@ -210,6 +216,10 @@ const FLOWER_TINT: Record<FlowerKind, { r: number; g: number; b: number; hueVar:
   bell: { r: 0.42, g: 0.46, b: 0.74, hueVar: 0.4 }, // saturated periwinkle blue-lilac (hepatica/harebell)
   daisy: { r: 0.86, g: 0.80, b: 0.38, hueVar: 0.36 }, // vivid buttercup/oxeye warm-yellow radiate
 };
+/** #113: fresh herb-green for the flower STEM + basal leaves (vdata.x=0). FLOWER_TINT
+ *  is now the BLOSSOM (petals, vdata.x=1) — the leaf resolve splits them so the bloom
+ *  reads its real colour against green foliage instead of one muted whole-plant tint. */
+const FLOWER_FOLIAGE = { r: 0.12, g: 0.24, b: 0.07, hueVar: 0.2 };
 /** understory fern frond tint — fresh mid forest-green with a HIGH hueVar so the
  *  per-pinnule vdata.x jitter (buildFern) spreads warm↔cool across the frond (a
  *  many-toned green, not one flat colour); the leaf resolve mixes base×warm for
@@ -543,7 +553,9 @@ export async function buildVegLibrary(
   }
   clsMaxDist[VegClass.Fern] = 140;
   // flowers: thin stalk + real petal geometry (buildFlower), also leaf-class
-  // primary (the bloom shape reads at understory range; one muted tint per kind).
+  // primary. #113: the leaf resolve now splits foliage/blossom by vdata.x, so the
+  // stem+basal leaves take a green (FLOWER_FOLIAGE) and the PETALS the bloom colour
+  // (FLOWER_TINT) — the muted single-tint plant is gone.
   const flowerKinds: { cls: number; kind: FlowerKind }[] = [
     { cls: VegClass.FlowerUmbel, kind: "umbel" },
     { cls: VegClass.FlowerBell, kind: "bell" },
@@ -565,7 +577,7 @@ export async function buildVegLibrary(
         trisR2: 0,
         height: b.height,
         radius: b.radius,
-        leaf: { geo, tris, color: FLOWER_TINT[kind] },
+        leaf: { geo, tris, color: FLOWER_FOLIAGE, blossom: FLOWER_TINT[kind] },
       });
     }
     clsMaxDist[cls] = 90;
@@ -581,11 +593,11 @@ export async function buildVegLibrary(
   //      COTTON tint (the white hare's-tail head is the plant's read). ----
   progress(0.82, "veg: bog understory pools");
   const bogShrubs = [
-    { cls: VegClass.Heather, build: buildHeather, tint: HEATHER_FOLIAGE, maxDist: HEATHER_CLS_MAX_DIST },
-    { cls: VegClass.LabradorTea, build: buildLabradorTea, tint: LABTEA_FOLIAGE, maxDist: LABTEA_CLS_MAX_DIST },
-    { cls: VegClass.BogRosemary, build: buildBogRosemary, tint: BOGROSEMARY_FOLIAGE, maxDist: BOGROSEMARY_CLS_MAX_DIST },
+    { cls: VegClass.Heather, build: buildHeather, tint: HEATHER_FOLIAGE, blossom: HEATHER_BLOSSOM, maxDist: HEATHER_CLS_MAX_DIST },
+    { cls: VegClass.LabradorTea, build: buildLabradorTea, tint: LABTEA_FOLIAGE, blossom: LABTEA_BLOSSOM, maxDist: LABTEA_CLS_MAX_DIST },
+    { cls: VegClass.BogRosemary, build: buildBogRosemary, tint: BOGROSEMARY_FOLIAGE, blossom: BOGROSEMARY_BLOSSOM, maxDist: BOGROSEMARY_CLS_MAX_DIST },
   ];
-  for (const { cls, build, tint, maxDist } of bogShrubs) {
+  for (const { cls, build, tint, blossom, maxDist } of bogShrubs) {
     for (let v = 0; v < 4; v++) {
       await yieldIfDue();
       const shrub = build(seed.rng(`veg/bog/shrub/${cls}/${v}`));
@@ -601,14 +613,15 @@ export async function buildVegLibrary(
         trisR2: 0,
         height: b.height,
         radius: b.radius,
-        leaf: { geo: shrub.crown, tris: shrub.crownTris, color: tint },
+        leaf: { geo: shrub.crown, tris: shrub.crownTris, color: tint, blossom },
       });
     }
     clsMaxDist[cls] = maxDist;
   }
   // cotton-grass: leaf-only, merge the green blade tussock + the white cotton heads
-  // into ONE leaf geometry and tint near-white (single-tint pool → the hero cotton
-  // reads; the blades pale under it — a judgment call for the visual gate).
+  // into ONE leaf geometry. #113: the leaf resolve splits on vdata.x — blades/culm
+  // (x<1) take the green blade tint, the cotton bristle heads (x=1) the near-white
+  // blossom, so the hero white head reads against GREEN blades (not a pale plant).
   for (let v = 0; v < 4; v++) {
     await yieldIfDue();
     const cg = buildCottonGrass(seed.rng(`veg/bog/cottongrass/${v}`));
@@ -625,17 +638,17 @@ export async function buildVegLibrary(
       trisR2: 0,
       height: b.height,
       radius: b.radius,
-      leaf: { geo, tris, color: COTTONGRASS_COTTON_TINT },
+      leaf: { geo, tris, color: COTTONGRASS_BLADE_TINT, blossom: COTTONGRASS_COTTON_TINT },
     });
   }
   clsMaxDist[VegClass.CottonGrass] = COTTONGRASS_CLS_MAXDIST;
-  // cranberry / cloudberry: leaf-only, one merged geo (berries masked by vdata.x =
-  // muted foliage under the single-tint resolve, #113 follow-up). FOLIAGE tint.
+  // cranberry / cloudberry: leaf-only, one merged geo. #113: berries (vdata.x=1) now
+  // take the BERRY tint via the leaf resolve's split; leaves/stems keep FOLIAGE.
   const bogFoliage = [
-    { cls: VegClass.Cranberry, build: buildCranberry, tint: CRANBERRY_FOLIAGE, maxDist: CRANBERRY_CLS_MAX_DIST },
-    { cls: VegClass.Cloudberry, build: buildCloudberry, tint: CLOUDBERRY_FOLIAGE, maxDist: CLOUDBERRY_CLS_MAX_DIST },
+    { cls: VegClass.Cranberry, build: buildCranberry, tint: CRANBERRY_FOLIAGE, blossom: CRANBERRY_BERRY, maxDist: CRANBERRY_CLS_MAX_DIST },
+    { cls: VegClass.Cloudberry, build: buildCloudberry, tint: CLOUDBERRY_FOLIAGE, blossom: CLOUDBERRY_BERRY, maxDist: CLOUDBERRY_CLS_MAX_DIST },
   ];
-  for (const { cls, build, tint, maxDist } of bogFoliage) {
+  for (const { cls, build, tint, blossom, maxDist } of bogFoliage) {
     for (let v = 0; v < 4; v++) {
       await yieldIfDue();
       const { geo, tris } = build(seed.rng(`veg/bog/foliage/${cls}/${v}`));
@@ -650,7 +663,7 @@ export async function buildVegLibrary(
         trisR2: 0,
         height: b.height,
         radius: b.radius,
-        leaf: { geo, tris, color: tint },
+        leaf: { geo, tris, color: tint, blossom },
       });
     }
     clsMaxDist[cls] = maxDist;

@@ -113,6 +113,16 @@ export function packLeafTint(c: { r: number; g: number; b: number; hueVar: numbe
   return (u8(c.r) | (u8(c.g) << 8) | (u8(c.b) << 16) | (u8(c.hueVar) << 24)) >>> 0;
 }
 
+/** #113: pack the leaf head's BLOSSOM/berry tint into matParam2 (mesh word 9) —
+ *  linear RGB in the low 3 bytes + a 0xFF PRESENCE marker in the high byte (so the
+ *  resolve can gate the petal-mix: high byte /255 = 1 ⇒ blossom pool, 0 ⇒ none). A
+ *  pool with no distinct blossom simply omits matParam2 (stays 0) and the resolve's
+ *  mix collapses to a no-op — trees/ferns/plain crowns render byte-for-byte as before. */
+export function packBlossomTint(c: { r: number; g: number; b: number }): number {
+  const u8 = (x: number): number => Math.max(0, Math.min(255, Math.round(x * 255)));
+  return (u8(c.r) | (u8(c.g) << 8) | (u8(c.b) << 16) | (0xff << 24)) >>> 0;
+}
+
 // canopy-tree class range is 0..TREE_MAX_CLS (Snag = 5 is special-cased below).
 // The tree block is a RESERVED 16-slot range (0–15): 0–7 the original set (#112
 // added Larch = 6 / Oak = 7), 8–10 the batch-1 broadleaves (Aspen/GreyAlder/
@@ -992,6 +1002,7 @@ export async function buildWorldRegistry(input: {
         label,
         swayPad: policy.swayPad,
         matParam: packLeafTint(foliage.color),
+        matParam2: foliage.blossom ? packBlossomTint(foliage.blossom) : 0,
         aggregate: true,
       });
       reg.setMaxDistance(head, lib.clsMaxDist[pool.cls] ?? 120);
@@ -1053,6 +1064,7 @@ export async function buildWorldRegistry(input: {
         label: `${label}/leaf`,
         swayPad: LEAF_SWAY_PAD,
         matParam: packLeafTint(pool.leaf.color),
+        matParam2: pool.leaf.blossom ? packBlossomTint(pool.leaf.blossom) : 0,
         aggregate: true,
       });
       // trees hand their crown to a voxel sibling at transitionDist and continue as
