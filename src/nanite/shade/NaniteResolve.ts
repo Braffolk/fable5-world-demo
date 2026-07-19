@@ -651,7 +651,18 @@ export function buildNaniteResolve(
       const cctx = causticContext();
       if (cctx) {
         const d = causticDepth(wp);
-        const fringe = smoothstep(-0.45, -0.04, d);
+        let fringe: NF = smoothstep(-0.45, -0.04, d) as unknown as NF;
+        // fineShore (c9d7f1f): causticDepth rides the wet-preferring flat pool
+        // surface, so on these flat bog banks d stays > −0.45 across the whole
+        // one-texel wet-dilation band and the fringe would paint it dark, cutting
+        // HARD at the all-dry sentinel edge — a 2 m stair-stepped halo around every
+        // pool. Feather by the bilinear wet fraction (the fineShore analog of
+        // Estonia's coverFeather): a continuous 1→0 ramp across the band, so the
+        // wet-darkening fades out smoothly past the fine shoreline instead of
+        // stepping. Estonia (α path) and the generated world skip this verbatim.
+        if (world.field.cookedMicroHeight && !world.field.hasWaterCoverage) {
+          fringe = fringe.mul(world.field.fieldWaterWetFrac(wp.xz)) as unknown as NF;
+        }
         const caust = causticTint(wp, d);
         const biofilm = smoothstep(0.04, 0.5, d);
         let wetCol = tc

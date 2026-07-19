@@ -201,7 +201,21 @@ export function causticContext(): CausticCtx | null {
 /** water column above this fragment (m); negative above the waterline */
 export function causticDepth(wp: NV3): NF {
   if (!ctx) throw new Error('caustic context not set');
-  return ctx.field.fieldWaterY(wp.xz).sub(wp.y);
+  // FINE-TERRAIN SHORELINE (mirrors WaterMaterial's c9d7f1f fineShore): on format-2
+  // micro cooks without a watercover α (the bog preview) the 2 m waterY plane's dry
+  // cells hold the −1e4 sentinel, so the plain bilinear near a shore blends the pool
+  // level with −1e4 — depth and EVERY gate derived from it (submerged, focal, the
+  // back-projection parallax, the mip blur, the NaniteResolve fringe/biofilm bands)
+  // snapped to the 2 m wet-texel lattice instead of the fine shoreline. Ride the
+  // wet-preferring bilerp: the surface stays FLAT at the pool level up to the shore,
+  // so depth = poolLevel − fragment height varies with the real 6 cm bed and the
+  // caustic footprint follows the same fine bed crossing as the water sheet's cut
+  // (all-dry 2×2 still falls back to the sentinel ⇒ dry land stays caustic-free).
+  // Estonia (α path) and the generated world compile the exact old tap verbatim.
+  const f = ctx.field;
+  const fineShore = f.cookedMicroHeight && !f.hasWaterCoverage;
+  const surfY = fineShore ? f.fieldWaterYWet(wp.xz) : f.fieldWaterY(wp.xz);
+  return surfY.sub(wp.y);
 }
 
 /**

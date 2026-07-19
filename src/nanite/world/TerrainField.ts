@@ -474,6 +474,18 @@ export class TerrainField {
     return planeBilerpWet(w, wxz);
   }
 
+  /** #GAP bilinear WET fraction ∈ [0,1] of the 2 m water plane (bilerp of the
+   *  binary above-sentinel mask): 1 inside the wet lattice, a continuous one-texel
+   *  ramp to 0 across the dilation band where fieldWaterYWet extends the flat pool
+   *  surface — the fineShore analog of fieldWaterCoverage's α feather. NaniteResolve
+   *  fades the waterline fringe with it so the wet-preferring surface's all-dry
+   *  sentinel cut never shows as 2 m stair-steps on the banks. */
+  fieldWaterWetFrac(wxz: NV2): NF {
+    const w = this.water;
+    if (!w) throw new Error('TerrainField: no water plane');
+    return planeWetFrac(w, wxz);
+  }
+
   /** #114 bilinear water coverage α ∈ [0,1] (channel 0 of the watercover rgba8
    *  plane). One filtered tap of the ANTI-ALIASED fraction — the sub-texel signal
    *  a bilinear of the BINARY water mask could never resolve, so the shore tracks
@@ -1203,11 +1215,9 @@ function planeNearest4(lvl: FieldLevel, wxz: NV2): NV4 {
   return texture(lvl.tex, uv as unknown as NV2, 0) as unknown as NV4;
 }
 
-/** #GAP wet-masked bilinear: planeBilerp with the 2×2 weights gated by a wetness
- *  mask (texel above the dry sentinel) and re-normalized, so the −1e4 sentinel
- *  corners never drag the interpolated surface down near a shore. All-dry ⇒ the
- *  plain average (the sentinel), which the caller clamps to the bed. */
-function planeBilerpWet(lvl: HeightLevel, wxz: NV2): NF {
+/** the 2×2 tap set around wxz shared by the wet-masked samplers below:
+ *  corner values s, bilinear corner weights w (sum 1), wet mask flags. */
+function wetTaps(lvl: HeightLevel, wxz: NV2): { s: NF[]; w: NF[]; wet: NF[]; f: NV2 } {
   const g = clamp(gridCoords(lvl, wxz), 0, lvl.res - 1);
   const i0 = floor(g);
   const f = fract(g);
@@ -1219,24 +1229,55 @@ function planeBilerpWet(lvl: HeightLevel, wxz: NV2): NF {
   const t10 = texelU(lvl, x1i, y0i);
   const t01 = texelU(lvl, x0i, y1i);
   const t11 = texelU(lvl, x1i, y1i);
-  const s00 = texLoadR(lvl.tex, t00.x, t00.y);
-  const s10 = texLoadR(lvl.tex, t10.x, t10.y);
-  const s01 = texLoadR(lvl.tex, t01.x, t01.y);
-  const s11 = texLoadR(lvl.tex, t11.x, t11.y);
-  const w00 = f.x.oneMinus().mul(f.y.oneMinus());
-  const w10 = f.x.mul(f.y.oneMinus());
-  const w01 = f.x.oneMinus().mul(f.y);
-  const w11 = f.x.mul(f.y);
+  const s = [
+    texLoadR(lvl.tex, t00.x, t00.y),
+    texLoadR(lvl.tex, t10.x, t10.y),
+    texLoadR(lvl.tex, t01.x, t01.y),
+    texLoadR(lvl.tex, t11.x, t11.y),
+  ];
+  const w = [
+    f.x.oneMinus().mul(f.y.oneMinus()) as unknown as NF,
+    f.x.mul(f.y.oneMinus()) as unknown as NF,
+    f.x.oneMinus().mul(f.y) as unknown as NF,
+    f.x.mul(f.y) as unknown as NF,
+  ];
   // wet = above the −1e4 dry sentinel (real Estonia water levels are ≫ −1000)
-  const wet = (s: NF): NF => s.greaterThan(-1000).select(float(1), float(0)) as unknown as NF;
-  const a00 = w00.mul(wet(s00));
-  const a10 = w10.mul(wet(s10));
-  const a01 = w01.mul(wet(s01));
-  const a11 = w11.mul(wet(s11));
-  const wsum = a00.add(a10).add(a01).add(a11);
-  const vsum = a00.mul(s00).add(a10.mul(s10)).add(a01.mul(s01)).add(a11.mul(s11));
-  const plain = mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
+  const wet = s.map(
+    (v) => v.greaterThan(-1000).select(float(1), float(0)) as unknown as NF,
+  );
+  return { s, w, wet, f: f as unknown as NV2 };
+}
+
+/** #GAP wet-masked bilinear: planeBilerp with the 2×2 weights gated by a wetness
+ *  mask (texel above the dry sentinel) and re-normalized, so the −1e4 sentinel
+ *  corners never drag the interpolated surface down near a shore. All-dry ⇒ the
+ *  plain average (the sentinel), which the caller clamps to the bed. */
+function planeBilerpWet(lvl: HeightLevel, wxz: NV2): NF {
+  const { s, w, wet, f } = wetTaps(lvl, wxz);
+  const a = w.map((wi, i) => wi.mul(wet[i] as NF) as unknown as NF);
+  const wsum = (a[0] as NF).add(a[1] as NF).add(a[2] as NF).add(a[3] as NF);
+  const vsum = (a[0] as NF)
+    .mul(s[0] as NF)
+    .add((a[1] as NF).mul(s[1] as NF))
+    .add((a[2] as NF).mul(s[2] as NF))
+    .add((a[3] as NF).mul(s[3] as NF));
+  const plain = mix(
+    mix(s[0] as NF, s[1] as NF, f.x),
+    mix(s[2] as NF, s[3] as NF, f.x),
+    f.y,
+  );
   return wsum.greaterThan(1e-4).select(vsum.div(wsum.max(1e-4)), plain) as unknown as NF;
+}
+
+/** #GAP bilinear of the binary wet mask (= Σ wᵢ·wetᵢ, weights sum 1): the smooth
+ *  0→1 one-texel ramp across the wet-dilation band — see fieldWaterWetFrac. */
+function planeWetFrac(lvl: HeightLevel, wxz: NV2): NF {
+  const { w, wet } = wetTaps(lvl, wxz);
+  return (w[0] as NF)
+    .mul(wet[0] as NF)
+    .add((w[1] as NF).mul(wet[1] as NF))
+    .add((w[2] as NF).mul(wet[2] as NF))
+    .add((w[3] as NF).mul(wet[3] as NF)) as unknown as NF;
 }
 
 /** true where the point sits ≥1 texel inside the level's window (the rim texel is
