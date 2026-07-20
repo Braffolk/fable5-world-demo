@@ -15,9 +15,9 @@ import { BufferAttribute, BufferGeometry, type DataArrayTexture } from "three";
 import { BootTrace, yieldIfDue } from "../debug/BootTrace";
 import type { WorldSeed } from "../core/Seed";
 import { bakeBarkArray } from "./BarkTexture";
-import { TREE_VARIANTS, VegClass } from "../gpu/passes/Scatter";
+import { TREE_VARIANTS, VEG_CLASS_COUNT, VegClass } from "../gpu/passes/Scatter";
 import { buildLog, buildStump, type DecayState } from "./Deadfall";
-import { twigGeometry } from "./GroundCover";
+import { twigGeometry } from "./Debris";
 import {
   ETAK_ERRATIC_CLASS,
   generateRock,
@@ -48,6 +48,9 @@ import { buildCranberry, CRANBERRY_FOLIAGE, CRANBERRY_BERRY, CRANBERRY_CLS_MAX_D
 import { buildCloudberry, CLOUDBERRY_FOLIAGE, CLOUDBERRY_BERRY, CLOUDBERRY_CLS_MAX_DIST } from "./bog/Cloudberry";
 import { mergeGeo } from "./bog/EricaceousKit";
 import { BOG_LOD_LADDER, BogLodCtx } from "./bog/BogLod";
+// CARPET layer (ground-cover strata; ScatterMap-only like the bog block): the
+// declarative spec table drives the pool loop — no per-cover code here.
+import { CARPET_SPECS, type CarpetBuilder } from "./carpet/CarpetTypes";
 import type { GrowthInstance, SpeciesParams } from "./VegTypes";
 
 export interface PoolPart {
@@ -195,6 +198,11 @@ export const HERO_DIETS: Record<string, HeroDiet> = {
   // with beech/oak-parity clusterSize [2,3] — full lush canopies (airiness comes from
   // twig DENSITY, not fewer anchors), so they need no HeroDiet entry.
 };
+
+/** the ONE implied max-draw-distance for a class no pool sized (fills clsMaxDist;
+ *  WorldRegistry's out-of-range fallbacks quote it too — three call sites used to
+ *  imply three different defaults). */
+export const DEFAULT_CLS_MAX_DIST = 150;
 
 export interface VegLib {
   pools: VegPool[];
@@ -368,11 +376,9 @@ export async function buildVegLibrary(
   const barkTex = await bakeBarkArray();
 
   const pools: VegPool[] = [];
-  // sized to the highest VegClass + 1: ETAK_ERRATIC_CLASS = 31 plus the bog
-  // understory block (CottonGrass..Cloudberry = 32..37), so 38.
-  const clsHeight = new Array<number>(38).fill(1);
-  const clsRadius = new Array<number>(38).fill(1);
-  const clsMaxDist = new Array<number>(38).fill(150);
+  const clsHeight = new Array<number>(VEG_CLASS_COUNT).fill(1);
+  const clsRadius = new Array<number>(VEG_CLASS_COUNT).fill(1);
+  const clsMaxDist = new Array<number>(VEG_CLASS_COUNT).fill(DEFAULT_CLS_MAX_DIST);
   const trackCls = (cls: number, h: number, r: number): void => {
     clsHeight[cls] = Math.max(clsHeight[cls] ?? 1, h);
     clsRadius[cls] = Math.max(clsRadius[cls] ?? 1, r);
@@ -707,6 +713,51 @@ export async function buildVegLibrary(
       });
     }
     clsMaxDist[cls] = maxDist;
+  }
+
+  // ---- CARPET layer (CarpetTypes.CARPET_SPECS; ScatterMap-only like the bog
+  //      block — the generated world never emits carpet classes). Per spec: the
+  //      PATCH tile (leaf-only pool whose SAME mesh the registry voxelizes for
+  //      the mid band — voxelFarClass) and the optional sparse HERO cushion
+  //      (mesh-only). Both ride the bog prune-and-preserve ladder; classPolicy
+  //      routes them on the RIGID (non-wind) channel. ------------------------------
+  progress(0.84, "veg: carpet pools");
+  for (const spec of CARPET_SPECS) {
+    const kinds: { cls: number; build: CarpetBuilder; maxDist: number }[] = [
+      { cls: spec.patchClass, build: spec.buildPatch, maxDist: spec.maxDist },
+    ];
+    if (spec.hero) kinds.push({ cls: spec.hero.cls, build: spec.hero.build, maxDist: spec.hero.maxDist });
+    for (const { cls, build, maxDist } of kinds) {
+      for (let v = 0; v < 4; v++) {
+        await yieldIfDue();
+        const label = `veg/carpet/${spec.id}/${cls}/${v}`;
+        const { geo, tris } = build(seed.rng(label));
+        const b = bounds([geo]);
+        trackCls(cls, b.height, b.radius);
+        pools.push({
+          cls,
+          variant: v,
+          r1: null,
+          r2: null,
+          trisR1: 0,
+          trisR2: 0,
+          height: b.height,
+          radius: b.radius,
+          leaf: {
+            geo,
+            tris,
+            color: spec.tint,
+            // bog crown-LOD (BogLod.ts): lazy per-rung regen, same seed ⇒ λ=1 ≡ `geo`.
+            buildLadder: (): CrownLodLevel[] =>
+              BOG_LOD_LADDER.map((rung) => {
+                const r = build(seed.rng(label), new BogLodCtx(rung.lambda, rung.detail, cls * 8 + v));
+                return { lambda: rung.lambda, geo: r.geo, tris: r.tris, keptAnchors: 0 };
+              }),
+          },
+        });
+      }
+      clsMaxDist[cls] = maxDist;
+    }
   }
 
   // ---- extras: deadfall -------------------------------------------------------

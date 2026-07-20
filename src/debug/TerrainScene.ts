@@ -29,7 +29,7 @@ import { StreamOrigin } from '../nanite/world/StreamOrigin';
 import { buildSpeciesMap } from '../nanite/world/SpeciesMap';
 import { buildScatterMap } from '../nanite/world/ScatterMap';
 import { InstanceBand, treeBoulderPlan } from '../nanite/world/InstanceBand';
-import { understoryDebrisPlan } from '../nanite/world/UnderstoryScatter';
+import { carpetPlan, understoryDebrisPlan } from '../nanite/world/UnderstoryScatter';
 import { VegClass } from '../gpu/passes/Scatter';
 import { chunkBox, coverageCenter } from '../nanite/world/PlaneFill';
 import type { TerrainField } from '../nanite/world/TerrainField';
@@ -150,20 +150,28 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
   // S8: a tree now consumes 3 slots (trunk + leaf mesh + voxel crown), so the band's
   // wanted set grew ~1.5× — measured pilot 4 dense LOD0 chunks = ~190 k slots wanted,
   // which SATURATED the 24-block pool ("full of wanted chunks" drops). 40 blocks
-  // (327 k slots) clears the wanted set with a motion-churn margin (band.* HUD reports
-  // live usage). Mirror/GPU A-B cost = 40·8192·32 B ≈ 10.5 MB — trivial vs the arc's
-  // −290 MB net. Streamed-only (generated keeps boot-bound instances) ⇒ no effect on
-  // the generated determinism gate.
+  // cleared that wanted set; the CARPET band adds ≤ ~26 blocks of moss patches at its
+  // worst (open full-cover bog — exactly where the tree band is emptiest, so the two
+  // peaks never stack) ⇒ 64 blocks (524 k slots) holds either extreme with a
+  // motion-churn margin (band.*/uband.*/carpet.* HUD report live usage). Mirror/GPU
+  // A-B cost = 64·8192·32 B ≈ 16.8 MB — trivial vs the arc's −290 MB net.
+  // Streamed-only (generated keeps boot-bound instances) ⇒ no effect on the
+  // generated determinism gate.
   const INST_BLOCK_SIZE = 8192;
-  const INST_BLOCKS = 40;
+  const INST_BLOCKS = 64;
   const INST_BAND_DIST = 300;
   // S9a understory/debris ride a TIGHT sub-chunk ring (ground cover renders only to
   // ~150 m; 2048 m-chunk residency would be a VRAM hog for 97%-culled content — demand
   // law §5). 256 m cells (÷ the 2048 m data chunk) within 160 m: ≤ ~9 resident cells ×
-  // ~65 k m² × ~0.02/m² × 2 layers ≈ 24 k pool slots worst-case, atop trees' ~190 k in
-  // the 327 k pool (band.* / uband.* HUD report live usage; no INST_BLOCKS change).
+  // ~65 k m² × ~0.02/m² × 2 layers ≈ 24 k pool slots worst-case, atop trees' ~190 k
+  // (band.* / uband.* HUD report live usage).
   const UBAND_CELL = 256;
   const UBAND_DIST = 160;
+  // CARPET band (moss lawns): ~10× the understory's areal instance density (2 m patch
+  // lattice × 2 heads ≈ 0.5 slots/m²), so it rides a TIGHTER cell ring — 128 m cells
+  // hug the 160 m disk (≤ ~13 resident cells ≈ ~8 k slots ≈ one full block each)
+  // instead of 256 m cells' ~2.3× area overshoot.
+  const CARPET_CELL = 128;
   BootTrace.phase(streamed ? 'world source (estonia stream)' : 'world source (heightfield + scatter)');
   const worldSource: WorldSource = streamed
     ? new RemoteWorldSource(params.dataUrl ?? undefined)
@@ -476,10 +484,23 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
         reg: wr.registry,
       });
       brain.addInstanceBand(uband);
+      // CARPET band (S9a sibling): continuous ground-cover strata (sphagnum, …) on
+      // their own deterministic patch lattice — an INDEPENDENT layer under the uband's
+      // plants (bog plants grow IN the moss; the two never compete for cells).
+      const cband = new InstanceBand({
+        plan: carpetPlan(worldSource, worldManifest, scatterMap, {
+          cellMeters: CARPET_CELL,
+          bandDist: UBAND_DIST,
+          ...(groundHeightAt ? { groundHeightAt } : {}),
+        }),
+        headsOf,
+        reg: wr.registry,
+      });
+      brain.addInstanceBand(cband);
       // eslint-disable-next-line no-console
       console.log(
         `[laas] instance bands armed: trees bandDist ${INST_BAND_DIST} m, understory/debris ` +
-          `cell ${UBAND_CELL} m/dist ${UBAND_DIST} m; pool ` +
+          `cell ${UBAND_CELL} m/dist ${UBAND_DIST} m, carpet cell ${CARPET_CELL} m/dist ${UBAND_DIST} m; pool ` +
           `${wr.registry.instancePoolBlockCount}×${wr.registry.instancePoolBlockSize} = ${wr.registry.instancePoolCapacity} slots`,
       );
     }

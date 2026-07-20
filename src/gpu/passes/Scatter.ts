@@ -97,7 +97,61 @@ export const enum VegClass {
   BogRosemary = 35, // Andromeda polifolia — pink urn-bell dwarf shrub (SHRUB)
   Cranberry = 36, // Vaccinium oxycoccos — creeping red-berry mat (FOLIAGE)
   Cloudberry = 37, // Rubus chamaemorus — amber-berry palmate herb (FOLIAGE)
+  // CARPET layer (vegetation/carpet/CarpetTypes.ts) — continuous rigid ground-cover
+  // strata, ScatterMap-only like the bog block (generated world byte-identical).
+  SphagnumPatch = 38, // peat-moss lawn tile — near mesh + mid voxel band (CARPET)
+  SphagnumHummock = 39, // sparse hero moss cushion — near silhouette (CARPET)
 }
+
+/** total VegClass count — sizes every per-class table (clsHeight/clsRadius/
+ *  clsMaxDist). Keep in lockstep with the enum tail above: a class appended
+ *  without bumping this would silently under-allocate those tables. */
+export const VEG_CLASS_COUNT = 40;
+
+/** runtime name per VegClass (const enum ⇒ no reverse mapping exists) — the ONE
+ *  name table, colocated with the enum so an appended class cannot drift from
+ *  its label (ScatterMap boot summaries, debug logs). */
+export const VEG_CLASS_NAME: Readonly<Record<number, string>> = {
+  [VegClass.Spruce]: 'Spruce',
+  [VegClass.Pine]: 'Pine',
+  [VegClass.Beech]: 'Beech',
+  [VegClass.Birch]: 'Birch',
+  [VegClass.KarstGnarl]: 'KarstGnarl',
+  [VegClass.Snag]: 'Snag',
+  [VegClass.Larch]: 'Larch',
+  [VegClass.Oak]: 'Oak',
+  [VegClass.Aspen]: 'Aspen',
+  [VegClass.GreyAlder]: 'GreyAlder',
+  [VegClass.BlackAlder]: 'BlackAlder',
+  [VegClass.Ash]: 'Ash',
+  [VegClass.Maple]: 'Maple',
+  [VegClass.Lime]: 'Lime',
+  [VegClass.Willow]: 'Willow',
+  [VegClass.Rowan]: 'Rowan',
+  [VegClass.BushHazel]: 'BushHazel',
+  [VegClass.BushPink]: 'BushPink',
+  [VegClass.Juniper]: 'Juniper',
+  [VegClass.Fern]: 'Fern',
+  [VegClass.FlowerUmbel]: 'FlowerUmbel',
+  [VegClass.FlowerBell]: 'FlowerBell',
+  [VegClass.FlowerDaisy]: 'FlowerDaisy',
+  [VegClass.Log]: 'Log',
+  [VegClass.Stump]: 'Stump',
+  [VegClass.Boulder]: 'Boulder',
+  [VegClass.Slab]: 'Slab',
+  [VegClass.StoneL]: 'StoneL',
+  [VegClass.StoneM]: 'StoneM',
+  [VegClass.StoneS]: 'StoneS',
+  [VegClass.Branch]: 'Branch',
+  [VegClass.CottonGrass]: 'CottonGrass',
+  [VegClass.Heather]: 'Heather',
+  [VegClass.LabradorTea]: 'LabradorTea',
+  [VegClass.BogRosemary]: 'BogRosemary',
+  [VegClass.Cranberry]: 'Cranberry',
+  [VegClass.Cloudberry]: 'Cloudberry',
+  [VegClass.SphagnumPatch]: 'SphagnumPatch',
+  [VegClass.SphagnumHummock]: 'SphagnumHummock',
+};
 
 /** structural variants baked per tree species (geometry reuse, D5) */
 export const TREE_VARIANTS = 4;

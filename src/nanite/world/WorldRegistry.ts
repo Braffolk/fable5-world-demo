@@ -14,6 +14,9 @@
  *    (frond rosette / small bloom), registered as a leaf-class PRIMARY head (the
  *    tree/shrub crown path, bound directly to instances). No opaque head, no voxel
  *    sibling — short-range dense cover capped at clsMaxDist.
+ *  - CARPET classes (CarpetTypes.CARPET_SPECS, 38+): leaf-primary like ferns but
+ *    RIGID (non-wind channel); the PATCH class hands off to a per-spec voxel
+ *    sibling at voxNear (voxelFarClass) — mesh near, voxel mid, terrain tint far.
  *  - logs/stumps (23–24), branches (30): deadwood, r1 (branch r2 is a clone
  *    that exists only for indirect-slot bookkeeping — one registration).
  *  - rocks (25–29 + EtakErratic 31): a single RockGen LOD0 ring — continuous
@@ -35,8 +38,9 @@ import { Vector2 } from 'three';
 import { internalSize } from '../../render/RenderScale';
 import { VegClass } from '../../gpu/passes/Scatter';
 import type { ChunkContentStreams } from './ChunkContent';
-import { CROWN_LOD_SCHEDULE, type VegLib, type VegPool, type PoolPart } from '../../vegetation/VegLibrary';
+import { CROWN_LOD_SCHEDULE, DEFAULT_CLS_MAX_DIST, type VegLib, type VegPool, type PoolPart } from '../../vegetation/VegLibrary';
 import { BOG_LOD_LADDER } from '../../vegetation/bog/BogLod';
+import { CARPET_CACHE_PARAMS, CARPET_CLASSES, carpetSpecOfPatch } from '../../vegetation/carpet/CarpetTypes';
 import { ETAK_ERRATIC_CLASS } from '../../vegetation/RockGen';
 import type { CrownLodLevel } from '../../vegetation/TreeBuilder';
 import type { Heightfield } from '../../world/Heightfield';
@@ -295,7 +299,40 @@ function classPolicy(
   // Short-range dense cover: lodDist unused (the aggregate DAG + clsMaxDist bound
   // it), a small sway pad (0.1–0.6 m plants barely move).
   if (FOLIAGE_CLASSES.has(cls)) return { matClass: 'leaf', channel: 'leaf', lodDist: 0, swayPad: 1.5 };
+  // CARPET ground-cover strata (CarpetTypes): leaf-primary like ferns/flowers but
+  // RIGID — a moss/lichen mat does not sway (the wind fetch skips channel 0
+  // entirely), so no sway cull pad either. The patch's mid band rides a voxel
+  // sibling (voxelFarClass); the far field is the terrain tint (zero instances).
+  if (CARPET_CLASSES.has(cls)) return { matClass: 'leaf', channel: 'rigid', lodDist: 0, swayPad: 0 };
   return null; // (no class currently falls through — kept as a guard)
+}
+
+/** Voxel-far sibling policy — the ONE predicate for "this class hands its leaf/
+ *  patch mesh to a voxel crown at distance", shared by planVegJobs and the pool
+ *  walk (they must agree job-for-job; this replaces their two hand-mirrored
+ *  `isTree` gates). Trees: handoff at the global ?voxnear knob, band to
+ *  TREE_GEO_FAR, fartile-pooled (the streamed far tiles continue the crown).
+ *  Carpet patches: per-spec near/far band + cm-scale voxel grid, never fartiled
+ *  (the terrain tint is a carpet's far field). null = mesh-only (shrubs,
+ *  ferns/flowers, carpet heroes, deadwood/rock). */
+function voxelFarClass(
+  cls: number,
+  knobs: { transitionDist: number; voxGridDim: number },
+): { voxNear: number; voxMaxDist: number; voxGridDim: number; fartiles: boolean; swayPad: number } | null {
+  if (cls <= TREE_MAX_CLS) {
+    return {
+      voxNear: knobs.transitionDist,
+      voxMaxDist: TREE_GEO_FAR,
+      voxGridDim: knobs.voxGridDim,
+      fartiles: true,
+      swayPad: LEAF_SWAY_PAD,
+    };
+  }
+  const spec = carpetSpecOfPatch(cls);
+  if (spec) {
+    return { voxNear: spec.voxNear, voxMaxDist: spec.maxDist, voxGridDim: spec.voxGridDim, fartiles: false, swayPad: 0 };
+  }
+  return null;
 }
 
 /** cull projK FOV reference: no camera exists at build time, so the app FOV
@@ -468,6 +505,9 @@ interface VegDagJob {
 interface VegCrownJob extends VegDagJob {
   idF: number;
   color: { r: number; g: number; b: number; hueVar: number };
+  /** per-class voxel grid (voxelFarClass) — tree crowns take the global knob,
+   *  carpet patches their cm-scale spec grid. */
+  gridDim: number;
 }
 interface VegJobPlan {
   /** QEM LOD DAGs for bark/rock/deadwood heads — mirrors the walk's `toDag` order */
@@ -526,29 +566,36 @@ function planVegJobs(
   for (const pool of lib.pools) {
     const policy = classPolicy(pool.cls);
     if (!policy) continue;
-    // FOLIAGE-PRIMARY (ferns/flowers): a single leaf-class aggregate job — MIRRORS the
-    // pool walk's toAggregate push (leaf-primary branch), so prep.dags stays index-
-    // aligned with [toDag..., toAggregate...]. No QEM dag, no voxel crown. Handled
-    // BEFORE the inSet gate (the leaf class is not in the migration set), in pool order.
+    const idF = pool.cls * 8 + pool.variant;
+    const label = `c${pool.cls}v${pool.variant}`;
+    // FOLIAGE-PRIMARY (ferns/flowers/carpet): a single leaf-class aggregate job —
+    // MIRRORS the pool walk's toAggregate push (leaf-primary branch), so prep.dags
+    // stays index-aligned with [toDag..., toAggregate...]. No QEM dag. Handled
+    // BEFORE the inSet gate (the leaf class is not in the migration set), in pool
+    // order. Carpet PATCH classes additionally voxelize (voxelFarClass — the mid
+    // band), exactly as the pool walk does.
     if (policy.matClass === 'leaf') {
       if (!leafOn || !pool.leaf) continue;
       const leafGeo = pool.leaf.geo;
       const buildLadder = pool.leaf.buildLadder;
       let leafSrc: ExplicitSource | null = null;
       let leafRungs: CrownLodLevelMesh[] | null = null;
+      const leafSource = (): ExplicitSource => (leafSrc ??= geometryToSource(leafGeo));
       plan.aggJobs.push({
-        label: `c${pool.cls}v${pool.variant}/leaf`,
-        source: () => (leafSrc ??= geometryToSource(leafGeo)),
+        label: `${label}/leaf`,
+        source: leafSource,
         // LAZY ladder regen (cache-miss only), mirroring the tree/shrub branch
-        // below — bog leaf-PRIMARY pools (cotton-grass, cranberry, cloudberry)
-        // carry a buildLadder; ferns/flowers don't (undefined ⇒ single-level).
+        // below — bog/carpet leaf-PRIMARY pools carry a buildLadder; ferns/
+        // flowers don't (undefined ⇒ single-level).
         ladder: () => (leafRungs ??= ladderToMeshes(buildLadder ? buildLadder() : null)),
       });
+      const vfc = voxelFarClass(pool.cls, knobs);
+      if (vfc && knobs.voxReg && (!knobs.forceVoxOn || knobs.forceVoxAll || knobs.forceVoxId === idF)) {
+        plan.crownJobs.push({ idF, label: `${label}/voxel`, source: leafSource, color: pool.leaf.color, gridDim: vfc.voxGridDim });
+      }
       continue;
     }
     if (!inSet(policy.matClass)) continue;
-    const idF = pool.cls * 8 + pool.variant;
-    const label = `c${pool.cls}v${pool.variant}`;
     const rings = poolRings(pool, policy);
     if (rings.length === 0) continue;
     if (dagSet?.has(policy.matClass)) {
@@ -567,11 +614,11 @@ function planVegJobs(
       const ladder = (): CrownLodLevelMesh[] =>
         (leafRungs ??= ladderToMeshes(buildLadder ? buildLadder() : null));
       plan.aggJobs.push({ label: `${label}/leaf`, source: leafSource, ladder });
-      // voxel crown = the TREE mid/far LOD only (mirrors the pool walk's `isTree` gate,
-      // so crownJobs count matches the walk's toVoxel); shrub leaves are mesh-only.
-      const isTree = pool.cls <= TREE_MAX_CLS;
-      if (isTree && knobs.voxReg && (!knobs.forceVoxOn || knobs.forceVoxAll || knobs.forceVoxId === idF)) {
-        plan.crownJobs.push({ idF, label: `${label}/voxel`, source: leafSource, color: pool.leaf.color });
+      // voxel crown per voxelFarClass (trees here; shrub leaves are mesh-only) —
+      // the SHARED predicate keeps crownJobs job-for-job with the walk's toVoxel.
+      const vfc = voxelFarClass(pool.cls, knobs);
+      if (vfc && knobs.voxReg && (!knobs.forceVoxOn || knobs.forceVoxAll || knobs.forceVoxId === idF)) {
+        plan.crownJobs.push({ idF, label: `${label}/voxel`, source: leafSource, color: pool.leaf.color, gridDim: vfc.voxGridDim });
       }
     }
   }
@@ -644,6 +691,9 @@ export async function prepareWorldVeg(input: {
       crownLod: CROWN_LOD_SCHEDULE,
       // bog understory ladder schedule (BogLod.ts) — same staleness argument.
       bogLod: BOG_LOD_LADDER,
+      // CARPET spec digest (classes/bands/voxel grids/tints) — a spec edit must
+      // invalidate the cached carpet crowns + DAGs.
+      carpet: CARPET_CACHE_PARAMS,
       crownLodErrorK: knobs.crownLodErrorK,
       knobs: knobs.keyKnobs,
     },
@@ -715,7 +765,7 @@ export async function prepareWorldVeg(input: {
                   vdata: src.vdata,
                   indices: src.indices,
                   color: j.color,
-                  gridDim: knobs.voxGridDim,
+                  gridDim: j.gridDim,
                   voxlod: knobs.voxLod,
                   occThreshold: occ,
                   cfg,
@@ -726,7 +776,7 @@ export async function prepareWorldVeg(input: {
             }
             if (!pack) {
               await yieldIfDue();
-              pack = packPreparedCrown(prepareVoxelCrown(src, j.color, knobs.voxGridDim, knobs.voxLod));
+              pack = packPreparedCrown(prepareVoxelCrown(src, j.color, j.gridDim, knobs.voxLod));
             }
           crownOut[slot] = { idF: j.idF, pack };
         });
@@ -981,6 +1031,13 @@ export async function buildWorldRegistry(input: {
     packed: PackedPreparedCrown;
     matParam: number;
     label: string;
+    /** voxelFarClass band: the leaf mesh caps at voxNear, the voxel sibling owns
+     *  voxNear..voxMaxDist; fartiles = tree crowns only (they continue into the
+     *  streamed far-tile pool — a carpet's far field is the terrain tint). */
+    voxNear: number;
+    voxMaxDist: number;
+    fartiles: boolean;
+    swayPad: number;
   }[] = [];
   let deferredTris = 0;
   const notePart = (label: string, parts: PoolPart[] | null | undefined, from: number): void => {
@@ -1003,12 +1060,15 @@ export async function buildWorldRegistry(input: {
       notePart(label, pool.r1, 0);
       continue;
     }
-    // FOLIAGE-PRIMARY pools (ferns/flowers): no opaque head — the plant IS a leaf-
-    // class mesh. Register the frond/bloom as a 'leaf' head (the SAME crown path the
-    // tree/shrub leaves ride: two-sided, aggregate DAG, tint via packLeafTint) and
-    // bind it directly to instances (main bind pass, via `heads`). Gated by leafOn
-    // like every leaf head — the leaf class rides the leaf gate, not the inSet
-    // migration set. Capped at clsMaxDist (no voxel/fartile sibling — dense short range).
+    // FOLIAGE-PRIMARY pools (ferns/flowers/carpet): no opaque head — the plant IS a
+    // leaf-class mesh. Register the frond/bloom/patch as a 'leaf' head (the SAME
+    // crown path the tree/shrub leaves ride: two-sided, aggregate DAG, tint via
+    // packLeafTint) on the POLICY's transform channel (ferns/flowers sway on 'leaf';
+    // carpet is 'rigid' — the wind fetch skips channel 0) and bind it directly to
+    // instances (main bind pass, via `heads`). Gated by leafOn like every leaf head —
+    // the leaf class rides the leaf gate, not the inSet migration set. Capped at
+    // clsMaxDist; carpet PATCH classes additionally hand off to a voxel sibling at
+    // voxNear (voxelFarClass — the mid band), exactly like the tree crowns below.
     if (policy.matClass === 'leaf') {
       const foliage = pool.leaf;
       if (!leafOn || !foliage) {
@@ -1017,7 +1077,7 @@ export async function buildWorldRegistry(input: {
       }
       const src = geometryToSource(foliage.geo);
       const head = reg.registerMesh(src, 'leaf', {
-        transformChannel: 'leaf',
+        transformChannel: policy.channel,
         castShadows: false,
         twoSided: true,
         label,
@@ -1028,9 +1088,30 @@ export async function buildWorldRegistry(input: {
         // 1b: low bog foliage cantilevers on the shrub leaf-wind params (h0 0.9).
         shrubWind: BOG_FOLIAGE_CLASSES.has(pool.cls),
       });
-      reg.setMaxDistance(head, lib.clsMaxDist[pool.cls] ?? 120);
+      reg.setMaxDistance(head, lib.clsMaxDist[pool.cls] ?? DEFAULT_CLS_MAX_DIST);
       heads.set(idF, head);
       toAggregate.push({ handle: head, source: src, label: `${label}/leaf`, buildLadder: foliage.buildLadder });
+      const vfc = voxelFarClass(pool.cls, knobs);
+      if (vfc && voxReg && (!forceVoxOn || forceVoxAll || forceVoxId === idF)) {
+        let packed = prep.crowns.get(idF);
+        if (!packed) {
+          console.warn(`[worldreg] crown ${label} missing from veg prep — building inline`);
+          packed = packPreparedCrown(prepareVoxelCrown(src, foliage.color, vfc.voxGridDim, voxLod));
+        }
+        if (packed.brickCount > 0) {
+          toVoxel.push({
+            idF,
+            packed,
+            matParam: packLeafTint(foliage.color),
+            label: `${label}/voxel`,
+            voxNear: vfc.voxNear,
+            voxMaxDist: vfc.voxMaxDist,
+            fartiles: vfc.fartiles,
+            swayPad: vfc.swayPad,
+          });
+          leafHeadForVox.set(idF, head);
+        }
+      }
       continue;
     }
     if (!inSet(policy.matClass)) {
@@ -1064,7 +1145,7 @@ export async function buildWorldRegistry(input: {
     // hybrid draw envelope = the old path's: trees hand over to impostors at
     // TREE_GEO_FAR; everything else uses its pool max distance (clsMaxDist;
     // trees' own entry is 1e8 "impostors continue" — not a geometry bound)
-    const maxDist = isTree ? TREE_GEO_FAR : (lib.clsMaxDist[pool.cls] ?? 150);
+    const maxDist = isTree ? TREE_GEO_FAR : (lib.clsMaxDist[pool.cls] ?? DEFAULT_CLS_MAX_DIST);
     reg.setMaxDistance(head, maxDist);
     heads.set(idF, head);
     if (dag?.has(policy.matClass)) toDag.push({ handle: head, source: headSource, label });
@@ -1096,7 +1177,7 @@ export async function buildWorldRegistry(input: {
       // trees hand their crown to a voxel sibling at transitionDist and continue as
       // impostors to TREE_GEO_FAR; understory shrubs are short-range dense cover — the
       // leaf MESH owns the whole 0..clsMaxDist band (no voxel sibling), so cap it there.
-      reg.setMaxDistance(leafHead, isTree ? TREE_GEO_FAR : (lib.clsMaxDist[pool.cls] ?? 170));
+      reg.setMaxDistance(leafHead, isTree ? TREE_GEO_FAR : (lib.clsMaxDist[pool.cls] ?? DEFAULT_CLS_MAX_DIST));
       toAggregate.push({
         handle: leafHead,
         source: leafSource,
@@ -1108,9 +1189,10 @@ export async function buildWorldRegistry(input: {
       // brick total is known before the addLate reservation freezes (§5.3). The voxel
       // sibling head + brick append happen post-build (a voxel cluster points at bricks,
       // not tris — that authoring is Stage 2; here we only reserve+upload the bricks).
-      // TREES ONLY: the voxel crown is the tree mid/far-field LOD; understory shrubs cap
-      // their leaf mesh at clsMaxDist (above) and never enter the voxel/fartile path.
-      if (isTree && voxReg && (!forceVoxOn || forceVoxAll || forceVoxId === idF)) {
+      // voxelFarClass ⇒ trees only on this branch (the tree mid/far-field LOD);
+      // understory shrubs cap their leaf mesh at clsMaxDist (above) — mesh-only.
+      const vfc = voxelFarClass(pool.cls, knobs);
+      if (vfc && voxReg && (!forceVoxOn || forceVoxAll || forceVoxId === idF)) {
         const matParam = packLeafTint(pool.leaf.color);
         // prep.crowns carries EVERY planned crown (cache hit or worker build — prepareWorldVeg
         // already stored the packed form). The world path appends STRAIGHT from the packed
@@ -1119,12 +1201,21 @@ export async function buildWorldRegistry(input: {
         let packed = prep.crowns.get(idF);
         if (!packed) {
           console.warn(`[worldreg] crown ${label} missing from veg prep — building inline`);
-          packed = packPreparedCrown(prepareVoxelCrown(leafSource, pool.leaf.color, voxGridDim, voxLod));
+          packed = packPreparedCrown(prepareVoxelCrown(leafSource, pool.leaf.color, vfc.voxGridDim, voxLod));
         }
         // a degenerate empty crown (0 bricks) would crash registerVoxelHead — skip it so the
-        // leaf head keeps its full mesh envelope (set below to TREE_GEO_FAR, no handoff).
+        // leaf head keeps its full mesh envelope (set above, no handoff).
         if (packed.brickCount > 0) {
-          toVoxel.push({ idF, packed, matParam, label: `${label}/voxel` });
+          toVoxel.push({
+            idF,
+            packed,
+            matParam,
+            label: `${label}/voxel`,
+            voxNear: vfc.voxNear,
+            voxMaxDist: vfc.voxMaxDist,
+            fartiles: vfc.fartiles,
+            swayPad: vfc.swayPad,
+          });
           leafHeadForVox.set(idF, leafHead);
         }
       }
@@ -1142,18 +1233,22 @@ export async function buildWorldRegistry(input: {
   if (leafHeadForVox.size > 0) {
     let handed = 0;
     let suppressed = 0;
-    for (const [idF, leafHead] of leafHeadForVox) {
-      const forced = forceVoxOn && (forceVoxAll || forceVoxId === idF);
+    for (const v of toVoxel) {
+      const leafHead = leafHeadForVox.get(v.idF);
+      if (leafHead === undefined) continue;
+      const forced = forceVoxOn && (forceVoxAll || forceVoxId === v.idF);
       if (forced) {
         reg.setMaxDistance(leafHead, 0.001);
         suppressed++;
       } else {
-        reg.setMaxDistance(leafHead, transitionDist);
+        // per-class handoff (voxelFarClass): trees at the global transitionDist,
+        // carpet patches at their spec's voxNear.
+        reg.setMaxDistance(leafHead, v.voxNear);
         handed++;
       }
     }
     console.log(
-      `[worldreg] voxel transition: ${handed} leaf head(s) handed off at ${transitionDist} m → voxel` +
+      `[worldreg] voxel transition: ${handed} leaf head(s) handed off at per-class voxNear (trees ${transitionDist} m) → voxel` +
         (suppressed > 0 ? `, ${suppressed} suppressed (?forcevox=${forceVoxRaw})` : ''),
     );
   }
@@ -1546,9 +1641,12 @@ export async function buildWorldRegistry(input: {
   // The pool is a NET VRAM CUT: the graded far cells cost ~4× fewer bricks per distance
   // doubling than the ungraded boot build (which was all-fine, all-resident).
   let ftArm: Omit<FtArmMsg, 'kind' | 'speciesToClass' | 'slots' | 'clusterCap' | 'granules'> | null = null;
-  if (farTilesOn && toVoxel.length > 0 && streamBrain) {
+  // tree crowns only (voxelFarClass.fartiles) — a carpet's far field is the terrain
+  // tint, so its patch crowns never enter the far-tile species pools.
+  const ftCrowns = toVoxel.filter((v) => v.fartiles);
+  if (farTilesOn && ftCrowns.length > 0 && streamBrain) {
     const ftSpeciesPools: FtSpeciesPool[] = [];
-    for (const v of toVoxel) {
+    for (const v of ftCrowns) {
       const levels = v.packed.vox.levels;
       if (!levels || levels.length === 0) continue;
       // pick the crown pyramid level whose brick size best matches the near cell size
@@ -1593,7 +1691,7 @@ export async function buildWorldRegistry(input: {
       horizon: FT_HORIZON,
       nearDist: Math.max(10, aggDist - 46),
       reachMargin: 20,
-      tint: toVoxel[0]?.matParam ?? 0,
+      tint: ftCrowns[0]?.matParam ?? 0,
     };
     // Pool ceilings from RING ARITHMETIC, not a magic number (#109). The far ring is a
     // Chebyshev square of FT_CELL_METERS cells out to FT_HORIZON; grading coarsens a cell's
@@ -1672,14 +1770,16 @@ export async function buildWorldRegistry(input: {
       await yieldIfDue();
       const r = appendPackedCrown(reg, v.packed, {
         matParam: v.matParam,
-        swayPad: LEAF_SWAY_PAD,
-        // fartiles: the per-tree voxel crown ENDS at aggDist — the streamed merged tile
-        // heads own the far field beyond (overlap by the tile radius, hole-free). When
-        // fartiles are off the voxel crown runs to TREE_GEO_FAR (no far handoff).
-        maxDist: ftArm ? aggDist : TREE_GEO_FAR,
-        // Stage-3a: the voxel head seeds only beyond transitionDist (the mesh→voxel
-        // handoff); ?forcevox forces nearDist=0 (voxel everywhere, leaf suppressed below).
-        nearDist: forceVoxOn && (forceVoxAll || forceVoxId === v.idF) ? 0 : transitionDist,
+        swayPad: v.swayPad,
+        // fartiles (tree crowns): the per-tree voxel crown ENDS at aggDist — the
+        // streamed merged tile heads own the far field beyond (overlap by the tile
+        // radius, hole-free); with fartiles off it runs to TREE_GEO_FAR. Carpet
+        // patches always end at their spec maxDist (the tint floor is beyond).
+        maxDist: v.fartiles && ftArm ? aggDist : v.voxMaxDist,
+        // Stage-3a: the voxel head seeds only beyond the per-class handoff
+        // (voxelFarClass voxNear); ?forcevox forces nearDist=0 (voxel everywhere,
+        // leaf suppressed above).
+        nearDist: forceVoxOn && (forceVoxAll || forceVoxId === v.idF) ? 0 : v.voxNear,
         label: v.label,
       });
       appended += r.brickCount;
@@ -1691,7 +1791,7 @@ export async function buildWorldRegistry(input: {
       if (s) reg.bindInstances(r.head, { a: s.a, b: s.b });
       // fartiles: the per-tree BARK trunk ends at aggDist too — the streamed tile splat
       // carries its own trunk columns beyond.
-      if (ftArm) {
+      if (v.fartiles && ftArm) {
         const bark = heads.get(v.idF);
         if (bark !== undefined) reg.setMaxDistance(bark, aggDist);
       }

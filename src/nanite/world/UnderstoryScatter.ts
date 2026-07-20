@@ -14,11 +14,18 @@
  * guidance/height PLANES are per-2048 m chunk though, so each fine cell fetches its
  * parent chunk's planes once (small LRU) and scatters only its own footprint from
  * a GLOBAL grid (position-stable → deterministic across cell/refetch boundaries).
+ *
+ * CARPET layer (CarpetTypes.CARPET_SPECS): `carpetPlan` is a SECOND, independent band
+ * over the same guidance planes — moss lawns scatter on their own deterministic patch
+ * lattice (density ≥ coverThreshold ⇒ emit; a carpet with acceptance-thinning holes is
+ * not a carpet) and the understory plants above keep their own probabilistic grid, so
+ * plants grow IN the moss instead of competing with it for cells.
  */
 
 import { makeGroundDeriver, pcg2d, type GroundDeriver } from '../../world/source/RecordGround';
 import { VegClass } from '../../gpu/passes/Scatter';
 import { packChunkKey } from '../../world/source/Lac1';
+import { CARPET_SPECS, type CarpetSpec } from '../../vegetation/carpet/CarpetTypes';
 import { pickClass, type ScatterMap } from './ScatterMap';
 import type { ChunkInstances } from './ChunkContent';
 import type { CellPlan } from './InstanceBand';
@@ -39,19 +46,22 @@ const UNDER_PEAK = 1.0;
 const DEBRIS_PEAK = 0.5;
 const PLANE_TEXEL_M = 2; // enc2 guidance planes: 2 m texel (manifest texelMeters)
 
+/** one decoded guidance layer of a parent chunk: (categoryId, density) u8 planes. */
+interface GuidancePlane {
+  res: number;
+  id: Uint8Array;
+  den: Uint8Array;
+}
+
 /** parent-chunk decoded planes + grounding deriver, cached across the fine cells that
- *  share one 2048 m chunk. null fields = the source has no such chunk (authoritative
+ *  share one 2048 m chunk. null layers = the source has no such chunk (authoritative
  *  absence — that category simply scatters nothing here). */
 interface ParentData {
   minX: number;
   minZ: number;
   deriver: GroundDeriver;
-  uRes: number;
-  uId: Uint8Array | null;
-  uDen: Uint8Array | null;
-  dRes: number;
-  dId: Uint8Array | null;
-  dDen: Uint8Array | null;
+  under: GuidancePlane | null;
+  debris: GuidancePlane | null;
 }
 
 /** per-class size + bed-sink, mirroring the generated scatter's ranges (cosmetic). */
@@ -92,6 +102,41 @@ function sizeFor(cls: number, hy: number): { scale: number; sink: number; lean: 
   }
 }
 
+/** grounding + placement context shared by every plan of one manifest. */
+interface PlanCtx {
+  chunkM: number;
+  originX: number;
+  originZ: number;
+  parentOf: (pcx: number, pcz: number) => Promise<ParentData>;
+}
+
+/** the parent-chunk plane LRU (24 chunks ≫ the fine ring's parent count) — each
+ *  plan instance owns one; both plans share the loader below. */
+function makePlanCtx(source: WorldSource, manifest: WorldManifest): PlanCtx {
+  const chunkM = manifest.grid.chunkMeters; // 2048 (parent stride)
+  const originX = manifest.grid.originX;
+  const originZ = manifest.grid.originZ;
+  const cache = new Map<number, Promise<ParentData>>();
+  const CACHE_CAP = 24;
+  return {
+    chunkM,
+    originX,
+    originZ,
+    parentOf: (pcx: number, pcz: number): Promise<ParentData> => {
+      const key = packChunkKey(0, pcx, pcz);
+      const hit = cache.get(key);
+      if (hit) return hit;
+      const p = loadParent(source, pcx, pcz, originX, originZ, chunkM);
+      cache.set(key, p);
+      if (cache.size > CACHE_CAP) {
+        const oldest = cache.keys().next().value as number;
+        cache.delete(oldest);
+      }
+      return p;
+    },
+  };
+}
+
 /**
  * Build the understory/debris CellPlan for the streamed instance band. Fine cells
  * (`cellMeters`, a divisor of the 2048 m chunk) within `bandDist` of the camera hold
@@ -104,55 +149,51 @@ export function understoryDebrisPlan(
   map: ScatterMap,
   opts: { cellMeters: number; bandDist: number; groundHeightAt?: (x: number, z: number) => number },
 ): CellPlan {
-  const chunkM = manifest.grid.chunkMeters; // 2048 (parent stride)
-  const originX = manifest.grid.originX;
-  const originZ = manifest.grid.originZ;
-  const cache = new Map<number, Promise<ParentData>>();
-  const CACHE_CAP = 24;
+  const ctx = makePlanCtx(source, manifest);
   let builtUnder = 0;
   let builtDebris = 0;
-
-  const parentOf = (pcx: number, pcz: number): Promise<ParentData> => {
-    const key = packChunkKey(0, pcx, pcz);
-    const hit = cache.get(key);
-    if (hit) return hit;
-    const p = loadParent(source, pcx, pcz, originX, originZ, chunkM);
-    cache.set(key, p);
-    if (cache.size > CACHE_CAP) {
-      const oldest = cache.keys().next().value as number;
-      cache.delete(oldest);
-    }
-    return p;
-  };
 
   return {
     cellMeters: opts.cellMeters,
     bandDist: opts.bandDist,
-    originX,
-    originZ,
+    originX: ctx.originX,
+    originZ: ctx.originZ,
     label: 'uband',
     ...(opts.groundHeightAt ? { groundHeightAt: opts.groundHeightAt } : {}),
     exists(cx: number, cz: number): boolean {
       // a fine cell exists iff its parent 2048 m chunk carries either guidance layer
-      const pcx = Math.floor((cx * opts.cellMeters) / chunkM);
-      const pcz = Math.floor((cz * opts.cellMeters) / chunkM);
+      const pcx = Math.floor((cx * opts.cellMeters) / ctx.chunkM);
+      const pcz = Math.floor((cz * opts.cellMeters) / ctx.chunkM);
       const k = { lod: 0, cx: pcx, cz: pcz };
       return manifest.coverage('understory', k) !== null || manifest.coverage('debris', k) !== null;
     },
     async build(cx: number, cz: number): Promise<ChunkInstances> {
       const C = opts.cellMeters;
-      const x0 = originX + cx * C;
-      const z0 = originZ + cz * C;
-      const pcx = Math.floor((x0 - originX) / chunkM);
-      const pcz = Math.floor((z0 - originZ) / chunkM);
-      const parent = await parentOf(pcx, pcz);
+      const x0 = ctx.originX + cx * C;
+      const z0 = ctx.originZ + cz * C;
+      const parent = await ctx.parentOf(Math.floor((x0 - ctx.originX) / ctx.chunkM), Math.floor((z0 - ctx.originZ) / ctx.chunkM));
       const a: number[] = [];
       const b: number[] = [];
       const groundOffsets: number[] | null = opts.groundHeightAt ? [] : null;
-      const nU = scatterGrid(a, b, groundOffsets, opts.groundHeightAt, x0, z0, C, UNDER_STEP, UNDER_PEAK, 0x51a3, parent.minX, parent.minZ, parent.deriver, parent.uRes, parent.uId, parent.uDen, (id, r) => pickClass(map.understory(id), r), () => 1);
-      const nD = scatterGrid(a, b, groundOffsets, opts.groundHeightAt, x0, z0, C, DEBRIS_STEP, DEBRIS_PEAK, 0x2c9f, parent.minX, parent.minZ, parent.deriver, parent.dRes, parent.dId, parent.dDen, (id, r) => pickClass(map.debris(id), r), (id) => map.debris(id).base / map.maxDebrisBase);
-      builtUnder += nU;
-      builtDebris += nD;
+      const shared = { a, b, groundOffsets, groundHeightAt: opts.groundHeightAt, x0, z0, C, parent };
+      builtUnder += scatterGrid({
+        ...shared,
+        plane: parent.under,
+        step: UNDER_STEP,
+        peak: UNDER_PEAK,
+        salt: 0x51a3,
+        pick: (id, r) => pickClass(map.understory(id), r),
+        baseFrac: () => 1,
+      });
+      builtDebris += scatterGrid({
+        ...shared,
+        plane: parent.debris,
+        step: DEBRIS_STEP,
+        peak: DEBRIS_PEAK,
+        salt: 0x2c9f,
+        pick: (id, r) => pickClass(map.debris(id), r),
+        baseFrac: (id) => map.debris(id).base / map.maxDebrisBase,
+      });
       return {
         a: Float32Array.from(a),
         b: Float32Array.from(b),
@@ -161,6 +202,77 @@ export function understoryDebrisPlan(
       };
     },
     extra: () => ({ 'uband.built.under': builtUnder, 'uband.built.debris': builtDebris }),
+  };
+}
+
+/**
+ * The CARPET band's CellPlan (CarpetTypes.CARPET_SPECS): continuous ground-cover
+ * strata over the SAME understory guidance planes, as an INDEPENDENT layer — the
+ * uband's plants scatter on top of the moss, never instead of it (user law: bog
+ * plants grow IN the sphagnum). Denser than understory (patch lattice ~2 m) but
+ * near-capped (voxel band ends ≤160 m), so it rides its own tighter cell ring;
+ * each patch instance binds a mesh + voxel head (2 pool slots).
+ */
+export function carpetPlan(
+  source: WorldSource,
+  manifest: WorldManifest,
+  map: ScatterMap,
+  opts: { cellMeters: number; bandDist: number; groundHeightAt?: (x: number, z: number) => number },
+): CellPlan {
+  const ctx = makePlanCtx(source, manifest);
+  let builtPatches = 0;
+  let builtHeroes = 0;
+
+  return {
+    cellMeters: opts.cellMeters,
+    bandDist: opts.bandDist,
+    originX: ctx.originX,
+    originZ: ctx.originZ,
+    label: 'carpet',
+    ...(opts.groundHeightAt ? { groundHeightAt: opts.groundHeightAt } : {}),
+    exists(cx: number, cz: number): boolean {
+      // carpets read only the understory guidance layer
+      const pcx = Math.floor((cx * opts.cellMeters) / ctx.chunkM);
+      const pcz = Math.floor((cz * opts.cellMeters) / ctx.chunkM);
+      return manifest.coverage('understory', { lod: 0, cx: pcx, cz: pcz }) !== null;
+    },
+    async build(cx: number, cz: number): Promise<ChunkInstances> {
+      const C = opts.cellMeters;
+      const x0 = ctx.originX + cx * C;
+      const z0 = ctx.originZ + cz * C;
+      const parent = await ctx.parentOf(Math.floor((x0 - ctx.originX) / ctx.chunkM), Math.floor((z0 - ctx.originZ) / ctx.chunkM));
+      const a: number[] = [];
+      const b: number[] = [];
+      const groundOffsets: number[] | null = opts.groundHeightAt ? [] : null;
+      if (parent.under) {
+        for (let si = 0; si < CARPET_SPECS.length; si++) {
+          const spec = CARPET_SPECS[si] as CarpetSpec;
+          const built = carpetGrid({
+            a,
+            b,
+            groundOffsets,
+            groundHeightAt: opts.groundHeightAt,
+            x0,
+            z0,
+            C,
+            parent,
+            plane: parent.under,
+            spec,
+            specIndex: si,
+            cover: (id) => map.carpetCover(id)[si] as number,
+          });
+          builtPatches += built.patches;
+          builtHeroes += built.heroes;
+        }
+      }
+      return {
+        a: Float32Array.from(a),
+        b: Float32Array.from(b),
+        count: a.length / 4,
+        ...(groundOffsets ? { groundOffsets: Float32Array.from(groundOffsets) } : {}),
+      };
+    },
+    extra: () => ({ 'carpet.built.patches': builtPatches, 'carpet.built.heroes': builtHeroes }),
   };
 }
 
@@ -177,48 +289,44 @@ async function loadParent(
   const [h, u, d] = await Promise.all([source.fetch('height', key), source.fetch('understory', key), source.fetch('debris', key)]);
   if (!h || h.kind !== 'height') throw new Error(`UnderstoryScatter: no height chunk (0,${pcx},${pcz})`);
   const deriver = makeGroundDeriver(h.heights, h.res, chunkM, pcx, pcz);
-  const up = u && u.kind === 'planes' ? u.planes : null;
-  const dp = d && d.kind === 'planes' ? d.planes : null;
+  const layer = (r: typeof u): GuidancePlane | null =>
+    r && r.kind === 'planes' ? { res: r.res, id: r.planes[0] as Uint8Array, den: r.planes[1] as Uint8Array } : null;
   return {
     minX: originX + pcx * chunkM,
     minZ: originZ + pcz * chunkM,
     deriver,
-    uRes: u && u.kind === 'planes' ? u.res : 0,
-    uId: up ? (up[0] as Uint8Array) : null,
-    uDen: up ? (up[1] as Uint8Array) : null,
-    dRes: d && d.kind === 'planes' ? d.res : 0,
-    dId: dp ? (dp[0] as Uint8Array) : null,
-    dDen: dp ? (dp[1] as Uint8Array) : null,
+    under: layer(u),
+    debris: layer(d),
   };
 }
 
-/** scatter ONE guidance grid (understory or debris) over the fine cell [x0,x0+C)². A
- *  global grid at `step` (game space) keeps every instance position-stable regardless
- *  of which fine cell/refetch produces it; each grid cell is owned by exactly one fine
- *  cell (by its unjittered base position), so no double-emit at cell seams. Returns the
- *  instance count appended. */
-function scatterGrid(
-  a: number[],
-  b: number[],
-  groundOffsets: number[] | null,
-  groundHeightAt: ((x: number, z: number) => number) | undefined,
-  x0: number,
-  z0: number,
-  C: number,
+/** shared per-cell scatter inputs: the output streams + the fine-cell footprint +
+ *  the parent chunk's grounding. */
+interface GridCellArgs {
+  a: number[];
+  b: number[];
+  groundOffsets: number[] | null;
+  groundHeightAt?: ((x: number, z: number) => number) | undefined;
+  /** fine-cell world footprint [x0,x0+C)² */
+  x0: number;
+  z0: number;
+  C: number;
+  parent: ParentData;
+}
+
+/** walk one global grid (step m) over the fine cell, yielding each owned cell's
+ *  jittered position + plane sample. A global grid keeps every instance position-
+ *  stable regardless of which fine cell/refetch produces it; each grid cell is
+ *  owned by exactly one fine cell (by its unjittered base position), so no
+ *  double-emit at cell seams. */
+function walkGrid(
+  args: GridCellArgs,
+  plane: GuidancePlane,
   step: number,
-  peak: number,
   salt: number,
-  minX: number,
-  minZ: number,
-  deriver: GroundDeriver,
-  res: number,
-  idPlane: Uint8Array | null,
-  denPlane: Uint8Array | null,
-  pick: (id: number, r01: number) => number,
-  baseFrac: (id: number) => number,
-): number {
-  if (!idPlane || !denPlane || res <= 0) return 0;
-  let n = 0;
+  visit: (gx: number, gz: number, px: number, pz: number, j0: number, id: number, den: number) => void,
+): void {
+  const { x0, z0, C, parent } = args;
   const gxLo = Math.floor(x0 / step);
   const gxHi = Math.floor((x0 + C) / step);
   const gzLo = Math.floor(z0 / step);
@@ -234,27 +342,98 @@ function scatterGrid(
       const px = bx + j0 * step;
       const pz = bz + j1 * step;
       // sample the guidance plane (nearest texel; ids are categorical)
-      const lx = px - minX;
-      const lz = pz - minZ;
-      const tx = Math.min(res - 1, Math.max(0, Math.round(lx / PLANE_TEXEL_M)));
-      const tz = Math.min(res - 1, Math.max(0, Math.round(lz / PLANE_TEXEL_M)));
-      const den = denPlane[tz * res + tx] as number;
+      const res = plane.res;
+      const tx = Math.min(res - 1, Math.max(0, Math.round((px - parent.minX) / PLANE_TEXEL_M)));
+      const tz = Math.min(res - 1, Math.max(0, Math.round((pz - parent.minZ) / PLANE_TEXEL_M)));
+      const den = plane.den[tz * res + tx] as number;
       if (den === 0) continue;
-      const id = idPlane[tz * res + tx] as number;
-      const [rAcc, rCls] = pcg2d((gx ^ (salt + 0x9e37)) >>> 0, (gz ^ (salt + 0x85eb)) >>> 0);
-      const accept = (den / 255) * baseFrac(id) * peak;
-      if (rAcc >= accept) continue;
-      const cls = pick(id, rCls);
-      if (cls < 0) continue; // SKIP — groundcover with no mesh
-      const [hScale, hVar] = pcg2d((gx ^ (salt + 0x27d4)) >>> 0, (gz ^ (salt + 0x1b56)) >>> 0);
-      const variant = Math.min(3, Math.floor(hVar * 4));
-      const { scale, sink, lean } = sizeFor(cls, hScale);
-      const g = deriver(lx, lz);
-      a.push(px, (groundHeightAt ? groundHeightAt(px, pz) : g.h) - sink, pz, scale);
-      b.push(j0 * TAU, g.leanX * lean, g.leanZ * lean, cls * 8 + variant);
-      groundOffsets?.push(-sink);
-      n++;
+      visit(gx, gz, px, pz, j0, plane.id[tz * res + tx] as number, den);
     }
   }
+}
+
+/** append one instance to the cell's {a,b} streams. */
+function emit(args: GridCellArgs, px: number, pz: number, scale: number, sink: number, yaw: number, lean: number, idF: number): void {
+  const g = args.parent.deriver(px - args.parent.minX, pz - args.parent.minZ);
+  args.a.push(px, (args.groundHeightAt ? args.groundHeightAt(px, pz) : g.h) - sink, pz, scale);
+  args.b.push(yaw, g.leanX * lean, g.leanZ * lean, idF);
+  args.groundOffsets?.push(-sink);
+}
+
+/** scatter ONE guidance grid (understory or debris) over the fine cell —
+ *  PROBABILISTIC acceptance (density × palette base × peak), the discrete-plant
+ *  law. Returns the instance count appended. */
+function scatterGrid(
+  o: GridCellArgs & {
+    plane: GuidancePlane | null;
+    step: number;
+    peak: number;
+    salt: number;
+    pick: (id: number, r01: number) => number;
+    baseFrac: (id: number) => number;
+  },
+): number {
+  if (!o.plane) return 0;
+  let n = 0;
+  walkGrid(o, o.plane, o.step, o.salt, (gx, gz, px, pz, j0, id, den) => {
+    const [rAcc, rCls] = pcg2d((gx ^ (o.salt + 0x9e37)) >>> 0, (gz ^ (o.salt + 0x85eb)) >>> 0);
+    const accept = (den / 255) * o.baseFrac(id) * o.peak;
+    if (rAcc >= accept) return;
+    const cls = o.pick(id, rCls);
+    if (cls < 0) return; // SKIP — groundcover with no mesh
+    const [hScale, hVar] = pcg2d((gx ^ (o.salt + 0x27d4)) >>> 0, (gz ^ (o.salt + 0x1b56)) >>> 0);
+    const variant = Math.min(3, Math.floor(hVar * 4));
+    const { scale, sink, lean } = sizeFor(cls, hScale);
+    emit(o, px, pz, scale, sink, j0 * TAU, lean, cls * 8 + variant);
+    n++;
+  });
   return n;
+}
+
+/** carpet grid salts, spread per spec index (patch + hero lattices stay decorrelated
+ *  from each other and from the understory/debris grids). */
+const CARPET_PATCH_SALT = 0x7a11;
+const CARPET_HERO_SALT = 0x3d67;
+
+/** scatter ONE CarpetSpec over the fine cell — DETERMINISTIC patch emission (the
+ *  community carries the cover token AND density ≥ coverThreshold ⇒ emit; no
+ *  acceptance thinning — holes come from real zero-cover ground only) plus the
+ *  probabilistic sparse hero cushions on their own jittered lattice. Patches lean
+ *  fully into the ground normal (a carpet conforms; plants stand). */
+function carpetGrid(
+  o: GridCellArgs & {
+    plane: GuidancePlane;
+    spec: CarpetSpec;
+    specIndex: number;
+    cover: (id: number) => number;
+  },
+): { patches: number; heroes: number } {
+  const { spec } = o;
+  let patches = 0;
+  let heroes = 0;
+  const pSalt = (CARPET_PATCH_SALT + o.specIndex * 0x0101) | 0;
+  walkGrid(o, o.plane, spec.step, pSalt, (gx, gz, px, pz, j0, id, den) => {
+    if (o.cover(id) <= 0 || den / 255 < spec.coverThreshold) return;
+    const [hScale, hVar] = pcg2d((gx ^ (pSalt + 0x27d4)) >>> 0, (gz ^ (pSalt + 0x1b56)) >>> 0);
+    const variant = Math.min(3, Math.floor(hVar * 4));
+    const scale = (spec.scale[0] as number) + hScale * ((spec.scale[1] as number) - (spec.scale[0] as number));
+    emit(o, px, pz, scale, spec.sink, j0 * TAU, 1, (spec.patchClass as number) * 8 + variant);
+    patches++;
+  });
+  const hero = spec.hero;
+  if (hero) {
+    const hSalt = (CARPET_HERO_SALT + o.specIndex * 0x0101) | 0;
+    walkGrid(o, o.plane, hero.step, hSalt, (gx, gz, px, pz, j0, id, den) => {
+      if (o.cover(id) <= 0 || den / 255 < spec.coverThreshold) return;
+      const [rAcc, rVar] = pcg2d((gx ^ (hSalt + 0x9e37)) >>> 0, (gz ^ (hSalt + 0x85eb)) >>> 0);
+      // density-scaled sparse acceptance: perM2 heroes at full cover
+      if (rAcc >= (den / 255) * hero.perM2 * hero.step * hero.step) return;
+      const [hScale] = pcg2d((gx ^ (hSalt + 0x27d4)) >>> 0, (gz ^ (hSalt + 0x1b56)) >>> 0);
+      const variant = Math.min(3, Math.floor(rVar * 4));
+      const scale = (hero.scale[0] as number) + hScale * ((hero.scale[1] as number) - (hero.scale[0] as number));
+      emit(o, px, pz, scale, hero.sink, j0 * TAU, 1, (hero.cls as number) * 8 + variant);
+      heroes++;
+    });
+  }
+  return { patches, heroes };
 }

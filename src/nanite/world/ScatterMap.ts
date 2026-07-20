@@ -10,15 +10,23 @@
  * Daisy), deadwood (Log/Stump/Branch) and stones (Boulder/Slab/StoneL/M/S). This
  * resolver folds each community's palette onto that pool set by keyword, so Estonia
  * ground cover MATCHES the generated world's. Only the true groundcover with no mesh
- * (moss/lichen/grass/sedge/reed/litter) falls to the SKIP bucket — covered by the
- * grass lane + biome tint, exactly as generated.
+ * (lichen/grass/sedge/reed/litter) falls to the SKIP bucket — covered by the grass
+ * lane + biome tint, exactly as generated.
+ *
+ * CARPET layer: palette tokens matching a CarpetSpec (sphagnum, …) STAY skip for the
+ * understory distribution (they thin plant acceptance exactly as before — the plant
+ * mix never rebalances) and ADDITIONALLY light up `carpetCover`, the per-community
+ * cover-weight fractions the carpet band's deterministic patch grid reads
+ * (UnderstoryScatter.carpetPlan). Moss carpets and the plants that grow IN them are
+ * independent layers, never a per-cell either/or.
  *
  * Pure/node-testable (no GPU/DOM). A community with an all-skip palette (moss/grass
  * only) resolves to the empty distribution — one boot summary line, never a throw
  * (§F placeholders never block).
  */
 
-import { VegClass } from '../../gpu/passes/Scatter';
+import { VEG_CLASS_NAME, VegClass } from '../../gpu/passes/Scatter';
+import { CARPET_SPECS, type CarpetSpec } from '../../vegetation/carpet/CarpetTypes';
 import type { CommunityEntry, WorldDictionaries } from '../../world/source/WorldSource';
 
 /** SKIP marker — a palette token with no library mesh (moss/lichen/grass/sedge/reed/
@@ -65,30 +73,6 @@ const DEBRIS_KEYWORDS: readonly (readonly [RegExp, VegClass])[] = [
   [/branch|twig|dead_?wood|fallen_cone|(^|_)cone|acorn|stick/, VegClass.Branch],
 ];
 
-const CLASS_NAME: Record<number, string> = {
-  [VegClass.BushHazel]: 'BushHazel',
-  [VegClass.BushPink]: 'BushPink',
-  [VegClass.Juniper]: 'Juniper',
-  [VegClass.Fern]: 'Fern',
-  [VegClass.FlowerUmbel]: 'FlowerUmbel',
-  [VegClass.FlowerBell]: 'FlowerBell',
-  [VegClass.FlowerDaisy]: 'FlowerDaisy',
-  [VegClass.CottonGrass]: 'CottonGrass',
-  [VegClass.Heather]: 'Heather',
-  [VegClass.LabradorTea]: 'LabradorTea',
-  [VegClass.BogRosemary]: 'BogRosemary',
-  [VegClass.Cranberry]: 'Cranberry',
-  [VegClass.Cloudberry]: 'Cloudberry',
-  [VegClass.Log]: 'Log',
-  [VegClass.Stump]: 'Stump',
-  [VegClass.Branch]: 'Branch',
-  [VegClass.Boulder]: 'Boulder',
-  [VegClass.Slab]: 'Slab',
-  [VegClass.StoneL]: 'StoneL',
-  [VegClass.StoneM]: 'StoneM',
-  [VegClass.StoneS]: 'StoneS',
-};
-
 /** one guidance category → its renderable-pool distribution + lushness. classes may
  *  include SKIP (-1); `total` = Σweights INCLUDING skip, so the pick thins by the
  *  non-mesh fraction of the palette. `base` = the dict's base_density (plants/m²). */
@@ -103,6 +87,10 @@ export interface CategoryDist {
 export interface ScatterMap {
   understory(id: number): CategoryDist;
   debris(id: number): CategoryDist;
+  /** CARPET layer: per-CARPET_SPECS cover-weight fraction (0..1) of this understory
+   *  community's palette — 0 everywhere for carpet-free communities. Presence gates
+   *  the carpet band's deterministic patch grid; it never touches `understory`. */
+  carpetCover(id: number): Float32Array;
   /** max debris base_density — normalises debris acceptance so litter floors ≫ stony
    *  ground (understory does NOT scale by base; its density plane carries the lushness). */
   maxDebrisBase: number;
@@ -147,6 +135,29 @@ function distFor(entry: CommunityEntry, keywords: readonly (readonly [RegExp, Ve
   return { classes, cumw, total: acc, base: entry.base_density };
 }
 
+const ZERO_COVER = new Float32Array(CARPET_SPECS.length);
+
+/** per-CarpetSpec cover-weight fraction of a community palette (Σ matching token
+ *  weights / Σ all weights); null when no token matches any carpet. */
+function carpetCoverOf(entry: CommunityEntry): Float32Array | null {
+  let total = 0;
+  let any = false;
+  const w = new Float32Array(CARPET_SPECS.length);
+  for (const tok of entry.palette) {
+    const [name, wt] = parseToken(tok);
+    total += wt;
+    for (let i = 0; i < CARPET_SPECS.length; i++) {
+      if ((CARPET_SPECS[i] as CarpetSpec).keywords.test(name)) {
+        w[i] = (w[i] as number) + wt;
+        any = true;
+      }
+    }
+  }
+  if (!any || total <= 0) return null;
+  for (let i = 0; i < w.length; i++) w[i] = (w[i] as number) / total;
+  return w;
+}
+
 /**
  * Build the resolver from the manifest dictionaries. The generated world never uses
  * this (its understory/extras/stones are explicit records — ChunkContent binds them
@@ -155,6 +166,7 @@ function distFor(entry: CommunityEntry, keywords: readonly (readonly [RegExp, Ve
 export function buildScatterMap(dict: WorldDictionaries): ScatterMap {
   const under = new Map<number, CategoryDist>();
   const debris = new Map<number, CategoryDist>();
+  const carpets = new Map<number, Float32Array>();
   let maxDebrisBase = 1;
   const emptyU: number[] = [];
   const emptyD: number[] = [];
@@ -164,6 +176,8 @@ export function buildScatterMap(dict: WorldDictionaries): ScatterMap {
     under.set(id, d);
     if (renderableWeight(d) === 0) emptyU.push(id);
     for (const c of d.classes) if (c !== SKIP) poolHits.add(c);
+    const cov = carpetCoverOf(e);
+    if (cov) carpets.set(id, cov);
   }
   for (const [id, e] of dict.debris) {
     const d = distFor(e, DEBRIS_KEYWORDS);
@@ -172,16 +186,18 @@ export function buildScatterMap(dict: WorldDictionaries): ScatterMap {
     if (renderableWeight(d) === 0) emptyD.push(id);
     for (const c of d.classes) if (c !== SKIP) poolHits.add(c);
   }
-  const pools = [...poolHits].sort((a, b) => a - b).map((c) => CLASS_NAME[c] ?? `c${c}`).join(', ');
+  const pools = [...poolHits].sort((a, b) => a - b).map((c) => VEG_CLASS_NAME[c] ?? `c${c}`).join(', ');
   const summary =
     `[laas] ScatterMap: ${dict.understory.size} understory + ${dict.debris.size} debris communities → ` +
     `pools {${pools}}` +
     (emptyU.length + emptyD.length > 0
       ? `; ${emptyU.length + emptyD.length} groundcover-only (no mesh, grass-lane covered) [u:${emptyU.join(',') || '-'} d:${emptyD.join(',') || '-'}]`
-      : '; 0 groundcover-only');
+      : '; 0 groundcover-only') +
+    `; ${carpets.size} carpet-bearing (${CARPET_SPECS.map((s) => s.id).join('/')})`;
   return {
     understory: (id) => under.get(id) ?? EMPTY,
     debris: (id) => debris.get(id) ?? EMPTY,
+    carpetCover: (id) => carpets.get(id) ?? ZERO_COVER,
     maxDebrisBase,
     summary,
   };

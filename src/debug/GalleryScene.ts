@@ -40,7 +40,7 @@ import {
   grassPatch,
   scatterInstances,
   twigGeometry,
-} from '../vegetation/GroundCover';
+} from '../vegetation/Debris';
 import { buildRock, type RockPreset } from '../vegetation/RockBuilder';
 import { TREE_SPECIES } from '../vegetation/Species';
 import { buildTree } from '../vegetation/TreeBuilder';
