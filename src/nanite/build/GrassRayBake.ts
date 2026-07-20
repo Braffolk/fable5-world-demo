@@ -12,10 +12,10 @@
  * toward the tip, seen root-ward as rays descend). Runtime answers a march
  * step with ONE fetch — no stepping, no per-clump batteries.
  *
- * The tile = one guide texel footprint: SUB×SUB fine cells at FULL density
- * (every cell holds a full 5-blade clump). Real-world density (the mask law)
- * and per-cell blade HEIGHTS are applied at runtime — the bake is 2D and
- * height-free, exactly like the article's.
+ * The tile = one guide texel footprint: SUB×SUB fine cells. One volume per
+ * DENSITY TIER (nested cell thinning — see GrassRayBakeOpts.tiers); the
+ * runtime picks the density-matched tier per pixel. Blade HEIGHT is applied
+ * at runtime — the bake is 2D and height-free, exactly like the article's.
  *
  * The article: "Предрасчёт вычисляется на чём угодно и каким угодно
  * алгоритмом" — so this is plain JS at boot, analytic (fiber cross-sections
@@ -58,19 +58,20 @@ export interface GrassRayBakeOpts {
   /** fibers per cell (bake-side density — FREE at runtime; more fibers means
    *  shorter fetch distances, i.e. cheaper marches) */
   fibers: number;
-  /** HEIGHT BANDS (user grid+batch calls 2026-07-04): one texture per vertical
-   *  band of the blade, each baked with every fiber displaced along its OWN arc
-   *  direction by arc·t² and tapered. Per-fiber radial arcs can't live in a
-   *  single 2D bake (it's height-free) — banding restores them: clumps spread
-   *  outward with height (no tight batches) and the tile content is isotropic
-   *  (no per-tile combing → the bombing grid stops reading). */
-  bands: number;
+  /** DENSITY TIERS: one volume per entry, the fraction of CELLS populated
+   *  (descending, [0] = 1 = full). The world thins grass per-cell; a single
+   *  uniform-tiling LUT can't express that, so the runtime picks/lerps the
+   *  density-matched tier per pixel — the article-legal "fewer blades in the
+   *  tiled mask", still one fetch. Tiers are NESTED (same per-cell hash,
+   *  different threshold): shared blades bake identical texels, so the
+   *  runtime's adjacent-tier lerp cross-fades only the blades that differ. */
+  tiers: number[];
   /** per-fiber arc magnitude scale (tip displacement ≈ 0.35..1.3 cells × this) */
   arcK: number;
 }
 
 export interface GrassRayBake {
-  /** one RGBA8 volume per HEIGHT BAND, index ((angle·res + z)·res + x)·4 */
+  /** one RGBA8 volume per DENSITY TIER, index ((angle·res + z)·res + x)·4 */
   data: Uint8Array[];
   res: number;
   angles: number;
@@ -169,21 +170,22 @@ export function bakeGrassRayTile(o: GrassRayBakeOpts): GrassRayBake {
   const OFFS: number[] = [-2 * sub, -sub, 0, sub, 2 * sub];
 
   const missR = Math.round(255 / (1 + dMaxC / sub));
+  /** per-cell keep hash in [0,1) — FIXED across tiers so tier k+1's cells are a
+   *  strict subset of tier k's (nested thinning ⇒ lerp-safe shared blades) */
+  const cellKeep = (cu: number, cv: number): number =>
+    ((((cu * 2654435761 ) ^ (cv * 2246822519) ^ 0x9e37) >>> 9) % 65536) / 65536;
   const volumes: Uint8Array[] = [];
-  for (let bandI = 0; bandI < o.bands; bandI++) {
-    // band cross-section: every fiber displaced along its OWN arc direction by
-    // arcM·t² (per-fiber radial arcs — impossible in one height-free bake) and
-    // tapered toward the tip (real needle profile, not just the ray heuristic)
-    const tb = (bandI + 0.5) / o.bands;
-    const bandFibers = fibers.map((f) => ({
-      ...f,
-      cx: f.cx + f.fx * f.arcM * tb * tb,
-      cz: f.cz + f.fz * f.arcM * tb * tb,
-    }));
-    // single-volume mode (default): no bake taper — the runtime column jitter
-    // carries the tip raggedness; banded mode tapers for real needle profiles
-    const hwB = o.bands > 1 ? hw0 * (1 - 0.72 * tb) : hw0;
-    const htB = o.bands > 1 ? ht0 * (1 - 0.4 * tb) : ht0;
+  for (const keepF of o.tiers) {
+    // mid-height cross-section: every fiber displaced along its OWN arc
+    // direction by arcM·0.25 (t=0.5 of the arc·t² law — the single height-free
+    // slice that reads as curved clumps; runtime column jitter does the tips)
+    const bandFibers = fibers
+      .filter((f) => cellKeep(f.ru, f.rv) < keepF)
+      .map((f) => ({
+        ...f,
+        cx: f.cx + f.fx * f.arcM * 0.25,
+        cz: f.cz + f.fz * f.arcM * 0.25,
+      }));
     const data = new Uint8Array(res * res * angles * 4);
     for (let ai = 0; ai < angles; ai++) {
       const th = ((ai + 0.5) / angles) * Math.PI * 2;
@@ -230,9 +232,9 @@ export function bakeGrassRayTile(o: GrassRayBakeOpts): GrassRayBake {
                   else if (k2 < -1e-9) lo = Math.max(lo, m2 / k2);
                   else if (m2 < 0) ok = false;
                 };
-                slab(ax * f.wx + az * f.wz, bx * f.wx + bz * f.wz, hwB);
+                slab(ax * f.wx + az * f.wz, bx * f.wx + bz * f.wz, hw0);
                 if (!ok) continue;
-                slab(ax * f.tx + az * f.tz, bx * f.tx + bz * f.tz, htB);
+                slab(ax * f.tx + az * f.tz, bx * f.tx + bz * f.tz, ht0);
                 if (!ok || lo > hi) continue;
                 if (lo < best) {
                   best = lo;
@@ -269,8 +271,8 @@ export function bakeGrassRayTile(o: GrassRayBakeOpts): GrassRayBake {
     volumes.push(data);
   }
   console.info(
-    `[grass] ray tile baked: ${res}×${res}×${angles} ×${o.bands} bands, ` +
-      `${fibers.length} fibers, ${Math.round(performance.now() - t0)} ms`,
+    `[grass] ray tile baked: ${res}×${res}×${angles} ×${o.tiers.length} tiers ` +
+      `(${o.tiers.join('/')}), ${fibers.length} fibers, ${Math.round(performance.now() - t0)} ms`,
   );
   return { data: volumes, res, angles, dMaxTile: dMaxC / sub };
 }
