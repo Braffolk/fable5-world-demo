@@ -83,10 +83,23 @@ ALL FIVE in-world fixes committed. Bog plants are colored, real-sized, grounded,
 Deferred (scope/perf, surfaced to user): clump/patch density (the "reads like a carpet" lever — costs
 instances; ties to UNDER_STEP 2.4m ceiling), the fake deadwood LOGS on open bog (→ TREE-GEN-REWORK #3).
 
-## NEXT (autonomous): moss / CARPET (#21/#26)
-After LOD commits: sphagnum cushion mesh(es) (Fable) → CARPET seam + 6 cleanups (per GROUNDCOVER-LAYER-
-ARCH.md) → fly-over gate. User note: moss + plants must COEXIST (plants grow IN the sphagnum), not
-compete for scatter slots.
+## Moss / CARPET (#21/#26) — DONE, commit `56caf3e`
+Sphagnum moss carpet + the reusable CarpetSpec seam + all 6 cleanups. Sphagnum.ts (real capitula
+geometry, dusty rust-ochre), carpet/{CarpetTypes,SphagnumCarpet}, VegClass 38 patch + 39 hummock.
+Render: near leaf-mesh 0-30m (BogLod ladder) → voxel band 30-160m → terrain tint. Own scatter band so
+moss + plants COEXIST (plants stand IN the moss; sphagnum stays SKIP in the plant distribution). 3 gates
+generalized (voxelFarClass; policy.channel incl 'rigid' non-wind; per-class voxNear/gridDim). Generated
+world byte-identical. tsc clean. Fly-over gate (orchestrator eyeball) PASSED for color/coexistence after
+fixing a linear-vs-sRGB pale-sand bug → dusty sphagnum.
+### OPEN for the user (do NOT silently ship/tune):
+- **PERF (#35, the #1 item):** bog-pose fps ~90 → ~38 (wide)/~25 (close) with the carpet. Boot-noisy
+  (thermal/bake) → needs a FRESH Xcode trace verdict. Levers if too slow: pull the near band in, lower
+  coverage, coarser tile. Color fix was zero-cost; this is the dense-layer's inherent load.
+- **Look follow-ups (#36, user-gated):** green-moss hue (blocked by shared warm-only leaf hue-shift —
+  currently rust/ochre only); far-terrain-tint match beyond 160m (cook asset); capitulum true-scale
+  (coarser tile); 30m handoff pop; fen community also carpets.
+- Full altitude/lattice fly-over from high up not exhaustively run — jitter/coverage should break the
+  1.6m lattice but a proper fly-over is a user gate.
 
 ## Working notes
 - Live env: data server `:8790` (bog preview manifest), vite `:5199`. Bog preview manifest sha
