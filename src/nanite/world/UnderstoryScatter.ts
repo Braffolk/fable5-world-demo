@@ -14,18 +14,11 @@
  * guidance/height PLANES are per-2048 m chunk though, so each fine cell fetches its
  * parent chunk's planes once (small LRU) and scatters only its own footprint from
  * a GLOBAL grid (position-stable → deterministic across cell/refetch boundaries).
- *
- * CARPET layer (CarpetTypes.CARPET_SPECS): `carpetPlan` is a SECOND, independent band
- * over the same guidance planes — moss lawns scatter on their own deterministic patch
- * lattice (density ≥ coverThreshold ⇒ emit; a carpet with acceptance-thinning holes is
- * not a carpet) and the understory plants above keep their own probabilistic grid, so
- * plants grow IN the moss instead of competing with it for cells.
  */
 
 import { makeGroundDeriver, pcg2d, type GroundDeriver } from '../../world/source/RecordGround';
 import { VegClass } from '../../gpu/passes/Scatter';
 import { packChunkKey } from '../../world/source/Lac1';
-import { CARPET_SPECS, type CarpetSpec } from '../../vegetation/carpet/CarpetTypes';
 import { pickClass, type ScatterMap } from './ScatterMap';
 import type { ChunkInstances } from './ChunkContent';
 import type { CellPlan } from './InstanceBand';
@@ -111,7 +104,7 @@ interface PlanCtx {
 }
 
 /** the parent-chunk plane LRU (24 chunks ≫ the fine ring's parent count) — each
- *  plan instance owns one; both plans share the loader below. */
+ *  plan instance owns one. */
 function makePlanCtx(source: WorldSource, manifest: WorldManifest): PlanCtx {
   const chunkM = manifest.grid.chunkMeters; // 2048 (parent stride)
   const originX = manifest.grid.originX;
@@ -202,77 +195,6 @@ export function understoryDebrisPlan(
       };
     },
     extra: () => ({ 'uband.built.under': builtUnder, 'uband.built.debris': builtDebris }),
-  };
-}
-
-/**
- * The CARPET band's CellPlan (CarpetTypes.CARPET_SPECS): continuous ground-cover
- * strata over the SAME understory guidance planes, as an INDEPENDENT layer — the
- * uband's plants scatter on top of the moss, never instead of it (user law: bog
- * plants grow IN the sphagnum). Denser than understory (patch lattice ~2 m) but
- * near-capped (voxel band ends ≤160 m), so it rides its own tighter cell ring;
- * each patch instance binds a mesh + voxel head (2 pool slots).
- */
-export function carpetPlan(
-  source: WorldSource,
-  manifest: WorldManifest,
-  map: ScatterMap,
-  opts: { cellMeters: number; bandDist: number; groundHeightAt?: (x: number, z: number) => number },
-): CellPlan {
-  const ctx = makePlanCtx(source, manifest);
-  let builtPatches = 0;
-  let builtHeroes = 0;
-
-  return {
-    cellMeters: opts.cellMeters,
-    bandDist: opts.bandDist,
-    originX: ctx.originX,
-    originZ: ctx.originZ,
-    label: 'carpet',
-    ...(opts.groundHeightAt ? { groundHeightAt: opts.groundHeightAt } : {}),
-    exists(cx: number, cz: number): boolean {
-      // carpets read only the understory guidance layer
-      const pcx = Math.floor((cx * opts.cellMeters) / ctx.chunkM);
-      const pcz = Math.floor((cz * opts.cellMeters) / ctx.chunkM);
-      return manifest.coverage('understory', { lod: 0, cx: pcx, cz: pcz }) !== null;
-    },
-    async build(cx: number, cz: number): Promise<ChunkInstances> {
-      const C = opts.cellMeters;
-      const x0 = ctx.originX + cx * C;
-      const z0 = ctx.originZ + cz * C;
-      const parent = await ctx.parentOf(Math.floor((x0 - ctx.originX) / ctx.chunkM), Math.floor((z0 - ctx.originZ) / ctx.chunkM));
-      const a: number[] = [];
-      const b: number[] = [];
-      const groundOffsets: number[] | null = opts.groundHeightAt ? [] : null;
-      if (parent.under) {
-        for (let si = 0; si < CARPET_SPECS.length; si++) {
-          const spec = CARPET_SPECS[si] as CarpetSpec;
-          const built = carpetGrid({
-            a,
-            b,
-            groundOffsets,
-            groundHeightAt: opts.groundHeightAt,
-            x0,
-            z0,
-            C,
-            parent,
-            plane: parent.under,
-            spec,
-            specIndex: si,
-            cover: (id) => map.carpetCover(id)[si] as number,
-          });
-          builtPatches += built.patches;
-          builtHeroes += built.heroes;
-        }
-      }
-      return {
-        a: Float32Array.from(a),
-        b: Float32Array.from(b),
-        count: a.length / 4,
-        ...(groundOffsets ? { groundOffsets: Float32Array.from(groundOffsets) } : {}),
-      };
-    },
-    extra: () => ({ 'carpet.built.patches': builtPatches, 'carpet.built.heroes': builtHeroes }),
   };
 }
 
@@ -388,52 +310,4 @@ function scatterGrid(
     n++;
   });
   return n;
-}
-
-/** carpet grid salts, spread per spec index (patch + hero lattices stay decorrelated
- *  from each other and from the understory/debris grids). */
-const CARPET_PATCH_SALT = 0x7a11;
-const CARPET_HERO_SALT = 0x3d67;
-
-/** scatter ONE CarpetSpec over the fine cell — DETERMINISTIC patch emission (the
- *  community carries the cover token AND density ≥ coverThreshold ⇒ emit; no
- *  acceptance thinning — holes come from real zero-cover ground only) plus the
- *  probabilistic sparse hero cushions on their own jittered lattice. Patches lean
- *  fully into the ground normal (a carpet conforms; plants stand). */
-function carpetGrid(
-  o: GridCellArgs & {
-    plane: GuidancePlane;
-    spec: CarpetSpec;
-    specIndex: number;
-    cover: (id: number) => number;
-  },
-): { patches: number; heroes: number } {
-  const { spec } = o;
-  let patches = 0;
-  let heroes = 0;
-  const pSalt = (CARPET_PATCH_SALT + o.specIndex * 0x0101) | 0;
-  walkGrid(o, o.plane, spec.step, pSalt, (gx, gz, px, pz, j0, id, den) => {
-    if (o.cover(id) <= 0 || den / 255 < spec.coverThreshold) return;
-    const [hScale, hVar] = pcg2d((gx ^ (pSalt + 0x27d4)) >>> 0, (gz ^ (pSalt + 0x1b56)) >>> 0);
-    const variant = Math.min(3, Math.floor(hVar * 4));
-    const scale = (spec.scale[0] as number) + hScale * ((spec.scale[1] as number) - (spec.scale[0] as number));
-    emit(o, px, pz, scale, spec.sink, j0 * TAU, 1, (spec.patchClass as number) * 8 + variant);
-    patches++;
-  });
-  const hero = spec.hero;
-  if (hero) {
-    const hSalt = (CARPET_HERO_SALT + o.specIndex * 0x0101) | 0;
-    walkGrid(o, o.plane, hero.step, hSalt, (gx, gz, px, pz, j0, id, den) => {
-      if (o.cover(id) <= 0 || den / 255 < spec.coverThreshold) return;
-      const [rAcc, rVar] = pcg2d((gx ^ (hSalt + 0x9e37)) >>> 0, (gz ^ (hSalt + 0x85eb)) >>> 0);
-      // density-scaled sparse acceptance: perM2 heroes at full cover
-      if (rAcc >= (den / 255) * hero.perM2 * hero.step * hero.step) return;
-      const [hScale] = pcg2d((gx ^ (hSalt + 0x27d4)) >>> 0, (gz ^ (hSalt + 0x1b56)) >>> 0);
-      const variant = Math.min(3, Math.floor(rVar * 4));
-      const scale = (hero.scale[0] as number) + hScale * ((hero.scale[1] as number) - (hero.scale[0] as number));
-      emit(o, px, pz, scale, hero.sink, j0 * TAU, 1, (hero.cls as number) * 8 + variant);
-      heroes++;
-    });
-  }
-  return { patches, heroes };
 }

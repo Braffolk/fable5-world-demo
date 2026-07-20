@@ -1,9 +1,9 @@
 /**
- * Debris + gallery grass (formerly GroundCover.ts — renamed: "ground cover" now
- * names the CARPET layer, and ScatterMap's "groundcover" means the no-mesh SKIP
- * bucket): grass blades (instanced, clumped placement preview of the Phase-5
- * scatter law, GalleryScene-only) + near-field debris classes (twigs — the one
- * pipeline consumer via VegLibrary — bark chips, leaf litter cards).
+ * Debris + gallery grass (formerly GroundCover.ts — renamed: ScatterMap's
+ * "groundcover" means the no-mesh SKIP bucket): grass blades (instanced, clumped
+ * placement preview of the Phase-5 scatter law, GalleryScene-only) + near-field
+ * debris classes (twigs — the one pipeline consumer via VegLibrary — bark chips,
+ * leaf litter cards).
  *
  * Grass instancing: per-instance vec4 `idata` (hue, dryness, swayPhase,
  * height) on an InstancedBufferAttribute; the blade geometry itself carries

@@ -48,9 +48,6 @@ import { buildCranberry, CRANBERRY_FOLIAGE, CRANBERRY_BERRY, CRANBERRY_CLS_MAX_D
 import { buildCloudberry, CLOUDBERRY_FOLIAGE, CLOUDBERRY_BERRY, CLOUDBERRY_CLS_MAX_DIST } from "./bog/Cloudberry";
 import { mergeGeo } from "./bog/EricaceousKit";
 import { BOG_LOD_LADDER, BogLodCtx } from "./bog/BogLod";
-// CARPET layer (ground-cover strata; ScatterMap-only like the bog block): the
-// declarative spec table drives the pool loop — no per-cover code here.
-import { CARPET_SPECS, type CarpetBuilder } from "./carpet/CarpetTypes";
 import type { GrowthInstance, SpeciesParams } from "./VegTypes";
 
 export interface PoolPart {
@@ -713,51 +710,6 @@ export async function buildVegLibrary(
       });
     }
     clsMaxDist[cls] = maxDist;
-  }
-
-  // ---- CARPET layer (CarpetTypes.CARPET_SPECS; ScatterMap-only like the bog
-  //      block — the generated world never emits carpet classes). Per spec: the
-  //      PATCH tile (leaf-only pool whose SAME mesh the registry voxelizes for
-  //      the mid band — voxelFarClass) and the optional sparse HERO cushion
-  //      (mesh-only). Both ride the bog prune-and-preserve ladder; classPolicy
-  //      routes them on the RIGID (non-wind) channel. ------------------------------
-  progress(0.84, "veg: carpet pools");
-  for (const spec of CARPET_SPECS) {
-    const kinds: { cls: number; build: CarpetBuilder; maxDist: number }[] = [
-      { cls: spec.patchClass, build: spec.buildPatch, maxDist: spec.maxDist },
-    ];
-    if (spec.hero) kinds.push({ cls: spec.hero.cls, build: spec.hero.build, maxDist: spec.hero.maxDist });
-    for (const { cls, build, maxDist } of kinds) {
-      for (let v = 0; v < 4; v++) {
-        await yieldIfDue();
-        const label = `veg/carpet/${spec.id}/${cls}/${v}`;
-        const { geo, tris } = build(seed.rng(label));
-        const b = bounds([geo]);
-        trackCls(cls, b.height, b.radius);
-        pools.push({
-          cls,
-          variant: v,
-          r1: null,
-          r2: null,
-          trisR1: 0,
-          trisR2: 0,
-          height: b.height,
-          radius: b.radius,
-          leaf: {
-            geo,
-            tris,
-            color: spec.tint,
-            // bog crown-LOD (BogLod.ts): lazy per-rung regen, same seed ⇒ λ=1 ≡ `geo`.
-            buildLadder: (): CrownLodLevel[] =>
-              BOG_LOD_LADDER.map((rung) => {
-                const r = build(seed.rng(label), new BogLodCtx(rung.lambda, rung.detail, cls * 8 + v));
-                return { lambda: rung.lambda, geo: r.geo, tris: r.tris, keptAnchors: 0 };
-              }),
-          },
-        });
-      }
-      clsMaxDist[cls] = maxDist;
-    }
   }
 
   // ---- extras: deadfall -------------------------------------------------------

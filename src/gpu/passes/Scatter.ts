@@ -97,16 +97,12 @@ export const enum VegClass {
   BogRosemary = 35, // Andromeda polifolia — pink urn-bell dwarf shrub (SHRUB)
   Cranberry = 36, // Vaccinium oxycoccos — creeping red-berry mat (FOLIAGE)
   Cloudberry = 37, // Rubus chamaemorus — amber-berry palmate herb (FOLIAGE)
-  // CARPET layer (vegetation/carpet/CarpetTypes.ts) — continuous rigid ground-cover
-  // strata, ScatterMap-only like the bog block (generated world byte-identical).
-  SphagnumPatch = 38, // peat-moss lawn tile — near mesh + mid voxel band (CARPET)
-  SphagnumHummock = 39, // sparse hero moss cushion — near silhouette (CARPET)
 }
 
 /** total VegClass count — sizes every per-class table (clsHeight/clsRadius/
  *  clsMaxDist). Keep in lockstep with the enum tail above: a class appended
  *  without bumping this would silently under-allocate those tables. */
-export const VEG_CLASS_COUNT = 40;
+export const VEG_CLASS_COUNT = 38;
 
 /** runtime name per VegClass (const enum ⇒ no reverse mapping exists) — the ONE
  *  name table, colocated with the enum so an appended class cannot drift from
@@ -149,8 +145,6 @@ export const VEG_CLASS_NAME: Readonly<Record<number, string>> = {
   [VegClass.BogRosemary]: 'BogRosemary',
   [VegClass.Cranberry]: 'Cranberry',
   [VegClass.Cloudberry]: 'Cloudberry',
-  [VegClass.SphagnumPatch]: 'SphagnumPatch',
-  [VegClass.SphagnumHummock]: 'SphagnumHummock',
 };
 
 /** structural variants baked per tree species (geometry reuse, D5) */
