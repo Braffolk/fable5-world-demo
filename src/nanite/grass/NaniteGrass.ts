@@ -373,6 +373,14 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
   // is f64 ⇒ uRoM is the precise small offset.
   const uRoMx = uniformF(0);
   const uRoMz = uniformF(0);
+  // WORLD-ANCHORED tile origin (streamed only): the exact-integer guide origin in
+  // TILE units, reduced mod 4096 tiles on the CPU (f64) so the fp32 shader stays
+  // precise. The anti-tiling hex lattice must be locked to the WORLD, not the
+  // camera — building it on the guide-origin-relative phE (which slides as the
+  // camera moves) made the whole voronoi pattern reset on every position change.
+  // worldTile = phE/PITCH + uOT ⇒ camera-invariant (mod a 3.4 km reshuffle line).
+  const uOTx = uniformF(0);
+  const uOTz = uniformF(0);
 
   /** per-texel FIELD bake (perf): the march re-derived every smooth field PER
    *  STEP (3× value noise = 12 hashes + swirl/wind trig) — measured ~12 ms of
@@ -636,7 +644,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
   // clump geometry with the article's shift+thicken heuristics. LINEAR filter +
   // REPEAT wrap on all three axes (his interpolation, incl. across angle slices).
   // The tile = one guide texel footprint (0.84 m, 8×8 fine cells).
-  const rayBake = ((): { texs: Data3DTexture[]; dMaxTile: number } => {
+  const rayBake = ((): { texs: Data3DTexture[]; dMaxTile: number; meanR: number } => {
     const b = bakeGrassRayTile({
       res: BAKE_RES,
       angles: BAKE_ANG,
@@ -668,7 +676,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
       t.name = `grassRayTile${i}`;
       return t;
     });
-    return { texs, dMaxTile: b.dMaxTile };
+    return { texs, dMaxTile: b.dMaxTile, meanR: b.meanR };
   })();
   // the article's OUTPUT is depth+normal — the hit normal/tip can't ride the 30-bit
   // election id, so kRay writes them per pixel into a screen StorageTexture (a
@@ -902,18 +910,28 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
       const phEz = phE.z.toVar() as unknown as NF;
       const rcEx = relCells(phEx, gfx).toVar() as unknown as NF;
       const rcEz = relCells(phEz, gfz).toVar() as unknown as NF;
-      const txfE = rcEx.div(GUIDE_SUB).floor().clamp(0, GUIDE_RES - 1).toVar() as unknown as NF;
-      const tzfE = rcEz.div(GUIDE_SUB).floor().clamp(0, GUIDE_RES - 1).toVar() as unknown as NF;
-      const cvE = guideCtx4.element(uint(tzfE.mul(GUIDE_RES).add(txfE)) as unknown as NU);
-      const groundE = bcU2F(cvE.x).toVar() as unknown as NF;
-      const gradE = (unpackHalfU(cvE.y) as unknown as { toVar(): NV2 }).toVar() as unknown as NV2;
-      const texOEx = texOrg(txfE, gfx).toVar() as unknown as NF;
-      const texOEz = texOrg(tzfE, gfz).toVar() as unknown as NF;
-      const texCEx = texOEx.add(GUIDE_PITCH / 2) as unknown as NF;
-      const texCEz = texOEz.add(GUIDE_PITCH / 2) as unknown as NF;
-      const gPE = groundE
-        .add(gradE.x.mul(phEx.sub(texCEx)))
-        .add(gradE.y.mul(phEz.sub(texCEz))) as unknown as NF;
+      // bilinear ground under E (the same 4-corner scheme as gB): the old faceted
+      // per-texel plane JUMPED at every 0.84 m guide-cell edge, so hgt jumped, the
+      // sampled tile shifted a hair, and a dark seam appeared on the SQUARE guide
+      // grid (visible at oblique angles where hgt is large). Bilinear ⇒ continuous.
+      const gPE = ((): NF => {
+        const qx = rcEx.div(GUIDE_SUB).sub(0.5) as unknown as NF;
+        const qz = rcEz.div(GUIDE_SUB).sub(0.5) as unknown as NF;
+        const ix = qx.floor().clamp(0, GUIDE_RES - 2).toVar() as unknown as NF;
+        const iz = qz.floor().clamp(0, GUIDE_RES - 2).toVar() as unknown as NF;
+        const fxg = qx.sub(ix).clamp(0, 1) as unknown as NF;
+        const fzg = qz.sub(iz).clamp(0, 1) as unknown as NF;
+        const gAt = (dx: number, dz: number): NF =>
+          bcU2F(
+            guideCtx4.element(uint(iz.add(dz).mul(GUIDE_RES).add(ix.add(dx))) as unknown as NU)
+              .x as unknown as NU,
+          ) as unknown as NF;
+        return mix(
+          mix(gAt(0, 0), gAt(1, 0), fxg),
+          mix(gAt(0, 1), gAt(1, 1), fxg),
+          fzg,
+        ) as unknown as NF;
+      })();
       // shear height at the entry (the article evaluates the oblique basis at the
       // fragment); clamped like the march — past ~0.6 m the arc wraps tile space
       const hgt = ro.y.add(rd.y.mul(tE)).sub(gPE).max(0).min(0.6).toVar() as unknown as NF;
@@ -931,14 +949,6 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
         .clamp(0, 1)
         .toVar() as unknown as NF;
       returnIf(dens.lessThan(0.02) as unknown as NB);
-      // swirl rotation: bilinear of (cos,sin) renormalized (bombI = exact inverse)
-      const cl = vec2(f2.x, f2.y).length().max(1e-4).toVar() as unknown as NF;
-      const ca = (f2.x as unknown as NF).div(cl).toVar() as unknown as NF;
-      const sa = (f2.y as unknown as NF).div(cl).toVar() as unknown as NF;
-      const bombF = (vx: NF, vz: NF): NV2 =>
-        vec2(vx.mul(ca).sub(vz.mul(sa)), vx.mul(sa).add(vz.mul(ca))) as unknown as NV2;
-      const bombI = (vx: NF, vz: NF): NV2 =>
-        vec2(vx.mul(ca).add(vz.mul(sa)), vz.mul(ca).sub(vx.mul(sa))) as unknown as NV2;
       // the wind — the article's march-space shear: oblique TRUE-derivative basis
       // (thetenthplanet.de/archives/1180, deliberately NON-orthonormal), linear
       // lean + quadratic arc re-linearized at the entry height
@@ -948,69 +958,170 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
       const Sqz = (f1.w as unknown as NF).add(f2.w).toVar() as unknown as NF;
       const offX = Slx.add(Sqx.mul(hgt)).mul(hgt) as unknown as NF; // Sl·h + Sq·h²
       const offZ = Slz.add(Sqz.mul(hgt)).mul(hgt) as unknown as NF;
-      const lxT = phEx.sub(offX).sub(texOEx).div(GUIDE_PITCH) as unknown as NF;
-      const lzT = phEz.sub(offZ).sub(texOEz).div(GUIDE_PITCH) as unknown as NF;
-      const qb0 = bombF(lxT.sub(0.5), lzT.sub(0.5)) as unknown as NV2;
-      const qbx = qb0.x.add(0.5).toVar() as unknown as NF;
-      const qbz = qb0.y.add(0.5).toVar() as unknown as NF;
-      // sheared ray direction (local tangent of the quadratic basis) → the fetch's
-      // angle axis; eLen = |in-tile projection| ⇒ dividing by it IS |OA|/cos α
+      // WORLD-ANCHORED tile coordinate (uOT folds the exact-integer guide origin
+      // back in, mod 4096 tiles): worldTile = phE/PITCH + uOT ⇒ camera-invariant,
+      // so the anti-tiling hex lattice locks to the WORLD instead of resetting on
+      // every camera-position move. (The old per-cell (phE − texOE) bomb rotated
+      // about each 0.84 m cell centre — that fixed point emptied top-down centres
+      // and the phase jump seamed adjacent cells.)
+      const wtx = (
+        streamed ? phEx.div(GUIDE_PITCH).add(uOTx as unknown as NF) : phEx.div(GUIDE_PITCH)
+      ).toVar() as unknown as NF;
+      const wtz = (
+        streamed ? phEz.div(GUIDE_PITCH).add(uOTz as unknown as NF) : phEz.div(GUIDE_PITCH)
+      ).toVar() as unknown as NF;
+      // wind shear (metres → tiles) displaces the SAMPLING coord; the hex LATTICE
+      // stays on the unsheared world coord so the voronoi doesn't wobble with wind
+      const Ptx = wtx.sub(offX.div(GUIDE_PITCH)).toVar() as unknown as NF;
+      const Ptz = wtz.sub(offZ.div(GUIDE_PITCH)).toVar() as unknown as NF;
+      // sheared view-ray horizontal → the fetch's angle axis; eLen (rotation-
+      // invariant) is the in-tile projection scale ⇒ dividing |OA| by it IS
+      // |OB|=|OA|/cos α
       const tanX = Slx.add(Sqx.mul(hgt).mul(2)) as unknown as NF;
       const tanZ = Slz.add(Sqz.mul(hgt).mul(2)) as unknown as NF;
       const ex = rd.x.sub(tanX.mul(rd.y)).toVar() as unknown as NF;
       const ez = rd.z.sub(tanZ.mul(rd.y)).toVar() as unknown as NF;
       const eLen = vec2(ex, ez).length().max(1e-5).toVar() as unknown as NF;
-      const ebT = bombF(ex as unknown as NF, ez as unknown as NF) as unknown as NV2;
-      const ebx = ebT.x.toVar() as unknown as NF;
-      const ebz = ebT.y.toVar() as unknown as NF;
-      const az = (atan(ebz, ebx) as unknown as NF).mul(1 / (Math.PI * 2)).fract() as unknown as NF;
 
-      // ---- THE FETCH (the whole runtime): R = 1/(1+d), GBA = normal/root-id ---------
-      // Density-matched tier pair, lerped by where dens falls between their
-      // cell-keep fractions (tiers are NESTED — shared blades bake identical
-      // texels, so the lerp cross-fades only the differing blades). Boundaries
-      // are C0 (each branch ends on the shared tier tap); below the sparsest
-      // tier R fades to the miss encoding — grass thins out to bare ground.
-      const tierTap = (i: number): NV4 =>
-        texture3D(
-          rayBake.texs[i] as unknown as Parameters<typeof texture3D>[0],
-          vec3(qbx, qbz, az) as unknown as NV3,
-          0,
-        ) as unknown as NV4;
+      // ---- one density-tier-mixed LUT fetch at (qx,qz,az) ---------------------------
+      // R = 1/(1+d), GBA = normal/root-id. Tiers are NESTED (shared blades bake
+      // identical texels), lerped by where dens falls between their cell-keep
+      // fractions; below the sparsest tier R fades to the miss encoding.
       const missNorm = 1 / (1 + rayBake.dMaxTile);
-      const smp = vec4(0, 0, 0, 0).toVar() as unknown as NV4;
       const tierW = (hi: number, lo: number): NF =>
         dens
           .sub(TIER_FRACS[lo] as number)
           .div((TIER_FRACS[hi] as number) - (TIER_FRACS[lo] as number))
           .clamp(0, 1) as unknown as NF;
-      If(dens.greaterThanEqual(TIER_FRACS[1] as number), () => {
-        (smp as unknown as { assign(v: unknown): void }).assign(
-          mix(tierTap(1), tierTap(0), tierW(0, 1)),
-        );
-      })
-        .ElseIf(dens.greaterThanEqual(TIER_FRACS[2] as number), () => {
-          (smp as unknown as { assign(v: unknown): void }).assign(
-            mix(tierTap(2), tierTap(1), tierW(1, 2)),
-          );
+      const lutSample = (qx: NF, qz: NF, azA: NF): NV4 => {
+        const tap = (i: number): NV4 =>
+          texture3D(
+            rayBake.texs[i] as unknown as Parameters<typeof texture3D>[0],
+            vec3(qx, qz, azA) as unknown as NV3,
+            0,
+          ) as unknown as NV4;
+        const s = vec4(0, 0, 0, 0).toVar() as unknown as NV4;
+        If(dens.greaterThanEqual(TIER_FRACS[1] as number), () => {
+          (s as unknown as { assign(v: unknown): void }).assign(mix(tap(1), tap(0), tierW(0, 1)));
         })
-        .ElseIf(dens.greaterThanEqual(TIER_FRACS[3] as number), () => {
-          (smp as unknown as { assign(v: unknown): void }).assign(
-            mix(tierTap(3), tierTap(2), tierW(2, 3)),
-          );
-        })
-        .Else(() => {
-          const s3 = (tierTap(3) as unknown as { toVar(): NV4 }).toVar();
-          const w = dens.div(TIER_FRACS[3] as number) as unknown as NF;
-          (smp as unknown as { assign(v: unknown): void }).assign(
-            vec4(mix(float(missNorm), s3.x as unknown as NF, w), s3.y, s3.z, s3.w),
-          );
-        });
-      const dTile = float(1)
-        .div((smp.x as unknown as NF).max(1 / 255))
-        .sub(1)
-        .toVar() as unknown as NF;
+          .ElseIf(dens.greaterThanEqual(TIER_FRACS[2] as number), () => {
+            (s as unknown as { assign(v: unknown): void }).assign(mix(tap(2), tap(1), tierW(1, 2)));
+          })
+          .ElseIf(dens.greaterThanEqual(TIER_FRACS[3] as number), () => {
+            (s as unknown as { assign(v: unknown): void }).assign(mix(tap(3), tap(2), tierW(2, 3)));
+          })
+          .Else(() => {
+            const s3 = (tap(3) as unknown as { toVar(): NV4 }).toVar();
+            const w = dens.div(TIER_FRACS[3] as number) as unknown as NF;
+            (s as unknown as { assign(v: unknown): void }).assign(
+              vec4(mix(float(missNorm), s3.x as unknown as NF, w), s3.y, s3.z, s3.w),
+            );
+          });
+        return s;
+      };
+
+      // ---- ANTI-TILING: Sannikov texture-bombing (hex 3-tap, decoupled grid) --------
+      // shadertoy tsVGRd / his 2023 flow-map update: three hex-lattice nodes, each
+      // an integer-hashed rotation + phase (pcg2d — stable, no fp drift), triangle-
+      // weight blended so there is NO seam anywhere. Variance-preservation restores
+      // the silhouette contrast that averaging N taps softens. Hex region ≈ 2 tiles.
+      const HEXR = 1.7320508; // √3
+      const HEX_TILES = qNum('grasshex', 2, 0.5, 8); // hex region size, in tiles
+      const uhx = wtx.div(HEX_TILES).toVar() as unknown as NF;
+      const uhz = wtz.div(HEX_TILES).toVar() as unknown as NF;
+      const NODEOFF: [number, number][] = [
+        [0, 0],
+        [1, 1],
+        [1, -1],
+      ];
+      const mkNode = (ni: number): { w: NF; Rx: NF; nx: NF; ny: NF; nz: NF } => {
+        // uv = worldTile/HEX_TILES + nodeOffset/hexRatio·0.5  (hexRatio = (1, √3))
+        const ux = uhx.add((NODEOFF[ni] as [number, number])[0] * 0.5) as unknown as NF;
+        const uz = uhz.add(((NODEOFF[ni] as [number, number])[1] * 0.5) / HEXR) as unknown as NF;
+        // even lattice a, odd lattice b; pick the nearer hex centre (Shane)
+        const ax = ux.add(0.5).floor() as unknown as NF;
+        const azi = uz.div(HEXR).add(0.5).floor() as unknown as NF;
+        const cAx = ax as unknown as NF;
+        const cAz = azi.mul(HEXR) as unknown as NF;
+        const bx = ux.floor() as unknown as NF; // round(ux−0.5)
+        const bz = uz.sub(1).div(HEXR).add(0.5).floor() as unknown as NF;
+        const cBx = bx.add(0.5) as unknown as NF;
+        const cBz = bz.add(0.5).mul(HEXR) as unknown as NF;
+        const oAx = ux.sub(cAx);
+        const oAz = uz.sub(cAz);
+        const oBx = ux.sub(cBx);
+        const oBz = uz.sub(cBz);
+        const dA = oAx.mul(oAx).add(oAz.mul(oAz)) as unknown as NF;
+        const dB = oBx.mul(oBx).add(oBz.mul(oBz)) as unknown as NF;
+        const useA = dA.lessThanEqual(dB) as unknown as NB;
+        const sel = (a: NF, b: NF): NF =>
+          (useA as unknown as { select(a: unknown, b: unknown): NF }).select(a, b);
+        const cX = sel(cAx, cBx);
+        const cZ = sel(cAz, cBz);
+        const idX = sel(ax, bx);
+        // fold the even/odd lattice bit into the key (disjoint integer ranges) so
+        // a- and b-cells never collide in the hash (pcg2d truncates to uint)
+        const idZ = sel(azi, bz.add(131072));
+        // weight = HexSDF(uv−centre)·2 (∈[0,1], the 3 nodes sum ≈ 1)
+        const pX = ux.sub(cX).abs() as unknown as NF;
+        const pZ = uz.sub(cZ).abs() as unknown as NF;
+        const w = float(0.5)
+          .sub(pX.mul(0.5).add(pZ.mul(HEXR * 0.5)).max(pX))
+          .mul(2)
+          .max(0)
+          .toVar() as unknown as NF;
+        // this node's hashed rotation + phase
+        const key = vec2(idX, idZ) as unknown as NV2;
+        const ang = (cellHash(key, SALT ^ 0x4e1b) as unknown as NF)
+          .mul(Math.PI * 2)
+          .toVar() as unknown as NF;
+        const cs = ang.cos().toVar() as unknown as NF;
+        const sn = ang.sin().toVar() as unknown as NF;
+        const ph = cellHash2(key, SALT ^ 0x2c9d) as unknown as NV2;
+        // rotate tile coord + view ray by this node's angle (LUT repeat-wraps qx,qz)
+        const qx = Ptx.mul(cs).sub(Ptz.mul(sn)).add(ph.x) as unknown as NF;
+        const qz = Ptx.mul(sn).add(Ptz.mul(cs)).add(ph.y) as unknown as NF;
+        const rex = ex.mul(cs).sub(ez.mul(sn)) as unknown as NF;
+        const rez = ex.mul(sn).add(ez.mul(cs)) as unknown as NF;
+        const azN = (atan(rez, rex) as unknown as NF).mul(1 / (Math.PI * 2)).fract() as unknown as NF;
+        const tap = lutSample(qx, qz, azN);
+        // baked normal azimuth is TILE space → world = R(−ang)·(cos,sin)·sinθ
+        const bAz = (tap.y as unknown as NF).mul(Math.PI * 2) as unknown as NF;
+        const nyy = (tap.z as unknown as NF).mul(2).sub(1) as unknown as NF;
+        const sxz = float(1).sub(nyy.mul(nyy)).max(0).sqrt() as unknown as NF;
+        const txx = bAz.cos().mul(sxz) as unknown as NF;
+        const tzz = bAz.sin().mul(sxz) as unknown as NF;
+        return {
+          w,
+          Rx: tap.x as unknown as NF,
+          nx: txx.mul(cs).add(tzz.mul(sn)) as unknown as NF, // R(−ang)·xz
+          ny: nyy,
+          nz: tzz.mul(cs).sub(txx.mul(sn)) as unknown as NF,
+        };
+      };
+      const N0 = mkNode(0);
+      const N1 = mkNode(1);
+      const N2 = mkNode(2);
+      const sumW = N0.w.add(N1.w).add(N2.w).max(1e-4) as unknown as NF;
+      const invW = float(1).div(sumW) as unknown as NF;
+      const sumR = N0.w.mul(N0.Rx).add(N1.w.mul(N1.Rx)).add(N2.w.mul(N2.Rx)) as unknown as NF;
+      const sumW2 = N0.w.mul(N0.w).add(N1.w.mul(N1.w)).add(N2.w.mul(N2.w)) as unknown as NF;
+      // variance-preserve the blended R toward the baked mean → crisp silhouettes
+      const Rb = sumR.mul(invW) as unknown as NF;
+      const m2 = sumW2.mul(invW).mul(invW).max(1e-4) as unknown as NF; // Σ(wᵢ/Σw)²
+      const Rv = Rb.sub(rayBake.meanR)
+        .div(m2.sqrt())
+        .add(rayBake.meanR)
+        .clamp(0, 1) as unknown as NF;
+      const dTile = float(1).div(Rv.max(1 / 255)).sub(1).toVar() as unknown as NF;
       returnIf(dTile.greaterThan(rayBake.dMaxTile * 0.94) as unknown as NB); // baked miss
+      // blended world normal (pre per-cell twist — applied once B's cell is known)
+      const nWx0 = N0.w.mul(N0.nx).add(N1.w.mul(N1.nx)).add(N2.w.mul(N2.nx)).mul(invW)
+        .toVar() as unknown as NF;
+      const nWy0 = N0.w.mul(N0.ny).add(N1.w.mul(N1.ny)).add(N2.w.mul(N2.ny)).mul(invW)
+        .toVar() as unknown as NF;
+      const nWz0 = N0.w.mul(N0.nz).add(N1.w.mul(N1.nz)).add(N2.w.mul(N2.nz)).mul(invW)
+        .toVar() as unknown as NF;
       // |OB| = |OA|/cos α: dTile is the in-tile 2D path, eLen the projection scale
       const tHit = tE.add(dTile.mul(GUIDE_PITCH).div(eLen)).toVar() as unknown as NF;
       // behind the scene hit (incl. under terrain): the election would lose anyway —
@@ -1065,20 +1176,18 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
       (bodyBest as unknown as { assign(v: unknown): void }).assign(
         uint(sys.mul(GRID).add(sxs)).shiftLeft(uint(6)),
       );
-      // baked normal (azimuth in G, y in B) → world: inverse bomb on xz + the
-      // WORLD-CELL azimuth twist (per-tile normal statistics decorrelation — the
-      // flatres-stop lesson)
-      const azn = (smp.y as unknown as NF)
-        .mul(6.2831853)
-        .add(
-          cellHash(vec2(wcx, wcz) as unknown as NV2, SALT ^ 0x6a6a)
-            .sub(0.5)
-            .mul(1.6),
-        ) as unknown as NF;
-      const nyT = (smp.z as unknown as NF).mul(2).sub(1) as unknown as NF;
-      const sxz = float(1).sub(nyT.mul(nyT)).max(0).sqrt() as unknown as NF;
-      const nW = bombI(azn.cos().mul(sxz) as unknown as NF, azn.sin().mul(sxz) as unknown as NF);
-      (nrmV as unknown as { assign(v: unknown): void }).assign(vec3(nW.x, nyT, nW.y));
+      // blended world normal (from the hex taps) + the WORLD-CELL azimuth twist
+      // (per-tile normal statistics decorrelation — the flatres-stop lesson): rotate
+      // the blended xz by a per-fine-cell angle so adjacent tiles don't share a
+      // normal signature
+      const twist = cellHash(vec2(wcx, wcz) as unknown as NV2, SALT ^ 0x6a6a)
+        .sub(0.5)
+        .mul(1.6) as unknown as NF;
+      const tc = twist.cos() as unknown as NF;
+      const ts = twist.sin() as unknown as NF;
+      const nWx = nWx0.mul(tc).sub(nWz0.mul(ts)) as unknown as NF;
+      const nWz = nWx0.mul(ts).add(nWz0.mul(tc)) as unknown as NF;
+      (nrmV as unknown as { assign(v: unknown): void }).assign(vec3(nWx, nWy0, nWz));
       // per-cell blade-top jitter (march parity: topEff = topB·(0.55..1.05)) —
       // shading-only here: adjacent blades get different tip params, which is
       // the fine-grain ragged ramp the march had (a REJECT would speckle)
@@ -1137,6 +1246,13 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
     // absolute coordinate. guideOriginWorld = uGFx·CELL (uGFx exact integer).
     uRoMx.value = camera.position.x - uGFx.value * CELL;
     uRoMz.value = camera.position.z - uGFz.value * CELL;
+    // world-anchored tile origin (exact int guide origin / GUIDE_SUB = tiles),
+    // reduced mod 4096 tiles in f64 so the shader's world-tile coord is precise
+    // AND camera-invariant (the anti-tiling lattice locks to the world).
+    const otx = uGFx.value / GUIDE_SUB;
+    const otz = uGFz.value / GUIDE_SUB;
+    uOTx.value = otx - Math.floor(otx / 4096) * 4096;
+    uOTz.value = otz - Math.floor(otz / 4096) * 4096;
     // separate dispatches (own submits) — keeps c.grassGuide / c.grassRay pass
     // timers clean (batched compute overlaps the render passes and smears their
     // timestamps; the whole-frame A/B is the ground truth either way)

@@ -77,6 +77,11 @@ export interface GrassRayBake {
   angles: number;
   /** max traced distance in TILE units — runtime treats d ≥ ~0.97·this as miss */
   dMaxTile: number;
+  /** mean normalized depth (R/255) across all tier volumes — the anti-tiling
+   *  hex blend's variance-preservation pivot (Sannikov 2023: averaged-mip mean).
+   *  Blending N rotated taps softens the R jump between hit/miss; pushing the
+   *  blend away from this mean by 1/√(Σwᵢ²) restores the silhouette contrast. */
+  meanR: number;
 }
 
 export function bakeGrassRayTile(o: GrassRayBakeOpts): GrassRayBake {
@@ -270,9 +275,20 @@ export function bakeGrassRayTile(o: GrassRayBakeOpts): GrassRayBake {
     }
     volumes.push(data);
   }
+  // global mean R (over every tier volume) for the hex blend's variance pivot
+  let sumR = 0;
+  let nR = 0;
+  for (const v of volumes) {
+    for (let i = 0; i < v.length; i += 4) {
+      sumR += v[i] as number;
+      nR++;
+    }
+  }
+  const meanR = nR > 0 ? sumR / nR / 255 : 0.5;
   console.info(
     `[grass] ray tile baked: ${res}×${res}×${angles} ×${o.tiers.length} tiers ` +
-      `(${o.tiers.join('/')}), ${fibers.length} fibers, ${Math.round(performance.now() - t0)} ms`,
+      `(${o.tiers.join('/')}), ${fibers.length} fibers, meanR=${meanR.toFixed(3)}, ` +
+      `${Math.round(performance.now() - t0)} ms`,
   );
-  return { data: volumes, res, angles, dMaxTile: dMaxC / sub };
+  return { data: volumes, res, angles, dMaxTile: dMaxC / sub, meanR };
 }
