@@ -159,6 +159,7 @@ regime starts, parks, gains a visual verdict, or changes owner.
 
 ### Accepted infrastructure
 
+- [x] Repair and checkpoint the O(1) precomputed-ray grass lane at commit `52df93d` without restoring a per-pixel march: atomic density/geometry records, two global nearest-hit layers, exact zero-distance top occupancy, non-orthogonal slope/shear rooting, physical camera-independent height, entering-face normals, and full-resolution per-pixel lookup. Exact localhost Estonia close, near-nadir, and repaired tip-debug WebGPU boots pass; median DPR-2 `c.grassRay` is `0.39 ms` over seven timestamp samples. User live motion/angle acceptance remains explicitly pending in `docs/tasks/2026-07-21/GRASS-STATUS-AND-ISSUES.md`; multi-species/moss generalization is a separate next track.
 - [x] Re-audit the dirty, unpushed implementation and isolate new work in a clean worktree based on `258ddef`.
 - [x] Restore the canonical shared grid: height LOD0 remains 1 m with 2048 m chunks; negative height-only rungs provide 0.25 m and 0.0625 m samples.
 - [x] Implement signed negative-LOD transport, LAC2 decoding, near-only demand, and packed-height sampling.

@@ -1,0 +1,309 @@
+# Grass rendering — status & issues (2026-07-21)
+
+Factual record only. **No hypotheses about causes are included** (by user directive).
+This documents: the overarching goal, the original issues we set out to fix, the one
+piece of work considered done (O(1)), every change made during this session, every new
+issue observed after those changes, and the debug mode that was attempted and botched.
+
+Work was **stopped by the user** at the original handoff point. It resumed later on
+2026-07-21; the continuation and its verified checkpoint are recorded in §9.
+
+---
+
+## 1. Overarching goal (user, start of session)
+
+- Evaluate the fit of the existing grass raycast lane against Aleksandr Sannikov's
+  precomputed-raycast technique (gamedev.ru article `docs/deep-research/grass/`,
+  shadertoy `tsVGRd`, and his 2023 flow-map update; all read in full this session).
+- Quality bar (user, verbatim intent): the moss/grass/ground-cover layer must be
+  **INDISTINGUISHABLE from how it appears in the real world**. The current grass did
+  not meet the bar either.
+- **Significantly faster** than the current grass (the ray lane measured ~10 ms).
+- Real grass is **not only blades**: it is ≥10 species distributed in **patches** (not
+  random per-blade), i.e. a ground-cover system (grass + moss + overlays).
+- **Control field (hard requirement, not to be reduced):** the raycast shader must read
+  a spatial ground-cover field telling it *what cover is here and how much* everywhere
+  (under trees less grass, swamps get sedge, etc.).
+- **Estonia-native species only.**
+- **O(1)** — the single-fetch speedup from the article (no per-pixel step loop).
+- Remove the previously-generated geometry sphagnum moss ("poop piles").
+
+## 2. Original issues we set out to fix
+
+### 2a. The four original issues (user, verbatim)
+
+> - there seems to be some issue with "expected grass sparsity" being applied very odd.
+>   like in taevaskoda, there is a dirty (could be sand, idk) area that from some distance
+>   in air, idk, lets say about 50m from it, renders expectedly. some sparse grassy places,
+>   most of it bare. now the area BEHIND it in forest where i would expect grass, its grass.
+>   so thats, lets say, easily 150m away. all grass. BUT when i fly in towards this
+>   sandy/dirty area, suddenly it gets a thick area of grass when im close enough. idk, lets
+>   say smth like 15-40m. hard to tell exactly. guessing
+> - the cells that the grass is made out of, work as some sort of clippers. meaning if a bit
+>   of grass is trying to extend outwards, into the neighboring one, it cant, its clipped.
+>   its not seamless. it has clear cell like seams/clipping effect going on
+> - the direction of grass makes zero sense. it doesnt feel like grass is coming out of
+>   ground. sometimes it feels like its coming out from some side, sometimes from top
+> - another cellines bug. same cells that i described before, but when going more into top
+>   down view, their centers get emptied. like only their edges are grassy looking, centers
+>   are empty. but in a more oblique view, it gets the grassy stuff (even if wrong and all
+>   fucked looking, still does get it)
+
+Labels used elsewhere in this doc: **C** = sparsity-applied-oddly (issue 1),
+**D** = cells-clip (issue 2), **E** = direction-makes-no-sense (issue 3),
+**F** = top-down-centres-empty (issue 4).
+
+Also stated as grass problems earlier in the session (part of the §1 goal): **A** grass is
+only blades — real grass is ≥10 species in irregular patches; **B** jitter / deformation
+artifacts.
+
+### 2b. Additional detail the user added during debugging
+
+- **Reference bar (important).** In the gamedev.ru (Sannikov) implementation **video**, the
+  camera is rotated around the grass, and **top-down AND side views show NO artifacts at
+  any angle** — it all looks like high-quality **geometry**, when in fact it is not real
+  geometry. Our implementation shows artifacts at those same angles (holes / empty centres
+  / clipping) that his does not. This is the quality target the grass is being measured
+  against.
+- **G. Not rooted.** The core of issue E, restated: the grass is not rooted in the ground —
+  it does not grow out of the ground.
+- **H. Banding / stretching.** Close up, at various band distances from the camera, the
+  grass starts stretching out in bands.
+- **I. "Vertically flipped" drips** (user screenshot): on a hillside near a sandy/bare
+  boundary, grass appeared to hang downward like drips.
+- **J. Sliding / inner-cell warping.** When moving on an oblique angle, the grass appears to
+  slide slightly faster than the camera; described as inner-cell warping; slight, and it
+  "stops at some point" (not the whole thing sliding at once).
+- **Black grass in the debug view.** ALL of the grass renders black; with the debug mode it
+  gains only red/green (later magenta) **outlines** — the black interior remains. The user
+  confirms this black is grass (see §6).
+
+## 3. What was completed (the only item considered good/done)
+
+- **O(1) single fetch (commit `f9238ed`).** The per-pixel 256-step DDA march
+  (`loopUN('gro', 0, 256)`) in `src/nanite/grass/NaniteGrass.ts` was deleted and replaced
+  with the article's single terrain-anchored LUT fetch: the vis-buffer election depth
+  gives point O, the guide texel's ground plane reconstructs the sward-top entry E, and
+  one trilinear fetch of the boot-baked (x, z-in-tile, angle) LUT gives the path, with
+  `|OB| = |OA|/cos α`. Reported measurement at the time: grassRay ~15–20 ms → ~0.3–0.5 ms,
+  flat across camera poses.
+- This is the only change the user considers a genuine improvement.
+- Also before this arc: the rejected geometry sphagnum moss was excised (commit
+  `c46878e`).
+
+## 4. Changes made during this session (beyond O(1))
+
+All of the following are in the working tree. Only `f9238ed` and `2ab69cf` were committed;
+everything after `2ab69cf` is uncommitted (see §6).
+
+In `src/nanite/grass/NaniteGrass.ts`:
+
+- **Anti-tiling hex 3-tap texture-bombing** (commit `2ab69cf`), replacing the previous
+  per-cell single-tap swirl "bomb". Three hex-lattice nodes, each with an integer-hashed
+  (pcg2d) rotation + phase, triangle-weight blended, with variance preservation toward a
+  baked mean-R (`meanR` added to `GrassRayBake.ts`). Knob `?grasshex=N` (default 2).
+- **World-anchored the tile lattice** (commit `2ab69cf`). Added CPU-computed uniforms
+  `uOTx`/`uOTz` (exact-integer guide origin in tile units, reduced mod 4096 on the CPU).
+  The reconstruction now uses `worldTile = phE/PITCH + uOT`.
+- **Bilinear entry-side (E) ground** (commit `2ab69cf`): `gPE` changed from a nearest,
+  per-guide-texel faceted plane to a bilinear 4-corner sample.
+- **Bilinear O-side ground + gradient** (uncommitted). Added a `bguide(rc)` helper
+  returning bilinear `{ground, grad}`; `groundO`/`gradO`/`hO`/`dhdt` and the `gOB`
+  plane-agreement term now use it instead of nearest per-texel values. Removed the now-dead
+  `texOrg`, `texCO*`, `txfO`/`tzfO`, `cvO` locals.
+- **Guide fields sampled at O** (uncommitted): the `guv` used for the density gate + wind
+  fields (`guideFieldT1/2/3`) was moved from the walked-back entry E's position to O's
+  position.
+- **Removed the static random per-tile lean/arc** (uncommitted): `SlxB/SlzB` (linear lean)
+  and `a1xB/a1zB` (quadratic arc) in the guide bake are now gated to 0 via a new knob
+  `?grassrandlean=K` (default 0). Wind lean (`SwxB/SwzB`) is unchanged.
+
+In `src/nanite/shade/NaniteResolve.ts`:
+
+- **Reduced the terrain-normal pull** on the proc-grass normal from `0.5→0.85` (near→far)
+  to `0.18→0.65`, via a new knob `?grassnrmpull=near` (default 0.18). Intended so the
+  blade's own normal drives near-field shading.
+- **Removed the dead legacy mesh-grass shading path** (matClass 5) via a subagent
+  (`−79` lines). Verified: no geometry produces matClass 5; boot PASS after removal; grass
+  rendered identically. Stale "legacy-grass / matClass 1-5" comments updated to "1-4" in
+  `NaniteResolve.ts` and one comment in `NaniteFrame.ts`.
+- **The `?grassdbg=tip` debug mode** — see §5. It is currently left in the file in its
+  last (magenta) state; per the stop directive it was not reverted.
+
+## 5. New issues observed AFTER the above changes
+
+Reported by the user while testing, in order:
+
+- After the O(1) + anti-tiling changes: the visible **grid was replaced by a
+  voronoi-looking pattern**; clipping "99% gone" but some **dark seams at rare oblique
+  angles**; the voronoi cells have **empty middles** (from a slightly-top-down angle;
+  oblique does not show it); the **voronoi pattern reset to a new one on every camera
+  position move** (not angle); a **green halo** appeared toward one direction when standing
+  and looking straight down.
+- The **dark seams** were reported to follow an actual **square grid**, independent of the
+  voronoi pattern.
+- After world-anchoring + bilinear O-side + density-at-O: user reported **"nothing
+  changed / nothing improved"** for the named issues; the voronoi-reset and dark-square-
+  seams were reported fixed.
+- After reducing the terrain-normal pull: user reported the edge **clipping became more
+  visible** again ("still 100% happening, clipping at edges of cells").
+- On a hillside near a sandy/bare boundary: grass appeared **vertically flipped / hanging
+  down like drips** (user screenshot).
+- Persistent through all changes: **grass is not rooted / does not grow from the ground**;
+  **stretches in bands**; user states these were **not improved** by any of the changes.
+
+Separately (not a grass-code issue): the Estonia world briefly rendered as **cubes with no
+trees**. This was traced to a wrong cooked data build being hosted; fixed by repointing
+`asset-gen/data/out/latest.json` from `m/b7afac38c167af79` to `m/fffd3771349f27c7`
+(cook_rev 4). This is a data-file (gitignored) change, not a shader change.
+
+## 6. The debug mode (`?grassdbg=tip`) — historical attempts and correction
+
+**Intended behaviour:** color grass by its tip parameter so rootedness could be judged —
+base (`t=0`) = red, tip (`t=1`) = green. If red sits on the ground line the grass is
+rooted.
+
+**Historical sequence before the handoff and the observation after each:**
+
+1. In the proc-grass resolve block, set `albedo = mix(red, green, t)` (lit path). —
+   Observed (user): grass showed red/green **outlines** with a **black interior**; the AO
+   was more visible than the grass. (This version was lit, so shadows applied.)
+2. Added an unlit early return `if (grassdbg==='tip') return vec4(albedo,1)` at the
+   debug-override point. — Observed (user): **no change; still black inside.**
+3. Rewrote it self-contained at the debug-override point using `gpTip` (the tip param the
+   proc-grass block writes) with `isGP` selecting grass; **every non-grass pixel forced to
+   gray (0.2)**. — Observed (my screenshots): terrain and voxel trees rendered gray; near
+   grass rendered as red/orange/green **speckles**; large **black masses** remained (a
+   ground-level shot at the Taevaskoja spawn and a turned-around forest shot).
+4. Forced **solid magenta** for every `isGP` grass pixel (no `gpTip`, no mix), gray
+   elsewhere. — Observed (user + my screenshot): grass clumps **remained black**, now with
+   **magenta outlines only**. Terrain gray, voxel-trees gray, water blue/teal. The user
+   confirmed: it is grass, the black is still there, only the outlines are magenta.
+
+**Correction after the handoff:**
+
+- The black pixels were the same procedural grass geometry. Procedural grass owns election
+  ids with `0xc0000000 | body`; `isGP` detects those ids in the ordinary resolve, and the
+  procedural block forces `matClass=255`. The earlier statement that the black interiors
+  were outside the resolve-owned grass pixels was false.
+- The earlier fartile statement was also false in this context. Fartile voxel records and
+  procedural grass use the shared visibility/resolve pipeline; neither explains a second
+  black grass renderer.
+- The pass-wide constant return in the old debug attempt dead-stripped graph inputs that
+  the Three/WebGPU material still expected and produced `null.constructor` material-build
+  failures. The repaired mode keeps the ordinary `lit` graph alive and replaces it only
+  inside `If(isGP)`.
+- Dense false-colour interiors stayed intact through the aerial composite and became black
+  only in the later temporal/grading chain. Debug mode now terminates at that proven-clean
+  aerial composite; production output is unchanged.
+- Verified exact localhost boots at the close Taevaskoda pose now render every procedural
+  grass pixel red→green, retain normal colours for terrain/trees/water, and contain no
+  black grass interior (`/tmp/grass-exact-default-tip.png`, frame 190).
+
+**Debug tooling added (scratchpad only, not in repo):**
+
+- `scratchpad/shot_ground.mjs` — boots, reads the spawn pose via `window.__laas.getPose()`,
+  sets a pose via `setPose` (args: pitch, dy, yaw, dx, dz), settles, screenshots at dpr2.
+  Estonia spawn pose observed: `p = [311123, 96.378, 190723], yaw 0, pitch -0.18, fov 55`.
+
+## 7. Code state at the original stop point (historical; superseded by §9)
+
+**Committed this session:**
+
+| commit    | summary |
+|-----------|---------|
+| `c46878e` | Excise rejected geometry sphagnum moss (before this arc) |
+| `f9238ed` | Grass TRUE O(1): kill the 256-step march, single terrain-anchored LUT fetch |
+| `2ab69cf` | Grass anti-tiling: world-anchored hex texture-bombing + bilinear entry ground |
+
+**Uncommitted (working tree) — relevant to grass:**
+
+- `src/nanite/grass/NaniteGrass.ts` — bilinear O-side, density-at-O, random-lean-off knob.
+- `src/nanite/shade/NaniteResolve.ts` — dead mesh-grass path removed; terrain-normal pull
+  reduced; `grassdbg=tip` debug left in its magenta state.
+- `src/nanite/frame/NaniteFrame.ts` — one comment text change ("matClass 1-5" → "1-4").
+
+**Uncommitted — unrelated / pre-existing (not touched for grass this session):**
+
+- `asset-gen/.../forest_exemplar/adjacent.py`, `docs/METAL-PROFILING.md`,
+  `docs/tasks/2026-07-13/KNOWN-ISSUES.md`, `src/core/ProfileBoot.ts` (older harness fix),
+  and various untracked docs/data.
+
+**Knobs / URLs in play:**
+
+- Test URL (Estonia, dpr2): `http://localhost:5173/?scene=world&src=estonia&dataurl=http://localhost:8787&dpr=2`
+- Debug: append `&grassdbg=tip` (currently forces magenta on grass, gray elsewhere).
+- Grass knobs: `grasshex`, `grassrandlean`, `grassnrmpull`, plus pre-existing `grassbakres`,
+  `grassbakang`, `grassbakw`, `grassbakt`, `grassbakn`, `grassquad`, `grasssway`,
+  `grassrayend`, `grassdbg=flatres|raysetup`.
+- Data server must serve `asset-gen/data/out` on `:8787`; `latest.json` must point at
+  `m/fffd3771349f27c7`.
+
+## 8. Status of the original issues
+
+| # | issue | status |
+|---|-------|--------|
+| A | only blades / no species / no patches | not addressed |
+| B | jitter / deformation | not addressed |
+| C | density/sparsity applied oddly (Taevaskoja sand) | implementation corrected; user acceptance pending |
+| D | cells clip (seams) | implementation corrected; user acceptance pending |
+| E | direction makes no sense (side/top) | implementation corrected; user acceptance pending |
+| F | top-down cell centres empty | exact-default near-nadir checkpoint clean; user acceptance pending |
+| G | not rooted / doesn't grow from ground | repaired tip checkpoint clean; user acceptance pending |
+| H | stretching in bands | distance-dependent geometry removed; user acceptance pending |
+| I | vertically-flipped drips | base-space rooting implemented; user acceptance pending |
+| J | sliding / inner-cell warping | camera-relative transforms and 2×2 replication removed; user acceptance pending |
+| — | O(1) single fetch | **done** (`f9238ed`) |
+| — | debug mode `grassdbg=tip` | **repaired and WebGPU-verified** (`52df93d`) |
+
+## 9. Continuation checkpoint (`52df93d`, 2026-07-21)
+
+The following changes are committed in `52df93d` without restoring any per-pixel march.
+The runtime remains fixed-cost O(1): a bounded number of predetermined texture candidates,
+no ray-step loop, and no distance- or density-dependent iteration.
+
+### Geometry and density corrections
+
+- Removed camera-distance thinning from the guide mask, removed the extra 8–14 m scruff
+  population, and removed the 50–90 m camera-distance blade-height growth. The physical
+  sward height is now camera-independent.
+- Replaced the three-node hex blend of unrelated first-hit depths/normals with the article's
+  geometry-safe composition: two globally continuous layers separated by golden-ratio·π.
+  The second layer has an incommensurate physical scale; the nearer complete record wins.
+- Density tiers no longer interpolate visibility records. A nearest-texel root id is checked
+  with the exact same `pcg2d` keep threshold used by the CPU bake; the shader selects the
+  complete denser record or the nested sparser fallback.
+- Exact `d=0` origin occupancy is preserved categorically instead of being blurred into a
+  small positive depth. This removes the division singularity for vertical/near-vertical
+  rays and retains filled top-down blade footprints.
+- Production bake defaults are back on the article's geometrically exact parallel-extrusion
+  case: `shiftK=0`, `thickK=0`, `arcK=0`. Those controlled-error extensions remain explicit
+  query knobs. Coverage now comes from six actual fibers per layer, not distance inflation.
+
+### Rooting, slope, normals, and motion
+
+- Implemented the exact non-orthogonal derivative for `x=P+F(h), y=g(P)+h`:
+  `dh/dt=(rd.y-m·rd.xz)/(1-m·F'(h))` and `dP/dt=rd.xz-F'(h)·dh/dt`.
+- Reconstructs the blade base coordinate `P=x-F(h)` at B, samples ground beneath P, derives
+  the stable body/root cell from P, and computes tip position from physical height `h`.
+- The CPU precompute stores the face actually entered. An exact origin/top hit stores an up
+  normal. The later per-cell shading-only normal twist and per-cell tip hash were removed.
+- Removed DPR-driven 2×2 ray replication and its copied depth/normal. Every output pixel now
+  runs its own fixed-cost lookup, removing that screen-space source of sliding/warping.
+
+### Verification evidence
+
+- `npm run typecheck`: pass.
+- Exact real-WebGPU localhost close/oblique production boot: pass at frame 179,
+  `cam=311123,47,190723,0,-0.12`.
+- Exact-default near-nadir production boot: pass at frame 136,
+  `cam=311123,120,190703,0,-1.45`; dense grass stays filled while the sandy density-field
+  clearing remains bare.
+- Repaired `grassdbg=tip` close boot: pass at frame 190; complete red-base→green-tip grass,
+  ordinary scene colours retained, no black grass interiors.
+- Timestamp-query harness at DPR 2: median `c.grassRay = 0.39 ms` over seven samples at the
+  Taevaskoda pose. This preserves the achieved speedup versus the former ~15–20 ms march.
+
+This checkpoint corrects the implementation-side causes and passes the recorded automated
+and visual inspections. Final issue closure remains subject to the user's live motion/angle
+acceptance; the multi-species/moss groundcover work begins from this committed grass base.
