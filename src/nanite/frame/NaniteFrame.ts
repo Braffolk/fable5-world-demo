@@ -353,7 +353,7 @@ export function buildNaniteFrame(
   // other isolating flag. Nothing shades when ON (the scene pass renders sky only) — perf probe.
   const noResolve = params.get('nores') === '1';
   if (!noResolve) engine.scene.add(resolve.mesh);
-  // resolve P2 (class-family split): the 'mesh' pass — shades mesh families (matClass 1-5),
+  // resolve P2 (class-family split): the 'mesh' pass — shades mesh families (matClass 1-4),
   // Discards terrain + voxel pixels. Present only in two-pass mode (undefined under 'both'
   // single-pass merge). renderOrder −999.5, right after the 'terr' `mesh`.
   if (resolve.meshMesh && !noResolve) engine.scene.add(resolve.meshMesh);

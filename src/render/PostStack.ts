@@ -714,10 +714,15 @@ export class PostStack {
 
     this.post = new RenderPipeline(renderer);
     // chain bisect: 9 = constant at pipeline output, 8 = aerial only (no
-    // AO/TRAA/bloom/exposure/grade), default = full chain
+    // AO/TRAA/bloom/exposure/grade), default = full chain. The grass base/tip
+    // diagnostic also stops at the proven-clean aerial composite: later temporal/
+    // grading stages turn its deliberately discontinuous false colours black in
+    // dense interiors, defeating the diagnostic. Ordinary terrain, vegetation,
+    // water, clouds and aerial perspective remain visible in their real colours.
     this.post.outputNode =
       skyVelDbgView !== null ? skyVelDbgView
       : cloudview === '9' ? vec3(1, 0, 0)
+      : q.get('grassdbg') === 'tip' ? aerialNode
       : cloudview !== null && cloudview !== '' ? aerialNode
       : graded;
 
@@ -749,4 +754,3 @@ export class PostStack {
     this.post.render();
   }
 }
-

@@ -93,7 +93,7 @@ export interface NaniteResolveHandles {
    *  merged resolve. */
   mesh: Mesh;
   /** resolve P2 (class-family split): the 'mesh' pass — shades the mesh material families
-   *  (rock/bark/leaf/deadwood/legacy-grass, matClass 1-5) and Discards terrain + voxel pixels.
+   *  (rock/bark/leaf/deadwood, matClass 1-4) and Discards terrain + voxel pixels.
    *  renderOrder −999.5 (between `mesh` at −1000 and `voxMesh` at −999). Present only in the
    *  two-pass mode; undefined under the forest single-pass 'both' merge. Add to engine.scene
    *  right after `mesh`. ?nores must cover it (skip all resolve meshes). */
@@ -369,9 +369,9 @@ export function buildNaniteResolve(
   // Both passes are provably ≤10 fragment storage buffers. The 'vox' pass is built only when
   // the voxel queue is present (cull.qVoxRasterRO) — a pure-triangle world has ONE pass.
   // resolve P2 (class-family split): the old 'tri' pass evaluated EVERY material family
-  // (terrain + rock/bark/leaf/legacy-grass) in one fragment shader — a register/latency wall
+  // (terrain + rock/bark/leaf/deadwood) in one fragment shader — a register/latency wall
   // at low occupancy. It is now SPLIT into 'terr' (matClass 0 terrain ONLY) and 'mesh'
-  // (rock/bark/leaf/deadwood/legacy-grass, matClass 1-5); each fullscreen pass Discards the
+  // (rock/bark/leaf/deadwood, matClass 1-4); each fullscreen pass Discards the
   // OTHER family right after the matClass decode and BEFORE wp reconstruction (the RP-5 reorder
   // precedent), and — crucially — BUILDS only its own family's subgraphs, so 'terr' never
   // binds/builds verts/indices/barkTex and 'mesh' never binds the terrain samplers/caustics.
@@ -499,7 +499,7 @@ export function buildNaniteResolve(
     }
     // P2 CLASS-FAMILY partition Discard (before the wp reconstruction below, RP-5 precedent):
     // a tri-side pixel is shaded by EXACTLY ONE of the two passes — matClass==0 (terrain) vs
-    // matClass!=0 (rock/bark/leaf/deadwood/legacy-grass). The decode above is identical in both
+    // matClass!=0 (rock/bark/leaf/deadwood). The decode above is identical in both
     // passes ⇒ the partition is exact + deterministic (no pixel double-shaded, none dropped). The
     // 'both'/'vox' passes shade their whole set (no family discard here). Skipping the other
     // family before wp means its view-pos math + shading never run; and each pass BUILDS only its
@@ -956,13 +956,6 @@ export function buildNaniteResolve(
       blK.assign(float(0.032));
     });
 
-    // ---- GRASS shading (S0, 31-grass-plan §5): matClass 5 — the GroundRing blade
-    // material ported to the resolve. ALU + explicit-LOD taps only (the vox-cliff
-    // rule: no implicit-derivative samples, no new storage buffers). Blade rounded
-    // normal pulled toward the TERRAIN normal, harder with distance, so swards
-    // light like their hillside (the GoT move; per-blade card normals sparkle).
-    // Albedo = fresh/dry tip ramps × world-anchored ~1.6 m patch dryness ×
-    // canopy shade-darkening (dry straw is a full-sun phenomenon).
     // Smooth ~1.6 m patch field (user: yellow dryness in PERFECT SQUARES ruins
     // immersion — the old floor() cell hash cut hard 1.6 m boundaries). Value
     // noise: 4 corner hashes + smoothstep-fade bilinear, domain rotated ~40° so
@@ -995,78 +988,6 @@ export function buildNaniteResolve(
       ) as unknown as NV2;
       return mix(hx, hy, u.y) as unknown as NV2;
     };
-    const isG = matClass.equal(uint(5)).toVar();
-    if ((pass === 'mesh' || pass === 'both') && hasClass(5)) If(isG, () => {
-      const instId = item.x;
-      const localTri = pRaw.bitAnd(uint(CLUSTER_TRI_MASK));
-      const distG = wp.sub(vec3(camPos) as unknown as NV3).length();
-      const t = float(0.5).toVar() as unknown as NF;
-      const nG = vec3(0, 1, 0).toVar() as unknown as NV3;
-      // tip param (uv.y) + normal: 3-vert bary interp near (the rounded
-      // cross-section reads as a half-cylinder), single-vertex beyond 30 m
-      // (the ?resfar cheap-path law — sub-pixel-width blades shade the same).
-      If(distG.lessThan(float(30)), () => {
-        const ctx = fetch.makeCtx(instId, ci);
-        const w0 = fetch.fetchWorldVert(ctx, localTri, 0);
-        const w1 = fetch.fetchWorldVert(ctx, localTri, 1);
-        const w2 = fetch.fetchWorldVert(ctx, localTri, 2);
-        const bw = baryWeights(wpRel, w0, w1, w2); // S6d: SO-relative — matches the pooled verts
-        const tb = ctx.triStart.add(localTri).mul(uint(3));
-        const va = readVertex(gpu.verts, elemU(gpu.indices, tb));
-        const vb = readVertex(gpu.verts, elemU(gpu.indices, tb.add(uint(1))));
-        const vc = readVertex(gpu.verts, elemU(gpu.indices, tb.add(uint(2))));
-        t.assign(
-          (va.uv.y as unknown as NF)
-            .mul(bw.x)
-            .add((vb.uv.y as unknown as NF).mul(bw.y))
-            .add((vc.uv.y as unknown as NF).mul(bw.z)) as unknown as NF,
-        );
-        nG.assign(
-          normalize(
-            instRotateDir(ctx.yawSc, va.nrm)
-              .mul(bw.x)
-              .add(instRotateDir(ctx.yawSc, vb.nrm).mul(bw.y))
-              .add(instRotateDir(ctx.yawSc, vc.nrm).mul(bw.z)),
-          ) as unknown as NV3,
-        );
-      }).Else(() => {
-        const triStart = elemU(gpu.clusters, ci.mul(uint(CLUSTER_WORDS)).add(uint(6)));
-        const va = readVertex(gpu.verts, elemU(gpu.indices, triStart.add(localTri).mul(uint(3))));
-        const B = gpu.instances.element(instId.mul(uint(2)).add(uint(1))) as unknown as NV4;
-        t.assign(va.uv.y as unknown as NF);
-        nG.assign(normalize(instRotateDir(instYaw(B), va.nrm)) as unknown as NV3);
-      });
-      // two-sided: flip camera-ward, then pull toward the terrain normal
-      const toCamG = normalize(camPos.sub(wp)) as unknown as NV3;
-      const nF = dot(nG, toCamG).lessThan(0).select(nG.negate(), nG) as unknown as NV3;
-      const tNrm = world.field.fieldNormalSlopeHot(wp.xz as unknown as NV2).xyz as unknown as NV3;
-      const upK = smoothstep(8, 70, distG).mul(0.35).add(0.5) as unknown as NF;
-      wNormal.assign(normalize(mix(nF, tNrm, upK)) as unknown as NV3);
-      const fresh = mix(
-        vec3(0.02, 0.062, 0.011),
-        vec3(0.065, 0.148, 0.028),
-        t.mul(t),
-      ) as unknown as NV3;
-      const dryC = mix(vec3(0.085, 0.07, 0.024), vec3(0.21, 0.17, 0.075), t) as unknown as NV3;
-      // world-anchored smooth ~1.6 m patch field (stable under camera motion,
-      // TAA-safe): x = dryness drift, y = brightness drift
-      const patch = patchField(wp.xz as unknown as NV2).toVar() as unknown as NV2;
-      const patchX = patch.x as unknown as NF;
-      const patchY = patch.y as unknown as NF;
-      const cov = (world.canopyTex
-        ? canopyAt(world.canopyTex, wp.xz as unknown as NV2)
-        : float(0)) as unknown as NF;
-      const dryK = smoothstep(0.64, 0.82, patchX).mul(float(1).sub(cov.mul(0.85))) as unknown as NF;
-      let alb = mix(fresh, dryC, dryK) as unknown as NV3;
-      alb = alb.mul(patchY.sub(0.5).mul(0.4).add(1)) as unknown as NV3;
-      alb = mix(alb, vec3(0.018, 0.052, 0.014) as unknown as NV3, cov.mul(0.55)) as unknown as NV3;
-      albedo.assign(alb);
-      // grass tip-AO + tip-weighted backlight (old grassAo(grassTip) consumer and
-      // blSrc=grassCol / kBl=grassTip·0.09) folded in — grassTip state dies here.
-      ao.assign(smoothstep(0.0, 0.55, t).mul(0.55).add(0.45));
-      blCol.assign(alb);
-      blK.assign((t as unknown as NF).mul(0.09) as unknown as NF);
-    });
 
     // ---- VOXEL shading (Stage 2 §7.2): matClass=voxel(7). The SECOND resolve pass shades
     // ONLY voxel-winner pixels (the 'tri' pass Discarded them). Reuses the SAME reconstructed
@@ -1276,11 +1197,17 @@ export function buildNaniteResolve(
         const toCamG = normalize(camPos.sub(wp)) as unknown as NV3;
         const nF = dot(g.nrm, toCamG).lessThan(0).select(g.nrm.negate(), g.nrm) as unknown as NV3;
         const tNrm = world.field.fieldNormalSlopeHot(wp.xz as unknown as NV2).xyz as unknown as NV3;
-        // far super-tufts (body ≥ GRASS_FAR_BASE): full terrain-normal pull (ring far mode)
+        // The BLADE normal must DRIVE near-field shading so individual blades catch
+        // light and read as 3D geometry (Sannikov's grass looks solid from every
+        // angle for exactly this reason). The old 0.5→0.85 pull toward the flat
+        // terrain-up normal erased that — grass shaded like a flat AO-gradient
+        // carpet, "the AO more visible than the blades." Keep only a light near pull
+        // for stability, ramping to full for distant tufts (?grassnrmpull=near).
         const isFarG = body.greaterThanEqual(uint(GRASS_FAR_BASE));
+        const nearPull = Number(q.get('grassnrmpull') ?? '0.18');
         const upK = isFarG.select(
           float(1),
-          smoothstep(8, 70, distG).mul(0.35).add(0.5),
+          smoothstep(8, 70, distG).mul(0.47).add(nearPull),
         ) as unknown as NF;
         const t = g.t;
         const fresh = mix(
@@ -1457,6 +1384,30 @@ export function buildNaniteResolve(
     }
 
     // ---- debug overrides ------------------------------------------------------
+    // ?grassdbg=tip — grass base→tip, UNLIT: base(t=0)=RED, tip(t=1)=GREEN.
+    // Non-grass pixels retain their normal lit output, so the terrain/vegetation
+    // context remains readable. gpTip carries the raycast tip param (set in the
+    // proc-grass block; 0.5 elsewhere) — isGP routes only grass to the ramp.
+    // Keep the ordinary `lit` graph alive and override it inside the grass-owning
+    // pass. Returning a pass-wide constant here made three drop attributes that
+    // the material/backend still expected and crashed WebGPUAttributeUtils while
+    // building the debug material (`null.constructor`).
+    if (q.get('grassdbg') === 'tip') {
+      if (isGP) {
+        const dbg = (lit as unknown as { toVar(): NV3 }).toVar();
+        If(isGP, () => {
+          dbg.assign(
+            mix(
+              vec3(1, 0, 0) as unknown as NV3,
+              vec3(0, 1, 0) as unknown as NV3,
+              gpTip.clamp(0, 1),
+            ) as unknown as NV3,
+          );
+        });
+        return vec4(dbg, 1) as unknown as NV4;
+      }
+      return vec4(lit, 1) as unknown as NV4;
+    }
     if (nandbg === 'flat') return vec4(albedo, 1);
     if (nandbg === 'albedo') return vec4(albedo, 1);
     if (nandbg === 'normal') return vec4(wNormal.mul(0.5).add(0.5), 1);
@@ -1648,7 +1599,7 @@ export function buildNaniteResolve(
 
   // MAIN resolve mesh. Two-pass (default): the tri-side is SPLIT by material family (resolve P2)
   // into a 'terr' pass (matClass 0 terrain ONLY) here at renderOrder −1000 and a 'mesh' pass
-  // (rock/bark/leaf/deadwood/legacy-grass, matClass 1-5) below at −999.5 — each Discards the
+  // (rock/bark/leaf/deadwood, matClass 1-4) below at −999.5 — each Discards the
   // OTHER family right after the matClass decode (before wp) and builds only its own subgraphs,
   // halving the register/latency load of the old single tri shader (it evaluated every family in
   // one pass). Under the forest single-pass 'both' merge (?respass), the whole partition shades
@@ -1661,7 +1612,7 @@ export function buildNaniteResolve(
   mesh.castShadow = false;
   mesh.receiveShadow = false;
 
-  // MESH-family pass (two-pass only): shades matClass 1-5, Discards terrain + voxel pixels.
+  // MESH-family pass (two-pass only): shades matClass 1-4, Discards terrain + voxel pixels.
   // Disjoint pixel set from the 'terr' pass (matClass==0 vs !=0), so depthTest=false + the shared
   // depthNode composite cleanly regardless of draw order. renderOrder −999.5 sits between terr
   // (−1000) and vox (−999), all before the sky/scene remainder.

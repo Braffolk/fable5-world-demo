@@ -6,11 +6,11 @@
  * tile, normalized ray angle) storing the 2D ray PATH LENGTH to the first
  * fiber intersection (R = 1/(1+d), d in tile widths) plus the surface normal
  * (GBA = n·0.5+0.5), traced assuming INFINITELY TILED geometry. His two
- * bake-time heuristics are included: fibers SHIFT along their bend direction
- * as the ray marches (approximates inclined/curved blades — exact only for
- * parallel prisms) and THICKEN with ray distance (approximates blades tapering
- * toward the tip, seen root-ward as rays descend). Runtime answers a march
- * step with ONE fetch — no stepping, no per-clump batteries.
+ * optional bake-time heuristics are available: fibers can SHIFT along their bend
+ * direction as the ray advances and THICKEN with ray distance. Production keeps
+ * both at zero because the article identifies them as controlled-error extensions;
+ * the base parallel extrusion is geometrically exact. Runtime answers with fixed
+ * fetches — no stepping and no per-clump batteries.
  *
  * The tile = one guide texel footprint: SUB×SUB fine cells. One volume per
  * DENSITY TIER (nested cell thinning — see GrassRayBakeOpts.tiers); the
@@ -33,7 +33,6 @@ interface BakeBlade {
   oz: number;
   hk: number;
   lean: number;
-  nm: [number, number, number];
 }
 
 export interface GrassRayBakeOpts {
@@ -60,12 +59,14 @@ export interface GrassRayBakeOpts {
   fibers: number;
   /** DENSITY TIERS: one volume per entry, the fraction of CELLS populated
    *  (descending, [0] = 1 = full). The world thins grass per-cell; a single
-   *  uniform-tiling LUT can't express that, so the runtime picks/lerps the
-   *  density-matched tier per pixel — the article-legal "fewer blades in the
-   *  tiled mask", still one fetch. Tiers are NESTED (same per-cell hash,
-   *  different threshold): shared blades bake identical texels, so the
-   *  runtime's adjacent-tier lerp cross-fades only the blades that differ. */
+   *  uniform-tiling LUT can't express that, so the runtime validates the denser
+   *  tier's nearest root and selects one complete record from the two bracketing
+   *  tiers. Tiers are NESTED (same per-cell hash, different threshold), making
+   *  the sparser candidate a guaranteed-valid fallback without interpolating
+   *  unrelated visibility records. */
   tiers: number[];
+  /** pcg2d salt shared with the runtime root-validity test. */
+  keepSalt: number;
   /** per-fiber arc magnitude scale (tip displacement ≈ 0.35..1.3 cells × this) */
   arcK: number;
 }
@@ -77,11 +78,6 @@ export interface GrassRayBake {
   angles: number;
   /** max traced distance in TILE units — runtime treats d ≥ ~0.97·this as miss */
   dMaxTile: number;
-  /** mean normalized depth (R/255) across all tier volumes — the anti-tiling
-   *  hex blend's variance-preservation pivot (Sannikov 2023: averaged-mip mean).
-   *  Blending N rotated taps softens the R jump between hit/miss; pushing the
-   *  blend away from this mean by 1/√(Σwᵢ²) restores the silhouette contrast. */
-  meanR: number;
 }
 
 export function bakeGrassRayTile(o: GrassRayBakeOpts): GrassRayBake {
@@ -110,13 +106,8 @@ export function bakeGrassRayTile(o: GrassRayBakeOpts): GrassRayBake {
     fx: number;
     fz: number; // bend/shift + radial-arc direction (unit)
     arcM: number; // per-fiber tip arc displacement, cells
-    nx: number;
-    ny: number;
-    nz: number; // shading normal (tile space)
   }
   const fibers: Fiber[] = [];
-  const CSn = 0.788;
-  const nl = Math.hypot(0.25, CSn);
   for (let cv = 0; cv < sub; cv++) {
     for (let cu = 0; cu < sub; cu++) {
       let s = ((cu * 127 + cv * 311 + 17) * 1664525 + 1013904223) >>> 0;
@@ -163,9 +154,6 @@ export function bakeGrassRayTile(o: GrassRayBakeOpts): GrassRayBake {
           fx,
           fz,
           arcM: (0.5 + rnd() * 1.1) * o.arcK, // tip displacement, cells
-          nx: (-CSn / nl) * cs,
-          ny: 0.25 / nl,
-          nz: (-CSn / nl) * cc,
         });
       }
     }
@@ -175,10 +163,27 @@ export function bakeGrassRayTile(o: GrassRayBakeOpts): GrassRayBake {
   const OFFS: number[] = [-2 * sub, -sub, 0, sub, 2 * sub];
 
   const missR = Math.round(255 / (1 + dMaxC / sub));
-  /** per-cell keep hash in [0,1) — FIXED across tiers so tier k+1's cells are a
-   *  strict subset of tier k's (nested thinning ⇒ lerp-safe shared blades) */
-  const cellKeep = (cu: number, cv: number): number =>
-    ((((cu * 2654435761 ) ^ (cv * 2246822519) ^ 0x9e37) >>> 9) % 65536) / 65536;
+  /** Exact CPU twin of Scatter.cellHash(...).x. Keeping the root threshold
+   *  reconstructible in the shader lets it select one COMPLETE tier hit record;
+   *  interpolating unrelated depths/normals/root ids is not valid visibility. */
+  const cellKeep = (cu: number, cv: number): number => {
+    const M = 1664525;
+    const C = 1013904223;
+    const add = (a: number, b: number): number => (a + b) >>> 0;
+    const mul = (a: number, b: number): number => Math.imul(a, b) >>> 0;
+    let a = (cu + 40000 + (o.keepSalt & 0x3fff)) >>> 0;
+    let b = (cv + 40000 + ((o.keepSalt >> 14) & 0x3fff)) >>> 0;
+    a = add(mul(a, M), C);
+    b = add(mul(b, M), C);
+    a = add(a, mul(b, M));
+    b = add(b, mul(a, M));
+    a = (a ^ (a >>> 16)) >>> 0;
+    b = (b ^ (b >>> 16)) >>> 0;
+    a = add(a, mul(b, M));
+    b = add(b, mul(a, M));
+    a = (a ^ (a >>> 16)) >>> 0;
+    return (a & 0xffffff) / 16777216;
+  };
   const volumes: Uint8Array[] = [];
   for (const keepF of o.tiers) {
     // mid-height cross-section: every fiber displaced along its OWN arc
@@ -202,6 +207,9 @@ export function bakeGrassRayTile(o: GrassRayBakeOpts): GrassRayBake {
           const ox_ = ((xi + 0.5) / res) * sub;
           let best = dMaxC;
           let bi = -1;
+          let bestNx = 0;
+          let bestNy = 1;
+          let bestNz = 0;
           for (let fi = 0; fi < bandFibers.length; fi++) {
             const f = bandFibers[fi] as Fiber;
             // B = u − fwd·shiftK (the fiber recedes/advances as the ray marches);
@@ -244,6 +252,40 @@ export function bakeGrassRayTile(o: GrassRayBakeOpts): GrassRayBake {
                 if (lo < best) {
                   best = lo;
                   bi = fi;
+                  if (lo <= 1e-7) {
+                    // The shell entry is already inside this finite sward
+                    // footprint: its first surface is the top/origin cap.
+                    bestNx = 0;
+                    bestNy = 1;
+                    bestNz = 0;
+                  } else {
+                    // Store the face actually entered, not a preset per-fiber
+                    // direction. At rectangle corners pick the closer slab face.
+                    const hx = ax + bx * lo;
+                    const hz = az + bz * lo;
+                    const vw = hx * f.wx + hz * f.wz;
+                    const vt = hx * f.tx + hz * f.tz;
+                    const hw = hw0 * (1 + o.thickK * lo);
+                    const ht = ht0 * (1 + o.thickK * lo);
+                    const ew = Math.abs(Math.abs(vw) - hw) / Math.max(hw, 1e-8);
+                    const et = Math.abs(Math.abs(vt) - ht) / Math.max(ht, 1e-8);
+                    if (ew <= et) {
+                      const sign = vw >= 0 ? 1 : -1;
+                      bestNx = f.wx * sign;
+                      bestNy = 0;
+                      bestNz = f.wz * sign;
+                    } else {
+                      const sign = vt >= 0 ? 1 : -1;
+                      bestNx = f.tx * sign;
+                      bestNy = 0;
+                      bestNz = f.tz * sign;
+                    }
+                    // Numerical corner cases must still face the incoming ray.
+                    if (bestNx * ux + bestNz * uz > 0) {
+                      bestNx = -bestNx;
+                      bestNz = -bestNz;
+                    }
+                  }
                 }
               }
             }
@@ -258,16 +300,15 @@ export function bakeGrassRayTile(o: GrassRayBakeOpts): GrassRayBake {
             const f = bandFibers[bi] as Fiber;
             // depth in TILE units, article encoding 1/(1+d)
             data[base] = Math.max(missR + 1, Math.round(255 / (1 + best / sub)));
-            // normal as (azimuth, y) — two-sided: face the ray (horizontal flip);
+            // actual entering-face normal as (azimuth, y);
             // the freed A channel carries the fiber's ROOT CELL id, the runtime's
             // validation anchor (density law applies to ROOTS — arcs legally
             // overhang empty cells, exactly like the reference ring)
-            const flip = f.nx * ux + f.nz * uz > 0 ? -1 : 1;
-            let azN = Math.atan2(f.nz * flip, f.nx * flip) / (Math.PI * 2);
+            let azN = Math.atan2(bestNz, bestNx) / (Math.PI * 2);
             if (azN < 0) azN += 1;
-            const nrmL = Math.hypot(f.nx, f.ny, f.nz) || 1;
+            const nrmL = Math.hypot(bestNx, bestNy, bestNz) || 1;
             data[base + 1] = Math.round(azN * 255);
-            data[base + 2] = Math.round((f.ny / nrmL) * 127.5 + 127.5);
+            data[base + 2] = Math.round((bestNy / nrmL) * 127.5 + 127.5);
             data[base + 3] = Math.round(((f.rv * sub + f.ru + 0.5) / (sub * sub)) * 255);
           }
         }
@@ -275,20 +316,10 @@ export function bakeGrassRayTile(o: GrassRayBakeOpts): GrassRayBake {
     }
     volumes.push(data);
   }
-  // global mean R (over every tier volume) for the hex blend's variance pivot
-  let sumR = 0;
-  let nR = 0;
-  for (const v of volumes) {
-    for (let i = 0; i < v.length; i += 4) {
-      sumR += v[i] as number;
-      nR++;
-    }
-  }
-  const meanR = nR > 0 ? sumR / nR / 255 : 0.5;
   console.info(
     `[grass] ray tile baked: ${res}×${res}×${angles} ×${o.tiers.length} tiers ` +
-      `(${o.tiers.join('/')}), ${fibers.length} fibers, meanR=${meanR.toFixed(3)}, ` +
+      `(${o.tiers.join('/')}), ${fibers.length} fibers, ` +
       `${Math.round(performance.now() - t0)} ms`,
   );
-  return { data: volumes, res, angles, dMaxTile: dMaxC / sub, meanR };
+  return { data: volumes, res, angles, dMaxTile: dMaxC / sub };
 }
