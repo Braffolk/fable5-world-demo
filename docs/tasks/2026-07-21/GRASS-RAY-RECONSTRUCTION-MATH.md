@@ -671,6 +671,150 @@ geometry bytes, and total `B` are hard bake gates. The existing owner counts are
 only a sizing observation, not a closure proof: triangles visible only between
 canonical samples must also be included by certification.
 
+### 7.3 Grazing elevation clamp collapses finite geometry into the top plane
+
+The observed distant low-oblique sheet has a direct mathematical signature. Let
+the profile top be `H`, let a canonical downward ray at elevation `beta` hit a
+finite three-dimensional plant at height `h_beta`, and let `rho_beta` be its
+horizontal projected path. Then
+
+\[
+\rho_\beta=\frac{H-h_\beta}{\tan\beta}.
+\]
+
+If a lower live elevation `alpha` is clamped to that canonical record and the
+stored projected path is merely lifted with the live direction, the reconstructed
+height is
+
+\[
+\widetilde h_\alpha
+=H-\rho_\beta\tan\alpha
+=H-(H-h_\beta)\frac{\tan\alpha}{\tan\beta}.
+\]
+
+Thus the entire vertical extent below `H` is compressed by the factor
+
+\[
+c=\frac{\tan\alpha}{\tan\beta}.
+\]
+
+At the current five-degree live view and fifteen-degree lowest stored row,
+`c=0.3264`. For `H=1.1765 m`, an actual ground-level hit is reconstructed at
+approximately `0.7925 m`, and an actual `0.2 m` hit at approximately `0.858 m`.
+As `alpha` approaches zero, every finite-mesh hit converges to `H` regardless of
+its true height. The limiting image is literally a textured top sheet. This
+explains all three linked observations without any distance-dependent projection
+term:
+
+- distant ground rays in one perspective image approach the horizon and therefore
+  have smaller `alpha` than foreground rays;
+- the apparent plant depth collapses toward the top envelope in those pixels;
+- only occasional records selected from another angular/ownership cell retain a
+  hint of lower structure, producing stripes rather than coherent plants.
+
+Adding a five-degree canonical row removes the particularly large `5 -> 15`
+collapse only at that row. It cannot make the continuum exact. Between rows, a
+finite mesh still has piecewise-rational depth
+
+\[
+\tau(n)=\frac{c_i}{\eta_i\cdot n}
+\]
+
+while owner `i` remains valid, followed by a discontinuous minimum when ownership
+changes. Linear interpolation of depth, inverse depth, projected path, colour, or
+normal is not this function. The exact runtime operation remains live intersection
+of a certified owner closure.
+
+The same objection applies before angular reconstruction. For fixed direction,
+first-hit distance as a function of top-plane phase `(u,v)` is also a lower
+envelope of triangle-plane intersections with discontinuities at silhouettes and
+owner changes. Bilinearly filtering the four neighbouring first-hit records can
+therefore fabricate a surface which no source triangle contains. A closure cell
+must cover both continuous phase and direction; neither axis may use scalar record
+interpolation as its correctness proof.
+
+### 7.4 World cover selection is a predicate-filtered successor query
+
+Let the complete ordered events of the fully populated periodic profile on one
+forward line be
+
+\[
+E_\ell=\{(s_1,o_1),(s_2,o_2),\ldots\},
+\]
+
+where owner `o_i` includes triangle, periodic copy/root, and geometry layer. Let
+`A(o_i)` say whether that root is active in the cooked world cover field. The
+actual visible event is
+
+\[
+\sigma_A(\ell,s_C)
+=\min\{s_i\mid s_i\ge s_C\ \land\ A(o_i)\}.
+\]
+
+This is a successor query even when the camera is above the top envelope. Querying
+only `(s_1,o_1)`, rejecting it when `A(o_1)=false`, and returning miss is wrong
+whenever a later active plant exists. It clips away the sides of a covered patch.
+The same order matters across the two anti-tiling layers: the minimum must be taken
+between each layer's first **eligible** event. Taking the unfiltered minimum first
+and rejecting its owner can discard a valid farther event from the other layer.
+
+The exact fixed-cost closure must therefore be certified against the declared
+eligibility family, not merely against the first owner of the fully populated
+profile. For a ray-domain cell `D` and allowed predicate family `mathcal A`, its
+required candidate set is
+
+\[
+C(D)=\bigcup_{(q,n)\in D,\ A\in\mathcal{A}}
+\operatorname{owner}(\sigma_A(q,n)).
+\]
+
+The bake may accept a cell only when `|C(D)| <= K`. Runtime intersects all `K`
+statically expanded triangle/copy candidates with the exact live ray, rejects
+behind-camera, out-of-triangle, out-of-horizon, and inactive-root candidates, then
+elects the minimum. Layer identity participates in that one election. This is
+loop-free O(1); it is not a first-hit texture followed by a coverage filter.
+
+For arbitrary masks and an unbounded periodic horizon, `C(D)` need not be bounded.
+Exactness therefore requires a declared finite horizon and a restricted/certified
+world-predicate family. If the fixed `K`, subdivision-depth, and memory gates cannot
+certify it, the asset or coverage representation must be rejected rather than
+silently clipping its patch sides. Camera-inside support adds the signed origin
+coordinate to this same predicate-filtered successor relation; it is not a separate
+approximation.
+
+### 7.5 The envelope owner is not automatically the botanical owner chart
+
+The shifted terrain query supplies the exact top-envelope point and the terrain
+primitive beneath that point. That chart is sufficient to establish `O`; it is
+not automatically the affine transform of a plant hit metres farther along a
+grazing ray.
+
+For an upright discrete plant rooted at horizontal coordinate `p`, the natural
+map of a local source point `(xi,h)` is
+
+\[
+X_{p}(\xi,h)=(p+\xi,\ g(p)+h),
+\]
+
+or a root-specific affine transform `B_p+A_p q` when the plant is aligned to a
+root frame. The correct transform belongs to the elected periodic copy/root. If
+instead the whole profile is draped continuously as
+
+\[
+X(u,h,v)=(u,\ g(u,v)+h,\ v),
+\]
+
+then non-affine terrain makes a straight world ray curved in profile coordinates.
+Freezing the terrain derivative at `O` is exact only while the same affine terrain
+chart remains valid over the complete segment to `B`.
+
+Consequently the owner closure must name not only a source triangle and periodic
+copy but also its root transform. Runtime transforms that triangle with the
+root's exact ground datum and intersects it with the live world ray. Alternatively,
+a closure for a continuously draped profile must be certified over the allowed
+terrain-transform family. A post-hit ground-range check cannot repair a hit that
+was selected with the wrong transform; it can only reject it.
+
 ## 8. Multiple heights and overlapping cover
 
 `H=1.176 m` is the current Calamagrostis asset's top coordinate. It is not a
@@ -735,7 +879,7 @@ must still represent the actual wind deformation of the botanical geometry.
 
 ## 10. Executable proof boundary
 
-The CPU reference currently proves nineteen finite properties:
+The CPU reference currently proves twenty-three finite properties:
 
 1. full inverse-basis reconstruction under a skewed affine map;
 2. projected-path reconstruction using profile projected speed;
@@ -757,11 +901,18 @@ The CPU reference currently proves nineteen finite properties:
 14. exact plane reprojection versus incorrect linear depth interpolation;
 15. invariance of profile direction, hit point, and apparent orientation along
     one view ray;
-16. failure of surrounding sampled owners to form an arbitrary-mesh closure;
-17. invalidity of clamping a grazing 3D-profile direction to the lowest stored
+16. failure of surrounding sampled directions to form an arbitrary-mesh owner
+    closure;
+17. failure of surrounding sampled origin texels to form an arbitrary-mesh
+    owner closure;
+18. invalidity of clamping a grazing 3D-profile direction to the lowest stored
     elevation;
-18. inverse-transpose normal transformation under shear;
-19. finite categorical handling of vertical origin occupancy.
+19. exact vertical-range collapse caused by lifting that clamped projected path
+    with a lower live elevation;
+20. predicate-filtered successor semantics at a world-cover boundary;
+21. necessity of applying root eligibility before anti-layer depth election;
+22. inverse-transpose normal transformation under shear;
+23. finite categorical handling of vertical origin occupancy.
 
 Run it with:
 

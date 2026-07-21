@@ -34,8 +34,21 @@
  * (user call) — git history has them.
  */
 
-import { ClampToEdgeWrapping, Data3DTexture, RepeatWrapping } from 'three';
-import { HalfFloatType, LinearFilter, NearestFilter, RGBAFormat } from 'three';
+import {
+  ClampToEdgeWrapping,
+  Data3DTexture,
+  DepthTexture,
+  RenderTarget,
+  RepeatWrapping,
+} from 'three';
+import {
+  FloatType,
+  HalfFloatType,
+  LinearFilter,
+  NearestFilter,
+  RGBAFormat,
+  RGFormat,
+} from 'three';
 import type { PerspectiveCamera } from 'three';
 import { StorageBufferAttribute, StorageTexture, type Renderer } from 'three/webgpu';
 import {
@@ -276,9 +289,14 @@ export interface GrassField {
    *  draw runs depth-tested — occluded blade fragments never invoke the election
    *  shader. Call right after the raster's hwRender (world1 only). */
   renderHw(renderer: Renderer, camera: PerspectiveCamera): void;
-  /** Height of the rasterized source-method outer shell, or null when this
-   * graph does not consume one. */
-  shellHeight: number | null;
+  /** Exact translated-surface datum without translated world geometry. The
+   * terrain query keeps the terrain vertices unchanged, projects them from the
+   * camera shifted down by `height`, and writes its winning triangle chart into
+   * the already-required ray output texture before kRay overwrites it. */
+  envelopeQuery: {
+    height: number;
+    target: RenderTarget;
+  } | null;
   /** resolve-side shading tap (call INSIDE the resolve fragment Fn): kRay writes
    *  the hit normal + tip param per pixel into a screen StorageTexture — the
    *  algorithm's own output is depth+normal. vec4(nrm, t). */
@@ -308,7 +326,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
     && GRASS_PROFILE_OVERRIDE === GroundCoverProfileId.CalamagrostisCanescens
     && !PERIODIC_EXACT_OWNER
     && BASE_EXTRUSION_DIAGNOSTIC;
-  const shellHeight = isolatedPeriodicProfile
+  const profileHeight = isolatedPeriodicProfile
     ? opts.periodicProfiles[0]!.topH
     : null;
   if (field.hasGroundCoverClosure) {
@@ -904,6 +922,30 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
     t.name = 'grassRayNrm';
     return t;
   })();
+  // Depth and chart must share one native depth election. A fragment storage
+  // side-effect is not winner-coupled under late depth, so the exact triangle
+  // chart lives in the query's rg16f color attachment (oct normal) beside its
+  // depth32 attachment. This is a bounded 8 B/pixel total; vis.depthV is no
+  // longer read or cleared for grass.
+  const envelopeTarget = profileHeight !== null
+    ? new RenderTarget(cam.width, cam.height, {
+        depthBuffer: true,
+        type: HalfFloatType,
+        depthTexture: new DepthTexture(cam.width, cam.height, FloatType),
+      })
+    : null;
+  if (envelopeTarget) {
+    envelopeTarget.texture.format = RGFormat;
+    envelopeTarget.texture.minFilter = NearestFilter;
+    envelopeTarget.texture.magFilter = NearestFilter;
+    envelopeTarget.texture.generateMipmaps = false;
+    envelopeTarget.texture.name = 'grassTerrainEnvelopeChart';
+    const depth = envelopeTarget.depthTexture!;
+    depth.minFilter = NearestFilter;
+    depth.magFilter = NearestFilter;
+    depth.generateMipmaps = false;
+    depth.name = 'grassTerrainEnvelopeDepth';
+  }
   /** resolve-side tap: pixel index (bottom-up rows, the election convention —
    *  kRay stores with the same row indexing, so no flip) → vec4(worldNrm, t) */
   const resolveRay = (px: NU): NV4 => {
@@ -1564,18 +1606,41 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
         ? null
         : uint(0).toVar() as unknown as NU;
       const bestAntiLayer = uint(0).toVar() as unknown as NU;
-      // ---- O/E: the source method's rasterized OUTER shell. In the isolated
-      // authored-profile graph vis.depthV contains the actual terrain triangles
-      // displaced by topH; it is not the later underlying scene hit. payloadV
-      // remains only the ordinary scene-occlusion bound. This also preserves
-      // shell silhouettes in pixels where the base terrain itself is not visible.
+      // ---- O/E: exact shell-free translated-surface datum. The terrain query
+      // leaves S unchanged and projects it from C-v, which is algebraically
+      // identical to projecting S+v from C. payloadV remains only the ordinary
+      // scene-occlusion bound. Its fragment also leaves the exact winning terrain
+      // triangle normal in rayNrmTex; kRay consumes it before writing the grass
+      // hit normal back to the same texel.
       let tScene: NF;
-      if (shellHeight !== null) {
-        const shellBits = aLoadU(vis.depthV.atomic.element(px));
-        returnIf(shellBits.equal(uint(0xffffffff)) as unknown as NB);
-        const czE = bcU2F(shellBits).toVar() as unknown as NF;
+      let envelopeChart: NV3 | null = null;
+      if (profileHeight !== null && envelopeTarget !== null) {
+        // Render-target texture rows are top-down; the grass/election convention
+        // is bottom-up. The chart scratch was explicitly written bottom-up.
+        const czE = textureLoad(
+          envelopeTarget.depthTexture!,
+          uvec2(xI, uint(H - 1).sub(yI)),
+        ) as unknown as NF;
+        returnIf(czE.greaterThanEqual(1) as unknown as NB);
         const he = cam.invVp.mul(vec4(ndcX, ndcY, czE, 1));
         tScene = he.xyz.div(he.w).sub(ro).length().max(0.05).toVar() as unknown as NF;
+        const chartRecord = textureLoad(
+          envelopeTarget.texture,
+          uvec2(xI, uint(H - 1).sub(yI)),
+        ) as unknown as NV4;
+        const ox = (chartRecord.x as unknown as NF).mul(2).sub(1).toVar() as unknown as NF;
+        const oy = (chartRecord.y as unknown as NF).mul(2).sub(1).toVar() as unknown as NF;
+        const oz = float(1).sub(ox.abs()).sub(oy.abs()).toVar() as unknown as NF;
+        If(oz.lessThan(0), () => {
+          const oldX = (ox as unknown as { toVar(): NF }).toVar() as unknown as NF;
+          const sx = (oldX.greaterThanEqual(0) as unknown as { select(a: unknown, b: unknown): NF })
+            .select(float(1), float(-1));
+          const sy = (oy.greaterThanEqual(0) as unknown as { select(a: unknown, b: unknown): NF })
+            .select(float(1), float(-1));
+          (ox as unknown as { assign(v: unknown): void }).assign(float(1).sub(oy.abs()).mul(sx));
+          (oy as unknown as { assign(v: unknown): void }).assign(float(1).sub(oldX.abs()).mul(sy));
+        });
+        envelopeChart = normalize(vec3(ox, oy, oz) as unknown as NV3) as unknown as NV3;
       } else {
         // Dormant multi-cover path retains its prior terrain-anchored entry
         // until its per-profile shell contract is generalized.
@@ -1681,8 +1746,28 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
       const rcOx = relCells(phOx, gfx).toVar() as unknown as NF;
       const rcOz = relCells(phOz, gfz).toVar() as unknown as NF;
       const og = bguide(rcOx, rcOz);
-      const groundO = (og.g as unknown as { toVar(): NF }).toVar() as unknown as NF;
-      const gradO = (og.grad as unknown as { toVar(): NV2 }).toVar() as unknown as NV2;
+      const pOy = ro.y.add(rd.y.mul(tScene)).toVar() as unknown as NF;
+      // In the isolated authored profile, O is the translated terrain hit itself:
+      // ground height is therefore O.y-H and J comes from that exact raster winner.
+      // The guide remains only the categorical/control carrier. This forbids the
+      // old mixed-chart state (exact entry depth plus a filtered neighbour slope).
+      const groundO = (
+        profileHeight !== null
+          ? pOy.sub(profileHeight)
+          : og.g
+      ).toVar() as unknown as NF;
+      const gradO = (
+        profileHeight !== null
+          ? (() => {
+              const chart = envelopeChart as NV3;
+              const invY = float(1).div((chart.y as unknown as NF).max(1e-4));
+              return vec2(
+                (chart.x as unknown as NF).negate().mul(invY),
+                (chart.z as unknown as NF).negate().mul(invY),
+              ) as unknown as NV2;
+            })()
+          : og.grad
+      ).toVar() as unknown as NV2;
       // One already-bound, HW-linear control tap at O. Density/vigor, blend,
       // moisture and canopy are continuous; only categorical ids/clump below
       // remain nearest. Keeping height on nearest packed vigor rebuilt a visible
@@ -1695,14 +1780,14 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
       const f2 = (texture(guideFieldT2, guv, 0) as unknown as { toVar(): NV4 }).toVar();
       const f3 = (texture(guideFieldT3, guv, 0) as unknown as { toVar(): NV4 }).toVar();
       const dens = (f3.x as unknown as NF).clamp(0, 1).toVar() as unknown as NF;
-      // The source-method shell point is only the ray origin. At a cover/bare
+      // The translated-surface datum is only the ray origin. At a cover/bare
       // boundary it can lie over bare ground while the precomputed ray reaches
       // geometry whose recovered root is inside the covered region. Rejecting
       // here clips those side surfaces into a floating top sheet. The exact
-      // shell path validates density together with categorical ownership at the
+      // exact envelope path validates density together with categorical ownership at the
       // recovered root below; the dormant ground-derived path keeps its prior
       // early-out until it receives the same exact-entry contract.
-      if (shellHeight === null) returnIf(dens.lessThan(0.02) as unknown as NB);
+      if (profileHeight === null) returnIf(dens.lessThan(0.02) as unknown as NB);
       const mixWordO = og.mixWord;
       const candidateMask = GRASS_PROFILE_OVERRIDE === null
         ? mixWordO.shiftRight(uint(16)).bitAnd(uint(0xffff))
@@ -1739,8 +1824,6 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
           ) as unknown as NF;
         return mix(mix(h(0, 0), h(1, 0), fx), mix(h(0, 1), h(1, 1), fx), fz) as unknown as NF;
       })();
-      const pOy = ro.y.add(rd.y.mul(tScene)) as unknown as NF;
-
       // A categorical profile cannot be chosen from shell point O: at an
       // oblique view O can be metres from the root returned by the LUT, so one
       // physical blade changed profile across pixels/views. Query the bounded
@@ -1780,7 +1863,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
       // height of O above the bilinear ground at O (≈0 on terrain; >0 on a trunk/
       // rock — grass in front of it still renders, hits behind it lose the election)
       const hO = (
-        shellHeight !== null
+        profileHeight !== null
           ? swardH
           : pOy.sub(groundO)
       ).toVar() as unknown as NF;
@@ -1823,7 +1906,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
       // because it has no bounded authored height field beyond that region.
       const dtEUnbounded = qTop.sub(qO).div(kGround) as unknown as NF;
       const dtE = (
-        shellHeight !== null
+        profileHeight !== null
           ? float(0)
           : rigidPeriodicProfile
           ? dtEUnbounded
@@ -2294,16 +2377,16 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
       const directHB = yH.sub(groundAt(vec2(absPhBx, absPhBz) as unknown as NV2))
         .toVar() as unknown as NF;
       const qBraw = (
-        shellHeight !== null
+        profileHeight !== null
           ? directHB
           : qO.add(kGround.mul(tHit.sub(tScene)))
       ).toVar() as unknown as NF;
       const qInRange = qBraw.greaterThanEqual(-0.03)
         .and(qBraw.lessThanEqual(
-          (shellHeight !== null ? swardH : qTop).add(0.08),
+          (profileHeight !== null ? swardH : qTop).add(0.08),
         ) as unknown as NB) as unknown as NB;
       const hB = (
-        shellHeight !== null
+        profileHeight !== null
           ? directHB.clamp(0, swardH)
           : hFromQ(qBraw.clamp(0, qTop.max(1e-4)) as unknown as NF).clamp(0, swardH)
       ).toVar() as unknown as NF;
@@ -2331,7 +2414,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
         .add(gradO.x.mul(baseBx.sub(phOx)))
         .add(gradO.y.mul(baseBz.sub(phOz))) as unknown as NF;
       const planeValid = gB.sub(gOB).abs().lessThanEqual(0.35) as unknown as NB;
-      const surfaceCandidate = shellHeight !== null
+      const surfaceCandidate = profileHeight !== null
         ? qInRange
         : qInRange.and(surfaceValid).and(planeValid) as unknown as NB;
       If(surfaceCandidate, () => {
@@ -2528,7 +2611,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
             .min(-1e-3)
             .toVar() as unknown as NF;
           const bestHO = (
-            shellHeight !== null
+            profileHeight !== null
               ? bestSwardH
               : pOy.sub(groundO)
           ).toVar() as unknown as NF;
@@ -2538,7 +2621,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
           const bestQTop = bestQAt(bestSwardH).toVar() as unknown as NF;
           const bestDtEUnbounded = bestQTop.sub(bestQO).div(bestKGround) as unknown as NF;
           const bestDtE = (
-            shellHeight !== null
+            profileHeight !== null
               ? float(0)
               : isolatedPeriodicProfile
               ? bestDtEUnbounded
@@ -2690,7 +2773,12 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
   return {
     batch: [],
     renderHw: runGrass,
-    shellHeight,
+    envelopeQuery: profileHeight !== null && envelopeTarget !== null
+      ? {
+          height: profileHeight,
+          target: envelopeTarget,
+        }
+      : null,
     resolveRay,
     setEnabled(v: boolean): void {
       onCpu = v;

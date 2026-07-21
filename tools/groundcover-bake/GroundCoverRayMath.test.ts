@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   affineEnvelopeEntryFromGround,
   bilinearEnvelopeRoots,
+  eligibleSuccessorRayEvent,
   makeProfileRay,
   profileNormalToWorld,
   rayDot,
@@ -430,6 +431,32 @@ test('owners at surrounding sampled directions do not form an arbitrary-mesh clo
   assert.equal(live?.owner, 0, 'an unsampled owner wins strictly between canonical directions');
 });
 
+test('owners at surrounding origin texels do not form an arbitrary-mesh closure', () => {
+  const narrowFront: Triangle = [
+    [-0.015, -0.08, 1],
+    [0.015, -0.08, 1],
+    [0, 0.08, 1],
+  ];
+  const broadBack: Triangle = [
+    [-2, -2, 2],
+    [2, -2, 2],
+    [0, 2, 2],
+  ];
+  const direction: RayVec3 = [0, 0, 1];
+  for (const x of [-0.1, 0.1]) {
+    const sampled = firstTriangleHit(
+      { origin: [x, 0, 0], direction },
+      [narrowFront, broadBack],
+    );
+    assert.equal(sampled?.owner, 1, 'both neighbouring origins see only the back owner');
+  }
+  const live = firstTriangleHit(
+    { origin: [0, 0, 0], direction },
+    [narrowFront, broadBack],
+  );
+  assert.equal(live?.owner, 0, 'an unsampled owner wins between origin texels');
+});
+
 test('clamping a live grazing elevation to the lowest baked 3D slice changes the hit', () => {
   const liveElevation = 5 * Math.PI / 180;
   const lowestBakedElevation = 15 * Math.PI / 180;
@@ -445,6 +472,51 @@ test('clamping a live grazing elevation to the lowest baked 3D slice changes the
   const bakedProjectedPath = bakedT * Math.hypot(bakedDirection[0], bakedDirection[2]);
   const incorrectlyLifted = bakedProjectedPath / Math.hypot(liveDirection[0], liveDirection[2]);
   assert.ok(Math.abs(incorrectlyLifted - exactT) > 7);
+});
+
+test('a clamped projected path compresses finite-mesh height toward the top plane', () => {
+  const topHeight = 1.1765;
+  const actualHitHeight = 0.2;
+  const liveElevation = 5 * Math.PI / 180;
+  const bakedElevation = 15 * Math.PI / 180;
+  const bakedProjectedPath = (topHeight - actualHitHeight) / Math.tan(bakedElevation);
+  const reconstructedHeight = topHeight - bakedProjectedPath * Math.tan(liveElevation);
+  const compression = Math.tan(liveElevation) / Math.tan(bakedElevation);
+  close((topHeight - reconstructedHeight) / (topHeight - actualHitHeight), compression);
+  close(reconstructedHeight, 0.8576608978630322, 1e-12);
+  assert.ok(reconstructedHeight > actualHitHeight + 0.65);
+});
+
+test('rejecting the populated-profile first hit is not a world-cover visibility query', () => {
+  const events = [
+    { s: 1, owner: 'bare-root' },
+    { s: 2.5, owner: 'covered-root' },
+  ] as const;
+  const active = (owner: string): boolean => owner === 'covered-root';
+  const unfiltered = successorRayEvent(events, 0);
+  const rejectAfterFirst = unfiltered && active(unfiltered.owner) ? unfiltered : undefined;
+  assert.equal(rejectAfterFirst, undefined);
+  assert.equal(eligibleSuccessorRayEvent(events, 0, active)?.s, 2.5);
+});
+
+test('anti-layer minimum must be elected after owner eligibility', () => {
+  const layer0 = [
+    { s: 1, owner: 'bare-root' },
+    { s: 4, owner: 'covered-root-0' },
+  ] as const;
+  const layer1 = [
+    { s: 2, owner: 'covered-root-1' },
+  ] as const;
+  const active = (owner: string): boolean => owner.startsWith('covered');
+  const raw0 = successorRayEvent(layer0, 0)!;
+  const raw1 = successorRayEvent(layer1, 0)!;
+  const rawWinner = raw0.s <= raw1.s ? raw0 : raw1;
+  assert.equal(active(rawWinner.owner), false, 'unfiltered winner is not visible cover');
+  const eligible0 = eligibleSuccessorRayEvent(layer0, 0, active)!;
+  const eligible1 = eligibleSuccessorRayEvent(layer1, 0, active)!;
+  const exactWinner = eligible0.s <= eligible1.s ? eligible0 : eligible1;
+  assert.equal(exactWinner.owner, 'covered-root-1');
+  assert.equal(exactWinner.s, 2);
 });
 
 test('profile normals use inverse-transpose and remain orthogonal after shear', () => {

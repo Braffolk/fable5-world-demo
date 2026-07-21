@@ -72,6 +72,19 @@ export function successorRayEvent<Owner>(
 }
 
 /**
+ * Exact first event whose owner is enabled by a world-cover predicate.
+ * Rejecting the unfiltered first event is not equivalent: a later eligible
+ * plant can still be the visible surface on the same forward ray.
+ */
+export function eligibleSuccessorRayEvent<Owner>(
+  events: readonly OrderedRayEvent<Owner>[],
+  cameraS: number,
+  eligible: (owner: Owner) => boolean,
+): OrderedRayEvent<Owner> | undefined {
+  return events.find((event) => event.s >= cameraS && eligible(event.owner));
+}
+
+/**
  * Exact conjugate ray for a surface translated by one constant vector.
  *
  * For S_v = { p + v | p in S }:

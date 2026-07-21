@@ -320,6 +320,12 @@ export function buildNaniteCull(
      *  anyway. LOD age is impossible by construction, and caster detail matches
      *  the owning level's texel density. */
     lodRingSnap?: number;
+    /** Grass translated-surface query: conservatively union the ordinary camera
+     * frustum with the camera shifted down by H for heightfield clusters only.
+     * Those terrain clusters also bypass previous-frame HZB rejection, because
+     * ordinary-view occlusion cannot prove shifted-view occlusion. The ordinary
+     * camera still owns DAG LOD, distances, and every non-heightfield decision. */
+    terrainEnvelopeHeight?: number;
   },
 ): NaniteCullChain {
   // N8-HIC: the cull is HIERARCHICAL — seed each mesh's roots + BFS-descend the DAG.
@@ -388,6 +394,7 @@ export function buildNaniteCull(
   // probably-visible, 1 = probably-occluded). buildNaniteVoxelRaster reads the SAME K.
   const VOX_F2B_K = 2;
   const coneCull = opts?.coneCull !== false;
+  const terrainEnvelopeHeight = Math.max(0, opts?.terrainEnvelopeHeight ?? 0);
   const crownLod0 = opts?.crownLod0 === true; // ?crownlod0 — leaf LOD0-or-descend (camera only)
   // shadow-only voxel COARSEN (>1): emit voxel clusters at a coarser DAG level for the
   // shvox2 caster (the "less detailed crown in the shadow"). ≤1 ⇒ inactive.
@@ -570,14 +577,27 @@ export function buildNaniteCull(
   };
 
   // ---- frustum test helper (shared TSL) ------------------------------------------
-  const frustumVisible = (center: NV3, radius: NF): NF => {
+  const frustumVisible = (center: NV3, radius: NF, isHF: NB): NF => {
     const visible = float(1).toVar();
     Loop(6, ({ i: pi }) => {
       const plane = cam.planes.element(pi);
       const d = dot(plane.xyz, center).add(plane.w) as unknown as NF;
-      If(d.lessThan(radius.negate()), () => {
-        visible.assign(0);
-      });
+      if (terrainEnvelopeHeight > 0) {
+        // Shifted-camera plane: n·p + c + n·v, v=(0,H,0). Union is outside only
+        // when the sphere misses both the ordinary and shifted frusta.
+        const shiftedD = d.add(plane.y.mul(terrainEnvelopeHeight)) as unknown as NF;
+        If(
+          d.lessThan(radius.negate())
+            .and(isHF.not().or(shiftedD.lessThan(radius.negate()))),
+          () => {
+            visible.assign(0);
+          },
+        );
+      } else {
+        If(d.lessThan(radius.negate()), () => {
+          visible.assign(0);
+        });
+      }
     });
     return visible as unknown as NF;
   };
@@ -1020,7 +1040,7 @@ export function buildNaniteCull(
         returnIf(isHF.not().and(nearDist.greaterThan(0)).and(instDist.lessThan(nearDist)));
       }
       const s = instWorldSphere(A, B, isHF as unknown as NB, head.sphere, head.swayPad);
-      returnIf(frustumVisible(s.center, s.radius).lessThan(0.5));
+      returnIf(frustumVisible(s.center, s.radius, isHF as unknown as NB).lessThan(0.5));
       const sizePx = projK
         .mul(s.radius)
         .mul(2)
@@ -1155,7 +1175,7 @@ export function buildNaniteCull(
             elemU(gpu.meshes, c.meshId.mul(uint(MESH_WORDS)).add(uint(11))),
           );
           const s = instWorldSphere(A, B, isHF as unknown as NB, c.sphere, swayPad);
-          const visible = frustumVisible(s.center, s.radius).toVar();
+          const visible = frustumVisible(s.center, s.radius, isHF as unknown as NB).toVar();
           If(visible.greaterThan(0.5).and(minPx.greaterThan(0)), () => {
             const toC = s.center.sub(cam.camPos) as unknown as NV3;
             const distC = dot(toC, toC).max(float(1e-6)).sqrt();
@@ -1207,9 +1227,17 @@ export function buildNaniteCull(
           // record/re-test is a follow-up — it needs a buffer-budget rework). null at occl=0.
           if (sphereOccluded) {
             If(visible.greaterThan(0.5), () => {
-              If(sphereOccluded(s.center, s.radius, cam.prevVp, cam.prevCamPos), () => {
-                visible.assign(0);
-              });
+              if (terrainEnvelopeHeight > 0) {
+                If(isHF.not(), () => {
+                  If(sphereOccluded(s.center, s.radius, cam.prevVp, cam.prevCamPos), () => {
+                    visible.assign(0);
+                  });
+                });
+              } else {
+                If(sphereOccluded(s.center, s.radius, cam.prevVp, cam.prevCamPos), () => {
+                  visible.assign(0);
+                });
+              }
             });
           }
           If(visible.greaterThan(0.5), () => {

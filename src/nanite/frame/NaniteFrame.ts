@@ -190,6 +190,34 @@ export async function buildNaniteFrame(
 
   const cam = makeNaniteCam(size.x, size.y);
   const vis = makeVisBuffers(size.x * size.y);
+  // Load the active profile before cull graph construction: its authored H is
+  // the exact translated-camera offset and must never be copied into a generic
+  // constant. Future cover profiles may use different heights or a certified
+  // shared H* carrier without changing this contract.
+  const grassMode = params.get('grass');
+  const grassOn = grassMode !== '0' && grassMode !== 'off';
+  const isolatedCalamagrostis = params.get('grassprofile') === String(
+    GroundCoverProfileId.CalamagrostisCanescens,
+  );
+  const exactCalamagrostisOwner = params.get('grassowner') === '1';
+  const periodicProfiles = grassOn && field.hasGroundCoverClosure
+    ? isolatedCalamagrostis
+      ? [await loadPeriodicProfile(
+          CALAMAGROSTIS_ACCEPTANCE_PROFILE_URL,
+          GroundCoverProfileId.CalamagrostisCanescens,
+          {
+            authoredColor: !exactCalamagrostisOwner,
+            ownedTables: exactCalamagrostisOwner,
+          },
+        )]
+      : (await loadPeriodicProfileArray(
+          GROUND_COVER_PROFILE_ARRAY_URL,
+          GROUND_COVER_PROFILE_IDS,
+        )).profiles
+    : [];
+  const terrainEnvelopeHeight = isolatedCalamagrostis
+    ? periodicProfiles[0]?.topH ?? 0
+    : 0;
   // PERF-VB4 (D-N45): the WORLD is single-pass — the HZB reads the packed depth key from
   // the election anchor (visPayloadV high bits, packed=true), there is no exact depthV.
   const hzb = buildNaniteHzb(vis.payloadV.ro, cam, true);
@@ -230,6 +258,7 @@ export async function buildNaniteFrame(
       // cluster with children back to full LOD0 (the pre-Phase-2 behavior), for A/B.
       // Camera path only (shadow culls omit it — casters already stay coarse).
       crownLod0: params.get('crownlod0') === '1',
+      terrainEnvelopeHeight,
     },
   );
   // S6e: the render-anchor uniform for terrain FIELD sampling (NaniteFetch hfWorld)
@@ -246,30 +275,6 @@ export async function buildNaniteFrame(
   // DEFAULT ON (user call 2026-07-04, look accepted): the single ray lane
   // (Sannikov baked-raycast, NaniteGrass.ts). ?grass=0|off disables. The old
   // geo/hybrid/rayold lanes were deleted the same day — git history has them.
-  const grassMode = params.get('grass');
-  const grassOn = grassMode !== '0' && grassMode !== 'off';
-  // Profile bytes must be validated before the shader graph captures their
-  // atlas dimensions/direction lattice. The frame builder is already called
-  // from async scene construction, so no render-time readiness branch exists.
-  const isolatedCalamagrostis = params.get('grassprofile') === String(
-    GroundCoverProfileId.CalamagrostisCanescens,
-  );
-  const exactCalamagrostisOwner = params.get('grassowner') === '1';
-  const periodicProfiles = grassOn && field.hasGroundCoverClosure
-    ? isolatedCalamagrostis
-      ? [await loadPeriodicProfile(
-          CALAMAGROSTIS_ACCEPTANCE_PROFILE_URL,
-          GroundCoverProfileId.CalamagrostisCanescens,
-          {
-            authoredColor: !exactCalamagrostisOwner,
-            ownedTables: exactCalamagrostisOwner,
-          },
-        )]
-      : (await loadPeriodicProfileArray(
-          GROUND_COVER_PROFILE_ARRAY_URL,
-          GROUND_COVER_PROFILE_IDS,
-        )).profiles
-    : [];
   const grass = grassOn
     ? buildGrassField({
         cam,
@@ -286,7 +291,7 @@ export async function buildNaniteFrame(
           batch: grass.batch,
           renderHw: grass.renderHw,
           enabled: grass.enabled,
-          shellHeight: grass.shellHeight,
+          envelopeQuery: grass.envelopeQuery,
         }
       : undefined,
     fieldAnchor, // S6e: absolute field-sample coords for the anchor-relative terrain verts

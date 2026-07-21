@@ -558,3 +558,43 @@ not used for production Sphagnum.
 
 O(1) remains intact: no per-frame ray march, WGSL loop, distance-dependent iteration, or new
 screen-sized colour target was introduced.
+
+## 14. Shell-free exterior reconstruction checkpoint (2026-07-21)
+
+- The scene-visible translated terrain shell has been removed from the implementation. The
+  query now fetches unchanged terrain vertices and applies `VP * vec4(0,H,0,0)` only to their
+  homogeneous projection. Algebraically this is the proved camera-translation identity; no
+  world vertex is raised by `H`, and the query renders only into an offscreen target.
+- Heightfield visibility conservatively includes both the ordinary and shifted-camera frusta.
+  Ordinary-view HZB rejection is disabled only for those heightfield clusters because it cannot
+  prove shifted-view occlusion. Ordinary camera distance still owns DAG LOD, while objects and
+  every non-heightfield decision retain the existing cull path.
+- Native depth election and an `rg16f` octahedral triangle chart share one render target, so the
+  queried depth and local terrain derivative come from the same winning terrain fragment. The
+  old mixed state—translated entry depth combined with a separately filtered guide slope—is no
+  longer used by the isolated Calamagrostis profile.
+- The ordinary hardware pass reuses this colour target with colour/depth writes disabled; only
+  a full-resolution `depth32float` attachment is newly resident. The query adds one conservative
+  terrain draw and fixed per-fragment derivative/octahedral ALU. It adds no bind group, compute
+  workgroup, barrier, ray step, data-dependent branch count, or shader loop. A fresh game-only
+  GPU trace remains required after visual acceptance.
+- `npm run typecheck` passes, all 23 shader-independent reconstruction properties pass, and the
+  exact DPR2 localhost acceptance URL passed real WebGPU Chromium through frame 167 with no
+  page, TSL, shader-validation, binding, pipeline, command-buffer, or uncaptured WebGPU error.
+- User flight review confirmed that the translated-mesh removal is regression-free and top-down
+  views remain strong. It also rejected the remaining low-oblique result: distant plants collapse
+  into striped relief, and a world-cover boundary still presents as a plane with only rare hints
+  of lower plant structure.
+- The pure-math comparison identifies two independent causes. Reusing the 15-degree projected
+  path at a five-degree live elevation compresses all source height below `H` by
+  `tan(5 deg)/tan(15 deg)=0.3265`; a true ground hit is reconstructed about `0.792 m` above ground,
+  and the limit toward horizontal is literally the top plane. Separately, querying the fully
+  populated periodic first hit and then rejecting a bare world root is not the first eligible
+  hit: it loses later covered roots and can reject the nearer anti-layer before considering a
+  valid farther layer.
+- This checkpoint therefore does **not** claim the finite-profile reconstruction is accepted.
+  The exact next carrier is the certified predicate-filtered owner/successor closure: live
+  ray/triangle intersection and barycentric colour/normal, fixed statically expanded candidate
+  count, finite horizon, sparse pages, and hard subdivision/page/geometry/total-byte gates. The
+  five-degree row is only a closure seed. Camera-inside adds signed origin phase to the same
+  successor relation. The current v4 owner-token range cannot represent the new row or closure.

@@ -37,11 +37,16 @@ import {
   atomicMax,
   atomicMin,
   bool,
+  cross,
+  dFdx,
+  dFdy,
   float,
   instanceIndex,
+  normalize,
   screenCoordinate,
   uint,
   varyingProperty,
+  vec2,
   vec3,
   vec4,
   vertexIndex,
@@ -82,16 +87,16 @@ interface ComputeKernel {
 
 export interface HwPath {
   kHwArgs: unknown;
-  /** One-thread indirect draw-args publish for the grass outer shell. */
-  kGrassShellArgs: unknown | null;
+  /** One-thread indirect draw-args publish for the terrain envelope query. */
+  kGrassEnvelopeArgs: unknown | null;
   hwDepthMat: NodeMaterial;
   hwCombinedMat: NodeMaterial;
   hwWorld1Mat: NodeMaterial;
   hwRT: RenderTarget;
   hwRender(renderer: Renderer, camera: PerspectiveCamera, mat: NodeMaterial): void;
   hwRenderCluster(renderer: Renderer, camera: PerspectiveCamera): void;
-  /** Rasterize the displaced terrain shell into vis.depthV. */
-  hwRenderGrassShell(renderer: Renderer, camera: PerspectiveCamera): void;
+  /** Query unchanged terrain from the camera translated down by profile height. */
+  hwRenderGrassEnvelope(renderer: Renderer, camera: PerspectiveCamera): void;
 }
 
 export function buildHw(p: {
@@ -141,8 +146,11 @@ export function buildHw(p: {
    *  OFF restores the previous compute-fetch `_clE` vertex — selected at BUILD time (two
    *  closures, the other body never compiled), not a runtime shader branch. */
   hwproj: boolean;
-  /** Authored outer-shell height. null omits the entire shell graph. */
-  grassShellHeight?: number | null;
+  /** Shell-free translated-surface datum. null omits the query graph. */
+  grassEnvelope?: {
+    height: number;
+    target: RenderTarget;
+  } | null;
 }): HwPath {
   const {
     cam,
@@ -167,7 +175,7 @@ export function buildHw(p: {
     projBaseSlot,
     indices,
     hwproj,
-    grassShellHeight = null,
+    grassEnvelope = null,
   } = p;
   // makeCtx used by the SOUP path (per-tri) + the legacy single 'both' `_cl` fallback; the
   // per-vertex fetch is resolved PER MATERIAL below (mFetch) so a class-split draw can bind its
@@ -560,81 +568,107 @@ export function buildHw(p: {
     }
   }
 
-  // Sannikov's O is a rasterized OUTER shell, not the later terrain hit. The
-  // world single-pass already allocates vis.depthV but otherwise leaves it
-  // unused, so the shell needs only a 16-byte indirect-args record. Every
-  // visible qRaster cluster is instanced once; non-heightfield clusters and
-  // partial-cluster tail vertices clip before a terrain fetch. The actual
-  // terrain triangles are displaced by the authored height, preserving their
-  // interpolation and silhouettes without a ray march or a second geometry
-  // representation.
-  const shellDrawAttr = grassShellHeight !== null && clusterCtxV !== null
+  // Exact translated-surface identity, without translated geometry:
+  //   C+t*d in S+v  <=>  (C-v)+t*d in S.
+  // The query therefore pulls the unchanged terrain triangles and applies the
+  // corresponding camera translation only in homogeneous projection. Hardware
+  // depth elects the terrain owner; its exact triangle chart is written into the
+  // grass output texture as ordered scratch and consumed before grass overwrites
+  // it. No scene-visible mesh, displaced vertex, ray march, or data-dependent
+  // loop exists in this path.
+  const envelopeDrawAttr = grassEnvelope !== null && clusterCtxV !== null
     ? new IndirectStorageBufferAttribute(new Uint32Array(4), 4)
     : null;
-  if (shellDrawAttr) shellDrawAttr.name = 'grassShellDraw';
-  const shellDrawBuf = shellDrawAttr
-    ? sU32Views(shellDrawAttr as unknown as StorageBufferAttribute, 4).rw
+  if (envelopeDrawAttr) envelopeDrawAttr.name = 'grassEnvelopeDraw';
+  const envelopeDrawBuf = envelopeDrawAttr
+    ? sU32Views(envelopeDrawAttr as unknown as StorageBufferAttribute, 4).rw
     : null;
-  const kGrassShellArgs = shellDrawBuf
+  const kGrassEnvelopeArgs = envelopeDrawBuf
     ? Fn(() => {
         const n = minU(qRasterRO.element(0).x, uint(PROJ_CLUSTER_CAP));
-        shellDrawBuf.element(0).assign(uint(MAX_CLUSTER_TRIS * 3));
-        shellDrawBuf.element(1).assign(n);
-        shellDrawBuf.element(2).assign(uint(0));
-        shellDrawBuf.element(3).assign(uint(0));
+        envelopeDrawBuf.element(0).assign(uint(MAX_CLUSTER_TRIS * 3));
+        envelopeDrawBuf.element(1).assign(n);
+        envelopeDrawBuf.element(2).assign(uint(0));
+        envelopeDrawBuf.element(3).assign(uint(0));
       })().compute(1, [1])
     : null;
-  if (kGrassShellArgs) {
-    (kGrassShellArgs as unknown as ComputeKernel).setName('grassShellArgs');
+  if (kGrassEnvelopeArgs) {
+    (kGrassEnvelopeArgs as unknown as ComputeKernel).setName('grassEnvelopeArgs');
   }
-  const grassShellScene = shellDrawAttr ? new Scene() : null;
-  if (grassShellScene && shellDrawAttr && clusterCtxV && grassShellHeight !== null) {
-    const shellGeometry = clusterGeom(shellDrawAttr);
-    const shellMaterial = new NodeMaterial();
-    shellMaterial.name = 'grassOuterShell';
-    const shellZ = varyingProperty('float', 'grassShellZ') as unknown as NF;
-    const shellW = varyingProperty('float', 'grassShellW') as unknown as NF;
-    shellMaterial.vertexNode = Fn(() => {
+  const grassEnvelopeScene = envelopeDrawAttr ? new Scene() : null;
+  if (grassEnvelopeScene && envelopeDrawAttr && clusterCtxV && grassEnvelope !== null) {
+    const envelopeGeometry = clusterGeom(envelopeDrawAttr);
+    const envelopeMaterial = new NodeMaterial();
+    envelopeMaterial.name = 'grassTerrainEnvelopeQuery';
+    const envelopeWorld = varyingProperty('vec3', 'grassEnvelopeWorld') as unknown as NV3;
+    envelopeMaterial.vertexNode = Fn(() => {
       const localTri = (vertexIndex.div(3) as unknown as NU).toVar();
       const corner = vertexIndex.mod(3) as unknown as NU;
       const tid = (instanceIndex as unknown as NU).toVar();
       const clip = vec4(0, 0, 2, 1).toVar();
+      const worldOut = vec3(0).toVar() as unknown as NV3;
       const ctx = decodeCtx(tid, false);
       If(ctx.isHF.and(localTri.lessThan(ctx.triCount)), () => {
         const world = nfetchTerrain
-          .fetchTerrainSurfaceVertDyn(ctx, localTri, corner)
-          .add(vec3(0, grassShellHeight, 0)) as unknown as NV3;
-        clip.assign(cam.vp.mul(vec4(world, 1)) as unknown as NV4);
+          .fetchTerrainSurfaceVertDyn(ctx, localTri, corner) as unknown as NV3;
+        (worldOut as unknown as { assign(v: unknown): void }).assign(world);
+        // vp*T(0,H,0) is the view-projection of C-v. `world` itself remains the
+        // original terrain vertex; the second term is a camera transform only.
+        clip.assign(
+          (cam.vp.mul(vec4(world, 1)) as unknown as NV4).add(
+            cam.vp.mul(vec4(0, grassEnvelope.height, 0, 0)) as unknown as NV4,
+          ),
+        );
       });
-      (shellZ as unknown as { assign(v: unknown): void }).assign(clip.z);
-      (shellW as unknown as { assign(v: unknown): void }).assign(clip.w);
+      (envelopeWorld as unknown as { assign(v: unknown): void }).assign(worldOut);
       return clip;
-    })() as unknown as typeof shellMaterial.vertexNode;
-    shellMaterial.fragmentNode = Fn(() => {
-      const z = shellZ.div(shellW).toVar() as unknown as NF;
-      const fy = float(cam.uH).sub(screenCoordinate.y);
-      const px = uint(fy).mul(uint(cam.uW)).add(uint(screenCoordinate.x));
-      If(z.greaterThanEqual(0).and(z.lessThanEqual(1)), () => {
-        atomicMin(visDepthV.atomic.element(px), bcF2U(z));
+    })() as unknown as typeof envelopeMaterial.vertexNode;
+    envelopeMaterial.fragmentNode = Fn(() => {
+      const chart = normalize(
+        cross(dFdx(envelopeWorld), dFdy(envelopeWorld)) as unknown as NV3,
+      ).toVar() as unknown as NV3;
+      If((chart.y as unknown as NF).lessThan(0), () => {
+        (chart as unknown as { assign(v: unknown): void }).assign(chart.negate());
       });
-      return vec4(0, 0, 0, 0);
-    })() as unknown as typeof shellMaterial.fragmentNode;
-    shellMaterial.depthTest = false;
-    shellMaterial.depthWrite = false;
-    shellMaterial.colorWrite = false;
-    shellMaterial.fog = false;
-    shellMaterial.lights = false;
-    shellMaterial.side = DoubleSide;
-    const shellMesh = new Mesh(shellGeometry, shellMaterial);
-    shellMesh.frustumCulled = false;
-    grassShellScene.add(shellMesh);
+      const invL1 = float(1).div(
+        (chart.x as unknown as NF).abs()
+          .add((chart.y as unknown as NF).abs())
+          .add((chart.z as unknown as NF).abs())
+          .max(1e-8),
+      );
+      const oct = vec2(
+        (chart.x as unknown as NF).mul(invL1),
+        (chart.y as unknown as NF).mul(invL1),
+      ).toVar() as unknown as { x: NF; y: NF; assign(v: unknown): void };
+      If((chart.z as unknown as NF).lessThan(0), () => {
+        const oldX = (oct.x as unknown as { toVar(): NF }).toVar() as unknown as NF;
+        const sx = (oldX.greaterThanEqual(0) as unknown as { select(a: unknown, b: unknown): NF })
+          .select(float(1), float(-1));
+        const sy = (oct.y.greaterThanEqual(0) as unknown as { select(a: unknown, b: unknown): NF })
+          .select(float(1), float(-1));
+        oct.assign(vec2(float(1).sub(oct.y.abs()).mul(sx), float(1).sub(oldX.abs()).mul(sy)));
+      });
+      return vec4(oct.x.mul(0.5).add(0.5), oct.y.mul(0.5).add(0.5), 0, 1);
+    })() as unknown as typeof envelopeMaterial.fragmentNode;
+    envelopeMaterial.depthTest = true;
+    envelopeMaterial.depthWrite = true;
+    envelopeMaterial.colorWrite = true;
+    envelopeMaterial.fog = false;
+    envelopeMaterial.lights = false;
+    envelopeMaterial.side = DoubleSide;
+    const envelopeMesh = new Mesh(envelopeGeometry, envelopeMaterial);
+    envelopeMesh.frustumCulled = false;
+    grassEnvelopeScene.add(envelopeMesh);
   }
-  // The HW pass renders into this dead full-res rgba8 (colorWrite=false -> never read).
+  // Reuse the envelope target as the ordinary HW pass's formerly-dead full-res
+  // color target. Ordinary HW materials still have colorWrite=false; only the
+  // later terrain query writes RG chart + native depth. This avoids allocating a
+  // second full-resolution color surface: enabling the query adds depth32 only.
   // It stays full-res unconditionally: r184 derives the render-pass viewport from
   // RenderTarget.viewport (= texture size), so shrinking it would clip HW coverage and
   // starve the vis buffers. Only the per-frame CLEAR is dropped (see hwRender).
-  const hwRT = new RenderTarget(width, height, { depthBuffer: false });
-  hwRT.texture.name = 'nanHwPass';
+  const hwRT = grassEnvelope?.target ?? new RenderTarget(width, height, { depthBuffer: false });
+  if (!grassEnvelope) hwRT.texture.name = 'nanHwPass';
 
   const hwRender = (
     renderer: Renderer,
@@ -669,29 +703,33 @@ export function buildHw(p: {
     renderer.autoClear = prevAutoClear;
     renderer.setRenderTarget(prevRT);
   };
-  const hwRenderGrassShell = (
+  const hwRenderGrassEnvelope = (
     renderer: Renderer,
     camera: PerspectiveCamera,
   ): void => {
-    if (!grassShellScene) return;
+    if (!grassEnvelopeScene) return;
     const prevRT = renderer.getRenderTarget();
     renderer.setRenderTarget(hwRT);
     const prevAutoClear = renderer.autoClear;
+    // Native depth and the RG chart color are one render-pass election. Explicit
+    // clear keeps the ordinary HW draws clear-free while guaranteeing a fresh
+    // terrain datum here.
     renderer.autoClear = false;
-    renderer.render(grassShellScene, camera);
+    renderer.clear(true, true, false);
+    renderer.render(grassEnvelopeScene, camera);
     renderer.autoClear = prevAutoClear;
     renderer.setRenderTarget(prevRT);
   };
 
   return {
     kHwArgs,
-    kGrassShellArgs,
+    kGrassEnvelopeArgs,
     hwDepthMat,
     hwCombinedMat,
     hwWorld1Mat,
     hwRT,
     hwRender,
     hwRenderCluster,
-    hwRenderGrassShell,
+    hwRenderGrassEnvelope,
   };
 }
