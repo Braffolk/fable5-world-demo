@@ -17,6 +17,13 @@ export interface Ray3 {
   direction: RayVec3;
 }
 
+export interface OrderedRayEvent<Owner = number> {
+  /** Coordinate along one oriented profile-space line. */
+  s: number;
+  /** Triangle/copy owner of this surface event. */
+  owner: Owner;
+}
+
 export interface ProfileRay {
   /** Unit direction in the Euclidean metric used by the profile bake. */
   direction: RayVec3;
@@ -48,6 +55,20 @@ export function rayPoint(ray: Ray3, t: number): RayVec3 {
     ray.origin[1] + ray.direction[1] * t,
     ray.origin[2] + ray.direction[2] * t,
   ];
+}
+
+/**
+ * Exact visibility query for a camera placed at `cameraS` on one oriented line.
+ * The input is the complete ordered surface-event list for that line. A
+ * top-entry bake is the special case cameraS <= events[0].s; arbitrary
+ * camera-inside rendering requires this successor relation rather than only
+ * the first top-entry event.
+ */
+export function successorRayEvent<Owner>(
+  events: readonly OrderedRayEvent<Owner>[],
+  cameraS: number,
+): OrderedRayEvent<Owner> | undefined {
+  return events.find((event) => event.s >= cameraS);
 }
 
 /**

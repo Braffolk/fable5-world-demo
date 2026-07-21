@@ -401,6 +401,85 @@ later hit. Camera-inside correctness therefore requires an inside-origin query
 or a bounded ordered-hit/interval carrier; it is separate from terrain-envelope
 reconstruction.
 
+### 6.2 Camera-inside visibility is a successor query
+
+Fix one oriented profile-space line and parameterize it from the top reference
+by `s`. Let its complete ordered surface-event set be
+
+\[
+I_\ell=\{s_1<s_2<\cdots<s_N\}.
+\]
+
+If the camera is at line coordinate `s_C`, the first visible event is exactly
+
+\[
+\sigma(\ell,s_C)=\min\{s_i\in I_\ell\mid s_i\ge s_C\}.
+\]
+
+The visible distance is `sigma-s_C`, divided by profile speed if `s` is a
+normalised profile distance. A top-entry atlas stores only `s_1`; it answers the
+successor only while `s_C<=s_1`. Clamping a negative result to zero, discarding
+it, or taking its absolute value cannot recover a later event.
+
+This has a strict information lower bound. Put `N` disjoint opaque sheets on one
+line. Camera positions between successive sheets have `N` distinct successors.
+Any carrier retaining only a fixed prefix `K<N` fails after event `K`. First and
+last are also insufficient: `{1,4}` and `{1,3,4}` have identical endpoints but
+different successors from `s_C=2`. For closed solids, parity answers only
+inside/outside; it does not give the distance or owner of the next boundary.
+Open blade sheets make parity still less applicable.
+
+There is consequently no universal small `K` for arbitrary finite meshes. The
+minimal exact abstract representation is either:
+
+- the complete ordered event-owner list per oriented line, followed by a
+  successor selection; or
+- the successor owner itself as a function of ray origin and direction.
+
+The second form has five degrees of freedom: an oriented line is four-dimensional
+and the origin position along that line adds one scalar. A compact implementation
+may partition this five-dimensional domain and store at most a certified fixed
+`K` possible successor `(triangle, periodic-copy)` owners per cell. Runtime then
+performs `K` statically expanded live ray/triangle tests, accepts `t>=0`, and
+elects the minimum. This stores owner ids rather than replicated depth, normal,
+or colour payloads. An equivalent sparse form stores ordered event-owner runs in
+the four-dimensional line domain plus an origin-height slab index.
+
+Exactness requires an offline closure proof, including owners on cell boundaries
+and ties. A cell whose possible-successor set exceeds `K` must subdivide, raise
+`K`, or reject the asset. A finite mesh and finite forward render interval make
+the candidate set finite. An infinite periodic tiling without a finite horizon
+does not: the number of crossed copies is unbounded as elevation approaches
+horizontal. `t=0`, edge ties, and coplanar rays need explicit categorical
+ownership rules rather than epsilon clamps.
+
+Sannikov's parallel infinite extrusion avoids this extra origin dimension:
+occupancy is invariant along profile height, so moving the camera along that
+axis does not change the two-dimensional successor problem. Arbitrary finite 3D
+botanical meshes do not have that invariance.
+
+There is also a direction-sign rule which cannot be inferred from the envelope
+point. Since
+
+\[
+O-C=t_Od,
+\]
+
+normalising `O-C` gives `sign(t_O)d`. When the camera is inside and the chosen
+top reference is behind it, `t_O<0` and that construction reverses the ray. The
+profile direction must always remain the forward pixel ray `d`; `-t_O` is used
+only as the successor threshold `s_C`. A hit with camera-space `t<0` remains
+behind the pinhole camera and may not be projected as a visible point.
+
+For a downward live ray from inside the cover band, the required top reference
+is the nearest envelope crossing behind the camera. The translation theorem
+still supplies it without a duplicate surface: query the unchanged carrier from
+`C-v` in direction `-d`, obtain positive distance `u`, and set `t_O=-u`. This is
+the backward half of one signed line-intersection oracle. A forward-only depth
+query cannot return it. Full arbitrary-direction camera-inside rendering also
+requires the successor carrier's direction domain to cover those directions;
+the current top-down-only hemisphere is not such a domain.
+
 ## 7. Arbitrary mesh profiles and angular reconstruction
 
 The article's exact base class is a parallel extrusion. Its first-hit projected
@@ -446,8 +525,151 @@ owner closure:
    elect the nearest valid hit.
 
 That is O(1), contains no runtime march, and has an offline-checkable exactness
-condition. Whether its memory/performance budget is acceptable is a later design
-decision; scalar interpolation cannot be labelled exact in its place.
+condition. The bounded sparse storage contract is fixed below; whether a
+particular asset satisfies it is an offline certification result. Scalar
+interpolation cannot be labelled exact in its place.
+
+### 7.1 Distance and apparent-orientation invariance
+
+Let the exact shifted-envelope query elect carrier chart `i` at `O`, with affine
+profile map `x=b_i+J_i q`. For a live world direction `d`, all directional and
+orientation quantities are
+
+\[
+a=J_i^{-1}d,\qquad \hat a=\frac{a}{\lVert a\rVert},\qquad
+n_x=\operatorname{normalize}(J_i^{-T}n_q).
+\]
+
+None contains `t_O` or camera-to-cover distance. Translating the camera along
+the same viewing line leaves `d`, `J_i^-1 d`, the profile direction, and the
+inverse-transpose normal unchanged. It only adds the opposite translation to
+the ray parameter of the same hit. Exact perspective makes a fixed object
+smaller with range; it does not rotate a top into a side.
+
+Therefore an apparent orientation that correlates with distance is not a new
+perspective correction term. It proves that at least one supposedly invariant
+input changed. The possible mathematical causes are:
+
+- the shifted-envelope owner/chart changed, or the ordinary ground owner was
+  substituted for it;
+- the direction was derived from an unnormalised distance-bearing displacement;
+- filtering, LOD, quantisation, or pixel footprint selected different owners;
+- scalar directional interpolation fabricated a hit between different owners;
+- a non-affine profile transform was treated as one constant affine basis.
+
+The shifted owner is load-bearing. On affine ground
+`g(x,z)=g_0+m_x x+m_z z`,
+
+\[
+J^{-1}d=(d_x,\ d_y-m_xd_x-m_zd_z,\ d_z),
+\]
+
+and a profile top normal transforms to
+
+\[
+J^{-T}e_h=(-m_x,1,-m_z).
+\]
+
+Using a different terrain owner's slope corrupts both ray elevation and normal;
+a sufficiently wrong slope can literally turn a top-facing record toward a
+side-facing world direction even when entry depth is exact.
+
+Within one fixed geometric plane `eta dot q=c`, live depth is rational,
+
+\[
+\lambda(a)=\frac{c}{\eta\cdot a}.
+\]
+
+Its relative sensitivity is approximately
+`delta(lambda)/lambda=-(eta dot delta(a))/(eta dot a)`, so angular errors amplify
+at grazing incidence but contain no absolute-range term. Reciprocal depth is
+linear in an unnormalised direction only while origin and owner plane are fixed.
+That identity cannot justify filtering across triangle owners.
+
+In particular, the owners at the two or four sampled directions surrounding a
+live angle are not a conservative owner closure. A narrow foreground triangle
+may win strictly between samples while every canonical sample sees the same
+background triangle. Exact arbitrary-mesh angular reconstruction must therefore
+store a certified owner closure and intersect its fixed candidates with the
+live ray. After election, shading normals and authored colour come from live
+barycentrics on that winning triangle, followed by the inverse-transpose normal
+map. Blending sampled normals is not the same operation.
+
+### 7.2 The current finite-direction carrier and the exact replacement
+
+The committed Calamagrostis asset has a `256x256` periodic origin lattice and 64
+canonical directions: 16 azimuths times elevations `15, 35, 55, 75` degrees.
+Its ordinary carrier converts each canonical 3D first hit into inverse projected
+path and filters the four surrounding direction records. Live elevation outside
+the stored range is clamped to the endpoint.
+
+That projected-path filtering is exact for Sannikov's parallel extrusion,
+because the two-dimensional path is independent of elevation and the live lift
+is exactly `rho/||P J^-1 d||`. It is not an exact identity for an arbitrary
+finite 3D plant. There, projected first-hit path changes with elevation and
+triangle ownership. Even a horizontal plane one metre below the origin exposes
+the range error: reusing a 15-degree projected path for a five-degree live ray
+produces roughly `3.75 m` instead of the exact `11.47 m`. No final colour or
+normal adjustment can repair that positional error.
+
+The exact fixed-cost replacement is a **certified successor-owner closure**,
+split so camera-inside support does not make the ordinary exterior carrier
+dense:
+
+1. Exterior/top-entry domains use a four-dimensional closure over periodic top
+   phase and live direction. Each cell stores at most fixed `K_ext` triangle/copy
+   owners that can be first anywhere in the cell.
+2. Camera-inside domains add signed origin phase/height and store a sparse
+   five-dimensional closure of at most fixed `K_in` possible successors.
+3. Runtime intersects the live forward ray with every stored candidate using a
+   statically fixed comparison network, rejects `t<0` and out-of-triangle hits,
+   and elects the minimum. There is no depth interpolation, ray march, or
+   data-dependent iteration.
+4. The elected triangle supplies live barycentrics, authored colour, and local
+   normal; the exact shifted terrain owner supplies `J`, and the normal uses
+   `J^-T`.
+
+This is a mathematical contract, not permission for a dense 5D texture. Cells
+store compact owner/copy ids and share the existing immutable triangle data.
+Adaptive subdivision is performed offline and must be certified conservatively.
+The runtime lookup depth and candidate counts are fixed constants. A hard memory
+budget is part of acceptance: if a cell cannot meet `K_ext`/`K_in` within the
+fixed subdivision depth and memory cap, that bake is rejected rather than
+silently approximated or allowed to grow without bound.
+
+The closure is exact only inside an explicit finite render horizon and declared
+direction domain. This is necessary, not a quality shortcut: periodic copy count
+is unbounded as a downward ray approaches horizontal over an infinite horizon.
+The domain must cover every angle the renderer promises; clamping an uncovered
+angle to the nearest baked direction is not reconstruction.
+
+A new five-degree canonical elevation row is approved as an additional seed for
+the grazing domain. It eliminates the current direct 5-to-15-degree endpoint
+substitution and should reduce closure page complexity. It does not replace the
+closure: the continuum between canonical rows still uses certified candidate
+owners and exact live intersections, never blended scalar path as proof.
+
+The current asset also shows why the word *sparse* is mandatory. Its guarded
+canonical atlas has 4,260,096 texels. One packed owner id per texel is already
+17,040,384 bytes. Across those canonical samples there are 762,368 distinct
+`(triangle,copy)` owners and 445,227 distinct source triangles. Restricting the
+existing packed geometry table to only those canonically visible triangles and
+their referenced vertices would still be about 21.4 MB. A blind dense `K=4`
+owner array would consume about 68.2 MB for ids alone and is rejected by this
+design.
+
+The accepted storage form is therefore one bounded indirection field into
+sparse fixed-width owner pages, or the equivalent sparse ordered-event runs plus
+origin-height slab references. Its exact byte formula is
+
+\[
+B=B_{index}+4K\,N_{pages}+B_{referenced\ geometry},
+\]
+
+before format alignment. `K`, maximum subdivision depth, page count, referenced
+geometry bytes, and total `B` are hard bake gates. The existing owner counts are
+only a sizing observation, not a closure proof: triangles visible only between
+canonical samples must also be included by certification.
 
 ## 8. Multiple heights and overlapping cover
 
@@ -513,7 +735,7 @@ must still represent the actual wind deformation of the botanical geometry.
 
 ## 10. Executable proof boundary
 
-The CPU reference currently proves thirteen finite properties:
+The CPU reference currently proves nineteen finite properties:
 
 1. full inverse-basis reconstruction under a skewed affine map;
 2. projected-path reconstruction using profile projected speed;
@@ -524,13 +746,22 @@ The CPU reference currently proves thirteen finite properties:
    ray has no hit;
 6. insufficiency of one top-entry first-hit record for arbitrary
    camera-inside visibility;
-7. grazing amplification from a mixed height/gradient chart;
-8. insufficiency of value plus gradient on curved terrain;
-9. failure when `T` and `O` belong to different terrain pieces;
-10. closed-form intersection on one known bilinear patch;
-11. exact plane reprojection versus incorrect linear depth interpolation;
-12. inverse-transpose normal transformation under shear;
-13. finite categorical handling of vertical origin occupancy.
+7. successor-event semantics for arbitrary camera origins, including `t=0`;
+8. failure of a peeled-hit prefix below the line's depth complexity;
+9. preservation of the forward pixel direction when a camera-inside top entry
+   lies behind the camera;
+10. grazing amplification from a mixed height/gradient chart;
+11. insufficiency of value plus gradient on curved terrain;
+12. failure when `T` and `O` belong to different terrain pieces;
+13. closed-form intersection on one known bilinear patch;
+14. exact plane reprojection versus incorrect linear depth interpolation;
+15. invariance of profile direction, hit point, and apparent orientation along
+    one view ray;
+16. failure of surrounding sampled owners to form an arbitrary-mesh closure;
+17. invalidity of clamping a grazing 3D-profile direction to the lowest stored
+    elevation;
+18. inverse-transpose normal transformation under shear;
+19. finite categorical handling of vertical origin occupancy.
 
 Run it with:
 

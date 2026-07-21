@@ -509,15 +509,40 @@ not used for production Sphagnum.
   `data/work/groundcover-mesh-review/6e3dfab54aa214c75e395e8be733cdc08aa0979b8bcb2360a11a46c8cc82aa4e/qa/2-calamagrostis-canescens`.
   The compact upward-branching, fluffy panicle source shape is committed at `d075c79`.
 - The full shader-independent reconstruction derivation and counterexamples are preserved in
-  `GRASS-RAY-RECONSTRUCTION-MATH.md`; ten CPU properties cover the affine inverse basis,
-  Sannikov projected distance, inverse-transpose normal, grazing mixed-chart failure,
-  different-triangle failure, and exact bounded alternatives. A fixed 1.176 m value is only
-  this asset's current top height, never a generic ground-cover height contract.
+  `GRASS-RAY-RECONSTRUCTION-MATH.md`; nineteen CPU properties now cover the affine inverse
+  basis, Sannikov projected distance, constant-translation shell equivalence, camera-inside
+  successor semantics and direction sign, inverse-transpose normals, grazing mixed-chart
+  failure, different-triangle failure, angular owner-closure failure, and exact bounded
+  alternatives. A fixed 1.176 m value is only this asset's current top height, never a generic
+  ground-cover height contract.
 - The current single-species hardware shell is temporary exact-O acceptance scaffolding. It is
   depth-only, and root density rather than shell-origin density owns visible coverage. It must
   not survive as a fixed-height generic-groundcover architecture or appear as a visible
-  floating terrain copy. The captured acceptance pose shows no visible shell; boundary-flight
-  confirmation remains with the visual review.
+  floating terrain copy. User boundary-flight review confirmed that its side plane is visible;
+  the duplicate translated mesh is therefore an active defect, not accepted scaffolding.
+- The exact shell-free replacement is proved: intersect the unchanged carrier terrain from the
+  camera translated by the negative envelope vector. The hit parameter, primitive owner,
+  barycentrics, clipping, silhouette, and projected depth are identical to the translated
+  surface. The result must carry the shifted terrain owner/chart; ordinary scene depth and
+  ordinary ground ownership are not substitutes.
+- The two remaining projection classes are solved as math contracts. Camera-inside visibility
+  is the next ordered surface event after the camera phase and retains the forward pixel ray;
+  deriving direction from a behind-camera top point reverses it. Distant top/side drift cannot
+  contain a distance term under an exact affine chart. The current 16x4 direction carrier
+  filters arbitrary-mesh first hits and clamps elevations below 15 degrees, neither of which is
+  exact. Exterior rendering needs a certified four-dimensional first-owner closure; inside
+  rendering needs a sparse five-dimensional successor-owner closure. Both use fixed candidate
+  counts, exact live triangle tests, and a hard offline memory/rejection bound—never a dense
+  unbounded 5D atlas, runtime march, or data-dependent loop.
+- The no-memory-blowup constraint is quantified against the accepted asset. Its canonical
+  4,260,096-texel owner grid costs 17.0 MB for one 32-bit owner per sample and references
+  445,227 distinct triangles. A dense four-owner closure would cost 68.2 MB for ids alone and
+  is explicitly rejected. The math contract instead uses a bounded indirection field plus
+  sparse fixed-width owner/event pages and compact referenced geometry, with hard bake gates
+  for candidate count, subdivision depth, page count, geometry bytes, and total bytes.
+- A five-degree canonical elevation row is approved for the grazing domain. It removes the
+  current direct 5-to-15-degree clamp and serves as an additional closure seed; it is not used
+  to justify scalar interpolation between arbitrary-mesh owners.
 - GCRP/v4 vertex RGB is now transcoded once at load into a filterable premultiplied RGBA8
   first-hit colour atlas. The compute shader samples four cache-local colour records only
   after the winning hit, packs full RGB888 plus the four-bit exact profile id, and resolve uses

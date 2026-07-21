@@ -13,6 +13,7 @@ import {
   rayPoint,
   rayForTranslatedSurface,
   reprojectCanonicalPlaneHit,
+  successorRayEvent,
   translatedSurfacePoint,
   worldDeltaFromProfileDistance,
   worldDeltaFromProjectedDistance,
@@ -216,6 +217,56 @@ test('one top-entry first-hit record cannot resolve arbitrary camera-inside visi
   assert.equal(firstVisible(profileWithoutLaterVisibleSurface), undefined);
 });
 
+test('camera-inside visibility is the successor event, not first, last, or parity', () => {
+  const events = [
+    { s: 1, owner: 'front' },
+    { s: 3, owner: 'middle' },
+    { s: 4, owner: 'back' },
+  ] as const;
+  assert.equal(successorRayEvent(events, 0)?.owner, 'front');
+  assert.equal(successorRayEvent(events, 2)?.owner, 'middle');
+  assert.equal(successorRayEvent(events, 3)?.owner, 'middle', 't=0 is a categorical hit');
+  assert.equal(successorRayEvent(events, 4.1), undefined);
+
+  // These profiles have the same first and last records. A camera at s=2
+  // nevertheless needs different next hits, so bidirectional first-hit data is
+  // not an exact arbitrary-profile carrier either.
+  const withoutMiddle = [
+    { s: 1, owner: 'front' },
+    { s: 4, owner: 'back' },
+  ] as const;
+  assert.equal(successorRayEvent(events, 2)?.s, 3);
+  assert.equal(successorRayEvent(withoutMiddle, 2)?.s, 4);
+});
+
+test('any fixed peeled-hit prefix fails beyond its certified line depth complexity', () => {
+  const allEvents = Array.from({ length: 9 }, (_, index) => ({
+    s: index + 1,
+    owner: index,
+  }));
+  const peeledK = 4;
+  const storedPrefix = allEvents.slice(0, peeledK);
+  const cameraS = 4.5;
+  assert.equal(successorRayEvent(storedPrefix, cameraS), undefined);
+  assert.equal(successorRayEvent(allEvents, cameraS)?.s, 5);
+});
+
+test('camera-inside direction remains the forward pixel ray when top entry is behind', () => {
+  const pixelDirection = rayNormalize([0.31, -0.72, 0.62]);
+  const camera: RayVec3 = [4, 0.7, -2];
+  const topEntryT = -1.8;
+  const topEntry = rayPoint({ origin: camera, direction: pixelDirection }, topEntryT);
+  const cameraToTop = rayNormalize(sub(topEntry, camera));
+  closeVec(cameraToTop, [
+    -pixelDirection[0],
+    -pixelDirection[1],
+    -pixelDirection[2],
+  ]);
+  // The top displacement supplies only the signed camera phase. It must never
+  // replace the live forward direction used by the successor query.
+  close(-topEntryT, 1.8);
+});
+
 test('mixing raster depth with a different height/gradient chart amplifies error at grazing angles', () => {
   const elevation = 5 * Math.PI / 180;
   const direction: RayVec3 = [Math.cos(elevation), -Math.sin(elevation), 0];
@@ -318,6 +369,82 @@ test('geometric-plane reprojection is exact where linear directional depth blend
   const exact = rayPlaneT({ origin, direction: live }, planePoint, planeNormal);
   close(reprojectCanonicalPlaneHit(origin, d0, t0, planeNormal, live), exact);
   assert.ok(Math.abs((t0 * 0.57 + t1 * 0.43) - exact) > 1e-3);
+});
+
+test('exact profile direction and apparent orientation are invariant along one view ray', () => {
+  const profileToWorld: RayMat3 = [
+    [1, 0, 0],
+    [0.31, 1, -0.18],
+    [0, 0, 1],
+  ];
+  const direction = rayNormalize([0.37, -0.42, 0.83]);
+  const nearOrigin: RayVec3 = [-0.6, 1.7, -2.4];
+  const cameraShift = 7.25;
+  const farOrigin = rayPoint({ origin: nearOrigin, direction }, -cameraShift);
+  const planePoint: RayVec3 = [0.2, 0.55, 0.3];
+  const planeNormal = rayNormalize([-0.2, 0.91, 0.36]);
+
+  const nearT = rayPlaneT({ origin: nearOrigin, direction }, planePoint, planeNormal);
+  const farT = rayPlaneT({ origin: farOrigin, direction }, planePoint, planeNormal);
+  close(farT, nearT + cameraShift);
+  closeVec(
+    rayPoint({ origin: nearOrigin, direction }, nearT),
+    rayPoint({ origin: farOrigin, direction }, farT),
+  );
+
+  // The affine inverse and inverse-transpose have no camera-distance input.
+  const nearProfileRay = makeProfileRay(direction, profileToWorld);
+  const farProfileRay = makeProfileRay(direction, profileToWorld);
+  closeVec(nearProfileRay.direction, farProfileRay.direction);
+  close(nearProfileRay.speed, farProfileRay.speed);
+  closeVec(
+    profileNormalToWorld(planeNormal, profileToWorld),
+    profileNormalToWorld(planeNormal, profileToWorld),
+  );
+});
+
+test('owners at surrounding sampled directions do not form an arbitrary-mesh closure', () => {
+  const narrowFront: Triangle = [
+    [-0.015, -0.08, 1],
+    [0.015, -0.08, 1],
+    [0, 0.08, 1],
+  ];
+  const broadBack: Triangle = [
+    [-2, -2, 2],
+    [2, -2, 2],
+    [0, 2, 2],
+  ];
+  const origin: RayVec3 = [0, 0, 0];
+  const sampledDirections = [
+    rayNormalize([-0.1, 0, 1]),
+    rayNormalize([0.1, 0, 1]),
+  ];
+  for (const direction of sampledDirections) {
+    const sampled = firstTriangleHit({ origin, direction }, [narrowFront, broadBack]);
+    assert.equal(sampled?.owner, 1, 'both canonical samples see only the back owner');
+  }
+  const live = firstTriangleHit(
+    { origin, direction: [0, 0, 1] },
+    [narrowFront, broadBack],
+  );
+  assert.equal(live?.owner, 0, 'an unsampled owner wins strictly between canonical directions');
+});
+
+test('clamping a live grazing elevation to the lowest baked 3D slice changes the hit', () => {
+  const liveElevation = 5 * Math.PI / 180;
+  const lowestBakedElevation = 15 * Math.PI / 180;
+  const verticalDrop = 1;
+  const liveDirection: RayVec3 = [Math.cos(liveElevation), -Math.sin(liveElevation), 0];
+  const bakedDirection: RayVec3 = [
+    Math.cos(lowestBakedElevation),
+    -Math.sin(lowestBakedElevation),
+    0,
+  ];
+  const exactT = verticalDrop / -liveDirection[1];
+  const bakedT = verticalDrop / -bakedDirection[1];
+  const bakedProjectedPath = bakedT * Math.hypot(bakedDirection[0], bakedDirection[2]);
+  const incorrectlyLifted = bakedProjectedPath / Math.hypot(liveDirection[0], liveDirection[2]);
+  assert.ok(Math.abs(incorrectlyLifted - exactT) > 7);
 });
 
 test('profile normals use inverse-transpose and remain orthogonal after shear', () => {
