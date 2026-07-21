@@ -95,6 +95,11 @@ export interface FieldPlan {
   /** Optional categorical geology on the 2 m condition lattice. Four channels are
    *  sampled nearest; null keeps old manifests and generated worlds unchanged. */
   geology: PlanePlan | null;
+  /** One logical cook-side ground-cover authority, split into two rgba8 GPU
+   *  carriers: A is categorical [typeA,typeB,clumpLo,clumpHi], B is continuous
+   *  [blend,vigor,moisture,canopyProximity]. */
+  groundCoverA: PlanePlan | null;
+  groundCoverB: PlanePlan | null;
   coverageBox: CoverageBox;
   /** the biome plane's channels 2/3 carry the merged far-forest canopy
    *  (heightM, cover) — true iff the source has a canopy layer. The generated
@@ -120,6 +125,12 @@ export const MICRO_HEIGHT_PLANE_RES = 1536;
  *  tracked the camera fine, so it keeps 1536² and does not pay the extra VRAM. */
 export const MICRO_HEIGHT_FINE_PLANE_RES = 2560;
 export const U8_PLANE_RES = 1024;
+/** Ground cover is consumed only by the 155 m-radius procedural lane. A 512²
+ *  camera window on its 2 m lattice has a 512 m half-extent, leaving 357 m of
+ *  scroll slack while keeping the two retained rgba8 carriers to 2 MB total.
+ *  Using the general 1024² window would retain 8 MB and push StreamBrain over
+ *  its 128 MB RAM ledger without exposing any additional rendered coverage. */
+export const GROUND_COVER_PLANE_RES = 512;
 /** cover-or-window rule (S3b): a level's plane res grows past the default
  *  window res up to the cap when that makes it cover the source's WHOLE layer
  *  span (generated world ⇒ full-coverage static planes); a larger world keeps
@@ -166,6 +177,18 @@ export const GEOLOGY_CHANNELS: readonly (readonly [string, number])[] = [
   ['surficialFamily', 1],
   ['processFamily', 2],
   ['coverageFlags', 3],
+];
+export const GROUNDCOVER_A_CHANNELS: readonly (readonly [string, number])[] = [
+  ['typeA', 0],
+  ['typeB', 1],
+  ['clumpLo', 2],
+  ['clumpHi', 3],
+];
+export const GROUNDCOVER_B_CHANNELS: readonly (readonly [string, number])[] = [
+  ['blend', 0],
+  ['vigor', 1],
+  ['moisture', 2],
+  ['canopyProximity', 3],
 ];
 /** Estonia dry water texels decode to NaN (§9a) — mapped to the dry sentinel
  *  the generated field uses downstream of its bed−2 encoding. */
@@ -571,6 +594,19 @@ export function planField(manifest: WorldManifest): FieldPlan {
   if (geologyMeta && geologyMeta.lods.includes(0)) {
     geology = planLayer(manifest, 'geology', U8_PLANE_RES, U8_PLANE_RES).find((p) => p.lod === 0) ?? null;
   }
+  let groundCoverA: PlanePlan | null = null;
+  let groundCoverB: PlanePlan | null = null;
+  const groundCoverMeta = manifest.layers.groundcover;
+  if (groundCoverMeta?.enc === 2 && groundCoverMeta.lods.includes(0) && groundCoverMeta.texelMeters) {
+    const control = planLayer(
+      manifest,
+      'groundcover',
+      GROUND_COVER_PLANE_RES,
+      GROUND_COVER_PLANE_RES,
+    ).find((p) => p.lod === 0) ?? null;
+    groundCoverA = control;
+    groundCoverB = control;
+  }
   return {
     cookedMicroHeight: manifest.format === 2 && height.some((level) => level.lod < 0),
     height,
@@ -582,6 +618,8 @@ export function planField(manifest: WorldManifest): FieldPlan {
     waterCoverFar,
     soil,
     geology,
+    groundCoverA,
+    groundCoverB,
     coverageBox: coverageBoxM(manifest),
     biomeHasCanopy: !!manifest.layers.canopy,
   };

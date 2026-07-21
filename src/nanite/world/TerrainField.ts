@@ -115,6 +115,12 @@ export class TerrainField {
   /** Optional categorical geology [bedrock, surficial, process, coverage flags]. */
   readonly geology: FieldLevel | null;
   readonly hasGeology: boolean;
+  /** Cook-side ground-cover control. A is categorical
+   *  [typeA,typeB,clumpLo,clumpHi], B continuous
+   *  [blend,vigor,moisture,canopyProximity]. */
+  readonly groundCoverA: FieldLevel | null;
+  readonly groundCoverB: FieldLevel | null;
+  readonly hasGroundCover: boolean;
   readonly coverageBox: CoverageBox;
   /** biome plane channels 2/3 carry the merged far-forest canopy (heightM, cover)
    *  — true iff the source has a canopy layer. The generated world packs snow/
@@ -135,6 +141,8 @@ export class TerrainField {
     waterCoverFar: FieldLevel | null,
     soil: FieldLevel | null,
     geology: FieldLevel | null,
+    groundCoverA: FieldLevel | null,
+    groundCoverB: FieldLevel | null,
     coverageBox: CoverageBox,
     biomeCarriesCanopy: boolean,
     cookedMicroHeight: boolean,
@@ -152,6 +160,9 @@ export class TerrainField {
     this.hasSoil = soil !== null;
     this.geology = geology;
     this.hasGeology = geology !== null;
+    this.groundCoverA = groundCoverA;
+    this.groundCoverB = groundCoverB;
+    this.hasGroundCover = groundCoverA !== null && groundCoverB !== null;
     this.coverageBox = coverageBox;
     this.biomeCarriesCanopy = biomeCarriesCanopy;
     this.cookedMicroHeight = cookedMicroHeight;
@@ -168,7 +179,8 @@ export class TerrainField {
         `water ${water ? `${water.res}² r32f (+far ${waterFar?.res ?? 0}²)` : 'none'} + ` +
         `watercover ${waterCover ? `${waterCover.res}² rgba8${waterCover.wraps ? '~' : ''} (+far ${waterCoverFar?.res ?? 0}²)` : 'none'} + ` +
         `soil ${soil ? `${soil.res}² rgba8${soil.wraps ? '~' : ''}` : 'none'} + ` +
-        `geology ${geology ? `${geology.res}² rgba8${geology.wraps ? '~' : ''}` : 'none'} = ` +
+        `geology ${geology ? `${geology.res}² rgba8${geology.wraps ? '~' : ''}` : 'none'} + ` +
+        `groundcover ${groundCoverA && groundCoverB ? `2×${groundCoverA.res}² rgba8${groundCoverA.wraps ? '~' : ''}` : 'none'} = ` +
         `${mb.toFixed(1)} MB VRAM (CPU mirrors share the backing; ~ = camera-window level)`,
     );
     if (mb > TERRAIN_FIELD_VRAM_CEILING_MB) {
@@ -188,6 +200,8 @@ export class TerrainField {
     const waterCoverFar = plan.waterCoverFar ? makeU8Level('terrainFieldWaterCoverFar', plan.waterCoverFar) : null;
     const soil = plan.soil ? makeU8Level('terrainFieldSoil', plan.soil) : null;
     const geology = plan.geology ? makeU8Level('terrainFieldGeology', plan.geology) : null;
+    const groundCoverA = plan.groundCoverA ? makeU8Level('terrainFieldGroundCoverA', plan.groundCoverA) : null;
+    const groundCoverB = plan.groundCoverB ? makeU8Level('terrainFieldGroundCoverB', plan.groundCoverB) : null;
     return new TerrainField(
       heightLevels,
       biomeLevels,
@@ -198,6 +212,8 @@ export class TerrainField {
       waterCoverFar,
       soil,
       geology,
+      groundCoverA,
+      groundCoverB,
       plan.coverageBox,
       plan.biomeHasCanopy,
       plan.cookedMicroHeight,
@@ -243,6 +259,8 @@ export class TerrainField {
       null,
       null, // no soil plane on a single-level field
       null, // no geology plane on a single-level field
+      null, // no cook-side ground-cover plane on a single-level field
+      null, // no second ground-cover carrier
       {
         minX: opts.worldMinX,
         minZ: opts.worldMinZ,
@@ -275,7 +293,11 @@ export class TerrainField {
                   ? this.waterCoverFar
                     : plane === 'soil'
                       ? this.soil
-                      : this.geology;
+                      : plane === 'geology'
+                        ? this.geology
+                        : plane === 'groundcoverA'
+                          ? this.groundCoverA
+                          : this.groundCoverB;
     if (!lvl) throw new Error(`TerrainField: no ${plane} level ${level}`);
     return lvl;
   }
@@ -368,6 +390,8 @@ export class TerrainField {
       ...(this.waterCoverFar ? [this.waterCoverFar] : []),
       ...(this.soil ? [this.soil] : []),
       ...(this.geology ? [this.geology] : []),
+      ...(this.groundCoverA ? [this.groundCoverA] : []),
+      ...(this.groundCoverB ? [this.groundCoverB] : []),
     ];
   }
 
@@ -685,6 +709,20 @@ export class TerrainField {
   geologyLinearAt(wxz: NV2): NV4 {
     if (!this.geology) return vec4(0) as unknown as NV4;
     return planeLinear(this.geology, wxz) as unknown as NV4;
+  }
+
+  /** Nearest sample of ground-cover carrier A:
+   *  [typeA, typeB, clumpLo, clumpHi]. All four channels are categorical. */
+  groundCoverAt(wxz: NV2): NV4 {
+    if (!this.groundCoverA) return vec4(0) as unknown as NV4;
+    return planeNearest4(this.groundCoverA, wxz);
+  }
+
+  /** Filtered sample of ground-cover carrier B:
+   *  [blend, vigor, moisture, canopyProximity]. */
+  groundCoverLinearAt(wxz: NV2): NV4 {
+    if (!this.groundCoverB) return vec4(0) as unknown as NV4;
+    return planeLinear(this.groundCoverB, wxz) as unknown as NV4;
   }
 
   /** nearest-texel waterY — hot gates (raster riverDepth, grass water gate).

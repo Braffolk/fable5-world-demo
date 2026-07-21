@@ -23,6 +23,7 @@ LAYER_IDS = {
     "height": 0, "biome": 1, "water": 2, "trees": 3, "soil": 4,
     "understory": 5, "debris": 6, "boulders": 7, "canopy": 8, "watercover": 9,
     "geology": 10,
+    "groundcover": 11,
 }
 LAYER_NAMES = {v: k for k, v in LAYER_IDS.items()}
 

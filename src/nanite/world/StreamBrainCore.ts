@@ -42,6 +42,8 @@ import {
   CANOPY_CHANNELS,
   FIELDS_CHANNELS,
   GEOLOGY_CHANNELS,
+  GROUNDCOVER_A_CHANNELS,
+  GROUNDCOVER_B_CHANNELS,
   WATER_DRY_SENTINEL,
   WATER_FAR_FACTOR,
   WATERCOVER_CHANNELS,
@@ -176,6 +178,10 @@ export class StreamBrainCore {
   private sWin: U8Window | null = null;
   /** Optional geology condition window; categorical channels use nearest sampling. */
   private gWin: U8Window | null = null;
+  /** One logical groundcover layer, retained as categorical + continuous rgba8
+   *  carriers so identity never passes through a linear sampler. */
+  private gcAWin: U8Window | null = null;
+  private gcBWin: U8Window | null = null;
 
   // decoded-chunk LRU
   private readonly lru = new Map<string, { payload: ChunkPayload; bytes: number }>();
@@ -565,6 +571,19 @@ export class StreamBrainCore {
       packets.push({ kind: 'fill', plane: 'geology', level: 0, x: 0, y: 0, w: plan.res, h: plan.res, u8: copy });
       transfers.push(copy.buffer);
     }
+    if (this.plan.groundCoverA && this.plan.groundCoverB) {
+      const planA = this.plan.groundCoverA;
+      const planB = this.plan.groundCoverB;
+      const dataA = await this.assembleU8('groundcover', planA, planA.n0x, planA.n0z, GROUNDCOVER_A_CHANNELS);
+      const dataB = await this.assembleU8('groundcover', planB, planB.n0x, planB.n0z, GROUNDCOVER_B_CHANNELS);
+      this.gcAWin = { plan: planA, data: dataA, n0x: planA.n0x, n0z: planA.n0z, phaseX: 0, phaseY: 0 };
+      this.gcBWin = { plan: planB, data: dataB, n0x: planB.n0x, n0z: planB.n0z, phaseX: 0, phaseY: 0 };
+      const copyA = dataA.slice();
+      const copyB = dataB.slice();
+      packets.push({ kind: 'fill', plane: 'groundcoverA', level: 0, x: 0, y: 0, w: planA.res, h: planA.res, u8: copyA });
+      packets.push({ kind: 'fill', plane: 'groundcoverB', level: 0, x: 0, y: 0, w: planB.res, h: planB.res, u8: copyB });
+      transfers.push(copyA.buffer, copyB.buffer);
+    }
     this.deps.emit({ kind: 'packets', packets }, transfers);
     this.dropLru(); // consumed — the retained windows are the persistent store
     this.deps.emit({ kind: 'planesReady', ramBytes: this.ramBytes() });
@@ -577,6 +596,8 @@ export class StreamBrainCore {
     if (this.wcWin) b += this.wcWin.data.byteLength;
     if (this.sWin) b += this.sWin.data.byteLength;
     if (this.gWin) b += this.gWin.data.byteLength;
+    if (this.gcAWin) b += this.gcAWin.data.byteLength;
+    if (this.gcBWin) b += this.gcBWin.data.byteLength;
     return b;
   }
 
@@ -769,6 +790,8 @@ export class StreamBrainCore {
     if (this.wcWin) await this.scrollU8('watercover', WATERCOVER_CHANNELS, this.wcWin, camX, camZ, vx, vz, (p, t) => this.pushFarCover(p, t));
     if (this.sWin) await this.scrollU8('soil', SOIL_CHANNELS, this.sWin, camX, camZ, vx, vz);
     if (this.gWin) await this.scrollU8('geology', GEOLOGY_CHANNELS, this.gWin, camX, camZ, vx, vz);
+    if (this.gcAWin) await this.scrollU8('groundcoverA', GROUNDCOVER_A_CHANNELS, this.gcAWin, camX, camZ, vx, vz, undefined, 'groundcover');
+    if (this.gcBWin) await this.scrollU8('groundcoverB', GROUNDCOVER_B_CHANNELS, this.gcBWin, camX, camZ, vx, vz, undefined, 'groundcover');
     // biome/fields planes scroll with the SAME rule but hold no brain window —
     // regions assemble straight from LRU'd chunks. (Their consumers are filtered
     // rgba8 taps; sub-texel placement is uncritical.) They ride height's snap
@@ -1107,7 +1130,7 @@ export class StreamBrainCore {
   // far-coverage reduce onto the same packet batch; soil has no far level ⇒ no hook. ----
 
   private async scrollU8(
-    kind: 'watercover' | 'soil' | 'geology',
+    kind: 'watercover' | 'soil' | 'geology' | 'groundcoverA' | 'groundcoverB',
     channels: readonly (readonly [string, number])[],
     win: U8Window,
     camX: number,
@@ -1115,16 +1138,18 @@ export class StreamBrainCore {
     vx = 0,
     vz = 0,
     afterScroll?: (packets: StreamPacket[], transfers: Transferable[]) => void,
+    sourceLayer?: LayerName,
   ): Promise<void> {
     const plan = win.plan;
     if (!plan.wraps) return;
-    const geo = this.layerGeo(kind);
+    const layer = sourceLayer ?? (kind as LayerName);
+    const geo = this.layerGeo(layer);
     const { n0x, n0z } = this.windowTarget(plan, geo, camX, camZ, vx, vz);
     const dx = n0x - win.n0x;
     const dz = n0z - win.n0z;
     if (dx === 0 && dz === 0) return;
     if (Math.abs(dx) >= plan.res || Math.abs(dz) >= plan.res) {
-      await this.refillU8(kind, channels, win, n0x, n0z, geo, afterScroll);
+      await this.refillU8(kind, layer, channels, win, n0x, n0z, geo, afterScroll);
       return;
     }
     const packets: StreamPacket[] = [];
@@ -1133,7 +1158,7 @@ export class StreamBrainCore {
     const phaseY = (((win.phaseY + dz) % plan.res) + plan.res) % plan.res;
     const emitRegion = async (rx0: number, rz0: number, rw: number, rh: number): Promise<void> => {
       if (rw <= 0 || rh <= 0) return;
-      const sub = await this.assembleRegionU8(kind, channels, plan, rx0, rz0, rw, rh);
+      const sub = await this.assembleRegionU8(layer, channels, plan, rx0, rz0, rw, rh);
       for (const r of wrapRects(rx0 - n0x, rz0 - n0z, rw, rh, phaseX, phaseY, plan.res)) {
         const lz0 = ((((r.y - phaseY) % plan.res) + plan.res) % plan.res) + n0z - rz0;
         const lx0 = ((((r.x - phaseX) % plan.res) + plan.res) % plan.res) + n0x - rx0;
@@ -1165,7 +1190,8 @@ export class StreamBrainCore {
 
   /** whole-window refill (teleport-scale jump): reassemble at the new placement. */
   private async refillU8(
-    kind: 'watercover' | 'soil' | 'geology',
+    kind: 'watercover' | 'soil' | 'geology' | 'groundcoverA' | 'groundcoverB',
+    layer: LayerName,
     channels: readonly (readonly [string, number])[],
     win: U8Window,
     n0x: number,
@@ -1174,7 +1200,7 @@ export class StreamBrainCore {
     afterScroll?: (packets: StreamPacket[], transfers: Transferable[]) => void,
   ): Promise<void> {
     const plan = win.plan;
-    const data = await this.assembleU8(kind, plan, n0x, n0z, channels);
+    const data = await this.assembleU8(layer, plan, n0x, n0z, channels);
     win.data.set(data);
     win.n0x = n0x;
     win.n0z = n0z;

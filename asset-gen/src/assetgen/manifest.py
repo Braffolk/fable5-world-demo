@@ -95,6 +95,23 @@ LAYER_DOC = {
             "subsurface formation prior unless bit4 is set; coarse polygons never place an exact cliff."
         ),
     },
+    "groundcover": {
+        "enc": 2,
+        "texelMeters": 2,
+        "planes": [
+            "typeA", "typeB", "clumpLo", "clumpHi",
+            "blend", "vigor", "moisture", "canopyProximity",
+        ],
+        "semantics": (
+            "ground-cover control field v1; one logical authority stored as two rgba8 "
+            "runtime carriers. typeA/typeB are categorical GroundCoverId values; blend is "
+            "the typeB fraction; vigor is continuous cover/height potential; clumpLo/Hi "
+            "form a stable cook-side patch id; moisture and canopyProximity are continuous. "
+            "The v1 ecology is derived from the already-cooked understory community, soil "
+            "wetness, and CHM evidence. It establishes the generic two-type contract; it is "
+            "not yet the final >=10 native-species facies cook. LOD0 only, 2 m texels."
+        ),
+    },
     "trees": {
         "enc": 3,
         "columns": [["x", "u16"], ["z", "u16"], ["species", "u8"], ["scale", "u8"],

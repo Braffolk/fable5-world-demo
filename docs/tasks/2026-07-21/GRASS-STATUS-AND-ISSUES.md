@@ -307,3 +307,66 @@ no ray-step loop, and no distance- or density-dependent iteration.
 This checkpoint corrects the implementation-side causes and passes the recorded automated
 and visual inspections. Final issue closure remains subject to the user's live motion/angle
 acceptance; the multi-species/moss groundcover work begins from this committed grass base.
+
+## 10. Generic ground-cover carrier checkpoint (2026-07-21)
+
+The first post-grass checkpoint is an end-to-end, optional `groundcover` layer. It is a
+control carrier, not yet the promised multi-species/moss geometry result: production still
+uses the validated grass LUT for every non-bare type. Its inspectable purpose is to prove
+that cooked cover authority survives the complete streaming and O(1) visibility path before
+the precomputed geometry becomes type-keyed.
+
+### Frozen carrier contract
+
+- One logical LAC1 layer (`groundcover`, id 11), LOD0 at 2 m, carries eight u8 planes:
+  `[typeA,typeB,clumpLo,clumpHi]` categorically and
+  `[blend,vigor,moisture,canopyProximity]` continuously.
+- Runtime splits it into nearest- and linear-filtered rgba8 carriers. Old manifests omit the
+  layer and compile to canonical grass id 0 with the prior procedural density.
+- The camera-window is 512², not the general u8 1024²: at 2 m it has a 512 m half-extent
+  around the grass lane's 155 m radius. The two retained carriers therefore cost 2 MB total,
+  keep StreamBrain at 126.3 MB under its 128 MB ledger, and expose no less rendered area.
+- Guide-record words 2–3 carry the packed control because they are already included in the
+  first `uvec4` record loads. Words 6–7 mirror the values for the approved external 32-byte
+  layout, but the ray kernel does not fetch that tail. The earlier design note calling only
+  words 6–7 "free" is stale after the O(1) rebuild; reading them would add memory traffic.
+- Cover election happens only after base-space root recovery, using the nearest complete
+  control record plus the cook-side clump id. The six low body-id bits carry `GroundCoverId`;
+  legacy grass remains exactly zero. There is no screen-noise type decision.
+
+### Cook-side v1 scope
+
+- `GroundCoverId`: grass 0, moss 1, sedge 2, lichen 3, forb 4, dwarf shrub 5, bare 63.
+- The v1 cook maps the existing cooked understory communities to functional two-type mixes,
+  derives vigor from the existing suitability-cut density, moisture from soil wetness,
+  canopy proximity from CHM cover/distance, and a world-seamless domain-warped clump id.
+- This is deliberately not labeled as the final >=10 Estonia-native species/facies cook.
+  It establishes the representation and produces visible ecological patches while the
+  native-species GPU baker and type-keyed geometry atlas are implemented next.
+
+### Shader-performance rationale
+
+- Ray candidate count, fixed texture candidates, dispatch shape, barriers, synchronization,
+  and binding count are unchanged. No march and no shader loop were introduced.
+- The retired nested 8×8 guide occupancy loop was removed; it had no surviving mask consumer.
+  Its density output is now the analytic mean of the four bilinear corner probabilities.
+- Ground-cover texture taps occur once per guide texel, not per pixel. Ray-time type decoding
+  reuses already loaded guide records. Moving the control read from entry record to root
+  record adds no storage load and shortens two register live ranges.
+
+### Verification
+
+- Taevaskoda cook: 64/64 control chunks; immutable overlay recipe
+  `5ec67099fa2b5415d6d0f6ccf3331884df5f2122ae039e7c87a27389af20721a`, manifest SHA-256
+  `14414ab1606ed57587db09582be26be6bf12823b64a77100b4faec8197258681`.
+- `npm run typecheck`: pass. Ground-cover cook tests: 3/3 pass. Focused TerrainField and
+  RemoteWorldSource tests pass. `PlaneFill.micro.test.ts` retains one unrelated stale
+  expectation (1536 vs the pre-existing 2560 finest micro-height window).
+- Exact localhost production boot at `cam=311123,47,190723,0,-0.12`, DPR2: pass with no
+  page error, TSL diagnostic, shader validation error, or uncaptured WebGPU error.
+  TerrainField is 151.8 MB; retained brain planes are 126.3 MB. Seven-sample medians before
+  the window correction were `c.grassRay=0.46 ms`, `c.grassGuide=0.13 ms`; the final boot
+  reported `c.grassRay=0.39 ms`, `c.grassGuide=0.13 ms`.
+- Exact `groundcoverdbg=type` boot after root anchoring: pass at frame 84. The coloured
+  patches are the same procedural geometry records that production shades as grass; the
+  debug is not a far-tile/pixel-ownership surrogate.

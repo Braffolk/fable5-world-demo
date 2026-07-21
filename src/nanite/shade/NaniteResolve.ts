@@ -81,6 +81,7 @@ import type { RegistryGpu } from '../world/GeometryRegistry';
 import { brickNormalTsl, brickWord, BRICK_ALBEDO, BRICK_NORMAL, BRICK_POS_X } from '../voxel/VoxelBrick';
 import { makeFetch, slotHash } from '../raster/NaniteFetch';
 import { GRASS_FAR_BASE } from '../grass/NaniteGrass';
+import { GroundCoverId, GROUND_COVER_ID_MASK } from '../groundcover/GroundCoverTypes';
 import { CLHW_MAX, hashColor, instRotateDir, instTransformPoint, instYaw, type NaniteCam } from '../NaniteCommon';
 import { clusterHwClass } from '../cull/NaniteHwClass';
 import type { NaniteVisBuffers } from '../raster/NaniteRaster';
@@ -1167,6 +1168,8 @@ export function buildNaniteResolve(
     // ~1.6 m patch dryness × canopy shade; blade normal pulled to the terrain normal
     // hardening with distance). Zero storage buffers — texture taps + ALU only.
     const gpTip = float(0.5).toVar() as unknown as NF;
+    const groundCoverTypeDebug = q.get('groundcoverdbg') === 'type';
+    const gpCoverId = groundCoverTypeDebug ? (uint(GroundCoverId.Grass).toVar() as unknown as NU) : null;
     // ?grassdbg=flatres — attribution stop: grass pixels keep their election/depth
     // but the resolve stubs derive+material+per-pixel work to constants. Splits
     // "grass pixels EXIST downstream" from "grass resolve work" in the frame A/B.
@@ -1187,6 +1190,7 @@ export function buildNaniteResolve(
           return;
         }
         const body = pRaw.bitAnd(uint(0x3fffffff));
+        if (gpCoverId) gpCoverId.assign(body.bitAnd(uint(GROUND_COVER_ID_MASK)));
         // normal + tip come straight from the raycast lane's screen texture (ONE tap)
         const rv = gp.ray(pixelIndex as unknown as NU) as unknown as NV4;
         const g = {
@@ -1384,6 +1388,29 @@ export function buildNaniteResolve(
     }
 
     // ---- debug overrides ------------------------------------------------------
+    // ?groundcoverdbg=type — verify the cook-controlled 6-bit id really survives
+    // guide -> ray election -> vis buffer -> resolve. This is a build-time-only
+    // override; production does not unpack or branch on the id yet.
+    if (groundCoverTypeDebug && gpCoverId && isGP) {
+      const dbg = (lit as unknown as { toVar(): NV3 }).toVar();
+      let typeColor = vec3(0.12, 0.42, 0.05) as unknown as NV3; // grass
+      typeColor = (gpCoverId.equal(uint(GroundCoverId.Moss)) as unknown as { select(a: NV3, b: NV3): NV3 })
+        .select(vec3(0.42, 0.78, 0.08) as unknown as NV3, typeColor);
+      typeColor = (gpCoverId.equal(uint(GroundCoverId.Sedge)) as unknown as { select(a: NV3, b: NV3): NV3 })
+        .select(vec3(0.92, 0.68, 0.08) as unknown as NV3, typeColor);
+      typeColor = (gpCoverId.equal(uint(GroundCoverId.Lichen)) as unknown as { select(a: NV3, b: NV3): NV3 })
+        .select(vec3(0.68, 0.76, 0.58) as unknown as NV3, typeColor);
+      typeColor = (gpCoverId.equal(uint(GroundCoverId.Forb)) as unknown as { select(a: NV3, b: NV3): NV3 })
+        .select(vec3(0.76, 0.18, 0.62) as unknown as NV3, typeColor);
+      typeColor = (gpCoverId.equal(uint(GroundCoverId.DwarfShrub)) as unknown as { select(a: NV3, b: NV3): NV3 })
+        .select(vec3(0.42, 0.21, 0.08) as unknown as NV3, typeColor);
+      typeColor = (gpCoverId.equal(uint(GroundCoverId.Bare)) as unknown as { select(a: NV3, b: NV3): NV3 })
+        .select(vec3(0.18, 0.18, 0.18) as unknown as NV3, typeColor);
+      If(isGP, () => {
+        dbg.assign(typeColor);
+      });
+      return vec4(dbg, 1) as unknown as NV4;
+    }
     // ?grassdbg=tip — grass base→tip, UNLIT: base(t=0)=RED, tip(t=1)=GREEN.
     // Non-grass pixels retain their normal lit output, so the terrain/vegetation
     // context remains readable. gpTip carries the raycast tip param (set in the

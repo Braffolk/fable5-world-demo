@@ -69,7 +69,6 @@ import {
   bcF2U,
   bcU2F,
   dispatch,
-  loopUN,
   packHalfU,
   returnIf,
   sU32Views,
@@ -324,15 +323,12 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
   // Word layout per texel i (base = i*8):
   //   [0] ground     f32 bitcast   (bcF2U)      ← kRay: O/E planes + gB corners
   //   [1] grad       half2         (dgdx, dgdz) ← kRay: O/E planes
-  //   [2] (topOut,amp) half2       packHalfU
-  //   [3] widenT     f32 bitcast   (bcF2U)
-  //   [4] mask0      u32 bits 0..31
-  //   [5] mask1      u32 bits 32..63
-  //   [6..7] spare   (written 0)   — pads to 32B so records stay line-aligned
-  // ⚠️ single-fetch rebuild (2026-07-20): kRay now reads ONLY words 0..1; the
-  // mask survives as kGuideBake's own popcount → guideFieldT3 density, and
-  // words 2..5 have NO consumer — shrinking the record is task #39's guide-
-  // bake diet (kept here to hold this change to the kernel swap).
+  //   [2] typeA|typeB<<8|blend<<16|vigor<<24
+  //   [3] clumpLo|clumpHi<<8|moisture<<16|canopyProximity<<24
+  //   [4..5] reserved (zero)
+  //   [6..7] exact mirror of [2..3] for the approved external 32B contract
+  // Words 2..3 ride the same uvec4 reads kRay already performs for ground/grad;
+  // the mirrored tail is not fetched by kRay. No second record-half load is added.
   const REC_WORDS_PER = 8;
   const recWords = GUIDE_N * REC_WORDS_PER;
   const guideRecAttr = new StorageBufferAttribute(new Uint32Array(recWords), 1);
@@ -390,7 +386,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
   };
   const guideFieldT1 = mkFieldTex('grassGuideField1');
   const guideFieldT2 = mkFieldTex('grassGuideField2');
-  /** T3.x = per-texel grass DENSITY (mask popcount / 64) — the tier-select
+  /** T3.x = continuous per-texel ground-cover density — the tier-select
    *  field. Rides its own HW-bilinear texture: continuous across space (a
    *  buffer texel read is a staircase; encoding it as swirl-vector length
    *  shrinks under angle mixing). yzw spare. ~1.2 MB. */
@@ -462,68 +458,55 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
       const p10 = pCorner(1, -1);
       const p01 = pCorner(-1, 1);
       const p11 = pCorner(1, 1);
-      const pMax = p00.max(p10).max(p01).max(p11) as unknown as NF;
-      // 64-bit occupancy: bit v·8+u = fine cell (fb.x+u, fb.y+v) holds a clump.
-      // SAME accept hash as the geo kFine (0x77a1) — the hybrid seam needs BOTH
-      // lanes to place the identical clump set or clumps reshuffle at the boundary.
-      const m0 = uint(0).toVar() as unknown as NU;
-      const m1 = uint(0).toVar() as unknown as NU;
-      /** occupied-cell count 0..64 — /64 = the texel's DENSITY (kRay tier select) */
-      const cnt = uint(0).toVar() as unknown as NU;
-      If(pMax.greaterThan(0), () => {
-        loopUN('gbv', uint(0), uint(GUIDE_SUB), (v) => {
-          loopUN('gbu', uint(0), uint(GUIDE_SUB), (u) => {
-            const wcF = fb.add(vec2(toF(u), toF(v))) as unknown as NV2;
-            const fu = toF(u).add(0.5).mul(1 / GUIDE_SUB) as unknown as NF;
-            const fv = toF(v).add(0.5).mul(1 / GUIDE_SUB) as unknown as NF;
-            const pC = mix(mix(p00, p10, fu), mix(p01, p11, fu), fv) as unknown as NF;
-            If(cellHash(wcF, SALT ^ 0x77a1).lessThan(pC), () => {
-              (cnt as unknown as { addAssign(v: unknown): void }).addAssign(uint(1));
-              const bit = (v as unknown as NU).mul(uint(GUIDE_SUB)).add(u) as unknown as NU;
-              If(bit.lessThan(uint(32)), () => {
-                (m0 as unknown as { assign(v: unknown): void }).assign(
-                  m0.bitOr(uint(1).shiftLeft(bit)),
-                );
-              }).Else(() => {
-                (m1 as unknown as { assign(v: unknown): void }).assign(
-                  m1.bitOr(uint(1).shiftLeft(bit.bitAnd(uint(31)))),
-                );
-              });
-            });
-          });
-        });
-      });
-      // conservative sward-top offset (the kernel's tight topB law) — 0 when empty,
-      // (word 2 is consumer-less since the single-fetch rebuild — #39 diet)
-      // Physical blade height is camera-independent. The retired geometry lane
-      // thinned distant blades and widened/tallened survivors to conserve mass;
-      // the O(1) LUT has no blade-count cost and must not move that LOD law into
-      // world geometry. topOut/widenT remain only in the consumer-less record
-      // tail pending the #39 guide-record diet.
-      const widenT = float(1) as unknown as NF;
+      // The retired 8x8 occupancy/popcount loop only estimated the mean of this
+      // bilinear probability field; no consumer used its mask after the O(1)
+      // rebuild. Store the analytic expectation directly: smoother, fixed ALU,
+      // and no per-frame shader loop.
+      const densOut = p00.add(p10).add(p01).add(p11).mul(0.25).clamp(0, 1)
+        .toVar() as unknown as NF;
       const topOff = float(0.75) as unknown as NF;
-      const occ = m0.bitOr(m1).notEqual(uint(0));
-      const topOut = occ.select(topOff, float(0)) as unknown as NF;
+      const topOut = densOut.greaterThanEqual(0.02).select(topOff, float(0)) as unknown as NF;
       // gust amplitude at the texel — rebaked EVERY frame, so wind stays live
       const amp = (windContext()
         ? (windU.strength as unknown as NF)
             .mul(gustAt(wpos).mul(0.9).add(0.3))
             .mul(windExposure(wpos))
         : (float(0) as unknown as NF)) as unknown as NF;
-      // merged 8-word record (see layout at decl): ctx words 0..3, mask words 4..5,
-      // spare words 6..7 (write 0). Same values/pack fns as the pre-merge split.
+      // Cook-side two-type control. Missing/legacy manifests compile to canonical
+      // grass (id 0) and the current procedural density, preserving old body ids.
+      const controlA = field.hasGroundCover
+        ? field.groundCoverAt(wpos)
+        : (vec4(0) as unknown as NV4);
+      const controlB = field.hasGroundCover
+        ? field.groundCoverLinearAt(wpos)
+        : (vec4(0, densOut, 0, 0) as unknown as NV4);
+      const byte = (v: NF): NU => uint(v.mul(255).add(0.5).floor()) as unknown as NU;
+      const typeA = byte(controlA.x as unknown as NF);
+      const typeB = byte(controlA.y as unknown as NF);
+      const blendB = byte(controlB.x as unknown as NF);
+      const vigorB = byte(controlB.y as unknown as NF);
+      const clumpLo = byte(controlA.z as unknown as NF);
+      const clumpHi = byte(controlA.w as unknown as NF);
+      const moistureB = byte(controlB.z as unknown as NF);
+      const canopyB = byte(controlB.w as unknown as NF);
+      const mixWord = typeA
+        .bitOr(typeB.shiftLeft(uint(8)))
+        .bitOr(blendB.shiftLeft(uint(16)))
+        .bitOr(vigorB.shiftLeft(uint(24))) as unknown as NU;
+      const envWord = clumpLo
+        .bitOr(clumpHi.shiftLeft(uint(8)))
+        .bitOr(moistureB.shiftLeft(uint(16)))
+        .bitOr(canopyB.shiftLeft(uint(24))) as unknown as NU;
+      // merged 8-word record (see layout at declaration).
       const base = i.mul(uint(REC_WORDS_PER));
       guideRecW.rw.element(base).assign(bcF2U(g));
       guideRecW.rw.element(base.add(uint(1))).assign(packHalfU(vec2(dgdx, dgdz) as unknown as NV2));
-      guideRecW.rw.element(base.add(uint(2))).assign(packHalfU(vec2(topOut, amp) as unknown as NV2));
-      // word 3: retired widenT — consumer-less since the single-fetch rebuild;
-      // dies with the #39 record diet
-      guideRecW.rw.element(base.add(uint(3))).assign(bcF2U(widenT));
-      guideRecW.rw.element(base.add(uint(4))).assign(m0);
-      guideRecW.rw.element(base.add(uint(5))).assign(m1);
-      // spare tail — keep the 32B record fully defined (line-aligned padding)
-      guideRecW.rw.element(base.add(uint(6))).assign(uint(0));
-      guideRecW.rw.element(base.add(uint(7))).assign(uint(0));
+      guideRecW.rw.element(base.add(uint(2))).assign(mixWord);
+      guideRecW.rw.element(base.add(uint(3))).assign(envWord);
+      guideRecW.rw.element(base.add(uint(4))).assign(uint(0));
+      guideRecW.rw.element(base.add(uint(5))).assign(uint(0));
+      guideRecW.rw.element(base.add(uint(6))).assign(mixWord);
+      guideRecW.rw.element(base.add(uint(7))).assign(envWord);
       // ---- per-texel FIELD bake (guideFieldT1/T2 — see decl): the kRay per-step
       // smNoise+trig monster, folded to texel rate. Same fields, same salts.
       const smN = (salt: number): NV2 => {
@@ -615,7 +598,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
       textureStore(
         guideFieldT3,
         uvec2(txu, tzu),
-        vec4(toF(cnt).mul(1 / 64), 0, 0, 0),
+        vec4(densOut, toF(typeA).div(255), toF(typeB).div(255), toF(blendB).div(255)),
       ).toWriteOnly();
     })().compute(GUIDE_N, [256]);
     (k as unknown as { setName(n: string): void }).setName('grassGuide');
@@ -773,7 +756,7 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
        *  the entry, height and descent JUMPED at every guide-cell edge — the hard
        *  cell-edge clipping the user still sees, and a per-cell warp as the camera
        *  moves. Bilinear ⇒ C0-continuous across space. */
-      const bguide = (rcx: NF, rcz: NF): { g: NF; grad: NV2 } => {
+      const bguide = (rcx: NF, rcz: NF): { g: NF; grad: NV2; mixWord: NU; envWord: NU } => {
         const qx = rcx.div(GUIDE_SUB).sub(0.5) as unknown as NF;
         const qz = rcz.div(GUIDE_SUB).sub(0.5) as unknown as NF;
         const ix = qx.floor().clamp(0, GUIDE_RES - 2).toVar() as unknown as NF;
@@ -806,7 +789,22 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
           ),
           fz,
         ) as unknown as NV2;
-        return { g, grad };
+        // Categorical control comes from the nearest guide record; interpolating
+        // ids or clump identity would invent nonexistent species at ecotones.
+        // c00..c11 are already live for ground/gradient, so this adds no load.
+        const nearMix0 = (fx.lessThan(0.5) as unknown as { select(a: unknown, b: unknown): NU })
+          .select(c00.z, c10.z);
+        const nearMix1 = (fx.lessThan(0.5) as unknown as { select(a: unknown, b: unknown): NU })
+          .select(c01.z, c11.z);
+        const nearEnv0 = (fx.lessThan(0.5) as unknown as { select(a: unknown, b: unknown): NU })
+          .select(c00.w, c10.w);
+        const nearEnv1 = (fx.lessThan(0.5) as unknown as { select(a: unknown, b: unknown): NU })
+          .select(c01.w, c11.w);
+        const mixWord = (fz.lessThan(0.5) as unknown as { select(a: unknown, b: unknown): NU })
+          .select(nearMix0, nearMix1);
+        const envWord = (fz.lessThan(0.5) as unknown as { select(a: unknown, b: unknown): NU })
+          .select(nearEnv0, nearEnv1);
+        return { g, grad, mixWord, envWord };
       };
 
       // ---- O's texel plane → sward height + the entry point E ----------------------
@@ -1113,6 +1111,8 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
       // slopes read as downhill/upside-down curtains.
       const bg = bguide(relCells(baseBx, gfx), relCells(baseBz, gfz));
       const gB = (bg.g as unknown as { toVar(): NF }).toVar() as unknown as NF;
+      const mixWordB = bg.mixWord.toVar() as unknown as NU;
+      const envWordB = bg.envWord.toVar() as unknown as NU;
       returnIf(yH.sub(gB.add(hB)).abs().greaterThan(0.15) as unknown as NB);
       // flat-local validity check: O's texel plane extrapolated to B must agree
       // with the bilinear ground field — they diverge exactly where terrain
@@ -1131,9 +1131,24 @@ export function buildGrassField(opts: GrassBuildOpts): GrassField {
         .toVar() as unknown as NF;
       const sxs = wcx.sub(wcx.div(GRID).floor().mul(GRID));
       const sys = wcz.sub(wcz.div(GRID).floor().mul(GRID));
+      const typeA = mixWordB.bitAnd(uint(0xff));
+      const typeB = mixWordB.shiftRight(uint(8)).bitAnd(uint(0xff));
+      const blend = toF(mixWordB.shiftRight(uint(16)).bitAnd(uint(0xff))).mul(1 / 255) as unknown as NF;
+      const clumpLo = envWordB.bitAnd(uint(0xff));
+      const clumpHi = envWordB.shiftRight(uint(8)).bitAnd(uint(0xff));
+      // Stable whole-record type election. It is rooted in the recovered base
+      // cell and cook-side clump id, never screen/pixel noise, so adjacent pixels
+      // on one fiber agree and type boundaries remain world-anchored.
+      const typePick = cellHash(
+        vec2(wcx.add(toF(clumpLo)), wcz.add(toF(clumpHi))) as unknown as NV2,
+        SALT ^ 0x6c31,
+      ) as unknown as NF;
+      const coverId = (typePick.lessThan(blend) as unknown as { select(a: unknown, b: unknown): NU })
+        .select(typeB, typeA)
+        .bitAnd(uint(0x3f));
       (tBest as unknown as { assign(v: unknown): void }).assign(tHit);
       (bodyBest as unknown as { assign(v: unknown): void }).assign(
-        uint(sys.mul(GRID).add(sxs)).shiftLeft(uint(6)),
+        uint(sys.mul(GRID).add(sxs)).shiftLeft(uint(6)).bitOr(coverId),
       );
       // Keep the selected geometry record intact. A post-hit per-cell normal twist
       // changed shading without changing the surface and visibly reintroduced a

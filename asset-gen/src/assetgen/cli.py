@@ -149,7 +149,7 @@ def country_floor_biome(workers: int, min_lod: int) -> None:
 @click.option("--aoi", required=True)
 @click.option("--layer", "layers_opt", multiple=True,
               type=click.Choice(["height", "biome", "water", "waterbed", "canopy", "soil", "trees",
-                                  "understory", "debris", "boulders", "geology"]),
+                                  "understory", "groundcover", "debris", "boulders", "geology"]),
               help="Cook only these layers (default: all the AOI enables)")
 @click.option("--workers", default=6, show_default=True)
 def cook(aoi: str, layers_opt: tuple[str, ...], workers: int) -> None:
@@ -162,6 +162,8 @@ def cook(aoi: str, layers_opt: tuple[str, ...], workers: int) -> None:
     wanted = set(layers_opt) or {
         {"landcover": "biome"}.get(k, k) for k, v in cfg.layers.items() if v
     }
+    if not layers_opt and "understory" in wanted:
+        wanted.add("groundcover")
     if "height" in wanted:
         from .cook.height_cook import cook_height
 
@@ -202,6 +204,10 @@ def cook(aoi: str, layers_opt: tuple[str, ...], workers: int) -> None:
         from .cook.layers_cook import cook_understory
 
         cook_understory(base, bbox, log=click.echo)
+    if "groundcover" in wanted:
+        from .groundcover import cook_groundcover
+
+        cook_groundcover(base, bbox, log=click.echo)
     if "debris" in wanted:
         from .cook.layers_cook import cook_debris
 
@@ -210,7 +216,7 @@ def cook(aoi: str, layers_opt: tuple[str, ...], workers: int) -> None:
         from .cook.layers_cook import cook_boulders
 
         cook_boulders(base, bbox, log=click.echo)
-    known = {"height", "biome", "water", "waterbed", "canopy", "soil", "trees", "understory", "debris", "boulders", "geology"}
+    known = {"height", "biome", "water", "waterbed", "canopy", "soil", "trees", "understory", "groundcover", "debris", "boulders", "geology"}
     for name in sorted(wanted - known):
         click.echo(f"(layer {name}: cooker lands in a later phase)")
     click.echo("cook complete.")
