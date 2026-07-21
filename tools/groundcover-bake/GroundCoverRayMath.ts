@@ -10,6 +10,7 @@
  */
 
 export type RayVec3 = readonly [number, number, number];
+export type RayVec2 = readonly [number, number];
 export type RayMat3 = readonly [RayVec3, RayVec3, RayVec3];
 
 export interface Ray3 {
@@ -293,6 +294,91 @@ export function reprojectCanonicalPlaneHit(
     origin[2] + canonicalDirection[2] * canonicalDistance,
   ];
   return rayPlaneT({ origin, direction: liveDirection }, canonicalHit, geometricNormal);
+}
+
+/** Point on a downward ray parameterised by top phase, slope, and vertical drop. */
+export function verticalDropPoint(
+  topPhase: RayVec2,
+  topHeight: number,
+  slope: RayVec2,
+  verticalDrop: number,
+): RayVec3 {
+  return [
+    topPhase[0] + slope[0] * verticalDrop,
+    topHeight - verticalDrop,
+    topPhase[1] + slope[1] * verticalDrop,
+  ];
+}
+
+/** v(s) in X(q,s,h) = O(q) + h*v(s). */
+export function verticalDropVelocity(slope: RayVec2): RayVec3 {
+  return [slope[0], -1, slope[1]];
+}
+
+/**
+ * Store the signed plane numerator kappa from one canonical hit. The tuple
+ * (kappa, geometricNormal) is a one-record projective surface representation:
+ * h_live = kappa / dot(normal, v(s_live)).
+ */
+export function planeNumeratorFromCanonicalDrop(
+  canonicalDrop: number,
+  canonicalSlope: RayVec2,
+  geometricNormal: RayVec3,
+): number {
+  return canonicalDrop * rayDot(geometricNormal, verticalDropVelocity(canonicalSlope));
+}
+
+/** Move a categorical plane record from its phase texel centre to the exact live phase. */
+export function phaseCorrectPlaneNumerator(
+  texelNumerator: number,
+  geometricNormal: RayVec3,
+  texelPhase: RayVec2,
+  livePhase: RayVec2,
+): number {
+  return texelNumerator
+    - geometricNormal[0] * (livePhase[0] - texelPhase[0])
+    - geometricNormal[2] * (livePhase[1] - texelPhase[1]);
+}
+
+/** Exact vertical drop to the plane selected by one precomputed record. */
+export function verticalDropFromPlaneRecord(
+  planeNumerator: number,
+  geometricNormal: RayVec3,
+  liveSlope: RayVec2,
+): number {
+  const denominator = rayDot(geometricNormal, verticalDropVelocity(liveSlope));
+  if (Math.abs(denominator) <= EPS) throw new Error('live ray is parallel to the reconstruction plane');
+  return planeNumerator / denominator;
+}
+
+/**
+ * Perspective-correct interpolation of vertical drop over one slope-space
+ * triangle. The weights must reproduce the live slope barycentrically.
+ */
+export function reciprocalSlopeTriangleDrop(
+  drops: RayVec3,
+  weights: RayVec3,
+): number {
+  if (Math.abs(drops[0]) <= EPS || Math.abs(drops[1]) <= EPS || Math.abs(drops[2]) <= EPS) {
+    throw new Error('zero vertical drop is categorical and cannot be reciprocally interpolated');
+  }
+  const reciprocal = weights[0] / drops[0] + weights[1] / drops[1] + weights[2] / drops[2];
+  if (Math.abs(reciprocal) <= EPS) throw new Error('interpolated ray is parallel to the reconstruction plane');
+  return 1 / reciprocal;
+}
+
+/** Perspective-correct interpolation of one affine surface attribute. */
+export function perspectiveCorrectTriangleAttribute(
+  attributes: RayVec3,
+  drops: RayVec3,
+  weights: RayVec3,
+): number {
+  const drop = reciprocalSlopeTriangleDrop(drops, weights);
+  return drop * (
+    weights[0] * attributes[0] / drops[0]
+    + weights[1] * attributes[1] / drops[1]
+    + weights[2] * attributes[2] / drops[2]
+  );
 }
 
 /** Profile normals are covectors and therefore transform by inverse-transpose. */

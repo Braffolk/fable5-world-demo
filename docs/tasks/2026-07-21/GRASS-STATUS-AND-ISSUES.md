@@ -604,3 +604,41 @@ screen-sized colour target was introduced.
   The result rules out the current four-owner diagnostic and further rules out treating a blind
   dense `K` array as the memory-safe answer; successor-aware adaptive sparse certification is
   the active feasibility track.
+
+## 15. Runtime-closure rejection and cheap projective reset (2026-07-21)
+
+- The fixed-candidate owner/successor runtime proposed at the end of §14 is rejected. Although
+  bounded and loop-free, it replaces a tiny precomputed lookup with many live triangle tests and
+  is therefore a brute-force response to an over-strengthened mathematical requirement. No
+  runtime or shader implementation of that proposal was made.
+- The conceptual mistake was requiring continuum-exact reproduction of the arbitrary source
+  mesh under arbitrary root deletion and camera origin. Sannikov's mesh-baked result is a direct,
+  discretised finite-mesh ray impostor. It is exact at baked rays and approximate between them;
+  the published low/mid-range architecture does not recover source topology at runtime.
+- The active derivation is `GRASS-CHEAP-PROJECTIVE-RAY-MATH.md`. A finite-mesh row must retain its
+  full view-conditioned distance. The current loader instead converts it to horizontal projected
+  path and the runtime relifts it with another elevation—an identity which is exact only for a
+  parallel extrusion. This is the direct mathematical source of the grazing top-sheet collapse.
+- The minimum corrected carrier is one complete vertical-drop record selected from a direction
+  domain which includes the grazing guard and vertical centre. A stronger one-read record stores
+  the selected geometric plane covector; the live ray then intersects that plane with one dot
+  denominator and one division. Three-read reciprocal-slope interpolation is an optional bounded
+  refinement and is exact on a shared plane without source triangles.
+- The CPU math harness now contains 27 passing properties, including one-record plane
+  reconstruction, reciprocal depth in Cartesian slope space, and perspective-correct affine
+  attributes. TypeScript type checking and whitespace checks pass.
+- The first actual-asset surrogate comparison is recorded in
+  `GRASS-RAY-SURROGATE-EVALUATION.md`. Across 53,248 noncanonical live rays, none of the current
+  projected relift, nearest canonical distance, nearest vertical drop, one-face plane, or
+  three-read reciprocal-slope forms is acceptable on the 16-azimuth support. The one-face plane
+  path is rejected: every accepted extrapolation left its microscopic source triangle.
+  Phase-only median error is millimetric for categorical vertical drop, while the 11.25-degree
+  half-bin azimuth offset produces metre-scale median grazing error; directional support is the
+  dominant current discretisation failure.
+- One consolidated second fixed-read experiment is active before this sampled-field track is
+  either selected or parked: exact phase-reprojected two-read lookup and denser azimuth support
+  under a fixed atlas-byte budget. It still contains no live triangle, candidate list, march, or
+  data-dependent loop.
+- The abandoned closure census/format files are preserved as research evidence only. Resume that
+  path solely if the user explicitly approves measured live candidate cost; absence of an
+  explicit prohibition is never permission to brute-force.

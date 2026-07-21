@@ -1,5 +1,13 @@
 # Precomputed-ray ground-cover reconstruction math
 
+> Historical analysis notice, 2026-07-21: the owner/successor-closure runtime
+> proposed in Sections 6.2 and 7.2-7.6 over-strengthened the target to continuum-
+> exact arbitrary-mesh visibility and led to a rejected fixed-candidate brute-
+> force design. It must not be implemented. The active low/mid-range derivation
+> is `GRASS-CHEAP-PROJECTIVE-RAY-MATH.md`. The translated-envelope theorem and
+> counterexamples in this file remain useful; the runtime closure conclusion
+> does not.
+
 Status: math-only reconstruction contract, 2026-07-21. This note deliberately
 contains no Three.js, TSL, WGSL, render-pass, or binding decisions. The executable
 reference is `tools/groundcover-bake/GroundCoverRayMath.ts`, with finite tests in

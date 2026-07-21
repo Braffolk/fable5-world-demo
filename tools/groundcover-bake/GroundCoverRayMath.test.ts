@@ -5,6 +5,9 @@ import {
   bilinearEnvelopeRoots,
   eligibleSuccessorRayEvent,
   makeProfileRay,
+  phaseCorrectPlaneNumerator,
+  perspectiveCorrectTriangleAttribute,
+  planeNumeratorFromCanonicalDrop,
   profileNormalToWorld,
   rayDot,
   rayInverse,
@@ -13,12 +16,16 @@ import {
   rayPlaneT,
   rayPoint,
   rayForTranslatedSurface,
+  reciprocalSlopeTriangleDrop,
   reprojectCanonicalPlaneHit,
   successorRayEvent,
   translatedSurfacePoint,
+  verticalDropFromPlaneRecord,
+  verticalDropPoint,
   worldDeltaFromProfileDistance,
   worldDeltaFromProjectedDistance,
   type RayMat3,
+  type RayVec2,
   type RayVec3,
 } from './GroundCoverRayMath';
 
@@ -372,6 +379,108 @@ test('geometric-plane reprojection is exact where linear directional depth blend
   assert.ok(Math.abs((t0 * 0.57 + t1 * 0.43) - exact) > 1e-3);
 });
 
+test('one plane record reconstructs the exact live vertical drop without a triangle test', () => {
+  const texelPhase: RayVec2 = [0.168, -0.229];
+  const livePhase: RayVec2 = [0.17, -0.23];
+  const topHeight = 1.1765;
+  const canonicalSlope: RayVec2 = [0.72, -0.31];
+  const liveSlope: RayVec2 = [3.4, 1.1];
+  const planePoint: RayVec3 = [0.8, 0.37, -0.4];
+  const planeNormal = rayNormalize([0.29, 0.91, -0.21]);
+  const texelOrigin: RayVec3 = [texelPhase[0], topHeight, texelPhase[1]];
+  const liveOrigin: RayVec3 = [livePhase[0], topHeight, livePhase[1]];
+  const canonicalDrop = rayPlaneT(
+    { origin: texelOrigin, direction: [canonicalSlope[0], -1, canonicalSlope[1]] },
+    planePoint,
+    planeNormal,
+  );
+  const texelNumerator = planeNumeratorFromCanonicalDrop(
+    canonicalDrop,
+    canonicalSlope,
+    planeNormal,
+  );
+  const numerator = phaseCorrectPlaneNumerator(
+    texelNumerator,
+    planeNormal,
+    texelPhase,
+    livePhase,
+  );
+  const reconstructed = verticalDropFromPlaneRecord(numerator, planeNormal, liveSlope);
+  const exact = rayPlaneT(
+    { origin: liveOrigin, direction: [liveSlope[0], -1, liveSlope[1]] },
+    planePoint,
+    planeNormal,
+  );
+  close(reconstructed, exact);
+  closeVec(verticalDropPoint(livePhase, topHeight, liveSlope, reconstructed), rayPoint({
+    origin: liveOrigin,
+    direction: [liveSlope[0], -1, liveSlope[1]],
+  }, exact));
+});
+
+test('reciprocal drop is affine in Cartesian ray slope on one plane', () => {
+  const topPhase: RayVec2 = [0.2, 0.4];
+  const topHeight = 1.3;
+  const planePoint: RayVec3 = [0.7, 0.25, -0.1];
+  const planeNormal = rayNormalize([0.22, 0.95, -0.31]);
+  const slopes = [
+    [-0.4, -0.2],
+    [1.3, -0.1],
+    [0.2, 1.5],
+  ] as const satisfies readonly [RayVec2, RayVec2, RayVec2];
+  const weights: RayVec3 = [0.21, 0.34, 0.45];
+  const liveSlope: RayVec2 = [
+    weights[0] * slopes[0][0] + weights[1] * slopes[1][0] + weights[2] * slopes[2][0],
+    weights[0] * slopes[0][1] + weights[1] * slopes[1][1] + weights[2] * slopes[2][1],
+  ];
+  const topOrigin: RayVec3 = [topPhase[0], topHeight, topPhase[1]];
+  const drops: RayVec3 = slopes.map((slope) => rayPlaneT(
+    { origin: topOrigin, direction: [slope[0], -1, slope[1]] },
+    planePoint,
+    planeNormal,
+  )) as unknown as RayVec3;
+  const exact = rayPlaneT(
+    { origin: topOrigin, direction: [liveSlope[0], -1, liveSlope[1]] },
+    planePoint,
+    planeNormal,
+  );
+  close(reciprocalSlopeTriangleDrop(drops, weights), exact);
+});
+
+test('affine hit attributes use the same perspective-correct slope denominator', () => {
+  const topPhase: RayVec2 = [-0.1, 0.3];
+  const topHeight = 1.2;
+  const planePoint: RayVec3 = [0.4, 0.31, 0.2];
+  const planeNormal = rayNormalize([-0.18, 0.96, 0.23]);
+  const slopes = [
+    [-0.6, 0.1],
+    [0.9, -0.4],
+    [0.4, 1.1],
+  ] as const satisfies readonly [RayVec2, RayVec2, RayVec2];
+  const weights: RayVec3 = [0.3, 0.25, 0.45];
+  const liveSlope: RayVec2 = [
+    weights[0] * slopes[0][0] + weights[1] * slopes[1][0] + weights[2] * slopes[2][0],
+    weights[0] * slopes[0][1] + weights[1] * slopes[1][1] + weights[2] * slopes[2][1],
+  ];
+  const topOrigin: RayVec3 = [topPhase[0], topHeight, topPhase[1]];
+  const attribute = (point: RayVec3): number => 0.7 * point[0] - 0.2 * point[1] + 0.4 * point[2] + 0.13;
+  const drops: RayVec3 = slopes.map((slope) => rayPlaneT(
+    { origin: topOrigin, direction: [slope[0], -1, slope[1]] },
+    planePoint,
+    planeNormal,
+  )) as unknown as RayVec3;
+  const attributes: RayVec3 = slopes.map((slope, index) => attribute(
+    verticalDropPoint(topPhase, topHeight, slope, drops[index]!),
+  )) as unknown as RayVec3;
+  const liveDrop = rayPlaneT(
+    { origin: topOrigin, direction: [liveSlope[0], -1, liveSlope[1]] },
+    planePoint,
+    planeNormal,
+  );
+  const expected = attribute(verticalDropPoint(topPhase, topHeight, liveSlope, liveDrop));
+  close(perspectiveCorrectTriangleAttribute(attributes, drops, weights), expected);
+});
+
 test('exact profile direction and apparent orientation are invariant along one view ray', () => {
   const profileToWorld: RayMat3 = [
     [1, 0, 0],
@@ -485,6 +594,17 @@ test('a clamped projected path compresses finite-mesh height toward the top plan
   close((topHeight - reconstructedHeight) / (topHeight - actualHitHeight), compression);
   close(reconstructedHeight, 0.8576608978630322, 1e-12);
   assert.ok(reconstructedHeight > actualHitHeight + 0.65);
+});
+
+test('categorical vertical drop preserves sampled height while canonical tau reuse does not', () => {
+  const canonicalElevation = 15 * Math.PI / 180;
+  const liveElevation = 5 * Math.PI / 180;
+  const sampledVerticalDrop = 0.84;
+  const canonicalTau = sampledVerticalDrop / Math.sin(canonicalElevation);
+  const tauReuseDrop = canonicalTau * Math.sin(liveElevation);
+  const carriedDrop = sampledVerticalDrop;
+  close(carriedDrop, sampledVerticalDrop);
+  assert.ok(tauReuseDrop < sampledVerticalDrop * 0.34);
 });
 
 test('rejecting the populated-profile first hit is not a world-cover visibility query', () => {
