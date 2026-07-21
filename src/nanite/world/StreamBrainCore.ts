@@ -44,6 +44,7 @@ import {
   GEOLOGY_CHANNELS,
   GROUNDCOVER_A_CHANNELS,
   GROUNDCOVER_B_CHANNELS,
+  GROUNDCOVER_C_CHANNELS,
   WATER_DRY_SENTINEL,
   WATER_FAR_FACTOR,
   WATERCOVER_CHANNELS,
@@ -182,6 +183,7 @@ export class StreamBrainCore {
    *  carriers so identity never passes through a linear sampler. */
   private gcAWin: U8Window | null = null;
   private gcBWin: U8Window | null = null;
+  private gcCWin: U8Window | null = null;
 
   // decoded-chunk LRU
   private readonly lru = new Map<string, { payload: ChunkPayload; bytes: number }>();
@@ -583,6 +585,14 @@ export class StreamBrainCore {
       packets.push({ kind: 'fill', plane: 'groundcoverA', level: 0, x: 0, y: 0, w: planA.res, h: planA.res, u8: copyA });
       packets.push({ kind: 'fill', plane: 'groundcoverB', level: 0, x: 0, y: 0, w: planB.res, h: planB.res, u8: copyB });
       transfers.push(copyA.buffer, copyB.buffer);
+      if (this.plan.groundCoverC) {
+        const planC = this.plan.groundCoverC;
+        const dataC = await this.assembleU8('groundcover', planC, planC.n0x, planC.n0z, GROUNDCOVER_C_CHANNELS);
+        this.gcCWin = { plan: planC, data: dataC, n0x: planC.n0x, n0z: planC.n0z, phaseX: 0, phaseY: 0 };
+        const copyC = dataC.slice();
+        packets.push({ kind: 'fill', plane: 'groundcoverC', level: 0, x: 0, y: 0, w: planC.res, h: planC.res, u8: copyC });
+        transfers.push(copyC.buffer);
+      }
     }
     this.deps.emit({ kind: 'packets', packets }, transfers);
     this.dropLru(); // consumed — the retained windows are the persistent store
@@ -598,6 +608,7 @@ export class StreamBrainCore {
     if (this.gWin) b += this.gWin.data.byteLength;
     if (this.gcAWin) b += this.gcAWin.data.byteLength;
     if (this.gcBWin) b += this.gcBWin.data.byteLength;
+    if (this.gcCWin) b += this.gcCWin.data.byteLength;
     return b;
   }
 
@@ -792,6 +803,7 @@ export class StreamBrainCore {
     if (this.gWin) await this.scrollU8('geology', GEOLOGY_CHANNELS, this.gWin, camX, camZ, vx, vz);
     if (this.gcAWin) await this.scrollU8('groundcoverA', GROUNDCOVER_A_CHANNELS, this.gcAWin, camX, camZ, vx, vz, undefined, 'groundcover');
     if (this.gcBWin) await this.scrollU8('groundcoverB', GROUNDCOVER_B_CHANNELS, this.gcBWin, camX, camZ, vx, vz, undefined, 'groundcover');
+    if (this.gcCWin) await this.scrollU8('groundcoverC', GROUNDCOVER_C_CHANNELS, this.gcCWin, camX, camZ, vx, vz, undefined, 'groundcover');
     // biome/fields planes scroll with the SAME rule but hold no brain window —
     // regions assemble straight from LRU'd chunks. (Their consumers are filtered
     // rgba8 taps; sub-texel placement is uncritical.) They ride height's snap
@@ -1130,7 +1142,7 @@ export class StreamBrainCore {
   // far-coverage reduce onto the same packet batch; soil has no far level ⇒ no hook. ----
 
   private async scrollU8(
-    kind: 'watercover' | 'soil' | 'geology' | 'groundcoverA' | 'groundcoverB',
+    kind: 'watercover' | 'soil' | 'geology' | 'groundcoverA' | 'groundcoverB' | 'groundcoverC',
     channels: readonly (readonly [string, number])[],
     win: U8Window,
     camX: number,
@@ -1190,7 +1202,7 @@ export class StreamBrainCore {
 
   /** whole-window refill (teleport-scale jump): reassemble at the new placement. */
   private async refillU8(
-    kind: 'watercover' | 'soil' | 'geology' | 'groundcoverA' | 'groundcoverB',
+    kind: 'watercover' | 'soil' | 'geology' | 'groundcoverA' | 'groundcoverB' | 'groundcoverC',
     layer: LayerName,
     channels: readonly (readonly [string, number])[],
     win: U8Window,

@@ -95,11 +95,14 @@ export interface FieldPlan {
   /** Optional categorical geology on the 2 m condition lattice. Four channels are
    *  sampled nearest; null keeps old manifests and generated worlds unchanged. */
   geology: PlanePlan | null;
-  /** One logical cook-side ground-cover authority, split into two rgba8 GPU
+  /** One logical cook-side ground-cover authority, split into versioned rgba8 GPU
    *  carriers: A is categorical [typeA,typeB,clumpLo,clumpHi], B is continuous
    *  [blend,vigor,moisture,canopyProximity]. */
   groundCoverA: PlanePlan | null;
   groundCoverB: PlanePlan | null;
+  /** v2 categorical query closure + exact profile pair:
+   * [candidateMaskLo,candidateMaskHi,profileA,profileB]. */
+  groundCoverC: PlanePlan | null;
   coverageBox: CoverageBox;
   /** the biome plane's channels 2/3 carry the merged far-forest canopy
    *  (heightM, cover) — true iff the source has a canopy layer. The generated
@@ -189,6 +192,12 @@ export const GROUNDCOVER_B_CHANNELS: readonly (readonly [string, number])[] = [
   ['vigor', 1],
   ['moisture', 2],
   ['canopyProximity', 3],
+];
+export const GROUNDCOVER_C_CHANNELS: readonly (readonly [string, number])[] = [
+  ['candidateMaskLo', 0],
+  ['candidateMaskHi', 1],
+  ['profileA', 2],
+  ['profileB', 3],
 ];
 /** Estonia dry water texels decode to NaN (§9a) — mapped to the dry sentinel
  *  the generated field uses downstream of its bed−2 encoding. */
@@ -596,6 +605,7 @@ export function planField(manifest: WorldManifest): FieldPlan {
   }
   let groundCoverA: PlanePlan | null = null;
   let groundCoverB: PlanePlan | null = null;
+  let groundCoverC: PlanePlan | null = null;
   const groundCoverMeta = manifest.layers.groundcover;
   if (groundCoverMeta?.enc === 2 && groundCoverMeta.lods.includes(0) && groundCoverMeta.texelMeters) {
     const control = planLayer(
@@ -606,6 +616,12 @@ export function planField(manifest: WorldManifest): FieldPlan {
     ).find((p) => p.lod === 0) ?? null;
     groundCoverA = control;
     groundCoverB = control;
+    if (
+      groundCoverMeta.planes?.includes('candidateMaskLo')
+      && groundCoverMeta.planes.includes('candidateMaskHi')
+      && groundCoverMeta.planes.includes('profileA')
+      && groundCoverMeta.planes.includes('profileB')
+    ) groundCoverC = control;
   }
   return {
     cookedMicroHeight: manifest.format === 2 && height.some((level) => level.lod < 0),
@@ -620,6 +636,7 @@ export function planField(manifest: WorldManifest): FieldPlan {
     geology,
     groundCoverA,
     groundCoverB,
+    groundCoverC,
     coverageBox: coverageBoxM(manifest),
     biomeHasCanopy: !!manifest.layers.canopy,
   };

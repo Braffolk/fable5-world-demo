@@ -262,6 +262,8 @@ export function buildNaniteRaster(
     batch: readonly unknown[];
     renderHw(renderer: Renderer, camera: PerspectiveCamera): void;
     enabled(): boolean;
+    /** Non-null only when this grass graph consumes a rasterized outer shell. */
+    shellHeight: number | null;
   },
   /** S6e: render anchor A for the terrain FIELD sampling in makeFetch — the S6d
    *  anchor-relative vert coords are re-absoluted to hit the world-anchored field
@@ -474,6 +476,7 @@ export function buildNaniteRaster(
   const dvParams = new URLSearchParams(window.location.search);
   const skipDepthClear =
     singlePass &&
+    (grass?.shellHeight ?? null) === null &&
     dvParams.get('nanprobe') !== '1' && // probe reads vis.depthV.ro
     dvParams.get('audit') !== '1' && // kAudit reads visDepthV.ro
     rdbg === 0; // rdbg sinks atomicMin depthV
@@ -1475,14 +1478,17 @@ export function buildNaniteRaster(
     projBaseSlot: CTX_PROJ_BASE,
     indices: gpu.indices,
     hwproj,
+    grassShellHeight: grass?.shellHeight ?? null,
   });
   const {
     kHwArgs,
+    kGrassShellArgs,
     hwDepthMat,
     hwCombinedMat,
     hwWorld1Mat,
     hwRender,
     hwRenderCluster,
+    hwRenderGrassShell,
   } = hw;
 
   // ---- flat resolve -----------------------------------------------------------------
@@ -1724,6 +1730,7 @@ export function buildNaniteRaster(
       // writes are visible to the raster's reads via the same in-pass storage sync the batch
       // gives clear→ctx→raster. Only present on the world1 (singlePass) instance.
       ...(kProjectVerts ? [kProjectVerts as unknown] : []),
+      ...(kGrassShellArgs ? [kGrassShellArgs as unknown] : []),
       // ?ksplit: the two class kernels REPLACE the unified world1 in the SAME compute
       // pass — no barrier between them, so the order-independent atomic election merges
       // both, and (because they share vis via atomics, not disjoint buffers) they are
@@ -1751,6 +1758,9 @@ export function buildNaniteRaster(
     // alongside the SW + soup winners, before grass/voxel pre-seed from them. (world1 is
     // the camera path ⇒ the cull always carries the partition; hwRenderCluster self-guards.)
     hwRenderCluster(renderer, camera);
+    // The source method starts at the rasterized outer shell. Its depth lands
+    // in the otherwise-unused vis.depthV before grassRay consumes it.
+    if (grass?.enabled()) hwRenderGrassShell(renderer, camera);
     // grass blade HW pass (own depth target, early-z primed from the election —
     // which now holds the mesh SW+HW winners + the grass SW slivers).
     if (grass?.enabled()) grass.renderHw(renderer, camera);

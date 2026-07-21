@@ -120,6 +120,11 @@ export interface NaniteFetch {
    *  vertex stage's single-fetch path). Same selected vertex by construction
    *  (identical per-corner math as the static-v arms of fetchWorldVert). */
   fetchWorldVertDyn(ctx: VertCtx, localTri: NU, corner: NU): NV3;
+  /** Terrain-only runtime-corner fetch with DAG skirt vertices collapsed back
+   *  onto their source surface. The grass outer shell uses this so sealing
+   *  skirts cannot become vertical grass curtains. Only terrain-specialized
+   *  consumers may call it. */
+  fetchTerrainSurfaceVertDyn(ctx: VertCtx, localTri: NU, corner: NU): NV3;
   /** mesh-record word 6: matClass u8 (bits 8–15) etc. */
   meshWord(meshId: NU, word: number): NU;
 }
@@ -421,6 +426,21 @@ export function makeFetch(
     return hfWorld(ctx, sx as unknown as NU, sz as unknown as NU, skirtDrop as unknown as NF);
   };
 
+  /** The same adaptive-DAG source coordinate as dagWorldByIndex, but without
+   *  its render-only skirt displacement. Skirt triangles then collapse onto
+   *  the terrain boundary instead of extruding a false shell wall. */
+  const dagSurfaceWorldByIndex = (ctx: VertCtx, vi: NU): NV3 => {
+    const packed = bindHfVerts ? elemU(gpu.hfVerts, vi) : elemU(gpu.verts, vi);
+    const sx = packed.bitAnd(uint(0x1fff)).toVar();
+    const sz = packed.shiftRight(uint(16)).toVar();
+    return hfWorld(
+      ctx,
+      sx as unknown as NU,
+      sz as unknown as NU,
+      float(0) as unknown as NF,
+    );
+  };
+
   /** per-vertex trunk/leaf wind offset (IDENTICAL math for both channels — deduped here).
    *  ?fp16w routes it through the f16 wgslFn (nanWindF16); off = the byte-identical f32 TSL
    *  math (node graph unchanged from the prior inline blocks). The offset is a small delta
@@ -590,6 +610,43 @@ export function makeFetch(
     return out as unknown as NV3;
   };
 
+  const fetchTerrainSurfaceVertDyn = (
+    ctx: VertCtx,
+    localTri: NU,
+    corner: NU,
+  ): NV3 => {
+    const out = vec3(0).toVar();
+    If(ctx.isDAG, () => {
+      out.assign(dagSurfaceWorldByIndex(ctx, explicitVi(ctx, localTri, corner)));
+    }).Else(() => {
+      const quad = localTri.shiftRight(uint(1));
+      const odd = localTri.bitAnd(uint(1)).equal(uint(1));
+      const col = quad.mod(ctx.qxw);
+      const row = quad.div(ctx.qxw);
+      const dx = corner
+        .equal(uint(1))
+        .select(
+          odd.select(uint(1), uint(0)),
+          corner.equal(uint(2)).select(uint(1), uint(0)),
+        ) as unknown as NU;
+      const dz = corner
+        .equal(uint(1))
+        .select(
+          uint(1),
+          corner.equal(uint(2)).select(odd.select(uint(0), uint(1)), uint(0)),
+        ) as unknown as NU;
+      const sx = ctx.gx.add(col).add(dx);
+      const sz = ctx.gz.add(row).add(dz);
+      out.assign(hfWorld(
+        ctx,
+        sx as unknown as NU,
+        sz as unknown as NU,
+        float(0) as unknown as NF,
+      ));
+    });
+    return out as unknown as NV3;
+  };
+
   const fetchWorldVertByIndex = (ctx: VertCtx, vi: NU): NV3 => {
     const out = vec3(0).toVar();
     if (variant === 'explicit') {
@@ -611,5 +668,12 @@ export function makeFetch(
   const meshWord = (meshId: NU, word: number): NU =>
     elemU(gpu.meshes, meshId.mul(uint(MESH_WORDS)).add(uint(word)));
 
-  return { makeCtx, fetchWorldVert, fetchWorldVertDyn, fetchWorldVertByIndex, meshWord };
+  return {
+    makeCtx,
+    fetchWorldVert,
+    fetchWorldVertDyn,
+    fetchTerrainSurfaceVertDyn,
+    fetchWorldVertByIndex,
+    meshWord,
+  };
 }

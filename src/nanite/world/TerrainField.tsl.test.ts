@@ -38,6 +38,7 @@ test('packed cold height samplers construct outside a TSL Fn stack', () => {
     geology: null,
     groundCoverA: null,
     groundCoverB: null,
+    groundCoverC: null,
     coverageBox: { minX: 0, minZ: 0, maxX: 8, maxZ: 8 },
     biomeHasCanopy: false,
   };

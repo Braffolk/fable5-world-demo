@@ -9,6 +9,8 @@ import {
 } from './ProfileFormat';
 
 export const PERIODIC_PROFILE_VERSION = 2;
+export const PERIODIC_CORRESPONDENCE_PROFILE_VERSION = 3;
+export const PERIODIC_OWNED_PROFILE_VERSION = 4;
 
 export interface PeriodicTile {
   originX: number;
@@ -40,7 +42,12 @@ export interface PeriodicBakeResult {
   tile: PeriodicTile;
   slices: PeriodicSlice[];
   /** Unguarded canonical tiles, atlas-order RGBA32F. */
-  pixels: number[];
+  pixels: number[] | Float32Array;
+  /** Optional atlas-order RGBA32F correspondence payload:
+   * geometric-face oct X/Y, RGB565/65535, safe in-triangle radius in metres. */
+  correspondencePixels?: number[] | Float32Array;
+  /** Optional atlas-order packed first-hit owner token. */
+  ownerPixels?: number[] | Uint32Array;
   adapter: string;
 }
 
@@ -49,6 +56,7 @@ export interface PackedPeriodicProfile extends PackedProfile {
   storedTileWidth: number;
   storedTileHeight: number;
   guardedPixels: number[];
+  guardedCorrespondencePixels?: number[];
 }
 
 export interface CushionSpec {
@@ -350,13 +358,269 @@ export function packPeriodicProfile(result: PeriodicBakeResult, profileId: numbe
   };
 }
 
+/**
+ * GCRP/v3 adds a second rgba16unorm record beside every v2 geometry record.
+ * The extra record is [geometric-face oct X/Y, safe-radius/supportScale,
+ * authored RGB565/65535]. The scalar support is the radius of a disk centred
+ * at the baked hit and wholly contained by its source triangle; a runtime
+ * plane reprojection is valid only while its displacement stays inside it.
+ */
+export function packPeriodicCorrespondenceProfile(
+  result: PeriodicBakeResult,
+  profileId: number,
+  gutter = 1,
+): PackedPeriodicProfile {
+  if (!result.correspondencePixels) {
+    throw new Error('GCRP/v3 correspondence pixels are required');
+  }
+  if (result.correspondencePixels.length !== result.pixels.length) {
+    throw new Error('GCRP/v3 correspondence pixels do not match geometry pixels');
+  }
+  const guarded = makeGuardedAtlas(result, gutter);
+  const guardedCorrespondence = makeGuardedAtlas(
+    { ...result, pixels: result.correspondencePixels },
+    gutter,
+  );
+  const atlasWidth = guarded.storedTileWidth * result.atlasColumns;
+  const atlasHeight = guarded.storedTileHeight * result.atlasRows;
+  const headerBytes = 80;
+  const sliceBytes = 64;
+  const texelBytes = PROFILE_TEXEL_BYTES * 2;
+  const payloadOffset = headerBytes + sliceBytes * result.slices.length;
+  const bytes = new Uint8Array(payloadOffset + atlasWidth * atlasHeight * texelBytes);
+  const view = new DataView(bytes.buffer);
+  const supportScale = Math.max(result.tile.sizeX, result.tile.sizeZ, result.tile.topH);
+  bytes.set([0x47, 0x43, 0x52, 0x50], 0);
+  view.setUint32(4, PERIODIC_CORRESPONDENCE_PROFILE_VERSION, true);
+  view.setUint32(8, profileId >>> 0, true);
+  view.setUint32(12, guarded.storedTileWidth, true);
+  view.setUint32(16, guarded.storedTileHeight, true);
+  view.setUint32(20, result.atlasColumns, true);
+  view.setUint32(24, result.atlasRows, true);
+  view.setUint32(28, result.slices.length, true);
+  view.setUint32(32, texelBytes, true);
+  view.setUint32(36, payloadOffset, true);
+  view.setUint32(40, 1, true);
+  view.setUint32(44, result.tileWidth, true);
+  view.setUint32(48, result.tileHeight, true);
+  view.setUint32(52, gutter, true);
+  view.setFloat32(56, result.tile.topH, true);
+  view.setFloat32(60, result.tile.originX, true);
+  view.setFloat32(64, result.tile.originZ, true);
+  view.setFloat32(68, result.tile.sizeX, true);
+  view.setFloat32(72, result.tile.sizeZ, true);
+  view.setFloat32(76, supportScale, true);
+  result.slices.forEach((slice, index) => {
+    const base = headerBytes + index * sliceBytes;
+    view.setFloat32(base, slice.direction.x, true);
+    view.setFloat32(base + 4, slice.direction.y, true);
+    view.setFloat32(base + 8, slice.direction.z, true);
+    view.setFloat32(base + 12, slice.depthMin, true);
+    view.setFloat32(base + 16, slice.depthMax, true);
+    view.setInt32(base + 20, slice.copyRange.minX, true);
+    view.setInt32(base + 24, slice.copyRange.maxX, true);
+    view.setInt32(base + 28, slice.copyRange.minZ, true);
+    view.setInt32(base + 32, slice.copyRange.maxZ, true);
+  });
+  for (let texel = 0; texel < atlasWidth * atlasHeight; texel++) {
+    const src = texel * 4;
+    const dst = payloadOffset + texel * texelBytes;
+    const hit = (guarded.pixels[src + 3] as number) > 0.5;
+    view.setUint16(dst, hit ? Math.min(65534, clampU16(guarded.pixels[src] as number)) : 65535, true);
+    view.setUint16(dst + 2, hit ? clampU16(guarded.pixels[src + 1] as number) : 32768, true);
+    view.setUint16(dst + 4, hit ? clampU16(guarded.pixels[src + 2] as number) : 32768, true);
+    view.setUint16(dst + 6, hit ? 65535 : 0, true);
+    view.setUint16(dst + 8, hit ? clampU16(guardedCorrespondence.pixels[src] as number) : 32768, true);
+    view.setUint16(dst + 10, hit ? clampU16(guardedCorrespondence.pixels[src + 1] as number) : 32768, true);
+    view.setUint16(
+      dst + 12,
+      hit ? clampU16((guardedCorrespondence.pixels[src + 3] as number) / supportScale) : 0,
+      true,
+    );
+    view.setUint16(dst + 14, hit ? clampU16(guardedCorrespondence.pixels[src + 2] as number) : 0, true);
+  }
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  return {
+    bytes,
+    sha256,
+    payloadOffset,
+    gutter,
+    storedTileWidth: guarded.storedTileWidth,
+    storedTileHeight: guarded.storedTileHeight,
+    guardedPixels: guarded.pixels,
+    guardedCorrespondencePixels: guardedCorrespondence.pixels,
+  };
+}
+
+/** GCRP/v4: precomputed first-hit owner atlas plus exact quantized source mesh.
+ * Runtime performs a fixed number of owner lookups and exact ray/triangle tests;
+ * it never traverses or rasterizes the mesh. */
+export function packPeriodicOwnedProfile(
+  result: PeriodicBakeResult,
+  mesh: IndexedMesh,
+  profileId: number,
+  gutter = 1,
+): PackedPeriodicProfile {
+  validateIndexedMesh(mesh);
+  if (!result.ownerPixels) throw new Error('GCRP/v4 owner pixels are required');
+  const sourceOwners = result.ownerPixels;
+  const triangleCount = mesh.indices.length / 3;
+  if (triangleCount >= 1 << 22) throw new Error('GCRP/v4 triangle count exceeds the 22-bit owner id');
+  const sourceWidth = result.tileWidth * result.atlasColumns;
+  const sourceHeight = result.tileHeight * result.atlasRows;
+  if (sourceOwners.length !== sourceWidth * sourceHeight) {
+    throw new Error('GCRP/v4 owner pixels do not match the atlas');
+  }
+  const guarded = makeGuardedAtlas(result, gutter);
+  const storedWidth = guarded.storedTileWidth * result.atlasColumns;
+  const storedHeight = guarded.storedTileHeight * result.atlasRows;
+  const guardedOwners = new Uint32Array(storedWidth * storedHeight);
+  guardedOwners.fill(0xffff_ffff);
+  result.slices.forEach((_slice, sliceIndex) => {
+    const srcTileX = (sliceIndex % result.atlasColumns) * result.tileWidth;
+    const srcTileY = Math.floor(sliceIndex / result.atlasColumns) * result.tileHeight;
+    const dstTileX = (sliceIndex % result.atlasColumns) * guarded.storedTileWidth;
+    const dstTileY = Math.floor(sliceIndex / result.atlasColumns) * guarded.storedTileHeight;
+    for (let y = 0; y < guarded.storedTileHeight; y++) {
+      const sourceY = mod(y - gutter, result.tileHeight);
+      for (let x = 0; x < guarded.storedTileWidth; x++) {
+        const sourceX = mod(x - gutter, result.tileWidth);
+        guardedOwners[(dstTileY + y) * storedWidth + dstTileX + x] =
+          sourceOwners[(srcTileY + sourceY) * sourceWidth + srcTileX + sourceX]!;
+      }
+    }
+  });
+  const bounds = meshBounds(mesh);
+  const span = {
+    x: Math.max(1e-9, bounds.max.x - bounds.min.x),
+    y: Math.max(1e-9, bounds.max.y - bounds.min.y),
+    z: Math.max(1e-9, bounds.max.z - bounds.min.z),
+  };
+  const headerBytes = 128;
+  const sliceBytes = 64;
+  const geometryOffset = headerBytes + result.slices.length * sliceBytes;
+  const geometryBytes = storedWidth * storedHeight * PROFILE_TEXEL_BYTES;
+  const ownerOffset = geometryOffset + geometryBytes;
+  const ownerBytes = guardedOwners.byteLength;
+  const vertexOffset = ownerOffset + ownerBytes;
+  const vertexCount = mesh.positions.length / 3;
+  const vertexBytes = vertexCount * 16;
+  const triangleOffset = vertexOffset + vertexBytes;
+  const triangleBytes = triangleCount * 16;
+  const bytes = new Uint8Array(triangleOffset + triangleBytes);
+  const view = new DataView(bytes.buffer);
+  bytes.set([0x47, 0x43, 0x52, 0x50], 0);
+  view.setUint32(4, PERIODIC_OWNED_PROFILE_VERSION, true);
+  view.setUint32(8, profileId >>> 0, true);
+  view.setUint32(12, guarded.storedTileWidth, true);
+  view.setUint32(16, guarded.storedTileHeight, true);
+  view.setUint32(20, result.atlasColumns, true);
+  view.setUint32(24, result.atlasRows, true);
+  view.setUint32(28, result.slices.length, true);
+  view.setUint32(32, PROFILE_TEXEL_BYTES, true);
+  view.setUint32(36, geometryOffset, true);
+  view.setUint32(40, 1, true);
+  view.setUint32(44, result.tileWidth, true);
+  view.setUint32(48, result.tileHeight, true);
+  view.setUint32(52, gutter, true);
+  view.setFloat32(56, result.tile.topH, true);
+  view.setFloat32(60, result.tile.originX, true);
+  view.setFloat32(64, result.tile.originZ, true);
+  view.setFloat32(68, result.tile.sizeX, true);
+  view.setFloat32(72, result.tile.sizeZ, true);
+  view.setUint32(76, headerBytes, true);
+  view.setUint32(80, ownerOffset, true);
+  view.setUint32(84, vertexOffset, true);
+  view.setUint32(88, triangleOffset, true);
+  view.setUint32(92, vertexCount, true);
+  view.setUint32(96, triangleCount, true);
+  view.setFloat32(100, bounds.min.x, true);
+  view.setFloat32(104, bounds.min.y, true);
+  view.setFloat32(108, bounds.min.z, true);
+  view.setFloat32(112, bounds.max.x, true);
+  view.setFloat32(116, bounds.max.y, true);
+  view.setFloat32(120, bounds.max.z, true);
+  result.slices.forEach((slice, index) => {
+    const base = headerBytes + index * sliceBytes;
+    view.setFloat32(base, slice.direction.x, true);
+    view.setFloat32(base + 4, slice.direction.y, true);
+    view.setFloat32(base + 8, slice.direction.z, true);
+    view.setFloat32(base + 12, slice.depthMin, true);
+    view.setFloat32(base + 16, slice.depthMax, true);
+    view.setInt32(base + 20, slice.copyRange.minX, true);
+    view.setInt32(base + 24, slice.copyRange.maxX, true);
+    view.setInt32(base + 28, slice.copyRange.minZ, true);
+    view.setInt32(base + 32, slice.copyRange.maxZ, true);
+  });
+  for (let texel = 0; texel < storedWidth * storedHeight; texel++) {
+    const src = texel * 4;
+    const dst = geometryOffset + texel * PROFILE_TEXEL_BYTES;
+    const hit = (guarded.pixels[src + 3] as number) > 0.5;
+    view.setUint16(dst, hit ? Math.min(65534, clampU16(guarded.pixels[src] as number)) : 65535, true);
+    view.setUint16(dst + 2, hit ? clampU16(guarded.pixels[src + 1] as number) : 32768, true);
+    view.setUint16(dst + 4, hit ? clampU16(guarded.pixels[src + 2] as number) : 32768, true);
+    view.setUint16(dst + 6, hit ? 65535 : 0, true);
+    view.setUint32(ownerOffset + texel * 4, guardedOwners[texel]!, true);
+  }
+  const encodeOct16 = (x: number, y: number, z: number): [number, number] => {
+    const l1 = Math.max(1e-12, Math.abs(x) + Math.abs(y) + Math.abs(z));
+    let ox = x / l1;
+    let oy = y / l1;
+    if (z < 0) {
+      const oldX = ox;
+      ox = (1 - Math.abs(oy)) * (oldX >= 0 ? 1 : -1);
+      oy = (1 - Math.abs(oldX)) * (oy >= 0 ? 1 : -1);
+    }
+    return [clampU16(ox * 0.5 + 0.5), clampU16(oy * 0.5 + 0.5)];
+  };
+  for (let vertex = 0; vertex < vertexCount; vertex++) {
+    const source = vertex * 3;
+    const target = vertexOffset + vertex * 16;
+    view.setUint16(target, clampU16((mesh.positions[source]! - bounds.min.x) / span.x), true);
+    view.setUint16(target + 2, clampU16((mesh.positions[source + 1]! - bounds.min.y) / span.y), true);
+    view.setUint16(target + 4, clampU16((mesh.positions[source + 2]! - bounds.min.z) / span.z), true);
+    view.setUint16(target + 6, clampU16(mesh.colors?.[source] ?? 1), true);
+    view.setUint16(target + 8, clampU16(mesh.colors?.[source + 1] ?? 1), true);
+    view.setUint16(target + 10, clampU16(mesh.colors?.[source + 2] ?? 1), true);
+    const [nx, ny] = encodeOct16(
+      mesh.normals[source]!,
+      mesh.normals[source + 1]!,
+      mesh.normals[source + 2]!,
+    );
+    view.setUint16(target + 12, nx, true);
+    view.setUint16(target + 14, ny, true);
+  }
+  for (let triangle = 0; triangle < triangleCount; triangle++) {
+    const target = triangleOffset + triangle * 16;
+    view.setUint32(target, mesh.indices[triangle * 3]!, true);
+    view.setUint32(target + 4, mesh.indices[triangle * 3 + 1]!, true);
+    view.setUint32(target + 8, mesh.indices[triangle * 3 + 2]!, true);
+  }
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  return {
+    bytes,
+    sha256,
+    payloadOffset: geometryOffset,
+    gutter,
+    storedTileWidth: guarded.storedTileWidth,
+    storedTileHeight: guarded.storedTileHeight,
+    guardedPixels: guarded.pixels,
+  };
+}
+
 export function parsePeriodicHeader(bytes: Uint8Array): PeriodicHeader {
   if (bytes.byteLength < 80 || String.fromCharCode(...bytes.subarray(0, 4)) !== 'GCRP') {
     throw new Error('not a GCRP profile');
   }
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const version = view.getUint32(4, true);
-  if (version !== PERIODIC_PROFILE_VERSION) throw new Error(`expected periodic GCRP/v2, got v${version}`);
+  if (
+    version !== PERIODIC_PROFILE_VERSION
+    && version !== PERIODIC_CORRESPONDENCE_PROFILE_VERSION
+    && version !== PERIODIC_OWNED_PROFILE_VERSION
+  ) {
+    throw new Error(`expected periodic GCRP/v2, v3, or v4, got v${version}`);
+  }
   return {
     version,
     profileId: view.getUint32(8, true),

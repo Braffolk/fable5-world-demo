@@ -82,6 +82,10 @@ import { brickNormalTsl, brickWord, BRICK_ALBEDO, BRICK_NORMAL, BRICK_POS_X } fr
 import { makeFetch, slotHash } from '../raster/NaniteFetch';
 import { GRASS_FAR_BASE } from '../grass/NaniteGrass';
 import { GroundCoverId, GROUND_COVER_ID_MASK } from '../groundcover/GroundCoverTypes';
+import {
+  GROUND_COVER_PROFILE_FUNCTIONAL_IDS,
+  GroundCoverProfileId,
+} from '../groundcover/GroundCoverProfiles';
 import { CLHW_MAX, hashColor, instRotateDir, instTransformPoint, instYaw, type NaniteCam } from '../NaniteCommon';
 import { clusterHwClass } from '../cull/NaniteHwClass';
 import type { NaniteVisBuffers } from '../raster/NaniteRaster';
@@ -156,6 +160,91 @@ export interface ResolveWorld {
 interface TexSample {
   depth(d: unknown): TexSample;
   grad(a: unknown, b: unknown): TexSample;
+}
+
+const GROUND_COVER_MATERIAL_STRIDE = 5;
+
+/** Five vec4s per exact native profile (legacy functional fixtures live at 16+id):
+ *  0 fresh-base.rgb / near normal-pull
+ *  1 fresh-tip.rgb  / base AO
+ *  2 dry-base.rgb   / tip translucency
+ *  3 dry-tip.rgb    / canopy darkening
+ *  4 canopy.rgb     / reserved
+ * A uniform table keeps the resolve cost independent of the authored species
+ * count; unassigned ids are inert black and never acquire a procedural hit. */
+function groundCoverMaterialTable(grassNearPull: number): Vector4[] {
+  const rows = Array.from(
+    { length: 64 * GROUND_COVER_MATERIAL_STRIDE },
+    () => new Vector4(0, 0, 0, 0),
+  );
+  const put = (
+    id: number,
+    freshBase: readonly [number, number, number],
+    freshTip: readonly [number, number, number],
+    dryBase: readonly [number, number, number],
+    dryTip: readonly [number, number, number],
+    canopy: readonly [number, number, number],
+    normalPull: number,
+    aoBase: number,
+    translucency: number,
+    canopyDarken: number,
+  ): void => {
+    const b = id * GROUND_COVER_MATERIAL_STRIDE;
+    rows[b] = new Vector4(...freshBase, normalPull);
+    rows[b + 1] = new Vector4(...freshTip, aoBase);
+    rows[b + 2] = new Vector4(...dryBase, translucency);
+    rows[b + 3] = new Vector4(...dryTip, canopyDarken);
+    rows[b + 4] = new Vector4(...canopy, 0);
+  };
+  const legacy = (functionalId: number): number => 16 + functionalId;
+  put(legacy(GroundCoverId.Grass),
+    [0.02, 0.062, 0.011], [0.065, 0.148, 0.028],
+    [0.085, 0.07, 0.024], [0.21, 0.17, 0.075],
+    [0.018, 0.052, 0.014],
+    grassNearPull, 0.45, 0.09, 0.55);
+  put(legacy(GroundCoverId.Moss),
+    [0.025, 0.065, 0.008], [0.18, 0.34, 0.035],
+    [0.11, 0.075, 0.018], [0.42, 0.27, 0.045],
+    [0.018, 0.05, 0.008],
+    0.1, 0.28, 0.13, 0.32);
+  put(legacy(GroundCoverId.Sedge),
+    [0.025, 0.055, 0.01], [0.14, 0.2, 0.03],
+    [0.12, 0.09, 0.025], [0.33, 0.25, 0.08],
+    [0.018, 0.045, 0.009],
+    0.14, 0.38, 0.1, 0.45);
+  put(legacy(GroundCoverId.Lichen),
+    [0.1, 0.12, 0.08], [0.32, 0.38, 0.25],
+    [0.16, 0.14, 0.1], [0.46, 0.4, 0.28],
+    [0.08, 0.1, 0.07],
+    0.3, 0.6, 0.02, 0.24);
+  put(legacy(GroundCoverId.Forb),
+    [0.015, 0.05, 0.012], [0.06, 0.17, 0.04],
+    [0.07, 0.055, 0.02], [0.19, 0.13, 0.05],
+    [0.012, 0.04, 0.01],
+    0.12, 0.4, 0.07, 0.5);
+  put(legacy(GroundCoverId.DwarfShrub),
+    [0.012, 0.035, 0.008], [0.045, 0.11, 0.025],
+    [0.055, 0.035, 0.012], [0.13, 0.085, 0.03],
+    [0.01, 0.03, 0.006],
+    0.16, 0.35, 0.05, 0.48);
+  // Until each remaining species gets its own measured material, inherit only
+  // the broad functional response. Geometry/profile identity stays exact.
+  GROUND_COVER_PROFILE_FUNCTIONAL_IDS.forEach((functionalId, profileId) => {
+    const source = legacy(functionalId) * GROUND_COVER_MATERIAL_STRIDE;
+    const target = profileId * GROUND_COVER_MATERIAL_STRIDE;
+    for (let i = 0; i < GROUND_COVER_MATERIAL_STRIDE; i++) {
+      rows[target + i] = rows[source + i]!.clone();
+    }
+  });
+  // S. capillifolium's authored profile includes a connected living carpet and
+  // exposed inter-capitulum branches. The old isolated-cap fixture's near-black
+  // root colour crushed that real low surface to literal black after AO.
+  put(GroundCoverProfileId.SphagnumCapillifolium,
+    [0.15, 0.3, 0.038], [0.22, 0.42, 0.055],
+    [0.27, 0.18, 0.048], [0.46, 0.3, 0.07],
+    [0.09, 0.19, 0.025],
+    0.08, 0.8, 0.16, 0.25);
+  return rows;
 }
 
 /** hue jitter (port of VegMaterials.hueShift): warm/cool tint by vdata.x */
@@ -253,6 +342,13 @@ export function buildNaniteResolve(
     throw new Error('NaniteResolve: heightfield noise bake missing (boot order)');
   }
   const q = new URLSearchParams(window.location.search);
+  const grassNearPullRaw = Number(q.get('grassnrmpull') ?? '0.18');
+  const grassNearPull = Number.isFinite(grassNearPullRaw)
+    ? Math.max(0, Math.min(1, grassNearPullRaw))
+    : 0.18;
+  const groundCoverMaterials = world.grassProc
+    ? uniformArrV4(groundCoverMaterialTable(grassNearPull))
+    : null;
   // S6d KEYSTONE (build-time gate): the streamed (Estonia) world reconstructs the
   // world pos in the StreamOrigin-relative frame — camWorldRel/cam.anchor are the
   // anchored camera; the generated world compiles the verbatim absolute built-ins
@@ -1161,15 +1257,27 @@ export function buildNaniteResolve(
     // above; grass tip-AO folded into `ao` in the grass branch, rock/bark cavity AO
     // into their branches. wNormal init IS the old up-normal fall-through.)
 
-    // ---- PROCEDURAL GRASS shading (grass rethink 2026-07-03, NaniteGrass) — the
-    // bit31|bit30 pixels. Re-derive the blade triangle from the self-describing id
-    // (bit-identical to the raster's corners), bary-interpolate tip/normal at the
-    // reconstructed wp, then the S0 GroundRing material port (fresh/dry tip ramps ×
-    // ~1.6 m patch dryness × canopy shade; blade normal pulled to the terrain normal
-    // hardening with distance). Zero storage buffers — texture taps + ALU only.
+    // ---- PROCEDURAL GROUND-COVER shading — bit31|bit30 pixels. The fixed-query
+    // lane supplies the real hit normal + normalized height. Streamed v2 bodies
+    // carry the exact 8-bit native profile; legacy/generated bodies retain their
+    // 6-bit functional id. Both index one compact material table.
     const gpTip = float(0.5).toVar() as unknown as NF;
+    const gpTransK = float(0).toVar() as unknown as NF;
     const groundCoverTypeDebug = q.get('groundcoverdbg') === 'type';
-    const gpCoverId = groundCoverTypeDebug ? (uint(GroundCoverId.Grass).toVar() as unknown as NU) : null;
+    const exactAuthoredProfileColor = q.get('grassprofile')
+        === String(GroundCoverProfileId.CalamagrostisCanescens)
+      && q.get('grassbase') !== '1';
+    const gpCoverId = uint(GroundCoverId.Grass).toVar() as unknown as NU;
+    const gpProfileId = uint(GroundCoverProfileId.AgrostisCapillaris).toVar() as unknown as NU;
+    const gpMaterialId = uint(16 + GroundCoverId.Grass).toVar() as unknown as NU;
+    // Debug-only carrier for the exact profile colour. `groundcoverdbg=type`
+    // must be unlit at the final output just like `grassdbg=tip`; otherwise
+    // ordinary cover lighting can turn the same visible procedural records
+    // black and make the identity diagnostic lie. The build-time query gate
+    // keeps this Var out of the production shader graph entirely.
+    const gpTypeColor = groundCoverTypeDebug
+      ? (vec3(0.12, 0.42, 0.05).toVar() as unknown as NV3)
+      : null;
     // ?grassdbg=flatres — attribution stop: grass pixels keep their election/depth
     // but the resolve stubs derive+material+per-pixel work to constants. Splits
     // "grass pixels EXIST downstream" from "grass resolve work" in the frame A/B.
@@ -1182,6 +1290,55 @@ export function buildNaniteResolve(
         // isV==1 seed set (old blGate.and(isGP.not())). Their own tip-weighted term
         // (gBl) is added below. Applies to both the gpFlat stub and the full path.
         blK.assign(float(0));
+        const body = pRaw.bitAnd(uint(0x3fffffff));
+        if (world.field.hasGroundCoverClosure) {
+          gpProfileId.assign(
+            exactAuthoredProfileColor
+              ? body.bitAnd(uint(0xf))
+              : body.bitAnd(uint(0xff)),
+          );
+          let functional: NU = uint(
+            GROUND_COVER_PROFILE_FUNCTIONAL_IDS[
+              GROUND_COVER_PROFILE_FUNCTIONAL_IDS.length - 1
+            ]!,
+          ) as unknown as NU;
+          for (let profileId = GROUND_COVER_PROFILE_FUNCTIONAL_IDS.length - 2; profileId >= 0; profileId--) {
+            functional = (gpProfileId.equal(uint(profileId)) as unknown as {
+              select(a: unknown, b: unknown): NU;
+            }).select(uint(GROUND_COVER_PROFILE_FUNCTIONAL_IDS[profileId]!), functional);
+          }
+          gpCoverId.assign(functional);
+          gpMaterialId.assign(gpProfileId);
+        } else {
+          gpCoverId.assign(body.bitAnd(uint(GROUND_COVER_ID_MASK)));
+          gpProfileId.assign(gpCoverId);
+          gpMaterialId.assign(gpCoverId.add(uint(16)));
+        }
+        if (groundCoverTypeDebug) {
+          const debugId = world.field.hasGroundCoverClosure ? gpProfileId : gpCoverId;
+          const colors = world.field.hasGroundCoverClosure
+            ? [
+                [0.12, 0.42, 0.05], [0.12, 0.68, 0.46], [0.10, 0.38, 0.82],
+                [0.92, 0.68, 0.08], [0.95, 0.92, 0.72], [0.42, 0.78, 0.08],
+                [0.20, 0.58, 0.26], [0.68, 0.76, 0.58], [0.76, 0.18, 0.62],
+                [0.82, 0.34, 0.22], [0.42, 0.21, 0.08], [0.62, 0.20, 0.74],
+              ]
+            : [
+                [0.12, 0.42, 0.05], [0.42, 0.78, 0.08], [0.92, 0.68, 0.08],
+                [0.68, 0.76, 0.58], [0.76, 0.18, 0.62], [0.42, 0.21, 0.08],
+              ];
+          let typeColor = vec3(...colors[0]!) as unknown as NV3;
+          for (let id = 1; id < colors.length; id++) {
+            typeColor = (debugId.equal(uint(id)) as unknown as { select(a: NV3, b: NV3): NV3 })
+              .select(vec3(...colors[id]!) as unknown as NV3, typeColor);
+          }
+          (gpTypeColor as unknown as { assign(v: NV3): void }).assign(typeColor);
+          albedo.assign(typeColor);
+          wNormal.assign(vec3(0, 1, 0) as unknown as NV3);
+          ao.assign(float(1));
+          gpTip.assign(float(0.5));
+          return;
+        }
         if (gpFlat) {
           albedo.assign(vec3(0.05, 0.12, 0.03) as unknown as NV3);
           wNormal.assign(vec3(0, 1, 0) as unknown as NV3);
@@ -1189,8 +1346,6 @@ export function buildNaniteResolve(
           gpTip.assign(float(0.5));
           return;
         }
-        const body = pRaw.bitAnd(uint(0x3fffffff));
-        if (gpCoverId) gpCoverId.assign(body.bitAnd(uint(GROUND_COVER_ID_MASK)));
         // normal + tip come straight from the raycast lane's screen texture (ONE tap)
         const rv = gp.ray(pixelIndex as unknown as NU) as unknown as NV4;
         const g = {
@@ -1201,25 +1356,25 @@ export function buildNaniteResolve(
         const toCamG = normalize(camPos.sub(wp)) as unknown as NV3;
         const nF = dot(g.nrm, toCamG).lessThan(0).select(g.nrm.negate(), g.nrm) as unknown as NV3;
         const tNrm = world.field.fieldNormalSlopeHot(wp.xz as unknown as NV2).xyz as unknown as NV3;
-        // The BLADE normal must DRIVE near-field shading so individual blades catch
-        // light and read as 3D geometry (Sannikov's grass looks solid from every
-        // angle for exactly this reason). The old 0.5→0.85 pull toward the flat
-        // terrain-up normal erased that — grass shaded like a flat AO-gradient
-        // carpet, "the AO more visible than the blades." Keep only a light near pull
-        // for stability, ramping to full for distant tufts (?grassnrmpull=near).
-        const isFarG = body.greaterThanEqual(uint(GRASS_FAR_BASE));
-        const nearPull = Number(q.get('grassnrmpull') ?? '0.18');
+        const matBase = gpMaterialId.mul(uint(GROUND_COVER_MATERIAL_STRIDE));
+        const m0 = groundCoverMaterials!.element(matBase);
+        const m1 = groundCoverMaterials!.element(matBase.add(uint(1)));
+        const m2 = groundCoverMaterials!.element(matBase.add(uint(2)));
+        const m3 = groundCoverMaterials!.element(matBase.add(uint(3)));
+        const m4 = groundCoverMaterials!.element(matBase.add(uint(4)));
+        // The authored surface normal drives near-field shading. Pull only enough
+        // toward terrain to stabilize distance filtering; each profile controls its
+        // own near gain, while the legacy grass ?grassnrmpull value occupies m0.w.
+        const isFarG = world.field.hasGroundCoverClosure
+          ? body.lessThan(uint(0))
+          : body.greaterThanEqual(uint(GRASS_FAR_BASE));
         const upK = isFarG.select(
           float(1),
-          smoothstep(8, 70, distG).mul(0.47).add(nearPull),
+          smoothstep(8, 70, distG).mul(0.47).add(m0.w),
         ) as unknown as NF;
         const t = g.t;
-        const fresh = mix(
-          vec3(0.02, 0.062, 0.011),
-          vec3(0.065, 0.148, 0.028),
-          t.mul(t),
-        ) as unknown as NV3;
-        const dryC = mix(vec3(0.085, 0.07, 0.024), vec3(0.21, 0.17, 0.075), t) as unknown as NV3;
+        const fresh = mix(m0.xyz, m1.xyz, t.mul(t)) as unknown as NV3;
+        const dryC = mix(m2.xyz, m3.xyz, t) as unknown as NV3;
         const patch = patchField(wp.xz as unknown as NV2).toVar() as unknown as NV2;
         const patchX = patch.x as unknown as NF;
         const patchY = patch.y as unknown as NF;
@@ -1227,13 +1382,26 @@ export function buildNaniteResolve(
           ? canopyAt(world.canopyTex, wp.xz as unknown as NV2)
           : float(0)) as unknown as NF;
         const dryK = smoothstep(0.64, 0.82, patchX).mul(float(1).sub(cov.mul(0.85))) as unknown as NF;
-        let alb = mix(fresh, dryC, dryK) as unknown as NV3;
-        alb = alb.mul(patchY.sub(0.5).mul(0.4).add(1)) as unknown as NV3;
-        alb = mix(alb, vec3(0.018, 0.052, 0.014) as unknown as NV3, cov.mul(0.55)) as unknown as NV3;
+        let alb: NV3;
+        if (exactAuthoredProfileColor) {
+          const packed = body.shiftRight(uint(4)).bitAnd(uint(0xff_ffff));
+          alb = vec3(
+            toF(packed.shiftRight(uint(16)).bitAnd(uint(0xff))).div(255),
+            toF(packed.shiftRight(uint(8)).bitAnd(uint(0xff))).div(255),
+            toF(packed.bitAnd(uint(0xff))).div(255),
+          ) as unknown as NV3;
+        } else {
+          alb = mix(fresh, dryC, dryK) as unknown as NV3;
+          alb = alb.mul(patchY.sub(0.5).mul(0.4).add(1)) as unknown as NV3;
+          alb = mix(alb, m4.xyz, cov.mul(m3.w)) as unknown as NV3;
+        }
         albedo.assign(alb);
         wNormal.assign(normalize(mix(nF, tNrm, upK)) as unknown as NV3);
-        ao.assign(smoothstep(0.0, 0.55, t).mul(0.55).add(0.45));
+        const coverAo = smoothstep(0.0, 0.55, t)
+          .mul(float(1).sub(m1.w)).add(m1.w) as unknown as NF;
+        ao.assign(coverAo);
         gpTip.assign(t);
+        gpTransK.assign(t.mul(m2.w));
       });
     }
 
@@ -1375,11 +1543,11 @@ export function buildNaniteResolve(
         .mul(vec3(0.9, 1.05, 0.55)) as unknown as NV3;
       lit = lit.add(backlight) as unknown as NV3;
       if (isGP) {
-        // grassTranslucency port for the procedural lane: albedo already holds the
-        // grass color on these pixels; k = 0.09 × tip weight (S0 parity).
+        // Profile-indexed forward scatter. Grass remains k=0.09×tip; moss,
+        // sedge, lichen, forb and shrub carry their own bounded response.
         const gBl = albedo
           .mul(sunU.color as unknown as NV3)
-          .mul(glow.div(0.032).mul(gpTip.mul(0.09)))
+          .mul(glow.div(0.032).mul(gpTransK))
           .mul(vec3(0.9, 1.05, 0.55)) as unknown as NV3;
         lit = lit.add(
           (isGP as unknown as { select(a: NV3, b: NV3): NV3 }).select(gBl, vec3(0) as unknown as NV3),
@@ -1388,28 +1556,20 @@ export function buildNaniteResolve(
     }
 
     // ---- debug overrides ------------------------------------------------------
-    // ?groundcoverdbg=type — verify the cook-controlled 6-bit id really survives
-    // guide -> ray election -> vis buffer -> resolve. This is a build-time-only
-    // override; production does not unpack or branch on the id yet.
-    if (groundCoverTypeDebug && gpCoverId && isGP) {
-      const dbg = (lit as unknown as { toVar(): NV3 }).toVar();
-      let typeColor = vec3(0.12, 0.42, 0.05) as unknown as NV3; // grass
-      typeColor = (gpCoverId.equal(uint(GroundCoverId.Moss)) as unknown as { select(a: NV3, b: NV3): NV3 })
-        .select(vec3(0.42, 0.78, 0.08) as unknown as NV3, typeColor);
-      typeColor = (gpCoverId.equal(uint(GroundCoverId.Sedge)) as unknown as { select(a: NV3, b: NV3): NV3 })
-        .select(vec3(0.92, 0.68, 0.08) as unknown as NV3, typeColor);
-      typeColor = (gpCoverId.equal(uint(GroundCoverId.Lichen)) as unknown as { select(a: NV3, b: NV3): NV3 })
-        .select(vec3(0.68, 0.76, 0.58) as unknown as NV3, typeColor);
-      typeColor = (gpCoverId.equal(uint(GroundCoverId.Forb)) as unknown as { select(a: NV3, b: NV3): NV3 })
-        .select(vec3(0.76, 0.18, 0.62) as unknown as NV3, typeColor);
-      typeColor = (gpCoverId.equal(uint(GroundCoverId.DwarfShrub)) as unknown as { select(a: NV3, b: NV3): NV3 })
-        .select(vec3(0.42, 0.21, 0.08) as unknown as NV3, typeColor);
-      typeColor = (gpCoverId.equal(uint(GroundCoverId.Bare)) as unknown as { select(a: NV3, b: NV3): NV3 })
-        .select(vec3(0.18, 0.18, 0.18) as unknown as NV3, typeColor);
-      If(isGP, () => {
-        dbg.assign(typeColor);
-      });
-      return vec4(dbg, 1) as unknown as NV4;
+    // ?groundcoverdbg=type — exact native-profile identity, UNLIT. Route only
+    // the procedural records through the palette; all other scene pixels keep
+    // their ordinary lit output. This is deliberately the same final-output
+    // pattern as `grassdbg=tip`, so shadows/material response cannot fabricate
+    // black interiors in otherwise visible ground-cover geometry.
+    if (groundCoverTypeDebug) {
+      if (isGP && gpTypeColor) {
+        const dbg = (lit as unknown as { toVar(): NV3 }).toVar();
+        If(isGP, () => {
+          dbg.assign(gpTypeColor);
+        });
+        return vec4(dbg, 1) as unknown as NV4;
+      }
+      return vec4(lit, 1) as unknown as NV4;
     }
     // ?grassdbg=tip — grass base→tip, UNLIT: base(t=0)=RED, tip(t=1)=GREEN.
     // Non-grass pixels retain their normal lit output, so the terrain/vegetation

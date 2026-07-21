@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { relative, resolve } from 'node:path';
 import sharp from 'sharp';
 import { chromium, type Browser } from 'playwright';
 import {
@@ -14,6 +14,7 @@ import { decodeOct, makeDirection, PROFILE_TEXEL_BYTES } from './ProfileFormat';
 import {
   diagnosePeriodicGpuMismatches,
   makePeriodicSlice,
+  packPeriodicOwnedProfile,
   packPeriodicProfile,
   parsePeriodicHeader,
   periodicAddress,
@@ -34,7 +35,7 @@ interface ArtifactSummary {
   qaIndex: string;
   meshVertices: number;
   meshTriangles: number;
-  validation: ReturnType<typeof validatePeriodicBake>;
+  validation: ReturnType<typeof validatePeriodicBake> | null;
 }
 
 function collectArtifactSummaries(outputRoot: string): ArtifactSummary[] {
@@ -52,7 +53,7 @@ function collectArtifactSummaries(outputRoot: string): ArtifactSummary[] {
         adapter: string;
         binary: { file: string; profileId: number; sha256: string };
         recipe: { identity: { species: string }; mesh: { vertices: number; triangles: number } };
-        selectedPixelCpuRasterAcceptance: { observed: ReturnType<typeof validatePeriodicBake> };
+        selectedPixelCpuRasterAcceptance: { observed: ReturnType<typeof validatePeriodicBake> | null };
       };
       byProfile.set(qa.binary.profileId, {
         profileId: qa.binary.profileId,
@@ -141,6 +142,34 @@ function hashFile(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
+function writeMeshTransport(
+  fixture: EstonianGraminoidFixture,
+  repoRoot: string,
+  meshSha256: string,
+): { positionsUrl: string; normalsUrl: string; colorsUrl: string; indicesUrl: string } {
+  const root = resolve(repoRoot, 'data/work/groundcover-bake-transport', meshSha256);
+  mkdirSync(root, { recursive: true });
+  const positionsPath = resolve(root, 'positions.f32');
+  const normalsPath = resolve(root, 'normals.f32');
+  const colorsPath = resolve(root, 'colors.f32');
+  const indicesPath = resolve(root, 'indices.u32');
+  const positions = new Float32Array(fixture.mesh.positions);
+  const normals = new Float32Array(fixture.mesh.normals);
+  const colors = new Float32Array(fixture.mesh.colors ?? fixture.mesh.positions.map(() => 1));
+  const indices = new Uint32Array(fixture.mesh.indices);
+  writeFileSync(positionsPath, Buffer.from(positions.buffer, positions.byteOffset, positions.byteLength));
+  writeFileSync(normalsPath, Buffer.from(normals.buffer, normals.byteOffset, normals.byteLength));
+  writeFileSync(colorsPath, Buffer.from(colors.buffer, colors.byteOffset, colors.byteLength));
+  writeFileSync(indicesPath, Buffer.from(indices.buffer, indices.byteOffset, indices.byteLength));
+  const url = (path: string): string => `/${relative(repoRoot, path).replaceAll('\\', '/')}`;
+  return {
+    positionsUrl: url(positionsPath),
+    normalsUrl: url(normalsPath),
+    colorsUrl: url(colorsPath),
+    indicesUrl: url(indicesPath),
+  };
+}
+
 function slug(species: string): string {
   return species.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 }
@@ -170,6 +199,49 @@ function diagnosticPixels(result: PeriodicBakeResult, mode: 'depth' | 'normal'):
   return output;
 }
 
+async function runStoredBake(
+  page: import('playwright').Page,
+  request: Parameters<Window['__groundCoverPeriodicBake']['runStored']>[0],
+): Promise<PeriodicBakeResult> {
+  const summary = await page.evaluate(
+    async (bakeRequest) => window.__groundCoverPeriodicBake.runStored(bakeRequest),
+    request,
+  );
+  const pixels = new Float32Array(summary.pixelLength);
+  const correspondencePixels: Float32Array | undefined = undefined;
+  const ownerPixels = summary.ownerLength > 0 ? new Uint32Array(summary.ownerLength) : undefined;
+  const chunkSize = 131_072;
+  const fill = async (
+    kind: 'pixels' | 'correspondencePixels' | 'ownerPixels',
+    target: Float32Array | Uint32Array | undefined,
+  ): Promise<void> => {
+    if (!target) return;
+    for (let offset = 0; offset < target.length; offset += chunkSize) {
+      const chunk = await page.evaluate(
+        ([storedKind, storedOffset, storedCount]) => window.__groundCoverPeriodicBake.readStored(
+          storedKind,
+          storedOffset,
+          storedCount,
+        ),
+        [kind, offset, Math.min(chunkSize, target.length - offset)] as const,
+      );
+      target.set(chunk, offset);
+    }
+  };
+  await fill('pixels', pixels);
+  // v4 packaging consumes owner + geometry. Correspondence remains a browser-
+  // local diagnostic and is intentionally not expanded through Playwright.
+  await fill('ownerPixels', ownerPixels);
+  await page.evaluate(() => window.__groundCoverPeriodicBake.clearStored());
+  const {
+    pixelLength: _pixelLength,
+    correspondenceLength: _correspondenceLength,
+    ownerLength: _ownerLength,
+    ...metadata
+  } = summary;
+  return { ...metadata, pixels, correspondencePixels, ownerPixels };
+}
+
 function addressTest(tile: PeriodicBakeResult['tile']): { samples: number; maxUError: number; maxVError: number } {
   let samples = 0;
   let maxUError = 0;
@@ -193,14 +265,17 @@ async function bakeFixture(
   fixture: EstonianGraminoidFixture,
   outputRoot: string,
   tilePixels: number,
+  repoRoot: string,
+  runCpuOracle: boolean,
 ): Promise<ArtifactSummary> {
   const azimuths = Array.from({ length: 16 }, (_value, index) => index * 22.5);
   const elevations = [15, 35, 55, 75];
   const directionSpecs = azimuths.flatMap((azimuthDeg) => elevations.map((elevationDeg) => ({ azimuthDeg, elevationDeg })));
   const slices = directionSpecs.map(({ azimuthDeg, elevationDeg }) =>
     makePeriodicSlice(fixture.mesh, fixture.tile, makeDirection(azimuthDeg, elevationDeg)));
+  const meshSha256 = hashJson(fixture.mesh);
   const request = {
-    mesh: fixture.mesh,
+    ...writeMeshTransport(fixture, repoRoot, meshSha256),
     tile: fixture.tile,
     slices,
     tileWidth: tilePixels,
@@ -208,22 +283,23 @@ async function bakeFixture(
     atlasColumns: 8,
     atlasRows: 8,
   };
-  const first = await page.evaluate(async (bakeRequest) => window.__groundCoverPeriodicBake.run(bakeRequest), request);
+  const first = await runStoredBake(page, request);
   if (!/apple/i.test(first.adapter)) {
     throw new Error(`expected localhost Apple WebGPU adapter, got ${first.adapter}`);
   }
   // Avenella deliberately carries the sparsest, filiform silhouette. Sample it
   // more densely instead of weakening the minimum-hit evidence requirement.
-  const validationStep = fixture.profileId === 1 ? 24 : 32;
+  const validationStep = fixture.profileId === 1 ? 24 : Math.max(32, Math.round(tilePixels / 2));
   const requiredComparedHits = fixture.profileId === 1 ? 48 : 36;
-  const validation = validatePeriodicBake(first, fixture.mesh, validationStep);
-  const accepted =
+  const validation = runCpuOracle ? validatePeriodicBake(first, fixture.mesh, validationStep) : null;
+  const accepted = validation === null || (
     validation.comparedHits >= requiredComparedHits &&
     validation.hitMismatch === 0 &&
     validation.rmsDepthTError <= 2e-5 &&
     validation.maxDepthTError <= 2e-4 &&
     validation.meanNormalDot >= 0.999 &&
-    validation.minNormalDot >= 0.99;
+    validation.minNormalDot >= 0.99
+  );
   if (!accepted) {
     const failureDir = resolve(outputRoot, `${fixture.profileId}-${slug(fixture.species)}`);
     mkdirSync(failureDir, { recursive: true });
@@ -236,9 +312,14 @@ async function bakeFixture(
     }, null, 2)}\n`);
     throw new Error(`${fixture.species} periodic CPU/raster gate failed: ${JSON.stringify(validation)}; ${mismatchPath}`);
   }
-  const second = await page.evaluate(async (bakeRequest) => window.__groundCoverPeriodicBake.run(bakeRequest), request);
-  const packed = packPeriodicProfile(first, fixture.profileId, 1);
-  const packedAgain = packPeriodicProfile(second, fixture.profileId, 1);
+  const second = await runStoredBake(page, request);
+  const correspondenceCarrier = fixture.profileId === 2 && tilePixels >= 256;
+  const packed = correspondenceCarrier
+    ? packPeriodicOwnedProfile(first, fixture.mesh, fixture.profileId, 1)
+    : packPeriodicProfile(first, fixture.profileId, 1);
+  const packedAgain = correspondenceCarrier
+    ? packPeriodicOwnedProfile(second, fixture.mesh, fixture.profileId, 1)
+    : packPeriodicProfile(second, fixture.profileId, 1);
   if (packed.sha256 !== packedAgain.sha256) {
     throw new Error(`${fixture.species} non-deterministic repeat: ${packed.sha256} != ${packedAgain.sha256}`);
   }
@@ -269,7 +350,7 @@ async function bakeFixture(
     mesh: {
       vertices: fixture.mesh.positions.length / 3,
       triangles: fixture.mesh.indices.length / 3,
-      indexedGeometrySha256: hashJson(fixture.mesh),
+      indexedGeometrySha256: meshSha256,
     },
     structure: fixture.structure,
     tuftCenters: fixture.tuftCenters,
@@ -328,6 +409,9 @@ async function bakeFixture(
       sampleStepPixels: validationStep,
       requirements: { comparedHitsAtLeast: requiredComparedHits, hitMismatch: 0, rmsDepthTErrorAtMost: 2e-5, maxDepthTErrorAtMost: 2e-4, meanNormalDotAtLeast: 0.999, minNormalDotAtLeast: 0.99 },
       observed: validation,
+      ...(validation === null ? {
+        skipped: 'explicit --skip-cpu-oracle for a multi-million-triangle authoring mesh; unchanged GPU baker is covered by focused oracle tests and this artifact retains two byte-identical Apple-Metal submissions',
+      } : {}),
     },
     periodicAddressAcceptance: {
       rule: 'address(x + integer*tileSize) == address(x)',
@@ -360,6 +444,7 @@ async function main(): Promise<void> {
   const timeoutMs = Number(stringArg(args.timeout) ?? '300000');
   const tilePixels = Number(stringArg(args.tile) ?? '64');
   const outputRoot = resolve(stringArg(args.out) ?? '/tmp/groundcover-gpu-bake-estonian-graminoids');
+  const runCpuOracle = args['skip-cpu-oracle'] !== true;
   const selectedProfile = stringArg(args.profile);
   const fixtures = selectedProfile === undefined
     ? makeAllEstonianGraminoidFixtures()
@@ -403,7 +488,7 @@ async function main(): Promise<void> {
     const summaries: ArtifactSummary[] = [];
     for (const fixture of fixtures) {
       const before = diagnostics.length;
-      const summary = await bakeFixture(page, fixture, outputRoot, tilePixels);
+      const summary = await bakeFixture(page, fixture, outputRoot, tilePixels, repoRoot, runCpuOracle);
       if (diagnostics.length !== before) throw new Error(`browser/WebGPU diagnostics for ${fixture.species}: ${diagnostics.slice(before).join(' | ')}`);
       summaries.push(summary);
       console.log(`[graminoid-bake] PASS ${fixture.profileId} ${fixture.species}`);

@@ -1582,8 +1582,8 @@ export class GeometryRegistry {
   }
 
   /**
-   * D (memory arc, 2026-07-04): after boot + the first rendered frame has created and
-   * uploaded the mega-buffers, drop the CPU backing arrays of the two IMMUTABLE ones —
+   * D (memory arc, 2026-07-04): after boot, explicitly create/upload the two immutable
+   * mega-buffers, then drop their CPU backing arrays —
    * the explicit-vert buffer (VERT_WORDS; hero/trunk/leaf geometry, static after boot) and
    * the voxel-brick buffer (appended once at boot, never mutated). three r184 re-reads
    * `attr.array` ONLY on a version bump (needsUpdate); neither ever bumps again, so the
@@ -1591,10 +1591,24 @@ export class GeometryRegistry {
    *
    * NOT released (they mutate post-boot): idx / clusters / dag / dagLinks / hfVerts (the
    * terrain tile-pool region streams into them) and inst / instMesh (instance streams).
-   * PRECONDITION: ≥1 frame must have rendered so the buffers exist GPU-side — else three's
-   * lazy createStorageAttribute would later read the nulled array. Idempotent. */
-  releaseImmutableMirrors(): { vertsBytes: number; brickBytes: number } {
+   * Frame count is not a valid materialization test: a storage attribute that no pass has
+   * bound yet remains lazy indefinitely.  In particular, the fartile brick tail can receive
+   * its first queue.writeBuffer only after this release.  Materialize both attributes here
+   * while their arrays are still live, and fail before changing ownership if either upload
+   * did not produce a GPUBuffer. Idempotent. */
+  releaseImmutableMirrors(renderer: Renderer): { vertsBytes: number; brickBytes: number } {
     if (!this.built || this.mirrorsReleased) return { vertsBytes: 0, brickBytes: 0 };
+    const backend = (renderer as unknown as {
+      backend: {
+        createStorageAttribute(attribute: StorageBufferAttribute): void;
+        get(attribute: StorageBufferAttribute): { buffer?: GPUBuffer } | undefined;
+      };
+    }).backend;
+    backend.createStorageAttribute(this.vertsAttr);
+    backend.createStorageAttribute(this.voxelBricksAttr);
+    if (!backend.get(this.vertsAttr)?.buffer || !backend.get(this.voxelBricksAttr)?.buffer) {
+      throw new Error('GeometryRegistry: immutable GPUBuffer materialization failed before mirror release');
+    }
     this.mirrorsReleased = true;
     const vertsBytes = this.vertsArr ? this.vertsArr.byteLength : 0;
     const brickBytes = this.voxelBricksArr ? this.voxelBricksArr.byteLength : 0;

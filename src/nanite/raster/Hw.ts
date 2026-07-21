@@ -25,7 +25,9 @@ import {
 } from 'three';
 import type { PerspectiveCamera } from 'three';
 import {
+  IndirectStorageBufferAttribute,
   NodeMaterial,
+  StorageBufferAttribute,
   type Renderer,
   type StorageBufferNode,
 } from 'three/webgpu';
@@ -40,11 +42,16 @@ import {
   screenCoordinate,
   uint,
   varyingProperty,
+  vec3,
   vec4,
   vertexIndex,
 } from 'three/tsl';
 import type { NB, NF, NU, NV3, NV4 } from '../../gpu/TSLTypes';
-import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK } from '../world/GeometryRegistry';
+import {
+  CLUSTER_TRI_BITS,
+  CLUSTER_TRI_MASK,
+  MAX_CLUSTER_TRIS,
+} from '../world/GeometryRegistry';
 import type { NaniteCam } from '../NaniteCommon';
 import type { NaniteFetch, VertCtx } from './NaniteFetch';
 import {
@@ -57,7 +64,6 @@ import {
   sU32Views,
   toF,
 } from '../Tsl';
-import type { IndirectStorageBufferAttribute } from 'three/webgpu';
 import type { NaniteVisBuffers } from './VisBuffer';
 import { depthKey16, depthKey24 } from './VisBuffer';
 import { HW_CAP } from './Queues';
@@ -76,12 +82,16 @@ interface ComputeKernel {
 
 export interface HwPath {
   kHwArgs: unknown;
+  /** One-thread indirect draw-args publish for the grass outer shell. */
+  kGrassShellArgs: unknown | null;
   hwDepthMat: NodeMaterial;
   hwCombinedMat: NodeMaterial;
   hwWorld1Mat: NodeMaterial;
   hwRT: RenderTarget;
   hwRender(renderer: Renderer, camera: PerspectiveCamera, mat: NodeMaterial): void;
   hwRenderCluster(renderer: Renderer, camera: PerspectiveCamera): void;
+  /** Rasterize the displaced terrain shell into vis.depthV. */
+  hwRenderGrassShell(renderer: Renderer, camera: PerspectiveCamera): void;
 }
 
 export function buildHw(p: {
@@ -131,6 +141,8 @@ export function buildHw(p: {
    *  OFF restores the previous compute-fetch `_clE` vertex — selected at BUILD time (two
    *  closures, the other body never compiled), not a runtime shader branch. */
   hwproj: boolean;
+  /** Authored outer-shell height. null omits the entire shell graph. */
+  grassShellHeight?: number | null;
 }): HwPath {
   const {
     cam,
@@ -155,6 +167,7 @@ export function buildHw(p: {
     projBaseSlot,
     indices,
     hwproj,
+    grassShellHeight = null,
   } = p;
   // makeCtx used by the SOUP path (per-tri) + the legacy single 'both' `_cl` fallback; the
   // per-vertex fetch is resolved PER MATERIAL below (mFetch) so a class-split draw can bind its
@@ -546,6 +559,76 @@ export function buildHw(p: {
       addClusterMesh(hwClusterDrawAttr, buildHwMaterial('world1', true));
     }
   }
+
+  // Sannikov's O is a rasterized OUTER shell, not the later terrain hit. The
+  // world single-pass already allocates vis.depthV but otherwise leaves it
+  // unused, so the shell needs only a 16-byte indirect-args record. Every
+  // visible qRaster cluster is instanced once; non-heightfield clusters and
+  // partial-cluster tail vertices clip before a terrain fetch. The actual
+  // terrain triangles are displaced by the authored height, preserving their
+  // interpolation and silhouettes without a ray march or a second geometry
+  // representation.
+  const shellDrawAttr = grassShellHeight !== null && clusterCtxV !== null
+    ? new IndirectStorageBufferAttribute(new Uint32Array(4), 4)
+    : null;
+  if (shellDrawAttr) shellDrawAttr.name = 'grassShellDraw';
+  const shellDrawBuf = shellDrawAttr
+    ? sU32Views(shellDrawAttr as unknown as StorageBufferAttribute, 4).rw
+    : null;
+  const kGrassShellArgs = shellDrawBuf
+    ? Fn(() => {
+        const n = minU(qRasterRO.element(0).x, uint(PROJ_CLUSTER_CAP));
+        shellDrawBuf.element(0).assign(uint(MAX_CLUSTER_TRIS * 3));
+        shellDrawBuf.element(1).assign(n);
+        shellDrawBuf.element(2).assign(uint(0));
+        shellDrawBuf.element(3).assign(uint(0));
+      })().compute(1, [1])
+    : null;
+  if (kGrassShellArgs) {
+    (kGrassShellArgs as unknown as ComputeKernel).setName('grassShellArgs');
+  }
+  const grassShellScene = shellDrawAttr ? new Scene() : null;
+  if (grassShellScene && shellDrawAttr && clusterCtxV && grassShellHeight !== null) {
+    const shellGeometry = clusterGeom(shellDrawAttr);
+    const shellMaterial = new NodeMaterial();
+    shellMaterial.name = 'grassOuterShell';
+    const shellZ = varyingProperty('float', 'grassShellZ') as unknown as NF;
+    const shellW = varyingProperty('float', 'grassShellW') as unknown as NF;
+    shellMaterial.vertexNode = Fn(() => {
+      const localTri = (vertexIndex.div(3) as unknown as NU).toVar();
+      const corner = vertexIndex.mod(3) as unknown as NU;
+      const tid = (instanceIndex as unknown as NU).toVar();
+      const clip = vec4(0, 0, 2, 1).toVar();
+      const ctx = decodeCtx(tid, false);
+      If(ctx.isHF.and(localTri.lessThan(ctx.triCount)), () => {
+        const world = nfetchTerrain
+          .fetchTerrainSurfaceVertDyn(ctx, localTri, corner)
+          .add(vec3(0, grassShellHeight, 0)) as unknown as NV3;
+        clip.assign(cam.vp.mul(vec4(world, 1)) as unknown as NV4);
+      });
+      (shellZ as unknown as { assign(v: unknown): void }).assign(clip.z);
+      (shellW as unknown as { assign(v: unknown): void }).assign(clip.w);
+      return clip;
+    })() as unknown as typeof shellMaterial.vertexNode;
+    shellMaterial.fragmentNode = Fn(() => {
+      const z = shellZ.div(shellW).toVar() as unknown as NF;
+      const fy = float(cam.uH).sub(screenCoordinate.y);
+      const px = uint(fy).mul(uint(cam.uW)).add(uint(screenCoordinate.x));
+      If(z.greaterThanEqual(0).and(z.lessThanEqual(1)), () => {
+        atomicMin(visDepthV.atomic.element(px), bcF2U(z));
+      });
+      return vec4(0, 0, 0, 0);
+    })() as unknown as typeof shellMaterial.fragmentNode;
+    shellMaterial.depthTest = false;
+    shellMaterial.depthWrite = false;
+    shellMaterial.colorWrite = false;
+    shellMaterial.fog = false;
+    shellMaterial.lights = false;
+    shellMaterial.side = DoubleSide;
+    const shellMesh = new Mesh(shellGeometry, shellMaterial);
+    shellMesh.frustumCulled = false;
+    grassShellScene.add(shellMesh);
+  }
   // The HW pass renders into this dead full-res rgba8 (colorWrite=false -> never read).
   // It stays full-res unconditionally: r184 derives the render-pass viewport from
   // RenderTarget.viewport (= texture size), so shrinking it would clip HW coverage and
@@ -586,14 +669,29 @@ export function buildHw(p: {
     renderer.autoClear = prevAutoClear;
     renderer.setRenderTarget(prevRT);
   };
+  const hwRenderGrassShell = (
+    renderer: Renderer,
+    camera: PerspectiveCamera,
+  ): void => {
+    if (!grassShellScene) return;
+    const prevRT = renderer.getRenderTarget();
+    renderer.setRenderTarget(hwRT);
+    const prevAutoClear = renderer.autoClear;
+    renderer.autoClear = false;
+    renderer.render(grassShellScene, camera);
+    renderer.autoClear = prevAutoClear;
+    renderer.setRenderTarget(prevRT);
+  };
 
   return {
     kHwArgs,
+    kGrassShellArgs,
     hwDepthMat,
     hwCombinedMat,
     hwWorld1Mat,
     hwRT,
     hwRender,
     hwRenderCluster,
+    hwRenderGrassShell,
   };
 }

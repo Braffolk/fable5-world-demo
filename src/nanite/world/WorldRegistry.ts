@@ -1727,9 +1727,10 @@ export async function buildWorldRegistry(input: {
   // arm runtime streaming with the pool geometry. The brain then re-centers the
   // clipmap on the live pose feed; packets drain through the scene's bucket.
   if (streamBrain) streamBrain.attachBootTiles(reg);
-  // D (memory arc): once the app's render loop has bound + uploaded the immutable mega-
-  // buffers (verts + bricks), free their CPU mirrors. Wait a generous margin of rAFs so the
-  // first frames have definitely created the GPUBuffers (three uploads lazily on first bind).
+  // D (memory arc): after a short settling margin, explicitly materialize the immutable
+  // mega-buffers (verts + bricks) and free their CPU mirrors. Frame count alone cannot prove
+  // that a lazily bound attribute was used, so releaseImmutableMirrors performs and verifies
+  // both uploads before nulling either array.
   // ?noreleasemirrors=1 keeps the mirrors (A/B lever + escape hatch if a late re-upload ever
   // needs them — e.g. adding a post-boot hero mesh into the verts/brick buffers).
   const releaseMirrors = new URLSearchParams(window.location.search).get('noreleasemirrors') !== '1';
@@ -1737,7 +1738,7 @@ export async function buildWorldRegistry(input: {
     let f = 0;
     const tick = (): void => {
       if (++f < 20) { requestAnimationFrame(tick); return; }
-      const freed = reg.releaseImmutableMirrors();
+      const freed = reg.releaseImmutableMirrors(renderer);
       // eslint-disable-next-line no-console
       console.log(
         `[worldreg] released immutable CPU mirrors: verts ${(freed.vertsBytes / 1048576).toFixed(1)} MB + ` +

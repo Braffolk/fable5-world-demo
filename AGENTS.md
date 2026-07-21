@@ -56,6 +56,7 @@
 ## Real Runtime Acceptance
 
 - A typecheck, unit test, static inspection, HTTP response, or successful asset cook is not a runtime acceptance test.
+- Do not attribute runtime failures to Vite, stale browser cache, or old cached assets without direct reproducing evidence that isolates that mechanism. Investigate buffer lifetime, shader validation, asset identity, and application state first; the user normally validates in an incognito browser.
 - After every major runtime task and every runtime-facing fix, boot the exact affected configuration in a real WebGPU Chromium using the existing Playwright/WebGPU launch tooling.
 - Before giving the user any live URL, boot that exact URL through readiness, cloud bake, and several settled frames. The agent, not the user, is the first WebGPU/compiler test.
 - Capture `pageerror`, console errors, and WebGPU/TSL diagnostics during the whole boot. Any TSL invalid-code message, uncaptured WebGPU error, shader validation error, invalid pipeline/bind group/command buffer, uniform-size violation, or non-uniform-barrier error fails the boot even if `window.__laas.ready` becomes true.

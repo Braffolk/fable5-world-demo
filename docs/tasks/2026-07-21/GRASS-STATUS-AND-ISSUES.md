@@ -370,3 +370,166 @@ the precomputed geometry becomes type-keyed.
 - Exact `groundcoverdbg=type` boot after root anchoring: pass at frame 84. The coloured
   patches are the same procedural geometry records that production shades as grass; the
   debug is not a far-tile/pixel-ownership surrogate.
+
+## 11. Type-keyed runtime seam and moss-baker checkpoint (2026-07-21)
+
+This section is the current continuation boundary after the committed carrier. It does not
+claim a finished species palette or finished moss.
+
+### Runtime seam now exercised
+
+- A bounded root-stable A/B query replaces shell-point type selection. Each cooked candidate
+  is queried with its own height/deformation/atlas profile, recovered to a world-space base,
+  re-sampled against the root control, and accepted only when that root elects the same type.
+  Pure `A == B` patches issue one candidate; actual mixtures issue two fixed candidates and
+  keep the nearer valid surface. Both calls are TSL graph expansion, not a WGSL loop.
+- Categorical type and clump carriers remain nearest. The already-bound guide T3 now carries
+  continuous `[vigor, blend, moisture, canopyProximity]`; no interpolated type id is possible.
+- The atlas packer gives every profile private last/first angular guard slices, preventing
+  trilinear angle wrap from crossing into the next type. Four density-tier bindings are
+  retained; no ray binding was added. Focused deterministic/nesting, ellipse, cap-normal,
+  seam-pack, and incompatible-layout tests pass (5/5).
+- Production resolve now decodes the 6-bit cover id into a 64-entry indexed material table.
+  Grass preserves its prior colour/AO/translucency values; the five functional forms have
+  distinct provisional parameters. These are functional-form materials, not native-species
+  provenance claims.
+- Corrected streamed-coordinate identity from `floor(relative + gfx)` to
+  `floor(relative) + gfx`; the former loses fine-cell identity at Estonia-scale floats.
+
+The rejected intermediate elections are useful regression evidence: guide-shell election
+made metre-scale rectangular type quilts; fine-cell IGN produced diagonal planted rows; a
+fine-cell integer hash removed the rows but still changed one physical object across
+pixels/views. The root-stable query is the first version whose type-debug image consists of
+whole coherent tufts without those patterns.
+
+### Performance and WebGPU evidence
+
+- Exact localhost production/type boots pass with no page, TSL, WebGPU validation, binding,
+  pipeline, command-buffer, or uniform diagnostics.
+- A deliberately mixture-heavy DPR2 view measured median `c.grassRay = 0.59 ms` over seven
+  timestamp samples, versus the validated all-grass checkpoint's `0.39 ms`. The fixed second
+  type query therefore costs about `0.20 ms` in the exercised worst-case mix and remains below
+  1 ms; pure patches retain the coherent single-query branch.
+
+### Parked analytic moss-cap path (two failed real attempts)
+
+- Reusable result: the CPU reference baker can analytically intersect an upper ellipsoid cap
+  at a bounded set of ray-elevation slices and pack rounded upward normals. Eight logarithmic
+  elevation blocks plus the other functional forms produce a 130-slice, four-tier atlas
+  (about 8.1 MiB). The exact atlas boots successfully in real WebGPU.
+- Real attempt 1, actual cooked moss component: full production boot passed at
+  `cam=318703,53.2,186089,0,-0.16`, packed ground `50.97 m`. The full scene obscured the
+  cushion shape and still read as irregular generic green cover, so it was not accepted.
+- Real attempt 2, isolated terrain+ray geometry at a stronger moss/sedge point
+  (`cam=310227,67,189511,0,-0.72`, packed ground `64.59 m`): both production and
+  `groundcoverdbg=type` boots passed, but the moss pixels themselves showed rectangular strips
+  and square holes. Filling moss roots instead of applying grass's runtime cell thinning
+  reduced holes but did not remove the 64² tile's visible spatial/cell quantization.
+- Exact blocker: this boot-time analytic fixture is a 64² stratified union of caps, not the
+  approved arbitrary-mesh GPU bake, baked horizon/AO/thickness payload, or native Sphagnum
+  profile. Further radius/spread tuning would lower the final quality ceiling and would repeat
+  the project's recorded two-failure pattern.
+- Active fallback: build the approved offline GPU raster-projection baker. Keep the analytic
+  cap and its focused tests as a numerical oracle only. Resume CPU-cap visual tuning only if
+  the GPU raster path cannot produce a deterministic first-hit atlas after its own bounded
+  two-attempt end-to-end cycle, or if it exposes a representation bug shared by both paths.
+
+O(1) remains non-negotiable throughout: none of the above adds a per-frame march, ray-step
+loop, distance-dependent iteration, or shader barrier.
+
+## 12. Exact-profile carrier, GPU baker, and first botanical profile (2026-07-21)
+
+This supersedes §11's continuation boundary. The analytic cap remains an oracle only; it is
+not used for production Sphagnum.
+
+### Exact cooked authority
+
+- The v2 carrier stores exact native profile ids, not only the six functional ids. The fixed
+  palette is: *Agrostis capillaris*, *Avenella flexuosa*, *Calamagrostis canescens*, *Carex
+  cespitosa*, *Eriophorum vaginatum*, *Sphagnum capillifolium*, *Pleurozium schreberi*,
+  *Cladonia rangiferina*, *Oxalis acetosella*, *Maianthemum bifolium*, *Vaccinium myrtillus*,
+  and *Calluna vulgaris* (ids 0–11 respectively).
+- A third rgba8 carrier supplies the 12-bit root-neighbour closure mask. The ray graph expands
+  twelve fixed guards at TypeScript build time; cooked cells normally enable only their local
+  A/B pair. There is no WGSL loop or runtime iteration over the palette.
+- The exact-profile Taevaskoda recook completed 64/64 chunks. Recipe:
+  `4b60720f863a860c91d313c33455514c3e0129e919237e62934ca395351d7112`;
+  locally published manifest: `m/b75736653a54055a/manifest.json` (cook revision 7).
+
+### Periodic arbitrary-mesh GPU baker
+
+- `GCRP/v2` defines a periodic top-XZ first-hit profile: 16 azimuths × four elevations
+  (15°, 35°, 55°, 75°), 64² interior texels with a one-pixel wrapped gutter, an 8×8 slice
+  atlas, normalized first-hit depth, octahedral normal, and coverage.
+- The GPU path rasterizes submitted indexed triangles into `depth32float`; it is not tied to
+  caps, fibers, or another analytic primitive. CPU ray tests are verification oracles only.
+- The first accepted botanical artifact is an original deterministic procedural *Sphagnum
+  capillifolium* periodic carpet: 25,397 vertices, 41,184 triangles, 922 primary branches,
+  287 branch forks, 88 non-grid star capitula, and exact periodic seams. Artifact SHA-256:
+  `cb61dd42c6265067f0be9a320d763da928b1e65a60ae3ebb359f49b3137a9959`.
+- Two Apple-Metal GPU bakes were byte-identical. The strict selected-pixel comparison reported
+  zero ownership mismatches, RMS depth error `2.08e-7`, maximum depth error `2.87e-6`, and
+  minimum normal dot `0.9999867`.
+
+### Runtime and black-tip correction
+
+- Production *S. capillifolium* uses the GCRP profile through two globally continuous
+  incommensurate geometry layers. Each layer performs four fixed direction-corner taps;
+  the nearer complete hit wins. This adds one filterable atlas binding and eight bounded taps
+  only for a queried Sphagnum candidate. Dispatch, barriers, synchronization, and workgroup
+  shape are unchanged.
+- `rgba16unorm` profile bytes are converted once during loading to `rgba16float`. This retains
+  the 8-byte/texel GPU footprint and supplies the filterable float binding on WebGPU devices
+  that do not expose optional `rgba16unorm` sampling.
+- The periodic lookup now carries the winning authored profile-space hit elevation into the
+  ray output. It no longer substitutes the generic blade-height reconstruction for a connected
+  carpet. This is fixed scalar ALU only: no fetch, binding, branch loop, or march was added.
+- Exact DPR2 localhost production and `grassdbg=tip` boots both pass at the moss-heavy pose
+  `cam=310227,67,189511,0,-0.72`. The unlit debug shows every procedural-cover pixel on the
+  red-base→green-tip ramp; there are no black procedural-cover interiors. The canonical
+  Taevaskoda production gate at `cam=311123,47,190723,0,-0.12` also passes.
+- Static gates at this boundary: TypeScript typecheck pass, 25 focused TypeScript tests pass,
+  four focused cook tests pass, and `git diff --check` pass.
+
+### Current boundary
+
+- The system carries all twelve exact identities but has one accepted authored periodic
+  geometry profile so far. The other eleven identities still use analytic integration
+  fixtures and therefore do **not** satisfy the approved ≥10-species visual deliverable.
+- Loading one 2D texture per profile would scale the bind group with species count. The active
+  next step is one packed multi-profile atlas/binding plus growth-form-specific GPU-baked
+  periodic assets for the remaining native palette.
+
+## 13. Calamagrostis single-species acceptance and reconstruction proof (2026-07-21)
+
+- `?grassprofile=2` remains the only active visual-acceptance view. Multi-profile code and
+  assets are preserved but must not be re-enabled until this view is accepted.
+- The accepted source mesh is 1.15 m tall with 2,049,985 vertices and 2,171,134 triangles.
+  Its four-direction QA is under
+  `data/work/groundcover-mesh-review/6e3dfab54aa214c75e395e8be733cdc08aa0979b8bcb2360a11a46c8cc82aa4e/qa/2-calamagrostis-canescens`.
+  The compact upward-branching, fluffy panicle source shape is committed at `d075c79`.
+- The full shader-independent reconstruction derivation and counterexamples are preserved in
+  `GRASS-RAY-RECONSTRUCTION-MATH.md`; ten CPU properties cover the affine inverse basis,
+  Sannikov projected distance, inverse-transpose normal, grazing mixed-chart failure,
+  different-triangle failure, and exact bounded alternatives. A fixed 1.176 m value is only
+  this asset's current top height, never a generic ground-cover height contract.
+- The current single-species hardware shell is temporary exact-O acceptance scaffolding. It is
+  depth-only, and root density rather than shell-origin density owns visible coverage. It must
+  not survive as a fixed-height generic-groundcover architecture or appear as a visible
+  floating terrain copy. The captured acceptance pose shows no visible shell; boundary-flight
+  confirmation remains with the visual review.
+- GCRP/v4 vertex RGB is now transcoded once at load into a filterable premultiplied RGBA8
+  first-hit colour atlas. The compute shader samples four cache-local colour records only
+  after the winning hit, packs full RGB888 plus the four-bit exact profile id, and resolve uses
+  that authored colour rather than the functional green palette. Default acceptance no longer
+  uploads the much larger owner, vertex, and triangle GPU tables; `?grassowner=1` retains them
+  only for its explicit diagnostic.
+- The exact acceptance URL booted cleanly through frame 113 at DPR2 with no page, TSL, WebGPU,
+  binding, pipeline, or command-buffer diagnostic. The captured view visibly contains the
+  authored pale pink-brown panicles above green culms/leaves. The added shader work is one
+  texture binding and four winner-only taps; dispatch shape, barriers, synchronization, and
+  the fixed query count are unchanged. The casual HUD readout is not a performance result; a
+  fresh game-only GPU trace is still required after visual acceptance.
+
+O(1) remains intact: no per-frame ray march, WGSL loop, distance-dependent iteration, or new
+screen-sized colour target was introduced.

@@ -101,15 +101,25 @@ LAYER_DOC = {
         "planes": [
             "typeA", "typeB", "clumpLo", "clumpHi",
             "blend", "vigor", "moisture", "canopyProximity",
+            "candidateMaskLo", "candidateMaskHi", "profileA", "profileB",
         ],
         "semantics": (
-            "ground-cover control field v1; one logical authority stored as two rgba8 "
+            "ground-cover control field v2; one logical authority stored as three rgba8 "
             "runtime carriers. typeA/typeB are categorical GroundCoverId values; blend is "
             "the typeB fraction; vigor is continuous cover/height potential; clumpLo/Hi "
             "form a stable cook-side patch id; moisture and canopyProximity are continuous. "
-            "The v1 ecology is derived from the already-cooked understory community, soil "
-            "wetness, and CHM evidence. It establishes the generic two-type contract; it is "
-            "not yet the final >=10 native-species facies cook. LOD0 only, 2 m texels."
+            "The frozen v1 ecology is derived from the already-cooked understory community, "
+            "soil wetness, and CHM evidence and establishes the generic two-type contract. "
+            "candidateMaskLo/Hi is the conservative 4 m query-closure set; profileA/B "
+            "are exact zero-based GroundCoverProfileId values in the frozen 12-species native "
+            "palette. Exact profiles are selected within the frozen functional classes by "
+            "community, suitability-cut vigor, soil wetness/texture, canopy cover, and two "
+            "world-seamless correlated fields sharpened by the domain-warped clump id. The "
+            "selection covers Agrostis capillaris, Avenella flexuosa, Calamagrostis canescens, "
+            "Carex cespitosa, Eriophorum vaginatum, Sphagnum capillifolium, Pleurozium "
+            "schreberi, Cladonia rangiferina, Oxalis acetosella, Maianthemum bifolium, "
+            "Vaccinium myrtillus, and Calluna vulgaris. The first eight v1 planes remain "
+            "byte-for-byte frozen. LOD0 only, 2 m texels."
         ),
     },
     "trees": {

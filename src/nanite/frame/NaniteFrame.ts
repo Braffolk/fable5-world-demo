@@ -35,6 +35,14 @@ import { deriveLodParams, makeNaniteCam } from '../NaniteCommon';
 import { buildNaniteCull } from '../cull/NaniteCull';
 import { buildNaniteHzb } from '../cull/NaniteHzb';
 import { buildGrassField } from '../grass/NaniteGrass';
+import {
+  CALAMAGROSTIS_ACCEPTANCE_PROFILE_URL,
+  GROUND_COVER_PROFILE_ARRAY_URL,
+  GROUND_COVER_PROFILE_IDS,
+  GroundCoverProfileId,
+  loadPeriodicProfile,
+  loadPeriodicProfileArray,
+} from '../groundcover/GroundCoverProfiles';
 import { makeFetch } from '../raster/NaniteFetch';
 import { buildNaniteRaster, makeVisBuffers } from '../raster/NaniteRaster';
 import { PROJ_CLUSTER_CAP, PROJ_RECORD_CAP } from '../raster/Project';
@@ -72,7 +80,7 @@ function halton(index: number, base: number): number {
   return result;
 }
 
-export function buildNaniteFrame(
+export async function buildNaniteFrame(
   engine: Engine,
   registry: GeometryRegistry,
   hf: Heightfield,
@@ -99,7 +107,7 @@ export function buildNaniteFrame(
      *  Omitted on the generated world ⇒ A=(0,0) ⇒ byte-identical absolute build. */
     streamAnchor?: () => { x: number; z: number };
   },
-): NaniteFrameHandles {
+): Promise<NaniteFrameHandles> {
   const renderer = engine.renderer;
   const size = internalSize(renderer, new Vector2()); // ?rscale: match the scene pass
   const params = new URLSearchParams(window.location.search);
@@ -240,12 +248,47 @@ export function buildNaniteFrame(
   // geo/hybrid/rayold lanes were deleted the same day — git history has them.
   const grassMode = params.get('grass');
   const grassOn = grassMode !== '0' && grassMode !== 'off';
+  // Profile bytes must be validated before the shader graph captures their
+  // atlas dimensions/direction lattice. The frame builder is already called
+  // from async scene construction, so no render-time readiness branch exists.
+  const isolatedCalamagrostis = params.get('grassprofile') === String(
+    GroundCoverProfileId.CalamagrostisCanescens,
+  );
+  const exactCalamagrostisOwner = params.get('grassowner') === '1';
+  const periodicProfiles = grassOn && field.hasGroundCoverClosure
+    ? isolatedCalamagrostis
+      ? [await loadPeriodicProfile(
+          CALAMAGROSTIS_ACCEPTANCE_PROFILE_URL,
+          GroundCoverProfileId.CalamagrostisCanescens,
+          {
+            authoredColor: !exactCalamagrostisOwner,
+            ownedTables: exactCalamagrostisOwner,
+          },
+        )]
+      : (await loadPeriodicProfileArray(
+          GROUND_COVER_PROFILE_ARRAY_URL,
+          GROUND_COVER_PROFILE_IDS,
+        )).profiles
+    : [];
   const grass = grassOn
-    ? buildGrassField({ cam, vis, field, canopyTex: world.canopyTex })
+    ? buildGrassField({
+        cam,
+        vis,
+        field,
+        canopyTex: world.canopyTex,
+        periodicProfiles,
+      })
     : null;
   const raster = buildNaniteRaster(
     registry.gpu, field, cam, cull, vis, 'flat', true, windOpt, false, true, voxActive,
-    grass ? { batch: grass.batch, renderHw: grass.renderHw, enabled: grass.enabled } : undefined,
+    grass
+      ? {
+          batch: grass.batch,
+          renderHw: grass.renderHw,
+          enabled: grass.enabled,
+          shellHeight: grass.shellHeight,
+        }
+      : undefined,
     fieldAnchor, // S6e: absolute field-sample coords for the anchor-relative terrain verts
   );
 

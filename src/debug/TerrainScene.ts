@@ -642,7 +642,7 @@ export async function buildTerrainScene(ctx: WorldContext): Promise<void> {
       // the migrated classes.
       BootTrace.phase('nanite: frame build (raster/resolve/grass)');
       const { buildNaniteFrame } = await import('../nanite/frame/NaniteFrame');
-      const nanFrame = buildNaniteFrame(engine, naniteRegistry, hf, field, post, {
+      const nanFrame = await buildNaniteFrame(engine, naniteRegistry, hf, field, post, {
         gi: ablate.has('gi') ? null : gi,
         canopyTex,
         // sunShadows carries the "scene has sun shadows" signal; the cloud gate is
