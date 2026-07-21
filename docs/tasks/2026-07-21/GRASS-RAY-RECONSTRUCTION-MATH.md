@@ -671,6 +671,21 @@ geometry bytes, and total `B` are hard bake gates. The existing owner counts are
 only a sizing observation, not a closure proof: triangles visible only between
 canonical samples must also be included by certification.
 
+The first actual-asset lower-bound probe is
+`tools/groundcover-bake/analyze-owner-closure.ts`. It unions the sixteen already
+stored v4 owners at the corners of every canonical phase-X/phase-Z/azimuth/elevation
+cell. Across `3,145,728` cells the unique-corner-owner count is median `6`, p95
+`12`, p99 `15`, and maximum `16`; `1,908,893` cells exceed four, `772,572` exceed
+eight, and `144,225` exceed twelve. This proves that the current four-owner
+diagnostic is structurally insufficient even as a corner seed.
+
+These counts are deliberately labelled a lower bound, not a closure result. They
+exclude owners which win only inside a cell, the missing five-degree domain, all
+events behind the fully populated first hit, and world-predicate eligibility.
+They also show why a dense fixed owner array is the wrong response: the viable
+direction remains adaptive sparse cells/pages, whose real `K` can be accepted
+only after successor-aware certification.
+
 ### 7.3 Grazing elevation clamp collapses finite geometry into the top plane
 
 The observed distant low-oblique sheet has a direct mathematical signature. Let
@@ -814,6 +829,86 @@ root's exact ground datum and intersects it with the live world ray. Alternative
 a closure for a continuously draped profile must be certified over the allowed
 terrain-transform family. A post-hit ground-range check cannot repair a hit that
 was selected with the wrong transform; it can only reject it.
+
+### 7.6 Concrete exterior-closure feasibility domain
+
+The first closure experiment uses top phase and ray slope rather than
+azimuth/elevation. Let `q=(q_x,q_z)` lie on the canonical periodic top tile, let
+
+\[
+s=\frac{d_{xz}}{-d_y},
+\]
+
+and parameterise the ray by vertical drop `h`:
+
+\[
+X(q,s,h)=(q_x+s_xh,\ H-h,\ q_z+s_zh).
+\]
+
+For the declared exterior direction domain `[5 deg,90 deg]`,
+
+\[
+\lVert s\rVert\le\cot(5\text{ deg})=11.4300523.
+\]
+
+For the shipped quantised Calamagrostis geometry, the exact vertical interval is
+`0 <= h <= H-minY = 1.1752226248 m`. Below that, the ray is beneath every source
+vertex and cannot hit any rigid periodic copy. The corresponding worst five-degree
+horizontal reach is `13.4328561 m`, or `25.8324` tile widths. This is the profile
+event horizon; the camera's separate `155 m` world-render radius must not be used
+as the profile closure horizon. Exact five-degree copy bounds are `-27..+26`, which
+also proves the current signed five-bit v4 copy token insufficient.
+
+The first predicate family is deliberately strong and explicit: every periodic
+tile-copy root may be independently active or inactive, separately in each of the
+two anti-tiling layers. Under this family, every root copy intersected by one ray
+can be made the visible successor by disabling all preceding roots. Therefore
+
+\[
+K_{point}=\max_{q,s}\#\{\text{root copies with at least one hit on }X(q,s,\cdot)\}
+\]
+
+is an unavoidable lower bound. No phase/direction subdivision can reduce a true
+pointwise `K_point`; subdivision only reduces the union across neighbouring rays.
+The current v4 geometry has no per-tuft source-root id, so the strongest exact
+predicate grain presently expressible is one root per submitted periodic tile
+copy. Hit-tile inference is invalid because the source mesh overhangs its canonical
+tile.
+
+The decisive first audit consequently operates on the decoded shipped u16 mesh,
+not the existing raster owner atlas:
+
+1. Build one source-triangle BVH and translate each query ray into every periodic
+   copy whose swept prism can intersect the mesh.
+2. For deterministic dense/adversarial `(q,s)` rays, retain the nearest triangle
+   independently per root copy and measure `K_point`. This is a lower-bound census.
+3. Certify the continuous four-dimensional domain with outward-rounded interval
+   ray/AABB and ray/triangle bounds. A node is discarded only when it cannot
+   intersect the complete ray bundle; a farther candidate is pruned only behind a
+   certified all-rays nearer hit within the **same root**. Determinant-zero,
+   silhouette, coplanar, and tie intervals retain all owners or force subdivision.
+4. A storage leaf is accepted only when the union of each root's possible first
+   triangles has size at most fixed `K_ext`. Binary phase/slope subdivision is
+   bounded; exceeding `K_ext`, maximum depth, numeric certification, copy/id range,
+   or memory is an explicit bake rejection.
+
+The first measured targets are `K_ext in {16,24,32,48}`, beginning with `32`; the
+two layers reuse the same closure pages and geometry but execute `2*K_ext` fixed
+candidate tests. The hard resident-profile cap is `51,121,152 B`, the current
+default Calamagrostis geometry-plus-colour footprint. With current 16-byte compact
+geometry records, the byte equation is
+
+\[
+B=B_{index}+4K N_{uniquePages}+16N_{triangles}+16N_{vertices}+B_{metadata}.
+\]
+
+The audit retains wide raw `(triangle,copyX,copyZ,root)` keys. A possible final
+32-bit candidate token exists only if compact referenced triangles fit 20 bits and
+page-local/absolute copies fit signed six bits: `[triangle20|copyX6|copyZ6]`.
+Passing this experiment certifies only the shipped quantised rigid flat-root
+exterior profile at elevations at least five degrees. Camera-inside, wind,
+non-affine/root-specific terrain transforms, per-tuft predicates, and original-f32
+geometry remain separate declared domains rather than silent extrapolations.
 
 ## 8. Multiple heights and overlapping cover
 

@@ -598,3 +598,9 @@ screen-sized colour target was introduced.
   count, finite horizon, sparse pages, and hard subdivision/page/geometry/total-byte gates. The
   five-degree row is only a closure seed. Camera-inside adds signed origin phase to the same
   successor relation. The current v4 owner-token range cannot represent the new row or closure.
+- An actual-asset lower-bound probe now covers all 3,145,728 canonical 4D cells. Corner-owner
+  union is median 6, p95 12, p99 15, maximum 16; 1,908,893 cells already exceed four. This is
+  before live-only interior owners, the five-degree domain, or predicate-filtered successors.
+  The result rules out the current four-owner diagnostic and further rules out treating a blind
+  dense `K` array as the memory-safe answer; successor-aware adaptive sparse certification is
+  the active feasibility track.
