@@ -15,8 +15,74 @@ export interface SphagnumCapitulumRecipe {
   palettePhase: number;
 }
 
+export type SphagnumPrimitiveDisposition = 'crisp' | 'medium-candidate';
+
+export type SphagnumClassEAxisCandidacy =
+  | 'not-an-axis'
+  | 'vertical-axis-candidate'
+  | 'rejected-near-horizontal-curved-axis';
+
+export type SphagnumPrimitiveKind =
+  | 'carpet-support'
+  | 'stem'
+  | 'core'
+  | 'primary-branch'
+  | 'fork-branch';
+
+export interface SphagnumPrimitiveRecipeBase {
+  /** Stable within this deterministic generator recipe and emission order. */
+  primitiveId: number;
+  stableId: string;
+  kind: SphagnumPrimitiveKind;
+  disposition: SphagnumPrimitiveDisposition;
+  classEAxisCandidacy: SphagnumClassEAxisCandidacy;
+  owner: string;
+  capitulumIndex: number | null;
+  sourceTriangleStart: number;
+  sourceTriangleCount: number;
+  emittedVertexStart: number;
+  emittedVertexCount: number;
+  rootSemantics: string;
+  capSemantics: string;
+}
+
+export interface SphagnumCarpetSupportRecipe extends SphagnumPrimitiveRecipeBase {
+  kind: 'carpet-support';
+  controlPoints: readonly Vec3[];
+  cellsX: number;
+  cellsZ: number;
+  sizeX: number;
+  sizeZ: number;
+}
+
+export interface SphagnumAxialRecipe extends SphagnumPrimitiveRecipeBase {
+  kind: 'stem' | 'core';
+  centerline: readonly Vec3[];
+  radii: readonly number[];
+}
+
+export interface SphagnumBranchRecipe extends SphagnumPrimitiveRecipeBase {
+  kind: 'primary-branch' | 'fork-branch';
+  branchIndex: number;
+  parentPrimaryBranchIndex: number | null;
+  angle: number;
+  startRadius: number;
+  length: number;
+  rise: number;
+  centerline: readonly Vec3[];
+  halfWidths: readonly number[];
+  halfThicknesses: readonly number[];
+}
+
+export type SphagnumPrimitiveRecipe =
+  | SphagnumCarpetSupportRecipe
+  | SphagnumAxialRecipe
+  | SphagnumBranchRecipe;
+
 export interface SphagnumCapillifoliumFixture {
   mesh: IndexedMesh;
+  /** Offline deterministic authoring sidecar. It is never runtime geometry. */
+  primitiveRecipes: readonly SphagnumPrimitiveRecipe[];
   tile: PeriodicTile;
   carpetVertexCount: number;
   carpetTriangleCount: number;
@@ -27,6 +93,7 @@ export interface SphagnumCapillifoliumFixture {
 const TILE_SIZE = 0.24;
 const CARPET_CELLS = 32;
 const CAPITULUM_COUNT = 88;
+const PRIMITIVE_OWNER = 'estonia-native/bryophyte/sphagnum-capillifolium';
 
 const HUMMOCKS = [
   { x: 0.018, z: 0.032, rx: 0.070, rz: 0.050, yaw: 0.23, h: 0.010 },
@@ -181,18 +248,54 @@ function connectRings(mesh: IndexedMesh, lower: number[], upper: number[]): void
   }
 }
 
-function appendStemAndCore(mesh: IndexedMesh, centerX: number, centerZ: number, baseY: number, crownY: number, phase: number): void {
+function appendStemAndCore(
+  mesh: IndexedMesh,
+  primitiveRecipes: SphagnumPrimitiveRecipe[],
+  capitulumIndex: number,
+  centerX: number,
+  centerZ: number,
+  baseY: number,
+  crownY: number,
+  phase: number,
+): void {
   const sides = 6;
   const stemCenter = { x: centerX, y: baseY, z: centerZ };
+  const stemTriangleStart = mesh.indices.length / 3;
+  const stemVertexStart = mesh.positions.length / 3;
   const lower = appendRing(mesh, stemCenter, 0.00145, 0, sides, 0.16);
   const middle = appendRing(mesh, stemCenter, 0.00125, (crownY - baseY) * 0.56, sides, 0.12);
   const upper = appendRing(mesh, stemCenter, 0.0028, crownY - baseY, sides, 0.42);
   connectRings(mesh, lower, middle);
   connectRings(mesh, middle, upper);
+  primitiveRecipes.push({
+    primitiveId: primitiveRecipes.length,
+    stableId: `capitulum/${capitulumIndex.toString().padStart(3, '0')}/stem`,
+    kind: 'stem',
+    disposition: 'crisp',
+    classEAxisCandidacy: 'vertical-axis-candidate',
+    owner: PRIMITIVE_OWNER,
+    capitulumIndex,
+    sourceTriangleStart: stemTriangleStart,
+    sourceTriangleCount: mesh.indices.length / 3 - stemTriangleStart,
+    emittedVertexStart: stemVertexStart,
+    emittedVertexCount: mesh.positions.length / 3 - stemVertexStart,
+    rootSemantics: 'open base ring embedded 0.3 mm below the periodic carpet support',
+    capSemantics: 'open crown ring spatially overlapped by the unwelded capitulum core',
+    centerline: [
+      { x: centerX, y: baseY, z: centerZ },
+      { x: centerX, y: baseY + (crownY - baseY) * 0.56, z: centerZ },
+      { x: centerX, y: crownY, z: centerZ },
+    ],
+    radii: [0.00145, 0.00125, 0.0028],
+  });
 
   const core = { x: centerX, y: crownY, z: centerZ };
-  const coreLower = appendRing(mesh, core, 0.0042 + phase * 0.0006, 0, 10, 0.62);
-  const coreUpper = appendRing(mesh, core, 0.0025 + phase * 0.0004, 0.0030, 10, 1.15);
+  const coreLowerRadius = 0.0042 + phase * 0.0006;
+  const coreUpperRadius = 0.0025 + phase * 0.0004;
+  const coreTriangleStart = mesh.indices.length / 3;
+  const coreVertexStart = mesh.positions.length / 3;
+  const coreLower = appendRing(mesh, core, coreLowerRadius, 0, 10, 0.62);
+  const coreUpper = appendRing(mesh, core, coreUpperRadius, 0.0030, 10, 1.15);
   connectRings(mesh, coreLower, coreUpper);
   const top = mesh.positions.length / 3;
   mesh.positions.push(centerX, crownY + 0.0043, centerZ);
@@ -200,11 +303,37 @@ function appendStemAndCore(mesh: IndexedMesh, centerX: number, centerZ: number, 
   for (let side = 0; side < coreUpper.length; side++) {
     mesh.indices.push(coreUpper[side]!, top, coreUpper[(side + 1) % coreUpper.length]!);
   }
+  primitiveRecipes.push({
+    primitiveId: primitiveRecipes.length,
+    stableId: `capitulum/${capitulumIndex.toString().padStart(3, '0')}/core`,
+    kind: 'core',
+    disposition: 'crisp',
+    classEAxisCandidacy: 'not-an-axis',
+    owner: PRIMITIVE_OWNER,
+    capitulumIndex,
+    sourceTriangleStart: coreTriangleStart,
+    sourceTriangleCount: mesh.indices.length / 3 - coreTriangleStart,
+    emittedVertexStart: coreVertexStart,
+    emittedVertexCount: mesh.positions.length / 3 - coreVertexStart,
+    rootSemantics: 'open lower ring spatially overlapping the unwelded stem crown',
+    capSemantics: 'closed point fan at the capitulum apex',
+    centerline: [
+      { x: centerX, y: crownY, z: centerZ },
+      { x: centerX, y: crownY + 0.0030, z: centerZ },
+      { x: centerX, y: crownY + 0.0043, z: centerZ },
+    ],
+    radii: [coreLowerRadius, coreUpperRadius, 0],
+  });
 }
 
 /** Flattened convex tube following a slightly arched radial branch. */
 function appendBranch(
   mesh: IndexedMesh,
+  primitiveRecipes: SphagnumPrimitiveRecipe[],
+  capitulumIndex: number,
+  kind: 'primary-branch' | 'fork-branch',
+  branchIndex: number,
+  parentPrimaryBranchIndex: number | null,
   centerX: number,
   centerZ: number,
   crownY: number,
@@ -217,11 +346,16 @@ function appendBranch(
 ): void {
   const segments = 3;
   const crossSides = 4;
+  const triangleStart = mesh.indices.length / 3;
+  const vertexStart = mesh.positions.length / 3;
   const dx = Math.cos(angle);
   const dz = Math.sin(angle);
   const lx = -dz;
   const lz = dx;
   const rings: number[][] = [];
+  const centerline: Vec3[] = [];
+  const halfWidths: number[] = [];
+  const halfThicknesses: number[] = [];
   for (let segment = 0; segment <= segments; segment++) {
     const t = segment / segments;
     const radial = startRadius + length * t;
@@ -231,6 +365,9 @@ function appendBranch(
     const cy = crownY + 0.0012 + arch;
     const halfWidth = width * (1 - t * 0.72);
     const halfThick = width * (0.34 - t * 0.18);
+    centerline.push({ x: cx, y: cy, z: cz });
+    halfWidths.push(halfWidth);
+    halfThicknesses.push(halfThick);
     const ring: number[] = [];
     const cross = [
       { x: lx * halfWidth, y: 0, z: lz * halfWidth, n: { x: lx, y: 0.35, z: lz } },
@@ -249,36 +386,99 @@ function appendBranch(
   for (let segment = 0; segment < segments; segment++) connectRings(mesh, rings[segment]!, rings[segment + 1]!);
   const tip = mesh.positions.length / 3;
   const endRadial = startRadius + length + width * (0.12 + phase * 0.08);
+  const tipPoint = {
+    x: centerX + dx * endRadial,
+    y: crownY + 0.0012 - length * 0.1,
+    z: centerZ + dz * endRadial,
+  };
   mesh.positions.push(
-    centerX + dx * endRadial,
-    crownY + 0.0012 - length * 0.1,
-    centerZ + dz * endRadial,
+    tipPoint.x,
+    tipPoint.y,
+    tipPoint.z,
   );
   const tipNormal = normalized({ x: dx * 0.45, y: 0.72, z: dz * 0.45 });
   mesh.normals.push(tipNormal.x, tipNormal.y, tipNormal.z);
   const last = rings[rings.length - 1]!;
   for (let side = 0; side < crossSides; side++) mesh.indices.push(last[side]!, tip, last[(side + 1) % crossSides]!);
+  centerline.push(tipPoint);
+  halfWidths.push(0);
+  halfThicknesses.push(0);
+  const branchLabel = branchIndex.toString().padStart(2, '0');
+  primitiveRecipes.push({
+    primitiveId: primitiveRecipes.length,
+    stableId: kind === 'primary-branch'
+      ? `capitulum/${capitulumIndex.toString().padStart(3, '0')}/primary/${branchLabel}`
+      : `capitulum/${capitulumIndex.toString().padStart(3, '0')}/fork/${branchLabel}`,
+    kind,
+    disposition: 'medium-candidate',
+    classEAxisCandidacy: 'rejected-near-horizontal-curved-axis',
+    owner: PRIMITIVE_OWNER,
+    capitulumIndex,
+    sourceTriangleStart: triangleStart,
+    sourceTriangleCount: mesh.indices.length / 3 - triangleStart,
+    emittedVertexStart: vertexStart,
+    emittedVertexCount: mesh.positions.length / 3 - vertexStart,
+    rootSemantics: kind === 'primary-branch'
+      ? 'unwelded open root ring spatially overlapping the capitulum core'
+      : `unwelded open root ring spatially overlapping primary branch ${parentPrimaryBranchIndex}`,
+    capSemantics: 'closed point fan at the branch tip',
+    branchIndex,
+    parentPrimaryBranchIndex,
+    angle,
+    startRadius,
+    length,
+    rise,
+    centerline,
+    halfWidths,
+    halfThicknesses,
+  });
 }
 
-function appendCapitulum(mesh: IndexedMesh, point: { x: number; z: number; phase: number }, index: number): SphagnumCapitulumRecipe {
+function appendCapitulum(
+  mesh: IndexedMesh,
+  primitiveRecipes: SphagnumPrimitiveRecipe[],
+  point: { x: number; z: number; phase: number },
+  index: number,
+): SphagnumCapitulumRecipe {
   const localRandom = xorshift((0x9e37_79b9 ^ Math.imul(index + 1, 0x85eb_ca6b)) >>> 0);
   const carpetY = carpetHeight(point.x, point.z);
   const hummockGain = Math.min(1, Math.max(0, (carpetY - 0.004) / 0.016));
   const crownY = carpetY + 0.011 + localRandom() * 0.007 + hummockGain * 0.003;
   const radius = 0.0080 + localRandom() * 0.0032;
   const primaryBranches = 9 + Math.floor(localRandom() * 4);
-  const forkedBranches = Math.floor(primaryBranches / 3);
+  let forkedBranches = 0;
   const rotation = localRandom() * Math.PI * 2;
-  appendStemAndCore(mesh, point.x, point.z, carpetY - 0.0003, crownY, point.phase);
+  appendStemAndCore(mesh, primitiveRecipes, index, point.x, point.z, carpetY - 0.0003, crownY, point.phase);
   for (let branch = 0; branch < primaryBranches; branch++) {
     const angle = rotation + (branch / primaryBranches) * Math.PI * 2 + (localRandom() - 0.5) * 0.13;
     const length = radius * (0.78 + localRandom() * 0.27);
     const width = 0.00145 + localRandom() * 0.00065;
-    appendBranch(mesh, point.x, point.z, crownY, angle, 0.0018, length, width, 0.0020 + localRandom() * 0.0018, point.phase);
+    appendBranch(
+      mesh,
+      primitiveRecipes,
+      index,
+      'primary-branch',
+      branch,
+      null,
+      point.x,
+      point.z,
+      crownY,
+      angle,
+      0.0018,
+      length,
+      width,
+      0.0020 + localRandom() * 0.0018,
+      point.phase,
+    );
     if (branch % 3 === 1) {
       const forkSign = ((branch + index) & 1) === 0 ? 1 : -1;
       appendBranch(
         mesh,
+        primitiveRecipes,
+        index,
+        'fork-branch',
+        forkedBranches,
+        branch,
         point.x + Math.cos(angle) * length * 0.48,
         point.z + Math.sin(angle) * length * 0.48,
         crownY - length * 0.025,
@@ -289,6 +489,7 @@ function appendCapitulum(mesh: IndexedMesh, point: { x: number; z: number; phase
         0.0012,
         point.phase,
       );
+      forkedBranches++;
     }
   }
   return {
@@ -305,8 +506,37 @@ function appendCapitulum(mesh: IndexedMesh, point: { x: number; z: number; phase
 
 export function makeSphagnumCapillifoliumFixture(): SphagnumCapillifoliumFixture {
   const mesh: IndexedMesh = { positions: [], normals: [], indices: [] };
+  const primitiveRecipes: SphagnumPrimitiveRecipe[] = [];
   const carpet = appendCarpet(mesh);
-  const capitula = placeCapitula().map((point, index) => appendCapitulum(mesh, point, index));
+  const carpetControlPoints: Vec3[] = [];
+  for (let vertex = 0; vertex < carpet.vertices; vertex++) {
+    carpetControlPoints.push({
+      x: mesh.positions[vertex * 3] as number,
+      y: mesh.positions[vertex * 3 + 1] as number,
+      z: mesh.positions[vertex * 3 + 2] as number,
+    });
+  }
+  primitiveRecipes.push({
+    primitiveId: 0,
+    stableId: 'support/carpet',
+    kind: 'carpet-support',
+    disposition: 'crisp',
+    classEAxisCandidacy: 'not-an-axis',
+    owner: PRIMITIVE_OWNER,
+    capitulumIndex: null,
+    sourceTriangleStart: 0,
+    sourceTriangleCount: carpet.triangles,
+    emittedVertexStart: 0,
+    emittedVertexCount: carpet.vertices,
+    rootSemantics: 'periodic connected height support on the tile torus',
+    capSemantics: 'two-sided uncapped support sheet with duplicated matching seam vertices',
+    controlPoints: carpetControlPoints,
+    cellsX: CARPET_CELLS,
+    cellsZ: CARPET_CELLS,
+    sizeX: TILE_SIZE,
+    sizeZ: TILE_SIZE,
+  });
+  const capitula = placeCapitula().map((point, index) => appendCapitulum(mesh, primitiveRecipes, point, index));
   validateIndexedMesh(mesh);
   let maxY = -Infinity;
   for (let index = 1; index < mesh.positions.length; index += 3) {
@@ -314,6 +544,7 @@ export function makeSphagnumCapillifoliumFixture(): SphagnumCapillifoliumFixture
   }
   return {
     mesh,
+    primitiveRecipes,
     tile: { originX: 0, originZ: 0, sizeX: TILE_SIZE, sizeZ: TILE_SIZE, topH: maxY + 0.012 },
     carpetVertexCount: carpet.vertices,
     carpetTriangleCount: carpet.triangles,

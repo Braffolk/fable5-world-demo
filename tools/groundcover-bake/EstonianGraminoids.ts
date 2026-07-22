@@ -11,6 +11,153 @@ export const ESTONIAN_GRAMINOID_PROFILE_IDS = {
 
 export type EstonianGraminoidProfileId = typeof ESTONIAN_GRAMINOID_PROFILE_IDS[keyof typeof ESTONIAN_GRAMINOID_PROFILE_IDS];
 
+export type GraminoidPrimitiveDisposition = 'crisp' | 'plume';
+
+export type GraminoidPrimitiveKind =
+  | 'hub'
+  | 'blade'
+  | 'tube'
+  | 'rhizome'
+  | 'lanceolate-surface'
+  | 'hair-filament'
+  | 'cotton-bristle';
+
+export type GraminoidTubeRole =
+  | 'structural-tube'
+  | 'culm'
+  | 'rhizome'
+  | 'panicle-axis'
+  | 'spikelet-axis'
+  | 'anther-filament'
+  | 'basal-sheath'
+  | 'upper-sheath';
+
+export type GraminoidLanceolateRole = 'surface' | 'glume' | 'lemma' | 'anther';
+
+export type GraminoidPrimitiveRootSemantics =
+  | 'plant-root-anchor'
+  | 'shared-anchor-fan'
+  | 'open-ring';
+
+export type GraminoidPrimitiveEndSemantics =
+  | 'anchor-only'
+  | 'open-ribbon-edge'
+  | 'tapered-point'
+  | 'emitted-center-cap'
+  | 'welded-center-cap';
+
+export type GraminoidPrimitiveCapSemantics =
+  | 'none'
+  | 'root-fan'
+  | 'terminal-fan'
+  | 'root-and-terminal-fan'
+  | 'terminal-welded-fan'
+  | 'root-and-terminal-welded-fan';
+
+export interface GraminoidPrimitiveOwner {
+  owner: string;
+  profileId: EstonianGraminoidProfileId;
+  species: string;
+  family: 'Poaceae' | 'Cyperaceae';
+}
+
+export interface GraminoidPrimitiveRecipeBase extends GraminoidPrimitiveOwner {
+  primitiveId: number;
+  kind: GraminoidPrimitiveKind;
+  disposition: GraminoidPrimitiveDisposition;
+  sourceTriangleStart: number;
+  sourceTriangleCount: number;
+  emittedVertexStart: number;
+  emittedVertexCount: number;
+  /** Existing vertices referenced by this primitive's triangles, never re-attributed. */
+  sharedAnchorVertices: readonly number[];
+  rootSemantics: GraminoidPrimitiveRootSemantics;
+  endSemantics: GraminoidPrimitiveEndSemantics;
+  capSemantics: GraminoidPrimitiveCapSemantics;
+}
+
+export interface GraminoidHubRecipe extends GraminoidPrimitiveRecipeBase {
+  kind: 'hub';
+  center: Vec3;
+  vertex: number;
+}
+
+export interface GraminoidBladeRecipe extends GraminoidPrimitiveRecipeBase {
+  kind: 'blade';
+  root: Vec3;
+  angle: number;
+  height: number;
+  width: number;
+  lean: number;
+  curl: number;
+  phase: number;
+  segments: number;
+  centerline: readonly Vec3[];
+  halfWidths: readonly number[];
+  rootColor: readonly [number, number, number];
+  tipColor: readonly [number, number, number];
+}
+
+export interface GraminoidTubeRecipe extends GraminoidPrimitiveRecipeBase {
+  kind: 'tube' | 'rhizome';
+  role: GraminoidTubeRole;
+  centerline: readonly Vec3[];
+  radii: readonly number[];
+  sides: number;
+  color: readonly [number, number, number];
+  anchorVertex: number | null;
+  endAnchorVertex: number | null;
+  endCenterVertex: number;
+}
+
+export interface GraminoidLanceolateRecipe extends GraminoidPrimitiveRecipeBase {
+  kind: 'lanceolate-surface';
+  role: GraminoidLanceolateRole;
+  base: Vec3;
+  direction: Vec3;
+  length: number;
+  halfWidth: number;
+  roll: number;
+  keel: number;
+  centerline: readonly Vec3[];
+  halfWidths: readonly number[];
+  color: readonly [number, number, number];
+  anchorVertex: number;
+}
+
+export interface GraminoidHairFilamentRecipe extends GraminoidPrimitiveRecipeBase {
+  kind: 'hair-filament';
+  root: Vec3;
+  direction: Vec3;
+  length: number;
+  width: number;
+  roll: number;
+  centerline: readonly Vec3[];
+  halfWidths: readonly number[];
+  color: readonly [number, number, number];
+  anchorVertex: number;
+}
+
+export interface GraminoidCottonBristleRecipe extends GraminoidPrimitiveRecipeBase {
+  kind: 'cotton-bristle';
+  root: Vec3;
+  direction: Vec3;
+  length: number;
+  width: number;
+  centerline: readonly Vec3[];
+  halfWidths: readonly number[];
+  color: readonly [number, number, number];
+  anchorVertex: number;
+}
+
+export type GraminoidPrimitiveRecipe =
+  | GraminoidHubRecipe
+  | GraminoidBladeRecipe
+  | GraminoidTubeRecipe
+  | GraminoidLanceolateRecipe
+  | GraminoidHairFilamentRecipe
+  | GraminoidCottonBristleRecipe;
+
 export interface GraminoidStructureAudit {
   tufts: number;
   leaves: number;
@@ -33,6 +180,8 @@ export interface EstonianGraminoidFixture {
   species: string;
   family: 'Poaceae' | 'Cyperaceae';
   mesh: IndexedMesh;
+  /** Offline deterministic authoring sidecar. It is never part of runtime geometry. */
+  primitiveRecipes: readonly GraminoidPrimitiveRecipe[];
   tile: PeriodicTile;
   tuftCenters: Array<{ x: number; z: number }>;
   structure: GraminoidStructureAudit;
@@ -51,7 +200,28 @@ interface BuildContext {
   random: () => number;
   structure: GraminoidStructureAudit;
   palette: GraminoidPalette;
+  owner: GraminoidPrimitiveOwner;
+  primitiveRecipes: GraminoidPrimitiveRecipe[];
 }
+
+type RecordedPrimitiveFields =
+  | 'primitiveId'
+  | 'owner'
+  | 'profileId'
+  | 'species'
+  | 'family'
+  | 'sourceTriangleStart'
+  | 'sourceTriangleCount'
+  | 'emittedVertexStart'
+  | 'emittedVertexCount';
+
+type GraminoidPrimitiveRecipeDetail =
+  | Omit<GraminoidHubRecipe, RecordedPrimitiveFields>
+  | Omit<GraminoidBladeRecipe, RecordedPrimitiveFields>
+  | Omit<GraminoidTubeRecipe, RecordedPrimitiveFields>
+  | Omit<GraminoidLanceolateRecipe, RecordedPrimitiveFields>
+  | Omit<GraminoidHairFilamentRecipe, RecordedPrimitiveFields>
+  | Omit<GraminoidCottonBristleRecipe, RecordedPrimitiveFields>;
 
 type Rgb = readonly [number, number, number];
 
@@ -100,7 +270,42 @@ const PALETTES: Record<EstonianGraminoidProfileId, GraminoidPalette> = {
   },
 };
 
+const OWNERS: Record<EstonianGraminoidProfileId, Omit<GraminoidPrimitiveOwner, 'profileId'>> = {
+  0: { owner: 'estonia-native/graminoid/agrostis-capillaris', species: 'Agrostis capillaris', family: 'Poaceae' },
+  1: { owner: 'estonia-native/graminoid/avenella-flexuosa', species: 'Avenella flexuosa', family: 'Poaceae' },
+  2: { owner: 'estonia-native/graminoid/calamagrostis-canescens', species: 'Calamagrostis canescens', family: 'Poaceae' },
+  3: { owner: 'estonia-native/graminoid/carex-cespitosa', species: 'Carex cespitosa', family: 'Cyperaceae' },
+  4: { owner: 'estonia-native/graminoid/eriophorum-vaginatum', species: 'Eriophorum vaginatum', family: 'Cyperaceae' },
+};
+
 const TAU = Math.PI * 2;
+
+function copyVec3(value: Vec3): Vec3 {
+  return { x: value.x, y: value.y, z: value.z };
+}
+
+function copyRgb(value: Rgb): Rgb {
+  return [value[0], value[1], value[2]];
+}
+
+function recordPrimitive(
+  context: BuildContext,
+  triangleStart: number,
+  vertexStart: number,
+  detail: GraminoidPrimitiveRecipeDetail,
+): void {
+  const sourceTriangleCount = context.mesh.indices.length / 3 - triangleStart;
+  const emittedVertexCount = context.mesh.positions.length / 3 - vertexStart;
+  context.primitiveRecipes.push({
+    primitiveId: context.primitiveRecipes.length,
+    ...context.owner,
+    sourceTriangleStart: triangleStart,
+    sourceTriangleCount,
+    emittedVertexStart: vertexStart,
+    emittedVertexCount,
+    ...detail,
+  } as GraminoidPrimitiveRecipe);
+}
 
 function normalized(value: Vec3): Vec3 {
   const length = Math.hypot(value.x, value.y, value.z);
@@ -152,7 +357,20 @@ function vertex(mesh: IndexedMesh, point: Vec3, normal: Vec3, color: Rgb): numbe
 }
 
 function appendHub(context: BuildContext, center: Vec3): number {
-  return vertex(context.mesh, center, { x: 0, y: 1, z: 0 }, context.palette.rhizome);
+  const triangleStart = context.mesh.indices.length / 3;
+  const vertexStart = context.mesh.positions.length / 3;
+  const result = vertex(context.mesh, center, { x: 0, y: 1, z: 0 }, context.palette.rhizome);
+  recordPrimitive(context, triangleStart, vertexStart, {
+    kind: 'hub',
+    disposition: 'crisp',
+    center: copyVec3(center),
+    vertex: result,
+    sharedAnchorVertices: [],
+    rootSemantics: 'plant-root-anchor',
+    endSemantics: 'anchor-only',
+    capSemantics: 'none',
+  });
+  return result;
 }
 
 function curvePoint(
@@ -187,7 +405,11 @@ function appendBlade(
   segments = 7,
 ): void {
   const { mesh } = context;
+  const triangleStart = mesh.indices.length / 3;
+  const vertexStart = mesh.positions.length / 3;
   const sides: Array<[number, number]> = [];
+  const centerline: Vec3[] = [copyVec3(root)];
+  const halfWidths: number[] = [width * 0.5 + width * 0.035];
   for (let segment = 1; segment <= segments; segment++) {
     const t = segment / segments;
     const prior = curvePoint(root, angle, height, lean, curl, phase, Math.max(0, t - 1 / segments));
@@ -197,6 +419,8 @@ function appendBlade(
     if (Math.hypot(side.x, side.z) < 0.1) side = { x: Math.cos(angle + Math.PI / 2), y: 0, z: Math.sin(angle + Math.PI / 2) };
     const center = curvePoint(root, angle, height, lean, curl, phase, t);
     const halfWidth = width * 0.5 * ((1 - t) ** 0.62) + width * 0.035;
+    centerline.push(copyVec3(center));
+    halfWidths.push(halfWidth);
     const normal = normalized(cross(side, tangent));
     const color = context.palette.leafRoot.map((value, channel) =>
       mix(value, context.palette.leafTip[channel]!, t),
@@ -214,6 +438,26 @@ function appendBlade(
     mesh.indices.push(a[0], b[0], a[1], a[1], b[0], b[1]);
   }
   context.structure.leaves++;
+  recordPrimitive(context, triangleStart, vertexStart, {
+    kind: 'blade',
+    disposition: 'crisp',
+    root: copyVec3(root),
+    angle,
+    height,
+    width,
+    lean,
+    curl,
+    phase,
+    segments,
+    centerline,
+    halfWidths,
+    rootColor: copyRgb(context.palette.leafRoot),
+    tipColor: copyRgb(context.palette.leafTip),
+    sharedAnchorVertices: [hub],
+    rootSemantics: 'shared-anchor-fan',
+    endSemantics: 'open-ribbon-edge',
+    capSemantics: 'root-fan',
+  });
 }
 
 function frameForTangent(tangent: Vec3): { side: Vec3; binormal: Vec3 } {
@@ -224,15 +468,19 @@ function frameForTangent(tangent: Vec3): { side: Vec3; binormal: Vec3 } {
 
 /** Indexed tube with a fan to an existing parent index, used for culms and axes. */
 function appendTube(
-  mesh: IndexedMesh,
+  context: BuildContext,
   points: Vec3[],
   radii: number[],
   sides: number,
   anchor?: number,
   endAnchor?: number,
   color: Rgb = [0.3, 0.5, 0.12],
+  role: GraminoidTubeRole = 'structural-tube',
 ): TubeResult {
   if (points.length < 2 || radii.length !== points.length || sides < 3) throw new Error('invalid tube recipe');
+  const { mesh } = context;
+  const triangleStart = mesh.indices.length / 3;
+  const vertexStart = mesh.positions.length / 3;
   const rings: number[][] = [];
   for (let pointIndex = 0; pointIndex < points.length; pointIndex++) {
     const point = points[pointIndex]!;
@@ -268,6 +516,25 @@ function appendTube(
   const endCenter = endAnchor ?? vertex(mesh, endPoint, tangent, color);
   const last = rings[rings.length - 1]!;
   for (let side = 0; side < sides; side++) mesh.indices.push(last[side]!, endCenter, last[(side + 1) % sides]!);
+  const sharedAnchorVertices = [anchor, endAnchor].filter((value): value is number => value !== undefined);
+  recordPrimitive(context, triangleStart, vertexStart, {
+    kind: role === 'rhizome' ? 'rhizome' : 'tube',
+    disposition: 'crisp',
+    role,
+    centerline: points.map(copyVec3),
+    radii: [...radii],
+    sides,
+    color: copyRgb(color),
+    anchorVertex: anchor ?? null,
+    endAnchorVertex: endAnchor ?? null,
+    endCenterVertex: endCenter,
+    sharedAnchorVertices,
+    rootSemantics: anchor === undefined ? 'open-ring' : 'shared-anchor-fan',
+    endSemantics: endAnchor === undefined ? 'emitted-center-cap' : 'welded-center-cap',
+    capSemantics: anchor === undefined
+      ? endAnchor === undefined ? 'terminal-fan' : 'terminal-welded-fan'
+      : endAnchor === undefined ? 'root-and-terminal-fan' : 'root-and-terminal-welded-fan',
+  });
   return { rings, endCenter };
 }
 
@@ -276,13 +543,14 @@ function appendRhizome(context: BuildContext, startHub: number, endHub: number, 
   const middle = add(scaled(add(start, end), 0.5), scaled(perpendicular, Math.sin(phase) * 0.018));
   middle.y = 0.004 + Math.cos(phase) * 0.001;
   appendTube(
-    context.mesh,
+    context,
     [{ ...start, y: 0.004 }, middle, { ...end, y: 0.004 }],
     [0.0022, 0.0018, 0.0022],
     5,
     startHub,
     endHub,
     context.palette.rhizome,
+    'rhizome',
   );
   context.structure.rhizomes++;
 }
@@ -301,13 +569,14 @@ function appendSpikelet(
   const middle = add(center, scaled(direction, length * 0.05));
   const end = add(center, scaled(direction, length * 0.55));
   const tube = appendTube(
-    context.mesh,
+    context,
     [start, middle, end],
     [width * 0.18, width, width * 0.06],
     sides,
     anchor,
     undefined,
     context.palette.spikelet,
+    'spikelet-axis',
   );
   context.structure.spikelets++;
   return tube.endCenter;
@@ -338,10 +607,15 @@ function appendLanceolateSurface(
   roll: number,
   color: Rgb,
   keel = 0.00035,
+  role: GraminoidLanceolateRole = 'surface',
 ): void {
+  const triangleStart = context.mesh.indices.length / 3;
+  const vertexStart = context.mesh.positions.length / 3;
   const direction = normalized(directionInput);
   const frame = rotatedFrame(direction, roll);
   const sections: Array<[number, number]> = [];
+  const centerline: Vec3[] = [];
+  const halfWidths: number[] = [];
   const sectionCount = 6;
   for (let section = 0; section <= sectionCount; section++) {
     const t = section / sectionCount;
@@ -355,6 +629,8 @@ function appendLanceolateSurface(
       scaled(frame.binormal, keel * Math.sin(Math.PI * t)),
     );
     const width = halfWidth * widthEnvelope;
+    centerline.push(copyVec3(center));
+    halfWidths.push(width);
     const normal = normalized(add(frame.binormal, scaled(frame.side, 0.12 * Math.cos(Math.PI * t))));
     sections.push([
       vertex(context.mesh, add(center, scaled(frame.side, width)), normal, color),
@@ -367,6 +643,25 @@ function appendLanceolateSurface(
     const b = sections[section + 1]!;
     context.mesh.indices.push(a[0], b[0], a[1], a[1], b[0], b[1]);
   }
+  recordPrimitive(context, triangleStart, vertexStart, {
+    kind: 'lanceolate-surface',
+    disposition: 'crisp',
+    role,
+    base: copyVec3(base),
+    direction: copyVec3(direction),
+    length,
+    halfWidth,
+    roll,
+    keel,
+    centerline,
+    halfWidths,
+    color: copyRgb(color),
+    anchorVertex: anchor,
+    sharedAnchorVertices: [anchor],
+    rootSemantics: 'shared-anchor-fan',
+    endSemantics: 'open-ribbon-edge',
+    capSemantics: 'root-fan',
+  });
 }
 
 /** A tapered two-segment ribbon used for the millimetric callus hairs. */
@@ -380,6 +675,8 @@ function appendHairFilament(
   color: Rgb,
   roll: number,
 ): void {
+  const triangleStart = context.mesh.indices.length / 3;
+  const vertexStart = context.mesh.positions.length / 3;
   const direction = normalized(directionInput);
   const frame = rotatedFrame(direction, roll);
   const middle = add(
@@ -396,6 +693,23 @@ function appendHairFilament(
   const d = vertex(context.mesh, add(middle, scaled(frame.side, -width * 0.58)), frame.binormal, color);
   const e = vertex(context.mesh, tip, frame.binormal, color);
   context.mesh.indices.push(anchor, a, b, a, c, b, b, c, d, c, e, d);
+  recordPrimitive(context, triangleStart, vertexStart, {
+    kind: 'hair-filament',
+    disposition: 'plume',
+    root: copyVec3(root),
+    direction: copyVec3(direction),
+    length,
+    width,
+    roll,
+    centerline: [copyVec3(root), copyVec3(middle), copyVec3(tip)],
+    halfWidths: [width, width * 0.58, 0],
+    color: copyRgb(color),
+    anchorVertex: anchor,
+    sharedAnchorVertices: [anchor],
+    rootSemantics: 'shared-anchor-fan',
+    endSemantics: 'tapered-point',
+    capSemantics: 'root-fan',
+  });
 }
 
 /**
@@ -416,13 +730,14 @@ function appendCalamagrostisSpikelet(
   const frame = rotatedFrame(direction, roll);
   const axisEnd = add(base, scaled(direction, length));
   const axis = appendTube(
-    context.mesh,
+    context,
     [base, add(base, scaled(direction, length * 0.52)), axisEnd],
     [0.00027, 0.00022, 0.00010],
     4,
     anchor,
     undefined,
     context.palette.panicleAxis,
+    'spikelet-axis',
   );
 
   // The paired glumes are offset about the compressed spikelet axis; a shorter
@@ -437,6 +752,7 @@ function appendCalamagrostisSpikelet(
     roll,
     context.palette.spikelet,
     length * 0.055,
+    'glume',
   );
   appendLanceolateSurface(
     context,
@@ -448,6 +764,7 @@ function appendCalamagrostisSpikelet(
     roll + Math.PI,
     context.palette.spikelet,
     length * 0.050,
+    'glume',
   );
   appendLanceolateSurface(
     context,
@@ -459,6 +776,7 @@ function appendCalamagrostisSpikelet(
     roll + Math.PI * 0.5,
     context.palette.callusHair,
     length * 0.032,
+    'lemma',
   );
 
   // Kew records the callus hairs as about 1.2x the lemma. Their collective
@@ -502,13 +820,14 @@ function appendCalamagrostisSpikelet(
       { x: 0, y: -length * 0.10, z: 0 },
     );
     appendTube(
-      context.mesh,
+      context,
       [filamentRoot, antherBase],
       [0.00010, 0.00008],
       3,
       axis.rings[1]![anther % axis.rings[1]!.length],
       undefined,
       context.palette.callusHair,
+      'anther-filament',
     );
     appendLanceolateSurface(
       context,
@@ -520,6 +839,7 @@ function appendCalamagrostisSpikelet(
       azimuth,
       context.palette.anther,
       0.00012,
+      'anther',
     );
   }
   context.structure.spikelets++;
@@ -548,13 +868,14 @@ function appendOpenPanicle(
     };
   });
   const rachis = appendTube(
-    context.mesh,
+    context,
     rachisPoints,
     rachisPoints.map((_point, index) => mix(branchRadius * 1.5, branchRadius * 0.75, index / (rachisPoints.length - 1))),
     5,
     anchor,
     undefined,
     context.palette.panicleAxis,
+    'panicle-axis',
   );
   for (let level = 0; level < levels; level++) {
     const t = (level + 0.35) / levels;
@@ -580,13 +901,14 @@ function appendOpenPanicle(
       };
       const nearestRachisRing = rachis.rings[Math.round(t * (rachis.rings.length - 1))]!;
       const branchTube = appendTube(
-        context.mesh,
+        context,
         [origin, mid, end],
         [branchRadius, branchRadius * 0.74, branchRadius * 0.42],
         4,
         nearestRachisRing[0],
         undefined,
         context.palette.panicleAxis,
+        'panicle-axis',
       );
       context.structure.panicleBranches++;
       appendSpikelet(
@@ -642,13 +964,14 @@ function appendCalamagrostisBranch(
     add(add(add(origin, scaled(direction, length)), scaled(frame.side, bend * 0.44)), { x: 0, y: droop * 1.65, z: 0 }),
   ];
   const branch = appendTube(
-    context.mesh,
+    context,
     points,
     [radius, radius * 0.76, radius * 0.50, radius * 0.24],
     4,
     anchor,
     undefined,
     context.palette.panicleAxis,
+    'panicle-axis',
   );
   context.structure.panicleBranches++;
 
@@ -701,13 +1024,14 @@ function appendCalamagrostisBranch(
     const pedicelEnd = add(sampled.point, scaled(pedicelDirection, pedicelLength));
     const ring = branch.rings[Math.min(branch.rings.length - 1, sampled.segment + 1)]!;
     const pedicel = appendTube(
-      context.mesh,
+      context,
       [sampled.point, pedicelEnd],
       [0.00030, 0.00016],
       4,
       ring[spikelet % ring.length],
       undefined,
       context.palette.panicleAxis,
+      'panicle-axis',
     );
     appendCalamagrostisSpikelet(
       context,
@@ -747,13 +1071,14 @@ function appendCalamagrostisPanicle(
     };
   });
   const rachis = appendTube(
-    context.mesh,
+    context,
     rachisPoints,
     rachisPoints.map((_point, index) => mix(0.00130, 0.00034, index / rachisSections)),
     5,
     anchor,
     undefined,
     context.palette.panicleAxis,
+    'panicle-axis',
   );
 
   const primaryCount = 22;
@@ -811,11 +1136,14 @@ function makeContext(
   structure: GraminoidStructureAudit,
   profileId: EstonianGraminoidProfileId,
 ): BuildContext {
+  const identity = OWNERS[profileId];
   return {
     mesh: { positions: [], normals: [], colors: [], indices: [] },
     random: xorshift(seed),
     structure,
     palette: PALETTES[profileId],
+    owner: { profileId, ...identity },
+    primitiveRecipes: [],
   };
 }
 
@@ -859,11 +1187,11 @@ function makeAgrostisCapillaris(): EstonianGraminoidFixture {
     }
     const culmHeight = mix(0.245, 0.335, context.random());
     const leanAngle = context.random() * TAU;
-    const culm = appendTube(context.mesh, [
+    const culm = appendTube(context, [
       { ...center, y: 0.005 },
       { x: center.x + Math.cos(leanAngle) * 0.006, y: culmHeight * 0.50, z: center.z + Math.sin(leanAngle) * 0.006 },
       { x: center.x + Math.cos(leanAngle) * 0.013, y: culmHeight, z: center.z + Math.sin(leanAngle) * 0.013 },
-    ], [0.00155, 0.00130, 0.00102], 6, hub, undefined, context.palette.culm);
+    ], [0.00155, 0.00130, 0.00102], 6, hub, undefined, context.palette.culm, 'culm');
     structure.culms++;
     appendOpenPanicle(context, culm.endCenter, {
       x: center.x + Math.cos(leanAngle) * 0.013,
@@ -880,6 +1208,7 @@ function makeAgrostisCapillaris(): EstonianGraminoidFixture {
     species: 'Agrostis capillaris',
     family: 'Poaceae',
     mesh: context.mesh,
+    primitiveRecipes: context.primitiveRecipes,
     tileSize,
     tuftCenters,
     structure,
@@ -913,11 +1242,11 @@ function makeAvenellaFlexuosa(): EstonianGraminoidFixture {
     for (let culmIndex = 0; culmIndex < culmCount; culmIndex++) {
       const culmHeight = mix(0.285, 0.390, context.random());
       const leanAngle = context.random() * TAU;
-      const culm = appendTube(context.mesh, [
+      const culm = appendTube(context, [
         { ...center, y: 0.005 },
         { x: center.x + Math.cos(leanAngle) * 0.008, y: culmHeight * 0.48, z: center.z + Math.sin(leanAngle) * 0.008 },
         { x: center.x + Math.cos(leanAngle) * 0.020, y: culmHeight, z: center.z + Math.sin(leanAngle) * 0.020 },
-      ], [0.0011, 0.0009, 0.00068], 5, hub, undefined, context.palette.culm);
+      ], [0.0011, 0.0009, 0.00068], 5, hub, undefined, context.palette.culm, 'culm');
       structure.culms++;
       appendOpenPanicle(context, culm.endCenter, {
         x: center.x + Math.cos(leanAngle) * 0.020,
@@ -931,6 +1260,7 @@ function makeAvenellaFlexuosa(): EstonianGraminoidFixture {
     species: 'Avenella flexuosa',
     family: 'Poaceae',
     mesh: context.mesh,
+    primitiveRecipes: context.primitiveRecipes,
     tileSize,
     tuftCenters,
     structure,
@@ -938,6 +1268,65 @@ function makeAvenellaFlexuosa(): EstonianGraminoidFixture {
     sourceKeys: ['powo-avenella-flexuosa', 'eelurikkus-avenella-synonym-record'],
     claimBoundary: 'Architectural flowering tuft profile; filiform blades are widened only enough to survive the 64-texel geometric carrier and are not a micrometric specimen reconstruction.',
   });
+}
+
+/**
+ * Appends one complete flowering Calamagrostis shoot. Keeping this as the one
+ * authoring function lets the periodic stand and the isolated band-limited QA
+ * source share byte-identical shoot geometry; the latter is not a simplified
+ * proxy or a second botanical recipe.
+ */
+function appendCalamagrostisShoot(
+  context: BuildContext,
+  center: { x: number; z: number },
+  hub: number,
+): void {
+  for (let leaf = 0; leaf < 15; leaf++) {
+    const angle = (leaf / 15) * TAU + context.random() * 0.33;
+    appendBlade(context, hub, { ...center, y: 0.004 }, angle, mix(0.260, 0.550, context.random()), mix(0.0030, 0.0060, context.random()), mix(0.055, 0.180, context.random()), mix(0.012, 0.048, context.random()), context.random() * TAU, 10);
+  }
+  const culmHeight = mix(0.680, 0.940, context.random());
+  const leanAngle = context.random() * TAU;
+  const culmPoints = [
+    { ...center, y: 0.005 },
+    { x: center.x + Math.cos(leanAngle) * 0.008, y: culmHeight * 0.42, z: center.z + Math.sin(leanAngle) * 0.008 },
+    { x: center.x + Math.cos(leanAngle) * 0.017, y: culmHeight * 0.78, z: center.z + Math.sin(leanAngle) * 0.017 },
+    { x: center.x + Math.cos(leanAngle) * 0.032, y: culmHeight, z: center.z + Math.sin(leanAngle) * 0.032 },
+  ];
+  const culm = appendTube(
+    context,
+    culmPoints,
+    [0.0023, 0.0020, 0.00165, 0.00125],
+    7,
+    hub,
+    undefined,
+    context.palette.culm,
+    'culm',
+  );
+  context.structure.culms++;
+  // Two explicit cauline leaves: Calamagrostis foliage is not exclusively a
+  // basal fountain. Their culm-ring anchors keep the authored mesh connected.
+  for (const node of [1, 2]) {
+    const nodePoint = culmPoints[node]!;
+    const leafAngle = leanAngle + (node === 1 ? 1.85 : -1.35) + context.random() * 0.35;
+    appendBlade(
+      context,
+      culm.rings[node]![0]!,
+      nodePoint,
+      leafAngle,
+      node === 1 ? mix(0.32, 0.48, context.random()) : mix(0.22, 0.36, context.random()),
+      mix(0.0035, 0.0060, context.random()),
+      mix(0.12, 0.24, context.random()),
+      mix(0.025, 0.065, context.random()),
+      context.random() * TAU,
+      9,
+    );
+  }
+  appendCalamagrostisPanicle(context, culm.endCenter, {
+    x: center.x + Math.cos(leanAngle) * 0.032,
+    y: culmHeight - 0.006,
+    z: center.z + Math.sin(leanAngle) * 0.032,
+  }, mix(0.180, 0.230, context.random()), mix(0.045, 0.055, context.random()), context.random() * TAU, 0.040 * Math.cos(leanAngle));
 }
 
 function makeCalamagrostisCanescens(): EstonianGraminoidFixture {
@@ -956,52 +1345,7 @@ function makeCalamagrostisCanescens(): EstonianGraminoidFixture {
   const context = makeContext(0xca1a_6c35, structure, ESTONIAN_GRAMINOID_PROFILE_IDS.CALAMAGROSTIS_CANESCENS);
   const hubs = tuftCenters.map((center) => appendHub(context, { ...center, y: 0.004 }));
   tuftCenters.forEach((center, tuft) => {
-    const hub = hubs[tuft]!;
-    for (let leaf = 0; leaf < 15; leaf++) {
-      const angle = (leaf / 15) * TAU + context.random() * 0.33;
-      appendBlade(context, hub, { ...center, y: 0.004 }, angle, mix(0.260, 0.550, context.random()), mix(0.0030, 0.0060, context.random()), mix(0.055, 0.180, context.random()), mix(0.012, 0.048, context.random()), context.random() * TAU, 10);
-    }
-    const culmHeight = mix(0.680, 0.940, context.random());
-    const leanAngle = context.random() * TAU;
-    const culmPoints = [
-      { ...center, y: 0.005 },
-      { x: center.x + Math.cos(leanAngle) * 0.008, y: culmHeight * 0.42, z: center.z + Math.sin(leanAngle) * 0.008 },
-      { x: center.x + Math.cos(leanAngle) * 0.017, y: culmHeight * 0.78, z: center.z + Math.sin(leanAngle) * 0.017 },
-      { x: center.x + Math.cos(leanAngle) * 0.032, y: culmHeight, z: center.z + Math.sin(leanAngle) * 0.032 },
-    ];
-    const culm = appendTube(
-      context.mesh,
-      culmPoints,
-      [0.0023, 0.0020, 0.00165, 0.00125],
-      7,
-      hub,
-      undefined,
-      context.palette.culm,
-    );
-    structure.culms++;
-    // Two explicit cauline leaves: Calamagrostis foliage is not exclusively a
-    // basal fountain. Their culm-ring anchors keep the authored mesh connected.
-    for (const node of [1, 2]) {
-      const nodePoint = culmPoints[node]!;
-      const leafAngle = leanAngle + (node === 1 ? 1.85 : -1.35) + context.random() * 0.35;
-      appendBlade(
-        context,
-        culm.rings[node]![0]!,
-        nodePoint,
-        leafAngle,
-        node === 1 ? mix(0.32, 0.48, context.random()) : mix(0.22, 0.36, context.random()),
-        mix(0.0035, 0.0060, context.random()),
-        mix(0.12, 0.24, context.random()),
-        mix(0.025, 0.065, context.random()),
-        context.random() * TAU,
-        9,
-      );
-    }
-    appendCalamagrostisPanicle(context, culm.endCenter, {
-      x: center.x + Math.cos(leanAngle) * 0.032,
-      y: culmHeight - 0.006,
-      z: center.z + Math.sin(leanAngle) * 0.032,
-    }, mix(0.180, 0.230, context.random()), mix(0.045, 0.055, context.random()), context.random() * TAU, 0.040 * Math.cos(leanAngle));
+    appendCalamagrostisShoot(context, center, hubs[tuft]!);
   });
   for (let index = 0; index < tuftCenters.length - 1; index++) {
     appendRhizome(context, hubs[index]!, hubs[index + 1]!, { ...tuftCenters[index]!, y: 0.004 }, { ...tuftCenters[index + 1]!, y: 0.004 }, index * 1.43 + 0.4);
@@ -1011,12 +1355,52 @@ function makeCalamagrostisCanescens(): EstonianGraminoidFixture {
     species: 'Calamagrostis canescens',
     family: 'Poaceae',
     mesh: context.mesh,
+    primitiveRecipes: context.primitiveRecipes,
     tileSize,
     tuftCenters,
     structure,
     generator: 'original-procedural-calamagrostis-canescens-v5-ascending-recursive-hairy-panicle',
     sourceKeys: ['powo-calamagrostis-canescens', 'eelurikkus-estonian-species-portal'],
     claimBoundary: 'High-detail flowering architectural stand with explicit glumes, lemmas, callus hairs, and anthers; geometry is species-grounded but not a scan of one local genotype or phenological specimen.',
+  });
+}
+
+/**
+ * One isolated flowering shoot for source-bandwidth inspection. It invokes the
+ * exact production shoot author (with the same seed) and changes only the root
+ * translation and omission of neighbouring shoots/rhizomes. This fixture is
+ * deliberately excluded from the profile-ID set and periodic production bake.
+ */
+export function makeCalamagrostisCanescensBandlimitedSource(): EstonianGraminoidFixture {
+  const tileSize = 0.52;
+  const tuftCenters = [{ x: tileSize * 0.5, z: tileSize * 0.5 }];
+  const structure = newStructure({
+    tufts: 1,
+    culmCrossSectionSides: 7,
+    growthForm: 'one isolated flowering shoot from the production loosely clumped stand',
+    leafForm: 'production broad flat-to-convolute basal and cauline blades',
+    inflorescenceForm: 'production ascending recursive hairy panicle, isolated for directional coverage prefiltering',
+  });
+  const context = makeContext(
+    0xca1a_6c35,
+    structure,
+    ESTONIAN_GRAMINOID_PROFILE_IDS.CALAMAGROSTIS_CANESCENS,
+  );
+  const center = tuftCenters[0]!;
+  const hub = appendHub(context, { ...center, y: 0.004 });
+  appendCalamagrostisShoot(context, center, hub);
+  return finalize({
+    profileId: ESTONIAN_GRAMINOID_PROFILE_IDS.CALAMAGROSTIS_CANESCENS,
+    species: 'Calamagrostis canescens — isolated production shoot',
+    family: 'Poaceae',
+    mesh: context.mesh,
+    primitiveRecipes: context.primitiveRecipes,
+    tileSize,
+    tuftCenters,
+    structure,
+    generator: 'original-procedural-calamagrostis-canescens-v5-isolated-bandlimited-source',
+    sourceKeys: ['powo-calamagrostis-canescens', 'eelurikkus-estonian-species-portal'],
+    claimBoundary: 'Exact production shoot geometry isolated for offline radiance/coverage prefiltering; not a replacement morphology, scan, or runtime mesh.',
   });
 }
 
@@ -1030,13 +1414,14 @@ function appendCarexSpike(
   phase: number,
 ): void {
   const axis = appendTube(
-    context.mesh,
+    context,
     [base, { ...base, y: base.y + length }],
     [radius * 0.28, radius * 0.22],
     5,
     anchor,
     undefined,
     context.palette.panicleAxis,
+    'spikelet-axis',
   );
   const scaleCount = female ? 9 : 11;
   for (let scale = 0; scale < scaleCount; scale++) {
@@ -1068,7 +1453,7 @@ function makeCarexCespitosa(): EstonianGraminoidFixture {
   const context = makeContext(0xca2e_ce51, structure, ESTONIAN_GRAMINOID_PROFILE_IDS.CAREX_CESPITOSA);
   tuftCenters.forEach((center) => {
     const hub = appendHub(context, { ...center, y: 0.005 });
-    appendTube(context.mesh, [{ ...center, y: 0.004 }, { ...center, y: 0.055 }], [0.017, 0.010], 10, hub, undefined, context.palette.rhizome);
+    appendTube(context, [{ ...center, y: 0.004 }, { ...center, y: 0.055 }], [0.017, 0.010], 10, hub, undefined, context.palette.rhizome, 'basal-sheath');
     for (let leaf = 0; leaf < 30; leaf++) {
       const angle = (leaf / 30) * TAU + context.random() * 0.23;
       appendBlade(context, hub, { ...center, y: 0.006 }, angle, mix(0.155, 0.315, context.random()), mix(0.0026, 0.0048, context.random()), mix(0.035, 0.120, context.random()), mix(0.009, 0.030, context.random()), context.random() * TAU, 8);
@@ -1077,7 +1462,7 @@ function makeCarexCespitosa(): EstonianGraminoidFixture {
       const angle = context.random() * TAU;
       const height = mix(0.305, 0.410, context.random());
       const tip = { x: center.x + Math.cos(angle) * 0.017, y: height, z: center.z + Math.sin(angle) * 0.017 };
-      const culm = appendTube(context.mesh, [{ ...center, y: 0.007 }, { x: mix(center.x, tip.x, 0.55), y: height * 0.55, z: mix(center.z, tip.z, 0.55) }, tip], [0.0025, 0.0021, 0.0018], 3, hub, undefined, context.palette.culm);
+      const culm = appendTube(context, [{ ...center, y: 0.007 }, { x: mix(center.x, tip.x, 0.55), y: height * 0.55, z: mix(center.z, tip.z, 0.55) }, tip], [0.0025, 0.0021, 0.0018], 3, hub, undefined, context.palette.culm, 'culm');
       structure.culms++;
       appendCarexSpike(context, culm.endCenter, { ...tip, y: tip.y - 0.002 }, 0.028, 0.0042, false, context.random() * TAU);
       for (let lateral = 0; lateral < 2; lateral++) {
@@ -1088,7 +1473,7 @@ function makeCarexCespitosa(): EstonianGraminoidFixture {
           y: origin.y - 0.004,
           z: origin.z + Math.sin(sideAngle) * (0.010 + lateral * 0.004),
         };
-        const stalk = appendTube(context.mesh, [origin, stalkEnd], [0.0009, 0.00065], 4, culm.endCenter, undefined, context.palette.panicleAxis);
+        const stalk = appendTube(context, [origin, stalkEnd], [0.0009, 0.00065], 4, culm.endCenter, undefined, context.palette.panicleAxis, 'panicle-axis');
         appendCarexSpike(context, stalk.endCenter, stalkEnd, 0.022 + lateral * 0.004, 0.0062, true, context.random() * TAU);
       }
     }
@@ -1098,6 +1483,7 @@ function makeCarexCespitosa(): EstonianGraminoidFixture {
     species: 'Carex cespitosa',
     family: 'Cyperaceae',
     mesh: context.mesh,
+    primitiveRecipes: context.primitiveRecipes,
     tileSize,
     tuftCenters,
     structure,
@@ -1109,16 +1495,19 @@ function makeCarexCespitosa(): EstonianGraminoidFixture {
 
 function appendCottonHead(context: BuildContext, anchor: number, base: Vec3, phase: number): void {
   const spike = appendTube(
-    context.mesh,
+    context,
     [base, { ...base, y: base.y + 0.023 }],
     [0.0052, 0.0038],
     8,
     anchor,
     undefined,
     context.palette.spikelet,
+    'spikelet-axis',
   );
   const bristles = 42;
   for (let bristle = 0; bristle < bristles; bristle++) {
+    const triangleStart = context.mesh.indices.length / 3;
+    const vertexStart = context.mesh.positions.length / 3;
     const u = (bristle + 0.5) / bristles;
     const angle = phase + bristle * 2.399963229728653;
     const axial = Math.cos(Math.PI * u);
@@ -1140,6 +1529,22 @@ function appendCottonHead(context: BuildContext, anchor: number, base: Vec3, pha
     const d = vertex(context.mesh, add(middle, scaled(side, -width * 0.68)), outward, context.palette.cotton);
     const tip = vertex(context.mesh, end, outward, context.palette.cotton);
     context.mesh.indices.push(spike.endCenter, a, b, a, c, b, b, c, d, c, tip, d);
+    recordPrimitive(context, triangleStart, vertexStart, {
+      kind: 'cotton-bristle',
+      disposition: 'plume',
+      root: copyVec3(root),
+      direction: copyVec3(outward),
+      length,
+      width,
+      centerline: [copyVec3(root), copyVec3(middle), copyVec3(end)],
+      halfWidths: [width, width * 0.68, 0],
+      color: copyRgb(context.palette.cotton),
+      anchorVertex: spike.endCenter,
+      sharedAnchorVertices: [spike.endCenter],
+      rootSemantics: 'shared-anchor-fan',
+      endSemantics: 'tapered-point',
+      capSemantics: 'root-fan',
+    });
     context.structure.cottonBristles++;
   }
   context.structure.cottonHeads++;
@@ -1160,7 +1565,7 @@ function makeEriophorumVaginatum(): EstonianGraminoidFixture {
   const context = makeContext(0xe710_f4a9, structure, ESTONIAN_GRAMINOID_PROFILE_IDS.ERIOPHORUM_VAGINATUM);
   tuftCenters.forEach((center) => {
     const hub = appendHub(context, { ...center, y: 0.005 });
-    appendTube(context.mesh, [{ ...center, y: 0.004 }, { ...center, y: 0.062 }], [0.020, 0.011], 11, hub, undefined, context.palette.rhizome);
+    appendTube(context, [{ ...center, y: 0.004 }, { ...center, y: 0.062 }], [0.020, 0.011], 11, hub, undefined, context.palette.rhizome, 'basal-sheath');
     for (let leaf = 0; leaf < 34; leaf++) {
       const angle = (leaf / 34) * TAU + context.random() * 0.22;
       appendBlade(context, hub, { ...center, y: 0.006 }, angle, mix(0.105, 0.235, context.random()), mix(0.00115, 0.00175, context.random()), mix(0.020, 0.068, context.random()), mix(0.006, 0.019, context.random()), context.random() * TAU, 7);
@@ -1169,11 +1574,11 @@ function makeEriophorumVaginatum(): EstonianGraminoidFixture {
       const angle = context.random() * TAU;
       const height = mix(0.305, 0.405, context.random());
       const tip = { x: center.x + Math.cos(angle) * 0.012, y: height, z: center.z + Math.sin(angle) * 0.012 };
-      const culm = appendTube(context.mesh, [{ ...center, y: 0.008 }, { x: mix(center.x, tip.x, 0.52), y: height * 0.55, z: mix(center.z, tip.z, 0.52) }, tip], [0.0023, 0.0019, 0.00155], 3, hub, undefined, context.palette.culm);
+      const culm = appendTube(context, [{ ...center, y: 0.008 }, { x: mix(center.x, tip.x, 0.52), y: height * 0.55, z: mix(center.z, tip.z, 0.52) }, tip], [0.0023, 0.0019, 0.00155], 3, hub, undefined, context.palette.culm, 'culm');
       structure.culms++;
       // The uppermost bladeless sheath is deliberately inflated around the culm.
       const sheathBase = { x: mix(center.x, tip.x, 0.57), y: height * 0.54, z: mix(center.z, tip.z, 0.57) };
-      appendTube(context.mesh, [sheathBase, { x: mix(center.x, tip.x, 0.72), y: height * 0.69, z: mix(center.z, tip.z, 0.72) }], [0.0042, 0.0031], 7, culm.rings[1]![0], undefined, context.palette.culm);
+      appendTube(context, [sheathBase, { x: mix(center.x, tip.x, 0.72), y: height * 0.69, z: mix(center.z, tip.z, 0.72) }], [0.0042, 0.0031], 7, culm.rings[1]![0], undefined, context.palette.culm, 'upper-sheath');
       appendCottonHead(context, culm.endCenter, { ...tip, y: tip.y - 0.001 }, context.random() * TAU);
     }
   });
@@ -1182,6 +1587,7 @@ function makeEriophorumVaginatum(): EstonianGraminoidFixture {
     species: 'Eriophorum vaginatum',
     family: 'Cyperaceae',
     mesh: context.mesh,
+    primitiveRecipes: context.primitiveRecipes,
     tileSize,
     tuftCenters,
     structure,

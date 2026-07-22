@@ -1,5 +1,13 @@
 # Exact representation theory for precomputed ground-cover first-hit rendering
 
+> **SUPERSEDED CONSTRUCTION NOTICE (2026-07-22):** The impossibility results
+> and rejection history remain useful, but this document's assembled class-E
+> construction, volume, sampling, terrain/wind/control, mip, and necessity
+> claims are not implementation authority. The independent audit is
+> `../2026-07-22/CLASS-E-MATHEMATICAL-AUDIT.md`; the binding exterior-only
+> replacement is
+> `../2026-07-22/CLASS-E-EXTERIOR-MATHEMATICAL-SPEC.md`.
+
 Status: pure mathematics, 2026-07-22. No runtime, shader, asset, or test file is
 changed by this document. It is the comprehensive derivation requested after the
 exploration stop recorded in `GRASS-MATHEMATICAL-EXPLORATION-SUMMARY.md`, and it

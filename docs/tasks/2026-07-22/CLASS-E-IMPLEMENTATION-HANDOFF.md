@@ -4,6 +4,27 @@ Date: 2026-07-22. Branch: `estonia-asset-gen`. You are the **single owner** of
 this track, end to end. Supersedes the shell-frame handoff and the
 shell-frame gate status (that model is demoted; see §0.3).
 
+> **MATHEMATICAL HOLD / BINDING REPLACEMENT (2026-07-22):** Do not execute this
+> handoff's phases as written. `CLASS-E-EXTERIOR-MATHEMATICAL-SPEC.md` is now
+> the binding exterior-only replacement, after two independent adversarial
+> passes. `CLASS-E-MATHEMATICAL-AUDIT.md` records why the older theory failed.
+> The body below is historical planning context only. The replacement proves
+> the ideal affine opaque core and a closed-form analytic plume core, but makes
+> implementation conditional on structural compiler feasibility, extended
+> visibility/interval certification, the flat-ground-compatible no-horizontal-
+> axis restriction, an honest minification choice, complete sample/byte cost,
+> and fragment-invocation coverage. The user requested mathematics first; no
+> compiler, harness, baker, shader, or render-pipeline phase is authorized by
+> this handoff until that hold is explicitly lifted.
+
+> **CPU GATE RESULT / RED (2026-07-22):** The hold is not lifted. The accepted
+> production Calamagrostis blade+culm endpoints alone give a global lower
+> bound of `14` opaque `M x I` fields / `29` two-layer reads at `10 mm`, `9` /
+> `19` at `20 mm`, and `5` / `11` even at `50 mm`, omitting the entire flower
+> head. See `CLASS-E-CPU-GATE-RESULT.md`. Do not implement this representation;
+> its resume condition is new endpoint mathematics, an explicit cost increase,
+> or an explicit acceptance of botanical-scale error.
+
 ---
 
 ## 0. Orientation

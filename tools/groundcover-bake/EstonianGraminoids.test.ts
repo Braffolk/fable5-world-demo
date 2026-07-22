@@ -6,8 +6,19 @@ import {
   ESTONIAN_GRAMINOID_PROFILE_IDS,
   makeAllEstonianGraminoidFixtures,
   makeEstonianGraminoidFixture,
+  type GraminoidBladeRecipe,
+  type GraminoidHairFilamentRecipe,
+  type GraminoidLanceolateRecipe,
+  type GraminoidTubeRecipe,
 } from './EstonianGraminoids';
 import { makePeriodicSlice, periodicAddress } from './PeriodicProfile';
+
+const ACCEPTED_CALAMAGROSTIS_MESH = {
+  sha256: '37b0cf1d33f632b5cde3dd60410ad987eec2e977661d0bc804dd6f2bee7054c0',
+  vertices: 2_049_985,
+  triangles: 2_171_134,
+  primitiveRecipes: 270_541,
+} as const;
 
 function meshHash(mesh: ReturnType<typeof makeEstonianGraminoidFixture>['mesh']): string {
   return createHash('sha256').update(JSON.stringify(mesh)).digest('hex');
@@ -85,9 +96,89 @@ test('five exact native profile identities are deterministic and geometrically d
   for (const fixture of fixtures) {
     const repeat = makeEstonianGraminoidFixture(fixture.profileId);
     assert.deepEqual(fixture, repeat);
+    assert.ok(fixture.primitiveRecipes.length > 0, `${fixture.species} must expose deterministic primitive recipes`);
     assert.ok(fixture.mesh.positions.length / 3 > 1_000);
     assert.ok(fixture.mesh.indices.length / 3 > 1_000);
   }
+});
+
+test('accepted Calamagrostis mesh stays byte-identical while recipes partition every source triangle', () => {
+  const fixture = makeEstonianGraminoidFixture(ESTONIAN_GRAMINOID_PROFILE_IDS.CALAMAGROSTIS_CANESCENS);
+  assert.equal(fixture.mesh.positions.length / 3, ACCEPTED_CALAMAGROSTIS_MESH.vertices);
+  assert.equal(fixture.mesh.indices.length / 3, ACCEPTED_CALAMAGROSTIS_MESH.triangles);
+  assert.equal(meshHash(fixture.mesh), ACCEPTED_CALAMAGROSTIS_MESH.sha256);
+  assert.equal(fixture.primitiveRecipes.length, ACCEPTED_CALAMAGROSTIS_MESH.primitiveRecipes);
+
+  let triangleCursor = 0;
+  let crispTriangles = 0;
+  let plumeTriangles = 0;
+  for (let index = 0; index < fixture.primitiveRecipes.length; index++) {
+    const recipe = fixture.primitiveRecipes[index]!;
+    assert.equal(recipe.primitiveId, index, 'primitive IDs must be stable emission-order IDs');
+    assert.equal(recipe.sourceTriangleStart, triangleCursor, `primitive ${index} leaves a gap or overlaps its predecessor`);
+    assert.ok(Number.isInteger(recipe.sourceTriangleCount) && recipe.sourceTriangleCount >= 0);
+    assert.equal(recipe.profileId, fixture.profileId);
+    assert.equal(recipe.species, 'Calamagrostis canescens');
+    assert.equal(recipe.owner, 'estonia-native/graminoid/calamagrostis-canescens');
+    assert.equal(recipe.family, fixture.family);
+    assert.ok(recipe.rootSemantics.length > 0 && recipe.endSemantics.length > 0 && recipe.capSemantics.length > 0);
+
+    const firstIndex = recipe.sourceTriangleStart * 3;
+    const endIndex = (recipe.sourceTriangleStart + recipe.sourceTriangleCount) * 3;
+    for (const anchor of recipe.sharedAnchorVertices) {
+      assert.ok(anchor < recipe.emittedVertexStart, `primitive ${index} shared anchor must predate emitted vertices`);
+      let attributed = false;
+      for (let source = firstIndex; source < endIndex; source++) {
+        if (fixture.mesh.indices[source] === anchor) {
+          attributed = true;
+          break;
+        }
+      }
+      assert.ok(attributed, `primitive ${index} declares an anchor unused by its attributed triangles`);
+    }
+
+    if (recipe.disposition === 'crisp') crispTriangles += recipe.sourceTriangleCount;
+    else plumeTriangles += recipe.sourceTriangleCount;
+    triangleCursor += recipe.sourceTriangleCount;
+  }
+  assert.equal(triangleCursor, ACCEPTED_CALAMAGROSTIS_MESH.triangles);
+  assert.equal(crispTriangles + plumeTriangles, ACCEPTED_CALAMAGROSTIS_MESH.triangles);
+  assert.ok(crispTriangles > 0 && plumeTriangles > 0);
+  assert.ok(
+    fixture.primitiveRecipes.filter((recipe) => recipe.kind === 'hub')
+      .every((recipe) => recipe.sourceTriangleCount === 0 && recipe.sharedAnchorVertices.length === 0),
+    'hubs own vertices only; incident root-fan triangles are attributed once to the emitting blade/tube',
+  );
+});
+
+test('Calamagrostis recipes preserve compiler-critical geometry and crisp/plume disposition', () => {
+  const fixture = makeEstonianGraminoidFixture(ESTONIAN_GRAMINOID_PROFILE_IDS.CALAMAGROSTIS_CANESCENS);
+  const culm = fixture.primitiveRecipes.find(
+    (recipe): recipe is GraminoidTubeRecipe => recipe.kind === 'tube' && recipe.role === 'culm',
+  );
+  const rhizome = fixture.primitiveRecipes.find(
+    (recipe): recipe is GraminoidTubeRecipe => recipe.kind === 'rhizome',
+  );
+  const blade = fixture.primitiveRecipes.find(
+    (recipe): recipe is GraminoidBladeRecipe => recipe.kind === 'blade',
+  );
+  const glume = fixture.primitiveRecipes.find(
+    (recipe): recipe is GraminoidLanceolateRecipe => recipe.kind === 'lanceolate-surface' && recipe.role === 'glume',
+  );
+  const hair = fixture.primitiveRecipes.find(
+    (recipe): recipe is GraminoidHairFilamentRecipe => recipe.kind === 'hair-filament',
+  );
+  assert.ok(culm && culm.centerline.length === culm.radii.length && culm.sides === 7);
+  assert.ok(rhizome && rhizome.centerline.length === 3 && rhizome.endAnchorVertex !== null);
+  assert.ok(blade && blade.centerline.length === blade.segments + 1 && blade.halfWidths.length === blade.centerline.length);
+  assert.ok(glume && glume.centerline.length === glume.halfWidths.length && glume.role === 'glume');
+  assert.ok(hair && hair.disposition === 'plume' && hair.centerline.length === 3);
+  assert.ok(
+    fixture.primitiveRecipes.every((recipe) =>
+      recipe.kind === 'hair-filament' || recipe.kind === 'cotton-bristle'
+        ? recipe.disposition === 'plume'
+        : recipe.disposition === 'crisp'),
+  );
 });
 
 test('growth forms remain connected at the authored plant or rhizome-network scale', () => {
