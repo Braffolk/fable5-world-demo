@@ -334,6 +334,69 @@ only. This is *lighter* than the currently accepted 0.39 ms path.
   fade of a world-anchored representation does (no pops, no wedges — detail
   softens).
 
+### 7.5 Variance and wind: the exact transform group and its boundary law
+
+**The conjugation principle.** For any invertible affine map `A` (possibly
+time-varying), rendering the transformed community `A(𝒢)` is exactly
+querying the unchanged atlas with the ray `A^{-1}(o,d)` and mapping the
+output event (position, normal by inverse-transpose) forward. All
+correctness proofs conjugate. Everything below is an application.
+
+**Wind (exact tier).** Any time-varying, spatially smooth, affine-in-height
+shear field
+
+\[
+x' = x + \beta(x,z,t)\,\bigl(y-g(x,z)\bigr)
+\]
+
+is exact where `β` is locally constant and bounded-error
+(`≤ ‖∇β‖·h·`tile) where it varies smoothly — i.e. gust waves, direction
+changes, and per-layer phase offsets are effectively exact, and
+height-proportional shear is the correct first cantilever bending mode
+(tips sweep, roots planted): strictly richer than uniform lean at identical
+cost. Non-affine motion (quadratic bending, per-blade flutter) is declared
+out of the exact tier; its bounded treatments are (a) high-frequency
+normal/shading perturbation with geometry untouched, and (b) optional `2–4`
+baked gust-pose atlases cross-faded through the alignment step (memory
+`×` poses).
+
+**Placement variance (three tiers).**
+
+1. **Layer-global transforms — exact, zero seams.** `L` globally affine
+   re-instancings (golden-angle rotation, irrational offset, incommensurate
+   scale) of one atlas, composed by nearest-depth winner: the committed
+   two-layer pattern, now with per-region *rotation addressing free of any
+   lattice-symmetry requirement* — a rotated query direction simply
+   re-enters the ordinary 3-node interpolation. Additionally the square
+   lattice's `D4` symmetry yields **8 exact variants** (mirrors + 90°
+   rotations) by pure address remapping, and smooth low-frequency
+   world-keyed modulation (tint, vigor, `±15%` height scale folded into
+   `o_i` and residual scaling) adds ecological patchiness as a bounded
+   world-anchored warp.
+2. **Runtime cell bombing (hex/Voronoi) — possible, with a quantified
+   boundary law.** Arbitrary per-cell rotations/offsets are exact *inside*
+   each cell; the error is confined to cell-boundary bands where baked
+   cross-copy occlusion disagrees with the differently-transformed
+   neighbour, of width `≈ σ\cotα` (centimetres steep, `~0.5–1 m` at 5°),
+   world-anchored. The legality rule, forced by Lemma 3.3 and confirmed by
+   this project's own `2ab69cf` history: the hex machinery
+   (`shadertoy-texture-tiling.txt`) is reused only as the **stable
+   world-anchored region-key field**; per pixel, **one** cell's transform is
+   selected categorically (world-anchored threshold) — the file's 3-tap
+   blend of differently-transformed samples is the forbidden unrelated-owner
+   mix for geometry records, and variance-preserving blending (Yu et al.)
+   remains legal only for far-field radiance mips.
+3. **Bake-time super-tile bombing — exact, memory-priced.** Apply the
+   rotations/offsets/species jitter offline over a `2×2` or `3×3`
+   super-period and bake frames of that community: all occlusion exact, no
+   boundary bands, no runtime cost beyond the larger period; memory scales
+   with super-tile area (`2×2 ≈ ×4` texels, `~30–40` MB compressed —
+   affordable under the relaxed cap when maximal decorrelation is wanted).
+
+Recommended stack: tier 1 as baseline (exact, free), tier 3 when stronger
+decorrelation is authored, tier 2 only knowingly, with its boundary band
+accepted and categorical selection mandatory.
+
 ---
 
 ## 8. Relation to prior art and to the ledger (what is actually new)
