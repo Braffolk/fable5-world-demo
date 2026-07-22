@@ -185,12 +185,24 @@ Per pixel with camera `C` (exterior) and unit ray `d`:
      the real terrain renders behind the cover layer (frames are
      cover-only, §2.3).
 
-**Cost:** `3` nodes × (`1` low-res `o_i` read + `1` record read) `+` optional
-`1` mark/detail read `= 6–7` texture reads, `< 100` FMA, no loops, no
-dependent chain longer than the single alignment step, no per-copy or
-per-species work, no compute passes, no geometry. All reads are small,
-tiled, block-compressible textures with high spatial coherence — the profile
-of a technique that runs on integrated GPUs.
+**Cost (corrected in review, §11 E12 — the earlier "6–7" undercounted the
+alignment's dependent read).** The residual `r` lives in the record texture,
+so strict per-node alignment is `1` low-res `o_i` read `+ 1` record read at
+the shell-aligned address (supplying `r`) `+ 1` record read at the corrected
+address `= 3` taps per node ⇒ **`9` taps strict** (`+1` optional
+mark/detail). The **winner-only-alignment variant** re-reads only the
+max-weight node (**`7` taps**): geometry is still second-order aligned (it
+comes from the winner alone), and only the two secondary *colour*
+contributions carry the first-order `Δ·σ` term at their smaller blend
+weights — the designated low-end knob. A no-realign variant (record read at
+the shell address only) forfeits the §4.1 second-order bound entirely
+(first-order `Δ·σ` everywhere) and is an ablation, never the model. All
+variants: `< 100` FMA, no loops, no dependent chain longer than the single
+alignment step, no per-copy or per-species work, no compute passes, no
+geometry. All reads are small, tiled, block-compressible textures with high
+spatial coherence, and `9` coherent taps sits at the measured envelope of
+the currently accepted `~8`-tap / `0.39 ms` path — the cost contract is
+"fixed small tap count within today's envelope", not a specific integer.
 
 ---
 
@@ -473,8 +485,17 @@ camera-translation sequences. Predictions this model stakes its life on:
    for every rejected route), and edge-doubling width within the
    `2Δσ` bound of §4.2.
 
-If prediction 1 or 4 fails, the model is wrong about its central lever claim
-and is parked without a shader attempt. If it holds, implementation is
+**GREEN is evaluated on the strict 9-tap aligned variant** — that variant
+*is* the model (§3 cost note): the second-order bound requires the corrected
+re-read, so gating on a cheaper variant would judge a hypothesis the theory
+already predicts is weaker. The 7-tap winner-only and no-realign variants
+are **scored as ablations** in the same report to price the low-end knob;
+their failure is expected information, not a model failure. The cost
+contract for GREEN is: fixed `≤ 10` taps, no loops, within the measured
+envelope of the accepted `~8`-tap path — not a specific integer.
+
+If prediction 1 or 4 fails **for the strict variant**, the model is wrong
+about its central lever claim and is parked without a shader attempt. If it holds, implementation is
 transcription: the bake is "render the real mesh from N directions" (any
 renderer, arbitrarily expensive, embarrassingly parallel), and the runtime
 is Section 3's seven reads.
@@ -572,6 +593,18 @@ gain: winner-election world-position p95 `≤ 3–5 cm` on crisp content
 (was metres for every rejected route), across an `m₀` sweep (eye 1.6 m over
 low sward down to 0.4 m over tall sward) and on **two communities** (dense
 low: expected-easy; tall airy Calamagrostis: the `σ_res` stress case).
+
+**E12 — Tap-count correction (found by the implementing agent; resolved
+here).** The §3 "6–7 reads" undercounted the alignment's dependent read:
+`r` is in the record texture, so strict alignment is 3 taps/node = 9 taps.
+Corrected accounting and the 7-tap winner-only variant are now in §3; §9
+gates GREEN on the strict variant and demotes cheaper variants to priced
+ablations. The implementing agent's proposal to require the 6–7-tap variant
+for GREEN is **rejected**: that variant cannot achieve the §4.1 second-order
+bound, so gating on it would manufacture a false refutation from a spec
+arithmetic slip. The binding cost contract is fixed `≤ 10` coherent taps, no
+loops, within the measured envelope of the accepted `~8`-tap / `0.39 ms`
+path.
 
 **User decision (2026-07-22): variance = tier 1 only** — two global
 golden-angle layers + `D4` variants + smooth tint/vigor/`±15%` height
