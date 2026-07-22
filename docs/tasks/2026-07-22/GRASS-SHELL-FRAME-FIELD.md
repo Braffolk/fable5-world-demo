@@ -681,3 +681,163 @@ option 1: `2–3` depth strata per shell cell with categorical selection
 3. only then re-derive the lattice budget and unpark or permanently park.
 
 No implementation is authorized meanwhile; the blocker's park is respected.
+
+---
+
+## 13. Reconstruction-gate analysis and the resolution (2026-07-22)
+
+`GRASS-SHELL-FRAME-FIELD-RECONSTRUCTION-BLOCKER.md` reports the §12
+measurements. The dense control **confirms** the premise; the sparse
+reconstruction is RED. The park is accepted, but the RED does not mean what
+the blocker's title implies, and the correct resolution follows from the two
+results *together*.
+
+### 13.1 What the sparse RED actually measured
+
+The gate ran the **fixed Experiment-024 lattice (97 directions)**. Substitute
+the asset's own measured `σ ≈ 0.20 m` into this document's §5.2 law and it
+demands `≈ 576` azimuths × `≈ 435` rings `≈ 250,000` directions. **The tested
+lattice is ~2,600× below what the law requires for that asset.** The
+experiment therefore measures the law's prediction, not the model's ceiling.
+
+The failure is quantitatively *exactly* what the law predicts — total
+decorrelation, not degradation:
+
+| view | measured IoU | random-overlap IoU at the measured coverage |
+|---|---:|---:|
+| 18° | `0.156` | `0.202` |
+| 5° | `0.638` | `0.513` |
+| 1° | `0.999` | `0.923` |
+
+At 18° the reconstruction is statistically indistinguishable from an
+*independent* draw of the same texture. Direct check: at the 15° ring, a
+half-bin azimuth offset is `|Δs| = 1.456`, so the phase error is
+`|Δs|·σ = 0.291 m` — `56%` of the `0.52 m` tile, `97` blade widths. Every
+fetch lands on unrelated content. In that state the ablation ordering
+(no-realign `≥` strict `≥` two-step) is **not evidence against second-order
+alignment**: correcting a fully decorrelated address can only re-randomise
+it. The `O(Δ²σ)` bound is defined on a locally coherent sheet, a condition
+this configuration violates by a factor of ~100 in phase.
+
+**The decisive experiment was not run.** The dense control measured only
+`σ`; its *reconstruction* was never scored. And at 97 directions it would
+have failed too: the law demands `≈ 36` azimuths × `≈ 36` rings `≈ 1,200`
+directions for `σ = 12.5 mm` (phase error at the tested lattice would be
+`18 mm` = 6 blade widths — marginal, not clean).
+
+**One threshold was mine and was mis-specified.** `12.885 m` crisp geometry
+p95 is `σ/\sin 1° = 0.2/0.0175 = 11.5 m` — the residual amplified *along*
+a 92 m grazing ray. A 5 cm **along-ray** tolerance at 92 m is not a
+perceptual requirement; what shows in the image is **transverse**
+displacement, with along-ray depth mattering only for compositing. E11 must
+split the metric: transverse p95 against the pixel footprint, plus a
+separate depth tolerance sized for terrain/water compositing. This does not
+rescue the sparse result (IoU, RGB, and stability fail independently) but the
+metric must be corrected before any regime is judged by it.
+
+**Genuinely new and valuable:** the dense control confirms `σ = 10.6–12.5 mm`
+from 90° through 5°, **falling to 3.4–4.0 mm at 1°** — the grazing-collapse
+premise is real for crest-forming cover, and the blocker states this
+plainly. That is the model's central empirical claim, validated.
+
+### 13.2 The regime parameter and the complementary-cost theorem
+
+The skin depth `σ` is the whole story, and it is measurable per community:
+
+| regime | measured `σ` | law's lattice | field cost | instance count `N` |
+|---|---:|---:|---:|---:|
+| connected mat (moss) | `3–12 mm` | `≈ 1,200` dirs | affordable | enormous |
+| sparse open stand | `≈ 200 mm` | `≈ 250,000` dirs | `≈ 32 GB` — dead | small |
+
+Field cost scales as `σ²`; anchored per-instance cost scales as the number
+of visible instances `N`. **These are inversely related by construction**: a
+crest forms (small `σ`) precisely when plants are packed (large `N`), and
+`σ → h` precisely when plants are separated (small `N`). Therefore
+
+\[
+\boxed{\;\min\bigl(\text{field}(\sigma),\ \text{instanced}(N)\bigr)\ \text{is bounded over the entire density range.}\;}
+\]
+
+The shell-frame field is not a failed model; it is a model with a **measured
+domain**, and its complement is cheap exactly where it is expensive. The
+error was mine: §1.2 asserted the shell-collapse premise for all exterior
+cover, when it is a property of optically thick, crest-forming cover.
+
+### 13.3 The resolution: optical stratification
+
+Decompose each community **by optical depth, not by species or height**,
+using the same harness that produced these numbers:
+
+1. **Mat stratum** — the top band within which cumulative interception
+   reaches `≈ 95%`. By construction its skin depth is the crest depth
+   (measured mm-scale). Represented by the **shell-frame field** exactly as
+   specified in §2–§7, with the lattice sized by the §5.2 law from *its own*
+   measured `σ`. This is the stratum where per-pixel O(1) matters, because
+   it is where blade counts are astronomical.
+2. **Emergent stratum** — isolated elements that rise above the mat's 95%
+   depth or stand alone in open cover (culms, inflorescences, forbs, sparse
+   tufts). These are **anchored per-instance impostors**: octahedral
+   view-atlas per species, placed by the existing scatter/control field, so
+   the plant's *position* is exact and only its internal parallax is
+   approximated (lever = plant radius, not community depth). Cost scales
+   with `N`, which is small by the definition of this stratum.
+3. **Ground** — already exact: frames are cover-only, real terrain renders
+   behind (§2.3).
+
+Why this is the correct decomposition rather than a retreat:
+
+- it is **botanically natural** — meadows, bogs, and forest floors are
+  literally a dense basal mat plus sparse emergents, and it reproduces the
+  independently-accepted §34 structural/plume split from a different
+  direction;
+- it **removes the failure mechanism by construction**: the blocker's exact
+  diagnosis is unanchored substitution (the field fetches a *different*
+  plant, displacing content by metres). Per-instance representation cannot
+  substitute plants — its worst case is internal ghosting bounded by the
+  plant radius, the standard, well-understood impostor artifact;
+- each stratum is used **only inside its measured validity domain**, and the
+  assignment is a measurement, never a guess;
+- far sparse cover self-heals: interception rises to `96%` at 1°, i.e. a
+  sparse stand at grazing range *is* optically thick — the mat treatment
+  applies there, and the content is unresolved anyway.
+
+**Open decision for the user (must not be resolved silently).** Anchored
+emergents are drawn primitives (impostor quads), which the original brief
+excluded ("actual grass meshes are not rendered at runtime"). That exclusion
+was motivated by *dense* cover, where instance counts are astronomical — the
+regime this design keeps in the field. For the sparse stratum the count is
+small (order `10³–10⁴` within the anchoring range, against `1.8×10⁶`
+instances the engine already carries). The alternatives are (a) allow
+anchored impostor instances for the emergent stratum only, or (b) accept a
+statistical/aggregate rendering of sparse cover with no per-plant anchoring
+(cheaper, visibly softer, and stability-limited). This design recommends
+(a) and requires an explicit decision.
+
+### 13.4 Corrected gate programme (cheap, decisive, in order)
+
+1. **Dense reconstruction at the law's lattice** — the never-run test of the
+   model in its valid regime. Frames already exist for the dense control;
+   rebuild at `σ`-derived spacing (`≈ 1,200` directions) and score the §9
+   metrics. This alone decides whether the shell-frame field survives at all.
+2. **Quality-versus-lattice sweep** on the dense asset. The tolerance
+   constant `k` (registration error in pixels) was **assumed at 2.5 and never
+   measured**; it drives the budget quadratically. Measured budgets at
+   `T = 0.52 m`, `p = 2.7 mm`, `10 B`/texel, anisotropic frames:
+   `k=2.5 → 80–113 MB` compressed, `k=5 → 20–28 MB`, `k=10 → 5–7 MB`.
+   The sweep converts an assumption into a measured quality/byte curve —
+   this is calibration, not threshold-loosening, and the IoU/RGB/stability
+   thresholds stay fixed while `k` varies.
+3. **Per-community `σ` profile versus height band** → the mat/emergent split
+   point for each Estonian community.
+4. **Metric correction** (E11): transverse displacement scored against the
+   pixel footprint, depth scored separately against a compositing tolerance;
+   stability (unforced class change) retained unchanged as the binding
+   view-consistency criterion.
+
+Only after 1–2 return GREEN does implementation resume, and then only for the
+mat stratum plus whichever emergent option the user selects. If step 1 fails
+at the law's own lattice, the shell-frame field is dead in every regime and
+the field half of the hybrid is replaced by the class-`E` route of
+`GRASS-EXACT-REPRESENTATION-THEORY.md` — which the dense-`σ` evidence
+supports, since a crest-forming mat is precisely the content class-`E`
+extrusion families represent well.
