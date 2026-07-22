@@ -121,11 +121,14 @@ view `i`'s own apparent shell. The full depth is
 \boxed{\;\sigma_i(u) = \text{local spread of } r_i \;=\; \text{the lever}\;}
 \]
 
-By construction `o_i` absorbs everything smooth — canopy undulation, gaps
-dipping to ground, the grazing fringe surface, terrain following — so
-`σ` is only the *categorical* within-shell scatter (which blade at this
-texel), measured centimetres for dense cover and **decreasing** toward
-grazing (crest-only visibility). Splitting depth this way is what converts
+Frames are **cover-only**: miss texels are fully transparent and the real
+terrain renders behind the layer (exact ground parallax for free). `o_i` is
+therefore the smooth mean over **cover-hit texels only**, extrapolated
+across gaps. By construction it absorbs everything smooth — canopy
+undulation, the grazing fringe surface, terrain following — so `σ` is only
+the *categorical* within-cover scatter (which blade at this texel), measured
+centimetres for dense cover and **decreasing** toward grazing (crest-only
+visibility). Splitting depth this way is what converts
 the impostor trick (parallax correction about a plane) into a field method
 (parallax correction about each view's own curved shell), and it is the
 single element no prior attempt in the ledger had: every tested variant
@@ -144,18 +147,20 @@ Per pixel with camera `C` (exterior) and unit ray `d`:
    Fixed arithmetic (octahedral map), no search.
 2. **Frame addressing (line-invariant by construction).** For each selected
    node `i`: the ray's orthographic projection onto `Π_i` is an **affine
-   function of the oriented line** — `u_i^{(0)} = P_i(C) + t^{*}\,P_i(d)`
-   evaluated at any datum; moving the datum along the ray moves the address
-   *along the ray's epipolar line in the frame*, which step 3 resolves.
-   There is no carrier plane, no heightfield solve, no pole, and no
-   query-datum dependence — the defect class of every "moving carrier" is
-   structurally impossible here.
+   function of the oriented line**. Initialize at the ray's crossing of the
+   chart-mean shell plane `y = Ē`: `u_i^{(0)} = P_i\bigl(X(t_Ē)\bigr)`, with
+   the frame-depth rate along the ray `dw/dτ = ⟨d,d_i⟩`. Moving the datum
+   along the ray moves the address *along the ray's epipolar line in the
+   frame*, which step 3 resolves. There is no carrier plane, no heightfield
+   solve, no pole, and no query-datum dependence — the defect class of every
+   "moving carrier" is structurally impossible here.
 3. **One-step shell alignment (the parallax correction).** The ray sweeps
    the epipolar line `u_i(τ) = u_i^{(0)} + τ\,P_i(d)` in frame `i`; the
    content it can hit lies where the frame's depth agrees with the ray's
    depth. Solve first against the smooth shell: `τ_0` from
    `⟨d,d_i⟩`-corrected intersection with `o_i(u)` (one bilinear read, one
-   division — `o_i` is smooth, so this is well-conditioned); then apply one
+   division whose denominator `⟨d,d_i⟩ − ∇o_i·P_i(d)` is bounded away from
+   zero by the bake gate `|∇o_i|\tanΔ ≤ ½`); then apply one
    fixed correction using the residual at that address:
    `u_i^{*} = u_i(τ_0 + r_i(u_i(τ_0)))`. This is relief-mapping algebra with
    a **provably small** step: the correction distance is `‖Δs_i‖·σ_i`, where
@@ -170,13 +175,15 @@ Per pixel with camera `C` (exterior) and unit ray `d`:
      owners.
    - **Geometry (depth, normal, mark):** taken **categorically from the
      max-weight node only**. No cross-view depth arithmetic ever occurs
-     (Lemma 3.3 of the theory doc is respected verbatim). The world hit is
-     `X = ` frame-plane point `+ τ^{*} d_i`-reconstruction mapped to the
-     live ray; its scene-depth is used for compositing against terrain,
+     (Lemma 3.3 of the theory doc is respected verbatim). The winner record
+     reconstructs the world point `X = u^{*} + w\,d_i` (frame→world);
+     **scene depth is `⟨X−C,\,d⟩`** — the projection onto the live ray,
+     never `τ^{*}` along `d_i` — used for compositing against terrain,
      trees, and water.
    - Alpha composites the cover over the terrain beneath; a miss texel is
-     transparent (ground shows through gaps with correct parallax, because
-     gap texels' `o_i` dips to the ground surface).
+     transparent, and ground shows through gaps with exact parallax because
+     the real terrain renders behind the cover layer (frames are
+     cover-only, §2.3).
 
 **Cost:** `3` nodes × (`1` low-res `o_i` read + `1` record read) `+` optional
 `1` mark/detail read `= 6–7` texture reads, `< 100` FMA, no loops, no
@@ -245,38 +252,55 @@ correct target — view-consistency exact, positions statistically exact.
 
 Three regimes, one budget rule.
 
-**5.1 Core (elevation ≳ 25°).** Hemi-octahedral grid, `8×8` to `10×10`
-(64–100 nodes). Lever `σ` is smallest here relative to tolerance (close-range
-top-down viewing), and `Δ ≈ 0.12–0.2` gives interior error `≪` blade width,
+**5.1 One chart, no seam: the slope-vector disk.** Parameterize all nodes in
+the **slope-vector plane** `s⃗ = d_{xz}/|d_y|`: the vertical view is the
+ordinary interior point `s⃗ = 0` (no pole), nodes sit on concentric rings at
+the designed `|s⃗|` values, triangulated as a fan ⇒ 3-node barycentric
+weights everywhere with no core/row seam. One margin ring extends past the
+chart equator for terrain tilt (exterior rays that ascend in world can
+descend in the local ground chart). Inner rings (elevation ≳ 25°,
+`|s⃗| ≲ 2`): spacing `Δ ≈ 0.12–0.2` gives interior error `≪` blade width and
 edge term `≤ 1–2 cm` at silhouettes.
 
-**5.2 Oblique-to-grazing rows (`α` from ~25° down to `α_min`).** Rows
-uniform in **slope** `s = cot α`, with per-row spacing set by the
-tolerance-cancellation law: content viewed at slope `s` sits at distance
-`D ≈ m₀ s` (camera height `m₀` above the shell), so the transverse world
-tolerance is `D·θ_pix = m₀ θ_pix s`, while misregistration is
-`Δs·σ_res(s)`. The admissible spacing is
+**5.2 Oblique-to-grazing rings, both spacings from one law.** Content viewed
+at slope `s` sits at distance `D ≈ m₀ s` (camera height `m₀` above the
+shell), so the transverse world tolerance is `k·D·θ_pix = k\,m₀ θ_pix s`
+(`k` = accepted edge-softening in pixels, 2–3), while misregistration is
+(node distance in slope space) `× σ_res(s)`. This bounds **both** lattice
+axes:
 
 \[
-\boxed{\;\Delta s(s) \;=\; \frac{m_0\,\theta_{\mathrm{pix}}\,s}{\sigma_{\mathrm{res}}(s)}\;}
-\qquad\Rightarrow\qquad
-N_{\text{rows}}=\int_{s_0}^{s_{\max}}\frac{\sigma_{\mathrm{res}}(s)}{m_0\theta_{\mathrm{pix}}\,s}\,ds ,
+\boxed{\;\Delta s(s) = \frac{k\,m_0\theta_{\mathrm{pix}}\,s}{\sigma_{\mathrm{res}}(s)}\;}
+\quad\Rightarrow\quad
+N_{\text{rings}}=\!\int_{s_0}^{s_{\max}}\!\frac{\sigma_{\mathrm{res}}(s)}{k\,m_0\theta_{\mathrm{pix}}\,s}ds,
+\qquad
+\boxed{\;\Delta\varphi \le \frac{k\,m_0\theta_{\mathrm{pix}}}{\sigma_{\mathrm{res}}(s)}\;}
+\quad\Rightarrow\quad
+N_\varphi(s)\approx\frac{2\pi\,\sigma_{\mathrm{res}}(s)}{k\,m_0\theta_{\mathrm{pix}}} ,
 \]
 
-and the integral **converges fast** because `σ_res(s)` falls toward grazing
-(crest-only visibility) while the denominator grows linearly. `σ_res(s)` is
-a measurable curve of the actual asset (one offline pass), not a tunable.
-Sannikov's own grass — dense, combed — got away with *four* angular slices;
-that is the empirical floor of this integral for dense content.
+(ring node distance at radius `s` under an azimuth step is `s·Δφ`, so the
+`s` factors cancel and the **per-ring azimuth count is constant, driven
+entirely by `σ_res`**). The ring integral converges because `σ_res(s)` falls
+toward grazing (crest-only visibility). `σ_res(s)` is a **measured curve of
+the asset**, evaluated on the *crisp* subset (blades/culms) — plume fluff is
+fractional-alpha fuzz that tolerates misregistration and must not inflate
+the lattice. Dense combed cover has millimetre grazing `σ_res` — Sannikov's
+four slices are this law's empirical floor; tall airy content can demand
+`N_φ ≥ 100` and pays for it (Section 6).
 
 **5.3 The fringe row (`α < α_min`, e.g. below ~2–3°).** Beyond the last
 ring, the visible shell band subtends ~1–2 pixels (Section 1.3): store one
 **fringe frame** — the near-horizontal orthographic image of the periodic
 canopy silhouette (transverse position × height, alpha against background),
-a tiny texture. It renders the sward horizon and distant skim exactly as a
-1–2-pixel band should be rendered: as its correct band-limited silhouette.
-No angle is hidden, no flattening is authored; the domain simply runs out of
-pixels before it runs out of rows.
+a tiny texture. Off-lattice azimuths project the square-periodic community
+only **quasi**-periodically: bake the fringe over a chosen transverse
+supercell and tile it (sub-pixel repetition inside a 1–2 px band). Frames
+below `α ≈ \text{texel}/T ≈ 0.3°` collapse their along-view axis — the
+natural fringe transition. It renders the sward horizon and distant skim
+exactly as a 1–2-pixel band should be rendered: as its correct band-limited
+silhouette. No angle is hidden, no flattening is authored; the domain simply
+runs out of pixels before it runs out of rings.
 
 **5.4 Anisotropic frame resolution.** A frame needs resolution only
 transverse to `d_i`; grazing frames foreshorten to thin high-alpha-sparsity
@@ -292,9 +316,11 @@ Symbolic: `M = Σ_i A_i·b`, `A_i` frame texels (anisotropic), `b ≈ 10 B`
 uncompressed (RGBA8 premult + oct-normal16 + residual16 + mark8 + spare),
 plus `32²` `o_i` maps (negligible), block-compressed `×3–4`.
 
-Example (one community type, `0.52 m` tile, `2.7 mm` transverse texels ⇒
-`192²` vertical-frame): core `10×10 = 100` frames avg `0.55·192²` texels
-(foreshortening), rows `4×16 = 64` frames avg `0.35·192²`, one fringe frame:
+Example for a **dense/low community** (`σ_res` millimetric at grazing so the
+5.2 azimuth law gives `N_φ ≈ 10–50`; `0.52 m` tile, `2.7 mm` transverse
+texels ⇒ `192²` vertical-frame): inner rings `≈ 100` frames avg
+`0.55·192²` texels (foreshortening), grazing rings `≈ 64` frames avg
+`0.35·192²`, one fringe frame:
 
 \[
 M_{\text{raw}} \approx (100\cdot0.55 + 64\cdot0.35)\cdot192^2\cdot10\ \mathrm B
@@ -303,11 +329,18 @@ M_{\text{raw}} \approx (100\cdot0.55 + 64\cdot0.35)\cdot192^2\cdot10\ \mathrm B
 \boxed{\;M_{\text{compressed}} \approx 7\text{–}10\ \mathrm{MB}\;}
 \]
 
-per resident community type — an order of magnitude under the old cap, in
-"low memory" territory, with quality knobs (lattice density, texel pitch,
-type count) that degrade *fidelity* gracefully, never *consistency*: coarser
-lattices increase the world-anchored `e`, they cannot re-create
+per resident community type. **This figure is conditional on measured
+`σ_res` (§5.2):** tall airy panicle content with `σ_crisp ≈ 5–15 cm` at
+grazing can demand `N_φ ≥ 100` with side-on frames (`≈ T×h`), i.e.
+`50–150 MB`, or an accepted larger edge-softening `k` — a reported number
+from the harness, never an assertion. Quality knobs (lattice density, texel
+pitch, `k`, type count) degrade *fidelity* gracefully, never *consistency*:
+coarser lattices increase the world-anchored `e`, they cannot re-create
 camera-anchored wedges because the lever stays `σ`.
+
+**Minification law:** premultiplied RGBA and normal mips are legal radiance
+filtering; **residual depth is never mipped** — coarse mips output shell
+depth from `o_i` alone (geometry degrades to the band-limited shell).
 
 Runtime: `6–7` reads, `<100` FMA, one shallow dependent step, fragment-shader
 only. This is *lighter* than the currently accepted 0.39 ms path.
@@ -323,6 +356,8 @@ only. This is *lighter* than the currently accepted 0.39 ms path.
   occlusion (they were rendered together into the frames).
 - **Anti-tiling:** two world-anchored layers with incommensurate global
   transforms of the same atlas (the committed pattern) — reads ×2, bytes ×1.
+  With fractional alpha, the layers compose by a 2-element depth sort +
+  front-to-back premultiplied blend, not an opaque winner.
 - **Wind:** global/patch-coherent affine shear of the frame addressing
   (exact for coherent lean, the impostor-standard limit), optionally 2–4
   baked gust phases (memory ×phases). Per-blade independent motion is a
@@ -417,20 +452,29 @@ contract (all successor/pointed-ray machinery).
 
 ## 9. The decisive falsifiable gate (one offline experiment, before any code)
 
-Rerun the existing §43 radiance-gate harness on the actual asset with three
-changes only: slope-aware rows per 5.2, per-view `o_i` shells, one-step
-residual alignment. Predictions this model stakes its life on:
+Rerun the existing §43 radiance-gate harness on the actual asset with four
+changes: the 5.1 slope-disk lattice sized by the 5.2 law, per-view `o_i`
+shells (cover-only, conditioning-gated), one-step residual alignment, and
+**geometry scoring of the categorical winner election** (the §43 gate was
+radiance-only). Evaluate on **two communities** — a dense low sward
+(expected easy) and the accepted tall Calamagrostis (the `σ_res` stress
+case) — across an eye-height sweep `m₀ ∈ [0.4, 1.6] m` and millimetre
+camera-translation sequences. Predictions this model stakes its life on:
 
 1. silhouette IoU `0.852 → ≥ 0.97` and RGB max-channel p95
-   `0.547 → ≤ 0.15` at **equal or lower** direction count and bytes;
+   `0.547 → ≤ 0.15` at **equal or lower** direction count and bytes (dense
+   community);
 2. connected wrong-view regions (was 25–59% of frame) collapse below `1%`
-   with residual errors world-anchored (verify by camera-translation
-   sequences: predicted unforced class-change rate `< 5%`, was 21–45%);
-3. measured `σ_res(s)` decreasing in `s`, and the 5.2 integral yielding
-   `≤ 16` rows for the accepted asset.
+   with residual errors world-anchored (predicted unforced class-change rate
+   `< 5%`, was 21–45%);
+3. measured `σ_res(s)` decreasing in `s` (crisp subset), and the 5.2 ring
+   integral yielding `≤ 16` rings for the dense asset;
+4. winner-election world-position p95 `≤ 5 cm` on crisp content (was metres
+   for every rejected route), and edge-doubling width within the
+   `2Δσ` bound of §4.2.
 
-If prediction 1 fails, the model is wrong about its central lever claim and
-is parked without a shader attempt. If it holds, implementation is
+If prediction 1 or 4 fails, the model is wrong about its central lever claim
+and is parked without a shader attempt. If it holds, implementation is
 transcription: the bake is "render the real mesh from N directions" (any
 renderer, arbitrarily expensive, embarrassingly parallel), and the runtime
 is Section 3's seven reads.
@@ -441,18 +485,21 @@ Under the corrected contract (exterior-only, arbitrary morphology, low
 memory, low-end O(1)), the shell-frame field is a complete new model:
 line-invariant by construction, wedge-free by lever design, crisp by
 storing literal supersampled images of the true geometry, `~7–10 MB` per
-community type, `6–7` reads per pixel, with one honest signature artifact
-(sub-2 cm world-anchored silhouette softening) and one declared domain edge
-(interior fade). Its correctness does not rest on replicating Sannikov's
+dense/low community type (`σ_res`-gated for tall airy content, §6), `6–7`
+reads per pixel, with one honest signature artifact (sub-2 cm
+world-anchored silhouette softening) and one declared domain edge (interior
+fade). Its correctness does not rest on replicating Sannikov's
 extrusion identity anywhere; his method survives only as the limiting case
 `σ → 0`, `N_rows → 4` that dense combed grass allows — which is precisely
 why his video looks the way it does.
 
 ---
 
-## 11. Critical self-review errata (same date; binding on the harness)
+## 11. Critical self-review errata (same date; review record)
 
-A hostile re-read found the following. Each is folded into the gate spec.
+A hostile re-read found the following. **All corrections are now integrated
+into the body text (§2–§10); this section remains as the review record and
+the rationale for each change.**
 
 **E1 — Azimuthal density at grazing was undercounted; the §6 budget is
 conditional (honesty-critical).** The §5.2 law bounds *elevation* spacing;
