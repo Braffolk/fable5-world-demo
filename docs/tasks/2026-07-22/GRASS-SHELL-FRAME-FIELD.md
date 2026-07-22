@@ -447,3 +447,87 @@ community type, `6–7` reads per pixel, with one honest signature artifact
 extrusion identity anywhere; his method survives only as the limiting case
 `σ → 0`, `N_rows → 4` that dense combed grass allows — which is precisely
 why his video looks the way it does.
+
+---
+
+## 11. Critical self-review errata (same date; binding on the harness)
+
+A hostile re-read found the following. Each is folded into the gate spec.
+
+**E1 — Azimuthal density at grazing was undercounted; the §6 budget is
+conditional (honesty-critical).** The §5.2 law bounds *elevation* spacing;
+the same tolerance applies azimuthally: node distance in slope space at
+radius `s` is `s·Δφ`, so `Δφ ≤ k·m₀θ_pix/σ_res` — **per-row azimuth count
+`N_φ ≈ 2π σ_res/(k·m₀θ_pix)` is constant per row and driven entirely by
+`σ_res`** (`k` = accepted edge-softening in pixels, 2–3). Dense/low cover
+(`σ_res` mm-scale at grazing) gives `N_φ ≈ 10–50` — the §6 example holds and
+Sannikov's 4-slice floor is recovered. Tall airy panicle content
+(`σ_res` possibly 5–15 cm) can push `N_φ ≥ 100` and grazing frames are
+side-on images (`≈ T × h`), so the hard community's budget may be
+`50–150 MB` or a declared quality knob — **decided by the measured
+`σ_res(s)`, not asserted**. Refinement that materially helps: measure
+`σ_res` on the **crisp subset** (blades/culms) separately from plume fluff —
+fluff is fractional-alpha fuzz and tolerates misregistration, so the binding
+lever is `σ_crisp`. The 7–10 MB headline stands for dense/low communities
+only; the harness emits the real lattice and budget from the law.
+
+**E2 — Conditioning gate for the shell solve (missing).** The `τ₀` division
+denominator is `⟨d,d_i⟩ − ∇o_i·P_i(d)`; the bake must smooth `o_i` until
+`|∇o_i|·\tanΔ ≤ ½` everywhere (frame coords), guaranteeing a bounded
+well-conditioned solve. Absent this gate a steep shell region plus an
+off-node ray is numerically unstable.
+
+**E3 — Initialization was underspecified.** The epipolar start point is the
+ray's crossing of the constant plane `y = Ē` (chart-mean shell height);
+`dw/dτ = ⟨d,d_i⟩` fixes the depth-axis rate. The stray `t^*` in §3.2 refers
+to this crossing.
+
+**E4 — Runtime mip law (missing).** Minified viewing: premultiplied RGBA and
+normal mips are legal radiance filtering; **residual depth is never mipped**
+— at coarse mips output depth from `o_i` alone (geometry degrades to the
+shell, correctly band-limited). Without this rule an implementer will mip
+depth and reinvent ghost surfaces.
+
+**E5 — Direction-lattice topology, concretely.** Replace "hemi-octa core +
+rows" (two charts, a seam) by the single **slope-vector disk**:
+`s⃗ = d_{xz}/|d_y|`, vertical view at the ordinary interior point `s⃗=0`,
+rings at the designed `s` values, triangulated fan ⇒ 3-node barycentric
+everywhere, no pole, no seam; extend one margin ring past the chart equator
+for terrain-tilt (exterior rays that ascend in world but descend in the
+local ground chart), then fringe.
+
+**E6 — Fringe periodicity is quasi, not exact.** Off-lattice azimuths of a
+square-periodic community project to quasi-periodic horizontal images; bake
+the fringe over a chosen transverse supercell and tile it (sub-pixel
+repetition inside a 1–2 px band — harmless, but claimed correctly). Frames
+below `α ≈ \text{texel}/T ≈ 0.3°` collapse their along-view axis — that is
+the natural fringe transition.
+
+**E7 — Output depth spec.** Winner record reconstructs world point
+`X = u^* + w·d_i` (frame→world); scene depth is `⟨X−C, d⟩` — project onto
+the live ray, never output `τ^*` along `d_i`.
+
+**E8 — Frames are cover-only.** Misses are transparent and real terrain
+renders behind (exact ground parallax); therefore `o_i` is the smooth mean
+over **cover-hit texels only**, extrapolated across gaps — §2.3's "dips to
+ground" is superseded. Residual bimodality (canopy vs ground) disappears
+from the field; tuft-vs-ground silhouettes behave as ordinary §4.2 edges.
+
+**E9 — Layer compositing with fractional alpha.** Two layers composite by a
+2-element depth sort + front-to-back premultiplied blend, not an opaque
+winner.
+
+**E10 — Optional second alignment step** is a harness ablation (further
+reduces edge misregistration; +3 reads).
+
+**E11 — The gate must score geometry, not only radiance.** §9 predictions
+gain: winner-election world-position p95 `≤ 3–5 cm` on crisp content
+(was metres for every rejected route), across an `m₀` sweep (eye 1.6 m over
+low sward down to 0.4 m over tall sward) and on **two communities** (dense
+low: expected-easy; tall airy Calamagrostis: the `σ_res` stress case).
+
+**User decision (2026-07-22): variance = tier 1 only** — two global
+golden-angle layers + `D4` variants + smooth tint/vigor/`±15%` height
+modulation. Tiers 2 (runtime cell bombing) and 3 (super-tile bake) are
+design-shelf: implemented only if the user judges tier 1 insufficient after
+seeing the implementation.
