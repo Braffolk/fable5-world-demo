@@ -611,3 +611,73 @@ golden-angle layers + `D4` variants + smooth tint/vigor/`±15%` height
 modulation. Tiers 2 (runtime cell bombing) and 3 (super-tile bake) are
 design-shelf: implemented only if the user judges tier 1 insufficient after
 seeing the implementation.
+
+---
+
+## 12. Response to the RED prerequisite blocker (2026-07-22)
+
+`GRASS-SHELL-FRAME-FIELD-RED-BLOCKER.md` is accepted as a genuine
+falsification of **prediction 3 as frozen**, with reservations that bound
+its scope. The park stands pending the revised law and the missing
+measurements below.
+
+**Conceded.** (i) The audit's slope-chart/epipolar math is exact and
+equivalent to §3; their unit-distance self-correction was right. (ii) On the
+tested asset, grazing crisp residual is `~0.20 m` p95, flat-to-growing in
+`s`; the premise "`σ_res` decreases toward grazing (crest-only visibility)"
+is **wrong as a general claim** — near-total grazing interception does not
+imply single-valued first-hit depth for open-structured cover. (iii) The
+9/7-tap distinction is irrelevant to this failure: alignment corrects within
+a stratum; it cannot shrink intra-cell multimodality. (iv) Under the frozen
+§5.2 law with `σ = crisp p95`, the budget explodes; the law as frozen is
+broken.
+
+**Reservations bounding the audit's scope.**
+
+1. **Wrong regime for the headline.** Top-down hit fraction `8.45%` is
+   sparse open cover, not the dense expected-easy control (near-total
+   top-down interception) that the E11 two-community gate required. Neither
+   required community was measured; the falsified premise was conditioned on
+   crest-forming dense canopies, which remain untested.
+2. **Conditioning bug.** The smoother was gated on the shell-cell radius,
+   not the direction-cell `tanΔ` (§3.3), and residuals were pooled across
+   azimuths (undefined in the law — shells are per-view). Their own table
+   shows conditioning *inflating* p95 from `0.069–0.114` to `0.1697` at 75°;
+   the steep portion of the `σ(s)` curve, hence part of the `316`-ring
+   integral and the `17.8 GiB` figure, is corrupted. The grazing endpoint
+   stands on raw numbers.
+3. **The model itself was not measured.** No reconstruction metric exists;
+   the §9 gate at the fixed `≤97`-direction lattice is runnable on the
+   already-baked frames. The frozen law charges `k`-pixel registration for
+   *all* σ-carrying content, but at the audit's own parameters
+   (`m₀ = 1.6 m`, `α = 1°`, `D ≈ 91 m`) the entire `0.2 m` band subtends
+   `~4–6` pixels: its interior is unresolvable self-similar texture whose
+   transverse misregistration preserves band statistics. The perceptually
+   binding grazing registration is the silhouette crest, a different and
+   smaller statistic.
+
+**Required upstream revision (this document's obligation, per the
+blocker's option 4/1).** A **stratified lattice law**: (a) azimuthal spacing
+sized by silhouette-crest scatter `σ_sil` about a crest-tracking shell, not
+by whole-population `σ`; (b) in-band unresolvable content held to
+band-profile statistics with tolerance equal to the band's own screen
+extent; (c) the fringe threshold generalized from a fixed `α_min` to
+"band screen height `≤ k` pixels" (`sinα ≤ k θ_pix m₀/σ_band` — already
+`α ≲ 0.6°` at the audit's parameters); (d) if the reconstruction gate shows
+silhouette-only insufficient, the structural fallback is the blocker's
+option 1: `2–3` depth strata per shell cell with categorical selection
+(taps `×` strata, still fixed and loop-free).
+
+**Revised gate order (before any further design work):**
+
+1. measure the dense-sward control (`σ(s)`, raw and correctly-conditioned,
+   per-view) — tests the falsified premise in its actual regime;
+2. run the §9 reconstruction gate (IoU / RGB p95 / winner-geometry /
+   camera-translation stability) on the **existing sparse-asset frames** at
+   the `≤97`-direction lattice, scored separately for silhouette band and
+   in-band content — decisive either way: failure kills the model
+   empirically; success proves the frozen law over-conservative and the
+   revised law is then fitted to measured error-vs-`Δs` curves;
+3. only then re-derive the lattice budget and unpark or permanently park.
+
+No implementation is authorized meanwhile; the blocker's park is respected.
