@@ -63,6 +63,23 @@ band-limited structural/plume source split of
 decomposition of Section 7. The theory explains both acceptances and all
 twenty-five rejections with the same theorems (Section 11).
 
+**V4 (memory relaxation to 250 MB / 500 MB — added on request, same date).**
+Section 13 re-derives every route under a relaxed byte cap and proves a
+memory-scaling law: for any sampled-direction representation of the full
+promised domain, correspondence coherence obeys `ε(M) ∝ 1/√M` with a
+geometry-locked constant, giving `ε ≈ 4.8 m` at 51 MB (validating against the
+measured Experiment 012 errors), `2.2 m` at 250 MB, `1.5 m` at 500 MB, and
+`≈ 1.8 TB` for subpixel crispness. **The arbitrary-mesh verdict is unchanged
+at both caps** — the unconditional lemmas never referenced memory, and the
+conditional route is short by a factor of `~3,600×`, not `~5–10×`. What the
+relaxed cap genuinely changes is class `E`'s applicability boundary: curvature
+becomes exactly representable (piecewise-prismatic band masks), fibre tips
+reach per-texel granularity, the `Δω` Nyquist gate closes for sparse cover,
+the `≥10`-species palette becomes resident, and the authoring gate turns into
+a measurable compilation-residual budget over the existing procedural
+generator. After 250 MB the binding scarcity is **reads, not bytes**; 500 MB
+adds only palette breadth.
+
 ---
 
 ## 1. The query domain (Question 1)
@@ -1159,3 +1176,202 @@ per directional class** (with band quantization for ends and media for
 sub-pixel detail). Nothing weaker survives Sections 3–5; nothing stronger is
 required by Sections 6–9. A later implementation is transcription of
 Sections 6, 7, and 9; nothing in it requires experimentation to be believed.
+
+---
+
+## 13. Memory-relaxation analysis: the frame under 250 MB and 500 MB
+
+Question posed after the main verdict: does raising the resident cap from
+`51,121,152` bytes to 250 MB (or 500 MB) change the frame — in particular,
+does it buy back the arbitrary authored mesh and remove the class-`E`
+authoring constraint? The answer requires knowing **how each route's error
+scales with memory**, not just whether it fits. This section derives those
+scaling laws and re-issues the verdict per route.
+
+### 13.1 The memory-scaling law for sampled-direction representations
+
+The controlling quantity for any representation that samples the direction
+sphere is the correspondence lever: an angular step `Δθ` displaces the
+phase correspondence of an event at along-ray lever distance `L` by
+`≈ L·Δθ`. Over the **full promised domain including the grazing band**, the
+lever saturates at the horizon:
+
+\[
+L_{\mathrm{eff}}(\alpha)=\min\bigl(h\cot\alpha,\;R_{\max}\bigr),
+\qquad h = 1.175\ \mathrm m,\ \ R_{\max}=155\ \mathrm m .
+\]
+
+A direction cell must satisfy `Δθ ≤ ε/L_eff` in both angular axes to hold
+correspondence coherence `ε`, so the required direction count is
+
+\[
+D(\varepsilon)
+=\frac1{\varepsilon^{2}}\int_{S^2_-}L_{\mathrm{eff}}^{2}\,d\Omega
+\;=\;\frac{4\pi\,h\,R_{\max}}{\varepsilon^{2}}\ \ (\text{exact to }0.8\%)
+\;=\;\frac{2288.7\ \mathrm m^2}{\varepsilon^{2}} .
+\]
+
+(The earlier §3.5 figures used an `α ≥ 5°` cutoff and are underestimates;
+this integral covers the promised domain.) The phase lattice **cannot** be
+coarsened to compensate: blade cross-sections are `1–3 mm`, so
+`P ≥ 256` texels over the `0.52 m` tile (`≈ 2 mm`) is a hard floor, and the
+plenoptic-cascade gate already proved phase-coarsening cannot buy angular
+rate (the `r`-term in the address displacement is phase-independent). With
+`P = 256` and 8-byte records, memory is `M = D·P²·8`, hence the law
+
+\[
+\boxed{\;
+\varepsilon(M)=\sqrt{\frac{4\pi h R_{\max}\,P^{2}b}{M}}
+\;\propto\;\frac{1}{\sqrt M}\;}
+\]
+
+| cap | coherence `ε(M)` | needed for subpixel (`ε ≈ 2.5 cm` at 50 m) |
+|---|---:|---:|
+| `51.1` MB (current) | `4.85 m` | — |
+| `250` MB | `2.19 m` | — |
+| `500` MB | `1.55 m` | — |
+| required | `0.025 m` | `≈ 1.8` **TB** |
+
+Validation: the law's characteristic scale at `51 MB` (`≈ 4.8 m`) sits inside
+the *measured* Experiment 012 error band (world-position p50/p95
+`1.56/7.99 m`) — the law reproduces the observed artifact magnitude of the
+strongest tested cap-filling light field.
+
+**Consequence.** Memory enters sampled-direction quality only as `1/√M`.
+Raising the cap `×5` (`250` MB) improves coherence `×2.2`; `×10` (`500` MB)
+improves it `×3.1`; **subpixel crispness needs `×35,000`** the original cap
+(`×3,600` the 500 MB cap). Camera-inside multiplies all of this by the
+origin-height sampling (`×8–32`). Metre-scale wedges — the exact rejected
+artifact class — persist at both proposed caps. The measured `20–25%`
+codebook compression moves `ε` by `≈ 12%`. This route stays closed.
+
+### 13.2 Route-by-route re-verdict at 250/500 MB
+
+- **Fixed-`K` deep event records.** Lemma 3.2 never referenced memory; lines
+  with `p95 = 1,077` events need `K` in the thousands
+  (`≈ 40+` GB at the measured per-atom cost). **Closed at any proposed cap.**
+- **Cross-owner arithmetic, camera-direction Voronoi, per-tile projective
+  taper, per-element axial intervals.** Lemmas 3.3, 5.3, 5.4 and
+  Theorem 4.1's sector mechanism are algebraic. **Memory-independent;
+  closed.**
+- **Exact visibility-complex point location.** This is the one route whose
+  *byte* exclusion genuinely weakens: the measured id-incidence lower bound
+  (`13.2 M` incidences `≈ 158–210` MB with separator references) now *fits*
+  at 250–500 MB. It remains rejected on the two grounds memory cannot touch:
+  (i) decision depth — `≥ 8` serial **dependent** reads per query at the
+  measured cell census (`≥ 6` after a full subdivision level, convergence
+  beyond level 1 unmeasured), an architecture of latency chains, not the
+  independent-read algebra; and (ii) it is exterior-only — the pointed
+  (camera-inside) successor complex multiplies cell count by the per-line
+  event census (`10²–10³`), i.e. tens of GB, and a hybrid
+  exterior-point-location / interior-other-mechanism scheme cannot agree
+  categorically at the eye-height seam. **Closed for the promised domain;
+  the reason at 250+ MB is depth and the fifth dimension, no longer bytes.**
+- **Many-sheet layered displacement.** Storage is (sheet count) × the
+  Section 13.1 lattice — inherits the `1/√M` law times `K`, and the measured
+  holonomy obstruction (`66.98%` of plaquettes at 3 sheets) worsens with
+  sheet count. **Closed.**
+- **Learned/low-rank at larger capacity.** The measured failure mode is
+  structural (dense categorical discontinuity sets; training loss falls
+  while held-out topology fails), not capacity-limited; decode cost also
+  scales with capacity. **No re-open.**
+
+**Re-verdict V1′.** At 250 MB **and** at 500 MB, exact O(1) reconstruction of
+the arbitrary-morphology community remains impossible for every mechanism
+family above — now with the quantitative form: the only memory-sensitive
+route obeys `ε ∝ 1/√M` and is short by `×10³–10⁴`, not by a factor a cap
+increase can reach. The class-`E` frame is not an artifact of the 51 MB cap.
+
+### 13.3 What 250 MB genuinely buys: closing class `E`'s applicability gaps
+
+Inside class `E`, bytes convert directly into fidelity, and every previously
+disclosed limitation of Section 10 is priced in memory:
+
+1. **Curvature — piecewise-prismatic band masks.** Generalize the top bands
+   of 6.5: give a family `B_h` height bands with **per-band displaced
+   masks** (the same fibre's cross-section moves across bands, authored from
+   its true curve). Each band is an exact opaque family; a curved culm/blade
+   renders as an exact `B_h`-chord polyline. Chord residual scales as
+   `1/B_h²`: the measured `3.98 mm` straight-generator residual of the culm
+   drops to `0.25 mm` at `B_h = 4` — below the `0.5 px @ 4 m` bound. This
+   **removes the sharpest expressiveness limit of the class** (10, last
+   bullet). Cost: `×B_h` mask bytes for curved families (funded by the new
+   cap); reads `×(bands crossed)` in the near field only — far pixels use
+   the volumetric mip where bands prebake into one integrated medium, so the
+   far-field read count is unchanged.
+2. **Per-texel fibre tips — rank-`K′` texel records.** Widen texels to hold
+   the first `K′ = 2–3` 2D events (single read). With per-texel top heights,
+   accept the first event passing its tip test; the measured tail (eligible
+   rank `> K′`) falls back to the band-quantized top — a bounded,
+   centimetre-scale, local error, never a wrong owner. This upgrades
+   Lemma 5.4 from exclusion to *bounded-rank exactness with a measured
+   tail*, and lifts tip silhouettes from band granularity to texel
+   granularity. (Consistent with Lemma 3.2: the bound is per-family,
+   mask-local, with a declared fallback — not an unbounded community
+   successor claim.)
+3. **`Δω` Nyquist closure.** Sparse families (open meadow, litter) with long
+   free paths `ρ̄` can now afford `Δω ≤ ε/ρ̄_{p95}` (`128–512` slices where
+   needed), closing the one quantization weak point of 8.1 across all
+   authored content.
+4. **Palette residency.** `~10–15` community profiles resident at
+   `15–25` MB each — the `≥10` Estonian-native-species mandate, plus
+   season/vigor states, without streaming churn. This is the practical
+   headline: the control-field architecture gets its full palette.
+5. **Richer coupled payloads.** Translucency/AO/wetness/specular per texel;
+   two-lump volumetric records (straddle bound of Lemma 7.1 halves);
+   anisotropic normal-spread channels for media highlights.
+
+Example allocation at 250 MB (illustrative): one hero community profile
+(curved-blade family `256²·32ω·4`-band `≈ 67` MB, two lean families
+`≈ 67` MB, culm/forb `≈ 8` MB, two-lump plume `≈ 13` MB, moss `≈ 4` MB)
+`≈ 160` MB, plus `6–8` lighter profiles at `10–20` MB. At 500 MB: several
+hero profiles. Layers still share textures under global affines (bytes ×1).
+
+### 13.4 The compilation corollary (the authoring gate becomes measurable)
+
+At 51 MB, class `E` forced *re-authoring* under tight `K`; the open risk was
+aesthetic. At 250 MB the class is capacious enough that the **existing
+procedural generator can be compiled into it** rather than replaced: the
+provenance audit already enumerates all `270,535` primitives with exact
+family semantics (culms, leaves, panicle axes, hairs, anthers). A class-`E`
+compiler assigns each primitive to an (axis class, band) pair, emits band
+masks from its true curve, and routes sub-pixel populations to media. Every
+approximation is then a **per-primitive computable residual**: axis-class
+angular quantization (`~10–15°` against a natural lean variance far larger —
+a statistical-ensemble fidelity claim, with dedicated fine classes available
+for near-field hero elements), chord residual (`∝ 1/B_h²`, sub-mm at
+`B_h=4`), tip band/texel residual (13.3.2), and plume split (already
+silhouette-gated in §34). The remaining gate is therefore no longer "does
+hand re-authored content look real" but "**do the computed residuals sit
+below the visual thresholds**" — an offline measurement with frozen
+budgets, decidable before any runtime work.
+
+### 13.5 What memory does not buy
+
+- **Reads and ALU.** `K`, `B_h`, and layer count are paid in taps and
+  registers regardless of resident bytes; after 250 MB the binding scarcity
+  is the read budget (Section 9's accounting), and 500 MB adds palette
+  breadth only.
+- **Taper and per-cell uniqueness.** Lemma 5.3 is algebra: exact non-affine
+  taper and per-cell re-instancing stay excluded at any cap.
+- **Non-affine wind.** Time-varying shear stays the exact form; arc terms
+  stay approximations.
+- **Frame time.** Resident bytes do not cost milliseconds; cache behaviour
+  does. The per-frame working set stays bounded by on-screen families ×
+  mip locality, but larger atlases lower hit rates — the transcription-time
+  budget must gate on measured traffic, not on residency.
+
+### 13.6 Verdict under the relaxed cap
+
+- Arbitrary-morphology community at 250 MB **or** 500 MB: **still
+  impossible** — unconditional lemmas untouched; the conditional route obeys
+  `ε ∝ 1/√M` and is `×3,600` short even at 500 MB; camera-inside multiplies
+  further. "Proven still infeasible" holds at both figures.
+- Class `E` at 250 MB: **strictly stronger conditional proof** — the same
+  exactness theorems, with the three disclosed applicability limits
+  (straightness, tip granularity, sparse-mask `Δω`) removed or reduced to
+  measured residual budgets, and the authoring gate replaced by a
+  compilation-residual gate over the existing generator (13.4).
+- Recommended frame: adopt 250 MB **spent inside class `E`**; 500 MB is not
+  needed to change any verdict and should be held in reserve for palette
+  breadth if the profile count demands it.
