@@ -841,3 +841,106 @@ the field half of the hybrid is replaced by the class-`E` route of
 `GRASS-EXACT-REPRESENTATION-THEORY.md` — which the dense-`σ` evidence
 supports, since a crest-forming mat is precisely the content class-`E`
 extrusion families represent well.
+
+---
+
+## 14. USER RULING: no geometry anywhere — and the decisive consequence
+
+**Ruling (2026-07-22):** no runtime geometry of any kind — no meshes, no
+impostor quads, no billboards, no raised/floating carriers. §13.3's emergent
+option (a) is **withdrawn**; §13's hybrid is superseded by this section.
+
+Removing that option removes the last escape from a dimension count, and the
+dimension count decides everything.
+
+### 14.1 The dimension theorem (why sparse killed shell-frame and does not kill class `E`)
+
+Both candidate architectures are precomputed periodic fields queried per
+pixel with no loop. They differ in one respect only:
+
+- the **shell-frame field is 4-dimensional**: it samples *both* direction
+  coordinates and reconstructs nothing analytically;
+- **class `E` is 3-dimensional**: two periodic phase coordinates and *one*
+  in-plane mask angle, because the extrusion symmetry makes the elevation
+  dependence **analytic** (`t = ρ/s_p`).
+
+That one missing sampled coordinate is the entire result. In the 4D field
+the angular budget scales with the square of the skin depth `σ`, and sparse
+cover has `σ ≈ h`; in the 3D field the elevation is *computed*, so only the
+in-plane angle is sampled, and its budget obeys a footprint cancellation:
+
+Error at the hit is `ρ·Δω` (`ρ` = in-plane travel to the hit). The pixel
+footprint there is `k·θ_pix·D`, and for an exterior camera at height `m₀`
+above a band of height `h`, `D ≳ (m₀+h)/α` while `ρ ≤ h/α`. The `α` cancels:
+
+\[
+\boxed{\;\Delta\omega\;\le\;k\,\theta_{\mathrm{pix}}\,\frac{m_0+h}{h}
+\qquad\Longrightarrow\qquad
+N_\omega \;=\; \frac{2\pi}{k\,\theta_{\mathrm{pix}}}\cdot\frac{h}{m_0+h}\;}
+\]
+
+**independent of density, of free path, and of viewing distance.** This is
+the cancellation §5.2 tried and failed to establish for the 4D field —
+it is real, but only in the chart where elevation is analytic.
+
+Measured against the same asset and the same tolerance:
+
+| | sparse stand (`σ ≈ 0.2 m`) | connected moss mat |
+|---|---:|---:|
+| shell-frame (4D) | `≈ 250,000` dirs → **`≈ 32 GB`** | `≈ 1,200` dirs → `80–113 MB` |
+| class `E` (3D) | `≈ 730` slices → **`27–61 MB`** | `≈ 128` slices → `5–11 MB` |
+
+Sparse cover is not intrinsically unaffordable. It was unaffordable **in a
+4D representation**. The blocker's mechanism — "one categorical record per
+node and texel cannot preserve stratum identity" — is a statement about
+sampling the direction sphere; class `E` never samples it.
+
+### 14.2 Verdict
+
+Under "no geometry anywhere", **class `E` (`GRASS-EXACT-REPRESENTATION-THEORY.md`
+§6–7) is the sole surviving architecture**, and this gate's data now argues
+*for* it rather than against it:
+
+- it is pure fragment-shader field evaluation — no mesh, quad, billboard,
+  shell, or raised carrier anywhere, rooted in the real ground chart
+  (no floating anything, by construction);
+- it is affordable in **every** density regime, including the one that just
+  killed the 4D field;
+- the measured dense skin depth (`3–12 mm`, collapsing to `3.4 mm` at 1°) is
+  direct evidence that crest-forming mats are exactly the content extrusion
+  families represent well;
+- it retains exact species overlap, exact periodicity, exact horizontal and
+  vertical rays, and (unneeded but free) exact camera-inside succession.
+
+Its price is unchanged and is the one real cost: the community must be
+**authored/compiled into `K` axis classes** with banded masks, rather than
+consumed as an arbitrary mesh. The 250 MB working cap plus the banded-mask
+refinement (theory doc §13.3) make that representable, and the existing
+procedural generator makes it a **compilation** with computable per-primitive
+residuals (theory doc §13.4), not hand re-authoring.
+
+The shell-frame field is **retained only as an optional accelerator for
+connected dense mats** (moss, closed sward), where it costs `5–11 MB`-class
+budgets and needs no compilation because it bakes renders of the real mesh.
+It is never the sparse or general answer, and it is not on the critical path.
+
+### 14.3 Corrected next gates
+
+Superseding §13.4:
+
+1. **Measure the free-path distribution `ρ(α)` per community** (same harness,
+   same assets). `ρ ≤ h/α` is the pessimistic bound; the real `Δω` follows
+   from `ρ_{p95}`, and for dense/tall cover the true value is far below the
+   traverse bound. This converts `N_ω` from an estimate into a measurement,
+   for `Calamagrostis` (the expensive `h = 1.15 m` case), the sparse stand,
+   and the moss mat.
+2. **Class-`E` compilation residuals** on the accepted generator: axis-class
+   quantization, band-chord residual (`∝ 1/B²`), tip granularity — all
+   computable offline per primitive (theory doc §13.4), no rendering needed.
+3. **Class-`E` reconstruction gate** at the measured `N_ω`, scored with the
+   corrected metric (transverse displacement vs pixel footprint, depth
+   separately, stability unchanged), on all three communities.
+
+Only then does implementation begin, and it begins as transcription of
+theory-doc §6/§7/§9 — one 3D field lookup per family, fixed ALU, no loops,
+no geometry, nothing floating.
