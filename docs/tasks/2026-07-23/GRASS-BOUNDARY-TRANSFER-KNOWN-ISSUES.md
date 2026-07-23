@@ -1,7 +1,8 @@
 # Ground-cover box-boundary transfer: known issues and resume record
 
 **Date:** 2026-07-23
-**Status:** parked before runtime implementation
+**Status:** prior finite codecs parked; GBC2-K6 offline gate active; runtime
+still held
 
 ## Requested outcome actually usable now
 
@@ -47,14 +48,14 @@ VQ parameters would violate the track limit and could only manufacture another
 unsupported result. Runtime transcription would preserve none of the claimed
 quality guarantees.
 
-## Fallback now active
+## Fallback while the replacement gate runs
 
 Keep the existing accepted grass runtime unchanged. Preserve the new
 mathematics and offline evidence only; do not add a box carrier, floating
 plane, view candidates, march, traversal, candidate list, per-species query,
 or new grass geometry.
 
-## Objective resume condition
+## Objective resume condition for runtime implementation
 
 Resume only as one coherent full-domain cook that, before shader work:
 
@@ -63,9 +64,16 @@ Resume only as one coherent full-domain cook that, before shader work:
 3. fits physically packed records on a training domain and passes disjoint
    held-out cameras, addresses, standoffs, seams and translations;
 4. validates finite Estonia side entry and no-missed-later-patch closure;
-5. reports total resident/working bytes `<=250 MiB` and worst fixed decode
-   `<=14` reads; and
+5. reports total resident/working bytes `<=250 MiB` and the declared GBC2-K6
+   worst fixed decode `<=15` logical reads, together with actual anisotropic
+   sampler traffic; and
 6. passes RGB/coverage/silhouette/depth/normal/temporal thresholds.
 
 Only that GREEN authorizes reading the runtime shaders as implementation
 targets and transcribing the model.
+
+The active replacement is specified in
+`GRASS-RAY-SPACE-CUT-CELL-CODEC.md`. It does not tune either invalid prior
+codec: it replaces point-value interpolation with certified analytic binary
+visibility cuts and delegates only irreducible multiway cells to a fixed
+six-pair-plane physical-pixel terminal.

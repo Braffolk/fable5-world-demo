@@ -2233,3 +2233,54 @@ or committed as an accepted result.
   defects fixed as one coherent full-domain cook, converged shared-origin
   truth, disjoint held-out cameras/addresses, physical packed decode, complete
   finite-patch closure, and exact `<=250 MiB` / `<=14`-read accounting.
+
+## 58. GBC2-K6 is the active finite-codec proposal (2026-07-23)
+
+- The user explicitly reopened the representation question and requested a
+  concrete codec. The selected candidate is **GBC2-K6**: a guarded boundary
+  field whose ordinary cells are certified MISS, one-owner REGULAR, or exact
+  two-outcome CUT2, with one fixed six-pair-plane filtered terminal for
+  genuinely multiway, chart-seam, pole, or copy-overflow cells.
+- The central new result is that an opaque triangle's support edges and every
+  pairwise depth-order separator are bilinear in the four boundary-ray
+  coordinates. A CUT2 descriptor therefore stores only its two source tokens;
+  the decoder regenerates the exact event polynomial, evaluates its tangent at
+  the live ray, projects the live camera-pixel Jacobian through it, and
+  integrates the resulting two-region pixel cut in closed form. Camera
+  standoff changes the Jacobian and fixed ALU, not atlas dimensionality.
+- The cap is one direct `128 x 128 x 32 x 16` grid of 64-bit `RG32Uint`
+  descriptors. A 32-byte source payload holds triangle geometry, colour,
+  normal, and categorical species/material. There is no page traversal,
+  candidate list, retry, march, loop, per-species query, or runtime geometry.
+- Complex cells use K6: six `448 x 448 x RGBA16F` coordinate-pair planes with
+  jointly fitted scale levels and one fixed shallow head. Live pair-projected
+  gradients select the fitted physical-pixel scale; analytic ray coordinate
+  and Jacobian invariants enter the head without reads. K6 is an explicit
+  held-out empirical terminal, not falsely described as categorical geometry
+  or as a proof for every arbitrary soup.
+- Per lane the schedules are `1/3/5/7` logical reads for
+  MISS/REGULAR/CUT2/KPLANE. Two Tier-1 lanes plus control cost at most `15`
+  logical reads. The fifteenth is declared rather than hidden; it is the one
+  extra read the user allowed when justified by fixed multiway coverage.
+  Anisotropic physical sampler traffic, register pressure, occupancy, and
+  payload locality remain mandatory measured performance gates.
+- The fifteenth read includes the one control record that supplies the local
+  terrain/carrier chart and both Tier-1 affine fields. There is no hidden
+  winner-root read: terrain curvature and smooth world-keyed tint/vigor/height
+  variation must fit the certified local affine carrier or force cook-side
+  carrier subdivision within the byte cap. A variant retaining a dependent
+  real-root correction is honestly a `16`-read worst case.
+- The accepted-source budget is `64.00 MiB` cap descriptors + `66.26 MiB`
+  source payload + at most `13 MiB` K6 + `16--64 MiB` simultaneously resident
+  finite-side/corner state. The intended complete total is `195--230 MiB` and
+  the hard publication ceiling remains `250 MiB`, including all control,
+  metadata, alignment, and padding. Both golden-angle layers reuse these
+  bytes.
+- No shader/runtime path is authorized yet. The next artifact is one coherent
+  actual-source offline gate on Calamagrostis and a dense low community:
+  certify/census the four modes and copy range, fit K6 on converged
+  production-pixel truth, score disjoint held-out exterior cameras and live
+  Jacobians including all angles/standoffs/seams/translations/two-layer order
+  swaps, and report exact packed bytes plus logical and physical traffic.
+- Binding proposal:
+  `docs/tasks/2026-07-23/GRASS-RAY-SPACE-CUT-CELL-CODEC.md`.
