@@ -3,14 +3,21 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   derivePeriodicProfileLattice,
-  makePeriodicProfileArrayTexture,
   makePeriodicProfileColorTexture,
   makePeriodicProfileTexture,
-  type PeriodicProfileData,
-  parsePeriodicProfileArray,
   parsePeriodicProfile,
-} from './GroundCoverProfiles';
-import { DataArrayTexture, DataUtils, HalfFloatType, UnsignedByteType } from 'three';
+} from './GroundCoverPeriodicProfile';
+import {
+  makePeriodicProfileArrayTexture,
+  parsePeriodicProfileArray,
+} from './GroundCoverProfileArray';
+import type { PeriodicProfileData } from './GroundCoverProfileTypes';
+import {
+  DataArrayTexture,
+  DataUtils,
+  HalfFloatType,
+  UnsignedByteType,
+} from 'three';
 import { packPeriodicProfileArray } from '../../../tools/groundcover-bake/ProfileArrayFormat';
 
 function fixture(options: { profileId?: number; corruptPayload?: boolean } = {}): Uint8Array {
@@ -72,14 +79,20 @@ test('rejects non-canonical payload offsets and ids outside the native palette',
   assert.throws(() => parsePeriodicProfile(fixture({ profileId: 12 })), /outside the native palette/);
 });
 
-test('uploads unorm payloads as filterable half-float values', () => {
+test('uploads the standalone inverse-path carrier as filterable half-float values', () => {
   const profile = parsePeriodicProfile(fixture());
   profile.texels[0] = 32768;
   profile.texels[1] = 65535;
+  profile.texels[3] = 65535;
   const texture = makePeriodicProfileTexture(profile);
   assert.equal(texture.type, HalfFloatType);
   const uploaded = texture.image.data as Uint16Array;
-  assert.ok(Math.abs(DataUtils.fromHalfFloat(uploaded[0]!) - 32768 / 65535) < 1e-3);
+  const direction = profile.slices[0]!.direction;
+  const storedT = 32768 / 65535 * profile.slices[0]!.depthMax;
+  const expectedInversePath = 1 / (
+    1 + storedT * Math.hypot(direction[0], direction[2]) / profile.tileSizeX
+  );
+  assert.ok(Math.abs(DataUtils.fromHalfFloat(uploaded[0]!) - expectedInversePath) < 1e-3);
   assert.equal(DataUtils.fromHalfFloat(uploaded[1]!), 1);
 });
 
@@ -155,10 +168,14 @@ test('parses the real Sphagnum profile through one zero-copy array layer', () =>
   assert.equal(parsed.profiles[0]!.profileId, 5);
   assert.equal(parsed.sourceSha256[0], 'cb61dd42c6265067f0be9a320d763da928b1e65a60ae3ebb359f49b3137a9959');
   assert.equal(parsed.halfTexels.buffer, packed.bytes.buffer);
-  const legacyUpload = makePeriodicProfileTexture(parsePeriodicProfile(source)).image.data as Uint16Array;
-  assert.equal(parsed.halfTexels.length, legacyUpload.length);
-  for (let value = 0; value < legacyUpload.length; value++) {
-    assert.equal(parsed.halfTexels[value], legacyUpload[value], `half-float payload mismatch at ${value}`);
+  const standalone = parsePeriodicProfile(source);
+  assert.equal(parsed.halfTexels.length, standalone.texels.length);
+  for (let value = 0; value < standalone.texels.length; value++) {
+    assert.equal(
+      parsed.halfTexels[value],
+      DataUtils.toHalfFloat(standalone.texels[value]! / 65535),
+      `GCAR half-float payload mismatch at ${value}`,
+    );
   }
   const texture = makePeriodicProfileArrayTexture(parsed);
   assert.ok(texture instanceof DataArrayTexture);

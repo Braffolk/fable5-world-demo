@@ -34,15 +34,8 @@ import { CLUSTER_TRI_BITS, CLUSTER_TRI_MASK } from '../world/GeometryRegistry';
 import { deriveLodParams, makeNaniteCam } from '../NaniteCommon';
 import { buildNaniteCull } from '../cull/NaniteCull';
 import { buildNaniteHzb } from '../cull/NaniteHzb';
-import { buildGrassField } from '../grass/NaniteGrass';
-import {
-  CALAMAGROSTIS_ACCEPTANCE_PROFILE_URL,
-  GROUND_COVER_PROFILE_ARRAY_URL,
-  GROUND_COVER_PROFILE_IDS,
-  GroundCoverProfileId,
-  loadPeriodicProfile,
-  loadPeriodicProfileArray,
-} from '../groundcover/GroundCoverProfiles';
+import { buildLegacyPeriodicGroundCoverField } from '../grass/NaniteGrass';
+import { loadGroundCoverFrameBinding } from './GroundCoverFrameBinding';
 import { makeFetch } from '../raster/NaniteFetch';
 import { buildNaniteRaster, makeVisBuffers } from '../raster/NaniteRaster';
 import { PROJ_CLUSTER_CAP, PROJ_RECORD_CAP } from '../raster/Project';
@@ -190,34 +183,13 @@ export async function buildNaniteFrame(
 
   const cam = makeNaniteCam(size.x, size.y);
   const vis = makeVisBuffers(size.x * size.y);
-  // Load the active profile before cull graph construction: its authored H is
-  // the exact translated-camera offset and must never be copied into a generic
-  // constant. Future cover profiles may use different heights or a certified
-  // shared H* carrier without changing this contract.
   const grassMode = params.get('grass');
   const grassOn = grassMode !== '0' && grassMode !== 'off';
-  const isolatedCalamagrostis = params.get('grassprofile') === String(
-    GroundCoverProfileId.CalamagrostisCanescens,
+  const groundCoverBinding = await loadGroundCoverFrameBinding(
+    grassOn,
+    field.hasGroundCoverClosure,
+    params,
   );
-  const exactCalamagrostisOwner = params.get('grassowner') === '1';
-  const periodicProfiles = grassOn && field.hasGroundCoverClosure
-    ? isolatedCalamagrostis
-      ? [await loadPeriodicProfile(
-          CALAMAGROSTIS_ACCEPTANCE_PROFILE_URL,
-          GroundCoverProfileId.CalamagrostisCanescens,
-          {
-            authoredColor: !exactCalamagrostisOwner,
-            ownedTables: exactCalamagrostisOwner,
-          },
-        )]
-      : (await loadPeriodicProfileArray(
-          GROUND_COVER_PROFILE_ARRAY_URL,
-          GROUND_COVER_PROFILE_IDS,
-        )).profiles
-    : [];
-  const terrainEnvelopeHeight = isolatedCalamagrostis
-    ? periodicProfiles[0]?.topH ?? 0
-    : 0;
   // PERF-VB4 (D-N45): the WORLD is single-pass — the HZB reads the packed depth key from
   // the election anchor (visPayloadV high bits, packed=true), there is no exact depthV.
   const hzb = buildNaniteHzb(vis.payloadV.ro, cam, true);
@@ -258,7 +230,6 @@ export async function buildNaniteFrame(
       // cluster with children back to full LOD0 (the pre-Phase-2 behavior), for A/B.
       // Camera path only (shadow culls omit it — casters already stay coarse).
       crownLod0: params.get('crownlod0') === '1',
-      terrainEnvelopeHeight,
     },
   );
   // S6e: the render-anchor uniform for terrain FIELD sampling (NaniteFetch hfWorld)
@@ -270,18 +241,20 @@ export async function buildNaniteFrame(
   // rastered geometry and the resolve's barycentric corners stay bit-identical)
   const windOn = params.get('nanwind') !== '0';
   const windOpt = windOn ? { camPos: cam.camPos } : undefined;
-  // PROCEDURAL GRASS (NaniteGrass.ts; ledger docs/perf-runs/2026-07-03-grass-arc.md).
-  // __laasNanite.setGrass(0|1) toggles within a boot.
-  // DEFAULT ON (user call 2026-07-04, look accepted): the single ray lane
-  // (Sannikov baked-raycast, NaniteGrass.ts). ?grass=0|off disables. The old
-  // geo/hybrid/rayold lanes were deleted the same day — git history has them.
-  const grass = grassOn
-    ? buildGrassField({
+  // Deprecated periodic GCAR compatibility lane. It remains isolated from the
+  // boundary-transfer successor and is removed after that renderer passes
+  // visual/performance acceptance. __laasNanite.setGrass(0|1) still toggles it.
+  const grass = groundCoverBinding.kind === 'periodic-multispecies'
+    || groundCoverBinding.kind === 'calamagrostis-preview'
+    ? buildLegacyPeriodicGroundCoverField({
         cam,
         vis,
         field,
         canopyTex: world.canopyTex,
-        periodicProfiles,
+        periodicProfiles: groundCoverBinding.profiles,
+        forcedProfileId: groundCoverBinding.kind === 'calamagrostis-preview'
+          ? groundCoverBinding.profileId
+          : null,
       })
     : null;
   const raster = buildNaniteRaster(
@@ -291,7 +264,6 @@ export async function buildNaniteFrame(
           batch: grass.batch,
           renderHw: grass.renderHw,
           enabled: grass.enabled,
-          envelopeQuery: grass.envelopeQuery,
         }
       : undefined,
     fieldAnchor, // S6e: absolute field-sample coords for the anchor-relative terrain verts
@@ -392,7 +364,10 @@ export async function buildNaniteFrame(
     naniteShadow: shadow,
     shadowHalf,
     grassProc: grass
-      ? { ray: grass.resolveRay }
+        ? {
+          ray: grass.resolveRay,
+          authoredPackedColor: grass.authoredPackedColor,
+        }
       : null,
   });
   // ?nores=1 — MEASUREMENT ablation (default OFF): skip ALL fullscreen resolve passes (the
