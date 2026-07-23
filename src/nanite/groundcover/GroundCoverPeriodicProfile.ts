@@ -4,6 +4,7 @@ import {
   DataTexture,
   HalfFloatType,
   LinearFilter,
+  NearestFilter,
   RGBAFormat,
   UnsignedByteType,
 } from 'three';
@@ -309,8 +310,11 @@ export function makePeriodicProfileTexture(profile: PeriodicProfileData): DataTe
     RGBAFormat,
     HalfFloatType,
   );
-  texture.minFilter = LinearFilter;
-  texture.magFilter = LinearFilter;
+  // Depth, coverage, and oct normal form one coupled categorical record.
+  // Spatial interpolation fabricates a surface which belongs to neither owner;
+  // radiance has its own filterable carrier below.
+  texture.minFilter = NearestFilter;
+  texture.magFilter = NearestFilter;
   texture.wrapS = ClampToEdgeWrapping;
   texture.wrapT = ClampToEdgeWrapping;
   texture.generateMipmaps = false;

@@ -227,7 +227,9 @@ export function createLegacyPeriodicRayQuery(options: LegacyPeriodicRayQueryOpti
       const f2 = (texture(guideFieldT2, guv, 0) as unknown as { toVar(): NV4 }).toVar();
       const f3 = (texture(guideFieldT3, guv, 0) as unknown as { toVar(): NV4 }).toVar();
       const dens = (f3.x as unknown as NF).clamp(0, 1).toVar() as unknown as NF;
-      returnIf(dens.lessThan(0.02) as unknown as NB);
+      // The isolated volume is clipped at the reconstructed plant root.  An
+      // endpoint test here cuts valid edge-facing plants into a floating sheet.
+      if (!standaloneProfile) returnIf(dens.lessThan(0.02) as unknown as NB);
       const mixWordO = og.mixWord;
       const candidateMask = options.forcedProfileId === null
         ? mixWordO.shiftRight(uint(16)).bitAnd(uint(0xffff))
@@ -484,14 +486,15 @@ export function createLegacyPeriodicRayQuery(options: LegacyPeriodicRayQueryOpti
               vec4(...depthRows.map((slice) => slice.depthMax)),
               uint(profile.textureLayer ?? 0),
             )).toVar() as unknown as NF;
-        const profileTip = profileOriginY
-          .add(ndy.mul(tProfile))
-          .div(profile.topH)
-          .clamp(0, 1)
-          .toVar() as unknown as NF;
+        const profileTip = (aligned
+          ? aligned.point.y.div(profile.topH)
+          : profileOriginY.add(ndy.mul(tProfile)).div(profile.topH))
+          .clamp(0, 1).toVar() as unknown as NF;
         const dt = tProfile.div(metricSpeed).toVar() as unknown as NF;
-        const hitQx = qx.add(ndx.mul(tProfile)) as unknown as NF;
-        const hitQz = qz.add(ndz.mul(tProfile)) as unknown as NF;
+        // Height and periodic-copy identity belong to the categorical point
+        // X1.  Only depth compositing uses X1 projected onto the camera ray.
+        const hitQx = (aligned ? aligned.point.x : qx.add(ndx.mul(tProfile))) as unknown as NF;
+        const hitQz = (aligned ? aligned.point.z : qz.add(ndz.mul(tProfile))) as unknown as NF;
         const rootQx = hitQx.sub(profile.tileOriginX).div(profile.tileSizeX)
           .floor().add(0.5).mul(profile.tileSizeX).add(profile.tileOriginX) as unknown as NF;
         const rootQz = hitQz.sub(profile.tileOriginZ).div(profile.tileSizeZ)
@@ -724,7 +727,9 @@ export function createLegacyPeriodicRayQuery(options: LegacyPeriodicRayQueryOpti
       const rootProfile = (rootPick.lessThan(rootBlend) as unknown as { select(a: unknown, b: unknown): NU })
         .select(rootProfileB, rootProfileA);
       const rootMatches = options.forcedProfileId !== null
-        ? (uint(0).equal(uint(0)) as unknown as NB)
+        ? (field.hasGroundCover
+            ? (rootControl.x as unknown as NF).greaterThanEqual(0.02) as unknown as NB
+            : (uint(0).equal(uint(0)) as unknown as NB))
         : rootCover.equal(coverId)
             .and(rootProfile.equal(profileIdU) as unknown as NB) as unknown as NB;
       const sxs = wcx.sub(wcx.div(GRID).floor().mul(GRID));

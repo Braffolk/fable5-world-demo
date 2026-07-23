@@ -16,6 +16,7 @@ import {
   DataArrayTexture,
   DataUtils,
   HalfFloatType,
+  NearestFilter,
   UnsignedByteType,
 } from 'three';
 import { packPeriodicProfileArray } from '../../../tools/groundcover-bake/ProfileArrayFormat';
@@ -86,6 +87,8 @@ test('uploads the standalone full-depth carrier as filterable half-float values'
   profile.texels[3] = 65535;
   const texture = makePeriodicProfileTexture(profile);
   assert.equal(texture.type, HalfFloatType);
+  assert.equal(texture.minFilter, NearestFilter);
+  assert.equal(texture.magFilter, NearestFilter);
   const uploaded = texture.image.data as Uint16Array;
   assert.ok(Math.abs(DataUtils.fromHalfFloat(uploaded[0]!) - 32768 / 65535) < 1e-3);
   assert.equal(DataUtils.fromHalfFloat(uploaded[1]!), 1);

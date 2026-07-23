@@ -21,7 +21,13 @@ export interface LegacyPeriodicProfileSamplers {
     qxz: NV2,
     direction: NV3,
     tile: NV4,
-  ) => { readonly depth: NF; readonly normal: NV3; readonly color: NV3 }) | null;
+  ) => {
+    readonly depth: NF;
+    readonly point: NV3;
+    readonly normal: NV3;
+    readonly color: NV3;
+    readonly alpha: NF;
+  }) | null;
   readonly standalone: boolean;
 }
 
@@ -264,7 +270,13 @@ export function createLegacyPeriodicProfileSamplers(
     : null;
 
   const alignedStandalone = standalone
-    ? ((qxz: NV2, nd: NV3, tile: NV4): { depth: NF; normal: NV3; color: NV3 } => {
+    ? ((qxz: NV2, nd: NV3, tile: NV4): {
+        depth: NF;
+        point: NV3;
+        normal: NV3;
+        color: NV3;
+        alpha: NF;
+      } => {
         const a = address(qxz, nd, tile, uint(0));
         const elevations = vec4(...layout.lattice.elevations) as unknown as NV4;
         const depthMins = vec4(...Array.from(
@@ -283,7 +295,7 @@ export function createLegacyPeriodicProfileSamplers(
               : row * layout.lattice.azimuthCount
           ]!.depthMax,
         )) as unknown as NV4;
-        const decodeDepth = (record: NV4, row: NF, missAsFar: boolean): NF => {
+        const decodeDepth = (record: NV4, row: NF): NF => {
           const coverage = (record.w as unknown as NF).clamp(0, 1) as unknown as NF;
           const depth01 = (record.x as unknown as NF)
             .sub(float(1).sub(coverage))
@@ -291,16 +303,12 @@ export function createLegacyPeriodicProfileSamplers(
             .clamp(0, 1) as unknown as NF;
           const low = a.rowValue(depthMins, row);
           const high = a.rowValue(depthMaxs, row);
-          const hitDepth = low.add(depth01.mul(high.sub(low))) as unknown as NF;
-          return missAsFar
-            ? (coverage.greaterThan(1 / 65535) as unknown as {
-                select(yes: unknown, no: unknown): NF;
-              }).select(hitDepth, high)
-            : hitDepth;
+          return low.add(depth01.mul(high.sub(low))) as unknown as NF;
         };
         type Node = {
           readonly score: NF;
           readonly liveDepth: NF;
+          readonly point: NV3;
           readonly normal: NV3;
           readonly color: NV4;
         };
@@ -313,7 +321,11 @@ export function createLegacyPeriodicProfileSamplers(
             sin(elevation).negate(),
             horizontal.mul(sin(azimuthRadians)),
           ).toVar() as unknown as NV3;
-          const tau0 = decodeDepth(initial, row, true);
+          // A miss still executes the fixed graph, but cannot be resurrected by
+          // the dependent read at its dummy corrected address.
+          const initialCovered = (initial.w as unknown as NF)
+            .greaterThan(1 / 65535) as unknown as NB;
+          const tau0 = decodeDepth(initial, row);
           const verticalRatio = (canonical.y as unknown as NF)
             .div((nd.y as unknown as NF).min(-1e-5)) as unknown as NF;
           const bx = verticalRatio.mul(nd.x).sub(canonical.x).toVar() as unknown as NF;
@@ -323,7 +335,7 @@ export function createLegacyPeriodicProfileSamplers(
             qxz.y.add(bz.mul(tau0)),
           ) as unknown as NV2;
           const record = a.tap(azimuth, row, correctedAddress);
-          const tau1 = decodeDepth(record, row, false);
+          const tau1 = decodeDepth(record, row);
           const canonicalDotLive = (canonical.x as unknown as NF).mul(nd.x)
             .add((canonical.y as unknown as NF).mul(nd.y))
             .add((canonical.z as unknown as NF).mul(nd.z)) as unknown as NF;
@@ -331,12 +343,24 @@ export function createLegacyPeriodicProfileSamplers(
             .add(bz.mul(tau0).mul(nd.z))
             .add(tau1.mul(canonicalDotLive))
             .toVar() as unknown as NF;
+          const correctedCovered = (record.w as unknown as NF)
+            .greaterThan(1 / 65535) as unknown as NB;
+          const eligible = initialCovered
+            .and(correctedCovered)
+            .and(liveDepth.greaterThanEqual(0) as unknown as NB) as unknown as NB;
+          const point = vec3(
+            correctedAddress.x.add(tau1.mul(canonical.x)),
+            float(layout.topH).add(tau1.mul(canonical.y)),
+            correctedAddress.y.add(tau1.mul(canonical.z)),
+          ) as unknown as NV3;
           const colorRecord = layout.colorTexture
             ? a.tap(azimuth, row, correctedAddress, layout.colorTexture as Texture)
             : vec4(0.05, 0.12, 0.03, record.w) as unknown as NV4;
           return {
-            score: base.mul((record.w as unknown as NF).clamp(0, 1)).toVar() as unknown as NF,
+            score: (eligible as unknown as { select(yes: unknown, no: unknown): NF })
+              .select(base, float(-1)),
             liveDepth,
+            point,
             normal: decodeRecordNormal(record),
             color: colorRecord,
           };
@@ -356,6 +380,7 @@ export function createLegacyPeriodicProfileSamplers(
           return {
             score: selectF(right.score, left.score),
             liveDepth: selectF(right.liveDepth, left.liveDepth),
+            point: selectV3(right.point, left.point),
             normal: selectV3(right.normal, left.normal),
             color: selectV4(right.color, left.color),
           };
@@ -369,15 +394,17 @@ export function createLegacyPeriodicProfileSamplers(
           .add((n10.color.w as unknown as NF).mul(a.b10))
           .add((n01.color.w as unknown as NF).mul(a.b01))
           .add((n11.color.w as unknown as NF).mul(a.b11)) as unknown as NF;
-        const valid = winner.score.greaterThan(1 / 255)
+        const valid = winner.score.greaterThanEqual(0)
           .and((nd.y as unknown as NF).lessThan(-1e-4) as unknown as NB) as unknown as NB;
         return {
           depth: (valid as unknown as { select(a: unknown, b: unknown): NF })
-            .select(winner.liveDepth.max(0), float(1e6)),
+            .select(winner.liveDepth, float(1e6)),
+          point: winner.point,
           normal: winner.normal,
           color: (alpha.greaterThan(1 / 255) as unknown as {
             select(a: unknown, b: unknown): NV3;
           }).select(premul.div(alpha.max(1 / 255)), vec3(0.05, 0.12, 0.03)),
+          alpha,
         };
       })
     : null;
