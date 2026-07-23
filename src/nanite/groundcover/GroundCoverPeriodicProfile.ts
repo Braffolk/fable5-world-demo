@@ -291,27 +291,13 @@ export function makePeriodicProfileTexture(profile: PeriodicProfileData): DataTe
   const halfTexels = new Uint16Array(profile.texels.length);
   const atlasWidth = profile.storedTileWidth * profile.atlasColumns;
   const atlasHeight = profile.storedTileHeight * profile.atlasRows;
-  const maxProjectedTiles = Math.max(...profile.slices.map((entry) =>
-    entry.depthMax * Math.hypot(entry.direction[0], entry.direction[2]) / profile.tileSizeX));
   for (let texel = 0; texel < atlasWidth * atlasHeight; texel++) {
-    const x = texel % atlasWidth;
-    const y = Math.floor(texel / atlasWidth);
-    const slice = Math.floor(y / profile.storedTileHeight) * profile.atlasColumns
-      + Math.floor(x / profile.storedTileWidth);
     const record = texel * 4;
-    const direction = profile.slices[slice]!.direction;
-    const horizontal = Math.hypot(direction[0], direction[2]);
     const coverage = profile.texels[record + 3]! / 65535;
-    const depth01 = profile.texels[record]! / 65535;
-    const storedT = profile.slices[slice]!.depthMin
-      + depth01 * (profile.slices[slice]!.depthMax - profile.slices[slice]!.depthMin);
-    const projectedTiles = coverage > 0.5
-      ? storedT * horizontal / profile.tileSizeX
-      : maxProjectedTiles;
-    // Sannikov's filterable carrier is inverse in-plane path, not a normalized
-    // per-view 3D depth. All elevation slices therefore share one metric before
-    // hardware filtering; runtime performs |OB|=|OA|/cos(alpha) once.
-    halfTexels[record] = DataUtils.toHalfFloat(1 / (1 + projectedTiles));
+    // Preserve each direction node's full 3D first-hit depth.  Converting this
+    // to horizontal travel made reconstructed height depend on the live camera
+    // elevation and caused the standing-height stretch.
+    halfTexels[record] = DataUtils.toHalfFloat(profile.texels[record]! / 65535);
     halfTexels[record + 1] = DataUtils.toHalfFloat(profile.texels[record + 1]! / 65535);
     halfTexels[record + 2] = DataUtils.toHalfFloat(profile.texels[record + 2]! / 65535);
     halfTexels[record + 3] = DataUtils.toHalfFloat(coverage);

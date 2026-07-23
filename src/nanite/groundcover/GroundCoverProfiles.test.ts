@@ -79,7 +79,7 @@ test('rejects non-canonical payload offsets and ids outside the native palette',
   assert.throws(() => parsePeriodicProfile(fixture({ profileId: 12 })), /outside the native palette/);
 });
 
-test('uploads the standalone inverse-path carrier as filterable half-float values', () => {
+test('uploads the standalone full-depth carrier as filterable half-float values', () => {
   const profile = parsePeriodicProfile(fixture());
   profile.texels[0] = 32768;
   profile.texels[1] = 65535;
@@ -87,12 +87,7 @@ test('uploads the standalone inverse-path carrier as filterable half-float value
   const texture = makePeriodicProfileTexture(profile);
   assert.equal(texture.type, HalfFloatType);
   const uploaded = texture.image.data as Uint16Array;
-  const direction = profile.slices[0]!.direction;
-  const storedT = 32768 / 65535 * profile.slices[0]!.depthMax;
-  const expectedInversePath = 1 / (
-    1 + storedT * Math.hypot(direction[0], direction[2]) / profile.tileSizeX
-  );
-  assert.ok(Math.abs(DataUtils.fromHalfFloat(uploaded[0]!) - expectedInversePath) < 1e-3);
+  assert.ok(Math.abs(DataUtils.fromHalfFloat(uploaded[0]!) - 32768 / 65535) < 1e-3);
   assert.equal(DataUtils.fromHalfFloat(uploaded[1]!), 1);
 });
 

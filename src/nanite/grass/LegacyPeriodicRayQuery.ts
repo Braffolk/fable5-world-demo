@@ -467,14 +467,23 @@ export function createLegacyPeriodicRayQuery(options: LegacyPeriodicRayQueryOpti
           ]!;
           return slice;
         });
-        const tProfile = periodicSamplers.depth(
-          vec2(qx, qz),
-          vec3(ndx, ndy, ndz),
-          vec4(profile.tileOriginX, profile.tileOriginZ, profile.tileSizeX, profile.tileSizeZ),
-          vec4(...depthRows.map((slice) => slice.depthMin)),
-          vec4(...depthRows.map((slice) => slice.depthMax)),
-          uint(profile.textureLayer ?? 0),
-        ).toVar() as unknown as NF;
+        const profileDirection = vec3(ndx, ndy, ndz) as unknown as NV3;
+        const profileTile = vec4(
+          profile.tileOriginX, profile.tileOriginZ, profile.tileSizeX, profile.tileSizeZ,
+        ) as unknown as NV4;
+        const aligned = standaloneProfile && periodicSamplers.alignedStandalone
+          ? periodicSamplers.alignedStandalone(vec2(qx, qz), profileDirection, profileTile)
+          : null;
+        const tProfile = (aligned
+          ? aligned.depth
+          : periodicSamplers.depth(
+              vec2(qx, qz),
+              profileDirection,
+              profileTile,
+              vec4(...depthRows.map((slice) => slice.depthMin)),
+              vec4(...depthRows.map((slice) => slice.depthMax)),
+              uint(profile.textureLayer ?? 0),
+            )).toVar() as unknown as NF;
         const profileTip = profileOriginY
           .add(ndy.mul(tProfile))
           .div(profile.topH)
@@ -494,15 +503,28 @@ export function createLegacyPeriodicRayQuery(options: LegacyPeriodicRayQueryOpti
         const hitPtx = Ptx.add(ex.mul(dt).div(GUIDE_PITCH)) as unknown as NF;
         const hitPtz = Ptz.add(ez.mul(dt).div(GUIDE_PITCH)) as unknown as NF;
         const valid = tProfile.lessThan(5e5) as unknown as NB;
+        const profileNormal = aligned?.normal ?? (vec3(0, 1, 0) as unknown as NV3);
+        const normalX = (profileNormal.x as unknown as NF).mul(cs)
+          .add((profileNormal.z as unknown as NF).mul(sn)) as unknown as NF;
+        const normalZ = (profileNormal.z as unknown as NF).mul(cs)
+          .sub((profileNormal.x as unknown as NF).mul(sn)) as unknown as NF;
+        const normalY = (profileNormal.y as unknown as NF)
+          .mul(profile.topH).div(swardH.max(1e-4)) as unknown as NF;
+        const worldNormal = normalize(vec3(
+          normalX.mul(profileDerivativeScale).sub(normalY.mul(gradO.x)),
+          normalY,
+          normalZ.mul(profileDerivativeScale).sub(normalY.mul(gradO.y)),
+        ) as unknown as NV3) as unknown as NV3;
+        const profileColor = aligned?.color ?? (vec3(0.05, 0.12, 0.03) as unknown as NV3);
         return {
           dt: (valid as unknown as { select(a: unknown, b: unknown): NF })
             .select(dt, float(1e6)),
-          nx: float(0) as unknown as NF,
-          ny: float(1) as unknown as NF,
-          nz: float(0) as unknown as NF,
-          cr: float(0.05) as unknown as NF,
-          cg: float(0.12) as unknown as NF,
-          cb: float(0.03) as unknown as NF,
+          nx: worldNormal.x as unknown as NF,
+          ny: worldNormal.y as unknown as NF,
+          nz: worldNormal.z as unknown as NF,
+          cr: profileColor.x as unknown as NF,
+          cg: profileColor.y as unknown as NF,
+          cb: profileColor.z as unknown as NF,
           tip: profileTip,
           rootDx: rootPtx.sub(hitPtx).mul(GUIDE_PITCH) as unknown as NF,
           rootDz: rootPtz.sub(hitPtz).mul(GUIDE_PITCH) as unknown as NF,
@@ -604,9 +626,19 @@ export function createLegacyPeriodicRayQuery(options: LegacyPeriodicRayQueryOpti
       const pick = (a: NF, b: NF): NF =>
         (take0 as unknown as { select(x: unknown, y: unknown): NF }).select(a, b);
       const dtHit = pick(L0.dt, L1.dt).toVar() as unknown as NF;
-      const nWx0 = usesPeriodicCarrier ? (float(0) as unknown as NF) : pick(L0.nx, L1.nx).toVar() as unknown as NF;
-      const nWy0 = usesPeriodicCarrier ? (float(1) as unknown as NF) : pick(L0.ny, L1.ny).toVar() as unknown as NF;
-      const nWz0 = usesPeriodicCarrier ? (float(0) as unknown as NF) : pick(L0.nz, L1.nz).toVar() as unknown as NF;
+      const inlinePeriodicSurface = standaloneProfile && Boolean(periodicSamplers?.alignedStandalone);
+      const nWx0 = usesPeriodicCarrier && !inlinePeriodicSurface
+        ? (float(0) as unknown as NF)
+        : pick(L0.nx, L1.nx).toVar() as unknown as NF;
+      const nWy0 = usesPeriodicCarrier && !inlinePeriodicSurface
+        ? (float(1) as unknown as NF)
+        : pick(L0.ny, L1.ny).toVar() as unknown as NF;
+      const nWz0 = usesPeriodicCarrier && !inlinePeriodicSurface
+        ? (float(0) as unknown as NF)
+        : pick(L0.nz, L1.nz).toVar() as unknown as NF;
+      const colorR = pick(L0.cr, L1.cr).toVar() as unknown as NF;
+      const colorG = pick(L0.cg, L1.cg).toVar() as unknown as NF;
+      const colorB = pick(L0.cb, L1.cb).toVar() as unknown as NF;
       const profileTip = pick(L0.tip, L1.tip).toVar() as unknown as NF;
       const rootDx = pick(L0.rootDx, L1.rootDx).toVar() as unknown as NF;
       const rootDz = pick(L0.rootDz, L1.rootDz).toVar() as unknown as NF;
@@ -707,7 +739,15 @@ export function createLegacyPeriodicRayQuery(options: LegacyPeriodicRayQueryOpti
                 .bitOr(profileIdU)
             : uint(sys.mul(GRID).add(sxs)).shiftLeft(uint(6)).bitOr(coverId),
         );
-        if (usesPeriodicCarrier) {
+        if (standaloneProfile) {
+          (nrmV as unknown as { assign(v: unknown): void }).assign(vec3(nWx0, nWy0, nWz0));
+          const authoredBody = uint(colorR.clamp(0, 1).mul(255).add(0.5).floor())
+            .shiftLeft(uint(20))
+            .bitOr(uint(colorG.clamp(0, 1).mul(255).add(0.5).floor()).shiftLeft(uint(12)))
+            .bitOr(uint(colorB.clamp(0, 1).mul(255).add(0.5).floor()).shiftLeft(uint(4)))
+            .bitOr(profileIdU.bitAnd(uint(0xf))) as unknown as NU;
+          (bodyBest as unknown as { assign(v: unknown): void }).assign(authoredBody);
+        } else if (usesPeriodicCarrier) {
           if (bestProfileId) {
             (bestProfileId as unknown as { assign(v: unknown): void }).assign(profileIdU);
           }
@@ -928,7 +968,7 @@ export function createLegacyPeriodicRayQuery(options: LegacyPeriodicRayQueryOpti
         const clip = cam.vp.mul(vec4(hit, 1));
         const cz = clip.z.div(clip.w.max(NEAR_EPS));
         If(cz.greaterThanEqual(0).and(cz.lessThanEqual(1)), () => {
-          reconstructPeriodicNormal();
+          if (!standaloneProfile) reconstructPeriodicNormal();
           emitPx(px as unknown as NU, cz as unknown as NF, bodyBest);
           textureStore(rayNrmTex, uvec2(xI, yI), vec4(nrmV, tParV)).toWriteOnly();
         });
