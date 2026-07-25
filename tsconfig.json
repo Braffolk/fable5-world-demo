@@ -19,5 +19,10 @@
     "types": ["vite/client", "@webgpu/types"],
     "noEmit": true
   },
-  "include": ["src", "tools", "vite.config.ts"]
+  "include": ["src", "tools", "vite.config.ts"],
+  "exclude": [
+    "src/nanite/grass/rejected-inactive",
+    "src/nanite/groundcover/rejected-inactive",
+    "tools/groundcover-bake/rejected-inactive"
+  ]
 }

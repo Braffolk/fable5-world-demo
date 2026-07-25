@@ -24,3 +24,27 @@ profile-results-**
 
 # Reference papers/slides (large binaries) — kept local, not versioned.
 docs/**/*.pdf
+
+# Content-addressed cook outputs and exported source meshes. These are local
+# build products (often hundreds of MB each), never source-controlled assets.
+data/work/
+
+# Ground-cover research codecs and the high-resolution Calamagrostis preview
+# are reproducible cook products. The small published GCAR/GCRP inputs remain
+# tracked; only these explicitly generated experimental/oversized outputs are
+# local.
+/src/assets/groundcover/calamagrostis-canescens.gcrp
+/src/assets/groundcover/*.gbc2
+/src/assets/groundcover/calamagrostis-canescens.gbr4
+
+# Local scratch, nested worktrees, and language caches.
+/tmp/
+/.worktrees/
+__pycache__/
+*.py[cod]
+
+# Downloaded microtopography research corpora/repository mirrors. Their
+# manifests and research notes are source; the multi-GB payload cache is not.
+/docs/deep-research/microtopography-generation/library/data/
+/docs/deep-research/microtopography-generation/library/datasets/
+/docs/deep-research/microtopography-generation/library/repos/
