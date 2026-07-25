@@ -1,5 +1,17 @@
 # Offline GPU ground-cover profile baker
 
+## Current status — 2026-07-25
+
+The root of this directory contains the still-used periodic compatibility baker, reusable offline
+truth/format utilities, and current botanical source modelling/review tools. Renderer/codec
+experiments that failed or were superseded are physically isolated under
+[`rejected-inactive/`](rejected-inactive/) and excluded from production TypeScript checks.
+
+In particular, Class E, GBC2/K6, GBR4 production, boundary transfer, GrassProfile2 Candidates
+H–Q, and the older representation gates are **not active alternatives**. The historical prose
+below documents the periodic compatibility path; it is not acceptance of a generic ground-cover
+representation.
+
 This is the first production-oriented mesh-to-ray-profile path. It accepts an ordinary indexed triangle mesh, affinely projects the vertices into a fixed ray-origin frame, and lets hardware rasterization plus `depth32float` elect the first hit. The fragment payload is normalized first-hit depth plus an octahedral world normal. No geometry assumption is made by the GPU path; the ellipsoid in `run.ts` is an analytic validation fixture only.
 
 Run the focused checks and the real WebGPU bake with:
